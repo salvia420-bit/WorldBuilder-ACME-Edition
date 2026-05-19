@@ -237,4 +237,157 @@ public partial class CommandEngine {
         h &= 0x0FFFFFFF;
         return new ChoriziteHashResult(input, $"0x{h:X8}", h);
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  chorizite-classify (Entity-Completeness E.E — cross-port oracle)
+    // ─────────────────────────────────────────────────────────────────
+
+    public sealed record ChoriziteClassifyResult(
+        uint ItemType,
+        uint ObjDescFlags,
+        uint WeenieFlags,
+        string ObjectClass
+    );
+
+    /// <summary>
+    /// C# port of the same algorithm as
+    /// <c>plugins/world-objects/canonical_classify.js</c>. Both are 1:1
+    /// ports of <c>ACPlugin/API/WorldObject.cs:344-411</c>; this command
+    /// exists so the cross_port_parity.sh harness can drive identical
+    /// payloads through both ports and assert byte-identical output. If
+    /// the two ports ever disagree, ONE of them has drifted from the C#
+    /// source — re-read WorldObject.cs to determine which.
+    ///
+    /// Inputs are bitfields (matching the wasm <c>EntityUpdate</c>'s
+    /// <c>itemType</c>, <c>objDescFlags</c>, <c>weenieFlags</c> getters).
+    /// Output is an <c>ObjectClass</c> enum-symbol name; <c>"Unknown"</c>
+    /// when no algorithm rule matches.
+    ///
+    /// Per docs/entity-completeness-method.md §3, this is part of the
+    /// canonical classification contract — the validator (E.D) relies on
+    /// this being byte-identical to the JS port.
+    /// </summary>
+    public ChoriziteClassifyResult ChoriziteClassify(uint itemType, uint objDescFlags, uint weenieFlags) {
+        // Bitflag constants — mirrors plugins/world-objects/canonical_classify.js
+        // and Chorizite.Common/Enums/{ItemType,ObjectDescriptionFlag,WeenieHeaderFlag}.cs
+        const uint IT_MELEE_WEAPON                  = 0x00000001u;
+        const uint IT_ARMOR                         = 0x00000002u;
+        const uint IT_CLOTHING                      = 0x00000004u;
+        const uint IT_JEWELRY                       = 0x00000008u;
+        const uint IT_CREATURE                      = 0x00000010u;
+        const uint IT_FOOD                          = 0x00000020u;
+        const uint IT_MONEY                         = 0x00000040u;
+        const uint IT_MISC                          = 0x00000080u;
+        const uint IT_MISSILE_WEAPON                = 0x00000100u;
+        const uint IT_CONTAINER                     = 0x00000200u;
+        const uint IT_USELESS                       = 0x00000400u;
+        const uint IT_GEM                           = 0x00000800u;
+        const uint IT_SPELL_COMPONENTS              = 0x00001000u;
+        const uint IT_WRITABLE                      = 0x00002000u;
+        const uint IT_KEY                           = 0x00004000u;
+        const uint IT_CASTER                        = 0x00008000u;
+        const uint IT_PORTAL                        = 0x00010000u;
+        const uint IT_PROMISSORY_NOTE               = 0x00040000u;
+        const uint IT_MANA_STONE                    = 0x00080000u;
+        const uint IT_SERVICE                       = 0x00100000u;
+        const uint IT_MAGIC_WIELDABLE               = 0x00200000u;
+        const uint IT_CRAFT_COOKING_BASE            = 0x00400000u;
+        const uint IT_CRAFT_ALCHEMY_BASE            = 0x00800000u;
+        const uint IT_CRAFT_FLETCHING_BASE          = 0x02000000u;
+        const uint IT_CRAFT_FLETCHING_INTERMEDIATE  = 0x08000000u;
+        const uint IT_TINKERING_TOOL                = 0x20000000u;
+        const uint IT_TINKERING_MATERIAL            = 0x40000000u;
+
+        const uint ODF_OPENABLE                  = 0x00000001u;
+        const uint ODF_INSCRIBABLE               = 0x00000002u;
+        const uint ODF_STUCK                     = 0x00000004u;
+        const uint ODF_PLAYER                    = 0x00000008u;
+        const uint ODF_ATTACKABLE                = 0x00000010u;
+        const uint ODF_BOOK                      = 0x00000100u;
+        const uint ODF_VENDOR                    = 0x00000200u;
+        const uint ODF_DOOR                      = 0x00001000u;
+        const uint ODF_CORPSE                    = 0x00002000u;
+        const uint ODF_LIFESTONE                 = 0x00004000u;
+        const uint ODF_FOOD                      = 0x00008000u;
+        const uint ODF_HEALER                    = 0x00010000u;
+        const uint ODF_LOCKPICK                  = 0x00020000u;
+        const uint ODF_PORTAL                    = 0x00040000u;
+        const uint ODF_REQUIRES_PACK_SLOT        = 0x00800000u;
+        const uint ODF_INCLUDES_SECOND_HEADER    = 0x04000000u;
+        const uint ODF_BIND_STONE                = 0x08000000u;
+
+        const uint WHF_SPELL                     = 0x00100000u;
+
+        string objectClass = "Unknown";
+
+        // PASS 1 — ItemType cascade (WorldObject.cs:347-372)
+        if      ((itemType & IT_MELEE_WEAPON) != 0)                    objectClass = "MeleeWeapon";
+        else if ((itemType & IT_ARMOR) != 0)                           objectClass = "Armor";
+        else if ((itemType & IT_CLOTHING) != 0)                        objectClass = "Clothing";
+        else if ((itemType & IT_JEWELRY) != 0)                         objectClass = "Jewelry";
+        else if ((itemType & IT_CREATURE) != 0)                        objectClass = "Monster";
+        else if ((itemType & IT_FOOD) != 0)                            objectClass = "Food";
+        else if ((itemType & IT_MONEY) != 0)                           objectClass = "Money";
+        else if ((itemType & IT_MISC) != 0)                            objectClass = "Misc";
+        else if ((itemType & IT_MISSILE_WEAPON) != 0)                  objectClass = "MissileWeapon";
+        else if ((itemType & IT_CONTAINER) != 0)                       objectClass = "Container";
+        else if ((itemType & IT_USELESS) != 0)                         objectClass = "Bundle";
+        else if ((itemType & IT_GEM) != 0)                             objectClass = "Gem";
+        else if ((itemType & IT_SPELL_COMPONENTS) != 0)                objectClass = "SpellComponent";
+        else if ((itemType & IT_KEY) != 0)                             objectClass = "Key";
+        else if ((itemType & IT_CASTER) != 0)                          objectClass = "WandStaffOrb";
+        else if ((itemType & IT_PORTAL) != 0)                          objectClass = "Portal";
+        else if ((itemType & IT_PROMISSORY_NOTE) != 0)                 objectClass = "TradeNote";
+        else if ((itemType & IT_MANA_STONE) != 0)                      objectClass = "ManaStone";
+        else if ((itemType & IT_SERVICE) != 0)                         objectClass = "Services";
+        else if ((itemType & IT_MAGIC_WIELDABLE) != 0)                 objectClass = "Plant";
+        else if ((itemType & IT_CRAFT_COOKING_BASE) != 0)              objectClass = "BaseCooking";
+        else if ((itemType & IT_CRAFT_ALCHEMY_BASE) != 0)              objectClass = "BaseAlchemy";
+        else if ((itemType & IT_CRAFT_FLETCHING_BASE) != 0)            objectClass = "BaseFletching";
+        else if ((itemType & IT_CRAFT_FLETCHING_INTERMEDIATE) != 0)    objectClass = "CraftedFletching";
+        else if ((itemType & IT_TINKERING_TOOL) != 0)                  objectClass = "Ust";
+        else if ((itemType & IT_TINKERING_MATERIAL) != 0)              objectClass = "Salvage";
+
+        // PASS 2 — ObjectDescriptionFlag overrides (WorldObject.cs:375-388)
+        if      ((objDescFlags & ODF_PLAYER) != 0)              objectClass = "Player";
+        else if ((objDescFlags & ODF_VENDOR) != 0)              objectClass = "Vendor";
+        else if ((objDescFlags & ODF_DOOR) != 0)                objectClass = "Door";
+        else if ((objDescFlags & ODF_CORPSE) != 0)              objectClass = "Corpse";
+        else if ((objDescFlags & ODF_LIFESTONE) != 0)           objectClass = "Lifestone";
+        else if ((objDescFlags & ODF_FOOD) != 0)                objectClass = "Food";
+        else if ((objDescFlags & ODF_HEALER) != 0)              objectClass = "HealingKit";
+        else if ((objDescFlags & ODF_LOCKPICK) != 0)            objectClass = "Lockpick";
+        else if ((objDescFlags & ODF_PORTAL) != 0)              objectClass = "Portal";
+        else if ((objDescFlags & ODF_REQUIRES_PACK_SLOT) != 0)  objectClass = "Foci";
+        else if ((objDescFlags & ODF_OPENABLE) != 0)            objectClass = "Container";
+        else if ((objDescFlags & ODF_BIND_STONE) != 0)          objectClass = "Bindstone";
+
+        // PASS 3a — Writable + Book disambiguation (WorldObject.cs:390-394)
+        if (objectClass == "Unknown"
+            && (itemType & IT_WRITABLE) != 0
+            && (objDescFlags & ODF_BOOK) != 0) {
+            if      ((objDescFlags & ODF_INSCRIBABLE) != 0) objectClass = "Journal";
+            else if ((objDescFlags & ODF_STUCK) != 0)       objectClass = "Sign";
+            else                                            objectClass = "Book";
+        }
+
+        // PASS 3b — Scroll discrimination (WorldObject.cs:396)
+        if ((itemType & IT_WRITABLE) != 0 && (weenieFlags & WHF_SPELL) != 0) {
+            objectClass = "Scroll";
+        }
+
+        // PASS 3c — Monster → Npc refinement (WorldObject.cs:398-401)
+        if (objectClass == "Monster") {
+            if ((objDescFlags & ODF_ATTACKABLE) == 0)              objectClass = "Npc";
+            if ((objDescFlags & ODF_INCLUDES_SECOND_HEADER) != 0)  objectClass = "Npc";
+        }
+
+        // PASS 3d — Misc/Unknown + Stuck → Static (WorldObject.cs:403-407)
+        if ((objectClass == "Misc" || objectClass == "Unknown")
+            && (objDescFlags & ODF_STUCK) != 0) {
+            objectClass = "Static";
+        }
+
+        return new ChoriziteClassifyResult(itemType, objDescFlags, weenieFlags, objectClass);
+    }
 }

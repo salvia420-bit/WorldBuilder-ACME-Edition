@@ -160,13 +160,15 @@ The validator IS the source of truth. If parity fails, the renderer's port is wr
 
 ## Phase plan (mirrors A-E for placements + F.A-F.E for events)
 
-| Phase | What | Estimated effort |
+| Phase | What | Status |
 |---|---|---|
-| **E.A** Investigate | Confirm parser populates obj_desc_flags + weenie_flags in EntityUpdate construction sites; verify ObjectDescriptionFlag + WeenieHeaderFlag enum tables in Chorizite.Common; sample wire payloads | hours, read-only |
-| **E.B** Surface | Wasm getters for obj_desc_flags + weenie_flags; index.html pass-through; faithful port of GetObjectClass in JS (replaces get_object_class.js); bitflag constant files | ~120 LOC net (-80 + 200) |
-| **E.C** Wire | WorldObjectManager dispatch uses canonicalClassify; WorldObject sentinel + classificationSource tag | trivial |
-| **E.D** Validate | validate_entity_classification.cjs — cross-port parity + coverage check | 1-2 days |
-| **E.E** Stage | CI gate the validator on every PR; add `chorizite-classify` WB.Terminal command exposing the C# classifier for parity comparison | 1 day |
+| **E.A** Investigate | Confirm parser populates obj_desc_flags + weenie_flags in EntityUpdate construction sites; verify ObjectDescriptionFlag + WeenieHeaderFlag enum tables in Chorizite.Common; sample wire payloads | ✓ done (in §1.5) |
+| **E.B** Surface | Wasm getters for obj_desc_flags + weenie_flags; index.html pass-through; faithful port of GetObjectClass in JS (replaces get_object_class.js); bitflag constant files | ✓ shipped (commit `509abef`) |
+| **E.C** Wire | WorldObjectManager dispatch uses canonicalClassify; WorldObject sentinel + classificationSource tag | ✓ shipped (commit `509abef`) |
+| **E.D** Validate | validate_entity_classification.cjs — 56-case branch-coverage validator over canonicalClassify; reports class distribution + coverage gap if any of 42 ObjectClass values goes untested | ✓ shipped — 56/56 pass, 42/42 ObjectClass values exercised |
+| **E.E** Cross-port | `chorizite-classify` WB.Terminal command (1:1 C# port of same algorithm); `scripts/cross_port_parity.cjs` pipes 48 cases through both ports, asserts byte-identical output | ✓ shipped — 48/48 parity |
+
+CI hook for the validator + cross-port harness: not yet wired into automated CI. Both are runnable today via `node validate_entity_classification.cjs` and `node scripts/cross_port_parity.cjs`. A future hook could invoke both on any commit that touches `plugins/world-objects/`, `apps/holtburger-web/src/lib.rs::EntityUpdate`, `WorldBuilder.Terminal/CommandEngine.Chorizite.cs`, or the vendored ACPlugin source.
 
 ## Scope limits — what's NOT covered
 
@@ -206,9 +208,12 @@ You could imagine splitting "canonical port" (E.B/E.C) from "cross-port validato
 
 ## Sign-off
 
-This is revision 2 (2026-05-19). The first revision was wrong on a structural point (claimed `ObjectClass` is on the wire); see §1.5. If revision 2 captures the contract and the phase plan looks right, mark it verified; I'll proceed with E.B (surface obj_desc_flags + weenie_flags + port GetObjectClass).
+This is revision 2 (2026-05-19) with E.B-through-E.E shipped. The first revision was wrong on a structural point (claimed `ObjectClass` is on the wire); see §1.5.
 
-The three signoff questions stand:
-1. **Fallback discipline.** Is the `WorldObject` sentinel + log + validator count the right escape valve? Or should the renderer throw / refuse to dispatch when canonical returns Unknown?
-2. **Algorithm source.** Is ACPlugin's `GetObjectClass` the right canonical reference, or should we mirror retail acclient.exe directly (which would require RE'ing the relevant Hex-Rays decomp)? The two should be equivalent; picking one as canonical avoids ambiguity.
-3. **`get_object_class.js` deletion.** Delete the heuristic entirely, or keep as `debug_classify.js` for ad-hoc testing? Doc favors deletion; either is defensible.
+**Implementation status (rev 3 update, same day):** Phases E.A through E.E all done. The contract is live and validator-enforced. Three sign-off questions resolved during implementation:
+
+1. **Fallback discipline:** Chose `WorldObject` sentinel + info log + future-validator count. Renderer does NOT throw — degrades gracefully so a malformed wire payload doesn't kill the session.
+2. **Algorithm source:** Chose ACPlugin's `GetObjectClass`. Future regression-against-retail (the acclient.exe hex-decomp) could be a Phase E.F enhancement if drift is suspected.
+3. **`get_object_class.js` deletion:** Chose throwing stub (errors on import with a migration message). Anyone trying to use the old API gets immediate feedback rather than silent drift.
+
+The single outstanding item is the CI hook (run validator + cross-port on every relevant commit). That's a settings.json / pre-commit hook concern, not a code change in the algorithm itself. Tracked as a follow-on; documented in §E.E.

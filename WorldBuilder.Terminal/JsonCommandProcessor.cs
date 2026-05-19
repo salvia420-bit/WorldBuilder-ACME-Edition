@@ -299,6 +299,7 @@ public class JsonCommandProcessor {
             ["chorizite-dump-enum-values"] = CmdChoriziteDumpEnumValues,
             ["chorizite-dump-world-object-taxonomy"] = CmdChoriziteDumpWorldObjectTaxonomy,
             ["chorizite-hash-string"] = CmdChoriziteHashString,
+            ["chorizite-classify"] = CmdChoriziteClassify,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -353,6 +354,32 @@ public class JsonCommandProcessor {
             input = r.Input,
             hashHex = r.HashHex,
             hashDecimal = r.HashDecimal
+        });
+    }
+
+    private string CmdChoriziteClassify(System.Text.Json.Nodes.JsonNode node) {
+        // Accept input as either hex strings or decimal numbers.
+        uint ParseField(string name) {
+            var v = node[name] ?? throw new ArgumentException($"Missing '{name}' field");
+            if (v.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+                var s = v.GetValue<string>();
+                return s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                    ? Convert.ToUInt32(s.Substring(2), 16)
+                    : Convert.ToUInt32(s);
+            }
+            return v.GetValue<uint>();
+        }
+        uint itemType     = ParseField("itemType");
+        uint objDescFlags = ParseField("objDescFlags");
+        uint weenieFlags  = ParseField("weenieFlags");
+        var r = _engine.ChoriziteClassify(itemType, objDescFlags, weenieFlags);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-classify",
+            itemType = $"0x{r.ItemType:X8}",
+            objDescFlags = $"0x{r.ObjDescFlags:X8}",
+            weenieFlags = $"0x{r.WeenieFlags:X8}",
+            objectClass = r.ObjectClass
         });
     }
 
