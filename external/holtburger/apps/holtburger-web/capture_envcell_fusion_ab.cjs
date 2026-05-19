@@ -358,7 +358,9 @@ function composeGridPng(rows, w, h) {
 
     const browser = await chromium.launch({
       args: [
-        "--use-gl=swiftshader",
+        ...(process.env.PLAYWRIGHT_GL_BACKEND === "none"
+          ? []
+          : [`--use-gl=${process.env.PLAYWRIGHT_GL_BACKEND || "swiftshader"}`]),
         "--disable-dev-shm-usage",
         "--no-sandbox",
         "--disable-gpu-sandbox",

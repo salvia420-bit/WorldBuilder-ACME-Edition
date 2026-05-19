@@ -104,7 +104,9 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 
   const browser = await chromium.launch({
     args: [
-      "--use-gl=swiftshader",
+      ...(process.env.PLAYWRIGHT_GL_BACKEND === "none"
+        ? []
+        : [`--use-gl=${process.env.PLAYWRIGHT_GL_BACKEND || "swiftshader"}`]),
       "--disable-dev-shm-usage",
       "--no-sandbox",
       "--disable-gpu-sandbox",
@@ -183,6 +185,21 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
       try { h.sendChat("/godly"); } catch (_) {}
     }
   });
+
+  // Wait for window.liveScene3d.renderer to become available. The 3D
+  // init is async and on the 1070 with radius=6 PVS bake it takes
+  // 60-90s before the renderer is queryable. Polling started too
+  // early before this wait was added (all metrics returned null).
+  console.log(`  waiting up to 180s for liveScene3d.renderer...`);
+  try {
+    await page.waitForFunction(
+      () => !!window.liveScene3d && !!window.liveScene3d.renderer,
+      { timeout: 180_000, polling: 1000 },
+    );
+    console.log(`  liveScene3d.renderer is up`);
+  } catch (e) {
+    console.log(`  liveScene3d.renderer never appeared — sampling will return nulls`);
+  }
 
   // --- Poll loop ---
   const totalSamples = Math.floor((PROBE_MINUTES * 60) / POLL_INTERVAL_S);

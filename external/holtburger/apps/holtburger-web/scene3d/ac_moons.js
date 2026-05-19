@@ -240,14 +240,21 @@ void main() {
     float cityDist = distance(vUv, uCityPos);
     float core = exp(-cityDist * 28.0);
     float halo = exp(-cityDist *  9.0) * 0.35;
-    float t = uTime;
+    // 2026-05-19: renamed t to tm here because line ~231 already
+    // declared float t = cloudAmt * uCloudIntensity in this same
+    // scope. GLSL doesn't allow same-scope redefinition (caught via
+    // Playwright Chromium validate-status; swiftshader was silently
+    // permissive). Unblocks the FPS plan validation harnesses.
+    // NOTE: no backticks in this comment — it lives inside a JS
+    // template literal carrying the shader source.
+    float tm = uTime;
     float sparkle =
         0.55
-      + 0.30 * sin(t * 3.17)
-      + 0.20 * sin(t * 7.71 + 1.1)
-      + 0.18 * sin(t * 13.9 + 0.4)
-      + 0.18 * (mvnoise(vec2(t * 4.0, 0.7)) - 0.5)
-      + 0.22 * (mhash21(floor(vUv * 90.0) + floor(t * 6.0)) - 0.5);
+      + 0.30 * sin(tm * 3.17)
+      + 0.20 * sin(tm * 7.71 + 1.1)
+      + 0.18 * sin(tm * 13.9 + 0.4)
+      + 0.18 * (mvnoise(vec2(tm * 4.0, 0.7)) - 0.5)
+      + 0.22 * (mhash21(floor(vUv * 90.0) + floor(tm * 6.0)) - 0.5);
     sparkle = clamp(sparkle, 0.25, 1.6);
     vec3 neon = vec3(0.18, 1.05, 0.42);
     // Disc-boundary fade — shared by main hotspot + micro-lights.
