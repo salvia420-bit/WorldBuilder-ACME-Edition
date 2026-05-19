@@ -326,4 +326,199 @@ mod tests {
             Some(Vector3::new(0.0, 0.0, 1.5))
         );
     }
+
+    fn retail_portal_dat_path() -> Option<std::path::PathBuf> {
+        if let Some(p) = crate::utils::get_portal_dat_path() {
+            return Some(p);
+        }
+        let c = std::path::PathBuf::from("/home/wbterminal/ac_base_dats/client_portal.dat");
+        c.exists().then_some(c)
+    }
+
+    /// Cross-reference parity test against the C# DatReaderWriter EOR
+    /// suite (`DatReaderWriter.Tests/DBObjs/MotionTableTests.cs::CanReadEORMotionTables`),
+    /// which asserts exactly these four facts about portal asset
+    /// `0x09000202`:
+    ///   - id == 0x09000202
+    ///   - default_style == MotionCommand.NonCombat (0x8000003D)
+    ///   - style_defaults.len() == 1
+    ///   - style_defaults[NonCombat] == MotionCommand.Off (0x4000000C)
+    ///
+    /// If this passes, our parser agrees field-for-field with the
+    /// upstream C# parser on a non-trivial real motion table. If it
+    /// fails, either our parser has a wire-format bug or the C# test
+    /// is asserting against a different DAT build.
+    #[test]
+    fn probe_retail_motion_table_0x09000202_matches_csharp_eor_test() {
+        use crate::DatDatabase;
+        let path = match retail_portal_dat_path() {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "[probe_retail_motion_table_0x09000202] SKIP — no client_portal.dat available"
+                );
+                return;
+            }
+        };
+        let dat = DatDatabase::new(&path).expect("open client_portal.dat");
+        let bytes = dat.get_file(0x09000202).expect("motion table 0x09000202 must exist in retail portal");
+        let mtable = MotionTable::read(&mut std::io::Cursor::new(bytes))
+            .expect("MotionTable::read should succeed on retail 0x09000202");
+
+        assert_eq!(mtable.id, 0x09000202);
+        assert_eq!(mtable.default_style, 0x8000003D, "default_style must be MotionCommand.NonCombat");
+        assert_eq!(mtable.style_defaults.len(), 1, "EOR test asserts exactly one StyleDefaults entry");
+        assert_eq!(
+            mtable.style_defaults.get(&0x8000003D),
+            Some(&0x4000000C),
+            "StyleDefaults[NonCombat] must be MotionCommand.Off"
+        );
+
+        eprintln!(
+            "[probe_retail_motion_table_0x09000202] PASS — id=0x{:08X} default_style=0x{:08X} \
+             style_defaults={} cycles={} modifiers={} links={}",
+            mtable.id,
+            mtable.default_style,
+            mtable.style_defaults.len(),
+            mtable.cycles.len(),
+            mtable.modifiers.len(),
+            mtable.links.len()
+        );
+    }
+
+    /// Sweep every motion table in the retail portal DAT (asset range
+    /// 0x09000000..=0x0900FFFF, per DatReaderWriter's
+    /// `[DBObjType(... 0x09000000, 0x0900FFFF, 0x09000000)]`) and assert
+    /// that `MotionTable::read` succeeds on each one. Also reports
+    /// aggregate stats so we can eyeball whether the parsed shape is
+    /// plausible.
+    ///
+    /// If any table fails, the parser has a wire-format bug that the
+    /// synthetic test doesn't exercise. If 100% pass, the parser is
+    /// validated across the full retail motion-table universe.
+    #[test]
+    fn sweep_all_retail_motion_tables_parse_successfully() {
+        use crate::DatDatabase;
+        let path = match retail_portal_dat_path() {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "[sweep_all_retail_motion_tables] SKIP — no client_portal.dat available"
+                );
+                return;
+            }
+        };
+        let dat = DatDatabase::new(&path).expect("open client_portal.dat");
+
+        let mut motion_table_ids: Vec<u32> = dat
+            .files
+            .keys()
+            .copied()
+            .filter(|id| (0x09000000..=0x0900FFFF).contains(id))
+            .collect();
+        motion_table_ids.sort();
+
+        assert!(
+            !motion_table_ids.is_empty(),
+            "retail portal.dat should contain motion tables in 0x09000000..=0x0900FFFF"
+        );
+
+        let mut parsed = 0usize;
+        let mut failures: Vec<(u32, String)> = Vec::new();
+        let mut total_cycles = 0usize;
+        let mut total_modifiers = 0usize;
+        let mut total_link_groups = 0usize;
+        let mut total_link_destinations = 0usize;
+        let mut total_anims_in_cycles = 0usize;
+        let mut tables_with_velocity = 0usize;
+        let mut tables_with_omega = 0usize;
+        let mut tables_with_bitfield_bit_0 = 0usize;
+        let mut max_cycles_in_table: (u32, usize) = (0, 0);
+        let mut max_links_in_table: (u32, usize) = (0, 0);
+
+        for &id in &motion_table_ids {
+            let bytes = match dat.get_file(id) {
+                Ok(b) => b,
+                Err(e) => {
+                    failures.push((id, format!("get_file: {}", e)));
+                    continue;
+                }
+            };
+            match MotionTable::read(&mut std::io::Cursor::new(bytes)) {
+                Ok(mt) => {
+                    parsed += 1;
+                    assert_eq!(mt.id, id, "parsed id must equal DAT entry id");
+                    total_cycles += mt.cycles.len();
+                    total_modifiers += mt.modifiers.len();
+                    total_link_groups += mt.links.len();
+                    for inner in mt.links.values() {
+                        total_link_destinations += inner.len();
+                    }
+                    if mt.cycles.len() > max_cycles_in_table.1 {
+                        max_cycles_in_table = (id, mt.cycles.len());
+                    }
+                    let link_dest_total: usize = mt.links.values().map(|m| m.len()).sum();
+                    if link_dest_total > max_links_in_table.1 {
+                        max_links_in_table = (id, link_dest_total);
+                    }
+                    let mut had_velocity = false;
+                    let mut had_omega = false;
+                    let mut had_bitfield_bit_0 = false;
+                    for md in mt.cycles.values().chain(mt.modifiers.values()) {
+                        total_anims_in_cycles += md.anims.len();
+                        if md.velocity.is_some() {
+                            had_velocity = true;
+                        }
+                        if md.omega.is_some() {
+                            had_omega = true;
+                        }
+                        if md.bitfield & 0x01 != 0 {
+                            had_bitfield_bit_0 = true;
+                        }
+                    }
+                    if had_velocity {
+                        tables_with_velocity += 1;
+                    }
+                    if had_omega {
+                        tables_with_omega += 1;
+                    }
+                    if had_bitfield_bit_0 {
+                        tables_with_bitfield_bit_0 += 1;
+                    }
+                }
+                Err(e) => failures.push((id, e.to_string())),
+            }
+        }
+
+        eprintln!(
+            "[sweep_all_retail_motion_tables] {}/{} parsed; \
+             total_cycles={} total_modifiers={} link_groups={} link_destinations={} anims={} \
+             tables_with_velocity={} tables_with_omega={} tables_with_bitfield_bit_0={} \
+             biggest_cycles=0x{:08X}({}) biggest_links=0x{:08X}({})",
+            parsed,
+            motion_table_ids.len(),
+            total_cycles,
+            total_modifiers,
+            total_link_groups,
+            total_link_destinations,
+            total_anims_in_cycles,
+            tables_with_velocity,
+            tables_with_omega,
+            tables_with_bitfield_bit_0,
+            max_cycles_in_table.0,
+            max_cycles_in_table.1,
+            max_links_in_table.0,
+            max_links_in_table.1,
+        );
+        if !failures.is_empty() {
+            for (id, err) in failures.iter().take(10) {
+                eprintln!("  FAIL 0x{:08X}: {}", id, err);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} motion tables failed to parse (showing first 10 above)",
+            failures.len()
+        );
+    }
 }
