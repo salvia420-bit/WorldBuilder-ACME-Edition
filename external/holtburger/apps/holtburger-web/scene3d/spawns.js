@@ -366,18 +366,24 @@ function deriveItemType(category, weenieType) {
  */
 function buildUpd(record, setupDid, isPlaceholder) {
   const wcid = record.wcid >>> 0;
-  const lbId = record.landblockId >>> 0;
-  // The wire's landblockId encodes the LB in the high 16 bits AND the
-  // cell in the low 16 bits (kind=0 PositionUpdate uses this packed
-  // form for cell-local routing). Spawn events follow the same shape.
-  // Our staged JSONL splits LB high-half and `cell` separately;
-  // re-pack them here so `(lbId >>> 16) << 16` produces the LB key
-  // the renderer's hooks expect (matches index.html:4169 +
-  // scene3d/loop.js:571-573).
+  // The wasm-side `EntitySpawnJs.landblockId` getter (lib.rs:1768
+  // `to_js`) already returns the full packed LB key `cell_id & 0xFFFF_0000`
+  // (e.g. 0xA9B40000 for Holtburg), with the cell bits stripped. Don't
+  // re-pack — just OR in the per-record cell for indoor placements (cell
+  // is 0 for outdoor, non-zero for EnvCell complexes). The renderer's
+  // hooks consume the same `(lbX<<24 | lbY<<16 | cell)` packed form
+  // (matches index.html:4169 + scene3d/loop.js:571-573).
   //
-  // Cell low 16: 0 for outdoor placements (the vast majority of the
-  // ring); non-zero for cells inside EnvCell complexes.
-  const packedLbId = (((lbId & 0xffff) << 16) | (record.cell & 0xffff)) >>> 0;
+  // Prior bug: `((lbId & 0xffff) << 16)` masked the high LB bits away,
+  // producing packedLbId = `cell` only. _spawnImpl's world-frame
+  // conversion at entities.js:1084-1090 then derived lbX = lbY = 0 and
+  // emitted root.position in LB-local frame instead of AC-world — every
+  // entity rendered at (meta.x, meta.y) ∈ [0, 192) instead of the
+  // intended (lbX*192+meta.x, lbY*192+meta.y). The validator's entity
+  // matcher (which buckets on `floor(world/192)`) then resolved every
+  // spawn to bucket key `wcid|0|0` and got `entities: matched=0`.
+  const lbId = record.landblockId >>> 0;
+  const packedLbId = (lbId | (record.cell & 0xffff)) >>> 0;
   return {
     kind: 1, // KIND_SPAWN
     guid: deriveSyntheticGuid(lbId, record.cell, wcid, record.x, record.y),

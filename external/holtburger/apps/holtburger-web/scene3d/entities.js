@@ -888,6 +888,20 @@ export class EntityManager {
     // drives.
     const root = new THREE.Group();
     root.name = `entity_${guid.toString(16).padStart(8, "0")}`;
+    // Validator-side identity. Mirrors the userData convention used
+    // by scene3d/statics.js (modelId, landblockId on the InstancedMesh
+    // node) and scene3d/buildings.js (modelId on the placementGroup)
+    // so validate_landblock_completeness.cjs's walker can attribute
+    // each entity to its expected manifest entry. Entities are matched
+    // on wcid (weenie class id), not setupDid, so wcid goes into the
+    // generic `modelId` field the walker reads. Without this block the
+    // matcher reported `entities: matched=0` (every rendered entity
+    // classified as "no modelId resolved" → invented).
+    root.userData = {
+      modelId: (meta?.wcid >>> 0) || 0,
+      landblockId: (meta?.landblockId >>> 0) || 0,
+      name: meta?.name ?? null,
+    };
     const parts = [];
 
     // Resolve materials — first preload all unique surface DIDs across

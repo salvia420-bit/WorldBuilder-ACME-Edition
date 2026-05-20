@@ -778,6 +778,7 @@ function hexU32(v) {
         if (useSoa && spawns) {
           const wcids = spawns.wcids;
           const landblockIds = spawns.landblockIds;
+          const cells = spawns.cells;
           const positions = spawns.positions;
           const quaternions = spawns.quaternions;
           const isServerManaged = spawns.isServerManaged;
@@ -793,6 +794,7 @@ function hexU32(v) {
               source: "entities",
               modelOrWcid: wcids[i] >>> 0,
               lbX, lbY,
+              cell: (cells?.[i] >>> 0) || 0,
               x: wx, y: wy, z: positions[i * 3 + 2],
               qw: quaternions[i * 4],
               qx: quaternions[i * 4 + 1],
