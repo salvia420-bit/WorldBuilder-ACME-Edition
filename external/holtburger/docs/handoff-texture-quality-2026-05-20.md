@@ -105,6 +105,155 @@ WB.Terminal command set + invocation pattern is at
   packed atlas had been bleeding adjacent slots' colours into each cell
   at mip levels ≥3 because there was no gutter.
 
+## Heitz tile-and-blend — what it is and what we shipped
+
+Reference: Heitz & Neyret 2018, "Procedural Stochastic Textures by
+Tiling and Blending" — https://eheitzresearch.wordpress.com/722-2/.
+Standard fix for "this tile is repeating obviously" without baking
+larger source textures.
+
+### The algorithm
+
+For every fragment, instead of one `texture(atlas, uv)` lookup:
+
+1. **Skew UV onto a triangular lattice** (Heitz's `triangleGrid` —
+   `scene3d/terrain.js:443`). The skew matrix
+   `mat2(1, 0, -0.57735, 1.15470)` maps a 60° triangle lattice onto
+   integer coords so `floor()`/`fract()` can pick the containing
+   rhombus + the diagonal of the rhombus to identify which of the two
+   triangles the fragment is in.
+2. **Find the 3 triangle vertices + barycentric weights** (`v1, v2,
+   v3, w1, w2, w3`).
+3. **Hash each vertex ID to a random uv offset** in [0, 1) (the
+   `hash2` helper at `scene3d/terrain.js:429` — classic sin/fract
+   hash; pseudo-random but cheap).
+4. **Sample the texture at `uv + off_i` for each i** with
+   `textureGrad` so the GPU mip selection is driven by the un-offset
+   gradient (continuous across hex boundaries — without that the
+   discontinuous hashed offsets push neighbouring fragments to
+   different mips and the blend flickers along hex edges).
+5. **Blend with variance-preserving normalisation around the local
+   3-sample mean.** The naive weighted average loses contrast by
+   `sqrt(w1²+w2²+w3²)` at triangle centres (sqrt(1/3) ≈ 0.577× — the
+   "muddy fog" appearance the original Heitz paper calls out).
+   Variance-correct: `result = cMean + cDev * inversesqrt(w1²+w2²+w3²)`
+   where `cMean = (c1+c2+c3)/3` and `cDev = (c1-cMean)*w1 + (c2-cMean)*w2
+   + (c3-cMean)*w3`.
+
+We're using the **simple variance-preserving variant**, NOT the
+"full" histogram-preservation variant from the paper. The full version
+Gaussianises each sample via the texture's precomputed inverse CDF,
+blends in Gaussian space, then re-applies the CDF — bias-perfect
+contrast preservation. Requires a per-texture CDF bake on upload (~33
+× small LUT). Picks the last ~5% of perceived sharpness back. Skipped
+because the simple variant gets ~95% of the way and avoids the bake
+pipeline.
+
+### Where it lives
+
+`scene3d/terrain.js`:
+
+| Symbol | Line | Purpose |
+|---|---|---|
+| `hash2(vec2) → vec2` | 429 | 2D pseudo-random offset hash |
+| `triangleGrid(uv, out v1, v2, v3, w1, w2, w3)` | 443 | Skew + rhombus subdivision |
+| `heitzSample(int code, vec2 uv) → vec3` | 487 | The 3-sample blend + variance correction |
+| Per-corner call sites | 552–555 | `c00 = heitzSample(clamp(t00,0,32), grid); c10 = heitzSample(...t10...grid); c01 = ...; c11 = ...;` |
+| Final blend | 560–578 | Bilinear 4-corner weight blend of the 4 Heitz returns |
+
+Per fragment: 4 corners × 3 hashed samples = **12 textureGrad calls**
+on `uAtlas` (the `sampler2DArray` of 33 layers, one per terrain code).
+Fine on any modern GPU; tiny atlas fits in L1.
+
+### Tunables (all in `heitzSample`)
+
+- **Hex tile rate** — currently `triangleGrid(uv * 4.0, ...)` at
+  `terrain.js:490`. Higher = smaller hexes = more variation but more
+  visible hex pattern. AC's LB-grid units are 24 m, so `4.0` →
+  ~6 m hexes. Try `6.0`–`8.0` if 256² repeat is still visible; back off
+  if the hex lattice starts showing as a pattern.
+- **Variance correction strength** — currently uncapped (the
+  `inversesqrt(w1²+w2²+w3²)` factor reaches `sqrt(3)` at triangle
+  centres). Could cap it (e.g. `min(wNorm, 1.5)`) if it ever produces
+  visibly over-saturated contrast.
+- **Hash function** — `hash2` uses the classic sin-fract hash. Known to
+  have periodicity on some GPUs/drivers; if banding appears, swap to an
+  integer bit-hash via GLSL ES 3.0 `uint` ops.
+
+### CRITICAL invariant — already cost us one debug round
+
+The `uv` passed to `heitzSample` MUST be **globally continuous within
+the LB**. We feed it `grid = vGridUv = position.xy / 24.0` (range
+[0,8] across a 192 m LB). The original ship (commit `4edf1a0`) passed
+`cellUv` (per-cell, range [0,1] resetting at every 24 m boundary) —
+the hex hash IDs reset at every cell edge, so every cell got a fresh
+random pattern that didn't stitch with its neighbour. Net effect: a
+24 m hex-mismatch seam at every cell boundary that visually defeated
+the entire de-tiling gain. User-reported "looks the same" was the
+audible truth. Fixed in `4cc8b14`. The CRITICAL comment block at
+`terrain.js:469-476` documents this for the next reader.
+
+The textureGrad sample coord `uv + off_i` is allowed to wrap (and
+does — RepeatWrapping on the in-layer 2D axes of the DataArrayTexture
+makes fract(uv+off) sample the correct seamlessly-tiled pixel). The
+gradient passed to textureGrad is `dFdx(uv) / dFdy(uv)` (the un-offset
+gradient) so mip selection stays continuous regardless of the hashed
+offset jumps. Per-layer isolation is preserved because the integer
+layer-axis selection on a sampler2DArray clamps regardless of wrap
+mode.
+
+### Side-effect of the continuous-coord switch (intentional)
+
+The pre-Heitz path had a per-corner water UV scroll
+(`waterCellUv = fract(cellUv + vec2(uTime*0.05, uTime*0.02))`) for the
+8 water terrain codes. That path required `cellUv`; it doesn't compose
+with the continuous-grid `heitzSample`. Dropped from the texture
+sampler in `4cc8b14`. Water animation now comes from vertex
+displacement only (sine waves at `subdivLevel >= 2`). Visible flow on
+water surfaces should still read because the displacement is large
+enough to dominate. If next-session eye-test says water looks too
+static, re-add a water-typed time-dependent offset to `grid` per
+corner in the heitzSample call (pass a 5th param to `heitzSample`, or
+add a small `+ vec2(uTime * 0.05, uTime * 0.02)` to `grid` inside the
+heitzSample body when the code is in the water range 16–23 except 21).
+
+### Buildings: does Heitz apply?
+
+**No code today.** The Heitz path is fragment-shader logic in
+`scene3d/terrain.js`'s `TERRAIN_FRAGMENT_GLSL` only. Building / model
+materials are built elsewhere (likely a standard `MeshStandardMaterial`
+from `MaterialCache` consuming the textures from
+`surfacePixelsToTexture`). To Heitz buildings:
+
+1. Pick a candidate material (MeshStandardMaterial or whichever).
+2. `material.onBeforeCompile = (shader) => { ... }` to inject the
+   `hash2 + triangleGrid + heitzSample` helpers into `shader.fragmentShader`
+   and replace the diffuse `texture2D(map, vUv)` call with `heitzSample`
+   on the diffuse texture.
+3. Tune hex rate to building wall scale (probably finer than terrain's
+   6 m — building tiles repeat at ~1–3 m on walls). Try `4.0 / uvScale`
+   where `uvScale` matches the model's UV unit.
+
+Note: building textures are NOT in a sampler2DArray today, so Heitz
+would target a single `sampler2D` per material. Trivially simpler than
+the terrain variant since there's no layer-axis to manage.
+
+### How to verify Heitz is doing something visible
+
+The C# reference render (WB.Terminal `render-preview`) does NOT use
+Heitz — it uses raw `worldX/tileWu` mod 1 wrap, so the 256² tile
+repeat is fully visible at every 24 m. Side-by-side a screenshot of
+the browser vs. that reference: Heitz should show less obvious tile
+repetition on grass / sand / rock cells (but identical tile repetition
+on the C# side). If side-by-side shows IDENTICAL tile repetition,
+Heitz is silently broken (probably a shader compile fallback or a wrap-mode
+regression).
+
+Quick A/B without a rebuild: edit `heitzSample` to return
+`texture(uAtlas, vec3(uv, float(code))).rgb` (single sample, no
+blend). Reload. That's the "Heitz off" baseline. Restore the function
+body to A/B.
+
 ## What's still wrong (working hypotheses)
 
 Despite the 512² upgrade, the user reports textures still look low-tex.
