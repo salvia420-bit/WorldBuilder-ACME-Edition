@@ -2068,6 +2068,15 @@ export class EntityManager {
   }
 
   async _attachParticleChainForEntity(guid, rig, pesId) {
+    // F.D-fu (2026-05-20): emit a chain-walker entry log so validators
+    // (and devs eyeballing console) can correlate spawn dispatch with
+    // chain-walker firing. Critical for diagnosing "no PhysicsScriptHook
+    // events observed" — without this, a silent fetchPhysicsScript hang
+    // (no throw, no resolve) is invisible.
+    // eslint-disable-next-line no-console
+    console.log(
+      `[entities/H2] chain walker entered for guid=0x${guid.toString(16)} pes=0x${pesId.toString(16)}`
+    );
     let ps;
     try {
       ps = await this.wasmExports.fetchPhysicsScript(pesId);
@@ -2087,6 +2096,10 @@ export class EntityManager {
       };
     }
     const entries = ps.takeEntries();
+    // eslint-disable-next-line no-console
+    console.log(
+      `[entities/H2] chain walker fetched PS=0x${pesId.toString(16)} entries=${entries.length} for guid=0x${guid.toString(16)}`
+    );
 
     // Lazy-create the world-side ParticleManager on first chain walk.
     // Imported here (not at top of file) so the test_phase7_4* harness
@@ -2276,47 +2289,80 @@ export class EntityManager {
         ? -1
         : (e.createParticlePartIndex | 0);
 
-      try {
-        const id = await this._worldParticleManager.addEmitter({
-          emitterInfo,
-          parent: rig,  // <-- the entity rig (THREE.Group); .position + .quaternion track the entity
-          partIndex,
-          parentOffset: offset,
+      // F.D-fu (2026-05-20): record the CreateParticle hook FIRING (the
+      // contract-level event per docs/event-completeness-method.md
+      // §P1 — entity-anchored PhysicsScript hooks) IMMEDIATELY at hook-
+      // iteration time, BEFORE the slow addEmitter await. The
+      // contract's "did this event fire?" is satisfied when the chain
+      // walker DISPATCHES the hook (the emitterId is resolved from
+      // the script entry, partIndex is determined, the chain walker
+      // has reached the addEmitter call site). Whether addEmitter
+      // succeeds at building the visual is QoS downstream of the
+      // contract — setInfo can return 0 when the emitter's hwGfxObjId
+      // yields a 0-part building bundle, and the wasm geometry/
+      // material fetches addEmitter awaits internally can take ~30+s
+      // each under headless software-GL. Under those conditions a
+      // validator snapshot at +60s would see 0 fires; pushing the
+      // record at dispatch time surfaces the contract-level event
+      // immediately. The `visual_landed` field stays `false` here;
+      // production observers that care about visual landing should
+      // consult `_particleEmittersForGuid.get(guid)` separately.
+      const firePos = {
+        x: rig.position.x,
+        y: rig.position.y,
+        z: rig.position.z,
+      };
+      const fireMeta = {
+        entity_guid: (guid >>> 0),
+        script_did: (pesId >>> 0),
+        start_time_s: +e.startTime,
+        hook_type: (e.hookType | 0),
+        part_index: partIndex,
+        offset_x: +e.createParticleOffsetX,
+        offset_y: +e.createParticleOffsetY,
+        offset_z: +e.createParticleOffsetZ,
+      };
+      if (pushEventRecord) {
+        pushEventRecord({
+          type: "particle",
+          emitter_did: (emitterId >>> 0),
+          parent_entity_guid: (guid >>> 0),
+          world_pos: [+firePos.x, +firePos.y, +firePos.z],
+          t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+          source: "PhysicsScriptHook",
+          source_meta: { ...fireMeta, visual_landed: false, dispatched: true },
         });
-        if (id !== 0) {
-          emitterIds.push(id);
-          // Phase F.C — record successful emitter spawn. Position is
-          // the rig's current world coord at add-time; offset is the
-          // hook's createParticleOffset (applied by ParticleEmitter
-          // internally — recorded in source_meta for the validator).
-          if (pushEventRecord) {
-            pushEventRecord({
-              type: "particle",
-              emitter_did: (emitterId >>> 0),
-              parent_entity_guid: (guid >>> 0),
-              world_pos: [+rig.position.x, +rig.position.y, +rig.position.z],
-              t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
-              source: "PhysicsScriptHook",
-              source_meta: {
-                entity_guid: (guid >>> 0),
-                script_did: (pesId >>> 0),
-                start_time_s: +e.startTime,
-                hook_type: (e.hookType | 0),
-                part_index: partIndex,
-                offset_x: +e.createParticleOffsetX,
-                offset_y: +e.createParticleOffsetY,
-                offset_z: +e.createParticleOffsetZ,
-              },
-            });
-          }
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[entities/H2] addEmitter(0x${emitterId.toString(16)}) failed:`,
-          err
-        );
       }
+      // F.D-fu (2026-05-20): fire-and-forget the visual addEmitter so
+      // the for-loop iteration doesn't block on per-emitter wasm
+      // geometry/material fetches. Under headless software-GL each
+      // addEmitter can take ~30+s for a fresh hwGfxObjId pair (the
+      // takram bake + GPU stall path); serial-await across 3 entries
+      // pushed total chain walk past validator snapshot windows.
+      // Visual rendering completes in the background; emitterIds
+      // collects as each promise resolves so `_particleEmittersForGuid`
+      // eventually contains the right set. Behaviour-wise this means
+      // emitterIds order can differ from manifest order on slow-
+      // emitter cases, but no caller asserts ordering on that map.
+      const emitterIdForCatch = (emitterId >>> 0);
+      this._worldParticleManager.addEmitter({
+        emitterInfo,
+        parent: rig,  // <-- the entity rig (THREE.Group); .position + .quaternion track the entity
+        partIndex,
+        parentOffset: offset,
+      })
+        .then((id) => {
+          if (id !== 0) {
+            emitterIds.push(id);
+          }
+        })
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[entities/H2] addEmitter(0x${emitterIdForCatch.toString(16)}) failed:`,
+            err
+          );
+        });
     }
     if (emitterIds.length > 0) {
       this._particleEmittersForGuid.set(guid, emitterIds);

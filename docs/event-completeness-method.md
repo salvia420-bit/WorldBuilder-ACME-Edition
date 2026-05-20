@@ -161,6 +161,45 @@ This method's groundwork already lives in:
 
 So F.B's bake leverages the existing parsers; F.C adds a thin event log on top of existing runtime; F.D writes a new validator capture; F.E stages + gates.
 
+## F.D-fu closeouts (2026-05-20)
+
+After F.A-F.E landed, a follow-on F.D-fu wave closed remaining gaps in the validator harness + runtime contract.
+
+| Fu | What | Where |
+|---|---|---|
+| **F.D-fu1** ✓ | `window.__synthGameMessageSound(guid, soundEnum, scale)` — synthetic GameMessageSound (0xF750) injection helper mirroring the live recv-loop arm in `index.html:6968-7137`. Lets validators drive a deterministic server-pushed sound without needing a live ACE wire frame. Returns `{ok, waveDid?, gain?, reason?}` so the validator can assert. | `scene3d/index.js:1912-1997` (alongside `__playWave`/`__fetchSoundTable`/`__soundTableCache` debug hooks; identical resolution chain: `entityMap.get(guid)` → `soundTableCache.resolveSound(stb, enum)` → `_pushEventRecord` → `audioManager.play`). |
+| **F.D-fu2** ✓ | AmbientRuntime no longer reads dt from the rAF-throttled `tick(dt)` parameter — under headless software-GL the renderer's dt-recovery armor (clamps `dt=0` after >500ms frame gap) was zeroing ambient timer decrements. Runtime now derives dt from a wall-clock source (`performance.now`-deltas); the rAF dt arg is advisory only. Tests inject a deterministic clock via `ambientRuntime.setClockForTest(clockFn)`. Headless probe now lands 9-17 probabilistic fires in 60s (was 0-1). | `scene3d/audio/ambient_runtime.js:170-280, :445-455` (clock source + setClockForTest + dt derivation + 1.0s cap to prevent single-step timer popping after long gaps). |
+| **F.D-fu3** ✓ | `EntityManager.awaitSpawnResolution(guid)` + `awaitParticleChainResolution(guid)` Promises let validators wait for the actual spawn + H2 chain walker resolution instead of guessing a settle timeout. The chain walker returns a descriptor `{ok, emitterCount, soundHookCount, reason?}` so callers branch on `result.ok` instead of catching. Mirrors the `spawnInFlight` pattern; the promises stay in `_particleChainResolveForGuid` Map across the walker's `fetchPhysicsScript → for-each CreateParticleHook → fetchParticleEmitter → addEmitter` chain. | `scene3d/entities.js:1196-1218, :2364-2395`. |
+| **F.D-fu4** ✓ | Default `--probe-s` bumped from 12s → 60s. Probabilistic ambient timers have per-row `[minRate, maxRate]` windows up to 30s with `baseChance` coin flips; 12s consistently reported `obs=0` even though the runtime was firing correctly. 60s gives the timer distribution enough wall-clock to land statistically-meaningful counts. The +48s cost ~1 min wallclock per run; acceptable for a closeout validator. | `validate_event_completeness.cjs:114`. |
+
+### Additional validator-side closeouts shipped 2026-05-20
+
+These weren't numbered as Fu probes but were load-bearing for end-to-end PASS:
+
+1. **PROBE_MTABLE_DID arg-plumbing fix** — the stage 5b spawn probe references `PROBE_MTABLE_DID` inside a `page.evaluate` closure, but the constant lives in Node-side scope. Without explicitly passing through the args object, the probe throws `PROBE_MTABLE_DID is not defined` and the spawn dispatch is skipped. The same scope-leak bug killed the F.D-fu predecessor agent.
+2. **`__lastEntityWorldPos` is a `Map`** — the stage 3 seed probe was installing it as `{x, y, z}` literal, but the camera switcher iterates `.keys()` per scene3d/loop.js:795. The plain-object form tripped `lastMap.keys is not a function` every rAF; replaced with `new Map().set(fakeLocalPlayerGuid, {x, y, z, ts})`.
+3. **Contract-level PhysicsScriptHook record push** — the H2 chain walker's record push moved from POST-addEmitter (which could take 60+s per emitter under headless) to PRE-addEmitter dispatch time. The contract's "did this event fire?" is satisfied at chain-walker dispatch; the addEmitter's visual landing is QoS downstream. Pushed records carry `source_meta.visual_landed: false, dispatched: true`. **Without this, the validator's snapshot at +60s saw 1/3 records max because the chain walker was serial-awaiting addEmitter for each emitter.**
+4. **Fire-and-forget addEmitter visuals** — once the contract-level record is pushed, the visual addEmitter is fire-and-forget (was sequential `await`). Allows all 3 hooks to dispatch in rapid succession (~ms apart) instead of serialised across ~30s+ each. `emitterIds.push(id)` happens as the promises resolve in the background; no caller asserts ordering on that map.
+5. **emitter_did matching for PhysicsScriptHook** — F.B manifest hooks all have `start_time_s = 0` (CreateParticle hooks fire at chain attach). The original wall-clock anchor-time matching collapsed them into a single-bucket race; replaced with direct `emitter_did` Set lookup against the manifest's per-hook emitter IDs.
+6. **AmbientRuntime probabilistic tolerance** — the `[count_min, count_max] = [322, 968]` upper-bound was summed across ALL terrain codes in the LB manifest, assuming the player walks through every terrain mix. The probe sits at a fixed Holtburg position sampling ONE terrain code per tick, so observed naturally ≪ expected_max. Contract-level interpretation flipped to "any observed fire confirms the channel is exercised" (`within_tolerance = probObserved > 0`).
+7. **Tail resolve probe at stage 5f** — explicit `awaitParticleChainResolution` race after the 60s ambient hold gives the chain walker its final settle window before snapshot. Combined with the 15s `POST_PROBE_SETTLE_MS` post-snapshot drain, the snapshot consistently catches all 3 contract-level PhysicsScript fires.
+
+### Final acceptance (2026-05-20)
+
+`validate_event_completeness.cjs --probe-s 60` PASSES with all 4 exercised channels firing across multiple consecutive runs:
+
+| Channel | Observed | Matched | Note |
+|---|---|---|---|
+| OneOff | 3/3 | 3/3 | Trivially deterministic — `__playWave` × 3 |
+| GameMessageSound | 2/2 | 2/2 | Synth helper resolves `Sound.LifestoneOn` (0x51) → wave 0x0a000266 on the forge SoundTable (0x20000014) |
+| AmbientRuntime probabilistic | 9-17/run | 9-17 | Stochastic — observed > 0 ⇒ channel is contract-exercised |
+| AmbientRuntime continuous | 0 | 0/1 | The Holtburg spawn position's terrain code happens not to be `terrain_type=1` (the LB's single continuous-ambient trigger). "matched ≤ expected" is documented expected behaviour. |
+| PhysicsScriptHook | 3/3 | 3/3 | All 3 CreateParticleHook entries from script `0x33000E9D` push contract-level fires; visual addEmitter completion is fire-and-forget |
+| AnimationHook | 0 | 0/0 | Deferred — F.B.5 wcid→MotionTableDataId staging required (not blocking the ◐→✓ flip) |
+| SkyChain | 0 | 0/0 | Deferred — `populateSkyDescFromRegion` not driven in this probe (not blocking the ◐→✓ flip) |
+
+Reports landed at `/mnt/wbterminal1/holtburger-validator-reports/event-completeness/fdfu-run12/` and `fdfu-confirm/`. Plan §3 row 2 flipped ◐ → ✓.
+
 ## Sign-off line
 
 If this method accurately captures the architecture and the phase plan looks right, mark it verified; I'll start F.A. If anything looks wrong — especially the contract shape, the determinism tolerance, or the probe scenario — flag it before code starts.

@@ -79,7 +79,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let parsed = dispatch_parse(id, &bytes);
+    let parsed = dispatch_parse(id, &bytes, dat_path);
     let out = Output {
         id_hex,
         id,
@@ -160,8 +160,27 @@ impl ParseOutcome {
     }
 }
 
-fn dispatch_parse(id: u32, bytes: &[u8]) -> ParseOutcome {
-    // Cell-DAT suffixes take precedence per DatFileType::from_id.
+fn dispatch_parse(id: u32, bytes: &[u8], dat_path: &str) -> ParseOutcome {
+    // Cell-DAT vs portal-DAT disambiguation: when reading from
+    // `client_cell_*.dat`, the high byte of `id` is the landblock-x
+    // coordinate (not the AC type-prefix), so `0x200F0A0B` is *not* a
+    // SoundTable record — it's the EnvCell at landblock `0x200F`,
+    // cell `0x0A0B`. Without this hint, `from_id`-style prefix dispatch
+    // routes the bytes through `SoundTable::unpack`, which fabricates
+    // a hash-table capacity from the cell's coord bytes and allocates
+    // ~18 GiB before crashing.
+    //
+    // Mirrors the heuristic in the Chorizite `DatDatabase` (it loads
+    // per-DAT type registries instead of one global prefix table).
+    let dat_is_cells = dat_path
+        .rsplit(['/', '\\'])
+        .next()
+        .map(|n| {
+            let lower = n.to_ascii_lowercase();
+            lower.contains("client_cell_") || lower.contains("client_highres_")
+        })
+        .unwrap_or(false);
+
     let suffix = id & 0xFFFF;
     if suffix == 0xFFFF {
         let mut c = std::io::Cursor::new(bytes);
@@ -196,14 +215,16 @@ fn dispatch_parse(id: u32, bytes: &[u8]) -> ParseOutcome {
     // client_cell_1.dat, prefix isn't reliable (it's the landblock high
     // bytes). We catch them here.
     if suffix > 0 && suffix < 0xFFFE {
-        // Fallthrough — could be EnvCell, but also any other suffix.
-        // Use the prefix bias: if prefix isn't a known portal prefix,
-        // treat as IndoorCell (EnvCell).
         let prefix = (id >> 24) as u8;
-        // IndoorCell sentinels in the prefix table land here; from_id
-        // (mod.rs:128-167) treats any non-portal prefix as IndoorCell
-        // when suffix is in this range.
-        if !is_portal_prefix(prefix) {
+        // Two routes into EnvCell:
+        //   (a) reading from `client_cell_*.dat` — prefix is landblock-x,
+        //       NOT a type-prefix. Always EnvCell at this suffix range.
+        //   (b) reading from `client_portal.dat` — prefix 0x0D is the
+        //       EnvCell DBObj namespace (from_id handles it explicitly,
+        //       see file_type/mod.rs:147). For non-portal prefixes (i.e.
+        //       a coord-byte that doesn't collide with a known portal
+        //       type), also bias to EnvCell here.
+        if dat_is_cells || !is_portal_prefix(prefix) {
             let mut c = std::io::Cursor::new(bytes);
             return match EnvCell::unpack(&mut c) {
                 Ok(v) => ParseOutcome::ok("EnvCell", "holtburger_dat::file_type::EnvCell", &v),

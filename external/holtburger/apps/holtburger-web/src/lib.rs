@@ -7946,9 +7946,9 @@ pub fn holtburg_envcell_count() -> u32 {
         cell_structure: 0,
         position: Frame::default(),
         portals: vec![
-            CellPortal { flags: 0, other_cell_id: 0x0101, other_portal_id: 0 },
-            CellPortal { flags: 0, other_cell_id: 0x0102, other_portal_id: 0 },
-            CellPortal { flags: 0, other_cell_id: 0x0103, other_portal_id: 0 },
+            CellPortal { flags: 0, polygon_id: 0, other_cell_id: 0x0101, other_portal_id: 0 },
+            CellPortal { flags: 0, polygon_id: 0, other_cell_id: 0x0102, other_portal_id: 0 },
+            CellPortal { flags: 0, polygon_id: 0, other_cell_id: 0x0103, other_portal_id: 0 },
         ],
         visible_cells: vec![0x0101, 0x0102, 0x0103],
         static_objects: vec![
@@ -7994,7 +7994,7 @@ pub fn holtburg_static_object_count() -> u32 {
             environment_id: 0x062E,
             cell_structure: 0,
             position: Frame::default(),
-            portals: vec![CellPortal { flags: 0, other_cell_id: 0x0101, other_portal_id: 0 }],
+            portals: vec![CellPortal { flags: 0, polygon_id: 0, other_cell_id: 0x0101, other_portal_id: 0 }],
             visible_cells: vec![0x0101],
             static_objects: (0..STATIC_OBJECTS_PER_CELL)
                 .map(|i| Stab {
