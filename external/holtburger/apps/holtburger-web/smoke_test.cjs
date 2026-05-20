@@ -5114,12 +5114,17 @@ try {
         const usesDataArrayTexture = /new\s+THREE\.DataArrayTexture\s*\(/.test(src);
         const usesArrayBytesBuilder = /buildTerrainAtlasArrayBytes\s*\(/.test(src);
         const adapterExportsBuilder = /export\s+function\s+buildTerrainAtlasArrayBytes\b/.test(adapterSrc);
-        const atlasClampToEdge = /atlasTexture\.wrapS\s*=\s*THREE\.ClampToEdgeWrapping\s*;/.test(src);
+        // RepeatWrapping (not ClampToEdge) on the in-layer 2D axes is
+        // required by the Heitz tile-and-blend sampler so its random
+        // per-fragment uv offset wraps seamlessly inside each layer.
+        // Layer isolation is independent of wrap mode.
+        const atlasRepeatWrap = /atlasTexture\.wrapS\s*=\s*THREE\.RepeatWrapping\s*;/.test(src);
+        const hasHeitzSampler = /vec3\s+heitzSample\s*\(/.test(src);
         const roadFlipY = /roadTexture\.flipY\s*=\s*false\s*;/.test(src);
         check(
-            "Terrain atlas: DataArrayTexture (one layer per code, ClampToEdge — no gutter-less-atlas bleed at cell vertex lines)",
-            usesDataArrayTexture && usesArrayBytesBuilder && adapterExportsBuilder && atlasClampToEdge,
-            `dataArray=${usesDataArrayTexture} usesBuilder=${usesArrayBytesBuilder} adapterExports=${adapterExportsBuilder} clamp=${atlasClampToEdge}`
+            "Terrain atlas: DataArrayTexture + Heitz tile-and-blend (RepeatWrap per layer, no cross-tile bleed via layer isolation, no 256x256 repeat artefact via 3-sample stochastic blend)",
+            usesDataArrayTexture && usesArrayBytesBuilder && adapterExportsBuilder && atlasRepeatWrap && hasHeitzSampler,
+            `dataArray=${usesDataArrayTexture} usesBuilder=${usesArrayBytesBuilder} adapterExports=${adapterExportsBuilder} repeat=${atlasRepeatWrap} heitz=${hasHeitzSampler}`
         );
         check(
             "Terrain atlas: roadTexture.flipY=false (sibling of atlas; keeps directional road art upright)",
