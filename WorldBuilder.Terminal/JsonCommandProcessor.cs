@@ -669,7 +669,10 @@ public class JsonCommandProcessor {
         string probeScenarioPath = node["probeScenarioPath"]?.GetValue<string>()
             ?? throw new ArgumentException("probeScenarioPath is required");
         float? maxDriftOverride = node["maxDriftOverride"]?.GetValue<float?>();
-        var r = _engine.PhysicsReplayTrace(traceSubjectPath, probeScenarioPath, maxDriftOverride);
+        // Wave 3.F: subjectSignal selects pure-prediction vs legacy pose.
+        // Default is "prediction" — the W3.F path closes the W3.A gap.
+        string subjectSignal = node["subjectSignal"]?.GetValue<string>() ?? "prediction";
+        var r = _engine.PhysicsReplayTrace(traceSubjectPath, probeScenarioPath, maxDriftOverride, subjectSignal);
         return Serialize(new {
             success = true,
             command = "physics-replay-trace",
@@ -689,6 +692,8 @@ public class JsonCommandProcessor {
             }),
             passed = r.Passed,
             notes = r.Notes,
+            subjectSignal = r.SubjectSignal,
+            predictionRowCount = r.PredictionRowCount,
         });
     }
 

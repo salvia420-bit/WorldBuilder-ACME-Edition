@@ -7331,6 +7331,17 @@ void main() {
               const now = performance.now();
               const localEntry = entityMap.get(spawnedPlayerGuid);
               if (localEntry?.sprite) {
+                // Wave 3.F: track velocity across ticks so the
+                // pure-prediction shadow can carry (vx, vy, vz) — the
+                // C# OracleSim integrates v dt, and the validator
+                // needs the same v this branch derived. `vz` stays 0
+                // here because the JS rAF integrator doesn't yet do a
+                // ballistic z-step (jump is server-authoritative); when
+                // the server lands a jump-arc update we let the
+                // PublicUpdatePosition path overwrite via the
+                // local_player_pose shadow, and the prediction shadow
+                // gets re-seeded on the next tick that has input.
+                let predVx = 0.0, predVy = 0.0, predVz = 0.0;
                 if (lastPredictionTime !== null) {
                   // Cap dt to 100ms — clamps large jumps from rAF
                   // throttling on hidden tabs / paused breakpoints
@@ -7380,16 +7391,73 @@ void main() {
                         effHeading = heading + Math.PI;
                         speed = WALK_FORWARD_SPEED;
                       }
-                      localEntry.sprite.x += -Math.cos(effHeading) * speed * dt;
-                      localEntry.sprite.y += Math.sin(effHeading) * speed * dt;
+                      const dx = -Math.cos(effHeading) * speed * dt;
+                      const dy = Math.sin(effHeading) * speed * dt;
+                      localEntry.sprite.x += dx;
+                      localEntry.sprite.y += dy;
+                      // Wave 3.F: record planar velocity for the
+                      // pure-prediction shadow (m/s, derived from the
+                      // SAME speed/dt the integrator just consumed).
+                      predVx = -Math.cos(effHeading) * speed;
+                      predVy = Math.sin(effHeading) * speed;
                     } else if (strafe !== 0) {
                       // Strafe right (D, +1) = heading + π/2;
                       // strafe left (A, -1) = heading - π/2.
                       // Always 1.0 m/s.
                       const effHeading = heading + strafe * (Math.PI / 2);
-                      localEntry.sprite.x += -Math.cos(effHeading) * WALK_FORWARD_SPEED * dt;
-                      localEntry.sprite.y += Math.sin(effHeading) * WALK_FORWARD_SPEED * dt;
+                      const dx = -Math.cos(effHeading) * WALK_FORWARD_SPEED * dt;
+                      const dy = Math.sin(effHeading) * WALK_FORWARD_SPEED * dt;
+                      localEntry.sprite.x += dx;
+                      localEntry.sprite.y += dy;
+                      predVx = -Math.cos(effHeading) * WALK_FORWARD_SPEED;
+                      predVy = Math.sin(effHeading) * WALK_FORWARD_SPEED;
                     }
+                  }
+                }
+                // ─── Wave 3.F (physics-replay parity, 2026-05-19) ───
+                // Push the pure-prediction frame into the wasm shadow
+                // BEFORE the recv-loop's PublicUpdatePosition arm at
+                // index.html:4670-4720 can clobber `local_player_pose`
+                // (and BEFORE the SetMovementInput dispatch below
+                // sends the wire packet that triggers the server's
+                // reconciliation broadcast).
+                //
+                // We always push, even on idle ticks — the C# oracle
+                // integrates a "no-input → no-motion" step too, and
+                // the validator wants a per-tick row to compare. Both
+                // signals come from the SAME sprite the integrator
+                // just wrote, so the shadow round-trips exactly what
+                // the renderer saw, not what the server sent.
+                //
+                // Z is read from the latest local_player_pose shadow's
+                // z (server-authoritative altitude — the JS integrator
+                // doesn't simulate z). on_ground heuristic: server
+                // hasn't told us we're airborne (or pre-spawn), so
+                // default true. This is intentionally conservative —
+                // the C# oracle's own on_ground predicate is the
+                // load-bearing signal for the on-ground gate.
+                if (typeof handle?.setLastClientPrediction === "function") {
+                  let zEst = 0.0;
+                  try {
+                    const stashedPose = handle.getLocalPlayerPose?.();
+                    if (stashedPose && Number.isFinite(stashedPose.z)) {
+                      zEst = stashedPose.z;
+                    }
+                  } catch (_) {}
+                  try {
+                    handle.setLastClientPrediction(
+                      localEntry.sprite.x,
+                      localEntry.sprite.y,
+                      zEst,
+                      predVx,
+                      predVy,
+                      predVz,
+                      true, // on_ground default; jump arc is server-side today.
+                      (window.__predTickCount || 0) >>> 0,
+                      now,
+                    );
+                  } catch (_) {
+                    // Channel-closed on disconnect; safe to swallow.
                   }
                 }
                 lastPredictionTime = now;

@@ -33,6 +33,16 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
+// ── Wave 3.F (2026-05-19): subject-signal CLI ────────────────────────────
+// --subject=prediction (default) gates the run on the pure-prediction
+// shadow from the new SessionHandle.getLastClientPrediction wasm export.
+// --subject=pose keeps the Wave 3.A legacy behaviour for comparison.
+let CLI_SUBJECT = "prediction";
+for (const arg of process.argv.slice(2)) {
+  const m = arg.match(/^--subject=(prediction|pose)$/);
+  if (m) CLI_SUBJECT = m[1];
+}
+
 // ── Constants ────────────────────────────────────────────────────────────
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 const WBT_DLL = path.join(
@@ -150,6 +160,8 @@ function runWbtReplay(traceSubjectPath, probeScenarioPath, timeoutMs = 90_000) {
       command: "physics-replay-trace",
       traceSubjectPath,
       probeScenarioPath,
+      // Wave 3.F: propagate the CLI flag through to the C# engine.
+      subjectSignal: CLI_SUBJECT,
     };
     child.stdin.write(JSON.stringify(cmd) + "\n");
   });
@@ -157,9 +169,10 @@ function runWbtReplay(traceSubjectPath, probeScenarioPath, timeoutMs = 90_000) {
 
 // ── Main ────────────────────────────────────────────────────────────────
 (async () => {
-  console.log("=== Wave 3.A physics-replay-trace validator ===");
+  console.log("=== Wave 3.A/3.F physics-replay-trace validator ===");
   console.log(`scenario:  ${SCENARIO_PATH}`);
   console.log(`WBT dll:   ${WBT_DLL}`);
+  console.log(`subject:   ${CLI_SUBJECT} ${CLI_SUBJECT === "prediction" ? "(Wave 3.F pure-prediction shadow)" : "(Wave 3.A legacy server-reconciled pose)"}`);
   if (!fs.existsSync(SCENARIO_PATH)) {
     console.error(`FATAL: scenario fixture missing: ${SCENARIO_PATH}`);
     process.exit(2);
@@ -209,6 +222,9 @@ function runWbtReplay(traceSubjectPath, probeScenarioPath, timeoutMs = 90_000) {
   // ─── Emit §4.4 envelope ───────────────────────────────────────
   const envelope = {
     surface: "physics-replay",
+    // Wave 3.F: brick lineage tag — useful for downstream CI consumers
+    // diffing W3.A vs W3.F runs.
+    brick: CLI_SUBJECT === "prediction" ? "wave-3.f" : "wave-3.a",
     oracle: {
       kind: "wb-terminal-cpysicsobj-cport",
       method: "physics-parity-method.md",
@@ -220,7 +236,10 @@ function runWbtReplay(traceSubjectPath, probeScenarioPath, timeoutMs = 90_000) {
       ],
     },
     subject: {
-      kind: "holtburger-web-wasm-prediction",
+      kind: CLI_SUBJECT === "prediction"
+        ? "holtburger-web-wasm-pure-prediction"
+        : "holtburger-web-wasm-server-reconciled-pose",
+      subjectSignal: CLI_SUBJECT,
       probeScenarioPath: SCENARIO_PATH,
       traceSubjectPath,
       runId: process.env.RUN_ID ?? null,
@@ -233,6 +252,11 @@ function runWbtReplay(traceSubjectPath, probeScenarioPath, timeoutMs = 90_000) {
       onGroundMismatchCount: replay.onGroundMismatchCount,
       onGroundSubjectMissingCount: replay.onGroundSubjectMissingCount,
       passed: replay.passed,
+      // Wave 3.F accounting: surfaces whether the gate actually ran on
+      // pure prediction (predictionRowCount > 0) or fell back to pose
+      // because the wasm bundle predates W3.F.
+      subjectSignal: replay.subjectSignal ?? CLI_SUBJECT,
+      predictionRowCount: replay.predictionRowCount ?? 0,
     },
     mismatchSampleCount: (replay.mismatches ?? []).length,
     mismatches: replay.mismatches ?? [],
@@ -246,7 +270,9 @@ function runWbtReplay(traceSubjectPath, probeScenarioPath, timeoutMs = 90_000) {
 
   // ─── Console summary ──────────────────────────────────────────
   console.log("");
-  console.log("=== Wave 3.A physics-replay-trace SUMMARY ===");
+  console.log("=== Wave 3.A/3.F physics-replay-trace SUMMARY ===");
+  console.log(`subjectSignal:              ${replay.subjectSignal ?? CLI_SUBJECT}`);
+  console.log(`predictionRowCount:         ${replay.predictionRowCount ?? 0}`);
   console.log(`tickCount:                  ${replay.tickCount}`);
   console.log(`maxPositionDriftMeters:     ${replay.maxPositionDriftMeters.toFixed(4)} m  (tick ${replay.maxPositionDriftTick})`);
   console.log(`meanDriftMeters:            ${replay.meanDriftMeters.toFixed(4)} m`);

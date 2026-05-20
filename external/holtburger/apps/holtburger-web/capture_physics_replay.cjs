@@ -250,6 +250,31 @@ console.log(`[w3a-cap] expanded ${scenario.phases.length} phases → ${tickStrea
   }
   console.log(`[w3a-cap] initial pose: (${probePose.x.toFixed(2)}, ${probePose.y.toFixed(2)}, ${probePose.z.toFixed(2)}) heading=${probePose.heading.toFixed(3)} lb=0x${probePose.lb.toString(16).toUpperCase()}`);
 
+  // ─── Wave 3.F: confirm setLastClientPrediction/getLastClientPrediction wired ──
+  // The wasm bundle has these exports from the lib.rs side; the
+  // index.html rAF block calls setLastClientPrediction every tick (per
+  // the W3.F edit). If either symbol is missing, the prediction shadow
+  // stays null and the validator falls back to the legacy `pos` signal,
+  // which structurally cannot pass the 0.10 m bar (W3.A documented gap).
+  const w3fProbe = await page.evaluate(() => {
+    const h = window.__sessionHandle;
+    return {
+      hasGetter: !!(h && typeof h.getLastClientPrediction === "function"),
+      hasSetter: !!(h && typeof h.setLastClientPrediction === "function"),
+    };
+  });
+  console.log(`[w3a-cap] W3.F shadow exposed: getter=${w3fProbe.hasGetter} setter=${w3fProbe.hasSetter}`);
+  if (!w3fProbe.hasGetter || !w3fProbe.hasSetter) {
+    console.warn(
+      `[w3a-cap] WARNING: Wave 3.F prediction shadow is NOT wired ` +
+      `(getter=${w3fProbe.hasGetter}, setter=${w3fProbe.hasSetter}). ` +
+      `Validator will fall back to the W3.A legacy 'pos' subject and ` +
+      `will report drift against the server-reconciled pose. Rebuild ` +
+      `the wasm bundle with the W3.F changes if you intended to gate on ` +
+      `pure-prediction parity.`
+    );
+  }
+
   // ─── Drive the tick stream ─────────────────────────────────────
   //
   // Strategy:
@@ -318,6 +343,13 @@ console.log(`[w3a-cap] expanded ${scenario.phases.length} phases → ${tickStrea
     const sample = await page.evaluate(() => {
       const out = {
         pos: [NaN, NaN, NaN],
+        // Wave 3.F (2026-05-19): pure-prediction shadow read via the
+        // new wasm getter `getLastClientPrediction`. This is the
+        // load-bearing replacement for `pos` as the validator's
+        // subject signal — `pos` (sourced from `getLocalPlayerPose`)
+        // reflects the SERVER-RECONCILED pose, which surfaced as
+        // ~2.8 m max drift vs the 0.10 m bar in the W3.A baseline.
+        prediction: null,
         onGround: null,
         cellId: null,
         isIndoor: null,
@@ -331,6 +363,22 @@ console.log(`[w3a-cap] expanded ${scenario.phases.length} phases → ${tickStrea
           out.pos = [p.x, p.y, p.z];
         }
       }
+      // Wave 3.F: pure-prediction shadow. May be null pre-spawn or if
+      // the rAF integrator hasn't ticked yet. Carries position +
+      // velocity + on_ground + tick_count + t_ms in the same units as
+      // the C# OracleSim integrates.
+      if (h && typeof h.getLastClientPrediction === "function") {
+        const pred = h.getLastClientPrediction();
+        if (pred) {
+          out.prediction = {
+            position: [pred.position_x, pred.position_y, pred.position_z],
+            velocity: [pred.velocity_x, pred.velocity_y, pred.velocity_z],
+            onGround: pred.on_ground,
+            tickCount: pred.tick_count,
+            tMs: pred.t_ms,
+          };
+        }
+      }
       // Cell + indoor state from index.html:5047-5051
       if (typeof window.__currentCellId === "number") out.cellId = window.__currentCellId >>> 0;
       if (typeof window.__isIndoor === "boolean") out.isIndoor = window.__isIndoor;
@@ -341,14 +389,10 @@ console.log(`[w3a-cap] expanded ${scenario.phases.length} phases → ${tickStrea
         out.predLastPos = { x: window.__predLastPos.x, y: window.__predLastPos.y };
       }
       if (typeof window.__predTickCount === "number") out.predTickCount = window.__predTickCount;
-      // on_ground predicate is not exposed on the wasm side yet — the
-      // C# oracle treats null subject onGround as a SKIP not a
-      // mismatch per the W3.A scope rule.
-      // Heuristic: if predLastPos and pose disagree by less than 10cm
-      // AND we haven't recently been jumping, treat as on_ground. We
-      // emit this as a derived signal under `onGroundHeuristic` but
-      // do NOT populate `onGround` so the C# replay engine can
-      // distinguish "missing" from "false".
+      // on_ground predicate now sourced from the prediction shadow when
+      // available (Wave 3.F). The W3.A heuristic stays as a fallback so
+      // the C# oracle has something to anchor against on the
+      // PublicUpdatePosition-pose subject mode.
       return out;
     });
 
@@ -370,6 +414,12 @@ console.log(`[w3a-cap] expanded ${scenario.phases.length} phases → ${tickStrea
       tick: tickIdx,
       timeSec: (Date.now() - t0) / 1000.0,
       pos: sample.pos,
+      // Wave 3.F: pure-prediction shadow (preferred subject signal).
+      // The C# replay engine reads this when present and falls back to
+      // `pos` only if the prediction is null (pre-spawn / handle not
+      // wired). Carries the integrator's actual output, not the
+      // server-reconciled pose.
+      prediction: sample.prediction,
       onGround: onGroundHeuristic, // null → C# treats as SKIP
       cellId: sample.cellId,
       isIndoor: sample.isIndoor,

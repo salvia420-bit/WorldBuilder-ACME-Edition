@@ -12743,6 +12743,21 @@ pub struct SessionHandle {
     /// the JS-side displacement-vector heading estimator that today's
     /// 3D camera math falls back to.
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
+    /// Wave 3.F (physics-replay parity, 2026-05-19): pure-prediction
+    /// shadow written by the JS-side rAF integrator BEFORE the recv
+    /// loop's `PublicUpdatePosition` arm can overwrite `local_player_pose`.
+    /// Captures the integrator's predicted `(position, velocity, on_ground,
+    /// tick_count, t_ms)` per frame, so the W3.A physics-replay validator
+    /// can compare the **pure client prediction** (what the integrator
+    /// produced) against the C# `OracleSim` (what `acclient.c::CPhysicsObj::
+    /// UpdateObjectInternal` would have produced) without
+    /// server-reconciliation drift confounding the signal. The Wave 3.A
+    /// 5-run baseline (max drift 2.81 m vs the 0.10 m bar) was caused
+    /// entirely by `getLocalPlayerPose` returning the server-overwritten
+    /// pose, not the integrator output. JS writes via
+    /// [`SessionHandle::set_last_client_prediction`]; JS validators read
+    /// via [`SessionHandle::get_last_client_prediction`]. `None` pre-spawn.
+    last_client_prediction: std::rc::Rc<std::cell::RefCell<Option<ClientPredictionFrame>>>,
     /// Workstream C (3D camera collision, 2026-05-11): shared shadow of
     /// the live `SpatialScene` used by the camera collision sweep
     /// exports (`cameraSweepCollision`, `sweepSphereAgainstBuildingMesh`,
@@ -12872,6 +12887,78 @@ pub struct LocalPlayerPose {
     z: f32,
     heading: f32,
     landblock_id: u32,
+}
+
+/// Wave 3.F internal carrier for the JS-side rAF integrator's pure
+/// prediction frame (NOT wasm-bindgen exposed — JS reads via
+/// [`LastClientPredictionJs`] which copies these fields out). Kept as
+/// an owned plain-data struct so the shared `Rc<RefCell<...>>` cell
+/// can `Clone` cheaply on every rAF read without crossing the JS
+/// boundary mid-borrow.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+struct ClientPredictionFrame {
+    /// World-space position predicted by the JS rAF integrator,
+    /// in metres. `position[0..2]` is landblock-local (x,y); `position[2]`
+    /// is z (altitude). Matches `LocalPlayerPose`'s coordinate convention
+    /// so JS callers can diff the two pages of state directly.
+    position: [f32; 3],
+    /// Planar + vertical velocity in m/s on the same axes. JS computes
+    /// this from the per-frame keystate and the `RUN_RATE_SCALAR`
+    /// constant; jump phases write a positive vz that decays toward
+    /// terrain Z.
+    velocity: [f32; 3],
+    /// `true` when the JS integrator believes the player is in contact
+    /// with the ground (i.e. not airborne mid-jump). Mirrors retail
+    /// `acclient.c::CPhysicsObj::on_ground` (`transient_state & 3 == 3`
+    /// per acclient.h:3688). Reset on `jump` edge-trigger; flipped back
+    /// when the ballistic z-velocity drops below zero on contact.
+    on_ground: bool,
+    /// Monotonically-increasing tick counter — `window.__predTickCount`
+    /// today. Useful for the validator to detect dropped frames between
+    /// the capture script's `page.evaluate()` round-trips and the
+    /// integrator's actual cadence.
+    tick_count: u32,
+    /// Wallclock timestamp from JS `performance.now()` at the moment the
+    /// integrator wrote the frame, in milliseconds. Lets the validator
+    /// compute per-tick `dt` directly from the trace instead of relying
+    /// on the scenario's nominal Hz (the capture script paces at ~11 Hz
+    /// wallclock even though the scenario nominally specifies 60 Hz).
+    t_ms: f64,
+}
+
+/// Wave 3.F: JS-facing payload for the rAF integrator's last
+/// pure-prediction frame, returned by
+/// [`SessionHandle::get_last_client_prediction`]. Same layout as the
+/// internal [`ClientPredictionFrame`] but exposed across the
+/// wasm-bindgen boundary as a plain struct with public fields so the
+/// generated JS getter chain is trivial. `None` from the parent getter
+/// means the JS rAF integrator has not yet pushed a frame
+/// (pre-EnteredWorld, or the validator forgot to wire the setter).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub struct LastClientPredictionJs {
+    /// Landblock-local x in metres (range 0..192).
+    pub position_x: f32,
+    /// Landblock-local y in metres (range 0..192).
+    pub position_y: f32,
+    /// World-space z (altitude) in metres.
+    pub position_z: f32,
+    /// Velocity x in m/s.
+    pub velocity_x: f32,
+    /// Velocity y in m/s.
+    pub velocity_y: f32,
+    /// Velocity z in m/s — positive during jump ascent, negative on
+    /// descent, ~0 once on contact.
+    pub velocity_z: f32,
+    /// `true` when the integrator believes the player is touching
+    /// ground. Mirrors retail `CPhysicsObj::on_ground`.
+    pub on_ground: bool,
+    /// `window.__predTickCount` snapshot at frame write time.
+    pub tick_count: u32,
+    /// `performance.now()` snapshot at frame write time (ms).
+    pub t_ms: f64,
 }
 
 /// Workstream C (3D camera collision, 2026-05-11): JS-facing payload
@@ -13289,6 +13376,90 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = getLocalPlayerPose)]
     pub fn get_local_player_pose(&self) -> Option<LocalPlayerPose> {
         *self.local_player_pose.borrow()
+    }
+
+    /// **Wave 3.F (physics-replay parity, 2026-05-19).** Pure-prediction
+    /// shadow returned to JS validators that need to compare the
+    /// rAF integrator's output against the C# `OracleSim` port of
+    /// `acclient.c::CPhysicsObj::UpdateObjectInternal` **without**
+    /// server-reconciliation drift.
+    ///
+    /// `get_local_player_pose` returns the post-reconciliation pose —
+    /// every `PublicUpdatePosition` broadcast at
+    /// `index.html:4670-4720` overwrites the wasm shadow with the
+    /// server-authoritative pose, which means the W3.A validator was
+    /// comparing pure prediction (oracle) against post-reconciliation
+    /// (subject), surfacing server-vs-client integrator drift instead of
+    /// pure integrator parity. The 5-run baseline showed maxDrift 2.81 m
+    /// vs the 0.10 m acceptance bar; replacing the subject signal with
+    /// THIS getter is the load-bearing fix.
+    ///
+    /// JS calls [`Self::set_last_client_prediction`] from the rAF
+    /// integration block at `index.html:7330-7397`, **before** the recv
+    /// loop's `handleEntityUpdate` arm can clobber the entry sprite +
+    /// `local_player_pose` shadow. This getter then returns whatever
+    /// the integrator last wrote.
+    ///
+    /// Returns `None` when:
+    /// - Pre-EnteredWorld (the rAF integrator hasn't ticked yet).
+    /// - The JS-side integrator has been disabled (e.g. unit-test mode).
+    ///
+    /// Treat `None` as "no prediction yet — fall back to
+    /// `get_local_player_pose`", not as a hard error.
+    #[wasm_bindgen(js_name = getLastClientPrediction)]
+    pub fn get_last_client_prediction(&self) -> Option<LastClientPredictionJs> {
+        self.last_client_prediction.borrow().as_ref().map(|p| LastClientPredictionJs {
+            position_x: p.position[0],
+            position_y: p.position[1],
+            position_z: p.position[2],
+            velocity_x: p.velocity[0],
+            velocity_y: p.velocity[1],
+            velocity_z: p.velocity[2],
+            on_ground: p.on_ground,
+            tick_count: p.tick_count,
+            t_ms: p.t_ms,
+        })
+    }
+
+    /// **Wave 3.F (physics-replay parity, 2026-05-19).** Setter for the
+    /// pure-prediction shadow read by [`Self::get_last_client_prediction`].
+    /// Called by the JS rAF integrator (`index.html:7330-7397`) once per
+    /// frame, **after** the integration step but **before** the
+    /// outbound `setMovementInput` packet (so the wasm shadow always
+    /// reflects the in-flight prediction even when the server hasn't
+    /// reconciled yet).
+    ///
+    /// `position_*` are in landblock-local metres (x,y in 0..192;
+    /// z is world altitude). `velocity_*` are in m/s. `on_ground`
+    /// mirrors retail `CPhysicsObj::on_ground` semantics — `true`
+    /// when the player is touching ground. `tick_count` is
+    /// `window.__predTickCount` (monotonically advancing on frames
+    /// with non-zero input). `t_ms` is `performance.now()`.
+    ///
+    /// Idempotent on re-call within the same frame; the validator's
+    /// `capture_physics_replay.cjs` reads after every `requestAnimationFrame`
+    /// callback, so the shadow latch is fine — there's only ever one
+    /// integrator step between two reads.
+    #[wasm_bindgen(js_name = setLastClientPrediction)]
+    pub fn set_last_client_prediction(
+        &self,
+        position_x: f32,
+        position_y: f32,
+        position_z: f32,
+        velocity_x: f32,
+        velocity_y: f32,
+        velocity_z: f32,
+        on_ground: bool,
+        tick_count: u32,
+        t_ms: f64,
+    ) {
+        *self.last_client_prediction.borrow_mut() = Some(ClientPredictionFrame {
+            position: [position_x, position_y, position_z],
+            velocity: [velocity_x, velocity_y, velocity_z],
+            on_ground,
+            tick_count,
+            t_ms,
+        });
     }
 
     /// Workstream C (3D camera collision, 2026-05-11): bilinear
@@ -14421,6 +14592,16 @@ pub async fn start_session(
     // pose, refreshed by the recv-loop on each TickMovement.
     let local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave 3.F (2026-05-19): shared cell for the JS rAF integrator's
+    // pure-prediction frame. Written by JS via
+    // `setLastClientPrediction`; read by JS via
+    // `getLastClientPrediction`. The recv-loop never touches this cell
+    // (the whole point is to keep it free of server-reconciliation
+    // drift). Lives alongside `local_player_pose` only because both
+    // shadows are 1:1 with `SessionHandle`.
+    let last_client_prediction: std::rc::Rc<
+        std::cell::RefCell<Option<ClientPredictionFrame>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Workstream C: shared shadow of the live SpatialScene + terrain
     // heightmap, refreshed by the recv-loop on each TickMovement.
     let collision_scene: std::rc::Rc<
@@ -14528,6 +14709,7 @@ pub async fn start_session(
         cell_scene_snapshot,
         door_part_snapshot,
         local_player_pose,
+        last_client_prediction,
         collision_scene,
         terrain_heights_shadow,
     })

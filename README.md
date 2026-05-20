@@ -1,26 +1,27 @@
 # ACME WorldBuilder
 
-A modern world-building tool for Asheron's Call. Edit terrain, dungeons, spells, skills, creature visuals, and ACE weenie scalars in a full GUI — or drive the same engine headlessly from a terminal, a script, or an LLM agent. Both interfaces share one service layer, so anything you can do in the editor you can also do from a JSON command stream.
+A modern world-building tool for Asheron's Call. Edit terrain, dungeons, spells, skills, creature visuals, and ACE weenie scalars in a full GUI — drive the same engine headlessly from a terminal, a script, or an LLM agent — and play the worlds you build in a browser against a live ACE server. Three interfaces, one service layer.
 
-The **ACME Edition** layers the headless terminal, an agent JSON protocol, a deterministic validation engine, three structured observation channels, and an ML-driven world generation pipeline on top of the original WorldBuilder.
+The **ACME Edition** layers a headless terminal with a JSON agent protocol, a deterministic validation engine, three structured observation channels, an ML-driven world generation pipeline, a browser AC client (`emit-dynamic-site`), and a retail-correctness diagnostic toolset on top of the original WorldBuilder.
 
-📖 **[User Guide](docs/USER_GUIDE.md)** — setup, editor walkthrough, export options, MySQL-backed tools.
+[User Guide](docs/USER_GUIDE.md) — setup, editor walkthrough, export options, MySQL-backed tools.
 
 <p align="center">
   <img src="docs/images/world_map_before.png" width="380" alt="Retail world map (input to AI)">
-  &nbsp;&nbsp;➜&nbsp;&nbsp;
+  &nbsp;&nbsp;to&nbsp;&nbsp;
   <img src="docs/images/world_map_after.png" width="380" alt="AI-generated world map variation">
 </p>
-<p align="center"><em>Retail Dereth (left) → AI-regenerated variation (right). The pipeline turns either into a playable world.</em></p>
+<p align="center"><em>Retail Dereth (left), AI-regenerated variation (right). The pipeline turns either into a playable world.</em></p>
 
-### GUI — Full Terrain & Object Editor
+### Three interfaces, one engine
 
 <p align="center">
   <img src="docs/images/worldbuilder_gui_1.webp" width="780" alt="WorldBuilder GUI terrain editing">
 </p>
 <p align="center">
-  <img src="docs/images/worldbuilder_gui_2.webp" width="780" alt="WorldBuilder GUI object placement">
+  <img src="docs/screenshots/holtburger-1070-fixes-2026-05-16/10_wide_town_view.png" width="780" alt="emit-dynamic-site browser client in Holtburg with Bruneton atmosphere and volumetric clouds">
 </p>
+<p align="center"><em>The desktop editor (top) and the browser client `emit-dynamic-site` rendering live Holtburg geometry against an ACE server (bottom). Both ride the same `WorldBuilder.Shared` service layer; the browser client adds a Rust+WASM session core and a Three.js r184 renderer with Bruneton atmosphere + volumetric clouds.</em></p>
 
 ---
 
@@ -28,7 +29,25 @@ The **ACME Edition** layers the headless terminal, an agent JSON protocol, a det
 
 Every capability in the GUI is also exposed as a structured command on the terminal. AI agents, scripts, and procedural generators **command** the engine (place objects, sculpt terrain, connect dungeon rooms), the engine **executes and validates** against live DAT data, and three observation channels let the agent **read back** the world — visually (`render-preview`), factually (`describe-landblock`), or statistically (`compare-to-retail`) — to refine its plan in a tight loop.
 
-The GUI and headless terminal are **parallel interfaces** sharing one service layer. Human artists and AI agents can work on the same project files.
+A fourth interface — the browser client `emit-dynamic-site` at [`external/holtburger/apps/holtburger-web/`](external/holtburger/apps/holtburger-web/) — turns the same engine + DAT data into a playable client that talks to a live ACE server over a UDP↔WebSocket bridge. The C# `WorldBuilder.Terminal` doubles as a **C# absorption layer** for the Chorizite stack and acts as the diagnostic-oracle host for the browser client (see [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md)).
+
+The GUI, headless terminal, and browser client share one service layer. Human artists, AI agents, and end users can work on the same project files and DAT data.
+
+---
+
+## Recent milestones (2026-05)
+
+Curated; full list per area lives in the linked method/handoff docs. Each line maps to a concrete artifact in the tree.
+
+- **Retail-correctness diagnostic toolset** ([`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md)) — 14 surfaces with a canonical oracle, 10 already validator-covered. Shipped in 5 parallel agent waves. New `chorizite-*` and `diag-*` JSON commands in `WorldBuilder.Terminal`; matching `validate_*.cjs` validators in `external/holtburger/apps/holtburger-web/`. See "Diagnostic Toolset" below.
+- **Volumetric clouds + Bruneton atmosphere** ([`docs/skybox-volumetric-clouds-handoff-2026-05-15.md`](docs/skybox-volumetric-clouds-handoff-2026-05-15.md), `external/holtburger/apps/holtburger-web/vendor/takram-three-clouds/`) — physically-based sky shipping in-game on a GTX 1070. AC's time-of-day drives the Bruneton runtime through `cloud_volume.js` and 5 `DayGroup` uniforms.
+- **Combat A-K** (memory: `project_holtburger_combat_phase_*`) — melee + missile + magic stances, stance-gated 3D click-to-attack, charge-to-range pursuit, 7-tab spellbook, drag-and-drop spell bar, delete-from-spellbook full wire round-trip. All wire packets live-validated against ACE on the 1070 dev box.
+- **Vendor UI v0.2.0** ([`external/holtburger/apps/holtburger-web/plugins/vendor-ui.js`](external/holtburger/apps/holtburger-web/plugins/vendor-ui.js)) — buy/sell round-trip + AC-aesthetic icons (`fetch_surface_pixels` wasm export).
+- **13x13 Holtburg world ring** ([`docs/world-expand-step-1-screenshots-2026-05-14/`](docs/world-expand-step-1-screenshots-2026-05-14/)) — 169 landblocks (2.4 km x 2.4 km) baked from real base DATs. Scenery, water, roads, and standing-stone clusters render at full retail density across the ring:
+  <p align="center"><img src="docs/world-expand-step-1-screenshots-2026-05-14/05-south-holtburg-outpost.png" width="700" alt="South Holtburg outpost forest in the 13x13 ring"></p>
+- **Scenery bake B.5** ([`docs/scenery-bake-b5-collision-parity-report.md`](docs/scenery-bake-b5-collision-parity-report.md)) — Rust scenery placement bit-for-bit identical to ACE on 16,700 placements.
+- **Visual fidelity waves 1-6** (memory: `project_visual_fidelity_wave*_done_*`) — 12/14 phases shipped: quality presets, shadow maps, surface classifier, procedural normals, triplanar, POM, terrain mesh subdivision, animated water/lava, SSAO, CSM.
+- **Chorizite absorption** ([`external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md`](external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md)) — 23-repo C# AC plugin ecosystem surveyed; tier 1-5 vendored at [`external/chorizite/`](external/chorizite/). WB.Terminal hosts the C# parsers; holtburger-web is the runtime under test.
 
 ---
 
@@ -41,9 +60,9 @@ The GUI and headless terminal are **parallel interfaces** sharing one service la
 
 **Requirements** — Windows 10/11, .NET 8.0 (the installer can prompt to install it). The app checks for updates in-place once installed.
 
-> ⚠️ **Beta software.** Active development across all features. The table-driven editors (Spell, Skill, Vital, Experience, CharGen, SpellSet, Layout), the Weenie Editor, and Object Debug are powerful but evolving. Back up your DAT files (and the ACE database when using DB-write features) before exporting.
+> **Beta software.** Active development across all features. The table-driven editors (Spell, Skill, Vital, Experience, CharGen, SpellSet, Layout), the Weenie Editor, and Object Debug are powerful but evolving. Back up your DAT files (and the ACE database when using DB-write features) before exporting.
 
-> 💡 **First run is slow** — the app builds caches for textures, thumbnails, and terrain on initial launch. They persist across sessions; subsequent launches are significantly faster.
+> **First run is slow.** The app builds caches for textures, thumbnails, and terrain on initial launch. They persist across sessions; subsequent launches are significantly faster.
 
 ---
 
@@ -100,7 +119,7 @@ Open **[`tools/town_placer.html`](tools/town_placer.html)** in any browser — n
   <img src="docs/images/townplacer.png" width="780" alt="Town Placer browser tool">
 </p>
 
-📖 Full pipeline guide: **[docs/HowToMakeNewWorlds.md](docs/HowToMakeNewWorlds.md)**
+Full pipeline guide: **[docs/HowToMakeNewWorlds.md](docs/HowToMakeNewWorlds.md)**
 
 ---
 
@@ -140,7 +159,7 @@ Full protocol — every command, parameter, response schema, coordinate conventi
 
 ### Command Catalog
 
-The agent JSON protocol exposes **63 documented commands**; the REPL surface is wider — **140+ commands** including bulk operations, image-driven terrain, ontology export, ACE-database I/O, and dungeon document editing. Sample categories:
+The agent JSON protocol exposes **63 documented commands**; the REPL surface is wider — **~150 commands** including bulk operations, image-driven terrain, ontology export, ACE-database I/O, dungeon document editing, and the Wave-1-through-5 diagnostic-toolset bricks. Sample categories:
 
 | Category | Commands |
 |---|---|
@@ -159,10 +178,11 @@ The agent JSON protocol exposes **63 documented commands**; the REPL surface is 
 | **ACE DB Editing** | `creature-{get,save,export-sql}`, `spell-{list,get,save,copy,delete}`, `weenie-{save,insert,delete,list-property-keys}`, `placement-{list,add-outdoor,add-dungeon,remove,export-sql}` |
 | **Layout Overlay** | `layout-{list,get,save,delete-overlay}` |
 | **World Generation** | `fresh-start`, `generate-world`, `export-towns-csv` |
+| **Diagnostics (Wave 1-5)** | `chorizite-{list-dat-records,parse-dat-record,list-dat-types,wire-{pack,unpack,list}-message-types,dump-enum-values,dump-opcodes}`, `enum-parity-report`, `physics-jump-formula{,-sweep}`, `physics-replay-trace`, `motion-{classify-swing,inventory}`, `compare-render-corners` |
 | **Logging** | `open-log-folder` (paired with `--log-file <path>` CLI flag) |
 | **Control** | `help`, `quit` / `exit` |
 
-Full grouped catalog in **[`docs/terminal_repl_commands.md`](docs/terminal_repl_commands.md)**.
+Full grouped catalog in **[`docs/terminal_repl_commands.md`](docs/terminal_repl_commands.md)**. Diagnostic-toolset commands are catalogued in [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md) §5.
 
 ### Validation Engine
 
@@ -351,25 +371,83 @@ Both **Python** (75+ tests) and **PowerShell** (25 checks) test harnesses valida
 
 ---
 
-## emit-dynamic-site *(in design — preliminary groundwork only)*
+## emit-dynamic-site — the browser AC client
 
-`emit-static-site` produces a *snapshot* of a world. **`emit-dynamic-site`** is the planned follow-on: the same Google-Maps-style frontend, but *playable* — the browser becomes a real Asheron's Call client connected to a live ACE world server, with player movement, chat, combat, and creature/NPC behavior visible in real time as a top-down view.
+`emit-static-site` produces a *snapshot* of a world. **`emit-dynamic-site`** is the playable companion: the browser is a real Asheron's Call client, connected to a live ACE world server over a UDP↔WebSocket bridge, rendering DAT geometry through a Three.js r184 scene with Bruneton atmosphere and volumetric clouds.
 
-This section is a forward-look. The full architectural design lives in **[`docs/emit-dynamic-site.md`](docs/emit-dynamic-site.md)**; below is a summary of the load-bearing constraints identified during groundwork.
+It lives at [`external/holtburger/apps/holtburger-web/`](external/holtburger/apps/holtburger-web/). Full architectural design in [`docs/emit-dynamic-site.md`](docs/emit-dynamic-site.md); local ACE bring-up in [`docs/ace-local-setup.md`](docs/ace-local-setup.md).
 
-**Stack.** The dynamic site assembles three vendored stacks already in this tree:
+<p align="center">
+  <img src="docs/screenshots/holtburger-1070-fixes-2026-05-16/09_facing_clouds.png" width="780" alt="emit-dynamic-site player view with Life Stone, Alcott NPC, and depth-correct volumetric clouds">
+</p>
+<p align="center"><em>In-game on a GTX 1070, 2026-05-16. Player avatar third-person, Life Stone glowing blue, guard NPC ("Alcott") with body intact, clouds depth-discarded behind the buildings. Captured live via CDP after a clean ACE handshake.</em></p>
 
-- **[`external/holtburger`](external/holtburger/)** — a modern Rust AC client (login, character flow, world-state authority, inventory, vendors, crafting, magic, melee, scripting). Hard-forked from [merklejerk/holtburger](https://github.com/merklejerk/holtburger) (commit `629695a2`, see [`external/holtburger/VENDORED.md`](external/holtburger/VENDORED.md)). Holtburger's own README states *"the network/session stack is modular so it technically can be swapped out for a WS layer if needed"* — this is the seam emit-dynamic-site exploits.
-- **[`external/ACE`](external/ACE/)** — the AGPLv3 Asheron's Call Emulator that the holtburger client connects to. Its game logic talks to a `Session.Network` abstraction, not raw UDP; a UDP↔WS bridge can sit transparently in front without modifying ACE.
-- **`emit-static-site`** — the existing Leaflet frontend, retained for the terrain/glyph tile pyramid. Its forward-compatibility hook (`overlays/dynamic_players.js`, silent-no-op when absent) is the documented seam for live overlays.
+### What's actually working
 
-**Three constraints we already know we have to solve:**
+- **Live ACE handshake** — `holtburger-protocol` Rust crate drives `LoginRequest -> CharacterList -> CharacterEnterWorldRequest -> PlayerCreate -> PlayerDescription` against `external/ACE/` over a `WsTransport` bridge. Local fixture in [`docs/ace-local-setup.md`](docs/ace-local-setup.md).
+- **3D scene** — Three.js r184 with EffectComposer, Bruneton atmosphere bake (5 `DayGroup` uniforms driven by AC time-of-day), volumetric clouds (vendored `takram-three-clouds` 0.7.6), AGX tone mapping, cascaded shadow maps, SSAO, animated water/lava vertex displacement.
+- **World** — 13x13 Holtburg ring (169 landblocks, 2.4 km x 2.4 km) baked from real base DATs at `~/ac_base_dats/`. Indoor EnvCells for Holtburg cottages/shops/Academy. Scenery placement bit-for-bit identical to ACE (16,700 placements at parity).
+- **Entities** — typed `WorldObject` hierarchy ported from Chorizite's `ACPlugin` (31 classes), per-class wire dispatch, nameplates, motion-table-driven swing poses, animation cache with shared geometry across N mesh instances.
+- **Combat** — melee, missile, magic stances. Stance-gated 3D click-to-attack with charge-to-range pursuit. 7-tab spellbook, drag-and-drop spell bar, delete-from-spellbook full round-trip.
+- **Plugins** — `combat-bar`, `spellbook`, `vendor-ui` (buy/sell + icons via `fetch_surface_pixels`), `vitals-hud`, `world-objects` skeleton. JS plugin shell at [`external/holtburger/apps/holtburger-web/plugins/`](external/holtburger/apps/holtburger-web/plugins/).
 
-1. **Asheron's Call clients require a UDP↔WebSocket bridge.** Browsers cannot speak raw UDP. Holtburger's network/session stack is modular and can in principle be swapped for a WS layer; alternately, an external proxy can translate transparently in front of ACE. Both are tractable; the choice is documented in the design doc.
-2. **DAT files must "stream" over HTTP.** Retail AC ships ~2 GB of DATs; the browser cannot pre-download them. Holtburger's `ContentRepository::from_mounts(Vec<Arc<dyn ResourceSource>>)` accepts a trait — an HTTP-range-request `ResourceSource` impl is the path. We need to settle whether to serve raw DATs, pre-bundled HBA shards, or a content-addressed CDN layout.
-3. **Renderer scale.** Leaflet excels at the static site (tile pyramid, pan/zoom, basemap). It is *not* suitable for thousands of moving entities — at z=11–12 the static site bakes objects into tiles; there is no marker layer. The dynamic site swaps to a WebGL renderer (PixiJS or equivalent) for the live entity layer; terrain tiles remain Leaflet's job.
+### Stack
 
-**What this groundwork pass landed:** the AGPLv3 license, the in-tree hard-fork of holtburger, this section, and the design doc. **No application code yet** — the next pass will spike one of the high-risk surfaces (likely the WS↔UDP bridge against ACE).
+- [`external/holtburger`](external/holtburger/) — Rust workspace (`holtburger-protocol`, `holtburger-session`, `holtburger-world`, `holtburger-dat`, `holtburger-common`, `holtburger-scenery-bake`, `holtburger-event-bake`). Hard-forked from [merklejerk/holtburger](https://github.com/merklejerk/holtburger); see [`external/holtburger/VENDORED.md`](external/holtburger/VENDORED.md).
+- [`external/ACE`](external/ACE/) — the AGPLv3 Asheron's Call Emulator the client talks to (UDP↔WS bridge sits transparently in front).
+- [`external/chorizite/`](external/chorizite/) — tier 1-5 C# repos from the Chorizite plugin ecosystem (`ACPlugin`, `Chorizite.Common`, `Chorizite.ACProtocol`). Consumed by `WorldBuilder.Terminal` as oracles; not loaded into the browser. See [`external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md`](external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md).
+- The Leaflet `emit-static-site` frontend remains the basemap. The dynamic site is a separate page that swaps Leaflet's z=11-12 sprite tiles for the live Three.js scene; terrain tiles remain Leaflet's job at smaller zooms.
+
+### Local bring-up
+
+A complete dev stack — ACE on MariaDB + the WS bridge + the browser page — comes up via [`scripts/spin-up-mariadb.sh`](scripts/spin-up-mariadb.sh) for the world database, the ACE bring-up recipe in [`docs/ace-local-setup.md`](docs/ace-local-setup.md), and `cargo run -p holtburger-wsbridge` for the UDP↔WS bridge. Default ports: ACE on 9000/udp, bridge on 8080/tcp, page served from any static HTTP origin.
+
+---
+
+## Diagnostic Toolset — proving retail-correctness
+
+The browser client's claim is that it is **retail-correct along every axis that has a canonical oracle**. The diagnostic toolset (planned in [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md)) breaks the runtime into **14 surfaces** with a canonical oracle and ships a validator for each.
+
+Status as of 2026-05-19 — 10 of 14 surfaces validator-covered, 1 partial, 3 open:
+
+| # | Surface | Status | Validator |
+|---|---|---|---|
+| 1 | Placement completeness | covered | `validate_landblock_completeness.cjs` |
+| 2 | Event completeness (sounds + particles) | partial | `validate_event_completeness.cjs` |
+| 3 | Entity classification | covered | `validate_entity_classification.cjs` |
+| 4 | Wire packet pack/unpack | covered | `validate_wire_conformance.cjs` (19/23 PASS + 4 documented SKIP) |
+| 5 | DAT parser parity (~20 file types) | covered | `validate_dat_parity.cjs` (24/24 x 906/906 Phase-A PASS) |
+| 6 | Property/enum parity (66 enums) | covered | `validate_enum_parity.cjs` (drift surfaced; triage open) |
+| 7 | Render-pose / coordinate-frame parity | covered | `compare_render_corners.cjs` |
+| 8 | Physics parity (jump, collision, on-ground) | partial | `physics-jump-formula{,-sweep}` (1000/1000 bitwise PASS) + `physics-replay-trace` infrastructure |
+| 9 | Motion / swing-pose parity | covered | `validate_motion_pose.cjs` (52/52 JS-vs-C# PASS) |
+| 10 | Texture / surface-chain decode parity | open | Wave 4 — `validate_texture_decode.cjs` |
+| 11 | Mesh / triangulation parity | open | Wave 4 — `validate_mesh_parity.cjs` |
+| 12 | Cell-portal graph + PVS | partial | Wave 5 — `validate_cell_portal_graph.cjs` |
+| 13 | Skybox / atmosphere parity | partial | Wave 5 — `validate_skybox.cjs` |
+| 14 | DAT integrity (sha256, modder-id rejection) | covered | `scenery-bake` pre-flight + `bake-source.sha256` sidecar |
+
+Each surface rides a **method doc** that defines the contract + canonical oracle:
+
+- [`docs/world-completeness-method.md`](docs/world-completeness-method.md) — placement contract
+- [`docs/entity-completeness-method.md`](docs/entity-completeness-method.md) — entity classification
+- [`docs/event-completeness-method.md`](docs/event-completeness-method.md) — sound/particle event contract
+- [`docs/wire-conformance-method.md`](docs/wire-conformance-method.md) — wire-packet contract
+- [`docs/dat-parity-method.md`](docs/dat-parity-method.md) — DAT parser parity
+- [`docs/enum-parity-method.md`](docs/enum-parity-method.md) — enum parity
+- [`docs/physics-parity-method.md`](docs/physics-parity-method.md) — physics contract
+- [`docs/motion-parity-method.md`](docs/motion-parity-method.md) — motion-table parity
+
+Validators live next to the runtime under test ([`external/holtburger/apps/holtburger-web/validate_*.cjs`](external/holtburger/apps/holtburger-web/)) and consume oracles from `WorldBuilder.Terminal` over the JSON-stdin loop. **WB.Terminal hosts the C# absorption layer**; the browser is the runtime; agents on either side speak the same protocol.
+
+```bash
+# Run one surface
+node external/holtburger/apps/holtburger-web/validate_wire_conformance.cjs
+
+# Each validator emits a JSON report under
+# /mnt/wbterminal1/holtburger-validator-reports/<surface>/<timestamp>/report.json
+# and exits 0 on PASS, non-zero on drift.
+```
 
 ---
 
@@ -660,12 +738,15 @@ Platform-specific projects: `WorldBuilder.Windows` (recommended), `WorldBuilder.
 
 | Phase | Status | What's there today |
 |---|---|---|
-| **1. Service Layer Consolidation** | ✅ | GUI logic extracted into `WorldBuilder.Shared`. `ITerrainService`, `IObjectPlacementService`, `IDungeonService`, `IStampService` all in place. Both GUI and CLI run through the same `CommandEngine`. |
-| **2. State Telemetry & Observation** | ✅ | Heightmap matrices, full vertex data, landblock enumeration, dungeon cell layout, spatial radius queries, quaternion orientation, region/world metadata — all machine-readable. |
-| **3. Deterministic Validation** | ✅ | 34-code `ValidationEngine` covering AABB bounds, Z-axis clamping, portal symmetry, terrain edge stitching, cliff detection, degenerate quaternions. |
-| **4. Speed & Bulk Operations** | 🟡 | `benchmark`, `set-landblock-heightmap`, `set-landblock-terrain`, `bulk-place-objects` all in place. The image-driven worldgen pipeline exercises the bulk path at scale. A sustained-throughput regression suite is still wishlist. |
-| **5. ML-Driven World Generation** | 🟡 | V3 terrain diffusion in production. Outdoor scene placer (50.5M Transformer) at 83–85/100 on retail 20×20 regions. Settlement planner MLP working. Unified outdoor + interior placer in flight. |
-| **6. Gameplay Population** | 🔲 | Encounters, NPC placement, vendor inventories, loot tables, quest scaffolds. Contingent on Phase 5 hitting retail-quality population. The `OntologyService` (semantic tags, constraint presets, 28-family creature taxonomy) is the natural input substrate when this phase begins. |
+| **1. Service Layer Consolidation** | done | GUI logic extracted into `WorldBuilder.Shared`. `ITerrainService`, `IObjectPlacementService`, `IDungeonService`, `IStampService` all in place. Both GUI and CLI run through the same `CommandEngine`. |
+| **2. State Telemetry & Observation** | done | Heightmap matrices, full vertex data, landblock enumeration, dungeon cell layout, spatial radius queries, quaternion orientation, region/world metadata — all machine-readable. |
+| **3. Deterministic Validation** | done | 34-code `ValidationEngine` covering AABB bounds, Z-axis clamping, portal symmetry, terrain edge stitching, cliff detection, degenerate quaternions. |
+| **4. Speed & Bulk Operations** | partial | `benchmark`, `set-landblock-heightmap`, `set-landblock-terrain`, `bulk-place-objects` all in place. The image-driven worldgen pipeline exercises the bulk path at scale. A sustained-throughput regression suite is still wishlist. |
+| **5. ML-Driven World Generation** | partial | V3 terrain diffusion in production. Outdoor scene placer (50.5M Transformer) at 83–85/100 on retail 20x20 regions. Settlement planner MLP working. Unified outdoor + interior placer in flight. |
+| **6. Gameplay Population** | open | Encounters, NPC placement, vendor inventories, loot tables, quest scaffolds. Contingent on Phase 5 hitting retail-quality population. The `OntologyService` (semantic tags, constraint presets, 28-family creature taxonomy) is the natural input substrate when this phase begins. |
+| **7. Browser AC Client (`emit-dynamic-site`)** | partial | Live ACE handshake; 13x13 Holtburg world ring rendered with Bruneton atmosphere + volumetric clouds; combat A-K shipped (melee/missile/magic with full wire round-trip); vendor UI with buy/sell + icons; scenery bake at ACE parity. See [`external/holtburger/apps/holtburger-web/`](external/holtburger/apps/holtburger-web/) and [`docs/emit-dynamic-site.md`](docs/emit-dynamic-site.md). |
+| **8. Retail-Correctness Diagnostic Toolset** | partial | 14 surfaces with canonical oracles; 10 covered, 1 partial, 3 open. Wave 1-3 + parts of 4-5 shipped 2026-05-19. See [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md). |
+| **9. Chorizite Absorption Layer** | partial | 23 Chorizite repos surveyed; tier 1-5 vendored at [`external/chorizite/`](external/chorizite/). `ACPlugin` `WorldObject` hierarchy ported to JS (31 typed classes). Enum + opcode parity validators surfacing real drift. See [`external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md`](external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md). |
 
 ---
 
@@ -684,6 +765,9 @@ WorldBuilder-ACME-Edition/
 ├── WorldBuilder.Terminal/         # Headless CLI (batch, REPL, agent stdin mode)
 │   ├── Program.cs                 #   Entry point — mode routing
 │   ├── CommandEngine.cs           #   Shared business logic for all commands
+│   ├── CommandEngine.Chorizite.cs #   Chorizite absorption-layer commands
+│   ├── CommandEngine.{DatParity,EnumParity,MotionParity,
+│   │     PhysicsParity,WireConformance}.cs   # Diagnostic-toolset partials
 │   ├── JsonCommandProcessor.cs    #   stdin/stdout JSON-line protocol handler
 │   ├── TerminalRepl.cs            #   Human-friendly interactive REPL
 │   └── HeadlessProjectManager.cs  #   DI-based project management
@@ -706,15 +790,22 @@ WorldBuilder-ACME-Edition/
 ├── town_kits/                     # Per-town placement kits driving the population pipeline
 ├── external/                      # Vendored third-party source and data
 │   ├── ACE/                       #   Asheron's Call Emulator (AGPLv3) — server target
-│   ├── holtburger/                #   Modern Rust AC client (AGPLv3) — emit-dynamic-site stack
+│   ├── holtburger/                #   Modern Rust AC client (AGPLv3)
+│   │   └── apps/holtburger-web/   #     emit-dynamic-site: Rust+WASM + Three.js r184 browser AC client
+│   ├── chorizite/                 #   Tier 1-5 C# AC plugin ecosystem (oracles)
 │   ├── DatReaderWriter/           #   DAT format library
 │   ├── DerethMaps/                #   Map reference data
 │   ├── acpedia/                   #   Community wiki XML dump (53k pages)
 │   └── LSD-Partial-2025-02-23.../ #   Spawn map dataset
 ├── LICENSE.md                     # AGPL v3 (see "License" below)
-├── docs/                          # Documentation
+├── docs/                          # Documentation (see docs/INDEX.md for triage)
+│   ├── INDEX.md                   #   Top-level docs index
+│   ├── diagnostic-toolset-plan-2026-05-19.md   # 14-surface validator plan
+│   ├── *-method.md                #   Canonical contracts per surface
+│   ├── emit-dynamic-site.md       #   Browser-client architectural design
+│   ├── ace-local-setup.md         #   Local ACE bring-up recipe
 │   ├── HowToMakeNewWorlds.md      #   World generation pipeline guide
-│   ├── agent_api_reference.md     #   Full command reference (1,400+ lines)
+│   ├── agent_api_reference.md     #   Full command reference
 │   ├── agent_api_schema.json      #   JSON schema for all commands
 │   └── PopulationPipeline*.md     #   ML pipeline strategy / progress notes
 ├── tests/                         # Integration test suites
@@ -735,9 +826,10 @@ This license is not a fresh choice — it is a structural consequence of the pro
 |---|---|---|
 | [`external/ACE`](external/ACE/) | AGPL v3 | Game server we target. |
 | [`external/holtburger`](external/holtburger/) | AGPL v3 | AC client we vendor for `emit-dynamic-site`. |
-| WorldBuilder (this project) | AGPL v3 | Inherited from the above. |
+| [`external/chorizite/`](external/chorizite/) | MIT | C# AC plugin ecosystem tier 1-5 vendored as oracles. |
+| WorldBuilder (this project) | AGPL v3 | Inherited from the AGPLv3 dependencies. |
 
-**Practical implication for `emit-dynamic-site`.** AGPL v3 §13 ("Remote Network Interaction") means that when a hosted instance of the browser-playable client lets remote users interact with our modified version, those users must be offered the corresponding source. Operators of an `emit-dynamic-site` deployment will need to publish their source — including any patches to holtburger, the WS bridge, and the frontend — at a URL the running service points to. Plan deployments accordingly.
+**Practical implication for `emit-dynamic-site`.** AGPL v3 §13 ("Remote Network Interaction") means that when a hosted instance of the browser-playable client lets remote users interact with our modified version, those users must be offered the corresponding source. Operators of an `emit-dynamic-site` deployment must publish their source — including any patches to holtburger, the WS bridge, and the frontend — at a URL the running service points to. Plan deployments accordingly.
 
 **Patch boundary.** Anything we add under [`external/holtburger`](external/holtburger/) is a derivative work of holtburger and stays AGPL v3. The same holds for [`external/ACE`](external/ACE/). New top-level WorldBuilder code that *uses* these stacks via process boundaries (e.g., a separate UDP↔WS proxy that does not link AGPL code) has more flexibility, but should still default to AGPL v3 unless we have a specific reason otherwise.
 
@@ -753,3 +845,4 @@ This license is not a fresh choice — it is a structural consequence of the pro
 - **The AC community** — everyone who has contributed, tested, reported bugs, or just kept Dereth going. If you helped and aren't listed, you know who you are.
 - **[merklejerk](https://github.com/merklejerk)** and the **holtburger** contributors — for the AGPLv3 Rust AC client stack vendored at [`external/holtburger`](external/holtburger/), without which `emit-dynamic-site` would not be on the table.
 - **[ACEmulator](https://github.com/ACEmulator/ACE)** maintainers — for the AGPLv3 server vendored at [`external/ACE`](external/ACE/).
+- **[Chorizite](https://github.com/Chorizite)** maintainers — for the MIT-licensed C# AC plugin ecosystem (`ACPlugin`, `Chorizite.Common`, `Chorizite.ACProtocol`, `DatReaderWriter`) that serves as the canonical oracle for the diagnostic toolset.
