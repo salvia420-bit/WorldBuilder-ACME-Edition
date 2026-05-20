@@ -315,10 +315,107 @@ function summarize(results) {
   };
 }
 
+// ─── Phase D — Cross-LB stitching (opt-in via --cross-lb flag) ────────
+//
+// Wave-followon 2026-05-20 (open follow-on of [[project_w5a_done_2026-05-20]]).
+// The existing Phase A "asymmetric portal" check works WITHIN one LB at a
+// time — its CellPortalGraphSweep walks one LB's cells and treats any
+// portal whose `OtherCellId` resolves to a different LB-high as a
+// "cross-LB portal: do NOT count as asymmetric" (see
+// CommandEngine.CellPortalGraph.cs:221-225). That `continue` hides the
+// case where a cell points at a neighbor-LB cell that DOESN'T EXIST.
+//
+// Phase D loads all ring LBs at once + samples a few cells per LB +
+// uses `pvs-visibility-snapshot` with bfsDepth=1 to enumerate each
+// sample cell's portal targets. Any target whose LB-high is NOT in the
+// loaded LB set is flagged.
+//
+// **Scope:** this is the slow path. Default off. Opt-in:
+//   `node validate_cell_portal_graph.cjs --cross-lb`
+//
+// **Sample size**: 4 cells per LB. With 169 ring LBs that's ~676
+// subprocess round-trips — at ~50ms each = ~35s total, acceptable.
+// Picking origin-adjacent low cells (0x{lb}0100..0x{lb}0103) since
+// retail LB origin is at low word 0x0100 per acclient.c convention.
+//
+// **Source of truth**: see acclient.c::CCellPortal::Pack at
+// ~/ac-headers/acclient.c:362347-362403; cross-LB portals carry the
+// `0xFFFE` no-other-cell sentinel ONLY for explicit unbound exits.
+// Implicit landscape adjacency lives outside the EnvCell graph (it's
+// the LandCell/LandBlock domain), so a non-sentinel cross-LB portal
+// pointing at a missing cell is genuinely broken stitching.
+
+async function runPhaseDCrossLb(driver, ringLbs, results) {
+  console.log(`\n=== Phase D — Cross-LB stitching (opt-in --cross-lb) ===`);
+  console.log(`  ${ringLbs.length} LBs loaded; sampling 4 origin cells per LB`);
+  const loadedLbHighs = new Set(ringLbs.map(s => (parseInt(s, 16) >>> 0) & 0xFFFF_0000));
+  const phase = {
+    label: "cross-lb",
+    sampleCellsPerLb: 4,
+    aggregate: {
+      sampleCellsAttempted: 0,
+      sampleCellsResolved: 0,
+      crossLbTargets: 0,
+      brokenStitches: 0,
+    },
+    brokenStitches: [], // {from, to, sourceLb, targetLb}
+  };
+  for (const lbStr of ringLbs) {
+    const lbHigh = (parseInt(lbStr, 16) >>> 0) & 0xFFFF_0000;
+    // Sample LB origin cells: lb|0100..lb|0103. LB|0xFFFD is the highest
+    // valid EnvCell ID per acclient.c convention; LB|0xFFFE is the
+    // LandBlockInfo sentinel; LB|0xFFFF is the LandBlock record.
+    for (let i = 0; i < 4; i++) {
+      const cellId = (lbHigh | (0x0100 + i)) >>> 0;
+      const cellHex = `0x${cellId.toString(16).toUpperCase().padStart(8, "0")}`;
+      phase.aggregate.sampleCellsAttempted++;
+      let resp;
+      try {
+        resp = await driver.send({ command: "pvs-visibility-snapshot", cellId: cellHex, bfsDepth: 1 });
+      } catch (e) {
+        // Cell doesn't exist or other infra error; skip silently — origin-cell
+        // sampling is best-effort.
+        continue;
+      }
+      if (!resp || resp.cellId === 0 || !resp.liveVisibleCells) continue;
+      phase.aggregate.sampleCellsResolved++;
+      for (const targetHex of resp.liveVisibleCells) {
+        const targetId = (parseInt(targetHex, 16) >>> 0);
+        const targetLbHigh = targetId & 0xFFFF_0000;
+        if (targetLbHigh === lbHigh) continue; // within-LB; already covered by Phase A
+        phase.aggregate.crossLbTargets++;
+        if (!loadedLbHighs.has(targetLbHigh)) {
+          // Target LB isn't in our ring — could be legitimate (e.g. landscape
+          // edge to an outer LB), but worth reporting since the ring is
+          // supposed to be self-contained per [[project_world_expand_step_1]].
+          phase.aggregate.brokenStitches++;
+          phase.brokenStitches.push({
+            from: cellHex,
+            to: targetHex,
+            sourceLb: `0x${lbHigh.toString(16).toUpperCase().padStart(8, "0")}`,
+            targetLb: `0x${targetLbHigh.toString(16).toUpperCase().padStart(8, "0")}`,
+          });
+        }
+      }
+    }
+  }
+  console.log(`  sampleCellsResolved/attempted: ${phase.aggregate.sampleCellsResolved}/${phase.aggregate.sampleCellsAttempted}`);
+  console.log(`  crossLbTargets: ${phase.aggregate.crossLbTargets}  brokenStitches: ${phase.aggregate.brokenStitches}`);
+  if (phase.brokenStitches.length > 0) {
+    console.log(`  Sample broken stitches (first 5):`);
+    for (const bs of phase.brokenStitches.slice(0, 5)) {
+      console.log(`    ${bs.from} → ${bs.to}  (source LB ${bs.sourceLb} → target LB ${bs.targetLb} NOT IN RING)`);
+    }
+  }
+  results.phaseD = phase;
+  return phase;
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────
 
 (async () => {
   ensureWbtDll();
+  const crossLbEnabled = process.argv.includes("--cross-lb");
   const slug = isoSlug();
   const reportDir = path.join(REPORT_ROOT, slug);
   fs.mkdirSync(reportDir, { recursive: true });
@@ -330,6 +427,7 @@ function summarize(results) {
     expectedDatSha: EXPECTED_DAT_SHA,
     phaseA: {},
     phaseB: null,
+    phaseD: null,
     summary: null,
   };
 
@@ -346,6 +444,11 @@ function summarize(results) {
     await runPhaseA(driver, [ACADEMY_LB], "academy", results);
     await runPhaseA(driver, DUNGEON_LBS, "dungeons", results);
     await runPhaseB(driver, PVS_PROBES, results);
+    if (crossLbEnabled) {
+      await runPhaseDCrossLb(driver, holtburgRing, results);
+    } else {
+      console.log(`\n=== Phase D — Cross-LB stitching (SKIPPED — pass --cross-lb to enable) ===`);
+    }
     results.summary = summarize(results);
     results.finishedAt = new Date().toISOString();
 

@@ -320,9 +320,20 @@ public class JsonCommandProcessor {
             // Wave-3.C motion-classify-swing diagnostic — see CommandEngine.MotionParity.cs
             ["motion-classify-swing"]      = CmdMotionClassifySwing,
             ["motion-inventory"]           = CmdMotionInventory,
+            // Wave-3.D motion-table-anim-hooks (follow-on bundle) — see CommandEngine.MotionParity.cs
+            ["motion-table-anim-hooks"]    = CmdMotionTableAnimHooks,
             // Wave-5.A cell-portal graph diagnostic — see CommandEngine.CellPortalGraph.cs
             ["cell-portal-graph-sweep"]   = CmdCellPortalGraphSweep,
             ["pvs-visibility-snapshot"]   = CmdPvsVisibilitySnapshot,
+            // Wave-4.A + 4.B texture-parity diagnostic — see CommandEngine.TextureParity.cs
+            ["chorizite-decode-surface-chunk"]       = CmdChoriziteDecodeSurfaceChunk,
+            ["chorizite-decode-texture-chain-chunk"] = CmdChoriziteDecodeTextureChainChunk,
+            // Wave-4.C + 4.D mesh-parity diagnostic — see CommandEngine.MeshParity.cs
+            ["mesh-vs-obj-export-chunk"]       = CmdMeshVsObjExportChunk,
+            ["env-cell-vs-setup-model-chunk"]  = CmdEnvCellVsSetupModelChunk,
+            // Wave-4.E sweep orchestrator — see CommandEngine.Wave4.cs
+            ["wave4-status"]               = _ => CmdWave4Status(),
+            ["wave4-sweep"]                = CmdWave4Sweep,
             // Wave-5.B skybox parity diagnostic — see CommandEngine.Skybox.cs
             ["region-skybox-snapshot"]    = CmdRegionSkyboxSnapshot,
             ["region-day-night-curve"]    = CmdRegionDayNightCurve,
@@ -4250,4 +4261,251 @@ public class JsonCommandProcessor {
             });
         }
     }
+
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-4.C mesh-vs-obj-export-chunk + Wave-4.D env-cell-vs-setup-model-chunk
+    // (auto-spliced by validate_mesh_parity.cjs from WAVE4M_DISPATCH_PENDING.patch)
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdMeshVsObjExportChunk(System.Text.Json.Nodes.JsonNode node) {
+        uint startId = ParseLbIdScalar(node["startId"]
+            ?? throw new ArgumentException("Missing 'startId' field"));
+        uint endId = ParseLbIdScalar(node["endId"]
+            ?? throw new ArgumentException("Missing 'endId' field"));
+        string? datPath = node["datPath"]?.GetValue<string>();
+        string? cacheRoot = node["cacheRoot"]?.GetValue<string>();
+        bool fastMode = node["fastMode"]?.GetValue<bool>() ?? false;
+        System.Collections.Generic.List<uint>? fastIds = null;
+        var idsArr = node["fastModeIds"]?.AsArray();
+        if (idsArr != null) {
+            fastIds = new System.Collections.Generic.List<uint>(idsArr.Count);
+            foreach (var entry in idsArr) {
+                if (entry == null) continue;
+                fastIds.Add(ParseLbIdScalar(entry));
+            }
+        }
+        var r = _engine.MeshVsObjExportChunk(startId, endId, datPath, cacheRoot, fastMode, fastIds);
+        return Serialize(new {
+            success = r.FailCount == 0,
+            command = "mesh-vs-obj-export-chunk",
+            chunkLabel = r.ChunkLabel,
+            datPath = r.DatPath,
+            datSha256 = r.DatSha256,
+            startId = $"0x{r.StartId:X8}",
+            endId = $"0x{r.EndId:X8}",
+            recordCount = r.RecordCount,
+            passCount = r.PassCount,
+            failCount = r.FailCount,
+            cachedCount = r.CachedCount,
+            parseErrorCount = r.ParseErrorCount,
+            cacheRoot = r.CacheRoot,
+            progressJsonPath = r.ProgressJsonPath,
+            source = r.Source,
+            failures = r.Failures.Select(f => new {
+                idHex = f.IdHex,
+                typeName = f.TypeName,
+                status = f.Status,
+                failureReason = f.FailureReason,
+            }),
+        });
+    }
+
+    private string CmdEnvCellVsSetupModelChunk(System.Text.Json.Nodes.JsonNode node) {
+        uint startId = ParseLbIdScalar(node["startId"]
+            ?? throw new ArgumentException("Missing 'startId' field"));
+        uint endId = ParseLbIdScalar(node["endId"]
+            ?? throw new ArgumentException("Missing 'endId' field"));
+        string? datPath = node["datPath"]?.GetValue<string>();
+        string? cacheRoot = node["cacheRoot"]?.GetValue<string>();
+        bool fastMode = node["fastMode"]?.GetValue<bool>() ?? false;
+        System.Collections.Generic.List<uint>? fastIds = null;
+        var idsArr = node["fastModeIds"]?.AsArray();
+        if (idsArr != null) {
+            fastIds = new System.Collections.Generic.List<uint>(idsArr.Count);
+            foreach (var entry in idsArr) {
+                if (entry == null) continue;
+                fastIds.Add(ParseLbIdScalar(entry));
+            }
+        }
+        var r = _engine.EnvCellVsSetupModelChunk(startId, endId, datPath, cacheRoot, fastMode, fastIds);
+        return Serialize(new {
+            success = r.FailCount == 0,
+            command = "env-cell-vs-setup-model-chunk",
+            chunkLabel = r.ChunkLabel,
+            datPath = r.DatPath,
+            datSha256 = r.DatSha256,
+            startId = $"0x{r.StartId:X8}",
+            endId = $"0x{r.EndId:X8}",
+            recordCount = r.RecordCount,
+            passCount = r.PassCount,
+            failCount = r.FailCount,
+            cachedCount = r.CachedCount,
+            parseErrorCount = r.ParseErrorCount,
+            knownDriftCount = r.KnownDriftCount,
+            cacheRoot = r.CacheRoot,
+            progressJsonPath = r.ProgressJsonPath,
+            source = r.Source,
+            failures = r.Failures.Select(f => new {
+                idHex = f.IdHex,
+                typeName = f.TypeName,
+                status = f.Status,
+                failureReason = f.FailureReason,
+            }),
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-3.D motion-table-anim-hooks (follow-on) — see CommandEngine.MotionParity.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdMotionTableAnimHooks(System.Text.Json.Nodes.JsonNode node) {
+        uint motionTableId = ParseUIntField(node, "motionTableId");
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.MotionTableAnimHooks(motionTableId, datPath);
+        return Serialize(new {
+            success = true,
+            command = "motion-table-anim-hooks",
+            motionTableId = $"0x{r.MotionTableId:X8}",
+            cycleCount = r.CycleCount,
+            modifierCount = r.ModifierCount,
+            linkCount = r.LinkCount,
+            animationCount = r.AnimationCount,
+            hookCount = r.Hooks.Count,
+            hooks = r.Hooks.Select(h => new {
+                animId = $"0x{h.AnimId:X8}",
+                frameNumber = h.FrameNumber,
+                hookType = h.HookType,
+                soundDid = h.SoundDid.HasValue ? $"0x{h.SoundDid.Value:X8}" : null,
+                emitterDid = h.EmitterDid.HasValue ? $"0x{h.EmitterDid.Value:X8}" : null,
+                emitterId = h.EmitterId,
+                pesDid = h.PesDid.HasValue ? $"0x{h.PesDid.Value:X8}" : null,
+            }),
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-4.A + 4.B texture-parity dispatch — see CommandEngine.TextureParity.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdChoriziteDecodeSurfaceChunk(System.Text.Json.Nodes.JsonNode node) {
+        uint startId = ParseUIntField(node, "startId");
+        uint endId = ParseUIntField(node, "endId");
+        string? datPath = node["datPath"]?.GetValue<string>();
+        string? cacheRoot = node["cacheRoot"]?.GetValue<string>();
+        bool fastMode = node["fastMode"]?.GetValue<bool>() ?? false;
+        bool emitPng = node["emitPng"]?.GetValue<bool>() ?? false;
+        var r = _engine.ChoriziteDecodeSurfaceChunk(startId, endId, datPath, cacheRoot, fastMode, emitPng);
+        return Serialize(new {
+            success = r.FailCount == 0,
+            command = "chorizite-decode-surface-chunk",
+            chunkLabel = r.ChunkLabel,
+            startId = $"0x{r.StartId:X8}",
+            endId = $"0x{r.EndId:X8}",
+            datPath = r.DatPath,
+            datSha256 = r.DatSha256,
+            cacheRoot = r.CacheRoot,
+            progressJsonPath = r.ProgressJsonPath,
+            recordCount = r.RecordCount,
+            passCount = r.PassCount,
+            failCount = r.FailCount,
+            cachedCount = r.CachedCount,
+            source = r.Source,
+            failures = r.Failures.Select(f => new {
+                idHex = f.IdHex,
+                status = f.Status,
+                failureReason = f.FailureReason,
+                pixelFormat = f.PixelFormat,
+            }),
+        });
+    }
+
+    private string CmdChoriziteDecodeTextureChainChunk(System.Text.Json.Nodes.JsonNode node) {
+        uint startId = ParseUIntField(node, "startId");
+        uint endId = ParseUIntField(node, "endId");
+        string? datPath = node["datPath"]?.GetValue<string>();
+        string? cacheRoot = node["cacheRoot"]?.GetValue<string>();
+        bool fastMode = node["fastMode"]?.GetValue<bool>() ?? false;
+        bool emitPng = node["emitPng"]?.GetValue<bool>() ?? false;
+        var r = _engine.ChoriziteDecodeTextureChainChunk(startId, endId, datPath, cacheRoot, fastMode, emitPng);
+        return Serialize(new {
+            success = r.FailCount == 0,
+            command = "chorizite-decode-texture-chain-chunk",
+            chunkLabel = r.ChunkLabel,
+            startId = $"0x{r.StartId:X8}",
+            endId = $"0x{r.EndId:X8}",
+            datPath = r.DatPath,
+            datSha256 = r.DatSha256,
+            cacheRoot = r.CacheRoot,
+            progressJsonPath = r.ProgressJsonPath,
+            recordCount = r.RecordCount,
+            passCount = r.PassCount,
+            failCount = r.FailCount,
+            cachedCount = r.CachedCount,
+            source = r.Source,
+            failures = r.Failures.Select(f => new {
+                idHex = f.IdHex,
+                status = f.Status,
+                failureReason = f.FailureReason,
+                pixelFormat = f.PixelFormat,
+            }),
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-4.E sweep orchestrator — see CommandEngine.Wave4.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdWave4Status() {
+        try {
+            var r = _engine.Wave4Status();
+            return Serialize(new {
+                success = true,
+                command = "wave4-status",
+                cacheRoot = r.CacheRoot,
+                chunkCount = r.ChunkCount,
+                completedChunks = r.CompletedChunks,
+                inFlightChunks = r.InFlightChunks,
+                failedChunks = r.FailedChunks,
+                cacheHitCount = r.CacheHitCount,
+                cacheMissCount = r.CacheMissCount,
+                lastFailureChunkLabel = r.LastFailureChunkLabel,
+                lastFailureMessage = r.LastFailureMessage,
+                lastSweepStartUtc = r.LastSweepStartUtc,
+                lastSweepFinishUtc = r.LastSweepFinishUtc,
+                lastSweepReportPath = r.LastSweepReportPath,
+            });
+        } catch (Exception ex) {
+            return Serialize(new {
+                success = false,
+                command = "wave4-status",
+                error = ex.Message,
+            });
+        }
+    }
+
+    private string CmdWave4Sweep(System.Text.Json.Nodes.JsonNode node) {
+        string? mode = node["mode"]?.GetValue<string>();
+        string? target = node["target"]?.GetValue<string>();
+        int concurrency = node["concurrency"]?.GetValue<int>() ?? 4;
+        bool reset = node["reset"]?.GetValue<bool>() ?? false;
+        var r = _engine.Wave4Sweep(mode, target, concurrency, reset);
+        return Serialize(new {
+            success = string.IsNullOrEmpty(r.DriverError) && r.FailedChunks == 0,
+            command = "wave4-sweep",
+            sweepReportJsonPath = r.SweepReportJsonPath,
+            summaryMarkdownPath = r.SummaryMarkdownPath,
+            exitCode = r.ExitCode,
+            elapsedMs = r.ElapsedMs,
+            driverError = r.DriverError,
+            summary = new {
+                chunkCount = r.ChunkCount,
+                passed = r.PassedChunks,
+                failed = r.FailedChunks,
+                infra = r.InfraChunks,
+                cached = r.CachedChunks,
+            },
+        });
+    }
+
 }

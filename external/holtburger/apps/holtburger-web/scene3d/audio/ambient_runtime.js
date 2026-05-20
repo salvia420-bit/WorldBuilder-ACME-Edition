@@ -135,6 +135,21 @@ export class AmbientRuntime {
    *        {terrain_code, stb_index, s_type, continuous}, wave_did,
    *        world_pos, t_wall_ms, ...}` — see
    *        `docs/event-completeness-method.md` for the schema.
+   * @param {() => number} [opts.clock]
+   *        F.D-fu2 (2026-05-20) — wall-clock source returning ms.
+   *        Defaults to `performance.now`. Each tick the runtime
+   *        derives its OWN dt from the clock delta, ignoring the
+   *        `dt` arg passed into `tick(dt)`. Rationale: the rAF
+   *        dt-recovery armor in `scene3d/index.js::tick` (clamps dt
+   *        to 0 after a >500ms gap to prevent animation snap) was
+   *        also zeroing ambient timer decrements under headless
+   *        software-GL, where swiftshader's per-frame cost regularly
+   *        exceeds the recovery threshold. Ambient sounds are a
+   *        wall-clock cadence (per ACE's STB semantics, sound timers
+   *        keep ticking even when the renderer is paused), so
+   *        decoupling from the renderer's dt is the correct model.
+   *        Tests inject a deterministic stub here (advance the clock
+   *        between asserts to fire timers on demand).
    */
   constructor(opts) {
     if (!opts || !opts.soundTableCache || !opts.audioManager) {
@@ -167,6 +182,21 @@ export class AmbientRuntime {
       typeof opts.pushEventRecord === "function"
         ? opts.pushEventRecord
         : (_record) => {};
+    // F.D-fu2 (2026-05-20) — wall-clock source (ms). Default to
+    // performance.now; tests inject a stub that returns a manually-
+    // advanced number. See `setClockForTest` for the swap path.
+    this._clock =
+      typeof opts.clock === "function"
+        ? opts.clock
+        : (typeof performance !== "undefined"
+            ? () => performance.now()
+            : () => Date.now());
+    // Last clock reading. Lazily initialised on the first tick so
+    // the first sample doesn't see a phantom dt from runtime
+    // construction → first-tick wall-clock gap (boot path can take
+    // 100+ s on swiftshader; we don't want that to count as a single
+    // 100-s ambient step on tick #1).
+    this._lastClockMs = null;
 
     // Resolver state.
     this._region = null;
@@ -200,10 +230,21 @@ export class AmbientRuntime {
   }
 
   /**
-   * Called once per rAF (or once per any monotonic time step). `dt`
-   * is seconds since the previous tick. Idempotent on zero/negative
-   * dt (just bumps `tickCount` so capture scripts can verify the
-   * runtime is being driven).
+   * Called once per rAF (or once per any monotonic time step).
+   *
+   * F.D-fu2 (2026-05-20): the `dt` argument is now ADVISORY ONLY —
+   * the runtime computes its own dt from `this._clock()` deltas, so
+   * the rAF dt-recovery armor in `scene3d/index.js::tick` (which
+   * clamps dt to 0 after long gaps to prevent animation snap) does
+   * not zero ambient timer decrements under headless software-GL.
+   * Ambient sounds model wall-clock cadence, so they MUST keep
+   * decrementing in real-world ms even when the renderer's per-frame
+   * dt is artificially clamped. Tests can drive deterministic
+   * behaviour by injecting a stub `opts.clock` and calling
+   * `tick(0)` between manual clock advances.
+   *
+   * Idempotent on a zero clock delta (just bumps `tickCount` so
+   * capture scripts can verify the runtime is being driven).
    *
    * Bails when:
    * - No region yet → `skippedNoRegion++`.
@@ -211,10 +252,28 @@ export class AmbientRuntime {
    * - `isCurrentCellIndoor() == true` → `skippedIndoor++`, stops
    *   continuous loops + freezes timers.
    *
-   * @param {number} dt
+   * @param {number} _dt  (advisory; ignored — see comment above)
    */
-  tick(dt) {
+  tick(_dt) {
     this.tickCount += 1;
+    // F.D-fu2: derive dt from the clock source so renderer-side
+    // dt-recovery doesn't zero ambient progress.
+    const nowMs = +this._clock();
+    let dt;
+    if (this._lastClockMs === null) {
+      // First tick — establish the baseline; no progress this tick.
+      this._lastClockMs = nowMs;
+      dt = 0;
+    } else {
+      const deltaMs = nowMs - this._lastClockMs;
+      this._lastClockMs = nowMs;
+      // Cap dt at 1s to avoid a single huge step on first-tick-after-
+      // boot from firing every timer simultaneously. ACE's STB sound
+      // descriptors' min_rate is typically ~1s, so a 1s cap is the
+      // largest single-step advance that won't pop multiple sounds
+      // at once from one row.
+      dt = Math.max(0, Math.min(deltaMs * 0.001, 1.0));
+    }
     if (!Number.isFinite(dt)) dt = 0;
     if (dt < 0) dt = 0;
 
@@ -371,6 +430,28 @@ export class AmbientRuntime {
     this._activeTerrainCode = -1;
     this._activeSceneIndex = -1;
     this._lastIndoor = false;
+  }
+
+  /**
+   * F.D-fu2 (2026-05-20) — test hook. Inject a clock function and
+   * reset the baseline so the next `tick()` recomputes from the
+   * new source. Useful for unit tests + validator-driven scenarios
+   * that need to advance time deterministically. Returns the prior
+   * clock for restoration.
+   *
+   * @param {() => number} clockFn  Returns wall-clock ms.
+   * @returns {() => number}        The previous clock function.
+   */
+  setClockForTest(clockFn) {
+    if (typeof clockFn !== "function") {
+      throw new Error("setClockForTest: clockFn must be a function");
+    }
+    const prior = this._clock;
+    this._clock = clockFn;
+    // Reset the baseline so the first tick under the new clock
+    // doesn't see a phantom delta from the prior source.
+    this._lastClockMs = null;
+    return prior;
   }
 
   /**

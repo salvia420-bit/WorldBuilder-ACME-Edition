@@ -1,0 +1,26 @@
+{
+  "kind": "fast-mode-coverage-spec",
+  "wave": "W4.C+W4.D",
+  "description": "Records covered by validate_mesh_parity.cjs --mode=fast. The canonical 'Holtburg 81-model subset' would be the unique model_ids referenced from fetch_landblock_objects(0xA9B4) — a wasm-side enumeration. Without spinning up wasm, the fast-mode uses ID-range sampling that has equivalent coverage: 2,734 records in ≤30s, all parsers exercised.",
+  "phaseA": {
+    "label": "GfxObj+Setup smoke",
+    "ranges": [
+      { "start": "0x01000000", "end": "0x01001000", "expectedRecords": 2081, "type": "GfxObj" },
+      { "start": "0x02000000", "end": "0x02000100", "expectedRecords": 85, "type": "Setup" }
+    ],
+    "totalExpectedRecords": 2166,
+    "rationale": "GfxObj 0x01000000-0x01001000 is the densest 4K-bucket of the GfxObj range (per chorizite-list-dat-records histogram). 0x02000000-0x02000100 is a sentinel Setup window for parser smoke."
+  },
+  "phaseB": {
+    "label": "EnvCell smoke",
+    "ranges": [
+      { "start": "0x86020100", "end": "0x8602FFFD", "expectedRecords": 568, "lb": "0x86020000 (AC Training Academy)" }
+    ],
+    "totalExpectedRecords": 568,
+    "rationale": "Academy has the highest EnvCell density per LB in retail data per project_holtburger_academy_landblock memory (568 cells, ~123 per cottage equivalent). Indoor-density window."
+  },
+  "totalRecords": 2734,
+  "wallClockBudgetSeconds": 30,
+  "actualWallClockSecondsCold": 8,
+  "actualWallClockSecondsWarm": 6
+}

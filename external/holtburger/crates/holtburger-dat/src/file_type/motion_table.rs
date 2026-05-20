@@ -48,13 +48,28 @@ impl MotionTable {
     /// Lookup the transition (link) clip for `(stance, from_cmd) →
     /// to_cmd`. The links table is a nested HashMap whose outer key
     /// is encoded with `cycle_key(stance, from_cmd)` and whose inner
-    /// key is the raw `to_cmd & MOTION_KEY_MASK`. Used by the client
-    /// to play a one-shot transition animation between two cycles
-    /// (e.g. WalkForward → Ready plays a deceleration flourish).
+    /// key is the FULL 32-bit `to_cmd`. Used by the client to play a
+    /// one-shot transition animation between two cycles (e.g.
+    /// WalkForward → Ready plays a deceleration flourish).
+    ///
+    /// **W2.E fix 2026-05-20**: previously this helper masked
+    /// `to_cmd & MOTION_KEY_MASK` (0x000F_FFFF), which stripped the
+    /// 0x10/0x40/0x44/0x45 classifier prefix and silently failed every
+    /// retail-data link lookup. The inner dict stores raw `u32` keys
+    /// matching the full MotionCommand (e.g. `SlashHigh = 0x1000005B`)
+    /// per `external/DatReaderWriter/DatReaderWriter/dats.xml:3746-3748`
+    /// where the inner `genericKey` is declared as `int` — DRW reads
+    /// it as raw little-endian u32. Validated by W3.E, whose direct
+    /// `mt.links.get(outer)?.get(&command)` call works correctly. See
+    /// `apps/holtburger-web/src/lib.rs:3989-4002` for the historic
+    /// note about the bug.
+    ///
     /// Matches the schema in
     /// `external/DatReaderWriter/DatReaderWriter/dats.xml:3746-3748`
     /// ("style << 16 | from substate → sub-dict (to substate →
-    /// transition MotionData)").
+    /// transition MotionData)"). NOTE: the docstring's "to substate"
+    /// language is a doc artifact — empirically the inner key is the
+    /// full command, not just the LOW-16 substate.
     pub fn motion_data_for_link(
         &self,
         stance: u32,
@@ -62,8 +77,7 @@ impl MotionTable {
         to_cmd: u32,
     ) -> Option<&MotionData> {
         let from_key = cycle_key(stance, from_cmd);
-        let to_key = to_cmd & MOTION_KEY_MASK;
-        self.links.get(&from_key)?.get(&to_key)
+        self.links.get(&from_key)?.get(&to_cmd)
     }
 
     pub fn movement_profile_for_stance(&self, stance: u32) -> MotionTableMovementProfile {

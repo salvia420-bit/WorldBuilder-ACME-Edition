@@ -393,4 +393,283 @@ public partial class CommandEngine {
         }
         return result;
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave 3.D — motion-table-anim-hooks
+    //
+    // Plan §5 row 12 deferred from Wave 3 era. Walk every Animation
+    // referenced by a MotionTable's cycles + modifiers + links, dump
+    // each animation's per-frame Hooks list as typed JSON entries.
+    //
+    // Used by the event-completeness validator and as a probe for the
+    // H2 (sky particle chain) and F.D-fu3 debugging — particle Emitter
+    // DIDs that fire from animation frames are referenced via
+    // `CreateParticleHook.EmitterInfoId` / `EmitterId`; sound chains
+    // hang off `SoundHook.Id`.
+    //
+    // Per dats.xml:2606-2714, an Animation's `PartFrames[i].Hooks` is
+    // a List<AnimationHook> where each entry is one of ~26 typed
+    // subclasses. We expose the small subset most relevant to event
+    // completeness: SoundHook / SoundTweakedHook / SoundTableHook /
+    // CreateParticleHook / DestroyParticleHook / StopParticleHook /
+    // CallPESHook. Other types are emitted as the catch-all "Other"
+    // hook with type-name only.
+    //
+    // Reference: AC retail uses identical `AnimationHook::UnPack` +
+    // subtype dispatch — see acclient.c::CreateParticleHook::Execute
+    // (line 7051) and ::Pack (line 7080). The hookType byte is the
+    // AnimationHookType enum from dats.xml:233-263 (NoOp=0,
+    // Sound=1, SoundTable=2, Attack=3, ReplaceObject=4, …).
+    // ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// One typed entry within an Animation's per-frame Hooks list.
+    ///
+    /// <para>
+    /// <see cref="AnimId"/> is the Animation DID (0x03xxxxxx) this hook
+    /// belongs to; <see cref="FrameNumber"/> is the index into
+    /// <c>Animation.PartFrames</c>. <see cref="HookType"/> is the
+    /// AnimationHookType enum name from dats.xml:233-263 (e.g.
+    /// "Sound" / "CreateParticle" / "CallPES").
+    /// </para>
+    ///
+    /// <para>
+    /// Per-subtype data is exposed via nullable fields. For example a
+    /// SoundHook populates <see cref="SoundDid"/> from
+    /// <c>SoundHook.Id.DataId</c>; a CreateParticleHook populates both
+    /// <see cref="EmitterDid"/> (<c>CreateParticleHook.EmitterInfoId.DataId</c>)
+    /// and <see cref="EmitterId"/> (the runtime instance id used by
+    /// Destroy/StopParticleHook later in the animation).
+    /// </para>
+    /// </summary>
+    public sealed record AnimHookJs(
+        uint AnimId,
+        int FrameNumber,
+        string HookType,
+        uint? SoundDid,
+        uint? EmitterDid,
+        uint? EmitterId,
+        uint? PesDid);
+
+    /// <summary>
+    /// Aggregated result of <see cref="MotionTableAnimHooks"/> — the set
+    /// of animation hooks reachable from any cycle / modifier / link in
+    /// the requested MotionTable.
+    ///
+    /// <para>
+    /// <see cref="CycleCount"/> / <see cref="ModifierCount"/> /
+    /// <see cref="LinkCount"/> mirror the same counts from
+    /// <see cref="MotionTableInventoryEntry"/>;
+    /// <see cref="AnimationCount"/> is the unique-DID count of
+    /// Animations we successfully resolved (i.e. some entries in cycles
+    /// /modifiers/links may share an AnimId, deduped here);
+    /// <see cref="Hooks"/> is the full flattened list across all
+    /// frames of all resolved animations, in (anim_did, frame_index)
+    /// order.
+    /// </para>
+    /// </summary>
+    public sealed record MotionAnimHooksResult(
+        uint MotionTableId,
+        int CycleCount,
+        int ModifierCount,
+        int LinkCount,
+        int AnimationCount,
+        IReadOnlyList<AnimHookJs> Hooks);
+
+    /// <summary>
+    /// Walk a MotionTable's cycles/modifiers/links, dedupe the set of
+    /// referenced Animation DIDs, load each Animation and dump its
+    /// per-frame Hooks as typed JSON entries.
+    ///
+    /// <para>
+    /// Algorithm:
+    /// <list type="number">
+    ///   <item>Load <see cref="MotionTable"/> via <see cref="DatDatabase"/>
+    ///     against the canonical <c>~/ac_base_dats/client_portal.dat</c>
+    ///     per memory <c>feedback_base_dats_only_for_bake</c>.</item>
+    ///   <item>Walk all three dictionaries (Cycles + Modifiers + Links)
+    ///     and collect each entry's <c>MotionData.Anims</c> array →
+    ///     <c>AnimId.DataId</c> into a set. Per dats.xml:3729-3748
+    ///     Cycles/Modifiers values are <c>MotionData</c> directly;
+    ///     Links values are <c>MotionCommandData</c> with a nested
+    ///     <c>.MotionData</c> dict of <c>MotionData</c>.</item>
+    ///   <item>For each unique DID, load the Animation. If the load
+    ///     fails (missing DAT record or non-0x03 namespace), skip it.</item>
+    ///   <item>For each frame in <c>Animation.PartFrames</c>, walk its
+    ///     <c>Hooks</c> list and emit one typed JSON entry per hook.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    public MotionAnimHooksResult MotionTableAnimHooks(uint motionTableId, string? datPath = null) {
+        var resolvedDatPath = ResolveDatPath(datPath);
+        using var dat = new DatDatabase(o => {
+            o.FilePath = resolvedDatPath;
+            o.AccessType = DatAccessType.Read;
+            o.IndexCachingStrategy = IndexCachingStrategy.Never;
+        });
+
+        if (!dat.TryGet<MotionTable>(motionTableId, out var mt) || mt == null) {
+            return new MotionAnimHooksResult(
+                MotionTableId: motionTableId,
+                CycleCount: 0,
+                ModifierCount: 0,
+                LinkCount: 0,
+                AnimationCount: 0,
+                Hooks: Array.Empty<AnimHookJs>());
+        }
+
+        int cycleCount = mt.Cycles?.Count ?? 0;
+        int modifierCount = mt.Modifiers?.Count ?? 0;
+        int linkCount = mt.Links?.Count ?? 0;
+
+        // Collect every Animation DID referenced from any MotionData.Anims
+        // slot across cycles + modifiers + links.
+        //
+        // Per dats.xml:3729-3748 schema:
+        //   Cycles    : Dictionary<int, MotionData>
+        //   Modifiers : Dictionary<int, MotionData>
+        //   Links     : Dictionary<int, MotionCommandData>
+        //     where MotionCommandData.MotionData is Dictionary<int, MotionData>
+        // The leaf type is always MotionData, which carries .Anims.
+        var animDids = new HashSet<uint>();
+        if (mt.Cycles != null) {
+            foreach (var kv in mt.Cycles) {
+                CollectAnimDidsFromMotionData(kv.Value, animDids);
+            }
+        }
+        if (mt.Modifiers != null) {
+            foreach (var kv in mt.Modifiers) {
+                CollectAnimDidsFromMotionData(kv.Value, animDids);
+            }
+        }
+        if (mt.Links != null) {
+            foreach (var kv in mt.Links) {
+                if (kv.Value?.MotionData == null) continue;
+                foreach (var inner in kv.Value.MotionData) {
+                    CollectAnimDidsFromMotionData(inner.Value, animDids);
+                }
+            }
+        }
+
+        // For each DID, load the Animation and walk its hooks.
+        var hooks = new List<AnimHookJs>();
+        int animationCount = 0;
+        // Iterate in sorted order so the output JSON is deterministic
+        // across runs — same diagnostic input → same diagnostic output.
+        foreach (var animDid in animDids.OrderBy(d => d)) {
+            // Animation DIDs are 0x03xxxxxx per dats.xml:3641. Guard
+            // against bogus 0x00 or non-03 prefixes in case a buggy
+            // motion table slipped through.
+            if ((animDid >> 24) != 0x03) continue;
+            if (!dat.TryGet<Animation>(animDid, out var anim) || anim == null) continue;
+            animationCount++;
+
+            if (anim.PartFrames == null) continue;
+            for (int frameIdx = 0; frameIdx < anim.PartFrames.Count; frameIdx++) {
+                var frame = anim.PartFrames[frameIdx];
+                if (frame?.Hooks == null) continue;
+                foreach (var rawHook in frame.Hooks) {
+                    if (rawHook == null) continue;
+                    hooks.Add(BuildAnimHookEntry(animDid, frameIdx, rawHook));
+                }
+            }
+        }
+
+        return new MotionAnimHooksResult(
+            MotionTableId: motionTableId,
+            CycleCount: cycleCount,
+            ModifierCount: modifierCount,
+            LinkCount: linkCount,
+            AnimationCount: animationCount,
+            Hooks: hooks);
+    }
+
+    /// <summary>
+    /// Push every <c>AnimId.DataId</c> from a <see cref="MotionData"/>'s
+    /// <c>Anims</c> list into the running set. Helper for
+    /// <see cref="MotionTableAnimHooks"/>.
+    /// </summary>
+    private static void CollectAnimDidsFromMotionData(
+        MotionData? md, HashSet<uint> animDids) {
+        if (md?.Anims == null) return;
+        foreach (var anim in md.Anims) {
+            // anim.AnimId is a QualifiedDataId<Animation>; .DataId is
+            // the raw u32 DID. A zero DID can show up for "no
+            // animation" filler entries — caller filters those.
+            uint did = anim.AnimId.DataId;
+            if (did == 0) continue;
+            animDids.Add(did);
+        }
+    }
+
+    /// <summary>
+    /// Convert a raw DRW <c>AnimationHook</c> subtype instance into the
+    /// flat <see cref="AnimHookJs"/> envelope. Most hook subtypes are
+    /// emitted with just their type-name; we expand the four families
+    /// that actually carry DIDs needed for event/sound/particle chain
+    /// debugging.
+    ///
+    /// <para>
+    /// Subtype handling (per dats.xml:2611-2714):
+    /// <list type="bullet">
+    ///   <item><c>SoundHook</c> → SoundDid = <c>Id.DataId</c>
+    ///     (0x0Axxxxxx Wave DID).</item>
+    ///   <item><c>SoundTweakedHook</c> → SoundDid = <c>SoundId.DataId</c>.</item>
+    ///   <item><c>CreateParticleHook</c> → EmitterDid =
+    ///     <c>EmitterInfoId.DataId</c> (0x32xxxxxx ParticleEmitter
+    ///     DID), EmitterId = the runtime instance handle that
+    ///     downstream Destroy/StopParticleHook will reference.</item>
+    ///   <item><c>DestroyParticleHook</c> / <c>StopParticleHook</c> →
+    ///     EmitterId only (no DID, just the runtime handle).</item>
+    ///   <item><c>CallPESHook</c> → PesDid = the
+    ///     <c>PES</c> field (0x33xxxxxx PhysicsScript DID).</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    private static AnimHookJs BuildAnimHookEntry(
+        uint animDid, int frameIdx, AnimationHook rawHook) {
+        string typeName = rawHook.GetType().Name;
+        uint? soundDid = null;
+        uint? emitterDid = null;
+        uint? emitterId = null;
+        uint? pesDid = null;
+
+        switch (rawHook) {
+            case SoundHook s:
+                soundDid = s.Id.DataId;
+                break;
+            case SoundTweakedHook st:
+                soundDid = st.SoundId.DataId;
+                break;
+            case CreateParticleHook cp:
+                emitterDid = cp.EmitterInfoId.DataId;
+                emitterId = cp.EmitterId;
+                break;
+            case DestroyParticleHook dp:
+                emitterId = dp.EmitterId;
+                break;
+            case StopParticleHook sp:
+                emitterId = sp.EmitterId;
+                break;
+            case CallPESHook pes:
+                pesDid = pes.PES;
+                break;
+            default:
+                // Unhandled subtype — caller will see HookType
+                // populated but all DID/Id slots null. That's fine for
+                // event-completeness diagnostics: the validator can
+                // filter on HookType == "Sound" | "CreateParticle" |
+                // "CallPES" and ignore everything else.
+                break;
+        }
+
+        return new AnimHookJs(
+            AnimId: animDid,
+            FrameNumber: frameIdx,
+            HookType: typeName,
+            SoundDid: soundDid,
+            EmitterDid: emitterDid,
+            EmitterId: emitterId,
+            PesDid: pesDid);
+    }
 }

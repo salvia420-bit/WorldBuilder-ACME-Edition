@@ -513,7 +513,7 @@ This revision (§4-Alt, with §4.5 demoting ACBindings to a navigation aid) corr
 - **`acclient.h` exhaustive overlap with ACBindings.** Both describe retail struct layouts. ACBindings adds LLM doc-comments but is otherwise redundant with `acclient.h`. The plan doesn't enumerate the overlap; assume `acclient.h` is more reliable (it came from the same Hex-Rays pass as `acclient.c`).
 - **Performance / sizing.** None of the porting estimates account for wasm-size, bundle-size, or runtime cost. Trust them as relative effort signals only.
 - **Licensing.** Chorizite is MIT (verified for `Chorizite/Chorizite` core; assumed for others — verify before redistributing). The `~/ac-headers/` files are derived from retail `acclient.exe` and `acclient.pdb` — same legal status as the existing ACE / WB / ACBindings ecosystem; treat them as in-house reference, not redistributable.
-- **The `external/holtburger` git remote.** This is an upstream-tracked subtree (per memory mentions of `UPSTREAM_SYNC_NOTES.md`). Modifications to `external/holtburger/apps/holtburger-web/plugins/` may have upstream-sync implications. **Confirm the sync policy before opening a PR.** This doc lives there too — moving it is fine if upstream sync is fragile.
+- **The `external/holtburger` git remote.** This is an upstream-tracked subtree. The canonical sync log + vendor manifest lives at [`../../VENDORED.md`](../../VENDORED.md) (i.e. `external/holtburger/VENDORED.md` from repo root). Modifications to `external/holtburger/apps/holtburger-web/plugins/` may have upstream-sync implications. **Confirm the sync policy before opening a PR.** This doc lives there too — moving it is fine if upstream sync is fragile.
 
 ---
 

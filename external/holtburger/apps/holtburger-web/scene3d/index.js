@@ -1884,6 +1884,117 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         // cache state via `await window.__soundTableCache.get(did)`,
         // `window.__soundTableCache.stats()`, etc.
         window.__soundTableCache = soundTableCache;
+        // F.D-fu1 (2026-05-20) — synthetic GameMessageSound (0xF750)
+        // injection helper for validator probes. Mirrors the SAME
+        // resolution chain as the live recv-loop arm in
+        // index.html:6968-7137 (KIND_SOUND_TRIGGERED handler):
+        //
+        //   1. Look up `entityManager.entityMap.get(guid)`.
+        //   2. Read `inst.soundTableDid`; bail soft if zero.
+        //   3. `soundTableCache.resolveSound(stbDid, soundEnum)` →
+        //      probability-weighted SoundEntry pick.
+        //   4. Push event-log record with source="GameMessageSound"
+        //      + source_meta `{server_object_guid, sound_enum,
+        //      stb_did, scale, gain, synthetic_probe: true}`.
+        //   5. `audioManager.play(waveDid, pos, { gain })`.
+        //
+        // Returns a Promise that resolves with one of:
+        //   { ok: true, waveDid, gain }   — full chain landed
+        //   { ok: false, reason: "..." }  — soft-skip case
+        //
+        // The `synthetic_probe: true` flag in source_meta lets the
+        // F.D validator distinguish synth fires from real ACE
+        // pushes during cross-source diffing.
+        //
+        // Usage from a validator:
+        //   await window.__synthGameMessageSound(guid, 0x46, 1.0);
+        //   await window.__synthGameMessageSound(guid, 0x51);  // scale=1
+        window.__synthGameMessageSound = async (guid, soundEnum, scale) => {
+          const safeScale = (typeof scale === "number" && scale > 0) ? +scale : 1.0;
+          const result = {
+            ok: false,
+            reason: null,
+            guid: (guid >>> 0),
+            soundEnum: (soundEnum >>> 0),
+            scale: safeScale,
+          };
+          const live = window.liveScene3d;
+          if (!live) {
+            result.reason = "no_liveScene3d";
+            return result;
+          }
+          const emgr = live.entityManager;
+          const cache = live.soundTableCache;
+          const audioMgr = live.audioManager;
+          const pushRec = live._pushEventRecord;
+          if (!emgr || !cache || !audioMgr) {
+            result.reason = "subsystems_not_ready";
+            return result;
+          }
+          const inst = emgr.entityMap?.get(guid >>> 0);
+          if (!inst) {
+            result.reason = "entity_not_in_registry";
+            return result;
+          }
+          const stbDid = (inst.soundTableDid >>> 0);
+          if (!stbDid) {
+            result.reason = "entity_no_sound_table";
+            return result;
+          }
+          let entry;
+          try {
+            entry = await cache.resolveSound(stbDid, soundEnum >>> 0);
+          } catch (e) {
+            result.reason = `resolveSound_threw:${String(e?.message ?? e)}`;
+            return result;
+          }
+          if (!entry) {
+            result.reason = "enum_not_in_sound_table";
+            return result;
+          }
+          const pos = inst.root?.position;
+          if (!pos) {
+            result.reason = "entity_no_position";
+            return result;
+          }
+          const baseVol = entry.volume > 0 ? entry.volume : 1.0;
+          const gain = baseVol * safeScale;
+          if (typeof pushRec === "function") {
+            pushRec({
+              type: "sound",
+              wave_did: (entry.waveDid >>> 0),
+              parent_entity_guid: (guid >>> 0),
+              world_pos: [+pos.x, +pos.y, +pos.z],
+              t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+              source: "GameMessageSound",
+              source_meta: {
+                server_object_guid: (guid >>> 0),
+                sound_enum: (soundEnum >>> 0),
+                stb_did: stbDid,
+                scale: safeScale,
+                gain,
+                synthetic_probe: true,
+              },
+            });
+          }
+          try {
+            await audioMgr.play(
+              entry.waveDid >>> 0,
+              { x: pos.x, y: pos.y, z: pos.z },
+              { gain }
+            );
+          } catch (e) {
+            // Play failure is non-fatal — the record is in the log,
+            // which is what the validator asserts on. AudioContext
+            // gating can fail under headless without a user gesture
+            // even with `--autoplay-policy=no-user-gesture-required`.
+            result.playError = String(e?.message ?? e);
+          }
+          result.ok = true;
+          result.waveDid = (entry.waveDid >>> 0);
+          result.gain = gain;
+          return result;
+        };
       }
       // eslint-disable-next-line no-console
       console.log(

@@ -1,0 +1,21 @@
+{
+  "kind": "known-drift-allowlist",
+  "wave": "W4.D",
+  "source": "project_wave2d_done_2026-05-19 memory + docs/mesh-parity-method.md",
+  "description": "EnvCell records where Rust holtburger-dat and Chorizite DRW disagree on a non-failing topology field. Allowlist sentinel budget is 5; current count is 1.",
+  "entries": [
+    {
+      "idHex": "0x72040335",
+      "type": "EnvCell",
+      "field": "visibleCells[]",
+      "drift": "ordering",
+      "rustSample": [5, 1, 667, "..."],
+      "chorizittSample": [811, 810, 812, "..."],
+      "rootCause": "acclient.c::CEnvCell::IsVisible treats the array as orderless; the two ports happen to read the same bytes in different orders due to internal dictionary iteration order. Not a parser bug; not a runtime regression.",
+      "documentedAt": [
+        "docs/mesh-parity-method.md#known-drift-documented-allowlist",
+        "project_wave2d_done_2026-05-19 memory"
+      ]
+    }
+  ]
+}

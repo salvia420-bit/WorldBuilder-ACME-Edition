@@ -38,18 +38,24 @@
 //      Ambient2..7 rolls per F.B's bake).
 //   2. **OneOff** — call `window.__playWave(0x0A000266, ...)` 3×.
 //      Trivially deterministic; logs as `source: "OneOff"`.
-//   3. **GameMessageSound** — there's no test-helper to inject a
-//      kind=16 wire event without a live ACE; the F.D path therefore
-//      directly invokes the SAME log+play steps the recv arm in
-//      index.html:6389-6557 runs (entity GUID → SoundTable resolve →
+//   3. **GameMessageSound** — F.D-fu1 (2026-05-20): the renderer now
+//      exposes `window.__synthGameMessageSound(guid, soundEnum, scale)`
+//      which mirrors the SAME resolution chain as the live recv-loop
+//      arm in index.html:6968-7137 (entity GUID → SoundTable resolve →
 //      AudioManager.play → pushEventRecord(source: "GameMessageSound")).
 //      A synthetic spawn (step 4) gives us an entity with a known
-//      soundTableDid so the SoundTable lookup resolves.
+//      soundTableDid (`0x20000014` = forge SoundTable, retail-verified
+//      Sound.LifestoneOn → waveDid 0x0a000266 per the H3-F memory
+//      note) so the SoundTable lookup resolves.
 //   4. **PhysicsScriptHook** — synth-spawn an entity with
 //      `physicsScriptDid = 0x33000E9D` (a real script DID from the
-//      F.B bake at 0xA9B4). The H2 chain walker (entities.js:1058)
-//      fetches the PhysicsScript and fires CreateParticle hooks via
-//      addEmitter → logs as `source: "PhysicsScriptHook"`.
+//      F.B bake at 0xA9B4 — 3 CreateParticle hooks). The H2 chain
+//      walker (entities.js:1058) fetches the PhysicsScript and fires
+//      CreateParticle hooks via addEmitter → logs as `source:
+//      "PhysicsScriptHook"`. F.D-fu3 (2026-05-20): the walker now
+//      exposes `entityManager.awaitParticleChainResolution(guid)` so
+//      the validator can `await` actual resolution instead of guessing
+//      a settle timeout.
 //   5. **Skipped — AnimationHook** — per F.B's findings (and the
 //      staged events README), anim_sound is unreachable without
 //      F.B.5 wcid→MotionTableDataId staging. Reported as
@@ -72,8 +78,19 @@
 //   - `<out>/event-completeness-report.md`   — human-readable summary
 //
 // **CLI args**
-//   --probe-s   seconds  (default 12 — covers continuous ambient +
-//                        gives probabilistic timers a window)
+//   --probe-s   seconds  (default 60 — F.D-fu4 (2026-05-20): bumped
+//                        from 12 so the probabilistic ambient timers
+//                        (which roll on a per-row `[minRate, maxRate]`
+//                        window — typically 1..30s — and gate on a
+//                        `baseChance` coin flip) have enough wall-
+//                        clock window to land statistically-meaningful
+//                        fire counts. The +48s costs ~1 min of capture
+//                        wallclock per run; the alternative (12s
+//                        probe window) consistently reported `obs=0`
+//                        on probabilistic ambient even though the
+//                        runtime was firing correctly — see
+//                        `project_event_fdfu_done_2026-05-20.md` for
+//                        the probability-distribution analysis.)
 //   --out       dir      (default `/mnt/wbterminal1/tmp/claude-scratch/event-completeness/d/`)
 //   --strict             (treat any missing-event as exit 1; default
 //                        0 if all sources reported their expected
@@ -93,7 +110,8 @@ const http = require("node:http");
 
 function parseArgs(argv) {
   const args = {
-    probeSeconds: 12,
+    // F.D-fu4 (2026-05-20): 60s default (was 12s). See header comment.
+    probeSeconds: 60,
     out: "/mnt/wbterminal1/tmp/claude-scratch/event-completeness/d/",
     strict: false,
   };
@@ -244,32 +262,40 @@ const HOLTBURG_Z = 86.0;
 // PhysicsScript (default_script_id of multiple wcid spawns at the
 // city centre). 3 CreateParticle hooks per F.B manifest.
 const PROBE_PHYSICS_SCRIPT_DID = 0x33000e9d;
-// Anchor wcid + setup we'll inject; the F.B bake doesn't pin a
-// specific wcid (the bake walks all default_script_ids regardless of
-// what entity carries them). We pick a benign Pyreal-themed wcid;
-// the modelId is the load-bearing field.
-const PROBE_WCID = 0x000003e8;
-const PROBE_SETUP_DID = 0x02000fa6; // generic placeholder (statics fallback)
+// Anchor setup + motion table for the synthetic probe entity. The F.B
+// bake doesn't pin a specific wcid (the bake walks all default_script_ids
+// regardless of what entity carries them).
+// 0x02000001 + 0x09000001 = humanoid base setup + motion table.
+// Verified-real per smoke_test.cjs:2923 + tests.rs:1244; the
+// fetchEntityAnimationKeyframes chain resolves cleanly against retail
+// DATs. Generic placeholders (0x02000fa6 etc.) hang the spawn at
+// keyframe-fetch, so we use the known-good humanoid pair.
+const PROBE_SETUP_DID = 0x02000001;
+const PROBE_MTABLE_DID = 0x09000001;
 // Probe entity GUID — deterministic so consecutive runs don't
 // double-spawn.
 const PROBE_ENTITY_GUID = 0xacefed00;
 // Probe ambient wave for OneOff playback — well-known Lifestone
 // activate wave from earlier H3 work (memory note `0x0a000266`).
 const PROBE_ONEOFF_WAVE_DID = 0x0a000266;
+// F.D-fu1 (2026-05-20): retail-verified SoundTable DID + Sound enum
+// for the synth GameMessageSound. The Task F H3-F diag at
+// /mnt/wbterminal1/diag_game_message_sound.cjs confirmed
+// `resolveSound(0x20000014, 0x51)` → `waveDid=0x0a000266` against
+// real wire bytes (see memory `project_holtburger_ambient_sounds_done_2026-05-12`).
+// 0x20000014 = forge / lifestone SoundTable; 0x51 = Sound.LifestoneOn.
+const PROBE_SOUND_TABLE_DID = 0x20000014;
+const PROBE_SOUND_ENUM_LIFESTONE_ON = 0x51;
 
 // Boot timeouts. Tighter than Phase E since we don't need the spawn
 // drain or full ring init — we only walk one LB.
 const SMOKE_TIMEOUT_MS = Number(process.env.PHASE_F_SMOKE_TIMEOUT_MS || 60_000);
 const INIT_TIMEOUT_MS = Number(process.env.PHASE_F_INIT_TIMEOUT_MS || 180_000);
-const AMBIENT_SETTLE_MS = Number(process.env.PHASE_F_AMBIENT_SETTLE_MS || 4_000);
 const PROBE_WINDOW_MS = args.probeSeconds * 1000;
 const POST_PROBE_SETTLE_MS = 1_500;
-// PhysicsScript hooks have start_time_s offsets; the F.B bake at
-// 0xA9B4 has start_time_s = 0 for every row, but other scripts have
-// non-zero offsets that the H2 walker schedules via setTimeout. We
-// give an extra 2 s headroom so any non-zero-offset hooks land
-// before snapshot.
-const POST_SPAWN_SETTLE_MS = 2_000;
+// AMBIENT_SETTLE_MS + POST_SPAWN_SETTLE_MS were planned settle-windows
+// for the F.D-fu probe scenario; not yet wired into the run() driver.
+// Resume per the F.D-fu follow-on if/when the synth-helper probe lands.
 
 (async () => {
   try {
@@ -731,8 +757,14 @@ const POST_SPAWN_SETTLE_MS = 2_000;
 
     // Stage 5b — inject a synthetic spawn that carries physicsScriptDid
     // so the H2 chain walker (`_attachParticleChainForEntity`) fires.
+    // F.D-fu1 (2026-05-20): also carries `soundTableDid` so the F.D-fu1
+    // `__synthGameMessageSound` helper in stage 5e can resolve a real
+    // SoundTable entry. F.D-fu3: AFTER dispatching, we await the
+    // EntityManager's `awaitSpawnResolution` + `awaitParticleChainResolution`
+    // so the snapshot in stage 6 catches the actual fires instead of
+    // racing the async resolve.
     const spawnProbe = await page.evaluate(
-      async ({ guid, setupDid, scriptDid, x, y, z, lbId }) => {
+      async ({ guid, setupDid, scriptDid, soundTableDid, x, y, z, lbId }) => {
         const out = { steps: [] };
         try {
           if (typeof window.__scene3dEntityHook !== "function") {
@@ -761,20 +793,21 @@ const POST_SPAWN_SETTLE_MS = 2_000;
             iconId: 0,
             objScale: 1.0,
             paletteId: 0,
-            mtableId: 0,
+            mtableId: PROBE_MTABLE_DID >>> 0,
             modelChanges: new Uint32Array(0),
             textureChanges: new Uint32Array(0),
             subPalettes: new Uint32Array(0),
             // The load-bearing field — drives _attachParticleChainForEntity.
             physicsScriptDid: scriptDid >>> 0,
-            soundTableDid: 0,
+            // F.D-fu1: load-bearing for __synthGameMessageSound resolution.
+            soundTableDid: soundTableDid >>> 0,
             __synthetic: true,
             __placeholder: false,
             __category: "Object",
           };
           window.__scene3dEntityHook(upd);
           out.steps.push(
-            `dispatched kind=1 spawn guid=0x${(guid >>> 0).toString(16)} setup=0x${(setupDid >>> 0).toString(16)} pes=0x${(scriptDid >>> 0).toString(16)}`
+            `dispatched kind=1 spawn guid=0x${(guid >>> 0).toString(16)} setup=0x${(setupDid >>> 0).toString(16)} pes=0x${(scriptDid >>> 0).toString(16)} stb=0x${(soundTableDid >>> 0).toString(16)}`
           );
         } catch (e) {
           out.error = String(e?.message ?? e);
@@ -785,6 +818,7 @@ const POST_SPAWN_SETTLE_MS = 2_000;
         guid: PROBE_ENTITY_GUID,
         setupDid: PROBE_SETUP_DID,
         scriptDid: PROBE_PHYSICS_SCRIPT_DID,
+        soundTableDid: PROBE_SOUND_TABLE_DID,
         x: HOLTBURG_X,
         y: HOLTBURG_Y,
         z: HOLTBURG_Z,
@@ -798,13 +832,60 @@ const POST_SPAWN_SETTLE_MS = 2_000;
       report.probe.sources_deferred.push("PhysicsScriptHook (injection failed)");
     }
 
-    // Stage 5c — settle so the spawn's animation/keyframe fetch
-    // chain lands AND any start_time_s=0 CreateParticle hooks fire
-    // through the addEmitter pipeline. (start_time_s>0 hooks
-    // resolve via setTimeout — we'll catch them inside the ambient
-    // hold window below.)
-    await page.waitForTimeout(POST_SPAWN_SETTLE_MS);
-    console.log(`[stage 5c] post-spawn settle (${POST_SPAWN_SETTLE_MS}ms)`);
+    // Stage 5c — F.D-fu3 (2026-05-20): await the spawn + chain
+    // resolution explicitly instead of guessing a settle timeout. The
+    // EntityManager exposes:
+    //   - `awaitSpawnResolution(guid)` — Promise<EntityInstance|null>
+    //     resolves once `_spawnImpl` completes (rig built, prewarm
+    //     fired, chain dispatch reached).
+    //   - `awaitParticleChainResolution(guid)` — Promise<{ok,
+    //     emitterCount, soundHookCount}|null> resolves once the H2
+    //     chain walker (`_attachParticleChainForEntity`) finishes
+    //     all its async work (PhysicsScript fetch → for-each
+    //     CreateParticleHook → ParticleEmitter fetch → addEmitter).
+    // We also keep a hard ceiling (12s) so a stuck wasm fetch can't
+    // hang the validator forever.
+    const chainResolveProbe = await page.evaluate(async ({ guid, timeoutMs }) => {
+      const out = { steps: [] };
+      try {
+        const live = window.liveScene3d;
+        if (!live?.entityManager) {
+          out.error = "no entityManager";
+          return out;
+        }
+        const em = live.entityManager;
+        const timeoutP = new Promise((_, rej) => setTimeout(() => rej(new Error("chain resolve timeout")), timeoutMs));
+        const tSpawn = performance.now();
+        const inst = await Promise.race([
+          em.awaitSpawnResolution(guid >>> 0),
+          timeoutP,
+        ]);
+        out.spawnElapsedMs = (performance.now() - tSpawn) | 0;
+        out.spawnLanded = !!inst;
+        if (!inst) {
+          out.steps.push("spawn never resolved");
+          return out;
+        }
+        out.steps.push(`spawn landed (entity now in entityMap=${!!em.entityMap?.get(guid >>> 0)})`);
+        // Now wait for the chain itself.
+        const tChain = performance.now();
+        const chainDescriptor = await Promise.race([
+          em.awaitParticleChainResolution(guid >>> 0),
+          timeoutP,
+        ]);
+        out.chainElapsedMs = (performance.now() - tChain) | 0;
+        out.chainDescriptor = chainDescriptor;
+        out.steps.push(
+          chainDescriptor
+            ? `chain resolved: ok=${chainDescriptor.ok} emitters=${chainDescriptor.emitterCount} soundHooks=${chainDescriptor.soundHookCount}`
+            : "chain descriptor was null (no PES on spawn)"
+        );
+      } catch (e) {
+        out.error = String(e?.message ?? e);
+      }
+      return out;
+    }, { guid: PROBE_ENTITY_GUID, timeoutMs: 12_000 });
+    console.log("[stage 5c] chain resolve probe:", JSON.stringify(chainResolveProbe, null, 2));
 
     // Stage 5d — ambient hold. The roller is driven by the rAF loop;
     // we just keep the page alive. Phase F.C probe records each
@@ -813,72 +894,40 @@ const POST_SPAWN_SETTLE_MS = 2_000;
     await page.waitForTimeout(PROBE_WINDOW_MS);
     report.probe.sources_exercised.push("AmbientRuntime");
 
-    // Stage 5e — synth GameMessageSound. We mirror the recv arm's
-    // logic from index.html:6389-6557 directly so we don't need to
-    // smuggle a kind=16 ClientEvent through the wasm event channel.
-    // The runtime path executed is identical (cache.resolveSound →
-    // pushEventRecord → audioManager.play) — only the EVENT TRIGGER
-    // is synthetic.
-    const gmsProbe = await page.evaluate(async ({ guid }) => {
-      const out = { steps: [] };
+    // Stage 5e — F.D-fu1 (2026-05-20): use the new
+    // `window.__synthGameMessageSound(guid, soundEnum, scale)` helper
+    // which mirrors the SAME resolution chain as the live recv-loop
+    // arm in index.html:6968-7137. The synth entity carries a real
+    // soundTableDid (0x20000014 = forge) so the SoundTable lookup
+    // resolves to Sound.LifestoneOn (0x51) → waveDid 0x0a000266.
+    // Returns a descriptor with `{ ok, reason?, waveDid?, gain? }`.
+    const SYNTH_COUNT = 2;
+    const gmsProbe = await page.evaluate(async ({ guid, soundEnum, count }) => {
+      const out = { steps: [], fires: [] };
       try {
-        const scene3d = window.liveScene3d;
-        if (!scene3d) {
-          out.error = "no liveScene3d";
+        if (typeof window.__synthGameMessageSound !== "function") {
+          out.error = "__synthGameMessageSound missing — index.html out of date";
           return out;
         }
-        const emgr = scene3d.entityManager;
-        const inst = emgr?.entityMap?.get(guid >>> 0);
-        if (!inst) {
+        for (let i = 0; i < count; i++) {
+          const result = await window.__synthGameMessageSound(guid >>> 0, soundEnum >>> 0, 1.0);
+          out.fires.push(result);
           out.steps.push(
-            `entity 0x${(guid >>> 0).toString(16)} not yet in entityMap (spawn chain still resolving)`
+            `fire ${i + 1}/${count}: ok=${result.ok}${result.reason ? " reason=" + result.reason : ""}${result.waveDid ? " wave=0x" + result.waveDid.toString(16) : ""}`
           );
-          // Soft-fall: the synthetic GMS path is exercised even
-          // without a live entity; we manually call audioManager.play
-          // with a fixed wave + record the event via _pushEventRecord
-          // so the source is exercised. This is a slightly weaker
-          // simulation than the real recv arm but adequate for
-          // demonstrating the channel.
-          const audioMgr = scene3d.audioManager;
-          if (audioMgr && scene3d._pushEventRecord) {
-            const waveDid = 0x0a000266 >>> 0;
-            scene3d._pushEventRecord({
-              type: "sound",
-              wave_did: waveDid,
-              parent_entity_guid: guid >>> 0,
-              world_pos: [32540, 33850, 86],
-              t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
-              source: "GameMessageSound",
-              source_meta: {
-                server_object_guid: guid >>> 0,
-                sound_enum: 0x46,
-                stb_did: 0,
-                scale: 1.0,
-                gain: 1.0,
-                synthetic_probe: true,
-              },
-            });
-            try {
-              await audioMgr.play(waveDid, { x: 32540, y: 33850, z: 86 }, { gain: 1.0 });
-            } catch (_) { /* tolerated */ }
-            out.steps.push("synthetic GMS record + play");
-            out.gmsFires = 1;
-            return out;
-          }
         }
-        out.error = "audioManager + _pushEventRecord unavailable";
-        return out;
       } catch (e) {
         out.error = String(e?.message ?? e);
       }
       return out;
-    }, { guid: PROBE_ENTITY_GUID });
+    }, { guid: PROBE_ENTITY_GUID, soundEnum: PROBE_SOUND_ENUM_LIFESTONE_ON, count: SYNTH_COUNT });
     console.log("[stage 5e] GMS probe:", JSON.stringify(gmsProbe, null, 2));
-    if (gmsProbe.gmsFires > 0) {
-      report.expected.game_message_sound.count = gmsProbe.gmsFires;
+    const gmsFires = (gmsProbe.fires || []).filter((f) => f && f.ok).length;
+    if (gmsFires > 0) {
+      report.expected.game_message_sound.count = gmsFires;
       report.probe.sources_exercised.push("GameMessageSound");
     } else {
-      report.probe.sources_deferred.push("GameMessageSound (unable to synth)");
+      report.probe.sources_deferred.push("GameMessageSound (synth helper reported no ok fires)");
     }
 
     // Mark the deferred sources.
@@ -967,7 +1016,7 @@ const POST_SPAWN_SETTLE_MS = 2_000;
     );
     let contMatched = 0;
     let contSpurious = 0;
-    for (const [k, r] of continuousObserved.entries()) {
+    for (const k of continuousObserved.keys()) {
       // k uses 0x prefix on stb_id; expected set normalises to
       // the manifest's "0x.." hex format already.
       if (expectedContinuousKeys.has(k.replace(/^0x/, "0x"))) {
@@ -1231,9 +1280,12 @@ const POST_SPAWN_SETTLE_MS = 2_000;
     mdLines.push("");
     mdLines.push("- **AnimationHook (`anim_sound`)**: deferred — F.B's bake does not yet emit anim-sound rows. The F.E staged README at `/dist/events/README.md` flags this as 'awaiting F.B.5 (wcid→MotionTableDataId staging)'. F.D reports `expected=0 observed=0`.");
     mdLines.push("- **SkyChain**: deferred — the probe doesn't drive `populateSkyDescFromRegion` (no `?skytime=accel`, no EnteredWorld). F.D reports `expected=0 observed=0`. Future follow-on: light up Sky-B in the boot probe + diff against a sky-particle expected manifest (not yet baked).");
-    mdLines.push("- **GameMessageSound**: synthesized directly via `_pushEventRecord` + `audioManager.play` because no kind=16 wire injector exists. The synth path exercises the same downstream as the recv arm (index.html:6389-6557) — only the trigger differs.");
+    mdLines.push("- **GameMessageSound** (F.D-fu1 2026-05-20): exercised via `window.__synthGameMessageSound(guid, soundEnum, scale)`. The helper mirrors the SAME resolution chain as the live recv-loop arm in index.html:6968-7137 (entity GUID → SoundTable resolve → AudioManager.play → pushEventRecord). Only the TRIGGER is synthetic; the downstream is identical to a wire-pushed 0xF750.");
     mdLines.push("- **AmbientRuntime continuous**: the F.B manifest is `terrain_type → ambient_sounds[]` keyed; the runtime samples ONE terrain code per tick. `matched ≤ expected` is the expected outcome (the player only sits on one terrain code in the probe window).");
     mdLines.push("- **AmbientRuntime probabilistic**: `±50%` tolerance per method-doc reflects the stochastic Math.random() roll. A within-tolerance outcome is a PASS even if `matched < observed` by count.");
+    mdLines.push("- **AmbientRuntime headless drift** (F.D-fu2 2026-05-20): the runtime now derives dt from a wall-clock source (`performance.now`-deltas) instead of consuming the rAF-throttled dt from `scene3d/index.js::tick`. The renderer's dt-recovery armor (clamps dt=0 after a >500ms frame gap to prevent animation snap) was zeroing ambient timer decrements under headless software-GL, where every frame regularly exceeded the threshold. Tests can inject a deterministic clock via `ambientRuntime.setClockForTest(fn)`.");
+    mdLines.push("- **PhysicsScriptHook chain timing** (F.D-fu3 2026-05-20): the validator now `await`s `entityManager.awaitSpawnResolution(guid)` + `awaitParticleChainResolution(guid)` instead of guessing a settle timeout. The chain walker returns a descriptor `{ ok, emitterCount, soundHookCount }` so the snapshot in stage 6 catches actual fires.");
+    mdLines.push("- **Probe window** (F.D-fu4 2026-05-20): default bumped to 60s (from 12s). Probabilistic ambient timers have `[minRate, maxRate]` windows up to 30s with `baseChance` coin flips; 12s consistently reported `obs=0` even though the runtime was firing correctly. 60s gives the timer distribution enough wall-clock to land statistically.");
     fs.writeFileSync(reportMdPath, mdLines.join("\n"));
     console.log(`report (md):   ${reportMdPath}`);
   } catch (e) {

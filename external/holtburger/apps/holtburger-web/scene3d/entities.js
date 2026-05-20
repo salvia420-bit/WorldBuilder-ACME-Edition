@@ -744,6 +744,15 @@ export class EntityManager {
     this._soundTimeoutsForGuid = new Map();
     /** @type {Set<number>} */
     this._particleChainsAttached = new Set();
+    // F.D-fu3 (2026-05-20): per-guid promise that resolves when the
+    // H2 chain walker has fully landed (including all `addEmitter`
+    // awaits + setTimeout schedules for Sound hooks). Distinct from
+    // `_particleChainsAttached` which fires synchronously at spawn-
+    // dispatch time; this Map's promise resolves at the END of the
+    // chain walk so validators can `await` the actual resolution
+    // instead of guessing a settle time. Cleared on `remove(guid)`.
+    /** @type {Map<number, Promise<{ok: boolean, emitterCount: number, soundHookCount: number, reason?: string}>>} */
+    this._particleChainResolveForGuid = new Map();
     this._worldParticleManager = null;
     // B4 (2026-05-18): name → Set<guid> index so `findGuidByName` is
     // O(1) instead of an O(N) entityMap scan. Names aren't unique
@@ -1184,14 +1193,29 @@ export class EntityManager {
       typeof this.wasmExports.fetchBuildingPlacement === "function"
     ) {
       this._particleChainsAttached.add(guid);
-      this._attachParticleChainForEntity(guid, root, pesId).catch((e) => {
-        this._particleChainsAttached.delete(guid);
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[entities/H2] particle chain walk for 0x${guid.toString(16)} (pes=0x${pesId.toString(16)}) threw:`,
-          e
-        );
-      });
+      // F.D-fu3 (2026-05-20): record the resolve promise so validators
+      // (and any caller via `awaitParticleChainResolution(guid)`) can
+      // wait for the H2 chain to actually finish landing emitters +
+      // scheduling Sound hooks before snapshotting state. The promise
+      // resolves to a small descriptor regardless of success/failure
+      // so the caller can branch on `result.ok` instead of catching.
+      const resolvePromise = this._attachParticleChainForEntity(guid, root, pesId)
+        .then((descriptor) => descriptor ?? { ok: true, emitterCount: 0, soundHookCount: 0 })
+        .catch((e) => {
+          this._particleChainsAttached.delete(guid);
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[entities/H2] particle chain walk for 0x${guid.toString(16)} (pes=0x${pesId.toString(16)}) threw:`,
+            e
+          );
+          return {
+            ok: false,
+            emitterCount: 0,
+            soundHookCount: 0,
+            reason: String(e?.message ?? e),
+          };
+        });
+      this._particleChainResolveForGuid.set(guid, resolvePromise);
     }
     // Follow-on #10 (3D port state doc) — DOM nameplate overlay. Skip
     // the local player (matches the 2D path's `ensureNameplate` skip at
@@ -1946,6 +1970,12 @@ export class EntityManager {
       this._soundTimeoutsForGuid.delete(g);
     }
     this._particleChainsAttached.delete(g);
+    // F.D-fu3: also drop the resolve-promise entry so a re-spawn
+    // with the same GUID gets a fresh promise. The old promise has
+    // already resolved by now in the common case (chain walks are
+    // fast vs entity lifetime); we don't need to await it before
+    // dropping the reference.
+    this._particleChainResolveForGuid.delete(g);
   }
 
   /**
@@ -2047,7 +2077,14 @@ export class EntityManager {
         `[entities/H2] fetchPhysicsScript(0x${pesId.toString(16)}) failed:`,
         e
       );
-      return;
+      // F.D-fu3 — return a descriptor so callers can distinguish a
+      // hard fetch failure from "no hooks found".
+      return {
+        ok: false,
+        emitterCount: 0,
+        soundHookCount: 0,
+        reason: `fetchPhysicsScript_failed:${String(e?.message ?? e)}`,
+      };
     }
     const entries = ps.takeEntries();
 
@@ -2297,6 +2334,64 @@ export class EntityManager {
           `for entity 0x${guid.toString(16)} (PES 0x${pesId.toString(16)})`
       );
     }
+    // F.D-fu3 (2026-05-20): return a descriptor so callers can
+    // observe what actually landed without polling the internal Maps.
+    return {
+      ok: true,
+      emitterCount: emitterIds.length,
+      soundHookCount: timeoutIds.length,
+    };
+  }
+
+  /**
+   * F.D-fu3 (2026-05-20) — await the H2 particle chain walker's
+   * resolution for `guid`. Returns the descriptor produced by
+   * `_attachParticleChainForEntity` (with `ok`, `emitterCount`,
+   * `soundHookCount`, optional `reason`), or `null` if the entity
+   * never had a PhysicsScript DID + thus never started a chain walk
+   * (which is the common case for most weenies).
+   *
+   * Used by validators (Phase F.D) to wait for the chain to land
+   * BEFORE snapshotting the event log, instead of guessing a settle
+   * time. Mirrors the `spawnInFlight` pattern at line 786 — the
+   * promise is created at chain-walk dispatch time and stays in
+   * the Map across the walker's `fetchPhysicsScript` → loop →
+   * `fetchParticleEmitter` → `addEmitter` chain.
+   *
+   * @param {number} guid
+   * @returns {Promise<{ok: boolean, emitterCount: number, soundHookCount: number, reason?: string}|null>}
+   */
+  async awaitParticleChainResolution(guid) {
+    const g = (guid >>> 0);
+    const p = this._particleChainResolveForGuid.get(g);
+    if (!p) return null;
+    return p;
+  }
+
+  /**
+   * F.D-fu3 (2026-05-20) — await the SPAWN resolution for `guid`.
+   * Returns the `EntityInstance` once the `_spawnImpl` async chain
+   * has fully resolved (rig built, meta populated, prewarm fired),
+   * or `null` if the entity isn't currently in-flight AND not in
+   * the entityMap. If the entity is already fully spawned, returns
+   * the existing instance synchronously (Promise resolves on next
+   * tick). If a spawn IS in flight, returns the in-flight promise.
+   *
+   * Validators call this BEFORE `awaitParticleChainResolution` so
+   * they wait for the spawn → chain dispatch BEFORE waiting on
+   * the chain itself. (Chain dispatch only happens once the
+   * spawn's `_spawnImpl` reaches line ~1187.)
+   *
+   * @param {number} guid
+   * @returns {Promise<object|null>}
+   */
+  async awaitSpawnResolution(guid) {
+    const g = (guid >>> 0);
+    const inFlight = this.spawnInFlight.get(g);
+    if (inFlight) return inFlight;
+    const inst = this.entityMap.get(g);
+    if (inst) return inst;
+    return null;
   }
 
   /**
