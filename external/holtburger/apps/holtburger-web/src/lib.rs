@@ -35,6 +35,24 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     #[wasm_bindgen(js_namespace = console, js_name = log)]
     fn console_log_str(s: &str);
+}
+
+// Per-tick / per-input / per-reconcile diagnostic traces (the noisy
+// "[step 3.6 tick #N] ...", "[step3-trace] ...", "[step3.6-trace]
+// ...", "[acad-diag rubberband] ...", "[acad-diag reconcile] ..."
+// lines) are gated on this flag. Set to `true` to re-enable when
+// debugging movement / academy rubberband / motion dispatch — the
+// constant is dead-code-eliminated by the release optimiser when
+// `false`, so production builds carry zero runtime cost AND zero
+// console spam. One-shot lifecycle logs (boot, init, capability
+// negotiation) and user-action logs (attack/jump/buy/sell/cast)
+// remain unconditional.
+#[cfg(target_arch = "wasm32")]
+const DIAG_VERBOSE: bool = false;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
 
     /// Workstream Sky-B: bind JS's `Date.now()` for wall-clock UTC
     /// derivation of the in-world time-of-day. Returns milliseconds
@@ -16172,7 +16190,7 @@ async fn recv_loop(
                                                         | SpatialSampleMode::SimulatingVelocity
                                                 )
                                             });
-                                        if snap_will_apply {
+                                        if snap_will_apply && DIAG_VERBOSE {
                                             console_log_str(&format!(
                                                 "[acad-diag reconcile] snapping to server pose: force_seq={} teleport_seq={} pose=({:.2}, {:.2}, {:.2})",
                                                 data.pos.force_position_sequence,
@@ -16317,10 +16335,12 @@ async fn recv_loop(
                                             // larger drifts indicate the
                                             // integrator has gotten lost.
                                             if dist_sq > 25.0 {
-                                                console_log_str(&format!(
-                                                    "[acad-diag reconcile] PrivateUpdatePosition drift {:.2} m → snapping to server",
-                                                    dist_sq.sqrt(),
-                                                ));
+                                                if DIAG_VERBOSE {
+                                                    console_log_str(&format!(
+                                                        "[acad-diag reconcile] PrivateUpdatePosition drift {:.2} m → snapping to server",
+                                                        dist_sq.sqrt(),
+                                                    ));
+                                                }
                                                 let _ = w.set_player_position(*pos);
                                             }
                                         }
@@ -16846,10 +16866,12 @@ async fn recv_loop(
                             // sprite still won't slide — retail AC
                             // expects the client to predict locally —
                             // but the round-trip is observable here.
-                            console_log_str(&format!(
-                                "[step3-trace] UpdateMotion guid=0x{:08X} (ACE accepted MoveToState)",
-                                u32::from(data.guid),
-                            ));
+                            if DIAG_VERBOSE {
+                                console_log_str(&format!(
+                                    "[step3-trace] UpdateMotion guid=0x{:08X} (ACE accepted MoveToState)",
+                                    u32::from(data.guid),
+                                ));
+                            }
                             // Animation-gate hint: derive the active
                             // forward locomotion command so JS can
                             // gate walk-cycle animation on a server-
@@ -18699,9 +18721,11 @@ async fn recv_loop(
                             ),
                             now,
                         );
-                        console_log_str(&format!(
-                            "[step3.6-trace] enqueue_drive_intent ManualHeld(forward={forward} strafe={strafe} turn={turn} run={run})",
-                        ));
+                        if DIAG_VERBOSE {
+                            console_log_str(&format!(
+                                "[step3.6-trace] enqueue_drive_intent ManualHeld(forward={forward} strafe={strafe} turn={turn} run={run})",
+                            ));
+                        }
                     }
                     Some(SessionCommand::TickMovement { now }) => {
                         // Phase 4 step 3.6: pumps the cli's
@@ -19009,7 +19033,7 @@ async fn recv_loop(
                                 // can verify the local-pose integrator is
                                 // advancing the WorldState pose that the
                                 // AutonomousPosition heartbeat reads.
-                                if movement.tick_count() % 60 == 0 {
+                                if DIAG_VERBOSE && movement.tick_count() % 60 == 0 {
                                     if let Some(pose) = w.local_player_runtime_pose() {
                                         let caps_ok =
                                             w.resolve_self_movement_capabilities()
@@ -19081,17 +19105,19 @@ async fn recv_loop(
                                 if last_diag_force_seq != Some(force_seq) {
                                     if let Some(prev) = last_diag_force_seq {
                                         if let Some(pose) = w.local_player_runtime_pose() {
-                                            console_log_str(&format!(
-                                                "[acad-diag rubberband] tick #{} force_seq {} -> {} pose=({:.2}, {:.2}, {:.2}) cell=0x{:08X} indoor={}",
-                                                movement.tick_count(),
-                                                prev,
-                                                force_seq,
-                                                pose.coords.x,
-                                                pose.coords.y,
-                                                pose.coords.z,
-                                                u32::from(pose.landblock_id),
-                                                pose.is_indoors(),
-                                            ));
+                                            if DIAG_VERBOSE {
+                                                console_log_str(&format!(
+                                                    "[acad-diag rubberband] tick #{} force_seq {} -> {} pose=({:.2}, {:.2}, {:.2}) cell=0x{:08X} indoor={}",
+                                                    movement.tick_count(),
+                                                    prev,
+                                                    force_seq,
+                                                    pose.coords.x,
+                                                    pose.coords.y,
+                                                    pose.coords.z,
+                                                    u32::from(pose.landblock_id),
+                                                    pose.is_indoors(),
+                                                ));
+                                            }
                                         }
                                     }
                                     last_diag_force_seq = Some(force_seq);
