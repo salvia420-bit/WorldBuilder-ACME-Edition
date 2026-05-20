@@ -26,7 +26,7 @@ import {
   landblockMeshToGeometry,
   subdividedLandblockMeshToGeometry,
   buildVertexTypesDataTexture,
-  buildTerrainAtlasCanvas,
+  buildTerrainAtlasArrayBytes,
 } from "./adapter.js";
 
 // ----- AC world-coord constants -------------------------------------
@@ -297,8 +297,7 @@ precision highp float;
 precision highp int;
 precision highp sampler2DArray;
 
-uniform sampler2D uAtlas;             // 6×6 grid of 256×256 retail terrain tiles
-uniform vec2 uAtlasGridSize;          // (cols, rows) — typically (6, 6)
+uniform sampler2DArray uAtlas;        // 33 layers of 256×256 retail terrain tiles, one per code (0..32). ClampToEdge per layer eliminates the cross-tile bleed that the prior 6×6 packed atlas produced at mip levels ≥3 (the "not flush with vertices" artefact: gutter-less neighbours bled into each other along cell vertex lines).
 uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadCode*64, A = 255
 uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
 uniform float uRoadTileScale;         // road UV tile rate per LB unit
@@ -427,14 +426,12 @@ in vec2 vWaveModulation;
 out vec4 fragColor;
 
 // Map terrain code (0..32) → atlas UV at the given cell-local UV.
-// Retail terrain atlas is a 6×6 grid; tile index = code.
-vec2 atlasUvFor(int code, vec2 cellUv) {
-  int cols = int(uAtlasGridSize.x);
-  int col = code - (code / cols) * cols;
-  int row = code / cols;
-  vec2 origin = vec2(float(col), float(row)) / uAtlasGridSize;
-  vec2 size = vec2(1.0) / uAtlasGridSize;
-  return origin + size * cellUv;
+// Retail terrain codes 0..32 are individual layers of a sampler2DArray.
+// cellUv (range [0,1]) is the intra-cell UV; the layer index is the
+// code itself -- DataArrayTexture clamps integer layer selection so no
+// neighbour-tile bleed at any mip level.
+vec3 atlasUvFor(int code, vec2 cellUv) {
+  return vec3(cellUv, float(code));
 }
 
 int vertexTypeAt(int iu, int iv) {
@@ -720,7 +717,6 @@ export const PHASE_2_2_LAVA_CODES = TERRAIN_LAVA_CODES;
 // Shared by every per-LB material the ring bakes. Lifted out of the
 // inner loop so the ring driver builds them once and threads them via
 // `opts` to `bakeTerrainForLandblock` rather than recomputing per LB.
-const ATLAS_GRID_SIZE = new THREE.Vector2(6, 6);
 
 /**
  * Resolve the once-per-ring opts the per-LB baker consumes. Reads
@@ -730,8 +726,8 @@ const ATLAS_GRID_SIZE = new THREE.Vector2(6, 6);
  *
  * Callers that already have an atlas/road texture pair (e.g. the lazy
  * hook reusing a previously baked ring's textures) should pass them via
- * `existing.atlasTexture` / `existing.roadTexture` / `existing.atlasCanvas`
- * / `existing.roadCanvas` to skip the canvas + texture build.
+ * `existing.atlasTexture` / `existing.roadTexture` / `existing.roadCanvas`
+ * to skip the texture build.
  *
  * `centreLbX` / `centreLbY` are used by the centre-vs-outer subdivision
  * LOD rule preserved from the prior `buildHoltburgTerrain` body. The
@@ -796,35 +792,42 @@ async function resolveTerrainRingOpts(
   // Atlas + road textures. Built from `fetch_terrain_textures()` when
   // the caller didn't pass a previously-baked pair. The lazy LB-entry
   // path (added in Objective 5/6) will pass the previously-baked
-  // textures here so we don't redo the canvas work.
+  // textures here so we don't redo the bake work.
   let atlasTexture = existing?.atlasTexture ?? null;
   let roadTexture = existing?.roadTexture ?? null;
-  let atlasCanvas = existing?.atlasCanvas ?? null;
   let roadCanvas = existing?.roadCanvas ?? null;
   if (!atlasTexture) {
     const terrainTextures = await wasmExports.fetch_terrain_textures();
-    const canvases = buildTerrainAtlasCanvas(terrainTextures);
-    atlasCanvas = canvases.atlasCanvas;
-    roadCanvas = canvases.roadCanvas;
+    const built = buildTerrainAtlasArrayBytes(terrainTextures);
+    roadCanvas = built.roadCanvas;
 
-    atlasTexture = new THREE.CanvasTexture(atlasCanvas);
-    // Atlas tiles are colour data — sRGB so three's renderer linearises
-    // them before the fragment shader does its bilinear blend.
+    // Per-code layer of a `sampler2DArray`. Replaces the prior
+    // `CanvasTexture` of a 6x6 packed atlas (1536x1536); the packed
+    // atlas had no inter-tile gutter so the GPU's bilinear+mipmap
+    // sampler bled neighbouring slots' colours into each cell at
+    // mip levels >=3 — the bleed line landed on the 24 m cell vertex
+    // grid, which the user described as "terrain textures not flush
+    // with vertices". DataArrayTexture clamps integer layer
+    // selection per-sample so cross-tile bleed is structurally
+    // impossible at any mip level, and each layer carries its own
+    // mipmap chain.
+    atlasTexture = new THREE.DataArrayTexture(
+      built.atlasArrayBytes,
+      built.tileSize,
+      built.tileSize,
+      built.depth
+    );
+    atlasTexture.format = THREE.RGBAFormat;
+    atlasTexture.type = THREE.UnsignedByteType;
+    // sRGB so three.js linearises tile colours before the fragment
+    // shader's bilinear-on-control corner blend (same colour-space
+    // contract the prior CanvasTexture path had).
     atlasTexture.colorSpace = THREE.SRGBColorSpace;
+    atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
+    atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
     atlasTexture.magFilter = THREE.LinearFilter;
     atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
     atlasTexture.generateMipmaps = true;
-    // THREE.CanvasTexture defaults flipY=true so the GPU vertically
-    // mirrors the canvas at upload. The fragment shader's
-    // `atlasUvFor(code, ...)` packs slots as `row = code/6`; with
-    // flipY=true every code C ends up sampling slot `(5 - C/6)*6 +
-    // C%6` instead of slot C — e.g. Grassland (1) → DesolateLands (31),
-    // LushGrass (3) → empty slot 33 (black), PatchyGrassland (9) →
-    // BlueIce (27, cyan). Matches adapter.js's surface-texture pattern
-    // (flipY=false at lines 588 / 644 / 691). Latent since the initial
-    // Phase 7.1 3D port; surfaced visually once the 13×13 ring (commit
-    // 2bbb0ad) exposed enough non-water LBs to show the discrepancy.
-    atlasTexture.flipY = false;
     atlasTexture.needsUpdate = true;
 
     if (roadCanvas) {
@@ -873,7 +876,6 @@ async function resolveTerrainRingOpts(
     lavaCodeMask,
     atlasTexture,
     roadTexture,
-    atlasCanvas,
     roadCanvas,
   };
 }
@@ -1069,7 +1071,6 @@ export async function bakeTerrainForLandblock(
     // uniforms.
     uniforms: {
       uAtlas: { value: opts.atlasTexture },
-      uAtlasGridSize: { value: ATLAS_GRID_SIZE },
       uVertexTypes: { value: vertexTypesTex },
       // Retail-style road painting (replaces the prior road-overlay
       // mesh). The road texture is the same retail-DAT road tile we
@@ -1446,7 +1447,6 @@ export async function bakeTerrainRing(
   // cleanup, and the lazy LB-entry path that Objective 6 will wire).
   scene3d.terrainAtlasTexture = opts.atlasTexture;
   scene3d.terrainRoadTexture = opts.roadTexture;
-  scene3d.terrainAtlasCanvas = opts.atlasCanvas;
   scene3d.terrainRoadCanvas = opts.roadCanvas;
   scene3d.terrainLbCount = coords.length;
   // Persist the resolved ring opts so the lazy LB-entry hook (Objective
@@ -1459,7 +1459,6 @@ export async function bakeTerrainRing(
   return {
     atlasTexture: opts.atlasTexture,
     roadTexture: opts.roadTexture,
-    atlasCanvas: opts.atlasCanvas,
     roadCanvas: opts.roadCanvas,
     lbCount: coords.length,
     lbWithRoads,
@@ -1471,9 +1470,9 @@ export async function bakeTerrainRing(
  * shader + per-LB vertex-types texture + road overlays) and add it to
  * `scene3d.terrainGroup`.
  *
- * Returns a summary `{ atlasTexture, roadTexture, lbCount, atlasCanvas,
- * roadCanvas }` with the shared atlas / road textures stashed for later
- * phases (Phase 7.5 camera, Phase 7.7 cleanup) to reuse.
+ * Returns a summary `{ atlasTexture, roadTexture, lbCount, roadCanvas }`
+ * with the shared atlas / road textures stashed for later phases
+ * (Phase 7.5 camera, Phase 7.7 cleanup) to reuse.
  *
  * world-expand step 1 (Objective 2): preserved as a thin radius=1
  * wrapper around `bakeTerrainRing`. Existing captures + smoke tests
@@ -1482,4 +1481,57 @@ export async function bakeTerrainRing(
  */
 export async function buildHoltburgTerrain(scene3d, wasmExports) {
   return bakeTerrainRing(scene3d, HOLTBURG_X, HOLTBURG_Y, 1, wasmExports);
+}
+
+// ---------------------------------------------------------------------
+// Visual-vs-collision Z reconciliation.
+//
+// Phase 2.1 subdivision interpolates 9×9 control heights with a bicubic
+// Catmull-Rom basis. The resulting visual surface deviates from the
+// 24 m bilinear collision surface by up to ±VISUAL_VS_COLLISION_MAX_M
+// (= 0.3 m, clamped server-side at terrain_subdiv.rs). Physics
+// (`WorldState::terrain_height_at`) queries bilinear; the rendered mesh
+// is Catmull-Rom. So a player at the bilinear standing-Z appears to
+// sink up to 0.3 m into a Catmull-Rom peak, or float over a Catmull-Rom
+// valley dip.
+//
+// `getTerrainVisualZ` casts a vertical ray against the rendered terrain
+// group and returns the visible surface Z at (x, y). Callers (loop.js's
+// player pose appliers) substitute this for the bilinear Z when
+// positioning the rendered avatar, while leaving the server-
+// authoritative collision pose unchanged.
+//
+// Cost: one raycast per call. THREE's bounding-sphere broad-phase skips
+// every LB whose mesh doesn't intersect the vertical ray (only the
+// 1–2 LBs directly under the query XY get triangle-tested), so per-
+// frame cost is ~one LB's worth of triangle tests — sub-millisecond
+// at subdivLevel=8 (≈8K tris/LB).
+// ---------------------------------------------------------------------
+
+const _terrainVisualRaycaster = new THREE.Raycaster();
+const _terrainVisualRayOrigin = new THREE.Vector3();
+const _terrainVisualRayDir = new THREE.Vector3(0, 0, -1);
+const _terrainVisualIntersects = [];
+
+export function getTerrainVisualZ(scene3d, x, y, fallbackZ) {
+  const group = scene3d?.terrainGroup;
+  if (!group || !group.children || group.children.length === 0) {
+    return fallbackZ;
+  }
+  // Cast from well above any plausible terrain height (Holtburg ~96 m
+  // peak; AC overall ~200 m max) so the ray origin is always above
+  // the surface.
+  _terrainVisualRayOrigin.set(x, y, 1000);
+  _terrainVisualRaycaster.set(_terrainVisualRayOrigin, _terrainVisualRayDir);
+  _terrainVisualRaycaster.far = 2000;
+  _terrainVisualIntersects.length = 0;
+  _terrainVisualRaycaster.intersectObject(
+    group,
+    true,
+    _terrainVisualIntersects
+  );
+  if (_terrainVisualIntersects.length === 0) return fallbackZ;
+  const z = _terrainVisualIntersects[0].point.z;
+  _terrainVisualIntersects.length = 0;
+  return Number.isFinite(z) ? z : fallbackZ;
 }

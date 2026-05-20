@@ -37,6 +37,7 @@
 
 import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
 import { tickLightingForCellState } from "./lighting.js";
+import { getTerrainVisualZ } from "./terrain.js";
 
 // Entity-update kind constants — mirror the wasm `ENTITY_UPDATE_KIND_*`
 // constants from `crates/holtburger-session/src/lib.rs`. Listed here
@@ -264,9 +265,18 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   }
   const qw = Math.cos(heading * 0.5);
   const qz = Math.sin(heading * 0.5);
+  // Visual-vs-collision Z reconcile. `posZ` is the wasm integrator's
+  // bilinear standing-Z (matches what ACE physics agrees on); the
+  // rendered terrain mesh interpolates with Catmull-Rom and can sit up
+  // to VISUAL_VS_COLLISION_MAX_M (0.3 m) above bilinear on peaks. That
+  // delta was rendering the player's feet inside the ground. Raycast
+  // the rendered terrain at the player's XY and use the visual Z if
+  // the cast hits — physics/server pose stays untouched (see
+  // `getTerrainVisualZ` doc in terrain.js).
+  const renderZ = getTerrainVisualZ(scene3d, predicted.x, predicted.y, posZ);
   scene3d.entityManager.setPose(
     guid,
-    predicted.x, predicted.y, posZ,
+    predicted.x, predicted.y, renderZ,
     qw, 0.0, 0.0, qz
   );
 }
@@ -810,9 +820,18 @@ export function installSharedDrainHook(scene3d) {
           // B reconciliation gate sees the fresh `ts` and behaves
           // correctly.
           if (!isLocalPlayerGuid(g)) {
+            // Visual-vs-collision Z reconcile (same rationale as the
+            // local-player path in applyLocalPlayerPoseFromIntegrator):
+            // server sends bilinear-collision Z; Catmull-Rom render
+            // surface deviates by up to 0.3 m. Raycast lifts the
+            // remote rig to the visible terrain so other players don't
+            // appear partially buried. Returns wz unchanged when the
+            // ray misses (indoor envcells, unloaded LBs, etc.) so
+            // non-terrain placements stay server-authoritative.
+            const renderWz = getTerrainVisualZ(scene3d, wx, wy, wz);
             em.setPose(
               g,
-              wx, wy, wz,
+              wx, wy, renderWz,
               upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0
             );
           }

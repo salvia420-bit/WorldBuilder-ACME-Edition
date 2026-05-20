@@ -5093,35 +5093,41 @@ try {
             false, String(e).slice(0, 120));
     }
 
-    // === World-expand step 1 terrain-atlas flipY regression (2026-05-14) =
-    // Source-pattern check that `scene3d/terrain.js`'s atlas + road
-    // CanvasTextures set `flipY = false` before `needsUpdate = true`.
-    // THREE.CanvasTexture defaults flipY=true; without the override the
-    // GPU vertically mirrors the canvas at upload, so the shader's
-    // `atlasUvFor(code, …)` (row = code/6) ends up sampling slot
-    // `(5 - code/6) * 6 + code%6` instead of slot `code` — Grassland (1)
-    // paints as DesolateLands (31), LushGrass (3) as empty slot 33
-    // (black), PatchyGrassland (9) as BlueIce (27, cyan), etc. Latent
-    // bug surfaced visually by the 13×13 ring screenshots (commit
-    // 8269e4b → dbea563); fixed in the follow-up patch with this guard
-    // as a regression gate.
+    // === Terrain atlas — DataArrayTexture regression (2026-05-20) =====
+    // Source-pattern check that `scene3d/terrain.js` builds the per-code
+    // terrain atlas as a `THREE.DataArrayTexture` (one layer per code,
+    // ClampToEdge) and that the per-code byte-builder is sourced from
+    // `adapter.js::buildTerrainAtlasArrayBytes`. The prior 6×6 packed
+    // CanvasTexture had no inter-tile gutter, so the bilinear+mipmap
+    // sampler bled neighbouring slots' colours into each cell at mip
+    // levels ≥3 — the bleed line landed on the 24 m cell vertex grid
+    // (read by the user as "terrain textures not flush with vertices").
+    // The flipY=false guard the prior gate enforced no longer applies
+    // (DataArrayTexture takes raw RGBA bytes in layer order); the new
+    // guard reverts cross-tile bleed instead. The road overlay still
+    // pins flipY=false because it stays a CanvasTexture with directional
+    // tile art that would mirror under the default flipY=true.
     try {
         const fs = require("fs");
         const src = fs.readFileSync(__dirname + "/scene3d/terrain.js", "utf8");
-        const atlasFlipY = /atlasTexture\.flipY\s*=\s*false\s*;/.test(src);
+        const adapterSrc = fs.readFileSync(__dirname + "/scene3d/adapter.js", "utf8");
+        const usesDataArrayTexture = /new\s+THREE\.DataArrayTexture\s*\(/.test(src);
+        const usesArrayBytesBuilder = /buildTerrainAtlasArrayBytes\s*\(/.test(src);
+        const adapterExportsBuilder = /export\s+function\s+buildTerrainAtlasArrayBytes\b/.test(adapterSrc);
+        const atlasClampToEdge = /atlasTexture\.wrapS\s*=\s*THREE\.ClampToEdgeWrapping\s*;/.test(src);
         const roadFlipY = /roadTexture\.flipY\s*=\s*false\s*;/.test(src);
         check(
-            "World-expand step 1 fix: terrain atlasTexture.flipY=false (otherwise grass→DesolateLands, etc)",
-            atlasFlipY,
-            `atlasFlipY=${atlasFlipY}`
+            "Terrain atlas: DataArrayTexture (one layer per code, ClampToEdge — no gutter-less-atlas bleed at cell vertex lines)",
+            usesDataArrayTexture && usesArrayBytesBuilder && adapterExportsBuilder && atlasClampToEdge,
+            `dataArray=${usesDataArrayTexture} usesBuilder=${usesArrayBytesBuilder} adapterExports=${adapterExportsBuilder} clamp=${atlasClampToEdge}`
         );
         check(
-            "World-expand step 1 fix: terrain roadTexture.flipY=false (sibling of atlas; keeps directional road art upright)",
+            "Terrain atlas: roadTexture.flipY=false (sibling of atlas; keeps directional road art upright)",
             roadFlipY,
             `roadFlipY=${roadFlipY}`
         );
     } catch (e) {
-        check("World-expand step 1 fix: terrain atlas/road CanvasTexture flipY=false",
+        check("Terrain atlas: DataArrayTexture regression gate",
             false, String(e).slice(0, 120));
     }
 

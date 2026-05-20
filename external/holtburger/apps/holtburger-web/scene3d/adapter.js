@@ -9,7 +9,9 @@
 //
 // Phase 7.1 ships:
 //   - landblockMeshToGeometry(wasmMesh) → THREE.BufferGeometry
-//   - buildTerrainAtlasCanvas(terrainTextures) → { atlasCanvas, roadCanvas }
+//   - buildTerrainAtlasArrayBytes(terrainTextures) → { atlasArrayBytes,
+//       tileSize, depth, roadCanvas } — DataArrayTexture-ready bytes
+//       (eliminates the gutter-less-atlas bleed at cell vertex lines)
 //   - buildVertexTypesDataTexture(terrainCodes) → THREE.DataTexture
 //
 // Phase 7.2 adds:
@@ -28,15 +30,19 @@
 import * as THREE from "three";
 
 // ---- Atlas layout constants ---------------------------------------
-// Mirrors `index.html:828-831` (ATLAS_COLS / ATLAS_ROWS / ATLAS_TILE_PX).
-// 6×6 grid of 256×256 RGBA8 tiles = 1536×1536 atlas covering codes
-// 0..32. Code 32 (RoadType, DID 0x05001458) is also extracted as a
-// standalone wrapping texture for the road overlay (Phase 7.1
-// `terrain.js`).
-const ATLAS_COLS = 6;
-const ATLAS_ROWS = 6;
+// Codes 0..32 are packed as layers of a `THREE.DataArrayTexture`. Each
+// layer is 256×256 RGBA8 = `ATLAS_TILE_PX² × 4 = 256 KiB`; 33 layers
+// total ≈ 8.5 MiB GPU. Replaces the prior 6×6 `CanvasTexture` atlas
+// (1536×1536 single 2D image) which bled adjacent tiles' colours into
+// each cell at mip levels ≥3 — the classic gutter-less-atlas artefact
+// that read as "terrain textures not flush with vertices" because the
+// bleed line landed exactly on the 24 m cell vertex grid.
+// `THREE.ClampToEdge` per layer + per-layer mipmap chains eliminate
+// the cross-tile bleed entirely. Code 32 (RoadType, DID 0x05001458)
+// also stays in the array (layer 32) and is independently extracted
+// as a standalone `RepeatWrapping` road texture for the overlay path.
 const ATLAS_TILE_PX = 256;
-const ATLAS_PX = ATLAS_COLS * ATLAS_TILE_PX; // 1536
+const ATLAS_DEPTH = 33;
 
 /**
  * Convert a wasm `LandblockMesh` into a `THREE.BufferGeometry` with:
@@ -166,47 +172,56 @@ export function subdividedLandblockMeshToGeometry(wasmSub) {
 }
 
 /**
- * Build a 6×6 RGBA8 terrain atlas + the standalone road tile from a
- * wasm `TerrainTexture[]` (33 entries, terrainType 0..32).
+ * Build a `THREE.DataArrayTexture`-ready byte block + the standalone
+ * road tile from a wasm `TerrainTexture[]` (33 entries, terrainType
+ * 0..32).
  *
- * Mirrors `index.html:833-925` (`buildTerrainAtlas`) but produces
- * raw `<canvas>` elements rather than `PIXI.Texture` instances. The
- * caller wraps each as a `THREE.CanvasTexture` and decides the colour
- * space / mipmap policy.
+ * Each terrain code becomes one 256×256 RGBA8 layer in the returned
+ * `atlasArrayBytes` (layer stride `ATLAS_TILE_PX² × 4 = 262144 bytes`,
+ * total 33 × 262144 = 8 650 752 bytes ≈ 8.5 MiB). The caller wraps the
+ * block as `new THREE.DataArrayTexture(bytes, tileSize, tileSize,
+ * depth)` and picks the colour-space / filter / mipmap policy.
  *
  * Returns:
- *   - `atlasCanvas`: 1536×1536 canvas containing all 33 codes packed
- *     6 across × 6 down at slots `(code % 6, code / 6 | 0)`. Slots 33-35
- *     are unused.
+ *   - `atlasArrayBytes`: Uint8Array of length `tileSize² × 4 × depth`
+ *     with layer `i` occupying bytes `[i*stride, (i+1)*stride)`.
+ *   - `tileSize`: 256 (per-layer width = height).
+ *   - `depth`: 33 (one layer per terrain code 0..32).
  *   - `roadCanvas`: the code-32 RoadType tile copied to its own canvas
  *     at native resolution, so the road overlay sampler can use
  *     `RepeatWrapping` at the texture's true dimensions instead of the
- *     atlas slot dimensions.
+ *     downsampled layer size.
  *
- * Memory: each tile is drawn through a working `<canvas>` so the
- * wasm-bindgen `Uint8Array` view lives only for the `putImageData` +
- * `drawImage` call. The output canvases are independent.
+ * Memory: each tile is decoded through a working `<canvas>` to handle
+ * variable native sizes (wasm gives us per-tile width/height); the
+ * canvas is then `getImageData`'d at the uniform 256×256 layer size
+ * and the bytes are copied directly into the array texture buffer.
  */
-export function buildTerrainAtlasCanvas(terrainTextures) {
+export function buildTerrainAtlasArrayBytes(terrainTextures) {
   if (!Array.isArray(terrainTextures) && !terrainTextures.length) {
     throw new Error(
-      `buildTerrainAtlasCanvas: terrainTextures is not array-like (got ${typeof terrainTextures})`
+      `buildTerrainAtlasArrayBytes: terrainTextures is not array-like (got ${typeof terrainTextures})`
     );
   }
-  if (terrainTextures.length !== 33) {
+  if (terrainTextures.length !== ATLAS_DEPTH) {
     throw new Error(
-      `buildTerrainAtlasCanvas: expected 33 terrain textures, got ${terrainTextures.length}`
+      `buildTerrainAtlasArrayBytes: expected ${ATLAS_DEPTH} terrain textures, got ${terrainTextures.length}`
     );
   }
 
-  const atlasCanvas = document.createElement("canvas");
-  atlasCanvas.width = ATLAS_PX;
-  atlasCanvas.height = ATLAS_PX;
-  const actx = atlasCanvas.getContext("2d");
+  const layerStride = ATLAS_TILE_PX * ATLAS_TILE_PX * 4;
+  const atlasArrayBytes = new Uint8Array(layerStride * ATLAS_DEPTH);
 
-  // Working canvas reused for each tile's RGBA decode → atlas blit.
+  // Working canvases: `tileCanvas` decodes wasm-native-sized RGBA into
+  // a 2D bitmap; `layerCanvas` is the fixed 256×256 sampler the GPU
+  // will see, so wasm tiles of any native size land at a uniform layer
+  // dimension.
   const tileCanvas = document.createElement("canvas");
   const tctx = tileCanvas.getContext("2d");
+  const layerCanvas = document.createElement("canvas");
+  layerCanvas.width = ATLAS_TILE_PX;
+  layerCanvas.height = ATLAS_TILE_PX;
+  const lctx = layerCanvas.getContext("2d");
 
   let roadCanvas = null;
 
@@ -218,38 +233,27 @@ export function buildTerrainAtlasCanvas(terrainTextures) {
 
     tileCanvas.width = w;
     tileCanvas.height = h;
-    // ImageData wants Uint8ClampedArray. Coerce the wasm view; the
-    // copy inside the ImageData constructor (via the canvas put) is
-    // unavoidable.
     const clamped = new Uint8ClampedArray(
       px.buffer,
       px.byteOffset,
       px.byteLength
     );
-    const img = new ImageData(clamped, w, h);
-    tctx.putImageData(img, 0, 0);
+    tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
 
-    const col = code % ATLAS_COLS;
-    const row = (code / ATLAS_COLS) | 0;
-    const dx = col * ATLAS_TILE_PX;
-    const dy = row * ATLAS_TILE_PX;
-    actx.drawImage(
-      tileCanvas,
-      0,
-      0,
-      w,
-      h,
-      dx,
-      dy,
-      ATLAS_TILE_PX,
-      ATLAS_TILE_PX
-    );
+    // Resample to the 256×256 layer size if the native tile isn't already
+    // that size. `drawImage` with explicit destination dims is the standard
+    // canvas-resize path.
+    lctx.clearRect(0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX);
+    lctx.drawImage(tileCanvas, 0, 0, w, h, 0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX);
+    const layerImg = lctx.getImageData(0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX);
+    // `ImageData.data` is `Uint8ClampedArray` — `Uint8Array.set` accepts it.
+    atlasArrayBytes.set(layerImg.data, code * layerStride);
 
     if (code === 32) {
       // Standalone road tile at native resolution — preserves the
       // texture's true dimensions for `RepeatWrapping` UVs in the road
-      // overlay (atlas slot is downsampled to 256×256, which would
-      // alias the tile pattern when tiled across long road runs).
+      // overlay (the array-layer copy is downsampled to 256×256, which
+      // would alias the tile pattern when tiled across long road runs).
       roadCanvas = document.createElement("canvas");
       roadCanvas.width = w;
       roadCanvas.height = h;
@@ -261,11 +265,15 @@ export function buildTerrainAtlasCanvas(terrainTextures) {
       );
     }
 
-    // Free the wasm-side struct now that we've copied its pixels.
     if (typeof tex.free === "function") tex.free();
   }
 
-  return { atlasCanvas, roadCanvas };
+  return {
+    atlasArrayBytes,
+    tileSize: ATLAS_TILE_PX,
+    depth: ATLAS_DEPTH,
+    roadCanvas,
+  };
 }
 
 /**
