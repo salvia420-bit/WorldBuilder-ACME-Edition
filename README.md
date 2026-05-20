@@ -39,7 +39,7 @@ The GUI, headless terminal, and browser client share one service layer. Human ar
 
 Curated; full list per area lives in the linked method/handoff docs. Each line maps to a concrete artifact in the tree.
 
-- **Retail-correctness diagnostic toolset** ([`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md)) — 14 surfaces with a canonical oracle, 9 validator-covered + 3 partial. Shipped in 5 parallel agent waves. New `chorizite-*` and `diag-*` JSON commands in `WorldBuilder.Terminal`; matching `validate_*.cjs` validators in `external/holtburger/apps/holtburger-web/`. See "Diagnostic Toolset" below.
+- **Retail-correctness diagnostic toolset** ([`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md)) — 14 of 14 surfaces ✓ covered (Waves 1-5 SHIPPED 2026-05-19 → 2026-05-20). `chorizite-*`, `physics-*`, `motion-*`, `region-*`, `wave4-*`, `diag-*` JSON commands in `WorldBuilder.Terminal`; matching `validate_*.cjs` validators in `external/holtburger/apps/holtburger-web/`. `diag-run-all` is the capstone meta-command. See "Diagnostic Toolset" below for the practical how-to.
 - **Volumetric clouds + Bruneton atmosphere** ([`docs/skybox-volumetric-clouds-handoff-2026-05-15.md`](docs/skybox-volumetric-clouds-handoff-2026-05-15.md), `external/holtburger/apps/holtburger-web/vendor/takram-three-clouds/`) — physically-based sky shipping in-game on a GTX 1070. AC's time-of-day drives the Bruneton runtime through `cloud_volume.js` and 5 `DayGroup` uniforms.
 - **Combat A-K** (memory: `project_holtburger_combat_phase_*`) — melee + missile + magic stances, stance-gated 3D click-to-attack, charge-to-range pursuit, 7-tab spellbook, drag-and-drop spell bar, delete-from-spellbook full wire round-trip. All wire packets live-validated against ACE on the 1070 dev box.
 - **Vendor UI v0.2.0** ([`external/holtburger/apps/holtburger-web/plugins/vendor-ui.js`](external/holtburger/apps/holtburger-web/plugins/vendor-ui.js)) — buy/sell round-trip + AC-aesthetic icons (`fetch_surface_pixels` wasm export).
@@ -388,28 +388,28 @@ A complete dev stack — ACE on MariaDB + the WS bridge + the browser page — c
 
 ## Diagnostic Toolset — proving retail-correctness
 
-The browser client's claim is that it is **retail-correct along every axis that has a canonical oracle**. The diagnostic toolset (planned in [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md)) breaks the runtime into **14 surfaces** with a canonical oracle and ships a validator for each.
+The browser client's claim is that it is **retail-correct along every axis that has a canonical oracle**. The diagnostic toolset (planned in [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md), umbrella doc at [`docs/diagnostic-toolset-method.md`](docs/diagnostic-toolset-method.md)) breaks the runtime into **14 surfaces** with canonical oracles and ships a validator for each.
 
-Status as of 2026-05-19 — 9 of 14 surfaces validator-covered, 3 partial, 2 open:
+**Status as of 2026-05-20: 14 of 14 surfaces ✓.** Waves 1-5 all SHIPPED. `diag-run-all` is the capstone meta-command.
 
 | # | Surface | Status | Validator |
 |---|---|---|---|
-| 1 | Placement completeness | covered | `validate_landblock_completeness.cjs` |
-| 2 | Event completeness (sounds + particles) | partial | `validate_event_completeness.cjs` |
-| 3 | Entity classification | covered | `validate_entity_classification.cjs` |
-| 4 | Wire packet pack/unpack | covered | `validate_wire_conformance.cjs` (19/23 PASS + 4 documented SKIP) |
-| 5 | DAT parser parity (~20 file types) | covered | `validate_dat_parity.cjs` (24/24 x 906/906 Phase-A PASS) |
-| 6 | Property/enum parity (66 enums) | covered | `validate_enum_parity.cjs` (drift surfaced; triage open) |
-| 7 | Render-pose / coordinate-frame parity | covered | `compare_render_corners.cjs` |
-| 8 | Physics parity (jump, collision, on-ground) | covered | `validate_physics_replay.cjs` + `physics-jump-formula{,-sweep}` (1000/1000 bitwise PASS) + `physics-replay-trace`; Wave 3.F pure-prediction shadow: 5/5 PASS at maxDrift 0.04–0.09 m |
-| 9 | Motion / swing-pose parity | covered | `validate_motion_pose.cjs` (52/52 JS-vs-C# PASS) |
-| 10 | Texture / surface-chain decode parity | open | Wave 4 — `validate_texture_decode.cjs` |
-| 11 | Mesh / triangulation parity | open | Wave 4 — `validate_mesh_parity.cjs` |
-| 12 | Cell-portal graph + PVS | partial | Wave 5 — `validate_cell_portal_graph.cjs` |
-| 13 | Skybox / atmosphere parity | partial | Wave 5 — `validate_skybox.cjs` |
-| 14 | DAT integrity (sha256, modder-id rejection) | covered | `scenery-bake` pre-flight + `bake-source.sha256` sidecar |
+| 1 | Placement completeness | ✓ | `validate_landblock_completeness.cjs` |
+| 2 | Event completeness (sounds + particles) | ✓ | `validate_event_completeness.cjs` (F.D-fu1..4 closeouts 2026-05-20) |
+| 3 | Entity classification | ✓ | `validate_entity_classification.cjs` |
+| 4 | Wire packet pack/unpack | ✓ | `validate_wire_conformance.cjs` (24/24 PASS) |
+| 5 | DAT parser parity (~20 file types) | ✓ | `validate_dat_parity.cjs --phase=both` (Phase A 906/906, Phase B 11/13/0) |
+| 6 | Property/enum parity (66 enums) | ✓ | `validate_enum_parity.cjs` (21/0/45 + 102-entry allowlist) |
+| 7 | Render-pose / coordinate-frame parity | ✓ | `compare_render_corners.cjs` |
+| 8 | Physics parity (jump, collision, on-ground) | ✓ | `validate_physics_replay.cjs --subject=prediction` (5/5 PASS, maxDrift 0.04–0.09 m) + jump formula 1000/1000 bitwise PASS |
+| 9 | Motion / swing-pose parity | ✓ | `validate_motion_pose.cjs --js-vs-cs` (52/52 JS-vs-C# PASS) |
+| 10 | Texture / surface-chain decode parity | ✓ | `validate_texture_decode.cjs` (6,152/6,152 PASS, 34 s cold) |
+| 11 | Mesh / triangulation parity | ✓ | `validate_mesh_parity.cjs` (753,284 records 0 parse-error, 74 s cold) |
+| 12 | Cell-portal graph + PVS | ✓ | `validate_cell_portal_graph.cjs` (175 LBs, 99.98 % portal symmetry) |
+| 13 | Skybox / atmosphere parity | ✓ | `validate_skybox.cjs` (24/24 within 2.1 × 10⁻⁷, target 10⁻⁴) |
+| 14 | DAT integrity (sha256, modder-id rejection) | ✓ | `scenery-bake` pre-flight + `bake-source.sha256` sidecar |
 
-Each surface rides a **method doc** that defines the contract + canonical oracle:
+Each surface rides a **method doc** that defines the contract + canonical oracle. Read these first if you're triaging a failure:
 
 - [`docs/world-completeness-method.md`](docs/world-completeness-method.md) — placement contract
 - [`docs/entity-completeness-method.md`](docs/entity-completeness-method.md) — entity classification
@@ -419,17 +419,84 @@ Each surface rides a **method doc** that defines the contract + canonical oracle
 - [`docs/enum-parity-method.md`](docs/enum-parity-method.md) — enum parity
 - [`docs/physics-parity-method.md`](docs/physics-parity-method.md) — physics contract
 - [`docs/motion-parity-method.md`](docs/motion-parity-method.md) — motion-table parity
+- [`docs/cell-portal-method.md`](docs/cell-portal-method.md) — cell-portal graph + PVS
+- [`docs/skybox-parity-method.md`](docs/skybox-parity-method.md) — Region 0x13 sky / atmosphere
 
-Validators live next to the runtime under test ([`external/holtburger/apps/holtburger-web/validate_*.cjs`](external/holtburger/apps/holtburger-web/)) and consume oracles from `WorldBuilder.Terminal` over the JSON-stdin loop. **WB.Terminal hosts the C# absorption layer**; the browser is the runtime; agents on either side speak the same protocol.
+Validators live next to the runtime under test ([`external/holtburger/apps/holtburger-web/validate_*.cjs`](external/holtburger/apps/holtburger-web/)) and consume oracles from `WorldBuilder.Terminal` over the JSON-stdin loop. **WB.Terminal hosts the C# absorption layer** (Chorizite.DatReaderWriter + ACE source + retail decomp at `~/ac-headers/`); the browser is the runtime; agents on either side speak the same protocol.
+
+### How to run
+
+**Pre-flight**: build WB.Terminal once + ensure `~/ac_base_dats/` exists.
 
 ```bash
-# Run one surface
-node external/holtburger/apps/holtburger-web/validate_wire_conformance.cjs
-
-# Each validator emits a JSON report under
-# /mnt/wbterminal1/holtburger-validator-reports/<surface>/<timestamp>/report.json
-# and exits 0 on PASS, non-zero on drift.
+cd /home/wbterminal/WorldBuilder-ACME-Edition
+dotnet build WorldBuilder.Terminal -c Release   # ~5 s incremental, ~20 s cold
+ls ~/ac_base_dats/client_portal.dat              # must exist; sha-pinned by validators
 ```
+
+**One-shot — run everything (the capstone)**:
+
+```bash
+cd external/holtburger/apps/holtburger-web
+NODE_PATH=/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules \
+  node run-all-validators.cjs
+
+# Common flags:
+#   --skip=physics-replay        Skip live-ACE surfaces (omit when ACE is down)
+#   --skip=placements --skip=events --skip=dat-parity   Skip the slow Playwright/Phase-B paths
+#   --wave4-mode=fast|full       Default fast (Holtburg 81-model subset, sub-second).
+#                                full = whole-DAT cold sweep (~minutes once cached, slower cold).
+#   --parallel                   Run validators concurrently (default sequential for log clarity)
+#   --report-dir=PATH            Override aggregate output dir
+```
+
+The aggregate envelope lands at `/mnt/wbterminal1/holtburger-validator-reports/diag-run-all/<ISO-ts>/{aggregate.json, summary.md, logs/<surface>.log}`. Exit 0 = all `required: true` surfaces PASS; exit 1 = any `requiredFailures > 0`; exit 2 = infra error before validators ran.
+
+**Read-only: last aggregate** (no re-run):
+
+```bash
+echo '{"command":"diag-status"}' | $DOTNET_ROOT/dotnet WorldBuilder.Terminal/bin/Release/net8.0/WorldBuilder.Terminal.dll --stdin | jq .summary
+```
+
+**Run one surface only** (each validator runs standalone):
+
+```bash
+# Single validator — same path/CWD/NODE_PATH convention:
+node external/holtburger/apps/holtburger-web/validate_wire_conformance.cjs
+node external/holtburger/apps/holtburger-web/validate_dat_parity.cjs --phase=both
+node external/holtburger/apps/holtburger-web/validate_motion_pose.cjs --js-vs-cs
+node external/holtburger/apps/holtburger-web/validate_physics_replay.cjs --subject=prediction
+
+# Wave-4 chunked sweep orchestrator (multi-target, sha-cached, resumable):
+node scripts/wave4_sweep.cjs --mode=fast --target=all --concurrency=4
+# Reports land at /mnt/wbterminal1/holtburger-validator-reports/wave4/<ts>/
+```
+
+Per-surface reports land under `/mnt/wbterminal1/holtburger-validator-reports/<surface>/<ISO-ts>/report.json` with a stable envelope: `{ surface, oracle, subject, bake_source_sha256, summary: { checked, pass, fail, skipped }, mismatches[], outputPath }`.
+
+### Interpreting results
+
+| Status | Meaning |
+|---|---|
+| **PASS** | Validator exited 0; client agrees with the oracle within the surface's tolerance |
+| **FAIL** | Real drift surfaced. Read `mismatches[]` in `report.json`. Don't change the validator — fix the client OR document the divergence as an allowlist entry in the relevant surface's mapping table |
+| **SKIP_CLI** | Validator skipped per `--skip=<surface>` flag (operator chose to skip; not a failure) |
+| **SKIP_NOT_SHIPPED** | A surface's validator file isn't on disk yet (e.g. brand-new surface staged but not implemented) |
+| **INFRA** | Validator exited 2: subprocess crashed, WB.Terminal didn't build, ACE wasn't reachable, etc. Investigate the surface's log under `logs/<surface>.log` |
+
+**The validator IS the source of truth.** If validator output disagrees with code, fix the code OR document the divergence in the relevant surface's mapping table (e.g. `CommandEngine.EnumParity.cs:ManualEnumMapping`'s per-row `Allowlist` field). Don't loosen the validator to make PRs pass.
+
+### Architecture in one paragraph
+
+The toolset is a two-layer setup. **C# side**: `WorldBuilder.Terminal/CommandEngine.{WireConformance,DatParity,EnumParity,PhysicsParity,MotionParity,CellPortalGraph,Skybox,TextureParity,MeshParity,Wave4}.cs` partials expose `chorizite-*` / `enum-parity-report` / `physics-jump-formula` / `motion-classify-swing` / `region-skybox-snapshot` / `wave4-sweep` / `diag-run-all` commands over the WB.Terminal JSON-stdin loop; each command consumes a canonical oracle (Chorizite.DatReaderWriter NuGet, ACE source, retail decomp at `~/ac-headers/acclient.{c,h}`). **JS side**: validators at `external/holtburger/apps/holtburger-web/validate_*.cjs` spawn the WB.Terminal stdin loop as a long-lived subprocess, drive deterministic probe scenarios against the browser runtime (via Playwright headless OR `wasm-pack --target nodejs` direct), and diff client output against the oracle.
+
+### Tunable knobs + gotchas
+
+- **Cache**: Wave 4 + DAT-parity validators are sha-keyed against `~/ac_base_dats/` and cache results under `/mnt/wbterminal1/holtburger-validator-fixtures/`. Warm re-runs are sub-second. To rebuild a cache: `rm -rf /mnt/wbterminal1/holtburger-validator-fixtures/<surface>/` or `node scripts/wave4_sweep.cjs --reset --target=<name>`.
+- **Live-ACE surfaces** (`physics-replay`, `events`): need ACE running on `127.0.0.1:9000/9001` + wsbridge on `127.0.0.1:8080` + static server on `127.0.0.1:8765`. Per-run `phaseN_diag_<uuid>` account rotation dodges the 60–90 s ghost-session window (ACE.Server keeps logged-in sessions alive after WS drop). `Config.js DefaultAccessLevel: 4` auto-creates each as Developer.
+- **External scratch only**: root disk fluctuates 85–96 % full. All reports + caches + scratch under `/mnt/wbterminal1/`. Validators write nothing to `/` by design.
+- **Build before running**: a stale `WorldBuilder.Terminal.dll` will report unknown-command errors. `dotnet build WorldBuilder.Terminal -c Release` first if you've pulled new code.
+- **`diag-run-all` is the manual gate**: no CI hook by design — operator runs it before declaring "build is retail-correct". The aggregate Markdown summary at `summary.md` is the human-facing report.
 
 ---
 
@@ -727,7 +794,7 @@ Platform-specific projects: `WorldBuilder.Windows` (recommended), `WorldBuilder.
 | **5. ML-Driven World Generation** | partial | V3 terrain diffusion in production. Outdoor scene placer (50.5M Transformer) at 83–85/100 on retail 20x20 regions. Settlement planner MLP working. Unified outdoor + interior placer in flight. |
 | **6. Gameplay Population** | open | Encounters, NPC placement, vendor inventories, loot tables, quest scaffolds. Contingent on Phase 5 hitting retail-quality population. The `OntologyService` (semantic tags, constraint presets, 28-family creature taxonomy) is the natural input substrate when this phase begins. |
 | **7. Browser AC Client (`emit-dynamic-site`)** | partial | Live ACE handshake; 13x13 Holtburg world ring rendered with Bruneton atmosphere + volumetric clouds; combat A-K shipped (melee/missile/magic with full wire round-trip); vendor UI with buy/sell + icons; scenery bake at ACE parity. See [`external/holtburger/apps/holtburger-web/`](external/holtburger/apps/holtburger-web/) and [`docs/emit-dynamic-site.md`](docs/emit-dynamic-site.md). |
-| **8. Retail-Correctness Diagnostic Toolset** | partial | 14 surfaces with canonical oracles; 9 covered, 3 partial, 2 open. Waves 1-3 + parts of 4-5 shipped 2026-05-19. See [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md). |
+| **8. Retail-Correctness Diagnostic Toolset** | complete | 14 of 14 surfaces ✓ across Waves 1-5 (shipped 2026-05-19 → 2026-05-20). `diag-run-all` is the capstone meta-command. See [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md) + [`docs/diagnostic-toolset-method.md`](docs/diagnostic-toolset-method.md). |
 | **9. Chorizite Absorption Layer** | partial | 23 Chorizite repos surveyed; tier 1-5 vendored at [`external/chorizite/`](external/chorizite/). `ACPlugin` `WorldObject` hierarchy ported to JS (31 typed classes). Enum + opcode parity validators surfacing real drift. See [`external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md`](external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md). |
 
 ---
