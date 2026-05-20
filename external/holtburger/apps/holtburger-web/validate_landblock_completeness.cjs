@@ -244,7 +244,7 @@ const SPAWN_LOAD_TIMEOUT_MS = Number(
   process.env.PHASE_E_SPAWN_LOAD_TIMEOUT_MS || 180_000
 );
 const SPAWN_DRAIN_POLL_MS = Number(
-  process.env.PHASE_E_SPAWN_DRAIN_POLL_MS || 90_000
+  process.env.PHASE_E_SPAWN_DRAIN_POLL_MS || 300_000
 );
 
 // Match tolerance. Per the brief.
@@ -786,10 +786,20 @@ function hexU32(v) {
           const n = spawns.len;
           for (let i = 0; i < n; i++) {
             const lbId = landblockIds[i] >>> 0;
-            const lbX = (lbId >>> 24) & 0xff;
-            const lbY = (lbId >>> 16) & 0xff;
-            const wx = lbX * 192.0 + positions[i * 3];
-            const wy = lbY * 192.0 + positions[i * 3 + 1];
+            const fileLbX = (lbId >>> 24) & 0xff;
+            const fileLbY = (lbId >>> 16) & 0xff;
+            const wx = fileLbX * 192.0 + positions[i * 3];
+            const wy = fileLbY * 192.0 + positions[i * 3 + 1];
+            // Bucket by world-derived LB, not the JSONL filename's LB.
+            // Some EnvCell-interior spawns carry LB-local coords > 192
+            // (e.g. Mukkir in 0xACB5 at y=244) because the (x,y) is
+            // cell-local-ish; when converted to world space the entity
+            // actually lives in the neighbouring LB. The rendered-side
+            // walker derives lbX/lbY from world position via the lbXY
+            // helper at line 1224-26, so we must do the same on the
+            // expected side or the bucket keys never align.
+            const lbX = Math.floor(wx / 192.0);
+            const lbY = Math.floor(wy / 192.0);
             out.spawns.push({
               source: "entities",
               modelOrWcid: wcids[i] >>> 0,
@@ -934,7 +944,9 @@ function hexU32(v) {
     // ---------------------------------------------------------------
     // Stage 5: poll until the spawn chain drains. Mirrors the pattern
     // in `capture_phase_d_spawns.cjs:431-457`. We break early on
-    // (a) zero in-flight, or (b) children count stable for 4 polls.
+    // (a) zero in-flight, or (b) children count stable for 20 polls
+    // (= 60s of true plateau) — bumped from 4 because some spawns
+    // legitimately take 30-60s to complete on a cold animation cache.
     // ---------------------------------------------------------------
     console.log(`[stage 5] poll spawn drain up to ${SPAWN_DRAIN_POLL_MS}ms`);
     const pollStart = Date.now();
@@ -954,7 +966,7 @@ function hexU32(v) {
       if (snap.inFlight === 0) break;
       if (snap.children === lastChildren && snap.children > 0) {
         stableCount += 1;
-        if (stableCount >= 4) break;
+        if (stableCount >= 20) break;
       } else {
         stableCount = 0;
       }
