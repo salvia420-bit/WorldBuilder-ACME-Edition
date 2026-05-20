@@ -15,10 +15,11 @@
 // `computeVertexNormals()` (called inside `landblockMeshToGeometry`)
 // to set up Lambert sun lighting for Phase 7.6.
 //
-// Roads are rendered as a thin triangle-strip overlay mesh, lifted
-// 0.1 m above terrain to avoid Z-fighting. Mirrors the directional
-// scan from `index.html:2113-2176` (E / N / NE / NW pairs), but uses
-// triangle pairs instead of `PIXI.Graphics` strokes.
+// Roads are painted inside the terrain shader (uRoadEnabled block
+// below) — bilinear-blend on the per-vertex road flag from
+// uVertexTypes.G, gated by smoothstep(0.85, 0.95) for a ~5 m band
+// matching retail's _road_width (acclient.c:467318). The prior
+// triangle-strip overlay mesh is gone.
 
 import * as THREE from "three";
 import {
@@ -523,9 +524,14 @@ void main() {
     float r01 = vertexRoadAt(iu,     iv + 1);
     float r11 = vertexRoadAt(iu + 1, iv + 1);
     float roadMask = r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11;
-    if (roadMask > 0.001) {
+    // smoothstep(0.85, 0.95) narrows the paint band to ~5 m, matching
+    // retail's _road_width = 5.0 (acclient.c:467318). The raw bilinear
+    // mask ramps 0..1 across a 24 m cell, so the previous > 0.001 gate
+    // smeared the road across full cells (~10x too wide).
+    float roadWeight = smoothstep(0.85, 0.95, roadMask);
+    if (roadWeight > 0.0) {
       vec3 roadColor = texture(uRoadTexture, vGridUv * uRoadTileScale).rgb;
-      result = mix(result, roadColor, roadMask);
+      result = mix(result, roadColor, roadWeight);
     }
   }
 

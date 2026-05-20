@@ -2316,15 +2316,29 @@ pub async fn fetch_landblock_spawns_soa(
     let mut is_server_managed: Vec<u8> = Vec::new();
     let mut names: Vec<String> = Vec::new();
 
-    for &cell_id in &cell_ids {
-        let lb_key = cell_id & 0xFFFF_0000;
-        let recs = spawn_fetch::fetch_one_lb(&base_url, lb_key)
-            .await
-            .map_err(|e| JsValue::from_str(&e))?;
+    // Fire all per-LB shard fetches concurrently. The previous serial
+    // `for &cell_id in &cell_ids { fetch_one_lb.await }` paid 169
+    // round-trips back-to-back on the 13x13 validator ring (~38 min
+    // cold-cache). join_all collects the futures and polls them in
+    // parallel; the result Vec preserves the input order so the
+    // post-fetch SoA append below stays byte-identical to the
+    // previous output. fetch_one_lb's CACHE is thread-local and the
+    // wasm runtime is single-threaded, so concurrent .with borrows
+    // can't race. Gameplay still fetches one LB at a time via the
+    // non-SOA fetch_landblock_spawns path; only bulk SOA callers
+    // (validator, capture scripts) see the win.
+    let lb_keys: Vec<u32> = cell_ids.iter().map(|id| id & 0xFFFF_0000).collect();
+    let fetches = lb_keys
+        .iter()
+        .map(|&lb_key| spawn_fetch::fetch_one_lb(&base_url, lb_key));
+    let results = futures::future::join_all(fetches).await;
+
+    for (lb_key, res) in lb_keys.iter().zip(results) {
+        let recs = res.map_err(|e| JsValue::from_str(&e))?;
         for r in &recs {
             wcids.push(r.wcid);
             weenie_types.push(r.weenie_type);
-            landblock_ids.push(lb_key);
+            landblock_ids.push(*lb_key);
             cells.push(r.cell);
             positions.extend_from_slice(&[r.x, r.y, r.z]);
             quaternions.extend_from_slice(&[r.qw, r.qx, r.qy, r.qz]);

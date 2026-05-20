@@ -1304,9 +1304,19 @@ export async function bakeStaticsRing(
   // Count placements that had no geometry (the model failed to fetch
   // OR was 0-tri AND got dropped from `geomByModel`). The
   // `skippedZeroTri` count is per-model; `skippedNoMesh` here is
-  // per-placement of models we couldn't render.
+  // per-placement of models we couldn't render. Per-LB break-out is
+  // accumulated alongside so the [phase7.2] statics log can name the
+  // landblocks losing placements (ring-wide aggregate alone hides
+  // which LB regressed).
+  const skippedNoMeshByLb = new Map();
   for (const placement of statics) {
-    if (!primary.geomByModel.has(placement.modelId)) skippedNoMesh += 1;
+    if (!primary.geomByModel.has(placement.modelId)) {
+      skippedNoMesh += 1;
+      const lb = placement.landblockId;
+      if (lb != null) {
+        skippedNoMeshByLb.set(lb, (skippedNoMeshByLb.get(lb) || 0) + 1);
+      }
+    }
   }
 
   // Draw-call savings: full per-placement Mesh path would have
@@ -1323,6 +1333,17 @@ export async function bakeStaticsRing(
     surfaceCount: primary.allSurfaceDids.size,
     skippedZeroTri: primary.skippedZeroTri,
     skippedNoMesh,
+    // Raw uint32 landblockId → skip count, sorted desc. Upper 16 bits
+    // carry lbX/lbY (e.g. Holtburg 0xA9B4 → 0xA9B40000). Empty {} when
+    // no skips.
+    skippedNoMeshByLb: Object.fromEntries(
+      [...skippedNoMeshByLb.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([lb, n]) => [
+          `0x${(lb >>> 0).toString(16).toUpperCase().padStart(8, "0")}`,
+          n,
+        ])
+    ),
     instancedGroupCount,
     singletonCount,
     lodCount,
@@ -1344,6 +1365,7 @@ export async function bakeStaticsRing(
  *     surfaceCount: number,             // unique surface DIDs preloaded
  *     skippedZeroTri: number,           // placements whose model had 0 tris
  *     skippedNoMesh: number,            // placements whose model failed to fetch
+ *     skippedNoMeshByLb: Record<string,number>, // per-LB break-out of skippedNoMesh (key: hex landblockId, sorted desc)
  *     // F#5+6 additions:
  *     instancedGroupCount: number,      // unique models rendered as InstancedMesh (>=2 instances)
  *     singletonCount: number,           // unique models rendered as plain Mesh (1 instance)
