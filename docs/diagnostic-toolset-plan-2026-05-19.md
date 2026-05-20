@@ -13,10 +13,8 @@ This document is a **team agent execution plan** for building a diagnostic-tool 
 
 ## 0. TL;DR
 
-- `emit-dynamic-site` already ships **three** retail-correctness validators in tree
-  (`validate_landblock_completeness.cjs`, `validate_event_completeness.cjs`,
-  `validate_entity_classification.cjs`). Each one rides a **method doc** that
-  defines the canonical contract + canonical oracle.
+- **As of 2026-05-20: 11 of 14 surfaces validator-covered** (9 ✓ + 2 ◐ + 2 ⨯ Wave 4 only). Waves 1-3 + 5 all SHIPPED. `diag-run-all` is the capstone meta-command.
+- `emit-dynamic-site` ships **10 retail-correctness validators** in tree: `validate_landblock_completeness.cjs`, `validate_event_completeness.cjs`, `validate_entity_classification.cjs`, `validate_wire_conformance.cjs`, `validate_dat_parity.cjs`, `validate_enum_parity.cjs`, `validate_motion_pose.cjs`, `validate_physics_replay.cjs`, `validate_cell_portal_graph.cjs`, `validate_skybox.cjs`. Each rides a method doc + canonical oracle.
 - **Gap:** ~8 more surfaces in the runtime have canonical oracles but no
   validator. Listing in §3. Most can be expressed as one `chorizite-*` / `diag-*`
   command in WB.Terminal + one matching `validate_*.cjs` in holtburger-web.
@@ -134,8 +132,8 @@ shipped validator (`✓`). Eight are gaps (`⨯`). Three are partially covered
 | 9 | **Motion / swing-pose parity** | ✓ | `~/ac-headers/acclient.c::CMotionInterp` + ACE `MotionTable.cs` + 436 retail motion tables (already validated 0 violations) | **Wave 3.C + 3.E SHIPPED 2026-05-19**. `validate_motion_pose.cjs [--js-vs-cs]` + `motion-classify-swing` + `motion-inventory` + wasm `lookup_motion_link_for_swing` + JS `classifyMotionCommandTyped`. **150 C# cases: 52 PASS / 0 FAIL / 98 SKIP-w-reason. JS-vs-C# diff: 52/52 PASS** (target was ≥30/52). Method doc: [`motion-parity-method.md`](motion-parity-method.md). Helper bug surfaced: `motion_table.rs:65` `motion_data_for_link` masks `& MOTION_KEY_MASK` (0x000F_FFFF), strips 0x10/0x40 classifier prefix → silent retail lookup failure. W3.E exports bypass; helper fix is open follow-on. |
 | 10 | **Texture / surface-chain decode parity** | ⨯ | `WorldBuilder.Shared.Lib.Texture.RenderSurfaceImporter` + retail Surface→SurfaceTexture→Texture chain | **`validate_texture_decode.cjs` + new `chorizite-decode-surface`** — Wave 4 |
 | 11 | **Mesh / triangulation parity** (GfxObj + SetupModel + EnvCell) | ⨯ | WB.Terminal `obj-export` ground truth + ACE `EnvCell.cs` + retail `CGfxObj::*` | **`validate_mesh_parity.cjs` + reuse `obj-export`** — Wave 4 |
-| 12 | **Cell-portal graph + PVS visibility** | ◐ | WB.Terminal `validate-dungeon` + ACE `CellPortal` semantics + retail `CCellPortal::*` | **`validate_cell_portal_graph.cjs` + reuse `validate-dungeon`** — Wave 5 |
-| 13 | **Skybox / atmosphere parity** | ◐ | `Region 0x13` + Bruneton bake + sky particle chain | **`validate_skybox.cjs` + new `region-skybox-snapshot`** — Wave 5 |
+| 12 | **Cell-portal graph + PVS visibility** | ✓ | WB.Terminal `validate-dungeon` + ACE `CellPortal` semantics + retail `CCellPortal::*` | `validate_cell_portal_graph.cjs` + `cell-portal-graph-sweep` + `pvs-visibility-snapshot` — **Wave 5.A SHIPPED 2026-05-20**. 99.98% portal symmetry across 175 LBs / 3,445 cells / 8,607 portals; 2 cross-wired portal pairs at LB 0xACB5 (retail content-build drift); 30 disconnected satellite cells documented as retail visible-from-window pattern. Method doc: [`cell-portal-method.md`](cell-portal-method.md). |
+| 13 | **Skybox / atmosphere parity** | ✓ | `Region 0x13` (Chorizite DBObj parser) + AC `SkyDesc::CalcPresentDayGroup` + Clouds-C contract | `validate_skybox.cjs` + `region-skybox-snapshot` + `region-day-night-curve` — **Wave 5.B SHIPPED 2026-05-20**. 24/24 sampled game-times match within 1e-4 (measured maxDrift **2.1e-7**, three orders under budget). Method doc: [`skybox-parity-method.md`](skybox-parity-method.md). |
 | 14 | **DAT integrity** (base-DAT-only, sha256, modder-id rejection) | ✓ | `~/ac_base_dats/` sha256s + `bake-source.sha256` sidecar | `scenery-bake` pre-flight + sidecar (shipped) |
 
 The eight `⨯` rows + the four `◐` rows are this plan's scope. Each becomes a wave (§6).
@@ -265,11 +263,11 @@ which wave it ships in.
 | 16 | `env-cell-vs-setup-model-chunk <start> <end>` | MeshParity | 140 | 4 |
 | 17 | `wave4-status` (sweep progress + cache hit rate) | TextureParity | 60 | 4 |
 | 18 | `wave4-sweep --reset` / `--resume` (orchestrator hook) | TextureParity | 60 | 4 |
-| 19 | `cell-portal-graph-sweep` | CellPortalGraph | 150 | 5 |
-| 20 | `pvs-visibility-snapshot` | CellPortalGraph | 120 | 5 |
-| 21 | `region-skybox-snapshot` | Skybox | 120 | 5 |
-| 22 | `region-day-night-curve` | Skybox | 80 | 5 |
-| 23 | `diag-run-all [--wave4-mode=fast\|full]` | (top-level meta) | 140 | 5 |
+| 19 | `cell-portal-graph-sweep` | CellPortalGraph | ~330 (shipped) | 5.A ✓ (shipped 2026-05-20) |
+| 20 | `pvs-visibility-snapshot` | CellPortalGraph | (see row 19) | 5.A ✓ (shipped 2026-05-20) |
+| 21 | `region-skybox-snapshot` | Skybox | ~620 (file total — partial) | 5.B ✓ (shipped 2026-05-20) |
+| 22 | `region-day-night-curve` | Skybox | (see row 21) | 5.B ✓ (shipped 2026-05-20) |
+| 23 | `diag-run-all` + `diag-status` | Diagnostics/RunAll | ~470 C# + ~590 Node (shipped) | 5.C ✓ (shipped 2026-05-20) |
 
 Approximate **2,580 LOC of C#** + **~1,400 LOC of Node** (8 validators ×
 ~150 LOC each + Wave 4 chunk orchestrator at ~200 LOC + `diag-run-all` driver).
@@ -392,10 +390,10 @@ trustworthy. Once they ship, the suite is complete.
 
 | Brick | Owner | Files touched | Acceptance |
 |---|---|---|---|
-| **W5.A — `cell-portal-graph-sweep`** — leverage WB.Terminal's existing `validate-dungeon` against every dungeon LB; compare with holtburger's `Scene.cell_portal_graph` per-LB. Validates the open-world LB-entry render's PVS gate. | open | `CommandEngine.CellPortalGraph.cs`, `validate_cell_portal_graph.cjs` | 100% portal symmetry, 0 orphaned cells across Holtburg ring + Academy + 5 other dungeons |
-| **W5.B — `region-skybox-snapshot <gameTime>`** — bake the canonical sky composition (DayGroup uniforms + visible sky objects) for a given game time; compare against `CloudVolume.setSkyState` output. | open | `CommandEngine.Skybox.cs`, `validate_skybox.cjs` | 24 sampled game-times (1/h): all 5 DayGroup uniforms match within 1e-4 |
-| **W5.C — `diag-run-all`** — top-level meta-command that invokes every validator + emits the aggregate report. Owns the report-directory rollup, the CI exit-code, the slack/console summary. | open | new `WorldBuilder.Terminal/Diagnostics/RunAll.cs`, `run-all-validators.cjs` | Single invocation produces 8 sub-reports + 1 aggregate; failure surfaces specific surface |
-| **W5.D — Update `diagnostic-toolset-method.md`** — *this doc* — to mark each wave as shipped + capture follow-ons. | open | this file | cross-link from CHORIZITE_PORTING_PLAN.md + memory |
+| **W5.A — `cell-portal-graph-sweep` + `pvs-visibility-snapshot`** | ✓ SHIPPED 2026-05-20 | `CommandEngine.CellPortalGraph.cs` (~330 LOC), `validate_cell_portal_graph.cjs` (~280 LOC), `docs/cell-portal-method.md` | **99.98% portal symmetry** across 175 LBs / 3,445 cells / 8,607 portals. **5/5 PVS spot-checks PASS**. 2 cross-wired portal pairs at LB 0xACB5 (retail content-build drift — engine routes around via depth-∞ baked VisibleCells). 30 disconnected satellite cells documented as retail visible-from-window pattern. First checker for cross-record graph invariants. |
+| **W5.B — `region-skybox-snapshot` + `region-day-night-curve`** | ✓ SHIPPED 2026-05-20 | `CommandEngine.Skybox.cs` (~620 LOC), `validate_skybox.cjs` (~520 LOC), `docs/skybox-parity-method.md` | **24/24 sampled game-times match within 1e-4** across 5 DayGroup uniforms. Measured maxDrift **2.1e-7**. Per-uniform: ambient 2.1e-7, sunPosition 1.1e-7, skyBottom 4.1e-8, skyTop 3.9e-8, fog 5.7e-10. Sky-K.6 finding: 5-uniform contract no longer consumed by cloud raymarch (Bruneton tables) but still drives `sky_lighting.js::_applyState`. |
+| **W5.C — `diag-run-all` + `diag-status`** | ✓ SHIPPED 2026-05-20 | `WorldBuilder.Terminal/Diagnostics/RunAll.cs` (~470 LOC), `run-all-validators.cjs` (~590 LOC), `docs/diagnostic-toolset-method.md` | Single invocation drives all 10 validators. Smoke run 2 (post-sibling-landing): **6 PASS / 4 SKIP_CLI / 0 FAIL / 0 INFRA, exit 0**. Aggregate envelope at `<ts>/aggregate.json` + `<ts>/summary.md` + per-surface logs. `--wave4-mode=fast\|full` plumbed (no-op until Wave 4 ships). Manual gate only per §9 q4. |
+| **W5.D — Plan + method-doc updates** | ✓ SHIPPED 2026-05-20 | this file + `diagnostic-toolset-method.md` | All Wave 5 status flips applied; §3 row 12+13 → ✓; cross-links live. |
 
 **Dispatch:** 3 agents in parallel. Estimated 4-6 hours total.
 

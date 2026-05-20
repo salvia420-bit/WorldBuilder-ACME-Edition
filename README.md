@@ -39,7 +39,7 @@ The GUI, headless terminal, and browser client share one service layer. Human ar
 
 Curated; full list per area lives in the linked method/handoff docs. Each line maps to a concrete artifact in the tree.
 
-- **Retail-correctness diagnostic toolset** ([`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md)) — 14 surfaces with a canonical oracle, 10 already validator-covered. Shipped in 5 parallel agent waves. New `chorizite-*` and `diag-*` JSON commands in `WorldBuilder.Terminal`; matching `validate_*.cjs` validators in `external/holtburger/apps/holtburger-web/`. See "Diagnostic Toolset" below.
+- **Retail-correctness diagnostic toolset** ([`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md)) — 14 surfaces with a canonical oracle, 9 validator-covered + 3 partial. Shipped in 5 parallel agent waves. New `chorizite-*` and `diag-*` JSON commands in `WorldBuilder.Terminal`; matching `validate_*.cjs` validators in `external/holtburger/apps/holtburger-web/`. See "Diagnostic Toolset" below.
 - **Volumetric clouds + Bruneton atmosphere** ([`docs/skybox-volumetric-clouds-handoff-2026-05-15.md`](docs/skybox-volumetric-clouds-handoff-2026-05-15.md), `external/holtburger/apps/holtburger-web/vendor/takram-three-clouds/`) — physically-based sky shipping in-game on a GTX 1070. AC's time-of-day drives the Bruneton runtime through `cloud_volume.js` and 5 `DayGroup` uniforms.
 - **Combat A-K** (memory: `project_holtburger_combat_phase_*`) — melee + missile + magic stances, stance-gated 3D click-to-attack, charge-to-range pursuit, 7-tab spellbook, drag-and-drop spell bar, delete-from-spellbook full wire round-trip. All wire packets live-validated against ACE on the 1070 dev box.
 - **Vendor UI v0.2.0** ([`external/holtburger/apps/holtburger-web/plugins/vendor-ui.js`](external/holtburger/apps/holtburger-web/plugins/vendor-ui.js)) — buy/sell round-trip + AC-aesthetic icons (`fetch_surface_pixels` wasm export).
@@ -273,7 +273,7 @@ Five data layers compose into the per-LB output, all loaded lazily from project-
 4. **wcid → Acpedia per-object naming** — 14,915 LSD weenie wcids matched to Acpedia pages with HIGH/MED/LOW/NONE confidence tiering. A `entry.Name == acpedia.Title` (case-insensitive) sanity gate catches setupID-collision false positives.
 5. **LSD spawnMap integration** — server-spawn data (1,162 spawnMaps → 53k entries → ~2k player-visible after the server-managed filter). Per-LB NPCs, creatures, and quest objects with positions and Acpedia categories, plus spawn-cluster detection for encounter groups (e.g. *"3× Drudge Prowler within ~5m at (153,−140) — encounter group."*).
 
-Plus a per-LB **validation overlay** (the existing 45 codes across DNG / LBK / TRN / BSH / BLD), structure containment with Z-band relations, and an extensible relations layer. The LLM is reduced to an optional prose-synthesizer over the structured output — never a fact-extractor over raw DAT data.
+Plus a per-LB **validation overlay** (the existing 43 codes across DNG / LBK / TRN / BSH / BLD), structure containment with Z-band relations, and an extensible relations layer. The LLM is reduced to an optional prose-synthesizer over the structured output — never a fact-extractor over raw DAT data.
 
 **Tile pyramid:** three zoom levels via `get-tile`:
 
@@ -347,27 +347,9 @@ The 2026-05-01 wave wires the emitter to a real ACE world database: `ace-db inge
 
 The 2026-05-XX wirerender wave adds `emit-render-gallery` — `render-preview`'s curated showcase. Auto-picks 5 towns + 5 creature zones + 5 dungeons + 5 region anchors from the gazetteer state, runs `render-preview` per pick, and bundles a single-file Tailwind viewer (no build step, Tailwind CDN) alongside the renders; `describe-landblock` text loads as the side panel for whichever pick is selected. The companion `serve-render-gallery` helper wraps a built-in C# `HttpListener` and detects Tailscale IPs so the gallery streams to any tailnet member via the printed URL. `emit-static-site --gallery` chains the gallery into `<outDir>/gallery/` and cross-links from the Leaflet view's header. Sprite generator's post-66b80ff "buildings only" filter is replaced with a per-mesh bbox flatness check (`min < 0.05 × max` across X/Y/Z), so creature/NPC setups now feed into the gallery instead of falling back to red glyphs — Drudge, Banderling, Mosswart, vendors all render as actual textured top-down sprites under `--use-sprites`.
 
-### Local ACE Fixture
-
-Several validation paths (compare-to-retail, the creature/NPC/housing
-ingest commands under `ace-db`) want a real ACE world database to grade
-against. The repository ships a self-contained loader: run
-**[`scripts/spin-up-mariadb.sh`](scripts/spin-up-mariadb.sh)** from the
-project root and it installs `mariadb-server` (if absent), starts the
-daemon, provisions a `baltic`/`baltic` database+user on
-`127.0.0.1:3306`, streams `ace_world_release/ACE-World-Database-v0.9.292.sql`
-into it (rewriting the source database name on the fly), and verifies row
-counts on `weenie`, `landblock_instance`, and `spell`. The companion
-**[`spin-down-mariadb.sh`](scripts/spin-down-mariadb.sh)** drops the
-database+user when you're done. This is a developer fixture — credentials
-are intentionally unguarded; do not point this at the public internet.
-
-After the fixture is up, headless commands connect like any other ACE
-DB target: `ace-db connect host=127.0.0.1 user=baltic password=baltic database=baltic`.
-
 ### Integration Tests
 
-Both **Python** (75+ tests) and **PowerShell** (25 checks) test harnesses validate the full `--stdin` protocol surface — startup handshake, error handling, CRUD roundtrips, validation report shapes, and serialization contracts. Zero external dependencies. See **[`tests/README.md`](tests/README.md)**.
+Both **Python** (100+ tests) and **PowerShell** (~25 checks) test harnesses validate the full `--stdin` protocol surface — startup handshake, error handling, CRUD roundtrips, validation report shapes, and serialization contracts. Zero external dependencies. See **[`tests/README.md`](tests/README.md)**.
 
 ---
 
@@ -408,7 +390,7 @@ A complete dev stack — ACE on MariaDB + the WS bridge + the browser page — c
 
 The browser client's claim is that it is **retail-correct along every axis that has a canonical oracle**. The diagnostic toolset (planned in [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md)) breaks the runtime into **14 surfaces** with a canonical oracle and ships a validator for each.
 
-Status as of 2026-05-19 — 10 of 14 surfaces validator-covered, 1 partial, 3 open:
+Status as of 2026-05-19 — 9 of 14 surfaces validator-covered, 3 partial, 2 open:
 
 | # | Surface | Status | Validator |
 |---|---|---|---|
@@ -419,7 +401,7 @@ Status as of 2026-05-19 — 10 of 14 surfaces validator-covered, 1 partial, 3 op
 | 5 | DAT parser parity (~20 file types) | covered | `validate_dat_parity.cjs` (24/24 x 906/906 Phase-A PASS) |
 | 6 | Property/enum parity (66 enums) | covered | `validate_enum_parity.cjs` (drift surfaced; triage open) |
 | 7 | Render-pose / coordinate-frame parity | covered | `compare_render_corners.cjs` |
-| 8 | Physics parity (jump, collision, on-ground) | partial | `physics-jump-formula{,-sweep}` (1000/1000 bitwise PASS) + `physics-replay-trace` infrastructure |
+| 8 | Physics parity (jump, collision, on-ground) | covered | `validate_physics_replay.cjs` + `physics-jump-formula{,-sweep}` (1000/1000 bitwise PASS) + `physics-replay-trace`; Wave 3.F pure-prediction shadow: 5/5 PASS at maxDrift 0.04–0.09 m |
 | 9 | Motion / swing-pose parity | covered | `validate_motion_pose.cjs` (52/52 JS-vs-C# PASS) |
 | 10 | Texture / surface-chain decode parity | open | Wave 4 — `validate_texture_decode.cjs` |
 | 11 | Mesh / triangulation parity | open | Wave 4 — `validate_mesh_parity.cjs` |
@@ -745,7 +727,7 @@ Platform-specific projects: `WorldBuilder.Windows` (recommended), `WorldBuilder.
 | **5. ML-Driven World Generation** | partial | V3 terrain diffusion in production. Outdoor scene placer (50.5M Transformer) at 83–85/100 on retail 20x20 regions. Settlement planner MLP working. Unified outdoor + interior placer in flight. |
 | **6. Gameplay Population** | open | Encounters, NPC placement, vendor inventories, loot tables, quest scaffolds. Contingent on Phase 5 hitting retail-quality population. The `OntologyService` (semantic tags, constraint presets, 28-family creature taxonomy) is the natural input substrate when this phase begins. |
 | **7. Browser AC Client (`emit-dynamic-site`)** | partial | Live ACE handshake; 13x13 Holtburg world ring rendered with Bruneton atmosphere + volumetric clouds; combat A-K shipped (melee/missile/magic with full wire round-trip); vendor UI with buy/sell + icons; scenery bake at ACE parity. See [`external/holtburger/apps/holtburger-web/`](external/holtburger/apps/holtburger-web/) and [`docs/emit-dynamic-site.md`](docs/emit-dynamic-site.md). |
-| **8. Retail-Correctness Diagnostic Toolset** | partial | 14 surfaces with canonical oracles; 10 covered, 1 partial, 3 open. Wave 1-3 + parts of 4-5 shipped 2026-05-19. See [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md). |
+| **8. Retail-Correctness Diagnostic Toolset** | partial | 14 surfaces with canonical oracles; 9 covered, 3 partial, 2 open. Waves 1-3 + parts of 4-5 shipped 2026-05-19. See [`docs/diagnostic-toolset-plan-2026-05-19.md`](docs/diagnostic-toolset-plan-2026-05-19.md). |
 | **9. Chorizite Absorption Layer** | partial | 23 Chorizite repos surveyed; tier 1-5 vendored at [`external/chorizite/`](external/chorizite/). `ACPlugin` `WorldObject` hierarchy ported to JS (31 typed classes). Enum + opcode parity validators surfacing real drift. See [`external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md`](external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md). |
 
 ---
@@ -809,7 +791,7 @@ WorldBuilder-ACME-Edition/
 │   ├── agent_api_schema.json      #   JSON schema for all commands
 │   └── PopulationPipeline*.md     #   ML pipeline strategy / progress notes
 ├── tests/                         # Integration test suites
-│   ├── test_agent_protocol.py     #   Python: 50+ protocol tests
+│   ├── test_agent_protocol.py     #   Python: 100+ protocol tests
 │   └── Test-AgentProtocol.ps1     #   PowerShell: ~25 smoke checks
 └── projects/                      # World projects (sample TestProject with retail DATs)
 ```

@@ -320,6 +320,15 @@ public class JsonCommandProcessor {
             // Wave-3.C motion-classify-swing diagnostic — see CommandEngine.MotionParity.cs
             ["motion-classify-swing"]      = CmdMotionClassifySwing,
             ["motion-inventory"]           = CmdMotionInventory,
+            // Wave-5.A cell-portal graph diagnostic — see CommandEngine.CellPortalGraph.cs
+            ["cell-portal-graph-sweep"]   = CmdCellPortalGraphSweep,
+            ["pvs-visibility-snapshot"]   = CmdPvsVisibilitySnapshot,
+            // Wave-5.B skybox parity diagnostic — see CommandEngine.Skybox.cs
+            ["region-skybox-snapshot"]    = CmdRegionSkyboxSnapshot,
+            ["region-day-night-curve"]    = CmdRegionDayNightCurve,
+            // Wave-5.C diag-run-all meta-command — see Diagnostics/RunAll.cs
+            ["diag-run-all"]              = CmdDiagRunAll,
+            ["diag-status"]               = _ => CmdDiagStatus(),
             ["help"] = _ => CmdHelp(),
         };
 
@@ -3945,5 +3954,300 @@ public class JsonCommandProcessor {
     private void WriteResponse(object obj) {
         Console.WriteLine(Serialize(obj));
         Console.Out.Flush();
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-5.A cell-portal-graph-sweep + pvs-visibility-snapshot
+    // see CommandEngine.CellPortalGraph.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdCellPortalGraphSweep(System.Text.Json.Nodes.JsonNode node) {
+        string? datPath = node["datPath"]?.GetValue<string>();
+        // Accept either an array of LB IDs (preferred) or a single lbId.
+        var lbIds = new System.Collections.Generic.List<uint>();
+        var lbArr = node["lbIds"]?.AsArray();
+        if (lbArr != null) {
+            foreach (var entry in lbArr) {
+                if (entry == null) continue;
+                lbIds.Add(ParseLbIdScalar(entry));
+            }
+        } else {
+            var single = node["lbId"];
+            if (single != null) lbIds.Add(ParseLbIdScalar(single));
+        }
+        if (lbIds.Count == 0)
+            throw new ArgumentException("Missing 'lbIds' (array) or 'lbId' (scalar)");
+        var r = _engine.CellPortalGraphSweep(datPath, lbIds);
+        return Serialize(new {
+            success = r.OrphanedCellCount == 0 && r.AsymmetricPortalCount == 0,
+            command = "cell-portal-graph-sweep",
+            datPath = r.DatPath,
+            datSha256 = r.DatSha256,
+            lbCount = r.LbCount,
+            envCellCount = r.EnvCellCount,
+            portalCount = r.PortalCount,
+            orphanedCellCount = r.OrphanedCellCount,
+            asymmetricPortalCount = r.AsymmetricPortalCount,
+            source = r.Source,
+            perLb = r.PerLb.Select(lb => new {
+                lbHex = lb.LbHex,
+                cellCount = lb.CellCount,
+                portalCount = lb.PortalCount,
+                orphanedCellCount = lb.OrphanedCellCount,
+                asymmetricPortalCount = lb.AsymmetricPortalCount,
+                orphanedCells = lb.OrphanedCells,
+                asymmetricPortals = lb.AsymmetricPortals.Select(a => new {
+                    fromCellHex = a.FromCellHex,
+                    toCellHex = a.ToCellHex,
+                    polyId = a.PolyId,
+                    otherPortalId = a.OtherPortalId,
+                    reason = a.Reason,
+                })
+            })
+        });
+    }
+
+    private string CmdPvsVisibilitySnapshot(System.Text.Json.Nodes.JsonNode node) {
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var cellNode = node["cellId"] ?? throw new ArgumentException("Missing 'cellId'");
+        uint cellId = ParseLbIdScalar(cellNode);
+        int bfsDepth = node["bfsDepth"]?.GetValue<int>() ?? 1;
+        var r = _engine.PvsVisibilitySnapshot(datPath, cellId, bfsDepth);
+        return Serialize(new {
+            success = true,
+            command = "pvs-visibility-snapshot",
+            cellHex = r.CellHex,
+            cellId = r.CellId,
+            bfsDepth = r.BfsDepth,
+            liveVisibleCount = r.LiveVisibleCount,
+            datVisibleCount = r.DatVisibleCount,
+            liveVisibleCells = r.LiveVisibleCells,
+            datVisibleCells = r.DatVisibleCells,
+            onlyInLive = r.OnlyInLive,
+            onlyInDat = r.OnlyInDat,
+            source = r.Source,
+        });
+    }
+
+    /// <summary>
+    /// Permissively parse an LB or cell ID from a JSON scalar. Accepts
+    /// "0xA9B40000" hex strings (full), "0xa9b4" short LB hex (widened by &lt;&lt;16),
+    /// or decimal numbers. Used by Wave-5.A dispatch wrappers.
+    /// </summary>
+    private static uint ParseLbIdScalar(System.Text.Json.Nodes.JsonNode entry) {
+        var kind = entry.GetValueKind();
+        if (kind == System.Text.Json.JsonValueKind.String) {
+            var s = entry.GetValue<string>().Trim();
+            if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
+                var hex = s.Substring(2);
+                var v = Convert.ToUInt32(hex, 16);
+                if (v <= 0xFFFFu && hex.Length <= 4) v <<= 16;
+                return v;
+            }
+            return uint.Parse(s);
+        }
+        return (uint)entry.GetValue<long>();
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-5.B region-skybox-snapshot + region-day-night-curve
+    // see CommandEngine.Skybox.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdRegionSkyboxSnapshot(System.Text.Json.Nodes.JsonNode node) {
+        double gameTimeSec = ParseDoubleField(node, "gameTimeSec");
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.RegionSkyboxSnapshot(gameTimeSec, datPath);
+        return Serialize(new {
+            success = true,
+            command = "region-skybox-snapshot",
+            gameTimeSec = r.GameTimeSec,
+            normalizedDayPosition = r.NormalizedDayPosition,
+            dayGroupIndex = r.DayGroupIndex,
+            dayGroupName = r.DayGroupName,
+            uniforms = new {
+                skyTop = r.Uniforms.SkyTop,
+                skyBottom = r.Uniforms.SkyBottom,
+                sunPosition = r.Uniforms.SunPosition,
+                ambient = r.Uniforms.Ambient,
+                fog = r.Uniforms.Fog,
+            },
+            rawSkyState = new {
+                dirColorArgb = $"0x{r.RawSkyState.DirColorArgb:X8}",
+                dirBright = r.RawSkyState.DirBright,
+                dirHeading = r.RawSkyState.DirHeading,
+                dirPitch = r.RawSkyState.DirPitch,
+                ambColorArgb = $"0x{r.RawSkyState.AmbColorArgb:X8}",
+                ambBright = r.RawSkyState.AmbBright,
+                fogColorArgb = $"0x{r.RawSkyState.FogColorArgb:X8}",
+                fogMin = r.RawSkyState.FogMin,
+                fogMax = r.RawSkyState.FogMax,
+                worldFog = r.RawSkyState.WorldFog,
+                timeOfDayNormalized = r.RawSkyState.TimeOfDayNormalized,
+                dayGroupIndex = r.RawSkyState.DayGroupIndex,
+            },
+            activeSkyObjects = r.ActiveSkyObjects.Select(s => new {
+                did = $"0x{s.Did:X8}",
+                brightness = s.Brightness,
+                alpha = s.Alpha,
+                propertyFlags = s.PropertyFlags,
+                beginTime = s.BeginTime,
+                endTime = s.EndTime,
+                beginAngleDeg = s.BeginAngleDeg,
+                endAngleDeg = s.EndAngleDeg,
+                visible = s.Visible,
+            }),
+            weatherStateName = r.WeatherStateName,
+            datPath = r.DatPath,
+            datSha256 = r.DatSha256,
+            source = r.Source,
+        });
+    }
+
+    private string CmdRegionDayNightCurve(System.Text.Json.Nodes.JsonNode node) {
+        int hours = node["hours"]?.GetValue<int>() ?? 24;
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.RegionDayNightCurve(hours, datPath);
+        return Serialize(new {
+            success = true,
+            command = "region-day-night-curve",
+            datPath = r.DatPath,
+            datSha256 = r.DatSha256,
+            hours = r.Hours,
+            dayLengthSeconds = r.DayLengthSeconds,
+            source = r.Source,
+            samples = r.Samples.Select(s => new {
+                gameTimeSec = s.GameTimeSec,
+                normalizedDayPosition = s.NormalizedDayPosition,
+                dayGroupIndex = s.DayGroupIndex,
+                dayGroupName = s.DayGroupName,
+                uniforms = new {
+                    skyTop = s.Uniforms.SkyTop,
+                    skyBottom = s.Uniforms.SkyBottom,
+                    sunPosition = s.Uniforms.SunPosition,
+                    ambient = s.Uniforms.Ambient,
+                    fog = s.Uniforms.Fog,
+                },
+                rawSkyState = new {
+                    dirColorArgb = $"0x{s.RawSkyState.DirColorArgb:X8}",
+                    dirBright = s.RawSkyState.DirBright,
+                    dirHeading = s.RawSkyState.DirHeading,
+                    dirPitch = s.RawSkyState.DirPitch,
+                    ambColorArgb = $"0x{s.RawSkyState.AmbColorArgb:X8}",
+                    ambBright = s.RawSkyState.AmbBright,
+                    fogColorArgb = $"0x{s.RawSkyState.FogColorArgb:X8}",
+                    fogMin = s.RawSkyState.FogMin,
+                    fogMax = s.RawSkyState.FogMax,
+                    worldFog = s.RawSkyState.WorldFog,
+                    timeOfDayNormalized = s.RawSkyState.TimeOfDayNormalized,
+                    dayGroupIndex = s.RawSkyState.DayGroupIndex,
+                },
+                weatherStateName = s.WeatherStateName,
+            }),
+        });
+    }
+
+    /// <summary>
+    /// Parse a JSON field as a double; accepts JSON number or numeric
+    /// string. Mirrors ParseFloatField but returns double for the
+    /// SkyEvalState time-driver f64 arithmetic.
+    /// </summary>
+    private static double ParseDoubleField(System.Text.Json.Nodes.JsonNode node, string name) {
+        var v = node[name] ?? throw new ArgumentException($"Missing '{name}' field");
+        if (v.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+            return double.Parse(v.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture);
+        }
+        return v.GetValue<double>();
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-5.C diag-run-all + diag-status — see Diagnostics/RunAll.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdDiagRunAll(System.Text.Json.Nodes.JsonNode node) {
+        string? wave4Mode = node["wave4Mode"]?.GetValue<string>();
+        string? reportDir = node["reportDir"]?.GetValue<string>();
+        bool parallel = node["parallel"]?.GetValue<bool>() ?? false;
+        List<string>? skipSurfaces = null;
+        if (node["skipSurfaces"] is System.Text.Json.Nodes.JsonArray skipArr) {
+            skipSurfaces = new List<string>();
+            foreach (var v in skipArr) {
+                var s = v?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(s)) skipSurfaces.Add(s);
+            }
+        }
+        var r = _engine.DiagRunAll(wave4Mode, reportDir, skipSurfaces, parallel);
+        return Serialize(new {
+            success = string.IsNullOrEmpty(r.DriverError) && r.RequiredFailures == 0,
+            command = "diag-run-all",
+            aggregateJsonPath = r.AggregateJsonPath,
+            summaryMarkdownPath = r.SummaryMarkdownPath,
+            wave4Mode = r.Wave4Mode,
+            elapsedMs = r.ElapsedMs,
+            driverExitCode = r.DriverExitCode,
+            driverError = r.DriverError,
+            summary = new {
+                checkedCount = r.CheckedSurfaces,
+                pass = r.PassedSurfaces,
+                fail = r.FailedSurfaces,
+                skipped = r.SkippedSurfaces,
+                skippedNotShipped = r.SkippedNotShipped,
+                skippedCli = r.SkippedCli,
+                infra = r.InfraSurfaces,
+                requiredFailures = r.RequiredFailures,
+            },
+            surfaces = r.Surfaces.Select(s => new {
+                surface = s.Surface,
+                status = s.Status,
+                exitCode = s.ExitCode,
+                reportJsonPath = s.ReportJsonPath,
+                durationMs = s.DurationMs,
+                mismatchCount = s.MismatchCount,
+                script = s.Script,
+                args = s.Args,
+                logPath = s.LogPath,
+                notes = s.Notes,
+                infraError = s.InfraError,
+            }),
+        });
+    }
+
+    private string CmdDiagStatus() {
+        try {
+            var r = _engine.DiagStatus();
+            return Serialize(new {
+                success = true,
+                command = "diag-status",
+                aggregateJsonPath = r.AggregateJsonPath,
+                summaryMarkdownPath = r.SummaryMarkdownPath,
+                wave4Mode = r.Wave4Mode,
+                elapsedMs = r.ElapsedMs,
+                summary = new {
+                    checkedCount = r.CheckedSurfaces,
+                    pass = r.PassedSurfaces,
+                    fail = r.FailedSurfaces,
+                    skipped = r.SkippedSurfaces,
+                    skippedNotShipped = r.SkippedNotShipped,
+                    skippedCli = r.SkippedCli,
+                    infra = r.InfraSurfaces,
+                    requiredFailures = r.RequiredFailures,
+                },
+                surfaces = r.Surfaces.Select(s => new {
+                    surface = s.Surface,
+                    status = s.Status,
+                    exitCode = s.ExitCode,
+                    reportJsonPath = s.ReportJsonPath,
+                    durationMs = s.DurationMs,
+                    mismatchCount = s.MismatchCount,
+                    notes = s.Notes,
+                }),
+            });
+        } catch (Exception ex) {
+            return Serialize(new {
+                success = false,
+                command = "diag-status",
+                error = ex.Message,
+            });
+        }
     }
 }
