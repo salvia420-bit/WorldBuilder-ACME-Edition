@@ -2,7 +2,7 @@ use crate::{EOR_PORTAL_NAMESPACE, ResourceKey, StaticResourceKey};
 use binrw::BinRead;
 
 /// Experience Tables from client_portal.dat (file 0x0E000018).
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct XpTable {
     pub id: u32,

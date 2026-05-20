@@ -45,7 +45,7 @@ pub const PARTS_MASK_HAS_REGION_MISC: u32 = 0x0000_0200;
 /// AC's terrain bounds + grid sizing (LandDefs). All eight scalar fields plus
 /// a 256-entry land-height lookup table. `SkyHeight` here is the *terrain*
 /// fog cap, **not** the skybox dome — the skybox is in `SkyDesc`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LandDefs {
     pub num_block_length: i32,
     pub num_block_width: i32,
@@ -90,7 +90,7 @@ impl LandDefs {
 
 /// Top-level skybox descriptor — owns N DayGroups (one is active per in-world
 /// day; selector hashes `current_day`/`current_year` against `num_day_groups`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SkyDesc {
     /// Seconds-per-tick for SkyObject motion (default 3.0 per PhatSDK).
     pub tick_size: f64,
@@ -126,7 +126,7 @@ impl SkyDesc {
 
 /// One in-world day archetype (e.g. "Clear", "Cloudy", "Rainy"). Owns its
 /// celestial fleet (`sky_objects`) + lighting keyframes (`sky_time`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DayGroup {
     /// Per-day random weight. Used by `SkyDesc::CalcPresentDayGroup`'s LCG
     /// hash (see PhatSDK `SkyDesc.cpp:52-71`).
@@ -172,7 +172,7 @@ impl DayGroup {
 /// across the dome each day. `default_gfx_object_id` is the `0x01xxxxxx` GfxObj
 /// DID — feed it into `crate::file_type::gfx_obj::GfxObj` to extract the
 /// mesh + textures.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SkyObject {
     /// Day-fraction (`0.0..1.0`) at which this object appears on the horizon.
     pub begin_time: f32,
@@ -225,7 +225,7 @@ impl SkyObject {
 
 /// One lighting keyframe in a `DayGroup`'s 24-hour cycle. AC interpolates
 /// directional + ambient color/brightness + fog between consecutive entries.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SkyTimeOfDay {
     /// Day-fraction (`0.0..1.0`) at which these light values apply.
     pub begin: f32,
@@ -285,7 +285,7 @@ impl SkyTimeOfDay {
 
 /// Per-keyframe override that swaps a `SkyObject`'s gfx mesh + color params.
 /// `object_index` indexes into the owning `DayGroup.sky_objects` array.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SkyObjectReplace {
     pub object_index: u32,
     /// `0x01xxxxxx` GfxObj DID — replaces the parent SkyObject's mesh for
@@ -340,7 +340,7 @@ impl SkyObjectReplace {
 /// seconds and fire if `random() < base_chance`". Exposed via
 /// [`AmbientSoundDesc::is_continuous`] so consumers don't have to
 /// re-derive the rule.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AmbientSoundDesc {
     /// Sound type enum (`uint`).
     pub s_type: u32,
@@ -389,7 +389,7 @@ impl AmbientSoundDesc {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AmbientSTBDesc {
     pub stb_id: u32,
     pub ambient_sounds: Vec<AmbientSoundDesc>,
@@ -422,7 +422,7 @@ impl AmbientSTBDesc {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SoundDesc {
     pub stb_descs: Vec<AmbientSTBDesc>,
 }
@@ -462,7 +462,7 @@ impl SoundDesc {
 /// — i.e. the index is signed and `-1` is meaningful. Reading as `u32`
 /// would wrap `-1` to `0xFFFFFFFF` and either OOB-panic any consumer or
 /// silently mis-index the SoundDesc array.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SceneType {
     pub stb_index: i32,
     /// `0x12xxxxxx` Scene DIDs.
@@ -481,7 +481,7 @@ impl SceneType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SceneDesc {
     pub scene_types: Vec<SceneType>,
 }
@@ -498,7 +498,7 @@ impl SceneDesc {
 }
 
 /// Per-terrain-type alpha mask + texture. Used by the `TexMerge` blender.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TerrainAlphaMap {
     /// Terrain code enum.
     pub t_code: u32,
@@ -516,7 +516,7 @@ impl TerrainAlphaMap {
 }
 
 /// Road alpha-blend overlay.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RoadAlphaMap {
     pub r_code: u32,
     /// `0x05xxxxxx` SurfaceTexture DID.
@@ -534,7 +534,7 @@ impl RoadAlphaMap {
 
 /// Texture-merger sub-record describing how AC blends per-corner terrain
 /// textures into a single landblock surface.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TerrainTex {
     /// `0x05xxxxxx` SurfaceTexture DID — base diffuse.
     pub texture_id: u32,
@@ -567,7 +567,7 @@ impl TerrainTex {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TMTerrainDesc {
     /// `TerrainTextureType` enum value (`uint`).
     pub terrain_type: u32,
@@ -585,7 +585,7 @@ impl TMTerrainDesc {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TexMerge {
     pub base_tex_size: u32,
     pub corner_terrain_maps: Vec<TerrainAlphaMap>,
@@ -632,7 +632,7 @@ impl TexMerge {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LandSurf {
     /// `LandSurf.Type` enum (`uint`).
     pub surf_type: u32,
@@ -652,7 +652,7 @@ impl LandSurf {
 
 /// Named terrain category (e.g. "Grasslands", "BarrenRock"). `terrain_color`
 /// is the radar/minimap color for this terrain.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TerrainType {
     pub terrain_name: String,
     pub terrain_color: u32,
@@ -679,7 +679,7 @@ impl TerrainType {
 
 /// Region-level terrain palette + texture-blending rules. Unconditional —
 /// every Region has one, even ones without SkyInfo.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TerrainDesc {
     pub terrain_types: Vec<TerrainType>,
     pub land_surfaces: LandSurf,
@@ -701,7 +701,7 @@ impl TerrainDesc {
 }
 
 /// Realm-wide miscellany — autotest map ID, clear-cell ID, etc.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RegionMisc {
     pub version: u32,
     pub game_map_id: u32,
@@ -730,7 +730,7 @@ impl RegionMisc {
 /// is the namespace-prefix-only `0x13000000`. The `0x1300xxxx` namespace
 /// reserves room for alternate realms (e.g. apartment overlays) but they
 /// are not present in current retail.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Region {
     /// File ID (HasId flag set on Region DBObjs per dats.xml:3850).
     pub id: u32,

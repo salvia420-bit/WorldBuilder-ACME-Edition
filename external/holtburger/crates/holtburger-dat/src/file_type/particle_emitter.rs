@@ -56,7 +56,7 @@ use binrw::{BinRead, binread};
 use holtburger_common::Vector3;
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct ParticleEmitter {
     /// Matches the DAT directory entry ID; must equal the 0x32xxxxxx file ID.

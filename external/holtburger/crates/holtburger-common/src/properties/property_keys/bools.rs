@@ -6,6 +6,12 @@ use strum_macros::{Display, FromRepr};
 )]
 #[repr(u32)]
 pub enum PropertyBool {
+    /// Value-0 sentinel. ACE source uses `Undef`; Chorizite uses `None`.
+    /// Wave 2.C audit (2026-05-19) confirmed the name divergence is the
+    /// only delta at the sentinel slot. ACE-wins per the three-source
+    /// cross-reference rule; the name rename is allowlisted in the
+    /// validator's `ManualEnumMapping`.
+    Undef = 0,
     Stuck = 1,
     Open = 2,
     Locked = 3,

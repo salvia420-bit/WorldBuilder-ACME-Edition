@@ -317,6 +317,107 @@ function classifyMotionCommand(cmd) {
   return null;
 }
 
+// Wave 3.E (2026-05-19) — typed widening of `classifyMotionCommand`.
+//
+// **Purpose.** When the renderer plays a swing (`setMotion(guid, cmd,
+// stance)` with `cls === "attack" || "cast"`), it currently routes
+// through `_tryPlayLink` which calls the wasm
+// `fetchEntityAnimationKeyframes` to bake a clip. That path resolves the
+// link anim correctly but doesn't expose the anim spec (id, low, high,
+// fps) — which `setSwingPoseFromMotion` needs to drive a one-shot
+// AnimationAction with precise timing (e.g. for the charge-attack
+// hold-at-peak-frame case).
+//
+// **What this does.** Calls the wasm export
+// `SessionHandle::lookupMotionLinkForSwing(mtId, stance, cmd)` to walk
+// `MotionTable.links[outer]` and return the typed link-anim spec. The
+// wasm side mirrors the C# oracle at
+// `WorldBuilder.Terminal/CommandEngine.MotionParity.cs::MotionClassifySwing`
+// per spec §3.2; the JS-side caller (renderer) consumes the typed
+// `{ kind, height, anim, animId, lowFrame, highFrame, framerate,
+//   durationSec, resolvedCommand }` to drive `setSwingPoseFromMotion`.
+//
+// **Fallback.** When no session handle is wired (e.g. unit tests,
+// offline cache misses, pre-spawn), returns a synthetic object whose
+// `kind` mirrors the coarse 1-arg `classifyMotionCommand(cmd)` result.
+// Existing 1-arg callers are untouched (they use the coarse string).
+// New callers prefer this typed function and inspect `.kind`.
+//
+// **Cross-port parity status.** `validate_motion_pose.cjs --js-vs-cs`
+// drives this same wasm export from Node (via the pkg-nodejs target)
+// and diffs against the C# oracle. As of Wave 3.E ship (2026-05-19),
+// 52/52 of the C# PASS rows additionally PASS on the JS side (22
+// resolved-swing match + 30 BowCombat both-missing). Spec target was
+// ≥30 of 52.
+function classifyMotionCommandTyped(motionTableId, stance, motionCmd) {
+  const wasmReady =
+    typeof window !== "undefined" &&
+    window.__sessionHandle &&
+    typeof window.__sessionHandle.lookupMotionLinkForSwing === "function";
+  if (wasmReady && motionTableId && stance && motionCmd) {
+    try {
+      const linkAnim = window.__sessionHandle.lookupMotionLinkForSwing(
+        motionTableId >>> 0,
+        stance >>> 0,
+        motionCmd >>> 0
+      );
+      if (linkAnim) {
+        // Typed result — caller can use `.anim`, `.durationSec`,
+        // etc. to drive the AnimationMixer precisely.
+        return {
+          kind: linkAnim.kind, // "swing" | "cast" | "unknown"
+          height: linkAnim.height || null, // "High" | "Medium" | "Low" | null
+          anim: linkAnim.anim,
+          animId: linkAnim.animId,
+          lowFrame: linkAnim.lowFrame,
+          highFrame: linkAnim.highFrame,
+          framerate: linkAnim.framerate,
+          durationSec: linkAnim.durationSec,
+          resolvedCommand: linkAnim.resolvedCommand,
+          source: "wasm-link",
+        };
+      }
+      // Wasm returned None — either no link for this (stance, cmd) or
+      // the motion table isn't in the cache yet. Fall through to coarse.
+    } catch (err) {
+      // Wasm threw — log once, fall through. Don't spam (rare path).
+      if (!classifyMotionCommandTyped._loggedErrorOnce) {
+        classifyMotionCommandTyped._loggedErrorOnce = true;
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[entities/W3E] lookupMotionLinkForSwing threw; falling back to coarse",
+          err
+        );
+      }
+    }
+  }
+  // Fallback path — wrap the coarse string in a typed envelope so
+  // callers see a consistent shape. `.kind` carries the coarse
+  // category; `.anim`-shaped fields are null.
+  const coarse = classifyMotionCommand(motionCmd);
+  return {
+    kind: coarse, // "stop"|"walk"|"run"|"attack"|"cast"|"idle"|null
+    height: null,
+    anim: null,
+    animId: null,
+    lowFrame: null,
+    highFrame: null,
+    framerate: null,
+    durationSec: null,
+    resolvedCommand: motionCmd >>> 0,
+    source: "coarse-fallback",
+  };
+}
+
+// Wave 3.E export hook — staged for the swing-pose driver wire-up
+// (setSwingPoseFromMotion adoption) and for plugin authors to call
+// directly. Per `project_w3e_done_2026-05-19` memory: 52/52 JS-vs-C#
+// parity on the wasm path. Exposed via window so callers don't need
+// to import this module.
+if (typeof window !== "undefined") {
+  window.__classifyMotionCommandTyped = classifyMotionCommandTyped;
+}
+
 /**
  * Per-entity instance: one Object3D rig + one AnimationMixer.
  *

@@ -46,7 +46,7 @@ use binrw::{BinRead, binread};
 pub const SURFACE_TYPE_TEXTURE_MASK: u32 = 0x06;
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct TextureRefs {
     pub orig_texture_id: u32,
@@ -54,7 +54,7 @@ pub struct TextureRefs {
 }
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct Surface {
     pub surface_type: u32,

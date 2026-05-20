@@ -80,6 +80,13 @@ log = { workspace = true }
 # from the recv loop back to the awaiting `start_session` future.
 tokio = { workspace = true, features = ["macros", "sync"] }
 wasm-bindgen-futures = "0.4"
+# Wave 3 prereq (2026-05-19) — `gloo-timers` provides a setTimeout-backed
+# Future so the recv loop can race an InWorld 5s keepalive arm against
+# `session.recv_message()` + the JS cmd channel. Mirrors the cli's
+# `crates/holtburger-core/src/client/runtime.rs::should_send_keepalive_ping`
+# arm. `tokio::time::sleep` panics on wasm32 ("time not implemented")
+# so this is the canonical wasm-side timer.
+gloo-timers = { version = "0.3", features = ["futures"] }
 
 # Phase 4 step 6 Phase A native tests for triangulate_setup_model_with_substitutions:
 # the substituting triangulator helpers are gated cfg(any(target_arch = "wasm32",

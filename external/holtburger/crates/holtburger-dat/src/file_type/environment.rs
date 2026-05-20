@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 /// One cell within an [`Environment`]. `polygons` are the drawing
 /// faces — that's what the renderer triangulates.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CellStruct {
     pub cell_struct_id: u32,
     pub vertex_array: CVertexArray,
@@ -44,7 +44,7 @@ pub struct CellStruct {
     pub drawing_bsp: Option<BspNode>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Environment {
     pub id: u32,
     pub cells: HashMap<u32, CellStruct>,

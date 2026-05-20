@@ -6,6 +6,10 @@ use strum_macros::{Display, FromRepr};
 )]
 #[repr(u32)]
 pub enum PropertyFloat {
+    /// Value-0 sentinel. ACE source uses `Undef`; Chorizite uses `None`.
+    /// The name divergence is allowlisted in the validator's
+    /// `ManualEnumMapping`. See `feedback_enum_parity_audit_2026-05-19.md`.
+    Undef = 0,
     HeartbeatInterval = 1,
     HeartbeatTimestamp = 2,
     HealthRate = 3,
@@ -56,6 +60,7 @@ pub enum PropertyFloat {
     LoginTimestamp = 48,
     CreationTimestamp = 49,
     MinimumTimeSincePk = 50,
+    DeprecatedHousekeepingPriority = 51,
     AbuseLoggingTimestamp = 52,
     LastPortalTeleportTimestamp = 53,
     UseRadius = 54,

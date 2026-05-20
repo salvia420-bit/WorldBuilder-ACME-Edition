@@ -11,7 +11,7 @@ const MOTION_KEY_MASK: u32 = 0x000F_FFFF;
 const KINEMATICS_HAS_VELOCITY: u8 = 0x01;
 const KINEMATICS_HAS_OMEGA: u8 = 0x02;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct MotionKinematics {
     pub id: u32,
     pub version: u32,
@@ -117,7 +117,7 @@ impl StaticResourceKey for MotionKinematics {
         ResourceKey::new(HOLTBURGER_CORE_NAMESPACE, Self::FILE_ID);
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct MotionKinematicsTable {
     pub motion_table_id: u32,
     pub default_style: u32,

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek};
 
 /// Spell Table from client_portal.dat (file 0x0E00000E).
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct SpellTable {
     pub id: u32,
@@ -24,7 +24,7 @@ impl StaticResourceKey for SpellTable {
         ResourceKey::new(EOR_PORTAL_NAMESPACE, Self::FILE_ID);
 }
 
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct SpellBase {
     #[br(parse_with = parse_obfuscated)]
@@ -99,7 +99,7 @@ impl Default for SpellBase {
     }
 }
 
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little, import(meta_spell_type: u32))]
 pub enum SpellExtras {
     #[br(pre_assert(meta_spell_type == 1 || meta_spell_type == 12))]
@@ -114,14 +114,14 @@ pub enum SpellExtras {
     None,
 }
 
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct SpellSet {
     #[br(parse_with = parse_spell_set_tiers_hash_table)]
     pub tiers: HashMap<u32, SpellSetTiers>,
 }
 
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct SpellSetTiers {
     pub spell_count: i32,

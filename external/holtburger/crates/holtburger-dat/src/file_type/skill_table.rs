@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek};
 
 /// Skill Table from client_portal.dat (file 0x0E000004).
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct SkillTable {
     pub id: u32,
@@ -31,7 +31,7 @@ impl StaticResourceKey for SkillTable {
         ResourceKey::new(EOR_PORTAL_NAMESPACE, Self::FILE_ID);
 }
 
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct SkillBase {
     #[br(parse_with = parse_description)]
@@ -54,7 +54,7 @@ pub struct SkillBase {
     pub learn_mod: f64,
 }
 
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct SkillFormula {
     pub w: u32,

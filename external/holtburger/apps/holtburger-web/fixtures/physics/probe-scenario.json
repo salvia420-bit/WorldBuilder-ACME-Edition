@@ -1,0 +1,63 @@
+{
+  "name": "holtburg-walk-jump-collide",
+  "description": "Wave 3.A physics replay probe scenario. Deterministic input sequence on the Holtburg landblock 0xA9B4 (per project_holtburger_academy_landblock memory: AC Training Academy is 0x8602; Holtburg town proper is 0xA9B4). The scenario exercises (a) the walking integrator over a slope, (b) a turn that should leave on-ground state unchanged, (c) a wall-push that should clamp the position delta against the building AABB index, and (d) a jump that leaves the ground and returns to on-ground via the ballistic-then-stick sequence.",
+  "landblockId": "0xA9B4",
+  "spawnCommand": "@telepoi Holtburg",
+  "acceptance": {
+    "maxPositionDriftMeters": 0.10,
+    "onGroundMatchPercent": 100.0
+  },
+  "tickHz": 60,
+  "phases": [
+    {
+      "kind": "settle",
+      "ticks": 60,
+      "input": { "forward": 0, "strafe": 0, "turn": 0, "jump": false, "run": true },
+      "description": "60 idle ticks (~1 s) so the player lands cleanly on the ground after spawn and the initial server-pose authoritative reset has happened. We expect on_ground=true throughout this phase."
+    },
+    {
+      "kind": "walk-forward",
+      "ticks": 500,
+      "input": { "forward": 1, "strafe": 0, "turn": 0, "jump": false, "run": true },
+      "description": "Hold W for 500 ticks (~8.3 s at 60 Hz). At the FALLBACK_RUN_RATE_SCALAR=4.5 m/s pace, that's ~37 m of forward travel across the Holtburg terrain. on_ground should remain true throughout (the terrain is gently sloping, not free-falling). This is the primary integrator-vs-oracle test."
+    },
+    {
+      "kind": "turn",
+      "ticks": 60,
+      "input": { "forward": 0, "strafe": 0, "turn": -1, "jump": false, "run": true },
+      "description": "Hold Q (turn left) for 60 ticks (~1 s) at NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC=1.0 rad/s (no forward → run flag goes to false → walk-turn speed). Net rotation ≈ -1 rad ≈ -57°. on_ground should stay true; only heading changes."
+    },
+    {
+      "kind": "walk-forward",
+      "ticks": 200,
+      "input": { "forward": 1, "strafe": 0, "turn": 0, "jump": false, "run": true },
+      "description": "Hold W for another 200 ticks (~3.3 s) on the new heading. Tests integrator stability after a heading change."
+    },
+    {
+      "kind": "release",
+      "ticks": 60,
+      "input": { "forward": 0, "strafe": 0, "turn": 0, "jump": false, "run": true },
+      "description": "Idle for 60 ticks pre-jump. Lets velocity zero out so the jump test starts from a known rest state."
+    },
+    {
+      "kind": "jump",
+      "ticks": 90,
+      "input": { "forward": 0, "strafe": 0, "turn": 0, "jump": true, "run": true },
+      "description": "Press Space for the first 1 tick (jump is edge-triggered). Then 90 ticks (~1.5 s) of airborne ballistic motion. on_ground should be false for at least 30-60 of these ticks (ascending + descending) then true once the player lands. The wasm side currently does NOT have a full ballistic local-prediction integrator hooked into __predLastPos — the server-authoritative bounce-back is what we record. This is documented as a known incomplete capture path; the C# oracle simulates the full ballistic.",
+      "edgeTriggeredJump": true
+    },
+    {
+      "kind": "settle",
+      "ticks": 60,
+      "input": { "forward": 0, "strafe": 0, "turn": 0, "jump": false, "run": true },
+      "description": "60 ticks for the player to settle back on the ground (if the jump completed mid-fall) and for any residual velocity to drain. Final state should be on_ground=true with zero velocity."
+    }
+  ],
+  "sourceCitations": {
+    "wasmPrediction": "external/holtburger/apps/holtburger-web/index.html:7330-7397 (the rAF prediction loop that drives __predLastPos)",
+    "movementConstants": "external/holtburger/apps/holtburger-web/index.html:6120-6136 (FALLBACK_RUN_RATE_SCALAR=4.5, WALK_FORWARD_SPEED=1.0, RUN_HELD_TURN_SPEED_RAD_PER_SEC=1.5, NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC=1.0)",
+    "acclientPhysics": "~/ac-headers/acclient.c:322719 CPhysicsObj::UpdateObjectInternal + :343373 CPhysicsObj::on_ground",
+    "acePhysics": "~/ace-server/Source/ACE.Server/Physics/PhysicsGlobals.cs (Gravity=-9.8, Epsilon=0.0002, MaxVelocity=50)",
+    "transientStateFlags": "~/ac-headers/acclient.h:3688 (CONTACT_TS=0x1 + ON_WALKABLE_TS=0x2 → on_ground)"
+  }
+}

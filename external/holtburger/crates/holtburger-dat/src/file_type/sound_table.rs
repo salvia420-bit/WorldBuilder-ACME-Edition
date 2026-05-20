@@ -83,7 +83,7 @@ use std::collections::HashMap;
 /// One entry in the `Hashes` dictionary. Schema field name in
 /// `dats.xml`: `SoundHashData`. Purpose at the runtime layer isn't
 /// documented (see module docs); the wire shape is just three floats.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct SoundHashData {
     pub priority: f32,
     pub probability: f32,
@@ -107,7 +107,7 @@ impl SoundHashData {
 /// `SoundEntry`. Note `wave_did` is a scalar u32 on the wire despite
 /// the schema's misleading `<vector type="QualifiedDataId">` annotation
 /// — see module docs.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct SoundEntry {
     /// Wave DAT ID (`0x0Axxxxxx`). Schema name `Id`.
     pub wave_did: u32,
@@ -134,7 +134,7 @@ impl SoundEntry {
 /// The value side of one `Sounds` dictionary entry — a flat list of
 /// `SoundEntry` records plus a trailing `unknown` i32 the schema calls
 /// out but doesn't document. Schema name: `SoundData`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct SoundData {
     pub entries: Vec<SoundEntry>,
     /// Schema-named `Unknown`. Always present at the tail of each
@@ -156,7 +156,7 @@ impl SoundData {
 }
 
 /// AC SoundTable file (`0x20xxxxxx`). Parse via [`SoundTable::unpack`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SoundTable {
     /// File ID — must equal the DAT directory key.
     pub id: u32,

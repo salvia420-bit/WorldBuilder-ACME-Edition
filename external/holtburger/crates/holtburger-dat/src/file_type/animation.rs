@@ -6,13 +6,13 @@ use binrw::{
 };
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
     pub struct AnimationFlags: u32 {
         const POS_FRAMES = 0x1;
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Animation {
     pub id: u32,
     pub flags: AnimationFlags,

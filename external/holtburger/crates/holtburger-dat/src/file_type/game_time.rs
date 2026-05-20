@@ -18,7 +18,7 @@ use binrw::{
 
 /// Realm-level wall-clock descriptor. The retail `GameTime` table seeds AC's
 /// time-of-day system + the skybox's deterministic day-group selector.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GameTime {
     /// Reference epoch — the *world* time (in seconds since some AC zero)
     /// that `ZeroYear` started at. PhatSDK reads this as `long double` but
@@ -34,7 +34,7 @@ pub struct GameTime {
     pub seasons: Vec<Season>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TimeOfDay {
     /// Hour-of-day start (in AC's normalized 0.0..1.0 day fraction).
     pub start: f32,
@@ -42,7 +42,7 @@ pub struct TimeOfDay {
     pub name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Season {
     /// Day-of-year start (uint, not normalized).
     pub start: u32,

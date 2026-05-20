@@ -55,7 +55,7 @@ pub const OBJECT_DESC_PACKED_SIZE: usize = 76;
 ///
 /// Field order MUST match ACE's `Unpack` exactly — the bake algorithm reads
 /// these positionally, not by name, so reordering breaks compatibility.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ObjectDesc {
     /// GfxObj / SetupModel DID (`0x01xxxxxx` or `0x02xxxxxx`) of the mesh.
     pub obj_id: u32,

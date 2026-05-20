@@ -3974,6 +3974,296 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     ))
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Wave 3.E — JS-vs-C# swing classifier parity (Rust port of the spec).
+//
+// Implements `lookup_motion_link_for_swing` per
+// `external/holtburger/docs/swing-classification-spec-2026-05-19.md` §3.2.
+// Mirrors the C# oracle at
+// `WorldBuilder.Terminal/CommandEngine.MotionParity.cs::MotionClassifySwing`.
+//
+// **Load-bearing detail (per project_wave3bc_done_2026-05-19):**
+// `MotionTable.links[outer]` inner-dict keys are the FULL 32-bit retail
+// MotionCommand (e.g. `SlashHigh = 0x1000005B`), NOT the LOW-16 substate.
+// The Rust parser at `crates/holtburger-dat/src/file_type/motion_table.rs:202`
+// stores raw u32 keys correctly, but the helper
+// `MotionTable::motion_data_for_link` at line 65 masks `to_cmd &
+// 0x000F_FFFF` before lookup — a port bug that strips the high-3-nibbles
+// classifier prefix (0x10 / 0x40 / 0x44 / 0x45) and never matches in
+// retail data. We do the lookup here directly via `mt.links.get(outer)?
+// .get(&command)` to bypass that buggy helper — preserving the
+// W3.C C# oracle's "raw int" semantics (DRW C# reads dict keys as raw
+// little-endian `int`).
+//
+// `dats.xml:3746-3748` declares `genericKey="int"` for both `Links` outer
+// and `MotionCommandData.MotionData` inner — confirming no masking is
+// applied by the wire format. The spec doc's "LOW 16 bits" remark
+// concerns only the OUTER key construction (`stance << 16 | substate`),
+// not the INNER key lookup.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// AC retail "Ready" command — the canonical `from_substate` for every
+/// swing/cast link in all 436 retail motion tables (validated by
+/// `crates/holtburger-dat/tests/motion_table_monsters.rs`).
+#[cfg(any(target_arch = "wasm32", test))]
+const MOTION_LINK_FROM_READY: u32 = 0x4100_0003;
+
+/// Per spec §2.4 the swing-classifier returns a typed bucket. The JS
+/// caller can use this to drive `setSwingPoseFromMotion` differently
+/// from `setSpellCastPoseFromMotion` (one-shot vs hold-to-charge).
+#[cfg(any(target_arch = "wasm32", test))]
+fn classify_command_kind(cmd: u32) -> (&'static str, Option<&'static str>) {
+    // High-3-nibbles classifier prefix is the discriminator. Refs:
+    //   0x10000058..0x1000005D : Thrust/Slash {Low,Med,High}
+    //   0x10000062..0x1000006A : AttackHigh/Med/Low {1,2,3}  (HandCombat)
+    //   0x1000011F..0x1000012A : Double/TripleSlash + Double/TripleThrust
+    //   0x10000173..0x10000184 : Offhand{Slash,Thrust} + Offhand{D,T}{S,T}
+    //   0x10000186..0x1000018E : AttackHigh/Med/Low {4,5,6}
+    //   0x1000018F..0x1000019A : Punch{Fast,Slow} + OffhandPunch
+    //   0x4000002B..0x40000039 : MagicGesture (Blast..Pray)
+    let high4 = cmd & 0xF000_0000;
+    if high4 == 0x4000_0000 {
+        // Magic gesture; no height bucket — return ("cast", None).
+        return ("cast", None);
+    }
+    if high4 != 0x1000_0000 {
+        return ("unknown", None);
+    }
+    let low12 = cmd & 0x0000_0FFF;
+    // Spec §2.4 commands fall into three height ranges by the LOW 12 bits.
+    // Mapping table derived from `external/chorizite/Chorizite.Common/
+    // Enums/MotionCommand.cs:95-418` — the canonical retail enum values.
+    // NOTE: the height-ordering convention varies across the table:
+    //   - Thrust trio 0x058-0x05A is Med/Low/High (NOT alphabetical).
+    //   - Slash trio 0x05B-0x05D is High/Med/Low.
+    //   - AttackHigh1..AttackLow3 0x062-0x06A repeats H/M/L per triple.
+    //   - DoubleSlash..TripleThrust 0x11F-0x12A repeats L/M/H per triple.
+    //   - OffhandSlash + OffhandThrust 0x173-0x178 repeats H/M/L.
+    //   - Offhand{Double,Triple}{Slash,Thrust} 0x179-0x184 repeats L/M/H.
+    //   - AttackHigh4..AttackLow6 0x186-0x18E repeats H/M/L.
+    //   - Punch{Fast,Slow} + OffhandPunch 0x18F-0x19A repeats H/M/L.
+    let height = match low12 {
+        // Thrust trio (Med/Low/High order — see MotionCommand.cs:95-97)
+        0x058 => Some("Medium"), // ThrustMed
+        0x059 => Some("Low"),    // ThrustLow
+        0x05A => Some("High"),   // ThrustHigh
+        // Slash trio (High/Med/Low order — see MotionCommand.cs:98-100)
+        0x05B => Some("High"),   // SlashHigh
+        0x05C => Some("Medium"), // SlashMed
+        0x05D => Some("Low"),    // SlashLow
+        // HandCombat AttackHigh/Med/Low {1,2,3}: H/M/L repeating
+        0x062 | 0x065 | 0x068 => Some("High"),
+        0x063 | 0x066 | 0x069 => Some("Medium"),
+        0x064 | 0x067 | 0x06A => Some("Low"),
+        // Double/TripleSlash + Double/TripleThrust: L/M/H repeating
+        0x121 | 0x124 | 0x127 | 0x12A => Some("High"),
+        0x120 | 0x123 | 0x126 | 0x129 => Some("Medium"),
+        0x11F | 0x122 | 0x125 | 0x128 => Some("Low"),
+        // OffhandSlash + OffhandThrust 0x173-0x178: H/M/L repeating
+        0x173 | 0x176 => Some("High"),
+        0x174 | 0x177 => Some("Medium"),
+        0x175 | 0x178 => Some("Low"),
+        // Offhand{Double,Triple}{Slash,Thrust} 0x179-0x184: L/M/H repeating
+        0x17B | 0x17E | 0x181 | 0x184 => Some("High"),
+        0x17A | 0x17D | 0x180 | 0x183 => Some("Medium"),
+        0x179 | 0x17C | 0x17F | 0x182 => Some("Low"),
+        // HandCombat AttackHigh/Med/Low {4,5,6}: H/M/L repeating
+        0x186 | 0x189 | 0x18C => Some("High"),
+        0x187 | 0x18A | 0x18D => Some("Medium"),
+        0x188 | 0x18B | 0x18E => Some("Low"),
+        // Punch{Fast,Slow} + OffhandPunch{Fast,Slow}: H/M/L repeating
+        0x18F | 0x192 | 0x195 | 0x198 => Some("High"),
+        0x190 | 0x193 | 0x196 | 0x199 => Some("Medium"),
+        0x191 | 0x194 | 0x197 | 0x19A => Some("Low"),
+        _ => None,
+    };
+    ("swing", height)
+}
+
+/// Pure-Rust core of the swing classifier. Builds the outer link key per
+/// spec §3.2 (`(stance & 0xFFFF) << 16 | 0x0003`), walks
+/// `MotionTable.links[outer]`, looks up the FULL 32-bit `command` key in
+/// the inner `MotionData` map, and returns the first anim (always
+/// `Anims[0]` per the 5,455-entry retail validation — every link has
+/// exactly 1 anim).
+///
+/// Returns `None` when:
+/// - the outer key has no link entry (stance has no swings — missile
+///   stances always fall here)
+/// - the inner `command` key isn't in the link's MotionData (no swing
+///   for that specific command in this stance)
+/// - the matched MotionData has zero anims (defensive — never observed
+///   in retail data)
+#[cfg(any(target_arch = "wasm32", test))]
+fn classify_motion_link_for_swing(
+    mtable: &holtburger_dat::file_type::MotionTable,
+    stance: u32,
+    command: u32,
+) -> Option<MotionLinkAnimInner> {
+    // Outer key: same encoding as `cycle_key` (stance LOW 16 << 16 |
+    // from-substate LOW 16). For swings, from-substate is always Ready
+    // (LOW 16 = 0x0003).
+    let outer_key = ((stance & 0xFFFF) << 16) | (MOTION_LINK_FROM_READY & 0xFFFF);
+    let inner_map = mtable.links.get(&outer_key)?;
+    // Inner key: the FULL 32-bit command, NOT masked. See module comment
+    // above. This is the W3.C load-bearing finding.
+    let motion_data = inner_map.get(&command)?;
+    let anim = motion_data.anims.first()?;
+
+    // Duration: number of played frames / framerate. Spec §2.3:
+    //   - melee swings use low=0, high=-1 (play to end of anim asset);
+    //     we report a duration of NaN/0 in this case since we don't
+    //     parse the Animation DID here (caller can resolve the
+    //     anim length via separate fetch_entity_animation_keyframes
+    //     if needed). Reported as 0.0 so JS can detect with `> 0`.
+    //   - magic casts have explicit high_frame (15-43 frames).
+    //
+    // Computing here: when high_frame >= 0 and framerate > 0, return
+    // `(high - low + 1) / framerate`. For high == -1, return 0.0.
+    let duration_sec = if anim.high_frame >= 0 && anim.framerate > 0.0 {
+        let frames = (anim.high_frame as f32 - anim.low_frame as f32 + 1.0).max(0.0);
+        frames / anim.framerate
+    } else {
+        0.0
+    };
+
+    let (kind, height) = classify_command_kind(command);
+    Some(MotionLinkAnimInner {
+        kind,
+        height: height.unwrap_or(""),
+        anim_id: anim.anim_id,
+        low_frame: anim.low_frame,
+        high_frame: anim.high_frame,
+        framerate: anim.framerate,
+        duration_sec,
+        resolved_command: command,
+    })
+}
+
+/// Native-shaped result struct (no wasm-bindgen). The wasm wrapper
+/// converts this into `MotionLinkAnimJs` before crossing the boundary.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Clone)]
+struct MotionLinkAnimInner {
+    kind: &'static str,
+    height: &'static str,
+    anim_id: u32,
+    low_frame: i32,
+    high_frame: i32,
+    framerate: f32,
+    duration_sec: f32,
+    resolved_command: u32,
+}
+
+/// JS-facing result of `lookup_motion_link_for_swing` / `parse_motion_link_for_swing_bytes`.
+///
+/// Mirrors spec §3.2's `MotionLinkAnimJs` plus the higher-level
+/// classifier fields (`kind`, `height`) from the JS-side
+/// `classifyMotionCommand` widening (entities.js).
+///
+/// Field semantics (matches C# `SwingClassifyResult`):
+/// - `kind`: "swing" | "cast" | "unknown" (per spec §2.4 ID-range classifier).
+/// - `height`: "High" | "Medium" | "Low" for swings; empty for casts.
+/// - `anim_id`: DAT DID of the Animation record (`0x03xxxxxx`).
+/// - `low_frame` / `high_frame`: clip range; `-1` = play to end.
+/// - `framerate`: anim playback rate in fps.
+/// - `duration_sec`: derived from frames/framerate; `0.0` when
+///   `high_frame == -1` (caller must resolve via Animation).
+/// - `resolved_command`: full 32-bit retail MotionCommand that matched.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone, Debug)]
+pub struct MotionLinkAnimJs {
+    kind: String,
+    height: String,
+    anim_id: u32,
+    low_frame: i32,
+    high_frame: i32,
+    framerate: f32,
+    duration_sec: f32,
+    resolved_command: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl MotionLinkAnimJs {
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> String {
+        self.kind.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> String {
+        self.height.clone()
+    }
+    #[wasm_bindgen(getter, js_name = animId)]
+    pub fn anim_id(&self) -> u32 {
+        self.anim_id
+    }
+    /// Spec §3.2 alias — `anim` returns the same DID as `animId`.
+    /// Keeps the JS validator readable when comparing against the spec
+    /// shape.
+    #[wasm_bindgen(getter)]
+    pub fn anim(&self) -> u32 {
+        self.anim_id
+    }
+    #[wasm_bindgen(getter, js_name = lowFrame)]
+    pub fn low_frame(&self) -> i32 {
+        self.low_frame
+    }
+    #[wasm_bindgen(getter, js_name = highFrame)]
+    pub fn high_frame(&self) -> i32 {
+        self.high_frame
+    }
+    #[wasm_bindgen(getter)]
+    pub fn framerate(&self) -> f32 {
+        self.framerate
+    }
+    #[wasm_bindgen(getter, js_name = durationSec)]
+    pub fn duration_sec(&self) -> f32 {
+        self.duration_sec
+    }
+    #[wasm_bindgen(getter, js_name = resolvedCommand)]
+    pub fn resolved_command(&self) -> u32 {
+        self.resolved_command
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn inner_to_motion_link_anim_js(inner: MotionLinkAnimInner) -> MotionLinkAnimJs {
+    MotionLinkAnimJs {
+        kind: inner.kind.to_string(),
+        height: inner.height.to_string(),
+        anim_id: inner.anim_id,
+        low_frame: inner.low_frame,
+        high_frame: inner.high_frame,
+        framerate: inner.framerate,
+        duration_sec: inner.duration_sec,
+        resolved_command: inner.resolved_command,
+    }
+}
+
+/// Parse a motion-table DAT record's raw bytes and resolve the swing
+/// link for `(stance, command)`. Returns `None` when the bytes don't
+/// parse, the stance has no swing links, or the command isn't in the
+/// link map.
+///
+/// This is the no-session wasm export used by the Wave 3.E JS validator
+/// (`validate_motion_pose.cjs --js-vs-cs`) which loads motion-table
+/// bytes via Node fs and drives the lookup directly. The browser caller
+/// uses `SessionHandle::lookupMotionLinkForSwing` (which loads via
+/// `global_source`) instead.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = parseMotionLinkForSwingBytes)]
+pub fn parse_motion_link_for_swing_bytes(
+    bytes: &[u8],
+    stance: u32,
+    command: u32,
+) -> Option<MotionLinkAnimJs> {
+    use holtburger_dat::file_type::MotionTable;
+    let mtable = MotionTable::read(&mut std::io::Cursor::new(bytes)).ok()?;
+    classify_motion_link_for_swing(&mtable, stance, command).map(inner_to_motion_link_anim_js)
+}
+
 /// Phase 4 step 6 Phase C: resolve the idle pose for a SetupModel by
 /// walking `default_motion_table` → `cycles[(default_style << 16) |
 /// idleSubstate]` → first `AnimData.anim_id` → `Animation.part_frames[0]`.
@@ -13805,6 +14095,51 @@ impl SessionHandle {
                 JsValue::from_str(&format!("tick_movement: cmd channel closed ({e})"))
             })
     }
+
+    /// Wave 3.E (2026-05-19) — Rust port of the swing classifier per
+    /// `docs/swing-classification-spec-2026-05-19.md` §3.2.
+    ///
+    /// Loads the motion table from the page-scoped resource source
+    /// (`global_source`), then walks `MotionTable.links[(stance,
+    /// Ready)]` looking up the FULL 32-bit `command` key. Returns the
+    /// matched anim spec, or `None` if no swing link exists for that
+    /// `(stance, command)` pair.
+    ///
+    /// Mirrors the C# oracle at
+    /// `WorldBuilder.Terminal/CommandEngine.MotionParity.cs::MotionClassifySwing`.
+    /// The C# oracle takes `attackHeight` and walks a candidate list to
+    /// resolve `command`; this wasm export takes the already-resolved
+    /// `command` and looks it up directly. The candidate-walking
+    /// happens in JS (`scene3d/entities.js::classifyMotionCommandTyped`)
+    /// or in the validator (`validate_motion_pose.cjs --js-vs-cs`),
+    /// keeping the wasm boundary single-purpose.
+    ///
+    /// **Async return shape — synchronous Option.** The motion table
+    /// must already be in the resource source's cache; callers should
+    /// `prefetch()` it first via the existing entity-animation pipeline
+    /// or trigger a render in the relevant landblock. Returns `None`
+    /// silently if the source can't resolve the table — JS fallback
+    /// path (`classifyMotionCommand` coarse) handles the offline case.
+    #[wasm_bindgen(js_name = lookupMotionLinkForSwing)]
+    pub fn lookup_motion_link_for_swing(
+        &self,
+        motion_table_id: u32,
+        stance: u32,
+        command: u32,
+    ) -> Option<MotionLinkAnimJs> {
+        use holtburger_dat::file_type::MotionTable;
+        use holtburger_dat::{ResourceKey, ResourceSource};
+        if (motion_table_id >> 24) != 0x09 {
+            return None;
+        }
+        let source = global_source::try_global_source()?;
+        let bytes = source
+            .get_file_by_key(ResourceKey::new("eor/portal", motion_table_id))
+            .ok()?;
+        let mtable = MotionTable::read(&mut std::io::Cursor::new(&bytes)).ok()?;
+        classify_motion_link_for_swing(&mtable, stance, command)
+            .map(inner_to_motion_link_anim_js)
+    }
 }
 
 /// Phase 4 step 2a.5: construct an Aluvian / Male / Adventurer /
@@ -14873,6 +15208,18 @@ async fn recv_loop(
     // to ≤30Hz (one emit per ≥33.3 ms) to keep the entity-update queue
     // from flooding under high-rAF cadence. `None` until first emit.
     let mut last_local_player_position_emit: Option<web_time::Instant> = None;
+
+    // Wave 3 prereq (2026-05-19) — InWorld PingRequest keepalive. The cli
+    // sends one every 5s when InWorld via its `should_send_keepalive_ping`
+    // helper (`crates/holtburger-core/src/client/runtime.rs:9-12`); the
+    // wasm bundle historically didn't, so rapid replay re-runs raced
+    // ACE's 60-90s ghost-session window (per the "Ghost-session quirk"
+    // section in [[project_emit_dynamic_site]]). The arm below mirrors
+    // that exact gating: only fires when `state == LoopState::InWorld`
+    // AND `session.last_send_time.elapsed() > 5s`. The third `select!`
+    // arm wakes every 5s via `gloo_timers::future::TimeoutFuture` (the
+    // wasm-safe equivalent of `tokio::time::sleep`, which panics on
+    // wasm32 — see [[project_emit_dynamic_site]] tokio split notes).
 
     loop {
         tokio::select! {
@@ -17367,6 +17714,35 @@ async fn recv_loop(
                             // signal + relay position-bearing messages
                             // + relay chat.
                         }
+                    }
+                }
+            }
+            // Wave 3 prereq (2026-05-19) — InWorld PingRequest keepalive.
+            // Wakes every 5s; gated InWorld so login/charlist phases are
+            // untouched. The actual gate also re-checks
+            // `session.last_send_time.elapsed() > 5s` so a recent send
+            // (movement broadcast, chat, etc.) acts as a free keepalive
+            // and we don't double-up. Mirrors the cli's
+            // `crates/holtburger-core/src/client/runtime.rs:124-131`
+            // arm. Failures are logged but never panic — the rest of the
+            // loop must keep running so the JS side can observe the
+            // eventual disconnect through `recv_message`.
+            _ = gloo_timers::future::TimeoutFuture::new(5_000) => {
+                if matches!(state, LoopState::InWorld { .. })
+                    && session.last_send_time.elapsed()
+                        > std::time::Duration::from_secs(5)
+                {
+                    use holtburger_protocol::messages::misc::actions::PingRequestActionData;
+                    use holtburger_protocol::messages::GameAction;
+                    if let Err(e) = session
+                        .send_action(GameAction::PingRequest(Box::new(
+                            PingRequestActionData,
+                        )))
+                        .await
+                    {
+                        log::warn!(
+                            "recv_loop: keepalive PingRequest send failed: {e}"
+                        );
                     }
                 }
             }

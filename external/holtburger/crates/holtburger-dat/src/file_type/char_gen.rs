@@ -7,7 +7,7 @@ use binrw::{
 };
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CharGen {
     pub id: u32,
     pub starter_areas: Vec<StarterArea>,
@@ -54,7 +54,7 @@ impl BinRead for CharGen {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct StarterArea {
     pub name: String,
     pub locations: Vec<StarterLocation>,
@@ -69,7 +69,7 @@ impl StarterArea {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct StarterLocation {
     pub obj_cell_id: u32,
     pub frame: Frame,
@@ -84,7 +84,7 @@ impl StarterLocation {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct HeritageGroup {
     pub name: String,
     pub icon_image: u32,
@@ -131,7 +131,7 @@ impl HeritageGroup {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SkillOverride {
     pub skill_num: u32,
     pub normal_cost: i32,
@@ -148,7 +148,7 @@ impl SkillOverride {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CharacterTemplate {
     pub name: String,
     pub icon_image: u32,
@@ -184,7 +184,7 @@ impl CharacterTemplate {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CharacterGenGender {
     pub name: String,
     pub scale: u32,
@@ -241,7 +241,7 @@ impl CharacterGenGender {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct HairStyle {
     pub icon_image: u32,
     pub bald: bool,
@@ -260,7 +260,7 @@ impl HairStyle {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EyeStrip {
     pub icon_image: u32,
     pub icon_image_bald: u32,
@@ -279,7 +279,7 @@ impl EyeStrip {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FaceStrip {
     pub icon_image: u32,
     pub obj_desc: ObjDesc,
@@ -294,7 +294,7 @@ impl FaceStrip {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Gear {
     pub name: String,
     pub clothing_table: u32,
@@ -311,7 +311,7 @@ impl Gear {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ObjDesc {
     pub palette_id: Option<u32>,
     pub sub_palettes: Vec<SubPalette>,
@@ -359,7 +359,7 @@ impl ObjDesc {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SubPalette {
     pub sub_id: u32,
     pub offset: u32,
@@ -383,7 +383,7 @@ impl SubPalette {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TextureMapChange {
     pub part_index: u8,
     pub old_texture: u32,
@@ -400,7 +400,7 @@ impl TextureMapChange {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AnimationPartChange {
     pub part_index: u8,
     pub part_id: u32,

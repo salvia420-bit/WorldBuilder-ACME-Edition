@@ -33,7 +33,7 @@ use binrw::{
     io::{Read, Seek, Write},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PhysicsScriptData {
     pub start_time: f64,
     pub hook: AnimationHook,
@@ -53,7 +53,7 @@ impl PhysicsScriptData {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PhysicsScript {
     pub id: u32,
     pub script_data: Vec<PhysicsScriptData>,

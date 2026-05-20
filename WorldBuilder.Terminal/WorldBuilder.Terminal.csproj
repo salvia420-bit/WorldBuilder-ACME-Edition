@@ -35,6 +35,10 @@
 		<!-- Chorizite.Common: enums + EventArgs. Lean deps (MS.Logging.Abstractions, System.Text.Json). -->
 		<!-- Vendored at external/chorizite/Chorizite.Common/ per external/chorizite/VENDORED.md. -->
 		<ProjectReference Include="..\external\chorizite\Chorizite.Common\Chorizite.Common.csproj" />
+		<!-- W1.A0 SPIKE: Chorizite.ACProtocol ProjectReference. Pulls in 368 message types
+		     via source generator. Track dep-graph carefully — if RmlUi/Lua/Autofac/Silk
+		     deps surface, revert and use regex-parse fallback. -->
+		<ProjectReference Include="..\external\chorizite\Chorizite.ACProtocol\Chorizite.ACProtocol\Chorizite.ACProtocol.csproj" />
 	</ItemGroup>
 
 	<ItemGroup Condition="'$(UseLocalReferenceBuild)'=='true'">

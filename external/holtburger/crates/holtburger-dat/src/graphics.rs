@@ -5,7 +5,7 @@ use binrw::{
 use holtburger_common::{Quaternion, Vector3};
 use std::collections::HashMap;
 
-#[derive(BinRead, BinWrite, Debug, Clone, Default, PartialEq)]
+#[derive(BinRead, BinWrite, Debug, Clone, Default, PartialEq, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct Frame {
@@ -13,7 +13,7 @@ pub struct Frame {
     pub orientation: Quaternion,
 }
 
-#[derive(BinRead, BinWrite, Debug, Clone)]
+#[derive(BinRead, BinWrite, Debug, Clone, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct SWVertex {
@@ -24,7 +24,7 @@ pub struct SWVertex {
     pub uvs: Vec<Vec2Duv>,
 }
 
-#[derive(BinRead, BinWrite, Debug, Clone, Copy)]
+#[derive(BinRead, BinWrite, Debug, Clone, Copy, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct Vec2Duv {
@@ -32,7 +32,7 @@ pub struct Vec2Duv {
     pub v: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CVertexArray {
     pub vertex_type: i32,
     pub vertices: HashMap<u16, SWVertex>,
@@ -121,7 +121,7 @@ impl BinWrite for CVertexArray {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Polygon {
     pub num_pts: u8,
     pub stippling: u8,

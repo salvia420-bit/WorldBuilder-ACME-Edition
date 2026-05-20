@@ -3,14 +3,14 @@ use binrw::{BinRead, binread, io::Cursor};
 use holtburger_common::{Quaternion, Vector3};
 use std::collections::HashMap;
 
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct Frame {
     pub origin: Vector3,
     pub orientation: Quaternion,
 }
 
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct Stab {
     pub id: u32,
@@ -18,7 +18,7 @@ pub struct Stab {
 }
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct BuildInfo {
     pub model_id: u32,
@@ -35,7 +35,7 @@ pub struct BuildInfo {
 }
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct PortalInternal {
     pub flags: u16,
@@ -49,7 +49,7 @@ pub struct PortalInternal {
     pub _align: (),
 }
 
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct CellLandblock {
     pub id: u32,
@@ -122,7 +122,7 @@ impl CellLandblock {
 }
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct LandblockInfo {
     pub id: u32,
@@ -149,7 +149,7 @@ impl LandblockInfo {
 }
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct RestrictionTable {
     #[br(temp)]

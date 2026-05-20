@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek};
 
 /// Chat pose table from client_portal.dat (file 0x0E000007).
-#[derive(BinRead, Debug, Clone)]
+#[derive(BinRead, Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct ChatPoseTable {
     pub id: u32,
@@ -34,7 +34,7 @@ impl StaticResourceKey for ChatPoseTable {
         ResourceKey::new(EOR_PORTAL_NAMESPACE, Self::FILE_ID);
 }
 
-#[derive(BinRead, Debug, Clone, PartialEq, Eq)]
+#[derive(BinRead, Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[br(little)]
 pub struct ChatEmoteData {
     #[br(parse_with = parse_pstring_aligned)]

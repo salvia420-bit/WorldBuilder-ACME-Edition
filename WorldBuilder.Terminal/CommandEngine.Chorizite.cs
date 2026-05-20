@@ -78,30 +78,93 @@ public partial class CommandEngine {
 
     /// <summary>
     /// Curated allowlist of enums emitted by <c>chorizite-dump-enum-values</c>
-    /// when called without an explicit <c>enumName</c>. These are the enums
-    /// the holtburger-web entity-completeness validators + world-objects
-    /// canonical classifier consume; expanding the allowlist is the only
-    /// surface that needs touching when a new enum joins the contract.
+    /// when called without an explicit <c>enumName</c>. As of Wave 2.C
+    /// (2026-05-19) this covers all 65 enums declared in
+    /// <c>external/chorizite/Chorizite.Common/Enums/*.cs</c> plus the
+    /// ACProtocol-side <c>ObjectDescriptionFlag</c> — i.e. the empty-default
+    /// "dump everything Chorizite.Common knows about".
     ///
     /// Names are matched against the Chorizite.Common.Enums namespace via
     /// reflection EXCEPT <c>ObjectDescriptionFlag</c>, which lives in
     /// <c>Chorizite.ACProtocol.Enums</c> and is sourced via regex-parse of
     /// the .generated.cs file (mirrors the ChoriziteDumpOpcodes pattern —
-    /// see that method's class-level remarks for why we avoid taking a
-    /// ProjectReference on Chorizite.ACProtocol).
+    /// see that method's class-level remarks for why we sourced ACProtocol's
+    /// generated enums via regex when the original pattern landed; the
+    /// ProjectReference exists now per W1.A0 but the parse path is kept for
+    /// the one enum that's referenced from this curated set).
+    ///
+    /// The previous 11-entry allowlist (kept here for posterity) was:
+    ///   AttackHeight, AttackType, ItemType, ObjectClass, SpellType,
+    ///   SpellFlags, DamageType, MagicSchool, CombatMode,
+    ///   ObjectDescriptionFlag, WeenieHeaderFlag.
     /// </summary>
     private static readonly string[] CuratedEnumAllowlist = new[] {
+        "AllegianceOfficerLevel",
+        "AmmoType",
         "AttackHeight",
         "AttackType",
-        "ItemType",
-        "ObjectClass",
-        "SpellType",
-        "SpellFlags",
-        "DamageType",
-        "MagicSchool",
+        "AttributeId",
+        "CharacterOptions1",
+        "CharacterOptions2",
+        "ClientAction",
         "CombatMode",
+        "ContainerProperties",
+        "CoverageMask",
+        "CreatureType",
+        "CurVitalId",
+        "DamageType",
+        "DatFileType",
+        "EmoteCategory",
+        "EmoteType",
+        "EnchantmentTypeFlags",
+        "EquipMask",
+        "FriendsUpdateType",
+        "Gender",
+        "HeritageGroup",
+        "HookType",
+        "ImbuedEffectType",
+        "ItemType",
+        "MagicSchool",
+        "MaterialType",
+        "MotionCommand",
+        "MotionStance",
+        "ObjectClass",
         "ObjectDescriptionFlag",
+        "ParentLocation",
+        "PhysicsDescriptionFlag",
+        "PhysicsState",
+        "PlayScript",
+        "Placement",
+        "PlayerKillerStatus",
+        "PortalBitmask",
+        "PropertyAttribute2nd",
+        "PropertyBool",
+        "PropertyDataId",
+        "PropertyFloat",
+        "PropertyInstanceId",
+        "PropertyInt",
+        "PropertyInt64",
+        "PropertyPosition",
+        "PropertyString",
+        "RadarBehavior",
+        "RadarColor",
+        "RootElementId",
+        "SkillAdvancementClass",
+        "SkillId",
+        "Sound",
+        "SpellBookFilterOptions",
+        "SpellCategory",
+        "SpellComponentType",
+        "SpellFlags",
+        "SpellType",
+        "SummoningMastery",
+        "UiEffects",
+        "VitalId",
         "WeenieHeaderFlag",
+        "WeenieHeaderFlag2",
+        "WeenieType",
+        "WieldRequirement",
+        "WieldType",
     };
 
     /// <summary>

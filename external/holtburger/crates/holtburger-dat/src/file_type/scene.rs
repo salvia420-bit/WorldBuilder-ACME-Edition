@@ -28,7 +28,7 @@ use binrw::{
 ///
 /// `id` echoes the file's DBObj ID (e.g. `0x1200_07AB`). `objects` is the
 /// candidate placement list the bake walks per matching landblock vertex.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Scene {
     pub id: u32,
     pub objects: Vec<ObjectDesc>,

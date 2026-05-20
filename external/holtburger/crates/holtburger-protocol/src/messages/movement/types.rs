@@ -87,7 +87,7 @@ pub enum MotionStance {
     Graze = 0x8000_0048,
     Magic = 0x8000_0049,
     BowNoAmmo = 0x8000_00e8,
-    CrossbowNoAmmo = 0x8000_00e9,
+    CrossBowNoAmmo = 0x8000_00e9,
     AtlatlCombat = 0x8000_013b,
     ThrownShieldCombat = 0x8000_013c,
 }

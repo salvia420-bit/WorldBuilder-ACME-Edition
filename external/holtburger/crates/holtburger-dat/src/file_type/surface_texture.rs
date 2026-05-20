@@ -8,7 +8,7 @@ use binrw::{BinRead, BinResult, binread};
 use std::io::{Read, Seek};
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct SurfaceTexture {
     pub id: u32,

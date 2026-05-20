@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 const MOTION_KEY_MASK: u32 = 0x000F_FFFF;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct MotionTable {
     pub id: u32,
     pub default_style: u32,
@@ -90,7 +90,7 @@ impl MotionTable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct MotionTableMovementProfile {
     pub motion_table_id: u32,
     pub stance: u32,
@@ -100,7 +100,7 @@ pub struct MotionTableMovementProfile {
     pub turn_right: Option<MotionCommandKinematics>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct MotionCommandKinematics {
     pub velocity: Option<Vector3>,
     pub omega: Option<Vector3>,
@@ -115,7 +115,7 @@ impl MotionCommandKinematics {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct MotionData {
     pub bitfield: u8,
     pub flags: MotionDataFlags,
@@ -155,7 +155,7 @@ impl MotionData {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct AnimData {
     pub anim_id: u32,
     pub low_frame: i32,
@@ -175,7 +175,7 @@ impl AnimData {
 }
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
     pub struct MotionDataFlags: u8 {
         const HAS_VELOCITY = 0x01;
         const HAS_OMEGA = 0x02;

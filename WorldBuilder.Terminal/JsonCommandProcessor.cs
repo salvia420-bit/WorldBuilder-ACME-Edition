@@ -302,6 +302,24 @@ public class JsonCommandProcessor {
             ["chorizite-classify"] = CmdChoriziteClassify,
             ["chorizite-dump-opcodes"] = CmdChoriziteDumpOpcodes,
             ["chorizite-resolve-sound"] = CmdChoriziteResolveSound,
+            // Wave-1 wire-conformance diagnostic commands — see CommandEngine.WireConformance.cs
+            ["chorizite-wire-pack-message"]   = CmdChoriziteWirePackMessage,
+            ["chorizite-wire-unpack-message"] = CmdChoriziteWireUnpackMessage,
+            ["chorizite-wire-list-message-types"] = _ => CmdChoriziteWireListMessageTypes(),
+            // Wave-2.C enum-parity diagnostic — see CommandEngine.EnumParity.cs
+            ["enum-parity-report"] = CmdEnumParityReport,
+            // Wave-2.A + 2.B DAT-parity diagnostic — see CommandEngine.DatParity.cs
+            ["chorizite-list-dat-records"] = CmdChoriziteListDatRecords,
+            ["chorizite-parse-dat-record"] = CmdChoriziteParseDatRecord,
+            ["chorizite-list-dat-types"] = _ => CmdChoriziteListDatTypes(),
+            // Wave-3.B physics-jump-formula diagnostic — see CommandEngine.PhysicsParity.cs
+            ["physics-jump-formula"]       = CmdPhysicsJumpFormula,
+            ["physics-jump-formula-sweep"] = CmdPhysicsJumpFormulaSweep,
+            // Wave-3.A physics-replay-trace diagnostic — see CommandEngine.PhysicsParity.cs
+            ["physics-replay-trace"]       = CmdPhysicsReplayTrace,
+            // Wave-3.C motion-classify-swing diagnostic — see CommandEngine.MotionParity.cs
+            ["motion-classify-swing"]      = CmdMotionClassifySwing,
+            ["motion-inventory"]           = CmdMotionInventory,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -440,6 +458,306 @@ public class JsonCommandProcessor {
             entryCount = r.EntryCount,
             source = r.Source,
         });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-1 wire-conformance dispatch — see CommandEngine.WireConformance.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdChoriziteWirePackMessage(System.Text.Json.Nodes.JsonNode node) {
+        string typeName = node["typeName"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'typeName' field");
+        var fields = node["fields"];
+        string? headerMode = node["headerMode"]?.GetValue<string>();
+        var r = _engine.ChoriziteWirePackMessage(typeName, fields, headerMode);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-wire-pack-message",
+            messageType = r.MessageType,
+            fullName = r.FullName,
+            headerMode = r.HeaderMode,
+            opCode = r.OpCode.HasValue ? $"0x{r.OpCode.Value:X4}" : null,
+            hexBytes = r.HexBytes,
+            byteLen = r.ByteLen,
+            sha256 = r.Sha256,
+        });
+    }
+
+    private string CmdChoriziteWireUnpackMessage(System.Text.Json.Nodes.JsonNode node) {
+        string hexBytes = node["hexBytes"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'hexBytes' field");
+        string? typeName = node["typeName"]?.GetValue<string>();
+        string? headerMode = node["headerMode"]?.GetValue<string>();
+        var r = _engine.ChoriziteWireUnpackMessage(hexBytes, typeName, headerMode);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-wire-unpack-message",
+            messageType = r.MessageType,
+            fullName = r.FullName,
+            headerMode = r.HeaderMode,
+            fields = r.Fields,
+            roundtrip = r.Roundtrip,
+            roundtripDiff = r.RoundtripDiff,
+        });
+    }
+
+    private string CmdChoriziteWireListMessageTypes() {
+        var r = _engine.ChoriziteWireListMessageTypes();
+        return Serialize(new {
+            success = true,
+            command = "chorizite-wire-list-message-types",
+            count = r.Count,
+            types = r.Types.Select(t => new {
+                typeName = t.TypeName,
+                fullName = t.FullName,
+                direction = t.Direction,
+                opCode = t.OpCode.HasValue ? $"0x{t.OpCode.Value:X4}" : null,
+            }),
+        });
+    }
+
+    private string CmdEnumParityReport(System.Text.Json.Nodes.JsonNode node) {
+        string? sourceRoot = node["sourceRoot"]?.GetValue<string>();
+        string? rustCrateRoot = node["rustCrateRoot"]?.GetValue<string>();
+        var report = _engine.EnumParityReportCommand(sourceRoot, rustCrateRoot);
+        return Serialize(new {
+            success = true,
+            command = "enum-parity-report",
+            choriziteSourceRoot = report.ChoriziteSourceRoot,
+            rustCrateRoot = report.RustCrateRoot,
+            checkedEnums = report.CheckedEnums,
+            passEnums = report.PassEnums,
+            failEnums = report.FailEnums,
+            gapEnums = report.GapEnums,
+            rows = report.Rows.Select(r => new {
+                choriziteName = r.ChoriziteName,
+                rustName = r.RustName,
+                rustRelativePath = r.RustRelativePath,
+                status = r.Status,
+                checkedMembers = r.CheckedMembers,
+                passMembers = r.PassMembers,
+                failMembers = r.FailMembers,
+                mismatches = r.Mismatches.Select(mm => new {
+                    kind = mm.Kind,
+                    name = mm.Name,
+                    choriziteValue = mm.ChoriziteValue,
+                    rustValue = mm.RustValue,
+                    note = mm.Note,
+                })
+            })
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-2.A + 2.B DAT-parity dispatch — see CommandEngine.DatParity.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdChoriziteListDatRecords(System.Text.Json.Nodes.JsonNode node) {
+        string? datPath = node["datPath"]?.GetValue<string>();
+        string? typeName = node["typeName"]?.GetValue<string>();
+        var r = _engine.ChoriziteListDatRecords(datPath ?? "", typeName);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-list-dat-records",
+            datPath = r.DatPath,
+            datSha256 = r.DatSha256,
+            recordCount = r.RecordCount,
+            source = r.Source,
+            records = r.Records.Select(s => new {
+                idHex = s.IdHex,
+                id = s.Id,
+                typeName = s.TypeName,
+                compressedSize = s.CompressedSize,
+            })
+        });
+    }
+
+    private string CmdChoriziteParseDatRecord(System.Text.Json.Nodes.JsonNode node) {
+        string? datPath = node["datPath"]?.GetValue<string>();
+        string idHex = node["idHex"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'idHex' field");
+        string? typeName = node["typeName"]?.GetValue<string>();
+        var r = _engine.ChoriziteParseDatRecord(datPath ?? "", idHex, typeName);
+        return Serialize(new {
+            success = r.ErrorMessage == null,
+            command = "chorizite-parse-dat-record",
+            idHex = r.IdHex,
+            id = r.Id,
+            typeName = r.TypeName,
+            fields = r.Fields,
+            errorMessage = r.ErrorMessage,
+            source = r.Source,
+        });
+    }
+
+    private string CmdChoriziteListDatTypes() {
+        var r = _engine.ChoriziteListDatTypes();
+        return Serialize(new {
+            success = true,
+            command = "chorizite-list-dat-types",
+            count = r.Count,
+            types = r.Select(row => new {
+                typeName = row.TypeName,
+                datFile = row.DatFile,
+                firstIdHex = row.FirstIdHex,
+                lastIdHex = row.LastIdHex,
+                isSingular = row.IsSingular,
+                hasRangeData = row.HasRangeData,
+            })
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-3.B physics-jump-formula — see CommandEngine.PhysicsParity.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdPhysicsJumpFormula(System.Text.Json.Nodes.JsonNode node) {
+        float jumpExtent = ParseFloatField(node, "jumpExtent");
+        float? weenieFallback = node["weenieFallback"] switch {
+            null => null,
+            var v when v.GetValueKind() == System.Text.Json.JsonValueKind.Null => null,
+            var v when v.GetValueKind() == System.Text.Json.JsonValueKind.String &&
+                       string.Equals(v.GetValue<string>(), "NaN", StringComparison.OrdinalIgnoreCase)
+                => float.NaN,
+            var v when v.GetValueKind() == System.Text.Json.JsonValueKind.String &&
+                       string.Equals(v.GetValue<string>(), "null", StringComparison.OrdinalIgnoreCase)
+                => (float?)null,
+            var v => (float?)ParseFloatField(node, "weenieFallback"),
+        };
+        var r = _engine.PhysicsJumpFormula(jumpExtent, weenieFallback);
+        return Serialize(new {
+            success = true,
+            command = "physics-jump-formula",
+            jumpExtent = r.JumpExtent,
+            weenieFallback = r.WeenieFallback.HasValue
+                ? (float.IsNaN(r.WeenieFallback.Value) ? "NaN" : (object)r.WeenieFallback.Value)
+                : null,
+            verticalVelocity = r.VerticalVelocity,
+            branch = r.Branch,
+            source = r.Source,
+        });
+    }
+
+    private string CmdPhysicsJumpFormulaSweep(System.Text.Json.Nodes.JsonNode node) {
+        int caseCount = node["caseCount"]?.GetValue<int>() ?? 1000;
+        var sweep = _engine.PhysicsJumpFormulaSweep(caseCount);
+        return Serialize(new {
+            success = true,
+            command = "physics-jump-formula-sweep",
+            caseCount = sweep.CaseCount,
+            branchHistogram = sweep.BranchHistogram,
+            notes = sweep.Notes,
+            cases = sweep.Cases.Select(c => new {
+                index = c.Index,
+                jumpExtent = c.JumpExtent,
+                weenieFallback = c.WeenieFallback.HasValue
+                    ? (float.IsNaN(c.WeenieFallback.Value) ? "NaN" : (object)c.WeenieFallback.Value)
+                    : null,
+                verticalVelocity = c.VerticalVelocity,
+                branch = c.Branch,
+            }),
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-3.A physics-replay-trace — see CommandEngine.PhysicsParity.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdPhysicsReplayTrace(System.Text.Json.Nodes.JsonNode node) {
+        string traceSubjectPath = node["traceSubjectPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("traceSubjectPath is required");
+        string probeScenarioPath = node["probeScenarioPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("probeScenarioPath is required");
+        float? maxDriftOverride = node["maxDriftOverride"]?.GetValue<float?>();
+        var r = _engine.PhysicsReplayTrace(traceSubjectPath, probeScenarioPath, maxDriftOverride);
+        return Serialize(new {
+            success = true,
+            command = "physics-replay-trace",
+            tickCount = r.TickCount,
+            maxPositionDriftTick = r.MaxPositionDriftTick,
+            maxPositionDriftMeters = r.MaxPositionDriftMeters,
+            meanDriftMeters = r.MeanDriftMeters,
+            onGroundMismatchCount = r.OnGroundMismatchCount,
+            onGroundSubjectMissingCount = r.OnGroundSubjectMissingCount,
+            mismatches = r.Mismatches.Select(m => new {
+                tick = m.Tick,
+                subjectPos = m.SubjectPos,
+                oraclePos = m.OraclePos,
+                driftMeters = m.DriftMeters,
+                subjectOnGround = m.SubjectOnGround,
+                oracleOnGround = m.OracleOnGround,
+            }),
+            passed = r.Passed,
+            notes = r.Notes,
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-3.C motion-classify-swing — see CommandEngine.MotionParity.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdMotionClassifySwing(System.Text.Json.Nodes.JsonNode node) {
+        uint motionTableId = ParseUIntField(node, "motionTableId");
+        uint stance = ParseUIntField(node, "stance");
+        uint attackHeight = ParseUIntField(node, "attackHeight");
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.MotionClassifySwing(motionTableId, stance, attackHeight, datPath);
+        return Serialize(new {
+            success = true,
+            command = "motion-classify-swing",
+            motionTableId = $"0x{r.MotionTableId:X8}",
+            stance = $"0x{r.Stance:X8}",
+            attackHeight = r.AttackHeight,
+            resolvedMotionCmd = r.ResolvedMotionCmd.HasValue ? $"0x{r.ResolvedMotionCmd.Value:X8}" : null,
+            linkClass = r.LinkClass.ToString(),
+            animId = r.AnimId.HasValue ? $"0x{r.AnimId.Value:X8}" : null,
+            lowFrame = r.LowFrame,
+            highFrame = r.HighFrame,
+            framerate = r.Framerate,
+            outerLinkCount = r.OuterLinkCount,
+            innerLinkCount = r.InnerLinkCount,
+            failureReason = r.FailureReason,
+            source = r.Source,
+        });
+    }
+
+    private string CmdMotionInventory(System.Text.Json.Nodes.JsonNode node) {
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var inv = _engine.MotionInventory(datPath);
+        return Serialize(new {
+            success = true,
+            command = "motion-inventory",
+            count = inv.Count,
+            entries = inv.Select(e => new {
+                id = $"0x{e.Id:X8}",
+                cycleCount = e.CycleCount,
+                linkCount = e.LinkCount,
+                modifierCount = e.ModifierCount,
+            }),
+        });
+    }
+
+    // Shared helpers for Wave 3 dispatch — JsonNode → float / uint with hex
+    // + string fallback. Mirrors the inline ParseField pattern inside
+    // CmdChoriziteClassify; broken out here so both PhysicsParity +
+    // MotionParity wrappers reuse one definition.
+    private static float ParseFloatField(System.Text.Json.Nodes.JsonNode node, string name) {
+        var v = node[name] ?? throw new ArgumentException($"Missing '{name}' field");
+        if (v.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+            return float.Parse(v.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture);
+        }
+        return (float)v.GetValue<double>();
+    }
+
+    private static uint ParseUIntField(System.Text.Json.Nodes.JsonNode node, string name) {
+        var v = node[name] ?? throw new ArgumentException($"Missing '{name}' field");
+        if (v.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+            var s = v.GetValue<string>();
+            return s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                ? Convert.ToUInt32(s.Substring(2), 16)
+                : Convert.ToUInt32(s);
+        }
+        return v.GetValue<uint>();
     }
 
     private string CmdEmitStaticSite(System.Text.Json.Nodes.JsonNode node) {

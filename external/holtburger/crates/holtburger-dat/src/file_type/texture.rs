@@ -24,7 +24,7 @@ use binrw::{BinRead, binread};
 /// [`Texture::to_rgba8`]; everything else returns an error so the caller
 /// learns which format to add when an unsupported texture is fed in.
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[repr(u32)]
 pub enum SurfacePixelFormat {
     Unknown = 0,
@@ -71,7 +71,7 @@ impl SurfacePixelFormat {
 }
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct Texture {
     pub id: u32,

@@ -25,7 +25,7 @@ pub fn surface_did_for_envcell_index(wire_value: u16) -> u32 {
     SURFACE_DID_NAMESPACE_PREFIX | (wire_value as u32)
 }
 
-#[derive(Debug, Clone, BinRead, BinWrite)]
+#[derive(Debug, Clone, BinRead, BinWrite, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct CellPortal {
@@ -34,7 +34,7 @@ pub struct CellPortal {
     pub other_portal_id: u16,
 }
 
-#[derive(Debug, Clone, BinRead, BinWrite)]
+#[derive(Debug, Clone, BinRead, BinWrite, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct Stab {
@@ -42,7 +42,7 @@ pub struct Stab {
     pub position: Frame,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EnvCell {
     pub id: u32,
     pub flags: u32,

@@ -7,7 +7,7 @@ use holtburger_common::{Sphere, Vector3};
 use std::collections::HashMap;
 use std::io::Cursor;
 
-#[derive(Debug, Clone, BinRead, BinWrite)]
+#[derive(Debug, Clone, BinRead, BinWrite, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct CylSphere {
@@ -16,7 +16,7 @@ pub struct CylSphere {
     pub height: f32,
 }
 
-#[derive(Debug, Clone, BinRead, BinWrite)]
+#[derive(Debug, Clone, BinRead, BinWrite, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct LocationType {
@@ -24,7 +24,7 @@ pub struct LocationType {
     pub frame: Frame,
 }
 
-#[derive(Debug, Clone, BinRead, BinWrite)]
+#[derive(Debug, Clone, BinRead, BinWrite, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct LightInfo {
@@ -48,7 +48,7 @@ pub struct LightInfo {
 /// `AnimPartChange::UnPack` (acclient.c:471699): 1 byte `part_index` then
 /// `Unpack_AsDataIDOfKnownType(0x01000000)` for the GfxObj part-id
 /// (acclient.c:667732).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AnimationHook {
     pub hook_type: u32,
     pub direction: i32,
@@ -178,7 +178,7 @@ impl AnimationHook {
 /// Fields are in **wire order** (matches `CreateParticleHook::Pack` /
 /// `UnPack` at `0x00527850` / `0x005278A0` in retail). Pack with
 /// `write` to round-trip back to the original 40-byte slice.
-#[derive(Debug, Clone, BinRead, BinWrite, PartialEq)]
+#[derive(Debug, Clone, BinRead, BinWrite, PartialEq, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct CreateParticleHookPayload {
@@ -242,7 +242,7 @@ fn read_replace_object_payload<R: Read + Seek>(reader: &mut R) -> BinResult<Vec<
     Ok(data)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AnimationFrame {
     pub frames: Vec<Frame>,
     pub hooks: Vec<AnimationHook>,
@@ -276,7 +276,7 @@ impl AnimationFrame {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PlacementType {
     pub anim_frame: AnimationFrame,
 }
@@ -293,7 +293,7 @@ impl PlacementType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SetupModel {
     pub id: u32,
     pub flags: u32,

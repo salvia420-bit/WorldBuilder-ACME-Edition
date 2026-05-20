@@ -52,7 +52,7 @@ pub const WAVEFORMATEX_SIZE: usize = 18;
 
 /// Decoded `WAVEFORMATEX` view. Constructed from `Wave::header` via
 /// [`Wave::pcm_format`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct PcmFormat {
     pub format_tag: u16,
     pub num_channels: u16,
@@ -64,16 +64,36 @@ pub struct PcmFormat {
 }
 
 #[binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
 pub struct Wave {
     pub id: u32,
     pub header_size: i32,
     pub data_size: i32,
     #[br(count = header_size.max(0) as usize)]
+    #[serde(serialize_with = "serialize_bytes_summary")]
     pub header: Vec<u8>,
     #[br(count = data_size.max(0) as usize)]
+    #[serde(serialize_with = "serialize_bytes_summary")]
     pub data: Vec<u8>,
+}
+
+/// Hex-summary byte arrays so the validator's per-field diff stays
+/// tractable. Raw byte arrays would expand massive PCM bodies (hundreds
+/// of KB per record) into JSON arrays that have ~no semantic value for
+/// the parity comparison.
+fn serialize_bytes_summary<S: serde::Serializer>(
+    bytes: &Vec<u8>,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    use serde::ser::SerializeStruct;
+    let mut st = s.serialize_struct("BytesSummary", 2)?;
+    st.serialize_field("len", &bytes.len())?;
+    // First 16 bytes as a hex preview — enough to distinguish records.
+    let preview_len = bytes.len().min(16);
+    let preview: String = bytes[..preview_len].iter().map(|b| format!("{:02x}", b)).collect();
+    st.serialize_field("preview", &preview)?;
+    st.end()
 }
 
 impl Wave {

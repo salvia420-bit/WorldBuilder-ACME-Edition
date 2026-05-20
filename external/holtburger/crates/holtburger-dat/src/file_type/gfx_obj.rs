@@ -9,7 +9,7 @@ use holtburger_common::Vector3;
 use holtburger_common::properties::GfxObjFlags;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GfxObj {
     pub id: u32,
     pub flags: GfxObjFlags,

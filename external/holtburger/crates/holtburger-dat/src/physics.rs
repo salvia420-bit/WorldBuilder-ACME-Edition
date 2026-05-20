@@ -4,21 +4,21 @@ use binrw::{
 };
 use holtburger_common::{Plane, Sphere};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum BspType {
     Drawing = 0,
     Physics = 1,
     Cell = 2,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum BspNode {
     Port(BspPortal),
     Leaf(BspLeaf),
     Internal(InternalNode),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BspPortal {
     pub plane: Plane,
     pub pos: Box<BspNode>,
@@ -28,7 +28,7 @@ pub struct BspPortal {
     pub portal_polys: Vec<PortalPoly>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BspLeaf {
     pub index: i32,
     pub solid: i32,
@@ -36,7 +36,7 @@ pub struct BspLeaf {
     pub poly_ids: Vec<u16>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct InternalNode {
     pub tag: [u8; 4],
     pub plane: Plane,
@@ -46,7 +46,7 @@ pub struct InternalNode {
     pub poly_ids: Vec<u16>,
 }
 
-#[derive(BinRead, BinWrite, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(BinRead, BinWrite, Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[br(little)]
 #[bw(little)]
 pub struct PortalPoly {

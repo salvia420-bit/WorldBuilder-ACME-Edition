@@ -37,7 +37,7 @@ use std::collections::HashMap;
 /// One `(mod, script_id)` pair inside a `PhysicsScriptTableData`. The
 /// schema name in `dats.xml` is `ScriptAndModData`; ACE calls the
 /// fields `Mod` and `ScriptID` respectively.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PhysicsScriptTableEntry {
     /// Weight / selection threshold for this PhysicsScript reference.
     pub mod_value: f32,
@@ -59,7 +59,7 @@ impl PhysicsScriptTableEntry {
 /// The value side of one `PhysicsScriptTable` dictionary entry — a
 /// flat list of `(mod, script_id)` pairs. Schema name:
 /// `PhysicsScriptTableData`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PhysicsScriptTableData {
     pub scripts: Vec<PhysicsScriptTableEntry>,
 }
@@ -75,7 +75,7 @@ impl PhysicsScriptTableData {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PhysicsScriptTable {
     pub id: u32,
     /// Keyed by `PlayScript` enum (u32). Use the raw u32 here so we
