@@ -975,7 +975,7 @@
             if (wantRenderer3d) {
               const eagerImport = () => {
                 Promise.all([
-                  import("./scene3d/index.js?v=eager-init"),
+                  import("./scene3d/index.js?v=ready-state"),
                   import("./scene3d/picking.js"),
                   // 2026-05-21 Phase E follow-on — warm the takram CDN
                   // graph (@takram/three-atmosphere, three-geospatial,
@@ -5525,7 +5525,7 @@ void main() {
           new URLSearchParams(window.location.search).get("renderer") === "3d";
         if (useRenderer3d) {
           renderStatus.textContent = "Initializing 3D renderer (?renderer=3d)…";
-          const { init3D } = await import("./scene3d/index.js?v=eager-init");
+          const { init3D } = await import("./scene3d/index.js?v=ready-state");
           // sessionHandle exposed via window.__sessionHandle by the
           // login-flow handler (see line ~5251). Pass it through so
           // future phases (cell visibility, MovementSystem) can read
@@ -7925,16 +7925,45 @@ void main() {
       // ────────────────────────────────────────────────────────────
       async function runAutonomousLogin(opts = {}) {
         const autoSpawn = opts.autoSpawn ?? "first";
-        const maxRetries = opts.maxRetries ?? 2;
-        // Connect timeout — short on the happy path (a fresh ACE
-        // returns CharacterList in ~3-5 s), long enough that a real
-        // first-cache wasm/DAT init can complete. We'll bail on this
-        // timeout AND fall through to the kick retry; an ACE that's
-        // actually accepting our login will return CharacterList well
-        // under this budget.
-        const connectTimeoutMs = opts.connectTimeoutMs ?? 20000;
-        const spawnTimeoutMs = opts.spawnTimeoutMs ?? 30000;
-        const kickWaitMs = opts.kickWaitMs ?? 5500;
+        const maxRetries = opts.maxRetries ?? 3;
+        // Tuned for localhost+tailnet ACE. Empirical measurements
+        // (2026-05-21, 3 consecutive cold boots with /clear-cache):
+        //   - Successful Connect after a 3s kick-wait: 250-300ms
+        //   - Connect retry after kickWaitMs: ~270ms (Phase B cache hit)
+        //   - Spawn → in-world: ~90ms
+        //   - Hung-Connect detection (ACE has orphan): connectTimeoutMs
+        //
+        // Total agentic-loop wall-clock = connectTimeoutMs + kickWaitMs
+        //                                  + ~400ms (Connect#2 + Spawn).
+        //
+        // Reliability-first tuning (2026-05-21). Aggressive 1.5-2.5s
+        // budgets broke the retry path: ACE's character-level logout
+        // (NOT the session-level kick) takes 5-10s, and short
+        // connectTimeoutMs leaves the retry chasing a half-killed
+        // session that keeps emitting CharacterError::Logon (0x01) and
+        // EnterGameCharacterInWorld (0x0D). Larger budgets give ACE
+        // time to finish kicking the character before we Connect+Spawn
+        // again. Total agentic boot ≈ connectTimeoutMs + kickWaitMs +
+        // Connect#2 (~400ms) + Spawn (~100ms) = ~8.5s worst-case.
+        const connectTimeoutMs = opts.connectTimeoutMs ?? 5000;
+        const spawnTimeoutMs = opts.spawnTimeoutMs ?? 10000;
+        const baseKickWaitMs = opts.kickWaitMs ?? 3000;
+        // char-in-world (EnterGameCharacterInWorld, code 0x0D) means
+        // ACE's character logout is still pending — we MUST wait
+        // longer than baseKickWaitMs (which is sized for session-level
+        // kick) before re-attempting. Empirical lower bound is ~5s.
+        const charInWorldWaitMs = opts.charInWorldWaitMs ?? 7000;
+        // Preemptive kick (`?kickFirst=1` or opts.kickFirst=true): fire
+        // a throwaway Connect immediately to trigger ACE's
+        // session-already-in-use kick, wait `baseKickWaitMs` for it to
+        // propagate, THEN run the normal attempt loop. Agents in a
+        // /clear-cache + reload loop should set this to make boot
+        // timing deterministic at ~6s instead of 2.5s/8.5s bimodal
+        // (fresh vs kicked path divergence). localStorage-based
+        // detection was tried + dropped — `/clear-cache` wipes
+        // localStorage as a side effect, which is unavoidable in
+        // agentic workflows that need to see code changes.
+        const kickFirst = opts.kickFirst ?? false;
 
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -7958,16 +7987,29 @@ void main() {
         //                       or disconnected us mid-handshake
         //   "error"           — submit handler set boot-state to error
         //   "timeout"         — neither signal arrived
-        const waitForConnectOutcome = async (timeoutMs) => {
+        // 50ms polling cadence — tight enough that a successful Connect
+        // (~500ms) registers in 1 poll, slow enough not to spin the CPU.
+        //
+        // `since` is the timestamp at which the current Connect attempt
+        // fired; we only treat a CharacterError or Disconnect as a real
+        // signal if it ARRIVED after that timestamp. Without this, a
+        // stale event from the previous attempt (e.g. spawn-failed
+        // CharacterError) sticks in `window.__lastCharacterError` and
+        // causes Connect #N+1 to incorrectly classify itself as
+        // "kick" within 50ms, blowing through all retries.
+        const waitForConnectOutcome = async (timeoutMs, since) => {
           const deadline = Date.now() + timeoutMs;
           while (Date.now() < deadline) {
             if (activeHandle?.characterList) return "char-list";
             const ce = window.__lastCharacterError;
-            if (ce && ce.code === 0x01) return "kick"; // Logon
-            if (ce && ce.code) return `character-error-${ce.code}`;
-            if (window.__lastDisconnect) return "kick"; // ACE terminated
+            if (ce && ce.ts >= since) {
+              if (ce.code === 0x01) return "kick"; // Logon
+              return `character-error-${ce.code}`;
+            }
+            const dc = window.__lastDisconnect;
+            if (dc && dc.ts >= since) return "kick"; // ACE terminated
             if (window.__bootState === "error") return "error";
-            await sleep(150);
+            await sleep(50);
           }
           return "timeout";
         };
@@ -7976,17 +8018,20 @@ void main() {
         // CharacterError::EnterGameCharacterInWorld (0x0D) which
         // means the character is in-world on ACE's end and we need to
         // fully restart Connect + Spawn after the kick wait.
-        const waitForSpawnOutcome = async (timeoutMs) => {
+        const waitForSpawnOutcome = async (timeoutMs, since) => {
           const deadline = Date.now() + timeoutMs;
           while (Date.now() < deadline) {
             if (window.__bootState === "in-world") return "in-world";
             const ce = window.__lastCharacterError;
-            if (ce && ce.code === 0x0D) return "char-in-world"; // retry
-            if (ce && ce.code === 0x10) return "char-in-world"; // EnterGameCharacterInWorldServer
-            if (ce && ce.code) return `character-error-${ce.code}`;
-            if (window.__lastDisconnect) return "disconnect";
+            if (ce && ce.ts >= since) {
+              if (ce.code === 0x0D) return "char-in-world"; // retry
+              if (ce.code === 0x10) return "char-in-world"; // EnterGameCharacterInWorldServer
+              return `character-error-${ce.code}`;
+            }
+            const dc = window.__lastDisconnect;
+            if (dc && dc.ts >= since) return "disconnect";
             if (window.__bootState === "error") return "error";
-            await sleep(150);
+            await sleep(50);
           }
           return "timeout";
         };
@@ -8007,15 +8052,35 @@ void main() {
         };
 
         try {
+          // Preemptive kick was tried + rejected 2026-05-21: ACE's
+          // session-termination is fast (<1s) but the character-level
+          // logout takes 5-10s longer. A short preemptive kick (3s)
+          // half-kills the session, leaving ACE in a state where
+          // Spawn returns CharacterError::EnterGameCharacterInWorld
+          // (0x0D) repeatedly until the character actually finishes
+          // logging out. Pure timing-based recovery (no preemptive)
+          // is faster + more reliable in practice (~8.5s vs failure).
+          // `kickFirst` opt is preserved as a tuning knob but
+          // intentionally not exposed via URL param.
+          if (kickFirst) {
+            setBootState("kicking", `preemptive (kickFirst=true; ${baseKickWaitMs}ms wait)`);
+            fireSubmit();
+            await sleep(baseKickWaitMs);
+          }
+
           for (let attempt = 0; attempt <= maxRetries; attempt++) {
             if (attempt > 0) {
-              setBootState("kicking", `attempt ${attempt}: waiting ${kickWaitMs}ms for ACE logout`);
-              await sleep(kickWaitMs);
-              setBootState("reconnecting", `attempt ${attempt + 1}`);
+              // Adaptive backoff: each retry adds 1.5× to the kick
+              // wait. attempt 1: 3000ms, 2: 4500ms, 3: 6750ms.
+              const adaptiveWaitMs = Math.round(baseKickWaitMs * Math.pow(1.5, attempt - 1));
+              setBootState("kicking", `attempt ${attempt + 1}/${maxRetries + 1}: waiting ${adaptiveWaitMs}ms`);
+              await sleep(adaptiveWaitMs);
+              setBootState("reconnecting", `attempt ${attempt + 1}/${maxRetries + 1}`);
             }
 
+            const attemptStartTs = Date.now();
             fireSubmit();
-            const connectOutcome = await waitForConnectOutcome(connectTimeoutMs);
+            const connectOutcome = await waitForConnectOutcome(connectTimeoutMs, attemptStartTs);
 
             if (connectOutcome === "kick") {
               // Wire-level signal: ACE kicked the account. Retry.
@@ -8054,14 +8119,45 @@ void main() {
               return;
             }
             target.click();
+            const spawnAttemptTs = Date.now();
 
-            const spawnOutcome = await waitForSpawnOutcome(spawnTimeoutMs);
+            const spawnOutcome = await waitForSpawnOutcome(spawnTimeoutMs, spawnAttemptTs);
             if (spawnOutcome === "in-world") {
-              return; // SUCCESS
+              // Protocol-level success — ACE confirmed PlayerCreate.
+              // But phase7 streaming + atmosphere LUT load are still
+              // running. Wait for `ready` (sky-k.3 fires the
+              // setBootState from scene3d/index.js) before declaring
+              // the agent flow complete. Without this, agents take
+              // screenshots / drive gameplay against a half-rendered
+              // scene (no buildings, no clouds, raw clear color sky).
+              const readyTimeoutMs = opts.readyTimeoutMs ?? 90000;
+              const readyDeadline = Date.now() + readyTimeoutMs;
+              while (Date.now() < readyDeadline) {
+                if (window.__bootState === "ready") {
+                  return; // FULL SUCCESS
+                }
+                if (window.__bootState === "error") {
+                  return;
+                }
+                await sleep(100);
+              }
+              setBootState(
+                "error",
+                `in-world reached but scene-ready signal did not fire within ${readyTimeoutMs}ms`,
+              );
+              return;
             }
             if (spawnOutcome === "char-in-world") {
               // Char-level kick: this character is in-world on ACE.
-              // Drop handle and full retry from Connect.
+              // ACE's character-logout is ~5-10s; wait longer than
+              // baseKickWaitMs here before the next attempt fires so
+              // we don't loop on the same 0x0D rejection. Drop handle
+              // and full retry from Connect.
+              setBootState(
+                "kicking",
+                `char-in-world (0x0D) — waiting ${charInWorldWaitMs}ms for character logout`,
+              );
+              await sleep(charInWorldWaitMs);
               continue;
             }
             if (attempt === maxRetries) {
@@ -8080,8 +8176,20 @@ void main() {
       // so the form-rendering + login-status DOM has a chance to settle.
       if (bootParams.get("autoLogin") === "1") {
         const opts = {
-          kickDance: bootParams.get("kickDance") !== "0",
           autoSpawn: bootParams.get("autoSpawn") ?? "first",
+          // Optional knobs for fine-tuning agent loops:
+          //   ?connectTimeoutMs=N   ?spawnTimeoutMs=N   ?kickWaitMs=N
+          //   ?maxRetries=N
+          // kickFirst is NOT URL-exposed — see comment block in
+          // runAutonomousLogin for why preemptive kick is harmful.
+          connectTimeoutMs:
+            parseInt(bootParams.get("connectTimeoutMs") ?? "", 10) || undefined,
+          spawnTimeoutMs:
+            parseInt(bootParams.get("spawnTimeoutMs") ?? "", 10) || undefined,
+          kickWaitMs:
+            parseInt(bootParams.get("kickWaitMs") ?? "", 10) || undefined,
+          maxRetries:
+            parseInt(bootParams.get("maxRetries") ?? "", 10) || undefined,
         };
         const launch = () => runAutonomousLogin(opts);
         if (typeof window.requestIdleCallback === "function") {

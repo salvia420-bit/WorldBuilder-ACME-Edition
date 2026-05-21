@@ -1897,6 +1897,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                   "SunDirectionalLight + SkyLightProbe added; parametric lights silenced. " +
                   "toneMappingExposure=5 — tune via __setExposure(v)."
               );
+              // 2026-05-21 — terminal boot signal for agents. By this
+              // point: phase7 buildings/statics/envCells have drained,
+              // sky+clouds are wired, atmosphere LUTs uploaded,
+              // renderer.compile pre-warmed all program variants. This
+              // is when an agent can take a screenshot, run a
+              // benchmark, or drive gameplay and trust the picture is
+              // real. `in-world` (kind=7) fires ~30-50s earlier — it
+              // means ACE confirmed PlayerCreate, NOT that the scene
+              // is finished loading.
+              try {
+                window.__setBootState?.(
+                  "ready",
+                  `scene fully loaded (atmosphere ${tag} ${ms}ms)`,
+                );
+              } catch {}
             }
             // eslint-disable-next-line no-undef
             if (typeof window !== "undefined") {
