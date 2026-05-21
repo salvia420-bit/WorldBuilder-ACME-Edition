@@ -324,6 +324,20 @@ export class CloudOverlay {
   }
 
   /**
+   * Frame-skip throttle for the cloud composer. The cloud raymarch is
+   * the dominant per-frame cost when clouds are on; cloud shape +
+   * lighting change slowly relative to 60 Hz so rendering every Nth
+   * frame is imperceptible. N=1 is no throttle; N=2 halves the cost;
+   * N=3 thirds it. Re-tune at runtime via
+   * `liveScene3d.cloudOverlay.setCloudRenderEvery(N)`.
+   */
+  setCloudRenderEvery(n) {
+    const v = Math.max(1, Math.floor(Number(n) || 1));
+    this._cloudRenderEvery = v;
+    this._cloudFrameCounter = 0;
+  }
+
+  /**
    * Opt-in toggle for the depth-aware cloud discard. Default off
    * (clouds visible over geometry). Toggle on when the AMD-driver
    * depth-sampling quirk is resolved.
@@ -482,11 +496,28 @@ export class CloudOverlay {
         this._lastActiveCam = cam;
       }
 
-      // Render the cloud pipeline. RenderPass clears the empty scene
-      // (depth → 1.0 far plane). EffectPass picks up that depth and
-      // runs the cloud raymarch with proper MRT wiring. Output lands
-      // in composer.outputBuffer.
-      this.composer.render(dt);
+      // Frame-skip the cloud composer to halve cloud render cost.
+      // Cloud morphology + lighting change slowly relative to a 60 Hz
+      // refresh; skipping every other frame is imperceptible because:
+      //   - composer.outputBuffer (= cloudsBuffer) persists across
+      //     skipped frames (no re-clear between renders)
+      //   - the fullscreen overlay still composites the previous
+      //     frame's cloud RGBA over the world every frame, so screen
+      //     refresh stays 60 Hz; only the cloud TEXTURE under it
+      //     updates at half-rate.
+      // Live-tunable: `liveScene3d.cloudOverlay.setCloudRenderEvery(N)`.
+      // N=1 is "every frame" (pre-throttle behavior); N=2 halves cost,
+      // N=3 thirds it. Higher N risks visible cloud-shape steps on
+      // fast camera pans because the cached cloudsBuffer is locked at
+      // last-render's view position.
+      if (this._cloudFrameCounter === undefined) {
+        this._cloudFrameCounter = 0;
+        this._cloudRenderEvery = 2;
+      }
+      this._cloudFrameCounter = (this._cloudFrameCounter + 1) % this._cloudRenderEvery;
+      if (this._cloudFrameCounter === 0) {
+        this.composer.render(dt);
+      }
 
       // Patch cameraHeight uniform AFTER the composer ran (which calls
       // CloudsMaterial.copyCameraSettings, which sets cameraHeight via
