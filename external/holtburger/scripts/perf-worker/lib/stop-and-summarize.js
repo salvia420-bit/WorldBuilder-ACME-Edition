@@ -5,6 +5,7 @@
   if (move) {
     move.abort = true;
     try { move.releaseAll && move.releaseAll(); } catch (e) {}
+    if (move.stuckCheckTimer) { try { clearInterval(move.stuckCheckTimer); } catch (e) {} }
   }
   if (rec) {
     rec.stopped = true;
@@ -115,6 +116,7 @@
       events: move.events,
       done: !!move.done,
       aborted: !!move.abort && !move.done,
+      stuckTeleports: move.stuckTeleports || 0,
     } : null,
   };
 }

@@ -3,6 +3,7 @@
   if (move) {
     move.abort = true;
     try { move.releaseAll && move.releaseAll(); } catch (e) {}
+    if (move.stuckCheckTimer) { try { clearInterval(move.stuckCheckTimer); } catch (e) {} }
   }
   const rec = window.__perfRec;
   if (rec) {

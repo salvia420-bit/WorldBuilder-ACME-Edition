@@ -71,25 +71,34 @@ Output (under `/mnt/wbterminal1/tmp/claude-scratch/perf/<label>-<UTC>/`):
 - **meshes / textures / geometries / programs** — scene complexity drift across the run; rising = PVS streaming, leaks, or eager-loads.
 - **pose path length (m)** — sanity-check the character actually moved.
 
-## Movement pattern (movement-pattern-v1)
+## Movement pattern (movement-pattern-v4)
 
-Fixed 60-second sequence of synthetic `KeyboardEvent` dispatches on `document`
-(same path the real keyboard takes through `scene3d/camera.js`):
+Cardinal traversal: 4 long forward legs at run speed (W alone — NO
+Shift; Shift is the WALK modifier in AC's retail-convention input
+handling) with 90° right-yaw turns between legs. ~125s total. Each
+leg covers ~200m+ at full run, deliberately overshooting Holtburg's
+192m LB boundary so each leg enters a new LB — maximum EnvCell bake
++ PVS stream + shader/texture upload stress.
 
-| t (s)  | keys held       | label        |
-| ------ | --------------- | ------------ |
-| 0–6    | `w`             | fwd          |
-| 6–12   | `w` `d`         | fwd-right    |
-| 12–18  | `d`             | right        |
-| 18–24  | `s` `d`         | back-right   |
-| 24–30  | `s`             | back         |
-| 30–36  | `s` `a`         | back-left    |
-| 36–42  | `a`             | left         |
-| 42–48  | `w` `a`         | fwd-left     |
-| 48–54  | `w` `Shift`     | sprint-fwd   |
-| 54–60  | _(idle)_        | idle         |
+| t (s)         | keys held       | label                   |
+| ------------- | --------------- | ----------------------- |
+| 0–30          | `w`             | run-leg-1-north         |
+| 30–31.5       | `w` `e`         | turn-right-1            |
+| 31.5–61.5     | `w`             | run-leg-2-east          |
+| 61.5–63.0     | `w` `e`         | turn-right-2            |
+| 63.0–93.0     | `w`             | run-leg-3-south         |
+| 93.0–94.5     | `w` `e`         | turn-right-3            |
+| 94.5–124.5    | `w`             | run-leg-4-west          |
 
-Same pattern every run → A/B numbers are comparable.
+Prior versions:
+- v1: 60s cardinal cycle (w/a/s/d/diagonals/sprint/idle) — covered
+  ~115m, stayed mostly in spawn LB
+- v2: 60s W+Shift sustained — covered ~60m (ran into hill, stopped)
+- v3: 120s W+Shift with periodic 45° turns — covered ~118m (Shift =
+  walk modifier, not sprint)
+
+Goal of v4: cross multiple LB boundaries per run so EnvCell + PVS
+streaming hitches reproduce reliably.
 
 ## Options
 
