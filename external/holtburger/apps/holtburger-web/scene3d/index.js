@@ -428,11 +428,20 @@ export async function preInit3D(canvas) {
   worldRoot.add(cube);
 
   // Phase 7.6 — scene lighting (sun + ambient + optional hemisphere).
-  const lighting = setupSceneLighting(scene, {
-    sceneSize: 600,
-    castShadow: shadowsEnabled,
-    csm: csmEnabled,
-  });
+  // Wire-agent: MeshBasicMaterial ignores ALL lights, so directional
+  // sun + ambient + hemisphere + CSM cascades are pure overhead. Return
+  // a null-stub that satisfies the downstream `lighting.*` reads
+  // (which all use optional chaining: `lighting.sun?.castShadow`,
+  // `lighting.csmState && ...`). Skips ~50-200ms of cold-start light-
+  // construction + the per-frame matrix updates the THREE renderer does
+  // for any DirectionalLight in the scene graph.
+  const lighting = wireframeMode
+    ? { sun: null, ambient: null, hemisphere: null, lightsGroup: null, csmState: null, dispose: () => {} }
+    : setupSceneLighting(scene, {
+        sceneSize: 600,
+        castShadow: shadowsEnabled,
+        csm: csmEnabled,
+      });
   const csmState = lighting.csmState ?? null;
 
   const camera = new THREE.PerspectiveCamera(60, cssW / cssH, 0.1, 5000);
@@ -990,6 +999,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // stress test verifies the cap works.
   let setupLightsSummary = null;
   if (
+    !wireframeMode &&
     wasmExports &&
     typeof wasmExports.fetchSetupModelLights === "function"
   ) {
