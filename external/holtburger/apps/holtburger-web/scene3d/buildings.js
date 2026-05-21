@@ -764,33 +764,219 @@ export async function bakeBuildingsRing(
   // — so lazy adds extend the same caches the ring populates.
   scene3d.buildingsOpts = opts;
 
-  // Fan out the per-LB bakes. Each call is independent (per-LB wasm
-  // fetch + per-LB instantiation); the shared bakeCache is read-then-
-  // populate so concurrent misses on the same modelId can race —
-  // tolerable because `bakeBuildingPlacement` is deterministic and
-  // the second write wins (a harmless replace of identical data).
-  // At radius=1 (9 LBs) the cost is 9 sequential-ish wasm calls
-  // instead of one batched 9-LB call; at radius=6 (169 LBs) it's
-  // 169 small fetches. The wasm side caches its own DAT shard reads,
-  // so the marginal cost is the marshalling per call.
-  const perLbSummaries = [];
-  const promises = [];
+  // Cold-boot Phase D (2026-05-21) — break the wasm single-thread
+  // bottleneck. The previous shape fanned out N=169 `bakeBuildingsForLandblock`
+  // promises in `Promise.all`. Each per-LB baker fired its OWN single-cell
+  // `fetch_landblock_objects([cellId])` and its OWN per-LB
+  // `fetch_surfaces_pixels([dids])` — 169 separate `pub async fn` wasm
+  // round-trips for what could be ONE batched call each.
+  //
+  // The wasm side already accepts a `Vec<u32>` for both
+  // `fetch_landblock_objects` (lib.rs:921) and `fetch_surfaces_pixels`
+  // (lib.rs:4881) — each does ONE `prefetch(&keys).await` over the full
+  // key set, which itself parallelizes URL fetches via F.35. Calling
+  // with single-element arrays N times is N× the wasm-marshalling
+  // overhead vs one batched call.
+  //
+  // `bakeStaticsRing` (statics.js:1054) already proves this pattern works:
+  // ONE ring-wide `fetch_landblock_objects(cellIds)`, ONE
+  // `fetch_model_meshes`, ONE `fetch_surfaces_pixels`. Mirror that here.
+  //
+  // The per-LB idempotency check + bake-cache hits + duplicate-placement
+  // dedup all survive the shape change — they were already keyed on
+  // `(lbX, lbY)` and `placementKey`, not on whose wasm call surfaced the
+  // placement.
+  const ringLbs = [];
   for (let dy = radius; dy >= -radius; dy -= 1) {
     for (let dx = -radius; dx <= radius; dx += 1) {
       const lbX = centreLbX + dx;
       const lbY = centreLbY + dy;
       if (lbX < 0 || lbX > 0xff || lbY < 0 || lbY > 0xff) continue;
-      promises.push(
-        bakeBuildingsForLandblock(scene3d, lbX, lbY, opts, wasmExports).then(
-          (s) => {
-            perLbSummaries.push(s);
-            return s;
-          }
-        )
-      );
+      const lbKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
+      ringLbs.push({
+        lbX,
+        lbY,
+        lbKey,
+        cellId: (lbKey | 0xfffe) >>> 0,
+      });
     }
   }
-  await Promise.all(promises);
+  if (!(scene3d.buildingsBakedLbs instanceof Set)) {
+    scene3d.buildingsBakedLbs = new Set();
+  }
+  // Filter out already-baked LBs (lazy-hook path may have run first in
+  // tests; production cold-boot has all 169 fresh).
+  const lbsToBake = ringLbs.filter(
+    (l) => !scene3d.buildingsBakedLbs.has(l.lbKey)
+  );
+  // Mark all freshly-baking LBs in the set BEFORE the wasm round-trip
+  // so a concurrent lazy hook observing mid-ring state sees them as
+  // baked (matches the per-LB baker's pre-instantiation guard at L549).
+  for (const l of lbsToBake) scene3d.buildingsBakedLbs.add(l.lbKey);
+
+  const perLbSummaries = [];
+  if (lbsToBake.length > 0) {
+    // ── Stage 1: ONE wasm round-trip across the ring. ──────────────────
+    // `fetch_landblock_objects` returns a flat list of placements
+    // tagged with `landblockId`; we demux by LB JS-side. 169 separate
+    // wasm awaits → 1 wasm await.
+    const allCellIds = new Uint32Array(lbsToBake.map((l) => l.cellId));
+    const allPlacementsRaw = await wasmExports.fetch_landblock_objects(
+      allCellIds
+    );
+
+    // ── Stage 2: demux + filter buildings, free wasm handles. ──────────
+    // Group by landblockId so per-LB instantiation reads its slice
+    // synchronously below. `landblockId` on each placement is the full
+    // `(lbX<<24)|(lbY<<16)|0xfffe` cellId — convert to the lbKey
+    // (lbX<<24)|(lbY<<16) by masking off 0xffff so the lookup keys
+    // match `lbKey` above.
+    const buildingsByLb = new Map();
+    for (const p of allPlacementsRaw) {
+      if (p.isBuilding) {
+        const lbKey = ((p.landblockId >>> 0) & 0xffff0000) >>> 0;
+        let arr = buildingsByLb.get(lbKey);
+        if (!arr) {
+          arr = [];
+          buildingsByLb.set(lbKey, arr);
+        }
+        arr.push({
+          landblockId: p.landblockId,
+          modelId: p.modelId,
+          x: p.x,
+          y: p.y,
+          z: p.z,
+          rotationZ: p.rotationZ,
+          isBuilding: true,
+        });
+      }
+      if (typeof p.free === "function") p.free();
+    }
+
+    // ── Stage 3: collect unique modelIds across the entire ring and ───
+    // bake them in ONE Promise.all. `bakeBuildingPlacement` is per-
+    // modelId, so deduplication across LBs is critical at radius=6
+    // (Holtburg has ~14 unique cottage/shop models across hundreds of
+    // ring placements). Cache hits in `opts.bakeCache` survive across
+    // calls so the radius=1 → radius=6 promotion doesn't re-fetch
+    // anything that the lazy hook already baked.
+    const allUniqueModelIds = new Set();
+    for (const list of buildingsByLb.values()) {
+      for (const b of list) allUniqueModelIds.add(b.modelId);
+    }
+    const toBake = [...allUniqueModelIds].filter(
+      (id) => !opts.bakeCache.has(id)
+    );
+    if (toBake.length > 0) {
+      const bakeResults = await Promise.all(
+        toBake.map((id) =>
+          bakeBuildingPlacement(id, wasmExports.fetchBuildingPlacement)
+        )
+      );
+      for (let i = 0; i < toBake.length; i += 1) {
+        if (bakeResults[i]) {
+          opts.bakeCache.set(toBake[i], bakeResults[i]);
+        }
+      }
+    }
+
+    // ── Stage 4: ONE materialCache.preload over the union of all surface
+    // DIDs referenced across the ring's bakes. 169 separate per-LB
+    // preload calls → 1. The MaterialCache itself already dedupes DIDs
+    // against `this.materials` / `this.pendingFetches`, so the prior
+    // shape's cross-LB redundancy got filtered cheaply — but each call
+    // still entered `fetch_surfaces_pixels` once per LB. One call here
+    // touches the wasm side once.
+    const allSurfaceDidsSet = new Set();
+    for (const modelId of allUniqueModelIds) {
+      const bake = opts.bakeCache.get(modelId);
+      if (!bake) continue;
+      for (const did of bake.surfaceDids) allSurfaceDidsSet.add(did);
+    }
+    if (allSurfaceDidsSet.size > 0) {
+      try {
+        await opts.materialCache.preload(
+          [...allSurfaceDidsSet],
+          wasmExports.fetch_surfaces_pixels
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[scene3d.buildings] ring materialCache.preload failed:",
+          e
+        );
+      }
+    }
+
+    // ── Stage 5: per-LB instantiation. PURE JS, no awaits — every
+    // wasm dependency is already cached above. Mirrors the L645-697
+    // instantiation block of the per-LB baker, scoped per LB so the
+    // returned summaries keep the legacy shape.
+    for (const l of lbsToBake) {
+      const buildings = buildingsByLb.get(l.lbKey) ?? [];
+      if (buildings.length === 0) {
+        perLbSummaries.push({
+          idempotent: false,
+          placementCount: 0,
+          modelCount: 0,
+          surfaceCount: 0,
+          partCount: 0,
+          surfaceMeshCount: 0,
+        });
+        continue;
+      }
+      const uniqueModelIdsForLb = [
+        ...new Set(buildings.map((b) => b.modelId)),
+      ];
+      const lbSurfaceDids = new Set();
+      for (const id of uniqueModelIdsForLb) {
+        const bake = opts.bakeCache.get(id);
+        if (!bake) continue;
+        for (const did of bake.surfaceDids) lbSurfaceDids.add(did);
+      }
+      let partCount = 0;
+      let surfaceMeshCount = 0;
+      for (const placement of buildings) {
+        const placementLbX = (placement.landblockId >>> 24) & 0xff;
+        const placementLbY = (placement.landblockId >>> 16) & 0xff;
+        const worldOffset = {
+          x: placementLbX * METERS_PER_LANDBLOCK,
+          y: placementLbY * METERS_PER_LANDBLOCK,
+        };
+        const bake = opts.bakeCache.get(placement.modelId);
+        if (!bake) continue;
+        const placementKey =
+          `${(placement.landblockId >>> 0).toString(16).padStart(8, "0")}_` +
+          `${placement.x.toFixed(2)}_${placement.y.toFixed(2)}_` +
+          `${(placement.modelId >>> 0).toString(16).padStart(8, "0")}`;
+        if (opts.buildingMap3d.has(placementKey)) {
+          // Cross-LB duplicate placement (border-spanning building
+          // surfaced by multiple LBs' fetch_landblock_objects). Skip.
+          continue;
+        }
+        const { group, surfaceMeshCount: smc } = buildOneBuilding(
+          placement,
+          bake,
+          opts.materialCache,
+          worldOffset,
+          opts.shadowsEnabled,
+          opts.buildingsReceiveShadow
+        );
+        scene3d.buildingsGroup.add(group);
+        partCount += bake.parts.length;
+        surfaceMeshCount += smc;
+        opts.buildingMap3d.set(group.userData.placementKey, group);
+      }
+      perLbSummaries.push({
+        idempotent: false,
+        placementCount: buildings.length,
+        modelCount: uniqueModelIdsForLb.length,
+        surfaceCount: lbSurfaceDids.size,
+        partCount,
+        surfaceMeshCount,
+      });
+    }
+  }
 
   // F#5 (LOD) — query the `did_degrade` chain for each unique
   // building modelId baked into the ring. The buildings path uses

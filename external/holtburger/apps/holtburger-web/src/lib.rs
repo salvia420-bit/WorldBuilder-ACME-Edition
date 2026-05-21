@@ -73,6 +73,13 @@ mod global_source;
 #[cfg(target_arch = "wasm32")]
 mod prefetch;
 
+// Phase B cold-boot plan (2026-05-21): page-scoped memoization of
+// `WorldBootstrap` so the 5-table prefetch+parse doesn't repeat on
+// every `start_session` (the double-connect dance triggers it twice).
+// Also lets `index.html` eagerly prefetch on page init.
+#[cfg(target_arch = "wasm32")]
+mod world_bootstrap_cache;
+
 // F.37 walk-result dedup primitive. Native test target needs the
 // `walk_dedup` module too (the unit tests live in it) — gated
 // `wasm32 OR test` so `cargo test` can exercise the dedup primitive
@@ -14707,9 +14714,17 @@ pub async fn start_session(
         // Phase 4 step 3.6: load the 5 game-data tables (skill / spell
         // / xp / motion-kinematics / chat-pose) needed by `WorldBootstrap`.
         // Required for the cli's `MovementSystemHandle` movement loop.
+        //
+        // Phase B cold-boot plan (2026-05-21): routed through the
+        // page-scoped cache so the double-connect dance doesn't
+        // refetch + reparse the 5 tables, and so the eager
+        // `prefetch_world_bootstrap` call from page init can satisfy
+        // this synchronously. Per-session `Rc<RefCell<…>>` shape is
+        // preserved so the recv loop's read sites (15967 / 18001)
+        // keep working unchanged.
         let world_bootstrap = world_bootstrap.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            match load_world_bootstrap().await {
+            match load_world_bootstrap_cached().await {
                 Ok(loaded) => {
                     *world_bootstrap.borrow_mut() = Some(loaded);
                     console_log_str("[step 3.6] world bootstrap loaded");
@@ -14848,6 +14863,46 @@ async fn load_world_bootstrap()
         motion_kinematics,
         soul_emote_catalog,
     )))
+}
+
+/// Phase B cold-boot plan (2026-05-21): page-scoped memoized wrapper
+/// around [`load_world_bootstrap`]. First caller fetches + parses;
+/// concurrent callers coalesce on a shared `oneshot`; later callers
+/// short-circuit to the cached `Arc`.
+///
+/// `start_session` calls this in place of the bare loader so the
+/// double-connect dance (`[[holtburger-login-double-connect]]`)
+/// doesn't repeat the 5-table prefetch. `index.html` also wires the
+/// `prefetch_world_bootstrap` wasm export below into the page-init
+/// path, so the load runs in parallel with the user filling out the
+/// login form rather than serially after Connect.
+///
+/// On loader error the cache resets to `Idle` so the next caller
+/// retries — bootstrap failures aren't memoized.
+#[cfg(target_arch = "wasm32")]
+async fn load_world_bootstrap_cached()
+-> anyhow::Result<std::sync::Arc<holtburger_world::WorldBootstrap>> {
+    world_bootstrap_cache::get_or_load(load_world_bootstrap).await
+}
+
+/// Phase B cold-boot plan (2026-05-21): eager-prefetch the
+/// `WorldBootstrap` from page init. Fire-and-forget — the page calls
+/// this once after `init_resource_source` resolves, without awaiting,
+/// so the login form stays interactive while the 5 game-data tables
+/// stream in the background. By the time the user clicks Connect, the
+/// `start_session` cache lookup is usually a synchronous hit.
+///
+/// Returns `Ok(())` on success, rejecting Promise on failure (the
+/// page wraps this in `.catch()` and just warns; bootstrap-less
+/// Connect still works because `start_session` re-attempts via the
+/// cached path, which falls back to the uncached loader as needed).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn prefetch_world_bootstrap() -> Result<(), JsValue> {
+    load_world_bootstrap_cached()
+        .await
+        .map(|_| ())
+        .map_err(|e| JsValue::from_str(&format!("prefetch_world_bootstrap: {e}")))
 }
 
 /// Payload the recv loop sends through the initial-CharacterList

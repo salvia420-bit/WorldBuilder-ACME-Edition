@@ -37,7 +37,7 @@
 
 import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
 import { tickLightingForCellState } from "./lighting.js";
-import { getTerrainVisualZ } from "./terrain.js";
+import { getTerrainVisualZ } from "./terrain.js?v=phase-d-batch";
 
 // Entity-update kind constants — mirror the wasm `ENTITY_UPDATE_KIND_*`
 // constants from `crates/holtburger-session/src/lib.rs`. Listed here

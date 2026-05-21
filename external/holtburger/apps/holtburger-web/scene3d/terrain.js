@@ -1396,11 +1396,57 @@ export async function bakeTerrainRing(
     );
   }
 
-  // 4. Batch-fetch subdivided meshes per LB (still per-call because the
-  // wasm export is per-(cellId, level)). Centre LB gets full level;
-  // outer LBs get half. Distance-keyed LOD is Objective 7's job.
+  // 4. Batch-fetch subdivided meshes. Cold-boot Phase D (2026-05-21) —
+  // group LBs by subdivision level and issue ONE
+  // `fetch_subdivided_landblocks(idsAtLevel, level)` call per group
+  // instead of N separate per-LB calls. At radius=6 ultra the cascade
+  // produces just two groups (centre+ring-1 at halfLevel; ring-2..6 at
+  // level=1), so 169 separate wasm round-trips collapse to 2. Mirrors
+  // the buildings-ring batching pattern.
   let subdivMeshes = null;
-  if (opts.canSubdivide) {
+  if (opts.canSubdivide && typeof wasmExports.fetch_subdivided_landblocks === "function") {
+    const levelByIndex = new Array(coords.length);
+    const indicesByLevel = new Map();
+    for (let i = 0; i < coords.length; i += 1) {
+      const level = pickSubdivLevelForLb(opts, coords[i].x, coords[i].y);
+      levelByIndex[i] = level;
+      let bucket = indicesByLevel.get(level);
+      if (!bucket) {
+        bucket = [];
+        indicesByLevel.set(level, bucket);
+      }
+      bucket.push(i);
+    }
+    const subdivByIndex = new Array(coords.length).fill(null);
+    const groupPromises = [];
+    for (const [level, indices] of indicesByLevel.entries()) {
+      const ids = new Uint32Array(indices.map((i) => coords[i].id >>> 0));
+      groupPromises.push(
+        wasmExports
+          .fetch_subdivided_landblocks(ids, level)
+          .then((batch) => {
+            for (let k = 0; k < indices.length; k += 1) {
+              subdivByIndex[indices[k]] = { mesh: batch[k], level };
+            }
+          })
+          .catch((err) => {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[terrain] subdivide batch failed at level=${level} (${indices.length} LBs):`,
+              err
+            );
+            // Leave subdivByIndex entries at null so the per-LB baker
+            // falls back to the prefetched 9×9 mesh — same as the prior
+            // per-call catch path's `return null` shape.
+          })
+      );
+    }
+    await Promise.all(groupPromises);
+    subdivMeshes = subdivByIndex;
+  } else if (opts.canSubdivide) {
+    // Fallback path for older wasm bundles without the batch export.
+    // Preserves the prior per-LB shape so a stale `pkg/` doesn't break
+    // the ring driver.
     const promises = coords.map((c) => {
       const level = pickSubdivLevelForLb(opts, c.x, c.y);
       return wasmExports

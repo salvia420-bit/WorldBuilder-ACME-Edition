@@ -193,8 +193,16 @@ function lbSetKey(lbX, lbY) {
  *
  * Phase 0.2 / 3.3 — detail-tile cache + CSM state propagation. See
  * buildings.js for the full rationale; same wiring here.
+ *
+ * Cold-boot Phase C (2026-05-21) — exported so `scene3d/index.js` can
+ * pre-install the MaterialCache BEFORE fanning out parallel bakers
+ * (`bakeBuildingsRing`, `bakeStaticsRing`, `buildEnvCellsForLandblock`).
+ * Without the pre-install, `cells.js:90` throws because
+ * `scene3d.materialCache` only gets stamped after a baker's internal
+ * `Promise.all` resolves. Synchronous + idempotent so calling it
+ * before the fan-out is cheap.
  */
-function getOrCreateMaterialCache(scene3d) {
+export function getOrCreateMaterialCache(scene3d) {
   if (scene3d.materialCache) return scene3d.materialCache;
   const mc = new MaterialCache({
     detailTileCache: scene3d.detailTileCache ?? null,

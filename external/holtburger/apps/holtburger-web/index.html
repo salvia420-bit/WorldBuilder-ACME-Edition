@@ -709,10 +709,16 @@
         start_session,
         init_resource_source,
         has_resource_source,
+        // Phase B cold-boot plan (2026-05-21): eager-prefetch the 5
+        // `WorldBootstrap` game-data tables on page init so they're
+        // ready by the time the user clicks Connect (especially the
+        // second Connect of the double-connect dance — see
+        // `project_holtburger_login_double_connect`).
+        prefetch_world_bootstrap,
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=dedup-buildings";
+      } from "./pkg/holtburger_web.js?v=wb-memoize";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -864,6 +870,96 @@
             "[Phase 5.0/5.2] manifest-mode source initialized from",
             MANIFEST_URL
           );
+          // Phase B cold-boot plan (2026-05-21): eager-prefetch the
+          // 5 `WorldBootstrap` game-data tables (SkillTable,
+          // SpellTable, XpTable, MotionKinematics, ChatPoseTable) so
+          // they're ready by the time the user clicks Connect.
+          // Fire-and-forget — login form stays interactive. The
+          // first `start_session` call (Connect click) hits the
+          // wasm-side cache short-circuit instead of repeating the
+          // fetch+parse. Double-connect dance gets a free second
+          // Connect.
+          prefetch_world_bootstrap()
+            .then(() => console.log("[boot] WorldBootstrap eagerly prefetched"))
+            .catch((e) =>
+              console.warn("[boot] eager WorldBootstrap prefetch failed:", e)
+            );
+
+          // Phase E cold-boot plan (2026-05-21): eager-import the
+          // scene3d module graph on page load when ?renderer=3d is
+          // set. The post-Connect `await import("./scene3d/index.js")`
+          // (~5340) is the entry point for ~1 MB of JS + the CDN
+          // takram/three-atmosphere/postprocessing graph. Until Phase
+          // E it only fires AFTER the user clicks Connect AND
+          // renderHoltburg awaits its 9-LB heightmap+objects fetch —
+          // ~5-10s of dead time the login form was already paid for.
+          //
+          // ES module imports are cached by URL, so the later
+          // `await import(...)` resolves synchronously from the
+          // module cache (no second fetch, no double-eval). The
+          // module graph traversal alone touches ~32 scene3d/*.js
+          // files plus CDN deps; loading them in parallel with the
+          // user reading the login form is free latency.
+          //
+          // Idempotency: dynamic import is cached by URL. Calling
+          // `import("./scene3d/index.js")` here and then again at
+          // line ~5340 returns the same module instance. The
+          // **side effect** of evaluating the module is the rIC-shim
+          // installation (see `_ric_shim.js`), which is itself
+          // idempotent (microtask poll-driver guard). No renderer is
+          // built here — init3D() is what builds Three.js objects
+          // and that still waits for Connect.
+          //
+          // requestIdleCallback so the form stays interactive on
+          // weak hardware; setTimeout(0) fallback for Safari/Firefox
+          // that lack rIC pre-shim.
+          try {
+            const wantRenderer3d =
+              new URLSearchParams(window.location.search).get("renderer") === "3d";
+            if (wantRenderer3d) {
+              const eagerImport = () => {
+                Promise.all([
+                  import("./scene3d/index.js"),
+                  import("./scene3d/picking.js"),
+                  // 2026-05-21 Phase E follow-on — warm the takram CDN
+                  // graph (@takram/three-atmosphere, three-geospatial,
+                  // three-geospatial-effects, postprocessing) on page
+                  // init instead of waiting until ~T+52s when the
+                  // atmosphere chain reaches its dynamic `await
+                  // import(...)` calls. Each of these modules statically
+                  // imports several MB of takram code that's otherwise
+                  // cold-fetched during the 41s gap between moon-decode
+                  // and sky-k.6. Warming here overlaps the CDN fetch
+                  // with the user reading the login form.
+                  //
+                  // Phase A's `?v=lutbake` query is preserved on the
+                  // runtime import so the module-cache key matches the
+                  // dynamic-import site at scene3d/index.js:212.
+                  import("./scene3d/atmosphere_runtime.js?v=lutbake"),
+                  import("./scene3d/atmosphere_pipeline.js"),
+                  import("./scene3d/atmosphere_lights.js"),
+                  import("./scene3d/atmosphere_sky.js"),
+                  import("./scene3d/aurora.js"),
+                ])
+                  .then(() =>
+                    console.log("[boot] scene3d module graph eagerly imported")
+                  )
+                  .catch((e) =>
+                    console.warn(
+                      "[boot] eager scene3d import failed (will retry on Connect):",
+                      e
+                    )
+                  );
+              };
+              if (typeof window.requestIdleCallback === "function") {
+                window.requestIdleCallback(eagerImport, { timeout: 1500 });
+              } else {
+                setTimeout(eagerImport, 0);
+              }
+            }
+          } catch (e) {
+            console.warn("[boot] scene3d eager-import scheduler failed:", e);
+          }
         } catch (e) {
           console.error(
             "[Phase 5.0/5.2] manifest-mode init failed; rendering will fail until dist/ is baked.\n" +

@@ -33,15 +33,16 @@ import * as THREE from "three";
 import {
   bakeTerrainForLandblock,
   bakeTerrainRing,
-} from "./terrain.js";
+} from "./terrain.js?v=phase-d-batch";
 import {
   bakeBuildingsForLandblock,
   bakeBuildingsRing,
-} from "./buildings.js";
+} from "./buildings.js?v=phase-d-batch";
 import {
   bakeStaticsForLandblock,
   bakeStaticsRing,
-} from "./statics.js";
+  getOrCreateMaterialCache,
+} from "./statics.js?v=phase7-par";
 import { buildEnvCellsForLandblock } from "./cells.js";
 // Phase D.1 — synthetic ACE entity-spawn injector. The third
 // placement stream (after `fetch_landblock_objects` DAT-explicit and
@@ -204,6 +205,26 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     canvas,
     antialias: !!quality.flags.antialias,
   });
+  // 2026-05-21 Phase F — explicitly enable EXT_float_blend so the GPU
+  // stops emitting "Using format enabled by implicitly enabled extension"
+  // warnings every frame the atmosphere LUTs are sampled. ~32 messages
+  // per cold boot disappear; no behavior change.
+  renderer.getContext().getExtension("EXT_float_blend");
+  // 2026-05-21 Phase A/D follow-on — kick off the atmosphere LUT load
+  // CONCURRENTLY with phase7 streaming. The existing chain at ~L1674
+  // used to construct AtmosphereRuntime here, but that was after
+  // skyDome / cloudOverlay / aurora setup AND after phase7 streaming
+  // finished — ~36-52s after the renderer existed. Moving the
+  // construction to RIGHT AFTER the renderer means the LUT load runs
+  // in parallel with phase7 instead of sequentially after it. By the
+  // time the original chain reaches `await atmosphereRuntimePromise`,
+  // the textures are already in GPU memory and `whenReady()` resolves
+  // synchronously. Hoisted via an outer-scope promise so the existing
+  // `.whenReady().then(...)` chain at ~L1681 can `await` the
+  // pre-warmed instance instead of constructing a second one.
+  const atmosphereRuntimePromise = import(
+    "./atmosphere_runtime.js?v=lutbake"
+  ).then(({ AtmosphereRuntime }) => new AtmosphereRuntime({ renderer }));
   // Cap DPR at 2 — beyond that the cost outpaces the visual gain on
   // a textured-mesh scene of this complexity.
   // 2026-05-18 — `?renderScale=N` lets the user dial back the
@@ -642,49 +663,92 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     }
   }
 
-  // Phase 7.2 — buildings + statics. Gated on the building wasm
-  // exports so the 7.0/7.1 capture paths (empty wasmExports / terrain-
-  // only exports) keep their existing contracts.
+  // `envCellsLoaded` is the load-result bundle for the eager Phase
+  // 7.3 dungeons (Mite Maze + Holtburg Dungeon), populated by the
+  // parallel envCells runner below. Hoisted out of the `if` block so
+  // the liveScene3d build at the bottom of init3D can reference it
+  // regardless of which gate branch ran.
+  let envCellsLoaded = null;
+
+  // Phase 7.2 + 7.3 — buildings, statics, and known dungeon EnvCells
+  // baked in parallel. Cold-boot Phase C (2026-05-21) flipped this
+  // from a sequential await chain (buildings → statics → mite maze →
+  // holt dungeon, each blocking the next) into a single `Promise.all`
+  // over three independent runners.
+  //
+  // Why this is safe:
+  //   - Each baker owns its own THREE.Group (`buildingsGroup`,
+  //     `staticsGroup`, `cellsGroup`) so there's no scene-graph race.
+  //   - The shared `MaterialCache` already implements per-DID
+  //     `pendingFetches` dedup in `materials.js:1227` so concurrent
+  //     `preload(...)` callers across bakers latch on a single
+  //     in-flight wasm fetch per surface DID.
+  //   - The wasm side caches its own DAT shard reads, so cross-baker
+  //     fetches for the same shard hit the wasm cache after the first.
+  //
+  // The one ordering constraint the previous serial chain hid:
+  // `cells.js:90` throws if `scene3d.materialCache` is undefined.
+  // `bakeBuildingsRing` used to be the first await and its inner
+  // `resolveBuildingsOpts` stamped the cache before its `Promise.all`
+  // resolved. With parallel runners we install the cache synchronously
+  // BEFORE any await fires, so the cells runner can launch from frame
+  // zero without losing the race.
+  //
+  // Capture-script contract: the three `[phase7.2 buildings]`,
+  // `[phase7.2 statics]`, `[phase7.3 envCells]` log strings are
+  // preserved verbatim — they're emitted by each runner the moment
+  // ITS internal Promise.all resolves, not after the outer
+  // `Promise.all` does. Capture scripts that grep for these strings
+  // see the same ordering they always did (any of the three may
+  // arrive first; previously buildings was always first because it
+  // blocked the others).
   if (
     wasmExports &&
     typeof wasmExports.fetch_landblock_objects === "function" &&
     typeof wasmExports.fetchBuildingPlacement === "function" &&
     typeof wasmExports.fetch_surfaces_pixels === "function"
   ) {
-    try {
-      // 2026-05-16 bandwidth optimisation — buildings ring decoupled
-      // from the terrain ring (radius=6) and shrunk to radius=2
-      // (5×5=25 LBs). Buildings own per-LB placement records,
-      // mesh fetches, and surface-pixels prewarm — same shape as
-      // scenery. PVS-driven expansion in loop.js's
-      // tickPvsLoadExpansion fires `loadBuildingsForLandblock`
-      // (idempotent) for any LB whose cell becomes visible.
-      buildingsSummary = await bakeBuildingsRing(
-        scene3dForBuilders,
-        HOLTBURG_X,
-        HOLTBURG_Y,
-        BUILDINGS_RING_RADIUS,
-        wasmExports
-      );
-      // eslint-disable-next-line no-console
-      console.log("[phase7.2] buildings:", buildingsSummary);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error("[scene3d] bakeBuildingsRing failed:", e);
-    }
-    if (typeof wasmExports.fetch_model_meshes === "function") {
+    // Pre-install the MaterialCache BEFORE any await. Both the statics
+    // runner (`getOrCreateMaterialCache` at statics.js:1178) and the
+    // cells runner (cells.js:90 guard) read this off scene3d
+    // synchronously at entry. Idempotent — subsequent
+    // `getOrCreateMaterialCache` / `resolveBuildingsOpts` calls
+    // observe the existing instance and return it as-is.
+    getOrCreateMaterialCache(scene3dForBuilders);
+
+    const runBuildings = async () => {
+      try {
+        // 2026-05-16 bandwidth optimisation — buildings ring decoupled
+        // from the terrain ring (radius=6) and shrunk to radius=2
+        // (5×5=25 LBs). PVS-driven expansion in loop.js's
+        // tickPvsLoadExpansion fires `loadBuildingsForLandblock`
+        // (idempotent) for any LB whose cell becomes visible.
+        const s = await bakeBuildingsRing(
+          scene3dForBuilders,
+          HOLTBURG_X,
+          HOLTBURG_Y,
+          BUILDINGS_RING_RADIUS,
+          wasmExports
+        );
+        // eslint-disable-next-line no-console
+        console.log("[phase7.2] buildings:", s);
+        return s;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("[scene3d] bakeBuildingsRing failed:", e);
+        return null;
+      }
+    };
+
+    const runStatics = async () => {
+      if (typeof wasmExports.fetch_model_meshes !== "function") return null;
       try {
         // 2026-05-16 bandwidth optimisation — statics ring decoupled
         // from the terrain/buildings ring. Initial radius=2 (5×5=25
-        // LBs) keeps the immediate neighborhood loaded for the
-        // boot-time view; PVS-driven expansion in loop.js's
-        // tickPerFrame pulls any additional LBs whose cells enter
-        // the renderer's visible set. The per-LB hook
-        // `loadStaticsForLandblock` is idempotent so both paths
-        // (PVS-tick + handlePositionUpdate movement) safely
-        // converge. Net: ~85 % fewer setup/surface fetches at boot
-        // vs. the prior 13×13 (169 → 25).
-        staticsSummary = await bakeStaticsRing(
+        // LBs). PVS expansion + the per-LB hook
+        // `loadStaticsForLandblock` are idempotent so concurrent
+        // expansion paths converge cleanly.
+        const s = await bakeStaticsRing(
           scene3dForBuilders,
           HOLTBURG_X,
           HOLTBURG_Y,
@@ -692,49 +756,53 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
           wasmExports
         );
         // eslint-disable-next-line no-console
-        console.log("[phase7.2] statics:", staticsSummary);
+        console.log("[phase7.2] statics:", s);
+        return s;
       } catch (e) {
         // eslint-disable-next-line no-console
         console.error("[scene3d] bakeStaticsRing failed:", e);
+        return null;
       }
-    }
+    };
 
-    // (Per-SetupModel lights are attached AFTER EnvCells load — see
-    // below — so the walker can pick up cells too once we extend the
-    // recorder. For now buildings + statics + entities are covered.)
-  }
+    const runEnvCells = async () => {
+      // Mite Maze (0x01F80000) + Holtburg Dungeon (0x01F60000) — known
+      // dungeon EnvCells eager-loaded for capture-script verification.
+      // Real-world flow loads on landblock-change events; for now
+      // these two are the only ones the boot-time pipeline pulls.
+      if (
+        typeof wasmExports.fetchEnvCellsInLandblock !== "function" ||
+        typeof wasmExports.fetch_surfaces_pixels !== "function"
+      ) {
+        return null;
+      }
+      try {
+        // Inner parallelism: the two LB loads are independent (different
+        // `envCellLoadedLbs` keys, separate `cellContainers3d` entries)
+        // so they can race too.
+        const [miteMaze, holtDungeon] = await Promise.all([
+          buildEnvCellsForLandblock(scene3dForBuilders, 0x01f80000, wasmExports),
+          buildEnvCellsForLandblock(scene3dForBuilders, 0x01f60000, wasmExports),
+        ]);
+        const result = { miteMaze, holtDungeon };
+        // eslint-disable-next-line no-console
+        console.log("[phase7.3] envCells:", result);
+        return result;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[phase7.3] EnvCell load failed:", e);
+        return null;
+      }
+    };
 
-  // Phase 7.3 — load known dungeon EnvCells for capture-script
-  // verification. Real-world flow loads on landblock-change events
-  // (Phase 7.5 will wire that). For now, eager-load Mite Maze
-  // (0x01F80000) + Holtburg Dungeon (0x01F60000) so the capture can
-  // confirm the EnvCell pipeline ships real data end-to-end.
-  let envCellsLoaded = null;
-  if (
-    wasmExports &&
-    typeof wasmExports.fetchEnvCellsInLandblock === "function" &&
-    typeof wasmExports.fetch_surfaces_pixels === "function" &&
-    scene3dForBuilders.materialCache
-  ) {
-    try {
-      const miteMaze = await buildEnvCellsForLandblock(
-        scene3dForBuilders,
-        0x01f80000,
-        wasmExports
-      );
-      const holtDungeon = await buildEnvCellsForLandblock(
-        scene3dForBuilders,
-        0x01f60000,
-        wasmExports
-      );
-      envCellsLoaded = { miteMaze, holtDungeon };
-      // eslint-disable-next-line no-console
-      console.log("[phase7.3] envCells:", envCellsLoaded);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[phase7.3] EnvCell load failed:", e);
-      envCellsLoaded = null;
-    }
+    const [bResult, sResult, eResult] = await Promise.all([
+      runBuildings(),
+      runStatics(),
+      runEnvCells(),
+    ]);
+    buildingsSummary = bResult;
+    staticsSummary = sResult;
+    envCellsLoaded = eResult;
   }
 
   // Phase 7.6.1 (3D port follow-on #1) — per-SetupModel point/spot
@@ -1617,8 +1685,13 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       // sky_dome.js). Bare scope kept so the brace pair below balances
       // without a costly re-indent.
       {
-        const { AtmosphereRuntime } = await import("./atmosphere_runtime.js");
-        const atmosphereRuntime = new AtmosphereRuntime({ renderer });
+        // 2026-05-21 Phase A/D follow-on — the LUT load was kicked off
+        // at the renderer-construction site (~L212) so it ran
+        // concurrently with phase7 streaming. We just await the
+        // pre-warmed instance here; `whenReady()` below resolves
+        // immediately on the EXR-load fast path, since the bake/load
+        // completed during the ~36s phase7 window.
+        const atmosphereRuntime = await atmosphereRuntimePromise;
         liveScene3d.atmosphereRuntime = atmosphereRuntime;
         // eslint-disable-next-line no-undef
         if (typeof window !== "undefined") {
@@ -1783,12 +1856,19 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
             }
 
             // eslint-disable-next-line no-console
-            console.log(
-              `[sky-k.3] AtmosphereRuntime ready (bake ${atmosphereRuntime.bakeMs?.toFixed?.(1)}ms). ` +
-                "AerialPerspective + ToneMapping(AGX) + Dithering composer wired. " +
-                "SunDirectionalLight + SkyLightProbe added; parametric lights silenced. " +
-                "toneMappingExposure=5 — tune via __setExposure(v)."
-            );
+            {
+              const src = atmosphereRuntime.source;
+              const ms = src === 'load'
+                ? atmosphereRuntime.loadMs?.toFixed?.(1)
+                : atmosphereRuntime.bakeMs?.toFixed?.(1);
+              const tag = src === 'load' ? 'load' : 'bake';
+              console.log(
+                `[sky-k.3] AtmosphereRuntime ready (${tag} ${ms}ms). ` +
+                  "AerialPerspective + ToneMapping(AGX) + Dithering composer wired. " +
+                  "SunDirectionalLight + SkyLightProbe added; parametric lights silenced. " +
+                  "toneMappingExposure=5 — tune via __setExposure(v)."
+              );
+            }
             // eslint-disable-next-line no-undef
             if (typeof window !== "undefined") {
               // eslint-disable-next-line no-undef
