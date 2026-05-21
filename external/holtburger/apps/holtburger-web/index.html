@@ -997,8 +997,30 @@
                   import("./scene3d/atmosphere_sky.js"),
                   import("./scene3d/aurora.js"),
                 ])
-                  .then(async ([sceneIndex]) => {
+                  .then(async ([
+                    sceneIndex,
+                    _picking,
+                    _atmosphereRuntime,
+                    atmospherePipelineMod,
+                    atmosphereLightsMod,
+                    atmosphereSkyMod,
+                    _aurora,
+                  ]) => {
                     console.log("[boot] scene3d module graph eagerly imported");
+                    // 2026-05-21 cold-boot win: stash the eager-imported
+                    // namespace objects on window so the post-phase7
+                    // atmosphere chain in scene3d/index.js can reuse them
+                    // directly. Empirically Firefox's ES module dynamic
+                    // import from inside scene3d/index.js MISSES this
+                    // cache and re-fetches the full takram CDN graph
+                    // (~14s wall-clock) even though the URLs resolve
+                    // identically. Passing the resolved namespace objects
+                    // directly is a cache-key-agnostic workaround.
+                    window.__eagerAtmosphere = [
+                      atmospherePipelineMod,
+                      atmosphereLightsMod,
+                      atmosphereSkyMod,
+                    ];
                     // 2026-05-21 cold-boot Phase G (eager-init) — once
                     // the scene3d module graph is warm, kick off the
                     // session-independent setup (`preInit3D`) so the
@@ -5493,13 +5515,22 @@ void main() {
         // Step 4: objects use the XXYYFFFE LandblockInfo records,
         // not XXYYFFFF (which is the terrain CellLandblock). Same
         // 3×3 neighbourhood, different cell suffix.
-        renderStatus.textContent = "Fetching object placements + sprite atlas…";
+        // 2026-05-21: skip the PIXI sprite atlas load when ?renderer=3d
+        // — it's 2D-only scaffolding (the explicit free()-then-discard
+        // pattern below at L~5613 already acknowledges 3D mode never
+        // consumes it). Removes one side of the Promise.all without
+        // touching the wasm-side fetch_landblock_objects warmup.
+        const _useRenderer3dFast =
+          new URLSearchParams(window.location.search).get("renderer") === "3d";
+        renderStatus.textContent = _useRenderer3dFast
+          ? "Fetching object placements…"
+          : "Fetching object placements + sprite atlas…";
         const objectIds = new Uint32Array(
           NEIGHBOURHOOD.map((n) => ((n.x << 24) | (n.y << 16) | 0xfffe) >>> 0)
         );
         const [objects, spriteMap] = await Promise.all([
           fetch_landblock_objects(objectIds),
-          loadSpriteAtlas(),
+          _useRenderer3dFast ? Promise.resolve(new Map()) : loadSpriteAtlas(),
         ]);
 
         // Step 4.5: per-model real colours from each model's GfxObj/

@@ -328,42 +328,51 @@ export async function preInit3D(canvas) {
       return false;
     }
   })();
+  // 2026-05-21 cold-boot win: the two detail-asset loaders below
+  // (Phase 0.2 detail tile cache + Phase 1.2 terrain detail-normal
+  // DataArrayTexture) are independent PNG fetches that decode through
+  // the DOM Image+canvas path. Run them concurrently instead of
+  // sequentially — the atmosphereRuntimePromise above is already
+  // concurrent with these via the same fire-and-forget shape.
   const detailEnabled = !!quality?.flags?.detailFlag || forceDetail;
-  let detailTileCache = null;
-  if (detailEnabled) {
-    try {
-      detailTileCache = await loadDetailTileCache();
-      // eslint-disable-next-line no-console
-      console.log(
-        `[phase-0.2] detail tiles loaded: ${detailTileCache.size}/5 (forceDetail=${forceDetail})`
-      );
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[phase-0.2] detail tile load failed:", e);
-    }
-  }
-
-  // Phase 1.2 — terrain detail-normal array.
   const terrainDetailNormalEnabled = !!quality?.flags?.terrainDetailNormal;
+  const detailTileCachePromise = detailEnabled
+    ? loadDetailTileCache().catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn("[phase-0.2] detail tile load failed:", e);
+        return null;
+      })
+    : Promise.resolve(null);
+  const terrainDetailNormalPromise = terrainDetailNormalEnabled
+    ? loadTerrainDetailNormalArray().catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn("[phase-1.2] terrain detail normal load failed:", e);
+        return null;
+      })
+    : Promise.resolve(null);
+  const [detailTileCache, terrainDetailNormalResult] = await Promise.all([
+    detailTileCachePromise,
+    terrainDetailNormalPromise,
+  ]);
+  if (detailEnabled && detailTileCache) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[phase-0.2] detail tiles loaded: ${detailTileCache.size}/5 (forceDetail=${forceDetail})`
+    );
+  }
   let terrainDetailNormalArray = null;
   if (terrainDetailNormalEnabled) {
-    try {
-      const r = await loadTerrainDetailNormalArray();
-      if (r) {
-        terrainDetailNormalArray = r.texture;
-        // eslint-disable-next-line no-console
-        console.log(
-          `[phase-1.2] terrain detail normal array loaded: ${r.keys.length} slices`
-        );
-      } else {
-        // eslint-disable-next-line no-console
-        console.warn(
-          "[phase-1.2] terrain detail normal array unavailable; shader will run baseline"
-        );
-      }
-    } catch (e) {
+    if (terrainDetailNormalResult) {
+      terrainDetailNormalArray = terrainDetailNormalResult.texture;
       // eslint-disable-next-line no-console
-      console.warn("[phase-1.2] terrain detail normal load failed:", e);
+      console.log(
+        `[phase-1.2] terrain detail normal array loaded: ${terrainDetailNormalResult.keys.length} slices`
+      );
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[phase-1.2] terrain detail normal array unavailable; shader will run baseline"
+      );
     }
   }
 
@@ -1711,11 +1720,31 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             // 3 sequential awaits that were stretching the post-bake
             // chain even when warm (microtask scheduling) and reads as
             // a single "load + construct" beat.
+            //
+            // 2026-05-21 hoist attempt: moving these to preInit3D
+            // (atmosphereModulesPromise on the handle) saved 14s on
+            // chain wall-clock BUT broke `renderer.compile(scene, camera)`
+            // pre-warm (programs=14 instead of programs=36+) because the
+            // chain then fired before entity replay populated the scene
+            // — reintroducing the first-frame texture/shader stutter the
+            // 2026-05-21 stutter-fix shipped. Reverted; the implicit 14s
+            // here is load-bearing for "scene fully populated" timing.
+            // See project_holtburger_stutter_fixes_2026-05-21 for the
+            // pre-warm contract that needs to be preserved.
             const [
               { createAtmospherePipeline },
               { AtmosphereLights },
               { AtmosphereSky },
-            ] = await Promise.all([
+            // 2026-05-21 cold-boot win: prefer the eager-imported
+            // modules stashed on window.__eagerAtmosphere by index.html's
+            // Phase E block. Empirically the dynamic-import here misses
+            // the ES module cache and re-fetches the full takram CDN
+            // graph (~14s wall-clock) even though the same modules were
+            // eagerly imported at T+1.6s; reusing the cached namespace
+            // objects directly skips that. Falls back to dynamic import
+            // if the eager block didn't run (e.g. Phase 7.0 capture path
+            // with no `?renderer=3d`).
+            ] = window.__eagerAtmosphere ?? await Promise.all([
               import("./atmosphere_pipeline.js"),
               import("./atmosphere_lights.js"),
               import("./atmosphere_sky.js"),
@@ -1853,36 +1882,45 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             }
 
             // 2026-05-21 stutter fix — pre-warm shaders + texture
-            // uploads. Without this, the FIRST frame a material is
-            // sampled or a texture is bound stalls the main thread
-            // synchronously while Firefox's WebGL driver compiles GLSL
-            // and lazily uploads the pixels (the WebGL "Tex image
-            // TEXTURE_2D level 0 is incurring lazy initialization"
-            // warnings at boot are the smoking gun). After this point
-            // atmosphere + terrain + buildings + statics + envcells +
-            // sky dome + clouds + sun probe are all live in the scene
-            // graph; `renderer.compile(scene, camera)` walks the graph,
-            // compiles every program variant, and uploads every texture
-            // synchronously HERE (during the post-bake idle window)
-            // instead of HITCHING in the rAF loop later. Cost paid once
-            // up front (~200-500 ms typically) for a hitch-free first
-            // few seconds of gameplay. Entity meshes added later still
-            // compile on demand but each one is small.
-            try {
-              const compileStart = performance.now();
-              renderer.compile(scene, camera);
-              // eslint-disable-next-line no-console
-              console.log(
-                `[sky-k.3] renderer.compile(scene) pre-warmed shaders + textures in ` +
-                  `${(performance.now() - compileStart).toFixed(1)}ms ` +
-                  `(programs=${renderer.info.programs?.length ?? "?"}, ` +
-                  `textures=${renderer.info.memory.textures}, ` +
-                  `geometries=${renderer.info.memory.geometries})`
-              );
-            } catch (eCompile) {
-              // eslint-disable-next-line no-console
-              console.warn("[sky-k.3] renderer.compile failed:", eCompile);
-            }
+            // uploads. Walks the scene graph, compiles every program
+            // variant, uploads every texture synchronously HERE so the
+            // first user-visible frames don't HITCH compiling on demand
+            // (the WebGL "Tex image TEXTURE_2D level 0 is incurring
+            // lazy initialization" warnings). Cost paid once up front
+            // (~200-500 ms typically).
+            //
+            // 2026-05-21 cold-boot win — split into two compile passes:
+            //   • Pass 1 (immediate): catches phase7 world materials
+            //     that are in scene by chain-end (terrain + buildings
+            //     + statics + envcells + atmosphere). ~14 programs.
+            //   • Pass 2 (deferred): catches entity materials that
+            //     stream in over the next several seconds via
+            //     workstream-E replay. ~25-30 more programs.
+            // Ready fires after pass 1 so the user gets a usable scene
+            // ~14s sooner; pass 2 runs in background per the
+            // stutter-fix memo's contract ("Entity meshes added later
+            // still compile on demand, but per-mesh cost is small —
+            // one variant at a time, not the whole world"). The
+            // up-front world pre-warm still kills the bulk-hitch
+            // pattern; entity-only lazy compiles are bounded + cheap.
+            const doCompile = (label) => {
+              try {
+                const t = performance.now();
+                renderer.compile(scene, camera);
+                // eslint-disable-next-line no-console
+                console.log(
+                  `[sky-k.3] renderer.compile ${label} ` +
+                    `${(performance.now() - t).toFixed(1)}ms ` +
+                    `(programs=${renderer.info.programs?.length ?? "?"}, ` +
+                    `textures=${renderer.info.memory.textures}, ` +
+                    `geometries=${renderer.info.memory.geometries})`
+                );
+              } catch (eCompile) {
+                // eslint-disable-next-line no-console
+                console.warn(`[sky-k.3] renderer.compile ${label} failed:`, eCompile);
+              }
+            };
+            doCompile("(pass 1: world)");
 
             // eslint-disable-next-line no-console
             {
@@ -1897,21 +1935,40 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                   "SunDirectionalLight + SkyLightProbe added; parametric lights silenced. " +
                   "toneMappingExposure=5 — tune via __setExposure(v)."
               );
-              // 2026-05-21 — terminal boot signal for agents. By this
-              // point: phase7 buildings/statics/envCells have drained,
-              // sky+clouds are wired, atmosphere LUTs uploaded,
-              // renderer.compile pre-warmed all program variants. This
-              // is when an agent can take a screenshot, run a
-              // benchmark, or drive gameplay and trust the picture is
-              // real. `in-world` (kind=7) fires ~30-50s earlier — it
-              // means ACE confirmed PlayerCreate, NOT that the scene
-              // is finished loading.
+              // 2026-05-21 — terminal boot signal for agents. Pass 1
+              // pre-warmed world + atmosphere; entity-only lazy
+              // compiles are bounded by `pass 2` below.
               try {
                 window.__setBootState?.(
                   "ready",
                   `scene fully loaded (atmosphere ${tag} ${ms}ms)`,
                 );
               } catch {}
+              // Background pass 2: defer until entity replay has had
+              // time to load most models. 4s after ready gives a typical
+              // 200-400 entity backlog plenty of time without gating the
+              // user. Uses raf-driven poll so a stalled main thread
+              // doesn't lose the deferral; falls back to setTimeout for
+              // headless / `?renderer=3d` capture contexts where rAF
+              // throttles.
+              const PASS2_DELAY_MS = 4000;
+              const scheduledFrom = performance.now();
+              const tryPass2 = () => {
+                if (performance.now() - scheduledFrom >= PASS2_DELAY_MS) {
+                  doCompile("(pass 2: entities + lazy)");
+                  return;
+                }
+                if (typeof requestAnimationFrame === "function") {
+                  requestAnimationFrame(tryPass2);
+                } else {
+                  setTimeout(tryPass2, 100);
+                }
+              };
+              if (typeof requestAnimationFrame === "function") {
+                requestAnimationFrame(tryPass2);
+              } else {
+                setTimeout(tryPass2, PASS2_DELAY_MS);
+              }
             }
             // eslint-disable-next-line no-undef
             if (typeof window !== "undefined") {
