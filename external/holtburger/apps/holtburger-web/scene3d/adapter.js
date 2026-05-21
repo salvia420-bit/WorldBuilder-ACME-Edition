@@ -29,6 +29,41 @@
 
 import * as THREE from "three";
 
+// ---- Module-wide texture anisotropy --------------------------------
+// Set once at scene init from `renderer.capabilities.getMaxAnisotropy()`
+// (16× on most desktop GPUs incl. the GTX 1070 Ti the user eyeballs on).
+// The surface-pixel + detail-tile helpers read this and apply it on
+// every `THREE.DataTexture` / `THREE.Texture` they create, so all
+// sampled textures get high-quality anisotropic filtering at grazing
+// angles uniformly. Defaults to 1 (Three.js stock) if the setter is
+// never called — safe for pkg-node smoke runs that have no renderer.
+let _maxAnisotropy = 1;
+
+/**
+ * Set the module-wide anisotropy applied to every texture the adapter
+ * helpers below create. Call once at scene init:
+ *
+ *   import { setAdapterMaxAnisotropy } from "./adapter.js";
+ *   setAdapterMaxAnisotropy(renderer.capabilities.getMaxAnisotropy());
+ *
+ * Subsequent texture creations (`surfacePixelsToTexture`,
+ * `surfacePixelsToNormalTexture`, `surfacePixelsToHeightTexture`,
+ * `loadDetailTileCache`) pick up the new value. Already-uploaded
+ * textures need their `.anisotropy` re-set + `.needsUpdate = true`
+ * manually — there's no retroactive sweep.
+ */
+export function setAdapterMaxAnisotropy(n) {
+  const v = Number(n);
+  if (Number.isFinite(v) && v >= 1) {
+    _maxAnisotropy = Math.max(1, Math.floor(v));
+  }
+}
+
+/** Read the current module-wide anisotropy. */
+export function getAdapterMaxAnisotropy() {
+  return _maxAnisotropy;
+}
+
 // ---- Atlas layout constants ---------------------------------------
 // Codes 0..32 are packed as layers of a `THREE.DataArrayTexture`. Each
 // layer is 256×256 RGBA8 = `ATLAS_TILE_PX² × 4 = 256 KiB`; 33 layers
@@ -611,6 +646,7 @@ export function surfacePixelsToTexture(rgba8, width, height) {
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.generateMipmaps = true;
+  tex.anisotropy = _maxAnisotropy;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.needsUpdate = true;
@@ -667,6 +703,7 @@ export function surfacePixelsToNormalTexture(normalRgb8, width, height) {
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.generateMipmaps = true;
+  tex.anisotropy = _maxAnisotropy;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.needsUpdate = true;
@@ -714,6 +751,7 @@ export function surfacePixelsToHeightTexture(heightR8, width, height) {
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.generateMipmaps = true;
+  tex.anisotropy = _maxAnisotropy;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.needsUpdate = true;
@@ -801,6 +839,7 @@ export async function loadDetailTileCache(opts = {}) {
       tex.minFilter = T.LinearMipmapLinearFilter;
       tex.magFilter = T.LinearFilter;
       tex.generateMipmaps = true;
+      tex.anisotropy = _maxAnisotropy;
       tex.name = `scene3d-detail-${key}`;
       tex.needsUpdate = true;
       cache.set(key, tex);
@@ -939,6 +978,7 @@ export async function loadTerrainDetailNormalArray(opts = {}) {
   tex.magFilter = T.LinearFilter;
   tex.minFilter = T.LinearMipmapLinearFilter;
   tex.generateMipmaps = true;
+  tex.anisotropy = _maxAnisotropy;
   tex.name = "scene3d-terrain-detail-normal-array";
   tex.needsUpdate = true;
 

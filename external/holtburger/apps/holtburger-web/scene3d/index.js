@@ -59,6 +59,7 @@ import {
   acToThree,
   loadDetailTileCache,
   loadTerrainDetailNormalArray,
+  setAdapterMaxAnisotropy,
 } from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
 import { AudioManager } from "./audio/audio_manager.js";
@@ -247,6 +248,14 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   }
   renderer.setSize(cssW, cssH, false);
   renderer.setClearColor(0x101418, 1);
+
+  // Texture quality 2026-05-20 — anisotropy cap. 1 ≡ OFF (Three.js
+  // minimum, plain trilinear). 16× was visually nice but stacked with
+  // the atmosphere/cloud composer chain it tanked FPS at grazing
+  // terrain angles. Re-enable by passing 4 or 8 if FPS headroom
+  // exists. Plumbing stays in place via setAdapterMaxAnisotropy so
+  // flipping this constant is the only knob.
+  setAdapterMaxAnisotropy(1);
 
   // Visual-fidelity Phase 0.1 — opt-in shadow maps via `?shadows=on`.
   // Default OFF so existing capture flows and the baseline visual
