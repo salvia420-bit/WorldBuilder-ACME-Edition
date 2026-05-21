@@ -877,19 +877,33 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       ) {
         return null;
       }
-      // 2026-05-21 low-agentic skip: dungeon EnvCells are ~10s of
-      // phase7 work that only matters once the player walks into a
-      // dungeon. For ?agentic=low boots, defer to the lazy
-      // `loadEnvCellsForLandblock` hook fired by handlePositionUpdate
-      // (or skip outright if the bot never enters a dungeon).
+      // 2026-05-21 — default skip for the two known dungeon EnvCells
+      // (Mite Maze 0x01F80000 + Holt Dungeon 0x01F60000). These were
+      // eager-loaded historically for capture-script verification, but
+      // ~10s of phase7 wall-clock for content the player only ever
+      // sees inside the specific dungeon LB is a poor default trade.
+      // index.html:4784 already wires `handlePositionUpdate` to call
+      // `liveScene3d.loadEnvCellsForLandblock(lbId)` on every LB the
+      // player enters — so walking into a dungeon still triggers the
+      // load on demand, with no observable latency penalty (the player
+      // can't see inside the dungeon until they're at the portal).
+      // Opt-in via `?eagerDungeons=on` for capture-script paths that
+      // assert the meshes exist immediately at boot. Holtburg's local
+      // cottage/shop envcells (the visible-from-spawn interior cells)
+      // load via the same handlePositionUpdate hook on the spawn LB
+      // — those are NOT in this block and are unaffected.
       try {
-        if (
-          typeof window !== "undefined" &&
-          new URLSearchParams(window.location.search).get("agentic") === "low"
-        ) {
-          // eslint-disable-next-line no-console
-          console.log("[phase7.3] envCells: skipped (agentic=low)");
-          return { miteMaze: null, holtDungeon: null, skipped: true };
+        if (typeof window !== "undefined") {
+          const ps = new URLSearchParams(window.location.search);
+          const eagerOptIn = ps.get("eagerDungeons") === "on";
+          if (!eagerOptIn) {
+            // eslint-disable-next-line no-console
+            console.log(
+              "[phase7.3] envCells: dungeon eager-load deferred to handlePositionUpdate " +
+              "(opt in via ?eagerDungeons=on for capture scripts)"
+            );
+            return { miteMaze: null, holtDungeon: null, deferred: true };
+          }
         }
       } catch (_) { /* fallthrough to normal load */ }
       try {
