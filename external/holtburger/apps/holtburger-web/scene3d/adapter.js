@@ -64,6 +64,63 @@ export function getAdapterMaxAnisotropy() {
   return _maxAnisotropy;
 }
 
+// ---- Module-wide texture downscale divisor ------------------------
+// 2026-05-21 — "low agentic mode" experiment. When >1, surface +
+// normal textures are decimated by box-filter through a canvas before
+// upload to the GPU. div=2 → 256×256 from native 512×512 (4× less
+// GPU memory + 4× faster upload); div=4 → 128×128 (16× less). Default
+// 1 (no downscale) keeps ultra-mode visual fidelity. The divisor must
+// be a power of two so the canvas-resize path stays clean.
+let _textureDownscaleDiv = 1;
+
+/**
+ * Set the module-wide texture downscale divisor (1 = no change, 2 = half
+ * each side, 4 = quarter each side). Call from `preInit3D` after parsing
+ * the quality flags / URL params.
+ */
+export function setAdapterTextureDownscale(div) {
+  const v = Number(div);
+  if (Number.isFinite(v) && v >= 1) {
+    _textureDownscaleDiv = Math.max(1, Math.floor(v));
+  }
+}
+
+/** Read the current module-wide texture downscale divisor. */
+export function getAdapterTextureDownscale() {
+  return _textureDownscaleDiv;
+}
+
+/**
+ * Downscale RGBA8 pixels via stride-based point-sampling. Returns a
+ * fresh `{ rgba, width, height }` tuple where width/height are the
+ * input divided by `div`. Point-sampling is intentionally lossy — we're
+ * trading visual fidelity for boot speed in low-agentic mode. A
+ * canvas-based box-filter path was tried first but the per-texture
+ * createCanvas + putImageData + drawImage + getImageData roundtrip
+ * cost ~30-50ms each, dominating phase7 over ~200 surfaces. The
+ * decimation loop below is ~10× faster (~1-3ms per 512² → 64²).
+ */
+function downscaleRgba(rgba, width, height, div) {
+  if (div <= 1) return { rgba, width, height };
+  const newW = Math.max(1, Math.floor(width / div));
+  const newH = Math.max(1, Math.floor(height / div));
+  if (newW * newH * 4 < 16) return { rgba, width, height };
+  const out = new Uint8Array(newW * newH * 4);
+  for (let y = 0; y < newH; y += 1) {
+    const srcRow = y * div * width;
+    const dstRow = y * newW;
+    for (let x = 0; x < newW; x += 1) {
+      const s = (srcRow + x * div) * 4;
+      const d = (dstRow + x) * 4;
+      out[d] = rgba[s];
+      out[d + 1] = rgba[s + 1];
+      out[d + 2] = rgba[s + 2];
+      out[d + 3] = rgba[s + 3];
+    }
+  }
+  return { rgba: out, width: newW, height: newH };
+}
+
 // ---- Atlas layout constants ---------------------------------------
 // Codes 0..32 are packed as layers of a `THREE.DataArrayTexture`. Each
 // layer is 512×512 RGBA8 = `ATLAS_TILE_PX² × 4 = 1 MiB`; 33 layers
@@ -83,8 +140,31 @@ export function getAdapterMaxAnisotropy() {
 // entirely. Code 32 (RoadType, DID 0x05001458) also stays in the
 // array (layer 32) and is independently extracted as a standalone
 // `RepeatWrapping` road texture for the overlay path.
-const ATLAS_TILE_PX = 512;
+// 2026-05-21 — low-agentic-mode override. `ATLAS_TILE_PX` was bumped
+// from 256 to 512 on 2026-05-20 to match native DAT resolution. For
+// fast-boot low-agentic experiments, `setAtlasTilePx(N)` can shrink it
+// back down (32-256 all work; the existing canvas-side downscale at
+// L~340 handles any native→target ratio). Drop = ~4× faster atlas
+// build per halving + ~4× less GPU upload + ~4× less mip-chain memory.
+let ATLAS_TILE_PX = 512;
 const ATLAS_DEPTH = 33;
+
+/**
+ * Override the terrain atlas tile-pixel size. Must be a power of two
+ * between 16 and 512. Call from `preInit3D` after parsing URL/quality
+ * flags but BEFORE `bakeTerrainRing` runs. No-op if N is invalid.
+ */
+export function setAtlasTilePx(n) {
+  const v = Number(n);
+  if (Number.isFinite(v) && v >= 16 && v <= 512 && (v & (v - 1)) === 0) {
+    ATLAS_TILE_PX = v;
+  }
+}
+
+/** Read the current terrain atlas tile size. */
+export function getAtlasTilePx() {
+  return ATLAS_TILE_PX;
+}
 
 /**
  * Convert a wasm `LandblockMesh` into a `THREE.BufferGeometry` with:
@@ -672,10 +752,15 @@ export function surfacePixelsToTexture(rgba8, width, height) {
   const copy = new Uint8Array(rgba8.byteLength);
   copy.set(rgba8);
 
+  // 2026-05-21 — optional low-agentic-mode downscale. Tradeoff is
+  // shipped behind `setAdapterTextureDownscale(div)`; default div=1 is
+  // a no-op preserving ultra-mode visual fidelity.
+  const ds = downscaleRgba(copy, width, height, _textureDownscaleDiv);
+
   const tex = new THREE.DataTexture(
-    copy,
-    width,
-    height,
+    ds.rgba,
+    ds.width,
+    ds.height,
     THREE.RGBAFormat,
     THREE.UnsignedByteType
   );
@@ -728,10 +813,12 @@ export function surfacePixelsToNormalTexture(normalRgb8, width, height) {
     rgba[i * 4 + 2] = normalRgb8[i * 3 + 2];
     rgba[i * 4 + 3] = 255;
   }
+  // 2026-05-21 — match diffuse path's optional downscale.
+  const ds = downscaleRgba(rgba, width, height, _textureDownscaleDiv);
   const tex = new THREE.DataTexture(
-    rgba,
-    width,
-    height,
+    ds.rgba,
+    ds.width,
+    ds.height,
     THREE.RGBAFormat,
     THREE.UnsignedByteType
   );

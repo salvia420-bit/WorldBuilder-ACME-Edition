@@ -61,6 +61,8 @@ import {
   loadDetailTileCache,
   loadTerrainDetailNormalArray,
   setAdapterMaxAnisotropy,
+  setAdapterTextureDownscale,
+  setAtlasTilePx,
 } from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
 import { AudioManager } from "./audio/audio_manager.js";
@@ -94,7 +96,25 @@ const HOLTBURG_Y = 0xb4;
 // flips ONLY the init3D call site; per-capture follow-ons are
 // out-of-scope (radius=1-hardcoded assertions move forward in their
 // own PR via Objective 10's `capture_world_expand_e2e.cjs`).
-const HOLTBURG_RING_RADIUS = 6;
+// 2026-05-21 — low-agentic-mode override. `?ringRadius=N` or
+// `?agentic=low` (which sets ringRadius=1) shrinks the initial ring
+// to drastically reduce phase7 wasm fetch time at boot. PVS-driven
+// `tickPvsLoadExpansion` still pulls additional LBs as the player
+// walks toward them, so functionality is preserved — just slower
+// horizon-fill the first time the user moves.
+const HOLTBURG_RING_RADIUS = (() => {
+  try {
+    if (typeof window === "undefined") return 6;
+    const ps = new URLSearchParams(window.location.search);
+    const raw = ps.get("ringRadius");
+    if (raw) {
+      const n = Number.parseInt(raw, 10);
+      if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
+    }
+    if (ps.get("agentic") === "low") return 1;
+  } catch (_) { /* fallthrough */ }
+  return 6;
+})();
 // Statics/scenery and buildings are the two heaviest per-LB content
 // streams (placements + per-model setup/meshes/surface-pixels via
 // F.41 batch). Decoupling their rings from the terrain ring lets us
@@ -111,8 +131,38 @@ const HOLTBURG_RING_RADIUS = 6;
 // the player walks toward, but with radius=6 the initial bake covers
 // the full visible horizon at Holtburg spawn — matching the world-
 // completeness method's 13×13 oracle counts.
-const STATICS_RING_RADIUS = 6;
-const BUILDINGS_RING_RADIUS = 6;
+// 2026-05-21 — low-agentic-mode override. Mirrors HOLTBURG_RING_RADIUS
+// above so all three streams (terrain + buildings + statics) shrink
+// together. `?agentic=low` defaults to radius=1 (3×3 = 9 LBs) for the
+// fastest possible cold boot; PVS expansion (`tickPvsLoadExpansion`)
+// still pulls more as the player walks. Per-stream `?buildingsRadius=N`
+// / `?staticsRadius=N` overrides win over agentic-mode default.
+const STATICS_RING_RADIUS = (() => {
+  try {
+    if (typeof window === "undefined") return 6;
+    const ps = new URLSearchParams(window.location.search);
+    const raw = ps.get("staticsRadius");
+    if (raw) {
+      const n = Number.parseInt(raw, 10);
+      if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
+    }
+    if (ps.get("agentic") === "low") return 1;
+  } catch (_) { /* fallthrough */ }
+  return 6;
+})();
+const BUILDINGS_RING_RADIUS = (() => {
+  try {
+    if (typeof window === "undefined") return 6;
+    const ps = new URLSearchParams(window.location.search);
+    const raw = ps.get("buildingsRadius");
+    if (raw) {
+      const n = Number.parseInt(raw, 10);
+      if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
+    }
+    if (ps.get("agentic") === "low") return 1;
+  } catch (_) { /* fallthrough */ }
+  return 6;
+})();
 
 // 2026-05-21 cold-boot Phase G (eager-init) — session-independent
 // scene3d bootstrap. Runs during page-init while the user is still
@@ -255,6 +305,46 @@ export async function preInit3D(canvas) {
 
   // Texture quality 2026-05-20 — anisotropy cap. 1 ≡ OFF.
   setAdapterMaxAnisotropy(1);
+
+  // 2026-05-21 — low-agentic-mode texture knobs.
+  //   `?textureScale=N` divides every surface + normal texture by N
+  //     before GPU upload (1 = native 512×512; 2 = 256; 4 = 128; 8 = 64).
+  //   `?atlasTilePx=N` shrinks the 33-layer terrain atlas's per-layer
+  //     size (default 512; min 16). 16-256 all valid powers of two.
+  //   `?agentic=low` shorthand: textureScale=8 + atlasTilePx=32.
+  // Quality preset on its own (`?quality=low`) doesn't touch these — we
+  // want to test "low agentic" as an independent axis from the visual-
+  // fidelity preset.
+  try {
+    const _ps = new URLSearchParams(window.location.search);
+    const _agentic = _ps.get("agentic");
+    let _div = 1;
+    let _atlas = null;
+    if (_agentic === "low") {
+      _div = 8;
+      _atlas = 32;
+    }
+    const _rawScale = _ps.get("textureScale");
+    if (_rawScale) {
+      const n = Number.parseInt(_rawScale, 10);
+      if (Number.isFinite(n) && n >= 1) _div = n;
+    }
+    const _rawAtlas = _ps.get("atlasTilePx");
+    if (_rawAtlas) {
+      const n = Number.parseInt(_rawAtlas, 10);
+      if (Number.isFinite(n) && n >= 16) _atlas = n;
+    }
+    if (_div > 1) {
+      setAdapterTextureDownscale(_div);
+      // eslint-disable-next-line no-console
+      console.log(`[adapter] textureDownscale div=${_div} (agentic=${_agentic ?? "off"})`);
+    }
+    if (_atlas !== null) {
+      setAtlasTilePx(_atlas);
+      // eslint-disable-next-line no-console
+      console.log(`[adapter] atlasTilePx=${_atlas} (agentic=${_agentic ?? "off"})`);
+    }
+  } catch (_) { /* default 1 */ }
 
   // Visual-fidelity Phase 0.1 — opt-in shadow maps via `?shadows=on`.
   const shadowsParam = (() => {
@@ -787,6 +877,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       ) {
         return null;
       }
+      // 2026-05-21 low-agentic skip: dungeon EnvCells are ~10s of
+      // phase7 work that only matters once the player walks into a
+      // dungeon. For ?agentic=low boots, defer to the lazy
+      // `loadEnvCellsForLandblock` hook fired by handlePositionUpdate
+      // (or skip outright if the bot never enters a dungeon).
+      try {
+        if (
+          typeof window !== "undefined" &&
+          new URLSearchParams(window.location.search).get("agentic") === "low"
+        ) {
+          // eslint-disable-next-line no-console
+          console.log("[phase7.3] envCells: skipped (agentic=low)");
+          return { miteMaze: null, holtDungeon: null, skipped: true };
+        }
+      } catch (_) { /* fallthrough to normal load */ }
       try {
         // Inner parallelism: the two LB loads are independent (different
         // `envCellLoadedLbs` keys, separate `cellContainers3d` entries)
