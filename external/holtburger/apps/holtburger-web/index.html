@@ -4179,6 +4179,25 @@ void main() {
             // arrives before the initial render completes, defer by
             // re-clearing the in-flight bit so the next position
             // update retries the bake.
+            //
+            // 2026-05-21 lag fix: under `?renderer=3d`, `liveScene`
+            // is PERMANENTLY null — the PIXI 2D path is never
+            // instantiated. The wasm-side `fetchEnvCellsInLandblock`
+            // call above has already queued cell-graph + physics
+            // data for the recv-loop drain (the only thing the 3D
+            // path needs). Without marking the LB populated here,
+            // every subsequent position update re-enters and re-
+            // pushes ~1953 cell physics triangles + 123 AABBs + 292
+            // portal edges into the wasm queues at 3.5 Hz; the
+            // drain then APPENDS them into `cell_physics_index`
+            // (insert_cell_triangle is non-idempotent .push), which
+            // the unconditional per-tick `scene.clone()` deep-copies.
+            // Mark populated in 3D mode (liveScene3d is set before
+            // position updates begin) to break that loop; the 2D
+            // retry-on-late-liveScene path is preserved.
+            if (window.liveScene3d) {
+              cellContainersPopulatedLbs.add(lbId);
+            }
             return;
           }
           // Bake meshes + build the per-cell PIXI containers.
