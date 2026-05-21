@@ -306,45 +306,38 @@ export async function preInit3D(canvas) {
   // Texture quality 2026-05-20 — anisotropy cap. 1 ≡ OFF.
   setAdapterMaxAnisotropy(1);
 
-  // 2026-05-21 — low-agentic-mode texture knobs.
+  // 2026-05-21 — texture knobs (URL flags, default off).
   //   `?textureScale=N` divides every surface + normal texture by N
   //     before GPU upload (1 = native 512×512; 2 = 256; 4 = 128; 8 = 64).
   //   `?atlasTilePx=N` shrinks the 33-layer terrain atlas's per-layer
   //     size (default 512; min 16). 16-256 all valid powers of two.
-  //   `?agentic=low` shorthand: textureScale=8 + atlasTilePx=32.
-  // Quality preset on its own (`?quality=low`) doesn't touch these — we
-  // want to test "low agentic" as an independent axis from the visual-
-  // fidelity preset.
+  // Neither is part of `?agentic=low` by default — empirical test
+  // showed only ~0.7s save in agentic-low boot from downscaling both
+  // (16.3s vs 17.0s), well inside run-to-run variance, and the visual
+  // quality loss (blurry stride-decimated textures) isn't worth it
+  // for boots a human might glance at. Available as explicit URL
+  // overrides if you really want the smallest possible scene.
   try {
     const _ps = new URLSearchParams(window.location.search);
-    const _agentic = _ps.get("agentic");
-    let _div = 1;
-    let _atlas = null;
-    if (_agentic === "low") {
-      _div = 8;
-      _atlas = 32;
-    }
     const _rawScale = _ps.get("textureScale");
     if (_rawScale) {
       const n = Number.parseInt(_rawScale, 10);
-      if (Number.isFinite(n) && n >= 1) _div = n;
+      if (Number.isFinite(n) && n >= 1 && n > 1) {
+        setAdapterTextureDownscale(n);
+        // eslint-disable-next-line no-console
+        console.log(`[adapter] textureDownscale div=${n}`);
+      }
     }
     const _rawAtlas = _ps.get("atlasTilePx");
     if (_rawAtlas) {
       const n = Number.parseInt(_rawAtlas, 10);
-      if (Number.isFinite(n) && n >= 16) _atlas = n;
+      if (Number.isFinite(n) && n >= 16) {
+        setAtlasTilePx(n);
+        // eslint-disable-next-line no-console
+        console.log(`[adapter] atlasTilePx=${n}`);
+      }
     }
-    if (_div > 1) {
-      setAdapterTextureDownscale(_div);
-      // eslint-disable-next-line no-console
-      console.log(`[adapter] textureDownscale div=${_div} (agentic=${_agentic ?? "off"})`);
-    }
-    if (_atlas !== null) {
-      setAtlasTilePx(_atlas);
-      // eslint-disable-next-line no-console
-      console.log(`[adapter] atlasTilePx=${_atlas} (agentic=${_agentic ?? "off"})`);
-    }
-  } catch (_) { /* default 1 */ }
+  } catch (_) { /* default off */ }
 
   // Visual-fidelity Phase 0.1 — opt-in shadow maps via `?shadows=on`.
   const shadowsParam = (() => {
