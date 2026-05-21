@@ -305,6 +305,17 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // policy against real Academy data in the A/B run.
   let fusedCellsWithTransparent = 0;
   let fusedCellsOpaqueOnly = 0;
+  // 2026-05-21 — Accumulate cellContainers into a local array instead
+  // of adding to scene3d.cellsGroup in the for-loop. Lets us batch
+  // `renderer.compileAsync(subtree, camera, scene)` once at the end
+  // to pre-warm shader programs + texture uploads via
+  // KHR_parallel_shader_compile, killing the 567ms (low-agent) /
+  // 708ms (wire-agent) hitch that fires when 1269 cell meshes hit
+  // the renderer in one tick (cell-visibility BFS flips them visible
+  // on first sight). The compile runs in the driver's background
+  // thread on real GPUs; on SwiftShader/llvmpipe it falls back to
+  // sync compile but the code shape is the same.
+  const newCells = [];
   for (const snap of snapshots) {
     const cellContainer = new THREE.Group();
     cellContainer.name = `envcell-${snap.cellId.toString(16).padStart(8, "0")}`;
@@ -515,9 +526,38 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     // BFS would never include.
     cellContainer.visible = false;
 
-    scene3d.cellsGroup.add(cellContainer);
-    scene3d.cellContainers3d.set(snap.cellId, cellContainer);
+    newCells.push({ container: cellContainer, cellId: snap.cellId });
     cellCount += 1;
+  }
+
+  // Pre-warm GPU programs + texture uploads for all new cells before
+  // they hit the scene graph. compileAsync walks the subtree, finds
+  // every material, and dispatches shader compile + texture upload
+  // requests. With KHR_parallel_shader_compile (real GPUs), the work
+  // happens in the driver background while JS continues. Without it
+  // (SwiftShader), compileAsync falls back to sync compile but still
+  // returns a Promise so the call shape is identical. Use a temp
+  // parent so we hand compileAsync a single subtree.
+  const renderer = scene3d.renderer;
+  const camera = scene3d.camera;
+  if (newCells.length > 0 && renderer && camera && typeof renderer.compileAsync === "function") {
+    const tempParent = new THREE.Group();
+    for (const { container } of newCells) tempParent.add(container);
+    try {
+      await renderer.compileAsync(tempParent, camera, scene3d.scene);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[envcell-compileAsync] failed (cells will lazy-compile on first render):", e);
+    }
+  }
+
+  // Attach the pre-warmed cells to the live scene graph. Cells default
+  // to `.visible=false`; the visibility tick flips them on as the
+  // player walks/looks. By this point the GPU programs are ready, so
+  // the first-frame-visible cost is minimal.
+  for (const { container, cellId } of newCells) {
+    scene3d.cellsGroup.add(container);
+    scene3d.cellContainers3d.set(cellId, container);
   }
 
   return {
