@@ -264,9 +264,65 @@
       #inventory-panel li[data-type-bit="0x2"] .name { color: #2e8b57; }    /* Armor */
       #inventory-panel li[data-type-bit="0x10000"] .name { color: #a020a0; }/* Magic / scroll */
       #inventory-panel li[data-type-bit="0x20"] .name { color: #b8860b; }   /* Money / pyreal */
+
+      /* ──────────────────────────────────────────────────────────────
+         Agent mode (2026-05-21) — strips chrome to a full-bleed canvas
+         when `?agent=1` or `?autoLogin=1` is set. The login form stays
+         in DOM (display:none doesn't block form.requestSubmit()) so the
+         autonomous orchestrator can drive it, but no UI is rendered.
+         Movement WASD pad + fullscreen-btn + render-status are hidden
+         because agents drive movement via the wire API, not keystrokes.
+         ────────────────────────────────────────────────────────────── */
+      html.agent-mode body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+      html.agent-mode body > *:not(#stage) { display: none !important; }
+      html.agent-mode body #stage {
+        position: fixed; inset: 0; margin: 0; padding: 0;
+        display: block; width: 100vw; height: 100vh;
+        max-width: 100vw; max-height: 100vh;
+      }
+      html.agent-mode body #stage > *:not(#canvas-column) { display: none !important; }
+      html.agent-mode body #canvas-column {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        max-width: none; max-height: none; padding: 0; margin: 0;
+        border: 0; background: transparent;
+      }
+      html.agent-mode body #canvas-column > *:not(#canvas) { display: none !important; }
+      html.agent-mode body #canvas {
+        width: 100% !important; height: 100% !important;
+        max-width: none !important; max-height: none !important;
+        display: block; touch-action: none; outline: none;
+      }
+      /* Plugin-bar + chat panel + inventory + nameplate overlay aren't
+         direct children of #stage — they get attached later. Suppress
+         them too so the canvas stays the only visible element. Each
+         one is identified by its known id from the various wiring
+         sites below. Add to this list as plugin panels appear. */
+      html.agent-mode body #ui-shell-bar,
+      html.agent-mode body #plugin-bar,
+      html.agent-mode body #chat-panel,
+      html.agent-mode body #inventory-panel,
+      html.agent-mode body #spellbook-panel,
+      html.agent-mode body #combat-bar,
+      html.agent-mode body #vitals-hud,
+      html.agent-mode body #nameplate-layer-3d,
+      html.agent-mode body #post-spawn,
+      html.agent-mode body .floating-panel { display: none !important; }
     </style>
   </head>
   <body>
+    <script>
+      // Agent mode toggle — must apply BEFORE the page renders so the
+      // CSS rules above kick in on first paint. Reads `?agent=1` or
+      // the autoLogin params (since autoLogin implies an agent driver).
+      (() => {
+        try {
+          const p = new URLSearchParams(window.location.search);
+          if (p.get("agent") === "1" || p.get("autoLogin") === "1") {
+            document.documentElement.classList.add("agent-mode");
+          }
+        } catch {}
+      })();
+    </script>
     <h1>holtburger-web</h1>
     <p>
       Browser-side validation of the wasm bundle. Phase 2 §8 floor checks

@@ -161,11 +161,26 @@ export async function preInit3D(canvas) {
   //     mid-range GPUs at higher res).
   //   - devicePixelRatio caps at 2 so HiDPI screens don't quadruple
   //     the draw cost.
-  const layoutChromeH = 320; // reserve space for HUD panels above + status
-  const cssW = Math.min(window.innerWidth - 32, 1920);
-  const cssH = Math.min(window.innerHeight - layoutChromeH, 1080);
-  canvas.style.width = `${cssW}px`;
-  canvas.style.height = `${cssH}px`;
+  // 2026-05-21 — agent mode (`?agent=1` / `?autoLogin=1`) strips all
+  // page chrome, so the canvas fills the full viewport. The CSS rule
+  // `html.agent-mode #canvas { width: 100% !important }` drives the
+  // displayed size; we still set the backing store to the matching
+  // pixel count so WebGL renders sharp.
+  const _isAgentMode =
+    typeof document !== "undefined" &&
+    document.documentElement?.classList?.contains("agent-mode");
+  const layoutChromeH = _isAgentMode ? 0 : 320;
+  const layoutMarginW = _isAgentMode ? 0 : 32;
+  const cssW = Math.min(window.innerWidth - layoutMarginW, _isAgentMode ? 4096 : 1920);
+  const cssH = Math.min(window.innerHeight - layoutChromeH, _isAgentMode ? 2160 : 1080);
+  if (!_isAgentMode) {
+    // Normal mode: pin the canvas's CSS size explicitly so the layout
+    // doesn't shift as content loads. In agent mode the CSS-rule
+    // !important wins over inline style anyway, so skip it to keep
+    // intent clear.
+    canvas.style.width = `${cssW}px`;
+    canvas.style.height = `${cssH}px`;
+  }
   canvas.width = cssW;
   canvas.height = cssH;
 
@@ -474,10 +489,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   window.addEventListener("resize", () => {
     if (resizeDebounce) clearTimeout(resizeDebounce);
     resizeDebounce = setTimeout(() => {
-      const newW = Math.min(window.innerWidth - 32, 1920);
-      const newH = Math.min(window.innerHeight - layoutChromeH, 1080);
-      canvas.style.width = `${newW}px`;
-      canvas.style.height = `${newH}px`;
+      const newW = Math.min(window.innerWidth - layoutMarginW, _isAgentMode ? 4096 : 1920);
+      const newH = Math.min(window.innerHeight - layoutChromeH, _isAgentMode ? 2160 : 1080);
+      if (!_isAgentMode) {
+        canvas.style.width = `${newW}px`;
+        canvas.style.height = `${newH}px`;
+      }
       renderer.setSize(newW, newH, false);
       camera.aspect = newW / newH;
       camera.updateProjectionMatrix();
