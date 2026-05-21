@@ -425,6 +425,15 @@ in vec2 vWaveModulation;
 
 out vec4 fragColor;
 
+// Map terrain code (0..32) -> atlas UV at the given cell-local UV.
+// Retail terrain codes 0..32 are individual layers of a sampler2DArray.
+// cellUv (range [0,1]) is the intra-cell UV; the layer index is the
+// code itself -- DataArrayTexture clamps integer layer selection so no
+// neighbour-tile bleed at any mip level.
+vec3 atlasUvFor(int code, vec2 cellUv) {
+  return vec3(cellUv, float(code));
+}
+
 // 2D hash to a pseudo-random offset in [0,1).
 vec2 hash2(vec2 p) {
   return fract(sin(vec2(
@@ -466,24 +475,15 @@ void triangleGrid(vec2 uv,
 // "fog" appearance). Picks ~95% of the Heitz reference contrast with
 // no precomputed CDF / histogram bake.
 //
-// CRITICAL: uv MUST be a globally-continuous coordinate (we feed it
-// vGridUv = position.xy / 24, continuous across all 64 cells of an
-// LB). A per-cell-local UV (range [0,1] that resets at every 24 m
-// edge) would make the triangleGrid hash IDs jump at every cell
-// boundary, producing visible 24 m seams that defeat the entire
-// point. Within an LB the hex grid is continuous; the only remaining
-// discontinuity is at LB seams every 192 m, which atmospheric
-// perspective + distance hides.
-//
 // textureGrad samples all 3 offsets at the same un-offset gradient so
 // mip selection stays continuous across hex boundaries; without this,
 // the discontinuous hashed offsets would push neighbouring fragments
 // to different mips and the blend would flicker along hex edges.
 //
-// Tile rate (4.0) controls how many hexagons fit per LB-grid unit. At
-// the 24 m / LB-grid-unit scale this gives ~6 m hex patches: small
-// enough to fully hide the underlying 256x256 tile repeat, large
-// enough that the 3-sample cost is amortised across many fragments.
+// Tile rate (4.0) controls how many hexagons fit in one cellUv. At
+// the 24 m cell scale this gives ~6 m patches: small enough to fully
+// hide the underlying 256x256 tile repeat, large enough that the
+// 3-sample cost is amortised.
 vec3 heitzSample(int code, vec2 uv) {
   vec2 v1, v2, v3;
   float w1, w2, w3;
@@ -522,37 +522,44 @@ void main() {
   iv = clamp(iv, 0, 7);
   float fu = grid.x - float(iu);
   float fv = grid.y - float(iv);
+  vec2 cellUv = vec2(fu, fv);
+
+  // Phase 2.2 — water UV scroll. Apply a per-frame offset to the
+  // intra-cell UV so the water texture pattern drifts. The scroll is
+  // small enough to stay within a tile each frame; fract() wraps
+  // cleanly inside the per-tile slot via atlasUvFor's modular indexing
+  // because the slot only sees the fractional part. Gated by both the
+  // displacement quality flag AND the per-vertex water flag so
+  // non-water cells (and low quality) keep their static UV.
+  vec2 waterCellUv = cellUv;
+  if (uDisplacementEnabled > 0.5 && vIsWater == 1) {
+    waterCellUv = fract(cellUv + vec2(uTime * 0.05, uTime * 0.02));
+  }
 
   int t00 = vertexTypeAt(iu,     iv    );  // SW
   int t10 = vertexTypeAt(iu + 1, iv    );  // SE
   int t01 = vertexTypeAt(iu,     iv + 1);  // NW
   int t11 = vertexTypeAt(iu + 1, iv + 1);  // NE
 
+  // Per-corner cellUv: water-typed corners get the scrolled UV, others
+  // stay on the static path. This keeps the blend across the water /
+  // land seam continuous because non-water corners contribute their
+  // unscrolled tile while the water corners drift.
+  vec2 uv00 = (t00 >= 16 && t00 <= 23 && t00 != 21) ? waterCellUv : cellUv;
+  vec2 uv10 = (t10 >= 16 && t10 <= 23 && t10 != 21) ? waterCellUv : cellUv;
+  vec2 uv01 = (t01 >= 16 && t01 <= 23 && t01 != 21) ? waterCellUv : cellUv;
+  vec2 uv11 = (t11 >= 16 && t11 <= 23 && t11 != 21) ? waterCellUv : cellUv;
+
   // Heitz tile-and-blend per corner. Replaces the prior single-sample
   // texture() lookup that produced a visible 256x256 tile repeat
-  // inside every 24 m cell.
-  //
-  // We feed the CONTINUOUS LB-grid coord (grid, range [0,8] across
-  // a 192 m LB) -- not the cell-local UV (cellUv, range [0,1] that
-  // resets at every 24 m edge). cellUv would make the triangleGrid
-  // hash IDs jump at every cell boundary; the prior version did
-  // exactly that and produced 24 m seams that wiped out any
-  // de-tiling gain. The continuous coord keeps the hex grid AND the
-  // textureGrad sample coord consistent across cell boundaries, so
-  // adjacent fragments at a 24 m edge sample the same tile pixel
-  // (RepeatWrapping on the layer's 2D axes wraps the offset uv
-  // seamlessly).
-  //
-  // Water UV scroll (Phase 2.2) is intentionally NOT applied here:
-  // it required per-corner cellUv variants that don't compose with
-  // the continuous-grid Heitz path. Water animation now comes from
-  // vertex displacement only (sine waves at subdivLevel >= 2). If
-  // visible flow loss is unacceptable, we can add a water-typed
-  // time-dependent offset to grid per corner.
-  vec3 c00 = heitzSample(clamp(t00, 0, 32), grid);
-  vec3 c10 = heitzSample(clamp(t10, 0, 32), grid);
-  vec3 c01 = heitzSample(clamp(t01, 0, 32), grid);
-  vec3 c11 = heitzSample(clamp(t11, 0, 32), grid);
+  // inside every 24 m cell. Now each per-corner sample is itself a
+  // 3-sample stochastic blend (12 textureGrads/fragment total), with
+  // variance-preserving normalisation so it doesn't go muddy at hex
+  // centres. See heitzSample doc above.
+  vec3 c00 = heitzSample(clamp(t00, 0, 32), uv00);
+  vec3 c10 = heitzSample(clamp(t10, 0, 32), uv10);
+  vec3 c01 = heitzSample(clamp(t01, 0, 32), uv01);
+  vec3 c11 = heitzSample(clamp(t11, 0, 32), uv11);
 
   float w00 = (1.0 - fu) * (1.0 - fv);
   float w10 = fu * (1.0 - fv);
