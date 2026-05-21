@@ -664,6 +664,25 @@ export async function bakeBuildingsForLandblock(
       // refactor).
       continue;
     }
+    // Compute placementKey BEFORE constructing the Group so we can
+    // dedup against `opts.buildingMap3d`. MUST match `buildOneBuilding`'s
+    // formula at L314: landblockId_x_y_modelId. Without this check, a
+    // placement returned by multiple LBs' `fetch_landblock_objects`
+    // (cross-LB inclusion for buildings near landblock boundaries)
+    // would be baked once per LB that surfaced it — producing N
+    // invisible stacked copies at the same world position, each its
+    // own draw call. User report 2026-05-20: 26 copies of every
+    // surface in the centre LB, 3,885 wasted draw calls scene-wide
+    // (~40% of all draws).
+    const placementKey =
+      `${(placement.landblockId >>> 0).toString(16).padStart(8, "0")}_` +
+      `${placement.x.toFixed(2)}_${placement.y.toFixed(2)}_` +
+      `${(placement.modelId >>> 0).toString(16).padStart(8, "0")}`;
+    if (opts.buildingMap3d.has(placementKey)) {
+      // Same placement was already baked by another LB whose
+      // fetch_landblock_objects returned it — skip the duplicate.
+      continue;
+    }
     const { group, surfaceMeshCount: smc } = buildOneBuilding(
       placement,
       bake,
