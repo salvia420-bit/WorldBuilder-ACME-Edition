@@ -114,7 +114,61 @@ const HOLTBURG_RING_RADIUS = 6;
 const STATICS_RING_RADIUS = 6;
 const BUILDINGS_RING_RADIUS = 6;
 
-export async function init3D(canvas, sessionHandle, wasmExports) {
+// 2026-05-21 cold-boot Phase G (eager-init) — session-independent
+// scene3d bootstrap. Runs during page-init while the user is still
+// reading the login form, so the renderer + atmosphere LUTs + detail
+// tiles are warm by the time the post-Connect `init3D` opens.
+//
+// Cuts ~10s off the cold-boot gap between the 2nd Connect and phase7.2
+// buildings by overlapping renderer + quality + detail-tile +
+// atmosphere-LUT-load with the handshake + character-select round-trip.
+//
+// What lives here (session-independent):
+//   - canvas sizing + WebGLRenderer (incl. pixelRatio + anisotropy)
+//   - quality preset + URL flag parsing (shadows / forceDetail / etc.)
+//   - shadow / CSM setup
+//   - scene + worldRoot + group placeholders + hello-cube
+//   - sceneLighting (sun + ambient + lightsGroup)
+//   - PerspectiveCamera + resize listener + render-scale setter
+//   - atmosphereRuntimePromise (LUT load — runs concurrent with the
+//     post-Connect phase7 streaming once `init3D` resumes)
+//   - detailTileCache + terrainDetailNormalArray (async asset loads
+//     gated on quality flags)
+//
+// What stays in init3D (session/wasm-dependent):
+//   - terrain/buildings/statics/envCells bake (needs wasmExports)
+//   - entity manager + camera switcher (needs sessionHandle accessor)
+//   - audio manager / sound table cache / ambient runtime (needs wasm)
+//   - sky dome / cloud overlay / atmosphere lights+sky (touches the
+//     init3D-scoped `liveScene3d`)
+//
+// The returned handle plugs back into `init3D(canvas, sessionHandle,
+// wasmExports, preInitHandle)`. When preInitHandle is null/undefined
+// `init3D` calls `preInit3D(canvas)` itself so the existing single-
+// argument call sites (Phase 7.0 hello-cube capture, etc.) keep
+// working unchanged.
+export async function preInit3D(canvas) {
+  // Canvas sizing — index.html's <canvas> has width="512" height="512"
+  // as an attribute fallback for the 2D path's pixel-art look. For
+  // the 3D path we override to a viewport-relative size so the world
+  // actually fills the screen instead of rendering into a 512px square
+  // that gets lost on a 4K display.
+  //
+  // Pick min(viewport - chrome, sensible cap) so:
+  //   - The canvas grows to fill the visible area on big screens.
+  //   - We cap at 1920×1080 in CSS pixels so the GPU isn't asked to
+  //     fill 4K natively (the wasm bundle + three.js already strain
+  //     mid-range GPUs at higher res).
+  //   - devicePixelRatio caps at 2 so HiDPI screens don't quadruple
+  //     the draw cost.
+  const layoutChromeH = 320; // reserve space for HUD panels above + status
+  const cssW = Math.min(window.innerWidth - 32, 1920);
+  const cssH = Math.min(window.innerHeight - layoutChromeH, 1080);
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
+  canvas.width = cssW;
+  canvas.height = cssH;
+
   // Phase X.1 — resolve the visual-fidelity quality preset from URL +
   // UA before any subsystem inits. Stored on `liveScene3d.quality` so
   // each later phase (POM, CSM, terrain subdiv, hero assets)
@@ -126,6 +180,236 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   console.log(
     `[phase-x.1] quality preset=${quality.preset} source=${quality.source}`
   );
+
+  // A1 (perf plan 2026-05-18) — antialias is read from the quality
+  // preset (with optional Graphics-tab override). MSAA costs ~25% of
+  // frametime on weaker GPUs; off at `low`, on otherwise.
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: !!quality.flags.antialias,
+  });
+  // 2026-05-21 Phase F — explicitly enable EXT_float_blend so the GPU
+  // stops emitting "Using format enabled by implicitly enabled extension"
+  // warnings every frame the atmosphere LUTs are sampled.
+  renderer.getContext().getExtension("EXT_float_blend");
+  // 2026-05-21 Phase A/D follow-on — kick off the atmosphere LUT load
+  // CONCURRENTLY with everything else. The post-Connect `init3D` arm
+  // awaits the result of this promise; bake/load runs in parallel with
+  // page-init + handshake + login + character-select instead of
+  // sequentially after them.
+  const atmosphereRuntimePromise = import(
+    "./atmosphere_runtime.js?v=lutbake"
+  ).then(({ AtmosphereRuntime }) => new AtmosphereRuntime({ renderer }));
+  // Cap DPR at 2 — beyond that the cost outpaces the visual gain on
+  // a textured-mesh scene of this complexity.
+  let _renderScale = 1;
+  try {
+    const _params = new URLSearchParams(window.location.search);
+    const _raw = parseFloat(_params.get("renderScale") ?? "");
+    if (Number.isFinite(_raw) && _raw > 0 && _raw <= 2) _renderScale = _raw;
+  } catch (_) { /* default 1 */ }
+  const _basePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  renderer.setPixelRatio(_basePixelRatio * _renderScale);
+  // Expose a live setter so the user can sweep render scale from
+  // devtools without reloading. Re-applies pixel ratio and re-fires
+  // setSize on the renderer + atmosphere pipeline + cloud overlay so
+  // every RT in the chain rebuilds at the new resolution.
+  if (typeof window !== "undefined") {
+    window.__setRenderScale = (scale) => {
+      const n = Number(scale);
+      if (!Number.isFinite(n) || n <= 0 || n > 2) {
+        // eslint-disable-next-line no-console
+        console.warn(`[render-scale] invalid value ${scale}; expected (0, 2]`);
+        return;
+      }
+      _renderScale = n;
+      const pr = Math.min(window.devicePixelRatio || 1, 2) * n;
+      renderer.setPixelRatio(pr);
+      const ccW = canvas.clientWidth || canvas.width;
+      const ccH = canvas.clientHeight || canvas.height;
+      renderer.setSize(ccW, ccH, false);
+      const lp = (typeof window !== "undefined") ? window.liveScene3d : null;
+      try { lp?.atmospherePipeline?.setSize?.(ccW, ccH); } catch (_) {}
+      try { lp?.cloudOverlay?.setSize?.(ccW, ccH); } catch (_) {}
+      // eslint-disable-next-line no-console
+      console.log(`[render-scale] applied scale=${n} → pixelRatio=${pr}`);
+    };
+  }
+  renderer.setSize(cssW, cssH, false);
+  renderer.setClearColor(0x101418, 1);
+
+  // Texture quality 2026-05-20 — anisotropy cap. 1 ≡ OFF.
+  setAdapterMaxAnisotropy(1);
+
+  // Visual-fidelity Phase 0.1 — opt-in shadow maps via `?shadows=on`.
+  const shadowsParam = (() => {
+    try {
+      if (typeof window === "undefined" || !window.location?.search) return null;
+      const params = new URLSearchParams(window.location.search);
+      const raw = params.get("shadows");
+      if (raw === "on") return "on";
+      if (raw === "off") return "off";
+      return null;
+    } catch (_) {
+      return null;
+    }
+  })();
+  const shadowsEnabled = shadowsParam === "on";
+  const csmEnabled = !!quality?.flags?.csm && shadowsParam !== "off";
+  if (shadowsEnabled || csmEnabled) {
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[visfid] shadow path: ${csmEnabled ? "CSM (Phase 3.3)" : "single-shadow (Phase 0.1)"}`
+    );
+  }
+
+  const scene = new THREE.Scene();
+  if (typeof window !== "undefined" && window.__particleSortObjects === false) {
+    scene.sortObjects = false;
+  }
+
+  const worldRoot = new THREE.Group();
+  worldRoot.name = "worldRoot";
+  worldRoot.rotation.x = -Math.PI / 2;
+  scene.add(worldRoot);
+
+  const terrainGroup = new THREE.Group(); terrainGroup.name = "terrain";
+  const buildingsGroup = new THREE.Group(); buildingsGroup.name = "buildings";
+  const staticsGroup = new THREE.Group(); staticsGroup.name = "statics";
+  const cellsGroup = new THREE.Group(); cellsGroup.name = "cells";
+  const entitiesGroup = new THREE.Group(); entitiesGroup.name = "entities";
+  worldRoot.add(terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup);
+
+  // Hello-world cube — kept for the Phase 7.0 capture path's assertion.
+  const cubeGeom = new THREE.BoxGeometry(2, 2, 2);
+  cubeGeom.computeBoundingSphere();
+  const cubeMat = new THREE.MeshStandardMaterial({ color: 0xff8844, roughness: 0.6, metalness: 0.1 });
+  const cube = new THREE.Mesh(cubeGeom, cubeMat);
+  cube.name = "hello-cube";
+  cube.position.set(0, 0, 5);
+  worldRoot.add(cube);
+
+  // Phase 7.6 — scene lighting (sun + ambient + optional hemisphere).
+  const lighting = setupSceneLighting(scene, {
+    sceneSize: 600,
+    castShadow: shadowsEnabled,
+    csm: csmEnabled,
+  });
+  const csmState = lighting.csmState ?? null;
+
+  const camera = new THREE.PerspectiveCamera(60, cssW / cssH, 0.1, 5000);
+  camera.position.set(15, 15, 15);
+  camera.lookAt(0, 0, 5);
+
+  // Phase 0.2 — detail tile cache (gated on `quality.flags.detailFlag`).
+  const forceDetail = (() => {
+    try {
+      if (typeof window === "undefined" || !window.location?.search) return false;
+      const params = new URLSearchParams(window.location.search);
+      return params.get("forceDetail") === "on";
+    } catch (_) {
+      return false;
+    }
+  })();
+  const detailEnabled = !!quality?.flags?.detailFlag || forceDetail;
+  let detailTileCache = null;
+  if (detailEnabled) {
+    try {
+      detailTileCache = await loadDetailTileCache();
+      // eslint-disable-next-line no-console
+      console.log(
+        `[phase-0.2] detail tiles loaded: ${detailTileCache.size}/5 (forceDetail=${forceDetail})`
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[phase-0.2] detail tile load failed:", e);
+    }
+  }
+
+  // Phase 1.2 — terrain detail-normal array.
+  const terrainDetailNormalEnabled = !!quality?.flags?.terrainDetailNormal;
+  let terrainDetailNormalArray = null;
+  if (terrainDetailNormalEnabled) {
+    try {
+      const r = await loadTerrainDetailNormalArray();
+      if (r) {
+        terrainDetailNormalArray = r.texture;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[phase-1.2] terrain detail normal array loaded: ${r.keys.length} slices`
+        );
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[phase-1.2] terrain detail normal array unavailable; shader will run baseline"
+        );
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[phase-1.2] terrain detail normal load failed:", e);
+    }
+  }
+
+  return {
+    canvas,
+    cssW,
+    cssH,
+    layoutChromeH,
+    renderer,
+    scene,
+    worldRoot,
+    terrainGroup,
+    buildingsGroup,
+    staticsGroup,
+    cellsGroup,
+    entitiesGroup,
+    cube,
+    lighting,
+    csmState,
+    camera,
+    quality,
+    shadowsEnabled,
+    csmEnabled,
+    detailTileCache,
+    terrainDetailNormalArray,
+    forceDetail,
+    atmosphereRuntimePromise,
+  };
+}
+
+export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) {
+  // 2026-05-21 cold-boot Phase G — reuse the eager-init handle from
+  // page-init when it was built ahead of time, otherwise build it
+  // inline now (preserves the Phase 7.0 hello-cube capture path that
+  // calls init3D(canvas, null, {}) directly).
+  const pre = preInitHandle ?? (await preInit3D(canvas));
+  const {
+    cssW,
+    cssH,
+    layoutChromeH,
+    renderer,
+    scene,
+    worldRoot,
+    terrainGroup,
+    buildingsGroup,
+    staticsGroup,
+    cellsGroup,
+    entitiesGroup,
+    cube,
+    lighting,
+    csmState,
+    camera,
+    quality,
+    shadowsEnabled,
+    csmEnabled,
+    detailTileCache,
+    terrainDetailNormalArray,
+    forceDetail,
+    atmosphereRuntimePromise,
+  } = pre;
+  const { sun, ambient, lightsGroup } = lighting;
 
   // Phase F.C — runtime event log probe. Opt-in via `?eventLog=on` so
   // production users don't pay the cost; the F.D validator flips the
@@ -173,245 +457,6 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         "validator can read via liveScene3d.snapshotEventLog()"
     );
   }
-
-  // Canvas sizing — index.html's <canvas> has width="512" height="512"
-  // as an attribute fallback for the 2D path's pixel-art look. For
-  // the 3D path we override to a viewport-relative size so the world
-  // actually fills the screen instead of rendering into a 512px square
-  // that gets lost on a 4K display.
-  //
-  // Pick min(viewport - chrome, sensible cap) so:
-  //   - The canvas grows to fill the visible area on big screens.
-  //   - We cap at 1920×1080 in CSS pixels so the GPU isn't asked to
-  //     fill 4K natively (the wasm bundle + three.js already strain
-  //     mid-range GPUs at higher res).
-  //   - devicePixelRatio caps at 2 so HiDPI screens don't quadruple
-  //     the draw cost.
-  // Both `canvas.width/height` (drawing buffer) and `canvas.style.*`
-  // (CSS rendered size) are set explicitly so the browser doesn't
-  // fall back to the 512 attribute defaults.
-  const layoutChromeH = 320; // reserve space for HUD panels above + status
-  const cssW = Math.min(window.innerWidth - 32, 1920);
-  const cssH = Math.min(window.innerHeight - layoutChromeH, 1080);
-  canvas.style.width = `${cssW}px`;
-  canvas.style.height = `${cssH}px`;
-  canvas.width = cssW;
-  canvas.height = cssH;
-
-  // A1 (perf plan 2026-05-18) — antialias is read from the quality
-  // preset (with optional Graphics-tab override). MSAA costs ~25% of
-  // frametime on weaker GPUs; off at `low`, on otherwise.
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    antialias: !!quality.flags.antialias,
-  });
-  // 2026-05-21 Phase F — explicitly enable EXT_float_blend so the GPU
-  // stops emitting "Using format enabled by implicitly enabled extension"
-  // warnings every frame the atmosphere LUTs are sampled. ~32 messages
-  // per cold boot disappear; no behavior change.
-  renderer.getContext().getExtension("EXT_float_blend");
-  // 2026-05-21 Phase A/D follow-on — kick off the atmosphere LUT load
-  // CONCURRENTLY with phase7 streaming. The existing chain at ~L1674
-  // used to construct AtmosphereRuntime here, but that was after
-  // skyDome / cloudOverlay / aurora setup AND after phase7 streaming
-  // finished — ~36-52s after the renderer existed. Moving the
-  // construction to RIGHT AFTER the renderer means the LUT load runs
-  // in parallel with phase7 instead of sequentially after it. By the
-  // time the original chain reaches `await atmosphereRuntimePromise`,
-  // the textures are already in GPU memory and `whenReady()` resolves
-  // synchronously. Hoisted via an outer-scope promise so the existing
-  // `.whenReady().then(...)` chain at ~L1681 can `await` the
-  // pre-warmed instance instead of constructing a second one.
-  const atmosphereRuntimePromise = import(
-    "./atmosphere_runtime.js?v=lutbake"
-  ).then(({ AtmosphereRuntime }) => new AtmosphereRuntime({ renderer }));
-  // Cap DPR at 2 — beyond that the cost outpaces the visual gain on
-  // a textured-mesh scene of this complexity.
-  // 2026-05-18 — `?renderScale=N` lets the user dial back the
-  // framebuffer resolution without changing the canvas's CSS size.
-  // pixelRatio = clamp(devicePixelRatio, 1..2) × scale. A 4K monitor
-  // running at scale=0.5 renders at 1920x1080 internally and upscales
-  // via the canvas's CSS size — same image area, ~1/4 the GPU pixels.
-  // Live-tunable: `window.__setRenderScale(0.5)`.
-  let _renderScale = 1;
-  try {
-    const _params = new URLSearchParams(window.location.search);
-    const _raw = parseFloat(_params.get("renderScale") ?? "");
-    if (Number.isFinite(_raw) && _raw > 0 && _raw <= 2) _renderScale = _raw;
-  } catch (_) { /* default 1 */ }
-  const _basePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-  renderer.setPixelRatio(_basePixelRatio * _renderScale);
-  // Expose a live setter so the user can sweep render scale from
-  // devtools without reloading. Re-applies pixel ratio and re-fires
-  // setSize on the renderer + atmosphere pipeline + cloud overlay so
-  // every RT in the chain rebuilds at the new resolution.
-  if (typeof window !== "undefined") {
-    window.__setRenderScale = (scale) => {
-      const n = Number(scale);
-      if (!Number.isFinite(n) || n <= 0 || n > 2) {
-        // eslint-disable-next-line no-console
-        console.warn(`[render-scale] invalid value ${scale}; expected (0, 2]`);
-        return;
-      }
-      _renderScale = n;
-      const pr = Math.min(window.devicePixelRatio || 1, 2) * n;
-      renderer.setPixelRatio(pr);
-      // Re-size at the current CSS size so the RTs rebuild.
-      const cssW = canvas.clientWidth || canvas.width;
-      const cssH = canvas.clientHeight || canvas.height;
-      renderer.setSize(cssW, cssH, false);
-      const lp = (typeof window !== "undefined") ? window.liveScene3d : null;
-      try { lp?.atmospherePipeline?.setSize?.(cssW, cssH); } catch (_) {}
-      try { lp?.cloudOverlay?.setSize?.(cssW, cssH); } catch (_) {}
-      // eslint-disable-next-line no-console
-      console.log(`[render-scale] applied scale=${n} → pixelRatio=${pr}`);
-    };
-  }
-  renderer.setSize(cssW, cssH, false);
-  renderer.setClearColor(0x101418, 1);
-
-  // Texture quality 2026-05-20 — anisotropy cap. 1 ≡ OFF (Three.js
-  // minimum, plain trilinear). 16× was visually nice but stacked with
-  // the atmosphere/cloud composer chain it tanked FPS at grazing
-  // terrain angles. Re-enable by passing 4 or 8 if FPS headroom
-  // exists. Plumbing stays in place via setAdapterMaxAnisotropy so
-  // flipping this constant is the only knob.
-  setAdapterMaxAnisotropy(1);
-
-  // Visual-fidelity Phase 0.1 — opt-in shadow maps via `?shadows=on`.
-  // Default OFF so existing capture flows and the baseline visual
-  // unchanged. Phase X.1 (quality presets) will gate this on
-  // `quality>=mid` instead of a one-off URL param.
-  // `?shadows=off` is an explicit kill-switch for BOTH the Phase 0.1
-  // single-shadow path AND the Phase 3.3 CSM path (the user-facing
-  // override beats the preset gating).
-  const shadowsParam = (() => {
-    try {
-      if (typeof window === "undefined" || !window.location?.search) return null;
-      const params = new URLSearchParams(window.location.search);
-      const raw = params.get("shadows");
-      if (raw === "on") return "on";
-      if (raw === "off") return "off";
-      return null;
-    } catch (_) {
-      return null;
-    }
-  })();
-  const shadowsEnabled = shadowsParam === "on";
-  // Visual-fidelity Phase 3.3 — Cascaded Shadow Maps. When
-  // `quality.flags.csm` is true (high+ preset) AND `?shadows=off`
-  // hasn't been passed, CSM picks up. CSM and Phase 0.1's single-
-  // shadow path are mutually exclusive — `setupSceneLighting` forces
-  // the sun's `castShadow` off when CSM is active.
-  // - quality=high + no shadows param      → CSM on, Phase 0.1 off
-  // - quality=high + ?shadows=on           → CSM on (no conflict —
-  //     Phase 0.1's `shadowsEnabled` is ignored when csmEnabled=true)
-  // - quality=high + ?shadows=off          → BOTH off
-  // - quality=mid  + ?shadows=on           → Phase 0.1 on, CSM off
-  // - quality=mid  + no shadows param      → BOTH off (preserves the
-  //     pre-Phase-3.3 default)
-  const csmEnabled = !!quality?.flags?.csm && shadowsParam !== "off";
-  if (shadowsEnabled || csmEnabled) {
-    renderer.shadowMap.enabled = true;
-    // Plan doc requested `PCFSoftShadowMap`, but three.js r184 (the
-    // version pinned in importmap at index.html:509) deprecated it
-    // and falls back to `PCFShadowMap` with a one-shot console warn
-    // the first frame the renderer renders shadows. Setting
-    // `PCFShadowMap` directly silences the warn and keeps the
-    // shipped output identical (the runtime falls back regardless).
-    // If three.js re-introduces a proper soft-shadow filter (`VSMShadowMap`
-    // or `PCFShadowMap.softness > 0`), we can swap here.
-    renderer.shadowMap.type = THREE.PCFShadowMap;
-    // eslint-disable-next-line no-console
-    console.log(
-      `[visfid] shadow path: ${csmEnabled ? "CSM (Phase 3.3)" : "single-shadow (Phase 0.1)"}`
-    );
-  }
-
-  const scene = new THREE.Scene();
-
-  // FU1 (perf followon 2026-05-18) — honour ?particleSortObjects=off
-  // URL flag. E5 (e1339af) plumbs the flag onto window; we read it
-  // here once at scene construction. Default true preserves
-  // existing transparent-particle sort behaviour.
-  if (typeof window !== "undefined" && window.__particleSortObjects === false) {
-    scene.sortObjects = false;
-  }
-
-  // worldRoot carries the AC-Z-up→three-Y-up correction. Every
-  // subsequent group attaches under it so child positions can be set
-  // in raw AC coordinates and three.js handles the rotation once at
-  // the root.
-  const worldRoot = new THREE.Group();
-  worldRoot.name = "worldRoot";
-  worldRoot.rotation.x = -Math.PI / 2;
-  scene.add(worldRoot);
-
-  // Group placeholders for phases 7.1–7.4. Empty in 7.0; future phases
-  // populate them with terrain meshes / building rigs / static meshes /
-  // env-cell groups / entity rigs.
-  const terrainGroup = new THREE.Group(); terrainGroup.name = "terrain";
-  const buildingsGroup = new THREE.Group(); buildingsGroup.name = "buildings";
-  const staticsGroup = new THREE.Group(); staticsGroup.name = "statics";
-  const cellsGroup = new THREE.Group(); cellsGroup.name = "cells";
-  const entitiesGroup = new THREE.Group(); entitiesGroup.name = "entities";
-  worldRoot.add(terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup);
-
-  // Hello-world cube — Phase 7.0 contract still in place so the 7.0
-  // capture stays green (it asserts position (0, 0, 5) when init3D is
-  // called with empty wasmExports). When real terrain is available
-  // (Phase 7.1+ path), we shift the cube 100 m off-axis below to keep
-  // it from polluting the Holtburg view.
-  const cubeGeom = new THREE.BoxGeometry(2, 2, 2);
-  // Phase 7.7 — three.js BoxGeometry's primitive constructor does NOT
-  // pre-compute boundingSphere (verified in r184). Without this call,
-  // the hello-cube's `Mesh.frustumCulled = true` would silently fail
-  // (three.js falls back to "always visible" when boundingSphere is
-  // null), polluting the frustum-culling measurement in
-  // capture_phase7_7_frustum.cjs. Explicit call keeps it honest.
-  cubeGeom.computeBoundingSphere();
-  const cubeMat = new THREE.MeshStandardMaterial({ color: 0xff8844, roughness: 0.6, metalness: 0.1 });
-  const cube = new THREE.Mesh(cubeGeom, cubeMat);
-  cube.name = "hello-cube";
-  cube.position.set(0, 0, 5);
-  worldRoot.add(cube);
-
-  // Phase 7.6 — scene lighting moved to `./lighting.js`. The module
-  // attaches a DirectionalLight (sun) + AmbientLight (+ optional
-  // HemisphereLight) under a `lights` group at the scene root, then
-  // `tickLightingForCellState` (driven by `loop.js`) flips
-  // `sun.visible` + boosts `ambient.intensity` when the wasm cell
-  // BFS reports indoor. `sceneSize: 600` covers Holtburg's 9-LB
-  // neighbourhood for shadow camera framing (shadows opt-in,
-  // disabled by default in Phase 7.6).
-  const lighting = setupSceneLighting(scene, {
-    sceneSize: 600,
-    // Visual-fidelity Phase 0.1 — opt in to shadow casting on the
-    // sun when `?shadows=on`. Caller is responsible for flipping
-    // `renderer.shadowMap.enabled` (done above) and tagging meshes
-    // with `castShadow` / `receiveShadow` (per buildings.js,
-    // statics.js, terrain.js, etc.).
-    castShadow: shadowsEnabled,
-    // Visual-fidelity Phase 3.3 — when CSM is enabled, the sun's own
-    // shadow is OFF and three cascade shadow-only DirectionalLights are
-    // constructed inside `setupCsm`. Mutually exclusive with the Phase
-    // 0.1 single-shadow path; the resolved gating
-    // (csm > Phase-0.1 > off) lives above.
-    csm: csmEnabled,
-  });
-  const { sun, ambient, lightsGroup } = lighting;
-  // Visual-fidelity Phase 3.3 — surface the csm bundle for builders +
-  // capture scripts. Materials produced by `MaterialCache` will install
-  // the shader patch when this is non-null (gated by Phase 0.1's
-  // shadowsEnabled vs csmEnabled split).
-  const csmState = lighting.csmState ?? null;
-
-  // Camera — perspective. Default framing for the Phase 7.0 hello-
-  // world is back-and-up from the cube; Phase 7.1+ retargets it onto
-  // the Holtburg LB centre after terrain is built.
-  const camera = new THREE.PerspectiveCamera(60, cssW / cssH, 0.1, 5000);
-  camera.position.set(15, 15, 15);
-  camera.lookAt(0, 0, 5);
 
   // Sky-K.2 — atmosphere pipeline (constructed below after AtmosphereRuntime's
   // texture bake completes). Forward-declared so the
@@ -463,67 +508,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   let terrainSummary = null;
   let buildingsSummary = null;
   let staticsSummary = null;
-  // Phase 0.2 — load the detail-tile cache once at scene init, before
-  // any builder runs. The MaterialCache constructor reads it from
-  // `scene3dForBuilders.detailTileCache` (via buildings.js / statics.js
-  // / sky_assets.js / cells.js lazy `new MaterialCache(...)`). Gated on
-  // `quality.flags.detailFlag` so the `low` preset doesn't pay the
-  // ~150 KB asset cost. `?forceDetail=on` URL override applies the
-  // composite to every textured material so the visual smoke can show
-  // the effect on real Holtburg surfaces — retail portal.dat ships 0
-  // Detail-flagged surfaces per the Phase 0.2 audit.
-  const forceDetail = (() => {
-    try {
-      if (typeof window === "undefined" || !window.location?.search) return false;
-      const params = new URLSearchParams(window.location.search);
-      return params.get("forceDetail") === "on";
-    } catch (_) {
-      return false;
-    }
-  })();
-  const detailEnabled = !!quality?.flags?.detailFlag || forceDetail;
-  let detailTileCache = null;
-  if (detailEnabled) {
-    try {
-      detailTileCache = await loadDetailTileCache();
-      // eslint-disable-next-line no-console
-      console.log(
-        `[phase-0.2] detail tiles loaded: ${detailTileCache.size}/5 (forceDetail=${forceDetail})`
-      );
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[phase-0.2] detail tile load failed:", e);
-    }
-  }
 
-  // Phase 1.2 — terrain detail-normal array. Gated on
-  // `quality.flags.terrainDetailNormal` (mid/high/ultra by default, low
-  // off). Loaded once, shared by every per-LB terrain ShaderMaterial.
-  // When the load fails (offline / 404 / mock-canvas captures) the
-  // shader sees `null` + uDetailNormalEnabled=0 and branches around
-  // the sample — no degradation versus baseline.
-  const terrainDetailNormalEnabled = !!quality?.flags?.terrainDetailNormal;
-  let terrainDetailNormalArray = null;
-  if (terrainDetailNormalEnabled) {
-    try {
-      const r = await loadTerrainDetailNormalArray();
-      if (r) {
-        terrainDetailNormalArray = r.texture;
-        // eslint-disable-next-line no-console
-        console.log(
-          `[phase-1.2] terrain detail normal array loaded: ${r.keys.length} slices`
-        );
-      } else {
-        // eslint-disable-next-line no-console
-        console.warn(
-          "[phase-1.2] terrain detail normal array unavailable; shader will run baseline"
-        );
-      }
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[phase-1.2] terrain detail normal load failed:", e);
-    }
-  }
   // Construct a stub scene3d shape early so the per-phase builders
   // can share state (`materialCache`, `buildingMap3d`).
   const scene3dForBuilders = {
@@ -1700,7 +1685,31 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         }
         atmosphereRuntime.whenReady().then(async () => {
           try {
-            const { createAtmospherePipeline } = await import("./atmosphere_pipeline.js");
+            // 2026-05-21 cold-boot Phase G follow-on — parallel imports
+            // for the three atmosphere modules. Index.html's Phase E
+            // eager-import block (around line ~924) already warmed
+            // these on page-init via `Promise.all([... 5 imports ...])`,
+            // so the dynamic import calls below hit the ES-module cache
+            // and resolve synchronously. The Promise.all here saves the
+            // 3 sequential awaits that were stretching the post-bake
+            // chain even when warm (microtask scheduling) and reads as
+            // a single "load + construct" beat.
+            const [
+              { createAtmospherePipeline },
+              { AtmosphereLights },
+              { AtmosphereSky },
+            ] = await Promise.all([
+              import("./atmosphere_pipeline.js"),
+              import("./atmosphere_lights.js"),
+              import("./atmosphere_sky.js"),
+            ]);
+            // Pipeline first — it owns the EffectComposer + cloud
+            // depth-texture coupling that the overlay wiring below
+            // reads. AtmosphereLights and AtmosphereSky are
+            // construction-only operations on independent scenes
+            // (Lights writes to `scene`; Sky writes to
+            // `skyDome.skyScene`) and so are safe to construct in
+            // parallel afterwards.
             atmospherePipeline = createAtmospherePipeline(renderer, scene, camera, {
               skyScene: skyDome?.skyScene,
               skyCamera: skyDome?.skyCamera,
@@ -1742,35 +1751,38 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
               console.warn("[sky-k.2/clouds] depth-texture wire failed:", e);
             }
 
-            // Sky-K.3 — physical sun + sky probe lights driven by the
-            // Bruneton lookups. Hands off from sky_lighting.js's
-            // parametric writes via setAtmosphereMode(true). Tone
-            // mapping (AGX) in the pipeline collapses the resulting
-            // HDR back to displayable sRGB.
-            const { AtmosphereLights } = await import("./atmosphere_lights.js");
-            const atmosphereLights = new AtmosphereLights({
+            // Sky-K.3 + K.4 — construct Lights and Sky in parallel.
+            // AtmosphereLights writes to `scene` (adds DirectionalLight
+            // + LightProbe). AtmosphereSky writes to `skyDome.skyScene`
+            // (adds SkyMaterial mesh + stars Points). Both read the
+            // SAME `atmosphereRuntime.textures` bundle but only sample
+            // it (no GPU state contention). The stars.bin fetch inside
+            // AtmosphereSky is async and resolves whenever it lands —
+            // independent of Lights init.
+            let atmosphereLights;
+            let atmosphereSky = null;
+            const lightsPromise = (async () => new AtmosphereLights({
               scene,
               atmosphereRuntime,
-            });
+            }))();
+            const skyPromise = skyDome?.skyScene
+              ? (async () => new AtmosphereSky({
+                  skyScene: skyDome.skyScene,
+                  skyDome,
+                  atmosphereRuntime,
+                }))()
+              : Promise.resolve(null);
+            [atmosphereLights, atmosphereSky] = await Promise.all([
+              lightsPromise,
+              skyPromise,
+            ]);
             liveScene3d.atmosphereLights = atmosphereLights;
             // eslint-disable-next-line no-undef
             if (typeof window !== "undefined") {
               // eslint-disable-next-line no-undef
               window.__atmosphereLights = atmosphereLights;
             }
-
-            // Sky-K.4 — replace SkyDome's parametric dome with takram's
-            // SkyMaterial + stars. Hides skyDome.skyCell + parametric
-            // celestials; adds SkyMaterial quad + stars Points to the
-            // SAME skyDome.skyScene so the existing sky RenderPass
-            // wiring still works.
-            if (skyDome?.skyScene) {
-              const { AtmosphereSky } = await import("./atmosphere_sky.js");
-              const atmosphereSky = new AtmosphereSky({
-                skyScene: skyDome.skyScene,
-                skyDome,
-                atmosphereRuntime,
-              });
+            if (atmosphereSky) {
               liveScene3d.atmosphereSky = atmosphereSky;
               // eslint-disable-next-line no-undef
               if (typeof window !== "undefined") {

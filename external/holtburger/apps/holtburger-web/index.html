@@ -919,7 +919,7 @@
             if (wantRenderer3d) {
               const eagerImport = () => {
                 Promise.all([
-                  import("./scene3d/index.js"),
+                  import("./scene3d/index.js?v=eager-init"),
                   import("./scene3d/picking.js"),
                   // 2026-05-21 Phase E follow-on — warm the takram CDN
                   // graph (@takram/three-atmosphere, three-geospatial,
@@ -941,9 +941,67 @@
                   import("./scene3d/atmosphere_sky.js"),
                   import("./scene3d/aurora.js"),
                 ])
-                  .then(() =>
-                    console.log("[boot] scene3d module graph eagerly imported")
-                  )
+                  .then(async ([sceneIndex]) => {
+                    console.log("[boot] scene3d module graph eagerly imported");
+                    // 2026-05-21 cold-boot Phase G (eager-init) — once
+                    // the scene3d module graph is warm, kick off the
+                    // session-independent setup (`preInit3D`) so the
+                    // WebGLRenderer + atmosphere LUT bake + detail-tile
+                    // fetch run in parallel with the login + character-
+                    // select round-trip. By the time the user clicks
+                    // Connect a SECOND time and init3D fires, the
+                    // returned handle holds a fully-warm renderer +
+                    // pre-staged AtmosphereRuntime; init3D destructures
+                    // and proceeds straight to terrain bake. Target ~10s
+                    // shaved off the gap between Connect→phase7.2.
+                    //
+                    // Canvas-not-in-DOM guard: index.html builds the
+                    // `<canvas id="canvas">` early enough that on a
+                    // normal page-init it's already in the DOM when
+                    // requestIdleCallback fires, but the
+                    // DOMContentLoaded fallback covers the edge case
+                    // where the scheduler races the parser (slow CPU /
+                    // long-running synchronous script earlier in the
+                    // body).
+                    if (typeof sceneIndex?.preInit3D !== "function") {
+                      console.warn(
+                        "[boot] preInit3D missing from scene3d/index.js — skipping eager-init"
+                      );
+                      return;
+                    }
+                    const runPreInit = () => {
+                      const c = document.getElementById("canvas");
+                      if (!c) {
+                        console.warn(
+                          "[boot] canvas missing at preInit3D-time — eager-init skipped (init3D will build inline)"
+                        );
+                        return;
+                      }
+                      sceneIndex
+                        .preInit3D(c)
+                        .then((handle) => {
+                          window.__preInit3DHandle = handle;
+                          console.log(
+                            "[boot] preInit3D handle staged on window.__preInit3DHandle"
+                          );
+                        })
+                        .catch((e) => {
+                          console.warn(
+                            "[boot] preInit3D failed; init3D will build inline:",
+                            e
+                          );
+                        });
+                    };
+                    if (document.readyState === "loading") {
+                      document.addEventListener(
+                        "DOMContentLoaded",
+                        runPreInit,
+                        { once: true }
+                      );
+                    } else {
+                      runPreInit();
+                    }
+                  })
                   .catch((e) =>
                     console.warn(
                       "[boot] eager scene3d import failed (will retry on Connect):",
@@ -5411,11 +5469,23 @@ void main() {
           new URLSearchParams(window.location.search).get("renderer") === "3d";
         if (useRenderer3d) {
           renderStatus.textContent = "Initializing 3D renderer (?renderer=3d)…";
-          const { init3D } = await import("./scene3d/index.js");
+          const { init3D } = await import("./scene3d/index.js?v=eager-init");
           // sessionHandle exposed via window.__sessionHandle by the
           // login-flow handler (see line ~5251). Pass it through so
           // future phases (cell visibility, MovementSystem) can read
           // the same handle the 2D path consumes via the global.
+          //
+          // 2026-05-21 cold-boot Phase G — `window.__preInit3DHandle`
+          // is staged by the eager-import block (around line ~924) when
+          // `?renderer=3d` is set and the canvas was in the DOM at
+          // page-init. It holds the WebGLRenderer + scene + camera +
+          // quality preset + atmosphereRuntimePromise built during the
+          // login/handshake window. Reusing it skips ~10s of pre-bake
+          // setup that would otherwise sit between the 2nd Connect and
+          // phase7.2 buildings. If the handle is null (canvas missed
+          // DOM, eager-import failed, or this is the Phase 7.0 capture
+          // path with no `?renderer=3d`), init3D builds it inline so
+          // the existing 3-arg call sites stay green.
           await init3D(canvas, window.__sessionHandle, {
             fetch_landblock_heightmaps,
             // Phase 2.1 — visual-only subdivided mesh. Read by
@@ -5479,7 +5549,7 @@ void main() {
             // resolver returns undefined and ticks no-op via
             // `skippedNoRegion++`.
             fetchRegion,
-          });
+          }, window.__preInit3DHandle);
           // Free the meshes/objects views the 3D path doesn't consume
           // yet (Phase 7.1 will read them via wasmExports directly).
           // The HUD panels (vitals, inventory, chat) are DOM and stay
@@ -6082,6 +6152,97 @@ void main() {
         }
       })();
 
+      // ────────────────────────────────────────────────────────────
+      // 2026-05-21 Agentic-workflow login machinery.
+      //
+      // Three concerns this block addresses, in order:
+      //   1. **State machine.** `window.__bootState` + a CustomEvent
+      //      (`holtburger:state`) report progress in machine-readable
+      //      form so agents can poll/wait/await instead of guessing.
+      //      Console log lines (`[boot-state] <state>`) double as
+      //      grep-friendly markers in the firefox-driver console buffer.
+      //   2. **Form pre-fill.** URL params `?account=X&password=Y` plus
+      //      `localStorage` (account only — never password) populate
+      //      the form so an agent doesn't need to fill it via /eval.
+      //   3. **Autonomous Connect+Spawn.** `?autoLogin=1` runs the full
+      //      ACE kick-then-reconnect-then-spawn dance: click Connect,
+      //      wait 5.5 s for ACE to log the in-world character out,
+      //      click Connect again, then click Spawn on the chosen
+      //      character (`?autoSpawn=Name` or `?autoSpawn=first`,
+      //      default first). Mirrors what the human user does manually.
+      //
+      // State sequence (each fires the `holtburger:state` event):
+      //   init → form-shown → connecting → kicking → reconnecting
+      //     → char-list-ready → spawning → in-world
+      //   (or `error` at any step)
+      //
+      // Agent usage:
+      //   await navigate('?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first');
+      //   await waitFor(() => window.__bootState === 'in-world');
+      //
+      // The state setter is harmless if URL params aren't set — the
+      // page behaves exactly like before (manual Connect + Spawn).
+      // ────────────────────────────────────────────────────────────
+      window.__bootState = "init";
+      window.__bootStateHistory = [];
+      function setBootState(state, message) {
+        const detail = { state, message: message ?? "", ts: Date.now() };
+        window.__bootState = state;
+        window.__bootStateAt = detail.ts;
+        window.__bootStateHistory.push(detail);
+        console.log(`[boot-state] ${state}${message ? ": " + message : ""}`);
+        try {
+          window.dispatchEvent(new CustomEvent("holtburger:state", { detail }));
+        } catch {}
+      }
+      // Expose so agents can call from /eval without redefining.
+      window.__setBootState = setBootState;
+
+      // URL params + localStorage pre-fill. account is persisted to
+      // localStorage on successful login below; password is never
+      // persisted. URL params always override localStorage so the
+      // agent's `?password=X` doesn't get stomped by an empty default.
+      const LOGIN_LAST_ACCOUNT_KEY = "holtburger.lastAccount";
+      const bootParams = (() => {
+        try { return new URLSearchParams(window.location.search); }
+        catch { return new URLSearchParams(""); }
+      })();
+      try {
+        const lsAcct = localStorage.getItem(LOGIN_LAST_ACCOUNT_KEY) ?? "";
+        const acctInput = loginForm.querySelector('[name="account"]');
+        const passInput = loginForm.querySelector('[name="password"]');
+        const acctUrl = bootParams.get("account");
+        const passUrl = bootParams.get("password");
+        if (acctInput) {
+          acctInput.value = acctUrl ?? lsAcct ?? acctInput.value ?? "";
+        }
+        if (passInput && passUrl != null) {
+          passInput.value = passUrl;
+        }
+      } catch (e) {
+        console.warn("[boot] login pre-fill failed:", e);
+      }
+
+      // Stable data-test-id attributes so capture scripts + agents don't
+      // depend on tag/class structure that may drift.
+      try {
+        const tagMap = {
+          'account': 'account-input',
+          'password': 'password-input',
+          'bridge_url': 'bridge-url-input',
+          'server_host': 'server-host-input',
+          'server_port': 'server-port-input',
+        };
+        for (const [name, id] of Object.entries(tagMap)) {
+          const el = loginForm.querySelector(`[name="${name}"]`);
+          if (el && !el.dataset.testId) el.dataset.testId = id;
+        }
+        const submitBtn = loginForm.querySelector("button[type=submit]");
+        if (submitBtn && !submitBtn.dataset.testId) submitBtn.dataset.testId = "connect-btn";
+      } catch (e) {
+        console.warn("[boot] data-test-id stamp failed:", e);
+      }
+
       // Enable Connect now that the submit listener is wired. Until
       // here the button reads "Loading…" + disabled so a tap on a
       // slow mobile connection can't slip through to the native
@@ -6090,6 +6251,7 @@ void main() {
         const btn = loginForm.querySelector("button[type=submit]");
         if (btn) { btn.disabled = false; btn.textContent = "Connect"; }
       }
+      setBootState("form-shown");
       loginForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         if (activeHandle) return;
@@ -6101,6 +6263,7 @@ void main() {
         const serverPort = Number(fd.get("server_port") ?? 0);
         if (!account || !password || !bridgeUrl || !serverHost || !serverPort) {
           loginStatus.innerHTML = `<span class="fail">[FAIL]</span> All fields are required.`;
+          setBootState("error", "missing form fields");
           return;
         }
 
@@ -6112,6 +6275,14 @@ void main() {
         submitBtn.dataset.connecting = "1";
         submitBtn.textContent = "Connect (retry)";
         loginStatus.innerHTML = `Connecting to <code>${bridgeUrl}</code> (server <code>${serverHost}:${serverPort}</code>) and sending LoginRequest…`;
+        // 'connecting' fires for both the first kick-Connect and any
+        // manual retry. The autonomous orchestrator below overrides
+        // this with 'kicking' / 'reconnecting' immediately AFTER this
+        // handler completes when it's driving the flow.
+        setBootState("connecting", `${serverHost}:${serverPort} as ${account}`);
+        // Persist the account name (NOT password) so a future cold
+        // boot can pre-fill the form even without URL params.
+        try { localStorage.setItem(LOGIN_LAST_ACCOUNT_KEY, account); } catch {}
 
         try {
           const handle = await start_session(bridgeUrl, serverHost, serverPort, account, password);
@@ -6203,6 +6374,7 @@ void main() {
               `<span class="hint">Character creation unavailable — CharGen / SkillTable not loaded. Verify <code>${MANIFEST_URL}</code> is reachable + that init_resource_source resolved (check console).</span>`;
           }
           selection.hidden = false;
+          setBootState("char-list-ready", `${handle.characterList?.()?.length ?? 0} characters`);
 
           // Phase 4 step 2a — spawn flow. Click Spawn → wasm sends
           // CharacterEnterWorldRequest. The recv loop auto-handles the
@@ -6264,12 +6436,14 @@ void main() {
             const id = Number(btn.dataset.id);
             const name = btn.parentElement?.dataset?.name || "<unknown>";
             spawningCharId = id;
+            setBootState("spawning", name);
             try {
               handle.selectCharacter(id);
             } catch (err) {
               spawningCharId = null;
               loginStatus.innerHTML =
                 `<span class="fail">[FAIL]</span> selectCharacter rejected: <code>${String(err?.message ?? err)}</code>`;
+              setBootState("error", `selectCharacter: ${String(err?.message ?? err)}`);
               return;
             }
             // Disable every Spawn button — only one spawn per session.
@@ -6765,6 +6939,9 @@ void main() {
                 }
                 postSpawn.hidden = false;
                 teleportBtn.disabled = false;
+                if (window.__bootState !== "in-world") {
+                  setBootState("in-world", `guid=0x${playerGuid}`);
+                }
                 // Workstream Sky-B (parametric skybox, 2026-05-11):
                 // populate the SkyDesc shadow from Region 0x13000000
                 // (Dereth — the only Region shipped in retail
@@ -7629,10 +7806,137 @@ void main() {
           submitBtn.disabled = false;
           submitBtn.textContent = "Connect";
           delete submitBtn.dataset.connecting;
+          setBootState("error", `start_session: ${msg}`);
           // eslint-disable-next-line no-console
           console.error("start_session failed:", err);
         }
       });
+
+      // ────────────────────────────────────────────────────────────
+      // Autonomous Connect+Spawn orchestrator.
+      //
+      // Drives the form when `?autoLogin=1` is set. Mirrors the human
+      // flow the user described: first Connect kicks any in-world
+      // character (ACE-side side effect when the same character is
+      // already logged in elsewhere), wait ~5.5 s for the kick to
+      // propagate, second Connect succeeds against a now-out-of-game
+      // character, then Spawn fires.
+      //
+      // URL params honored:
+      //   - `?autoLogin=1`         — run the orchestrator
+      //   - `?kickDance=0`         — skip the first-Connect kick + 5.5 s wait
+      //                              (use when the character is known to
+      //                              be out of game already)
+      //   - `?autoSpawn=first`     — click Spawn on the first character
+      //   - `?autoSpawn=Name`      — click Spawn on a named character
+      //   - `?autoSpawn=0`         — skip Spawn (stop at char-list-ready)
+      //
+      // Defaults: kickDance=1, autoSpawn=first.
+      //
+      // The orchestrator is idempotent — calling it twice is a no-op
+      // unless the prior run errored out. Agents can re-trigger via
+      // `window.__runAutonomousLogin({...})`.
+      // ────────────────────────────────────────────────────────────
+      async function runAutonomousLogin(opts = {}) {
+        const kickDance = opts.kickDance ?? true;
+        const autoSpawn = opts.autoSpawn ?? "first";
+
+        const fireConnectAndWait = async (label) => {
+          // The submit handler bails when activeHandle is set; clear it
+          // first so a second fire actually runs.
+          activeHandle = null;
+          window.__sessionHandle = null;
+          // requestSubmit() drives the existing submit handler so all
+          // its bookkeeping (button text, dataset.connecting, etc.) runs
+          // exactly as if a human clicked. Falls back to dispatchEvent
+          // for older browsers without requestSubmit.
+          if (typeof loginForm.requestSubmit === "function") {
+            loginForm.requestSubmit();
+          } else {
+            loginForm.dispatchEvent(new Event("submit", { cancelable: true }));
+          }
+          // Poll for activeHandle to be populated OR boot-state to
+          // signal error. 45 s timeout — generous for slow DAT/manifest
+          // boot on first-ever cold cache.
+          const deadline = Date.now() + 45000;
+          while (Date.now() < deadline) {
+            if (window.__bootState === "error") {
+              throw new Error(`autonomous ${label} hit error state`);
+            }
+            if (activeHandle?.characterList) {
+              return;
+            }
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          throw new Error(`autonomous ${label} timed out`);
+        };
+
+        try {
+          await fireConnectAndWait("first-Connect (kick)");
+
+          if (kickDance) {
+            setBootState("kicking", "waiting 5500ms for ACE logout");
+            await new Promise((r) => setTimeout(r, 5500));
+            setBootState("reconnecting");
+            await fireConnectAndWait("reconnect");
+          }
+
+          // We're now at char-list-ready (set by the submit handler's
+          // selection.hidden = false branch).
+          if (autoSpawn === "0" || autoSpawn === "" || autoSpawn === false) {
+            return; // stop at char list
+          }
+
+          // Locate the spawn button. Char-list buttons are rendered as
+          // `<button data-id="ID">` inside `<li data-name="NAME">`.
+          const buttons = [...characterUl.querySelectorAll("button[data-id]")];
+          if (buttons.length === 0) {
+            setBootState("error", "autoSpawn: character list is empty");
+            return;
+          }
+          let target;
+          if (autoSpawn === "first" || autoSpawn === "1" || autoSpawn === true) {
+            target = buttons[0];
+          } else {
+            const wantName = String(autoSpawn).toLowerCase();
+            target = buttons.find(
+              (b) => (b.parentElement?.dataset?.name ?? "").toLowerCase() === wantName,
+            );
+          }
+          if (!target) {
+            setBootState(
+              "error",
+              `autoSpawn target "${autoSpawn}" not found (have: ${buttons.map((b) => b.parentElement?.dataset?.name).join(", ")})`,
+            );
+            return;
+          }
+          // Stamp a stable data-test-id on every spawn button — same
+          // shape as the form inputs above.
+          for (const b of buttons) {
+            if (!b.dataset.testId) b.dataset.testId = "character-spawn-btn";
+          }
+          target.click();
+          // 'in-world' fires from the kind=7 handler above.
+        } catch (e) {
+          setBootState("error", `autonomous-login: ${String(e?.message ?? e)}`);
+        }
+      }
+      window.__runAutonomousLogin = runAutonomousLogin;
+
+      // Auto-trigger when `?autoLogin=1`. Defer via requestIdleCallback
+      // so the form-rendering + login-status DOM has a chance to settle.
+      if (bootParams.get("autoLogin") === "1") {
+        const opts = {
+          kickDance: bootParams.get("kickDance") !== "0",
+          autoSpawn: bootParams.get("autoSpawn") ?? "first",
+        };
+        const launch = () => runAutonomousLogin(opts);
+        if (typeof window.requestIdleCallback === "function") {
+          window.requestIdleCallback(launch, { timeout: 800 });
+        } else {
+          setTimeout(launch, 0);
+        }
+      }
     </script>
   </body>
 </html>
