@@ -853,6 +853,17 @@ export class MaterialCache {
     /** @type {Map<number, Promise<THREE.MeshStandardMaterial>>} */
     this.pendingFetches = new Map();
 
+    // Wire-agent mode (?wireframe=1). When true, getCached() returns
+    // shared per-DID-hash MeshBasicMaterial({wireframe:true}) instead of
+    // a textured MeshStandardMaterial, and preload() skips the
+    // expensive surface-pixel fetch + GPU texture upload entirely.
+    // Designed so software-WebGL (SwiftShader) can keep up — no PBR
+    // shader, no fragment fill, no texture sampling. Composable with
+    // any quality preset; orthogonal to `agentic=low`.
+    this.wireframeMode = !!opts.wireframeMode;
+    /** @type {Map<number, THREE.MeshBasicMaterial>} */
+    this.wireframeBuckets = new Map();
+
     // Phase 0.2 — shared detail-tile cache. `null` means "Detail flag
     // is decoded but the composite is not wired" (preserves Phase 7.2
     // baseline). All MaterialCache instances in one scene share the
@@ -879,12 +890,18 @@ export class MaterialCache {
 
     // Shared fallback for the 0xFF "no surface" bucket and for any
     // surface DID that fails to resolve (zero-size SurfacePixels, etc).
-    this.fallbackMaterial = new THREE.MeshStandardMaterial({
-      color: 0x888888,
-      roughness: 0.9,
-      metalness: 0.0,
-      side: THREE.DoubleSide,
-    });
+    this.fallbackMaterial = this.wireframeMode
+      ? new THREE.MeshBasicMaterial({
+          color: 0x808080,
+          wireframe: true,
+          side: THREE.DoubleSide,
+        })
+      : new THREE.MeshStandardMaterial({
+          color: 0x888888,
+          roughness: 0.9,
+          metalness: 0.0,
+          side: THREE.DoubleSide,
+        });
     this.fallbackMaterial.name = "scene3d-fallback";
     // Perf B3 (2026-05-18) — tag cache-owned so entity dispose chains
     // (entities.js `_disposeMaterialIfOwned`) skip this shared
@@ -894,7 +911,7 @@ export class MaterialCache {
       ...(this.fallbackMaterial.userData || {}),
       __cacheOwned: true,
     };
-    if (this.csmState) {
+    if (this.csmState && !this.wireframeMode) {
       _installCsmShaderPatch(this.fallbackMaterial, this.csmState);
     }
 
@@ -913,6 +930,9 @@ export class MaterialCache {
    * of resolved vs fallback materials at instantiation time.
    */
   getCached(surfaceDid) {
+    if (this.wireframeMode) {
+      return this._wireframeMaterialFor(surfaceDid >>> 0);
+    }
     if (surfaceDid === FALLBACK_SURFACE_DID) {
       this.fallbackHits += 1;
       return this.fallbackMaterial;
@@ -924,6 +944,33 @@ export class MaterialCache {
     }
     this.fallbackHits += 1;
     return this.fallbackMaterial;
+  }
+
+  /**
+   * Wire-agent path: return a shared MeshBasicMaterial({wireframe:true})
+   * keyed by a 32-bucket hash of the surface DID so different surface
+   * categories render as visually distinct wire colors but the GPU
+   * sees at most 32 distinct materials per scene. HSL distribution
+   * (hue across the wheel, fixed S=0.6, L=0.55) gives perceptually
+   * distinct buckets without naming surface types explicitly.
+   */
+  _wireframeMaterialFor(did) {
+    const WIRE_BUCKETS = 32;
+    const bucket = (did === FALLBACK_SURFACE_DID ? 0 : did) % WIRE_BUCKETS;
+    let m = this.wireframeBuckets.get(bucket);
+    if (m) return m;
+    const hue = bucket / WIRE_BUCKETS;
+    const color = new THREE.Color().setHSL(hue, 0.6, 0.55);
+    m = new THREE.MeshBasicMaterial({
+      color,
+      wireframe: true,
+      side: THREE.DoubleSide,
+      fog: true,
+    });
+    m.name = `wire-bucket-${bucket}`;
+    m.userData = { __cacheOwned: true };
+    this.wireframeBuckets.set(bucket, m);
+    return m;
   }
 
   /**
@@ -1139,6 +1186,9 @@ export class MaterialCache {
    * cached entry) if the surface has zero pixels.
    */
   async get(surfaceDid, fetchSurfacesPixels) {
+    if (this.wireframeMode) {
+      return this._wireframeMaterialFor(surfaceDid >>> 0);
+    }
     if (surfaceDid === FALLBACK_SURFACE_DID) {
       return this.fallbackMaterial;
     }
@@ -1226,6 +1276,15 @@ export class MaterialCache {
    */
   async preload(surfaceDids, fetchSurfacesPixels) {
     if (!surfaceDids || surfaceDids.length === 0) return 0;
+    if (this.wireframeMode) {
+      // Wire-agent mode: skip the wasm surface-pixel fetch + GPU texture
+      // upload entirely. Materials are constructed lazily via the
+      // bucket-hash path in `_wireframeMaterialFor`, and the synchronous
+      // `getCached` route always returns the bucket material regardless
+      // of preload. Total skip — no fetch, no upload, no shader compile
+      // beyond the ~32 MeshBasicMaterials lazily created on first hit.
+      return 0;
+    }
     // Dedupe + filter cached. The 0 sentinel never goes to wasm.
     const need = [];
     for (const did of surfaceDids) {
@@ -1330,6 +1389,13 @@ export class MaterialCache {
   async preloadBatch(groups, fetchEntitySurfacesPixelsBatch) {
     if (!Array.isArray(groups) || groups.length === 0) {
       return { groups: [] };
+    }
+    if (this.wireframeMode) {
+      // Wire-agent mode: return empty per-group results. Entity code
+      // that uses preloadBatch falls back to its own per-entity material
+      // path, which in wireframe-mode is also branched to use a shared
+      // wireframe material (see entities.js).
+      return { groups: groups.map(() => ({ materials: new Map(), isEntityOwned: false })) };
     }
     if (typeof fetchEntitySurfacesPixelsBatch !== "function") {
       // Fallback path — wasm bundle predates F.41. Serial preload

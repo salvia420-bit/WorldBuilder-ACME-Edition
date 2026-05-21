@@ -1,3 +1,16 @@
+// 2026-05-21 — wire-agent mode (?wireframe=1) gate. Module-scope const
+// matches the URL-parsing pattern other modules use. When true, the
+// per-entity surface material at L977 swaps from MeshStandardMaterial
+// (texture+PBR) to a shared MeshBasicMaterial({wireframe:true}) so
+// entities render as wire silhouettes consistent with the rest of the
+// scene in wire-agent mode.
+const WIREFRAME_MODE = (() => {
+  try {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("wireframe") === "1";
+  } catch (_) { return false; }
+})();
+
 // Phase 7.4b — EntityManager: per-entity Object3D rig + AnimationMixer.
 //
 // Sister to the 2D path's `entityMap` + `tickEntityAnimations`
@@ -974,13 +987,31 @@ export class EntityManager {
             }
             const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
             if (typeof sp.free === "function") sp.free();
-            const mat = new THREE.MeshStandardMaterial({
-              map: tex,
-              roughness: 0.9,
-              metalness: 0.0,
-              side: THREE.DoubleSide,
-              transparent: false,
-            });
+            let mat;
+            if (WIREFRAME_MODE) {
+              // Wire-agent: skip the textured PBR material entirely.
+              // Color-hash per DID for visual distinctness across entity
+              // surfaces (limb vs torso vs cape) without any texture
+              // sampling cost. Dispose the texture we just built — wire
+              // mode never uses it.
+              try { tex.dispose && tex.dispose(); } catch (_) {}
+              const hue = ((did >>> 0) % 32) / 32;
+              const color = new THREE.Color().setHSL(hue, 0.6, 0.65);
+              mat = new THREE.MeshBasicMaterial({
+                color,
+                wireframe: true,
+                side: THREE.DoubleSide,
+                fog: true,
+              });
+            } else {
+              mat = new THREE.MeshStandardMaterial({
+                map: tex,
+                roughness: 0.9,
+                metalness: 0.0,
+                side: THREE.DoubleSide,
+                transparent: false,
+              });
+            }
             mat.name = `entity-${guid.toString(16)}-surface-${did.toString(16)}`;
             // Perf B3 (2026-05-18) — entity-owned recoloured surface
             // material. NOT shared with MaterialCache (keyed by
@@ -1291,12 +1322,16 @@ export class EntityManager {
     }
     // Standalone / test mode — synthesize a one-off fallback.
     if (!this._sharedFallback) {
-      this._sharedFallback = new THREE.MeshStandardMaterial({
-        color: 0x888888,
-        roughness: 0.9,
-        metalness: 0.0,
-        side: THREE.DoubleSide,
-      });
+      this._sharedFallback = WIREFRAME_MODE
+        ? new THREE.MeshBasicMaterial({
+            color: 0x888888, wireframe: true, side: THREE.DoubleSide,
+          })
+        : new THREE.MeshStandardMaterial({
+            color: 0x888888,
+            roughness: 0.9,
+            metalness: 0.0,
+            side: THREE.DoubleSide,
+          });
       // Perf B3 (2026-05-18) — manager-owned singleton (lifecycle =
       // EntityManager.dispose at the bottom of this file). Mark as
       // cache-owned so per-entity dispose chains skip it. See the

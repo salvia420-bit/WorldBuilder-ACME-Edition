@@ -246,6 +246,26 @@ export async function preInit3D(canvas) {
     `[phase-x.1] quality preset=${quality.preset} source=${quality.source}`
   );
 
+  // 2026-05-21 — wire-agent mode (?wireframe=1). Orthogonal to the
+  // quality preset; when set, replaces all surface materials with
+  // shared per-hash MeshBasicMaterial({wireframe:true}) and skips the
+  // atmosphere/composer/clouds/skydome/CSM pipelines entirely. Designed
+  // so software-WebGL (SwiftShader) can render the scene at usable
+  // fps for cloud-scaled bot fleets while preserving wasm + protocol +
+  // plugin + scene-graph code paths intact. Does NOT mutate the
+  // quality preset — `?quality=ultra&wireframe=1` is valid and yields
+  // wireframe-everything regardless of preset.
+  const wireframeMode = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search).get("wireframe") === "1";
+    } catch (_) { return false; }
+  })();
+  if (wireframeMode) {
+    // eslint-disable-next-line no-console
+    console.log("[wire-agent] ?wireframe=1 — skipping atmosphere/clouds/skydome/CSM, wireframe materials");
+  }
+
   // A1 (perf plan 2026-05-18) — antialias is read from the quality
   // preset (with optional Graphics-tab override). MSAA costs ~25% of
   // frametime on weaker GPUs; off at `low`, on otherwise.
@@ -262,9 +282,14 @@ export async function preInit3D(canvas) {
   // awaits the result of this promise; bake/load runs in parallel with
   // page-init + handshake + login + character-select instead of
   // sequentially after them.
-  const atmosphereRuntimePromise = import(
-    "./atmosphere_runtime.js?v=lutbake"
-  ).then(({ AtmosphereRuntime }) => new AtmosphereRuntime({ renderer }));
+  // Wire-agent: skip atmosphere entirely. Render falls back to direct
+  // renderer.render at L1218 when atmospherePipeline stays null, which
+  // is the path we want for the wireframe scene.
+  const atmosphereRuntimePromise = wireframeMode
+    ? Promise.resolve(null)
+    : import("./atmosphere_runtime.js?v=lutbake").then(
+        ({ AtmosphereRuntime }) => new AtmosphereRuntime({ renderer })
+      );
   // Cap DPR at 2 — beyond that the cost outpaces the visual gain on
   // a textured-mesh scene of this complexity.
   let _renderScale = 1;
@@ -352,8 +377,11 @@ export async function preInit3D(canvas) {
       return null;
     }
   })();
-  const shadowsEnabled = shadowsParam === "on";
-  const csmEnabled = !!quality?.flags?.csm && shadowsParam !== "off";
+  // Wire-agent skips ALL shadow paths (CSM + single). No fragment-side
+  // lighting at all in MeshBasicMaterial; shadow maps would just be
+  // wasted GPU work.
+  const shadowsEnabled = !wireframeMode && shadowsParam === "on";
+  const csmEnabled = !wireframeMode && !!quality?.flags?.csm && shadowsParam !== "off";
   if (shadowsEnabled || csmEnabled) {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -366,6 +394,16 @@ export async function preInit3D(canvas) {
   const scene = new THREE.Scene();
   if (typeof window !== "undefined" && window.__particleSortObjects === false) {
     scene.sortObjects = false;
+  }
+  if (wireframeMode) {
+    // Background + distance fog give human evaluators a depth cue when
+    // wire-edges of distant geometry would otherwise look identical to
+    // near geometry. FogExp2 + MeshBasicMaterial.fog=true (set in the
+    // MaterialCache wireframe path) makes color lerp toward bg with
+    // exponential falloff — zero per-frame cost, no shader setup.
+    const bg = new THREE.Color(0x1a1f26);
+    scene.background = bg;
+    scene.fog = new THREE.FogExp2(bg.getHex(), 0.004);
   }
 
   const worldRoot = new THREE.Group();
@@ -483,6 +521,7 @@ export async function preInit3D(canvas) {
     terrainDetailNormalArray,
     forceDetail,
     atmosphereRuntimePromise,
+    wireframeMode,
   };
 }
 
@@ -515,6 +554,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     terrainDetailNormalArray,
     forceDetail,
     atmosphereRuntimePromise,
+    wireframeMode,
   } = pre;
   const { sun, ambient, lightsGroup } = lighting;
 
@@ -621,6 +661,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // Construct a stub scene3d shape early so the per-phase builders
   // can share state (`materialCache`, `buildingMap3d`).
   const scene3dForBuilders = {
+    // Wire-agent flag — propagates into getOrCreateMaterialCache so
+    // the MaterialCache returns wireframe MeshBasicMaterial bundles
+    // instead of standard textured materials.
+    wireframeMode,
     // Phase X.1 — resolved quality preset (`{ preset, flags, source }`)
     // mirrored onto every builder's scene3d arg so per-phase gates can
     // read `scene3d.quality.flags.<feature>` without re-parsing the URL.
@@ -1588,8 +1632,20 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // ?? sessionHandle`. Same lazy pattern as SkyLightingController —
   // the init3D `sessionHandle` arg is null at construction; the real
   // handle lands on window post-SelectCharacter.
-  try {
-    const skyDome = new SkyDome({
+  // Forward-declared at outer scope so downstream references (aurora,
+  // atmospherePipeline construction, cloud-overlay wiring) can read
+  // `skyDome?.skyScene` without ReferenceError when the construct
+  // block below is skipped (wireframe mode).
+  let skyDome = null;
+  if (wireframeMode) {
+    // Wire-agent: skip the SkyDome construction entirely. Downstream
+    // `skyDome?.skyScene` reads return undefined cleanly via optional
+    // chaining, and the direct-render fallback at L1218 paints
+    // scene.background instead.
+    // eslint-disable-next-line no-console
+    console.log("[wire-agent] skipping SkyDome construction");
+  } else try {
+    skyDome = new SkyDome({
       scene,
       sessionHandleAccessor: () =>
         // eslint-disable-next-line no-undef
@@ -1656,7 +1712,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // eslint-disable-next-line no-undef
       const params = new URLSearchParams(window.location.search);
       const cloudsFlag = params.get("clouds");
-      if (cloudsFlag === "on") {
+      if (cloudsFlag === "on" && !wireframeMode) {
         // Optional URL knobs for the eye-test on real GPU. Allow the
         // user to crank coverage / quality without reloading + opening
         // dev console.
@@ -1821,7 +1877,27 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           // eslint-disable-next-line no-undef
           window.__atmosphereRuntime = atmosphereRuntime;
         }
-        atmosphereRuntime.whenReady().then(async () => {
+        if (!atmosphereRuntime) {
+          // Wire-agent path — atmosphereRuntimePromise resolved to null
+          // because ?wireframe=1 set wireframeMode in preInit3D.
+          // Composer/pipeline construction is skipped; the render loop
+          // falls back to direct renderer.render at L1218.
+          // eslint-disable-next-line no-console
+          console.log("[wire-agent] atmosphereRuntime null — skipping composer construction");
+          // Terminal boot signal for agent harnesses — the autoLogin
+          // state machine in index.html waits for `ready` (would
+          // otherwise time out at 90s with the atmosphere never
+          // signalling). Fire it ourselves; the scene is already
+          // visually settled (terrain + buildings + entities present)
+          // by the time atmosphereRuntimePromise resolves.
+          try {
+            // eslint-disable-next-line no-undef
+            window.__setBootState?.(
+              "ready",
+              "scene fully loaded (wire-agent; atmosphere skipped)"
+            );
+          } catch {}
+        } else atmosphereRuntime.whenReady().then(async () => {
           try {
             // 2026-05-21 cold-boot Phase G follow-on — parallel imports
             // for the three atmosphere modules. Index.html's Phase E
@@ -2141,7 +2217,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // play() is a no-op until then. Per-tick listener sync happens in
   // the rAF tick below.
   let audioManager = null;
-  if (wasmExports && typeof wasmExports.fetchWave === "function") {
+  if (!wireframeMode && wasmExports && typeof wasmExports.fetchWave === "function") {
     try {
       audioManager = new AudioManager({
         fetchWave: (did) => wasmExports.fetchWave(did),
@@ -2207,7 +2283,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // Tasks D/E/F will read this via liveScene3d.soundTableCache (or
   // scene3dForBuilders.soundTableCache for subsystems built earlier).
   let soundTableCache = null;
-  if (wasmExports && typeof wasmExports.fetchSoundTable === "function") {
+  if (!wireframeMode && wasmExports && typeof wasmExports.fetchSoundTable === "function") {
     try {
       soundTableCache = new SoundTableCache({
         fetchSoundTable: (did) => wasmExports.fetchSoundTable(did),
@@ -2463,5 +2539,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // window.__scene3dEntityHook(upd) for each EntityUpdate to forward
   // it into the 3D path.
   installSharedDrainHook(liveScene3d);
+
+  // 2026-05-21 wire-agent — fire the terminal `ready` boot-state
+  // signal. The normal path fires it inside the atmosphereRuntime
+  // .whenReady() callback (~L2111), but that whole atmosphere/sky/
+  // composer block sits inside an `else try { ... }` that wireframe
+  // mode skips. We've now completed every wireframe-relevant init
+  // (terrain + buildings + statics + entities) and the render loop
+  // is rAF-driven; signal ready so the autoLogin state machine in
+  // index.html doesn't time out at 90s.
+  if (wireframeMode) {
+    try {
+      // eslint-disable-next-line no-undef
+      window.__setBootState?.(
+        "ready",
+        "wire-agent scene ready (atmosphere/composer/clouds/skydome/CSM skipped)"
+      );
+    } catch {}
+  }
+
   return liveScene3d;
 }

@@ -210,6 +210,10 @@ export function getOrCreateMaterialCache(scene3d) {
     csmState: scene3d.csmState ?? null,
     pomEnabled: !!scene3d.pomEnabled,
     forcePom: !!scene3d.forcePom,
+    // Wire-agent (?wireframe=1) — orthogonal to quality preset. When
+    // true, cache returns shared MeshBasicMaterial({wireframe:true})
+    // and preload no-ops the surface-pixel fetch.
+    wireframeMode: !!scene3d.wireframeMode,
   });
   scene3d.materialCache = mc;
   return mc;

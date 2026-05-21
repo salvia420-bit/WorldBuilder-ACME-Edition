@@ -1071,13 +1071,34 @@ export async function bakeTerrainForLandblock(
   } else {
     geom = landblockMeshToGeometry(wasmMesh);
   }
-  const vertexTypesTex = buildVertexTypesDataTexture(terrainCodesCopy, roadCodesCopy);
+  let vertexTypesTex = null;
+  // Wire-agent: skip the per-LB DataTexture upload and use a shared
+  // MeshBasicMaterial({wireframe:true}). No atlas sampling, no road
+  // painting, no detail normals, no time-driven wave displacement. The
+  // geometry already carries the height profile so the wire mesh shows
+  // hills + slopes clearly. Single shared material for all LBs keeps
+  // GPU state changes near zero.
+  let material;
+  if (scene3d.wireframeMode) {
+    if (!scene3d._wireTerrainMaterial) {
+      scene3d._wireTerrainMaterial = new THREE.MeshBasicMaterial({
+        color: 0x4a6a52,
+        wireframe: true,
+        side: THREE.DoubleSide,
+        fog: true,
+      });
+      scene3d._wireTerrainMaterial.name = "wire-terrain";
+      scene3d._wireTerrainMaterial.userData = { __cacheOwned: true };
+    }
+    material = scene3d._wireTerrainMaterial;
+  } else {
+    vertexTypesTex = buildVertexTypesDataTexture(terrainCodesCopy, roadCodesCopy);
 
-  // 5. ShaderMaterial — verbatim port from the prior in-loop body.
-  // Per-LB uniforms (uVertexTypes, uLbOriginXy) are bound here; the
-  // once-per-ring uniforms (uAtlas, uTerrainDetailNormalArray,
-  // uCodeToSlice, uWaterCodeMask, etc.) come straight off `opts`.
-  const material = new THREE.ShaderMaterial({
+    // 5. ShaderMaterial — verbatim port from the prior in-loop body.
+    // Per-LB uniforms (uVertexTypes, uLbOriginXy) are bound here; the
+    // once-per-ring uniforms (uAtlas, uTerrainDetailNormalArray,
+    // uCodeToSlice, uWaterCodeMask, etc.) come straight off `opts`.
+    material = new THREE.ShaderMaterial({
     // three.js auto-injects `projectionMatrix`, `modelViewMatrix`,
     // and the `position` attribute. We just supply the user
     // uniforms.
@@ -1196,14 +1217,18 @@ export async function bakeTerrainForLandblock(
     // worldRoot rotation. Don't flip back to DoubleSide without
     // also reverting the adapter's index reversal.
     side: THREE.FrontSide,
-  });
+    });
+  }
 
   // Phase 2.2 — register the material so the per-rAF tick can push
   // the shared wall-clock `uTime`. Single shared time source means
   // matched wave motion across LB seams (objective #4). The registry
   // entry retains the ShaderMaterial handle directly; on
   // disposal/rebuild the caller should null out scene3d.terrainMaterials.
-  scene3d.terrainMaterials.push(material);
+  // Wire-agent skips the time-push (MeshBasicMaterial has no uTime).
+  if (!scene3d.wireframeMode) {
+    scene3d.terrainMaterials.push(material);
+  }
 
   // CSM-on-terrain — register the material on csmState.patchedMaterials
   // so csm.refreshCsmUniforms walks it each frame and pushes fresh
@@ -1211,8 +1236,8 @@ export async function bakeTerrainForLandblock(
   // materials.js's MeshStandardMaterial patch but for our raw GLSL3
   // shader. `csmShaderUniforms = material.uniforms` works because
   // ShaderMaterial's uniforms ARE the shader's uniforms (no
-  // onBeforeCompile copy).
-  if (scene3d.csmState?.patchedMaterials) {
+  // onBeforeCompile copy). Skipped in wire-agent (no CSM, no shader).
+  if (!scene3d.wireframeMode && scene3d.csmState?.patchedMaterials) {
     material.userData = {
       ...(material.userData || {}),
       csmShaderUniforms: material.uniforms,
