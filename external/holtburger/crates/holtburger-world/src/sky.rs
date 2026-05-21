@@ -951,8 +951,32 @@ fn lerp_f32(a: f32, b: f32, u: f32) -> f32 {
 /// the long way through south, not the short way through north), so
 /// a naive linear lerp is correct. Documented here because the
 /// reflex would be to use `lerp(a, b)` with a wrap correction.
+/// Shortest-path lerp between two angles. Despite the historical name
+/// ("radians"), `dir_heading` values from the DAT are in DEGREES — see
+/// `scene3d/sun_direction.js` which converts via `DEG_TO_RAD` and the
+/// SkyObjectSnapshot doc note at the top of this file. The previous
+/// implementation called plain `lerp_f32` which produced a 180° jump
+/// whenever consecutive keyframes straddled the 0°/360° wrap (e.g.
+/// dusk → midnight → dawn). Symptoms reported 2026-05-20: the sun
+/// "moved really fast and got stuck" — visible discrete heading jumps
+/// at low FPS, then directional light frozen in the wrong hemisphere.
+///
+/// Fix: normalize the inter-keyframe delta into (-180, 180] before
+/// interpolating, so the lerp picks the shorter arc around the unit
+/// circle. Period 360 because the inputs are degrees (verified
+/// upstream by `sunDirFromHeadingPitch(headingDeg, pitchDeg)`).
+///
+/// Keyframes that don't straddle the wrap are unaffected — the
+/// arithmetic reduces to `a + (b - a) * u` exactly when |b - a| <=
+/// 180. Pitch lerp doesn't use this; pitches never cross a boundary.
 fn lerp_angle_radians(a: f32, b: f32, u: f32) -> f32 {
-    lerp_f32(a, b, u)
+    let mut delta = b - a;
+    if delta > 180.0 {
+        delta -= 360.0;
+    } else if delta < -180.0 {
+        delta += 360.0;
+    }
+    a + delta * u
 }
 
 /// Component-wise lerp of two ARGB packed u32 colors. Decode to
