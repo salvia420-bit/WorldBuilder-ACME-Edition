@@ -27,6 +27,7 @@ import {
   subdividedLandblockMeshToGeometry,
   buildVertexTypesDataTexture,
   buildTerrainAtlasArrayBytes,
+  getAdapterMaxAnisotropy,
 } from "./adapter.js";
 
 // ----- AC world-coord constants -------------------------------------
@@ -828,6 +829,7 @@ async function resolveTerrainRingOpts(
     atlasTexture.magFilter = THREE.LinearFilter;
     atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
     atlasTexture.generateMipmaps = true;
+    atlasTexture.anisotropy = getAdapterMaxAnisotropy();
     atlasTexture.needsUpdate = true;
 
     if (roadCanvas) {
@@ -838,6 +840,7 @@ async function resolveTerrainRingOpts(
       roadTexture.magFilter = THREE.LinearFilter;
       roadTexture.minFilter = THREE.LinearMipmapLinearFilter;
       roadTexture.generateMipmaps = true;
+      roadTexture.anisotropy = getAdapterMaxAnisotropy();
       // Same flipY=false as the atlas above — the road tile is a single
       // sub-image with RepeatWrapping; flipY=true would vertically
       // mirror the tile and rotate any directional road art (arrows /
@@ -905,7 +908,8 @@ async function resolveTerrainRingOpts(
  * the outer rings to subdivLevel=1 so triangle counts don't explode.
  */
 function pickSubdivLevelForLb(opts, lbX, lbY) {
-  const fullLevel = opts.subdivLevel;
+  // Per-LB subdivision cascade. Centre and ring-1 both cap at halfLevel
+  // (perf fix 2026-05-20 — see comment below). Outer rings stay at 1.
   const halfLevel = Math.max(1, Math.floor(opts.subdivLevel / 2));
   // Resolve the distance reference. The scene3d ref is threaded through
   // `opts` by `resolveTerrainRingOpts` (which captures the scene3d at
@@ -923,8 +927,16 @@ function pickSubdivLevelForLb(opts, lbX, lbY) {
     pY = opts.centreLbY;
   }
   const distLb = Math.max(Math.abs(lbX - pX), Math.abs(lbY - pY));
-  if (distLb <= 0) return fullLevel;
-  if (distLb === 1) return halfLevel;
+  // Perf 2026-05-20 — the centre LB (distLb=0) previously got the full
+  // `opts.subdivLevel` (8 at ultra), producing 8192 triangles per centre
+  // tile vs 2048 for ring-1 neighbours. User report: "FPS bad in a
+  // specific landblock, gone when I move away" — the slow LB was always
+  // the centre one. At ~3 m vertex spacing the centre LB also dominated
+  // the per-frame triangle traverse cost for no visible benefit (vertex
+  // displacement / triplanar slope detection both look equivalent at 6 m
+  // spacing). Cap centre at `halfLevel` to match ring-1; ring-2+ stays
+  // at 1.
+  if (distLb <= 1) return halfLevel;
   return 1;
 }
 
