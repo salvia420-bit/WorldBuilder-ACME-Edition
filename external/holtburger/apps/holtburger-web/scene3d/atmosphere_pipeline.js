@@ -70,6 +70,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     height: optH,
     bloom: bloomOpt = true,
     vignette: vignetteOpt = false,
+    lensFlare: lensFlareOpt = false,
   } = opts ?? {};
   if (!atmosphereRuntime) {
     throw new Error("createAtmospherePipeline: atmosphereRuntime is required");
@@ -153,12 +154,25 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // (the sun, primarily). Runs BEFORE tone mapping so it operates on
   // the HDR radiance values (sun is many orders of magnitude over
   // diffuse light → easy threshold).
-  const lensFlare = new LensFlareEffect({
-    intensity: 0.005,
-    resolutionScale: 0.5,
-  });
-  lensFlare.thresholdLevel = 0.9;
-  lensFlare.thresholdRange = 0.1;
+  //
+  // 2026-05-21 stutter fix: gated OFF by default (opt in via
+  // `?lensFlare=on`). The takram LensFlareEffect does a screen-space
+  // bright-pixel extraction + per-ghost-element render whose cost
+  // spikes when the sun first enters / leaves the framebuffer at a
+  // grazing screen angle. User reported "running into the sun at a
+  // certain angle" reproducibly stalled the frame; disabling the
+  // effect removes the spike entirely. Bloom + AGX tone mapping still
+  // give the sun a halo + highlight roll-off without the flare ghosts.
+  const lensFlare = lensFlareOpt
+    ? new LensFlareEffect({
+        intensity: 0.005,
+        resolutionScale: 0.5,
+      })
+    : null;
+  if (lensFlare) {
+    lensFlare.thresholdLevel = 0.9;
+    lensFlare.thresholdRange = 0.1;
+  }
 
   // Tone mapping — collapses the HalfFloat HDR pipeline to sRGB. AGX
   // is the takram-recommended mode (well-behaved highlight roll-off,

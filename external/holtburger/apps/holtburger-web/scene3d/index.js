@@ -1634,6 +1634,9 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
               atmosphereRuntime,
               bloom: !!quality.flags.bloom,
               vignette: !!quality.flags.vignette,
+              // 2026-05-21 stutter fix — lensFlare default OFF (see
+              // atmosphere_pipeline.js). Opt in via `?lensFlare=on`.
+              lensFlare: !!quality.flags.lensFlare,
             });
             liveScene3d.atmospherePipeline = atmospherePipeline;
             // eslint-disable-next-line no-undef
@@ -1745,6 +1748,38 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
                 // eslint-disable-next-line no-console
                 console.log("[sky-k.6] CloudVolume.attachAtmosphere wired Bruneton tables onto the cloud material.");
               }
+            }
+
+            // 2026-05-21 stutter fix — pre-warm shaders + texture
+            // uploads. Without this, the FIRST frame a material is
+            // sampled or a texture is bound stalls the main thread
+            // synchronously while Firefox's WebGL driver compiles GLSL
+            // and lazily uploads the pixels (the WebGL "Tex image
+            // TEXTURE_2D level 0 is incurring lazy initialization"
+            // warnings at boot are the smoking gun). After this point
+            // atmosphere + terrain + buildings + statics + envcells +
+            // sky dome + clouds + sun probe are all live in the scene
+            // graph; `renderer.compile(scene, camera)` walks the graph,
+            // compiles every program variant, and uploads every texture
+            // synchronously HERE (during the post-bake idle window)
+            // instead of HITCHING in the rAF loop later. Cost paid once
+            // up front (~200-500 ms typically) for a hitch-free first
+            // few seconds of gameplay. Entity meshes added later still
+            // compile on demand but each one is small.
+            try {
+              const compileStart = performance.now();
+              renderer.compile(scene, camera);
+              // eslint-disable-next-line no-console
+              console.log(
+                `[sky-k.3] renderer.compile(scene) pre-warmed shaders + textures in ` +
+                  `${(performance.now() - compileStart).toFixed(1)}ms ` +
+                  `(programs=${renderer.info.programs?.length ?? "?"}, ` +
+                  `textures=${renderer.info.memory.textures}, ` +
+                  `geometries=${renderer.info.memory.geometries})`
+              );
+            } catch (eCompile) {
+              // eslint-disable-next-line no-console
+              console.warn("[sky-k.3] renderer.compile failed:", eCompile);
             }
 
             // eslint-disable-next-line no-console
