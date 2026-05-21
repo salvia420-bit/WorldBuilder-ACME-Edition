@@ -66,17 +66,24 @@ export function getAdapterMaxAnisotropy() {
 
 // ---- Atlas layout constants ---------------------------------------
 // Codes 0..32 are packed as layers of a `THREE.DataArrayTexture`. Each
-// layer is 256×256 RGBA8 = `ATLAS_TILE_PX² × 4 = 256 KiB`; 33 layers
-// total ≈ 8.5 MiB GPU. Replaces the prior 6×6 `CanvasTexture` atlas
-// (1536×1536 single 2D image) which bled adjacent tiles' colours into
-// each cell at mip levels ≥3 — the classic gutter-less-atlas artefact
-// that read as "terrain textures not flush with vertices" because the
-// bleed line landed exactly on the 24 m cell vertex grid.
-// `THREE.ClampToEdge` per layer + per-layer mipmap chains eliminate
-// the cross-tile bleed entirely. Code 32 (RoadType, DID 0x05001458)
-// also stays in the array (layer 32) and is independently extracted
-// as a standalone `RepeatWrapping` road texture for the overlay path.
-const ATLAS_TILE_PX = 256;
+// layer is 512×512 RGBA8 = `ATLAS_TILE_PX² × 4 = 1 MiB`; 33 layers
+// total ≈ 33 MiB GPU (≈ 46 MiB with the per-layer mip pyramid). Native
+// size matches what `fetch_terrain_textures` actually emits from the
+// retail DAT — PFID_CUSTOM_LSCAPE_R8G8B8 / PFID_INDEX16 / DXT chains
+// decoded to RGBA8 land at 512×512 for all 33 terrain codes
+// (verified 2026-05-20 via the pkg-node wasm). The prior 256² constant
+// downsampled every tile via `drawImage` before upload, halving the
+// visible grass-blade / rock-aggregate detail.
+//
+// Replaces the prior 6×6 `CanvasTexture` atlas (1536×1536 single 2D
+// image) which bled adjacent tiles' colours into each cell at mip
+// levels ≥3 — the bleed line landed on the 24 m cell vertex grid
+// (the original "not flush with vertices" artefact). Per-layer
+// isolation in DataArrayTexture eliminates the cross-tile bleed
+// entirely. Code 32 (RoadType, DID 0x05001458) also stays in the
+// array (layer 32) and is independently extracted as a standalone
+// `RepeatWrapping` road texture for the overlay path.
+const ATLAS_TILE_PX = 512;
 const ATLAS_DEPTH = 33;
 
 /**
@@ -211,9 +218,9 @@ export function subdividedLandblockMeshToGeometry(wasmSub) {
  * road tile from a wasm `TerrainTexture[]` (33 entries, terrainType
  * 0..32).
  *
- * Each terrain code becomes one 256×256 RGBA8 layer in the returned
- * `atlasArrayBytes` (layer stride `ATLAS_TILE_PX² × 4 = 262144 bytes`,
- * total 33 × 262144 = 8 650 752 bytes ≈ 8.5 MiB). The caller wraps the
+ * Each terrain code becomes one 512×512 RGBA8 layer in the returned
+ * `atlasArrayBytes` (layer stride `ATLAS_TILE_PX² × 4 = 1 048 576 bytes`,
+ * total 33 × 1 048 576 ≈ 33 MiB). The caller wraps the
  * block as `new THREE.DataArrayTexture(bytes, tileSize, tileSize,
  * depth)` and picks the colour-space / filter / mipmap policy.
  *
@@ -247,16 +254,28 @@ export function buildTerrainAtlasArrayBytes(terrainTextures) {
   const layerStride = ATLAS_TILE_PX * ATLAS_TILE_PX * 4;
   const atlasArrayBytes = new Uint8Array(layerStride * ATLAS_DEPTH);
 
-  // Working canvases: `tileCanvas` decodes wasm-native-sized RGBA into
-  // a 2D bitmap; `layerCanvas` is the fixed 256×256 sampler the GPU
-  // will see, so wasm tiles of any native size land at a uniform layer
-  // dimension.
-  const tileCanvas = document.createElement("canvas");
-  const tctx = tileCanvas.getContext("2d");
-  const layerCanvas = document.createElement("canvas");
-  layerCanvas.width = ATLAS_TILE_PX;
-  layerCanvas.height = ATLAS_TILE_PX;
-  const lctx = layerCanvas.getContext("2d");
+  // Lazily-allocated resize scratch — only constructed if a tile comes
+  // in at a non-`ATLAS_TILE_PX` native size and needs canvas-side
+  // resampling. The fast path (every retail tile is 512×512 per the
+  // wasm decoder) skips canvas entirely and memcpy's the wasm RGBA
+  // bytes straight into the array-texture buffer, which avoids the
+  // double sRGB roundtrip the `putImageData` -> `drawImage` ->
+  // `getImageData` chain otherwise applies (canvas linearises on put,
+  // re-encodes sRGB on get; the texture is then marked SRGBColorSpace
+  // and Three.js linearises a third time in the fragment shader).
+  let tileCanvas = null;
+  let tctx = null;
+  let layerCanvas = null;
+  let lctx = null;
+  const ensureResizeScratch = () => {
+    if (tileCanvas) return;
+    tileCanvas = document.createElement("canvas");
+    tctx = tileCanvas.getContext("2d");
+    layerCanvas = document.createElement("canvas");
+    layerCanvas.width = ATLAS_TILE_PX;
+    layerCanvas.height = ATLAS_TILE_PX;
+    lctx = layerCanvas.getContext("2d");
+  };
 
   let roadCanvas = null;
 
@@ -265,34 +284,53 @@ export function buildTerrainAtlasArrayBytes(terrainTextures) {
     const w = tex.width;
     const h = tex.height;
     const px = tex.pixels; // wasm-bindgen Uint8Array, length w*h*4
+    const dstOffset = code * layerStride;
 
-    tileCanvas.width = w;
-    tileCanvas.height = h;
-    const clamped = new Uint8ClampedArray(
-      px.buffer,
-      px.byteOffset,
-      px.byteLength
-    );
-    tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
-
-    // Resample to the 256×256 layer size if the native tile isn't already
-    // that size. `drawImage` with explicit destination dims is the standard
-    // canvas-resize path.
-    lctx.clearRect(0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX);
-    lctx.drawImage(tileCanvas, 0, 0, w, h, 0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX);
-    const layerImg = lctx.getImageData(0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX);
-    // `ImageData.data` is `Uint8ClampedArray` — `Uint8Array.set` accepts it.
-    atlasArrayBytes.set(layerImg.data, code * layerStride);
+    if (w === ATLAS_TILE_PX && h === ATLAS_TILE_PX) {
+      // Fast path: byte-exact copy of the wasm-decoded RGBA into the
+      // array-texture buffer. No canvas, no resample, no sRGB
+      // roundtrip — the bytes Three.js uploads are the same bytes the
+      // DAT decoder produced.
+      atlasArrayBytes.set(px, dstOffset);
+    } else {
+      // Slow path: resample non-512x512 tiles down/up to the layer
+      // size via canvas. Defensive — retail emits 512x512 for all 33
+      // codes today, but a future palette change or non-retail mod
+      // could land a differently-sized tile and we'd rather render it
+      // resampled than crash the array-texture upload.
+      ensureResizeScratch();
+      tileCanvas.width = w;
+      tileCanvas.height = h;
+      const clamped = new Uint8ClampedArray(
+        px.buffer,
+        px.byteOffset,
+        px.byteLength
+      );
+      tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
+      lctx.clearRect(0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX);
+      lctx.drawImage(
+        tileCanvas, 0, 0, w, h,
+        0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX
+      );
+      const layerImg = lctx.getImageData(0, 0, ATLAS_TILE_PX, ATLAS_TILE_PX);
+      atlasArrayBytes.set(layerImg.data, dstOffset);
+    }
 
     if (code === 32) {
       // Standalone road tile at native resolution — preserves the
       // texture's true dimensions for `RepeatWrapping` UVs in the road
-      // overlay (the array-layer copy is downsampled to 256×256, which
-      // would alias the tile pattern when tiled across long road runs).
+      // overlay. Even at the new 512x512 layer size the road overlay
+      // still gets its own canvas so the road sampler can wrap at the
+      // tile's authored period rather than the atlas-layer dim.
       roadCanvas = document.createElement("canvas");
       roadCanvas.width = w;
       roadCanvas.height = h;
       const rctx = roadCanvas.getContext("2d");
+      const clamped = new Uint8ClampedArray(
+        px.buffer,
+        px.byteOffset,
+        px.byteLength
+      );
       rctx.putImageData(
         new ImageData(new Uint8ClampedArray(clamped), w, h),
         0,
