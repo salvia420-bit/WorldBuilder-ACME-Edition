@@ -11235,6 +11235,23 @@ const CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED: u32 = 18;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_COMBAT_EVENT: u32 = 19;
 
+/// kind=20: server-sent `GameMessage::CharacterError`. ACE fires these
+/// in two scenarios the autoLogin orchestrator cares about:
+/// - `CharacterError::Logon` (0x01) — mid-handshake; ACE detected the
+///   account is in use elsewhere and is terminating both sessions
+///   (`AuthenticationHandler.cs:189-192`). The previous client gets
+///   kicked out of world; the new client (us) is rejected. Wait ~5.5 s
+///   then retry Connect.
+/// - `CharacterError::EnterGameCharacterInWorld` (0x0D) — after Spawn;
+///   ACE rejected the EnterWorld because the character is already
+///   in-world. Wait ~5.5 s, drop handle, retry full Connect + Spawn.
+///
+/// `u32_payload` carries the `CharacterError` discriminant verbatim;
+/// `string_payload` carries the Rust-side enum name (e.g. "Logon",
+/// "EnterGameCharacterInWorld") for readable logging.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CHARACTER_ERROR: u32 = 20;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -17973,6 +17990,27 @@ async fn recv_loop(
                                 u32_payload: Some(u32::from(data.target)),
                                 u32_payload_2: Some(data.sound_id),
                                 f32_payload: Some(data.volume),
+                            });
+                        }
+                        GameMessage::CharacterError(data) => {
+                            // 2026-05-21 — surface to JS so the autoLogin
+                            // orchestrator can detect "account in use"
+                            // (CharacterError::Logon) or "character
+                            // in-world" (EnterGameCharacterInWorld) and
+                            // trigger the kick-then-reconnect retry
+                            // path. See CLIENT_EVENT_KIND_CHARACTER_ERROR
+                            // doc comment for the wire-side context.
+                            let raw = data.error_id;
+                            let name = holtburger_protocol::errors::CharacterError::from_repr(raw)
+                                .map(|e| format!("{:?}", e))
+                                .unwrap_or_else(|| format!("Unknown({:#x})", raw));
+                            log::warn!("[character-error] code={:#x} name={}", raw, name);
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHARACTER_ERROR,
+                                string_payload: Some(name),
+                                u32_payload: Some(raw),
+                                u32_payload_2: None,
+                                f32_payload: None,
                             });
                         }
                         _ => {

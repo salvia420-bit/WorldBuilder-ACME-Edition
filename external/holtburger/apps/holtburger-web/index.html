@@ -774,7 +774,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=wb-memoize";
+      } from "./pkg/holtburger_web.js?v=character-error";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -7079,7 +7079,37 @@ void main() {
                 loginStatus.innerHTML =
                   `<span class="fail">[FAIL]</span> Disconnected: <code>${evt.stringPayload || ""}</code>` +
                   ` <span class="hint">Reload the page to retry.</span>`;
+                // Stash the disconnect reason so the autoLogin
+                // orchestrator can see it (it watches for kind=20
+                // CharacterError + kind=4 disconnect as the two
+                // signals that the kick path is required).
+                window.__lastDisconnect = {
+                  ts: Date.now(),
+                  reason: evt.stringPayload || "",
+                };
                 return; // Stop polling.
+              } else if (evt.kind === 20) {
+                // CharacterError — ACE wire-level signal. See
+                // CLIENT_EVENT_KIND_CHARACTER_ERROR in src/lib.rs.
+                // The two cases that matter for autoLogin:
+                //   Logon (0x01) → account in use elsewhere, kick
+                //     dance required (ACE terminates the new session
+                //     mid-handshake; old session also gets kicked)
+                //   EnterGameCharacterInWorld (0x0D) → character is
+                //     in-world, char-level kick dance required (drop
+                //     handle, full Connect+Spawn retry)
+                const code = evt.u32Payload >>> 0;
+                const name = evt.stringPayload || `Unknown(${code})`;
+                window.__lastCharacterError = {
+                  ts: Date.now(),
+                  code,
+                  name,
+                };
+                console.warn(`[character-error] ${name} (0x${code.toString(16)})`);
+                if (loginStatus) {
+                  loginStatus.innerHTML =
+                    `<span class="fail">[ACE]</span> CharacterError: <code>${name}</code> (0x${code.toString(16)})`;
+                }
               } else if (evt.kind === 8) {
                 // Phase 4 step 4 follow-on: PlayerStatsUpdated.
                 // The recv loop coalesces all stat-bearing wire
@@ -7894,85 +7924,152 @@ void main() {
       // `window.__runAutonomousLogin({...})`.
       // ────────────────────────────────────────────────────────────
       async function runAutonomousLogin(opts = {}) {
-        const kickDance = opts.kickDance ?? true;
         const autoSpawn = opts.autoSpawn ?? "first";
+        const maxRetries = opts.maxRetries ?? 2;
+        // Connect timeout — short on the happy path (a fresh ACE
+        // returns CharacterList in ~3-5 s), long enough that a real
+        // first-cache wasm/DAT init can complete. We'll bail on this
+        // timeout AND fall through to the kick retry; an ACE that's
+        // actually accepting our login will return CharacterList well
+        // under this budget.
+        const connectTimeoutMs = opts.connectTimeoutMs ?? 20000;
+        const spawnTimeoutMs = opts.spawnTimeoutMs ?? 30000;
+        const kickWaitMs = opts.kickWaitMs ?? 5500;
 
-        const fireConnectAndWait = async (label) => {
-          // The submit handler bails when activeHandle is set; clear it
-          // first so a second fire actually runs.
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        const fireSubmit = () => {
+          // The submit handler bails when activeHandle is set; clear
+          // it first so a fresh fire actually runs.
           activeHandle = null;
           window.__sessionHandle = null;
-          // requestSubmit() drives the existing submit handler so all
-          // its bookkeeping (button text, dataset.connecting, etc.) runs
-          // exactly as if a human clicked. Falls back to dispatchEvent
-          // for older browsers without requestSubmit.
+          window.__lastCharacterError = null;
+          window.__lastDisconnect = null;
           if (typeof loginForm.requestSubmit === "function") {
             loginForm.requestSubmit();
           } else {
             loginForm.dispatchEvent(new Event("submit", { cancelable: true }));
           }
-          // Poll for activeHandle to be populated OR boot-state to
-          // signal error. 45 s timeout — generous for slow DAT/manifest
-          // boot on first-ever cold cache.
-          const deadline = Date.now() + 45000;
-          while (Date.now() < deadline) {
-            if (window.__bootState === "error") {
-              throw new Error(`autonomous ${label} hit error state`);
-            }
-            if (activeHandle?.characterList) {
-              return;
-            }
-            await new Promise((r) => setTimeout(r, 200));
-          }
-          throw new Error(`autonomous ${label} timed out`);
         };
 
-        try {
-          await fireConnectAndWait("first-Connect (kick)");
-
-          if (kickDance) {
-            setBootState("kicking", "waiting 5500ms for ACE logout");
-            await new Promise((r) => setTimeout(r, 5500));
-            setBootState("reconnecting");
-            await fireConnectAndWait("reconnect");
+        // Watch for the outcome of a Connect attempt. Returns:
+        //   "char-list"       — start_session resolved, handle has list
+        //   "kick"            — ACE sent CharacterError::Logon (0x01)
+        //                       or disconnected us mid-handshake
+        //   "error"           — submit handler set boot-state to error
+        //   "timeout"         — neither signal arrived
+        const waitForConnectOutcome = async (timeoutMs) => {
+          const deadline = Date.now() + timeoutMs;
+          while (Date.now() < deadline) {
+            if (activeHandle?.characterList) return "char-list";
+            const ce = window.__lastCharacterError;
+            if (ce && ce.code === 0x01) return "kick"; // Logon
+            if (ce && ce.code) return `character-error-${ce.code}`;
+            if (window.__lastDisconnect) return "kick"; // ACE terminated
+            if (window.__bootState === "error") return "error";
+            await sleep(150);
           }
+          return "timeout";
+        };
 
-          // We're now at char-list-ready (set by the submit handler's
-          // selection.hidden = false branch).
-          if (autoSpawn === "0" || autoSpawn === "" || autoSpawn === false) {
-            return; // stop at char list
+        // After Spawn click, watch for in-world (kind=7) OR a
+        // CharacterError::EnterGameCharacterInWorld (0x0D) which
+        // means the character is in-world on ACE's end and we need to
+        // fully restart Connect + Spawn after the kick wait.
+        const waitForSpawnOutcome = async (timeoutMs) => {
+          const deadline = Date.now() + timeoutMs;
+          while (Date.now() < deadline) {
+            if (window.__bootState === "in-world") return "in-world";
+            const ce = window.__lastCharacterError;
+            if (ce && ce.code === 0x0D) return "char-in-world"; // retry
+            if (ce && ce.code === 0x10) return "char-in-world"; // EnterGameCharacterInWorldServer
+            if (ce && ce.code) return `character-error-${ce.code}`;
+            if (window.__lastDisconnect) return "disconnect";
+            if (window.__bootState === "error") return "error";
+            await sleep(150);
           }
+          return "timeout";
+        };
 
-          // Locate the spawn button. Char-list buttons are rendered as
-          // `<button data-id="ID">` inside `<li data-name="NAME">`.
+        const pickSpawnButton = () => {
           const buttons = [...characterUl.querySelectorAll("button[data-id]")];
-          if (buttons.length === 0) {
-            setBootState("error", "autoSpawn: character list is empty");
-            return;
-          }
-          let target;
-          if (autoSpawn === "first" || autoSpawn === "1" || autoSpawn === true) {
-            target = buttons[0];
-          } else {
-            const wantName = String(autoSpawn).toLowerCase();
-            target = buttons.find(
-              (b) => (b.parentElement?.dataset?.name ?? "").toLowerCase() === wantName,
-            );
-          }
-          if (!target) {
-            setBootState(
-              "error",
-              `autoSpawn target "${autoSpawn}" not found (have: ${buttons.map((b) => b.parentElement?.dataset?.name).join(", ")})`,
-            );
-            return;
-          }
-          // Stamp a stable data-test-id on every spawn button — same
-          // shape as the form inputs above.
           for (const b of buttons) {
             if (!b.dataset.testId) b.dataset.testId = "character-spawn-btn";
           }
-          target.click();
-          // 'in-world' fires from the kind=7 handler above.
+          if (buttons.length === 0) return null;
+          if (autoSpawn === "first" || autoSpawn === "1" || autoSpawn === true) {
+            return buttons[0];
+          }
+          const wantName = String(autoSpawn).toLowerCase();
+          return buttons.find(
+            (b) => (b.parentElement?.dataset?.name ?? "").toLowerCase() === wantName,
+          );
+        };
+
+        try {
+          for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            if (attempt > 0) {
+              setBootState("kicking", `attempt ${attempt}: waiting ${kickWaitMs}ms for ACE logout`);
+              await sleep(kickWaitMs);
+              setBootState("reconnecting", `attempt ${attempt + 1}`);
+            }
+
+            fireSubmit();
+            const connectOutcome = await waitForConnectOutcome(connectTimeoutMs);
+
+            if (connectOutcome === "kick") {
+              // Wire-level signal: ACE kicked the account. Retry.
+              continue;
+            }
+            if (connectOutcome === "error" || connectOutcome === "timeout") {
+              if (attempt === maxRetries) {
+                setBootState(
+                  "error",
+                  `connect failed after ${attempt + 1} attempts: ${connectOutcome}`,
+                );
+                return;
+              }
+              continue;
+            }
+            if (connectOutcome !== "char-list") {
+              if (attempt === maxRetries) {
+                setBootState("error", `connect: ${connectOutcome}`);
+                return;
+              }
+              continue;
+            }
+
+            // Char list arrived. Stop here if autoSpawn is disabled.
+            if (autoSpawn === "0" || autoSpawn === "" || autoSpawn === false) {
+              return;
+            }
+
+            const target = pickSpawnButton();
+            if (!target) {
+              const buttons = [...characterUl.querySelectorAll("button[data-id]")];
+              setBootState(
+                "error",
+                `autoSpawn target "${autoSpawn}" not found (have: ${buttons.map((b) => b.parentElement?.dataset?.name).join(", ")})`,
+              );
+              return;
+            }
+            target.click();
+
+            const spawnOutcome = await waitForSpawnOutcome(spawnTimeoutMs);
+            if (spawnOutcome === "in-world") {
+              return; // SUCCESS
+            }
+            if (spawnOutcome === "char-in-world") {
+              // Char-level kick: this character is in-world on ACE.
+              // Drop handle and full retry from Connect.
+              continue;
+            }
+            if (attempt === maxRetries) {
+              setBootState("error", `spawn: ${spawnOutcome}`);
+              return;
+            }
+          }
+          setBootState("error", `connect+spawn failed after ${maxRetries + 1} attempts`);
         } catch (e) {
           setBootState("error", `autonomous-login: ${String(e?.message ?? e)}`);
         }
