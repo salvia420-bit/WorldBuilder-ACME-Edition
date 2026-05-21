@@ -425,81 +425,13 @@ in vec2 vWaveModulation;
 
 out vec4 fragColor;
 
-// Map terrain code (0..32) -> atlas UV at the given cell-local UV.
+// Map terrain code (0..32) → atlas UV at the given cell-local UV.
 // Retail terrain codes 0..32 are individual layers of a sampler2DArray.
 // cellUv (range [0,1]) is the intra-cell UV; the layer index is the
 // code itself -- DataArrayTexture clamps integer layer selection so no
 // neighbour-tile bleed at any mip level.
 vec3 atlasUvFor(int code, vec2 cellUv) {
   return vec3(cellUv, float(code));
-}
-
-// 2D hash to a pseudo-random offset in [0,1).
-vec2 hash2(vec2 p) {
-  return fract(sin(vec2(
-    dot(p, vec2(127.1, 311.7)),
-    dot(p, vec2(269.5, 183.3))
-  )) * 43758.5453);
-}
-
-// Triangle-lattice cell decomposition (Heitz & Neyret 2018, "Procedural
-// Stochastic Textures by Tiling and Blending"). Skew UV into a
-// rhombic grid, find which of the two triangles in the rhombus the
-// fragment falls into, return the three triangle vertex IDs + their
-// barycentric weights. The skew matrix maps a 60-degree triangle
-// lattice onto integer coordinates so floor()/fract() can pick the
-// containing cell trivially.
-void triangleGrid(vec2 uv,
-                  out vec2 v1, out vec2 v2, out vec2 v3,
-                  out float w1, out float w2, out float w3) {
-  const mat2 toSkewed = mat2(1.0, 0.0, -0.57735026, 1.15470054);
-  vec2 sk = toSkewed * uv;
-  vec2 i = floor(sk);
-  vec2 f = fract(sk);
-  if (f.x + f.y < 1.0) {
-    v1 = i;                  w1 = 1.0 - f.x - f.y;
-    v2 = i + vec2(1.0, 0.0); w2 = f.x;
-    v3 = i + vec2(0.0, 1.0); w3 = f.y;
-  } else {
-    v1 = i + vec2(1.0, 1.0); w1 = f.x + f.y - 1.0;
-    v2 = i + vec2(1.0, 0.0); w2 = 1.0 - f.y;
-    v3 = i + vec2(0.0, 1.0); w3 = 1.0 - f.x;
-  }
-}
-
-// Heitz tile-and-blend sample of a sampler2DArray layer. Samples the
-// tile at 3 hashed offsets and blends them by triangle barycentrics,
-// then variance-corrects the deviation around the local 3-sample mean
-// to recover the contrast a naive weighted blend loses at triangle
-// centres (sqrt(w1*w1+w2*w2+w3*w3) -> sqrt(1/3) ~= 0.577x = muddy
-// "fog" appearance). Picks ~95% of the Heitz reference contrast with
-// no precomputed CDF / histogram bake.
-//
-// textureGrad samples all 3 offsets at the same un-offset gradient so
-// mip selection stays continuous across hex boundaries; without this,
-// the discontinuous hashed offsets would push neighbouring fragments
-// to different mips and the blend would flicker along hex edges.
-//
-// Tile rate (4.0) controls how many hexagons fit in one cellUv. At
-// the 24 m cell scale this gives ~6 m patches: small enough to fully
-// hide the underlying 256x256 tile repeat, large enough that the
-// 3-sample cost is amortised.
-vec3 heitzSample(int code, vec2 uv) {
-  vec2 v1, v2, v3;
-  float w1, w2, w3;
-  triangleGrid(uv * 4.0, v1, v2, v3, w1, w2, w3);
-  vec2 off1 = hash2(v1);
-  vec2 off2 = hash2(v2);
-  vec2 off3 = hash2(v3);
-  vec2 dx = dFdx(uv);
-  vec2 dy = dFdy(uv);
-  vec3 c1 = textureGrad(uAtlas, vec3(uv + off1, float(code)), dx, dy).rgb;
-  vec3 c2 = textureGrad(uAtlas, vec3(uv + off2, float(code)), dx, dy).rgb;
-  vec3 c3 = textureGrad(uAtlas, vec3(uv + off3, float(code)), dx, dy).rgb;
-  vec3 cMean = (c1 + c2 + c3) * (1.0 / 3.0);
-  vec3 cDev = (c1 - cMean) * w1 + (c2 - cMean) * w2 + (c3 - cMean) * w3;
-  float wNorm = inversesqrt(w1 * w1 + w2 * w2 + w3 * w3);
-  return cMean + cDev * wNorm;
 }
 
 int vertexTypeAt(int iu, int iv) {
@@ -550,16 +482,10 @@ void main() {
   vec2 uv01 = (t01 >= 16 && t01 <= 23 && t01 != 21) ? waterCellUv : cellUv;
   vec2 uv11 = (t11 >= 16 && t11 <= 23 && t11 != 21) ? waterCellUv : cellUv;
 
-  // Heitz tile-and-blend per corner. Replaces the prior single-sample
-  // texture() lookup that produced a visible 256x256 tile repeat
-  // inside every 24 m cell. Now each per-corner sample is itself a
-  // 3-sample stochastic blend (12 textureGrads/fragment total), with
-  // variance-preserving normalisation so it doesn't go muddy at hex
-  // centres. See heitzSample doc above.
-  vec3 c00 = heitzSample(clamp(t00, 0, 32), uv00);
-  vec3 c10 = heitzSample(clamp(t10, 0, 32), uv10);
-  vec3 c01 = heitzSample(clamp(t01, 0, 32), uv01);
-  vec3 c11 = heitzSample(clamp(t11, 0, 32), uv11);
+  vec3 c00 = texture(uAtlas, atlasUvFor(clamp(t00, 0, 32), uv00)).rgb;
+  vec3 c10 = texture(uAtlas, atlasUvFor(clamp(t10, 0, 32), uv10)).rgb;
+  vec3 c01 = texture(uAtlas, atlasUvFor(clamp(t01, 0, 32), uv01)).rgb;
+  vec3 c11 = texture(uAtlas, atlasUvFor(clamp(t11, 0, 32), uv11)).rgb;
 
   float w00 = (1.0 - fu) * (1.0 - fv);
   float w10 = fu * (1.0 - fv);
@@ -897,16 +823,8 @@ async function resolveTerrainRingOpts(
     // shader's bilinear-on-control corner blend (same colour-space
     // contract the prior CanvasTexture path had).
     atlasTexture.colorSpace = THREE.SRGBColorSpace;
-    // RepeatWrapping so the Heitz tile-and-blend sampler (heitzSample
-    // in the fragment shader) can offset INSIDE each tile by a
-    // pseudo-random uv shift and wrap seamlessly across the tile
-    // border. Per-layer isolation (no cross-code bleed) is preserved
-    // because DataArrayTexture clamps the integer layer dimension
-    // regardless of the in-layer wrap mode -- only the 2D inside of
-    // each tile wraps. Retail terrain tiles are designed seamlessly
-    // tileable so the wrap stays invisible.
-    atlasTexture.wrapS = THREE.RepeatWrapping;
-    atlasTexture.wrapT = THREE.RepeatWrapping;
+    atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
+    atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
     atlasTexture.magFilter = THREE.LinearFilter;
     atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
     atlasTexture.generateMipmaps = true;
