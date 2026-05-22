@@ -23,9 +23,10 @@
 //   - Bottom 120x14: burden meter (placeholder until equipMask wiring).
 
 const OVERLAY_ID = "hb-inventory";
-const WIDTH = 300;
-const HEIGHT = 362;
-const TITLE_H = 25;
+// Title bar is now owned by main-panel (see plugins/main-panel.js).
+// All vertical offsets in the inventory CSS use TITLE_H = 0 since
+// the view mounts inside main-panel's body slot.
+const TITLE_H = 0;
 const PAPERDOLL_W = 224;
 const PAPERDOLL_H = 214;
 const BAG_COL_W = 60;
@@ -89,25 +90,19 @@ function ensureStyles() {
   const style = document.createElement("style");
   style.id = "hb-inventory-style";
   style.textContent = `
+    /* Inventory view — mounts inside main-panel's body slot. The
+       main-panel owns position/frame/title; we just lay out our
+       content (paperdoll + bag column + items / examine swap +
+       burden meter) inside the provided bodyEl. */
     #${OVERLAY_ID} {
-      position: fixed;
-      top: 160px;          /* below compass (top:8 + 140 + a bit) */
-      right: 8px;
-      z-index: 50;
-      width: ${WIDTH}px;
-      height: ${HEIGHT}px;
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
       box-sizing: border-box;
-      pointer-events: none;
+      pointer-events: auto;
       font-family: var(--hb-font-serif);
-      background: url("./data/ui-sprites/0x06004D0A.png") center/cover no-repeat,
-                  linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
-      border: 6px solid transparent;
-      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
-      box-shadow: var(--hb-shadow-panel);
+      background: url("./data/ui-sprites/0x06004D0A.png") center/cover no-repeat;
       color: var(--hb-text-cream);
-      display: none;
     }
-    #${OVERLAY_ID}[data-open="1"] { display: block; }
     /* Title bar — real DAT 0x06004CFA brass strip. */
     #${OVERLAY_ID} .hb-inv-title {
       position: absolute;
@@ -436,28 +431,27 @@ export const manifest = {
   description: "Right-side inventory window (gmInventoryUI 0x21000023)",
 };
 
-export function mount(_ctx) {
+// Inventory view — mounted inside main-panel's body slot. Returns
+// a cleanup fn the container calls on view swap.
+export const view = {
+  name: "Inventory",
+  nameFor: (_ctx) => {
+    const sn = document.getElementById("char-name")?.textContent
+      || window.__pluginClient?.player?.stats?.name
+      || null;
+    return sn ? `Inventory of ${sn}` : "Inventory";
+  },
+  mount: (parentEl, ctx) => doMount(parentEl, ctx),
+};
+
+function doMount(parentEl, _ctx) {
   ensureStyles();
   const existing = document.getElementById(OVERLAY_ID);
   if (existing) existing.remove();
 
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
-
-  // Title bar
-  const titleEl = document.createElement("div");
-  titleEl.className = "hb-inv-title";
-  const titleName = document.createElement("span");
-  titleName.className = "hb-inv-title-name";
-  titleName.textContent = "Inventory";
-  titleEl.appendChild(titleName);
-  const closeBtn = document.createElement("span");
-  closeBtn.className = "hb-inv-close";
-  closeBtn.textContent = "×";
-  closeBtn.title = "Close (F4)";
-  closeBtn.addEventListener("click", () => setOpen(false));
-  titleEl.appendChild(closeBtn);
-  overlay.appendChild(titleEl);
+  // Title + close are owned by main-panel (the shared container).
 
   // Paperdoll backdrop + body-slot squares per PAPERDOLL_SLOTS table.
   const paperdoll = document.createElement("div");
@@ -526,86 +520,12 @@ export function mount(_ctx) {
   itemsGrid.className = "hb-inv-items";
   overlay.appendChild(itemsGrid);
 
-  // In-place examine view — overlays the items grid region when an
-  // inventory item is clicked / E-keyed. Matches retail's gm3DItemsUI
-  // swap behaviour (see docs/examine-architecture-2026-05-22.md).
-  const examineView = document.createElement("div");
-  examineView.className = "hb-inv-examine";
-  const exHead = document.createElement("div");
-  exHead.className = "hb-inv-examine-head";
-  const exIcon = document.createElement("div");
-  exIcon.className = "hb-inv-examine-icon";
-  const exIconFill = document.createElement("div");
-  exIconFill.className = "hb-inv-examine-icon-fill";
-  exIcon.appendChild(exIconFill);
-  exHead.appendChild(exIcon);
-  const exNameCol = document.createElement("div");
-  exNameCol.className = "hb-inv-examine-namecol";
-  const exName = document.createElement("div");
-  exName.className = "hb-inv-examine-name";
-  exName.textContent = "—";
-  const exGuid = document.createElement("div");
-  exGuid.className = "hb-inv-examine-guid";
-  exGuid.textContent = "";
-  exNameCol.appendChild(exName);
-  exNameCol.appendChild(exGuid);
-  exHead.appendChild(exNameCol);
-  const exBackBtn = document.createElement("button");
-  exBackBtn.type = "button";
-  exBackBtn.className = "hb-inv-examine-back";
-  exBackBtn.textContent = "← Items";
-  exHead.appendChild(exBackBtn);
-  examineView.appendChild(exHead);
-  const exBody = document.createElement("div");
-  exBody.className = "hb-inv-examine-body";
-  examineView.appendChild(exBody);
-  overlay.appendChild(examineView);
+  // PR-T's in-place examine swap is replaced by main-panel.pushView
+  // ("examine", ctx) — the WHOLE pane transitions, not just our lower
+  // region. The user's eyes don't have to move because main-panel sits
+  // in the same screen position regardless of which view is mounted.
 
-  document.body.appendChild(overlay);
-
-  // Switch view mode between "grid" and "examine".
-  function setView(mode) {
-    overlay.dataset.view = mode;
-  }
-  setView("grid");
-  exBackBtn.addEventListener("click", () => setView("grid"));
-
-  // Populate examine-view from a source <li>.
-  function showInPlaceExamine(srcLi) {
-    if (!srcLi) return;
-    const guid = srcLi.dataset.guid;
-    const tb = srcLi.dataset.typeBit ?? "0x0";
-    const item = getItemByGuid(guid);
-    exName.textContent = srcLi.querySelector(".name")?.textContent || item?.name || "(unnamed)";
-    exGuid.textContent = `0x${(Number(guid) >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
-    exIconFill.style.background = TYPE_COLOR[tb] || "#777";
-    exBody.innerHTML = "";
-    function r(label, value) {
-      if (value == null || value === "") return;
-      const row = document.createElement("div");
-      row.className = "hb-inv-examine-row";
-      const l = document.createElement("span");
-      l.className = "hb-inv-examine-label";
-      l.textContent = label;
-      const v = document.createElement("span");
-      v.className = "hb-inv-examine-value";
-      v.textContent = String(value);
-      row.appendChild(l);
-      row.appendChild(v);
-      exBody.appendChild(row);
-    }
-    const typeNames = { "0x4": "Weapon", "0x2": "Armor", "0x10000": "Magic / Scroll", "0x20": "Currency" };
-    r("Type", typeNames[tb] || "Item");
-    if (item) {
-      if (item.stackSize > 1) r("Stack", item.stackSize);
-      if (item.value > 0) r("Value", `${item.value} pyreals`);
-      if (item.equipMask) r("Equip mask", `0x${item.equipMask.toString(16).toUpperCase().padStart(8, "0")}`);
-      if (item.burden != null) r("Burden", item.burden);
-      if (item.itemType != null) r("Item type bits", `0x${item.itemType.toString(16)}`);
-    }
-    r("GUID", exGuid.textContent);
-    setView("examine");
-  }
+  parentEl.appendChild(overlay);
 
   // Track the currently selected inventory <li> (for E-key fire).
   let selectedSrcLi = null;
@@ -670,11 +590,14 @@ export function mount(_ctx) {
         ev.dataTransfer.effectAllowed = "move";
       });
     }
-    // Single click → select + in-place examine swap (retail's
-    // gm3DItemsUI behaviour). Double-click could later trigger Use.
+    // Single click → select + push examine view onto main-panel stack.
+    // The shared container swaps the whole pane to examine; "Back"
+    // returns to inventory. Matches retail's full-pane transition.
     slot.addEventListener("click", () => {
       setSelected(srcLi);
-      showInPlaceExamine(srcLi);
+      const guid = srcLi.dataset?.guid;
+      const name = srcLi.querySelector(".name")?.textContent || "Item";
+      window.__mainPanel?.pushView?.("examine", { guid, name, fromInventory: true, srcLi });
     });
     return slot;
   }
@@ -771,46 +694,19 @@ export function mount(_ctx) {
     }, 500);
   }
 
-  // Update title with character name when available.
-  function tryName() {
-    const sn = document.getElementById("char-name")?.textContent
-            || window.__pluginClient?.player?.stats?.name
-            || null;
-    if (sn) titleName.textContent = `Inventory of ${sn}`;
-  }
-  tryName();
-  const nameRetry = setInterval(tryName, 1000);
-
-  // Show/hide + F4 toggle (retail muscle-memory).
-  function setOpen(open) { overlay.dataset.open = open ? "1" : "0"; }
-  setOpen(true);
+  // E key behaviour (acclient keymap SelectionExamine, UICommands):
+  // when an inventory item is selected, push the examine view onto the
+  // shared main-panel stack so "Back" returns to inventory.
   function onKey(ev) {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    if (ev.key === "F4") {
-      ev.preventDefault();
-      setOpen(overlay.dataset.open !== "1");
-      return;
-    }
-    // E — SelectionExamine (acclient keymap). Context-aware:
-    //   1) Inventory item selected → in-place examine swap.
-    //   2) Otherwise: let examine-target.js handle floating examine
-    //      via getSelectedTarget() rAF poll. We dispatch a synthetic
-    //      window event so it doesn't have to poll for the key too.
     if (ev.key === "e" || ev.key === "E") {
-      // Only fire if the inventory is open and visible — otherwise the
-      // floating examine handles it.
-      if (overlay.dataset.open !== "1") {
-        window.dispatchEvent(new CustomEvent("hb-examine-key"));
-        return;
-      }
+      if (!selectedSrcLi) return;  // examine-target / main-panel handle the other cases
       ev.preventDefault();
-      if (selectedSrcLi) {
-        showInPlaceExamine(selectedSrcLi);
-      } else {
-        window.dispatchEvent(new CustomEvent("hb-examine-key"));
-      }
+      const guid = selectedSrcLi.dataset?.guid;
+      const name = selectedSrcLi.querySelector(".name")?.textContent || "Item";
+      window.__mainPanel?.pushView?.("examine", { guid, name, fromInventory: true, srcLi: selectedSrcLi });
     }
   }
   window.addEventListener("keydown", onKey);
@@ -818,7 +714,6 @@ export function mount(_ctx) {
   return () => {
     window.removeEventListener("keydown", onKey);
     delete window.__isInventoryItem;
-    clearInterval(nameRetry);
     if (pollTimer) clearInterval(pollTimer);
     for (const o of observers) o.disconnect();
     overlay.remove();

@@ -410,7 +410,7 @@
          because agents drive movement via the wire API, not keystrokes.
          ────────────────────────────────────────────────────────────── */
       html.agent-mode body { margin: 0; padding: 0; overflow: hidden; background: #000; }
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-inventory):not(#hb-examine-target) { display: none !important; }
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -925,6 +925,7 @@
       import * as hotbarPlugin from "./plugins/hotbar.js";
       import * as inventoryPlugin from "./plugins/inventory.js";
       import * as examineTargetPlugin from "./plugins/examine-target.js";
+      import * as mainPanelPlugin from "./plugins/main-panel.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
       let pluginClient = null;
@@ -963,10 +964,16 @@
           ...hotbarPlugin.manifest,
           mount: hotbarPlugin.mount,
         },
+        // Shared main-panel container — holds inventory / examine /
+        // (future) skills / magic / etc. as registered views. iconHidden
+        // so it doesn't claim a bar slot; F4 toggles inventory view.
         {
-          ...inventoryPlugin.manifest,
-          mount: inventoryPlugin.mount,
+          ...mainPanelPlugin.manifest,
+          mount: mainPanelPlugin.mount,
         },
+        // Examine watcher — rAF polls getSelectedTarget; on world-target
+        // change pushes the examine view onto main-panel. No DOM of its
+        // own; it just observes + triggers.
         {
           ...examineTargetPlugin.manifest,
           mount: examineTargetPlugin.mount,
@@ -993,6 +1000,24 @@
           mount: vendorUiPlugin.mount,
         },
       ];
+
+      // Register views with the main-panel container (PR-U). Inventory
+      // and Examine share one pane; main-panel.pushView routes between
+      // them with a view stack so "Back" returns to inventory.
+      // See docs/examine-architecture-2026-05-22.md.
+      mainPanelPlugin.registerView("inventory", inventoryPlugin.view);
+      mainPanelPlugin.registerView("examine",   examineTargetPlugin.view);
+
+      // F4 toggles the inventory view in the shared main-panel (retail
+      // muscle-memory). Always opens inventory as the root view; pressing
+      // again closes the panel.
+      window.addEventListener("keydown", (ev) => {
+        if (ev.key !== "F4" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        const tag = ev.target?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        ev.preventDefault();
+        window.__mainPanel?.toggleView?.("inventory");
+      });
 
       // Phase G — F5 toggles the Spellbook panel (retail muscle memory).
       // The keyboard listener finds the spellbook's bar icon by aria-label

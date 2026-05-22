@@ -1,130 +1,88 @@
-// Examine-target popup — port of retail gmFloatyExaminationUI (layout
-// 0x2100006B, 70 elements, 24 image DIDs, 310x400 floating panel).
+// Examine view — mounts inside main-panel's body slot. Replaces the
+// PR-S standalone floating popup (gmFloatyExaminationUI 0x2100006B).
 //
-// Trigger: rAF-polls liveScene3d.entityManager.getSelectedTarget()
-// (per scene3d/picking.js:305). When the selected GUID changes from 0
-// to non-zero, the panel pops with that entity's name + icon + stats.
-// Setting target back to 0 (deselect) hides it. Close button dismisses
-// without changing selection.
+// User direction 2026-05-22: examine and inventory share the same UI
+// pane — clicking an inventory item OR examining a creature in the
+// world transitions the same pane. main-panel owns the position +
+// title + close; we render the examine content inside its body slot.
+//
+// Two trigger paths:
+//   1. From inventory: inventory.js pushes view "examine" with ctx
+//      { srcLi, guid, name, fromInventory: true }. We pull stats from
+//      the source <li>'s dataset + window.__sessionHandle.playerInventory().
+//   2. From world picking: the rAF tick polls
+//      liveScene3d.entityManager.getSelectedTarget(); on
+//      0 → non-zero, pushes view "examine" with ctx { guid, name?,
+//      fromEntity: true }. EntityMap entry sourced for details.
 //
 // Real DAT sprites:
 //   - 0x06004CFC : blue glowing orb (32x32) — examine icon at top-left.
-//                  Retail uses this as the "appraised" indicator.
-//   - panel.png 9-slice from Chorizite atlas — outer brass chrome
-//     (matches our other framed surfaces).
-//
-// First pass: name + GUID + (placeholder) level/HP/notes. Real stat
-// rows (creature level, vitals, attack/defense, magic resists, etc.)
-// need wasm.appraiseTarget() which we don't expose yet — wiring is a
-// follow-on. The chrome + show/hide on selection is the core of PR-S.
 
-const OVERLAY_ID = "hb-examine-target";
-const WIDTH = 310;
-const HEIGHT = 400;
-const TITLE_H = 25;
+const VIEW_ID_STYLE = "hb-examine-view-style";
 
 let stylesInjected = false;
 function ensureStyles() {
   if (stylesInjected) return;
   stylesInjected = true;
   const style = document.createElement("style");
-  style.id = "hb-examine-target-style";
+  style.id = VIEW_ID_STYLE;
   style.textContent = `
-    #${OVERLAY_ID} {
-      position: fixed;
-      top: 100px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 60;
-      width: ${WIDTH}px;
-      height: ${HEIGHT}px;
+    .hb-exa-root {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
       box-sizing: border-box;
-      pointer-events: none;
-      font-family: var(--hb-font-serif);
-      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
-      border: 6px solid transparent;
-      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
-      box-shadow: var(--hb-shadow-panel);
-      color: var(--hb-text-cream);
-      display: none;
-    }
-    #${OVERLAY_ID}[data-open="1"] { display: block; }
-    #${OVERLAY_ID} .hb-exa-title {
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: ${TITLE_H}px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 8px;
-      background: url("./data/ui-sprites/0x06004CFA.png") center/100% 100% no-repeat;
-      font-size: 11px;
-      color: var(--hb-text-cream-bright);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
       pointer-events: auto;
-      user-select: none;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      overflow: hidden;
     }
-    #${OVERLAY_ID} .hb-exa-close {
-      width: 14px; height: 14px;
-      background: var(--hb-border-brass);
-      color: var(--hb-bg-stone-bottom);
-      font-size: 9px;
-      line-height: 14px;
-      text-align: center;
-      cursor: pointer;
-    }
-    #${OVERLAY_ID} .hb-exa-close:hover { background: var(--hb-text-gold); }
-    /* Header row: blue-orb icon + target name + GUID. */
-    #${OVERLAY_ID} .hb-exa-head {
+    .hb-exa-head {
       position: absolute;
-      top: ${TITLE_H + 6}px;
+      top: 6px;
       left: 8px;
       right: 8px;
-      height: 38px;
+      height: 44px;
       display: flex;
       align-items: center;
       gap: 8px;
-      pointer-events: auto;
     }
-    #${OVERLAY_ID} .hb-exa-icon {
-      width: 32px; height: 32px;
+    .hb-exa-icon {
+      width: 40px; height: 40px;
       background: url("./data/ui-sprites/0x06004CFC.png") center/contain no-repeat;
-      filter: drop-shadow(0 0 3px rgba(80, 140, 255, 0.7));
+      filter: drop-shadow(0 0 4px rgba(80, 140, 255, 0.7));
       image-rendering: pixelated;
     }
-    #${OVERLAY_ID} .hb-exa-namecol {
+    .hb-exa-namecol {
       display: flex;
       flex-direction: column;
       flex: 1;
-      gap: 1px;
+      gap: 2px;
     }
-    #${OVERLAY_ID} .hb-exa-name {
+    .hb-exa-name {
       font-size: 13px;
       color: var(--hb-text-gold);
       text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
       letter-spacing: 0.02em;
     }
-    #${OVERLAY_ID} .hb-exa-guid {
+    .hb-exa-guid {
       font-size: 9px;
       font-family: var(--hb-font-mono);
       color: var(--hb-text-muted);
     }
-    /* Body: stat rows. Each row is "Label : Value". */
-    #${OVERLAY_ID} .hb-exa-body {
+    .hb-exa-body {
       position: absolute;
-      top: ${TITLE_H + 50}px;
+      top: 56px;
       left: 8px;
       right: 8px;
       bottom: 8px;
       overflow-y: auto;
-      pointer-events: auto;
       padding: 4px;
       background: rgba(0, 0, 0, 0.4);
       border: 1px solid var(--hb-border-brass-dim);
       scrollbar-width: thin;
       scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
     }
-    #${OVERLAY_ID} .hb-exa-row {
+    .hb-exa-row {
       display: flex;
       justify-content: space-between;
       gap: 8px;
@@ -133,18 +91,18 @@ function ensureStyles() {
       line-height: 14px;
       border-bottom: 1px solid rgba(138, 117, 68, 0.18);
     }
-    #${OVERLAY_ID} .hb-exa-row:last-child { border-bottom: none; }
-    #${OVERLAY_ID} .hb-exa-label {
+    .hb-exa-row:last-child { border-bottom: none; }
+    .hb-exa-label {
       color: var(--hb-text-cream);
       text-transform: uppercase;
       letter-spacing: 0.04em;
       font-size: 9px;
     }
-    #${OVERLAY_ID} .hb-exa-value {
+    .hb-exa-value {
       color: var(--hb-text-gold);
       text-align: right;
     }
-    #${OVERLAY_ID} .hb-exa-section {
+    .hb-exa-section {
       font-size: 9px;
       color: var(--hb-text-cream-bright);
       text-transform: uppercase;
@@ -157,139 +115,165 @@ function ensureStyles() {
   document.head.appendChild(style);
 }
 
-export const manifest = {
-  id: "examine-target",
+// Type-bit → label (mirrors inventory.js TYPE_COLOR map).
+const TYPE_LABEL = {
+  "0x4":     "Weapon",
+  "0x2":     "Armor",
+  "0x10000": "Magic / Scroll",
+  "0x20":    "Currency (pyreal)",
+};
+
+function r(parent, label, value) {
+  if (value == null || value === "") return;
+  const row = document.createElement("div");
+  row.className = "hb-exa-row";
+  const l = document.createElement("span");
+  l.className = "hb-exa-label";
+  l.textContent = label;
+  const v = document.createElement("span");
+  v.className = "hb-exa-value";
+  v.textContent = String(value);
+  row.appendChild(l);
+  row.appendChild(v);
+  parent.appendChild(row);
+}
+function section(parent, text) {
+  const s = document.createElement("div");
+  s.className = "hb-exa-section";
+  s.textContent = text;
+  parent.appendChild(s);
+}
+
+function getItemByGuid(guid) {
+  try {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    if (!handle?.playerInventory) return null;
+    const items = handle.playerInventory();
+    return items.find((it) => String(it.guid) === String(guid)) || null;
+  } catch (_) { return null; }
+}
+
+function populateFromInventory(body, ctx, nameEl, guidEl) {
+  const srcLi = ctx.srcLi;
+  const guid = ctx.guid ?? srcLi?.dataset?.guid;
+  const item = getItemByGuid(guid);
+  const tb = srcLi?.dataset?.typeBit ?? "0x0";
+  nameEl.textContent = srcLi?.querySelector?.(".name")?.textContent || item?.name || ctx.name || "(unnamed)";
+  guidEl.textContent = guid != null
+    ? `0x${(Number(guid) >>> 0).toString(16).toUpperCase().padStart(8, "0")}`
+    : "";
+  section(body, "Identity");
+  r(body, "Kind", TYPE_LABEL[tb] || "Item");
+  if (item) {
+    if (item.stackSize > 1) r(body, "Stack", item.stackSize);
+    if (item.value > 0) r(body, "Value", `${item.value} pyreals`);
+    if (item.equipMask) r(body, "Equip mask", `0x${item.equipMask.toString(16).toUpperCase().padStart(8, "0")}`);
+    if (item.burden != null) r(body, "Burden", item.burden);
+    if (item.itemType != null) r(body, "Item type bits", `0x${item.itemType.toString(16)}`);
+  }
+  r(body, "GUID", guidEl.textContent);
+}
+
+function populateFromEntity(body, ctx, nameEl, guidEl) {
+  const guid = (ctx.guid >>> 0) || 0;
+  const em = window.liveScene3d?.entityManager;
+  const ent = em?.entityMap?.get?.(guid) || em?.entityMap?.get?.(String(guid)) || null;
+  nameEl.textContent = ent?.name || ctx.name || "(unnamed)";
+  guidEl.textContent = `0x${guid.toString(16).toUpperCase().padStart(8, "0")}`;
+  if (!ent) {
+    section(body, "Status");
+    r(body, "Loading", "—");
+    return;
+  }
+  section(body, "Identity");
+  if (ent.type != null) r(body, "Type", String(ent.type));
+  if (ent.classId != null) r(body, "Class", `0x${ent.classId.toString(16)}`);
+  if (ent.wcid != null) r(body, "Wcid", String(ent.wcid));
+  if (ent.position) {
+    section(body, "Position");
+    const p = ent.position;
+    r(body, "X", p.x?.toFixed?.(1) ?? p.x);
+    r(body, "Y", p.y?.toFixed?.(1) ?? p.y);
+    r(body, "Z", p.z?.toFixed?.(1) ?? p.z);
+    if (ent.landblock != null) r(body, "Landblock", `0x${ent.landblock.toString(16).padStart(8, "0").toUpperCase()}`);
+  }
+  section(body, "Combat");
+  if (ent.level != null) r(body, "Level", String(ent.level));
+  if (ent.health != null) r(body, "Health", String(ent.health));
+  if (ent.stamina != null) r(body, "Stamina", String(ent.stamina));
+  if (ent.mana != null) r(body, "Mana", String(ent.mana));
+  if (ent.motionState != null) {
+    section(body, "Animation");
+    r(body, "Motion", String(ent.motionState));
+    if (ent.heading != null) r(body, "Heading", (ent.heading * 180 / Math.PI).toFixed(1) + "°");
+  }
+}
+
+// View interface — registered with main-panel under id "examine".
+export const view = {
   name: "Examine",
+  nameFor: (ctx) => {
+    if (ctx?.name) return `Examine: ${ctx.name}`;
+    if (ctx?.srcLi) {
+      const n = ctx.srcLi.querySelector(".name")?.textContent;
+      if (n) return `Examine: ${n}`;
+    }
+    return "Examine";
+  },
+  mount: (parentEl, ctx) => {
+    ensureStyles();
+    const root = document.createElement("div");
+    root.className = "hb-exa-root";
+
+    const head = document.createElement("div");
+    head.className = "hb-exa-head";
+    const iconEl = document.createElement("div");
+    iconEl.className = "hb-exa-icon";
+    head.appendChild(iconEl);
+    const nameCol = document.createElement("div");
+    nameCol.className = "hb-exa-namecol";
+    const nameEl = document.createElement("div");
+    nameEl.className = "hb-exa-name";
+    nameEl.textContent = "—";
+    const guidEl = document.createElement("div");
+    guidEl.className = "hb-exa-guid";
+    guidEl.textContent = "";
+    nameCol.appendChild(nameEl);
+    nameCol.appendChild(guidEl);
+    head.appendChild(nameCol);
+    root.appendChild(head);
+
+    const body = document.createElement("div");
+    body.className = "hb-exa-body";
+    root.appendChild(body);
+
+    parentEl.appendChild(root);
+
+    if (ctx?.fromInventory) {
+      populateFromInventory(body, ctx, nameEl, guidEl);
+    } else {
+      populateFromEntity(body, ctx ?? {}, nameEl, guidEl);
+    }
+
+    return () => { root.remove(); };
+  },
+};
+
+// Selection-poll module: watches getSelectedTarget() and pushes the
+// examine view onto the main-panel stack on non-zero transitions
+// (skipping inventory items, which are handled by inventory.js).
+// Exported as a separate mount() so index.html can register it as
+// an iconHidden bar slot — it has no DOM of its own; it only watches.
+export const manifest = {
+  id: "examine-target-watcher",
+  name: "Examine watcher",
   icon: "🔍",
   iconHidden: true,
-  version: "0.1.0",
-  description: "Floating examine popup (gmFloatyExaminationUI 0x2100006B)",
+  version: "0.2.0",
+  description: "rAF polls getSelectedTarget; pushes examine view to main-panel on world-target change",
 };
 
 export function mount(_ctx) {
-  ensureStyles();
-  const existing = document.getElementById(OVERLAY_ID);
-  if (existing) existing.remove();
-
-  const overlay = document.createElement("div");
-  overlay.id = OVERLAY_ID;
-
-  // Title
-  const title = document.createElement("div");
-  title.className = "hb-exa-title";
-  const titleLabel = document.createElement("span");
-  titleLabel.textContent = "Examine";
-  title.appendChild(titleLabel);
-  const closeBtn = document.createElement("span");
-  closeBtn.className = "hb-exa-close";
-  closeBtn.textContent = "×";
-  closeBtn.addEventListener("click", () => { overlay.dataset.open = "0"; });
-  title.appendChild(closeBtn);
-  overlay.appendChild(title);
-
-  // Header (icon + name + guid)
-  const head = document.createElement("div");
-  head.className = "hb-exa-head";
-  const iconEl = document.createElement("div");
-  iconEl.className = "hb-exa-icon";
-  head.appendChild(iconEl);
-  const nameCol = document.createElement("div");
-  nameCol.className = "hb-exa-namecol";
-  const nameEl = document.createElement("div");
-  nameEl.className = "hb-exa-name";
-  nameEl.textContent = "—";
-  const guidEl = document.createElement("div");
-  guidEl.className = "hb-exa-guid";
-  guidEl.textContent = "";
-  nameCol.appendChild(nameEl);
-  nameCol.appendChild(guidEl);
-  head.appendChild(nameCol);
-  overlay.appendChild(head);
-
-  // Body: stat rows
-  const body = document.createElement("div");
-  body.className = "hb-exa-body";
-  overlay.appendChild(body);
-
-  document.body.appendChild(overlay);
-
-  function row(label, value) {
-    const r = document.createElement("div");
-    r.className = "hb-exa-row";
-    const l = document.createElement("span");
-    l.className = "hb-exa-label";
-    l.textContent = label;
-    const v = document.createElement("span");
-    v.className = "hb-exa-value";
-    v.textContent = value;
-    r.appendChild(l);
-    r.appendChild(v);
-    return r;
-  }
-  function section(label) {
-    const s = document.createElement("div");
-    s.className = "hb-exa-section";
-    s.textContent = label;
-    return s;
-  }
-
-  function populateFor(guid) {
-    body.innerHTML = "";
-    const em = window.liveScene3d?.entityManager;
-    if (!em) return;
-    // entityMap is per memory keyed by guid → entity record.
-    const ent = em.entityMap?.get?.(guid) || em.entityMap?.get?.(String(guid)) || null;
-    if (!ent) {
-      body.appendChild(row("Status", "Loading…"));
-      return;
-    }
-    // Surface whatever the entity record has. Common fields per the
-    // surface inventory: name, type, level, position, motionState, etc.
-    // Read defensively so we don't crash if shape drifts.
-    nameEl.textContent = ent.name || ent.displayName || "(unnamed)";
-    guidEl.textContent = `0x${(guid >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
-
-    body.appendChild(section("Identity"));
-    if (ent.type != null) body.appendChild(row("Type", String(ent.type)));
-    if (ent.classId != null) body.appendChild(row("Class", `0x${ent.classId.toString(16)}`));
-    if (ent.wcid != null) body.appendChild(row("Wcid", String(ent.wcid)));
-
-    body.appendChild(section("Position"));
-    if (ent.position) {
-      const p = ent.position;
-      body.appendChild(row("X", (p.x ?? 0).toFixed?.(1) ?? p.x));
-      body.appendChild(row("Y", (p.y ?? 0).toFixed?.(1) ?? p.y));
-      body.appendChild(row("Z", (p.z ?? 0).toFixed?.(1) ?? p.z));
-    }
-    if (ent.landblock != null) {
-      body.appendChild(row("Landblock", `0x${ent.landblock.toString(16).padStart(8, "0").toUpperCase()}`));
-    }
-
-    body.appendChild(section("Combat"));
-    if (ent.level != null) body.appendChild(row("Level", String(ent.level)));
-    if (ent.health != null) body.appendChild(row("Health", String(ent.health)));
-    if (ent.stamina != null) body.appendChild(row("Stamina", String(ent.stamina)));
-    if (ent.mana != null) body.appendChild(row("Mana", String(ent.mana)));
-
-    body.appendChild(section("Animation"));
-    if (ent.motionState != null) body.appendChild(row("Motion", String(ent.motionState)));
-    if (ent.heading != null) body.appendChild(row("Heading", (ent.heading * 180 / Math.PI).toFixed(1) + "°"));
-
-    // Empty-state fallback — show that we have the entity but no fields.
-    if (body.childElementCount === 0) {
-      body.appendChild(row("Status", "Entity record empty"));
-    }
-  }
-
-  // Poll for selected-target changes. The entity manager exposes
-  // getSelectedTarget() per scene3d/picking.js:305.
-  //
-  // Per the examine architecture doc (apps/holtburger-web/docs/
-  // examine-architecture-2026-05-22.md), this floating popup is only
-  // for NON-INVENTORY targets — creatures/NPCs picked in the 3D
-  // world, spell right-click, etc. Inventory items go to the
-  // inventory's in-place examine swap (gm3DItemsUI). So we suppress
-  // auto-pop when window.__isInventoryItem(guid) returns true.
   let lastGuid = 0;
   let rafId = 0;
   function tick() {
@@ -298,15 +282,11 @@ export function mount(_ctx) {
       const guid = (em.getSelectedTarget() ?? 0) >>> 0;
       if (guid !== lastGuid) {
         lastGuid = guid;
-        if (guid === 0) {
-          overlay.dataset.open = "0";
-        } else if (window.__isInventoryItem?.(guid)) {
-          // Selection is an inventory item — let inventory.js handle
-          // the in-place examine swap; we stay hidden.
-          overlay.dataset.open = "0";
-        } else {
-          populateFor(guid);
-          overlay.dataset.open = "1";
+        // Skip inventory items — inventory.js handles those via
+        // pushView on click. Floating popup behaviour is retired in
+        // favour of the shared main-panel.
+        if (guid !== 0 && !window.__isInventoryItem?.(guid)) {
+          window.__mainPanel?.pushView?.("examine", { guid });
         }
       }
     }
@@ -314,28 +294,26 @@ export function mount(_ctx) {
   }
   rafId = requestAnimationFrame(tick);
 
-  // E key handler — fires for non-inventory selections (inventory.js
-  // already handled its own case + dispatched this event when not
-  // applicable). Per acclient.c:402002, if no selection, retail enters
-  // target mode; we just no-op here for now.
-  function onExamineKey() {
-    const guid = lastGuid;
-    if (guid === 0) return;
-    if (window.__isInventoryItem?.(guid)) return;
-    populateFor(guid);
-    overlay.dataset.open = "1";
+  // E key — examine current world selection (non-inventory case
+  // already handled inside inventory.js).
+  function onKey(ev) {
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const tag = ev.target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (ev.key !== "e" && ev.key !== "E") return;
+    if (lastGuid === 0) return;
+    if (window.__isInventoryItem?.(lastGuid)) return;
+    ev.preventDefault();
+    window.__mainPanel?.pushView?.("examine", { guid: lastGuid });
   }
-  window.addEventListener("hb-examine-key", onExamineKey);
+  window.addEventListener("keydown", onKey);
 
-  // Debug helper — manually trigger by GUID from console.
-  window.__showExamineFor = (guid) => { populateFor(guid >>> 0); overlay.dataset.open = "1"; };
-  window.__hideExamine = () => { overlay.dataset.open = "0"; };
+  // Debug helper.
+  window.__showExamineFor = (guid) => window.__mainPanel?.pushView?.("examine", { guid: guid >>> 0 });
 
   return () => {
     cancelAnimationFrame(rafId);
-    window.removeEventListener("hb-examine-key", onExamineKey);
+    window.removeEventListener("keydown", onKey);
     delete window.__showExamineFor;
-    delete window.__hideExamine;
-    overlay.remove();
   };
 }
