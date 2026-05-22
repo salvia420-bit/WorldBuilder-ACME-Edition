@@ -26,6 +26,11 @@ function ensureStyles() {
   // Mirrors the prior `#vitals-hud-overlay` CSS verbatim so the
   // pre-plugin presentation is byte-identical.
   style.textContent = `
+    /* Retail composes the 3 vials as one UIElement_Meter group with a
+       brass-frame wrapper around the whole cluster (not per-vial frames).
+       Wrapper uses the panel 9-slice for the beveled outer chrome;
+       padding pushes the vials in just enough that the sprite rims sit
+       inside the brass corners. */
     #${OVERLAY_ID} {
       position: fixed;
       top: 6px;
@@ -34,9 +39,11 @@ function ensureStyles() {
       display: flex;
       flex-direction: column;
       gap: 1px;
-      padding: 0;
-      background: transparent;
-      border: none;
+      padding: 4px;
+      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
+      border: 6px solid transparent;
+      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
+      box-shadow: var(--hb-shadow-panel);
       font-family: var(--hb-font-serif);
       pointer-events: none;
     }
