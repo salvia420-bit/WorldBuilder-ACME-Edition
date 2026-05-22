@@ -1079,6 +1079,30 @@ export async function bakeStaticsRing(
     scene3d.staticsBakedLbs = new Set();
   }
 
+  // 2026-05-22 — opt-in profile instrumentation via `?profileStatics=1`.
+  // When the flag is absent (default), `mark()` is a no-op. When set,
+  // each call logs a `[profileStatics] <phase> +<ms>` line. Zero perf
+  // cost in the default path — the flag is read once at function
+  // entry and the timestamp captures only fire under truthy check.
+  let _profStatT0 = 0, _profStatLast = 0, _profStatOn = false;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      _profStatOn = new URLSearchParams(globalThis.location.search).get("profileStatics") === "1";
+    }
+  } catch (_) { _profStatOn = false; }
+  const mark = _profStatOn
+    ? (phase) => {
+        const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+        if (_profStatT0 === 0) { _profStatT0 = now; _profStatLast = now; }
+        const dPhase = now - _profStatLast;
+        const dTotal = now - _profStatT0;
+        // eslint-disable-next-line no-console
+        console.log(`[profileStatics] ${phase.padEnd(36)} +${dPhase.toFixed(1)}ms  (total ${dTotal.toFixed(1)}ms)`);
+        _profStatLast = now;
+      }
+    : () => {};
+  mark("bakeStaticsRing entry");
+
   // World-expand step 1 Objective 5 — persist a marker opts bag on
   // scene3d so `liveScene3d.loadStaticsForLandblock(lbX, lbY)` has a
   // non-undefined value to forward into `bakeStaticsForLandblock`.
@@ -1147,8 +1171,11 @@ export async function bakeStaticsRing(
   // nothing renders for this LB (expected for ocean / terrain-only
   // LBs).
   const allPlacements = await wasmExports.fetch_landblock_objects(cellIds);
+  mark("stage1: fetch_landblock_objects");
   const landblockInfoStatics = drainPlacements(allPlacements);
+  mark("stage1: drainPlacements (JS)");
   const sceneryStatics = await fetchAndDrainScenery(cellIds, wasmExports);
+  mark("stage1: fetchAndDrainScenery");
   const statics = landblockInfoStatics.concat(sceneryStatics);
   // Mark every newly-baked LB in the set BEFORE instantiation runs
   // so a concurrent caller observing mid-instantiation state sees the
@@ -1174,16 +1201,37 @@ export async function bakeStaticsRing(
     uniqueModelIds,
     wasmExports.fetch_model_meshes
   );
+  mark(`stage2: fetchPrimaryGeometries (${uniqueModelIds.length} models)`);
   if (primary.fetchFailed) {
     return {
       ...makeEmptySummary(),
       skippedNoMesh: statics.length,
     };
   }
-  const degradedGeomByModel = await fetchDegradedGeometries(
-    primary.didDegradeByModel,
-    wasmExports.fetch_model_meshes
-  );
+  // Wire-agent: skip the degraded (LOD) geometry fetch entirely. In
+  // wireframe rendering there's no visual difference between full-
+  // detail and degraded leaves — the LOD switch only matters for
+  // textured perspective at distance. Empty Map → buildSingletonNode /
+  // buildInstancedNode see `degradedGeom: null` and return the
+  // primary leaf without an LOD wrapper (guarded paths at L593/L727).
+  // Profile data 2026-05-22: this fetch accounted for 86% (341.9ms of
+  // 394ms) of wire-mode statics bake on Chromium+SwiftShader.
+  // Wire-agent: skip the degraded (LOD) geometry fetch entirely. In
+  // wireframe rendering there's no visual difference between full-
+  // detail and degraded leaves — the LOD switch only matters for
+  // textured perspective at distance. Empty Map → buildSingletonNode /
+  // buildInstancedNode see `degradedGeom: null` and return the
+  // primary leaf without an LOD wrapper (guarded paths at L593/L727).
+  // Profile data 2026-05-22: this fetch accounted for 86% (341.9ms of
+  // 394ms) of wire-mode statics bake on Chromium+SwiftShader. A/B
+  // measured total boot 5087→4218ms median (-869ms, -17%).
+  const degradedGeomByModel = scene3d.wireframeMode
+    ? new Map()
+    : await fetchDegradedGeometries(
+        primary.didDegradeByModel,
+        wasmExports.fetch_model_meshes
+      );
+  mark(`stage2: fetchDegradedGeometries (${primary.didDegradeByModel?.size ?? 0} degraded${scene3d.wireframeMode ? " — SKIPPED in wire" : ""})`);
 
   // Material cache shared across all 3D phases (Phase 0.2 / 3.3
   // propagation; see buildings.js).
@@ -1202,12 +1250,14 @@ export async function bakeStaticsRing(
       );
     }
   }
+  mark(`stage2: materialCache.preload (${primary.allSurfaceDids.size} surfaces)`);
 
   const matByModel = buildMaterialMap(
     primary.geomByModel,
     primary.dominantSurfaceByModel,
     materialCache
   );
+  mark("stage2: buildMaterialMap (JS)");
 
   // ── Stage 3: ring-wide group-by-modelId + InstancedMesh/Mesh emit ──
   // This is the divergent step vs the per-LB baker: placements
@@ -1312,6 +1362,7 @@ export async function bakeStaticsRing(
       if (isLod) lodCount += 1;
     }
   }
+  mark(`stage3: build+add ${placementsByModel.size} groups (inst=${instancedGroupCount}, single=${singletonCount})`);
 
   // Count placements that had no geometry (the model failed to fetch
   // OR was 0-tri AND got dropped from `geomByModel`). The
