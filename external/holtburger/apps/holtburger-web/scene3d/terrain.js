@@ -57,6 +57,65 @@ const DETAIL_SLICE_STONE = 3;
 const DETAIL_SLICE_SNOW = 4;
 const DETAIL_SLICE_NONE = 255;
 
+// 2026-05-22 — wire-agent fill palette. One sRGB triple per terrain code
+// (0..31), approximating the per-code base colour of the atlas texture
+// `TERRAIN_TEXTURE_NAMES` would sample at distance. The wire-mode bake
+// builds a per-vertex `color` BufferAttribute from this table + the
+// existing per-vertex `terrainCode` attribute, so MeshBasicMaterial
+// ({vertexColors:true}) can render distinguishable terrain types without
+// the 33-layer DataArrayTexture upload that dominates `resolveTerrainRing-
+// Opts` (the ~840ms silent gap in the wire-agent boot profile). Values
+// stay in sRGB — three.js's LinearSRGBColorSpace conversion at upload
+// linearises them.
+const TERRAIN_CODE_TO_RGB = new Float32Array([
+  /*  0 BarrenRock         */ 0.36, 0.32, 0.26,
+  /*  1 Grassland          */ 0.34, 0.46, 0.20,
+  /*  2 Ice                */ 0.78, 0.86, 0.92,
+  /*  3 LushGrass          */ 0.40, 0.56, 0.22,
+  /*  4 MarshSparseSwamp   */ 0.34, 0.40, 0.20,
+  /*  5 MudRichDirt        */ 0.30, 0.22, 0.12,
+  /*  6 ObsidianPlain      */ 0.16, 0.16, 0.20,
+  /*  7 PackedDirt         */ 0.38, 0.28, 0.18,
+  /*  8 PatchyDirt         */ 0.46, 0.36, 0.24,
+  /*  9 PatchyGrassland    */ 0.42, 0.50, 0.22,
+  /* 10 sand-yellow        */ 0.78, 0.66, 0.40,
+  /* 11 sand-grey          */ 0.70, 0.62, 0.50,
+  /* 12 sand-rockStrewn    */ 0.60, 0.54, 0.42,
+  /* 13 SedimentaryRock    */ 0.46, 0.42, 0.36,
+  /* 14 SemiBarrenRock     */ 0.52, 0.46, 0.38,
+  /* 15 Snow               */ 0.90, 0.92, 0.96,
+  /* 16 WaterRunning       */ 0.18, 0.26, 0.42,
+  /* 17 WaterStandingFresh */ 0.14, 0.24, 0.46,
+  /* 18 WaterShallowSea    */ 0.18, 0.34, 0.50,
+  /* 19 WaterShallowStillSea*/ 0.16, 0.30, 0.46,
+  /* 20 WaterDeepSea       */ 0.10, 0.18, 0.38,
+  /* 21 forestfloor        */ 0.22, 0.30, 0.16,
+  /* 22 FauxWaterRunning   */ 0.18, 0.28, 0.46,
+  /* 23 SeaSlime           */ 0.30, 0.38, 0.20,
+  /* 24 Argila             */ 0.42, 0.24, 0.18,
+  /* 25 Volcano1           */ 0.30, 0.20, 0.18,
+  /* 26 Volcano2           */ 0.22, 0.16, 0.16,
+  /* 27 BlueIce            */ 0.68, 0.80, 0.92,
+  /* 28 Moss               */ 0.28, 0.36, 0.20,
+  /* 29 DarkMoss           */ 0.16, 0.24, 0.12,
+  /* 30 olthoi             */ 0.32, 0.24, 0.34,
+  /* 31 DesolateLands      */ 0.34, 0.30, 0.24,
+]);
+
+function buildWireTerrainColors(terrainCodes) {
+  const out = new Float32Array(terrainCodes.length * 3);
+  for (let i = 0; i < terrainCodes.length; i += 1) {
+    // Mask to 5 bits — table is 32 codes; defensive against any future
+    // bit-packing into the high nibbles of the per-vertex code byte.
+    const code = terrainCodes[i] & 0x1f;
+    const base = code * 3;
+    out[i * 3 + 0] = TERRAIN_CODE_TO_RGB[base + 0];
+    out[i * 3 + 1] = TERRAIN_CODE_TO_RGB[base + 1];
+    out[i * 3 + 2] = TERRAIN_CODE_TO_RGB[base + 2];
+  }
+  return out;
+}
+
 // Indexed by terrain code 0..31. UNKNOWN codes (water, swamp, slime,
 // faux-water) get NONE; the shader branches and skips sampling.
 const TERRAIN_CODE_TO_DETAIL_SLICE = new Uint8Array([
@@ -742,6 +801,45 @@ async function resolveTerrainRingOpts(
   centreLbY,
   existing
 ) {
+  // 2026-05-22 — wire-agent short-circuit. Terrain bake uses a shared
+  // `MeshBasicMaterial({vertexColors:true})` (solid fill driven by the
+  // 32-entry TERRAIN_CODE_TO_RGB palette) + a shared wireframe overlay
+  // material, neither of which sample the atlas / road / detail-normal
+  // arrays. Skipping `wasmExports.fetch_terrain_textures()` +
+  // `buildTerrainAtlasArrayBytes` + the 33-layer DataArrayTexture
+  // upload + the road CanvasTexture removes the ~840ms silent gap
+  // between phase6.D cellgraph drain and bakeStaticsRing entry that
+  // the post-cellgraph-fix boot profile (2026-05-22) surfaced. Also
+  // forces `canSubdivide=false` — the 24m control mesh is plenty for
+  // wire-mode visual rough-shape, and skipping the subdivision wasm
+  // batch shaves another fetch off the critical path even at
+  // ?quality=mid/high/ultra in wire mode.
+  if (scene3d?.wireframeMode) {
+    return {
+      centreLbX,
+      centreLbY,
+      playerLbKey:
+        typeof scene3d?.playerLbKey === "number" ? scene3d.playerLbKey : null,
+      initialCentreLbKey:
+        typeof scene3d?.initialCentreLbKey === "number"
+          ? scene3d.initialCentreLbKey
+          : null,
+      detailNormalEnabled: false,
+      detailNormalArrayTex: null,
+      triplanarEnabled: false,
+      triplanarSlopeLo: 0.3,
+      codeToSliceArr: null,
+      subdivLevel: 1,
+      canSubdivide: false,
+      displacementEnabled: false,
+      waterCodeMask: 0,
+      lavaCodeMask: 0,
+      atlasTexture: null,
+      roadTexture: null,
+      roadCanvas: null,
+    };
+  }
+
   // Phase 1.2 — terrain detail normal array. Loaded once in index.js
   // and stashed on scene3d, gated behind `quality.flags.terrainDetailNormal`.
   // When the flag is off, `terrainDetailNormalArray` is null and the
@@ -1072,17 +1170,42 @@ export async function bakeTerrainForLandblock(
     geom = landblockMeshToGeometry(wasmMesh);
   }
   let vertexTypesTex = null;
-  // Wire-agent: skip the per-LB DataTexture upload and use a shared
-  // MeshBasicMaterial({wireframe:true}). No atlas sampling, no road
-  // painting, no detail normals, no time-driven wave displacement. The
-  // geometry already carries the height profile so the wire mesh shows
-  // hills + slopes clearly. Single shared material for all LBs keeps
-  // GPU state changes near zero.
+  // Wire-agent: skip the per-LB DataTexture upload and use a pair of
+  // shared MeshBasicMaterials. The fill material reads a per-vertex
+  // `color` attribute computed from TERRAIN_CODE_TO_RGB + the existing
+  // per-vertex terrainCode array — Gouraud-interpolates colour across
+  // each triangle so terrain types (grass / road / water / sand / etc.)
+  // read as themselves. The wireframe overlay is then rendered on top
+  // (second mesh, same geometry) with a near-black colour and a slight
+  // polygonOffset on the fill so the lines aren't z-fought. No atlas
+  // sampling, no road painting, no detail normals, no time-driven wave
+  // displacement; the GPU sees two MeshBasicMaterials totalling a few
+  // KB of program state per LB.
   let material;
   if (scene3d.wireframeMode) {
+    // Build per-vertex colour attribute from the palette + existing
+    // per-vertex terrainCode. Cheap — ~750 verts × 3 floats per LB at
+    // subdivLevel=1; ~50,000 floats per LB at subdivLevel=8. Wire mode
+    // forces subdivLevel=1 via resolveTerrainRingOpts so we stay on
+    // the smaller end.
+    const colorAttr = buildWireTerrainColors(terrainCodesCopy);
+    geom.setAttribute("color", new THREE.BufferAttribute(colorAttr, 3, false));
+
+    if (!scene3d._wireTerrainFillMaterial) {
+      scene3d._wireTerrainFillMaterial = new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        side: THREE.DoubleSide,
+        fog: true,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+      });
+      scene3d._wireTerrainFillMaterial.name = "wire-terrain-fill";
+      scene3d._wireTerrainFillMaterial.userData = { __cacheOwned: true };
+    }
     if (!scene3d._wireTerrainMaterial) {
       scene3d._wireTerrainMaterial = new THREE.MeshBasicMaterial({
-        color: 0x4a6a52,
+        color: 0x1c2a22, // very dark green — readable on the colour fill
         wireframe: true,
         side: THREE.DoubleSide,
         fog: true,
@@ -1319,6 +1442,25 @@ export async function bakeTerrainForLandblock(
   };
 
   scene3d.terrainGroup.add(lbMesh);
+
+  // 2026-05-22 — wire-agent: pair the wireframe mesh with a second mesh
+  // sharing the same BufferGeometry that draws the solid colour fill
+  // (vertexColors driven by the TERRAIN_CODE_TO_RGB palette). polygon-
+  // Offset on the fill material pushes it slightly behind the wire so
+  // the cell lines stay crisp without z-fighting. Sharing geometry means
+  // no extra GPU memory; two draw calls per LB instead of one — still
+  // negligible at 9-LB (agentic=low) or 169-LB scale.
+  if (scene3d.wireframeMode && scene3d._wireTerrainFillMaterial) {
+    const fillMesh = new THREE.Mesh(geom, scene3d._wireTerrainFillMaterial);
+    fillMesh.name = `terrain-lb-fill-${lbX.toString(16)}-${lbY.toString(16)}`;
+    fillMesh.position.set(
+      lbX * METERS_PER_LANDBLOCK,
+      lbY * METERS_PER_LANDBLOCK,
+      0
+    );
+    fillMesh.userData = { wireFillFor: lbMesh.name, lbX, lbY };
+    scene3d.terrainGroup.add(fillMesh);
+  }
 
   // Roads are now painted inside the terrain shader via the G-channel
   // of uVertexTypes + uRoadTexture (retail-style bilinear-blended,
