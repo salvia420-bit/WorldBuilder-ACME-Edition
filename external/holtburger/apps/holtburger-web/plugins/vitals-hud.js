@@ -62,15 +62,12 @@ function ensureStyles() {
     #${OVERLAY_ID} .hud-vital-bar {
       position: relative;
       width: 250px;
-      height: 16px;
-      background: rgba(0, 0, 0, 0.7);
-      border-radius: 0;
+      height: 22px;
+      background: rgba(0, 0, 0, 0.85);
       overflow: hidden;
-      border: 1px solid var(--hb-border-brass);
-      box-shadow:
-        inset 0 0 4px rgba(0, 0, 0, 0.9),
-        0 0 0 1px var(--hb-border-brass-deep),
-        0 1px 2px rgba(0, 0, 0, 0.6);
+      border: 6px solid transparent;
+      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
     }
     #${OVERLAY_ID} .hud-vital-fill {
       position: absolute;

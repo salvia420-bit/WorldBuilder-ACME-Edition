@@ -16,7 +16,7 @@ const DEFAULTS = Object.freeze({
   iconSize: 36,
   transparency: 0.7,
   color: "#141418",
-  orientation: "h",
+  orientation: "v",
   minimized: false,
 });
 
@@ -31,9 +31,9 @@ const CSS = `
     align-items: center;
     gap: 4px;
     padding: 6px;
-    background: transparent;
+    background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
     border: 6px solid transparent;
-    border-image: url("./sprites/acsprites/panel.png") 6 fill / 6px / 0 stretch;
+    border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
     border-radius: 0;
     color: var(--hb-text-cream);
     font-family: var(--hb-font-serif);
@@ -53,25 +53,24 @@ const CSS = `
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 6px;
-    color: #fff;
+    background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
+    border: none;
+    border-radius: 0;
+    color: var(--hb-text-cream);
     font-size: calc(var(--hb-icon-size) * 0.55);
     cursor: pointer;
-    transition: background 120ms ease, border-color 120ms ease;
+    transition: filter 120ms ease;
     padding: 0;
-    font-family: inherit;
+    font-family: var(--hb-font-serif);
     line-height: 1;
     flex: 0 0 auto;
   }
   .hb-bar-icon:hover {
-    background: rgba(255, 255, 255, 0.14);
-    border-color: rgba(255, 255, 255, 0.28);
+    filter: brightness(1.25);
   }
   .hb-bar-icon.active {
-    background: rgba(120, 170, 255, 0.25);
-    border-color: rgba(120, 170, 255, 0.6);
+    background-image: url("./sprites/acsprites/icon-slot-bg2.png");
+    filter: brightness(1.15);
   }
   .hb-bar-icon:focus { outline: none; }
   .hb-bar-icon:focus-visible {
@@ -118,8 +117,9 @@ const CSS = `
   .hb-bar-slot-empty {
     width: var(--hb-icon-size);
     height: var(--hb-icon-size);
-    border: 1px dashed rgba(255, 255, 255, 0.3);
-    border-radius: 6px;
+    background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
+    border: none;
+    border-radius: 0;
     opacity: 0.5;
     flex: 0 0 auto;
   }
@@ -711,6 +711,14 @@ export function mountBar({ client, root, slots: slotsOpt }) {
         bar.style.top = `${state.top}px`;
         persist();
       }
+    } else if (state.orientation === "v") {
+      // Retail default: right-edge vertical column (matches the icon
+      // column in gamesbeat retail reference 2026-05-22).
+      bar.style.transform = "translateY(-50%)";
+      bar.style.left = "auto";
+      bar.style.right = "12px";
+      bar.style.top = "50%";
+      bar.style.bottom = "auto";
     } else {
       bar.style.transform = "translateX(-50%)";
       bar.style.left = "50%";
