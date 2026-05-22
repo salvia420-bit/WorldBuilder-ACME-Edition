@@ -41,6 +41,47 @@ const TYPE_COLOR = {
   "0x20":    "#f0c060",   // Money / pyreal
 };
 
+// Paperdoll equipment slot table — element IDs + equipMask bits from
+// gmPaperDollUI::GetLocationInfoFromElementID at acclient.c:219835.
+// Y coords come from the gmPaperDollUI-0x21000024 LayoutDesc JSON;
+// X coords are hand-tuned to approximate retail body anatomy in the
+// 224x214 paperdoll area (no X data is set in the LayoutDesc — retail
+// computes it via parent flow at runtime).
+//
+// Side values: 0 = both/center, 1 = right-arm, 2 = left-arm.
+// Equipped items render in the slot whose equipMask bit matches
+// `item.equipMask & slot.equipMask`.
+const PAPERDOLL_SLOTS = [
+  // Head row
+  { elemId: "0x100005AB", equipMask: 0x00000001, x: 96,  y: 8,   name: "Head" },
+  { elemId: "0x100001DA", equipMask: 0x00008000, x: 96,  y: 44,  name: "Necklace" },
+  { elemId: "0x100001E1", equipMask: 0x00200000, x: 64,  y: 28,  name: "Earring (L)" },
+  // Shoulders / upper torso
+  { elemId: "0x100005AE", equipMask: 0x00000800, x: 32,  y: 64,  name: "Upper arm (L)" },
+  { elemId: "0x100005AC", equipMask: 0x00000200, x: 96,  y: 64,  name: "Chest armor" },
+  { elemId: "0x100001E2", equipMask: 0x00000002, x: 64,  y: 64,  name: "Chest under" },
+  { elemId: "0x10000596", equipMask: 0x20000000, x: 160, y: 64,  name: "Right hand" },
+  { elemId: "0x100005E9", equipMask: 0x08000000, x: 192, y: 64,  name: "Wand/staff" },
+  // Mid torso
+  { elemId: "0x100005AF", equipMask: 0x00001000, x: 32,  y: 100, name: "Lower arm (L)" },
+  { elemId: "0x100005AD", equipMask: 0x00000400, x: 96,  y: 100, name: "Abdomen" },
+  { elemId: "0x10000595", equipMask: 0x10000000, x: 160, y: 100, name: "Shield" },
+  { elemId: "0x1000050E", equipMask: 0x04000000, x: 192, y: 100, name: "Aetheria" },
+  // Hands / waist row
+  { elemId: "0x100001DB", equipMask: 0x00010000, x: 32,  y: 116, name: "Ring (R)" },
+  { elemId: "0x100005B0", equipMask: 0x00000020, x: 64,  y: 116, name: "Gloves" },
+  { elemId: "0x100001DD", equipMask: 0x00020000, x: 160, y: 116, name: "Ring (L)" },
+  { elemId: "0x10000597", equipMask: 0x40000000, x: 192, y: 116, name: "Missile" },
+  // Legs
+  { elemId: "0x100005B1", equipMask: 0x00002000, x: 64,  y: 136, name: "Upper leg" },
+  { elemId: "0x100001E3", equipMask: 0x00000040, x: 96,  y: 136, name: "Underpants" },
+  { elemId: "0x100005B2", equipMask: 0x00004000, x: 128, y: 136, name: "Lower leg" },
+  { elemId: "0x100001DC", equipMask: 0x00040000, x: 32,  y: 152, name: "Bracelet (R)" },
+  { elemId: "0x100001DE", equipMask: 0x00080000, x: 160, y: 152, name: "Bracelet (L)" },
+  // Feet
+  { elemId: "0x100005B3", equipMask: 0x00000100, x: 96,  y: 172, name: "Boots" },
+];
+
 let stylesInjected = false;
 function ensureStyles() {
   if (stylesInjected) return;
@@ -113,6 +154,53 @@ function ensureStyles() {
         radial-gradient(ellipse at center, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.8) 100%);
       border: 1px solid var(--hb-border-brass-dim);
     }
+    /* Each paperdoll body-slot — 28x28 brass-trim square positioned at
+       the (x, y) from the PAPERDOLL_SLOTS table. Smaller than 32 to
+       fit more slots in the 224x214 anatomy box. */
+    #${OVERLAY_ID} .hb-inv-doll-slot {
+      position: absolute;
+      width: 28px;
+      height: 28px;
+      background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
+      image-rendering: pixelated;
+      cursor: pointer;
+      transition: filter 120ms ease;
+      opacity: 0.6;
+    }
+    #${OVERLAY_ID} .hb-inv-doll-slot:hover { opacity: 1; filter: brightness(1.3); }
+    #${OVERLAY_ID} .hb-inv-doll-slot.equipped {
+      opacity: 1;
+      filter: drop-shadow(0 0 3px var(--hb-text-gold));
+    }
+    #${OVERLAY_ID} .hb-inv-doll-slot.drag-target {
+      filter: drop-shadow(0 0 4px rgba(120, 220, 120, 0.9));
+    }
+    #${OVERLAY_ID} .hb-inv-doll-icon {
+      position: absolute;
+      top: 4px; left: 4px;
+      width: 20px;
+      height: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-inv-doll-tip {
+      position: absolute;
+      top: calc(100% + 3px);
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 2px 5px;
+      font-size: 9px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      background: rgba(10, 8, 4, 0.96);
+      border: 1px solid var(--hb-border-brass);
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 120ms ease;
+      z-index: 70;
+    }
+    #${OVERLAY_ID} .hb-inv-doll-slot:hover .hb-inv-doll-tip { opacity: 1; }
     /* Bag column — narrow vertical strip on the right. */
     #${OVERLAY_ID} .hb-inv-bagcol {
       position: absolute;
@@ -275,12 +363,31 @@ export function mount(_ctx) {
   titleEl.appendChild(closeBtn);
   overlay.appendChild(titleEl);
 
-  // Paperdoll backdrop (placeholder — real 2D character model later)
+  // Paperdoll backdrop + body-slot squares per PAPERDOLL_SLOTS table.
   const paperdoll = document.createElement("div");
   paperdoll.className = "hb-inv-paperdoll";
   const paperdollBg = document.createElement("div");
   paperdollBg.className = "hb-inv-paperdoll-bg";
   paperdoll.appendChild(paperdollBg);
+  const dollSlotEls = {};
+  for (const s of PAPERDOLL_SLOTS) {
+    const el = document.createElement("div");
+    el.className = "hb-inv-doll-slot";
+    el.dataset.equipMask = String(s.equipMask);
+    el.dataset.name = s.name;
+    el.style.left = `${s.x}px`;
+    el.style.top = `${s.y}px`;
+    const icon = document.createElement("div");
+    icon.className = "hb-inv-doll-icon";
+    icon.style.display = "none";
+    el.appendChild(icon);
+    const tip = document.createElement("span");
+    tip.className = "hb-inv-doll-tip";
+    tip.textContent = s.name;
+    el.appendChild(tip);
+    paperdoll.appendChild(el);
+    dollSlotEls[s.equipMask] = { el, icon, tip, slot: s };
+  }
   overlay.appendChild(paperdoll);
 
   // Bag column — 4 placeholder tabs for now (Main, Bag 1, 2, 3).
@@ -362,18 +469,76 @@ export function mount(_ctx) {
     return slot;
   }
 
+  // Find the inventory item record for a given source <li> via wasm.
+  // The source <li>'s data-guid lets us look up the item's equipMask
+  // from the SessionHandle.playerInventory() snapshot.
+  function getItemByGuid(guid) {
+    try {
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (!handle?.playerInventory) return null;
+      const items = handle.playerInventory();
+      return items.find((it) => String(it.guid) === String(guid)) || null;
+    } catch (_) { return null; }
+  }
+
+  // Clear any equipped icon from every paperdoll slot.
+  function clearPaperdoll() {
+    for (const k of Object.keys(dollSlotEls)) {
+      const e = dollSlotEls[k];
+      e.el.classList.remove("equipped");
+      e.icon.style.display = "none";
+      e.tip.textContent = e.slot.name;
+    }
+  }
+
+  // Place an equipped item into the matching paperdoll slot. equipMask
+  // may have multiple bits set — find the first slot whose mask AND'd
+  // with the item's equipMask is non-zero.
+  function placeEquippedInDoll(srcLi, item) {
+    const em = (item?.equipMask >>> 0) || 0;
+    if (em === 0) return false;
+    let matched = null;
+    for (const k of Object.keys(dollSlotEls)) {
+      const slotMask = Number(k) >>> 0;
+      if ((em & slotMask) !== 0) {
+        matched = dollSlotEls[k];
+        break;
+      }
+    }
+    if (!matched) return false;
+    matched.el.classList.add("equipped");
+    const tb = srcLi.dataset?.typeBit ?? "0x0";
+    matched.icon.style.display = "block";
+    matched.icon.style.background = TYPE_COLOR[tb] || "#777";
+    matched.tip.textContent = `${item.name || matched.slot.name} — ${matched.slot.name}`;
+    return true;
+  }
+
   function rebuild() {
     const equipped = document.getElementById("inv-equipped");
     const pack = document.getElementById("inv-pack");
-    // Clear and re-populate. Equipped items will eventually go to paperdoll
-    // slot positions; for now they just lead the items grid.
+    clearPaperdoll();
     itemsGrid.innerHTML = "";
-    const all = [];
-    if (equipped) for (const li of equipped.children) all.push(li);
-    if (pack) for (const li of pack.children) all.push(li);
-    for (const li of all) {
-      itemsGrid.appendChild(makeSlot(li));
+    // Equipped → paperdoll body slots
+    if (equipped) {
+      for (const li of equipped.children) {
+        const item = getItemByGuid(li.dataset.guid);
+        const placed = placeEquippedInDoll(li, item);
+        if (!placed) {
+          // Couldn't match any slot (unknown equipMask) — fall back to grid.
+          itemsGrid.appendChild(makeSlot(li));
+        }
+      }
     }
+    // Pack → items grid
+    if (pack) {
+      for (const li of pack.children) {
+        itemsGrid.appendChild(makeSlot(li));
+      }
+    }
+    // Burden meter: sum equipped item weights / capacity. The source
+    // panel doesn't expose burden directly; once we have an event for
+    // it we wire here. Static 0% for now.
   }
 
   let observers = [];
