@@ -4424,10 +4424,28 @@ void main() {
             // drain then APPENDS them into `cell_physics_index`
             // (insert_cell_triangle is non-idempotent .push), which
             // the unconditional per-tick `scene.clone()` deep-copies.
-            // Mark populated in 3D mode (liveScene3d is set before
-            // position updates begin) to break that loop; the 2D
-            // retry-on-late-liveScene path is preserved.
-            if (window.liveScene3d) {
+            //
+            // 2026-05-22 follow-on: the original gate (`window
+            // .liveScene3d`) was set on the assumption "liveScene3d
+            // is set before position updates begin", but boot
+            // profiling shows position updates DO arrive before
+            // `window.liveScene3d` is assigned (init3D's terrain bake
+            // + envcells dungeon load happen between in-world and the
+            // liveScene3d assignment ~600ms later). During that
+            // window the function repeatedly re-fetches the same
+            // landblock — measured 13 duplicate drains over 900ms
+            // (892ms of recv-loop time) on the wire-agent boot.
+            //
+            // Fix: gate on the renderer-mode URL flag directly
+            // instead. In `?renderer=3d`, the 2D PIXI bake will
+            // NEVER run, so we can safely mark populated immediately
+            // — the wasm push above already shipped all the data
+            // the 3D path needs. In 2D mode (no `?renderer=3d`),
+            // fall through to the existing retry-on-late-liveScene
+            // behaviour.
+            const wantRenderer3d =
+              new URLSearchParams(window.location.search).get("renderer") === "3d";
+            if (wantRenderer3d || window.liveScene3d) {
               cellContainersPopulatedLbs.add(lbId);
             }
             return;
