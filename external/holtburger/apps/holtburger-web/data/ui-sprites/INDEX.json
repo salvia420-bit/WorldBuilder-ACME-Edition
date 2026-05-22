@@ -1,59 +1,815 @@
 {
   "generatedBy": "WorldBuilder.Terminal chorizite-extract-ui-textures",
   "datPath": "/home/wbterminal/ac_base_dats/client_portal.dat",
-  "count": 6,
-  "passCount": 6,
+  "count": 90,
+  "passCount": 90,
   "failCount": 0,
   "records": {
-    "0x06001343": {
-      "width": 800,
-      "height": 482,
-      "sha256": "63113c60246859382340350bb628218ea0f72b228475276d923431c973a17057",
+    "0x0600113A": {
+      "width": 500,
+      "height": 17,
+      "sha256": "3544c2adcaa617dd4bf7c79268d4fc5d9ed766503f93377538010becac2abe48",
       "source": "client_portal.dat",
       "status": "PASS",
       "pixelFormat": "PFID_R8G8B8",
       "failureReason": null
     },
-    "0x0600195C": {
-      "width": 325,
-      "height": 52,
-      "sha256": "a31010dee0ee22cb6cb3d0be42464b08e8f838bd3f16870bcd2d2dd14ab657ec",
+    "0x060011AB": {
+      "width": 500,
+      "height": 17,
+      "sha256": "d7e19f22099348018726c08efb173f4452b73d356626cdc30bfda9b6371972c0",
       "source": "client_portal.dat",
       "status": "PASS",
       "pixelFormat": "PFID_R8G8B8",
       "failureReason": null
     },
-    "0x0600195D": {
-      "width": 325,
-      "height": 52,
-      "sha256": "23cea1129b26e1495df40c47de6b1e766388a8638d488d1eddf57a1e53d9bb57",
+    "0x060011FB": {
+      "width": 10,
+      "height": 9,
+      "sha256": "47bf6cd24fb3f9e00337d0ea39f772c0fa0ddfe9b9566924ffb77f80c313d262",
       "source": "client_portal.dat",
       "status": "PASS",
       "pixelFormat": "PFID_R8G8B8",
       "failureReason": null
     },
-    "0x06001966": {
-      "width": 325,
-      "height": 52,
-      "sha256": "d71f645fd71932ee7321659d67ac858242db6c749d89afec754973c2e54e30c2",
+    "0x0600126F": {
+      "width": 265,
+      "height": 100,
+      "sha256": "06aef177c2bfd037bbaa0b074dc65d889d644a2098fb9ab0651d0f777c7af920",
       "source": "client_portal.dat",
       "status": "PASS",
       "pixelFormat": "PFID_R8G8B8",
       "failureReason": null
     },
-    "0x06001967": {
-      "width": 325,
-      "height": 52,
-      "sha256": "0ef58de106eaae204e1f78ad7b6fa72cd92d07c3903e3a15ef167178b7d55d2f",
+    "0x060012C6": {
+      "width": 7,
+      "height": 71,
+      "sha256": "c629f40a8b6de37e20d49b255cd3f9fcea9b0516c70ceb37aa06affb7ec37a94",
       "source": "client_portal.dat",
       "status": "PASS",
       "pixelFormat": "PFID_R8G8B8",
       "failureReason": null
     },
-    "0x06004D69": {
-      "width": 15,
+    "0x06001915": {
+      "width": 46,
+      "height": 17,
+      "sha256": "7cf3c099d4838c279cd6f5e391e52b1cf3044c2da19de3a23b74013c7f4a3ff3",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06001916": {
+      "width": 46,
+      "height": 17,
+      "sha256": "85cb8b7bb1bd0f2fff1c1a91de3810d9124faaea15546aa21a28461f0cdb499b",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06001934": {
+      "width": 46,
+      "height": 17,
+      "sha256": "bc97a074275703a6e57146c42b138fe7c9d0a774c8af9d67f86ed6f9e745710e",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06001938": {
+      "width": 10,
+      "height": 9,
+      "sha256": "3767be4ecc7f26b16f80999f5667823ec61da8da0602ac5b04b55200fe5d0a20",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600193A": {
+      "width": 10,
+      "height": 9,
+      "sha256": "d5c641de1202490e7ae6da3cf2efe87567942a46366fbdbb12969f731d91abb0",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600193C": {
+      "width": 10,
+      "height": 9,
+      "sha256": "f2225364c689cfa6406592150c36e74a4301dac8ed6bd89013ea27e1c9ef9525",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06004CC0": {
+      "width": 48,
+      "height": 48,
+      "sha256": "dcb0d0bcc71fd1ec7e9ecc735c8296b52f04b5c6f357205a162a58156e80a737",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004CC1": {
+      "width": 120,
+      "height": 120,
+      "sha256": "5e0fe85727604f5f66d5cd040c209ace39ed475d47217e2a0cef6c0ebcb1974e",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004CC2": {
+      "width": 48,
+      "height": 48,
+      "sha256": "a5ba53731ecb569b35d4743a236fc2bc2649178ebed4a5cf33c0179e7363745b",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004CE8": {
+      "width": 20,
       "height": 28,
-      "sha256": "4ba74856590d111af1114a35718b362e6cb0b4abed432274f03932836933270e",
+      "sha256": "c7441795ebc5ececfc8aaf9d837eae8371114c0faf06ab01636475c7877289d0",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004CFA": {
+      "width": 276,
+      "height": 25,
+      "sha256": "bc3611cf6a3e35fb3546087054f0e11c6173a66b37a0830f1723725f854c7453",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004CFC": {
+      "width": 32,
+      "height": 32,
+      "sha256": "ab676551ea3f4936ed5ad8265f4add09f4708706a522293bea4dfa21bc7a6e81",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06004D0A": {
+      "width": 300,
+      "height": 362,
+      "sha256": "5b7daabfb1ff847cb355908b1284076d8f1711fa9c34f51b83827ebb23ccefb5",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004D0B": {
+      "width": 48,
+      "height": 48,
+      "sha256": "bb3d14a48062d6007a192ca5af390b0f8a09ec22cf16af9e1be9e9436244bad6",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06004D0C": {
+      "width": 24,
+      "height": 25,
+      "sha256": "926c81b598b39e4fbc5898222cd995d2adaa3f340193d60e2c312146a925aae7",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004D0D": {
+      "width": 24,
+      "height": 25,
+      "sha256": "a5556a29307c54250d4e8b9854ed26f113a8387b9fddd721567f0572a26341af",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004D65": {
+      "width": 46,
+      "height": 17,
+      "sha256": "fdf1a5916d9a2fba53c4b3ce20b1f4133ccd4f59bf9ae0551860078214a838ce",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004D66": {
+      "width": 46,
+      "height": 17,
+      "sha256": "0b3284f1c4fc26dcaafe975dc716b6b4f3cee27c9a447d563c040bfaeb6b21dd",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06004D67": {
+      "width": 1,
+      "height": 17,
+      "sha256": "07b5d9cef9e316ce81d8ea336558d93567e980982c380740be7eb4af59dbbc78",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06005E64": {
+      "width": 16,
+      "height": 16,
+      "sha256": "fc87edaa2e785e6bbf04e708c612b961727bc20812e00366971a4af5e96c0797",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06005E65": {
+      "width": 16,
+      "height": 16,
+      "sha256": "ac7775ff964fe50c460635a25cff7892a703cd80fafe4974c3ae91eba02d3783",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06005E66": {
+      "width": 32,
+      "height": 32,
+      "sha256": "8b3bcc10c100c475dda5fa37233963822e22d5b41224b15310e33c1ef987d42c",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06006119": {
+      "width": 32,
+      "height": 32,
+      "sha256": "34f8b62ca18f3777b6814eed2768c8c5a13aec816b35e8aaea604f89df191383",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06006126": {
+      "width": 32,
+      "height": 32,
+      "sha256": "7293a6e14703b275ddf0f79626215646249d9ed801d27f5572f20b172bfb4fee",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06006127": {
+      "width": 32,
+      "height": 32,
+      "sha256": "ecd1a5047ecfe8cc30db856cf80cf4de82dbc3a29934b6eb6173f4881a852cfd",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06006128": {
+      "width": 32,
+      "height": 32,
+      "sha256": "fe5b9b593d4e18a0888af47d5a997e1f192eb68ec1e798b5a53e24628dd4e0c6",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06006129": {
+      "width": 5,
+      "height": 5,
+      "sha256": "bcf176db7ff9d16c17b3118281b45b826ba5d99c86ad68a907f964f5ea7e08a5",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600612A": {
+      "width": 10,
+      "height": 5,
+      "sha256": "b325702fff2cb9579e8ff4764fbe4a842a916d3e4f1729d755c89fb24d1c9e7a",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x0600612B": {
+      "width": 5,
+      "height": 10,
+      "sha256": "138ff32ec09b17b4572555e55ff24ba497ae9259ab58a8b697ff1bf58bfc4baf",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x0600612C": {
+      "width": 10,
+      "height": 5,
+      "sha256": "735e9d41ea2acbd7f9e61934ec94baba4f7336b5ea2fb02e31717e5ea474890c",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x0600612D": {
+      "width": 5,
+      "height": 10,
+      "sha256": "1e82067c0cfcc7350dea1a08ed517b7b280d3eae42a07a36a1703097935965b6",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06006215": {
+      "width": 14,
+      "height": 14,
+      "sha256": "827646d3c7e980c7af9efd6d4d89a44085c0f98ec35941867bcae052cfbe2bed",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06006216": {
+      "width": 14,
+      "height": 14,
+      "sha256": "dc1370b41012fc7afa66f40b64bcfb8c1c2476794bb00a4cb8b9beaf7ceec35c",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x0600747E": {
+      "width": 10,
+      "height": 16,
+      "sha256": "1e1c363d4f316f4bedc8d28532dc75fc2a2ffc24b9368309e9515759b7935133",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600747F": {
+      "width": 100,
+      "height": 16,
+      "sha256": "8cf3c04d1442b63663ff83afeb4974c6bf8c43d4d87e050aa0c273d765675cbe",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007480": {
+      "width": 10,
+      "height": 16,
+      "sha256": "8f1ab34c675657f4b34b03549bc68c5b78d0b77df75fa411397c5b3c2c8a7257",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007481": {
+      "width": 10,
+      "height": 16,
+      "sha256": "ff5549cfb3868f0af0ba7b542165b8239ef5fa3910560ccf1d0cb2c19ed8ae96",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007482": {
+      "width": 100,
+      "height": 16,
+      "sha256": "12c3c86c287df4b8ebfb9220fc70fd837000a530a1a369eefa9ef1b628fe160a",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007483": {
+      "width": 10,
+      "height": 16,
+      "sha256": "dda4eb86118b3501cd7d6195f0ff10c0386b929b014bb62077e502b4aafd79d6",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007484": {
+      "width": 10,
+      "height": 16,
+      "sha256": "875605969978240ebb506a13f1388c21bbaec64cc8ae2720177caff3a2d2eec2",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007485": {
+      "width": 100,
+      "height": 16,
+      "sha256": "1bb979ea4e73ae52d442d5bf9115097af333d8b60376936b96d7b425ef07439e",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007486": {
+      "width": 10,
+      "height": 16,
+      "sha256": "ef047756931a638267f4e75fb64fa0b28724f40acb7e5ad1d304bfe675878aab",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007487": {
+      "width": 10,
+      "height": 16,
+      "sha256": "ef80ab6b548a0095d52d4405e7a85ed149b9ec3ae1ff05652833dadee0852ede",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007488": {
+      "width": 100,
+      "height": 16,
+      "sha256": "a45fed04b740426f7f3725cbfd114e110a27dd81bfa0fae1aa1c41acde368a4e",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007489": {
+      "width": 10,
+      "height": 16,
+      "sha256": "c9a76ec120e1b632b762682f56fa3553f60ccb8bb62d66f27f8c0a7193703053",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600748A": {
+      "width": 10,
+      "height": 16,
+      "sha256": "af5b943ee4a8042c5e4c63fc5cc4aef5c3db751de49032f858c8d75dcd00b4af",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600748B": {
+      "width": 100,
+      "height": 16,
+      "sha256": "24935716bd36ec983f52bdb88b5c8607c05825535c4e9b6a89677f6c2eddb26c",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600748C": {
+      "width": 10,
+      "height": 16,
+      "sha256": "09ee99a662ab807dd948e9532967a00de7b49924097c126481ecdfbd0116f3c2",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600748D": {
+      "width": 10,
+      "height": 16,
+      "sha256": "7097a6b6669025a82de6df997ded46dfc10e419197c0788ada6ff765c7a17702",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600748E": {
+      "width": 100,
+      "height": 16,
+      "sha256": "6bea4728fccbbdba462de6a975b71e766f6514850e9f3674388dec15afab3174",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600748F": {
+      "width": 10,
+      "height": 16,
+      "sha256": "961d2222ac297ce4932323fc1b181acafa527774d2896d5e4f5064d1e506aa62",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007490": {
+      "width": 18,
+      "height": 16,
+      "sha256": "629b721b559e53b4eaee4cdbed6ef230dffeff2c282968661d26bcfc484d12f8",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06007491": {
+      "width": 18,
+      "height": 16,
+      "sha256": "c468e53ae226bbc95f33381b449887d1a38dff4ba80833a8a6636dae0c5c3a8a",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06007492": {
+      "width": 85,
+      "height": 16,
+      "sha256": "8d4bb309913c2c7c9c258171723a04551377175fedc84210fe662b557c73a87b",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06007493": {
+      "width": 85,
+      "height": 16,
+      "sha256": "51d15b927dd4eae9cc2bc95ee705f021c4719502a3a32a9ceef43194159cb9fd",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06007494": {
+      "width": 100,
+      "height": 16,
+      "sha256": "09220547a15befe63b1ae6642ddf6e37cf0ecfc42f811eaa3687dcd1effaef0a",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06007495": {
+      "width": 100,
+      "height": 16,
+      "sha256": "12be9a54bdcd943511a40318d8f48532a22f05ba4ac0d9e022a77630496865a1",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x06007498": {
+      "width": 20,
+      "height": 20,
+      "sha256": "bc79d332f07604de87f7a531fd548ae434171950034613ded0e1c0de2f78707c",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06007499": {
+      "width": 20,
+      "height": 20,
+      "sha256": "b5225d90887b792bdf87aa47ad3e06a7ab56f474c24fd43068a55c4fe001fb49",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600749A": {
+      "width": 20,
+      "height": 20,
+      "sha256": "01ca0040a90fed94bcd695bfaa5563e37dd98226a6899711263a297e53ce89df",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600749B": {
+      "width": 20,
+      "height": 20,
+      "sha256": "321c1e27ab28b4a85f5ccae8bf924ccb04c855f107c40dc19c5ad1eb86a5bd18",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x0600749C": {
+      "width": 20,
+      "height": 20,
+      "sha256": "82b5869b1db86dbcd2d1a39cabfbcc18bf72c8d4c5fe665f520083e333ec16c3",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600749D": {
+      "width": 20,
+      "height": 20,
+      "sha256": "7de6e9177741cefe54d9c67b95dc2d5375e88ecc03ff85ea6a99a8fade5f4574",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600749E": {
+      "width": 20,
+      "height": 20,
+      "sha256": "acf16009a8212f8c6578cfe900a53b523549b24f44a02c3e3c4916f943f3214f",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600749F": {
+      "width": 20,
+      "height": 20,
+      "sha256": "98524e0a82600ab509790c4877e059f8669980833d8491a4a6b72e88e559397d",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074A0": {
+      "width": 20,
+      "height": 20,
+      "sha256": "0a8fa41c5b38af04ce45ccd8d1394420d238d3f69ff8b9729353039ba75681a9",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074A1": {
+      "width": 20,
+      "height": 20,
+      "sha256": "b7a778935dc6f5f549fffa271c4ef4561fe22234071e1ab0d4eda0852e4fcba4",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074A2": {
+      "width": 20,
+      "height": 20,
+      "sha256": "68da5ea8162c52ad4f36166a902928cb76f548e074a1da426fa6be0e3897aa82",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074A3": {
+      "width": 20,
+      "height": 20,
+      "sha256": "61587eb08e57c89520490e0c069a14d7c7241abddd46a7c509c4f4f0b223fd42",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074A4": {
+      "width": 20,
+      "height": 20,
+      "sha256": "5ec50f237566d238c0ffccb2cfad16d70a80044741da4e010b34b4e2394ee7be",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074A5": {
+      "width": 20,
+      "height": 20,
+      "sha256": "6b551efbce79675e9c60bb0f23374c707e0675568f21ea6474c5d02c17a4f4bf",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074A6": {
+      "width": 20,
+      "height": 20,
+      "sha256": "785e69393e7d9e701030871b51053ac7bddd26c8cfeedf8593980b6f42c38daa",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074B1": {
+      "width": 20,
+      "height": 20,
+      "sha256": "5d66fba5de46d854969e92d4d1d8051cf70e744cfb74a6f244fd2d1f2226f149",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074B2": {
+      "width": 20,
+      "height": 20,
+      "sha256": "b147de77e6ce2e6ae76422649d19d93a4cb55300e1268c1dfabb2e0385f1979c",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x060074B7": {
+      "width": 27,
+      "height": 27,
+      "sha256": "d733a1ee8f36cb2bdbc3794d1aabaac3dd0539d7396743d045a8cecf078e2721",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074B8": {
+      "width": 27,
+      "height": 27,
+      "sha256": "8988117e560cc60ce17ed44b73894e3f1f968f850e957bf782bf9dbc3b97424b",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074BF": {
+      "width": 10,
+      "height": 5,
+      "sha256": "b5ac2a58c963442a174a4c8759b64e082d87602c2fc3d4e1a9f612d9d338b33a",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074C0": {
+      "width": 5,
+      "height": 10,
+      "sha256": "7bf48a52f6ae9c51f89293241acae2681f90edaaf7ae3e0bfa5b3c6459dd9187",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074C1": {
+      "width": 10,
+      "height": 5,
+      "sha256": "b3f5e4786e032615ea9844bc8033d22e54b006230d2d333df9a4c20c5aa0ad52",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074C2": {
+      "width": 5,
+      "height": 10,
+      "sha256": "5e936bce3fc0427cd5ca9a49f5a0c539f858c9bcf3cdcae2ea0970c0188a7bf5",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074C3": {
+      "width": 5,
+      "height": 5,
+      "sha256": "1f9afe29841cd943a5673bde33c9ec8c6e544594e4aed9403f9fe4a703b7d31e",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074C4": {
+      "width": 5,
+      "height": 5,
+      "sha256": "370901e28f93b610687a128834ed80160077c6489b35a6a8f8cbb46139cc9d5c",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074C5": {
+      "width": 5,
+      "height": 5,
+      "sha256": "1f8770056128779085c519383e1c8983b12f59817e71a2ec9dee75d8c2e86c12",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074C6": {
+      "width": 5,
+      "height": 5,
+      "sha256": "7a187bb94cd8cb4e845b3d48144f411105a918032451fe71028df56d96b486e6",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    },
+    "0x060074C9": {
+      "width": 27,
+      "height": 27,
+      "sha256": "c1828dfa01d2da911a64bfa891c0c3768cfa7dc128e53ea885bcc14d4b69f14a",
       "source": "client_portal.dat",
       "status": "PASS",
       "pixelFormat": "PFID_A8R8G8B8",

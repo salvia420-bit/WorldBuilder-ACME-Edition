@@ -77,14 +77,17 @@ function ensureStyles() {
         inset 0 1px 2px rgba(255, 255, 255, 0.35),
         inset 0 -2px 3px rgba(0, 0, 0, 0.45);
     }
+    /* Real retail DAT sprites — extracted 2026-05-22 from layout
+       0x2100006C (gmFloatyVitalsUI) via WB.Terminal. 100x16 RGBA with
+       brass top/bottom rim already baked in. */
     #${OVERLAY_ID} .hud-vital.health .hud-vital-fill {
-      background: linear-gradient(180deg, #ff5a5a 0%, #c81818 60%, #6a0a0a 100%);
+      background: url("./data/ui-sprites/0x06007482.png") 0/100% 100% no-repeat;
     }
     #${OVERLAY_ID} .hud-vital.stamina .hud-vital-fill {
-      background: linear-gradient(180deg, #ffd070 0%, #d89028 60%, #6a4818 100%);
+      background: url("./data/ui-sprites/0x06007488.png") 0/100% 100% no-repeat;
     }
     #${OVERLAY_ID} .hud-vital.mana .hud-vital-fill {
-      background: linear-gradient(180deg, #5aa0ff 0%, #2860d0 60%, #0a2870 100%);
+      background: url("./data/ui-sprites/0x0600748E.png") 0/100% 100% no-repeat;
     }
     #${OVERLAY_ID} .hud-vital-nums {
       position: absolute;
