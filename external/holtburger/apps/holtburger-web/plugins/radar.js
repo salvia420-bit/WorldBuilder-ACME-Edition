@@ -76,12 +76,32 @@ function ensureStyles() {
                                 background-image: url("./data/ui-sprites/0x0600193C.png"); }
     #${OVERLAY_ID} .hb-radar-centre {
       position: absolute;
-      top: 50%; left: 50%;
-      width: 12px;
-      height: 12px;
+      top: ${DISK_SIZE / 2}px;
+      left: ${DISK_SIZE / 2}px;
+      width: 14px;
+      height: 14px;
       transform: translate(-50%, -50%);
       background: url("./data/ui-sprites/0x060074C9.png") center/contain no-repeat;
-      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6));
+      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
+      pointer-events: none;
+      z-index: 3;
+    }
+    /* Field-of-view wedge — translucent green cone pointing where the
+       player is looking. Anchored centre, rotates with .hb-radar-rotor
+       (which itself rotates by -heading so the wedge stays world-aligned
+       to the player's facing). */
+    #${OVERLAY_ID} .hb-radar-fov {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 0;
+      height: 0;
+      transform: translate(-50%, -100%);
+      border-left: 24px solid transparent;
+      border-right: 24px solid transparent;
+      border-bottom: ${DISK_SIZE / 2 - 10}px solid rgba(120, 220, 120, 0.18);
+      pointer-events: none;
+      z-index: 2;
     }
     /* Chrome overlays — lock + move handle in the upper corners,
        per retail rect data 0x10000619 + 0x100006A3 (both 27x27 at y=6). */
@@ -119,8 +139,10 @@ function ensureStyles() {
       font-family: var(--hb-font-serif);
       font-size: 10px;
       color: var(--hb-text-cream);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.8);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+      background: transparent;
     }
+    #${OVERLAY_ID} .hb-radar-coords:empty::before { content: ""; }
   `;
   document.head.appendChild(style);
 }
@@ -150,14 +172,27 @@ export function mount(_ctx) {
   disk.className = "hb-radar-disk";
   overlay.appendChild(disk);
 
-  // Rotor wraps the cardinals + entity blips — rotates with -heading
-  // once we wire the pose API.
+  // Rotor wraps the cardinals + FOV wedge + (future) entity blips.
+  // We rotate it by `-heading` so that N stays world-north when the
+  // player turns; the cardinals counter-rotate to stay readable.
   const rotor = document.createElement("div");
   rotor.className = "hb-radar-rotor";
+  // Field-of-view wedge — points UP in rotor-local space, which after
+  // rotor's -heading rotation lands in world-space at the player's
+  // facing direction. So this is BOTH player facing + N indicator combined?
+  // No — wedge stays in rotor local frame. As rotor rotates with -heading,
+  // wedge sweeps with player facing in screen-space — exactly what retail
+  // does: the cone shows where you're looking, regardless of how cardinals
+  // are oriented.
+  const fov = document.createElement("div");
+  fov.className = "hb-radar-fov";
+  rotor.appendChild(fov);
+  const cardinalEls = {};
   for (const dir of ["n", "e", "s", "w"]) {
     const card = document.createElement("div");
     card.className = `hb-radar-cardinal hb-radar-${dir}`;
     rotor.appendChild(card);
+    cardinalEls[dir] = card;
   }
   overlay.appendChild(rotor);
 
@@ -183,40 +218,91 @@ export function mount(_ctx) {
   });
   overlay.appendChild(lockBtn);
 
-  // Move handle (upper-right) — click-drag repositions the radar.
+  // Move handle (upper-right) — pointer-capture-based drag so the
+  // browser keeps mouse events flowing even if the cursor leaves the
+  // 27x27 hit area mid-drag.
   const moveBtn = document.createElement("div");
   moveBtn.className = "hb-radar-move";
   moveBtn.setAttribute("role", "button");
   moveBtn.setAttribute("aria-label", "Move Compass");
-  let dragging = null;
-  moveBtn.addEventListener("mousedown", (ev) => {
+  let drag = null;
+  moveBtn.addEventListener("pointerdown", (ev) => {
     if (locked) return;
     ev.preventDefault();
     const rect = overlay.getBoundingClientRect();
-    dragging = {
-      ox: ev.clientX - rect.left,
-      oy: ev.clientY - rect.top,
-    };
+    drag = { ox: ev.clientX - rect.left, oy: ev.clientY - rect.top };
+    try { moveBtn.setPointerCapture(ev.pointerId); } catch (_) {}
   });
-  window.addEventListener("mousemove", (ev) => {
-    if (!dragging) return;
-    overlay.style.top = `${ev.clientY - dragging.oy}px`;
-    overlay.style.left = `${ev.clientX - dragging.ox}px`;
+  moveBtn.addEventListener("pointermove", (ev) => {
+    if (!drag) return;
+    overlay.style.top = `${ev.clientY - drag.oy}px`;
+    overlay.style.left = `${ev.clientX - drag.ox}px`;
     overlay.style.right = "auto";
   });
-  window.addEventListener("mouseup", () => { dragging = null; });
+  moveBtn.addEventListener("pointerup", (ev) => {
+    drag = null;
+    try { moveBtn.releasePointerCapture(ev.pointerId); } catch (_) {}
+  });
+  moveBtn.addEventListener("pointercancel", () => { drag = null; });
   overlay.appendChild(moveBtn);
 
-  // Coords strip placeholder — retail shows player coords here.
-  // TODO: hook to getLocalPlayerPose().position when API surfaces.
+  // Coords strip — empty by default so no horizontal line shows. Populated
+  // by the rAF tick below once getPlayerWorldPos() returns valid data.
   const coords = document.createElement("div");
   coords.className = "hb-radar-coords";
-  coords.textContent = "—";
+  coords.textContent = "";
   overlay.appendChild(coords);
 
   document.body.appendChild(overlay);
 
+  // ──────────────────────────────────────────────────────────────────
+  // rAF tick — rotate the rotor by -heading so the FOV wedge follows
+  // player facing, counter-rotate cardinals so N/E/S/W stay upright,
+  // and populate the coord strip.
+  let rafId = 0;
+  function fmtCoord(x, y) {
+    // AC-style coords: world x is east-west axis, world z (3JS) is N-S,
+    // displayed as "NN.NN, EE.EE" in dec-degree-ish form. Holtburg sits
+    // near (32000, -34000) in three.js coords — divide by ~1000 for a
+    // readable order of magnitude until we wire the real packed coords.
+    if (x == null || y == null) return "";
+    const ew = (x / 240).toFixed(1);
+    const ns = (-y / 240).toFixed(1);
+    return `${ns}, ${ew}`;
+  }
+  function tick() {
+    const sw = window.liveScene3d?.cameraSwitcher;
+    let heading = 0;
+    try { heading = sw?.getPlayerHeading?.() ?? 0; } catch (_) {}
+    // CSS rotation is clockwise; AC heading is compass bearing (0 = north,
+    // 90 = east). To make N world-stay (player turning rotates the disk
+    // counter-clockwise relative to screen), apply `-heading`.
+    rotor.style.transform = `rotate(${-heading}deg)`;
+    // Counter-rotate each cardinal so the letters stay screen-upright.
+    for (const dir of ["n", "e", "s", "w"]) {
+      const el = cardinalEls[dir];
+      if (el) {
+        // Each cardinal already has translateX/Y(-50%) baked in; chain
+        // the counter-rotation onto that. position:absolute placement
+        // is unaffected by the rotation.
+        const existing = el.dataset.baseTransform ?? "";
+        if (!existing) {
+          el.dataset.baseTransform = el.style.transform || getComputedStyle(el).transform;
+        }
+        const base = el.dataset.baseTransform === "none" ? "" : el.dataset.baseTransform;
+        el.style.transform = `${base} rotate(${heading}deg)`;
+      }
+    }
+    try {
+      const pos = sw?.getPlayerWorldPos?.();
+      if (pos) coords.textContent = fmtCoord(pos.x, pos.z);
+    } catch (_) {}
+    rafId = requestAnimationFrame(tick);
+  }
+  rafId = requestAnimationFrame(tick);
+
   return () => {
+    cancelAnimationFrame(rafId);
     overlay.remove();
   };
 }
