@@ -44,3 +44,39 @@ cd external/holtburger
 cargo run --release --bin surface-colors
 # walks ~6147 surfaces in ~7s, emits apps/holtburger-web/data/surface-colors.json
 ```
+
+## Mesh-creation inventory (audit trail)
+
+Every `new THREE.Mesh|InstancedMesh|SkinnedMesh|LOD(...)` call site in
+the wire-agent render path, and how each one gets a solid-fill
+companion. Re-run the audit with:
+
+```bash
+grep -rnE 'new THREE\.(Mesh|InstancedMesh|SkinnedMesh|LOD)\(' \
+  apps/holtburger-web/scene3d/ apps/holtburger-web/index.html
+```
+
+| Site | Path | Fill coverage |
+|---|---|---|
+| terrain LB mesh | `scene3d/terrain.js:1371` | ✓ wire mat + per-vertex palette fill via dedicated second mesh @1454 |
+| terrain LB fill twin | `scene3d/terrain.js:1454` | (this IS the fill) |
+| buildings | `scene3d/buildings.js:380` | ✓ `materialCache.getCached(did)` → wire bucket → fill via `addFillCompanions(buildingsGroup)` |
+| statics (singleton) | `scene3d/statics.js:569` + LOD wrapper 626 | ✓ same path as buildings |
+| statics (degraded LOD) | `scene3d/statics.js:603` | N/A in wire — `?wireframe=1` skips degraded fetch (commit 2cd43b9) |
+| statics (instanced) | `scene3d/statics.js:696` + degraded 737 + LOD 758 | ✓ `addFillCompanions` clones InstancedMesh with shared instanceMatrix |
+| cells (fused, material array) | `scene3d/cells.js:443` | ✓ `addFillCompanions` walks material-array entries |
+| cells (per-surface) | `scene3d/cells.js:477` | ✓ same path |
+| cells (static interior) | `scene3d/cells.js:499` | ✓ same path |
+| entities (plain) | `scene3d/entities.js:1107` | ✓ `materialCache.getCached(did)` + entity-spawn hook attaches companion |
+| entities (palette-subbed, incl. local player) | `scene3d/entities.js:990-1024` | ✓ **fixed by f9b2293** — was minting `entity-<guid>-surface-<did>` materials that bypassed the cache; now routes wire-mode through `_wireframeMaterialFor` |
+| particles | `scene3d/particles/particle_manager.js:218` | ✓ uses `materialCache` factory → wire bucket → fill via entity-spawn hook on parent (or world particle manager) |
+| selection ring | `scene3d/entities.js:1657` | N/A — UI overlay (target-selection highlight), intentionally outside fill scope |
+| hello-cube | `scene3d/index.js:429` | N/A — debug artifact, intentionally wire-only per spec |
+| aurora / atmosphere / clouds / moons | `aurora.js:232`, `atmosphere_sky.js:144`, `cloud_overlay.js:271`, `ac_moons.js:431` | N/A — wire-agent skips these subsystems entirely |
+| PIXI 2D mesh | `index.html:1971, 2696` | N/A — `?renderer=3d` short-circuits the PIXI path |
+
+To audit a specific run live, drop into the Playwright probe at
+`/tmp/local-wire-validate/diag-player2.mjs` — it walks every entity
+in `EntityManager.entityMap`, reports mesh count and how many carry
+`userData.__wireFillCompanion`. Any entity with `meshCount.total > 0`
+but `withFillCompanion: 0` is a regression candidate.
