@@ -410,7 +410,7 @@
          because agents drive movement via the wire API, not keystrokes.
          ────────────────────────────────────────────────────────────── */
       html.agent-mode body { margin: 0; padding: 0; overflow: hidden; background: #000; }
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar) { display: none !important; }
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-inventory) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -923,6 +923,7 @@
       import * as chatPanelPlugin from "./plugins/chat-panel.js";
       import * as statusIndicatorsPlugin from "./plugins/status-indicators.js";
       import * as hotbarPlugin from "./plugins/hotbar.js";
+      import * as inventoryPlugin from "./plugins/inventory.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
       let pluginClient = null;
@@ -960,6 +961,10 @@
         {
           ...hotbarPlugin.manifest,
           mount: hotbarPlugin.mount,
+        },
+        {
+          ...inventoryPlugin.manifest,
+          mount: inventoryPlugin.mount,
         },
         {
           id: "rynthsuite",
