@@ -926,6 +926,7 @@
       import * as inventoryPlugin from "./plugins/inventory.js";
       import * as examineTargetPlugin from "./plugins/examine-target.js";
       import * as mainPanelPlugin from "./plugins/main-panel.js";
+      import * as characterInfoPlugin from "./plugins/character-info.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
       let pluginClient = null;
@@ -1007,16 +1008,23 @@
       // See docs/examine-architecture-2026-05-22.md.
       mainPanelPlugin.registerView("inventory", inventoryPlugin.view);
       mainPanelPlugin.registerView("examine",   examineTargetPlugin.view);
+      mainPanelPlugin.registerView("character", characterInfoPlugin.view);
 
-      // F4 toggles the inventory view in the shared main-panel (retail
-      // muscle-memory). Always opens inventory as the root view; pressing
-      // again closes the panel.
+      // Main-panel view hotkeys (retail muscle-memory):
+      //   F4 → Inventory     (Wave 1 PR-U)
+      //   C  → Character     (Wave 2 PR-V — Attributes/Skills/Titles)
+      // Add S/M/A/F/J/etc. here as Wave 2 surfaces land.
       window.addEventListener("keydown", (ev) => {
-        if (ev.key !== "F4" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+        if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const tag = ev.target?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
-        ev.preventDefault();
-        window.__mainPanel?.toggleView?.("inventory");
+        if (ev.key === "F4") {
+          ev.preventDefault();
+          window.__mainPanel?.toggleView?.("inventory");
+        } else if (ev.key === "c" || ev.key === "C") {
+          ev.preventDefault();
+          window.__mainPanel?.toggleView?.("character");
+        }
       });
 
       // Phase G — F5 toggles the Spellbook panel (retail muscle memory).
