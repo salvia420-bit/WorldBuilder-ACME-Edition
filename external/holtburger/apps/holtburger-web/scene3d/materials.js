@@ -874,6 +874,21 @@ export class MaterialCache {
     this.wireframeFillBuckets = new Map();
     /** @type {Map<THREE.MeshBasicMaterial, THREE.MeshBasicMaterial>} */
     this.wireMatToFill = new Map();
+    // 2026-05-22 — per-surface dominant-colour pair, populated lazily
+    // when the manifest at `data/surface-colors.json` has an entry for
+    // the requested DID. Each entry is `{ wire, fill }`; both
+    // MeshBasicMaterial. With the manifest installed, wire-mode
+    // surfaces render in their actual dominant texture colour (grass
+    // green, bark brown, stone grey, water blue, etc.) instead of the
+    // 32-bucket HSL hash. Surfaces missing from the manifest still
+    // fall through to `wireframeBuckets`. See
+    // `apps/holtburger-tools/src/bin/surface-colors.rs` for the
+    // build-time tool.
+    //
+    // `surfaceColors` is the loaded `Map<u32, [r, g, b]>` (Uint8 0..255).
+    /** @type {Map<number, {wire: THREE.MeshBasicMaterial, fill: THREE.MeshBasicMaterial}>} */
+    this.didMaterials = new Map();
+    this.surfaceColors = opts.surfaceColors ?? null;
 
     // Phase 0.2 — shared detail-tile cache. `null` means "Detail flag
     // is decoded but the composite is not wired" (preserves Phase 7.2
@@ -972,6 +987,53 @@ export class MaterialCache {
    * (brighter) read clearly against it.
    */
   _wireframeMaterialFor(did) {
+    // 2026-05-22 — per-DID dominant-colour path. If the surface-colours
+    // manifest has an entry for this DID, mint (or fetch) a dedicated
+    // pair { wire, fill } where wire = lighter+more-saturated variant
+    // of the dominant for contrast and fill = the dominant itself.
+    // Materials cached in `didMaterials` for reuse across meshes that
+    // share the surface. Falls through to the 32-bucket HSL hash for
+    // any DID the manifest doesn't cover.
+    if (did !== FALLBACK_SURFACE_DID && this.surfaceColors) {
+      const rgb = this.surfaceColors.get(did >>> 0);
+      if (rgb) {
+        const existing = this.didMaterials.get(did >>> 0);
+        if (existing) return existing.wire;
+        const fillColor = new THREE.Color(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+        // Derive a brighter, slightly more saturated wire colour so the
+        // overlay reads on top of the fill. HSL roundtrip — bumping L
+        // alone would wash out saturated colours; bumping S too keeps
+        // grass green green and bark brown brown.
+        const hsl = { h: 0, s: 0, l: 0 };
+        fillColor.getHSL(hsl);
+        const wireColor = new THREE.Color().setHSL(
+          hsl.h,
+          Math.min(1.0, hsl.s + 0.15),
+          Math.min(0.85, hsl.l + 0.28),
+        );
+        const wireMat = new THREE.MeshBasicMaterial({
+          color: wireColor,
+          wireframe: true,
+          side: THREE.DoubleSide,
+          fog: true,
+        });
+        wireMat.name = `wire-did-${did.toString(16).padStart(8, "0")}`;
+        wireMat.userData = { __cacheOwned: true, surfaceDid: did >>> 0 };
+        const fillMat = new THREE.MeshBasicMaterial({
+          color: fillColor,
+          side: THREE.DoubleSide,
+          fog: true,
+          polygonOffset: true,
+          polygonOffsetFactor: 4,
+          polygonOffsetUnits: 4,
+        });
+        fillMat.name = `wire-fill-did-${did.toString(16).padStart(8, "0")}`;
+        fillMat.userData = { __cacheOwned: true, surfaceDid: did >>> 0 };
+        this.didMaterials.set(did >>> 0, { wire: wireMat, fill: fillMat });
+        this.wireMatToFill.set(wireMat, fillMat);
+        return wireMat;
+      }
+    }
     const WIRE_BUCKETS = 32;
     const bucket = (did === FALLBACK_SURFACE_DID ? 0 : did) % WIRE_BUCKETS;
     let m = this.wireframeBuckets.get(bucket);

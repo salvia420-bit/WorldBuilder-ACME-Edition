@@ -859,6 +859,41 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     typeof wasmExports.fetchBuildingPlacement === "function" &&
     typeof wasmExports.fetch_surfaces_pixels === "function"
   ) {
+    // 2026-05-22 — wire-agent per-DID dominant-colour manifest.
+    // `apps/holtburger-tools surface-colors` produced
+    // `data/surface-colors.json` from the retail portal DAT — one RGB
+    // triple per surface DID, computed as the centroid of the most-
+    // populated 16×16×16 quantised bin of the alpha≥128 pixels of the
+    // highest-res Texture. ~180 KB JSON for ~6147 surfaces. When
+    // installed, MaterialCache._wireframeMaterialFor mints per-DID
+    // material pairs (wire = brightened HSL of dominant, fill =
+    // dominant) instead of the 32-bucket HSL hash so trees look brown,
+    // grass green, stone grey, etc. Fetch is fire-and-forget if it
+    // fails (file not present in non-wire builds, network error,
+    // etc.); the bucket-hash fallback path stays intact.
+    if (scene3dForBuilders.wireframeMode) {
+      try {
+        const r = await fetch("./data/surface-colors.json", { cache: "force-cache" });
+        if (r.ok) {
+          const json = await r.json();
+          const map = new Map();
+          for (const [k, v] of Object.entries(json)) {
+            const did = parseInt(k, 16) >>> 0;
+            if (Number.isFinite(did) && Array.isArray(v) && v.length === 3) {
+              map.set(did, [v[0] & 0xff, v[1] & 0xff, v[2] & 0xff]);
+            }
+          }
+          scene3dForBuilders.surfaceColors = map;
+          // eslint-disable-next-line no-console
+          console.log(`[wire-fill] surface-colours manifest loaded: ${map.size} DIDs`);
+        }
+      } catch (e) {
+        // Manifest missing → silent fallback to HSL-bucket hashes.
+        // eslint-disable-next-line no-console
+        console.log("[wire-fill] surface-colours manifest unavailable; using HSL-hash fallback");
+      }
+    }
+
     // Pre-install the MaterialCache BEFORE any await. Both the statics
     // runner (`getOrCreateMaterialCache` at statics.js:1178) and the
     // cells runner (cells.js:90 guard) read this off scene3d

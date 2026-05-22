@@ -214,6 +214,12 @@ export function getOrCreateMaterialCache(scene3d) {
     // true, cache returns shared MeshBasicMaterial({wireframe:true})
     // and preload no-ops the surface-pixel fetch.
     wireframeMode: !!scene3d.wireframeMode,
+    // 2026-05-22 — wire-agent per-DID dominant-colour map. When non-
+    // null, `_wireframeMaterialFor` mints a per-DID material pair
+    // using the manifest's RGB instead of the 32-bucket HSL hash.
+    // Loaded by init3D from `data/surface-colors.json`; null if the
+    // fetch failed (fallback path stays intact).
+    surfaceColors: scene3d.surfaceColors ?? null,
   });
   scene3d.materialCache = mc;
   return mc;
