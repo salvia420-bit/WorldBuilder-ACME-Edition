@@ -4,6 +4,142 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>holtburger-web — Phase 4 step 1 wasm-driven AC login</title>
+    <!--
+      hb-theme — shared CSS custom-property tokens (Wave 1 PR-A, 2026-05-22)
+
+      Retail Asheron's Call UI palette extracted from
+      plugins/vendor-ui.js (lines 120-398), which was pixel-verified against
+      retail captures in
+      /mnt/wbterminal1/tmp/claude-scratch/fandom-ui-images/asheronfandomcom-20200324-wikidump/images/
+      (anchor set: Vendor Window Live.jpg, User-Interface 01-27, *Live.jpg).
+
+      Aesthetic: dark stone/leather panel + brass-gold trim + cream-gold
+      titles + warm earth tones + serif typography. NOT the modern dark-
+      glass aesthetic used by bar.js / vitals-hud.js / combat-bar.js /
+      spellbook.js / graphics_settings.js (those are off-brand and will be
+      refactored in later PRs).
+
+      No plugin consumes these tokens yet — this PR introduces the tokens
+      only. PR-B will port UIElement base + UIElementManager; PR-C will
+      add primitive widgets; later PRs migrate each existing plugin's
+      style block to read these variables.
+
+      Naming convention: `--hb-<role>-<variant>`. Matches the
+      `holtburger_*` localStorage namespace used elsewhere in the app.
+    -->
+    <style id="hb-theme-tokens">
+      :root {
+        /* --- Panel background --- */
+        /* vendor-ui:128 — full-panel linear-gradient(180deg, top → bottom). */
+        --hb-bg-stone-top: rgba(30, 24, 14, 0.97);
+        --hb-bg-stone-bottom: rgba(18, 14, 8, 0.97);
+
+        /* --- Titlebar background --- */
+        /* vendor-ui:155 — brass-tinted gradient on the title row. */
+        --hb-bg-titlebar-top: rgba(96, 72, 32, 0.5);
+        --hb-bg-titlebar-bottom: rgba(56, 42, 18, 0.5);
+
+        /* --- Brass / gold borders --- */
+        /* vendor-ui:129/153/180 — primary brass border on panel edge,
+           titlebar bottom, hover button outline. The signature retail
+           panel edge (`#8a7544`-family per memory doc). */
+        --hb-border-brass: #8a7544;
+        /* vendor-ui:209 — dimmed brass used on input fields and minor
+           dividers. */
+        --hb-border-brass-dim: #6a5530;
+        /* vendor-ui:255 — deeper brass on icon-cell rims (acts like an
+           inset bevel on item icons). */
+        --hb-border-brass-deep: #5a4a28;
+
+        /* --- Inset light edge --- */
+        /* vendor-ui:133 — the 1px highlight from
+           `box-shadow: inset 0 1px 0 ...` that gives panels a chiseled
+           brass-cap top edge. */
+        --hb-edge-light: rgba(232, 207, 138, 0.15);
+        /* vendor-ui:179 — slightly stronger version used on hovered
+           close button background. */
+        --hb-edge-light-hover: rgba(232, 207, 138, 0.1);
+
+        /* --- Text colours --- */
+        /* vendor-ui:163/208 — primary cream-gold for titles and form
+           values. Retail "Attributes/Skills/Titles tab labels". */
+        --hb-text-cream: #f0d8a0;
+        /* vendor-ui:269 — brighter cream for primary item-row labels. */
+        --hb-text-cream-bright: #f0e8d0;
+        /* vendor-ui:159/192/286 — accent gold for emphasised values
+           (vendor multiplier %, prices, title-icons). Retail "highlight
+           gold". */
+        --hb-text-gold: #f0c87c;
+        /* vendor-ui:307 — dimmed gold used on the alternate-currency
+           strip. */
+        --hb-text-gold-dim: #b8a868;
+        /* vendor-ui:136 — default body text on dark stone (warm
+           off-white). */
+        --hb-text-body: #d8d4c4;
+        /* vendor-ui:185/199/281 — muted secondary text (rates, toolbar,
+           item-stack count). */
+        --hb-text-muted: #a8a090;
+        /* vendor-ui:276 — slightly more muted (item-sub label). */
+        --hb-text-muted-2: #888070;
+        /* vendor-ui:215/294/300/314 — most muted, italic hints and empty
+           state. */
+        --hb-text-muted-3: #807868;
+        /* vendor-ui:203 — toolbar form-label text colour. */
+        --hb-text-label: #c8c0ac;
+        /* vendor-ui:170 — close-button glyph colour. */
+        --hb-text-button: #b8b0a0;
+
+        /* --- Vital fills --- */
+        /* Sourced from retail captures, not from vendor-ui (which has no
+           vitals UI). Pixel-anchor file in brackets. */
+        /* User-Interface 01.jpg (HP `30/30`) — dark red vial gradient. */
+        --hb-fill-hp: linear-gradient(180deg, #6a1414 0%, #3a0a0a 100%);
+        /* User-Interface 02.jpg (Stamina `60/60`) — gold/amber gradient. */
+        --hb-fill-stamina: linear-gradient(180deg, #d8a040 0%, #6a4818 100%);
+        /* User-Interface 03.jpg (Mana `10/10`) — dark blue gradient. */
+        --hb-fill-mana: linear-gradient(180deg, #1a3870 0%, #0a1838 100%);
+
+        /* --- Special-purpose text colours --- */
+        /* User-Interface 14.png + retail wiki text — tell-channel chat
+           is bright yellow. */
+        --hb-text-tell-yellow: #ffe060;
+        /* Memory doc + Skills/Attributes captures — numeric values
+           (Strength 100, Skill 82) render in a saturated green. */
+        --hb-text-numeric-green: #8aef6d;
+
+        /* --- Translucent overlays --- */
+        /* vendor-ui:238 — item-row :hover gradient start. */
+        --hb-overlay-hover: rgba(232, 207, 138, 0.08);
+        /* vendor-ui:241 — item-row :active background flash. */
+        --hb-overlay-active: rgba(232, 207, 138, 0.16);
+        /* vendor-ui:189/309/316 — dark inset strip (rates row, alt-
+           currency footer, sell-zone). */
+        --hb-overlay-dark: rgba(0, 0, 0, 0.18);
+        /* vendor-ui:207 — input-field background (darker still). */
+        --hb-overlay-dark-deep: rgba(0, 0, 0, 0.4);
+
+        /* --- Shadows --- */
+        /* vendor-ui:132 — full-panel drop shadow (large + opaque). */
+        --hb-shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.85);
+
+        /* --- Typography --- */
+        /* Retail uses an antiqua/lapidary serif (Trajan/Cinzel-class) for
+           titles and headings (memory doc). Cinzel is the standard free
+           drop-in for Trajan; the fallback chain stays universal. */
+        --hb-font-serif: "Cinzel", "Trajan Pro", "Times New Roman", serif;
+        /* vendor-ui:134 — current monospaced body font for tabular item
+           rows, prices, ids. */
+        --hb-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+        /* --- Radii --- */
+        /* vendor-ui:130 — panel corner. */
+        --hb-radius-panel: 4px;
+        /* vendor-ui:173/256 — buttons, icon cells. */
+        --hb-radius-inner: 3px;
+        /* vendor-ui:210 — input field. */
+        --hb-radius-tight: 2px;
+      }
+    </style>
     <style>
       body { font-family: system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
       h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
