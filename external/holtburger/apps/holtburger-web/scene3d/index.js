@@ -1628,7 +1628,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // just a SkyState cache — atmosphere_lights.tick + atmosphere_sky.tick
   // read its _lastState as the canonical SkyState snapshot for the
   // frame. Constructor no longer needs sun/ambient/scene args.
-  try {
+  // Wire-agent: SkyLightingController is a SkyState cache consumed by
+  // atmosphereLights / atmosphereSky / aurora / skyDome — all stripped
+  // in wire. tick() never writes to scene.fog, lights, or anything
+  // visual (per its source: only updates `this._lastState` via wasm
+  // session.getSkyState). Skipping construction has zero visual effect
+  // and saves the per-rAF wasm round-trip + decode. loop.js already
+  // null-guards `scene3d.skyLightingController?.tick(dt)`.
+  if (!wireframeMode) try {
     const skyLightingController = new SkyLightingController({
       sessionHandleAccessor: () =>
         // eslint-disable-next-line no-undef
