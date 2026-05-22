@@ -16,8 +16,14 @@ const DEFAULTS = Object.freeze({
   iconSize: 36,
   transparency: 0.7,
   color: "#141418",
+  // No retail equivalent: holtburger's plugin bar (combat/spellbook/settings) is a
+  // modern-MMO graft. Per direction 2026-05-22, each plugin is being folded into
+  // its retail-equivalent panel (combat → inventory/equipment, spellbook → Magic
+  // Panel, settings → Options Panel). Until those exist, the bar starts minimized
+  // — the existing `≡` pill button (positioned bottom-right by default) keeps
+  // the legacy surfaces reachable.
   orientation: "v",
-  minimized: false,
+  minimized: true,
 });
 
 const CSS = `
@@ -337,27 +343,26 @@ const CSS = `
   }
   .hb-pill {
     position: fixed;
-    width: 36px;
-    height: 36px;
+    width: 20px;
+    height: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(20, 20, 24, 0.78);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 18px;
-    color: #fff;
-    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-    font-size: 18px;
+    background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
+    border: none;
+    color: var(--hb-text-cream);
+    font-family: var(--hb-font-serif);
+    font-size: 11px;
+    line-height: 1;
     cursor: pointer;
     z-index: 100;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     user-select: none;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    opacity: 0.65;
+    transition: opacity 120ms ease, filter 120ms ease;
   }
   .hb-pill:hover {
-    background: rgba(40, 40, 48, 0.88);
-    border-color: rgba(255, 255, 255, 0.3);
+    opacity: 1;
+    filter: brightness(1.2);
   }
 `;
 
@@ -955,17 +960,20 @@ export function mountBar({ client, root, slots: slotsOpt }) {
       pill.addEventListener("click", restore);
       root.appendChild(pill);
     }
-    // Pin pill near the bar's last known corner, or bottom-right by default.
+    // Pin pill near the bar's last known corner, or top-left by default —
+    // joins the retail status-icon cluster (peace/combat indicator etc.)
+    // since holtburger's plugin bar has no retail equivalent and the pill
+    // is the only access point until plugins fold into their retail panels.
     if (state.left != null && state.top != null) {
       pill.style.left = `${state.left}px`;
       pill.style.top = `${state.top}px`;
       pill.style.bottom = "auto";
       pill.style.right = "auto";
     } else {
-      pill.style.left = "auto";
-      pill.style.top = "auto";
-      pill.style.right = "12px";
-      pill.style.bottom = "12px";
+      pill.style.left = "4px";
+      pill.style.top = "4px";
+      pill.style.right = "auto";
+      pill.style.bottom = "auto";
     }
     pill.style.display = "";
     persist();
