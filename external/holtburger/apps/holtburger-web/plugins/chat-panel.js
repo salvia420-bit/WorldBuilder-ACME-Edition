@@ -68,9 +68,44 @@ function ensureStyles() {
       box-shadow: var(--hb-shadow-panel);
       color: var(--hb-text-cream);
     }
+    /* Tab strip — mirrors index.html's #chat-tabs filter set (line 626-633). */
+    #${OVERLAY_ID} .hb-chat-tabs {
+      position: absolute;
+      top: 2px;
+      left: 4px;
+      right: 4px;
+      height: 16px;
+      display: flex;
+      gap: 1px;
+      pointer-events: auto;
+      align-items: stretch;
+      border-bottom: 1px solid var(--hb-border-brass-dim);
+    }
+    #${OVERLAY_ID} .hb-chat-tab-btn {
+      flex: 0 1 auto;
+      padding: 1px 5px;
+      font-size: 9px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream-bright);
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--hb-border-brass-dim);
+      border-bottom: none;
+      cursor: pointer;
+      user-select: none;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    #${OVERLAY_ID} .hb-chat-tab-btn:hover {
+      background: var(--hb-overlay-hover);
+    }
+    #${OVERLAY_ID} .hb-chat-tab-btn.active {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+      border-color: var(--hb-border-brass);
+    }
     #${OVERLAY_ID} .hb-chat-scroll {
       position: absolute;
-      top: 4px;
+      top: 24px;
       left: 4px;
       right: 4px;
       bottom: 22px;
@@ -91,6 +126,32 @@ function ensureStyles() {
       word-break: break-word;
       text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
     }
+    /* Mirror the index.html tab filter rules exactly — same cat-N
+       classes are applied to .hb-chat-line in mirrorOne(), so the
+       :not() exclusion chains line up. */
+    #${OVERLAY_ID} .hb-chat-scroll[data-tab="local"] .hb-chat-line:not(.cat-1):not(.cat-4):not(.echo) { display: none; }
+    #${OVERLAY_ID} .hb-chat-scroll[data-tab="combat"] .hb-chat-line:not(.cat-5):not(.cat-6):not(.echo) { display: none; }
+    #${OVERLAY_ID} .hb-chat-scroll[data-tab="channels"] .hb-chat-line:not(.cat-3):not(.cat-12):not(.cat-13):not(.cat-14):not(.cat-15):not(.cat-16):not(.cat-17):not(.cat-22):not(.cat-23):not(.echo) { display: none; }
+    #${OVERLAY_ID} .hb-chat-scroll[data-tab="tell"] .hb-chat-line:not(.cat-2):not(.echo) { display: none; }
+    #${OVERLAY_ID} .hb-chat-scroll[data-tab="magic"] .hb-chat-line:not(.cat-7):not(.echo) { display: none; }
+    #${OVERLAY_ID} .hb-chat-scroll[data-tab="system"] .hb-chat-line:not(.cat-0):not(.cat-8):not(.cat-9):not(.cat-10):not(.cat-11):not(.cat-18):not(.cat-19):not(.cat-20):not(.cat-21):not(.echo) { display: none; }
+    /* Resize handle — bottom-right corner, drag to grow/shrink. Wiki
+       says retail chat windows are resizable, with size persisted
+       per-character. Persistence is a follow-on. */
+    #${OVERLAY_ID} .hb-chat-resize {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 12px;
+      height: 12px;
+      cursor: nwse-resize;
+      pointer-events: auto;
+      background:
+        linear-gradient(135deg, transparent 0%, transparent 40%, var(--hb-border-brass) 40%, var(--hb-border-brass) 50%, transparent 50%, transparent 60%, var(--hb-border-brass) 60%, var(--hb-border-brass) 70%, transparent 70%);
+      opacity: 0.7;
+      z-index: 4;
+    }
+    #${OVERLAY_ID} .hb-chat-resize:hover { opacity: 1; }
     #${OVERLAY_ID} .hb-chat-input-row {
       position: absolute;
       bottom: 2px;
@@ -176,12 +237,56 @@ export function mount(_ctx) {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
 
-  // Scrollback area
+  // Tab strip — same set + order as index.html:625-633.
+  const TABS = [
+    { id: "all",      label: "All" },
+    { id: "local",    label: "Local" },
+    { id: "tell",     label: "Tells" },
+    { id: "channels", label: "Channels" },
+    { id: "combat",   label: "Combat" },
+    { id: "magic",    label: "Magic" },
+    { id: "system",   label: "System" },
+  ];
+  const tabsEl = document.createElement("div");
+  tabsEl.className = "hb-chat-tabs";
+  const tabBtns = {};
+  for (const t of TABS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hb-chat-tab-btn" + (t.id === "all" ? " active" : "");
+    btn.dataset.tab = t.id;
+    btn.textContent = t.label;
+    tabsEl.appendChild(btn);
+    tabBtns[t.id] = btn;
+  }
+  overlay.appendChild(tabsEl);
+
+  // Scrollback area — its [data-tab] drives the CSS filter chains
+  // defined alongside this block in ensureStyles().
   const scroll = document.createElement("div");
   scroll.className = "hb-chat-scroll";
+  scroll.dataset.tab = "all";
   overlay.appendChild(scroll);
 
-  // Input row: channel tab + text input
+  function setTab(tabId) {
+    scroll.dataset.tab = tabId;
+    for (const id of Object.keys(tabBtns)) {
+      tabBtns[id].classList.toggle("active", id === tabId);
+    }
+    // Mirror the selection to the source #chat-log so the filter
+    // stays in sync if the agent-mode hide rule is ever removed.
+    const src = document.getElementById("chat-log");
+    if (src) src.dataset.tab = tabId;
+    // Re-pin to bottom on tab change.
+    scroll.scrollTop = scroll.scrollHeight;
+  }
+  tabsEl.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-tab]");
+    if (!btn) return;
+    setTab(btn.dataset.tab);
+  });
+
+  // Input row
   const inputRow = document.createElement("div");
   inputRow.className = "hb-chat-input-row";
   const tab = document.createElement("span");
@@ -194,6 +299,33 @@ export function mount(_ctx) {
   input.placeholder = "type here…";
   inputRow.appendChild(input);
   overlay.appendChild(inputRow);
+
+  // Resize handle (bottom-right) — pointer-capture drag to adjust
+  // panel width + height. Min/max clamps prevent escaping the viewport.
+  const resizeHandle = document.createElement("div");
+  resizeHandle.className = "hb-chat-resize";
+  resizeHandle.setAttribute("aria-label", "Resize chat");
+  let resizeDrag = null;
+  resizeHandle.addEventListener("pointerdown", (ev) => {
+    if (locked) return;
+    ev.preventDefault();
+    const rect = overlay.getBoundingClientRect();
+    resizeDrag = { startX: ev.clientX, startY: ev.clientY, w0: rect.width, h0: rect.height };
+    try { resizeHandle.setPointerCapture(ev.pointerId); } catch (_) {}
+  });
+  resizeHandle.addEventListener("pointermove", (ev) => {
+    if (!resizeDrag) return;
+    const w = Math.max(220, Math.min(900, resizeDrag.w0 + (ev.clientX - resizeDrag.startX)));
+    const h = Math.max(70, Math.min(500, resizeDrag.h0 + (ev.clientY - resizeDrag.startY)));
+    overlay.style.width = `${w}px`;
+    overlay.style.height = `${h}px`;
+  });
+  resizeHandle.addEventListener("pointerup", (ev) => {
+    resizeDrag = null;
+    try { resizeHandle.releasePointerCapture(ev.pointerId); } catch (_) {}
+  });
+  resizeHandle.addEventListener("pointercancel", () => { resizeDrag = null; });
+  overlay.appendChild(resizeHandle);
 
   // Lock + Move handles
   let locked = false;
@@ -252,7 +384,12 @@ export function mount(_ctx) {
     line.className = "hb-chat-line";
     const cat = srcLi.dataset?.cat ?? null;
     line.style.color = colorForCategory(cat);
+    if (cat != null) {
+      line.classList.add(`cat-${cat}`);
+      line.dataset.cat = cat;
+    }
     if (srcLi.classList.contains("echo")) {
+      line.classList.add("echo");
       line.style.color = "var(--hb-text-cream-bright)";
     } else if (isEmpty) {
       line.dataset.empty = "1";
