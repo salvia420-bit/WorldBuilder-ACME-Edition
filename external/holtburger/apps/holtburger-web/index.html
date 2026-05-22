@@ -410,7 +410,7 @@
          because agents drive movement via the wire API, not keystrokes.
          ────────────────────────────────────────────────────────────── */
       html.agent-mode body { margin: 0; padding: 0; overflow: hidden; background: #000; }
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel) { display: none !important; }
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -921,6 +921,7 @@
       import * as vendorUiPlugin from "./plugins/vendor-ui.js";
       import * as radarPlugin from "./plugins/radar.js";
       import * as chatPanelPlugin from "./plugins/chat-panel.js";
+      import * as statusIndicatorsPlugin from "./plugins/status-indicators.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
       let pluginClient = null;
@@ -950,6 +951,10 @@
         {
           ...chatPanelPlugin.manifest,
           mount: chatPanelPlugin.mount,
+        },
+        {
+          ...statusIndicatorsPlugin.manifest,
+          mount: statusIndicatorsPlugin.mount,
         },
         {
           id: "rynthsuite",
