@@ -23,8 +23,6 @@ const DEFAULTS = Object.freeze({
 const CSS = `
   .hb-bar {
     --hb-icon-size: 36px;
-    --hb-bg: #141418;
-    --hb-bg-alpha: 0.7;
     position: fixed;
     left: 50%;
     bottom: 12px;
@@ -33,16 +31,15 @@ const CSS = `
     align-items: center;
     gap: 4px;
     padding: 6px;
-    background: rgba(20, 20, 24, var(--hb-bg-alpha));
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 8px;
-    color: #fff;
-    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: transparent;
+    border: 6px solid transparent;
+    border-image: url("./sprites/acsprites/panel.png") 6 fill / 6px / 0 stretch;
+    border-radius: 0;
+    color: var(--hb-text-cream);
+    font-family: var(--hb-font-serif);
     z-index: 100;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--hb-shadow-panel);
     user-select: none;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
     cursor: grab;
   }
   .hb-bar.hb-bar-dragging { cursor: grabbing; }
@@ -396,13 +393,6 @@ function makeSaver() {
   };
 }
 
-function hexToRgb(hex) {
-  const m = /^#?([a-f0-9]{6})$/i.exec(hex || "");
-  if (!m) return { r: 20, g: 20, b: 24 };
-  const n = parseInt(m[1], 16);
-  return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
-}
-
 function makeIcon(slot) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -678,10 +668,6 @@ export function mountBar({ client, root, slots: slotsOpt }) {
 
   function applyStyleVars() {
     bar.style.setProperty("--hb-icon-size", `${state.iconSize}px`);
-    bar.style.setProperty("--hb-bg", state.color);
-    bar.style.setProperty("--hb-bg-alpha", String(state.transparency));
-    const { r, g, b } = hexToRgb(state.color);
-    bar.style.background = `rgba(${r}, ${g}, ${b}, ${state.transparency})`;
     bar.style.gap = `${Math.max(2, Math.round(state.iconSize * 0.11))}px`;
   }
 

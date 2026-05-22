@@ -28,58 +28,78 @@ function ensureStyles() {
   style.textContent = `
     #${OVERLAY_ID} {
       position: fixed;
-      top: 8px;
-      left: 50%;
-      transform: translateX(-50%);
+      top: 6px;
+      left: 260px;
       z-index: 50;
       display: flex;
-      gap: 8px;
-      padding: 6px 10px;
-      background: rgba(20, 20, 24, 0.78);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      border-radius: 8px;
-      backdrop-filter: blur(4px);
-      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      flex-direction: column;
+      gap: 2px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      font-family: var(--hb-font-serif);
       pointer-events: none;
     }
     #${OVERLAY_ID}[hidden] { display: none; }
     #${OVERLAY_ID} .hud-vital {
+      position: relative;
       display: flex;
       align-items: center;
-      gap: 5px;
-      font-size: 11px;
-      color: #fff;
+      gap: 0;
       font-variant-numeric: tabular-nums;
     }
     #${OVERLAY_ID} .hud-vital-label {
       font-weight: 600;
-      font-size: 9px;
+      font-size: 10px;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: rgba(255, 255, 255, 0.7);
-      width: 12px;
+      letter-spacing: 0.08em;
+      color: var(--hb-text-cream);
+      width: 24px;
+      text-align: right;
+      padding-right: 6px;
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.8);
     }
     #${OVERLAY_ID} .hud-vital-bar {
       position: relative;
-      width: 90px;
-      height: 10px;
-      background: rgba(0, 0, 0, 0.45);
-      border-radius: 2px;
+      width: 250px;
+      height: 16px;
+      background: rgba(0, 0, 0, 0.7);
+      border-radius: 0;
       overflow: hidden;
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      border: 1px solid var(--hb-border-brass);
+      box-shadow:
+        inset 0 0 4px rgba(0, 0, 0, 0.9),
+        0 0 0 1px var(--hb-border-brass-deep),
+        0 1px 2px rgba(0, 0, 0, 0.6);
     }
     #${OVERLAY_ID} .hud-vital-fill {
       position: absolute;
       top: 0; left: 0; bottom: 0;
       transition: width 120ms linear;
+      box-shadow:
+        inset 0 1px 2px rgba(255, 255, 255, 0.35),
+        inset 0 -2px 3px rgba(0, 0, 0, 0.45);
     }
-    #${OVERLAY_ID} .hud-vital.health .hud-vital-fill { background: linear-gradient(180deg, #e64646, #b22222); }
-    #${OVERLAY_ID} .hud-vital.stamina .hud-vital-fill { background: linear-gradient(180deg, #d4b330, #a88a14); }
-    #${OVERLAY_ID} .hud-vital.mana .hud-vital-fill { background: linear-gradient(180deg, #4f8aff, #2c5fcc); }
+    #${OVERLAY_ID} .hud-vital.health .hud-vital-fill {
+      background: linear-gradient(180deg, #ff5a5a 0%, #c81818 60%, #6a0a0a 100%);
+    }
+    #${OVERLAY_ID} .hud-vital.stamina .hud-vital-fill {
+      background: linear-gradient(180deg, #ffd070 0%, #d89028 60%, #6a4818 100%);
+    }
+    #${OVERLAY_ID} .hud-vital.mana .hud-vital-fill {
+      background: linear-gradient(180deg, #5aa0ff 0%, #2860d0 60%, #0a2870 100%);
+    }
     #${OVERLAY_ID} .hud-vital-nums {
-      min-width: 60px;
-      font-size: 10px;
-      color: rgba(255, 255, 255, 0.85);
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      min-width: 0;
+      font-size: 11px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream-bright);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.8);
+      pointer-events: none;
     }
   `;
   document.head.appendChild(style);
