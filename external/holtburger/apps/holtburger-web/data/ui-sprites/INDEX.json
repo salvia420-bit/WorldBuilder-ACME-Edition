@@ -1,0 +1,63 @@
+{
+  "generatedBy": "WorldBuilder.Terminal chorizite-extract-ui-textures",
+  "datPath": "/home/wbterminal/ac_base_dats/client_portal.dat",
+  "count": 6,
+  "passCount": 6,
+  "failCount": 0,
+  "records": {
+    "0x06001343": {
+      "width": 800,
+      "height": 482,
+      "sha256": "63113c60246859382340350bb628218ea0f72b228475276d923431c973a17057",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600195C": {
+      "width": 325,
+      "height": 52,
+      "sha256": "a31010dee0ee22cb6cb3d0be42464b08e8f838bd3f16870bcd2d2dd14ab657ec",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x0600195D": {
+      "width": 325,
+      "height": 52,
+      "sha256": "23cea1129b26e1495df40c47de6b1e766388a8638d488d1eddf57a1e53d9bb57",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06001966": {
+      "width": 325,
+      "height": 52,
+      "sha256": "d71f645fd71932ee7321659d67ac858242db6c749d89afec754973c2e54e30c2",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06001967": {
+      "width": 325,
+      "height": 52,
+      "sha256": "0ef58de106eaae204e1f78ad7b6fa72cd92d07c3903e3a15ef167178b7d55d2f",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_R8G8B8",
+      "failureReason": null
+    },
+    "0x06004D69": {
+      "width": 15,
+      "height": 28,
+      "sha256": "4ba74856590d111af1114a35718b362e6cb0b4abed432274f03932836933270e",
+      "source": "client_portal.dat",
+      "status": "PASS",
+      "pixelFormat": "PFID_A8R8G8B8",
+      "failureReason": null
+    }
+  }
+}

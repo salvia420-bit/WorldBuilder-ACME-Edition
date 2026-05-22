@@ -302,6 +302,9 @@ public class JsonCommandProcessor {
             ["chorizite-classify"] = CmdChoriziteClassify,
             ["chorizite-dump-opcodes"] = CmdChoriziteDumpOpcodes,
             ["chorizite-resolve-sound"] = CmdChoriziteResolveSound,
+            // Wave-1 UI-port commands — see CommandEngine.UiSpriteExtract.cs
+            ["chorizite-dump-layout-tree"]      = CmdChoriziteDumpLayoutTree,
+            ["chorizite-extract-ui-textures"]   = CmdChoriziteExtractUiTextures,
             // Wave-1 wire-conformance diagnostic commands — see CommandEngine.WireConformance.cs
             ["chorizite-wire-pack-message"]   = CmdChoriziteWirePackMessage,
             ["chorizite-wire-unpack-message"] = CmdChoriziteWireUnpackMessage,
@@ -477,6 +480,99 @@ public class JsonCommandProcessor {
             volume = r.Volume,
             entryCount = r.EntryCount,
             source = r.Source,
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Wave-1 UI-port dispatch — see CommandEngine.UiSpriteExtract.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdChoriziteDumpLayoutTree(System.Text.Json.Nodes.JsonNode node) {
+        // layoutId accepts hex string ("0x21000000"), decimal string, or
+        // an integer JSON value. Default = 0x21000000 (the retail
+        // 800×600 root UI tree).
+        uint layoutId = 0x21000000u;
+        var layoutIdNode = node["layoutId"];
+        if (layoutIdNode != null && layoutIdNode.GetValueKind() != System.Text.Json.JsonValueKind.Null) {
+            if (layoutIdNode.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+                var s = layoutIdNode.GetValue<string>().Trim();
+                layoutId = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                    ? Convert.ToUInt32(s.Substring(2), 16)
+                    : Convert.ToUInt32(s);
+            } else {
+                layoutId = layoutIdNode.GetValue<uint>();
+            }
+        }
+        string? outPath = node["outPath"]?.GetValue<string>();
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.ChoriziteDumpLayoutTree(layoutId, outPath, datPath);
+
+        // Wrap the dump result. We inline the full tree when no outPath
+        // was given so the caller can pipe it; when outPath is set we
+        // still return the full body so the caller can confirm shape.
+        return Serialize(new {
+            success = true,
+            command = "chorizite-dump-layout-tree",
+            datPath = r.DatPath,
+            outPath = string.IsNullOrEmpty(r.OutPath) ? null : r.OutPath,
+            summary = new {
+                layoutId = r.LayoutIdHex,
+                width = r.Width,
+                height = r.Height,
+                elementCount = r.ElementCount,
+                imageDidCount = r.ImageDidCount,
+                allImageDids = r.AllImageDids,
+            },
+            layout = new {
+                layoutId = r.LayoutIdHex,
+                width = r.Width,
+                height = r.Height,
+                elements = r.Elements,
+            },
+        });
+    }
+
+    private string CmdChoriziteExtractUiTextures(System.Text.Json.Nodes.JsonNode node) {
+        var didsArr = node["dids"] as System.Text.Json.Nodes.JsonArray
+            ?? throw new ArgumentException("Missing 'dids' array");
+        var dids = new List<uint>();
+        foreach (var entry in didsArr) {
+            if (entry == null) continue;
+            uint did;
+            if (entry.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+                var s = entry.GetValue<string>().Trim();
+                did = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                    ? Convert.ToUInt32(s.Substring(2), 16)
+                    : Convert.ToUInt32(s);
+            } else {
+                did = entry.GetValue<uint>();
+            }
+            dids.Add(did);
+        }
+        string outDir = node["outDir"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outDir' field");
+        string? datPath = node["datPath"]?.GetValue<string>();
+
+        var r = _engine.ChoriziteExtractUiTextures(dids, outDir, datPath);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-extract-ui-textures",
+            outDir = r.OutDir,
+            datPath = r.DatPath,
+            requestedCount = r.RequestedCount,
+            pngCount = r.PngCount,
+            failCount = r.FailCount,
+            indexJson = r.IndexJsonPath,
+            records = r.Records.Select(rec => new {
+                did = rec.DidHex,
+                status = rec.Status,
+                width = rec.Width,
+                height = rec.Height,
+                sha256 = rec.Sha256,
+                pixelFormat = rec.PixelFormat,
+                pngPath = rec.PngPath,
+                failureReason = rec.FailureReason,
+            }),
         });
     }
 
