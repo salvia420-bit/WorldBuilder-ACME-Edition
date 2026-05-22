@@ -283,6 +283,13 @@ export function mount(_ctx) {
 
   // Poll for selected-target changes. The entity manager exposes
   // getSelectedTarget() per scene3d/picking.js:305.
+  //
+  // Per the examine architecture doc (apps/holtburger-web/docs/
+  // examine-architecture-2026-05-22.md), this floating popup is only
+  // for NON-INVENTORY targets — creatures/NPCs picked in the 3D
+  // world, spell right-click, etc. Inventory items go to the
+  // inventory's in-place examine swap (gm3DItemsUI). So we suppress
+  // auto-pop when window.__isInventoryItem(guid) returns true.
   let lastGuid = 0;
   let rafId = 0;
   function tick() {
@@ -292,6 +299,10 @@ export function mount(_ctx) {
       if (guid !== lastGuid) {
         lastGuid = guid;
         if (guid === 0) {
+          overlay.dataset.open = "0";
+        } else if (window.__isInventoryItem?.(guid)) {
+          // Selection is an inventory item — let inventory.js handle
+          // the in-place examine swap; we stay hidden.
           overlay.dataset.open = "0";
         } else {
           populateFor(guid);
@@ -303,12 +314,26 @@ export function mount(_ctx) {
   }
   rafId = requestAnimationFrame(tick);
 
+  // E key handler — fires for non-inventory selections (inventory.js
+  // already handled its own case + dispatched this event when not
+  // applicable). Per acclient.c:402002, if no selection, retail enters
+  // target mode; we just no-op here for now.
+  function onExamineKey() {
+    const guid = lastGuid;
+    if (guid === 0) return;
+    if (window.__isInventoryItem?.(guid)) return;
+    populateFor(guid);
+    overlay.dataset.open = "1";
+  }
+  window.addEventListener("hb-examine-key", onExamineKey);
+
   // Debug helper — manually trigger by GUID from console.
   window.__showExamineFor = (guid) => { populateFor(guid >>> 0); overlay.dataset.open = "1"; };
   window.__hideExamine = () => { overlay.dataset.open = "0"; };
 
   return () => {
     cancelAnimationFrame(rafId);
+    window.removeEventListener("hb-examine-key", onExamineKey);
     delete window.__showExamineFor;
     delete window.__hideExamine;
     overlay.remove();

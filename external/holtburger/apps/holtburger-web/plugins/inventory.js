@@ -327,6 +327,102 @@ function ensureStyles() {
       z-index: 60;
     }
     #${OVERLAY_ID} .hb-inv-slot:hover .hb-inv-tip { opacity: 1; }
+    /* In-place examine view — overlays the items grid when an inventory
+       item is selected (retail's gm3DItemsUI swap behaviour, see
+       docs/examine-architecture-2026-05-22.md). Hidden by default;
+       toggled via data-view="examine" on the parent #hb-inventory. */
+    #${OVERLAY_ID}[data-view="examine"] .hb-inv-items { display: none; }
+    #${OVERLAY_ID} .hb-inv-examine {
+      position: absolute;
+      top: ${TITLE_H + PAPERDOLL_H + 28}px;
+      left: 6px;
+      right: 6px;
+      bottom: 6px;
+      pointer-events: auto;
+      padding: 6px;
+      display: none;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
+    }
+    #${OVERLAY_ID}[data-view="examine"] .hb-inv-examine { display: block; }
+    #${OVERLAY_ID} .hb-inv-examine-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    #${OVERLAY_ID} .hb-inv-examine-icon {
+      width: 48px;
+      height: 48px;
+      background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
+      image-rendering: pixelated;
+      position: relative;
+    }
+    #${OVERLAY_ID} .hb-inv-examine-icon-fill {
+      position: absolute;
+      top: 8px; left: 8px;
+      width: 32px; height: 32px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+    #${OVERLAY_ID} .hb-inv-examine-namecol {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    #${OVERLAY_ID} .hb-inv-examine-name {
+      font-size: 12px;
+      color: var(--hb-text-gold);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+      letter-spacing: 0.02em;
+    }
+    #${OVERLAY_ID} .hb-inv-examine-guid {
+      font-size: 9px;
+      font-family: var(--hb-font-mono);
+      color: var(--hb-text-muted);
+    }
+    #${OVERLAY_ID} .hb-inv-examine-back {
+      padding: 2px 6px;
+      font-size: 9px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid var(--hb-border-brass);
+      cursor: pointer;
+      user-select: none;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    #${OVERLAY_ID} .hb-inv-examine-back:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    #${OVERLAY_ID} .hb-inv-examine-body {
+      margin-top: 4px;
+    }
+    #${OVERLAY_ID} .hb-inv-examine-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 2px 4px;
+      font-size: 10px;
+      line-height: 14px;
+      border-bottom: 1px solid rgba(138, 117, 68, 0.18);
+    }
+    #${OVERLAY_ID} .hb-inv-examine-row:last-child { border-bottom: none; }
+    #${OVERLAY_ID} .hb-inv-examine-label {
+      color: var(--hb-text-cream);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 9px;
+    }
+    #${OVERLAY_ID} .hb-inv-examine-value {
+      color: var(--hb-text-gold);
+      text-align: right;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -430,7 +526,115 @@ export function mount(_ctx) {
   itemsGrid.className = "hb-inv-items";
   overlay.appendChild(itemsGrid);
 
+  // In-place examine view — overlays the items grid region when an
+  // inventory item is clicked / E-keyed. Matches retail's gm3DItemsUI
+  // swap behaviour (see docs/examine-architecture-2026-05-22.md).
+  const examineView = document.createElement("div");
+  examineView.className = "hb-inv-examine";
+  const exHead = document.createElement("div");
+  exHead.className = "hb-inv-examine-head";
+  const exIcon = document.createElement("div");
+  exIcon.className = "hb-inv-examine-icon";
+  const exIconFill = document.createElement("div");
+  exIconFill.className = "hb-inv-examine-icon-fill";
+  exIcon.appendChild(exIconFill);
+  exHead.appendChild(exIcon);
+  const exNameCol = document.createElement("div");
+  exNameCol.className = "hb-inv-examine-namecol";
+  const exName = document.createElement("div");
+  exName.className = "hb-inv-examine-name";
+  exName.textContent = "—";
+  const exGuid = document.createElement("div");
+  exGuid.className = "hb-inv-examine-guid";
+  exGuid.textContent = "";
+  exNameCol.appendChild(exName);
+  exNameCol.appendChild(exGuid);
+  exHead.appendChild(exNameCol);
+  const exBackBtn = document.createElement("button");
+  exBackBtn.type = "button";
+  exBackBtn.className = "hb-inv-examine-back";
+  exBackBtn.textContent = "← Items";
+  exHead.appendChild(exBackBtn);
+  examineView.appendChild(exHead);
+  const exBody = document.createElement("div");
+  exBody.className = "hb-inv-examine-body";
+  examineView.appendChild(exBody);
+  overlay.appendChild(examineView);
+
   document.body.appendChild(overlay);
+
+  // Switch view mode between "grid" and "examine".
+  function setView(mode) {
+    overlay.dataset.view = mode;
+  }
+  setView("grid");
+  exBackBtn.addEventListener("click", () => setView("grid"));
+
+  // Populate examine-view from a source <li>.
+  function showInPlaceExamine(srcLi) {
+    if (!srcLi) return;
+    const guid = srcLi.dataset.guid;
+    const tb = srcLi.dataset.typeBit ?? "0x0";
+    const item = getItemByGuid(guid);
+    exName.textContent = srcLi.querySelector(".name")?.textContent || item?.name || "(unnamed)";
+    exGuid.textContent = `0x${(Number(guid) >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+    exIconFill.style.background = TYPE_COLOR[tb] || "#777";
+    exBody.innerHTML = "";
+    function r(label, value) {
+      if (value == null || value === "") return;
+      const row = document.createElement("div");
+      row.className = "hb-inv-examine-row";
+      const l = document.createElement("span");
+      l.className = "hb-inv-examine-label";
+      l.textContent = label;
+      const v = document.createElement("span");
+      v.className = "hb-inv-examine-value";
+      v.textContent = String(value);
+      row.appendChild(l);
+      row.appendChild(v);
+      exBody.appendChild(row);
+    }
+    const typeNames = { "0x4": "Weapon", "0x2": "Armor", "0x10000": "Magic / Scroll", "0x20": "Currency" };
+    r("Type", typeNames[tb] || "Item");
+    if (item) {
+      if (item.stackSize > 1) r("Stack", item.stackSize);
+      if (item.value > 0) r("Value", `${item.value} pyreals`);
+      if (item.equipMask) r("Equip mask", `0x${item.equipMask.toString(16).toUpperCase().padStart(8, "0")}`);
+      if (item.burden != null) r("Burden", item.burden);
+      if (item.itemType != null) r("Item type bits", `0x${item.itemType.toString(16)}`);
+    }
+    r("GUID", exGuid.textContent);
+    setView("examine");
+  }
+
+  // Track the currently selected inventory <li> (for E-key fire).
+  let selectedSrcLi = null;
+  function setSelected(srcLi) {
+    if (selectedSrcLi) {
+      const prevSlot = itemsGrid.querySelector(`[data-guid="${selectedSrcLi.dataset.guid}"]`);
+      prevSlot?.classList.remove("selected");
+    }
+    selectedSrcLi = srcLi;
+    if (srcLi) {
+      const slot = itemsGrid.querySelector(`[data-guid="${srcLi.dataset.guid}"]`);
+      slot?.classList.add("selected");
+    }
+  }
+
+  // Expose to other plugins so the floating examine popup can skip
+  // when the selection is an inventory item.
+  window.__isInventoryItem = (guid) => {
+    const g = String(guid >>> 0);
+    const eq = document.getElementById("inv-equipped");
+    const pk = document.getElementById("inv-pack");
+    for (const list of [eq, pk]) {
+      if (!list) continue;
+      for (const li of list.children) {
+        if (String(li.dataset.guid >>> 0) === g) return true;
+      }
+    }
+    return false;
+  };
 
   // ── Mirror from index.html's #inv-equipped + #inv-pack ────────────
   function makeSlot(srcLi) {
@@ -466,6 +670,12 @@ export function mount(_ctx) {
         ev.dataTransfer.effectAllowed = "move";
       });
     }
+    // Single click → select + in-place examine swap (retail's
+    // gm3DItemsUI behaviour). Double-click could later trigger Use.
+    slot.addEventListener("click", () => {
+      setSelected(srcLi);
+      showInPlaceExamine(srcLi);
+    });
     return slot;
   }
 
@@ -581,12 +791,33 @@ export function mount(_ctx) {
     if (ev.key === "F4") {
       ev.preventDefault();
       setOpen(overlay.dataset.open !== "1");
+      return;
+    }
+    // E — SelectionExamine (acclient keymap). Context-aware:
+    //   1) Inventory item selected → in-place examine swap.
+    //   2) Otherwise: let examine-target.js handle floating examine
+    //      via getSelectedTarget() rAF poll. We dispatch a synthetic
+    //      window event so it doesn't have to poll for the key too.
+    if (ev.key === "e" || ev.key === "E") {
+      // Only fire if the inventory is open and visible — otherwise the
+      // floating examine handles it.
+      if (overlay.dataset.open !== "1") {
+        window.dispatchEvent(new CustomEvent("hb-examine-key"));
+        return;
+      }
+      ev.preventDefault();
+      if (selectedSrcLi) {
+        showInPlaceExamine(selectedSrcLi);
+      } else {
+        window.dispatchEvent(new CustomEvent("hb-examine-key"));
+      }
     }
   }
   window.addEventListener("keydown", onKey);
 
   return () => {
     window.removeEventListener("keydown", onKey);
+    delete window.__isInventoryItem;
     clearInterval(nameRetry);
     if (pollTimer) clearInterval(pollTimer);
     for (const o of observers) o.disconnect();
