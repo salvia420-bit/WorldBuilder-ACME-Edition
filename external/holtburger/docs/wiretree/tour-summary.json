@@ -1,6 +1,6 @@
 {
-  "tourStartedAt": "2026-05-22T00:24:22.251Z",
-  "totalMs": 169317,
+  "tourStartedAt": "2026-05-22T00:48:44.226Z",
+  "totalMs": 104070,
   "results": [
     {
       "lbHex": "A7B4",
@@ -13,9 +13,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 1921,
-        "textures": 36,
-        "geometries": 171
+        "meshes": 713,
+        "textures": 4,
+        "geometries": 116
       },
       "align": {
         "ok": true,
@@ -38,9 +38,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 4401,
-        "textures": 64,
-        "geometries": 309
+        "meshes": 863,
+        "textures": 4,
+        "geometries": 135
       },
       "align": {
         "ok": true,
@@ -63,9 +63,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 7158,
-        "textures": 149,
-        "geometries": 647
+        "meshes": 1662,
+        "textures": 13,
+        "geometries": 408
       },
       "align": {
         "ok": true,
@@ -73,7 +73,7 @@
         "pose": {
           "x": 96,
           "y": 96,
-          "z": 200.01
+          "z": 94
         }
       }
     },
@@ -88,9 +88,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 7590,
-        "textures": 175,
-        "geometries": 703
+        "meshes": 1780,
+        "textures": 14,
+        "geometries": 441
       },
       "align": {
         "ok": true,
@@ -113,9 +113,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 7726,
-        "textures": 176,
-        "geometries": 730
+        "meshes": 1913,
+        "textures": 14,
+        "geometries": 441
       },
       "align": {
         "ok": true,
@@ -138,9 +138,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 8616,
-        "textures": 176,
-        "geometries": 730
+        "meshes": 2963,
+        "textures": 22,
+        "geometries": 455
       },
       "align": {
         "ok": true,
@@ -163,9 +163,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 8962,
-        "textures": 176,
-        "geometries": 730
+        "meshes": 3452,
+        "textures": 22,
+        "geometries": 455
       },
       "align": {
         "ok": true,
@@ -188,9 +188,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 9100,
-        "textures": 177,
-        "geometries": 747
+        "meshes": 3505,
+        "textures": 22,
+        "geometries": 455
       },
       "align": {
         "ok": true,
@@ -213,9 +213,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 9151,
-        "textures": 179,
-        "geometries": 747
+        "meshes": 6262,
+        "textures": 41,
+        "geometries": 501
       },
       "align": {
         "ok": true,
@@ -238,9 +238,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 9214,
-        "textures": 179,
-        "geometries": 747
+        "meshes": 6451,
+        "textures": 41,
+        "geometries": 501
       },
       "align": {
         "ok": true,
@@ -263,9 +263,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 9305,
-        "textures": 186,
-        "geometries": 752
+        "meshes": 6451,
+        "textures": 41,
+        "geometries": 501
       },
       "align": {
         "ok": true,
@@ -288,9 +288,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 9395,
-        "textures": 186,
-        "geometries": 752
+        "meshes": 6532,
+        "textures": 41,
+        "geometries": 501
       },
       "align": {
         "ok": true,
@@ -313,9 +313,9 @@
         "heading": 0
       },
       "sceneStats": {
-        "meshes": 9469,
-        "textures": 191,
-        "geometries": 756
+        "meshes": 6606,
+        "textures": 41,
+        "geometries": 505
       },
       "align": {
         "ok": true,

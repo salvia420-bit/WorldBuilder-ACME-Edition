@@ -117,6 +117,37 @@ console.log("scene tree meshes:", trees.length);
 console.log("staticsBakedLbs:", [...(window.liveScene3d?.staticsBakedLbs || [])].map(k => "0x"+k.toString(16)));
 ```
 
+## Follow-up — lazy-terrain wire bypass FIXED 2026-05-22
+
+Pre-fix screenshots are archived in `before_lazy_fix/`. Current 13 PNGs
+are post-fix. Diff is night-and-day for the outer-ring LBs (S2, E2, W2,
+N2, and the inner-but-low-altitude SW/S/SE/E):
+
+- **Before**: textured dark-blue water + brown hill horizons (the
+  terrain ShaderMaterial path was running because lazy-loaded LBs went
+  through `liveScene3d.loadTerrainForLandblock` where `wireframeMode`
+  was undefined).
+- **After**: pure wireframe — character + wire terrain grid + distant
+  wire ridges. No textured water, no textured hills.
+
+Root cause: `liveScene3d` didn't include `wireframeMode` in its field
+spread from `scene3dForBuilders`. The alias precedent at L1441-1443
+(terrainOpts/buildingsOpts/staticsOpts) explicitly forwards similar
+fields and called out exactly this risk in its comment: "without the
+aliasing, `this.terrainOpts` was undefined inside the load* hooks →
+bakeTerrainForLandblock threw."
+
+Same pattern, different field. Fix: add
+`wireframeMode: !!scene3dForBuilders.wireframeMode` to the liveScene3d
+alias block.
+
+Also fixed: hello-cube (Phase 7.0 debug artifact) was the lone
+remaining non-wire mesh after the terrain fix. Now uses
+MeshBasicMaterial wire when wireframeMode set.
+
+See `VISUAL_FEATURES_AUDIT.md` for a comprehensive survey of which
+features are active vs stripped in wire mode.
+
 ## Reproduction
 
 ```bash

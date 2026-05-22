@@ -419,9 +419,13 @@ export async function preInit3D(canvas) {
   worldRoot.add(terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup);
 
   // Hello-world cube — kept for the Phase 7.0 capture path's assertion.
+  // Wire-agent uses MeshBasicMaterial wire so the cube doesn't stand out
+  // as the lone textured mesh in an otherwise all-wire scene.
   const cubeGeom = new THREE.BoxGeometry(2, 2, 2);
   cubeGeom.computeBoundingSphere();
-  const cubeMat = new THREE.MeshStandardMaterial({ color: 0xff8844, roughness: 0.6, metalness: 0.1 });
+  const cubeMat = wireframeMode
+    ? new THREE.MeshBasicMaterial({ color: 0xff8844, wireframe: true })
+    : new THREE.MeshStandardMaterial({ color: 0xff8844, roughness: 0.6, metalness: 0.1 });
   const cube = new THREE.Mesh(cubeGeom, cubeMat);
   cube.name = "hello-cube";
   cube.position.set(0, 0, 5);
@@ -1441,6 +1445,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     terrainOpts: scene3dForBuilders.terrainOpts,
     buildingsOpts: scene3dForBuilders.buildingsOpts,
     staticsOpts: scene3dForBuilders.staticsOpts,
+    // Wire-agent — without this alias, loadTerrainForLandblock /
+    // loadBuildingsForLandblock / loadStaticsForLandblock (called from
+    // handlePositionUpdate when player crosses an LB) pass `this =
+    // liveScene3d` to the bakers, where `scene3d.wireframeMode` is
+    // undefined → falsy → bakeTerrainForLandblock takes the
+    // ShaderMaterial branch even in wire mode. Surfaced 2026-05-21 by
+    // the docs/wiretree tour: outer-ring LBs reached via @teleloc were
+    // textured while the initial-ring LBs (baked via scene3dForBuilders)
+    // were wire. Mirrors the terrainOpts/etc aliasing precedent above.
+    wireframeMode: !!scene3dForBuilders.wireframeMode,
     // Phase 7.6.1 (follow-on #1) — per-SetupModel light registry +
     // summary. `activeLights` is the Array<THREE.PointLight |
     // THREE.SpotLight> that `tickLightingForCellState` sorts by
