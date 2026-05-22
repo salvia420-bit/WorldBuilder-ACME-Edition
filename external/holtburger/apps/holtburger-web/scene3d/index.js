@@ -396,14 +396,42 @@ export async function preInit3D(canvas) {
     scene.sortObjects = false;
   }
   if (wireframeMode) {
-    // Background + distance fog give human evaluators a depth cue when
-    // wire-edges of distant geometry would otherwise look identical to
-    // near geometry. FogExp2 + MeshBasicMaterial.fog=true (set in the
-    // MaterialCache wireframe path) makes color lerp toward bg with
-    // exponential falloff — zero per-frame cost, no shader setup.
-    const bg = new THREE.Color(0x1a1f26);
-    scene.background = bg;
-    scene.fog = new THREE.FogExp2(bg.getHex(), 0.004);
+    // 2026-05-22 — vertical sky gradient via a 1×256 CanvasTexture in
+    // equirectangular mapping. Three.js samples it for `scene.background`
+    // based on the camera direction's Y; the horizon stop matches the
+    // FogExp2 colour so distant wire geometry fades into the horizon
+    // line seamlessly. One Texture, zero extra draw calls (the renderer
+    // uses its built-in equirect-background path). Replaces the prior
+    // flat-colour 0x1a1f26 background.
+    const horizon = 0x2c2f38;   // slightly warmer / lighter than the prior bg
+    const zenith  = 0x0a0e16;   // dark blue-grey
+    const ground  = 0x080808;   // near-black earth below
+    const bg = new THREE.Color(horizon);
+
+    const skyCanvas =
+      (typeof OffscreenCanvas !== "undefined") ? new OffscreenCanvas(1, 256) :
+      (typeof document !== "undefined") ? document.createElement("canvas") : null;
+    if (skyCanvas) {
+      if (skyCanvas instanceof HTMLCanvasElement) { skyCanvas.width = 1; skyCanvas.height = 256; }
+      const ctx = skyCanvas.getContext("2d");
+      const grad = ctx.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0.00, `#${zenith.toString(16).padStart(6, "0")}`);
+      grad.addColorStop(0.42, `#${horizon.toString(16).padStart(6, "0")}`);
+      grad.addColorStop(0.55, `#${horizon.toString(16).padStart(6, "0")}`);
+      grad.addColorStop(1.00, `#${ground.toString(16).padStart(6, "0")}`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 1, 256);
+      const skyTex = new THREE.Texture(skyCanvas);
+      skyTex.mapping = THREE.EquirectangularReflectionMapping;
+      skyTex.colorSpace = THREE.SRGBColorSpace;
+      skyTex.needsUpdate = true;
+      scene.background = skyTex;
+    } else {
+      scene.background = bg;
+    }
+    // Fog colour stays tuned to the horizon stop so the wire-far-plane
+    // dissolves into the gradient instead of into a contrasting flat.
+    scene.fog = new THREE.FogExp2(horizon, 0.004);
   }
 
   const worldRoot = new THREE.Group();

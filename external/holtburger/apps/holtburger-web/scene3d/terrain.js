@@ -29,6 +29,7 @@ import {
   buildTerrainAtlasArrayBytes,
   getAdapterMaxAnisotropy,
 } from "./adapter.js";
+import { applyWireVertexAOPatch } from "./materials.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -1202,6 +1203,7 @@ export async function bakeTerrainForLandblock(
       });
       scene3d._wireTerrainFillMaterial.name = "wire-terrain-fill";
       scene3d._wireTerrainFillMaterial.userData = { __cacheOwned: true };
+      applyWireVertexAOPatch(scene3d._wireTerrainFillMaterial);
     }
     if (!scene3d._wireTerrainMaterial) {
       scene3d._wireTerrainMaterial = new THREE.MeshBasicMaterial({
@@ -1212,6 +1214,7 @@ export async function bakeTerrainForLandblock(
       });
       scene3d._wireTerrainMaterial.name = "wire-terrain";
       scene3d._wireTerrainMaterial.userData = { __cacheOwned: true };
+      applyWireVertexAOPatch(scene3d._wireTerrainMaterial);
     }
     material = scene3d._wireTerrainMaterial;
   } else {

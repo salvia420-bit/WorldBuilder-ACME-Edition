@@ -187,6 +187,46 @@ function _chainBeforeCompile(material, newHook) {
   };
 }
 
+// 2026-05-22 — wire-agent: cheap normal-based AO modulation. Patches a
+// MeshBasicMaterial's shader to multiply the fragment colour by
+// `mix(0.45, 1.0, smoothstep(-0.3, 1.0, vWorldNormalAO.y))`. Result:
+// floors (N=up) full bright, walls (N⊥up) ~70%, ceilings/overhangs
+// (N=-up) ~45%. Adds 3D depth perception to flat-shaded wireframe
+// fills without per-vertex precompute or new geometry attributes —
+// just one extra varying + one mix() per fragment. Applied to every
+// wire-bucket / fill-bucket / per-DID material in this cache.
+export function applyWireVertexAOPatch(material) {
+  if (!material || material.userData?.__aoPatched) return;
+  _chainBeforeCompile(material, (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        varying vec3 vWorldNormalAO;`,
+      )
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+        vWorldNormalAO = normalize(mat3(modelMatrix) * normal);`,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        varying vec3 vWorldNormalAO;`,
+      )
+      .replace(
+        "#include <fog_fragment>",
+        // Apply BEFORE fog so the AO darkening fades into the fog
+        // colour at distance, not the unmodulated colour.
+        `gl_FragColor.rgb *= mix(0.45, 1.0, smoothstep(-0.3, 1.0, vWorldNormalAO.y));
+        #include <fog_fragment>`,
+      );
+  });
+  material.userData = material.userData ?? {};
+  material.userData.__aoPatched = true;
+}
+
 function _installDetailShaderPatch(material, detailTexture, opts = {}) {
   const detailScale = opts.scale ?? DETAIL_UNIFORM_DEFAULTS.scale;
   const detailBlend = opts.blend ?? DETAIL_UNIFORM_DEFAULTS.blend;
@@ -1029,6 +1069,9 @@ export class MaterialCache {
         });
         fillMat.name = `wire-fill-did-${did.toString(16).padStart(8, "0")}`;
         fillMat.userData = { __cacheOwned: true, surfaceDid: did >>> 0 };
+        // AO shading on both — floors brighter, walls/ceilings darker.
+        applyWireVertexAOPatch(wireMat);
+        applyWireVertexAOPatch(fillMat);
         this.didMaterials.set(did >>> 0, { wire: wireMat, fill: fillMat });
         this.wireMatToFill.set(wireMat, fillMat);
         return wireMat;
@@ -1048,6 +1091,7 @@ export class MaterialCache {
     });
     m.name = `wire-bucket-${bucket}`;
     m.userData = { __cacheOwned: true, wireBucket: bucket };
+    applyWireVertexAOPatch(m);
     this.wireframeBuckets.set(bucket, m);
 
     // Companion solid-fill material — same hue, darker + less saturated
@@ -1069,6 +1113,7 @@ export class MaterialCache {
     });
     fillM.name = `wire-fill-bucket-${bucket}`;
     fillM.userData = { __cacheOwned: true, wireFillFor: bucket };
+    applyWireVertexAOPatch(fillM);
     this.wireframeFillBuckets.set(bucket, fillM);
     this.wireMatToFill.set(m, fillM);
     return m;
