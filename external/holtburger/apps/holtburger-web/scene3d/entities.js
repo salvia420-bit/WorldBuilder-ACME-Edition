@@ -989,20 +989,37 @@ export class EntityManager {
             if (typeof sp.free === "function") sp.free();
             let mat;
             if (WIREFRAME_MODE) {
-              // Wire-agent: skip the textured PBR material entirely.
-              // Color-hash per DID for visual distinctness across entity
-              // surfaces (limb vs torso vs cape) without any texture
-              // sampling cost. Dispose the texture we just built — wire
-              // mode never uses it.
+              // 2026-05-22 — route through the shared MaterialCache so
+              // the per-DID dominant-colour manifest applies AND the
+              // material gets registered in `wireMatToFill`, which is
+              // what `addFillCompanions` walks to attach the solid-fill
+              // twin. Per-entity palette substitutions are irrelevant
+              // here: in wire mode the colour comes from either the
+              // manifest's dominant RGB or the 32-bucket HSL hash —
+              // neither uses palette. Sharing materials across all
+              // entities that touch the same surface DID is therefore
+              // safe and gives fill coverage for the local player
+              // (whose palette-driven branch previously minted unique
+              // materials that bypassed the cache → bypassed the fill
+              // companion walk → wire-only rig in screenshots).
               try { tex.dispose && tex.dispose(); } catch (_) {}
-              const hue = ((did >>> 0) % 32) / 32;
-              const color = new THREE.Color().setHSL(hue, 0.6, 0.65);
-              mat = new THREE.MeshBasicMaterial({
-                color,
-                wireframe: true,
-                side: THREE.DoubleSide,
-                fog: true,
-              });
+              mat = this.materialCache?._wireframeMaterialFor?.(did)
+                ?? this._fallbackMaterial?.()
+                ?? this.materialCache?.fallbackMaterial;
+              if (!mat) {
+                const hue = ((did >>> 0) % 32) / 32;
+                mat = new THREE.MeshBasicMaterial({
+                  color: new THREE.Color().setHSL(hue, 0.6, 0.65),
+                  wireframe: true,
+                  side: THREE.DoubleSide,
+                  fog: true,
+                });
+                mat.userData = { __disposable: true };
+                inst.registerOwnedMaterial(mat);
+              }
+              // Cache-owned materials don't get a per-entity name or
+              // __disposable flag — MaterialCache owns their lifetime.
+              entityMaterials.set(did, mat);
             } else {
               mat = new THREE.MeshStandardMaterial({
                 map: tex,
@@ -1011,17 +1028,17 @@ export class EntityManager {
                 side: THREE.DoubleSide,
                 transparent: false,
               });
+              mat.name = `entity-${guid.toString(16)}-surface-${did.toString(16)}`;
+              // Perf B3 (2026-05-18) — entity-owned recoloured surface
+              // material. NOT shared with MaterialCache (keyed by
+              // (entity, did) instead of just did). Free at entity
+              // dispose; tag so `_disposeMaterialIfOwned` lets it
+              // through.
+              mat.userData = { ...(mat.userData || {}), __disposable: true };
+              inst.registerOwnedTexture(tex);
+              inst.registerOwnedMaterial(mat);
+              entityMaterials.set(did, mat);
             }
-            mat.name = `entity-${guid.toString(16)}-surface-${did.toString(16)}`;
-            // Perf B3 (2026-05-18) — entity-owned recoloured surface
-            // material. NOT shared with MaterialCache (keyed by
-            // (entity, did) instead of just did). Free at entity
-            // dispose; tag so `_disposeMaterialIfOwned` lets it
-            // through.
-            mat.userData = { ...(mat.userData || {}), __disposable: true };
-            inst.registerOwnedTexture(tex);
-            inst.registerOwnedMaterial(mat);
-            entityMaterials.set(did, mat);
           }
           inst._entityMaterials = entityMaterials;
         }
