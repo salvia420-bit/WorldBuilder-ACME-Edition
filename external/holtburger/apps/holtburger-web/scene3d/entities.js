@@ -1174,6 +1174,20 @@ export class EntityManager {
     if (this.scene3d?.entitiesGroup) {
       this.scene3d.entitiesGroup.add(root);
     }
+    // 2026-05-22 — wire-agent: walk THIS entity's subtree and add solid-
+    // fill companion meshes for every wire-bucket-materialed
+    // Mesh/InstancedMesh, so NPCs/monsters/players render with the
+    // per-bucket HSL fill colour visible between the wire lines instead
+    // of empty transparency. Scoped to the entity's `root` (not the
+    // entire entitiesGroup) so the walk is O(per-entity verts) on each
+    // spawn instead of O(all-entity verts).
+    if (
+      this.scene3d?.wireframeMode &&
+      this.scene3d.materialCache &&
+      typeof this.scene3d.materialCache.addFillCompanions === "function"
+    ) {
+      this.scene3d.materialCache.addFillCompanions(root);
+    }
     this.entityMap.set(guid, inst);
     // B4 (2026-05-18): index `name → Set<guid>` for O(1) lookup in
     // `findGuidByName`. Only adds when the entity carries a non-empty

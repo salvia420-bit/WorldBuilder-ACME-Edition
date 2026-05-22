@@ -1551,7 +1551,20 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // Stop hook — future phases use this for renderer hot-swap.
     stop() { running = false; },
     loadEnvCellsForLandblock(landblockId) {
-      return buildEnvCellsForLandblock(this, landblockId, this.wasmExports);
+      const p = buildEnvCellsForLandblock(this, landblockId, this.wasmExports);
+      // 2026-05-22 — wire-agent: walk the cellsGroup after the bake to
+      // pick up the newly-attached EnvCell meshes and add their fill
+      // companions. addFillCompanions is idempotent (per-mesh
+      // `__wireFillCompanion` tag), so existing companions aren't
+      // double-added.
+      if (this.wireframeMode && this.materialCache) {
+        const self = this;
+        return Promise.resolve(p).then((r) => {
+          if (self.cellsGroup) self.materialCache.addFillCompanions(self.cellsGroup);
+          return r;
+        });
+      }
+      return p;
     },
     // === World-expand step 1 — Objective 5 — per-LB lazy 3D loaders ===
     // Sibling hooks to `loadEnvCellsForLandblock` for the three other
@@ -1576,6 +1589,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // (init3D failed early or wasm exports are absent) because the
     // bakers raise an explicit error if `opts` is required but unset.
     loadTerrainForLandblock(lbX, lbY) {
+      // Terrain bake handles its own wire-fill companion (second mesh
+      // per LB sharing geometry, added directly to terrainGroup by
+      // `bakeTerrainForLandblock` — see scene3d/terrain.js:1335ish).
+      // No post-bake walk needed.
       return bakeTerrainForLandblock(
         this,
         lbX,
@@ -1585,22 +1602,38 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       );
     },
     loadBuildingsForLandblock(lbX, lbY) {
-      return bakeBuildingsForLandblock(
+      const p = bakeBuildingsForLandblock(
         this,
         lbX,
         lbY,
         this.buildingsOpts,
         this.wasmExports
       );
+      if (this.wireframeMode && this.materialCache) {
+        const self = this;
+        return Promise.resolve(p).then((r) => {
+          if (self.buildingsGroup) self.materialCache.addFillCompanions(self.buildingsGroup);
+          return r;
+        });
+      }
+      return p;
     },
     loadStaticsForLandblock(lbX, lbY) {
-      return bakeStaticsForLandblock(
+      const p = bakeStaticsForLandblock(
         this,
         lbX,
         lbY,
         this.staticsOpts,
         this.wasmExports
       );
+      if (this.wireframeMode && this.materialCache) {
+        const self = this;
+        return Promise.resolve(p).then((r) => {
+          if (self.staticsGroup) self.materialCache.addFillCompanions(self.staticsGroup);
+          return r;
+        });
+      }
+      return p;
     },
     // === Phase D.1 — per-LB lazy ACE spawn injector ===
     // Third placement stream (per `docs/hypotheticalmethod.md`'s

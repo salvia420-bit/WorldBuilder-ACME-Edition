@@ -1042,7 +1042,7 @@ export class MaterialCache {
     if (!this.wireframeMode || !group || typeof group.traverse !== "function") {
       return 0;
     }
-    /** @type {Array<{source: any, fillMat: any, isInstanced: boolean}>} */
+    /** @type {Array<{source: any, fillMat: any, kind: "mesh"|"instanced"|"skinned"}>} */
     const queue = [];
     group.traverse((obj) => {
       if (!obj || obj.userData?.__wireFillCompanion) return;
@@ -1051,6 +1051,11 @@ export class MaterialCache {
       // Material may be a single material or an array (for grouped geometries).
       const mat = obj.material;
       if (!mat) return;
+      const kind = obj.isInstancedMesh
+        ? "instanced"
+        : obj.isSkinnedMesh
+        ? "skinned"
+        : "mesh";
       if (Array.isArray(mat)) {
         // Multi-material mesh — map each entry to its fill twin. If any
         // entry has no twin we still attach (using fallback wire material
@@ -1058,17 +1063,17 @@ export class MaterialCache {
         const fills = mat.map((m) => this._fillMaterialForWire(m));
         if (fills.every((f) => f === null)) return;
         const arr = mat.map((m, i) => fills[i] ?? m);
-        queue.push({ source: obj, fillMat: arr, isInstanced: !!obj.isInstancedMesh });
+        queue.push({ source: obj, fillMat: arr, kind });
       } else {
         const fillMat = this._fillMaterialForWire(mat);
         if (!fillMat) return;
-        queue.push({ source: obj, fillMat, isInstanced: !!obj.isInstancedMesh });
+        queue.push({ source: obj, fillMat, kind });
       }
     });
     let added = 0;
-    for (const { source, fillMat, isInstanced } of queue) {
+    for (const { source, fillMat, kind } of queue) {
       let fillMesh;
-      if (isInstanced) {
+      if (kind === "instanced") {
         // InstancedMesh — copy count + instanceMatrix (and instanceColor
         // if present). Geometry is shared.
         fillMesh = new THREE.InstancedMesh(source.geometry, fillMat, source.count);
@@ -1078,6 +1083,20 @@ export class MaterialCache {
           fillMesh.instanceColor = source.instanceColor.clone();
           fillMesh.instanceColor.needsUpdate = true;
         }
+      } else if (kind === "skinned") {
+        // SkinnedMesh — clone as another SkinnedMesh sharing the SAME
+        // skeleton + bindMatrix so the fill follows the source's
+        // animation exactly. Without this, a plain `new THREE.Mesh(geom,
+        // fillMat)` would render at the rest pose (T-pose) regardless of
+        // the source's per-frame bone transforms, producing a static
+        // ghost blob attached to the animating wire (which is what the
+        // first iteration looked like — the `Cow` showed wires but no
+        // fill).
+        fillMesh = new THREE.SkinnedMesh(source.geometry, fillMat);
+        fillMesh.bindMode = source.bindMode;
+        fillMesh.bindMatrix.copy(source.bindMatrix);
+        fillMesh.bindMatrixInverse.copy(source.bindMatrixInverse);
+        fillMesh.bind(source.skeleton, source.bindMatrix);
       } else {
         fillMesh = new THREE.Mesh(source.geometry, fillMat);
       }
