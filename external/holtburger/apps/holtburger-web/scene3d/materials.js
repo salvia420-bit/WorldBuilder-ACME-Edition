@@ -863,6 +863,17 @@ export class MaterialCache {
     this.wireframeMode = !!opts.wireframeMode;
     /** @type {Map<number, THREE.MeshBasicMaterial>} */
     this.wireframeBuckets = new Map();
+    // 2026-05-22 — companion solid-fill materials for the wire buckets,
+    // populated lazily alongside the wireframe materials. Keyed by the
+    // same bucket index (0..WIRE_BUCKETS) so `addFillCompanions` can
+    // map a wire material back to its fill twin by either bucket-index
+    // (via `wireMatToFill`) or reference. polygonOffset on the fill
+    // pushes it slightly behind the wire so the wireframe lines stay
+    // crisp without z-fighting.
+    /** @type {Map<number, THREE.MeshBasicMaterial>} */
+    this.wireframeFillBuckets = new Map();
+    /** @type {Map<THREE.MeshBasicMaterial, THREE.MeshBasicMaterial>} */
+    this.wireMatToFill = new Map();
 
     // Phase 0.2 — shared detail-tile cache. `null` means "Detail flag
     // is decoded but the composite is not wired" (preserves Phase 7.2
@@ -953,6 +964,12 @@ export class MaterialCache {
    * sees at most 32 distinct materials per scene. HSL distribution
    * (hue across the wheel, fixed S=0.6, L=0.55) gives perceptually
    * distinct buckets without naming surface types explicitly.
+   *
+   * 2026-05-22 — also creates the companion solid-fill material for the
+   * same bucket so `addFillCompanions` can map wire-material → fill-
+   * material by reference. The fill colour uses the same hue with a
+   * darker, less-saturated tone (S=0.45, L=0.42) so the wireframe lines
+   * (brighter) read clearly against it.
    */
   _wireframeMaterialFor(did) {
     const WIRE_BUCKETS = 32;
@@ -968,9 +985,131 @@ export class MaterialCache {
       fog: true,
     });
     m.name = `wire-bucket-${bucket}`;
-    m.userData = { __cacheOwned: true };
+    m.userData = { __cacheOwned: true, wireBucket: bucket };
     this.wireframeBuckets.set(bucket, m);
+
+    // Companion solid-fill material — same hue, darker + less saturated
+    // so the wireframe overlay reads clearly. polygonOffset pushes the
+    // fill back in depth so the wire lines aren't z-fought. Buildings
+    // and statics have dense small triangles where polygonOffsetUnits=1
+    // can be smaller than the per-pixel depth precision — bumped to
+    // factor=4, units=4 for reliable wire visibility across all mesh
+    // densities. The terrain bake uses a separate dedicated path
+    // (`scene3d/terrain.js`) with the same offset values.
+    const fillColor = new THREE.Color().setHSL(hue, 0.45, 0.32);
+    const fillM = new THREE.MeshBasicMaterial({
+      color: fillColor,
+      side: THREE.DoubleSide,
+      fog: true,
+      polygonOffset: true,
+      polygonOffsetFactor: 4,
+      polygonOffsetUnits: 4,
+    });
+    fillM.name = `wire-fill-bucket-${bucket}`;
+    fillM.userData = { __cacheOwned: true, wireFillFor: bucket };
+    this.wireframeFillBuckets.set(bucket, fillM);
+    this.wireMatToFill.set(m, fillM);
     return m;
+  }
+
+  /**
+   * Map a wire-bucket material to its solid-fill twin. Returns null if
+   * `mat` isn't one of this cache's wire-bucket materials. Used by
+   * `addFillCompanions` and also tolerates per-material arrays (Mesh
+   * with geometry groups) by callers iterating their entries.
+   */
+  _fillMaterialForWire(mat) {
+    if (!mat) return null;
+    return this.wireMatToFill.get(mat) ?? null;
+  }
+
+  /**
+   * Wire-agent: walk `group` and for each Mesh / InstancedMesh whose
+   * material (or one of its material-array entries) is a wire-bucket
+   * material, attach a companion solid-fill mesh sharing the geometry.
+   * The fill mesh has identical pose; the wire-bucket material maps to
+   * its fill twin via `_fillMaterialForWire`. Sharing the BufferGeometry
+   * means no extra GPU memory; the only cost is the additional draw call
+   * per source mesh (matched 1:1 by mesh count).
+   *
+   * Idempotent — each mesh is tagged with `userData.__wireFillCompanion`
+   * after seeding so re-walks (e.g. after an LB-lazy bake adds new
+   * meshes) only add companions for new objects.
+   *
+   * Returns the number of companions added.
+   */
+  addFillCompanions(group) {
+    if (!this.wireframeMode || !group || typeof group.traverse !== "function") {
+      return 0;
+    }
+    /** @type {Array<{source: any, fillMat: any, isInstanced: boolean}>} */
+    const queue = [];
+    group.traverse((obj) => {
+      if (!obj || obj.userData?.__wireFillCompanion) return;
+      if (obj.userData?.__wireFillSource) return; // skip already-attached fills
+      if (!obj.isMesh && !obj.isInstancedMesh) return;
+      // Material may be a single material or an array (for grouped geometries).
+      const mat = obj.material;
+      if (!mat) return;
+      if (Array.isArray(mat)) {
+        // Multi-material mesh — map each entry to its fill twin. If any
+        // entry has no twin we still attach (using fallback wire material
+        // for that slot maps to null → use the source slot directly).
+        const fills = mat.map((m) => this._fillMaterialForWire(m));
+        if (fills.every((f) => f === null)) return;
+        const arr = mat.map((m, i) => fills[i] ?? m);
+        queue.push({ source: obj, fillMat: arr, isInstanced: !!obj.isInstancedMesh });
+      } else {
+        const fillMat = this._fillMaterialForWire(mat);
+        if (!fillMat) return;
+        queue.push({ source: obj, fillMat, isInstanced: !!obj.isInstancedMesh });
+      }
+    });
+    let added = 0;
+    for (const { source, fillMat, isInstanced } of queue) {
+      let fillMesh;
+      if (isInstanced) {
+        // InstancedMesh — copy count + instanceMatrix (and instanceColor
+        // if present). Geometry is shared.
+        fillMesh = new THREE.InstancedMesh(source.geometry, fillMat, source.count);
+        fillMesh.instanceMatrix.array.set(source.instanceMatrix.array);
+        fillMesh.instanceMatrix.needsUpdate = true;
+        if (source.instanceColor) {
+          fillMesh.instanceColor = source.instanceColor.clone();
+          fillMesh.instanceColor.needsUpdate = true;
+        }
+      } else {
+        fillMesh = new THREE.Mesh(source.geometry, fillMat);
+      }
+      fillMesh.name = (source.name || "wire") + "-fill";
+      // Copy pose. matrix is already the local matrix; matrixAutoUpdate
+      // controls whether it gets recomputed each frame from p/r/s.
+      fillMesh.position.copy(source.position);
+      fillMesh.quaternion.copy(source.quaternion);
+      fillMesh.scale.copy(source.scale);
+      fillMesh.matrixAutoUpdate = source.matrixAutoUpdate;
+      if (!source.matrixAutoUpdate) {
+        fillMesh.matrix.copy(source.matrix);
+        fillMesh.matrixWorldNeedsUpdate = true;
+      }
+      fillMesh.castShadow = false;
+      fillMesh.receiveShadow = false;
+      fillMesh.frustumCulled = source.frustumCulled;
+      // renderOrder: fill renders BEFORE the wire so the wire's depth
+      // values win at edges. Combined with polygonOffset on the fill,
+      // gives reliable wire-on-top across hardware (SwiftShader's
+      // depth precision in particular benefits).
+      fillMesh.renderOrder = (source.renderOrder ?? 0) - 1;
+      fillMesh.userData = { __wireFillSource: true };
+      source.userData = source.userData ?? {};
+      source.userData.__wireFillCompanion = true;
+      const parent = source.parent;
+      if (parent) {
+        parent.add(fillMesh);
+        added += 1;
+      }
+    }
+    return added;
   }
 
   /**

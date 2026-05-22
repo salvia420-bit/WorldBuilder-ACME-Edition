@@ -983,6 +983,32 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     buildingsSummary = bResult;
     staticsSummary = sResult;
     envCellsLoaded = eResult;
+
+    // 2026-05-22 — wire-agent: walk the just-baked buildings + statics +
+    // cells groups and attach solid-fill companion meshes for every
+    // wire-bucket-materialed Mesh/InstancedMesh. The companions share
+    // geometry with their wire source so the only GPU cost is one extra
+    // draw call per source mesh. Result: trees, doors, signs, building
+    // walls, EnvCell interiors all render with the per-bucket HSL fill
+    // colour visible BETWEEN the wire lines, instead of empty
+    // transparency. The lazy LB-entry hooks
+    // (`liveScene3d.loadBuildingsForLandblock` etc.) also call this on
+    // their respective groups so newly-loaded LBs pick up companions.
+    if (wireframeMode && scene3dForBuilders.materialCache) {
+      const mc = scene3dForBuilders.materialCache;
+      let total = 0;
+      if (scene3dForBuilders.buildingsGroup) {
+        total += mc.addFillCompanions(scene3dForBuilders.buildingsGroup);
+      }
+      if (scene3dForBuilders.staticsGroup) {
+        total += mc.addFillCompanions(scene3dForBuilders.staticsGroup);
+      }
+      if (scene3dForBuilders.cellsGroup) {
+        total += mc.addFillCompanions(scene3dForBuilders.cellsGroup);
+      }
+      // eslint-disable-next-line no-console
+      console.log(`[wire-fill] attached ${total} solid-fill companion meshes`);
+    }
   }
 
   // Phase 7.6.1 (3D port follow-on #1) — per-SetupModel point/spot
