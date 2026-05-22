@@ -305,6 +305,8 @@ public class JsonCommandProcessor {
             // Wave-1 UI-port commands — see CommandEngine.UiSpriteExtract.cs
             ["chorizite-dump-layout-tree"]      = CmdChoriziteDumpLayoutTree,
             ["chorizite-extract-ui-textures"]   = CmdChoriziteExtractUiTextures,
+            // PR-V Skills view backing dump — see CommandEngine.SkillTableDump.cs
+            ["chorizite-dump-skill-table"]      = CmdChoriziteDumpSkillTable,
             // Wave-1 wire-conformance diagnostic commands — see CommandEngine.WireConformance.cs
             ["chorizite-wire-pack-message"]   = CmdChoriziteWirePackMessage,
             ["chorizite-wire-unpack-message"] = CmdChoriziteWireUnpackMessage,
@@ -573,6 +575,42 @@ public class JsonCommandProcessor {
                 pngPath = rec.PngPath,
                 failureReason = rec.FailureReason,
             }),
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // PR-V Skills view dispatch — see CommandEngine.SkillTableDump.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdChoriziteDumpSkillTable(System.Text.Json.Nodes.JsonNode node) {
+        // skillTableId accepts hex string ("0x0E000004"), decimal string,
+        // or an integer JSON value. Default = 0xE000004u (the only retail
+        // SkillTable DID per dats.xml — first=0xE000004 last=0xE000004).
+        uint skillTableId = 0x0E000004u;
+        var idNode = node["skillTableId"];
+        if (idNode != null && idNode.GetValueKind() != System.Text.Json.JsonValueKind.Null) {
+            if (idNode.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+                var s = idNode.GetValue<string>().Trim();
+                skillTableId = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                    ? Convert.ToUInt32(s.Substring(2), 16)
+                    : Convert.ToUInt32(s);
+            } else {
+                skillTableId = idNode.GetValue<uint>();
+            }
+        }
+        string? outPath = node["outPath"]?.GetValue<string>();
+        string? datPath = node["datPath"]?.GetValue<string>();
+
+        var r = _engine.ChoriziteDumpSkillTable(skillTableId, outPath, datPath);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-dump-skill-table",
+            skillTableIdHex = r.SkillTableIdHex,
+            datPath = r.DatPath,
+            outPath = string.IsNullOrEmpty(r.OutPath) ? null : r.OutPath,
+            skillCount = r.SkillCount,
+            skills = r.Skills,
+            summary = r.Summary,
         });
     }
 
