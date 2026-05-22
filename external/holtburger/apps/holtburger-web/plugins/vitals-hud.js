@@ -33,7 +33,7 @@ function ensureStyles() {
       z-index: 50;
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 1px;
       padding: 0;
       background: transparent;
       border: none;
@@ -48,34 +48,23 @@ function ensureStyles() {
       gap: 0;
       font-variant-numeric: tabular-nums;
     }
-    #${OVERLAY_ID} .hud-vital-label {
-      font-weight: 600;
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--hb-text-cream);
-      width: 24px;
-      text-align: right;
-      padding-right: 6px;
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.8);
-    }
+    /* HP/ST/MN labels removed per direction 2026-05-22 — retail doesn't
+       label its vials. The sprite already carries the brass rim + beveled
+       liquid-in-vial gradient; we don't add any extra border that would
+       compress the sprite vertically or hide the bevel. */
+    #${OVERLAY_ID} .hud-vital-label { display: none; }
     #${OVERLAY_ID} .hud-vital-bar {
       position: relative;
       width: 250px;
-      height: 22px;
-      background: rgba(0, 0, 0, 0.85);
+      height: 16px;
+      background: transparent;
       overflow: hidden;
-      border: 6px solid transparent;
-      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+      border: none;
     }
     #${OVERLAY_ID} .hud-vital-fill {
       position: absolute;
       top: 0; left: 0; bottom: 0;
       transition: width 120ms linear;
-      box-shadow:
-        inset 0 1px 2px rgba(255, 255, 255, 0.35),
-        inset 0 -2px 3px rgba(0, 0, 0, 0.45);
     }
     /* Real retail DAT sprites — extracted 2026-05-22 from layout
        0x2100006C (gmFloatyVitalsUI) via WB.Terminal. 100x16 RGBA with
@@ -91,14 +80,14 @@ function ensureStyles() {
     }
     #${OVERLAY_ID} .hud-vital-nums {
       position: absolute;
-      right: 8px;
+      left: 50%;
       top: 50%;
-      transform: translateY(-50%);
+      transform: translate(-50%, -50%);
       min-width: 0;
-      font-size: 11px;
+      font-size: 10px;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream-bright);
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.8);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.85);
       pointer-events: none;
     }
   `;
