@@ -1,0 +1,331 @@
+{
+  "tourStartedAt": "2026-05-22T00:24:22.251Z",
+  "totalMs": 169317,
+  "results": [
+    {
+      "lbHex": "A7B4",
+      "label": "W2",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xA7B4_W2_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 28,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 1921,
+        "textures": 36,
+        "geometries": 171
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 28
+        }
+      }
+    },
+    {
+      "lbHex": "ABB4",
+      "label": "E2",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xABB4_E2_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 28,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 4401,
+        "textures": 64,
+        "geometries": 309
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 28
+        }
+      }
+    },
+    {
+      "lbHex": "A9B2",
+      "label": "N2",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xA9B2_N2_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 94,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 7158,
+        "textures": 149,
+        "geometries": 647
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 200.01
+        }
+      }
+    },
+    {
+      "lbHex": "A9B6",
+      "label": "S2",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xA9B6_S2_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 28,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 7590,
+        "textures": 175,
+        "geometries": 703
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 28
+        }
+      }
+    },
+    {
+      "lbHex": "A8B3",
+      "label": "NW",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xA8B3_NW_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 58,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 7726,
+        "textures": 176,
+        "geometries": 730
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 58
+        }
+      }
+    },
+    {
+      "lbHex": "A9B3",
+      "label": "N",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xA9B3_N_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 106,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 8616,
+        "textures": 176,
+        "geometries": 730
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 106
+        }
+      }
+    },
+    {
+      "lbHex": "AAB3",
+      "label": "NE",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xAAB3_NE_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 112,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 8962,
+        "textures": 176,
+        "geometries": 730
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 112
+        }
+      }
+    },
+    {
+      "lbHex": "A8B4",
+      "label": "W",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xA8B4_W_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 48,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 9100,
+        "textures": 177,
+        "geometries": 747
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 48
+        }
+      }
+    },
+    {
+      "lbHex": "A9B4",
+      "label": "C-Holtburg",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xA9B4_C-Holtburg_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 80,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 9151,
+        "textures": 179,
+        "geometries": 747
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 80
+        }
+      }
+    },
+    {
+      "lbHex": "AAB4",
+      "label": "E",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xAAB4_E_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 54,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 9214,
+        "textures": 179,
+        "geometries": 747
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 54
+        }
+      }
+    },
+    {
+      "lbHex": "A8B5",
+      "label": "SW",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xA8B5_SW_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 28,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 9305,
+        "textures": 186,
+        "geometries": 752
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 28
+        }
+      }
+    },
+    {
+      "lbHex": "A9B5",
+      "label": "S",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xA9B5_S_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 28,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 9395,
+        "textures": 186,
+        "geometries": 752
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 28
+        }
+      }
+    },
+    {
+      "lbHex": "AAB5",
+      "label": "SE",
+      "file": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/docs/wiretree/lb_0xAAB5_SE_initial.png",
+      "pose": {
+        "x": 96,
+        "y": 96,
+        "z": 28,
+        "heading": 0
+      },
+      "sceneStats": {
+        "meshes": 9469,
+        "textures": 191,
+        "geometries": 756
+      },
+      "align": {
+        "ok": true,
+        "heading": 0,
+        "pose": {
+          "x": 96,
+          "y": 96,
+          "z": 28
+        }
+      }
+    }
+  ]
+}

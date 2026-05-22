@@ -1,0 +1,1312 @@
+[
+  {
+    "t": 671,
+    "type": "log",
+    "text": "[Phase 5.0] service-worker registered"
+  },
+  {
+    "t": 796,
+    "type": "log",
+    "text": "[Phase 5.0/5.2] manifest-mode source initialized from ../../dist/manifest.json"
+  },
+  {
+    "t": 799,
+    "type": "log",
+    "text": "[boot-state] form-shown"
+  },
+  {
+    "t": 817,
+    "type": "log",
+    "text": "[boot-state] connecting: 127.0.0.1:9000 as tailnet1"
+  },
+  {
+    "t": 976,
+    "type": "log",
+    "text": "[boot] WorldBootstrap loaded: skill_base_hash=48 spells=6266 motion_tables=436"
+  },
+  {
+    "t": 976,
+    "type": "log",
+    "text": "[step 3.6] world bootstrap loaded"
+  },
+  {
+    "t": 977,
+    "type": "log",
+    "text": "[boot] WorldBootstrap eagerly prefetched"
+  },
+  {
+    "t": 1143,
+    "type": "log",
+    "text": "[boot-state] char-list-ready: 2 characters"
+  },
+  {
+    "t": 1194,
+    "type": "info",
+    "text": "[wom] loaded: 31 classes, 66 enums"
+  },
+  {
+    "t": 1194,
+    "type": "log",
+    "text": "[boot-state] spawning: +Tester2"
+  },
+  {
+    "t": 1205,
+    "type": "log",
+    "text": "[step4-follow-on] WorldState constructed eagerly on SelectCharacter (guid=0x5000011E)"
+  },
+  {
+    "t": 1205,
+    "type": "log",
+    "text": "[workstream-A] eagerly emitted kind=1 PlayerSpawned on SelectCharacter (guid=0x5000011E)"
+  },
+  {
+    "t": 1364,
+    "type": "log",
+    "text": "[step 3.7] PlayerDescription arrived without pos field — entity remains unseeded; waiting for UpdatePosition"
+  },
+  {
+    "t": 1365,
+    "type": "log",
+    "text": "[step 3.7] PlayerDescription handled; fallback caps cleared (real_caps_ok=true)"
+  },
+  {
+    "t": 1384,
+    "type": "log",
+    "text": "[step 3.6] WorldState already constructed (eager path); PlayerCreate guid=0x5000011E confirms"
+  },
+  {
+    "t": 1384,
+    "type": "log",
+    "text": "[step 3.7] WorldState player entity seeded via ObjectCreate at landblock=0xA9B4001B (88.3, 57.6, 88.7)"
+  },
+  {
+    "t": 1384,
+    "type": "log",
+    "text": "[step 3.7] AutonomousPosition heartbeat armed"
+  },
+  {
+    "t": 1384,
+    "type": "log",
+    "text": "[acad-diag init] spawn cell=0xA9B4001B aabb=NONE (cell not yet baked) triangles=0"
+  },
+  {
+    "t": 1416,
+    "type": "log",
+    "text": "[workstream-A] emitted KIND_SPAWN for local player on ObjectCreate (guid=0x5000011E, pose lb=0xA9B4001B (88.3, 57.6, 88.7))"
+  },
+  {
+    "t": 1422,
+    "type": "log",
+    "text": "[boot-state] in-world: guid=0x5000011E"
+  },
+  {
+    "t": 1422,
+    "type": "log",
+    "text": "[step 3] setMovementInput(0,0,0,true)"
+  },
+  {
+    "t": 1422,
+    "type": "log",
+    "text": "[step 3.6 watchdog] caps_ok regressed to false at tick; re-installed fallback override to keep heartbeat advancing"
+  },
+  {
+    "t": 1423,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa8b30000"
+  },
+  {
+    "t": 1423,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA8B30000 (1 cached total)"
+  },
+  {
+    "t": 1425,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA9B30000 (2 cached total)"
+  },
+  {
+    "t": 1426,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xAAB30000 (3 cached total)"
+  },
+  {
+    "t": 1426,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA8B40000 (4 cached total)"
+  },
+  {
+    "t": 1426,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA9B40000 (5 cached total)"
+  },
+  {
+    "t": 1426,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xAAB40000 (6 cached total)"
+  },
+  {
+    "t": 1426,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA8B50000 (7 cached total)"
+  },
+  {
+    "t": 1426,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA9B50000 (8 cached total)"
+  },
+  {
+    "t": 1426,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xAAB50000 (9 cached total)"
+  },
+  {
+    "t": 1430,
+    "type": "log",
+    "text": "[phase6.B] queued 1 building AABBs for landblock 0xa9b30000"
+  },
+  {
+    "t": 1437,
+    "type": "log",
+    "text": "[phase6.B] queued 2 building AABBs for landblock 0xaab30000"
+  },
+  {
+    "t": 1457,
+    "type": "log",
+    "text": "[phase6.B] drained 3 pending building AABBs into scene (total now 3 across all cells)"
+  },
+  {
+    "t": 1457,
+    "type": "log",
+    "text": "[phase6.E] drained 3 pending building origins"
+  },
+  {
+    "t": 1457,
+    "type": "log",
+    "text": "[wsC] drained 690 building physics triangles into scene (2 landblocks, 690 total tris)"
+  },
+  {
+    "t": 2172,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa8b40000"
+  },
+  {
+    "t": 2313,
+    "type": "log",
+    "text": "[phase6.B] queued 16 building AABBs for landblock 0xa9b40000"
+  },
+  {
+    "t": 2313,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xaab40000"
+  },
+  {
+    "t": 2313,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa8b50000"
+  },
+  {
+    "t": 2314,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa9b50000"
+  },
+  {
+    "t": 2314,
+    "type": "log",
+    "text": "[phase6.B] queued 1 building AABBs for landblock 0xaab50000"
+  },
+  {
+    "t": 2314,
+    "type": "log",
+    "text": "[phase6.B] drained 17 pending building AABBs into scene (total now 20 across all cells)"
+  },
+  {
+    "t": 2314,
+    "type": "log",
+    "text": "[phase6.E] drained 13 pending building origins"
+  },
+  {
+    "t": 2316,
+    "type": "log",
+    "text": "[wsC] drained 1644 building physics triangles into scene (4 landblocks, 2334 total tris)"
+  },
+  {
+    "t": 2357,
+    "type": "log",
+    "text": "[Sky-B] populateSkyDescFromRegion 0x13000000 → 20 DayGroups"
+  },
+  {
+    "t": 2358,
+    "type": "log",
+    "text": "[Sky-B] populateSkyDescFromRegion → 20 DayGroups"
+  },
+  {
+    "t": 2562,
+    "type": "log",
+    "text": "[phase6.D] drained 584 portal edges + 246 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 2563,
+    "type": "log",
+    "text": "[phase6.G] drained 3906 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 2604,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 2604,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 2612,
+    "type": "log",
+    "text": "[boot] scene3d module graph eagerly imported"
+  },
+  {
+    "t": 2614,
+    "type": "log",
+    "text": "[phase-x.1] quality preset=low source=url"
+  },
+  {
+    "t": 2614,
+    "type": "log",
+    "text": "[wire-agent] ?wireframe=1 — skipping atmosphere/clouds/skydome/CSM, wireframe materials"
+  },
+  {
+    "t": 2635,
+    "type": "log",
+    "text": "[boot] preInit3D handle staged on window.__preInit3DHandle"
+  },
+  {
+    "t": 2721,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 2722,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 2759,
+    "type": "warning",
+    "text": "[.WebGL-0x93400150200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+  },
+  {
+    "t": 2800,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 2801,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 2846,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 2847,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 2890,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 2890,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 2973,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 2974,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3044,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3044,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3098,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3098,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3154,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3155,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3217,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3218,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3266,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3266,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3313,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3313,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3368,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3369,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3416,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3417,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3463,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3463,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3508,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3509,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3553,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3553,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3597,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3597,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3641,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3641,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3686,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3686,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3733,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3733,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3778,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3778,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3823,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3823,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3871,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3872,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 3957,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 3957,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 4065,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 4066,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 4128,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 4129,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 4470,
+    "type": "log",
+    "text": "[phase7.3] envCells: dungeon eager-load deferred to handlePositionUpdate (opt in via ?eagerDungeons=on for capture scripts)"
+  },
+  {
+    "t": 4561,
+    "type": "log",
+    "text": "[phase7.2] buildings: {buildingCount: 16, uniqueModelCount: 14, partCount: 16, surfaceMeshCount: 96, surfaceCount: 41}"
+  },
+  {
+    "t": 4607,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 4608,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 4694,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 4695,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 4751,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 4751,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 4798,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 4798,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 4839,
+    "type": "log",
+    "text": "[phase6.D] drained 292 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 4840,
+    "type": "log",
+    "text": "[phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 4847,
+    "type": "log",
+    "text": "[phase7.2] statics: {objectCount: 222, modelCount: 66, surfaceCount: 85, skippedZeroTri: 1, skippedNoMesh: 1}"
+  },
+  {
+    "t": 4847,
+    "type": "log",
+    "text": "[phase7.6.1] fetchSetupModelLights wasm export not in wasmExports — skipping per-SetupModel lights"
+  },
+  {
+    "t": 4847,
+    "type": "log",
+    "text": "[scene3d] nameplate overlay attached: nameplate-layer-3d"
+  },
+  {
+    "t": 4848,
+    "type": "log",
+    "text": "[sky-c] SkyLightingController attached as SkyState cache."
+  },
+  {
+    "t": 4848,
+    "type": "log",
+    "text": "[wire-agent] skipping SkyDome construction"
+  },
+  {
+    "t": 4849,
+    "type": "log",
+    "text": "[workstream-E] replaying 162 pre-init3D entity events (kinds=0:46,1:111,3:4,5:1, localGuid=0x5000011e, local=48, other=114) through 3D EntityManager"
+  },
+  {
+    "t": 4852,
+    "type": "log",
+    "text": "[boot-state] ready: wire-agent scene ready (atmosphere/composer/clouds/skydome/CSM skipped)"
+  },
+  {
+    "t": 4978,
+    "type": "log",
+    "text": "[scene3d.spawns] mode=auto, sessionHandle=present → synthetic injection SKIPPED (live session — wire feeds spawns; use ?spawns=force to override)"
+  },
+  {
+    "t": 5085,
+    "type": "log",
+    "text": "[phase6.D] drained 584 portal edges + 246 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)"
+  },
+  {
+    "t": 5085,
+    "type": "log",
+    "text": "[phase6.G] drained 3906 cell physics triangles into scene (123 cells with physics)"
+  },
+  {
+    "t": 5543,
+    "type": "warning",
+    "text": "[.WebGL-0x93400150200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+  },
+  {
+    "t": 5718,
+    "type": "warning",
+    "text": "[.WebGL-0x93400150200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+  },
+  {
+    "t": 6417,
+    "type": "warning",
+    "text": "[.WebGL-0x93400150200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+  },
+  {
+    "t": 7601,
+    "type": "warning",
+    "text": "THREE.WebGLRenderer: KHR_parallel_shader_compile extension not supported."
+  },
+  {
+    "t": 7874,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=1); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 7875,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 1 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 7884,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa6b30000"
+  },
+  {
+    "t": 8235,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA6B30000 (10 cached total)"
+  },
+  {
+    "t": 8235,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA7B30000 (11 cached total)"
+  },
+  {
+    "t": 8235,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA6B40000 (12 cached total)"
+  },
+  {
+    "t": 8235,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA7B40000 (13 cached total)"
+  },
+  {
+    "t": 8235,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA6B50000 (14 cached total)"
+  },
+  {
+    "t": 8236,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA7B50000 (15 cached total)"
+  },
+  {
+    "t": 15313,
+    "type": "log",
+    "text": "[phase6.B] queued 1 building AABBs for landblock 0xa7b30000"
+  },
+  {
+    "t": 15389,
+    "type": "log",
+    "text": "[phase6.B] drained 1 pending building AABBs into scene (total now 21 across all cells)"
+  },
+  {
+    "t": 15390,
+    "type": "log",
+    "text": "[phase6.E] drained 1 pending building origins"
+  },
+  {
+    "t": 15390,
+    "type": "log",
+    "text": "[wsC] drained 133 building physics triangles into scene (5 landblocks, 2467 total tris)"
+  },
+  {
+    "t": 16963,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=2); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 16964,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 2 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 16975,
+    "type": "debug",
+    "text": "[task-F/gms] entity 0x5000011e not in registry — skip"
+  },
+  {
+    "t": 16998,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0x85010000"
+  },
+  {
+    "t": 16999,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0x86010000"
+  },
+  {
+    "t": 17001,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0x87010000"
+  },
+  {
+    "t": 17243,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa6b40000"
+  },
+  {
+    "t": 17245,
+    "type": "log",
+    "text": "[phase6.B] queued 2 building AABBs for landblock 0xa7b40000"
+  },
+  {
+    "t": 17245,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa6b50000"
+  },
+  {
+    "t": 17245,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa7b50000"
+  },
+  {
+    "t": 20530,
+    "type": "log",
+    "text": "[phase6.B] drained 2 pending building AABBs into scene (total now 23 across all cells)"
+  },
+  {
+    "t": 20530,
+    "type": "log",
+    "text": "[phase6.E] drained 2 pending building origins"
+  },
+  {
+    "t": 20533,
+    "type": "log",
+    "text": "[phase6.D] drained 26 portal edges + 14 cell AABBs into scene (graph now 130 cells, 130 cell AABBs)"
+  },
+  {
+    "t": 20534,
+    "type": "log",
+    "text": "[phase6.G] drained 214 cell physics triangles into scene (130 cells with physics)"
+  },
+  {
+    "t": 20534,
+    "type": "log",
+    "text": "[wsC] drained 84 building physics triangles into scene (6 landblocks, 2551 total tris)"
+  },
+  {
+    "t": 22596,
+    "type": "log",
+    "text": "[terrain] populated landblock 0x85010000 (16 cached total)"
+  },
+  {
+    "t": 22597,
+    "type": "log",
+    "text": "[terrain] populated landblock 0x86010000 (17 cached total)"
+  },
+  {
+    "t": 22597,
+    "type": "log",
+    "text": "[terrain] populated landblock 0x87010000 (18 cached total)"
+  },
+  {
+    "t": 22597,
+    "type": "log",
+    "text": "[terrain] populated landblock 0x85020000 (19 cached total)"
+  },
+  {
+    "t": 22597,
+    "type": "log",
+    "text": "[terrain] populated landblock 0x86020000 (20 cached total)"
+  },
+  {
+    "t": 22597,
+    "type": "log",
+    "text": "[terrain] populated landblock 0x87020000 (21 cached total)"
+  },
+  {
+    "t": 22597,
+    "type": "log",
+    "text": "[terrain] populated landblock 0x85030000 (22 cached total)"
+  },
+  {
+    "t": 22597,
+    "type": "log",
+    "text": "[terrain] populated landblock 0x86030000 (23 cached total)"
+  },
+  {
+    "t": 22597,
+    "type": "log",
+    "text": "[terrain] populated landblock 0x87030000 (24 cached total)"
+  },
+  {
+    "t": 23565,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0x85020000"
+  },
+  {
+    "t": 23567,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0x86020000"
+  },
+  {
+    "t": 24883,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0x87020000"
+  },
+  {
+    "t": 25260,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=3); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 25260,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 3 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 25556,
+    "type": "log",
+    "text": "[phase6.D] drained 3240 portal edges + 1136 cell AABBs into scene (graph now 672 cells, 698 cell AABBs)"
+  },
+  {
+    "t": 25556,
+    "type": "log",
+    "text": "[phase6.G] drained 15320 cell physics triangles into scene (697 cells with physics)"
+  },
+  {
+    "t": 25574,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0x85030000"
+  },
+  {
+    "t": 25763,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xABB30000 (25 cached total)"
+  },
+  {
+    "t": 25764,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xACB30000 (26 cached total)"
+  },
+  {
+    "t": 25770,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xABB40000 (27 cached total)"
+  },
+  {
+    "t": 25771,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xACB40000 (28 cached total)"
+  },
+  {
+    "t": 25771,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xABB50000 (29 cached total)"
+  },
+  {
+    "t": 25771,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xACB50000 (30 cached total)"
+  },
+  {
+    "t": 29908,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0x86030000"
+  },
+  {
+    "t": 34330,
+    "type": "log",
+    "text": "[phase6.B] queued 1 building AABBs for landblock 0xabb30000"
+  },
+  {
+    "t": 34330,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xacb30000"
+  },
+  {
+    "t": 34330,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xabb40000"
+  },
+  {
+    "t": 34332,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xacb40000"
+  },
+  {
+    "t": 34388,
+    "type": "log",
+    "text": "[phase6.B] drained 1 pending building AABBs into scene (total now 24 across all cells)"
+  },
+  {
+    "t": 34388,
+    "type": "log",
+    "text": "[phase6.E] drained 1 pending building origins"
+  },
+  {
+    "t": 34388,
+    "type": "log",
+    "text": "[wsC] drained 143 building physics triangles into scene (7 landblocks, 2694 total tris)"
+  },
+  {
+    "t": 38542,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0x87030000"
+  },
+  {
+    "t": 40552,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xabb50000"
+  },
+  {
+    "t": 54873,
+    "type": "log",
+    "text": "[phase6.B] queued 2 building AABBs for landblock 0xacb50000"
+  },
+  {
+    "t": 54898,
+    "type": "log",
+    "text": "[phase6.B] drained 2 pending building AABBs into scene (total now 26 across all cells)"
+  },
+  {
+    "t": 54898,
+    "type": "log",
+    "text": "[phase6.E] drained 1 pending building origins"
+  },
+  {
+    "t": 54898,
+    "type": "log",
+    "text": "[wsC] drained 56 building physics triangles into scene (8 landblocks, 2750 total tris)"
+  },
+  {
+    "t": 59056,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=4); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 59057,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 4 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 61049,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA8B10000 (31 cached total)"
+  },
+  {
+    "t": 61050,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA9B10000 (32 cached total)"
+  },
+  {
+    "t": 61051,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xAAB10000 (33 cached total)"
+  },
+  {
+    "t": 61051,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA8B20000 (34 cached total)"
+  },
+  {
+    "t": 61052,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA9B20000 (35 cached total)"
+  },
+  {
+    "t": 61052,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xAAB20000 (36 cached total)"
+  },
+  {
+    "t": 61054,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa8b10000"
+  },
+  {
+    "t": 68382,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=5); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 68384,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 5 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 69205,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa9b10000"
+  },
+  {
+    "t": 69259,
+    "type": "log",
+    "text": "[phase6.D] drained 130 portal edges + 54 cell AABBs into scene (graph now 699 cells, 725 cell AABBs)"
+  },
+  {
+    "t": 69259,
+    "type": "log",
+    "text": "[phase6.G] drained 752 cell physics triangles into scene (724 cells with physics)"
+  },
+  {
+    "t": 69384,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xaab10000"
+  },
+  {
+    "t": 69529,
+    "type": "log",
+    "text": "[phase6.B] queued 1 building AABBs for landblock 0xa8b20000"
+  },
+  {
+    "t": 69530,
+    "type": "log",
+    "text": "[phase6.B] queued 2 building AABBs for landblock 0xa9b20000"
+  },
+  {
+    "t": 69530,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xaab20000"
+  },
+  {
+    "t": 69533,
+    "type": "log",
+    "text": "[phase6.B] drained 3 pending building AABBs into scene (total now 29 across all cells)"
+  },
+  {
+    "t": 69534,
+    "type": "log",
+    "text": "[phase6.E] drained 3 pending building origins"
+  },
+  {
+    "t": 69534,
+    "type": "log",
+    "text": "[wsC] drained 234 building physics triangles into scene (10 landblocks, 2984 total tris)"
+  },
+  {
+    "t": 69663,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=6); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 69663,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 6 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 69787,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa8b60000"
+  },
+  {
+    "t": 69787,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa9b60000"
+  },
+  {
+    "t": 69787,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xaab60000"
+  },
+  {
+    "t": 69787,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa8b70000"
+  },
+  {
+    "t": 69787,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xa9b70000"
+  },
+  {
+    "t": 69787,
+    "type": "log",
+    "text": "[phase6.B] queued 0 building AABBs for landblock 0xaab70000"
+  },
+  {
+    "t": 70114,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA8B60000 (37 cached total)"
+  },
+  {
+    "t": 70116,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA9B60000 (38 cached total)"
+  },
+  {
+    "t": 70116,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xAAB60000 (39 cached total)"
+  },
+  {
+    "t": 70118,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA8B70000 (40 cached total)"
+  },
+  {
+    "t": 70118,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xA9B70000 (41 cached total)"
+  },
+  {
+    "t": 70118,
+    "type": "log",
+    "text": "[terrain] populated landblock 0xAAB70000 (42 cached total)"
+  },
+  {
+    "t": 91290,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=7); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 91291,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 7 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 97323,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=8); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 97324,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 8 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 98571,
+    "type": "log",
+    "text": "[phase6.D] drained 84 portal edges + 34 cell AABBs into scene (graph now 716 cells, 742 cell AABBs)"
+  },
+  {
+    "t": 98571,
+    "type": "log",
+    "text": "[phase6.G] drained 464 cell physics triangles into scene (741 cells with physics)"
+  },
+  {
+    "t": 107387,
+    "type": "log",
+    "text": "[motion-link] 0x80001b24 3→7 stance=3d (link clip played, 1 hooks)"
+  },
+  {
+    "t": 109643,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=9); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 109643,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 9 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 114381,
+    "type": "log",
+    "text": "[phase6.D] drained 54 portal edges + 22 cell AABBs into scene (graph now 727 cells, 753 cell AABBs)"
+  },
+  {
+    "t": 114382,
+    "type": "log",
+    "text": "[phase6.G] drained 390 cell physics triangles into scene (752 cells with physics)"
+  },
+  {
+    "t": 120547,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=10); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 120548,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 10 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 127849,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=11); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 127850,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 11 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 137156,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=12); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 137157,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 12 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 146275,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=13); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 146276,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 13 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 153610,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=14); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 153611,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 14 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 156439,
+    "type": "log",
+    "text": "[entities/H2] chain walker entered for guid=0x80001cc4 pes=0x57"
+  },
+  {
+    "t": 156440,
+    "type": "warning",
+    "text": "[entities/H2] fetchPhysicsScript(0x57) failed: fetchPhysicsScript 0x00000057: fetch failed: Other(\"ManifestResourceSource(v2): record not prefetched: eor/portal:0x00000057; call prefetch() first\")"
+  },
+  {
+    "t": 161658,
+    "type": "log",
+    "text": "[step 3.6] PlayerTeleport received (teleport_seq=15); sending LoginComplete to clear Teleporting"
+  },
+  {
+    "t": 161659,
+    "type": "log",
+    "text": "[workstream-G] PlayerTeleport: advanced teleport_sequence → 15 + suspended runtime bodies; runtime pose will snap on next UpdatePosition"
+  },
+  {
+    "t": 164194,
+    "type": "log",
+    "text": "[phase6.D] drained 4 portal edges + 2 cell AABBs into scene (graph now 728 cells, 754 cell AABBs)"
+  },
+  {
+    "t": 164195,
+    "type": "log",
+    "text": "[phase6.G] drained 44 cell physics triangles into scene (753 cells with physics)"
+  }
+]

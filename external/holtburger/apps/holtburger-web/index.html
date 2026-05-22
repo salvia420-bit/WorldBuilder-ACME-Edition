@@ -774,7 +774,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=character-error";
+      } from "./pkg/holtburger_web.js?v=wire-relight";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -975,7 +975,7 @@
             if (wantRenderer3d) {
               const eagerImport = () => {
                 Promise.all([
-                  import("./scene3d/index.js?v=ready-state"),
+                  import("./scene3d/index.js?v=wire-tour"),
                   import("./scene3d/picking.js"),
                   // 2026-05-21 Phase E follow-on — warm the takram CDN
                   // graph (@takram/three-atmosphere, three-geospatial,
@@ -5556,7 +5556,7 @@ void main() {
           new URLSearchParams(window.location.search).get("renderer") === "3d";
         if (useRenderer3d) {
           renderStatus.textContent = "Initializing 3D renderer (?renderer=3d)…";
-          const { init3D } = await import("./scene3d/index.js?v=ready-state");
+          const { init3D } = await import("./scene3d/index.js?v=wire-tour");
           // sessionHandle exposed via window.__sessionHandle by the
           // login-flow handler (see line ~5251). Pass it through so
           // future phases (cell visibility, MovementSystem) can read

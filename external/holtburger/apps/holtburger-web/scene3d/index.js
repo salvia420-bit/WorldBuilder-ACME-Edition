@@ -2550,6 +2550,34 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // it into the 3D path.
   installSharedDrainHook(liveScene3d);
 
+  // 2026-05-21 wire-agent — camera alignment helper. Driver scripts
+  // touring landblocks via @teleloc need the camera to point in the
+  // player's facing direction so the screenshot shows what's IN FRONT
+  // of the character, not the side. cameraSwitcher's `followYaw`
+  // doesn't auto-track player heading (the mouse drag does normally);
+  // this helper snaps yaw to current heading + resets pitch/distance
+  // to defaults. One-shot — call before each screenshot.
+  // eslint-disable-next-line no-undef
+  if (typeof window !== "undefined") {
+    // eslint-disable-next-line no-undef
+    window.__wireCameraAlignBehindPlayer = function () {
+      const cs = liveScene3d?.cameraSwitcher;
+      // eslint-disable-next-line no-undef
+      const handle = window.__sessionHandle;
+      if (!cs || !handle || typeof handle.getLocalPlayerPose !== "function") {
+        return { ok: false, reason: "no-camera-or-session" };
+      }
+      const p = handle.getLocalPlayerPose();
+      if (!p || typeof p.heading !== "number") {
+        return { ok: false, reason: "no-heading-yet" };
+      }
+      cs.followYaw = p.heading;
+      cs.followPitch = 0.3;
+      cs.followDistance = 6.0;
+      return { ok: true, heading: +p.heading.toFixed(3), pose: { x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2) } };
+    };
+  }
+
   // 2026-05-21 wire-agent — fire the terminal `ready` boot-state
   // signal. The normal path fires it inside the atmosphereRuntime
   // .whenReady() callback (~L2111), but that whole atmosphere/sky/
