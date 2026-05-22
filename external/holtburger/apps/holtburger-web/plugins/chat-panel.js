@@ -185,28 +185,71 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-chat-input:focus {
       border-color: var(--hb-border-brass);
     }
-    /* Chrome handles — lock + move, same pattern as radar. */
-    #${OVERLAY_ID} .hb-chat-lock,
-    #${OVERLAY_ID} .hb-chat-move {
-      position: absolute;
-      top: -3px;
-      width: 16px;
-      height: 16px;
-      background-repeat: no-repeat;
-      background-size: contain;
-      background-position: center;
-      pointer-events: auto;
-      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.8));
-    }
-    #${OVERLAY_ID} .hb-chat-lock {
-      left: -3px;
-      background-image: url("./data/ui-sprites/0x060074B7.png");
+    /* Channel selector — click the "Local" tag (now a button) to open
+       an imperative popup menu with all the outgoing chat channels.
+       Selecting one updates the button label and prefixes outgoing
+       text with the channel's slash-command on send. */
+    #${OVERLAY_ID} .hb-chat-channel-btn {
+      padding: 2px 8px 2px 6px;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-gold);
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid var(--hb-border-brass);
       cursor: pointer;
+      user-select: none;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      position: relative;
+      pointer-events: auto;
     }
-    #${OVERLAY_ID} .hb-chat-move {
-      right: -3px;
-      background-image: url("./data/ui-sprites/0x06006119.png");
-      cursor: move;
+    #${OVERLAY_ID} .hb-chat-channel-btn::after {
+      content: "▾";
+      margin-left: 4px;
+      font-size: 8px;
+      color: var(--hb-text-cream);
+    }
+    #${OVERLAY_ID} .hb-chat-channel-btn:hover {
+      background: var(--hb-overlay-active);
+    }
+    #${OVERLAY_ID} .hb-chat-channel-menu {
+      position: absolute;
+      bottom: calc(100% + 2px);
+      left: 0;
+      min-width: 140px;
+      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
+      border: 6px solid transparent;
+      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
+      box-shadow: var(--hb-shadow-panel);
+      padding: 2px;
+      display: none;
+      z-index: 200;
+      pointer-events: auto;
+    }
+    #${OVERLAY_ID} .hb-chat-channel-menu[data-open="1"] { display: block; }
+    #${OVERLAY_ID} .hb-chat-channel-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 3px 8px;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-cream);
+      cursor: pointer;
+      user-select: none;
+    }
+    #${OVERLAY_ID} .hb-chat-channel-item:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    #${OVERLAY_ID} .hb-chat-channel-item .hb-chat-channel-cmd {
+      color: var(--hb-text-muted);
+      font-size: 9px;
+      margin-left: 12px;
+    }
+    #${OVERLAY_ID} .hb-chat-channel-item.selected {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
     }
   `;
   document.head.appendChild(style);
@@ -286,13 +329,90 @@ export function mount(_ctx) {
     setTab(btn.dataset.tab);
   });
 
+  // Channel selector — outgoing-chat channel + slash-prefix table.
+  // Sourced from acpedia Chat Interface page (channel tags + commands):
+  //   - Say   -> default, no prefix
+  //   - Tell  -> /tell <name>  (target is per-message; we surface "/tell ")
+  //   - General/Trade/LFG/Roleplay -> /cg /ct /clfg /crp (global channels)
+  //   - Allegiance/Fellowship -> /a /f
+  //   - Emote -> /me <action>
+  //   - Broadcast -> /b   (admin-gated; ACE may reject)
+  const CHANNELS = [
+    { id: "say",        label: "Local",      cmd: "" },
+    { id: "tell",       label: "Tell",       cmd: "/tell " },
+    { id: "general",    label: "General",    cmd: "/cg " },
+    { id: "trade",      label: "Trade",      cmd: "/ct " },
+    { id: "lfg",        label: "LFG",        cmd: "/clfg " },
+    { id: "roleplay",   label: "Roleplay",   cmd: "/crp " },
+    { id: "allegiance", label: "Allegiance", cmd: "/a " },
+    { id: "fellowship", label: "Fellowship", cmd: "/f " },
+    { id: "emote",      label: "Emote",      cmd: "/me " },
+    { id: "broadcast",  label: "Broadcast",  cmd: "/b " },
+  ];
+  let activeChannel = CHANNELS[0];
+
   // Input row
   const inputRow = document.createElement("div");
   inputRow.className = "hb-chat-input-row";
-  const tab = document.createElement("span");
-  tab.className = "hb-chat-tab";
-  tab.textContent = "Local";
-  inputRow.appendChild(tab);
+
+  // Channel button (was a static span; now an imperative dropdown).
+  const channelBtn = document.createElement("button");
+  channelBtn.type = "button";
+  channelBtn.className = "hb-chat-channel-btn";
+  channelBtn.textContent = activeChannel.label;
+  inputRow.appendChild(channelBtn);
+
+  // Channel popup menu — built imperatively, opens above the button.
+  const channelMenu = document.createElement("div");
+  channelMenu.className = "hb-chat-channel-menu";
+  const channelItems = {};
+  for (const c of CHANNELS) {
+    const item = document.createElement("div");
+    item.className = "hb-chat-channel-item" + (c.id === activeChannel.id ? " selected" : "");
+    item.dataset.channel = c.id;
+    const lbl = document.createElement("span");
+    lbl.textContent = c.label;
+    item.appendChild(lbl);
+    const cmd = document.createElement("span");
+    cmd.className = "hb-chat-channel-cmd";
+    cmd.textContent = c.cmd.trim() || "say";
+    item.appendChild(cmd);
+    channelMenu.appendChild(item);
+    channelItems[c.id] = item;
+  }
+  inputRow.appendChild(channelMenu);
+
+  function selectChannel(id) {
+    const c = CHANNELS.find((x) => x.id === id);
+    if (!c) return;
+    activeChannel = c;
+    channelBtn.textContent = c.label;
+    for (const k of Object.keys(channelItems)) {
+      channelItems[k].classList.toggle("selected", k === id);
+    }
+    closeChannelMenu();
+    input.focus();
+  }
+  function openChannelMenu()  { channelMenu.dataset.open = "1"; }
+  function closeChannelMenu() { channelMenu.dataset.open = "0"; }
+
+  channelBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (channelMenu.dataset.open === "1") closeChannelMenu();
+    else openChannelMenu();
+  });
+  channelMenu.addEventListener("click", (ev) => {
+    const item = ev.target.closest("[data-channel]");
+    if (!item) return;
+    selectChannel(item.dataset.channel);
+  });
+  // Click anywhere else closes the menu.
+  document.addEventListener("click", (ev) => {
+    if (channelMenu.dataset.open !== "1") return;
+    if (overlay.contains(ev.target)) return;
+    closeChannelMenu();
+  });
+
   const input = document.createElement("input");
   input.className = "hb-chat-input";
   input.type = "text";
@@ -307,7 +427,6 @@ export function mount(_ctx) {
   resizeHandle.setAttribute("aria-label", "Resize chat");
   let resizeDrag = null;
   resizeHandle.addEventListener("pointerdown", (ev) => {
-    if (locked) return;
     ev.preventDefault();
     const rect = overlay.getBoundingClientRect();
     resizeDrag = { startX: ev.clientX, startY: ev.clientY, w0: rect.width, h0: rect.height };
@@ -327,45 +446,8 @@ export function mount(_ctx) {
   resizeHandle.addEventListener("pointercancel", () => { resizeDrag = null; });
   overlay.appendChild(resizeHandle);
 
-  // Lock + Move handles
-  let locked = false;
-  const lockBtn = document.createElement("div");
-  lockBtn.className = "hb-chat-lock";
-  lockBtn.setAttribute("role", "button");
-  lockBtn.setAttribute("aria-label", "Lock chat");
-  lockBtn.addEventListener("click", () => {
-    locked = !locked;
-    lockBtn.style.backgroundImage = locked
-      ? "url('./data/ui-sprites/0x060074B8.png')"
-      : "url('./data/ui-sprites/0x060074B7.png')";
-  });
-  overlay.appendChild(lockBtn);
-
-  const moveBtn = document.createElement("div");
-  moveBtn.className = "hb-chat-move";
-  moveBtn.setAttribute("role", "button");
-  moveBtn.setAttribute("aria-label", "Move chat");
-  let drag = null;
-  moveBtn.addEventListener("pointerdown", (ev) => {
-    if (locked) return;
-    ev.preventDefault();
-    const rect = overlay.getBoundingClientRect();
-    drag = { ox: ev.clientX - rect.left, oy: ev.clientY - rect.top };
-    try { moveBtn.setPointerCapture(ev.pointerId); } catch (_) {}
-  });
-  moveBtn.addEventListener("pointermove", (ev) => {
-    if (!drag) return;
-    overlay.style.left = `${ev.clientX - drag.ox}px`;
-    overlay.style.top = `${ev.clientY - drag.oy}px`;
-    overlay.style.bottom = "auto";
-    overlay.style.right = "auto";
-  });
-  moveBtn.addEventListener("pointerup", (ev) => {
-    drag = null;
-    try { moveBtn.releasePointerCapture(ev.pointerId); } catch (_) {}
-  });
-  moveBtn.addEventListener("pointercancel", () => { drag = null; });
-  overlay.appendChild(moveBtn);
+  // No lock + move handles on chat — those are radar-only chrome per
+  // user direction 2026-05-22. Resize is on the bottom-right corner.
 
   document.body.appendChild(overlay);
 
@@ -452,10 +534,16 @@ export function mount(_ctx) {
     ev.preventDefault();
     const text = input.value.trim();
     if (!text) return;
+    // If the user typed their own slash-command, honour it as-is
+    // (don't double-prefix). Otherwise prepend the active channel's
+    // command so e.g. selecting "Trade" + typing "WTS keys" sends
+    // "/ct WTS keys" through the existing chat-form submit handler.
+    const startsWithSlash = text.startsWith("/") || text.startsWith("@");
+    const outgoing = startsWithSlash ? text : (activeChannel.cmd + text);
     const srcInput = document.getElementById("chat-input");
     const srcForm = document.getElementById("chat-form");
     if (srcInput && srcForm) {
-      srcInput.value = text;
+      srcInput.value = outgoing;
       // Dispatch submit on the source form so all listeners (the
       // existing Talk packet sender) fire.
       const submitEv = new Event("submit", { bubbles: true, cancelable: true });
