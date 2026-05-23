@@ -135,6 +135,18 @@ pub struct SpatialScene {
     /// against the building's AABB entries) so subsequent
     /// `set_door_aabb_active` calls only need the door GUID.
     door_part_index: HashMap<u64, (BuildingId, u8)>,
+    /// PR-RR 2026-05-23 (interim): per-open-door world-space AABB.
+    /// Populated by the recv loop on `WorldEvent::DoorStateChanged
+    /// { state: Open }` from the door entity's pose + capsule extent,
+    /// cleared on `state: Closed`. Consumed by
+    /// `clamp_delta_against_cell_walls_with_exclusions` to skip cell-
+    /// mesh triangles representing the (now-open) door panel —
+    /// EnvCell BSP polys are baked once at landblock-load and don't
+    /// support per-part toggle today (see docs/FOLLOW_ONS.md "Indoor
+    /// door per-poly toggle" for the proper fix). Keyed by door GUID
+    /// so the open→closed transition can remove the matching entry
+    /// without rebuilding the set.
+    open_door_exclusion_aabbs: HashMap<u32, Aabb>,
     /// Phase 6 step E follow-up (2026-05-09): per-placement world-space
     /// origin (xy only — Z varies along the landblock height field and
     /// isn't load-bearing for sprite lookup) keyed by `BuildingId`. The
@@ -224,6 +236,7 @@ impl SpatialScene {
             cell_aabbs: HashMap::new(),
             cell_physics_index: HashMap::new(),
             door_part_index: HashMap::new(),
+            open_door_exclusion_aabbs: HashMap::new(),
             building_origins: HashMap::new(),
             statics_aabb_index: HashMap::new(),
             building_physics_index: HashMap::new(),
@@ -384,6 +397,54 @@ impl SpatialScene {
     /// Phase 6 step E: count of registered door GUIDs. Diagnostic only.
     pub fn door_part_index_len(&self) -> usize {
         self.door_part_index.len()
+    }
+
+    /// PR-RR 2026-05-23: register an open door's world-space exclusion
+    /// AABB. Cell-mesh sweeps skip triangles whose centroid sits
+    /// inside any registered exclusion AABB, so open doors become
+    /// physically walkable without per-poly bake-time tagging. Keyed
+    /// by door GUID so the open→closed transition removes the matching
+    /// entry. See module doc on
+    /// `clamp_delta_against_cell_walls_with_exclusions` for the
+    /// follow-on proper-fix scope.
+    pub fn add_open_door_exclusion(&mut self, door_guid: u32, aabb: Aabb) {
+        self.open_door_exclusion_aabbs.insert(door_guid, aabb);
+    }
+
+    /// PR-RR 2026-05-23: clear an open door's exclusion entry (called
+    /// on close). Returns `true` if an entry was actually removed.
+    pub fn remove_open_door_exclusion(&mut self, door_guid: u32) -> bool {
+        self.open_door_exclusion_aabbs.remove(&door_guid).is_some()
+    }
+
+    /// PR-RR 2026-05-23: open-door exclusion AABBs that overlap the
+    /// pose's landblock (broad pre-filter — the centroid-in-AABB
+    /// check in the sweep is the narrow phase). Returns owned `Vec`
+    /// to dodge the borrow on `self.scene`.
+    pub fn open_door_exclusion_aabbs_near(&self, pose: &WorldPosition) -> Vec<Aabb> {
+        if self.open_door_exclusion_aabbs.is_empty() {
+            return Vec::new();
+        }
+        let global = pose.global_coords();
+        // Broad-phase: any AABB whose XY range is within ~10 m of the
+        // pose. Player capsule + max door extent fits comfortably.
+        const PREFILTER_M: f32 = 10.0;
+        self.open_door_exclusion_aabbs
+            .values()
+            .filter(|aabb| {
+                global.x >= aabb.min.x - PREFILTER_M
+                    && global.x <= aabb.max.x + PREFILTER_M
+                    && global.y >= aabb.min.y - PREFILTER_M
+                    && global.y <= aabb.max.y + PREFILTER_M
+            })
+            .copied()
+            .collect()
+    }
+
+    /// PR-RR 2026-05-23: count of registered open-door exclusions.
+    /// Diagnostic only.
+    pub fn open_door_exclusion_len(&self) -> usize {
+        self.open_door_exclusion_aabbs.len()
     }
 
     /// Phase 6 step E follow-up (2026-05-09): record a building's

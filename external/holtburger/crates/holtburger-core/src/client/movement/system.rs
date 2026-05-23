@@ -674,16 +674,26 @@ impl MovementSystem {
             let cell_id = world.scene.current_cell(&pose);
             let triangles = world.scene.cell_triangles(cell_id);
             let cell_aabb_opt = world.scene.cell_aabb(cell_id);
+            // PR-RR 2026-05-23: open-door exclusion list — cell-mesh
+            // sweeps skip triangles whose centroid sits inside any of
+            // these. Lets the player walk through doors whose collision
+            // panel is part of the EnvCell BSP (the common indoor
+            // case). Empty when no doors are open near the player; the
+            // sweep no-ops on empty exclusion via the existing
+            // `exclusion_aabbs.is_empty()` short-circuit.
+            let exclusion_aabbs =
+                world.scene.open_door_exclusion_aabbs_near(&pose);
             if triangles.is_empty() && cell_aabb_opt.is_none() {
                 Vector3::zero()
             } else {
                 let pre_clamped = if !triangles.is_empty() {
-                    holtburger_world::spatial::clamp_delta_against_cell_walls(
+                    holtburger_world::spatial::clamp_delta_against_cell_walls_with_exclusions(
                         triangles,
                         &pose,
                         lateral,
                         holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
                         holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT,
+                        &exclusion_aabbs,
                     )
                 } else {
                     lateral

@@ -16052,13 +16052,16 @@ async fn recv_loop(
                                         ));
                                     } else {
                                         // No outdoor building AABB enclosed the door's pose
-                                        // (likely indoor cell door — EnvCell mesh + cylinder
-                                        // collision path, not building AABB). Probe the
-                                        // entity's physics state so we can confirm ETHEREAL
-                                        // actually toggled at the entity layer (which gates
-                                        // the cylinder collision via is_collidable filter
-                                        // at holtburger-core/src/client/movement/system.rs:759).
-                                        let (ethereal, collidable) = w
+                                        // — indoor cell door. The door entity's cylinder
+                                        // is correctly skipped via the is_collidable
+                                        // ETHEREAL filter, but the EnvCell BSP mesh may
+                                        // include the door PANEL geometry as static wall
+                                        // polys. PR-RR interim: when door opens, register
+                                        // a world-space exclusion AABB centred on the
+                                        // door's pose; `clamp_delta_against_cell_walls_
+                                        // with_exclusions` (movement/system.rs:680) skips
+                                        // cell-mesh triangles whose centroid lands inside.
+                                        let (ethereal, collidable, pose_opt) = w
                                             .entities
                                             .get(*guid)
                                             .map(|e| {
@@ -16066,15 +16069,49 @@ async fn recv_loop(
                                                 (
                                                     e.physics_state.contains(PhysicsState::ETHEREAL),
                                                     e.is_collidable(),
+                                                    Some(e.position),
                                                 )
                                             })
-                                            .unwrap_or((false, false));
-                                        console_log_str(&format!(
-                                            "[phase6.E] DoorStateChanged 0x{:08X} state={:?} — INDOOR (no building AABB). Entity layer: ETHEREAL={} collidable={} (cylinder collision should{} block)",
-                                            u32::from(*guid), door_state,
-                                            ethereal, collidable,
-                                            if collidable { "" } else { " NOT" },
-                                        ));
+                                            .unwrap_or((false, false, None));
+                                        let guid_u32 = u32::from(*guid);
+                                        if matches!(door_state, holtburger_world::DoorState::Open) {
+                                            if let Some(pose) = pose_opt {
+                                                // ~1.5m horizontal × full door height
+                                                // (-0.5..+3 m vertical) AABB around the
+                                                // door's global position. Big enough to
+                                                // capture the door panel + small frame
+                                                // overlap; tight enough to avoid
+                                                // excluding surrounding wall polys.
+                                                let g = pose.global_coords();
+                                                let aabb = holtburger_common::Aabb {
+                                                    min: holtburger_common::Vector3::new(
+                                                        g.x - 1.5, g.y - 1.5, g.z - 0.5,
+                                                    ),
+                                                    max: holtburger_common::Vector3::new(
+                                                        g.x + 1.5, g.y + 1.5, g.z + 3.0,
+                                                    ),
+                                                };
+                                                w.scene.add_open_door_exclusion(guid_u32, aabb);
+                                                console_log_str(&format!(
+                                                    "[phase6.E] DoorStateChanged 0x{:08X} state=Open — INDOOR: added cell-mesh exclusion AABB @ global ({:.1},{:.1},{:.1}), eth={} (open-door exclusion count now {})",
+                                                    guid_u32, g.x, g.y, g.z, ethereal,
+                                                    w.scene.open_door_exclusion_len(),
+                                                ));
+                                            } else {
+                                                console_log_str(&format!(
+                                                    "[phase6.E] DoorStateChanged 0x{:08X} state=Open — INDOOR: NO pose available to build exclusion AABB; cell-mesh will still block. eth={} collidable={}",
+                                                    guid_u32, ethereal, collidable,
+                                                ));
+                                            }
+                                        } else {
+                                            // Closed: drop the exclusion entry.
+                                            let removed = w.scene.remove_open_door_exclusion(guid_u32);
+                                            console_log_str(&format!(
+                                                "[phase6.E] DoorStateChanged 0x{:08X} state=Closed — INDOOR: removed cell-mesh exclusion (was_set={}) eth={} (open-door exclusion count now {})",
+                                                guid_u32, removed, ethereal,
+                                                w.scene.open_door_exclusion_len(),
+                                            ));
+                                        }
                                     }
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_DOOR_STATE_CHANGED,

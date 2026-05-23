@@ -340,6 +340,39 @@ pub fn clamp_delta_against_cell_walls(
     radius: f32,
     height: f32,
 ) -> Vector3 {
+    clamp_delta_against_cell_walls_with_exclusions(
+        triangles, pose, delta, radius, height, &[],
+    )
+}
+
+/// PR-RR 2026-05-23 (interim): same as `clamp_delta_against_cell_walls`,
+/// but skips triangles whose centroid falls inside any of the supplied
+/// `exclusion_aabbs`. Used to make an open door visually + physically
+/// walk-through-able without per-part baking: when a door entity goes
+/// ETHEREAL (open), the recv loop adds a small AABB centred on the
+/// door's pose to `SpatialScene.open_door_exclusion_aabbs`. The
+/// caller (`holtburger-core/src/client/movement/system.rs`) pulls the
+/// list and passes it here, so cell-mesh triangles representing the
+/// closed door panel (baked into the EnvCell BSP at landblock-load
+/// time) are skipped while the door is open.
+///
+/// Proper fix (see `docs/FOLLOW_ONS.md` "Indoor door per-poly toggle"):
+/// at cell-mesh bake time, tag each triangle with the door it belongs
+/// to (spatial match against placed `Door`-flagged static objects in
+/// the EnvCell) so this filter becomes O(1) per triangle instead of
+/// O(n_open_doors). The centroid-in-AABB scan here is cheap enough
+/// (~50 cell tris × ~5 open doors max per cell = 250 tests / frame
+/// hot-path) for an interim, but doesn't generalise to giant-door /
+/// portcullis / multi-panel cases where the AABB might enclose
+/// non-door wall geometry too.
+pub fn clamp_delta_against_cell_walls_with_exclusions(
+    triangles: &[Triangle],
+    pose: &WorldPosition,
+    delta: Vector3,
+    radius: f32,
+    height: f32,
+    exclusion_aabbs: &[Aabb],
+) -> Vector3 {
     // 0.7 corresponds to a 45° slope from horizontal — anything more
     // upward-facing is a floor, anything more downward is a ceiling;
     // both are skipped here so the floor raycast doesn't double-clamp.
@@ -368,6 +401,28 @@ pub fn clamp_delta_against_cell_walls(
         let tri_aabb = tri.aabb();
         if tri_aabb.max.z < cap_z_min || tri_aabb.min.z > cap_z_max {
             continue;
+        }
+        // PR-RR 2026-05-23: open-door exclusion. If the triangle's
+        // centroid falls inside any active open-door AABB, skip it
+        // — this is the interim fix for indoor doors whose collision
+        // panel is part of the EnvCell BSP mesh.
+        if !exclusion_aabbs.is_empty() {
+            let cx = (tri.v0.x + tri.v1.x + tri.v2.x) * (1.0 / 3.0);
+            let cy = (tri.v0.y + tri.v1.y + tri.v2.y) * (1.0 / 3.0);
+            let cz = (tri.v0.z + tri.v1.z + tri.v2.z) * (1.0 / 3.0);
+            let mut excluded = false;
+            for ex in exclusion_aabbs {
+                if cx >= ex.min.x && cx <= ex.max.x
+                    && cy >= ex.min.y && cy <= ex.max.y
+                    && cz >= ex.min.z && cz <= ex.max.z
+                {
+                    excluded = true;
+                    break;
+                }
+            }
+            if excluded {
+                continue;
+            }
         }
 
         // Signed distance from each end of the proposed motion to
