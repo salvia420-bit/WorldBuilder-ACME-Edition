@@ -992,10 +992,8 @@
           ...combatBarPlugin.manifest,
           activate: combatBarPlugin.activate,
         },
-        {
-          ...spellbookPlugin.manifest,
-          activate: spellbookPlugin.activate,
-        },
+        // PR-Z (2026-05-22): spellbook moved out of the bar — registered
+        // as a main-panel view below. Bar slot removed.
         {
           // Vendor Window — event-driven (auto-pops on kind=12 VendorOpened),
           // iconHidden so it doesn't claim bar space. Per acpedia "Trading"
@@ -1015,11 +1013,15 @@
       mainPanelPlugin.registerView("map",       mapPanelPlugin.view);
       mainPanelPlugin.registerView("allegiance", allegiancePanelPlugin.view);
       mainPanelPlugin.registerView("fellowship", fellowshipPanelPlugin.view);
+      mainPanelPlugin.registerView("spellbook", spellbookPlugin.view);
 
       // Main-panel view hotkeys (retail muscle-memory):
       //   F4 → Inventory     (Wave 1 PR-U)
       //   C  → Character     (Wave 2 PR-V — Attributes/Skills/Titles)
-      // Add S/M/A/F/J/etc. here as Wave 2 surfaces land.
+      //   M  → Map           (Wave 2 PR-W)
+      //   A  → Allegiance    (Wave 2 PR-X)
+      //   F  → Fellowship    (Wave 2 PR-Y)
+      //   S / F5 → Spellbook (Wave 2 PR-Z — F5 = retail muscle memory)
       window.addEventListener("keydown", (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const tag = ev.target?.tagName;
@@ -1039,24 +1041,9 @@
         } else if (ev.key === "f" || ev.key === "F") {
           ev.preventDefault();
           window.__mainPanel?.toggleView?.("fellowship");
-        }
-      });
-
-      // Phase G — F5 toggles the Spellbook panel (retail muscle memory).
-      // The keyboard listener finds the spellbook's bar icon by aria-label
-      // and clicks it, leveraging the bar's existing toggle behavior.
-      window.addEventListener("keydown", (ev) => {
-        if (ev.key === "F5" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-          const target = ev.target;
-          // Don't intercept F5 if the user is typing in a text field.
-          if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
-            return;
-          }
-          const sbBtn = document.querySelector('[data-plugin-id="spellbook"]');
-          if (sbBtn) {
-            ev.preventDefault();
-            sbBtn.click();
-          }
+        } else if (ev.key === "s" || ev.key === "S" || ev.key === "F5") {
+          ev.preventDefault();
+          window.__mainPanel?.toggleView?.("spellbook");
         }
       });
 
