@@ -266,6 +266,85 @@ export async function preInit3D(canvas) {
     console.log("[wire-agent] ?wireframe=1 — skipping atmosphere/clouds/skydome/CSM, wireframe materials");
   }
 
+  // 2026-05-23 — render cadence controls for multi-agent fleets.
+  // `?targetFps=N` (N > 0, capped at 240) paces the render loop at N
+  // frames per second via setTimeout chained to rAF instead of bare rAF.
+  // Useful when you want a low-CPU wire agent that still moves through
+  // simulation at a sensible rate (e.g. 10 fps for protocol tests).
+  // `?renderOnDemand=1` short-circuits the rAF re-arm entirely — the
+  // loop runs ONE tick at boot, then idles until `window.__renderOnce()`
+  // is invoked. Designed for screenshot-driven tests: drive the wire
+  // round-trip, call `__renderOnce()`, screenshot, repeat. Zero idle
+  // CPU between captures. Both flags compose with wireframe + agentic.
+  const targetFps = (() => {
+    try {
+      if (typeof window === "undefined") return 0;
+      const raw = parseFloat(new URLSearchParams(window.location.search).get("targetFps") ?? "");
+      if (!Number.isFinite(raw) || raw <= 0) return 0;
+      return Math.min(raw, 240);
+    } catch (_) { return 0; }
+  })();
+  const renderOnDemand = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search).get("renderOnDemand") === "1";
+    } catch (_) { return false; }
+  })();
+  if (targetFps > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`[render-cadence] ?targetFps=${targetFps} — pacing rAF at ${(1000 / targetFps).toFixed(1)} ms/frame`);
+  }
+  if (renderOnDemand) {
+    // eslint-disable-next-line no-console
+    console.log("[render-cadence] ?renderOnDemand=1 — rAF disabled; call window.__renderOnce() to advance one frame");
+  }
+
+  // 2026-05-23 — Tier-3 network-drain decouple. `?netDrainHz=N` drives a
+  // setInterval(1000/N ms) that calls `tickPerFrame` independently of rAF
+  // so the JS-side observation of the wasm event queues stays current
+  // during 0-fps idle. Useful paired with ?renderOnDemand=1 — the wasm
+  // recv_loop is already a long-running async task draining the wire
+  // continuously, but the JS-side scene-graph propagation (drainEntity
+  // Events3D, cell-visibility, PVS expansion, local-player pose) is
+  // rAF-gated. Without this flag, an idle screenshot-on-demand agent
+  // accumulates 5+ seconds of EntityUpdates that all process in the
+  // first __renderOnce() — spike. With it, drains roll continuously.
+  //
+  // N is capped at 60 (no point above rAF cadence). Default 0 = no
+  // interval; preserves current behaviour. Multiple calls per "tick"
+  // are safe — pollEntityUpdates() uses std::mem::take so re-entry
+  // returns an empty vec (Tier-3 grounding agents 1+2 confirmed).
+  const netDrainHz = (() => {
+    try {
+      if (typeof window === "undefined") return 0;
+      const raw = parseFloat(new URLSearchParams(window.location.search).get("netDrainHz") ?? "");
+      if (!Number.isFinite(raw) || raw <= 0) return 0;
+      return Math.min(raw, 60);
+    } catch (_) { return 0; }
+  })();
+  if (netDrainHz > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`[net-drain] ?netDrainHz=${netDrainHz} — setInterval drain at ${(1000 / netDrainHz).toFixed(1)} ms`);
+  }
+
+  // 2026-05-23 — Tier-3 ?nullRender=1: skip the renderer.render() call in
+  // tick(). Sim/protocol/state-propagation still runs (cell visibility,
+  // PVS, entity drain, animation mixers); GPU work is zero. Pairs with
+  // ?renderOnDemand=1 + ?netDrainHz=30 for pure-protocol bots that
+  // need to be alive in the world but never paint a pixel. The canvas
+  // stays frozen at boot-time content. Flag name avoids collision with
+  // the existing ?renderer=3d|2d (renderer-type) URL param.
+  const nullRender = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search).get("nullRender") === "1";
+    } catch (_) { return false; }
+  })();
+  if (nullRender) {
+    // eslint-disable-next-line no-console
+    console.log("[render-cadence] ?nullRender=1 — skipping renderer.render() in tick");
+  }
+
   // A1 (perf plan 2026-05-18) — antialias is read from the quality
   // preset (with optional Graphics-tab override). MSAA costs ~25% of
   // frametime on weaker GPUs; off at `low`, on otherwise.
@@ -563,6 +642,10 @@ export async function preInit3D(canvas) {
     forceDetail,
     atmosphereRuntimePromise,
     wireframeMode,
+    targetFps,
+    renderOnDemand,
+    netDrainHz,
+    nullRender,
   };
 }
 
@@ -596,6 +679,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     forceDetail,
     atmosphereRuntimePromise,
     wireframeMode,
+    targetFps,
+    renderOnDemand,
+    netDrainHz,
+    nullRender,
   } = pre;
   const { sun, ambient, lightsGroup } = lighting;
 
@@ -1187,6 +1274,31 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // one passed into `init3D`; capture scripts can stub it post-init
   // by setting `window.liveScene3d.sessionHandle = mock`.
   let liveScene3dRef = null;
+  // 2026-05-23 — render-cadence scheduler. Replaces bare rAF re-arms
+  // so the loop honours ?targetFps=N (pace) and ?renderOnDemand=1
+  // (idle until window.__renderOnce()). On targetFps, we measure the
+  // wall-clock at scheduleNext time and setTimeout the difference up
+  // to the per-frame budget; on render-on-demand we no-op (the caller
+  // drives via __renderOnce). Bare rAF stays the default.
+  const _frameIntervalMs = targetFps > 0 ? 1000 / targetFps : 0;
+  let _lastScheduleTs = null;
+  function scheduleNext() {
+    if (renderOnDemand) return;
+    if (_frameIntervalMs > 0) {
+      const now = (typeof performance !== "undefined" && performance.now)
+        ? performance.now() : Date.now();
+      const elapsed = _lastScheduleTs === null ? 0 : (now - _lastScheduleTs);
+      _lastScheduleTs = now;
+      const delay = Math.max(0, _frameIntervalMs - elapsed);
+      if (delay > 0) {
+        setTimeout(() => requestAnimationFrame(tick), delay);
+      } else {
+        requestAnimationFrame(tick);
+      }
+      return;
+    }
+    requestAnimationFrame(tick);
+  }
   function tick(nowTs) {
     if (!running) return;
     const ts = typeof nowTs === "number" ? nowTs : performance.now();
@@ -1295,30 +1407,32 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // + Dithering. Cloud overlay's pre/render hooks run AROUND composer.render
     // (depth-unaware-cloud limitation — addressed in a follow-on cleanup).
     if (atmospherePipeline) {
-      try {
-        atmospherePipeline.preFrameSkySync(
-          liveScene3dRef?.skyDome,
-          activeCam
-        );
-        const cloudOverlay = liveScene3dRef?.cloudOverlay;
-        const cloudActive =
-          cloudOverlay &&
-          !liveScene3dRef?.skyDome?._lastIsIndoor;
-        if (cloudActive) {
-          cloudOverlay.preRender(renderer, dt, activeCam);
-        }
-        atmospherePipeline.render(activeCam, dt);
-        if (cloudActive) {
-          cloudOverlay.renderOverlay(renderer);
-        }
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        if (!liveScene3dRef._atmRenderWarned) {
-          liveScene3dRef._atmRenderWarned = true;
-          console.warn("[sky-k.2] atmospherePipeline.render threw:", e);
+      if (!nullRender) {
+        try {
+          atmospherePipeline.preFrameSkySync(
+            liveScene3dRef?.skyDome,
+            activeCam
+          );
+          const cloudOverlay = liveScene3dRef?.cloudOverlay;
+          const cloudActive =
+            cloudOverlay &&
+            !liveScene3dRef?.skyDome?._lastIsIndoor;
+          if (cloudActive) {
+            cloudOverlay.preRender(renderer, dt, activeCam);
+          }
+          atmospherePipeline.render(activeCam, dt);
+          if (cloudActive) {
+            cloudOverlay.renderOverlay(renderer);
+          }
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!liveScene3dRef._atmRenderWarned) {
+            liveScene3dRef._atmRenderWarned = true;
+            console.warn("[sky-k.2] atmospherePipeline.render threw:", e);
+          }
         }
       }
-      requestAnimationFrame(tick);
+      scheduleNext();
       return;
     }
 
@@ -1336,6 +1450,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // the framebuffer; then renderer.clearDepth() + renderer.render
     // overpaints world geometry at world pixels (same render-order
     // logic as the atmosphere composer's clear=false/clearDepth=true).
+    if (nullRender) {
+      // ?nullRender=1 — pure-protocol bot mode. Sim + drain + scene-
+      // graph mutation all ran above; we just skip the GPU submission.
+      // Canvas stays at last paint (boot-time content). Combined with
+      // ?renderOnDemand=1 + ?netDrainHz=N this is a zero-GPU agent.
+      scheduleNext();
+      return;
+    }
     let skyRendered = false;
     if (liveScene3dRef?.skyDome) {
       try {
@@ -1364,9 +1486,78 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // autoClear-true render clears color+depth as usual.
       renderer.render(scene, activeCam);
     }
-    requestAnimationFrame(tick);
+    scheduleNext();
   }
+  // Initial kickoff is always a bare rAF — even in render-on-demand
+  // mode we want one paint so the canvas isn't blank at boot. After
+  // that first frame, scheduleNext() honours the cadence flags.
   requestAnimationFrame(tick);
+
+  // Expose __renderOnce so test harnesses can drive the render loop
+  // imperatively when ?renderOnDemand=1 is set. Each call advances
+  // exactly one tick (sim + render). Safe to call from outside as
+  // tick is closed over the local `running` flag.
+  if (typeof window !== "undefined") {
+    window.__renderOnce = () => {
+      try {
+        tick(typeof performance !== "undefined" && performance.now
+          ? performance.now() : Date.now());
+        return true;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[render-cadence] __renderOnce threw:", e);
+        return false;
+      }
+    };
+  }
+
+  // 2026-05-23 — Tier-3 network-drain decouple. When `?netDrainHz=N` is
+  // set (typically paired with `?renderOnDemand=1`), start an interval
+  // that calls `tickPerFrame` independently of rAF. Keeps JS-side wasm
+  // event drain + cell visibility + PVS + local-player pose current
+  // while rendering is paused. tickPerFrame is already idempotent under
+  // re-entry (pollEntityUpdates uses std::mem::take, setPose is sync-
+  // atomic; spawn/setMotion defer scene-graph mutations to microtasks).
+  // The interval is cleared on `window.beforeunload` so playwright
+  // contexts don't leak it across navigation.
+  let netDrainInterval = null;
+  let netDrainLastTs = null;
+  if (netDrainHz > 0 && typeof setInterval === "function") {
+    const periodMs = 1000 / netDrainHz;
+    netDrainInterval = setInterval(() => {
+      if (!liveScene3dRef) return;
+      const now = (typeof performance !== "undefined" && performance.now)
+        ? performance.now() : Date.now();
+      const dt = netDrainLastTs === null ? 1 / netDrainHz : Math.min((now - netDrainLastTs) / 1000, 0.1);
+      netDrainLastTs = now;
+      try {
+        tickPerFrame(liveScene3dRef, liveScene3dRef.sessionHandle, dt);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        if (!liveScene3dRef._netDrainTickWarned) {
+          liveScene3dRef._netDrainTickWarned = true;
+          console.warn("[net-drain] tickPerFrame threw:", e);
+        }
+      }
+    }, periodMs);
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("beforeunload", () => {
+        if (netDrainInterval !== null) {
+          clearInterval(netDrainInterval);
+          netDrainInterval = null;
+        }
+      });
+      // Expose for capture-script teardown + test inspection.
+      window.__netDrainInterval = netDrainInterval;
+      window.__stopNetDrain = () => {
+        if (netDrainInterval !== null) {
+          clearInterval(netDrainInterval);
+          netDrainInterval = null;
+          window.__netDrainInterval = null;
+        }
+      };
+    }
+  }
 
   // Follow-on #10 (3D port state doc) — DOM-projected nameplate overlay.
   // PIXI v8 stays in the page for any 2D filtering needs DOM/CSS can't
@@ -1380,17 +1571,32 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // null from createNameplateOverlay; downstream `?.setNameplate` /
   // `?.tick` calls degrade to no-ops via optional chaining. The mode-1
   // capture verifies this explicitly via window.liveScene3d.nameplateLayer.
+  // 2026-05-23 — skip the DOM nameplate overlay entirely under ?hud=none.
+  // The per-frame .tick(camera) projection is HUD-coupled visual work
+  // (one Vector3.project + DOM transform per visible entity); skipping
+  // construction means `scene3d.nameplateLayer` is null and the
+  // existing `?.setNameplate` / `?.tick` optional-chaining call sites
+  // become no-ops naturally. Pairs with the sprite-nameplate gate in
+  // nameplate_sprite.js::ensureNameplateForEntity.
+  const _hudDisabled = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search).get("hud") === "none";
+    } catch (_) { return false; }
+  })();
   let nameplateLayer = null;
-  try {
-    const overlay = createNameplateOverlay(canvas);
-    if (overlay) {
-      nameplateLayer = overlay.layer;
+  if (!_hudDisabled) {
+    try {
+      const overlay = createNameplateOverlay(canvas);
+      if (overlay) {
+        nameplateLayer = overlay.layer;
+        // eslint-disable-next-line no-console
+        console.log("[scene3d] nameplate overlay attached:", overlay.domRoot.id);
+      }
+    } catch (e) {
       // eslint-disable-next-line no-console
-      console.log("[scene3d] nameplate overlay attached:", overlay.domRoot.id);
+      console.warn("[scene3d] createNameplateOverlay failed:", e);
     }
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn("[scene3d] createNameplateOverlay failed:", e);
   }
   scene3dForBuilders.nameplateLayer = nameplateLayer;
 

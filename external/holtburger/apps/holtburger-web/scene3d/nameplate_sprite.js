@@ -116,6 +116,18 @@ const CANVAS_PADDING_X = 16;
 /** @type {Map<string, { texture: THREE.CanvasTexture, material: THREE.SpriteMaterial }>} */
 const _nameplateCache = new Map();
 
+// 2026-05-23 — ?hud=none gate. Sprite-baked nameplates are GPU-scene
+// objects, not DOM, so the no-hud CSS can't hide them. Read the URL
+// flag once at module load; ensureNameplateForEntity short-circuits
+// when set, avoiding the CanvasTexture bake + Sprite allocation on
+// every entity spawn for the agent fleet's lifetime.
+const _NAMEPLATE_DISABLED = (() => {
+  try {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("hud") === "none";
+  } catch (_) { return false; }
+})();
+
 // ITEM_TYPE bit constants mirrored from `index.html:2771` (the 2D PIXI
 // path). We only need the bits the nameplate-colour switch reads.
 const ITEM_TYPE_CREATURE = 0x00000010;
@@ -398,6 +410,7 @@ export function createNameplateSprite(name, options = {}) {
  * @returns {THREE.Sprite | null} the attached sprite (or null on skip).
  */
 export function ensureNameplateForEntity(inst, scene3d) {
+  if (_NAMEPLATE_DISABLED) return null;
   if (!inst || !inst.root || !inst.meta) return null;
   const meta = inst.meta;
   const name = (meta && typeof meta.name === "string") ? meta.name : "";

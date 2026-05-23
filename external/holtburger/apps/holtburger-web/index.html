@@ -464,6 +464,20 @@
       html.agent-mode body #nameplate-layer-3d,
       html.agent-mode body #post-spawn,
       html.agent-mode body .floating-panel { display: none !important; }
+
+      /* ?hud=none — strips EVERY overlay (the PR-Z hb-* HUDs that
+         agent-mode allowlists by default, plus the 3D nameplate layer
+         and the .hb-pill toggle buttons that anchor each plugin). Use
+         for visual-regression / wire-agent capture flows where any
+         overlay paint is noise. Composes with agent-mode + wireframe=1.
+
+         CSS only — the plugins still install + tick. For also skipping
+         install (CPU win on per-agent fleets), see ?plugins=none which
+         the install path checks at module import. */
+      html.no-hud body > *:not(#stage) { display: none !important; }
+      html.no-hud body #nameplate-layer-3d,
+      html.no-hud body .nameplate-3d,
+      html.no-hud body .floating-panel { display: none !important; }
     </style>
   </head>
   <body>
@@ -476,6 +490,9 @@
           const p = new URLSearchParams(window.location.search);
           if (p.get("agent") === "1" || p.get("autoLogin") === "1") {
             document.documentElement.classList.add("agent-mode");
+          }
+          if (p.get("hud") === "none") {
+            document.documentElement.classList.add("no-hud");
           }
         } catch {}
       })();
@@ -966,6 +983,26 @@
       // consumption. See CHORIZITE_PORTING_PLAN.md §13 for the contract.
       let worldObjectManager = null;
 
+      // 2026-05-23 — ?plugins=none short-circuits HUD plugin registration.
+      // The plugin modules above were imported statically (CSS injection
+      // + module-scope event listeners still fire — spellbook L800 Delete
+      // key, hotbar L239 number keys — but those are cheap and harmless
+      // for wire-agent tests). What we skip: barSlots construction,
+      // mainPanelPlugin.registerView calls, and the mountBar() that
+      // actually attaches HUDs + their per-frame tick callbacks. Wire
+      // round-trip + F-key handler + setupClickPicking() (post-login)
+      // are all independent and keep working.
+      const pluginsDisabled = (() => {
+        try {
+          if (typeof window === "undefined") return false;
+          return new URLSearchParams(window.location.search).get("plugins") === "none";
+        } catch (_) { return false; }
+      })();
+      if (pluginsDisabled) {
+        // eslint-disable-next-line no-console
+        console.log("[plugins-disabled] ?plugins=none — skipping bar + main-panel registration");
+      }
+
       // 2026-05-17:
       //  - the standalone `⚐ stance-toggle` slot was merged into
       //    the Combat plugin; one slot instead of two.
@@ -1131,20 +1168,25 @@
       // and Examine share one pane; main-panel.pushView routes between
       // them with a view stack so "Back" returns to inventory.
       // See docs/examine-architecture-2026-05-22.md.
-      mainPanelPlugin.registerView("inventory", inventoryPlugin.view);
-      mainPanelPlugin.registerView("examine",   examineTargetPlugin.view);
-      mainPanelPlugin.registerView("character", characterInfoPlugin.view);
-      mainPanelPlugin.registerView("map",       mapPanelPlugin.view);
-      mainPanelPlugin.registerView("allegiance", allegiancePanelPlugin.view);
-      mainPanelPlugin.registerView("fellowship", fellowshipPanelPlugin.view);
-      mainPanelPlugin.registerView("spellbook", spellbookPlugin.view);
-      mainPanelPlugin.registerView("journal",   journalPanelPlugin.view);
-      mainPanelPlugin.registerView("contracts", contractsPanelPlugin.view);
-      // PR-II (2026-05-23): Options view — main-panel port of retail
-      // gmConfigUI (layout 0x21000029). Same convention as Inventory /
-      // Character / Spellbook / etc. — shares the right-side pane and
-      // gets brass-rim chrome from main-panel's container slot.
-      mainPanelPlugin.registerView("options",   optionsPanelPlugin.view);
+      // 2026-05-23 — gated on !pluginsDisabled. When ?plugins=none is set,
+      // main-panel never mounts so __mainPanel is undefined and these
+      // views would no-op anyway, but skipping the calls is tidier.
+      if (!pluginsDisabled) {
+        mainPanelPlugin.registerView("inventory", inventoryPlugin.view);
+        mainPanelPlugin.registerView("examine",   examineTargetPlugin.view);
+        mainPanelPlugin.registerView("character", characterInfoPlugin.view);
+        mainPanelPlugin.registerView("map",       mapPanelPlugin.view);
+        mainPanelPlugin.registerView("allegiance", allegiancePanelPlugin.view);
+        mainPanelPlugin.registerView("fellowship", fellowshipPanelPlugin.view);
+        mainPanelPlugin.registerView("spellbook", spellbookPlugin.view);
+        mainPanelPlugin.registerView("journal",   journalPanelPlugin.view);
+        mainPanelPlugin.registerView("contracts", contractsPanelPlugin.view);
+        // PR-II (2026-05-23): Options view — main-panel port of retail
+        // gmConfigUI (layout 0x21000029). Same convention as Inventory /
+        // Character / Spellbook / etc. — shares the right-side pane and
+        // gets brass-rim chrome from main-panel's container slot.
+        mainPanelPlugin.registerView("options",   optionsPanelPlugin.view);
+      }
       // PR-GG (2026-05-23): vendor-ui is its own top-level horizontal bar
       // (retail gmVendorUI layout 0x21000012), NOT a main-panel view.
       // The plugin's bar-slot mount() builds a standalone overlay; the
@@ -1187,14 +1229,22 @@
 
       // Mount the bar immediately — it doesn't depend on session state.
       // The facade is created post-login and stored on window.__pluginClient.
-      if (document.body) {
-        barInstance = mountBar({ client: null, root: document.body, slots: barSlots });
-        window.__barInstance = barInstance;
-      } else {
-        window.addEventListener("DOMContentLoaded", () => {
+      // 2026-05-23 — gated on !pluginsDisabled. Skipping mountBar avoids
+      // every plugin's mount() side effects (DOM append, per-frame tick
+      // hookups, requestAnimationFrame drivers). barInstance stays null,
+      // window.__barInstance stays undefined; downstream consumers like
+      // window.__pluginClient.attack() use the wire client directly
+      // (window.__sessionHandle), not the bar.
+      if (!pluginsDisabled) {
+        if (document.body) {
           barInstance = mountBar({ client: null, root: document.body, slots: barSlots });
           window.__barInstance = barInstance;
-        });
+        } else {
+          window.addEventListener("DOMContentLoaded", () => {
+            barInstance = mountBar({ client: null, root: document.body, slots: barSlots });
+            window.__barInstance = barInstance;
+          });
+        }
       }
 
       const root = document.getElementById("results");
@@ -1314,7 +1364,7 @@
             if (wantRenderer3d) {
               const eagerImport = () => {
                 Promise.all([
-                  import("./scene3d/index.js?v=wire-skip-lod"),
+                  import("./scene3d/index.js?v=tier3-nullrender-2026-05-23"),
                   import("./scene3d/picking.js"),
                   // 2026-05-21 Phase E follow-on — warm the takram CDN
                   // graph (@takram/three-atmosphere, three-geospatial,
@@ -5913,7 +5963,7 @@ void main() {
           new URLSearchParams(window.location.search).get("renderer") === "3d";
         if (useRenderer3d) {
           renderStatus.textContent = "Initializing 3D renderer (?renderer=3d)…";
-          const { init3D } = await import("./scene3d/index.js?v=wire-skip-lod");
+          const { init3D } = await import("./scene3d/index.js?v=tier3-nullrender-2026-05-23");
           // sessionHandle exposed via window.__sessionHandle by the
           // login-flow handler (see line ~5251). Pass it through so
           // future phases (cell visibility, MovementSystem) can read
