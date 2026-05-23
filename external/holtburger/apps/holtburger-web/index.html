@@ -1009,6 +1009,67 @@
           panelBody: "RynthSuite — combat & navigation (stub)",
         },
         {
+          // PR-MM 2026-05-23: fullscreen toggle in the (deprecated)
+          // plugin bar. Uses the browser Fullscreen API on
+          // #canvas-column (the wrapper holding #canvas + keypad),
+          // matching the existing #fullscreen-btn that's hidden in
+          // agent-mode (index.html:759). Going fullscreen on the
+          // column lets the canvas expand to native screen
+          // resolution via the existing :fullscreen CSS rules at
+          // index.html:177-178.
+          id: "fullscreen",
+          name: "Fullscreen",
+          icon: "⛶",
+          activate: (bodyEl) => {
+            const col = document.getElementById("canvas-column");
+            if (!col) {
+              bodyEl.textContent = "fullscreen unavailable (#canvas-column missing)";
+              return;
+            }
+            const isFull = !!document.fullscreenElement;
+            bodyEl.innerHTML = "";
+            const status = document.createElement("div");
+            status.style.cssText = "margin-bottom:8px;color:var(--hb-text-cream,#fff);";
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.style.cssText = "padding:6px 12px;background:rgba(120,84,32,0.5);color:#fff;border:1px solid #8a7544;border-radius:3px;cursor:pointer;font-family:inherit;";
+            const note = document.createElement("div");
+            note.style.cssText = "margin-top:8px;font-size:10px;color:rgba(255,255,255,0.55);font-style:italic;";
+            note.textContent = "Press Esc to exit fullscreen.";
+            function refresh() {
+              const on = !!document.fullscreenElement;
+              status.textContent = on
+                ? "Currently fullscreen — canvas at screen resolution."
+                : "Currently windowed.";
+              btn.textContent = on ? "Exit Fullscreen" : "Enter Fullscreen";
+            }
+            btn.addEventListener("click", () => {
+              if (document.fullscreenElement) {
+                document.exitFullscreen?.();
+              } else {
+                col.requestFullscreen?.();
+              }
+              setTimeout(refresh, 100);
+            });
+            const onChange = () => refresh();
+            document.addEventListener("fullscreenchange", onChange);
+            // Best-effort cleanup when the popover closes:
+            // the bar's closePanel removes bodyEl from the DOM, so
+            // listen for disconnection via MutationObserver.
+            const obs = new MutationObserver(() => {
+              if (!bodyEl.isConnected) {
+                document.removeEventListener("fullscreenchange", onChange);
+                obs.disconnect();
+              }
+            });
+            obs.observe(document.body, { childList: true, subtree: true });
+            bodyEl.appendChild(status);
+            bodyEl.appendChild(btn);
+            bodyEl.appendChild(note);
+            refresh();
+          },
+        },
+        {
           ...combatBarPlugin.manifest,
           activate: combatBarPlugin.activate,
         },
