@@ -21,16 +21,29 @@ const WIDTH = 150;
 const HEIGHT = 30;
 const ICON_SIZE = 20;
 
-// 6 indicators with (active, inactive) sprite pairs picked by-eye from
-// the 0x06007498-A6 + 0x06004CE8 ranges. Re-bind these once we identify
-// each sprite's exact state mapping via acclient.c reads.
+// 6 indicators with (active, inactive) sprite pairs.
+//
+// PR-JJ 2026-05-23 corrections: two prior-agent mislabels were caught
+// by visual sprite inspection (blue/red starburst pair):
+//   - "Mini-Game" (0x0600749C/D, blue starburst) was actually the
+//     **beneficial-spells** (buffs) indicator. Retail's
+//     MiniGameIndicator is the chess overlay — distinct sprite.
+//   - "Portal Storm" (0x0600749E/F, red starburst) was actually the
+//     **harmful-spells** (debuffs) indicator.
+// Renamed to `buffs` / `debuffs`; the buffs-hud plugin drives both
+// indicators' active state from `handle.playerEnchantments()` and
+// owns click-to-toggle of the active-spells strip.
+//
+// The previous "Effects" slot (0x060074A0/A1) is re-purposed as
+// `linkup` / Activity (generic connection-state dot) — its real retail
+// meaning is TBD; it's not the effects indicator, that's `buffs`.
 const INDICATORS = [
-  { id: "burden",     name: "Burden",       active: "0x06007498", inactive: "0x06007498" },
-  { id: "effects",    name: "Effects",      active: "0x060074A0", inactive: "0x060074A1" },
-  { id: "linkstatus", name: "Link Status",  active: "0x06004CE8", inactive: "0x06004CE8" },
-  { id: "minigame",   name: "Mini-Game",    active: "0x0600749C", inactive: "0x0600749D" },
-  { id: "portalstorm",name: "Portal Storm", active: "0x0600749E", inactive: "0x0600749F" },
-  { id: "vitae",      name: "Vitae",        active: "0x06007499", inactive: "0x060074A4" },
+  { id: "burden",     name: "Burden",          active: "0x06007498", inactive: "0x06007498" },
+  { id: "buffs",      name: "Beneficial Spells", active: "0x0600749C", inactive: "0x0600749D" },
+  { id: "debuffs",    name: "Harmful Spells",  active: "0x0600749E", inactive: "0x0600749F" },
+  { id: "linkstatus", name: "Link Status",     active: "0x06004CE8", inactive: "0x06004CE8" },
+  { id: "linkup",     name: "Activity",        active: "0x060074A0", inactive: "0x060074A1" },
+  { id: "vitae",      name: "Vitae",           active: "0x06007499", inactive: "0x060074A4" },
 ];
 
 let stylesInjected = false;
@@ -132,6 +145,18 @@ export function mount(_ctx) {
     tip.className = "hb-indicator-tip";
     tip.textContent = ind.name;
     el.appendChild(tip);
+    // PR-JJ 2026-05-23: buffs/debuffs indicators are clickable —
+    // they toggle the buffs-hud strip filtered to the matching type.
+    // Other indicators stay click-passive for now (future work:
+    // burden → encumbrance breakdown, vitae → vitae-pool details).
+    if (ind.id === "buffs" || ind.id === "debuffs") {
+      el.style.cursor = "pointer";
+      el.addEventListener("click", () => {
+        if (typeof window.__buffsHudToggle === "function") {
+          window.__buffsHudToggle(ind.id);
+        }
+      });
+    }
     overlay.appendChild(el);
   }
 

@@ -410,7 +410,7 @@
          because agents drive movement via the wire API, not keystrokes.
          ────────────────────────────────────────────────────────────── */
       html.agent-mode body { margin: 0; padding: 0; overflow: hidden; background: #000; }
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar) { display: none !important; }
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -910,7 +910,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=pr-hh-container-opened";
+      } from "./pkg/holtburger_web.js?v=pr-jj-buffs-hud";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -918,6 +918,7 @@
       import * as combatBarPlugin from "./plugins/combat-bar.js";
       import * as spellbookPlugin from "./plugins/spellbook.js";
       import * as vitalsHudPlugin from "./plugins/vitals-hud.js";
+      import * as buffsHudPlugin from "./plugins/buffs-hud.js";
       import * as vendorUiPlugin from "./plugins/vendor-ui.js";
       import * as radarPlugin from "./plugins/radar.js";
       import * as chatPanelPlugin from "./plugins/chat-panel.js";
@@ -954,6 +955,13 @@
         {
           ...vitalsHudPlugin.manifest,
           mount: vitalsHudPlugin.mount,
+        },
+        {
+          // PR-JJ 2026-05-23: buffs/debuffs strip below vitals.
+          // Standalone overlay (like vitals-hud); iconHidden so no bar
+          // slot, claimed only for the mount lifecycle.
+          ...buffsHudPlugin.manifest,
+          mount: buffsHudPlugin.mount,
         },
         {
           ...radarPlugin.manifest,

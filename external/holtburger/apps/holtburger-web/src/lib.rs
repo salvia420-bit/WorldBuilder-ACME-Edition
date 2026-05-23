@@ -12513,6 +12513,74 @@ impl VendorItemJs {
     pub fn icon_id(&self) -> u32 { self.icon_id }
 }
 
+/// PR-JJ 2026-05-23: Internal cache shape for `latest_enchantments`.
+/// Mirrors the load-bearing subset of
+/// `holtburger_protocol::messages::magic::types::Enchantment`. We
+/// don't store the per-stat modifier vector or the typed-arg payloads
+/// (mod_type / interp_type / start_value / etc.) — the buffs HUD
+/// only needs name/duration/category/power. Full enchantment shape
+/// is preserved in `world.player.enchantments` for spell-stack
+/// resolution; this is a JS-friendly subset.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct PlayerEnchantment {
+    spell_id: u32,
+    spell_category: u32,
+    layer: u32,
+    power_level: u32,
+    start_time: f64,
+    duration: f64,
+    caster_guid: u32,
+}
+
+/// JS-facing wrapper around `PlayerEnchantment`. Cloneable per-access
+/// (wasm-bindgen vec semantics).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct PlayerEnchantmentJs {
+    spell_id: u32,
+    spell_category: u32,
+    layer: u32,
+    power_level: u32,
+    start_time: f64,
+    duration: f64,
+    caster_guid: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl PlayerEnchantmentJs {
+    /// Spell DataID. UI looks up display name + icon from
+    /// `data/spells-catalog.json` keyed by this id.
+    #[wasm_bindgen(getter, js_name = spellId)]
+    pub fn spell_id(&self) -> u32 { self.spell_id }
+    /// Stacking category. Only one enchantment per (category, layer)
+    /// is active on a target — higher power wins. UI groups by this
+    /// when computing "which spell is winning the slot".
+    #[wasm_bindgen(getter, js_name = spellCategory)]
+    pub fn spell_category(&self) -> u32 { self.spell_category }
+    /// Rotation index for spells that re-cast over themselves.
+    #[wasm_bindgen(getter)]
+    pub fn layer(&self) -> u32 { self.layer }
+    /// Relative strength (ties broken by this). Higher = harder to
+    /// dispel.
+    #[wasm_bindgen(getter, js_name = powerLevel)]
+    pub fn power_level(&self) -> u32 { self.power_level }
+    /// Server time (seconds, Derethian epoch) when the effect went
+    /// active. UI computes `elapsed = now() - startTime` to render a
+    /// duration progress bar.
+    #[wasm_bindgen(getter, js_name = startTime)]
+    pub fn start_time(&self) -> f64 { self.start_time }
+    /// Total lifetime in seconds. `0` = permanent (cantrip / equipment).
+    #[wasm_bindgen(getter)]
+    pub fn duration(&self) -> f64 { self.duration }
+    /// GUID of whoever cast the spell. UI tooltip resolves to the
+    /// caster's display name when known (entity store lookup).
+    #[wasm_bindgen(getter, js_name = casterGuid)]
+    pub fn caster_guid(&self) -> u32 { self.caster_guid }
+}
+
 /// Phase 4 step 4 follow-on: human-readable label for a `SkillType`
 /// numeric id. Mirrors the `Display` impl on
 /// `holtburger_common::stats::SkillType` (which uses strum's
@@ -12807,6 +12875,18 @@ pub struct SessionHandle {
     /// existing entity store; this cache only retains the GUID list
     /// so JS can enumerate via [`SessionHandle::get_container_contents`].
     latest_container_contents: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>>,
+    /// PR-JJ 2026-05-23: the local player's active enchantments —
+    /// snapshot of `world.player.enchantments` refreshed by the recv
+    /// loop on every `WorldEvent::PlayerEnchantmentsUpdated` (the
+    /// dispatcher already maps all 8 wire-level magic events —
+    /// MagicUpdate / MagicRemove / MagicPurge / MagicDispel — onto
+    /// this single world-level event with the full active list).
+    /// JS reads via [`SessionHandle::player_enchantments`] from the
+    /// same `kind=8 PlayerStatsUpdated` drain that surfaces
+    /// vitae / attribute / skill / level changes (the dispatcher
+    /// arm at recv_loop:15679 already buckets PlayerEnchantmentsUpdated
+    /// into `stats_changed`).
+    latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -13316,6 +13396,34 @@ impl SessionHandle {
             .get(&container_guid)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// PR-JJ 2026-05-23: the local player's active enchantments — full
+    /// snapshot refreshed by the recv loop on every
+    /// `WorldEvent::PlayerEnchantmentsUpdated`. Empty pre-spawn /
+    /// before the player's biota lands. UI plugins should re-pull on
+    /// each `kind=8 playerStatsUpdated` drain (the dispatcher already
+    /// buckets enchantment updates into `stats_changed`).
+    ///
+    /// Returns one entry per active enchantment, in arrival order.
+    /// Multiple entries with the same `spell_category` are possible
+    /// (stacking layers); UI groups by (category, layer) and picks the
+    /// highest `power_level` per group when computing the active slot.
+    #[wasm_bindgen(js_name = playerEnchantments)]
+    pub fn player_enchantments(&self) -> Vec<PlayerEnchantmentJs> {
+        self.latest_enchantments
+            .borrow()
+            .iter()
+            .map(|e| PlayerEnchantmentJs {
+                spell_id: e.spell_id,
+                spell_category: e.spell_category,
+                layer: e.layer,
+                power_level: e.power_level,
+                start_time: e.start_time,
+                duration: e.duration,
+                caster_guid: e.caster_guid,
+            })
+            .collect()
     }
 
     /// Phase G (spell book): the local player's known-spells list as a
@@ -14733,6 +14841,10 @@ pub async fn start_session(
     let latest_container_contents: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // PR-JJ (2026-05-23): local player's active enchantments snapshot,
+    // refreshed by the recv loop's stats_changed publish block.
+    let latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -14780,6 +14892,7 @@ pub async fn start_session(
         let latest_inventory = latest_inventory.clone();
         let latest_vendor_state_inner = latest_vendor_state.clone();
         let latest_container_contents_inner = latest_container_contents.clone();
+        let latest_enchantments_inner = latest_enchantments.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -14799,6 +14912,7 @@ pub async fn start_session(
                 latest_inventory,
                 latest_vendor_state_inner,
                 latest_container_contents_inner,
+                latest_enchantments_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -14874,6 +14988,7 @@ pub async fn start_session(
         latest_inventory,
         latest_vendor_state,
         latest_container_contents,
+        latest_enchantments,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -15426,6 +15541,34 @@ fn publish_player_known_spells_snapshot(
     *latest_known_spells.borrow_mut() = all.into_iter().collect();
 }
 
+/// PR-JJ 2026-05-23: copy the local player's active enchantments out
+/// of `world.player.enchantments` into the wasm-side cache that the
+/// JS-facing `playerEnchantments()` getter reads. Called from the
+/// stats_changed publish block in the recv loop alongside
+/// `publish_player_stats_snapshot` and
+/// `publish_player_known_spells_snapshot`.
+#[cfg(target_arch = "wasm32")]
+fn publish_player_enchantments_snapshot(
+    world: &holtburger_world::WorldState,
+    latest_enchantments: &std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>>,
+) {
+    let next: Vec<PlayerEnchantment> = world
+        .player
+        .enchantments
+        .iter()
+        .map(|e| PlayerEnchantment {
+            spell_id: e.spell_id as u32,
+            spell_category: e.spell_category as u32,
+            layer: e.layer as u32,
+            power_level: e.power_level,
+            start_time: e.start_time,
+            duration: e.duration,
+            caster_guid: u32::from(e.caster_guid),
+        })
+        .collect();
+    *latest_enchantments.borrow_mut() = next;
+}
+
 /// Phase 6 step D: refresh the cell-scene snapshot the rAF tick reads
 /// each frame. Computes `current_cell` from the local player's pose +
 /// the BFS render set at depth=1, parks them in a shared cell. JS
@@ -15534,6 +15677,7 @@ async fn recv_loop(
     latest_container_contents: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
     >,
+    latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -15853,6 +15997,18 @@ async fn recv_loop(
                         publish_player_known_spells_snapshot(
                             w,
                             &latest_known_spells,
+                        );
+                        // PR-JJ 2026-05-23: piggyback enchantments
+                        // refresh on stats_changed. The dispatcher
+                        // already buckets PlayerEnchantmentsUpdated
+                        // into stats_changed (see arm at 15679), so
+                        // every magic update / remove / purge / dispel
+                        // fires us at the same cadence. JS reads via
+                        // `handle.playerEnchantments()` on each
+                        // `kind=8 playerStatsUpdated` drain.
+                        publish_player_enchantments_snapshot(
+                            w,
+                            &latest_enchantments,
                         );
                         queued_events.borrow_mut().push(ClientEvent {
                             kind: CLIENT_EVENT_KIND_PLAYER_STATS_UPDATED,
