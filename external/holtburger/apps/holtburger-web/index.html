@@ -7714,6 +7714,25 @@ void main() {
                 if (matchedPart && matchedPart.sprite) {
                   matchedPart.sprite.rotation = rotation;
                 }
+                // PR-OO 2026-05-23: 3D path — rotate the door entity's
+                // THREE.Group root around the world-up (Z) axis. The
+                // 2D path above only touches Pixi sprites; the 3D
+                // renderer needs a parallel write to the
+                // entityManager.entityMap[guid].root. Hinge frame from
+                // SetupModel still TODO (the `holtburg_test_door_
+                // rotation_keyframe` follow-on); rotating around the
+                // root's local origin is a visible approximation — for
+                // most doors the origin sits on the hinge edge of the
+                // mesh, so this swings the door open. Doors with a
+                // centred origin will spin in place; refine via SetupModel
+                // hingeFrame extraction in a follow-up.
+                if (window.liveScene3d?.entityManager?.entityMap) {
+                  const inst = window.liveScene3d.entityManager.entityMap.get(doorGuid >>> 0);
+                  if (inst?.root) {
+                    inst.root.rotation.z = doorState === "open" ? -Math.PI / 2 : 0;
+                    inst.__doorState = doorState;
+                  }
+                }
                 // eslint-disable-next-line no-console
                 console.log(
                   `[phase6.E] door 0x${doorGuid.toString(16).toUpperCase().padStart(8, "0")} → ${doorState}`
