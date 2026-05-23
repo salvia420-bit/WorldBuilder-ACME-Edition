@@ -927,6 +927,7 @@
       import * as examineTargetPlugin from "./plugins/examine-target.js";
       import * as mainPanelPlugin from "./plugins/main-panel.js";
       import * as characterInfoPlugin from "./plugins/character-info.js";
+      import * as mapPanelPlugin from "./plugins/map-panel.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
       let pluginClient = null;
@@ -1009,6 +1010,7 @@
       mainPanelPlugin.registerView("inventory", inventoryPlugin.view);
       mainPanelPlugin.registerView("examine",   examineTargetPlugin.view);
       mainPanelPlugin.registerView("character", characterInfoPlugin.view);
+      mainPanelPlugin.registerView("map",       mapPanelPlugin.view);
 
       // Main-panel view hotkeys (retail muscle-memory):
       //   F4 → Inventory     (Wave 1 PR-U)
@@ -1024,6 +1026,9 @@
         } else if (ev.key === "c" || ev.key === "C") {
           ev.preventDefault();
           window.__mainPanel?.toggleView?.("character");
+        } else if (ev.key === "m" || ev.key === "M") {
+          ev.preventDefault();
+          window.__mainPanel?.toggleView?.("map");
         }
       });
 
