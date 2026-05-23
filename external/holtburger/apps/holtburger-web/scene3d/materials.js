@@ -1585,6 +1585,7 @@ export class MaterialCache {
       // Bulk fetch failed entirely — clear all pending so subsequent
       // calls can retry. Caller's await of `preload()` will reject.
       for (const d of need) this.pendingFetches.delete(d);
+      try { window.__diag?.assets?.onMaterialError?.({ dids: need, error: e, source: "preload" }); } catch (_) {}
       throw e;
     }
 
@@ -1760,6 +1761,7 @@ export class MaterialCache {
         "[MaterialCache] preloadBatch: wasm batch threw; all groups fall back",
         e
       );
+      try { window.__diag?.assets?.onMaterialError?.({ dids: flatSurfaceDids, error: e, source: "batch" }); } catch (_) {}
       return {
         groups: groupMeta.map((m) => ({
           surfaceDids: m.surfaceDids,

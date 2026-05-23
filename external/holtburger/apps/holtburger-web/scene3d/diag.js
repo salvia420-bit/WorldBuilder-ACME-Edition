@@ -36,6 +36,8 @@ import { attachWire as _attachWire } from "./diag/wire.js";
 import { attachPhysics as _attachPhysics } from "./diag/physics.js";
 import { attachMotion as _attachMotion } from "./diag/motion.js";
 import { attachPvs as _attachPvs } from "./diag/pvs.js";
+import { attachAssets as _attachAssets } from "./diag/assets.js";
+import { attachIntegrity as _attachIntegrity } from "./diag/integrity.js";
 
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
@@ -410,6 +412,8 @@ export function installDiag() {
     ["physics",    _attachPhysics],
     ["motion",     _attachMotion],
     ["pvs",        _attachPvs],
+    ["assets",     _attachAssets],
+    ["integrity",  _attachIntegrity],
   ]) {
     try { fn?.(diag); } catch (e) {
       // eslint-disable-next-line no-console

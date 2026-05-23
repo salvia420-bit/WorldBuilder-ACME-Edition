@@ -287,7 +287,10 @@ export class AnimationCache {
                 motionCommand,
                 stance,
                 fromMotion,
-            );
+            ).catch((e) => {
+                try { window.__diag?.assets?.onAnimationError?.({ setupId, mtableId, motionCmd: motionCommand, stance, error: e, source: "get" }); } catch (_) {}
+                throw e;
+            });
 
             const partCount = animData.partCount >>> 0;
             const numFrames = animData.numFrames >>> 0;
@@ -341,8 +344,9 @@ export class AnimationCache {
                 }
                 try {
                     partGroups[p] = meshToGeometryGroups(partMesh);
-                } catch (_) {
+                } catch (e) {
                     partGroups[p] = { groups: [], surfaceDids: [] };
+                    try { window.__diag?.assets?.onMeshError?.({ partIndex: p, setupId, error: e }); } catch (_) {}
                 }
                 if (typeof partMesh.free === "function") {
                     try { partMesh.free(); } catch (_) {}
@@ -537,6 +541,7 @@ export class AnimationCache {
                 try {
                     batch = await fetchKeyframesBatch(new Uint32Array(fresh));
                 } catch (e) {
+                    try { window.__diag?.assets?.onAnimationError?.({ setupIds: fresh, error: e, source: "getBatch" }); } catch (_) {}
                     // Roll back so a retry can re-attempt.
                     for (const id of fresh) {
                         this.prewarmedSetupIds.delete(id);

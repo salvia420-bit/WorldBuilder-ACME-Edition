@@ -1066,6 +1066,7 @@ export class EntityManager {
           `[phase7.4b] fetchEntitySurfacesPixels failed for entity ${guid.toString(16)}:`,
           e
         );
+        try { window.__diag?.assets?.onMaterialError?.({ guid, dids: allSurfaceDids, error: e, source: "surface" }); } catch (_) {}
       }
     } else if (allSurfaceDids.size > 0 && this.materialCache) {
       // Cache hit / miss flows through the shared cache. Preload via
@@ -1081,6 +1082,7 @@ export class EntityManager {
           `[phase7.4b] materialCache.preload failed for entity ${guid.toString(16)}:`,
           e
         );
+        try { window.__diag?.assets?.onMaterialError?.({ guid, dids: allSurfaceDids, error: e, source: "surface" }); } catch (_) {}
       }
     }
 
