@@ -932,6 +932,7 @@
       import * as fellowshipPanelPlugin from "./plugins/fellowship-panel.js";
       import * as journalPanelPlugin from "./plugins/journal-panel.js";
       import * as contractsPanelPlugin from "./plugins/contracts-panel.js";
+      import * as optionsPanelPlugin from "./plugins/options-panel.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
       let pluginClient = null;
@@ -1019,6 +1020,11 @@
       mainPanelPlugin.registerView("spellbook", spellbookPlugin.view);
       mainPanelPlugin.registerView("journal",   journalPanelPlugin.view);
       mainPanelPlugin.registerView("contracts", contractsPanelPlugin.view);
+      // PR-II (2026-05-23): Options view — main-panel port of retail
+      // gmConfigUI (layout 0x21000029). Same convention as Inventory /
+      // Character / Spellbook / etc. — shares the right-side pane and
+      // gets brass-rim chrome from main-panel's container slot.
+      mainPanelPlugin.registerView("options",   optionsPanelPlugin.view);
       // PR-GG (2026-05-23): vendor-ui is its own top-level horizontal bar
       // (retail gmVendorUI layout 0x21000012), NOT a main-panel view.
       // The plugin's bar-slot mount() builds a standalone overlay; the
@@ -1032,7 +1038,7 @@
       // A with strafe-left, etc. F-keys never collide with movement.
       //   F1 Character    F2 Spellbook   F3 Map        F4 Inventory
       //   F5 Spellbook    F6 Journal     F7 Contracts  F8 Allegiance
-      //   F9 Fellowship
+      //   F9 Fellowship   F10 Options (PR-II 2026-05-23)
       // Examine is no longer auto-fired on selection (regression fix
       // 2026-05-22): clicking a vendor / NPC now passes through to the
       // interact path. Open examine via main-panel toggle if needed.
@@ -1046,6 +1052,7 @@
         F7: "contracts",
         F8: "allegiance",
         F9: "fellowship",
+        F10: "options",
       };
       window.addEventListener("keydown", (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
