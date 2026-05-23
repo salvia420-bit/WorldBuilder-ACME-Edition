@@ -410,7 +410,7 @@
          because agents drive movement via the wire API, not keystrokes.
          ────────────────────────────────────────────────────────────── */
       html.agent-mode body { margin: 0; padding: 0; overflow: hidden; background: #000; }
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel) { display: none !important; }
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -910,7 +910,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=wire-relight";
+      } from "./pkg/holtburger_web.js?v=pr-gg-vendor-bar";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -1019,9 +1019,11 @@
       mainPanelPlugin.registerView("spellbook", spellbookPlugin.view);
       mainPanelPlugin.registerView("journal",   journalPanelPlugin.view);
       mainPanelPlugin.registerView("contracts", contractsPanelPlugin.view);
-      // PR-CC (2026-05-22): vendor-ui registered as a main-panel view.
-      // No hotkey — auto-opens on kind=12 VendorOpened (server-driven).
-      mainPanelPlugin.registerView("vendor",    vendorUiPlugin.view);
+      // PR-GG (2026-05-23): vendor-ui is its own top-level horizontal bar
+      // (retail gmVendorUI layout 0x21000012), NOT a main-panel view.
+      // The plugin's bar-slot mount() builds a standalone overlay; the
+      // kind=12 VendorOpened handler shows it. PR-CC's registerView call
+      // is gone — vendor never shares the inventory/skills/etc. pane.
 
       // Main-panel view hotkeys — F-keys only. Single-letter bindings
       // (S, A, F, C, J, K, M, E) were retired 2026-05-22 per user

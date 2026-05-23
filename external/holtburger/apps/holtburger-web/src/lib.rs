@@ -11465,15 +11465,18 @@ enum SessionCommand {
     RemoveSpellFromBook {
         spell_id: u32,
     },
-    /// Vendor-UI: JS-side requested purchase of `amount` × vendor stock
-    /// entry (`vendor_item_guid`) from `vendor_guid`. Sends
-    /// `GameAction::Buy` (sub-opcode 0x005F) with a single
-    /// `ItemProfileActionData`. ACE owns price validation, inventory
-    /// bulk/encumbrance checks, and pyreal/alt-currency deduction;
-    /// this is fire-and-forget.
+    /// Vendor-UI: JS-side requested purchase of one or more vendor
+    /// stock entries from `vendor_guid`. Each `(vendor_item_guid,
+    /// amount)` pair becomes one `ItemProfileActionData` in the
+    /// outgoing `GameAction::Buy` (sub-opcode 0x005F). Retail's
+    /// `gmVendorUI::SendShopEvent` (acclient.c:4582) flushes the
+    /// Buying queue as a single multi-item packet; PR-GG mirrors
+    /// that behaviour so a batch Confirm is one wire op instead of
+    /// N. ACE owns price validation, inventory bulk/encumbrance
+    /// checks, and pyreal/alt-currency deduction; fire-and-forget.
     ///
-    /// PR-EE 2026-05-22: `vendor_item_guid` is the per-stock-entry
-    /// WorldObject GUID assigned by ACE when populating
+    /// PR-EE 2026-05-22: each `vendor_item_guid` is the per-stock-
+    /// entry WorldObject GUID assigned by ACE when populating
     /// `Vendor.DefaultItemsForSale` / `UniqueItemsForSale`, surfaced
     /// to JS as `VendorItemJs.itemGuid`. NOT the wcid — ACE's
     /// `BuyItems_ValidateTransaction` keys those dictionaries by
@@ -11482,18 +11485,17 @@ enum SessionCommand {
     /// (no failure event, but no items / coin change either).
     BuyFromVendor {
         vendor_guid: u32,
-        vendor_item_guid: u32,
-        amount: i32,
+        items: Vec<(u32, i32)>,
     },
-    /// Vendor-UI: JS-side requested sale of `amount` × player item
-    /// (`item_guid`) to `vendor_guid`. Sends `GameAction::Sell`
-    /// (sub-opcode 0x0060) with a single `ItemProfileActionData`.
-    /// The `object_guid` field on the wire here is the *player's*
-    /// item GUID.
+    /// Vendor-UI: JS-side requested sale of one or more player items
+    /// to `vendor_guid`. Each `(item_guid, amount)` pair becomes one
+    /// `ItemProfileActionData` in the outgoing `GameAction::Sell`
+    /// (sub-opcode 0x0060). The `object_guid` field on the wire is
+    /// the *player's* item GUID. PR-GG: multi-item to mirror retail's
+    /// batched SendShopEvent.
     SellToVendor {
         vendor_guid: u32,
-        item_guid: u32,
-        amount: i32,
+        items: Vec<(u32, i32)>,
     },
 }
 
@@ -14252,70 +14254,87 @@ impl SessionHandle {
             })
     }
 
-    /// Vendor-UI: buy `amount` × the vendor stock entry identified by
-    /// `vendor_item_guid` from `vendor_guid`. The wire-side
-    /// `ItemProfileActionData.object_guid` here is the **vendor's
-    /// per-stock-entry WorldObject GUID** (NOT wcid) — sourced from
-    /// `VendorItemJs.itemGuid`, populated from
-    /// `VendorItemEventData.description.guid` in the cached
-    /// ApproachVendor payload.
+    /// Vendor-UI: buy a batch of stock entries from `vendor_guid` in
+    /// one `GameAction::Buy` (sub-opcode 0x005F). `item_guids` and
+    /// `amounts` are parallel arrays — the *i*th call pairs
+    /// `item_guids[i]` (the vendor's per-stock-entry WO GUID,
+    /// surfaced as `VendorItemJs.itemGuid`) with `amounts[i]`. Empty
+    /// or mismatched-length input is a no-op (silent — debug-logged).
     ///
-    /// PR-EE 2026-05-22: prior implementation took a `wcid` parameter
-    /// here, but ACE's `Vendor.BuyItems_ValidateTransaction` keys
-    /// `DefaultItemsForSale` / `UniqueItemsForSale` by `ObjectGuid`,
-    /// and a wcid never matches an allocated GUID. The validation
-    /// loop would walk an empty `defaultItemProfiles` list, compute
-    /// `totalPrice = 0`, pass the coin check trivially, and call
-    /// `Player.FinalizeBuyTransaction(this, [], [], 0)` — emitting
-    /// the Vendor "buy" emote and an `ApproachVendor` refresh, but
-    /// creating no item, deducting no pyreals, and never sending a
-    /// `GameMessageCreateObject` back to the client. The visible
-    /// symptom was an inert client (no inventory cache update + no
-    /// pyreal decrement) despite the chat showing the buy emote.
+    /// PR-GG mirrors retail's `gmVendorUI::SendShopEvent` atomic
+    /// flush (acclient.c:4582): the Buying tab queues N selections,
+    /// the Confirm button sends them as one packet instead of N
+    /// fire-and-forget calls.
     ///
-    /// Amount defaults to 1 if `amount <= 0`. Fire-and-forget; ACE
-    /// pushes a `GameMessageCreateObject` for the newly-created
-    /// inventory item on success, plus the inventory-snapshot
-    /// publisher emits a `kind=11 InventoryUpdated` event.
+    /// PR-EE 2026-05-22 (still holds): each `vendor_item_guid` is
+    /// the per-stock-entry WO GUID assigned by ACE when populating
+    /// `Vendor.DefaultItemsForSale` / `UniqueItemsForSale` — NOT
+    /// the wcid. ACE's `BuyItems_ValidateTransaction` keys those
+    /// dictionaries by `ObjectGuid`, and a wcid never matches a
+    /// real allocated GUID, so the transaction silently validates
+    /// an empty item list (no failure event, no items, no coin
+    /// change).
+    ///
+    /// Amounts ≤ 0 are clamped to 1. Fire-and-forget; ACE pushes a
+    /// `GameMessageCreateObject` per item on success plus a
+    /// `kind=11 InventoryUpdated` event.
     #[wasm_bindgen(js_name = buyFromVendor)]
     pub fn buy_from_vendor(
         &self,
         vendor_guid: u32,
-        vendor_item_guid: u32,
-        amount: i32,
+        item_guids: Vec<u32>,
+        amounts: Vec<i32>,
     ) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
-        let amount = if amount <= 0 { 1 } else { amount };
+        if item_guids.is_empty() || item_guids.len() != amounts.len() {
+            console_log_str(&format!(
+                "[buy] no-op: item_guids.len()={} amounts.len()={}",
+                item_guids.len(),
+                amounts.len(),
+            ));
+            return Ok(());
+        }
+        let items: Vec<(u32, i32)> = item_guids
+            .into_iter()
+            .zip(amounts.into_iter())
+            .map(|(g, a)| (g, if a <= 0 { 1 } else { a }))
+            .collect();
         self.cmd_tx
-            .unbounded_send(SessionCommand::BuyFromVendor {
-                vendor_guid,
-                vendor_item_guid,
-                amount,
-            })
+            .unbounded_send(SessionCommand::BuyFromVendor { vendor_guid, items })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("buyFromVendor: cmd channel closed ({e})"))
             })
     }
 
-    /// Vendor-UI: sell `amount` × player-owned item (`item_guid`) to
-    /// `vendor_guid`. ACE validates the item is in the player's
-    /// inventory + not equipped + tradeable; failures surface via
-    /// chat / WeenieError. Amount defaults to 1 if `amount <= 0`.
+    /// Vendor-UI: sell a batch of player-owned items to `vendor_guid`
+    /// in one `GameAction::Sell` (sub-opcode 0x0060). Same parallel-
+    /// array shape as `buyFromVendor` — `item_guids[i]` is a
+    /// player-owned inventory GUID, `amounts[i]` is the qty to sell.
+    /// ACE validates each item is owned + not equipped + tradeable;
+    /// failures surface via chat / WeenieError.
     #[wasm_bindgen(js_name = sellToVendor)]
     pub fn sell_to_vendor(
         &self,
         vendor_guid: u32,
-        item_guid: u32,
-        amount: i32,
+        item_guids: Vec<u32>,
+        amounts: Vec<i32>,
     ) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
-        let amount = if amount <= 0 { 1 } else { amount };
+        if item_guids.is_empty() || item_guids.len() != amounts.len() {
+            console_log_str(&format!(
+                "[sell] no-op: item_guids.len()={} amounts.len()={}",
+                item_guids.len(),
+                amounts.len(),
+            ));
+            return Ok(());
+        }
+        let items: Vec<(u32, i32)> = item_guids
+            .into_iter()
+            .zip(amounts.into_iter())
+            .map(|(g, a)| (g, if a <= 0 { 1 } else { a }))
+            .collect();
         self.cmd_tx
-            .unbounded_send(SessionCommand::SellToVendor {
-                vendor_guid,
-                item_guid,
-                amount,
-            })
+            .unbounded_send(SessionCommand::SellToVendor { vendor_guid, items })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("sellToVendor: cmd channel closed ({e})"))
             })
@@ -18518,24 +18537,28 @@ async fn recv_loop(
                             "[remove_spell] spell_id={spell_id}",
                         ));
                     }
-                    Some(SessionCommand::BuyFromVendor {
-                        vendor_guid,
-                        vendor_item_guid,
-                        amount,
-                    }) => {
+                    Some(SessionCommand::BuyFromVendor { vendor_guid, items }) => {
                         use holtburger_common::Guid;
                         use holtburger_protocol::messages::{
                             BuyActionData, GameAction, ItemProfileActionData,
                         };
-                        // PR-EE 2026-05-22: object_guid = vendor's
-                        // per-stock-entry WO GUID (NOT wcid). See
-                        // SessionHandle::buy_from_vendor doc comment.
+                        let item_count = items.len();
+                        let log_preview: String = items
+                            .iter()
+                            .take(4)
+                            .map(|(g, a)| format!("0x{g:08X}×{a}"))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let profiles: Vec<ItemProfileActionData> = items
+                            .into_iter()
+                            .map(|(guid, amount)| ItemProfileActionData {
+                                amount,
+                                object_guid: Guid(guid),
+                            })
+                            .collect();
                         let action = GameAction::Buy(Box::new(BuyActionData {
                             vendor_guid: Guid(vendor_guid),
-                            items: vec![ItemProfileActionData {
-                                amount,
-                                object_guid: Guid(vendor_item_guid),
-                            }],
+                            items: profiles,
                         }));
                         if let Err(e) = session.send_action(action).await {
                             log::warn!("recv_loop: send_action(Buy): {e}");
@@ -18549,24 +18572,31 @@ async fn recv_loop(
                             return;
                         }
                         console_log_str(&format!(
-                            "[buy] vendor=0x{vendor_guid:08X} item=0x{vendor_item_guid:08X} amount={amount}",
+                            "[buy] vendor=0x{vendor_guid:08X} count={item_count} items=[{log_preview}]",
                         ));
                     }
-                    Some(SessionCommand::SellToVendor {
-                        vendor_guid,
-                        item_guid,
-                        amount,
-                    }) => {
+                    Some(SessionCommand::SellToVendor { vendor_guid, items }) => {
                         use holtburger_common::Guid;
                         use holtburger_protocol::messages::{
                             GameAction, ItemProfileActionData, SellActionData,
                         };
+                        let item_count = items.len();
+                        let log_preview: String = items
+                            .iter()
+                            .take(4)
+                            .map(|(g, a)| format!("0x{g:08X}×{a}"))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let profiles: Vec<ItemProfileActionData> = items
+                            .into_iter()
+                            .map(|(guid, amount)| ItemProfileActionData {
+                                amount,
+                                object_guid: Guid(guid),
+                            })
+                            .collect();
                         let action = GameAction::Sell(Box::new(SellActionData {
                             vendor_guid: Guid(vendor_guid),
-                            items: vec![ItemProfileActionData {
-                                amount,
-                                object_guid: Guid(item_guid),
-                            }],
+                            items: profiles,
                         }));
                         if let Err(e) = session.send_action(action).await {
                             log::warn!("recv_loop: send_action(Sell): {e}");
@@ -18580,7 +18610,7 @@ async fn recv_loop(
                             return;
                         }
                         console_log_str(&format!(
-                            "[sell] vendor=0x{vendor_guid:08X} item=0x{item_guid:08X} amount={amount}",
+                            "[sell] vendor=0x{vendor_guid:08X} count={item_count} items=[{log_preview}]",
                         ));
                     }
                     Some(SessionCommand::TargetedMissileAttack {
