@@ -996,10 +996,11 @@
         },
         // PR-Z (2026-05-22): spellbook moved out of the bar — registered
         // as a main-panel view below. Bar slot removed.
+        // PR-CC (2026-05-22): vendor-ui moved out of the bar — registered
+        // as a main-panel view below. The bar slot below still mounts
+        // the kind=12 event subscription (iconHidden so no icon shows);
+        // the view itself is auto-pushed onto main-panel.
         {
-          // Vendor Window — event-driven (auto-pops on kind=12 VendorOpened),
-          // iconHidden so it doesn't claim bar space. Per acpedia "Trading"
-          // article: shows vendor's stock + buy/sell rates + prices.
           ...vendorUiPlugin.manifest,
           mount: vendorUiPlugin.mount,
         },
@@ -1018,6 +1019,9 @@
       mainPanelPlugin.registerView("spellbook", spellbookPlugin.view);
       mainPanelPlugin.registerView("journal",   journalPanelPlugin.view);
       mainPanelPlugin.registerView("contracts", contractsPanelPlugin.view);
+      // PR-CC (2026-05-22): vendor-ui registered as a main-panel view.
+      // No hotkey — auto-opens on kind=12 VendorOpened (server-driven).
+      mainPanelPlugin.registerView("vendor",    vendorUiPlugin.view);
 
       // Main-panel view hotkeys — F-keys only. Single-letter bindings
       // (S, A, F, C, J, K, M, E) were retired 2026-05-22 per user
