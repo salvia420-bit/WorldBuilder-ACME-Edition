@@ -99,28 +99,74 @@ export function attachPvs(diag) {
     },
 
     /**
-     * Diff observed visible-cell set against an oracle Set<cellId>. When
-     * `oracleVisibleSet` is null/undefined, returns observed-only (no
-     * throw — `diff()` is the entry-point harnesses call first to check
-     * the wiring). Missing = oracle has, observer doesn't (under-load).
-     * Extra = observer shows, oracle doesn't (failed-to-hide / leaked).
+     * Diff observed visible-cell set against an oracle. Accepts EITHER:
+     *   - `Set<cellId>` (numeric u32 entries) — direct comparison
+     *   - oracle object from WB.T `pvs-visibility-snapshot` shape:
+     *     `{ cellHex, datVisibleCells: [hexString, ...], ... }`
+     *     (the canonical baked PVS set per acclient.c:362347-362403)
+     *
+     * When `oracle` is null/undefined, returns observed-only (no throw —
+     * `diff()` is the entry-point harnesses call first to check wiring).
+     * Missing = oracle has, observer doesn't (under-load — runtime PVS
+     * narrower than the bake). Extra = observer shows, oracle doesn't
+     * (failed-to-hide / leaked — runtime over-renders vs the bake).
      */
-    diff(oracleVisibleSet) {
+    diff(oracle) {
       const obs = this.visibleCells();
-      if (!oracleVisibleSet || !(oracleVisibleSet instanceof Set)) {
+      // Normalize oracle into a Set<cellId-u32>
+      let oracleSet = null;
+      if (oracle instanceof Set) {
+        oracleSet = oracle;
+      } else if (oracle && Array.isArray(oracle.datVisibleCells)) {
+        oracleSet = new Set();
+        for (const entry of oracle.datVisibleCells) {
+          // Accept hex string "0x..." or numeric u32
+          let cid;
+          if (typeof entry === "string") cid = parseInt(entry, 16) >>> 0;
+          else if (typeof entry === "number") cid = entry >>> 0;
+          else continue;
+          if (cid) oracleSet.add(cid);
+        }
+      }
+      if (!oracleSet) {
         return { observed: Array.from(obs).map(hexCell), oracle: null };
       }
       const missing = [];
       const extra = [];
-      for (const cid of oracleVisibleSet) if (!obs.has(cid >>> 0)) missing.push(hexCell(cid));
-      for (const cid of obs) if (!oracleVisibleSet.has(cid >>> 0)) extra.push(hexCell(cid));
+      for (const cid of oracleSet) if (!obs.has(cid >>> 0)) missing.push(hexCell(cid));
+      for (const cid of obs) if (!oracleSet.has(cid >>> 0)) extra.push(hexCell(cid));
       return {
         observedCount: obs.size,
-        oracleCount: oracleVisibleSet.size,
+        oracleCount: oracleSet.size,
+        oracleSource: oracle?.source ?? null,
+        oracleCellHex: oracle?.cellHex ?? null,
         missing,
         extra,
         ok: missing.length === 0 && extra.length === 0,
       };
+    },
+
+    /**
+     * Fetch a WB.T `pvs-visibility-snapshot` oracle from disk and parse
+     * it. Returns the JSON object (suitable to pass directly to diff())
+     * or `{error}` on failure. Caches per-URL on `_oracleCache`.
+     */
+    async loadOracle(url) {
+      this._oracleCache = this._oracleCache || {};
+      if (this._oracleCache[url]) return this._oracleCache[url];
+      if (typeof fetch !== "function") return { error: "fetch unavailable" };
+      try {
+        const r = await fetch(url, { cache: "reload" });
+        if (!r.ok) return { error: `fetch ${url}: ${r.status}` };
+        const data = await r.json();
+        if (!Array.isArray(data.datVisibleCells)) {
+          return { error: "oracle missing datVisibleCells array" };
+        }
+        this._oracleCache[url] = data;
+        return data;
+      } catch (e) {
+        return { error: String(e?.message ?? e) };
+      }
     },
 
     /** Cheap status snapshot for telemetry / smoke tests. */

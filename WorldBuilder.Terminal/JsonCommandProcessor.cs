@@ -4424,6 +4424,11 @@ public class JsonCommandProcessor {
         var cellNode = node["cellId"] ?? throw new ArgumentException("Missing 'cellId'");
         uint cellId = ParseLbIdScalar(cellNode);
         int bfsDepth = node["bfsDepth"]?.GetValue<int>() ?? 1;
+        // Wave-5.A — optional `out` writes the oracle JSON to disk for
+        // the wire-agent's __diag.pvs.diff() consumption. Convention:
+        // apps/holtburger-web/oracles/pvs-<cellHex>.json. Same pattern
+        // as dump-lb-expectations.
+        string outPath = node["out"]?.GetValue<string>() ?? "";
         var r = _engine.PvsVisibilitySnapshot(datPath, cellId, bfsDepth);
         return Serialize(new {
             success = true,
@@ -4438,7 +4443,7 @@ public class JsonCommandProcessor {
             onlyInLive = r.OnlyInLive,
             onlyInDat = r.OnlyInDat,
             source = r.Source,
-        });
+        }, outPath);
     }
 
     /// <summary>
