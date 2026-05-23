@@ -118,6 +118,14 @@ def write_lb_jsonl(out_dir: Path, lb: int, records: list[dict]) -> None:
             f.write(json.dumps(r, sort_keys=True))
             f.write("\n")
 
+    # Wave-4.B (2026-05-23) — per-LB sha256 sidecar. Consumed by the
+    # holtburger-web `__diag.integrity.verifyManifests({landblocks:[...]})`
+    # surface: client fetches the JSONL + sidecar, hashes the bytes, and
+    # asserts the digest matches. Catches network corruption, modder
+    # tampering downstream of the bake, and stale CDN caches.
+    sha = sha256_file(path)
+    (path.parent / f"{path.name}.sha256").write_text(sha + "\n")
+
 
 def write_readme(out_dir: Path) -> None:
     """Schema doc — explains what the JSONL means and how to consume it."""

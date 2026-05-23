@@ -147,14 +147,78 @@ export function attachIntegrity(diag) {
             url,
             lineage: text.split("\n").slice(0, 10),
             match: null,
-            info: "lineage info only — no per-LB JSONL sidecars yet (Wave 4.B)",
+            info: "lineage info only (input-DAT hashes for the bake). For per-LB byte verification, pass opts.landblocks=[\"0xA9B4\", ...] — Wave 4.B sidecars are emitted by scenery-bake-cli / event-bake-cli / stage-ring-spawns.py.",
           });
         } catch (e) {
           results.push({ source, url, error: String(e?.message ?? e), match: false });
         }
       }
 
-      // 5. Optional ad-hoc verifications passed by caller
+      // 5. Wave-4.B per-LB JSONL verification. Caller passes
+      //    `opts.landblocks: ["0xA9B4", "0xA9B3", ...]` (16-bit form, hex
+      //    string OR number). For each LB and each of the three bake
+      //    types (scenery / events / spawns) we fetch
+      //    `<distBase>/<type>/<lbHex>.<type>.jsonl.sha256` to get the
+      //    expected sha, then verifyOne the JSONL itself. Missing files
+      //    surface as info (no error) — empty LBs are legitimate.
+      if (Array.isArray(opts.landblocks)) {
+        for (const lbInput of opts.landblocks) {
+          let lbHex;
+          if (typeof lbInput === "number") {
+            // Accept either full 32-bit (0xA9B40000) or 16-bit (0xA9B4)
+            const high16 = (lbInput >>> 16) ? (lbInput >>> 16) : lbInput;
+            lbHex = "0x" + (high16 & 0xffff).toString(16).toUpperCase().padStart(4, "0");
+          } else {
+            lbHex = String(lbInput).toUpperCase().replace(/^0X/, "0x");
+            if (!lbHex.startsWith("0x")) lbHex = "0x" + lbHex;
+            // If caller passed full 8-digit form, trim to high-16
+            if (lbHex.length === 10) lbHex = lbHex.slice(0, 6);
+          }
+
+          for (const t of ["scenery", "events", "spawns"]) {
+            const jsonlUrl = `${distBase}${t}/${lbHex}.${t}.jsonl`;
+            const sidecarUrl = `${jsonlUrl}.sha256`;
+            let expectedSha = null;
+            let sidecarMissing = false;
+            try {
+              const r = await fetch(sidecarUrl, { cache: "reload" });
+              if (r.ok) {
+                expectedSha = (await r.text()).trim().split(/\s+/)[0];
+              } else if (r.status === 404) {
+                sidecarMissing = true;
+              } else {
+                results.push({
+                  source: `${t}:${lbHex}`,
+                  url: sidecarUrl,
+                  error: `sidecar fetch ${r.status}`,
+                  match: false,
+                });
+                continue;
+              }
+            } catch (e) {
+              results.push({
+                source: `${t}:${lbHex}`,
+                url: sidecarUrl,
+                error: String(e?.message ?? e),
+                match: false,
+              });
+              continue;
+            }
+            if (sidecarMissing) {
+              results.push({
+                source: `${t}:${lbHex}`,
+                url: sidecarUrl,
+                match: null,
+                info: "sidecar 404 — LB likely not baked for this type (legitimate empty)",
+              });
+              continue;
+            }
+            results.push(await this.verifyOne(`${t}:${lbHex}`, jsonlUrl, expectedSha));
+          }
+        }
+      }
+
+      // 6. Optional ad-hoc verifications passed by caller
       if (Array.isArray(opts.extraVerifications)) {
         for (const v of opts.extraVerifications) {
           results.push(await this.verifyOne(v.source, v.url, v.expectedSha));

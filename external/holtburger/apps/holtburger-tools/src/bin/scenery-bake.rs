@@ -637,6 +637,22 @@ fn bake_one(
     }
     w.flush()?;
 
+    // Wave-4.B (2026-05-23) — per-LB sha256 sidecar. The wire-agent's
+    // diag.integrity.verifyManifests() fetches the JSONL + this sidecar,
+    // computes sha256 of the fetched bytes via crypto.subtle.digest, and
+    // compares. Catches network corruption, modder-edited bake outputs
+    // that bypassed the input-DAT preflight, and CDN stale-cache. Bake-
+    // input integrity (the canonical DATs the bake was run against) is
+    // covered by the existing top-level `bake-source.sha256` written
+    // once per CLI run.
+    let sha = sha256_file(&out_path)
+        .with_context(|| format!("sha256 {}", out_path.display()))?;
+    let sidecar_path = out_dir.join(format!("0x{lb_key:04X}.scenery.jsonl.sha256"));
+    let mut sf = File::create(&sidecar_path)
+        .with_context(|| format!("create {}", sidecar_path.display()))?;
+    writeln!(sf, "{sha}")?;
+    sf.flush()?;
+
     debug!(
         "LB 0x{lb_key:04X}: {} placements ({} buildings collide-blocking) → {}",
         placements.len(),

@@ -726,6 +726,16 @@ fn bake_one_lb(
     }
     w.flush()?;
 
+    // Wave-4.B per-LB sha256 sidecar. See scenery-bake.rs for the
+    // wire-agent diag.integrity contract.
+    let sha = sha256_file(&out_path)
+        .with_context(|| format!("sha256 {}", out_path.display()))?;
+    let sidecar_path = out_dir.join(format!("0x{lb_key:04X}.events.jsonl.sha256"));
+    let mut sf = File::create(&sidecar_path)
+        .with_context(|| format!("create {}", sidecar_path.display()))?;
+    writeln!(sf, "{sha}")?;
+    sf.flush()?;
+
     debug!(
         "LB 0x{lb_key:04X}: ambient={} anim_sound={} particle={} → {}",
         ambient.len(),
@@ -852,6 +862,15 @@ fn bake_sky_chain(
         write_sky_particle_line(&mut w, t, hw)?;
     }
     w.flush()?;
+
+    // Wave-4.B sidecar for the region sky-events file (one-shot per bake run).
+    let sha = sha256_file(&out_path)
+        .with_context(|| format!("sha256 {}", out_path.display()))?;
+    let sidecar_path = out_dir.join("region.sky-events.jsonl.sha256");
+    let mut sf = File::create(&sidecar_path)
+        .with_context(|| format!("create {}", sidecar_path.display()))?;
+    writeln!(sf, "{sha}")?;
+    sf.flush()?;
 
     debug!(
         "sky-chain: {} triggers (skipped_emitter_resolve={}) → {}",
