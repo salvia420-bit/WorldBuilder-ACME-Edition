@@ -2002,6 +2002,7 @@ export class EntityManager {
       }
     }
     inst.crossFadeTo(action, cacheKey, CROSSFADE_S);
+    try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
   }
 
   /**

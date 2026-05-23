@@ -279,6 +279,7 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
     predicted.x, predicted.y, renderZ,
     qw, 0.0, 0.0, qz
   );
+  try { window.__diag?.physics?.onFrame?.(); } catch (_) {}
 }
 
 /**

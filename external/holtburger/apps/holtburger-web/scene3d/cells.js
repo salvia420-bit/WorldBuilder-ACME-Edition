@@ -647,6 +647,11 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       container.visible = want;
     }
   }
+
+  // Wave-3 diag hook: post-flip notify so diag.pvs can detect transitions
+  // against the just-applied visibility state. Reuses `cellId` resolved
+  // above — no extra wasm call. Optional-chained throughout; never throws.
+  try { window.__diag?.pvs?.onCellTick?.(cellId); } catch (_) { /* swallow */ }
 }
 
 /**
