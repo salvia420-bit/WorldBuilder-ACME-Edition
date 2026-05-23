@@ -176,6 +176,27 @@
       #fullscreen-btn:hover { background: rgba(0, 0, 0, 0.8); }
       #canvas-column:fullscreen { background: #000; width: 100vw; height: 100vh; }
       #canvas-column:fullscreen #canvas { width: 100vw; height: 100vh; }
+      /* PR-NN 2026-05-23: when document.documentElement enters fullscreen
+         (path used by the bar's Fullscreen slot, works in both agent-
+         mode and normal 3D-render mode), force the canvas hierarchy to
+         fill the viewport. The :fullscreen rules above only fire when
+         canvas-column IS the fullscreen target — they don't trigger
+         when documentElement is. */
+      html:fullscreen { background: #000; width: 100vw; height: 100vh; }
+      html:fullscreen body { width: 100vw; height: 100vh; margin: 0; padding: 0; overflow: hidden; }
+      html:fullscreen #stage,
+      html:fullscreen #canvas-column,
+      html:fullscreen #canvas {
+        width: 100vw !important;
+        height: 100vh !important;
+      }
+      html:fullscreen #stage {
+        position: fixed !important;
+        inset: 0 !important;
+        margin: 0; padding: 0;
+        display: block !important;
+        background: #000;
+      }
       /* Virtual keypad — for testing on devices without a physical
          keyboard (Tailscale-served page on phone/tablet). Mirrors the
          WASD/QE/Shift movement keys + scroll-wheel zoom + a centre-on-
@@ -410,7 +431,7 @@
          because agents drive movement via the wire API, not keystrokes.
          ────────────────────────────────────────────────────────────── */
       html.agent-mode body { margin: 0; padding: 0; overflow: hidden; background: #000; }
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar) { display: none !important; }
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -920,6 +941,7 @@
       import * as vitalsHudPlugin from "./plugins/vitals-hud.js";
       import * as buffsHudPlugin from "./plugins/buffs-hud.js";
       import * as targetBarPlugin from "./plugins/target-bar.js";
+      import * as combatHudPlugin from "./plugins/combat-hud.js";
       import * as vendorUiPlugin from "./plugins/vendor-ui.js";
       import * as radarPlugin from "./plugins/radar.js";
       import * as chatPanelPlugin from "./plugins/chat-panel.js";
@@ -973,6 +995,13 @@
           mount: targetBarPlugin.mount,
         },
         {
+          // PR-NN 2026-05-23: retail gmCombatUI horizontal bar —
+          // auto-shows when in combat stance, hides in peace. Power
+          // slider + 3 height buttons. iconHidden — claims no bar slot.
+          ...combatHudPlugin.manifest,
+          mount: combatHudPlugin.mount,
+        },
+        {
           ...radarPlugin.manifest,
           mount: radarPlugin.mount,
         },
@@ -1021,12 +1050,13 @@
           name: "Fullscreen",
           icon: "⛶",
           activate: (bodyEl) => {
-            const col = document.getElementById("canvas-column");
-            if (!col) {
-              bodyEl.textContent = "fullscreen unavailable (#canvas-column missing)";
-              return;
-            }
-            const isFull = !!document.fullscreenElement;
+            // PR-NN 2026-05-23: target document.documentElement so
+            // fullscreen works in BOTH agent-mode (canvas-column may
+            // be 0x0 because the body>* whitelist hides it; #stage is
+            // the visible carrier) AND normal 3D-render mode. The
+            // html:fullscreen CSS above expands #stage/#canvas to
+            // 100vw/100vh in either mode. Was previously targeting
+            // canvas-column which only worked in normal mode.
             bodyEl.innerHTML = "";
             const status = document.createElement("div");
             status.style.cssText = "margin-bottom:8px;color:var(--hb-text-cream,#fff);";
@@ -1047,7 +1077,19 @@
               if (document.fullscreenElement) {
                 document.exitFullscreen?.();
               } else {
-                col.requestFullscreen?.();
+                document.documentElement.requestFullscreen?.()
+                  .then(() => {
+                    // Three.js / Pixi canvas needs a resize to pick up
+                    // the new viewport. Some renderers auto-resize via
+                    // ResizeObserver; many don't. Dispatch a resize
+                    // event so listeners (scene3d/index.js handleResize)
+                    // re-compute camera projection + renderer drawing
+                    // buffer at native res.
+                    setTimeout(() => {
+                      window.dispatchEvent(new Event("resize"));
+                    }, 50);
+                  })
+                  .catch((e) => console.warn("[fullscreen] request failed:", e));
               }
               setTimeout(refresh, 100);
             });

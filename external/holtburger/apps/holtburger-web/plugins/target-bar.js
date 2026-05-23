@@ -307,14 +307,32 @@ function build() {
   stance.addEventListener("click", () => {
     const handle = window.__sessionHandle;
     if (!handle) return;
-    const next = state.inCombat ? COMBAT_MODE_NON_COMBAT : COMBAT_MODE_MELEE_DEFAULT;
+    // Read authoritative current stance from window.__getCurrentStanceLow()
+    // (same source combat-bar uses). `world.player.combat_mode` is
+    // unreliable as a source per combat-bar.js:393-403; the
+    // motion-table-applied stance from kind=5 UpdateMotion is the
+    // truth. Toggle: !Peace → NonCombat(1); Peace → Melee(2).
+    let inCombatNow = state.inCombat;
+    try {
+      const stanceLow = (typeof window.__getCurrentStanceLow === "function")
+        ? window.__getCurrentStanceLow()
+        : 0;
+      // Low 16 bits: Peace = 0x3D (61) per MotionStance; non-zero
+      // non-peace values mean combat stance. Treat any non-peace
+      // motion-stance as in-combat for toggle purposes.
+      // See plugins/combat-bar.js stanceWord() for the full table.
+      inCombatNow = stanceLow !== 0 && stanceLow !== 0x3D;
+    } catch {}
+    const next = inCombatNow ? COMBAT_MODE_NON_COMBAT : COMBAT_MODE_MELEE_DEFAULT;
     try {
       if (typeof handle.setCombatMode === "function") {
         handle.setCombatMode(next);
       } else if (typeof handle.toggleCombatMode === "function") {
         handle.toggleCombatMode();
       }
-      state.inCombat = !state.inCombat;
+      // Optimistic flip; the 500ms poll will reconcile from
+      // __getCurrentStanceLow when the server confirms.
+      state.inCombat = !inCombatNow;
       renderStance();
     } catch (e) {
       console.warn("[target-bar] combat-mode toggle failed", e);
@@ -417,12 +435,18 @@ export function mount(_ctx) {
     }
   }, 250);
 
-  // Stance state derives from the existing combat-bar plugin shared
-  // state (window.__combatBarState.inCombat, set by combat-bar).
-  // Poll at 2Hz; cheap.
+  // Stance state derives from the authoritative motion-table stance
+  // (window.__getCurrentStanceLow — updated by applyConfirmedStance
+  // on every kind=5 UpdateMotion). Low 16 bits == 0x3D = Peace;
+  // anything else non-zero = in combat. Poll at 2Hz; cheap.
   const stanceTimer = setInterval(() => {
-    const inCombat = !!(window.__combatBarState?.inCombat
-      || (window.__sessionHandle?.localPlayerCombatMode?.() ?? 0) >= COMBAT_MODE_MELEE_DEFAULT);
+    let inCombat = state.inCombat;
+    try {
+      const stanceLow = (typeof window.__getCurrentStanceLow === "function")
+        ? window.__getCurrentStanceLow()
+        : 0;
+      inCombat = stanceLow !== 0 && stanceLow !== 0x3D;
+    } catch {}
     if (inCombat !== state.inCombat) {
       state.inCombat = inCombat;
       renderStance();
