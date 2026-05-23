@@ -312,7 +312,7 @@ function buildInState(root, members) {
 export const view = {
   name: "Fellowship",
   nameFor: () => "Fellowship",
-  mount: (parentEl, _ctx) => {
+  mount: (parentEl, ctx) => {
     ensureStyles();
     const root = document.createElement("div");
     root.className = "hb-fellow-root";
@@ -332,7 +332,11 @@ export const view = {
       btn.className = "hb-fellow-tab" + (t.current ? " active" : "");
       btn.textContent = t.label;
       if (t.swap) {
-        btn.addEventListener("click", () => window.__mainPanel?.showView?.(t.swap));
+        btn.addEventListener("click", () => {
+          // PR-DD: keep swap in the same pane the user opened us in.
+          const pane = ctx?._pane || window.__mainPanel?.currentPaneOf?.("fellowship") || "primary";
+          window.__mainPanel?.showView?.(t.swap, {}, { pane });
+        });
       } else if (!t.current) {
         btn.addEventListener("click", () => emit(`[fellowship] ${t.label} tab not wired yet`));
       }

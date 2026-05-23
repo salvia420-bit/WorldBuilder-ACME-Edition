@@ -235,7 +235,7 @@ function emit(msgText, cat = 0) {
 export const view = {
   name: "Allegiance",
   nameFor: () => "Allegiance",
-  mount: (parentEl, _ctx) => {
+  mount: (parentEl, ctx) => {
     ensureStyles();
     const root = document.createElement("div");
     root.className = "hb-alleg-root";
@@ -257,7 +257,10 @@ export const view = {
       btn.textContent = t.label;
       if (t.swap) {
         btn.addEventListener("click", () => {
-          window.__mainPanel?.showView?.(t.swap);
+          // PR-DD: keep swap in the same pane the user opened us in
+          // (allegiance might live in primary OR secondary).
+          const pane = ctx?._pane || window.__mainPanel?.currentPaneOf?.("allegiance") || "primary";
+          window.__mainPanel?.showView?.(t.swap, {}, { pane });
         });
       } else if (!t.current) {
         btn.addEventListener("click", () => emit(`[allegiance] ${t.label} tab not wired yet`));

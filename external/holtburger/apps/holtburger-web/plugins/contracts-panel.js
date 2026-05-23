@@ -201,7 +201,7 @@ const SAMPLE_CONTRACTS = [
 export const view = {
   name: "Contracts",
   nameFor: () => "Contracts",
-  mount: (parentEl, _ctx) => {
+  mount: (parentEl, ctx) => {
     ensureStyles();
     const root = document.createElement("div");
     root.className = "hb-contracts-root";
@@ -217,7 +217,11 @@ export const view = {
       btn.type = "button";
       btn.className = "hb-contracts-tab" + (t.current ? " active" : "");
       btn.textContent = t.label;
-      if (t.swap) btn.addEventListener("click", () => window.__mainPanel?.showView?.(t.swap));
+      if (t.swap) btn.addEventListener("click", () => {
+        // PR-DD: keep swap in the same pane the user opened us in.
+        const pane = ctx?._pane || window.__mainPanel?.currentPaneOf?.("contracts") || "primary";
+        window.__mainPanel?.showView?.(t.swap, {}, { pane });
+      });
       tabs.appendChild(btn);
     }
     root.appendChild(tabs);
