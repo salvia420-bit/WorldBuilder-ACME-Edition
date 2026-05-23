@@ -269,6 +269,21 @@ export async function preInit3D(canvas) {
       return new URLSearchParams(window.location.search).get("wireframe") === "1";
     } catch (_) { return false; }
   })();
+  // 2026-05-23 — `?diag=1` keeps the audio + ambient chain constructed
+  // even under ?wireframe=1, so the diag layer's events surface has
+  // something to observe. Headless browsers without a user gesture
+  // never actually unlock the AudioContext, so audioManager.play()
+  // is a silent no-op — but `_pushEventRecord` fires BEFORE the play
+  // call, which is the part the diag.events.diff() consumes. Same
+  // pattern keeps SoundTableCache + AmbientRuntime alive for the
+  // ambient-channel sampling timers.
+  const diagMode = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search).get("diag") === "1";
+    } catch (_) { return false; }
+  })();
+  const audioConstructable = !wireframeMode || diagMode;
   if (wireframeMode) {
     // eslint-disable-next-line no-console
     console.log("[wire-agent] ?wireframe=1 — skipping atmosphere/clouds/skydome/CSM, wireframe materials");
@@ -654,6 +669,8 @@ export async function preInit3D(canvas) {
     renderOnDemand,
     netDrainHz,
     nullRender,
+    diagMode,
+    audioConstructable,
   };
 }
 
@@ -691,6 +708,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     renderOnDemand,
     netDrainHz,
     nullRender,
+    diagMode: _diagMode,
+    audioConstructable,
   } = pre;
   const { sun, ambient, lightsGroup } = lighting;
 
@@ -2589,7 +2608,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // play() is a no-op until then. Per-tick listener sync happens in
   // the rAF tick below.
   let audioManager = null;
-  if (!wireframeMode && wasmExports && typeof wasmExports.fetchWave === "function") {
+  if (audioConstructable && wasmExports && typeof wasmExports.fetchWave === "function") {
     try {
       audioManager = new AudioManager({
         fetchWave: (did) => wasmExports.fetchWave(did),
@@ -2655,7 +2674,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // Tasks D/E/F will read this via liveScene3d.soundTableCache (or
   // scene3dForBuilders.soundTableCache for subsystems built earlier).
   let soundTableCache = null;
-  if (!wireframeMode && wasmExports && typeof wasmExports.fetchSoundTable === "function") {
+  if (audioConstructable && wasmExports && typeof wasmExports.fetchSoundTable === "function") {
     try {
       soundTableCache = new SoundTableCache({
         fetchSoundTable: (did) => wasmExports.fetchSoundTable(did),

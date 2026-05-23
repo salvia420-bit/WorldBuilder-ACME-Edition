@@ -1364,7 +1364,7 @@
             if (wantRenderer3d) {
               const eagerImport = () => {
                 Promise.all([
-                  import("./scene3d/index.js?v=diag-wave2-2026-05-23"),
+                  import("./scene3d/index.js?v=diag-wave2-audio-v2-2026-05-23"),
                   import("./scene3d/picking.js"),
                   // 2026-05-21 Phase E follow-on — warm the takram CDN
                   // graph (@takram/three-atmosphere, three-geospatial,
@@ -5963,7 +5963,7 @@ void main() {
           new URLSearchParams(window.location.search).get("renderer") === "3d";
         if (useRenderer3d) {
           renderStatus.textContent = "Initializing 3D renderer (?renderer=3d)…";
-          const { init3D } = await import("./scene3d/index.js?v=diag-wave2-2026-05-23");
+          const { init3D } = await import("./scene3d/index.js?v=diag-wave2-audio-v2-2026-05-23");
           // sessionHandle exposed via window.__sessionHandle by the
           // login-flow handler (see line ~5251). Pass it through so
           // future phases (cell visibility, MovementSystem) can read
