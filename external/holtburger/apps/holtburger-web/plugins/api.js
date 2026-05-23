@@ -17,7 +17,7 @@
 // |---|-------------------------------------|------------------------------------------------|---------------------------|-------------|----------------------------------------------------------------------|
 // | 1 | World.OnWeenieCreated               | WorldObject Object                             | EntityUpdate kind=1 SPAWN | PARTIAL     | spawn/position channel only; no bus event "objectCreated" (TODO)     |
 // | 2 | World.OnWeenieReleased              | WorldObject Object                             | EntityUpdate kind=2 REMOVE| PARTIAL     | no bus event "objectReleased" (TODO)                                 |
-// | 3 | World.OnContainerOpened (vendor)    | Container Container                            | kind=12 → "vendorOpened"  | PARTIAL     | only vendor variant; generic container open not surfaced (TODO)      |
+// | 3 | World.OnContainerOpened             | Container Container                            | kind=12 vendorOpened + kind=21 containerOpened | IMPLEMENTED | PR-HH 2026-05-23: ViewContents (opcode 0x0196) routed to kind=21 for chests/corpses; vendor stays on kind=12 |
 // | 4 | World.OnContainerClosed             | Container Container                            | —                         | MISSING     | StopViewingObjectContents not surfaced as ClientEvent (TODO)         |
 // | 5 | World.OnSelectionChanged            | WorldObject? Object                            | —                         | MISSING     | selection is local picking.js state, not bus-broadcast (TODO)        |
 // | 6 | Game.OnStateChanged                 | ClientState NewState, OldState                 | kinds {1,4,5,6,7} partial | PARTIAL     | no single "stateChanged" with old→new; spread across kinds (TODO)    |
@@ -82,7 +82,8 @@ export function createClient(sessionHandle) {
   };
   // TODO(coverage-table row 1):  add "objectCreated"  bus event (World.OnWeenieCreated)
   // TODO(coverage-table row 2):  add "objectReleased" bus event (World.OnWeenieReleased)
-  // TODO(coverage-table row 3):  generalise kind=12 to "containerOpened" (currently vendor-only)
+  // row 3: DONE (PR-HH 2026-05-23) — kind=21 containerOpened fires for
+  // non-vendor containers (chest/corpse/salvage bag); vendor still on kind=12.
   // TODO(coverage-table row 4):  add "containerClosed" (StopViewingObjectContents → new ClientEvent kind)
   // TODO(coverage-table row 5):  add "selectionChanged" bus event (picking.js owns local state today)
   // TODO(coverage-table row 6):  add unified "stateChanged" {oldState,newState} bus event

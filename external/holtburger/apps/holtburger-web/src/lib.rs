@@ -11252,6 +11252,26 @@ const CLIENT_EVENT_KIND_COMBAT_EVENT: u32 = 19;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_CHARACTER_ERROR: u32 = 20;
 
+/// `kind = 21` — ContainerOpened. ACE sent a `GameEvent::ViewContents`
+/// (opcode 0x0196) — the server-side `Container.Open()` path that fires
+/// when the player double-clicks a chest, corpse, or non-vendor
+/// container (see `external/ACE/Source/ACE.Server/WorldObjects/
+/// Container.cs:744-810`). The wasm side has cached the contained item
+/// GUIDs in `latest_container_contents` (keyed by container guid), so
+/// JS can fetch via [`SessionHandle::get_container_contents`].
+///
+/// `u32_payload` = container GUID. `u32_payload_2` = item count.
+/// `string_payload` carries the container's display name when
+/// resolvable from the local world cache (falls back to `"Container"`).
+///
+/// PR-HH 2026-05-23: this generalises the kind=12 VendorOpened path
+/// (vendors send `ApproachVendor` with full stock metadata inline;
+/// non-vendor containers send `ViewContents` with just the item GUIDs,
+/// the item DATA having arrived via separate `GameMessageCreateObject`
+/// packets per item — already cached in the entity store).
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CONTAINER_OPENED: u32 = 21;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -12776,6 +12796,17 @@ pub struct SessionHandle {
     /// Multi-vendor: each vendor's state lives independently so opening
     /// a second vendor doesn't clobber the first.
     latest_vendor_state: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, VendorState>>>,
+    /// PR-HH 2026-05-23: cached contents of the last opened non-vendor
+    /// container, keyed by container GUID. Populated by the recv loop
+    /// when ACE sends `GameEvent::ViewContents` (opcode 0x0196) — the
+    /// server-side `Container.Open()` response for chests, corpses,
+    /// salvage bags, and other non-vendor containers (the vendor path
+    /// uses `ApproachVendor` instead, with full stock metadata inline).
+    /// Item *data* (name, value, icon, etc.) arrives via separate
+    /// `GameMessageCreateObject` packets per item and lives in the
+    /// existing entity store; this cache only retains the GUID list
+    /// so JS can enumerate via [`SessionHandle::get_container_contents`].
+    latest_container_contents: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -13267,6 +13298,24 @@ impl SessionHandle {
             .borrow()
             .get(&vendor_guid)
             .map(VendorStateJs::from_cached)
+    }
+
+    /// PR-HH 2026-05-23: contents (item GUIDs) of the most-recently
+    /// opened non-vendor container, keyed by container GUID. Returns
+    /// an empty vec if the container hasn't been opened (or the cache
+    /// was evicted on close — caller should always re-fire UseObject
+    /// + wait for `kind=21 containerOpened` rather than rely on stale
+    /// caches).
+    ///
+    /// Item *details* (name / value / icon / item_type) live in the
+    /// regular entity store — caller looks each GUID up there.
+    #[wasm_bindgen(js_name = getContainerContents)]
+    pub fn get_container_contents(&self, container_guid: u32) -> Vec<u32> {
+        self.latest_container_contents
+            .borrow()
+            .get(&container_guid)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Phase G (spell book): the local player's known-spells list as a
@@ -14679,6 +14728,11 @@ pub async fn start_session(
     let latest_vendor_state: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, VendorState>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // PR-HH (2026-05-23): per-container cached item-GUID list, refreshed
+    // by the ViewContents handler (chests / corpses / non-vendor).
+    let latest_container_contents: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -14725,6 +14779,7 @@ pub async fn start_session(
         let latest_stats = latest_stats.clone();
         let latest_inventory = latest_inventory.clone();
         let latest_vendor_state_inner = latest_vendor_state.clone();
+        let latest_container_contents_inner = latest_container_contents.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -14743,6 +14798,7 @@ pub async fn start_session(
                 latest_stats,
                 latest_inventory,
                 latest_vendor_state_inner,
+                latest_container_contents_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -14817,6 +14873,7 @@ pub async fn start_session(
         latest_stats,
         latest_inventory,
         latest_vendor_state,
+        latest_container_contents,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -15473,6 +15530,9 @@ async fn recv_loop(
     latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
     latest_vendor_state: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, VendorState>>,
+    >,
+    latest_container_contents: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
     >,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
@@ -17845,6 +17905,48 @@ async fn recv_loop(
                                         )),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_TRADE),
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::ViewContents(data) => {
+                                    // PR-HH 2026-05-23: non-vendor
+                                    // container opened (chest, corpse,
+                                    // salvage bag, etc.). Server-side
+                                    // `Container.Open()` sends N
+                                    // `GameMessageCreateObject` per
+                                    // contained item FIRST (which the
+                                    // entity store has already absorbed
+                                    // by the time we reach this arm),
+                                    // then one `GameEventViewContents`
+                                    // = (container_guid, [(item_guid,
+                                    // container_type), …]). We just
+                                    // cache the GUID list; JS reads
+                                    // item details out of the entity
+                                    // store by guid.
+                                    let container_guid_u32 = u32::from(data.container);
+                                    let item_guids: Vec<u32> = data
+                                        .items
+                                        .iter()
+                                        .map(|i| u32::from(i.guid))
+                                        .collect();
+                                    let item_count = item_guids.len() as u32;
+                                    let container_name = world
+                                        .as_ref()
+                                        .and_then(|w| {
+                                            w.entities.get(data.container).map(|entity| {
+                                                use holtburger_common::properties::WorldObjectExt as _;
+                                                entity.name().to_string()
+                                            })
+                                        })
+                                        .unwrap_or_else(|| "Container".to_string());
+                                    latest_container_contents
+                                        .borrow_mut()
+                                        .insert(container_guid_u32, item_guids);
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CONTAINER_OPENED,
+                                        string_payload: Some(container_name),
+                                        u32_payload: Some(container_guid_u32),
+                                        u32_payload_2: Some(item_count),
                                         f32_payload: None,
                                     });
                                 }

@@ -910,7 +910,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=pr-gg-vendor-bar";
+      } from "./pkg/holtburger_web.js?v=pr-hh-container-opened";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -7424,6 +7424,28 @@ void main() {
                     stringPayload: vendorName,
                     u32Payload: vendorGuidU32,
                     u32Payload2: itemCount,
+                  });
+                }
+              } else if (evt.kind === 21) {
+                // PR-HH 2026-05-23: ContainerOpened. ACE sent a
+                // `GameEvent::ViewContents` (opcode 0x0196) for a
+                // non-vendor container — chest, corpse, salvage bag,
+                // etc. The wasm side cached the item-GUID list
+                // BEFORE pushing this event; plugins read it via
+                // `handle.getContainerContents(containerGuid)`.
+                // (Per-item DATA — name, value, icon — lives in the
+                // existing entity store; look each GUID up there.)
+                const containerName = evt.stringPayload || "Container";
+                const containerGuidU32 = evt.u32Payload >>> 0;
+                const containerGuidHex = containerGuidU32.toString(16).toUpperCase().padStart(8, "0");
+                const containerItemCount = evt.u32Payload2 >>> 0;
+                // eslint-disable-next-line no-console
+                console.log(`[PR-HH] ContainerOpened ${containerName} guid=0x${containerGuidHex} items=${containerItemCount}`);
+                if (window.__pluginClient && window.__pluginClient.events) {
+                  window.__pluginClient.events.emit("containerOpened", {
+                    stringPayload: containerName,
+                    u32Payload: containerGuidU32,
+                    u32Payload2: containerItemCount,
                   });
                 }
               } else if (evt.kind === 13) {
