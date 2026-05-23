@@ -12930,6 +12930,13 @@ pub struct SessionHandle {
     /// the JS-side displacement-vector heading estimator that today's
     /// 3D camera math falls back to.
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
+    /// PR-SS 2026-05-23: timestamp of the most-recent
+    /// `SessionEvent::Message` from the WS transport — the freshest
+    /// server packet of any kind. JS polls `sessionLastRecvAgeMs()`
+    /// at 1Hz to drive the link-status indicator (green=healthy /
+    /// yellow=middling / red=poor). `None` pre-handshake; populated
+    /// on the first message after Connect.
+    last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
     /// Wave 3.F (physics-replay parity, 2026-05-19): pure-prediction
     /// shadow written by the JS-side rAF integrator BEFORE the recv
     /// loop's `PublicUpdatePosition` arm can overwrite `local_player_pose`.
@@ -13386,6 +13393,24 @@ impl SessionHandle {
             .borrow()
             .get(&vendor_guid)
             .map(VendorStateJs::from_cached)
+    }
+
+    /// PR-SS 2026-05-23: milliseconds since the most-recent
+    /// `SessionEvent::Message` from the WS transport. Returns
+    /// `u32::MAX` when no message has been received yet (pre-handshake
+    /// or post-disconnect). Used by the link-status indicator
+    /// (status-indicators.js) to tint the chain icon — green under
+    /// 500ms (healthy), yellow 500-2000ms (middling), red over 2000ms
+    /// (poor / disconnected).
+    #[wasm_bindgen(js_name = sessionLastRecvAgeMs)]
+    pub fn session_last_recv_age_ms(&self) -> u32 {
+        match *self.last_recv_instant.borrow() {
+            Some(when) => {
+                let dt = web_time::Instant::now().saturating_duration_since(when);
+                u32::try_from(dt.as_millis()).unwrap_or(u32::MAX)
+            }
+            None => u32::MAX,
+        }
     }
 
     /// PR-HH 2026-05-23: contents (item GUIDs) of the most-recently
@@ -14905,6 +14930,11 @@ pub async fn start_session(
     // pose, refreshed by the recv-loop on each TickMovement.
     let local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    // PR-SS 2026-05-23: timestamp of last server packet. Recv loop
+    // writes on every SessionEvent::Message; JS-side link-status
+    // indicator polls `sessionLastRecvAgeMs()` to tint the icon.
+    let last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     // Wave 3.F (2026-05-19): shared cell for the JS rAF integrator's
     // pure-prediction frame. Written by JS via
     // `setLastClientPrediction`; read by JS via
@@ -14940,6 +14970,7 @@ pub async fn start_session(
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
+        let last_recv_instant_inner = last_recv_instant.clone();
         let collision_scene_inner = collision_scene.clone();
         let terrain_heights_shadow_inner = terrain_heights_shadow.clone();
         wasm_bindgen_futures::spawn_local(async move {
@@ -14960,6 +14991,7 @@ pub async fn start_session(
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
+                last_recv_instant_inner,
                 collision_scene_inner,
                 terrain_heights_shadow_inner,
             )
@@ -15036,6 +15068,7 @@ pub async fn start_session(
         cell_scene_snapshot,
         door_part_snapshot,
         local_player_pose,
+        last_recv_instant,
         last_client_prediction,
         collision_scene,
         terrain_heights_shadow,
@@ -15727,6 +15760,7 @@ async fn recv_loop(
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
     >,
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
+    last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
     collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
     terrain_heights_shadow: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
@@ -15822,6 +15856,11 @@ async fn recv_loop(
                 };
                 for event in events {
                     let SessionEvent::Message(bytes) = event else { continue };
+                    // PR-SS 2026-05-23: stamp the recv timestamp for the
+                    // link-status indicator. Any inbound server frame
+                    // counts as "the link is alive" — staleness > 2s
+                    // tints the indicator red, > 0.5s yellow.
+                    *last_recv_instant.borrow_mut() = Some(web_time::Instant::now());
                     let mut offset = 0;
                     let Some(message) = GameMessage::unpack(&bytes, &mut offset) else {
                         continue;

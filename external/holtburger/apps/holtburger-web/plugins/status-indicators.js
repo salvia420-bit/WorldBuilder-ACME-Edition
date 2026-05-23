@@ -174,7 +174,58 @@ export function mount(_ctx) {
     return true;
   };
 
+  // PR-SS 2026-05-23: link-status latency tint. Polls
+  // sessionLastRecvAgeMs() at 1Hz; the chain icon shows green when
+  // the link is healthy (<500ms), yellow when middling (500-2000ms),
+  // red when poor (>2000ms or no message ever). Uses CSS filter
+  // tinting on the existing green-chain sprite — no extra sprites
+  // needed. Override threshold via `window.__linkStatusThresholds =
+  // {middlingMs: N, poorMs: N}` if you want to demo.
+  const linkEl = overlay.querySelector('[data-indicator="linkstatus"]');
+  const linkTip = linkEl?.querySelector(".hb-indicator-tip");
+  let linkLastTier = null;
+  const linkPollTimer = setInterval(() => {
+    if (!linkEl) return;
+    const handle = window.__sessionHandle;
+    let ageMs = 0xFFFFFFFF;
+    try {
+      if (typeof handle?.sessionLastRecvAgeMs === "function") {
+        ageMs = handle.sessionLastRecvAgeMs() >>> 0;
+      }
+    } catch {}
+    const th = window.__linkStatusThresholds || {};
+    const middling = th.middlingMs ?? 500;
+    const poor = th.poorMs ?? 2000;
+    let tier;
+    if (ageMs >= 0xFFFFFFF0 || ageMs > poor) tier = "poor";
+    else if (ageMs > middling) tier = "middling";
+    else tier = "ok";
+    if (tier !== linkLastTier) {
+      linkLastTier = tier;
+      // CSS filter: keep green-chain sprite as-is for ok; tint to
+      // yellow / red for middling / poor. hue-rotate values picked by
+      // eye against the source green (~hue 120°) — yellow ≈ -60°,
+      // red ≈ -120°. Saturate boosts the tinted color.
+      if (tier === "ok") {
+        linkEl.style.filter = "";
+        linkEl.style.opacity = "1";
+      } else if (tier === "middling") {
+        linkEl.style.filter = "hue-rotate(-60deg) saturate(1.4)";
+        linkEl.style.opacity = "1";
+      } else {
+        linkEl.style.filter = "hue-rotate(-120deg) saturate(1.8) brightness(1.1)";
+        linkEl.style.opacity = "1";
+      }
+      // Update tooltip with ms reading.
+      if (linkTip) {
+        const ageStr = ageMs >= 0xFFFFFFF0 ? "—" : `${ageMs} ms`;
+        linkTip.textContent = `Link: ${tier} (last recv ${ageStr})`;
+      }
+    }
+  }, 1000);
+
   return () => {
+    clearInterval(linkPollTimer);
     delete window.__setStatusIndicator;
     overlay.remove();
   };
