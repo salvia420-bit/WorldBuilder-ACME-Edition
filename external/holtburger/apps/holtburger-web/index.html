@@ -1019,41 +1019,36 @@
       mainPanelPlugin.registerView("journal",   journalPanelPlugin.view);
       mainPanelPlugin.registerView("contracts", contractsPanelPlugin.view);
 
-      // Main-panel view hotkeys (retail muscle-memory):
-      //   F4 → Inventory     (Wave 1 PR-U)
-      //   C  → Character     (Wave 2 PR-V — Attributes/Skills/Titles)
-      //   M  → Map           (Wave 2 PR-W)
-      //   A  → Allegiance    (Wave 2 PR-X)
-      //   F  → Fellowship    (Wave 2 PR-Y)
-      //   S / F5 → Spellbook (Wave 2 PR-Z — F5 = retail muscle memory)
+      // Main-panel view hotkeys — F-keys only. Single-letter bindings
+      // (S, A, F, C, J, K, M, E) were retired 2026-05-22 per user
+      // direction: "these keymap changes have served their purpose and
+      // are approaching interference." S collided with strafe-back,
+      // A with strafe-left, etc. F-keys never collide with movement.
+      //   F1 Character    F2 Spellbook   F3 Map        F4 Inventory
+      //   F5 Spellbook    F6 Journal     F7 Contracts  F8 Allegiance
+      //   F9 Fellowship
+      // Examine is no longer auto-fired on selection (regression fix
+      // 2026-05-22): clicking a vendor / NPC now passes through to the
+      // interact path. Open examine via main-panel toggle if needed.
+      const FKEY_VIEWS = {
+        F1: "character",
+        F2: "spellbook",
+        F3: "map",
+        F4: "inventory",
+        F5: "spellbook",
+        F6: "journal",
+        F7: "contracts",
+        F8: "allegiance",
+        F9: "fellowship",
+      };
       window.addEventListener("keydown", (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const tag = ev.target?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
-        if (ev.key === "F4") {
+        const view = FKEY_VIEWS[ev.key];
+        if (view) {
           ev.preventDefault();
-          window.__mainPanel?.toggleView?.("inventory");
-        } else if (ev.key === "c" || ev.key === "C") {
-          ev.preventDefault();
-          window.__mainPanel?.toggleView?.("character");
-        } else if (ev.key === "m" || ev.key === "M") {
-          ev.preventDefault();
-          window.__mainPanel?.toggleView?.("map");
-        } else if (ev.key === "a" || ev.key === "A") {
-          ev.preventDefault();
-          window.__mainPanel?.toggleView?.("allegiance");
-        } else if (ev.key === "f" || ev.key === "F") {
-          ev.preventDefault();
-          window.__mainPanel?.toggleView?.("fellowship");
-        } else if (ev.key === "s" || ev.key === "S" || ev.key === "F5") {
-          ev.preventDefault();
-          window.__mainPanel?.toggleView?.("spellbook");
-        } else if (ev.key === "j" || ev.key === "J") {
-          ev.preventDefault();
-          window.__mainPanel?.toggleView?.("journal");
-        } else if (ev.key === "k" || ev.key === "K") {
-          ev.preventDefault();
-          window.__mainPanel?.toggleView?.("contracts");
+          window.__mainPanel?.toggleView?.(view);
         }
       });
 

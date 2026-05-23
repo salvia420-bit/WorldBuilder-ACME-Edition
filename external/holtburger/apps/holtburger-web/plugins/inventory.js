@@ -694,21 +694,10 @@ function doMount(parentEl, _ctx) {
     }, 500);
   }
 
-  // E key behaviour (acclient keymap SelectionExamine, UICommands):
-  // when an inventory item is selected, push the examine view onto the
-  // shared main-panel stack so "Back" returns to inventory.
-  function onKey(ev) {
-    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-    const tag = ev.target?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return;
-    if (ev.key === "e" || ev.key === "E") {
-      if (!selectedSrcLi) return;  // examine-target / main-panel handle the other cases
-      ev.preventDefault();
-      const guid = selectedSrcLi.dataset?.guid;
-      const name = selectedSrcLi.querySelector(".name")?.textContent || "Item";
-      window.__mainPanel?.pushView?.("examine", { guid, name, fromInventory: true, srcLi: selectedSrcLi });
-    }
-  }
+  // E key removed 2026-05-22 (movement-key collision with turn-right).
+  // Inventory item examine now requires explicit click on the item
+  // slot — the slot click handler pushes the examine view directly.
+  function onKey(_ev) { /* no-op placeholder for cleanup symmetry */ }
   window.addEventListener("keydown", onKey);
 
   return () => {

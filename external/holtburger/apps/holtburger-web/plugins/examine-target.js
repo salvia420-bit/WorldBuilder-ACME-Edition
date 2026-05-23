@@ -274,46 +274,21 @@ export const manifest = {
 };
 
 export function mount(_ctx) {
-  let lastGuid = 0;
-  let rafId = 0;
-  function tick() {
-    const em = window.liveScene3d?.entityManager;
-    if (em?.getSelectedTarget) {
-      const guid = (em.getSelectedTarget() ?? 0) >>> 0;
-      if (guid !== lastGuid) {
-        lastGuid = guid;
-        // Skip inventory items — inventory.js handles those via
-        // pushView on click. Floating popup behaviour is retired in
-        // favour of the shared main-panel.
-        if (guid !== 0 && !window.__isInventoryItem?.(guid)) {
-          window.__mainPanel?.pushView?.("examine", { guid });
-        }
-      }
-    }
-    rafId = requestAnimationFrame(tick);
-  }
-  rafId = requestAnimationFrame(tick);
+  // No auto-pop on selection change — selection click is reserved for
+  // select-to-interact (attack / use / vendor-open / etc.). Examine
+  // fires only on explicit user action: window.__showExamineFor(guid),
+  // inventory slot click, or (future) right-click context menu.
+  // User regression 2026-05-22: "clicking on the vendor causes
+  // examine, before it was the other command, which would let you
+  // interact with things."
 
-  // E key — examine current world selection (non-inventory case
-  // already handled inside inventory.js).
-  function onKey(ev) {
-    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-    const tag = ev.target?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return;
-    if (ev.key !== "e" && ev.key !== "E") return;
-    if (lastGuid === 0) return;
-    if (window.__isInventoryItem?.(lastGuid)) return;
-    ev.preventDefault();
-    window.__mainPanel?.pushView?.("examine", { guid: lastGuid });
-  }
-  window.addEventListener("keydown", onKey);
-
-  // Debug helper.
+  // E key removed 2026-05-22 (collides with turn-right movement key).
+  // Examine is now only triggered explicitly via
+  // window.__showExamineFor(guid), inventory slot click, or right-click
+  // (when wired). Keeping the debug helper for console testing.
   window.__showExamineFor = (guid) => window.__mainPanel?.pushView?.("examine", { guid: guid >>> 0 });
 
   return () => {
-    cancelAnimationFrame(rafId);
-    window.removeEventListener("keydown", onKey);
     delete window.__showExamineFor;
   };
 }
