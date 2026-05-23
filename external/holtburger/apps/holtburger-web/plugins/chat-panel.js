@@ -185,6 +185,29 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-chat-input:focus {
       border-color: var(--hb-border-brass);
     }
+    /* PR-LL 2026-05-23: explicit Send button, bottom-right of input row. */
+    #${OVERLAY_ID} .hb-chat-send-btn {
+      flex: 0 0 auto;
+      padding: 2px 10px;
+      margin-right: 12px;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--hb-text-gold);
+      background: linear-gradient(180deg, rgba(120, 84, 32, 0.55) 0%, rgba(50, 35, 15, 0.7) 100%);
+      border: 1px solid var(--hb-border-brass);
+      cursor: pointer;
+      user-select: none;
+      letter-spacing: 0.04em;
+      pointer-events: auto;
+    }
+    #${OVERLAY_ID} .hb-chat-send-btn:hover {
+      background: linear-gradient(180deg, rgba(150, 105, 40, 0.65) 0%, rgba(70, 50, 20, 0.75) 100%);
+      color: var(--hb-text-cream-bright);
+    }
+    #${OVERLAY_ID} .hb-chat-send-btn:active {
+      background: linear-gradient(180deg, rgba(40, 25, 10, 0.75) 0%, rgba(80, 55, 20, 0.6) 100%);
+    }
     /* Channel selector — click the "Local" tag (now a button) to open
        an imperative popup menu with all the outgoing chat channels.
        Selecting one updates the button label and prefixes outgoing
@@ -418,6 +441,18 @@ export function mount(_ctx) {
   input.type = "text";
   input.placeholder = "type here…";
   inputRow.appendChild(input);
+
+  // PR-LL 2026-05-23: explicit Send button on the right of the input
+  // row. Same submit path as Enter. Users on touch / inconsistent
+  // keyboards asked for a button; also gives the input a clear
+  // "fire" affordance.
+  const sendBtn = document.createElement("button");
+  sendBtn.type = "button";
+  sendBtn.className = "hb-chat-send-btn";
+  sendBtn.textContent = "Send";
+  sendBtn.title = "Send (Enter)";
+  inputRow.appendChild(sendBtn);
+
   overlay.appendChild(inputRow);
 
   // Resize handle (bottom-right) — pointer-capture drag to adjust
@@ -529,9 +564,7 @@ export function mount(_ctx) {
   // wasm/ACE wiring (Talk packet, error handling, local echo) stays in
   // one place. Keypress on Enter mirrors index.html's Submit form
   // behaviour at line 6755+.
-  input.addEventListener("keydown", (ev) => {
-    if (ev.key !== "Enter") return;
-    ev.preventDefault();
+  function submitChat() {
     const text = input.value.trim();
     if (!text) return;
     // If the user typed their own slash-command, honour it as-is
@@ -553,6 +586,16 @@ export function mount(_ctx) {
       // Fallback: no source input found yet, just clear ours.
       input.value = "";
     }
+  }
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter") return;
+    ev.preventDefault();
+    submitChat();
+  });
+  sendBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    submitChat();
+    input.focus();
   });
   // Stop the global keydown-driven movement from firing while typing.
   input.addEventListener("keydown", (ev) => ev.stopPropagation(), true);

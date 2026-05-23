@@ -289,6 +289,50 @@ export function setupClickPicking({
 
   canvas.addEventListener("pointerdown", onPointerDown);
 
+  // PR-LL 2026-05-23: drag-drop give from inventory onto an NPC.
+  // The inventory plugin's <slot> elements set dataTransfer with
+  // `application/x-hb-inv-guid` on dragstart. When such a drag is
+  // released over the 3D canvas we raycast to find the entity under
+  // the cursor and fire GameAction::GiveObjectRequest.
+  function onCanvasDragOver(ev) {
+    if (!ev.dataTransfer) return;
+    if (!ev.dataTransfer.types?.includes("application/x-hb-inv-guid")) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+  }
+  function onCanvasDrop(ev) {
+    if (!ev.dataTransfer) return;
+    const guidStr = ev.dataTransfer.getData("application/x-hb-inv-guid");
+    if (!guidStr) return;
+    ev.preventDefault();
+    const itemGuid = parseInt(guidStr, 10) >>> 0;
+    if (!itemGuid) return;
+    const targetGuid = pickEntityAt(ev.clientX, ev.clientY);
+    if (!targetGuid) {
+      console.log("[give] drop missed — no entity under cursor at",
+        ev.clientX, ev.clientY);
+      return;
+    }
+    const handle = window.__sessionHandle;
+    if (!handle?.giveObject) {
+      console.warn("[give] no session handle — drop ignored");
+      return;
+    }
+    try {
+      handle.giveObject(targetGuid >>> 0, itemGuid >>> 0, 1);
+      // Best-effort visual feedback via existing chat channel:
+      // ACE will echo success/failure as a chat line shortly.
+      console.log(
+        `[give] target=0x${targetGuid.toString(16).padStart(8, "0").toUpperCase()} ` +
+        `item=0x${itemGuid.toString(16).padStart(8, "0").toUpperCase()} amount=1`,
+      );
+    } catch (e) {
+      console.warn("[give] giveObject failed", e);
+    }
+  }
+  canvas.addEventListener("dragover", onCanvasDragOver);
+  canvas.addEventListener("drop", onCanvasDrop);
+
   // Retail UX — combat-bar Hi/Med/Lo buttons call this to fire on the
   // currently selected target at the chosen height. Click on a monster
   // selects it (in `onPointerDown` above); subsequent height-button
@@ -373,6 +417,11 @@ export function setupClickPicking({
   // Namespace prefix matches `window.__combatBarState` / `__pluginClient`.
   if (typeof window !== "undefined") {
     window.__fireAttackOnTarget = fireAttackOnSelectedTarget;
+    // PR-LL 2026-05-23: expose pickEntityAt so plugins (e.g. inventory
+    // drag-drop onto an NPC for GiveObject) can do hit-testing without
+    // re-implementing the raycast against entity roots. Returns the
+    // entity GUID (u32) or null if no entity is under the cursor.
+    window.__pickEntityAt = pickEntityAt;
   }
 
   // Phase I.1 follow-on (handoff Tier 1): manual-input override.
@@ -401,6 +450,8 @@ export function setupClickPicking({
   return {
     destroy() {
       canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("dragover", onCanvasDragOver);
+      canvas.removeEventListener("drop", onCanvasDrop);
       document.removeEventListener("keydown", onKeyDownAbortCharge);
     },
   };

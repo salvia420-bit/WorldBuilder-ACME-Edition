@@ -11485,6 +11485,14 @@ enum SessionCommand {
     RemoveSpellFromBook {
         spell_id: u32,
     },
+    /// PR-LL 2026-05-23: drag-and-drop give from inventory onto an
+    /// NPC / player target. Maps 1:1 to `GameAction::GiveObjectRequest`
+    /// (sub-opcode 0x00CD).
+    GiveObject {
+        target_guid: u32,
+        item_guid: u32,
+        amount: i32,
+    },
     /// Vendor-UI: JS-side requested purchase of one or more vendor
     /// stock entries from `vendor_guid`. Each `(vendor_item_guid,
     /// amount)` pair becomes one `ItemProfileActionData` in the
@@ -14408,6 +14416,41 @@ impl SessionHandle {
                 JsValue::from_str(&format!(
                     "removeSpellFromBook: cmd channel closed ({e})"
                 ))
+            })
+    }
+
+    /// PR-LL 2026-05-23: give `amount` × player-owned item
+    /// (`item_guid`) to NPC / player (`target_guid`). Sends
+    /// `GameAction::GiveObjectRequest` (sub-opcode 0x00CD,
+    /// `GameActionGiveObjectRequest.cs` in ACE handler dir). The
+    /// retail trigger is a drag-drop from inventory onto an entity
+    /// in the 3D world; our wasm side is fire-and-forget — server
+    /// validates (item owned, target receptive, transfer allowed)
+    /// and pushes either a `GameMessageInventoryUpdate` on success
+    /// or a `WeenieError` chat message on failure.
+    ///
+    /// `amount` clamped to 1 if `<= 0`. For stackable items the
+    /// retail UI prompts for a partial split when the player drops
+    /// a stack — we omit that for v1 and always send `amount=1` from
+    /// the JS-side drop handler; callers wanting to give a full
+    /// stack should pass the stack size explicitly.
+    #[wasm_bindgen(js_name = giveObject)]
+    pub fn give_object(
+        &self,
+        target_guid: u32,
+        item_guid: u32,
+        amount: i32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        let amount = if amount <= 0 { 1 } else { amount };
+        self.cmd_tx
+            .unbounded_send(SessionCommand::GiveObject {
+                target_guid,
+                item_guid,
+                amount,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("giveObject: cmd channel closed ({e})"))
             })
     }
 
@@ -18793,6 +18836,37 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[remove_spell] spell_id={spell_id}",
+                        ));
+                    }
+                    Some(SessionCommand::GiveObject {
+                        target_guid,
+                        item_guid,
+                        amount,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, GiveObjectRequestActionData,
+                        };
+                        let action = GameAction::GiveObjectRequest(Box::new(
+                            GiveObjectRequestActionData {
+                                target_guid: Guid(target_guid),
+                                item_guid: Guid(item_guid),
+                                amount,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(GiveObject): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("give_object: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[give] target=0x{target_guid:08X} item=0x{item_guid:08X} amount={amount}",
                         ));
                     }
                     Some(SessionCommand::BuyFromVendor { vendor_guid, items }) => {
