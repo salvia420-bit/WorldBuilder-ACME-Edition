@@ -166,6 +166,7 @@ public class JsonCommandProcessor {
             ["get-terrain-data"] = CmdGetTerrainData,
             ["list-objects"] = CmdListObjects,
             ["describe-landblock"] = CmdDescribeLandblock,
+            ["dump-lb-expectations"] = CmdDumpLbExpectations,
             ["add-object"] = CmdAddObject,
             ["remove-object"] = CmdRemoveObject,
             ["clear-objects"] = CmdClearObjects,
@@ -1567,6 +1568,70 @@ public class JsonCommandProcessor {
         });
     }
 
+    // 2026-05-23 — compact landblock-expectations export for the
+    // holtburger-web wire-agent diagnostic layer. Reuses DescribeLandblock
+    // but emits only the fields the in-browser oracle needs (npcs +
+    // buildings + scenery counts + dungeon cells), keyed by the full
+    // 32-bit landblockId (e.g. "0xA9B40000") so it matches the wire's
+    // spawn-meta high-16-bits convention. Consumer:
+    //   window.__diag.setExpected(await (await fetch(url)).json())
+    //   window.__diag.diff(0xA9B40000)
+    private string CmdDumpLbExpectations(System.Text.Json.Nodes.JsonNode node) {
+        var (lbX, lbY) = Lb(node);
+        var r = _engine.DescribeLandblock(lbX, lbY);
+        uint lbKey32 = (uint)((lbX & 0xff) << 24) | (uint)((lbY & 0xff) << 16);
+        return Serialize(new {
+            success = true,
+            command = "dump-lb-expectations",
+            landblockId = $"0x{lbKey32:X8}",
+            lbX = r.LbX,
+            lbY = r.LbY,
+            timestamp = DateTime.UtcNow.ToString("O"),
+            npcs = r.Body.Spawns.Select(s => new {
+                wcid = s.Wcid,
+                name = s.Name,
+                category = s.Category,
+                generator = s.Generator,
+                cell = s.Cell,
+                weenieType = s.WeenieType,
+                x = Math.Round(s.X, 2),
+                y = Math.Round(s.Y, 2),
+                z = Math.Round(s.Z, 2),
+                isSynthetic = s.IsSynthetic,
+            }).ToArray(),
+            buildings = r.Body.Structures.Select(s => new {
+                index = s.Index,
+                modelId = s.ModelId,
+                typeDescription = s.TypeDescription,
+                origin = new {
+                    x = Math.Round(s.Origin.X, 2),
+                    y = Math.Round(s.Origin.Y, 2),
+                    z = Math.Round(s.Origin.Z, 2),
+                },
+                floorZ = Math.Round(s.FloorZ, 2),
+                topZ = Math.Round(s.TopZ, 2),
+                stories = s.Stories,
+                attributedCellCount = s.AttributedCellCount,
+                nameHint = s.NameHint,
+            }).ToArray(),
+            sceneryCount = r.Body.LooseObjectCount,
+            interior = r.Body.Interior == null ? null : new {
+                cellCount = r.Body.Interior.CellCount,
+                zMin = Math.Round(r.Body.Interior.ZMin, 2),
+                zMax = Math.Round(r.Body.Interior.ZMax, 2),
+                cellGraphEdges = r.Body.Interior.CellGraphEdges,
+                exteriorPortals = r.Body.Interior.ExteriorPortals,
+                staticObjectCount = r.Body.Interior.StaticObjectCount,
+            },
+            counts = new {
+                npcs = r.Body.Spawns.Count,
+                buildings = r.Body.Structures.Count,
+                scenery = r.Body.LooseObjectCount,
+                envCells = r.Body.Interior?.CellCount ?? 0,
+            },
+        });
+    }
+
     private string CmdAddObject(System.Text.Json.Nodes.JsonNode node) {
         var (lbX, lbY) = Lb(node);
         uint modelId = Hex32(node, "modelId");
@@ -2154,6 +2219,7 @@ public class JsonCommandProcessor {
             new { name = "transact",         args = "ops[] | opsFile, rollback_on_fail?, validate?, diff?", description = "Stage N mutating ops, validate the staged delta, atomically commit or rollback. Allow-list: terrain edits, object placement, generate-dungeon. validate=auto|all|none|{landblocks:[...]}. diff=true|\"structured\"|\"visual\"|\"both\" inlines the transact-diff response." },
             new { name = "transact-diff",    args = "txId, render?, renderMode?, lbs?, resolution?, out?",        description = "Structured before/after report for a committed transaction. renderMode=overlay|side-by-side|after-only-with-diff. Returns TXDIFF-EXPIRED or TXDIFF-ROLLED-BACK if the snapshot is unavailable." },
             new { name = "describe-landblock", args = "lbX, lbY",                            description = "Living Atlas: verbal + deeply structured per-LB description (terrain, structures, spawns, POIs, validation). Composes ontology + region/town gazetteer + Acpedia + LSD spawnMap." },
+            new { name = "dump-lb-expectations", args = "lbX, lbY",                          description = "Compact landblock oracle for holtburger-web wire-agent diagnostic layer — npcs (wcid+name+pos) + buildings (modelId+origin) + scenery count + interior cells. Consumer: window.__diag.setExpected(json); window.__diag.diff(0xLLLL0000)." },
             new { name = "get-tile",         args = "zoom, lbX?, lbY?, region?, includeBase64?", description = "Tile pyramid (sourced from render-preview). zoom=lb (LB-keyed), region (region name), or world. Returns path + size + optional base64 PNG." },
             new { name = "tile-stats",       args = "",                                      description = "Tile-cache totals, dirty counts, disk used vs. budget" },
             new { name = "regenerate-dirty-tiles", args = "",                                description = "Rebuild every tile flagged dirty (e.g. by transact-journal invalidation) and clear dirty bits." },
