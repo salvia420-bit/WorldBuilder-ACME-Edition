@@ -929,6 +929,7 @@
       import * as characterInfoPlugin from "./plugins/character-info.js";
       import * as mapPanelPlugin from "./plugins/map-panel.js";
       import * as allegiancePanelPlugin from "./plugins/allegiance-panel.js";
+      import * as fellowshipPanelPlugin from "./plugins/fellowship-panel.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
       let pluginClient = null;
@@ -1013,6 +1014,7 @@
       mainPanelPlugin.registerView("character", characterInfoPlugin.view);
       mainPanelPlugin.registerView("map",       mapPanelPlugin.view);
       mainPanelPlugin.registerView("allegiance", allegiancePanelPlugin.view);
+      mainPanelPlugin.registerView("fellowship", fellowshipPanelPlugin.view);
 
       // Main-panel view hotkeys (retail muscle-memory):
       //   F4 → Inventory     (Wave 1 PR-U)
@@ -1034,6 +1036,9 @@
         } else if (ev.key === "a" || ev.key === "A") {
           ev.preventDefault();
           window.__mainPanel?.toggleView?.("allegiance");
+        } else if (ev.key === "f" || ev.key === "F") {
+          ev.preventDefault();
+          window.__mainPanel?.toggleView?.("fellowship");
         }
       });
 
