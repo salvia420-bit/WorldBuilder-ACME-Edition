@@ -666,6 +666,7 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
   if (!updates || updates.length === 0) return;
   const em = scene3d.entityManager;
   for (const upd of updates) {
+    try { window.__diag?.wire?.onEntityUpdate?.(upd); } catch (_) {}
     try {
       const kind = upd.kind | 0;
       if (kind === KIND_SPAWN) {

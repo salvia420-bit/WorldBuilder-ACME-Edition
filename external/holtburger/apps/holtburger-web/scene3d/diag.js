@@ -32,6 +32,7 @@
 import { attachPlacements as _attachPlacements } from "./diag/placements.js";
 import { attachEntityTypes as _attachEntityTypes } from "./diag/entity_types.js";
 import { attachEvents as _attachEvents } from "./diag/events.js";
+import { attachWire as _attachWire } from "./diag/wire.js";
 
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
@@ -402,6 +403,7 @@ export function installDiag() {
     ["placements", _attachPlacements],
     ["entityTypes", _attachEntityTypes],
     ["events",     _attachEvents],
+    ["wire",       _attachWire],
   ]) {
     try { fn?.(diag); } catch (e) {
       // eslint-disable-next-line no-console
