@@ -1576,6 +1576,24 @@ public class JsonCommandProcessor {
     // spawn-meta high-16-bits convention. Consumer:
     //   window.__diag.setExpected(await (await fetch(url)).json())
     //   window.__diag.diff(0xA9B40000)
+    //
+    // Wave-2 extension (2026-05-23): also folds in pre-baked scenery
+    // placements + pre-baked event trigger sources from the
+    // holtburger-scenery-bake / holtburger-event-bake JSONL artifacts.
+    // - `bakedScenery: [...]` — direct copies of scenery.jsonl records;
+    //   LB-LOCAL coords (0-192). The diff layer handles LB→world conversion.
+    // - `events: [...]` — flattened expected-event entries from
+    //   events.jsonl. Ambient records explode into one entry per
+    //   ambient_sounds[] slot. Physics/sky particle records pass through
+    //   with light field renaming so `type + emitter_did + source`
+    //   match-keys hold.
+    // - `bakeWarnings: [...]` — soft errors (missing file, bad JSON line,
+    //   unrecognized source). Empty when both bake files load clean.
+    //
+    // Optional command fields:
+    //   sceneryBakeDir — default /mnt/wbterminal1/holtburger-dist-v2/scenery/
+    //   eventsBakeDir — default /mnt/wbterminal1/holtburger-dist-v2/events/
+    // Filenames are composed as `0x{lbX:X2}{lbY:X2}.{scenery,events}.jsonl`.
     private string CmdDumpLbExpectations(System.Text.Json.Nodes.JsonNode node) {
         var (lbX, lbY) = Lb(node);
         var r = _engine.DescribeLandblock(lbX, lbY);
@@ -1587,6 +1605,22 @@ public class JsonCommandProcessor {
         // `apps/holtburger-web/oracles/0xLLLL0000.json`. Caller passes the
         // ABSOLUTE path; we don't infer.
         string outPath = node["out"]?.GetValue<string>() ?? "";
+
+        // Pre-bake artifact directories. Filenames use 16-bit LB form
+        // (0xLLLL), NOT the 32-bit landblockId (0xLLLL0000).
+        string sceneryDir = node["sceneryBakeDir"]?.GetValue<string>()
+                            ?? "/mnt/wbterminal1/holtburger-dist-v2/scenery/";
+        string eventsDir = node["eventsBakeDir"]?.GetValue<string>()
+                           ?? "/mnt/wbterminal1/holtburger-dist-v2/events/";
+        string lbHex16 = $"0x{lbX:X2}{lbY:X2}";
+        var bakeWarnings = new List<string>();
+        var bakedScenery = LoadBakedScenery(
+            System.IO.Path.Combine(sceneryDir, $"{lbHex16}.scenery.jsonl"),
+            bakeWarnings);
+        var events = LoadBakedEvents(
+            System.IO.Path.Combine(eventsDir, $"{lbHex16}.events.jsonl"),
+            bakeWarnings);
+
         return Serialize(new {
             success = true,
             command = "dump-lb-expectations",
@@ -1622,6 +1656,9 @@ public class JsonCommandProcessor {
                 nameHint = s.NameHint,
             }).ToArray(),
             sceneryCount = r.Body.LooseObjectCount,
+            bakedScenery,
+            events,
+            bakeWarnings,
             interior = r.Body.Interior == null ? null : new {
                 cellCount = r.Body.Interior.CellCount,
                 zMin = Math.Round(r.Body.Interior.ZMin, 2),
@@ -1633,10 +1670,149 @@ public class JsonCommandProcessor {
             counts = new {
                 npcs = r.Body.Spawns.Count,
                 buildings = r.Body.Structures.Count,
-                scenery = r.Body.LooseObjectCount,
+                sceneryLandblockInfo = r.Body.LooseObjectCount,
+                sceneryBaked = bakedScenery.Count,
+                events = events.Count,
                 envCells = r.Body.Interior?.CellCount ?? 0,
             },
         }, outPath);
+    }
+
+    // Read scenery.jsonl as one JsonNode per line. Tolerates missing file
+    // (returns empty + warning) and corrupt lines (skips + warning). Records
+    // are passed through unchanged — coord conversion lives in the diff layer.
+    private static List<System.Text.Json.Nodes.JsonNode?> LoadBakedScenery(
+        string path, List<string> warnings) {
+        var records = new List<System.Text.Json.Nodes.JsonNode?>();
+        if (!System.IO.File.Exists(path)) {
+            warnings.Add($"scenery file missing at {path}");
+            return records;
+        }
+        try {
+            foreach (var line in System.IO.File.ReadAllLines(path)) {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try {
+                    var rec = System.Text.Json.Nodes.JsonNode.Parse(line);
+                    if (rec != null) records.Add(rec);
+                } catch (Exception ex) {
+                    warnings.Add($"scenery bad json line in {path}: {ex.Message}");
+                }
+            }
+        } catch (Exception ex) {
+            warnings.Add($"scenery read failed at {path}: {ex.Message}");
+        }
+        return records;
+    }
+
+    // Read events.jsonl and flatten into the diff-layer's expected-event
+    // schema. Ambient records explode (one entry per ambient_sounds[]
+    // slot). Physics/sky particle records pass through with light field
+    // renaming (emitter_id → emitter_did, normalized type+source). Unknown
+    // sources are passed through with `_passthrough: true` so the diff
+    // surfaces the coverage gap rather than silently dropping records.
+    private static List<object> LoadBakedEvents(string path, List<string> warnings) {
+        var events = new List<object>();
+        if (!System.IO.File.Exists(path)) {
+            warnings.Add($"events file missing at {path}");
+            return events;
+        }
+        try {
+            foreach (var line in System.IO.File.ReadAllLines(path)) {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try {
+                    var rec = System.Text.Json.Nodes.JsonNode.Parse(line);
+                    if (rec == null) continue;
+                    FlattenEventRecord(rec, events, warnings);
+                } catch (Exception ex) {
+                    warnings.Add($"events bad json line in {path}: {ex.Message}");
+                }
+            }
+        } catch (Exception ex) {
+            warnings.Add($"events read failed at {path}: {ex.Message}");
+        }
+        return events;
+    }
+
+    private static void FlattenEventRecord(
+        System.Text.Json.Nodes.JsonNode rec,
+        List<object> events,
+        List<string> warnings) {
+        string source = rec["source"]?.GetValue<string>() ?? "";
+        if (source == "ambient") {
+            // One expected-event entry per ambient_sounds[] slot.
+            int terrainType = rec["terrain_type"]?.GetValue<int>() ?? -1;
+            string stbId = rec["stb_id"]?.GetValue<string>() ?? "";
+            var vertexIndices = (rec["vertex_indices"] as System.Text.Json.Nodes.JsonArray)
+                ?.Select(v => v?.GetValue<int>() ?? -1).ToArray()
+                ?? Array.Empty<int>();
+            var sounds = rec["ambient_sounds"] as System.Text.Json.Nodes.JsonArray;
+            if (sounds == null) return;
+            foreach (var s in sounds) {
+                if (s == null) continue;
+                bool continuous = s["continuous"]?.GetValue<bool>() ?? false;
+                events.Add(new {
+                    type = "sound",
+                    source = "AmbientRuntime",
+                    trigger = continuous ? "continuous" : "probabilistic",
+                    terrain_type = terrainType,
+                    stb_id = stbId,
+                    s_type = s["s_type"]?.GetValue<int>() ?? -1,
+                    vertex_indices = vertexIndices,
+                    volume = s["volume"]?.GetValue<double>() ?? 0.0,
+                    base_chance = s["base_chance"]?.GetValue<double>() ?? 0.0,
+                    min_rate = s["min_rate"]?.GetValue<double>() ?? 0.0,
+                    max_rate = s["max_rate"]?.GetValue<double>() ?? 0.0,
+                });
+            }
+            return;
+        }
+        // Recognized particle sources: pass through with normalized
+        // emitter_did + type so the diff's `type + emitter_did + source`
+        // match-key works. `physics_script_particle` is the actual bake
+        // value; `physics_particle` is the spec-doc alias. Accept both.
+        if (source == "physics_script_particle" || source == "physics_particle") {
+            events.Add(new {
+                type = "physics_particle",
+                source,
+                trigger = rec["trigger"]?.GetValue<string>() ?? source,
+                emitter_did = rec["emitter_id"]?.GetValue<string>() ?? "",
+                default_script_id = rec["default_script_id"]?.GetValue<string>() ?? "",
+                start_time_s = rec["start_time_s"]?.GetValue<double>() ?? 0.0,
+                part_index = rec["part_index"]?.GetValue<int>() ?? 0,
+                blocking = rec["blocking"]?.GetValue<bool>() ?? false,
+                anchor = rec["anchor"]?.GetValue<string>() ?? "",
+            });
+            return;
+        }
+        if (source == "sky_particle") {
+            events.Add(new {
+                type = "sky_particle",
+                source,
+                trigger = rec["trigger"]?.GetValue<string>() ?? source,
+                emitter_did = rec["emitter_id"]?.GetValue<string>()
+                              ?? rec["emitter_did"]?.GetValue<string>() ?? "",
+                raw = rec.DeepClone(),
+            });
+            return;
+        }
+        if (source == "anim_hook") {
+            events.Add(new {
+                type = "anim_sound",
+                source = "AnimationHook",
+                trigger = rec["trigger"]?.GetValue<string>() ?? source,
+                wave_did = rec["wave_did"]?.GetValue<string>() ?? "",
+                raw = rec.DeepClone(),
+            });
+            return;
+        }
+        // Unknown source — preserve the record verbatim with a passthrough
+        // marker. The diff layer will report this as a coverage gap.
+        warnings.Add($"unrecognized event source: {source}");
+        events.Add(new {
+            _passthrough = true,
+            source,
+            raw = rec.DeepClone(),
+        });
     }
 
     // Serialize wrapper that ALSO writes the JSON to outPath when set,
