@@ -200,6 +200,24 @@ These weren't numbered as Fu probes but were load-bearing for end-to-end PASS:
 
 Reports landed at `/mnt/wbterminal1/holtburger-validator-reports/event-completeness/fdfu-run12/` and `fdfu-confirm/`. Plan §3 row 2 flipped ◐ → ✓.
 
+## Client-side observation layer (Wave-1+2 of `__diag`, 2026-05-23)
+
+F.D's validator drives a deterministic 60-s probe AND synthesizes a `GameMessageSound` via `__synthGameMessageSound` (`scene3d/index.js:1912-1997`) to exercise the kind=16 recv arm. That's **build-side cheating** by design — the contract owns its scenario. The wire-agent's `window.__diag.events` (commit `2bd5dee7`) adds the **observation-only** sibling for live diagnostic use:
+
+- **`__diag.events.tail(N)` / `.byKind('sound'|'particle')` / `.bySource('AmbientRuntime'|'AnimationHook'|'GameMessageSound'|'PhysicsScriptHook')`** — read-through to the same `liveScene3d.eventLog` ring buffer F.D consumes, but during free-play with NO synthetic injection. The runtime's `_pushEventRecord` (gated on `?eventLog=on`) fires from every source documented in §S1–S3 / P1–P3.
+- **`__diag.events.probe(durationMs)` → `Promise<{records, summary}>`** — deterministic time-windowed capture for CI-style runs (no time-mocking; uses wall-clock).
+- **`__diag.events.diff(lbId, opts)`** — matches observed fires against `oracle.events[]` (Wave-2 extension to WB.T `dump-lb-expectations`, commit `7c2076ef`) by `(type, wave_did | emitter_did, source)` key. Classifies missing as `never-fired` / `wrong-position` / `wrong-time` / `channel-disabled`.
+
+### Audio-under-wireframe contract (fix 2026-05-23 commit `49634b33`)
+
+`?wireframe=1` is the wire-agent's CPU-light mode (`scene3d/index.js:266+`). It used to unconditionally skip AudioManager + SoundTableCache + AmbientRuntime construction. That meant **wire-agent fleets had no events-channel exercise at all** — `__diag.events` would correctly report 0 fires because the chain was never built.
+
+Fix: a new `?diag=1` URL flag (also implies `?eventLog=on`) computes `audioConstructable = !wireframeMode || diagMode` and gates the three audio constructors on it instead of `!wireframeMode`. Headless chromium without a user gesture keeps the AudioContext locked, so `audioManager.play()` stays a silent no-op — but `_pushEventRecord` fires BEFORE the play call in every source, which is the part `__diag.events.diff()` consumes. Wire-agent fleets now exercise the events channel at ~15 ambient + ~7 anim-hook fires per 60 s without losing the GPU/CPU savings from wireframe mode.
+
+Discipline: **observation only**. The diag layer reads the runtime's actual event log; it does NOT inject synthetic events, mock time, or replay traces (that's F.D's job).
+
+Memory: `~/.claude/projects/-home-wbterminal/memory/reference_wire_agent_diag_layer.md`.
+
 ## Sign-off line
 
 If this method accurately captures the architecture and the phase plan looks right, mark it verified; I'll start F.A. If anything looks wrong — especially the contract shape, the determinism tolerance, or the probe scenario — flag it before code starts.

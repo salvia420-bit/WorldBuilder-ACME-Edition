@@ -158,9 +158,33 @@ The 14 surfaces from plan §3, with their method-doc links and shipping status:
 | 11 | Mesh / triangulation parity | (planned: `mesh-parity-method.md`) | ⨯ Wave 4 — deferred |
 | 12 | Cell-portal graph + PVS | (planned: pending sibling W5.A) | ◐ Wave 5.A — landing 2026-05-20 |
 | 13 | Skybox / atmosphere | (planned: pending sibling W5.B) | ◐ Wave 5.B — landing 2026-05-20 |
-| 14 | DAT integrity (sha256 + modder rejection) | (sidecar in `scenery-bake`) | ✓ SHIPPED |
+| 14 | DAT integrity (sha256 + modder rejection) | (sidecar in `scenery-bake` + Wave-4.B per-LB JSONL sidecars) | ✓ SHIPPED |
+| 15 | Client-side `window.__diag` 10-surface layer | (`scene3d/diag/` modules; commits 5d8ba2d6/645626c9/cc8819f9/c465cb77/8cc553d7/3bd0d854/7c0b4545) | ✓ SHIPPED Wave 6 (2026-05-23) |
 
 The `diag-run-all` driver discovers these dynamically — when a sibling agent ships a new `validate_<surface>.cjs`, the driver picks it up via the `VALIDATORS` list at the top of `run-all-validators.cjs`. The driver's per-row `required: true|false` flag controls whether that surface's failure gates the exit code.
+
+### Surface 15 — client-side observation layer (the cheat-free complement)
+
+The first 14 surfaces are **build-side**: each runs a Node-side script that drives a canonical oracle (ACE source, retail decomp, Chorizite, WB.Terminal command) and compares against captured runtime state. They legitimately "cheat" because they ARE the contract.
+
+Surface 15 is **observation-only** from the running wire-agent's `window.__diag` namespace. 10 sub-surfaces:
+
+| sub-surface | observes | optional oracle |
+|---|---|---|
+| `__diag.spawns` | `entityManager.spawn()` lifecycle (5-mode missing classification) | `dump-lb-expectations.npcs` |
+| `__diag.placements` | scene-graph contents | `dump-lb-expectations.buildings`+`bakedScenery`+`npcs` |
+| `__diag.entityTypes` | `__wom.snapshot()` classifications | (none — coverage gaps surface as `unknownTuples`) |
+| `__diag.events` | `liveScene3d.eventLog` ring buffer | `dump-lb-expectations.events` |
+| `__diag.wire` | drainEvents + drainEntityEvents3D dispatch counters | (none) |
+| `__diag.physics` | local-player predicted vs server pose | (none) |
+| `__diag.motion` | per-entity action state + `_tryPlayLink` ring | (cross-refs `__diag.wire.tail`) |
+| `__diag.pvs` | `cellContainers3d.visible` flips | `pvs-visibility-snapshot --out` |
+| `__diag.assets` | MaterialCache + AnimationCache error rings + `stuck()` | (none) |
+| `__diag.integrity` | sha256 of fetched bake bytes | manifest + per-LB JSONL `.sha256` sidecars |
+
+The runtime invariants and oracle producers all read like build-side validators **inverted** — same data flow, the diag layer just reads what was actually applied rather than what was supposed to be applied. When build-side and client-side disagree, build-side wins; client-side data tells you WHY.
+
+Memory: `~/.claude/projects/-home-wbterminal/memory/reference_wire_agent_diag_layer.md`. Operator workflow: `docs/ring-diagnose-repair-playbook.md`. One-shot expansion playbook: `docs/ring-expansion-method.md`.
 
 ---
 
@@ -182,6 +206,8 @@ The waves shipped chronologically:
 | Wave 5.B | region-skybox + day-night | 2026-05-20 | (in flight) |
 | **Wave 5.C** | **diag-run-all + diag-status** | **2026-05-20** | **[[project_w5c_done_2026-05-20]]** |
 | Wave 4 | texture/mesh whole-DAT sweep | (out-of-band, multi-hour) | deferred |
+| **Wave 6** | **client-side `window.__diag` 10-surface observation layer + WB.T oracle producers + per-LB sidecars** | **2026-05-23** | **[[reference_wire_agent_diag_layer]]** |
+| **Wave 6 follow-ons** | motion link hook + assets stuck v2 + per-scenery diff + global-greedy matcher (spawn `goodMatches` 11→25 on Holtburg) | 2026-05-23 | (see commit 7c0b4545) |
 
 Key cross-references:
 - [[reference_worldbuilder_terminal]] — command catalog (147 commands today; +2 with W5.C)

@@ -10,6 +10,8 @@ Conservative triage pass. 12 March/April-2026 files moved to `archive/`. Nothing
 - `entity-completeness-method.md` — entity classification (validator: `validate_entity_classification.cjs`)
 - `event-completeness-method.md` — sound/particle event contract (validator: `validate_event_completeness.cjs`)
 - `wire-conformance-method.md` — wire-packet contract (Wave 1 brick; cited in `validate_wire_conformance.cjs`)
+- `ring-diagnose-repair-playbook.md` — operational diagnose+repair workflow (2026-05-23; ties Phase E validators to client-side `__diag`)
+- `ring-expansion-method.md` — one-shot LB-range expansion (2026-05-23; current 3-CLI recipe + proposed `bake-region` orchestrator)
 - `dat-parity-method.md` — DAT parity (Wave 2; cited in `validate_dat_parity.cjs`)
 - `enum-parity-method.md` — enum parity (Wave 2.C/D)
 - `motion-parity-method.md` — motion-table parity (Wave 3.B)

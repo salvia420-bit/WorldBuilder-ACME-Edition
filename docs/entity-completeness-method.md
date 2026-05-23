@@ -256,6 +256,17 @@ You could imagine splitting "canonical port" (E.B/E.C) from "cross-port validato
 - [`../external/holtburger/apps/holtburger-web/plugins/world-objects/README.md`](../external/holtburger/apps/holtburger-web/plugins/world-objects/README.md) — the runtime that consumes the classification
 - [`../external/chorizite/ACPlugin/API/WorldObject.cs`](../external/chorizite/ACPlugin/API/WorldObject.cs) lines 344-411 — the canonical algorithm we port
 
+## Client-side observation layer (Wave-1 of `__diag`, 2026-05-23)
+
+E.E and E.F operate on captured payload sets. The wire-agent's `window.__diag.entityTypes` (commit `2bd5dee7`) adds a complementary LIVE observation surface that wraps `__wom.snapshot()` — every entity the runtime classifies via `canonicalClassify` lands in `__wom.objects` with a `classificationSource ∈ {canonical, canonical-item-fallback, unknown}` tag.
+
+- **`__diag.entityTypes.snapshot()`** → `{total, byClass, bySource, unknownTuples: [{wcid, itemType, objDescFlags, weenieFlags, name, guid}]}`. The `unknownTuples` array is the actionable signal — each entry is a wire-input combination the canonical algorithm didn't recognize, and porting the missing branch from ACPlugin's `WorldObject.cs` closes a coverage gap.
+- **`__diag.entityTypes.coverageByLb(lbId)`** filters by guid landblock-bits. Useful in batch-validation runs across many LBs.
+
+Discipline: **observation only**. The diag layer reads what the runtime classified; it doesn't re-run `canonicalClassify` on synthetic inputs (that's E.E's job) and doesn't peek at wasm-internal state. When a discrepancy surfaces, E.E + E.F still own the contract; the diag layer just helps you find the gap faster.
+
+Memory: `~/.claude/projects/-home-wbterminal/memory/reference_wire_agent_diag_layer.md`.
+
 ## Sign-off
 
 This is revision 2 (2026-05-19) with E.B-through-E.E shipped. The first revision was wrong on a structural point (claimed `ObjectClass` is on the wire); see §1.5.

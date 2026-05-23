@@ -147,6 +147,20 @@ The renderer doesn't know about per-LB visibility budgets; the InstancedMesh dra
 
 The validator IS the source of truth. If it finds drift, the renderer is wrong — don't change the validator to make it pass.
 
+## Client-side observation layer (Phase F, shipped 2026-05-23)
+
+Phase E's `validate_landblock_completeness.cjs` is build-side: it ALSO calls the wasm `fetch_landblock_{objects,scenery,spawns}_soa` exports to construct its expected manifest. That's correct for the contract but it means any bug DOWNSTREAM of the wasm fetch (worldRoot rotation, instance-matrix decompose, addPlacement ordering) is invisible to the validator because it diffs wasm-fetch-output against scene-graph-derived-from-wasm-fetch.
+
+Wave 1–4.B of the wire-agent shipped a complementary client-side layer at `window.__diag` that observes ONLY the scene-graph + runtime state, never wasm internals, and compares against an externally-emitted oracle. Two surfaces are relevant to placement-completeness:
+
+- **`__diag.placements.walk(lbId)`** / **`.diff(lbId)`** — walks `staticsGroup`/`buildingsGroup`/`entitiesGroup` (same scene-graph the build-side validator walks), then diffs against `WB.Terminal dump-lb-expectations` output loaded from a static URL. Diff classifies into `building-not-rendered` / `building-misplaced` / `npc-not-rendered` / `scenery-not-rendered` / `scenery-misplaced`. Uses a global-greedy matcher (not per-row greedy) so multi-instance models — wcid=412 Door spawns 30+× — pair stably without crosstalk.
+
+- **`__diag.integrity.verifyManifests({landblocks: [...]})`** — fetches each per-LB JSONL + its `.sha256` sidecar (Wave-4.B, emitted by scenery-bake-cli + event-bake-cli + stage-ring-spawns.py), hashes the fetched bytes via `crypto.subtle.digest`, and compares. Catches network corruption, modder tampering downstream of the bake input-DAT preflight, and stale CDN caches at byte level.
+
+Discipline: **client-side observation must not cheat** — no synthetic injection, no re-running canonical algorithms, no peeking at wasm-internal queues. When build-side and client-side disagree, build-side wins (it has access to the canonical source); client-side data helps debug WHY.
+
+See `docs/ring-diagnose-repair-playbook.md` for the operator workflow that ties Phase E's validator to Phase F's `__diag` surfaces.
+
 ### World-frame convention (important)
 
 The renderer puts `terrainGroup`, `staticsGroup`, `buildingsGroup`, `entitiesGroup` directly under `worldRoot`, which has `rotation.x = -π/2`. So per-Mesh / per-instance `(position.x, position.y, position.z)` are in **AC world frame** — no `acToThree` inverse needed at validator time. `lbX = floor(pos.x / 192)`, `lbY = floor(pos.y / 192)`.
@@ -182,6 +196,17 @@ python3 scripts/world-completeness/stage-ring-spawns.py \
 # 6. Validator runs as a CI gate before any deploy.
 node external/holtburger/apps/holtburger-web/validate_landblock_completeness.cjs \
   --ring 0x0000..0xFEFE --strict
+
+# 7. (Wave-4.B, 2026-05-23) Per-LB byte-integrity verify from the wire-agent's
+#    POV — sha256 of fetched bytes vs the sidecar emitted by the bake CLIs.
+#    Catches anything that mutated the JSONL between bake-output and
+#    runtime-fetch (network corruption, CDN stale-cache, post-bake tamper).
+#    Each bake CLI emits `0xLLLL.<type>.jsonl.sha256` next to its JSONL.
+#    Browser-side verify:
+#      await window.__diag.integrity.verifyManifests({
+#        landblocks: ringLbsAsHexStrings
+#      });
+#    Returns `{ok, results: [{source, match, expectedSha, computedSha}]}`.
 ```
 
 To scale from a 13×13 region to whole Dereth (256×256 = 65,536 LBs), the same loop runs — just over more LBs. The artifacts that result:
@@ -194,13 +219,17 @@ To scale from a 13×13 region to whole Dereth (256×256 = 65,536 LBs), the same 
 
 Tracked + non-blocking for the method's correctness:
 
-1. **F.35 — URL-level fetch dedup in `ManifestResourceSource::prefetch`.** Root cause of the entity rig race surfaced in Phase E + D-polish. 13 concurrent spawns currently fire ~78 redundant HTTP GETs because the per-LB cache doesn't dedupe in-flight URL fetches. Fix: `Mutex<HashMap<String, Shared<JsFuture>>>` per URL. Estimated 13-in-<5s, 119-in-<15s after fix. One-file change in `crates/holtburger-resource-http/src/manifest_source.rs`.
+1. ~~**F.35 — URL-level fetch dedup**~~ — shipped pre-Wave-1 (commit `37f9c02`); verified during Wave 2 with 8-test dedup suite including 119-spawn × 50-URL stress (asserts 50 fetches, would be 5,950 without dedup).
 
-2. **Demo screenshot regen after F.35.** Hudriffa is intermittently absent from `01-hudriffa-shopkeeper.png` because of the same race. F.35 should fix this automatically.
+2. **Demo screenshot regen.** Hudriffa is intermittently absent from `01-hudriffa-shopkeeper.png`. F.35 fixed the race upstream; capture re-run with current renderer pending.
 
-3. **Whole-Dereth bake performance.** Baking 65,536 LBs in serial is ~hours. Parallelize over LBs (independent: no shared state in `bake_landblock`). Future tool work.
+3. **Whole-Dereth bake performance.** Baking 65,536 LBs in serial is ~hours. The three bake CLIs (scenery-bake, event-bake, stage-ring-spawns.py) are per-LB independent (no shared state in `bake_landblock`); a `--parallel <N>` flag is the natural addition. See `docs/ring-expansion-method.md` for the proposed orchestrator.
 
-4. **Live-ACE entity channel verification.** Phase D.1 used synthetic JSONL replay; the wire-frame path through `handleEntitySpawn` / `__scene3dEntityHook` was exercised but not against a live ACE socket. When connecting to Coldeve, verify the channel keeps up at radius=6 under real network conditions.
+4. **Live-ACE entity channel verification.** Phase D.1 used synthetic JSONL replay; the wire-frame path through `handleEntitySpawn` / `__scene3dEntityHook` was exercised but not against a live ACE socket at radius=6. The client-side `__diag.spawns` lifecycle (Wave-1 of the wire-agent diag layer, commit `5d8ba2d6`) now provides observation infrastructure for that test.
+
+5. **Per-LB JSONL byte-integrity verification** — shipped Wave-4.B (2026-05-23, commit `8cc553d7`). Each of the three bake CLIs now emits `0xLLLL.<type>.jsonl.sha256` sidecars; the wire-agent's `window.__diag.integrity.verifyManifests({landblocks: [...]})` fetches + hashes the JSONL via `crypto.subtle.digest` and compares. 169-LB ring backfilled.
+
+6. **Client-side observation layer for Phase E drift forensics** — shipped Wave-1 through Wave-4 of the wire-agent diag (2026-05-23, commits `5d8ba2d6`, `645626c9`, `7c2076ef`, `49634b33`, `cc8819f9`, `c465cb77`). 10 cheat-free `window.__diag` surfaces (spawns / placements / entityTypes / events / wire / physics / motion / pvs / assets / integrity). Complement, not replace, the Phase E validator. See `~/.claude/projects/-home-wbterminal/memory/reference_wire_agent_diag_layer.md`.
 
 ## What this method does NOT solve
 
