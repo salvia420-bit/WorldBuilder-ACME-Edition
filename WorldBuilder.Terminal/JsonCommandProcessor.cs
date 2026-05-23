@@ -1580,6 +1580,13 @@ public class JsonCommandProcessor {
         var (lbX, lbY) = Lb(node);
         var r = _engine.DescribeLandblock(lbX, lbY);
         uint lbKey32 = (uint)((lbX & 0xff) << 24) | (uint)((lbY & 0xff) << 16);
+        // Optional `--out` (or "out") path. When set, the oracle payload is
+        // ALSO written to disk so the wire-agent diag harness can fetch by
+        // URL (`./oracles/<lbHex>.json`). Convention used by the
+        // holtburger-web Wave-1 diagnostic layer: write to
+        // `apps/holtburger-web/oracles/0xLLLL0000.json`. Caller passes the
+        // ABSOLUTE path; we don't infer.
+        string outPath = node["out"]?.GetValue<string>() ?? "";
         return Serialize(new {
             success = true,
             command = "dump-lb-expectations",
@@ -1629,7 +1636,25 @@ public class JsonCommandProcessor {
                 scenery = r.Body.LooseObjectCount,
                 envCells = r.Body.Interior?.CellCount ?? 0,
             },
-        });
+        }, outPath);
+    }
+
+    // Serialize wrapper that ALSO writes the JSON to outPath when set,
+    // mirroring the existing static Serialize call shape. The on-disk
+    // write is best-effort — diagnostic errors land in stderr but don't
+    // block the stdout response (so callers parsing stdin loops aren't
+    // disrupted).
+    private static string Serialize(object payload, string outPath) {
+        string json = Serialize(payload);
+        if (!string.IsNullOrEmpty(outPath)) {
+            try {
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(outPath) ?? ".");
+                System.IO.File.WriteAllText(outPath, json);
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[dump-lb-expectations] out write failed ({outPath}): {ex.Message}");
+            }
+        }
+        return json;
     }
 
     private string CmdAddObject(System.Text.Json.Nodes.JsonNode node) {
