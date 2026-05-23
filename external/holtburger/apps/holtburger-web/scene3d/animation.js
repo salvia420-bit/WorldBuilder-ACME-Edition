@@ -193,6 +193,15 @@ export class AnimationCache {
     constructor() {
         // key → Promise<{ clip, partMeshes, partCount, framerate, resolvedStance }>
         this.entries = new Map();
+        // Sidecar to `entries` keyed by the same cache-key — records
+        // wall-clock at promise-creation time so `__diag.assets.stuck
+        // (thresholdMs)` can flag long-pending fetches. Cleared in
+        // `.then` / `.catch` continuations attached at .set() time so
+        // entries.size keeps growing (cache pattern) but pendingStart
+        // Times only retains in-flight requests. Observation only —
+        // never read from cache logic.
+        /** @type {Map<string, number>} */
+        this.pendingStartTimes = new Map();
         // setupId → string[] (computed on first bake; reused for every
         // future stance/command on the same setup).
         this.partNames = new Map();
@@ -447,6 +456,11 @@ export class AnimationCache {
             };
         })();
         this.entries.set(key, promise);
+        // pendingStartTimes sidecar for __diag.assets.stuck() — cleared
+        // on both success and failure via Promise.then(both arms).
+        this.pendingStartTimes.set(key, performance.now());
+        const _clearPending = () => { this.pendingStartTimes.delete(key); };
+        promise.then(_clearPending, _clearPending);
         return promise;
     }
 

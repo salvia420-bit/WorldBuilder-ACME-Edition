@@ -2169,6 +2169,26 @@ export class EntityManager {
       console.log(
         `[motion-link] 0x${(inst.guid >>> 0).toString(16)} ${fromCmd.toString(16)}→${toCmd.toString(16)} stance=${stance.toString(16)} (link clip played, ${entry.hooks?.length ?? 0} hooks)`,
       );
+      // Follow-on hook for __diag.motion combat-swing observation.
+      // The locomotion crossFadeTo path at L~2005 already lands on
+      // onMotionApplied; this site is the link-clip path (attacks,
+      // casts, gesture loops) which raw-plays without touching
+      // inst.currentActionKey. Fires a SEPARATE link-played event so
+      // the diag surface can tell "swung" apart from "transitioned
+      // motion state" without one event blocking the other.
+      if (typeof window !== "undefined" && window.__diag?.motion?.onMotionLinkPlayed) {
+        try {
+          window.__diag.motion.onMotionLinkPlayed({
+            guid: inst.guid >>> 0,
+            name: inst.meta?.name ?? "",
+            fromCmd: fromCmd >>> 0,
+            toCmd: toCmd >>> 0,
+            stance: stance >>> 0,
+            hookCount: entry.hooks?.length ?? 0,
+            linkKey,
+          });
+        } catch (_) { /* never block the play path */ }
+      }
     } catch (e) {
       console.warn(`[motion-link] play failed: ${e?.message ?? e}`);
     }

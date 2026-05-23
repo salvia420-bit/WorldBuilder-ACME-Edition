@@ -158,16 +158,47 @@ export function attachAssets(diag) {
     },
 
     /**
-     * v2 stuck-detector: read pendingFetches / entries and find ones older
-     * than `thresholdMs`. The current caches don't record per-entry
-     * start-times, so the implementation returns a `note` placeholder.
-     * Adding start-time instrumentation in `MaterialCache.preload`'s
-     * pending-promise install + `AnimationCache.get`'s entries set is the
-     * follow-on. Keeping the entry point so harness code can call it
-     * unconditionally and check `.note` to decide whether to ignore.
+     * Read MaterialCache.pendingStartTimes + AnimationCache.pending
+     * StartTimes (sidecar maps maintained alongside pendingFetches /
+     * entries) and return entries that have been in-flight longer
+     * than `thresholdMs` (default 5000 ms).
+     *
+     * Materials sidecar clears on success+failure (preload + preload
+     * Batch finally blocks); animation sidecar clears via .then/.catch
+     * arms attached at .set() time. So a stuck entry here means the
+     * promise has neither resolved nor rejected within the window —
+     * the actual "fetch hung" signal, not just "fetch settled with
+     * an error" (which the {material,animation}Errors arrays already
+     * record).
      */
-    stuck(_thresholdMs) {
-      return { note: "not implemented — caches don't track per-entry startTimes yet" };
+    stuck(thresholdMs = 5000) {
+      const now = performance.now();
+      const ls = window.liveScene3d;
+      const out = { materials: [], animations: [], thresholdMs, ts: now };
+      const mPending = ls?.materialCache?.pendingStartTimes;
+      if (mPending instanceof Map) {
+        for (const [did, startedAt] of mPending) {
+          const ageMs = now - startedAt;
+          if (ageMs > thresholdMs) {
+            out.materials.push({
+              did: "0x" + (did >>> 0).toString(16).padStart(8, "0"),
+              ageMs: Math.round(ageMs),
+            });
+          }
+        }
+      }
+      const aPending = ls?.entityManager?.animationCache?.pendingStartTimes;
+      if (aPending instanceof Map) {
+        for (const [key, startedAt] of aPending) {
+          const ageMs = now - startedAt;
+          if (ageMs > thresholdMs) {
+            out.animations.push({ key, ageMs: Math.round(ageMs) });
+          }
+        }
+      }
+      out.materialCount = out.materials.length;
+      out.animationCount = out.animations.length;
+      return out;
     },
 
     /** Clear all three rings. Idempotent. */

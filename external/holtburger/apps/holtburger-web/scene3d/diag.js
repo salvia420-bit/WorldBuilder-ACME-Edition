@@ -264,74 +264,113 @@ export function installDiag() {
       const lbY = (lb >> 16) & 0xff;
       const METERS_PER_LB = 192.0;
 
-      // For each expected NPC, find the best observed match.
-      for (const exp of expectedNpcs) {
+      // Global-greedy pairing on SUCCEEDED observations only — multi-
+      // instance wcids (Door=412, Royal Guard=37518) used to pair sub-
+      // optimally under per-expected nearest-neighbour: a near-optimal
+      // pairing globally beats any locally-greedy choice. Algorithm:
+      // enumerate all (expected, succeeded-observation) pairs with
+      // matching wcid + same LB, sort by distSq, take in order while
+      // both sides are unclaimed.
+      const succeededPairs = [];
+      for (let i = 0; i < expectedNpcs.length; i++) {
+        const exp = expectedNpcs[i];
         const wcid = exp.wcid >>> 0;
         const observedByWcid = this.spawns.byWcid.get(wcid) ?? [];
-
         const expWorldX = lbX * METERS_PER_LB + (exp.x ?? 0);
         const expWorldY = lbY * METERS_PER_LB + (exp.y ?? 0);
         const expWorldZ = (exp.z ?? 0);
-
-        // Best match: same wcid, in this LB, closest position, not yet paired.
-        let best = null;
-        let bestDistSq = Infinity;
         for (const obs of observedByWcid) {
-          if (paired.has(obs.guid)) continue;
           if (obs.lbId !== lb) continue;
+          if (obs.status !== "succeeded") continue;
           const dx = obs.x - expWorldX;
           const dy = obs.y - expWorldY;
           const dz = obs.z - expWorldZ;
-          const distSq = dx*dx + dy*dy + dz*dz;
-          if (distSq < bestDistSq) {
-            bestDistSq = distSq;
-            best = obs;
+          const dSq = dx*dx + dy*dy + dz*dz;
+          succeededPairs.push({ i, obs, dSq });
+        }
+      }
+      succeededPairs.sort((a, b) => a.dSq - b.dSq);
+      const matchedExp = new Map();   // expectedIdx → {obs, distSq}
+      for (const p of succeededPairs) {
+        if (matchedExp.has(p.i)) continue;
+        if (paired.has(p.obs.guid)) continue;
+        matchedExp.set(p.i, { obs: p.obs, distSq: p.dSq });
+        paired.add(p.obs.guid);
+      }
+
+      // Walk expected list in original order, applying matchedExp first
+      // and falling back to the failed/pending/elsewhere classification
+      // for unmatched entries.
+      for (let i = 0; i < expectedNpcs.length; i++) {
+        const exp = expectedNpcs[i];
+        const wcid = exp.wcid >>> 0;
+        const observedByWcid = this.spawns.byWcid.get(wcid) ?? [];
+
+        const matched = matchedExp.get(i);
+        if (matched) {
+          if (matched.distSq <= TWO_M_SQ) {
+            goodMatches += 1;
+          } else {
+            missing.push({
+              expected: exp,
+              classification: "succeeded-but-misplaced",
+              detail: {
+                observedGuid: matched.obs.guid,
+                observedPos: [matched.obs.x, matched.obs.y, matched.obs.z],
+                distance: Math.sqrt(matched.distSq),
+              },
+            });
           }
-        }
-
-        if (best && best.status === "succeeded" && bestDistSq <= TWO_M_SQ) {
-          paired.add(best.guid);
-          goodMatches += 1;
-          continue;   // OK match
-        }
-
-        // Classify the missing entry
-        if (best && best.status === "succeeded") {
-          missing.push({
-            expected: exp,
-            classification: "succeeded-but-misplaced",
-            detail: { observedGuid: best.guid, observedPos: [best.x, best.y, best.z], distance: Math.sqrt(bestDistSq) },
-          });
-          paired.add(best.guid);
           continue;
         }
-        if (best && best.status === "failed") {
-          const failure = this.spawns.failed.find((f) => f.guid === best.guid);
+
+        // No succeeded global-greedy match. Fall back: walk failed +
+        // pending + elsewhere for this wcid (per-row nearest is fine
+        // for these — they aren't position-sensitive contracts).
+        let bestFail = null;
+        let bestFailDistSq = Infinity;
+        let bestPending = null;
+        let bestPendingDistSq = Infinity;
+        const expWorldX = lbX * METERS_PER_LB + (exp.x ?? 0);
+        const expWorldY = lbY * METERS_PER_LB + (exp.y ?? 0);
+        const expWorldZ = (exp.z ?? 0);
+        for (const obs of observedByWcid) {
+          if (paired.has(obs.guid)) continue;
+          if (obs.lbId !== lb) continue;
+          const dx = obs.x - expWorldX, dy = obs.y - expWorldY, dz = obs.z - expWorldZ;
+          const dSq = dx*dx + dy*dy + dz*dz;
+          if (obs.status === "failed" && dSq < bestFailDistSq) {
+            bestFailDistSq = dSq; bestFail = obs;
+          } else if (obs.status === "pending" && dSq < bestPendingDistSq) {
+            bestPendingDistSq = dSq; bestPending = obs;
+          }
+        }
+        if (bestFail) {
+          const failure = this.spawns.failed.find((f) => f.guid === bestFail.guid);
           missing.push({
             expected: exp,
             classification: "spawn-failed",
-            detail: { guid: best.guid, error: failure?.error ?? "(unknown)" },
+            detail: { guid: bestFail.guid, error: failure?.error ?? "(unknown)" },
           });
-          paired.add(best.guid);
+          paired.add(bestFail.guid);
           continue;
         }
-        if (best && best.status === "pending") {
-          const pending = this.spawns.pending.get(best.guid);
+        if (bestPending) {
+          const pending = this.spawns.pending.get(bestPending.guid);
           const age = pending ? now - pending.attemptedAt : 0;
           if (age > PENDING_TIMEOUT_MS) {
             missing.push({
               expected: exp,
               classification: "spawn-pending",
-              detail: { guid: best.guid, ageMs: age, awaitingWhat: pending?.awaitingWhat ?? "unknown" },
+              detail: { guid: bestPending.guid, ageMs: age, awaitingWhat: pending?.awaitingWhat ?? "unknown" },
             });
-            paired.add(best.guid);
+            paired.add(bestPending.guid);
             continue;
           }
         }
 
-        // No observation of this wcid at all in this LB. Check whether
-        // we saw it somewhere ELSE:
-        const sawElsewhere = observedByWcid.find((o) => o.lbId !== lb);
+        // No observation of this wcid at all in this LB. Check elsewhere.
+        const sawElsewhere = observedByWcid.find((o) => o.lbId !== lb && !paired.has(o.guid));
         if (sawElsewhere) {
           missing.push({
             expected: exp,

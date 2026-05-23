@@ -892,6 +892,16 @@ export class MaterialCache {
     this.heightTextures = new Map();
     /** @type {Map<number, Promise<THREE.MeshStandardMaterial>>} */
     this.pendingFetches = new Map();
+    /**
+     * Sidecar to `pendingFetches` keyed by the same DID — records the
+     * wall-clock at which the fetch was kicked off so `__diag.assets
+     * .stuck(thresholdMs)` can identify entries that have been in-flight
+     * too long. Set on every `pendingFetches.set(did, ...)`; deleted on
+     * every `pendingFetches.delete(did)` (both success and failure
+     * paths). Never read from cache logic — observation only.
+     * @type {Map<number, number>}
+     */
+    this.pendingStartTimes = new Map();
 
     // Wire-agent mode (?wireframe=1). When true, getCached() returns
     // shared per-DID-hash MeshBasicMaterial({wireframe:true}) instead of
@@ -1521,10 +1531,12 @@ export class MaterialCache {
       return mat;
     })();
     this.pendingFetches.set(did, p);
+    this.pendingStartTimes.set(did, performance.now());
     try {
       return await p;
     } finally {
       this.pendingFetches.delete(did);
+      this.pendingStartTimes.delete(did);
     }
   }
 
@@ -1565,6 +1577,7 @@ export class MaterialCache {
     // concurrent `get()` calls latch on.
     const ids = new Uint32Array(need);
     const sharedFetch = fetchSurfacesPixels(ids);
+    const _batchStart = performance.now();
     for (const d of need) {
       this.pendingFetches.set(
         d,
@@ -1576,6 +1589,7 @@ export class MaterialCache {
           return this._installFromPixels(d, sp);
         })
       );
+      this.pendingStartTimes.set(d, _batchStart);
     }
 
     let results;
@@ -1584,7 +1598,10 @@ export class MaterialCache {
     } catch (e) {
       // Bulk fetch failed entirely — clear all pending so subsequent
       // calls can retry. Caller's await of `preload()` will reject.
-      for (const d of need) this.pendingFetches.delete(d);
+      for (const d of need) {
+        this.pendingFetches.delete(d);
+        this.pendingStartTimes.delete(d);
+      }
       try { window.__diag?.assets?.onMaterialError?.({ dids: need, error: e, source: "preload" }); } catch (_) {}
       throw e;
     }
@@ -1596,6 +1613,7 @@ export class MaterialCache {
       const installed = this._installFromPixels(d, sp);
       if (installed !== this.fallbackMaterial) resolved += 1;
       this.pendingFetches.delete(d);
+      this.pendingStartTimes.delete(d);
     }
     return resolved;
   }

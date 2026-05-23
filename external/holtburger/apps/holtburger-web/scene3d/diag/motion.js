@@ -95,12 +95,22 @@ function pushGlobal(motion, rec) {
   }
 }
 
+const MAX_LINK_PLAYS = 200;
+
 export function attachMotion(diag) {
   const motion = {
     byGuid: new Map(),
     globalHistory: [],
+    // Separate ring buffer for the link-clip path (combat swings + casts
+    // + gesture loops). entities.js::_tryPlayLink raw-plays without
+    // touching `inst.currentActionKey`, so these events DON'T appear in
+    // byGuid/globalHistory and need their own surface. Diff vs the
+    // wire-event combat stream via __diag.wire.tail to detect "wire
+    // said attacker swung but no link clip played" type bugs.
+    linkPlays: [],
     maxGlobalHistory: MAX_GLOBAL_HISTORY,
     maxPerGuidHistory: MAX_PER_GUID_HISTORY,
+    maxLinkPlays: MAX_LINK_PLAYS,
 
     /**
      * Hook fired from entities.js::setMotion immediately after
@@ -164,6 +174,35 @@ export function attachMotion(diag) {
     },
 
     /**
+     * Hook fired from entities.js::_tryPlayLink after `action.play()`
+     * lands. The link path is used for combat swings, spell casts, and
+     * gesture loops; it does NOT mutate `inst.currentActionKey` (that
+     * stays on the underlying locomotion clip), so locomotion-aware
+     * consumers like `onMotionApplied` never see swing events. This
+     * separate surface captures them with `(fromCmd, toCmd, stance,
+     * hookCount, linkKey)` so the operator can correlate against
+     * `__diag.wire.tail` combat packets without confusing the two
+     * streams.
+     */
+    onMotionLinkPlayed(meta) {
+      if (!meta || typeof meta.guid !== "number") return;
+      const rec = {
+        t: performance.now(),
+        guid: meta.guid >>> 0,
+        name: meta.name ?? "",
+        fromCmd: meta.fromCmd >>> 0,
+        toCmd: meta.toCmd >>> 0,
+        stance: meta.stance >>> 0,
+        hookCount: typeof meta.hookCount === "number" ? meta.hookCount : 0,
+        linkKey: meta.linkKey ?? null,
+      };
+      motion.linkPlays.push(rec);
+      if (motion.linkPlays.length > motion.maxLinkPlays) {
+        motion.linkPlays.shift();
+      }
+    },
+
+    /**
      * Return either a single guid's entry or the entire byGuid map
      * materialized as a plain object (devtools-friendly).
      */
@@ -216,6 +255,7 @@ export function attachMotion(diag) {
     reset() {
       motion.byGuid.clear();
       motion.globalHistory.length = 0;
+      motion.linkPlays.length = 0;
     },
   };
 

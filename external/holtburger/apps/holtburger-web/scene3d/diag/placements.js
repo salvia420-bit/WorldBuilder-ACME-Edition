@@ -148,18 +148,53 @@ function walkScene(lbFilter) {
   return all.filter((p) => lbKey(lbByte(p.position[0]), lbByte(p.position[1])) === lb);
 }
 
-/** Find the closest unclaimed observed placement with matching modelId. */
-function closestMatch(observed, claimed, wantModelId, wx, wy, wz, claimPrefix) {
-  let bestIdx = -1, bestDistSq = Infinity;
-  for (let i = 0; i < observed.length; i++) {
-    if (claimed.has(`${claimPrefix}${i}`)) continue;
-    const o = observed[i];
-    if (o.modelId !== wantModelId) continue;
-    const dx = o.position[0] - wx, dy = o.position[1] - wy, dz = o.position[2] - wz;
-    const dSq = dx*dx + dy*dy + dz*dz;
-    if (dSq < bestDistSq) { bestDistSq = dSq; bestIdx = i; }
+/**
+ * Global-greedy bipartite matcher between expected and observed lists.
+ *
+ * Per-expected greedy is suboptimal on multi-instance models: with 30
+ * "Door" placements expected and 30 observed, the first-claimed expected
+ * grabs whichever observed happens to come closest, which can force
+ * later expected entries to pair against far-away leftovers. This walks
+ * ALL candidate pairs in ascending distance order, claiming both sides
+ * stably — equivalent to the "global nearest neighbour matching"
+ * heuristic and within a small constant of true Hungarian-optimal for
+ * the position-matching problem (where the true optimum has lots of
+ * close pairs and few far ones).
+ *
+ * Complexity: O(N*M) for pair enumeration + O(N*M log N*M) sort, where
+ * N=|expected|, M=|observed|. For Holtburg N≈100, M≈250 → ~25K pair
+ * compute + ~25K log sort = sub-millisecond.
+ *
+ * Returns `Map<expectedIdx, { observedIdx, distSq }>` for matched
+ * pairs only. Expected entries without a same-modelId observed
+ * counterpart get no entry (caller treats them as not-rendered).
+ */
+function globalNearestMatch(expected, observed, modelIdOf, posOf) {
+  const pairs = [];
+  for (let i = 0; i < expected.length; i++) {
+    const em = modelIdOf(expected[i]);
+    const ep = posOf(expected[i]);
+    if (em == null || !ep) continue;
+    for (let j = 0; j < observed.length; j++) {
+      if (observed[j].modelId !== em) continue;
+      const op = observed[j].position;
+      const dx = op[0] - ep[0];
+      const dy = op[1] - ep[1];
+      const dz = op[2] - ep[2];
+      pairs.push({ i, j, dSq: dx*dx + dy*dy + dz*dz });
+    }
   }
-  return { idx: bestIdx, distSq: bestDistSq };
+  pairs.sort((a, b) => a.dSq - b.dSq);
+  const result = new Map();
+  const claimedExp = new Set();
+  const claimedObs = new Set();
+  for (const p of pairs) {
+    if (claimedExp.has(p.i) || claimedObs.has(p.j)) continue;
+    claimedExp.add(p.i);
+    claimedObs.add(p.j);
+    result.set(p.i, { observedIdx: p.j, distSq: p.dSq });
+  }
+  return result;
 }
 
 export function attachPlacements(diag) {
@@ -192,58 +227,124 @@ export function attachPlacements(diag) {
       const expScenery   = typeof exp.sceneryCount === "number" ? exp.sceneryCount : 0;
 
       const missing = [];
-      const claimed = new Set();
+      const extra = [];
 
-      // ── buildings: oracle origins are world-frame (Vector3 Origin in
-      //    LandblockDescriber.cs:101) — no LB-local conversion needed.
-      for (const eb of expBuildings) {
+      // ── buildings: oracle origins are world-frame — global-greedy
+      //    pair against same-modelId observed entries. Eliminates the
+      //    multi-instance crosstalk the per-row matcher produced on
+      //    LBs with N identical building models (warden barracks etc).
+      const bMatches = globalNearestMatch(
+        expBuildings, obBuildings,
+        (eb) => normalizeModelId(eb.modelId),
+        (eb) => [eb.origin?.x ?? 0, eb.origin?.y ?? 0, eb.origin?.z ?? 0],
+      );
+      const bClaimed = new Set();
+      for (let i = 0; i < expBuildings.length; i++) {
+        const eb = expBuildings[i];
         const wantModel = normalizeModelId(eb.modelId);
         const ox = eb.origin?.x ?? 0, oy = eb.origin?.y ?? 0, oz = eb.origin?.z ?? 0;
-        const m = closestMatch(obBuildings, claimed, wantModel, ox, oy, oz, "b");
         const expectedSpec = { modelId: wantModel, origin: [ox, oy, oz], nameHint: eb.nameHint ?? null };
-        if (m.idx < 0) {
+        const m = bMatches.get(i);
+        if (!m) {
           missing.push({ kind: "building", expected: expectedSpec,
                          classification: "building-not-rendered", detail: null });
         } else if (m.distSq > POS_TOLERANCE_SQ) {
           missing.push({ kind: "building", expected: expectedSpec,
                          classification: "building-misplaced",
-                         detail: { observedPos: obBuildings[m.idx].position,
+                         detail: { observedPos: obBuildings[m.observedIdx].position,
                                    distance: Math.sqrt(m.distSq) } });
-          claimed.add(`b${m.idx}`);
+          bClaimed.add(m.observedIdx);
         } else {
-          claimed.add(`b${m.idx}`);
+          bClaimed.add(m.observedIdx);
         }
       }
-      const extra = [];
       for (let i = 0; i < obBuildings.length; i++) {
-        if (claimed.has(`b${i}`)) continue;
+        if (bClaimed.has(i)) continue;
         extra.push({ kind: "building", modelId: obBuildings[i].modelId,
                      position: obBuildings[i].position });
       }
 
-      // ── npcs: oracle coords are LB-local → convert to world. Complementary
-      //    to diag.diff lifecycle; we only ask "is something at the spot?".
-      for (const en of expNpcs) {
+      // ── npcs: oracle coords LB-local → world. Same global-greedy
+      //    treatment so multi-instance wcids (Door=412, Royal Guard=
+      //    37518) pair stably. We still defer 5-mode classification
+      //    to diag.diff(lbId); this surface only flags "rendered or not".
+      const nMatches = globalNearestMatch(
+        expNpcs, obEntities,
+        (en) => (en.wcid >>> 0) || 0,
+        (en) => [
+          lbX * METERS_PER_LB + (en.x ?? 0),
+          lbY * METERS_PER_LB + (en.y ?? 0),
+          en.z ?? 0,
+        ],
+      );
+      const nClaimed = new Set();
+      for (let i = 0; i < expNpcs.length; i++) {
+        const en = expNpcs[i];
         const wantWcid = (en.wcid >>> 0) || 0;
         const wx = lbX * METERS_PER_LB + (en.x ?? 0);
         const wy = lbY * METERS_PER_LB + (en.y ?? 0);
         const wz = en.z ?? 0;
-        const m = closestMatch(obEntities, claimed, wantWcid, wx, wy, wz, "e");
-        if (m.idx < 0 || m.distSq > POS_TOLERANCE_SQ) {
+        const m = nMatches.get(i);
+        if (!m || m.distSq > POS_TOLERANCE_SQ) {
           missing.push({
             kind: "npc",
             expected: { wcid: wantWcid, name: en.name ?? null, worldPos: [wx, wy, wz] },
             classification: "npc-not-rendered",
-            detail: m.idx < 0 ? null
-                  : { observedPos: obEntities[m.idx].position, distance: Math.sqrt(m.distSq) },
+            detail: !m ? null
+                  : { observedPos: obEntities[m.observedIdx].position, distance: Math.sqrt(m.distSq) },
           });
+          if (m) nClaimed.add(m.observedIdx);
         } else {
-          claimed.add(`e${m.idx}`);
+          nClaimed.add(m.observedIdx);
         }
       }
 
-      // ── scenery: count-only at v1 per brief.
-      if (obStatics.length !== expScenery) {
+      // ── scenery: prefer per-placement diff against oracle.bakedScenery[]
+      //    (Wave-2 oracle — `{obj_id, x, y, z, scale, ...}` LB-local).
+      //    Global-greedy pairing — multi-instance models like grass tufts
+      //    or rocks would crosstalk badly under per-row matching.
+      const expBakedScenery = Array.isArray(exp.bakedScenery) ? exp.bakedScenery : null;
+      if (expBakedScenery) {
+        const sMatches = globalNearestMatch(
+          expBakedScenery, obStatics,
+          (es) => normalizeModelId(es.obj_id),
+          (es) => [
+            lbX * METERS_PER_LB + (es.x ?? 0),
+            lbY * METERS_PER_LB + (es.y ?? 0),
+            es.z ?? 0,
+          ],
+        );
+        const sClaimed = new Set();
+        for (let i = 0; i < expBakedScenery.length; i++) {
+          const es = expBakedScenery[i];
+          const wantModel = normalizeModelId(es.obj_id);
+          const wx = lbX * METERS_PER_LB + (es.x ?? 0);
+          const wy = lbY * METERS_PER_LB + (es.y ?? 0);
+          const wz = es.z ?? 0;
+          const expectedSpec = { obj_id: wantModel, worldPos: [wx, wy, wz], scale: es.scale ?? 1 };
+          const m = sMatches.get(i);
+          if (!m) {
+            missing.push({ kind: "scenery", expected: expectedSpec,
+                           classification: "scenery-not-rendered", detail: null });
+          } else if (m.distSq > POS_TOLERANCE_SQ) {
+            missing.push({ kind: "scenery", expected: expectedSpec,
+                           classification: "scenery-misplaced",
+                           detail: { observedPos: obStatics[m.observedIdx].position,
+                                     distance: Math.sqrt(m.distSq) } });
+            sClaimed.add(m.observedIdx);
+          } else {
+            sClaimed.add(m.observedIdx);
+          }
+        }
+        let extraSceneryReported = 0;
+        for (let i = 0; i < obStatics.length; i++) {
+          if (sClaimed.has(i)) continue;
+          if (extraSceneryReported++ >= 25) break;
+          extra.push({ kind: "scenery", modelId: obStatics[i].modelId,
+                       position: obStatics[i].position });
+        }
+      } else if (obStatics.length !== expScenery) {
+        // Legacy count-only fallback.
         missing.push({
           kind: "scenery",
           expected: { count: expScenery },
