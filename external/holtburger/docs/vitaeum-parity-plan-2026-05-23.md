@@ -1,0 +1,216 @@
+# Vitaeum-Parity Plan — DAT Coverage Closeout
+
+**Started:** 2026-05-23
+**Baseline:** commit `c32a6f8f` (kind-aware classifier landed; vitaeum stat parity proven)
+**Working tree:** `/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/`
+**Base DATs (reference):** `/home/wbterminal/ac_base_dats/{client_portal,client_cell_1,client_local_English}.dat`
+
+## Context
+
+A closed competitor client ("vitaeum") publishes per-type DAT record counts that initially looked like coverage we lacked. Investigation showed our counts were wrong, not our coverage: `DatFileType::from_id` was DAT-context-blind and misclassified ~195k cell entries as portal types plus dropped ~7k portal types into Unknown/IndoorCell. Baseline commit fixes classification and adds 20 missing variants. This doc plans the follow-on parser work to actually decode what we now identify.
+
+Three milestones, sequenced A → C → B with explicit go/no-go gates. Skip-or-continue decisions live with the user, not the agent.
+
+---
+
+## Milestone A — Caller migration
+
+**Goal:** Move bake-pipeline and test callers off the legacy `from_id` onto `from_id_in_dat`, so misclassification can't silently affect output anywhere downstream.
+
+**Risk:** LOW (signature change, no parser logic). The biggest exposure is uncovering pre-existing latent bugs that the misclassification was hiding.
+
+**Estimate:** 1–2 hours.
+
+### Call-site triage (already done)
+
+| File | Needs migration? | Why |
+|---|---|---|
+| `apps/holtburger-tools/src/dat2hba.rs:282,554` | YES | dispatches by type for HBA pack; iterates all DAT IDs |
+| `apps/holtburger-tools/src/bin/scenery-bake.rs:214` | YES | scenery bake iterates and classifies |
+| `apps/holtburger-tools/src/bin/event-bake.rs:199` | YES | event bake iterates and classifies |
+| `crates/holtburger-dat/benches/provider_bench.rs:24` | YES | `is_essential()` filter when reading DATs |
+| `crates/holtburger-dat/tests/parity_tests.rs:27` | YES | fixture-test with known DAT origin |
+| `crates/holtburger-content/src/repository.rs:304,341` | NO | `as u32` on known-unambiguous IDs (ChatPoseTable, Iteration) |
+| `crates/holtburger-core/src/client/builder.rs:318,337` | NO | same pattern |
+| `crates/holtburger-world/src/state/tests.rs:83` | NO | synthetic test fixture, no real DAT |
+
+### Acceptance test
+
+Re-bake one **low-X-coord** landblock (Yaraq region around X=0x20) before and after migration. Pre-migration should show different per-type counts in the bake log; post-migration counts should match the cell-DAT IndoorCell total for that LB. If anything else changes (output structure, sha256 of baked files for a high-X-coord LB control), STOP and triage — that's a real bug hiding behind the misclassification.
+
+Control LBs:
+- High-X (must be identical pre/post): 0xA9B4 (Holtburg)
+- Low-X (must change for the better): pick something with X in 0x01-0x40 from cell.dat scan; verify the new bake parses indoor cells where the old one bailed
+
+### Commit shape
+
+One commit: `fix(bake,tests): migrate from legacy from_id to kind-aware from_id_in_dat`
+
+### Exit criteria
+
+- All five YES-row callers migrated and compiling
+- Sanity bakes match expectations (high-X identical, low-X improved)
+- Full test suite green: `cargo test --release` (whole workspace)
+- Commit + push
+
+### Go/no-go
+
+If sanity bake reveals latent bug → STOP, escalate, fix before continuing. Otherwise → roll into Milestone C.
+
+---
+
+## Milestone C — Four foundational parsers
+
+**Goal:** Add parsers for file types whose enum variants exist but where no parser body has been written. Ordered ascending by complexity; each gets its own commit.
+
+**Risk:** MEDIUM per parser. Format reverse-engineering can hide gotchas (e.g. `[[feedback_dat_parser_mislabels]]`).
+
+**Estimate:** ~1 day total, ~2 hours per parser plus integration validation.
+
+### Discipline (load-bearing per memory)
+
+- **Ground in real wire data** — `[[feedback_ground_in_real_wire_data]]`: parse against actual DAT bytes before claiming structure correctness.
+- **Trust acclient.c for widths** — `[[feedback_dat_parser_mislabels]]`: DRW labels and the wiki are docs; acclient.h decomp is truth for scalar widths + vector/scalar distinctions.
+- **Three-source cross-reference** — `[[feedback_three_source_cross_reference]]`: for each new type, sanity-check against ACE (server) + DRW (client C# decomp) + acclient.h (retail). Avoid PhatSDK per `[[feedback_no_phatac]]`.
+- **WB.Terminal first for verification** — `[[reference_worldbuilder_terminal]]`: WB.Terminal can dump retail records; use it to cross-check our parser output against the canonical decode.
+
+### Files to touch per parser
+
+1. `crates/holtburger-dat/src/file_type/<name>.rs` — new parser module
+2. `crates/holtburger-dat/src/file_type/mod.rs` — `pub mod <name>;` + `pub use <name>::*;`
+3. `crates/holtburger-dat/tests/` — at least one fixture test against real bytes
+4. (optional) `apps/holtburger-tools/src/bin/dat-tool.rs` `Commands::Extract` arm if there's a useful per-type extraction
+
+### C1 — Font (0x40, 49 records)
+
+**Why:** Real AC font rendering for retail-faithful UI. Currently fall back to browser system fonts.
+
+**Reference order:**
+1. acclient.h decomp — search for `Font`, `CFont`, `FontTable`, glyph struct
+2. DRW upstream — `external/DatReaderWriter/DatReaderWriter/DBObjs/` may not have a Font.cs; check `Types/` for FontData
+3. acpedia/fandom — `[[reference_ac_wikis]]` for human-readable shape
+
+**Acceptance:** Parse all 49 records without error; dump glyph count + atlas dimensions; spot-check 3 fonts against WB.Terminal hex dump.
+
+**Out of scope (here):** glyph atlas integration into holtburger-web renderer. Parser only — wire it in a follow-on.
+
+### C2 — LanguageString (0x31, 28 records)
+
+**Why:** Localized text records (vendor banter, NPC dialog tags, item-name keys).
+
+**Reference order:**
+1. DRW — search for `LanguageString.cs` or `String.cs`
+2. acclient.h — look for `StringInfo` / `LanguageString` / `_String`
+3. Likely shape: header + count + array of PackedString (16-bit length-prefixed UTF-16 or codepage)
+
+**Acceptance:** Parse all 28 records; sample 3 known strings (find via dat-tool extract); verify decoded text matches WB.Terminal output.
+
+### C3 — CombatManeuverTable (0x30, 71 records)
+
+**Why:** Server-correct combat move dispatch. Combat Phases B–J ship without it (`[[project_holtburger_combat_phase_b_done_2026-05-17]]`); having the parser is prereq for proper attack-motion validation.
+
+**Reference order:**
+1. ACE `Server/Network/Structure/CombatManeuverTable.cs` (definitive — server uses this for move legality)
+2. DRW `Types/CombatTable.cs` if present
+3. acclient.h `CombatTable`
+
+**Acceptance:** Parse all 71 records; cross-check the player-melee table against ACE's parse for the same WCID; confirm move-id → animation mapping resolves cleanly.
+
+### C4 — Clothing (0x10, 1917 records)
+
+**Why:** Equipment visuals (armor/clothing rendering on character meshes). Largest gameplay-visible payoff.
+
+**Reference order:**
+1. DRW `DBObjs/ClothingTable.cs` or similar — most thoroughly documented
+2. ACE `WorldObjects/ClothingTable` companion
+3. acclient.h `ClothingBase` / `ClothingTable`
+
+**Format shape (rough):** WCID setup map + palette templates + ClothingBaseEffect per body-part + sub-palette effects per slot. **Heaviest parser of the four.**
+
+**Acceptance:** Parse all 1917 records; cross-check 3 representative WCIDs against WB.Terminal (e.g. starter outfit, drudge skin, named NPC outfit).
+
+**Out of scope (here):** wiring parsed clothing into the holtburger-web entity renderer.
+
+### Exit criteria for Milestone C
+
+- All four parsers land as separate commits
+- Per-parser test parses all retail records without error
+- Per-parser test cross-checks at least 3 specific records
+- Plan-doc updated noting any format gotchas discovered
+
+### Go/no-go
+
+If two or more parsers reveal that a downstream consumer wasn't actually planning to use the data → STOP, defer the rest. We do not pile up dead code.
+
+---
+
+## Milestone B — Newly-identified portal-DAT parsers
+
+**Goal:** Add parsers for the 20 types we now correctly classify but never decoded. Triaged HIGH / MEDIUM / SKIP by holtburger value.
+
+**Estimate:** ~½ day for HIGH+MEDIUM batches; SKIP triaged out unless a consumer demands.
+
+### B1 — HIGH batch (UI / input infrastructure)
+
+Single commit covering all four:
+
+| Type | Prefix | Count | Why |
+|---|---|---|---|
+| StringTable | 0x23 | 15 | Locale-keyed string lookup, pairs with C2 LanguageString |
+| Layout | 0x21 | 101 | UI screen layout descriptors |
+| ActionMap | 0x26 | 1 | Input action map |
+| Keymap | 0x14 | 2 | Keyboard binding map |
+
+References as in C; WB.Terminal cross-decode required for at least one record per type.
+
+**Why batched:** All small. Together they unlock retail-faithful UI port (Chorizite plan §13 needs these).
+
+### B2 — MEDIUM batch (rendering / LOD)
+
+Single commit covering both:
+
+| Type | Prefix | Count | Why |
+|---|---|---|---|
+| PaletteSet | 0x0F | 2681 | Color/dye variant palette overrides — pairs with C4 Clothing |
+| DegradeInfo | 0x11 | 4131 | Per-asset LOD selection — complements visual-fidelity work |
+
+**Why batched:** Both are about retail visual fidelity beyond the base mesh.
+
+### Skipped (low value at current scope)
+
+- RenderTexture (2), RenderMaterial (1), MaterialModifier (1), MaterialInstance (1), RenderMesh (?), MutateFilter (?) — modern-pipeline/AC2-era types, mostly unused in retail-1.6 timeframe
+- DataIDMapper (22), DualDataIDMapper (5), EnumMapper (40) — generic lookup tables, write only if a consumer demands
+- DatabaseProperties (2), MasterProperty (1), StringState (1), StringTableString (?), BSPNodeType (?) — rare system records
+
+Document why each is skipped if a future audit asks.
+
+### Exit criteria for Milestone B
+
+- B1 commit lands with all four parsers + at least one cross-decode per type
+- B2 commit lands with both parsers + at least one cross-decode per type
+- Skipped types list documented in this doc with a reason
+
+### Go/no-go
+
+Stop after B2 unless a concrete consumer materializes for a SKIP type. Don't roll into low-value parsing for completeness alone.
+
+---
+
+## Cross-cutting acceptance
+
+When all three milestones land:
+
+1. `cargo test --release` workspace-wide PASS
+2. `dat-tool list` bucket-counts match `vitaeum-parity-2026-05-23` snapshot (already captured in this commit's message)
+3. No new "Unknown" buckets appear from retail base DATs (subject to the documented SKIP list)
+4. README / ARCHITECTURE update: holtburger-dat parser coverage table refreshed
+
+## Scratch / artifacts
+
+- Bucket-count outputs: `/mnt/wbterminal1/tmp/claude-scratch/vitaeum-compare/{portal,cell,local}.v2.list`
+- Pre-fix outputs (for diffs): `/mnt/wbterminal1/tmp/claude-scratch/vitaeum-compare/{portal,cell,local}.list`
+- Always write logs/intermediates under `/mnt/wbterminal1/tmp/claude-scratch/` per `[[feedback_use_external_drives_for_scratch]]`.
+
+## Status log
+
+- 2026-05-23 — Baseline `c32a6f8f` pushed. This doc created. Starting Milestone A.
