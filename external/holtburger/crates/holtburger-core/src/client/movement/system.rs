@@ -703,14 +703,31 @@ impl MovementSystem {
                 // cell whose wall triangles are missing on one segment
                 // could let the player drift out of the AABB. Cheap
                 // and idempotent on top of per-poly.
+                //
+                // PR-RR.1 2026-05-23: bypass the safety net when an
+                // open door is within range — the cell AABB stops at
+                // the doorway, so containment clamp crops the player's
+                // delta right at the door even with the panel polys
+                // already excluded. Per-poly walls + door-entity
+                // ETHEREAL filter are sufficient inside the doorway
+                // (any nearby wall triangle would have caught us in
+                // the prior pass). Trade-off: temporarily disables the
+                // L-shaped-cell drift defence when standing next to
+                // an open door — acceptable for the door-walk-through
+                // UX. Proper fix is a multi-cell containment variant
+                // that consults the portal graph (see
+                // docs/FOLLOW_ONS.md "Cell-AABB containment vs.
+                // doorway crossing").
                 match cell_aabb_opt {
-                    Some(aabb) => holtburger_world::spatial::clamp_delta_to_cell_interior(
-                        &pose,
-                        pre_clamped,
-                        &aabb,
-                        holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
-                    ),
-                    None => pre_clamped,
+                    Some(aabb) if exclusion_aabbs.is_empty() => {
+                        holtburger_world::spatial::clamp_delta_to_cell_interior(
+                            &pose,
+                            pre_clamped,
+                            &aabb,
+                            holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                        )
+                    }
+                    _ => pre_clamped,
                 }
             }
         } else {
