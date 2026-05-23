@@ -1077,6 +1077,37 @@
         });
       }
 
+      // Auto-mount Character in the secondary pane on boot so users
+      // discover the second pane without having to know about
+      // Shift+F-key routing. User direction 2026-05-22: "i don't see
+      // the second pane."
+      //
+      // Wait for __mainPanel to appear (it's set by main-panel.js's
+      // mount, which runs via the bar-slot init), then give 500ms for
+      // all the registerView calls right above this block to settle,
+      // then fire the secondary mount. showView is a no-op if character
+      // isn't yet registered, but the 500ms grace covers it.
+      (function autoOpenPanesOnReady() {
+        let tries = 0;
+        const t = setInterval(() => {
+          tries++;
+          const mp = window.__mainPanel;
+          if (!mp) {
+            if (tries > 100) clearInterval(t);
+            return;
+          }
+          clearInterval(t);
+          setTimeout(() => {
+            if (!window.__mainPanel?.currentViewId?.("secondary")) {
+              try {
+                window.__mainPanel.showView("character", {}, { pane: "secondary" });
+                console.log("[auto-open] secondary pane → character");
+              } catch (e) { console.warn("[auto-open] character mount failed", e); }
+            }
+          }, 500);
+        }, 100);
+      })();
+
       const root = document.getElementById("results");
       const lines = [];
 
