@@ -17,6 +17,7 @@ fn test_hba_parity_with_retail_portal() {
 
     println!("Starting parity test for {:?}", dat_path);
     let dat_db = DatDatabase::new(&dat_path).expect("Failed to open retail DAT");
+    let dat_kind = dat_db.dat_kind();
 
     // 1. Create a Lite HBA in memory/temp file
     let mut writer = HbaWriter::new();
@@ -24,7 +25,7 @@ fn test_hba_parity_with_retail_portal() {
 
     let mut kept_ids = Vec::new();
     for &id in dat_db.files.keys() {
-        if DatFileType::from_id(id).is_essential() {
+        if DatFileType::from_id_in_dat(id, dat_kind).is_essential() {
             let data = dat_db.get_file(id).expect("Failed to read from DAT");
             writer
                 .add(EOR_PORTAL_NAMESPACE, id, id >> 24, data)

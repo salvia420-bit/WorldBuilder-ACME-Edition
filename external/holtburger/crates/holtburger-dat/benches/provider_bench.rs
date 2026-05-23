@@ -16,12 +16,13 @@ fn bench_providers(c: &mut Criterion) {
     };
 
     let dat_db = DatDatabase::new(&dat_path).expect("Failed to open DAT");
+    let dat_kind = dat_db.dat_kind();
 
     // Select 50 file IDs to cycle through
     let ids: Vec<u32> = dat_db
         .files
         .keys()
-        .filter(|&&id| DatFileType::from_id(id).is_essential())
+        .filter(|&&id| DatFileType::from_id_in_dat(id, dat_kind).is_essential())
         .take(50)
         .cloned()
         .collect();

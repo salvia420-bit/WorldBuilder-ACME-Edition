@@ -37,6 +37,22 @@ impl StripperManifest {
             DatFileType::Landblock,
             DatFileType::LandblockInfo,
             DatFileType::IndoorCell,
+            // Legacy inclusion preserved during the 2026-05-23 kind-aware
+            // classifier migration. Pre-migration these ~6886 portal records
+            // were silently bundled because the legacy `from_id` mis-classified
+            // their prefixes (0x0F, 0x11, 0x14, 0x15, 0x22, 0x25, 0x27, 0x39,
+            // 0x78) as IndoorCell. Keeping the same set here so the produced
+            // boot.hba stays byte-stable. Audit which of these the holtburger
+            // client actually needs and prune the unused ones in a follow-on.
+            DatFileType::PaletteSet,
+            DatFileType::DegradeInfo,
+            DatFileType::Keymap,
+            DatFileType::RenderTexture,
+            DatFileType::EnumMapper,
+            DatFileType::DataIDMapper,
+            DatFileType::DualDataIDMapper,
+            DatFileType::MasterProperty,
+            DatFileType::DatabaseProperties,
         ] {
             manifest.keep_type(file_type);
         }

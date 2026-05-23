@@ -278,8 +278,9 @@ fn derive_motion_kinematics_from_portal_db(db: &DatDatabase) -> Result<MotionKin
     let mut motion_table_ids = Vec::new();
     let mut setup_model_ids = Vec::new();
 
+    let dat_kind = db.dat_kind();
     for &id in db.files.keys() {
-        match DatFileType::from_id(id) {
+        match DatFileType::from_id_in_dat(id, dat_kind) {
             DatFileType::MotionTable => motion_table_ids.push(id),
             DatFileType::SetupModel => setup_model_ids.push(id),
             _ => {}
@@ -551,7 +552,7 @@ fn process_entry(
     id: u32,
     state: &ProcessingState<'_>,
 ) -> Option<ProcessedEntry> {
-    let file_type = DatFileType::from_id(id);
+    let file_type = DatFileType::from_id_in_dat(id, db.dat_kind());
     let should_keep = state
         .manifest
         .is_none_or(|manifest| manifest.should_keep_entry(namespace, id, file_type));
