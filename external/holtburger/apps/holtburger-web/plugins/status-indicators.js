@@ -174,31 +174,51 @@ export function mount(_ctx) {
     return true;
   };
 
-  // PR-SS 2026-05-23: link-status latency tint. Polls
-  // sessionLastRecvAgeMs() at 1Hz; the chain icon shows green when
-  // the link is healthy (<500ms), yellow when middling (500-2000ms),
-  // red when poor (>2000ms or no message ever). Uses CSS filter
-  // tinting on the existing green-chain sprite — no extra sprites
-  // needed. Override threshold via `window.__linkStatusThresholds =
-  // {middlingMs: N, poorMs: N}` if you want to demo.
+  // PR-SS / PR-SS.1 2026-05-23: link-status latency tint. Polls
+  // 1Hz. Two signals:
+  //   1. `sessionLastPingRttMs()` (PR-SS.1) — real measured RTT from
+  //      keepalive PingRequest↔PingResponse round-trip. Preferred
+  //      when available — the truer "link health" metric.
+  //   2. `sessionLastRecvAgeMs()` (PR-SS) — fallback staleness of
+  //      ANY inbound packet. Useful before the first ping completes
+  //      (~5s post-EnteredWorld) and as a "server stopped talking
+  //      to us" backstop even when RTT is stale.
+  // Tier picked from MAX(rtt, recvAge) so either degraded signal
+  // surfaces. Sprite re-tinted via CSS filter — no extra art.
+  // Thresholds via `window.__linkStatusThresholds = {middlingMs,
+  // poorMs}` for demo / testing.
   const linkEl = overlay.querySelector('[data-indicator="linkstatus"]');
   const linkTip = linkEl?.querySelector(".hb-indicator-tip");
   let linkLastTier = null;
+  let linkLastTipText = null;
   const linkPollTimer = setInterval(() => {
     if (!linkEl) return;
     const handle = window.__sessionHandle;
     let ageMs = 0xFFFFFFFF;
+    let rttMs = 0xFFFFFFFF;
     try {
       if (typeof handle?.sessionLastRecvAgeMs === "function") {
         ageMs = handle.sessionLastRecvAgeMs() >>> 0;
+      }
+      if (typeof handle?.sessionLastPingRttMs === "function") {
+        rttMs = handle.sessionLastPingRttMs() >>> 0;
       }
     } catch {}
     const th = window.__linkStatusThresholds || {};
     const middling = th.middlingMs ?? 500;
     const poor = th.poorMs ?? 2000;
+    // Pick the worse signal. u32::MAX (0xFFFFFFFF) means "no data"
+    // for that signal — ignore it unless both are MAX.
+    const rttKnown = rttMs < 0xFFFFFFF0;
+    const ageKnown = ageMs < 0xFFFFFFF0;
+    let metric;
+    if (rttKnown && ageKnown) metric = Math.max(rttMs, ageMs);
+    else if (rttKnown) metric = rttMs;
+    else if (ageKnown) metric = ageMs;
+    else metric = 0xFFFFFFFF;
     let tier;
-    if (ageMs >= 0xFFFFFFF0 || ageMs > poor) tier = "poor";
-    else if (ageMs > middling) tier = "middling";
+    if (metric >= 0xFFFFFFF0 || metric > poor) tier = "poor";
+    else if (metric > middling) tier = "middling";
     else tier = "ok";
     if (tier !== linkLastTier) {
       linkLastTier = tier;
@@ -216,10 +236,18 @@ export function mount(_ctx) {
         linkEl.style.filter = "hue-rotate(-120deg) saturate(1.8) brightness(1.1)";
         linkEl.style.opacity = "1";
       }
-      // Update tooltip with ms reading.
-      if (linkTip) {
-        const ageStr = ageMs >= 0xFFFFFFF0 ? "—" : `${ageMs} ms`;
-        linkTip.textContent = `Link: ${tier} (last recv ${ageStr})`;
+    }
+    // Tooltip refreshes every tick so the ms value is live (not just
+    // on tier change). Show both signals when available so users can
+    // tell whether degradation is RTT (uplink slow) or recv staleness
+    // (downlink silent).
+    if (linkTip) {
+      const rttStr = rttKnown ? `${rttMs} ms` : "—";
+      const ageStr = ageKnown ? `${ageMs} ms` : "—";
+      const next = `Link: ${tier}  (rtt ${rttStr} · last recv ${ageStr})`;
+      if (next !== linkLastTipText) {
+        linkLastTipText = next;
+        linkTip.textContent = next;
       }
     }
   }, 1000);

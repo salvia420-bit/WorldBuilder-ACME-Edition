@@ -6609,6 +6609,18 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+/// PR-SS.1 2026-05-23: send timestamp for the most-recently-sent
+/// `GameAction::PingRequest`. Cleared by the matching
+/// `GameEvent::PingResponse` arm after computing RTT, or on
+/// send-failure. Thread-local because the wasm bundle is single-
+/// threaded and both writers (the 5s keepalive arm and the response
+/// arm) live in the same `recv_loop` task.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static PING_SEND_INSTANT: std::cell::RefCell<Option<web_time::Instant>> =
+        std::cell::RefCell::new(None);
+}
+
 /// Pending SetupModel collision radii queued by `fetch_entity_model_render`
 /// after loading a SetupModel DAT record. Drained by the recv loop on
 /// each `SessionCommand::TickMovement` into `WorldState::setup_radii`.
@@ -12937,6 +12949,16 @@ pub struct SessionHandle {
     /// yellow=middling / red=poor). `None` pre-handshake; populated
     /// on the first message after Connect.
     last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
+    /// PR-SS.1 2026-05-23: most-recent measured round-trip time in
+    /// milliseconds, from `PingRequest` send to `PingResponse` recv.
+    /// Updated by the recv loop's `GameEvent::PingResponse` arm using
+    /// the send timestamp stashed in `PING_SEND_INSTANT`. JS prefers
+    /// this over the recv-staleness fallback when available (real
+    /// RTT is more accurate; staleness is only useful when there's no
+    /// active ping in flight or no response yet). `None` until the
+    /// first ping round-trip completes (~5s post-EnteredWorld since
+    /// that's the keepalive cadence).
+    last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>>,
     /// Wave 3.F (physics-replay parity, 2026-05-19): pure-prediction
     /// shadow written by the JS-side rAF integrator BEFORE the recv
     /// loop's `PublicUpdatePosition` arm can overwrite `local_player_pose`.
@@ -13411,6 +13433,21 @@ impl SessionHandle {
             }
             None => u32::MAX,
         }
+    }
+
+    /// PR-SS.1 2026-05-23: most-recent measured round-trip time in
+    /// milliseconds, from `PingRequest` send to `PingResponse` recv.
+    /// Returns `u32::MAX` when no ping round-trip has completed yet
+    /// (pre-EnteredWorld, or in the ~5s window before the first
+    /// keepalive ping fires after EnteredWorld). When this returns a
+    /// real value, JS prefers it over `sessionLastRecvAgeMs()` — RTT
+    /// is the truer "link health" signal than recv staleness, which
+    /// can stay near zero just because the server is spamming
+    /// broadcast updates regardless of whether OUR packets are
+    /// landing.
+    #[wasm_bindgen(js_name = sessionLastPingRttMs)]
+    pub fn session_last_ping_rtt_ms(&self) -> u32 {
+        self.last_ping_rtt_ms.borrow().unwrap_or(u32::MAX)
     }
 
     /// PR-HH 2026-05-23: contents (item GUIDs) of the most-recently
@@ -14935,6 +14972,9 @@ pub async fn start_session(
     // indicator polls `sessionLastRecvAgeMs()` to tint the icon.
     let last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    // PR-SS.1 2026-05-23: real RTT from PingRequest/PingResponse.
+    let last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     // Wave 3.F (2026-05-19): shared cell for the JS rAF integrator's
     // pure-prediction frame. Written by JS via
     // `setLastClientPrediction`; read by JS via
@@ -14971,6 +15011,7 @@ pub async fn start_session(
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
         let last_recv_instant_inner = last_recv_instant.clone();
+        let last_ping_rtt_ms_inner = last_ping_rtt_ms.clone();
         let collision_scene_inner = collision_scene.clone();
         let terrain_heights_shadow_inner = terrain_heights_shadow.clone();
         wasm_bindgen_futures::spawn_local(async move {
@@ -14992,6 +15033,7 @@ pub async fn start_session(
                 door_part_snapshot,
                 local_player_pose,
                 last_recv_instant_inner,
+                last_ping_rtt_ms_inner,
                 collision_scene_inner,
                 terrain_heights_shadow_inner,
             )
@@ -15069,6 +15111,7 @@ pub async fn start_session(
         door_part_snapshot,
         local_player_pose,
         last_recv_instant,
+        last_ping_rtt_ms,
         last_client_prediction,
         collision_scene,
         terrain_heights_shadow,
@@ -15761,6 +15804,7 @@ async fn recv_loop(
     >,
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
     last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
+    last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>>,
     collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
     terrain_heights_shadow: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
@@ -18463,6 +18507,31 @@ async fn recv_loop(
                                         f32_payload: None,
                                     });
                                 }
+                                holtburger_protocol::messages::GameEvent::PingResponse(_) => {
+                                    // PR-SS.1 2026-05-23: real RTT for
+                                    // the link-status indicator. Empty
+                                    // payload on both Request + Response
+                                    // (see protocol/messages/network/
+                                    // events.rs) so we can't multiplex —
+                                    // we always treat the response as
+                                    // matching the most recent send. The
+                                    // keepalive runs every 5s gated by
+                                    // last_send_time, so at most one
+                                    // outstanding ping at any time.
+                                    let rtt_ms = PING_SEND_INSTANT.with(|c| {
+                                        let mut slot = c.borrow_mut();
+                                        slot.take().map(|sent| {
+                                            web_time::Instant::now()
+                                                .saturating_duration_since(sent)
+                                                .as_millis()
+                                                .min(u32::MAX as u128)
+                                                as u32
+                                        })
+                                    });
+                                    if let Some(rtt) = rtt_ms {
+                                        *last_ping_rtt_ms.borrow_mut() = Some(rtt);
+                                    }
+                                }
                                 _ => {
                                     // Non-chat GameEvents drop through
                                     // to the no-op outer catch-all.
@@ -18573,12 +18642,24 @@ async fn recv_loop(
                 {
                     use holtburger_protocol::messages::misc::actions::PingRequestActionData;
                     use holtburger_protocol::messages::GameAction;
+                    // PR-SS.1 2026-05-23: stamp send time so the
+                    // matching GameEvent::PingResponse arm can
+                    // compute RTT. Cleared on response — a None
+                    // means "no ping in flight, fall back to
+                    // staleness". Empty payload on both ends, so we
+                    // can't multiplex (one in flight at a time).
+                    PING_SEND_INSTANT.with(|c| {
+                        *c.borrow_mut() = Some(web_time::Instant::now());
+                    });
                     if let Err(e) = session
                         .send_action(GameAction::PingRequest(Box::new(
                             PingRequestActionData,
                         )))
                         .await
                     {
+                        // Clear on send failure so we don't
+                        // mis-attribute the next response.
+                        PING_SEND_INSTANT.with(|c| { *c.borrow_mut() = None; });
                         log::warn!(
                             "recv_loop: keepalive PingRequest send failed: {e}"
                         );
