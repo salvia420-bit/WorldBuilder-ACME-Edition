@@ -930,6 +930,8 @@
       import * as mapPanelPlugin from "./plugins/map-panel.js";
       import * as allegiancePanelPlugin from "./plugins/allegiance-panel.js";
       import * as fellowshipPanelPlugin from "./plugins/fellowship-panel.js";
+      import * as journalPanelPlugin from "./plugins/journal-panel.js";
+      import * as contractsPanelPlugin from "./plugins/contracts-panel.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
       let pluginClient = null;
@@ -1014,6 +1016,8 @@
       mainPanelPlugin.registerView("allegiance", allegiancePanelPlugin.view);
       mainPanelPlugin.registerView("fellowship", fellowshipPanelPlugin.view);
       mainPanelPlugin.registerView("spellbook", spellbookPlugin.view);
+      mainPanelPlugin.registerView("journal",   journalPanelPlugin.view);
+      mainPanelPlugin.registerView("contracts", contractsPanelPlugin.view);
 
       // Main-panel view hotkeys (retail muscle-memory):
       //   F4 → Inventory     (Wave 1 PR-U)
@@ -1044,6 +1048,12 @@
         } else if (ev.key === "s" || ev.key === "S" || ev.key === "F5") {
           ev.preventDefault();
           window.__mainPanel?.toggleView?.("spellbook");
+        } else if (ev.key === "j" || ev.key === "J") {
+          ev.preventDefault();
+          window.__mainPanel?.toggleView?.("journal");
+        } else if (ev.key === "k" || ev.key === "K") {
+          ev.preventDefault();
+          window.__mainPanel?.toggleView?.("contracts");
         }
       });
 
