@@ -144,9 +144,15 @@ function _mountCurrent() {
   const { id, ctx } = stack[stack.length - 1];
   const view = views.get(id);
   if (!view) {
-    console.warn(`[main-panel] no view registered: ${id}`);
-    stack.pop();
-    _mountCurrent();
+    // View not registered — leave the previous view intact instead of
+    // destroying the panel. The caller should have checked first.
+    console.warn(`[main-panel] no view registered: ${id} (showing not-yet-built placeholder)`);
+    _runCleanup();
+    titleName.textContent = id.charAt(0).toUpperCase() + id.slice(1);
+    bodyEl.innerHTML = `<div style="padding:24px;color:var(--hb-text-muted);font-style:italic;text-align:center;font-size:11px;">View "${id}" not built yet.</div>`;
+    currentCleanup = null;
+    overlay.dataset.stackDepth = String(stack.length);
+    show();
     return;
   }
   _runCleanup();
@@ -161,14 +167,26 @@ function _mountCurrent() {
   show();
 }
 
-// Replace current view (reset stack to single entry).
+// Replace current view (reset stack to single entry). Refuses to swap
+// to a missing view — keeps the previous view shown.
 export function showView(id, ctx = {}) {
+  if (!views.has(id)) {
+    console.warn(`[main-panel] showView: no view "${id}"; keeping current`);
+    // Show a placeholder anyway so the user sees the click landed.
+    stack = [{ id, ctx }];
+    _mountCurrent();
+    return;
+  }
   stack = [{ id, ctx }];
   _mountCurrent();
 }
 
 // Push view onto stack (preserves previous so closeView returns to it).
 export function pushView(id, ctx = {}) {
+  if (!views.has(id)) {
+    console.warn(`[main-panel] pushView: no view "${id}"; staying on current`);
+    return;
+  }
   stack.push({ id, ctx });
   _mountCurrent();
 }
