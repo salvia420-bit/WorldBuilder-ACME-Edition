@@ -15973,6 +15973,109 @@ async fn recv_loop(
                                         holtburger_world::DoorState::Open => 1,
                                         holtburger_world::DoorState::Closed => 0,
                                     };
+                                    // PR-PP 2026-05-23: the actual load-
+                                    // bearing wire for "open door is
+                                    // walkable". The world emitted the
+                                    // DoorStateChanged event but our
+                                    // recv loop wasn't propagating it
+                                    // into the spatial scene's AABB
+                                    // filter — `building_aabbs_near_pose`
+                                    // returns only `.active == true`
+                                    // entries, but nothing was flipping
+                                    // the flag, so open doors kept
+                                    // blocking movement. Now we look up
+                                    // the door's bound `(BuildingId,
+                                    // part_index)` (registered at
+                                    // ObjectCreate time via
+                                    // `scene.register_door_part`) and
+                                    // call `set_door_aabb_active` with
+                                    // active=!open, exactly mirroring
+                                    // the existing test fixture at
+                                    // lib.rs:8586 + 8741. The 2D-Pixi
+                                    // and 3D-Three.js visual rotation
+                                    // paths (kind=15 handler in
+                                    // index.html) are unchanged.
+                                    let active = matches!(door_state, holtburger_world::DoorState::Closed);
+                                    // `w` here is the outer `if let Some(w) = world.as_mut()`
+                                    // binding that wraps this whole WorldEvent dispatch
+                                    // block — re-borrowing `world` would conflict.
+                                    let door_guid_u64 = u32::from(*guid) as u64;
+                                    // PR-PP follow-up: lazy door registration when
+                                    // the ObjectCreate-time spatial match missed
+                                    // (race with building-AABB drain, dynamic
+                                    // dungeon, etc.). On the first DoorStateChanged
+                                    // for an unregistered door, run the same
+                                    // building-AABB spatial match as the
+                                    // ObjectCreate arm at lib.rs:17211 and
+                                    // register the result. Idempotent on
+                                    // subsequent state changes.
+                                    let mut lookup = w.scene.door_part_for_guid(door_guid_u64);
+                                    if lookup.is_none() {
+                                        let pose_opt = w.entities.get(*guid).map(|e| e.position);
+                                        if let Some(pose) = pose_opt {
+                                            let candidates = w.scene.building_aabbs_near_pose(&pose);
+                                            let px = pose.coords.x;
+                                            let py = pose.coords.y;
+                                            let mut hit: Option<(holtburger_world::BuildingId, u8)> = None;
+                                            for entry in candidates {
+                                                if px >= entry.aabb.min.x
+                                                    && px <= entry.aabb.max.x
+                                                    && py >= entry.aabb.min.y
+                                                    && py <= entry.aabb.max.y
+                                                {
+                                                    hit = Some((entry.building_id, entry.part_index));
+                                                    break;
+                                                }
+                                            }
+                                            if let Some((bid, pidx)) = hit {
+                                                w.scene.register_door_part(door_guid_u64, bid, pidx);
+                                                lookup = Some((bid, pidx));
+                                                console_log_str(&format!(
+                                                    "[phase6.E] DoorStateChanged 0x{:08X} lazy-registered to building part bid={:?} pidx={}",
+                                                    u32::from(*guid), bid, pidx,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    if let Some((building_id, part_index)) = lookup {
+                                        let flipped = w.scene.set_door_aabb_active(
+                                            building_id, part_index, active,
+                                        );
+                                        console_log_str(&format!(
+                                            "[phase6.E] DoorStateChanged 0x{:08X} state={:?} → set_door_aabb_active(bid={:?}, pidx={}, active={}) flipped={}",
+                                            u32::from(*guid),
+                                            door_state,
+                                            building_id,
+                                            part_index,
+                                            active,
+                                            flipped,
+                                        ));
+                                    } else {
+                                        // No outdoor building AABB enclosed the door's pose
+                                        // (likely indoor cell door — EnvCell mesh + cylinder
+                                        // collision path, not building AABB). Probe the
+                                        // entity's physics state so we can confirm ETHEREAL
+                                        // actually toggled at the entity layer (which gates
+                                        // the cylinder collision via is_collidable filter
+                                        // at holtburger-core/src/client/movement/system.rs:759).
+                                        let (ethereal, collidable) = w
+                                            .entities
+                                            .get(*guid)
+                                            .map(|e| {
+                                                use holtburger_common::properties::PhysicsState;
+                                                (
+                                                    e.physics_state.contains(PhysicsState::ETHEREAL),
+                                                    e.is_collidable(),
+                                                )
+                                            })
+                                            .unwrap_or((false, false));
+                                        console_log_str(&format!(
+                                            "[phase6.E] DoorStateChanged 0x{:08X} state={:?} — INDOOR (no building AABB). Entity layer: ETHEREAL={} collidable={} (cylinder collision should{} block)",
+                                            u32::from(*guid), door_state,
+                                            ethereal, collidable,
+                                            if collidable { "" } else { " NOT" },
+                                        ));
+                                    }
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_DOOR_STATE_CHANGED,
                                         string_payload: None,
