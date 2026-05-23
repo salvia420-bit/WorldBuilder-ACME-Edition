@@ -70,6 +70,7 @@ import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
 import { ACMoons } from "./ac_moons.js";
+import { installDiag } from "./diag.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -198,6 +199,13 @@ const BUILDINGS_RING_RADIUS = (() => {
 // argument call sites (Phase 7.0 hello-cube capture, etc.) keep
 // working unchanged.
 export async function preInit3D(canvas) {
+  // 2026-05-23 — install window.__diag observability surface eagerly so
+  // every spawn from the autoLogin handshake onwards is captured. The
+  // hooks in entities.js are optional-chained against window.__diag so
+  // pre-install spawns become no-ops (rare; the autoLogin spawn fires
+  // after preInit3D in the typical boot path).
+  installDiag();
+
   // Canvas sizing — index.html's <canvas> has width="512" height="512"
   // as an attribute fallback for the 2D path's pixel-art look. For
   // the 3D path we override to a viewport-relative size so the world

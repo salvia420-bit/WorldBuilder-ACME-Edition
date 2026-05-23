@@ -813,10 +813,28 @@ export class EntityManager {
       // `ensureEntitySprite`'s `entry.modelId === 0` upgrade path.
       this.remove(guid);
     }
+    // Diagnostic hook (always-on; cheap when __diag not installed). Fires
+    // BEFORE any async work so the "spawn attempt observed" signal is
+    // captured even if _spawnImpl never returns. See scene3d/diag.js.
+    if (typeof window !== "undefined" && window.__diag?.onSpawnAttempted) {
+      try {
+        let isLocalPlayer = false;
+        if (typeof window.getLocalPlayerGuid === "function") {
+          const lpg = window.getLocalPlayerGuid();
+          if (lpg !== null && lpg !== undefined && (lpg >>> 0) === guid) {
+            isLocalPlayer = true;
+          }
+        }
+        window.__diag.onSpawnAttempted({ ...meta, guid, isLocalPlayer });
+      } catch (_) { /* diag must never break spawn */ }
+    }
     const promise = this._spawnImpl(meta).catch((e) => {
       this.lastError = String(e?.message ?? e);
       // eslint-disable-next-line no-console
       console.warn(`[phase7.4b] spawn(0x${guid.toString(16)}) failed:`, e);
+      if (typeof window !== "undefined" && window.__diag?.onSpawnFailed) {
+        try { window.__diag.onSpawnFailed(meta, e); } catch (_) {}
+      }
       return null;
     });
     this.spawnInFlight.set(guid, promise);
@@ -1206,6 +1224,12 @@ export class EntityManager {
       this.scene3d.materialCache.addFillCompanions(root);
     }
     this.entityMap.set(guid, inst);
+    // Diagnostic hook (always-on; cheap when __diag not installed). Fires
+    // AFTER the entity is committed to the live scene graph so observed
+    // position is the final post-bake value, not the spawn-time meta.
+    if (typeof window !== "undefined" && window.__diag?.onSpawnSucceeded) {
+      try { window.__diag.onSpawnSucceeded(guid, inst); } catch (_) {}
+    }
     // B4 (2026-05-18): index `name → Set<guid>` for O(1) lookup in
     // `findGuidByName`. Only adds when the entity carries a non-empty
     // string name (matches the nameplate-attach guard just below).
