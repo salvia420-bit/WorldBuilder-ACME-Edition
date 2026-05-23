@@ -410,7 +410,7 @@
          because agents drive movement via the wire API, not keystrokes.
          ────────────────────────────────────────────────────────────── */
       html.agent-mode body { margin: 0; padding: 0; overflow: hidden; background: #000; }
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-main-panel-2) { display: none !important; }
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -1031,14 +1031,6 @@
       //   F1 Character    F2 Spellbook   F3 Map        F4 Inventory
       //   F5 Spellbook    F6 Journal     F7 Contracts  F8 Allegiance
       //   F9 Fellowship
-      //
-      // PR-DD dual-pane (2026-05-22):
-      //   plain F<n>        → toggleView in PRIMARY pane (right-side, today's behaviour)
-      //   Shift + F<n>      → toggleView in SECONDARY pane (top-left, env-panel mirror)
-      // So Shift+F1 puts Character in the secondary pane while
-      // Inventory stays in the primary. The user can have both visible
-      // simultaneously, mirroring retail's two-pane layout.
-      //
       // Examine is no longer auto-fired on selection (regression fix
       // 2026-05-22): clicking a vendor / NPC now passes through to the
       // interact path. Open examine via main-panel toggle if needed.
@@ -1060,8 +1052,7 @@
         const view = FKEY_VIEWS[ev.key];
         if (view) {
           ev.preventDefault();
-          const pane = ev.shiftKey ? "secondary" : "primary";
-          window.__mainPanel?.toggleView?.(view, {}, { pane });
+          window.__mainPanel?.toggleView?.(view);
         }
       });
 
@@ -1076,37 +1067,6 @@
           window.__barInstance = barInstance;
         });
       }
-
-      // Auto-mount Character in the secondary pane on boot so users
-      // discover the second pane without having to know about
-      // Shift+F-key routing. User direction 2026-05-22: "i don't see
-      // the second pane."
-      //
-      // Wait for __mainPanel to appear (it's set by main-panel.js's
-      // mount, which runs via the bar-slot init), then give 500ms for
-      // all the registerView calls right above this block to settle,
-      // then fire the secondary mount. showView is a no-op if character
-      // isn't yet registered, but the 500ms grace covers it.
-      (function autoOpenPanesOnReady() {
-        let tries = 0;
-        const t = setInterval(() => {
-          tries++;
-          const mp = window.__mainPanel;
-          if (!mp) {
-            if (tries > 100) clearInterval(t);
-            return;
-          }
-          clearInterval(t);
-          setTimeout(() => {
-            if (!window.__mainPanel?.currentViewId?.("secondary")) {
-              try {
-                window.__mainPanel.showView("character", {}, { pane: "secondary" });
-                console.log("[auto-open] secondary pane → character");
-              } catch (e) { console.warn("[auto-open] character mount failed", e); }
-            }
-          }, 500);
-        }, 100);
-      })();
 
       const root = document.getElementById("results");
       const lines = [];

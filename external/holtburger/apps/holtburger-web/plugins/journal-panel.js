@@ -197,7 +197,7 @@ const SAMPLE_ENTRIES = [
 export const view = {
   name: "Journal",
   nameFor: () => "Quest Journal",
-  mount: (parentEl, ctx) => {
+  mount: (parentEl, _ctx) => {
     ensureStyles();
     const root = document.createElement("div");
     root.className = "hb-journal-root";
@@ -215,11 +215,7 @@ export const view = {
       btn.className = "hb-journal-tab" + (t.current ? " active" : "");
       btn.textContent = t.label;
       if (t.swap) {
-        btn.addEventListener("click", () => {
-          // PR-DD: keep swap in the same pane the user opened us in.
-          const pane = ctx?._pane || window.__mainPanel?.currentPaneOf?.("journal") || "primary";
-          window.__mainPanel?.showView?.(t.swap, {}, { pane });
-        });
+        btn.addEventListener("click", () => window.__mainPanel?.showView?.(t.swap));
       }
       tabs.appendChild(btn);
     }
