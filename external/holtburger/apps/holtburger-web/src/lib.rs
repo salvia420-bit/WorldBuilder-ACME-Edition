@@ -11465,21 +11465,31 @@ enum SessionCommand {
     RemoveSpellFromBook {
         spell_id: u32,
     },
-    /// Vendor-UI: JS-side requested purchase of `amount` × wcid
-    /// (`item_or_wcid`) from `vendor_guid`. Sends `GameAction::Buy`
-    /// (sub-opcode 0x005F) with a single `ItemProfileActionData`.
-    /// ACE owns price validation, inventory bulk/encumbrance checks,
-    /// and pyreal/alt-currency deduction; this is fire-and-forget.
+    /// Vendor-UI: JS-side requested purchase of `amount` × vendor stock
+    /// entry (`vendor_item_guid`) from `vendor_guid`. Sends
+    /// `GameAction::Buy` (sub-opcode 0x005F) with a single
+    /// `ItemProfileActionData`. ACE owns price validation, inventory
+    /// bulk/encumbrance checks, and pyreal/alt-currency deduction;
+    /// this is fire-and-forget.
+    ///
+    /// PR-EE 2026-05-22: `vendor_item_guid` is the per-stock-entry
+    /// WorldObject GUID assigned by ACE when populating
+    /// `Vendor.DefaultItemsForSale` / `UniqueItemsForSale`, surfaced
+    /// to JS as `VendorItemJs.itemGuid`. NOT the wcid — ACE's
+    /// `BuyItems_ValidateTransaction` keys those dictionaries by
+    /// `ObjectGuid`, and a wcid never matches a real allocated GUID,
+    /// so the transaction silently validates an empty item list
+    /// (no failure event, but no items / coin change either).
     BuyFromVendor {
         vendor_guid: u32,
-        item_wcid: u32,
+        vendor_item_guid: u32,
         amount: i32,
     },
     /// Vendor-UI: JS-side requested sale of `amount` × player item
     /// (`item_guid`) to `vendor_guid`. Sends `GameAction::Sell`
     /// (sub-opcode 0x0060) with a single `ItemProfileActionData`.
     /// The `object_guid` field on the wire here is the *player's*
-    /// item GUID (not the vendor's wcid like Buy).
+    /// item GUID.
     SellToVendor {
         vendor_guid: u32,
         item_guid: u32,
@@ -14242,17 +14252,36 @@ impl SessionHandle {
             })
     }
 
-    /// Vendor-UI: buy `amount` × wcid from `vendor_guid`. The wire-side
-    /// `ItemProfileActionData.object_guid` here is the **vendor item's
-    /// wcid** (per ACE's `Vendor_ValidateTransaction` lookup, which
-    /// resolves it server-side against the vendor's stock list).
+    /// Vendor-UI: buy `amount` × the vendor stock entry identified by
+    /// `vendor_item_guid` from `vendor_guid`. The wire-side
+    /// `ItemProfileActionData.object_guid` here is the **vendor's
+    /// per-stock-entry WorldObject GUID** (NOT wcid) — sourced from
+    /// `VendorItemJs.itemGuid`, populated from
+    /// `VendorItemEventData.description.guid` in the cached
+    /// ApproachVendor payload.
+    ///
+    /// PR-EE 2026-05-22: prior implementation took a `wcid` parameter
+    /// here, but ACE's `Vendor.BuyItems_ValidateTransaction` keys
+    /// `DefaultItemsForSale` / `UniqueItemsForSale` by `ObjectGuid`,
+    /// and a wcid never matches an allocated GUID. The validation
+    /// loop would walk an empty `defaultItemProfiles` list, compute
+    /// `totalPrice = 0`, pass the coin check trivially, and call
+    /// `Player.FinalizeBuyTransaction(this, [], [], 0)` — emitting
+    /// the Vendor "buy" emote and an `ApproachVendor` refresh, but
+    /// creating no item, deducting no pyreals, and never sending a
+    /// `GameMessageCreateObject` back to the client. The visible
+    /// symptom was an inert client (no inventory cache update + no
+    /// pyreal decrement) despite the chat showing the buy emote.
+    ///
     /// Amount defaults to 1 if `amount <= 0`. Fire-and-forget; ACE
-    /// pushes a fresh inventory delta on success.
+    /// pushes a `GameMessageCreateObject` for the newly-created
+    /// inventory item on success, plus the inventory-snapshot
+    /// publisher emits a `kind=11 InventoryUpdated` event.
     #[wasm_bindgen(js_name = buyFromVendor)]
     pub fn buy_from_vendor(
         &self,
         vendor_guid: u32,
-        item_wcid: u32,
+        vendor_item_guid: u32,
         amount: i32,
     ) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
@@ -14260,7 +14289,7 @@ impl SessionHandle {
         self.cmd_tx
             .unbounded_send(SessionCommand::BuyFromVendor {
                 vendor_guid,
-                item_wcid,
+                vendor_item_guid,
                 amount,
             })
             .map_err(|e: TrySendError<_>| {
@@ -18491,18 +18520,21 @@ async fn recv_loop(
                     }
                     Some(SessionCommand::BuyFromVendor {
                         vendor_guid,
-                        item_wcid,
+                        vendor_item_guid,
                         amount,
                     }) => {
                         use holtburger_common::Guid;
                         use holtburger_protocol::messages::{
                             BuyActionData, GameAction, ItemProfileActionData,
                         };
+                        // PR-EE 2026-05-22: object_guid = vendor's
+                        // per-stock-entry WO GUID (NOT wcid). See
+                        // SessionHandle::buy_from_vendor doc comment.
                         let action = GameAction::Buy(Box::new(BuyActionData {
                             vendor_guid: Guid(vendor_guid),
                             items: vec![ItemProfileActionData {
                                 amount,
-                                object_guid: Guid(item_wcid),
+                                object_guid: Guid(vendor_item_guid),
                             }],
                         }));
                         if let Err(e) = session.send_action(action).await {
@@ -18517,7 +18549,7 @@ async fn recv_loop(
                             return;
                         }
                         console_log_str(&format!(
-                            "[buy] vendor=0x{vendor_guid:08X} wcid=0x{item_wcid:08X} amount={amount}",
+                            "[buy] vendor=0x{vendor_guid:08X} item=0x{vendor_item_guid:08X} amount={amount}",
                         ));
                     }
                     Some(SessionCommand::SellToVendor {

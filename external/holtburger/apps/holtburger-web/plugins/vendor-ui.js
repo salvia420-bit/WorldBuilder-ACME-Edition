@@ -15,8 +15,10 @@
  * inside the main-panel body.
  *
  * Preserved wiring (DO NOT regress):
- *   - Buy:  handle.buyFromVendor(vendorGuid, wcid, qty)
- *           wire: GameAction::Buy 0x005F, object_guid = vendor item's wcid
+ *   - Buy:  handle.buyFromVendor(vendorGuid, vendorItemGuid, qty)
+ *           wire: GameAction::Buy 0x005F, object_guid = vendor's per-stock-entry WO GUID
+ *           (NOT wcid — ACE keys DefaultItemsForSale/UniqueItemsForSale by ObjectGuid
+ *           in Vendor.BuyItems_ValidateTransaction. PR-EE 2026-05-22 fix.)
  *   - Sell: handle.sellToVendor(vendorGuid, itemGuid, qty)
  *           wire: GameAction::Sell 0x0060, object_guid = player's item GUID
  *   - Vendor list via `kind=12 VendorOpened` → handle.getVendorState(guid)
@@ -365,13 +367,23 @@ function doMount(parentEl, ctx) {
       return;
     }
     if (!state?.vendorGuid) return;
+    if (!item?.itemGuid) {
+      toast(root, `buy error: no itemGuid for "${item?.name || "(unnamed)"}"`, "err");
+      return;
+    }
     try {
-      // object_guid on the wire = vendor item's wcid (PR-CC preserved
-      // contract: ACE looks up against the vendor's stock list, not
-      // a player-owned guid).
+      // object_guid on the wire = vendor's PER-STOCK-ENTRY WO GUID
+      // (NOT wcid). PR-EE 2026-05-22: prior plugin sent wcid which ACE's
+      // Vendor.BuyItems_ValidateTransaction silently rejected (lookup is
+      // `DefaultItemsForSale[ObjectGuid]` — wcid never matches an
+      // allocated GUID). Symptom: chat showed "An excellent purchase"
+      // emote but no item arrived, no pyreals decremented, no
+      // inventory cache update fired. Fix: thread `item.itemGuid`
+      // (populated from VendorItemEventData.description.guid in the
+      // ApproachVendor cache, see lib.rs:17718).
       handle.buyFromVendor(
         state.vendorGuid >>> 0,
-        item.wcid >>> 0,
+        item.itemGuid >>> 0,
         qty | 0,
       );
       rowEl.classList.add("vw-busy", "vw-flash");
@@ -450,6 +462,31 @@ function doMount(parentEl, ctx) {
 
   render();
 
+  // ── Inventory-change re-pull ─────────────────────────────────
+  // PR-EE 2026-05-22: when a buy / sell completes, ACE sends a
+  // kind=11 InventoryUpdated (decrements pyreals + adds the item
+  // for buy / removes the item + credits pyreals for sell). The
+  // wasm-side vendor cache also gets refreshed by the parallel
+  // kind=12 ApproachVendor that Vendor.FinalizeBuyTransaction
+  // triggers (Vendor.cs:288). Re-pull and re-render so the row
+  // counts / multipliers / alt-currency stay accurate without the
+  // user having to close + reopen the trade panel.
+  const client = ctx?.client ?? window.__pluginClient ?? null;
+  const onInvChanged = () => {
+    const handle = window.__sessionHandle;
+    if (!handle?.getVendorState || !state?.vendorGuid) return;
+    try {
+      const raw = handle.getVendorState(state.vendorGuid >>> 0);
+      if (raw) {
+        state = snapshotFromWasm(raw);
+        render();
+      }
+    } catch (e) {
+      console.warn("[vendor-ui] inventory-change re-pull failed", e);
+    }
+  };
+  client?.events?.on?.("playerInventoryChanged", onInvChanged);
+
   // ── Cleanup — fires on view swap (e.g. user F4s to inventory)
   // and on closeView() (main-panel's × or back chevron).
   return () => {
@@ -458,6 +495,7 @@ function doMount(parentEl, ctx) {
     root.removeEventListener("dragover", onDragOver);
     root.removeEventListener("dragleave", onDragLeave);
     root.removeEventListener("drop", onDrop);
+    client?.events?.off?.("playerInventoryChanged", onInvChanged);
     root.remove();
   };
 }

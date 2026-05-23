@@ -7393,6 +7393,14 @@ void main() {
                 // here. The wasm-side filter excludes entities not
                 // owned by the player.
                 renderInventoryPanel(handle);
+                // PR-EE 2026-05-22: also relay through the plugin bus
+                // so vendor-ui / inventory-panel / examine-popover and
+                // future plugins can react without polling. Payload is
+                // intentionally empty — subscribers re-pull state via
+                // `client.player.inventory` (live snapshot from wasm).
+                if (window.__pluginClient && window.__pluginClient.events) {
+                  window.__pluginClient.events.emit("playerInventoryChanged", {});
+                }
               } else if (evt.kind === 12) {
                 // Phase 4 step 5: VendorOpened. The wasm side cached the
                 // full vendor state (items + multipliers + alt currency)
