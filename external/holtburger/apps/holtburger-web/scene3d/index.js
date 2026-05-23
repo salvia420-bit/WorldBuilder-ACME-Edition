@@ -710,7 +710,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   const eventLogEnabled = (() => {
     try {
       if (typeof window === "undefined" || !window.location?.search) return false;
-      return new URLSearchParams(window.location.search).get("eventLog") === "on";
+      const p = new URLSearchParams(window.location.search);
+      // 2026-05-23 — `?diag=1` implies `?eventLog=on` so the wave-1 diag
+      // events surface (scene3d/diag/events.js) has a ring buffer to
+      // read. Explicit ?eventLog=off can still suppress it.
+      if (p.get("eventLog") === "off") return false;
+      return p.get("eventLog") === "on" || p.get("diag") === "1";
     } catch (_) {
       return false;
     }

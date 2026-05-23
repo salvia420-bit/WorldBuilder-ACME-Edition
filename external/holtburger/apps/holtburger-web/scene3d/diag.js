@@ -25,6 +25,14 @@
 // behind a URL flag so the diagnostic surface is always available
 // for inspection from devtools without a page reload.
 
+// Wave-1 surface attach modules. Each adds its own namespace to the
+// installed __diag via `attach<Name>(diag)`. Imported here to keep diag.js
+// the single installation point; modules can fail to load gracefully via
+// the optional-chain in the install loop.
+import { attachPlacements as _attachPlacements } from "./diag/placements.js";
+import { attachEntityTypes as _attachEntityTypes } from "./diag/entity_types.js";
+import { attachEvents as _attachEvents } from "./diag/events.js";
+
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
 
@@ -384,7 +392,37 @@ export function installDiag() {
   };
 
   window.__diag = diag;
+
+  // Wave-1 surfaces: each new module attaches its own namespace via
+  // `attach<Name>(diag)`. The attach pattern keeps diag.js the single
+  // installation point while letting each surface own its own file under
+  // ./diag/. Order is not load-bearing — attach failures are isolated
+  // so one broken surface doesn't kill the rest.
+  for (const [name, fn] of [
+    ["placements", _attachPlacements],
+    ["entityTypes", _attachEntityTypes],
+    ["events",     _attachEvents],
+  ]) {
+    try { fn?.(diag); } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(`[diag] attach ${name} failed:`, e);
+    }
+  }
+
+  // Convenience: run every diff function that has an oracle loaded and
+  // return an aggregated structured object the harness can serialize to
+  // a report.json. Mirror of build-side `diag-run-all`.
+  diag.runAll = function runAll(lbId) {
+    const out = { landblockId: `0x${(((lbId >>> 0) & 0xffff0000) >>> 0).toString(16).padStart(8, "0")}`, ts: new Date().toISOString(), surfaces: {} };
+    try { out.surfaces.spawns = this.diff(lbId); } catch (e) { out.surfaces.spawns = { error: String(e?.message ?? e) }; }
+    try { if (this.placements?.diff) out.surfaces.placements = this.placements.diff(lbId); } catch (e) { out.surfaces.placements = { error: String(e?.message ?? e) }; }
+    try { if (this.entityTypes?.coverageByLb) out.surfaces.entityTypes = this.entityTypes.coverageByLb(lbId); } catch (e) { out.surfaces.entityTypes = { error: String(e?.message ?? e) }; }
+    try { if (this.events?.diff) out.surfaces.events = this.events.diff(lbId); } catch (e) { out.surfaces.events = { error: String(e?.message ?? e) }; }
+    out.summary = Object.fromEntries(Object.entries(out.surfaces).map(([k, v]) => [k, v?.error ? "INFRA" : (v?.ok === false ? "DRIFT" : "PASS")]));
+    return out;
+  };
+
   // eslint-disable-next-line no-console
-  console.log("[diag] window.__diag installed — call .summary() / .diff(lbId) from devtools");
+  console.log("[diag] window.__diag installed — call .summary() / .runAll(lbId) / .diff(lbId) from devtools");
   return diag;
 }
