@@ -351,6 +351,7 @@ fn main() -> Result<()> {
             let provider = Provider::open(&path)?;
             match &provider {
                 Provider::Dat(db) => {
+                    let dat_kind = db.dat_kind();
                     let mut ids = db.files.keys().copied().collect::<Vec<_>>();
                     ids.sort();
                     for id in ids {
@@ -358,7 +359,7 @@ fn main() -> Result<()> {
                         println!(
                             "{:08X} - {:<25} - Size: {:<10} - Offset: {:08X} - Flags: {:08X}",
                             id,
-                            entry.file_type().to_string(),
+                            entry.file_type_in_dat(dat_kind).to_string(),
                             entry.size,
                             entry.offset,
                             entry.bit_flags
@@ -394,7 +395,7 @@ fn main() -> Result<()> {
                 Provider::Dat(db) => {
                     if let Some(entry) = db.files.get(&id_val) {
                         println!("File ID: {:08X}", entry.id);
-                        println!("Type:    {}", entry.file_type());
+                        println!("Type:    {}", entry.file_type_in_dat(db.dat_kind()));
                         println!("Size:    {}", entry.size);
                         println!("Offset:  {:08X}", entry.offset);
                         println!("Flags:   {:08X}", entry.bit_flags);

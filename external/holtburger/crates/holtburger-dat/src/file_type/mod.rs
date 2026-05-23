@@ -60,6 +60,24 @@ use std::fmt;
 
 pub const MOTION_KINEMATICS_TYPE_ID: u32 = 0xFFFF_FF01;
 
+/// Which retail DAT a given file ID came from. The cell DAT encodes the
+/// landblock X-coordinate in the top byte (0x00–0xFE), so classifying a cell
+/// ID by its prefix the way you would a portal ID misreads ~25% of indoor
+/// cells as portal types. Pass this when classifying to disambiguate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DatKind {
+    /// `client_portal.dat` — top byte is the type tag.
+    Portal,
+    /// `client_cell_*.dat` — top byte is the landblock X-coordinate;
+    /// type is encoded in the suffix (`FFFF`=Landblock, `FFFE`=LandblockInfo,
+    /// otherwise IndoorCell).
+    Cell,
+    /// `client_local_*.dat` — uses portal-style prefix dispatch.
+    Local,
+    /// Unknown source — fall back to legacy heuristic dispatch.
+    Unknown,
+}
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DatFileType {
@@ -75,16 +93,36 @@ pub enum DatFileType {
     Audio = 0x0A,
     EnvCell = 0x0D,
     Table = 0x0E,
+    PaletteSet = 0x0F,
     Clothing = 0x10,
+    DegradeInfo = 0x11,
     Scene = 0x12,
     Region = 0x13,
+    Keymap = 0x14,
+    RenderTexture = 0x15,
+    RenderMaterial = 0x16,
+    MaterialModifier = 0x17,
+    MaterialInstance = 0x18,
+    RenderMesh = 0x19,
     SoundTable = 0x20,
+    Layout = 0x21,
+    EnumMapper = 0x22,
+    StringTable = 0x23,
+    StringTableString = 0x24,
+    DataIDMapper = 0x25,
+    ActionMap = 0x26,
+    DualDataIDMapper = 0x27,
     CombatManeuverTable = 0x30,
+    LanguageString = 0x31,
     ParticleEmitter = 0x32,
     PhysicsScript = 0x33,
     PhysicsScriptTable = 0x34,
-    LanguageString = 0x31,
+    MutateFilter = 0x38,
+    MasterProperty = 0x39,
     Font = 0x40,
+    StringState = 0x41,
+    BSPNodeType = 0x42,
+    DatabaseProperties = 0x78,
     Custom = 0xFFFF_FF00,
     MotionKinematics = MOTION_KINEMATICS_TYPE_ID,
 
@@ -117,6 +155,11 @@ impl DatFileType {
         )
     }
 
+    /// Legacy DAT-context-blind classifier. Prefer
+    /// [`Self::from_id_in_dat`] when the source DAT is known — this
+    /// function misreads cell-DAT IDs whose landblock X-coordinate falls
+    /// in `0x01..=0x40` (it returns the portal-type variant for that
+    /// prefix instead of `IndoorCell`).
     pub fn from_id(id: u32) -> Self {
         // Special internal files
         if id == 0xFFFF0001 {
@@ -132,8 +175,55 @@ impl DatFileType {
             return DatFileType::LandblockInfo;
         }
 
-        // Check Portal prefixes
+        // Try portal-prefix dispatch; fall back to IndoorCell when the prefix
+        // is not a known portal type but the suffix is in the cell range.
         let prefix = (id >> 24) as u8;
+        let portal_guess = Self::classify_portal_prefix(prefix);
+        if portal_guess != DatFileType::Unknown {
+            return portal_guess;
+        }
+        if suffix > 0 && suffix < 0xFFFE {
+            DatFileType::IndoorCell
+        } else {
+            DatFileType::Unknown
+        }
+    }
+
+    /// Classify a file ID with explicit DAT context.
+    ///
+    /// The portal and cell DATs reuse the same 32-bit ID space with
+    /// different conventions: portal IDs put the type tag in the top byte,
+    /// cell IDs put the landblock X-coordinate (0x00–0xFE) there. Without
+    /// context, cell entries with X ≤ 0x40 collide with portal type tags
+    /// and get misclassified (vitaeum-comparison 2026-05-23: 194,935 cell
+    /// IndoorCells were misread as portal types under the legacy
+    /// [`Self::from_id`]).
+    pub fn from_id_in_dat(id: u32, dat_kind: DatKind) -> Self {
+        if id == 0xFFFF0001 {
+            return DatFileType::Iteration;
+        }
+
+        let suffix = id & 0xFFFF;
+        let prefix = (id >> 24) as u8;
+
+        match dat_kind {
+            DatKind::Cell => {
+                if suffix == 0xFFFF {
+                    DatFileType::Landblock
+                } else if suffix == 0xFFFE {
+                    DatFileType::LandblockInfo
+                } else if suffix > 0 && suffix < 0xFFFE {
+                    DatFileType::IndoorCell
+                } else {
+                    DatFileType::Unknown
+                }
+            }
+            DatKind::Portal | DatKind::Local => Self::classify_portal_prefix(prefix),
+            DatKind::Unknown => Self::from_id(id),
+        }
+    }
+
+    fn classify_portal_prefix(prefix: u8) -> Self {
         match prefix {
             0x01 => DatFileType::Model,
             0x02 => DatFileType::SetupModel,
@@ -146,23 +236,37 @@ impl DatFileType {
             0x0A => DatFileType::Audio,
             0x0D => DatFileType::EnvCell,
             0x0E => DatFileType::Table,
+            0x0F => DatFileType::PaletteSet,
             0x10 => DatFileType::Clothing,
+            0x11 => DatFileType::DegradeInfo,
             0x12 => DatFileType::Scene,
             0x13 => DatFileType::Region,
+            0x14 => DatFileType::Keymap,
+            0x15 => DatFileType::RenderTexture,
+            0x16 => DatFileType::RenderMaterial,
+            0x17 => DatFileType::MaterialModifier,
+            0x18 => DatFileType::MaterialInstance,
+            0x19 => DatFileType::RenderMesh,
             0x20 => DatFileType::SoundTable,
+            0x21 => DatFileType::Layout,
+            0x22 => DatFileType::EnumMapper,
+            0x23 => DatFileType::StringTable,
+            0x24 => DatFileType::StringTableString,
+            0x25 => DatFileType::DataIDMapper,
+            0x26 => DatFileType::ActionMap,
+            0x27 => DatFileType::DualDataIDMapper,
             0x30 => DatFileType::CombatManeuverTable,
+            0x31 => DatFileType::LanguageString,
             0x32 => DatFileType::ParticleEmitter,
             0x33 => DatFileType::PhysicsScript,
             0x34 => DatFileType::PhysicsScriptTable,
-            0x31 => DatFileType::LanguageString,
+            0x38 => DatFileType::MutateFilter,
+            0x39 => DatFileType::MasterProperty,
             0x40 => DatFileType::Font,
-            _ => {
-                if suffix > 0 && suffix < 0xFFFE {
-                    DatFileType::IndoorCell
-                } else {
-                    DatFileType::Unknown
-                }
-            }
+            0x41 => DatFileType::StringState,
+            0x42 => DatFileType::BSPNodeType,
+            0x78 => DatFileType::DatabaseProperties,
+            _ => DatFileType::Unknown,
         }
     }
 
@@ -179,16 +283,36 @@ impl DatFileType {
             0x0A => DatFileType::Audio,
             0x0D => DatFileType::EnvCell,
             0x0E => DatFileType::Table,
+            0x0F => DatFileType::PaletteSet,
             0x10 => DatFileType::Clothing,
+            0x11 => DatFileType::DegradeInfo,
             0x12 => DatFileType::Scene,
             0x13 => DatFileType::Region,
+            0x14 => DatFileType::Keymap,
+            0x15 => DatFileType::RenderTexture,
+            0x16 => DatFileType::RenderMaterial,
+            0x17 => DatFileType::MaterialModifier,
+            0x18 => DatFileType::MaterialInstance,
+            0x19 => DatFileType::RenderMesh,
             0x20 => DatFileType::SoundTable,
+            0x21 => DatFileType::Layout,
+            0x22 => DatFileType::EnumMapper,
+            0x23 => DatFileType::StringTable,
+            0x24 => DatFileType::StringTableString,
+            0x25 => DatFileType::DataIDMapper,
+            0x26 => DatFileType::ActionMap,
+            0x27 => DatFileType::DualDataIDMapper,
             0x30 => DatFileType::CombatManeuverTable,
             0x31 => DatFileType::LanguageString,
             0x32 => DatFileType::ParticleEmitter,
             0x33 => DatFileType::PhysicsScript,
             0x34 => DatFileType::PhysicsScriptTable,
+            0x38 => DatFileType::MutateFilter,
+            0x39 => DatFileType::MasterProperty,
             0x40 => DatFileType::Font,
+            0x41 => DatFileType::StringState,
+            0x42 => DatFileType::BSPNodeType,
+            0x78 => DatFileType::DatabaseProperties,
             0xFD => DatFileType::IndoorCell,
             0xFE => DatFileType::Landblock,
             0xFE01 => DatFileType::Iteration,
@@ -214,16 +338,36 @@ impl fmt::Display for DatFileType {
             DatFileType::Audio => "Audio (WAV)",
             DatFileType::EnvCell => "EnvCell (ENV)",
             DatFileType::Table => "Table",
+            DatFileType::PaletteSet => "PaletteSet",
             DatFileType::Clothing => "Clothing (CLO)",
+            DatFileType::DegradeInfo => "DegradeInfo",
             DatFileType::Scene => "Scene (SCN)",
             DatFileType::Region => "Region (RGN)",
+            DatFileType::Keymap => "Keymap",
+            DatFileType::RenderTexture => "RenderTexture",
+            DatFileType::RenderMaterial => "RenderMaterial",
+            DatFileType::MaterialModifier => "MaterialModifier",
+            DatFileType::MaterialInstance => "MaterialInstance",
+            DatFileType::RenderMesh => "RenderMesh",
             DatFileType::SoundTable => "SoundTable (STB)",
+            DatFileType::Layout => "Layout",
+            DatFileType::EnumMapper => "EnumMapper",
+            DatFileType::StringTable => "StringTable",
+            DatFileType::StringTableString => "StringTableString",
+            DatFileType::DataIDMapper => "DataIDMapper",
+            DatFileType::ActionMap => "ActionMap",
+            DatFileType::DualDataIDMapper => "DualDataIDMapper",
             DatFileType::CombatManeuverTable => "CombatManeuverTable",
             DatFileType::ParticleEmitter => "ParticleEmitter",
             DatFileType::PhysicsScript => "PhysicsScript",
             DatFileType::PhysicsScriptTable => "PhysicsScriptTable",
             DatFileType::LanguageString => "LanguageString",
+            DatFileType::MutateFilter => "MutateFilter",
+            DatFileType::MasterProperty => "MasterProperty",
             DatFileType::Font => "Font",
+            DatFileType::StringState => "StringState",
+            DatFileType::BSPNodeType => "BSPNodeType",
+            DatFileType::DatabaseProperties => "DatabaseProperties",
             DatFileType::Custom => "Custom",
             DatFileType::MotionKinematics => "MotionKinematics",
             DatFileType::Landblock => "Landblock (Terrain)",
@@ -270,6 +414,79 @@ mod tests {
             DatFileType::MotionKinematics
         );
         assert_eq!(DatFileType::from_type_id(0xDEADBEEF), DatFileType::Unknown);
+    }
+
+    #[test]
+    fn test_from_id_in_dat_disambiguates_cell_vs_portal() {
+        // Same byte pattern, different DAT context, different meaning.
+        // `0x01000042` in portal.dat is a GfxObj/Model; in cell.dat it's
+        // an indoor cell at landblock X=0x01, Y=0x00, cell 0x0042.
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x01000042, DatKind::Portal),
+            DatFileType::Model
+        );
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x01000042, DatKind::Cell),
+            DatFileType::IndoorCell
+        );
+
+        // Cell-DAT terrain + LBI markers ignore the prefix entirely.
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x0100FFFF, DatKind::Cell),
+            DatFileType::Landblock
+        );
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x0100FFFE, DatKind::Cell),
+            DatFileType::LandblockInfo
+        );
+
+        // High-X-coord cells already worked under legacy from_id, still work here.
+        assert_eq!(
+            DatFileType::from_id_in_dat(0xA9B40042, DatKind::Cell),
+            DatFileType::IndoorCell
+        );
+
+        // Portal types the legacy from_id misread as IndoorCell are now correct.
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x0F000001, DatKind::Portal),
+            DatFileType::PaletteSet
+        );
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x11000000, DatKind::Portal),
+            DatFileType::DegradeInfo
+        );
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x15000001, DatKind::Portal),
+            DatFileType::RenderTexture
+        );
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x78000001, DatKind::Portal),
+            DatFileType::DatabaseProperties
+        );
+
+        // Local DAT (client_local_*.dat) uses portal-style dispatch.
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x21000001, DatKind::Local),
+            DatFileType::Layout
+        );
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x23000001, DatKind::Local),
+            DatFileType::StringTable
+        );
+
+        // Iteration metadata is recognized regardless of context.
+        for kind in [DatKind::Portal, DatKind::Cell, DatKind::Local, DatKind::Unknown] {
+            assert_eq!(
+                DatFileType::from_id_in_dat(0xFFFF0001, kind),
+                DatFileType::Iteration,
+            );
+        }
+
+        // Unknown context falls back to legacy heuristic.
+        assert_eq!(
+            DatFileType::from_id_in_dat(0x01000042, DatKind::Unknown),
+            DatFileType::from_id(0x01000042),
+        );
     }
 
     #[test]

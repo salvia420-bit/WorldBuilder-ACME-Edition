@@ -16,7 +16,7 @@ use crate::utils::FileExtPolyfill;
 pub use archive::{HbaReader, HbaStreamWriter, HbaWriter};
 use binrw::{BinRead, io::Cursor};
 pub use error::{DatError, Result};
-pub use file_type::DatFileType;
+pub use file_type::{DatFileType, DatKind};
 pub use manifest::StripperManifest;
 pub use normal_gen::normal_from_luminance;
 pub use surface_classify::{SurfaceCategory, SurfaceStats, classify, compute_stats};
@@ -197,6 +197,19 @@ impl DatHeader {
             _ => None,
         }
     }
+
+    /// Classify which retail DAT this header belongs to. Portal and Cell
+    /// are identified by their unique (block_size, dataset) signature;
+    /// anything else with our magic is assumed to be a locale DAT
+    /// (`client_local_*.dat`) which uses portal-style prefix dispatch.
+    pub fn dat_kind(&self) -> file_type::DatKind {
+        match (self.magic, self.block_size, self.dataset) {
+            (DAT_MAGIC, 1024, 1) => file_type::DatKind::Portal,
+            (DAT_MAGIC, 256, 2) => file_type::DatKind::Cell,
+            (DAT_MAGIC, _, _) => file_type::DatKind::Local,
+            _ => file_type::DatKind::Unknown,
+        }
+    }
 }
 
 #[derive(BinRead, Debug, Clone)]
@@ -211,8 +224,14 @@ pub struct DatFileEntry {
 }
 
 impl DatFileEntry {
+    /// Legacy DAT-context-blind classifier. Prefer
+    /// [`Self::file_type_in_dat`] when the source DAT is known.
     pub fn file_type(&self) -> DatFileType {
         DatFileType::from_id(self.id)
+    }
+
+    pub fn file_type_in_dat(&self, dat_kind: file_type::DatKind) -> DatFileType {
+        DatFileType::from_id_in_dat(self.id, dat_kind)
     }
 
     pub fn is_compressed(&self) -> bool {
@@ -300,6 +319,10 @@ impl DatDatabase {
 
     pub fn retail_namespace_hint(&self) -> Option<&'static str> {
         self.header.retail_namespace_hint()
+    }
+
+    pub fn dat_kind(&self) -> DatKind {
+        self.header.dat_kind()
     }
 
     pub fn read_file_data(&self, offset: u32, size: u32) -> Result<Vec<u8>> {
