@@ -977,6 +977,7 @@
       import * as statusIndicatorsPlugin from "./plugins/status-indicators.js";
       import * as hotbarPlugin from "./plugins/hotbar.js";
       import * as inventoryPlugin from "./plugins/inventory.js";
+      import * as dyePreviewPlugin from "./plugins/dye-preview.js";
       import * as examineTargetPlugin from "./plugins/examine-target.js";
       import * as mainPanelPlugin from "./plugins/main-panel.js";
       import * as characterInfoPlugin from "./plugins/character-info.js";
@@ -1080,6 +1081,14 @@
         {
           ...mainPanelPlugin.manifest,
           mount: mainPanelPlugin.mount,
+        },
+        // Wave 7.9 — dye-preview tooltip plugin. Subscribes to
+        // inventory.js drag-over events; renders a swatch tooltip
+        // when a dye pot is dragged over a dyeable armor. iconHidden
+        // — reactive, no bar slot.
+        {
+          ...dyePreviewPlugin.manifest,
+          mount: dyePreviewPlugin.mount,
         },
         // Examine watcher — rAF polls getSelectedTarget; on world-target
         // change pushes the examine view onto main-panel. No DOM of its

@@ -702,6 +702,55 @@ function doMount(parentEl, _ctx) {
   function onKey(_ev) { /* no-op placeholder for cleanup symmetry */ }
   window.addEventListener("keydown", onKey);
 
+  // Wave 7.9 — dragover event dispatch for plugins that want to react
+  // to drag interactions (currently: dye-preview plugin shows a
+  // tooltip when a dye-pot is dragged over a dyeable armor). The
+  // event fires continuously during drag; subscribers debounce as
+  // needed. Drop is still a no-op in inventory.js (recipe-use wire
+  // is a separate piece of work); this dispatch is for visual
+  // feedback only.
+  function dispatchInventoryDragOver(ev, scope) {
+    // dataTransfer.getData returns "" during dragover (only readable
+    // on drop per the HTML5 spec). Subscribers identify the dragged
+    // item via the dragstart-time stash on overlay.dataset
+    // .draggingGuid below. We still preventDefault on every
+    // dragover that hits the panel so the drop indicator is correct.
+    ev.preventDefault();
+    const hoveredSlot = ev.target.closest?.(".hb-inv-doll-slot, .hb-inv-slot, [data-guid]") ?? null;
+    try {
+      window.dispatchEvent(new CustomEvent("hb:inventory-drag-over", {
+        detail: {
+          scope,
+          hoveredElement: ev.target,
+          hoveredSlot,
+          hoveredGuid: hoveredSlot?.dataset?.guid ?? null,
+          // The currently-being-dragged GUID is captured at dragstart
+          // time + stashed on the overlay for retrieval here (W7.9
+          // workaround for the dataTransfer.getData drag-over
+          // restriction in HTML5).
+          draggedGuid: overlay.dataset.draggingGuid ?? null,
+          clientX: ev.clientX,
+          clientY: ev.clientY,
+        },
+      }));
+    } catch (_) {}
+  }
+  // Capture dragstart on the overlay so we know what's being dragged
+  // during subsequent dragover events (dataTransfer.getData isn't
+  // available outside drop per the HTML5 spec).
+  overlay.addEventListener("dragstart", (ev) => {
+    const guid = ev.target?.dataset?.guid ?? ev.target?.closest?.("[data-guid]")?.dataset?.guid;
+    if (guid) overlay.dataset.draggingGuid = guid;
+  }, true);
+  overlay.addEventListener("dragend", () => {
+    delete overlay.dataset.draggingGuid;
+    try {
+      window.dispatchEvent(new CustomEvent("hb:inventory-drag-end"));
+    } catch (_) {}
+  }, true);
+  paperdoll.addEventListener("dragover", (ev) => dispatchInventoryDragOver(ev, "paperdoll"));
+  itemsGrid.addEventListener("dragover", (ev) => dispatchInventoryDragOver(ev, "items"));
+
   return () => {
     window.removeEventListener("keydown", onKey);
     delete window.__isInventoryItem;

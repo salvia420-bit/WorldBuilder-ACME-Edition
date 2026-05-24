@@ -49,6 +49,15 @@ export function attachClothing(diag) {
     dyeApplications: 0,
     recentDyes: [],
     dyesBySource: { spawn: 0, "hot-swap": 0 },
+    // Wave 7.9 — Phase D plugin tooltip-shown counter. Fires from
+    // `plugins/dye-preview.js::showTooltipFor` when a dye-pot is
+    // dragged over a dyeable armor + the tooltip is rendered.
+    // Includes a "reason" string when preview is unavailable
+    // (e.g. armor metadata missing from wire packet).
+    dyePreviewsShown: 0,
+    dyePreviewsShownByReason: {},
+    recentDyePreviewsShown: [],
+    maxRecentDyePreviewsShown: 30,
     // Wave 7.8 — Phase C dye-preview compositor counters. Fired from
     // ui/ac_dye_preview.js::composeDyePreview. previewsRendered =
     // unique (clothing, setup, template, shadeBucket) combos
@@ -136,6 +145,35 @@ export function attachClothing(diag) {
     },
 
     /**
+     * Wave 7.9 — plugin tooltip-shown hook. Meta:
+     *   {source: "drag-over", dyePotWcid, clothingId, setupDid,
+     *    paletteTemplate, shade, composed, reason?}
+     * `composed` is false when the underlying composeDyePreview
+     * couldn't produce a canvas; `reason` is set when the tooltip
+     * shows a fallback message (e.g. armor metadata missing).
+     */
+    onDyePreviewShown(meta) {
+      try {
+        const m = meta || {};
+        clothing.dyePreviewsShown += 1;
+        const reason = m.reason || "ok";
+        clothing.dyePreviewsShownByReason[reason] =
+          (clothing.dyePreviewsShownByReason[reason] || 0) + 1;
+        pushCapped(clothing.recentDyePreviewsShown, {
+          source: m.source || "unknown",
+          dyePotWcid: m.dyePotWcid ? hexId(m.dyePotWcid) : "0x0",
+          clothingId: m.clothingId ? hexId(m.clothingId) : null,
+          setupDid: m.setupDid ? hexId(m.setupDid) : null,
+          paletteTemplate: (m.paletteTemplate ?? 0) | 0,
+          shade: Number(m.shade ?? 0),
+          composed: !!m.composed,
+          reason,
+          ts: performance.now(),
+        }, clothing.maxRecentDyePreviewsShown);
+      } catch (_) {}
+    },
+
+    /**
      * Wave 7.8 — dye-preview compositor hooks. Fired from
      * `ui/ac_dye_preview.js::composeDyePreview`.
      */
@@ -195,6 +233,8 @@ export function attachClothing(diag) {
         dyePreviewCacheHits: clothing.dyePreviewCacheHits,
         dyePreviewFailures: clothing.dyePreviewFailures,
         dyePreviewCacheSize: cached.preview?.previewCacheSize ?? 0,
+        dyePreviewsShown: clothing.dyePreviewsShown,
+        dyePreviewsShownByReason: { ...clothing.dyePreviewsShownByReason },
       };
     },
 
@@ -214,6 +254,9 @@ export function attachClothing(diag) {
         dyePreviewFailures: clothing.dyePreviewFailures,
         dyePreviewFailuresByReason: { ...clothing.dyePreviewFailuresByReason },
         recentDyePreviews: [...clothing.recentDyePreviews],
+        dyePreviewsShown: clothing.dyePreviewsShown,
+        dyePreviewsShownByReason: { ...clothing.dyePreviewsShownByReason },
+        recentDyePreviewsShown: [...clothing.recentDyePreviewsShown],
       };
     },
 
@@ -229,6 +272,9 @@ export function attachClothing(diag) {
       clothing.dyePreviewFailures = 0;
       clothing.dyePreviewFailuresByReason = {};
       clothing.recentDyePreviews.length = 0;
+      clothing.dyePreviewsShown = 0;
+      clothing.dyePreviewsShownByReason = {};
+      clothing.recentDyePreviewsShown.length = 0;
     },
   };
 
