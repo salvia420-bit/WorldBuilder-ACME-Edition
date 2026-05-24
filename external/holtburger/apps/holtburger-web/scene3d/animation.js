@@ -192,7 +192,48 @@ export function buildAnimationClip(animData, partNames) {
 export class AnimationCache {
     constructor() {
         // key → Promise<{ clip, partMeshes, partCount, framerate, resolvedStance }>
+        //
+        // Wave 7.6 (2026-05-24) — LRU eviction. Pre-W7.5 the cache key
+        // was setup/mt/motion/stance and 169-LB Holtburg fit
+        // comfortably under a few hundred entries. W7.5's substitution-
+        // aware suffix multiplies entries by num_unique_equip_variants
+        // per (setup, mt, motion, stance) tuple, which is bounded in
+        // starter zones but can grow large in dense vendor towns or
+        // long-running sessions. JS `Map` preserves insertion order;
+        // `get(key)` on a hit deletes+re-inserts to move-to-tail
+        // (strict LRU). When `entries.size > maxEntries` after a
+        // miss-then-fetch, we evict from the head — skipping any key
+        // that's still in `pendingStartTimes` (an in-flight Promise
+        // shared by concurrent callers — evicting it would cause
+        // duplicate fetches but never corruption).
+        //
+        // Geometries held by cached entries are also referenced by
+        // every live entity's Mesh tree (entity registers them at
+        // spawn time via `inst.registerGeometry`). Eviction just
+        // drops the cache entry — live entities continue rendering;
+        // dispose happens via normal GC when the last entity using
+        // a geometry despawns. Cache geometries don't carry the
+        // `__disposable` userData tag, so `EntityInstance.dispose`'s
+        // skip-cache-geometries guard (FU3) already protects against
+        // disposing them prematurely. Mixer + AnimationAction objects
+        // pinned by live entities also keep `entry.clip` alive
+        // independently of the cache.
         this.entries = new Map();
+        // Wave 7.6 — cap + eviction stats. URL flag `?animCacheMax=N`
+        // overrides the default for stress testing or memory tuning.
+        this.maxEntries = 256;
+        try {
+            if (typeof window !== "undefined" && window.location) {
+                const v = new URLSearchParams(window.location.search).get("animCacheMax");
+                if (v) {
+                    const n = parseInt(v, 10);
+                    if (Number.isFinite(n) && n >= 1) this.maxEntries = n;
+                }
+            }
+        } catch (_) {}
+        // Cumulative eviction counter + high-watermark of entries.size.
+        this.evictionCount = 0;
+        this.sizeWatermark = 0;
         // Sidecar to `entries` keyed by the same cache-key — records
         // wall-clock at promise-creation time so `__diag.assets.stuck
         // (thresholdMs)` can flag long-pending fetches. Cleared in
@@ -330,7 +371,15 @@ export class AnimationCache {
             ? `${baseKey}${subSuffix}`
             : `${baseKey}:link:${fromMotion.toString(16)}${subSuffix}`;
         const hit = this.entries.get(key);
-        if (hit) return hit;
+        if (hit) {
+            // Wave 7.6 — move-to-tail on hit (strict LRU). JS Maps
+            // preserve insertion order; delete + set re-inserts at
+            // tail. O(1), no allocation. Safe even if `hit` is an
+            // unresolved Promise — Promise refs are stable.
+            this.entries.delete(key);
+            this.entries.set(key, hit);
+            return hit;
+        }
         const promise = (async () => {
 
             const animData = await fetchKeyframes(
@@ -506,9 +555,81 @@ export class AnimationCache {
         // pendingStartTimes sidecar for __diag.assets.stuck() — cleared
         // on both success and failure via Promise.then(both arms).
         this.pendingStartTimes.set(key, performance.now());
-        const _clearPending = () => { this.pendingStartTimes.delete(key); };
+        // Wave 7.6 — clearing + eviction together. After the in-flight
+        // Promise resolves we attempt eviction again, which catches
+        // the boot-drain case where many fetches start concurrently:
+        // at insert time every entry is still pending and the
+        // eviction loop skips all of them; after each promise
+        // resolves we re-check, and the just-resolved entry becomes
+        // a valid eviction candidate.
+        const _clearPending = () => {
+            this.pendingStartTimes.delete(key);
+            if (this.entries.size > this.maxEntries) {
+                this._evictLruIfNeeded();
+            }
+        };
         promise.then(_clearPending, _clearPending);
+        // First-pass eviction at insert time. Catches the common case
+        // of cap+1 sequential miss-then-resolve in single-stepping
+        // scenarios (one motion change, then another, then another).
+        if (this.entries.size > this.maxEntries) {
+            this._evictLruIfNeeded();
+        }
+        if (this.entries.size > this.sizeWatermark) {
+            this.sizeWatermark = this.entries.size;
+        }
         return promise;
+    }
+
+    /**
+     * Wave 7.6 (2026-05-24) — evict LRU entries until size is at or
+     * below maxEntries. Walks `entries` in insertion order (which the
+     * `get(...)` hit path moves-to-tail on every hit, so head = LRU)
+     * and deletes the first key that is NOT in `pendingStartTimes`
+     * (an in-flight Promise; evicting would cause duplicate fetches
+     * for concurrent callers). Stops when size <= maxEntries OR when
+     * a full pass found nothing to evict (all remaining entries are
+     * in flight — the cap effectively becomes maxEntries + max-
+     * pending-concurrent-fetches, which is still bounded).
+     *
+     * Cache geometries held in evicted entries are NOT disposed here.
+     * Live entities still reference them via `inst.geometries` (cache-
+     * shared, no `__disposable` tag). When the last entity using a
+     * geometry despawns + GC runs, the geometry is reclaimed. The
+     * `EntityInstance.dispose` FU3 guard ensures we never dispose
+     * cache geometries prematurely.
+     *
+     * @private
+     */
+    _evictLruIfNeeded() {
+        let evicted = 0;
+        for (const key of this.entries.keys()) {
+            if (this.entries.size <= this.maxEntries) break;
+            if (this.pendingStartTimes.has(key)) continue;
+            this.entries.delete(key);
+            evicted += 1;
+            // Defensive: if the caller has a sidecar map keyed by the
+            // same string, future versions might want to clear it
+            // here. partNames is keyed by setupId (not by cache key),
+            // so we don't touch it — multiple cache entries for the
+            // same setup share one partNames entry; eviction of one
+            // shouldn't disturb the others.
+        }
+        this.evictionCount += evicted;
+    }
+
+    /**
+     * Wave 7.6 — observability snapshot. Used by `scene3d/diag/assets.js`
+     * via read-through from `EntityManager.animationCache.getStats()`.
+     */
+    getStats() {
+        return {
+            size: this.entries.size,
+            max: this.maxEntries,
+            pending: this.pendingStartTimes.size,
+            evictions: this.evictionCount,
+            watermark: this.sizeWatermark,
+        };
     }
 
     /**

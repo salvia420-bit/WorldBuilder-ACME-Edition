@@ -87,7 +87,7 @@ Harness: `/mnt/wbterminal1/tmp/claude-scratch/wire-agent-new-pipelines-2026-05-2
 
 **Known limitations:**
 - Topology mismatch (e.g. swap to a setup with different part count) falls through to despawn+respawn. Same-setupId equip changes (the common case for clothing) always preserve topology.
-- Cache memory grows by `num_unique_equip_variants` per (setup, mtable, motion, stance) tuple. Bounded for starter zones; if dense vendor towns become a concern, add LRU eviction.
+- ~~Cache memory grows by `num_unique_equip_variants` per (setup, mtable, motion, stance) tuple.~~ **Closed by Wave 7.6** — `AnimationCache` now caps `entries.size` at 256 (configurable via `?animCacheMax=N`) with strict-LRU eviction. Move-to-tail on hit; skip in-flight entries during eviction. Eviction also triggers on Promise resolution (catches the boot-drain case where many concurrent fetches start before any can be evicted). Stats exposed via `__diag.assets.summary().animCache = {size, max, pending, evictions, watermark}`.
 - Manual combat-motion validation against real GPU is still recommended before defaulting the flag on. The current harness verifies wire path + diag + reference preservation but not visual continuity through an actual swing animation. To default-on, a follow-on should run side-by-side capture on a 1070-class GPU comparing hot-swap to despawn-respawn under a combat swing cycle.
 
 Estimated 1-2 weeks for the full dye experience. None of it is blocked by Wave 7.2 or the equip-change follow-on above.

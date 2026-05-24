@@ -147,6 +147,20 @@ export function attachAssets(diag) {
       };
     },
 
+    /**
+     * Wave 7.6 (2026-05-24) — read-through to `AnimationCache.getStats()`
+     * for the LRU eviction counters. Safe across pre-W7.6 cache builds
+     * (returns null if the method is missing).
+     */
+    animCacheStats() {
+      try {
+        const ls = (typeof window !== "undefined") ? window.liveScene3d : null;
+        const ac = ls?.entityManager?.animationCache;
+        if (ac && typeof ac.getStats === "function") return ac.getStats();
+      } catch (_) {}
+      return null;
+    },
+
     /** Aggregate counts: errors + pending per cache. */
     summary() {
       const p = assets.pending();
@@ -154,6 +168,7 @@ export function attachAssets(diag) {
         material: { errors: assets.materialErrors.length, pending: p.materials },
         animation: { errors: assets.animationErrors.length, pending: p.animations },
         mesh: { errors: assets.meshErrors.length },
+        animCache: assets.animCacheStats(),
       };
     },
 
