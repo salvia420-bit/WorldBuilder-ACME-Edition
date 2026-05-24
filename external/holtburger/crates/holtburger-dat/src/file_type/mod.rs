@@ -1,3 +1,4 @@
+pub mod action_map;
 pub mod animation;
 pub mod char_gen;
 pub mod chat_pose_table;
@@ -37,6 +38,7 @@ pub mod texture;
 pub mod wave;
 pub mod xp_table;
 
+pub use action_map::{ActionMap, ActionMapValue, InputMapConflictsValue, UserBindingValue};
 pub use animation::Animation;
 pub use char_gen::CharGen;
 pub use chat_pose_table::{ChatEmoteData, ChatPoseTable};
