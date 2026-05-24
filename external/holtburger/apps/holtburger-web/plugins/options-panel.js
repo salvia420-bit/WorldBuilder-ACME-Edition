@@ -300,6 +300,26 @@ let keybindingsCache = null;
 let captureFor = null; // labelHash (hex string) currently in capture mode
 let captureHandler = null;
 
+// Local-action table — the keys the JS-side code actually consults.
+// Distinct from the 389 retail-ActionMap entries (which are read-only
+// for now). Synthetic labelHashes use the `0xFF00…` prefix to avoid
+// collision with retail's lower-bit hashes; the prefix lets storage
+// share `LS_KEY_KEYBINDINGS` with retail rebinds.
+//
+// Add a row here whenever a JS handler should consult getKeybindings —
+// the row's labelHash + defaultCode is the contract.
+const LOCAL_ACTIONS = [
+  { labelHash: "0xFF000001", label: "Hotbar Slot 1", defaultCode: "Digit1" },
+  { labelHash: "0xFF000002", label: "Hotbar Slot 2", defaultCode: "Digit2" },
+  { labelHash: "0xFF000003", label: "Hotbar Slot 3", defaultCode: "Digit3" },
+  { labelHash: "0xFF000004", label: "Hotbar Slot 4", defaultCode: "Digit4" },
+  { labelHash: "0xFF000005", label: "Hotbar Slot 5", defaultCode: "Digit5" },
+  { labelHash: "0xFF000006", label: "Hotbar Slot 6", defaultCode: "Digit6" },
+  { labelHash: "0xFF000007", label: "Hotbar Slot 7", defaultCode: "Digit7" },
+  { labelHash: "0xFF000008", label: "Hotbar Slot 8", defaultCode: "Digit8" },
+  { labelHash: "0xFF000009", label: "Hotbar Slot 9", defaultCode: "Digit9" },
+];
+
 function loadKeybindings() {
   if (keybindingsCache) return keybindingsCache;
   try {
@@ -389,6 +409,63 @@ function clearBinding(labelHashHex, refresh) {
   }
 }
 
+// Build one row in the keybinding table. Used for both the local
+// (functional) actions and the read-only retail-ActionMap rows.
+// `defaultCode` is shown when no user override exists.
+function buildBindingRow(labelHashHex, label, defaultCode, bindings, refresh) {
+  const row = document.createElement("div");
+  row.style.display = "flex";
+  row.style.alignItems = "center";
+  row.style.gap = "8px";
+  row.style.padding = "2px 4px";
+  row.style.borderBottom = "1px solid rgba(138, 117, 68, 0.15)";
+
+  const l = document.createElement("span");
+  l.style.flex = "1 1 auto";
+  setAcText(l, label);
+  row.appendChild(l);
+
+  const k = document.createElement("span");
+  k.style.flex = "0 0 110px";
+  k.style.textAlign = "right";
+  k.style.opacity = "0.85";
+  const inCapture = captureFor === labelHashHex;
+  const userBinding = bindings[labelHashHex];
+  const effectiveBinding = userBinding ?? (defaultCode ? { code: defaultCode } : null);
+  const isDefault = !userBinding && !!defaultCode;
+  const text = inCapture
+    ? "Press a key… (Esc=cancel)"
+    : (effectiveBinding ? formatBinding(effectiveBinding) + (isDefault ? " (default)" : "") : "—");
+  setAcText(k, text, { color: inCapture ? "#f0c87c" : (isDefault ? "#a8a090" : "#f0d8a0") });
+  row.appendChild(k);
+
+  const bindBtn = document.createElement("button");
+  bindBtn.type = "button";
+  bindBtn.style.flex = "0 0 auto";
+  bindBtn.style.padding = "1px 6px";
+  bindBtn.style.fontSize = "10px";
+  bindBtn.style.cursor = "pointer";
+  setAcText(bindBtn, inCapture ? "Cancel" : "Bind");
+  bindBtn.addEventListener("click", () => {
+    if (inCapture) { endCapture(); refresh(); }
+    else startCapture(labelHashHex, refresh);
+  });
+  row.appendChild(bindBtn);
+
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.style.flex = "0 0 auto";
+  clearBtn.style.padding = "1px 6px";
+  clearBtn.style.fontSize = "10px";
+  clearBtn.style.cursor = "pointer";
+  clearBtn.disabled = !userBinding;
+  setAcText(clearBtn, "×");
+  clearBtn.addEventListener("click", () => clearBinding(labelHashHex, refresh));
+  row.appendChild(clearBtn);
+
+  return row;
+}
+
 function renderControlsTab(bodyEl) {
   bodyEl.innerHTML = "";
 
@@ -400,11 +477,40 @@ function renderControlsTab(bodyEl) {
   const note = document.createElement("div");
   note.style.marginBottom = "8px";
   note.style.opacity = "0.75";
-  setAcText(note, "Click Bind, press a key (Esc to cancel). Bindings persist locally; existing hardcoded handlers (WASD / 1-9 / F-keys) are not yet routed through this table.");
+  setAcText(note, "Click Bind, press a key (Esc to cancel). Local actions below route through live JS handlers. Retail ActionMap entries are read-only labels — server-side dispatch isn't wired yet.");
   bodyEl.appendChild(note);
 
+  const bindings = loadKeybindings();
+  const refresh = () => renderControlsTab(bodyEl);
+
+  // Local (functional) actions — JS handlers consult these.
+  const localHeader = document.createElement("div");
+  localHeader.className = "hb-opt-section";
+  localHeader.style.marginTop = "0";
+  setAcText(localHeader, "Local Actions");
+  bodyEl.appendChild(localHeader);
+
+  const localList = document.createElement("div");
+  localList.style.background = "rgba(0, 0, 0, 0.35)";
+  localList.style.border = "1px solid var(--hb-border-brass-dim)";
+  localList.style.padding = "4px 6px";
+  localList.style.marginBottom = "12px";
+  localList.style.fontFamily = "var(--hb-font-mono)";
+  localList.style.fontSize = "11px";
+  bodyEl.appendChild(localList);
+
+  for (const action of LOCAL_ACTIONS) {
+    localList.appendChild(buildBindingRow(action.labelHash, action.label, action.defaultCode, bindings, refresh));
+  }
+
+  // Retail ActionMap actions — informational, no live dispatch yet.
+  const retailHeader = document.createElement("div");
+  retailHeader.className = "hb-opt-section";
+  setAcText(retailHeader, "Retail ActionMap (read-only labels)");
+  bodyEl.appendChild(retailHeader);
+
   const list = document.createElement("div");
-  list.style.maxHeight = "320px";
+  list.style.maxHeight = "240px";
   list.style.overflowY = "auto";
   list.style.background = "rgba(0, 0, 0, 0.35)";
   list.style.border = "1px solid var(--hb-border-brass-dim)";
@@ -418,9 +524,6 @@ function renderControlsTab(bodyEl) {
     setAcText(list, "(loading — open the Controls tab again in a few seconds)");
     return;
   }
-
-  const bindings = loadKeybindings();
-  const refresh = () => renderControlsTab(bodyEl);
 
   // De-duplicate by labelHash to collapse the many input_maps that
   // share the same action (alt-bindings, controller, etc.) into one
@@ -436,52 +539,7 @@ function renderControlsTab(bodyEl) {
 
   for (const [hash, label] of rows) {
     const hashHex = `0x${hash.toString(16).toUpperCase().padStart(8, "0")}`;
-    const row = document.createElement("div");
-    row.style.display = "flex";
-    row.style.alignItems = "center";
-    row.style.gap = "8px";
-    row.style.padding = "2px 4px";
-    row.style.borderBottom = "1px solid rgba(138, 117, 68, 0.15)";
-
-    const l = document.createElement("span");
-    l.style.flex = "1 1 auto";
-    setAcText(l, label);
-    row.appendChild(l);
-
-    const k = document.createElement("span");
-    k.style.flex = "0 0 110px";
-    k.style.textAlign = "right";
-    k.style.opacity = "0.85";
-    const inCapture = captureFor === hashHex;
-    const text = inCapture ? "Press a key… (Esc=cancel)" : formatBinding(bindings[hashHex]);
-    setAcText(k, text, { color: inCapture ? "#f0c87c" : "#f0d8a0" });
-    row.appendChild(k);
-
-    const bindBtn = document.createElement("button");
-    bindBtn.type = "button";
-    bindBtn.style.flex = "0 0 auto";
-    bindBtn.style.padding = "1px 6px";
-    bindBtn.style.fontSize = "10px";
-    bindBtn.style.cursor = "pointer";
-    setAcText(bindBtn, inCapture ? "Cancel" : "Bind");
-    bindBtn.addEventListener("click", () => {
-      if (inCapture) { endCapture(); refresh(); }
-      else startCapture(hashHex, refresh);
-    });
-    row.appendChild(bindBtn);
-
-    const clearBtn = document.createElement("button");
-    clearBtn.type = "button";
-    clearBtn.style.flex = "0 0 auto";
-    clearBtn.style.padding = "1px 6px";
-    clearBtn.style.fontSize = "10px";
-    clearBtn.style.cursor = "pointer";
-    clearBtn.disabled = !bindings[hashHex];
-    setAcText(clearBtn, "×");
-    clearBtn.addEventListener("click", () => clearBinding(hashHex, refresh));
-    row.appendChild(clearBtn);
-
-    list.appendChild(row);
+    list.appendChild(buildBindingRow(hashHex, label, null, bindings, refresh));
   }
 }
 
@@ -495,6 +553,37 @@ function renderControlsTab(bodyEl) {
  */
 export function getKeybindings() {
   return loadKeybindings();
+}
+
+/**
+ * Check if a KeyboardEvent matches a stored binding shape. Useful
+ * for handlers that route through getKeybindings().
+ *
+ * @param {KeyboardEvent} ev
+ * @param {{code: string, shift?: boolean, ctrl?: boolean, alt?: boolean, meta?: boolean}} binding
+ * @returns {boolean}
+ */
+export function matchesBinding(ev, binding) {
+  if (!binding || !binding.code) return false;
+  return ev.code === binding.code
+    && ev.shiftKey === !!binding.shift
+    && ev.ctrlKey === !!binding.ctrl
+    && ev.altKey === !!binding.alt
+    && ev.metaKey === !!binding.meta;
+}
+
+/**
+ * Resolve a synthetic-local-action keybinding to its effective
+ * binding shape — user override if set, otherwise the default.
+ *
+ * @param {string} labelHashHex — e.g. "0xFF000001" for Hotbar Slot 1.
+ * @param {string} defaultCode — KeyboardEvent.code default ("Digit1").
+ * @returns {{code: string, shift: boolean, ctrl: boolean, alt: boolean, meta: boolean}}
+ */
+export function resolveLocalBinding(labelHashHex, defaultCode) {
+  const b = loadKeybindings()[labelHashHex];
+  if (b && b.code) return b;
+  return { code: defaultCode, shift: false, ctrl: false, alt: false, meta: false };
 }
 
 function renderAboutTab(bodyEl) {

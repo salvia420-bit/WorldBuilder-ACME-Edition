@@ -15,6 +15,8 @@
 //     follow-on; for now it just logs via the chat-log.
 //   - Number key 1-9 fires the matching slot if it's bound.
 
+import { resolveLocalBinding, matchesBinding } from "./options-panel.js";
+
 const OVERLAY_ID = "hb-hotbar";
 const WIDTH = 310;
 const HEIGHT = 40;            // single-row variant; retail's 100 is the
@@ -227,14 +229,20 @@ export function mount(ctx) {
 
   document.body.appendChild(overlay);
 
-  // Number keys 1-9 fire the matching slot (unless typing in chat input).
+  // Hotbar slot keys 1-9 (default Digit1..Digit9). User-rebindable
+  // via Options → Controls → Local Actions. Suppress while focused
+  // on a text input (chat send, etc.).
   function onKey(ev) {
-    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    const n = Number(ev.key);
-    if (!(n >= 1 && n <= 9)) return;
-    fireSlot(n - 1);
+    for (let slot = 1; slot <= SLOT_COUNT; slot++) {
+      const hash = `0xFF00000${slot}`;
+      const binding = resolveLocalBinding(hash, `Digit${slot}`);
+      if (matchesBinding(ev, binding)) {
+        fireSlot(slot - 1);
+        return;
+      }
+    }
   }
   window.addEventListener("keydown", onKey);
 
