@@ -19,7 +19,7 @@
 // gmInventoryUI + gmExaminationUI relationship — different
 // gmXxxUI instances mount into the same container slot.
 
-import { setAcText } from "../ui/ac_font.js";
+import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
 
 const OVERLAY_ID = "hb-main-panel";
 const STYLE_ID = "hb-main-panel-style";
@@ -150,7 +150,7 @@ function _mountCurrent() {
     // destroying the panel. The caller should have checked first.
     console.warn(`[main-panel] no view registered: ${id} (showing not-yet-built placeholder)`);
     _runCleanup();
-    setAcText(titleName, id.charAt(0).toUpperCase() + id.slice(1));
+    setAcText(titleName, id.charAt(0).toUpperCase() + id.slice(1), { fontId: HEADING_FONT_ID });
     bodyEl.innerHTML = `<div style="padding:24px;color:var(--hb-text-muted);font-style:italic;text-align:center;font-size:11px;">View "${id}" not built yet.</div>`;
     currentCleanup = null;
     overlay.dataset.stackDepth = String(stack.length);
@@ -159,7 +159,7 @@ function _mountCurrent() {
   }
   _runCleanup();
   const name = (typeof view.nameFor === "function") ? view.nameFor(ctx) : (view.name ?? id);
-  setAcText(titleName, name);
+  setAcText(titleName, name, { fontId: HEADING_FONT_ID });
   try {
     currentCleanup = view.mount(bodyEl, ctx) || null;
   } catch (e) {
@@ -256,7 +256,7 @@ export function mount(_ctx) {
   titleEl.appendChild(backBtn);
   titleName = document.createElement("span");
   titleName.className = "hb-mp-title-name";
-  setAcText(titleName, "Panel");
+  setAcText(titleName, "Panel", { fontId: HEADING_FONT_ID });
   titleEl.appendChild(titleName);
   closeBtn = document.createElement("span");
   closeBtn.className = "hb-mp-close";

@@ -33,6 +33,16 @@ const UI_FONT_ID = 0x40000000;
  */
 export const COMPACT_FONT_ID = 0x4000001C;
 
+/**
+ * Heading variant — 21 × 22 cell, 1912 glyph set (extended ASCII +
+ * symbols). Use for panel chrome titles and other contexts where the
+ * default UI font reads too small/light. Per
+ * `docs/ac-font-inventory-2026-05-24.md` the 0x40000007–18 family
+ * shares the 1912-char extended set; 0x40000019 is the canonical
+ * mid-size pick.
+ */
+export const HEADING_FONT_ID = 0x40000019;
+
 // Module-scoped per-font runtime cache. Each entry holds the
 // HTMLCanvasElement of the decoded foreground atlas and a Map<u32, glyph>.
 const runtimes = new Map();

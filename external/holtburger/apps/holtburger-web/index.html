@@ -1355,13 +1355,16 @@
           // with "init_resource_source must be called before any fetch_*"
           // otherwise.
           import("./ui/ac_font.js")
-            .then((m) => m.loadAcFont())
-            .then((runtime) => {
-              if (runtime) {
-                console.log("[ac-font] runtime ready");
-              } else {
-                console.warn("[ac-font] runtime null after load (font missing?)");
-              }
+            .then(async (m) => {
+              const runtime = await m.loadAcFont();
+              if (runtime) console.log("[ac-font] runtime ready");
+              else console.warn("[ac-font] runtime null after load (font missing?)");
+              // Preload the heading font (0x40000019, 21×22, 1912
+              // glyphs) for main-panel title strips. Fire-and-forget;
+              // setAcText falls back to UI font if this misses.
+              m.loadAcFont(m.HEADING_FONT_ID)
+                .then((h) => h && console.log("[ac-font] heading runtime ready"))
+                .catch(() => {});
             })
             .catch((err) => console.warn("[ac-font] preload failed:", err));
 
