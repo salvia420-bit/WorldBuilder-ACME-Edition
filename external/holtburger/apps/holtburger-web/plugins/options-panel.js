@@ -271,8 +271,127 @@ function stubTab(title, blurb) {
   };
 }
 
+// ---------------------------------------------------------------------
+// Controls tab — keybinding capture + persist.
+//
+// ACE has no server-side keybind protocol; the model is purely
+// client-side, mirroring acclient.c's UIOption_ActionKeyMap. Each row
+// in the Controls tab is one retail action (deduped from
+// window.__acKeybindings by labelHash). The user clicks "Bind", we
+// capture the next keydown, encode it as a portable JS shape, and
+// persist to localStorage at LS_KEY_KEYBINDINGS. Esc cancels capture.
+//
+// Storage shape (LS_KEY_KEYBINDINGS = "holtburger_keybindings_v1"):
+//   { [labelHash_hex_8]: { code, shift, ctrl, alt, meta } }
+// where `code` is a KeyboardEvent.code string ("KeyW", "F5", "Space")
+// and the four mods are booleans. The hex labelHash is the stable
+// identifier — labels are localised and `inputMap` differs per
+// alt-binding, but labelHash is invariant for an action.
+//
+// The 389 actions in window.__acKeybindings already carry retail
+// defaults via `inputMap`, but we don't reverse-decode that bitfield
+// to a KeyboardEvent.code today — too many edge cases (controller,
+// chord modifiers, alt-bindings). Default rows render "—" until the
+// user binds them. Existing handlers (WASD, F5, 1-9) stay hardcoded
+// for now; future work threads these bindings into the dispatcher.
+
+const LS_KEY_KEYBINDINGS = "holtburger_keybindings_v1";
+let keybindingsCache = null;
+let captureFor = null; // labelHash (hex string) currently in capture mode
+let captureHandler = null;
+
+function loadKeybindings() {
+  if (keybindingsCache) return keybindingsCache;
+  try {
+    const raw = localStorage.getItem(LS_KEY_KEYBINDINGS);
+    keybindingsCache = raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    keybindingsCache = {};
+  }
+  return keybindingsCache;
+}
+
+function saveKeybindings() {
+  try {
+    localStorage.setItem(LS_KEY_KEYBINDINGS, JSON.stringify(keybindingsCache ?? {}));
+  } catch (_) { /* quota / privacy mode — silent */ }
+}
+
+function formatBinding(b) {
+  if (!b || !b.code) return "—";
+  const parts = [];
+  if (b.ctrl) parts.push("Ctrl");
+  if (b.alt) parts.push("Alt");
+  if (b.shift) parts.push("Shift");
+  if (b.meta) parts.push("Meta");
+  // Strip "Key" / "Digit" prefix for cleaner labels: "KeyW" → "W".
+  let key = b.code;
+  if (key.startsWith("Key")) key = key.slice(3);
+  else if (key.startsWith("Digit")) key = key.slice(5);
+  else if (key.startsWith("Numpad")) key = `Num ${key.slice(6)}`;
+  parts.push(key);
+  return parts.join("+");
+}
+
+function endCapture() {
+  if (captureHandler) {
+    window.removeEventListener("keydown", captureHandler, true);
+    captureHandler = null;
+  }
+  captureFor = null;
+}
+
+function startCapture(labelHashHex, refresh) {
+  endCapture();
+  captureFor = labelHashHex;
+  captureHandler = (ev) => {
+    // Esc cancels without binding.
+    if (ev.code === "Escape") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      endCapture();
+      refresh();
+      return;
+    }
+    // Ignore bare modifier presses — capture should be "Ctrl+F5", not
+    // just "Ctrl". User has to press a non-modifier to complete.
+    const isBareModifier =
+      ev.code === "ShiftLeft" || ev.code === "ShiftRight" ||
+      ev.code === "ControlLeft" || ev.code === "ControlRight" ||
+      ev.code === "AltLeft" || ev.code === "AltRight" ||
+      ev.code === "MetaLeft" || ev.code === "MetaRight";
+    if (isBareModifier) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    keybindingsCache = loadKeybindings();
+    keybindingsCache[labelHashHex] = {
+      code: ev.code,
+      shift: ev.shiftKey,
+      ctrl: ev.ctrlKey,
+      alt: ev.altKey,
+      meta: ev.metaKey,
+    };
+    saveKeybindings();
+    endCapture();
+    refresh();
+  };
+  window.addEventListener("keydown", captureHandler, true);
+}
+
+function clearBinding(labelHashHex, refresh) {
+  keybindingsCache = loadKeybindings();
+  if (keybindingsCache[labelHashHex]) {
+    delete keybindingsCache[labelHashHex];
+    saveKeybindings();
+    refresh();
+  }
+}
+
 function renderControlsTab(bodyEl) {
   bodyEl.innerHTML = "";
+
   const title = document.createElement("div");
   title.className = "hb-opt-section";
   setAcText(title, "Key Bindings");
@@ -281,7 +400,7 @@ function renderControlsTab(bodyEl) {
   const note = document.createElement("div");
   note.style.marginBottom = "8px";
   note.style.opacity = "0.75";
-  setAcText(note, "Read-only retail action labels (from ActionMap 0x26000001 → StringTable 0x23000005). Rebind UI is a follow-on.");
+  setAcText(note, "Click Bind, press a key (Esc to cancel). Bindings persist locally; existing hardcoded handlers (WASD / 1-9 / F-keys) are not yet routed through this table.");
   bodyEl.appendChild(note);
 
   const list = document.createElement("div");
@@ -300,6 +419,9 @@ function renderControlsTab(bodyEl) {
     return;
   }
 
+  const bindings = loadKeybindings();
+  const refresh = () => renderControlsTab(bodyEl);
+
   // De-duplicate by labelHash to collapse the many input_maps that
   // share the same action (alt-bindings, controller, etc.) into one
   // visible row each.
@@ -313,20 +435,66 @@ function renderControlsTab(bodyEl) {
     .slice(0, 200);
 
   for (const [hash, label] of rows) {
+    const hashHex = `0x${hash.toString(16).toUpperCase().padStart(8, "0")}`;
     const row = document.createElement("div");
     row.style.display = "flex";
-    row.style.justifyContent = "space-between";
-    row.style.padding = "1px 4px";
+    row.style.alignItems = "center";
+    row.style.gap = "8px";
+    row.style.padding = "2px 4px";
     row.style.borderBottom = "1px solid rgba(138, 117, 68, 0.15)";
+
     const l = document.createElement("span");
+    l.style.flex = "1 1 auto";
     setAcText(l, label);
-    const h = document.createElement("span");
-    h.style.opacity = "0.5";
-    setAcText(h, `0x${hash.toString(16).toUpperCase().padStart(8, "0")}`);
     row.appendChild(l);
-    row.appendChild(h);
+
+    const k = document.createElement("span");
+    k.style.flex = "0 0 110px";
+    k.style.textAlign = "right";
+    k.style.opacity = "0.85";
+    const inCapture = captureFor === hashHex;
+    const text = inCapture ? "Press a key… (Esc=cancel)" : formatBinding(bindings[hashHex]);
+    setAcText(k, text, { color: inCapture ? "#f0c87c" : "#f0d8a0" });
+    row.appendChild(k);
+
+    const bindBtn = document.createElement("button");
+    bindBtn.type = "button";
+    bindBtn.style.flex = "0 0 auto";
+    bindBtn.style.padding = "1px 6px";
+    bindBtn.style.fontSize = "10px";
+    bindBtn.style.cursor = "pointer";
+    setAcText(bindBtn, inCapture ? "Cancel" : "Bind");
+    bindBtn.addEventListener("click", () => {
+      if (inCapture) { endCapture(); refresh(); }
+      else startCapture(hashHex, refresh);
+    });
+    row.appendChild(bindBtn);
+
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.style.flex = "0 0 auto";
+    clearBtn.style.padding = "1px 6px";
+    clearBtn.style.fontSize = "10px";
+    clearBtn.style.cursor = "pointer";
+    clearBtn.disabled = !bindings[hashHex];
+    setAcText(clearBtn, "×");
+    clearBtn.addEventListener("click", () => clearBinding(hashHex, refresh));
+    row.appendChild(clearBtn);
+
     list.appendChild(row);
   }
+}
+
+/**
+ * Read the current keybindings table from localStorage.
+ *
+ * Exposed for future dispatchers that want to consult user-bound
+ * keys before invoking hardcoded handlers. Returns a plain object
+ * keyed by labelHash hex (`"0x..."`) — values are `{code, shift,
+ * ctrl, alt, meta}` per `KeyboardEvent`.
+ */
+export function getKeybindings() {
+  return loadKeybindings();
 }
 
 function renderAboutTab(bodyEl) {
@@ -427,6 +595,8 @@ export const view = {
     parentEl.appendChild(root);
 
     function switchTo(tabId) {
+      // Cancel any in-flight keybind capture when leaving Controls.
+      if (activeId === "controls" && tabId !== "controls") endCapture();
       activeId = tabId;
       for (const id of Object.keys(tabBtns)) {
         tabBtns[id].classList.toggle("active", id === tabId);
@@ -443,6 +613,7 @@ export const view = {
     initial.render(bodyEl);
 
     return () => {
+      endCapture();
       root.remove();
     };
   },
