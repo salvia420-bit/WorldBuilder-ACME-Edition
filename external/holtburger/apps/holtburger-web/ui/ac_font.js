@@ -126,30 +126,41 @@ export function renderAcText(text, opts = {}) {
   // Sharp pixel scaling — bitmap fonts look bad with bilinear.
   ctx.imageSmoothingEnabled = false;
 
-  // Pass 1 — optional drop shadow from the background atlas. Drawn
-  // black with reduced opacity so the foreground text reads cleanly
-  // against bright backgrounds. The bg atlas in retail mirrors the
-  // glyph rects from the fg atlas (same offset_x/y/width/height).
+  // Multi-glyph bitmap rendering: draw ALL glyphs first (source-over,
+  // default) onto a tmp canvas, then colorize the resulting alpha
+  // mask with a single `source-in` fill. Per-glyph `destination-in`
+  // doesn't work — each `drawImage` clears the destination outside
+  // its source rect, wiping prior glyphs. The atlas (post-_atlasToCanvas
+  // remap) carries the mask in alpha so drawing it accumulates the
+  // correct alpha-mask shape across the canvas.
+
+  // Optional drop shadow first, behind the foreground.
   if (drawShadow) {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
-    ctx.fillRect(0, 0, w, h);
-    ctx.globalCompositeOperation = "destination-in";
-    _drawGlyphs(ctx, runtime, runtime.atlasBgCanvas, text, scale, 1, 1);
-    ctx.globalCompositeOperation = "source-over";
+    const tmpBg = document.createElement("canvas");
+    tmpBg.width = w;
+    tmpBg.height = h;
+    const tbg = tmpBg.getContext("2d");
+    if (tbg) {
+      tbg.imageSmoothingEnabled = false;
+      _drawGlyphs(tbg, runtime, runtime.atlasBgCanvas, text, scale, 1, 1);
+      tbg.globalCompositeOperation = "source-in";
+      tbg.fillStyle = "rgba(0, 0, 0, 0.85)";
+      tbg.fillRect(0, 0, w, h);
+      ctx.drawImage(tmpBg, 0, 0);
+    }
   }
 
-  // Pass 2 — foreground glyphs in the requested color. Fill the
-  // remaining area with the color, then mask to glyph alpha.
+  // Foreground glyphs in the requested color.
   const tmp = document.createElement("canvas");
   tmp.width = w;
   tmp.height = h;
   const tctx = tmp.getContext("2d");
   if (!tctx) return null;
   tctx.imageSmoothingEnabled = false;
+  _drawGlyphs(tctx, runtime, runtime.atlasFgCanvas, text, scale, 0, 0);
+  tctx.globalCompositeOperation = "source-in";
   tctx.fillStyle = color;
   tctx.fillRect(0, 0, w, h);
-  tctx.globalCompositeOperation = "destination-in";
-  _drawGlyphs(tctx, runtime, runtime.atlasFgCanvas, text, scale, 0, 0);
 
   ctx.drawImage(tmp, 0, 0);
   return canvas;
@@ -248,13 +259,37 @@ function _buildRuntime(data) {
 }
 
 function _atlasToCanvas(pixels, width, height) {
+  // The wasm side decodes the A8 atlas to RGBA8 as (V,V,V,255) — the
+  // mask value lives in the R/G/B channels and alpha is always opaque.
+  // For canvas compositing (we use `destination-in` to mask a color
+  // fill to the glyph shape) the mask MUST live in the alpha channel.
+  // Re-pack here: (255,255,255,V). Pre-multiplied alpha not needed
+  // because we only mask against opaque solids.
+  //
+  // The pre-fix layout (V,V,V,255) caused multi-char text to render
+  // as an all-zero canvas: the first `drawImage atlas-region` with
+  // destination-in clears every pixel outside the source-rect, and
+  // because source-alpha was 255 EVERYWHERE inside the source-rect
+  // (no shape mask), subsequent drawImage calls progressively wiped
+  // out earlier work. Hotbar (single-char) coincidentally produced
+  // a usable single-glyph canvas; everything else came out blank.
+  const remapped = new Uint8ClampedArray(pixels.length);
+  for (let i = 0; i < pixels.length; i += 4) {
+    // Either R or G or B carries the original mask byte (all equal).
+    const v = pixels[i];
+    remapped[i] = 255;
+    remapped[i + 1] = 255;
+    remapped[i + 2] = 255;
+    remapped[i + 3] = v;
+  }
+
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) return canvas;
   const img = ctx.createImageData(width, height);
-  img.data.set(pixels);
+  img.data.set(remapped);
   ctx.putImageData(img, 0, 0);
   return canvas;
 }

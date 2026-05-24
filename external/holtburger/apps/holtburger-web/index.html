@@ -984,6 +984,14 @@
       // consumption. See CHORIZITE_PORTING_PLAN.md §13 for the contract.
       let worldObjectManager = null;
 
+      // dist/ manifest path used by `init_resource_source(MANIFEST_URL)`
+      // below. Hoisted to module scope so the later character-creation
+      // status text (~L6890) can reference it in its error message —
+      // previously it was a block-scoped const inside the async init
+      // block, which threw "MANIFEST_URL is not defined" on the
+      // "CharGen / SkillTable not loaded" hint path.
+      const MANIFEST_URL = "../../dist/manifest.json";
+
       // 2026-05-23 — ?plugins=none short-circuits HUD plugin registration.
       // The plugin modules above were imported statically (CSS injection
       // + module-scope event listeners still fire — spellbook L800 Delete
@@ -1309,7 +1317,8 @@
         // canonical retail DATs). Phase 5.2 made v2 the default
         // wire format; pass `--manifest-version=1` only to drain
         // an in-flight CDN deploy on the v1 schema.
-        const MANIFEST_URL = "../../dist/manifest.json";
+        // (MANIFEST_URL is declared at module-top-level so it's also in
+        // scope for the character-creation error hint downstream.)
         root.innerHTML = "<p class=\"hint\">Fetching manifest (v2: ~2 KB top-level + lazy per-namespace catalogs; v1: ~200 MB and slower on mobile/Tailscale)…</p>";
         try {
           await init_resource_source(MANIFEST_URL);
