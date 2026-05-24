@@ -15,32 +15,11 @@ fn get_local_dat_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOLTBURGER_LOCAL_DAT").map(std::path::PathBuf::from)
 }
 
-/// Full retail Layout parity is gated on resolving multiple wire-format
-/// unknowns the D1–D3 pass exposed but couldn't close:
-///
-/// 1. `BaseProperty::StringInfo` wire layout — DRW's dats.xml declares
-///    a 12-byte shape but marks itself `TODO: this doesn't match dats`,
-///    and the 12-byte interpretation empirically desyncs against
-///    retail Layout 0x21000000 (next MediaDesc reads invalid type
-///    0x100). acclient.h's `struct StringInfo` is the in-memory shape
-///    (8 fields including PStrings + a HashTable<u32, StringInfoData*>)
-///    but on-disk serialization isn't guaranteed to mirror it.
-///
-/// 2. Downstream symptoms of (1): bogus master-property keys, invalid
-///    MediaTypes, unreasonable element counts that blow out memory
-///    allocation in HashMap::with_capacity.
-///
-/// 3. Possible Layout-level shape gaps (some records parse cleanly
-///    but consume less than the full byte buffer — could be a trailer
-///    or a misread element count).
-///
-/// Until those are RE'd properly, this test is `#[ignore]`-d. The
-/// `LayoutDesc::read_le` / `ElementDesc::read_le` / `StateDesc::read_le`
-/// implementations are structurally complete and ship unblocked for
-/// any consumer that wants to drive synthetic fixtures or that doesn't
-/// hit StringInfo BaseProperty in its inputs.
+/// Retail Layout parity. Validates every Layout record in
+/// `client_local_English.dat` parses cleanly with the ACE-derived
+/// wire-format (StateDesc is a Dictionary with u8 counts; LayoutDesc
+/// uses u8 element count; StringInfo is the 12-byte ACE shape).
 #[test]
-#[ignore = "Layout retail parity is blocked on BaseProperty::StringInfo wire-format RE — see Milestone D StringInfo follow-on"]
 fn all_retail_layouts_parse() {
     let Some(portal_path) = get_portal_dat_path() else {
         println!("Skipping Layout parity: portal.dat not found");
@@ -142,25 +121,19 @@ fn all_retail_layouts_parse() {
             }
             Err(e) => {
                 let msg = format!("{e}");
-                // StringInfo blocked: known wire-format gap. The other
-                // "unknown ..." / "duplicate-type mismatch" failures
-                // observed on retail are downstream symptoms of an
-                // upstream StringInfo-shaped desync, not genuine
-                // schema bugs in our parsers — confirmed by D1's
-                // master-property parity (all 383 BasePropertyDescs
-                // parse cleanly when StringInfo defaults aren't in
-                // the way) and D2's media_desc unit tests (round-trip
-                // exact bytes). All such records get bucketed for the
-                // follow-on; only truly unexpected errors panic.
-                let downstream_of_string_info = msg.contains("StringInfo")
+                let known_gap = msg.contains("StringInfo")
                     || msg.contains("unknown MasterProperty key")
                     || msg.contains("unknown MediaType")
                     || msg.contains("unknown BasePropertyType")
                     || msg.contains("duplicate-type mismatch")
                     || msg.contains("failed to fill whole buffer")
                     || msg.contains("exceeds sanity cap");
-                if downstream_of_string_info {
+                if known_gap {
                     string_info_blocked += 1;
+                    // Print first few failing samples for diagnosis.
+                    if string_info_blocked <= 3 {
+                        eprintln!("  Layout 0x{id:08X} blocked: {e}");
+                    }
                 } else {
                     panic!("parse Layout 0x{id:08X} ({} bytes): {e}", bytes.len());
                 }
@@ -169,12 +142,10 @@ fn all_retail_layouts_parse() {
     }
 
     println!(
-        "Layout parity: {fp}/{total} records fully parsed; {si} blocked on StringInfo / downstream desync; {sm} parsed but with size mismatch (Layout-level shape gap). \
-         Fully-parsed totals: {te} top-level elements, {tc} child elements (recursive), {ts} states, {tp} BaseProperty overrides, {tm} MediaDescs",
+        "Layout parity: {fp}/{total} records fully parsed. \
+         Totals: {te} top-level elements, {tc} child elements (recursive), {ts} states, {tp} BaseProperty overrides, {tm} MediaDescs",
         fp = full_parse_count,
         total = layout_ids.len(),
-        si = string_info_blocked,
-        sm = size_mismatch_blocked,
         te = total_elements,
         tc = total_children,
         ts = total_states,
@@ -182,8 +153,10 @@ fn all_retail_layouts_parse() {
         tm = total_media,
     );
 
-    assert!(
-        full_parse_count > 0 || string_info_blocked > 0 || size_mismatch_blocked > 0,
-        "expected at least one Layout to parse or block clearly",
+    assert_eq!(
+        full_parse_count,
+        layout_ids.len(),
+        "expected ALL retail Layouts to parse cleanly — got {full_parse_count}/{}, {string_info_blocked} blocked, {size_mismatch_blocked} size-mismatch",
+        layout_ids.len(),
     );
 }

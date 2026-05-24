@@ -121,7 +121,9 @@ pub struct BasePropertyDesc {
     pub dat_file_type: u8,
     /// PropertyPropagationType (parent=byte).
     pub propagation_type: u8,
-    /// PropertyCachingType (parent=byte).
+    /// Reserved — DRW schema claims a CachingType byte here but ACE
+    /// confirms no such byte exists on the wire. Kept as a doc-only
+    /// note; not read.
     pub caching_type: u8,
     pub required: bool,
     pub read_only: bool,
@@ -175,18 +177,21 @@ impl BasePropertyDesc {
         let inheritance_type = read_u8(reader)?;
         let dat_file_type = read_u8(reader)?;
         let propagation_type = read_u8(reader)?;
-        let caching_type = read_u8(reader)?;
-
+        // NOTE: NO caching_type byte here (DRW says there is; ACE
+        // confirms there isn't). The 14 bytes after prediction_timeout
+        // are: 3 type bytes + 10 booleans + 1 numItems byte.
         let required = read_bool_byte(reader)?;
         let read_only = read_bool_byte(reader)?;
+        let propagate_to_children = read_bool_byte(reader)?;
         let no_checkpoint = read_bool_byte(reader)?;
-        let recorded = read_bool_byte(reader)?;
-        let do_not_replay = read_bool_byte(reader)?;
         let absolute_time_stamp = read_bool_byte(reader)?;
         let groupable = read_bool_byte(reader)?;
-        let propagate_to_children = read_bool_byte(reader)?;
+        let all_available = read_bool_byte(reader)?;
+        let do_not_replay = read_bool_byte(reader)?;
+        let recorded = read_bool_byte(reader)?;
+        let tool_only = read_bool_byte(reader)?;
+        let _ = (all_available, tool_only); // ACE-extra booleans we don't model
 
-        let _bucket_size = read_u8(reader)?;
         let num_available = read_u8(reader)? as usize;
         let mut available_properties = HashMap::with_capacity(num_available);
         for _ in 0..num_available {
@@ -209,7 +214,7 @@ impl BasePropertyDesc {
             inheritance_type,
             dat_file_type,
             propagation_type,
-            caching_type,
+            caching_type: 0, // not on wire per ACE
             required,
             read_only,
             no_checkpoint,
@@ -253,19 +258,19 @@ pub enum BaseProperty {
     InstanceId(u32),
     Bitfield32(u32),
     Bitfield64(u64),
-    /// String-info value (DRW marks the schema TODO; we RE'd the
-    /// 16-byte wire layout against retail Layout 0x21000000). Stored
-    /// as four raw u32 fields — exact field semantics deferred to a
-    /// follow-on once we can correlate the values against retail
-    /// StringTable lookups. Layout: `[u32; 4]` little-endian.
+    /// String-info value. Per ACE `StringInfo.cs`: 12 bytes total
+    /// (1-byte token + u32 string-id + u32 table-id + 3 trailing
+    /// bytes). The 3 trailing bytes are Override + 2 unknown bytes
+    /// in ACE's source; semantics not fully nailed down.
+    /// `table_id` references a StringTable DataID (0x23 prefix);
+    /// `string_id` is a hash into that StringTable's entries.
     StringInfo {
-        /// Possibly the StringInfo "token" or self-type tag — in
-        /// retail Layout 0x21000000 this equals the surrounding
-        /// `BasePropertyDesc.name` for the property.
-        word0: u32,
-        word1: u32,
-        word2: u32,
-        word3: u32,
+        token: u8,
+        string_id: u32,
+        table_id: u32,
+        override_flag: u8,
+        unknown1: u8,
+        unknown2: u8,
     },
     /// Recursive Array — entries use the master-lookup form.
     Array(Vec<BaseProperty>),
@@ -372,17 +377,24 @@ impl BaseProperty {
                 Ok(Self::Struct(map))
             }
             BasePropertyType::StringInfo => {
-                // RE'd against retail Layout 0x21000000 in the
-                // Milestone D StringInfo follow-on: 16 bytes = four
-                // u32 LE words. DRW's 12-byte schema is explicitly
-                // marked TODO and is wrong (validated by alignment
-                // check — element_id at +0x15 hits the dict-key
-                // exactly when we consume 16 bytes here, not 12).
-                let word0 = read_u32_le(reader)?;
-                let word1 = read_u32_le(reader)?;
-                let word2 = read_u32_le(reader)?;
-                let word3 = read_u32_le(reader)?;
-                Ok(Self::StringInfo { word0, word1, word2, word3 })
+                // Per ACE Source/ACE.DatLoader/Entity/StringInfo.cs:
+                // 12 bytes total. DRW's dats.xml schema agrees on
+                // shape (their TODO note is about field semantics,
+                // not size).
+                let token = read_u8(reader)?;
+                let string_id = read_u32_le(reader)?;
+                let table_id = read_u32_le(reader)?;
+                let override_flag = read_u8(reader)?;
+                let unknown1 = read_u8(reader)?;
+                let unknown2 = read_u8(reader)?;
+                Ok(Self::StringInfo {
+                    token,
+                    string_id,
+                    table_id,
+                    override_flag,
+                    unknown1,
+                    unknown2,
+                })
             }
             BasePropertyType::Invalid
             | BasePropertyType::LongInteger

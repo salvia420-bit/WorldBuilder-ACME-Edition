@@ -271,7 +271,43 @@ records and the DRW EOR-test suite.
     is `#[ignore]`-d pending a StringInfo wire-format spike (see
     "Milestone D StringInfo follow-on" below).
 
-## Milestone D StringInfo follow-on — partial (2026-05-23)
+## Milestone D — FULL parity (2026-05-23)
+
+**Status: 101/101 retail Layouts parse cleanly.** Every wire-format
+unknown closed by cross-referencing ACE source instead of trusting DRW
+or guessing.
+
+The breakthrough: **ACE has working parsers for everything** in
+`/home/wbterminal/ace-server/Source/ACE.DatLoader/`, including a
+test (`UnpackLocalEnglishDatFiles_NoExceptions`) that asserts every
+local-English DAT record consumes exactly its file size. DRW's
+`dats.xml` schemas disagree with ACE on the load-bearing details and
+were leading me wrong.
+
+Wire-format corrections that landed:
+
+| Field | DRW said | ACE / retail says |
+|---|---|---|
+| `StateDesc.num_properties` | CompressedUInt | u8 byte |
+| `StateDesc.Properties` | `List<BaseProperty>` | `Dictionary<u32, BaseProperty>` (each entry: u32 dict_key + u32 BaseProperty.Id + value) |
+| `StateDesc.num_media` | CompressedUInt (with bucket prefix) | u8 byte (no bucket prefix) |
+| `ElementDesc.num_states` | CompressedUInt | u8 byte |
+| `ElementDesc.num_children` | CompressedUInt | u8 byte |
+| `LayoutDesc.num_elements` | CompressedUInt | u8 byte |
+| `BasePropertyDesc` trailing layout | 4 type bytes + 8 booleans + 2 size bytes (= 14 bytes) | 3 type bytes + 10 booleans + 1 numItems byte (= 14 bytes; same total, different field assignments) |
+| `BaseProperty::StringInfo` width | "TODO" | **12 bytes** (1 + 4 + 4 + 1 + 1 + 1) — DRW's schema number was correct, our previous failures were caused by the *Properties = List vs Dictionary* mismatch downstream |
+
+Validated against full retail:
+
+```
+Layout parity: 101/101 records fully parsed.
+Totals: 372 top-level elements, 1790 child elements (recursive),
+        1142 states, 4161 BaseProperty overrides, 1451 MediaDescs
+```
+
+Layout parity test no longer `#[ignore]`'d.
+
+## Milestone D StringInfo follow-on — partial (superseded, kept for history)
 
 First spike on StringInfo wire-format RE. Partial progress shipped;
 the schema is not fully resolved but the failure surface is now

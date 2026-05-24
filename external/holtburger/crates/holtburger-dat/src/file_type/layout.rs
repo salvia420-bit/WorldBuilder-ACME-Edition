@@ -51,35 +51,9 @@
 //! ```
 
 use crate::file_type::{MasterProperty, StateDesc};
-use crate::utils::read_compressed_u32;
 use binrw::io::Seek;
 use std::collections::HashMap;
 use std::io::Read;
-
-/// Cap on dictionary entry counts inside Layout parsing. A misread
-/// CompressedUInt (typically from a StringInfo desync) can produce
-/// bogus huge counts; without this cap, HashMap::with_capacity will
-/// try to allocate gigabytes and OOM-kill the process. The cap chosen
-/// is well above any realistic UI count (the biggest retail Layout
-/// has under 200 nested elements) but below catastrophic allocation
-/// territory.
-const LAYOUT_DICT_COUNT_CAP: u32 = 65_536;
-
-fn checked_count<R: Read + Seek>(
-    reader: &mut R,
-    raw: u32,
-    field: &'static str,
-) -> binrw::BinResult<usize> {
-    if raw > LAYOUT_DICT_COUNT_CAP {
-        return Err(binrw::Error::Custom {
-            pos: reader.stream_position().unwrap_or(0),
-            err: Box::new(format!(
-                "{field} count {raw} exceeds sanity cap {LAYOUT_DICT_COUNT_CAP} (likely upstream desync — see StringInfo follow-on)"
-            )),
-        });
-    }
-    Ok(raw as usize)
-}
 
 mod incorporation_flags {
     pub const X: u32 = 0x02;
@@ -159,10 +133,10 @@ impl ElementDesc {
         let right_edge = u32::read_le(reader)?;
         let bottom_edge = u32::read_le(reader)?;
 
-        // States dictionary (header: u8 bucket_size + CompressedUInt count).
+        // States dictionary (header: u8 bucket + u8 count per ACE
+        // ElementDesc.UnpackElementDesc).
         let _states_bucket = u8::read(reader)?;
-        let raw_states = read_compressed_u32(reader)?;
-        let num_states = checked_count(reader, raw_states, "ElementDesc.states")?;
+        let num_states = u8::read(reader)? as usize;
         let mut states = HashMap::with_capacity(num_states);
         for _ in 0..num_states {
             let key = u32::read_le(reader)?;
@@ -170,10 +144,9 @@ impl ElementDesc {
             states.insert(key, value);
         }
 
-        // Children dictionary — recursive ElementDesc.
+        // Children dictionary — recursive ElementDesc, same shape.
         let _children_bucket = u8::read(reader)?;
-        let raw_children = read_compressed_u32(reader)?;
-        let num_children = checked_count(reader, raw_children, "ElementDesc.children")?;
+        let num_children = u8::read(reader)? as usize;
         let mut children = HashMap::with_capacity(num_children);
         for _ in 0..num_children {
             let key = u32::read_le(reader)?;
@@ -223,10 +196,9 @@ impl LayoutDesc {
         let width = u32::read_le(reader)?;
         let height = u32::read_le(reader)?;
 
-        // Elements HashTable header.
+        // Elements dictionary (u8 bucket + u8 count per ACE LayoutDesc).
         let _bucket = u8::read(reader)?;
-        let raw_elements = read_compressed_u32(reader)?;
-        let num_elements = checked_count(reader, raw_elements, "LayoutDesc.elements")?;
+        let num_elements = u8::read(reader)? as usize;
         let mut elements = HashMap::with_capacity(num_elements);
         for _ in 0..num_elements {
             let key = u32::read_le(reader)?;
