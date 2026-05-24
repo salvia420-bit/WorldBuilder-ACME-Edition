@@ -317,13 +317,25 @@ function _atlasToCanvas(pixels, width, height) {
 function _measure(runtime, text) {
   let penX = 0;
   let maxY = 0;
+  // Lazy fallback-measure canvas for codepoints not in the AC font
+  // (em-dashes, curly quotes, etc.). Set up once per call.
+  let fallbackCtx = null;
   for (const ch of text) {
     const cp = ch.codePointAt(0);
     const g = runtime.glyphMap.get(cp);
     if (!g) {
-      // Missing glyph — advance one max-char-width so the rest of the
-      // string still renders rather than collapsing.
-      penX += runtime.maxCharWidth;
+      // Missing glyph — measure the system-font fallback so the
+      // canvas reservation matches what `_drawGlyphs` will draw.
+      if (!fallbackCtx) {
+        const c = document.createElement("canvas");
+        fallbackCtx = c.getContext("2d");
+        if (fallbackCtx) fallbackCtx.font = `${runtime.maxCharHeight}px sans-serif`;
+      }
+      const w = fallbackCtx
+        ? Math.ceil(fallbackCtx.measureText(ch).width)
+        : runtime.maxCharWidth;
+      penX += Math.max(1, w);
+      if (runtime.maxCharHeight > maxY) maxY = runtime.maxCharHeight;
       continue;
     }
     penX += g.h_off_before;
@@ -340,11 +352,25 @@ function _measure(runtime, text) {
 
 function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy) {
   let penX = 0;
+  // System-font fallback for codepoints the AC bitmap doesn't carry
+  // (em-dash, curly quotes, …). Drawn in white so the resulting
+  // pixels contribute to the alpha mask consumed by the outer
+  // `source-in` colorize pass — the fallback chars get the same
+  // caller-supplied color as the AC-rendered chars.
+  let fallbackConfigured = false;
   for (const ch of text) {
     const cp = ch.codePointAt(0);
     const g = runtime.glyphMap.get(cp);
     if (!g) {
-      penX += runtime.maxCharWidth;
+      if (!fallbackConfigured) {
+        ctx.font = `${runtime.maxCharHeight * scale}px sans-serif`;
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "#FFFFFF";
+        fallbackConfigured = true;
+      }
+      ctx.fillText(ch, (penX + ox) * scale, oy * scale);
+      const w = Math.max(1, Math.ceil(ctx.measureText(ch).width / scale));
+      penX += w;
       continue;
     }
     penX += g.h_off_before;
