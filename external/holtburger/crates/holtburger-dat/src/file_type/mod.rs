@@ -3,6 +3,7 @@ pub mod char_gen;
 pub mod chat_pose_table;
 pub mod clothing;
 pub mod combat_maneuver_table;
+pub mod degrade_info;
 pub mod dxt;
 pub mod env_cell;
 pub mod environment;
@@ -14,6 +15,7 @@ pub mod motion_kinematics;
 pub mod motion_table;
 pub mod object_desc;
 pub mod palette;
+pub mod palette_set;
 pub mod particle_emitter;
 pub mod physics_script;
 pub mod physics_script_table;
@@ -38,6 +40,7 @@ pub use clothing::{
     ClothingBaseEffect, ClothingTable,
 };
 pub use combat_maneuver_table::{CombatManeuver, CombatManeuverTable};
+pub use degrade_info::{GfxObjDegradeInfo, GfxObjInfo};
 pub use env_cell::EnvCell;
 pub use environment::{CellStruct, Environment};
 pub use font::{Font, FontCharDesc};
@@ -48,6 +51,7 @@ pub use motion_kinematics::{MotionKinematics, MotionKinematicsTable};
 pub use motion_table::{MotionCommandKinematics, MotionTable, MotionTableMovementProfile};
 pub use object_desc::ObjectDesc;
 pub use palette::Palette;
+pub use palette_set::PaletteSet;
 pub use particle_emitter::ParticleEmitter;
 pub use physics_script::{PhysicsScript, PhysicsScriptData};
 pub use physics_script_table::{
