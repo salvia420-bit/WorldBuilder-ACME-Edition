@@ -33,10 +33,14 @@ const MAX_LINES = 48;          // ring buffer; ~6x what fits on-screen
 // CHAT_CATEGORY_* colours — mirror the index.html `#chat-log .cat-N`
 // palette but adjusted for legibility against our dark stone background
 // (the index.html version sits on a light #fafafa, ours on dark).
+// Concrete hex colors (no CSS vars) so canvas2d's fillStyle in
+// ac_font's renderAcText accepts them. The cream/tell-yellow values
+// mirror the `--hb-text-cream` / `--hb-text-tell-yellow` definitions
+// in index.html (theme variables).
 const CAT_COLORS = {
   0: "#90d090",                            // system   (was #1a7f1a)
-  1: "var(--hb-text-cream)",               // local
-  2: "var(--hb-text-tell-yellow)",         // tell     (yellow per retail wiki)
+  1: "#f0d8a0",                            // local    (--hb-text-cream)
+  2: "#ffe060",                            // tell     (--hb-text-tell-yellow per wiki)
   3: "#7da6e0",                            // channel  (blue-grey per retail wiki)
   4: "#bba696",                            // emote    (italic-grey)
   5: "#ff6a4a",                            // combat
@@ -46,6 +50,7 @@ const CAT_COLORS = {
   9: "#888070",                            // transient
   10: "#ff8080",                           // send-error
 };
+const ECHO_COLOR = "#f0e8d0";              // --hb-text-cream-bright
 
 let stylesInjected = false;
 function ensureStyles() {
@@ -283,9 +288,9 @@ function ensureStyles() {
 function colorForCategory(catStr) {
   // catStr is the dataset.cat attribute from the source <li> ("0".."9")
   // or null/undefined for the .echo neutral class (outgoing local-echo).
-  if (catStr == null) return "var(--hb-text-cream-bright)";
+  if (catStr == null) return ECHO_COLOR;
   const c = CAT_COLORS[catStr];
-  return c || "var(--hb-text-cream)";
+  return c || "#f0d8a0";
 }
 
 export const manifest = {
@@ -502,20 +507,21 @@ export function mount(_ctx) {
     const line = document.createElement("div");
     line.className = "hb-chat-line";
     const cat = srcLi.dataset?.cat ?? null;
-    line.style.color = colorForCategory(cat);
+    let lineColor = colorForCategory(cat);
     if (cat != null) {
       line.classList.add(`cat-${cat}`);
       line.dataset.cat = cat;
     }
     if (srcLi.classList.contains("echo")) {
       line.classList.add("echo");
-      line.style.color = "var(--hb-text-cream-bright)";
+      lineColor = ECHO_COLOR;
     } else if (isEmpty) {
       line.dataset.empty = "1";
       line.style.opacity = "0.55";
       line.style.fontStyle = "italic";
     }
-    line.textContent = srcLi.textContent || "";
+    line.style.color = lineColor;
+    setAcText(line, srcLi.textContent || "", { color: lineColor });
     scroll.appendChild(line);
     // Auto-scroll if pinned to bottom.
     if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40) {

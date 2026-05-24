@@ -179,8 +179,14 @@ export function renderAcText(text, opts = {}) {
  *
  * @param {HTMLElement} el — host element (button, span, div, …).
  * @param {string} text — new text content.
+ * @param {{color?: string, scale?: number}} [opts] — optional per-call
+ *   styling. `color` forwards to the inner ac-text's `color` attribute
+ *   (CSS color string — defaults to white). `scale` forwards to `scale`.
+ *   Set color when the host element's CSS color is critical (e.g.
+ *   chat-line per-category text, journal-panel parchment ink, spellbook
+ *   school tags). Otherwise the canvas renders white by default.
  */
-export function setAcText(el, text) {
+export function setAcText(el, text, opts) {
   if (!el) return;
   // DO NOT call registerAcText() here — triggers customElements.define
   // mid-mount-sequence which hangs the page (see registerAcText comment).
@@ -198,6 +204,10 @@ export function setAcText(el, text) {
     el.textContent = "";
     inner = el.ownerDocument.createElement("ac-text");
     el.appendChild(inner);
+  }
+  if (opts) {
+    if (opts.color !== undefined) inner.setAttribute("color", String(opts.color));
+    if (opts.scale !== undefined) inner.setAttribute("scale", String(opts.scale));
   }
   inner.textContent = String(text ?? "");
 }

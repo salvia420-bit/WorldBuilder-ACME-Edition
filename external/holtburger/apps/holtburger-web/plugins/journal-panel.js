@@ -239,7 +239,10 @@ export const view = {
     const title = document.createElement("div");
     title.className = "hb-journal-title";
     const playerName = window.__pluginClient?.player?.stats?.name || "Adventurer";
-    title.textContent = `Journal of ${playerName}`;
+    // Parchment-ink dark brown — matches the CSS color the canvas
+    // replaces. Without the color override the canvas defaults to
+    // white, which is invisible on cream parchment.
+    setAcText(title, `Journal of ${playerName}`, { color: "#6b3a0a" });
     content.appendChild(title);
 
     // Real journal data isn't wired — show the placeholder narrative
@@ -247,7 +250,7 @@ export const view = {
     if (SAMPLE_ENTRIES.length === 0) {
       const empty = document.createElement("div");
       empty.className = "hb-journal-empty";
-      empty.textContent = "No journal entries yet.";
+      setAcText(empty, "No journal entries yet.", { color: "#5a3a18" });
       content.appendChild(empty);
     } else {
       for (const e of SAMPLE_ENTRIES) {
@@ -256,23 +259,26 @@ export const view = {
         const head = document.createElement("div");
         head.className = "hb-journal-entry-h";
         const t = document.createElement("span");
-        t.textContent = e.title;
+        setAcText(t, e.title, { color: "#4a2810" });
         head.appendChild(t);
         const s = document.createElement("span");
         s.className = `hb-journal-entry-status ${e.status}`;
-        s.textContent = e.status;
+        const statusColor = e.status === "complete" ? "#2a6020"
+          : e.status === "failed" ? "#802020"
+          : "#6b3a0a";
+        setAcText(s, e.status, { color: statusColor });
         head.appendChild(s);
         entry.appendChild(head);
         const b = document.createElement("div");
         b.className = "hb-journal-entry-body";
-        b.textContent = e.body;
+        setAcText(b, e.body, { color: "#3a2210" });
         entry.appendChild(b);
         content.appendChild(entry);
       }
       const note = document.createElement("div");
       note.className = "hb-journal-empty";
       note.style.fontSize = "9px";
-      note.textContent = "—  Placeholder entries.  Server journal() RPC pending.  —";
+      setAcText(note, "—  Placeholder entries.  Server journal() RPC pending.  —", { color: "#5a3a18" });
       content.appendChild(note);
     }
 

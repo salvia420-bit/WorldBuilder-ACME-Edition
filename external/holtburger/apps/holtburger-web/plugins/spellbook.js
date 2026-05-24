@@ -624,7 +624,16 @@ function doMount(parentEl, ctx) {
 
     const schoolTag = document.createElement("span");
     schoolTag.className = `hb-sb-row-tag school-${meta.school}`;
-    setAcText(schoolTag, SCHOOL_NAMES[meta.school] ?? "?");
+    // School-tinted text — pass concrete color so the AC-font canvas
+    // matches the CSS .school-N color (red/green/orange/blue/purple).
+    const schoolColor = {
+      1: "rgb(255, 140, 140)",
+      2: "rgb(140, 220, 140)",
+      3: "rgb(255, 200, 120)",
+      4: "rgb(140, 200, 255)",
+      5: "rgb(200, 140, 255)",
+    }[meta.school];
+    setAcText(schoolTag, SCHOOL_NAMES[meta.school] ?? "?", schoolColor ? { color: schoolColor } : undefined);
     row.appendChild(schoolTag);
 
     const manaTag = document.createElement("span");
