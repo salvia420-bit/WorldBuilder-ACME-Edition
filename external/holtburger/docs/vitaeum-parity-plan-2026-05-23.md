@@ -511,3 +511,47 @@ Follow-ons (not in this push):
   pattern; the safe-during-mount property is now guaranteed.
 - LanguageString + StringTable consumers (unchanged from above).
 - Other 48 Font records (unchanged from above).
+
+## AC font wave 3 — MANIFEST_URL fix, render fix, long tail, consumers (2026-05-24)
+
+Closes all the wave-2 follow-ons + lands the LanguageString +
+StringTable consumer infrastructure.
+
+What landed:
+
+- **MANIFEST_URL fix** (commit `3a944758`) — hoisted from
+  block-scoped to module-top-level. autoLogin now reaches `in-world`.
+- **Multi-glyph render bug** (same commit) — atlas was decoded
+  `(V,V,V,255)` and per-glyph `destination-in` wiped each prior
+  glyph (only single-char hotbar slots happened to work). Atlas
+  now decodes `(255,255,255,V)` and `renderAcText` switched to
+  draw-all-then-`source-in`-colorize. 109/109 canvases render.
+- **15 long-tail plugins migrated** (commit `78fcfdcd`): radar,
+  buffs-hud, combat-hud, status-indicators, options-panel,
+  spellbook, main-panel, inventory, character-info, map-panel,
+  allegiance-panel, fellowship-panel, journal-panel, vendor-ui,
+  contracts-panel. 125 `<ac-text>` elements live in the HUD.
+- **Color support** (commit `e65ab261`) — `setAcText(el, text,
+  {color, scale})` forwards through the inner `<ac-text>` as
+  attributes. Unblocks 3 deliberately-skipped color-critical
+  sites: journal parchment ink, chat per-category lines,
+  spellbook school tags.
+- **LanguageString + StringTable consumers** (commit `db836bf3`)
+  + dat-shard merge mode (commit `90b5ab61`). New wasm exports
+  `fetch_language_string(id)` and `fetch_string_table(id)`. JS
+  runtime at `ui/ac_strings.js` exposes `loadStringTable(id)
+  → Map<hashKey, text>`, `acString(table, hash)`,
+  `loadLanguageString(id) → string`. Verified end-to-end:
+  LanguageString 0x31000010 returns the Sho-naming hint
+  ("Sho men's names have the surname first..."). StringTable
+  consumer wired; live data requires the `eor/local` namespace
+  in the bake. dat-shard now accepts `--input` + `--eor-local`
+  together so holtburger/core AND eor/local both land.
+
+Screenshot at `external/holtburger/docs/ac-font-hud-2026-05-24.png`.
+
+Remaining open follow-ons:
+
+- Other 48 Font records (chat-window, scrolling battle text,
+  spell-effect labels) — `fetch_font(id)` works for any of them.
+- Full-world bake scope-up: 13×13 → 255×255.
