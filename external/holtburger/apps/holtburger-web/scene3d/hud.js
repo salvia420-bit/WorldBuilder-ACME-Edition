@@ -155,7 +155,15 @@ export class NameplateLayer {
     const existing = this.nodes.get(key);
     if (existing) {
       if (existing.name !== name) {
-        existing.el.textContent = name;
+        // The inner `<ac-text>` element holds the text — update it
+        // there so the custom element re-renders. Fallback to direct
+        // textContent if the inner element was never created (older
+        // dev tooling, capture-script harness, etc.).
+        if (existing.textEl) {
+          existing.textEl.textContent = name;
+        } else {
+          existing.el.textContent = name;
+        }
         existing.name = name;
       }
       existing.follow = followObj3d;
@@ -166,9 +174,14 @@ export class NameplateLayer {
     // small padding, rounded corners. Anchored bottom-centre via
     // `transform: translate(-50%, -100%)` so `style.left`/`top` set the
     // bottom-centre pixel and the text grows up and outward.
+    //
+    // Inner `<ac-text>` swaps to the retail bitmap font once the font
+    // runtime loads; until then, system-font textContent shows.
     const el = this.domRoot.ownerDocument.createElement("div");
     el.className = "nameplate-3d";
-    el.textContent = name;
+    const textEl = this.domRoot.ownerDocument.createElement("ac-text");
+    textEl.textContent = name;
+    el.appendChild(textEl);
     el.style.position = "absolute";
     // Perf B6 — position via `translate3d` (composited, layout-free)
     // instead of `style.left`/`top` (forces style recalc + layout). The
@@ -192,7 +205,7 @@ export class NameplateLayer {
     // Perf B6 — stash last-written {left, top} on the record so the
     // per-frame writer in `tick()` can skip identical transform writes.
     // NaN seeds force a first-frame write regardless of projected coords.
-    this.nodes.set(key, { el, follow: followObj3d, name, _lastLeft: NaN, _lastTop: NaN });
+    this.nodes.set(key, { el, textEl, follow: followObj3d, name, _lastLeft: NaN, _lastTop: NaN });
   }
 
   /**

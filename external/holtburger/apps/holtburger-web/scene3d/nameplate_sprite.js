@@ -55,6 +55,7 @@
 //     teardown — they're reused).
 
 import * as THREE from "three";
+import { getAcFont, loadAcFont, renderAcText } from "../ui/ac_font.js";
 
 // AC's character rig is ~1.8 m crown-to-feet (rough average). Lift to
 // ~2.2 m so the nameplate sits well above the head with a small air
@@ -115,6 +116,9 @@ const CANVAS_PADDING_X = 16;
 // two textures because the text fill colour differs.
 /** @type {Map<string, { texture: THREE.CanvasTexture, material: THREE.SpriteMaterial }>} */
 const _nameplateCache = new Map();
+
+// Sentinel so we only attach one cache-flush watch per AC-font load.
+let _pendingAcFontWatch = false;
 
 // 2026-05-23 — ?hud=none gate. Sprite-baked nameplates are GPU-scene
 // objects, not DOM, so the no-hud CSS can't hide them. Read the URL
@@ -200,8 +204,73 @@ export function nameplateColorForCategory(category) {
  * bake; repeated calls for the same `(name, colour)` reuse the entry
  * verbatim so we don't reallocate the GPU resource on every spawn.
  */
+/**
+ * Bake variant that composites a pre-rendered text canvas (the output
+ * of `renderAcText`) onto the standard rounded-rect background. Used
+ * by the AC-font path; the system-font path keeps its self-contained
+ * Canvas2D draw to preserve the legacy stroke-outline look while the
+ * AC font is loading.
+ */
+function _bakeWithCanvasText(cacheKey, textCanvas) {
+  const padding = 4;
+  const canvasWidth = Math.ceil(
+    Math.max(
+      CANVAS_WIDTH_MIN,
+      Math.min(CANVAS_WIDTH_MAX, textCanvas.width + CANVAS_PADDING_X * 2),
+    ),
+  );
+
+  const canvas = document.createElement("canvas");
+  canvas.width = canvasWidth;
+  canvas.height = CANVAS_HEIGHT;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = false;
+
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath();
+    ctx.roundRect(padding, padding, canvasWidth - padding * 2, CANVAS_HEIGHT - padding * 2, 8);
+    ctx.fill();
+  } else {
+    ctx.fillRect(padding, padding, canvasWidth - padding * 2, CANVAS_HEIGHT - padding * 2);
+  }
+
+  // Centre the rendered text canvas inside the rounded rect. If the
+  // glyphs are taller than the background, clip rather than upscale.
+  const dx = Math.floor((canvasWidth - textCanvas.width) / 2);
+  const dy = Math.floor((CANVAS_HEIGHT - textCanvas.height) / 2);
+  ctx.drawImage(textCanvas, dx, dy);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  // Bitmap fonts deserve nearest-neighbour magnification so the
+  // pixel-perfect glyph shapes don't blur when the camera zooms in.
+  texture.minFilter = THREE.NearestFilter;
+  texture.magFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    sizeAttenuation: true,
+    toneMapped: false,
+  });
+  material.name = `nameplate-${cacheKey}`;
+
+  const entry = { texture, material, canvasWidth };
+  _nameplateCache.set(cacheKey, entry);
+  return entry;
+}
+
 function getOrBakeNameplateMaterial(name, colorHex) {
-  const cacheKey = `${name}|${colorHex}`;
+  // Cache key includes the font generation so entries baked with the
+  // system fallback get re-baked once the AC font finishes loading.
+  const acFontReady = !!getAcFont();
+  const cacheKey = `${name}|${colorHex}|${acFontReady ? "ac" : "sys"}`;
   const hit = _nameplateCache.get(cacheKey);
   if (hit) return hit;
 
@@ -209,6 +278,31 @@ function getOrBakeNameplateMaterial(name, colorHex) {
   // Node test harnesses. Return null so the spawn path skips creation.
   // The real browser path always has document.
   if (typeof document === "undefined") return null;
+
+  // Schedule a one-time cache flush when the AC font becomes available
+  // so existing system-font nameplates get re-baked in the retail font.
+  if (!acFontReady && !_pendingAcFontWatch) {
+    _pendingAcFontWatch = true;
+    loadAcFont()
+      .then((runtime) => {
+        if (runtime) disposeNameplateCache();
+      })
+      .catch(() => {})
+      .finally(() => {
+        _pendingAcFontWatch = false;
+      });
+  }
+
+  // AC-font path — produce the text canvas from the retail bitmap font.
+  // The renderAcText() call returns null if the font isn't loaded yet,
+  // which falls through to the system-font path below.
+  if (acFontReady) {
+    // scale=2 gets us roughly 32px-tall AC glyphs (max_char_height=16).
+    const textCanvas = renderAcText(name, { color: colorHex, scale: 2, shadow: false });
+    if (textCanvas && textCanvas.width > 0 && textCanvas.height > 0) {
+      return _bakeWithCanvasText(cacheKey, textCanvas);
+    }
+  }
 
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");

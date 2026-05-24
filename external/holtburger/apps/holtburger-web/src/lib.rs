@@ -4909,6 +4909,182 @@ pub async fn fetch_surfaces_pixels(
     Ok(out)
 }
 
+/// One AC bitmap font with its glyph-atlas pixel data, ready for
+/// in-browser text rendering. Output of [`fetch_font`].
+///
+/// AC Fonts (DAT type 0x40) reference two Texture (0x06) atlases:
+/// `pixels_fg` is the foreground glyph mask; `pixels_bg` is the
+/// background drop-shadow / fill mask. Both ship as A8 on the wire
+/// and are pre-expanded to RGBA8 (V,V,V,255) here so JS can drop the
+/// buffer straight into `ImageData` / `CanvasTexture` without a
+/// reshape pass. JS renders each glyph by sampling the foreground
+/// atlas at `(offset_x, offset_y) .. (offset_x+width, offset_y+height)`
+/// and using any of R/G/B (they're equal) as the alpha mask.
+///
+/// `char_descs_packed` is the on-wire 11-byte-per-glyph layout
+/// (u16 unicode + u16 offset_x + u16 offset_y + u8 width + u8 height +
+/// i8 h_off_before + i8 h_off_after + i8 v_off_before). JS parses it
+/// with `DataView` rather than paying for a per-glyph wasm boundary
+/// crossing.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg(any(target_arch = "wasm32", test))]
+pub struct FontData {
+    id: u32,
+    num_glyphs: u32,
+    max_char_height: u32,
+    max_char_width: u32,
+    baseline_offset: i32,
+    atlas_width: u32,
+    atlas_height: u32,
+    pixels_fg: Vec<u8>,
+    pixels_bg: Vec<u8>,
+    char_descs_packed: Vec<u8>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl FontData {
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+    #[wasm_bindgen(getter, js_name = numGlyphs)]
+    pub fn num_glyphs(&self) -> u32 {
+        self.num_glyphs
+    }
+    #[wasm_bindgen(getter, js_name = maxCharHeight)]
+    pub fn max_char_height(&self) -> u32 {
+        self.max_char_height
+    }
+    #[wasm_bindgen(getter, js_name = maxCharWidth)]
+    pub fn max_char_width(&self) -> u32 {
+        self.max_char_width
+    }
+    #[wasm_bindgen(getter, js_name = baselineOffset)]
+    pub fn baseline_offset(&self) -> i32 {
+        self.baseline_offset
+    }
+    #[wasm_bindgen(getter, js_name = atlasWidth)]
+    pub fn atlas_width(&self) -> u32 {
+        self.atlas_width
+    }
+    #[wasm_bindgen(getter, js_name = atlasHeight)]
+    pub fn atlas_height(&self) -> u32 {
+        self.atlas_height
+    }
+    #[wasm_bindgen(getter, js_name = pixelsFg)]
+    pub fn pixels_fg(&self) -> Vec<u8> {
+        self.pixels_fg.clone()
+    }
+    #[wasm_bindgen(getter, js_name = pixelsBg)]
+    pub fn pixels_bg(&self) -> Vec<u8> {
+        self.pixels_bg.clone()
+    }
+    #[wasm_bindgen(getter, js_name = charDescsPacked)]
+    pub fn char_descs_packed(&self) -> Vec<u8> {
+        self.char_descs_packed.clone()
+    }
+}
+
+/// Walk Font → 2× Texture → RGBA8 for one font ID. Returns an empty
+/// FontData (num_glyphs=0, empty pixel vectors) when any step fails.
+#[cfg(any(target_arch = "wasm32", test))]
+fn fetch_font_impl<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    font_id: u32,
+) -> FontData {
+    use holtburger_dat::ResourceKey;
+    use holtburger_dat::file_type::{Font, Texture, TextureDecodeError};
+    let empty = FontData {
+        id: 0,
+        num_glyphs: 0,
+        max_char_height: 0,
+        max_char_width: 0,
+        baseline_offset: 0,
+        atlas_width: 0,
+        atlas_height: 0,
+        pixels_fg: Vec::new(),
+        pixels_bg: Vec::new(),
+        char_descs_packed: Vec::new(),
+    };
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", font_id)) else {
+        return empty;
+    };
+    let Ok(font) = Font::unpack(&bytes) else {
+        return empty;
+    };
+
+    let decode_atlas = |atlas_id: u32| -> (u32, u32, Vec<u8>) {
+        let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", atlas_id)) else {
+            return (0, 0, Vec::new());
+        };
+        let Ok(tex) = Texture::unpack(&tb) else {
+            return (0, 0, Vec::new());
+        };
+        // Font atlases are A8 (no palette lookup); the closure is a
+        // defensive no-op in case a non-A8 atlas ever shows up.
+        let rgba = tex.to_rgba8(|_| Err(TextureDecodeError::MissingPaletteId));
+        match rgba {
+            Ok(pixels) => (tex.width as u32, tex.height as u32, pixels),
+            Err(_) => (0, 0, Vec::new()),
+        }
+    };
+
+    let (atlas_w_fg, atlas_h_fg, pixels_fg) = decode_atlas(font.foreground_surface_data_id);
+    let (atlas_w_bg, atlas_h_bg, pixels_bg) = decode_atlas(font.background_surface_data_id);
+
+    // Both atlases share dims per acclient.h's `struct Font` invariants;
+    // if a record disagrees, fall back to fg dims and drop bg.
+    let (atlas_width, atlas_height, pixels_bg) =
+        if atlas_w_fg == atlas_w_bg && atlas_h_fg == atlas_h_bg {
+            (atlas_w_fg, atlas_h_fg, pixels_bg)
+        } else {
+            (atlas_w_fg, atlas_h_fg, Vec::new())
+        };
+
+    let mut packed = Vec::with_capacity(font.char_descs.len() * 11);
+    for d in &font.char_descs {
+        packed.extend_from_slice(&d.unicode.to_le_bytes());
+        packed.extend_from_slice(&d.offset_x.to_le_bytes());
+        packed.extend_from_slice(&d.offset_y.to_le_bytes());
+        packed.push(d.width);
+        packed.push(d.height);
+        packed.push(d.horizontal_offset_before as u8);
+        packed.push(d.horizontal_offset_after as u8);
+        packed.push(d.vertical_offset_before as u8);
+    }
+
+    FontData {
+        id: font.id,
+        num_glyphs: font.char_descs.len() as u32,
+        max_char_height: font.max_char_height,
+        max_char_width: font.max_char_width,
+        baseline_offset: font.baseline_offset,
+        atlas_width,
+        atlas_height,
+        pixels_fg,
+        pixels_bg,
+        char_descs_packed: packed,
+    }
+}
+
+/// Fetch + parse + decode an AC bitmap font (DAT type 0x40) along
+/// with its two atlas Textures, all in one async call. Empty result
+/// (`numGlyphs == 0`) means the walk failed; JS falls back to system
+/// font for that text run.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_font(font_id: u32) -> Result<FontData, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", font_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = fetch_font_impl(s, font_id);
+    })
+    .await?;
+    Ok(fetch_font_impl(source.as_ref(), font_id))
+}
+
 /// Phase 4 step 6 Phase B: surface decode with entity palette overrides.
 /// ACE's `CalculateObjDesc` (~/ace-server/Source/ACE.Server/WorldObjects/
 /// WorldObject_Networking.cs:1017 + Creature_Networking.cs:218) sets

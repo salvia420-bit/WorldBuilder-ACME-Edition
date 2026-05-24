@@ -399,3 +399,66 @@ acclient-runtime 24-byte+, RynthSuite/Chorizite C# decomps if any),
 and find the one where the immediately-following bytes parse as a
 valid MediaDesc. Then validate against all 101 retail Layout
 records. Estimated effort: 2-3 hours.
+
+## Downstream consumer — AC font wired into HUD (2026-05-24)
+
+Closes one of the handoff's "downstream work the parser coverage
+unlocks" follow-ons: *Font + LanguageString + StringTable → real AC
+font/text rendering in holtburger-web*.
+
+What landed:
+
+- `Font::unpack(&[u8])` parser helper mirrors the Surface/Texture
+  pattern so callers don't pull a direct `binrw` dep.
+- `BOOT_ESSENTIAL_PORTAL_IDS` now includes the canonical UI Font
+  (0x40000000) + its two A8 glyph-atlas Textures (0x06005EE5
+  foreground, 0x06005EE6 background). Re-bake to land them in
+  `boot.hba`; the per-shard HTTP fallback works in the meantime.
+- Wasm export `fetch_font(font_id) → FontData` walks Font → 2×Texture
+  → RGBA8 atlases. Returns char-desc rects packed at 11 bytes/glyph
+  (JS slices with DataView). Mirrors `fetch_surface_pixels`'s
+  prefetch-then-impl shape.
+- New JS runtime at `apps/holtburger-web/ui/ac_font.js`:
+  - `loadAcFont(id?)` — async, idempotent, concurrent-safe.
+  - `renderAcText(text, {color, scale, fontId?, shadow?})` — composes
+    glyphs from the foreground atlas via `destination-in` masking
+    onto a color-filled canvas; returns `HTMLCanvasElement`.
+  - `<ac-text>` custom element — wraps `renderAcText` with a
+    MutationObserver so `el.textContent = X` re-renders the canvas.
+- HUD migrations (representative, not exhaustive):
+  - `scene3d/nameplate_sprite.js` — 3D nameplates fall back to
+    monospace until the font runtime loads, then auto re-bake via
+    `disposeNameplateCache()` once-per-load.
+  - `scene3d/hud.js` — DOM nameplate overlay uses inner `<ac-text>`.
+  - `plugins/vitals-hud.js` — H/S/M labels + current/max numeric
+    readouts use `<ac-text>`.
+
+Verification (wire-agent + HUD intact, screenshot at
+`/mnt/wbterminal1/holtburger-captures/ac-font-hud-2026-05-24.png`):
+
+```
+acFontReady       : true
+acFontGlyphCount  : 1050
+atlasFgDims       : 1024 × 312
+acTextElements    : 73 in HUD
+assets.material   : 0 errors
+assets.animation  : 0 errors
+```
+
+Vitals HUD numeric readouts ("15 / 15", "30 / 30", "10 / 10") render
+in retail AC bitmap font as visible proof.
+
+Follow-ons (not in this push):
+
+- Re-bake `dist/` so Font + atlases land in `boot.hba` (no HTTP
+  round-trip on first text render).
+- Migrate the long tail of HUD plugins (spellbook, chat-panel, radar,
+  vendor-ui, hotbar, combat-bar, target-bar, inventory, examine-target,
+  main-panel, character-info, map-panel, allegiance-panel,
+  fellowship-panel, journal-panel, combat-hud, status-indicators) to
+  `<ac-text>` for label-and-number text. Same pattern as vitals-hud.
+- LanguageString + StringTable consumers — e.g. real AC localized
+  tooltips and key-binding labels. Parsers ship; no consumer wired.
+- Other 48 Font records (chat-window font, scrolling battle text,
+  spell-effect labels) — `fetch_font(id)` works for any of them;
+  pick by use case.

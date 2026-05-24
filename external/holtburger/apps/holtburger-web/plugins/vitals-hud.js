@@ -111,7 +111,10 @@ function buildVitalRow(type) {
   const rowEl = document.createElement("div");
   rowEl.className = `hud-vital ${cls}`.trim();
 
-  const labelEl = document.createElement("span");
+  // Labels and numeric readouts render in the retail AC bitmap font
+  // once the font runtime loads; until then they show as the page's
+  // default-styled text. `<ac-text>` is defined in `ui/ac_font.js`.
+  const labelEl = document.createElement("ac-text");
   labelEl.className = "hud-vital-label";
   labelEl.textContent = short;
   rowEl.appendChild(labelEl);
@@ -124,7 +127,7 @@ function buildVitalRow(type) {
   barEl.appendChild(fillEl);
   rowEl.appendChild(barEl);
 
-  const numsEl = document.createElement("span");
+  const numsEl = document.createElement("ac-text");
   numsEl.className = "hud-vital-nums";
   numsEl.textContent = "";
   rowEl.appendChild(numsEl);

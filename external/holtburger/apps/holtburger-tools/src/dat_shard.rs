@@ -75,7 +75,23 @@ pub const BOOT_ESSENTIAL_PORTAL_IDS: &[u32] = &[
     SpellTable::FILE_ID,
     XpTable::FILE_ID,
     MotionKinematics::FILE_ID,
+    // Canonical UI font + its two glyph-atlas Textures. The Font record
+    // declares the per-glyph rects; the two A8 (1024x312) Textures hold
+    // foreground (glyph mask) and background (drop-shadow / fill) pixel
+    // data. Baked into boot.hba so retail-style text rendering is
+    // available at session start with no extra HTTP round-trip.
+    UI_FONT_ID,
+    UI_FONT_ATLAS_FG_ID,
+    UI_FONT_ATLAS_BG_ID,
 ];
+
+/// Standard 16×16-cell UI Font record (1050 glyphs starting at U+0020).
+/// Holtburger's first canonical text font.
+pub const UI_FONT_ID: u32 = 0x40000000;
+/// Foreground glyph-mask Texture referenced by [`UI_FONT_ID`].
+pub const UI_FONT_ATLAS_FG_ID: u32 = 0x06005EE5;
+/// Background (drop-shadow / fill) Texture referenced by [`UI_FONT_ID`].
+pub const UI_FONT_ATLAS_BG_ID: u32 = 0x06005EE6;
 
 /// Caller-supplied dat-shard options. Mirrors the CLI argv shape.
 #[derive(Debug, Clone)]
@@ -857,16 +873,19 @@ mod tests {
             },
         };
         let keep = compute_boot_keep_set(&bundle, 0xA9B4);
-        // Catalog tables: 6 portal records.
+        // Catalog tables: 6 + UI font + 2 glyph atlases = 9 portal records.
         assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), CharGen::FILE_ID)));
         assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), SkillTable::FILE_ID)));
+        assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), UI_FONT_ID)));
+        assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), UI_FONT_ATLAS_FG_ID)));
+        assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), UI_FONT_ATLAS_BG_ID)));
         // Spawn 9-cell × 2 (terrain + LBI) = 18 cell records.
         assert!(keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0xA9B4_FFFF)));
         assert!(keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0xA9B4_FFFE)));
         assert!(keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0xA8B3_FFFF)));
-        // 6 catalog + 18 cell = 24 entries (no walk-discovered
+        // 9 catalog + 18 cell = 27 entries (no walk-discovered
         // records for an empty bundle).
-        assert_eq!(keep.len(), 6 + 18);
+        assert_eq!(keep.len(), 9 + 18);
         // Far-away cells are not in the keep set.
         assert!(!keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0x0000_FFFF)));
     }

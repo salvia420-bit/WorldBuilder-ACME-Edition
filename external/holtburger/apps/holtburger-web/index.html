@@ -890,6 +890,7 @@
         fetch_model_meshes,
         fetch_surface_pixels,
         fetch_surfaces_pixels,
+        fetch_font,
         fetchEntityModelRender,
         fetchEntityCycleFrames,
         fetchEntityAnimationKeyframes,
@@ -1279,6 +1280,7 @@
         window.__hbWasm = {
           fetch_surface_pixels: (id) => fetch_surface_pixels(id >>> 0),
           fetch_surfaces_pixels,
+          fetch_font: (id) => fetch_font(id >>> 0),
           hash32,
         };
 
@@ -1329,6 +1331,23 @@
             .catch((e) =>
               console.warn("[boot] eager WorldBootstrap prefetch failed:", e)
             );
+
+          // Kick off the canonical UI bitmap-font load — fire-and-forget.
+          // Once it resolves, `renderAcText` / `<ac-text>` start producing
+          // real retail glyphs instead of falling through to system fonts.
+          // Must run AFTER `init_resource_source` — `fetch_font` panics
+          // with "init_resource_source must be called before any fetch_*"
+          // otherwise.
+          import("./ui/ac_font.js")
+            .then((m) => m.loadAcFont())
+            .then((runtime) => {
+              if (runtime) {
+                console.log("[ac-font] runtime ready");
+              } else {
+                console.warn("[ac-font] runtime null after load (font missing?)");
+              }
+            })
+            .catch((err) => console.warn("[ac-font] preload failed:", err));
 
           // Phase E cold-boot plan (2026-05-21): eager-import the
           // scene3d module graph on page load when ?renderer=3d is

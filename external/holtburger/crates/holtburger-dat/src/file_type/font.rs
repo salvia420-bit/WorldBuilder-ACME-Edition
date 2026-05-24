@@ -69,6 +69,17 @@ pub struct Font {
     pub background_surface_data_id: u32,
 }
 
+impl Font {
+    /// Parse a Font record from the raw bytes returned by a
+    /// `ResourceSource`. Mirrors the [`Texture::unpack`] / [`Surface::unpack`]
+    /// pattern so wasm-side callers don't have to take a direct `binrw`
+    /// dependency.
+    pub fn unpack(data: &[u8]) -> binrw::BinResult<Self> {
+        let mut cursor = binrw::io::Cursor::new(data);
+        <Self as binrw::BinRead>::read(&mut cursor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
