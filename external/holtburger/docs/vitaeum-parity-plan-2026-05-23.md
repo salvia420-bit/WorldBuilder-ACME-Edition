@@ -159,9 +159,9 @@ with the rest documented as follow-on work:
 | Type | Prefix | Count | Status |
 |---|---|---|---|
 | StringTable | 0x23 | 15 | ✅ **Shipped** in B1 — clean schema, full parity test |
-| Layout (LayoutDesc) | 0x21 | 101 | ⏸ Deferred — `ElementDesc` has conditional `maskmap` fields gated on `StateDesc.IncorporationFlags`, which itself drags in `BaseProperty` (a 13+-variant union with typeswitch). Needs a dedicated spike to do right. |
-| ActionMap | 0x26 | 1 | ⏸ Deferred — DRW `dats.xml` body is empty (`<type name="ActionMap" .../>`), but the single retail record is 12,303 bytes. No schema source at all; requires full RE from acclient.h `struct InputManager`/`ActionMap` decomp. |
-| KeyMap (MasterInputMap) | 0x14 | 2 | ⏸ Deferred — well-defined sub-types but uses `guid` primitive + `Dictionary` wire format (distinct from `HashTable`/`PackableHashTable`/`IntrusiveHashTable`) that holtburger-dat doesn't yet implement. |
+| KeyMap (MasterInputMap) | 0x14 | 2 | ✅ **Shipped** in B1.b — `guid` as 16-byte array, "Dictionary" wire format is just N (key, value) pairs with no header, full parity test (2/2 records, every byte consumed) |
+| Layout (LayoutDesc) | 0x21 | 101 | ⏸ **Deferred with larger scope** — discovered during B1.b that `BaseProperty`'s on-wire format is `u32 MasterPropertyId + typed_value_bytes` (DRW's dats.xml `_propertyType` field is misleading). The value type comes from looking up `MasterPropertyId` in the **MasterProperty** record (DAT 0x39). Requires shipping MasterProperty as a prerequisite, which itself drags in `BasePropertyDesc` with recursive Default/Max/Min `BaseProperty` values. Realistic scope: ~4–6 hours of careful work + cross-validation. Tracked as Milestone D. |
+| ActionMap | 0x26 | 1 | ⏸ **Deferred with explicit rationale** — DRW `dats.xml` body is empty (`<type name="ActionMap" .../>`), but the single retail record is 12,303 bytes. No schema source at all; requires reverse-engineering from acclient.h `InputManager` / `ActionMap` decomp plus the actual record bytes. Tracked as a separate spike (no current consumer in holtburger). |
 
 The three deferred types are tracked as a follow-on B1.b commit and
 should not block B2.
@@ -219,6 +219,37 @@ When all three milestones land:
 - Pre-fix outputs (for diffs): `/mnt/wbterminal1/tmp/claude-scratch/vitaeum-compare/{portal,cell,local}.list`
 - Always write logs/intermediates under `/mnt/wbterminal1/tmp/claude-scratch/` per `[[feedback_use_external_drives_for_scratch]]`.
 
+## Milestone D (proposed follow-on — Layout chain)
+
+Discovered while pushing into B1.b. To unlock the Layout parser we need
+to ship a chain of prerequisites first:
+
+1. **MasterProperty** (DAT 0x39, 1 record) — EnumMapperData + Dictionary
+   of `BasePropertyDesc`. The single record acts as a runtime type table
+   that BaseProperty values look themselves up against.
+2. **BasePropertyDesc** — per-property metadata (Type, Group, Provider,
+   Default/Max/Min BaseProperty, PatchFlags, etc.).
+3. **BaseProperty** (with MasterProperty context) — on the wire it's
+   `u32 MasterPropertyId + typed_value_bytes`; the value width comes
+   from `master_property.properties[id].type`. Recursive: Array and
+   Struct variants embed nested BaseProperty.
+4. **MediaDesc** — small typeswitch (Movie, Alpha, Animation, Cursor,
+   Image, Jump, Message), all simple sub-types.
+5. **StateDesc** — composed of Properties (`BaseProperty[]`) and Media
+   (`MediaDesc[]`).
+6. **ElementDesc** — conditional maskmap fields on
+   `StateDesc.IncorporationFlags` (X/Y/Width/Height/ZLevel), recursive
+   States (Dictionary<UIStateId, StateDesc>), recursive Children
+   (Dictionary<u32, ElementDesc>).
+7. **LayoutDesc** — top-level: id + Width + Height +
+   HashTable<u32, ElementDesc>.
+
+Estimated effort: 4–6 hours with proper cross-validation against retail
+records and the DRW EOR-test suite.
+
 ## Status log
 
-- 2026-05-23 — Baseline `c32a6f8f` pushed. This doc created. Starting Milestone A.
+- 2026-05-23 — Baseline `c32a6f8f` pushed. This doc created. Milestones
+  A, C1–C4, B1 (StringTable), B2 (PaletteSet + DegradeInfo) shipped.
+  B1.b: KeyMap shipped. Layout + ActionMap deferred with explicit
+  scope notes — see Milestone D above for the Layout chain.
