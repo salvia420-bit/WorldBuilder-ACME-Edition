@@ -7,6 +7,7 @@
 // experiments.
 
 import { getPaletteSetDiagSnapshot } from "../../ui/ac_palette_set.js";
+import { getPaletteDiagSnapshot } from "../../ui/ac_palette.js";
 
 const DEFAULT_MAX_FAILURES = 20;
 
@@ -28,6 +29,12 @@ export function attachPalettes(diag) {
   const palettes = {
     loaded: new Map(),    // setId → {paletteCount, loadedAt}
     failures: [],
+    // Wave 7.7 — individual Palette (DAT 0x04) tracking, parallel to
+    // PaletteSet (DAT 0x0F). Reader runtime is `ui/ac_palette.js`;
+    // observation here lets the harness audit which raw colour
+    // tables a dye-picker or character-creator actually pulled.
+    palettesLoaded: new Map(),    // paletteId → {colorCount, loadedAt}
+    paletteFailures: [],
     maxFailures: DEFAULT_MAX_FAILURES,
 
     onLoadSucceeded(meta) {
@@ -54,10 +61,46 @@ export function attachPalettes(diag) {
       } catch (_) {}
     },
 
-    /** Read-through to the runtime cache. */
+    /**
+     * Wave 7.7 — individual-Palette load hooks. Mirror onLoad* /
+     * onLoadFailed pattern but keyed by paletteId (DAT 0x04) instead
+     * of setId (DAT 0x0F).
+     */
+    onPaletteLoaded(meta) {
+      try {
+        const m = meta || {};
+        const pid = (m.paletteId ?? 0) >>> 0;
+        palettes.palettesLoaded.set(pid, {
+          paletteId: hexId(pid),
+          colorCount: (m.colorCount ?? 0) | 0,
+          loadedAt: performance.now(),
+        });
+      } catch (_) {}
+    },
+
+    onPaletteLoadFailed(meta) {
+      try {
+        const m = meta || {};
+        pushCapped(palettes.paletteFailures, {
+          paletteId: hexId(m.paletteId ?? 0),
+          error: errStr(m.error),
+          source: m.source || "unknown",
+          ts: performance.now(),
+        }, palettes.maxFailures);
+      } catch (_) {}
+    },
+
+    /** Read-through to BOTH runtime caches (PaletteSet + Palette). */
     cached() {
-      try { return getPaletteSetDiagSnapshot(); }
-      catch (_) { return { sets: [] }; }
+      const setSnap = (() => {
+        try { return getPaletteSetDiagSnapshot(); }
+        catch (_) { return { sets: [] }; }
+      })();
+      const palSnap = (() => {
+        try { return getPaletteDiagSnapshot(); }
+        catch (_) { return { palettes: [] }; }
+      })();
+      return { sets: setSnap.sets, palettes: palSnap.palettes };
     },
 
     summary() {
@@ -66,6 +109,9 @@ export function attachPalettes(diag) {
         loaded: palettes.loaded.size,
         cached: cached.sets.length,
         failures: palettes.failures.length,
+        palettesLoaded: palettes.palettesLoaded.size,
+        palettesCached: cached.palettes.length,
+        paletteFailures: palettes.paletteFailures.length,
       };
     },
 
@@ -73,13 +119,16 @@ export function attachPalettes(diag) {
       return {
         ts: new Date().toISOString(),
         loaded: Array.from(palettes.loaded.values()),
+        palettesLoaded: Array.from(palettes.palettesLoaded.values()),
         cached: palettes.cached(),
         failures: [...palettes.failures],
+        paletteFailures: [...palettes.paletteFailures],
       };
     },
 
     reset() {
       palettes.failures.length = 0;
+      palettes.paletteFailures.length = 0;
     },
   };
 

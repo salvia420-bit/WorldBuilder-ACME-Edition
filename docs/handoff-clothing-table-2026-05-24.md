@@ -63,9 +63,23 @@ No additional wire-up needed — call `getCloSubPalEffect(rt, paletteTemplate)` 
 
 The dye chain (CloSubPalette → PaletteSet → Palette → texture pixel substitution) is already handled by the wasm-side `fetch_entity_surface_pixels_impl` (lib.rs:~L5209) when `sub_palettes` triples arrive via the spawn path. The remaining work for "Clothing II":
 
-- Wire a dye-picker plugin UI (consumer of `getCloSubPalEffect`)
-- Add `__diag.clothing.dyeApplications` ring to observe which (sub_palette_id, offset, length) triples actually drove a surface fetch
-- Verify retail-fidelity by screenshotting dyed armor sets against retail screenshots
+**Phase A — Dye observability** ✅ shipped Wave 7.7 (2026-05-24).
+- `__diag.clothing.dyeApplications` counter + `recentDyes` ring (max 50) + `dyesBySource` bucket ({spawn, hot-swap}).
+- Hook fires from `_spawnImpl` AND `_applyAppearanceHotSwap` BEFORE the `fetchEntitySurfacesPixels` call so observation lands even when the wasm call throws.
+- Wire-agent boot drain on Holtburg yielded 37 organic spawn-time dye applications including the local player carrying `paletteId 0x0400007E` + 9 sub-palette triples across 19 surface DIDs — proves W7.3's server-pushed dye path was always working; W7.7 just makes it auditable.
+
+**Phase B — Palette reader** ✅ shipped Wave 7.7.
+- `fetch_palette(palette_id) → JSON` wasm export + `ui/ac_palette.js` runtime: `loadPalette(id)`, `getPalette(id)`, `paletteColor(rt, idx) → {r, g, b, a}`.
+- `__diag.palettes` extended with `palettesLoaded` + `paletteFailures` + read-through to `getPaletteDiagSnapshot()`.
+- Verified against retail Palette 0x040005F3: loads 2048 colours (note: not always 256 — i32 count in wire format), sample[0] = {a:255, r:24, g:7, b:0}.
+
+**Phase C — CPU preview compositor** (deferred): walk `getCloSubPalEffect → PaletteSet → pickPaletteForShade → Palette` and apply ranges to a base icon. Two implementation strategies:
+- (i) Call wasm `fetch_entity_surface_pixels_impl` directly with synthetic `(palette_id, sub_palettes)` triples — guaranteed byte-parity with the spawn-time render path; one wasm round-trip per swatch; cache by `(clothingId, template, shade)`.
+- (ii) Hand-roll CPU compositor — faster per-preview but risks parity drift if the wasm path ever changes. **Recommend (i).**
+
+**Phase D — Dye-picker plugin UI** (deferred): `plugins/dye-picker.js` with paletteTemplate thumbnail list + shade slider + live preview pane. Optional "apply to equipped" toggle drives `applyAppearance(localGuid, {paletteId, subPalettes})` for whole-mesh local preview (reverts on next server ObjectCreate).
+
+**Wiki-grounded design note:** Per the fandom dye-pages (Dyeing, Vial of Hennacin Dye, Hennacin Dye Pot) and `WorldObject_Networking.cs::CalculateObjDesc`, dye commit is a server-side recipe flow (Dye Pot + Dyeable armor → cooking check → updates item's `PaletteTemplate` + `Shade` properties → server emits the resulting `ModelData.{palette_id, sub_palettes}`). The CLIENT is purely a renderer of pre-computed overlays — any dye-picker UI is preview-only; the actual commit lives in the inventory recipe-application flow.
 
 ### D. Hot-swap optimization for applyAppearance — ✅ SHIPPED (Wave 7.5)
 

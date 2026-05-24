@@ -1049,6 +1049,23 @@ export class EntityManager {
       try {
         const dids = new Uint32Array([...allSurfaceDids]);
         if (dids.length > 0) {
+          // Wave 7.7 — dye observability. Fires for every spawn that
+          // arrives with non-trivial palette overlays (W7.3 server-
+          // pushed dyes + any local applyAppearance preview). Captures
+          // the (guid, surfaceDids, paletteId, subPalettes) triple so
+          // the diag harness can audit which entities ARE actually
+          // paying the dye compositor cost vs spawning with empty
+          // overlays. Fires BEFORE the wasm call so we observe even
+          // when the call throws.
+          try {
+            window.__diag?.clothing?.onDyeApplication?.({
+              guid,
+              source: "spawn",
+              surfaceDidCount: dids.length,
+              paletteId,
+              subPaletteTripleCount: (subPalettes.length / 3) | 0,
+            });
+          } catch (_) {}
           const results = await this.wasmExports.fetchEntitySurfacesPixels(
             dids,
             paletteId,
@@ -2253,6 +2270,16 @@ export class EntityManager {
     if (hasPaletteSubs && typeof this.wasmExports?.fetchEntitySurfacesPixels === "function") {
       const dids = new Uint32Array([...allSurfaceDids]);
       if (dids.length > 0) {
+        // Wave 7.7 — dye observability on the hot-swap path too.
+        try {
+          window.__diag?.clothing?.onDyeApplication?.({
+            guid,
+            source: "hot-swap",
+            surfaceDidCount: dids.length,
+            paletteId,
+            subPaletteTripleCount: (subPalettes.length / 3) | 0,
+          });
+        } catch (_) {}
         const results = await this.wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes);
         entityMaterials = new Map();
         const newOwnedMaterials = [];

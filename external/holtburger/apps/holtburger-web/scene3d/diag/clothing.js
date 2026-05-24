@@ -10,6 +10,7 @@ import { getClothingDiagSnapshot } from "../../ui/ac_clothing.js";
 
 const DEFAULT_MAX_FAILURES = 20;
 const DEFAULT_MAX_APPEARANCE_CHANGES = 30;
+const DEFAULT_MAX_DYE_APPLICATIONS = 50;
 
 function errStr(e) {
   if (e == null) return "(null)";
@@ -35,8 +36,21 @@ export function attachClothing(diag) {
     // errors out.
     appearanceChanges: 0,
     recentChanges: [],
+    // Wave 7.7 — dye observability. Fires from
+    // `EntityManager._spawnImpl` AND `_applyAppearanceHotSwap` when
+    // `fetchEntitySurfacesPixels` is invoked with non-trivial
+    // overlays (paletteId != 0 || sub_palettes.length > 0). Captures
+    // (guid, surfaceDids, paletteId, subPaletteTripleCount, source)
+    // so the harness can audit which entities are actually paying
+    // the dye compositor cost. Counter + ring; no diff against any
+    // oracle (matches the rest of __diag.clothing's observation-
+    // only discipline).
+    dyeApplications: 0,
+    recentDyes: [],
+    dyesBySource: { spawn: 0, "hot-swap": 0 },
     maxFailures: DEFAULT_MAX_FAILURES,
     maxRecentChanges: DEFAULT_MAX_APPEARANCE_CHANGES,
+    maxRecentDyes: DEFAULT_MAX_DYE_APPLICATIONS,
 
     onLoadSucceeded(meta) {
       try {
@@ -84,6 +98,30 @@ export function attachClothing(diag) {
       } catch (_) {}
     },
 
+    /**
+     * Wave 7.7 — fired when fetchEntitySurfacesPixels runs with
+     * non-trivial overlays. Meta:
+     *   {guid, source: "spawn"|"hot-swap", surfaceDidCount,
+     *    paletteId, subPaletteTripleCount}
+     */
+    onDyeApplication(meta) {
+      try {
+        const m = meta || {};
+        clothing.dyeApplications += 1;
+        const source = m.source || "unknown";
+        if (source in clothing.dyesBySource) clothing.dyesBySource[source] += 1;
+        else clothing.dyesBySource[source] = 1;
+        pushCapped(clothing.recentDyes, {
+          guid: hexId(m.guid ?? 0),
+          source,
+          surfaceDidCount: (m.surfaceDidCount ?? 0) | 0,
+          paletteId: hexId(m.paletteId ?? 0),
+          subPaletteTripleCount: (m.subPaletteTripleCount ?? 0) | 0,
+          ts: performance.now(),
+        }, clothing.maxRecentDyes);
+      } catch (_) {}
+    },
+
     /** Read-through to the runtime cache. */
     cached() {
       try { return getClothingDiagSnapshot(); }
@@ -97,6 +135,8 @@ export function attachClothing(diag) {
         cached: cached.tables.length,
         failures: clothing.failures.length,
         appearanceChanges: clothing.appearanceChanges,
+        dyeApplications: clothing.dyeApplications,
+        dyesBySource: { ...clothing.dyesBySource },
       };
     },
 
@@ -108,6 +148,9 @@ export function attachClothing(diag) {
         failures: [...clothing.failures],
         appearanceChanges: clothing.appearanceChanges,
         recentChanges: [...clothing.recentChanges],
+        dyeApplications: clothing.dyeApplications,
+        recentDyes: [...clothing.recentDyes],
+        dyesBySource: { ...clothing.dyesBySource },
       };
     },
 
@@ -115,6 +158,9 @@ export function attachClothing(diag) {
       clothing.failures.length = 0;
       clothing.appearanceChanges = 0;
       clothing.recentChanges.length = 0;
+      clothing.dyeApplications = 0;
+      clothing.recentDyes.length = 0;
+      clothing.dyesBySource = { spawn: 0, "hot-swap": 0 };
     },
   };
 

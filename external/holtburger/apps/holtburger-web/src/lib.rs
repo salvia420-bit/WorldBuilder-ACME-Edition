@@ -5354,6 +5354,49 @@ pub async fn fetch_clothing_table(clothing_id: u32) -> Result<String, JsValue> {
     serde_json::to_string(&ct).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Fetch one Palette (DAT 0x04) — a 256-colour ARGB lookup table.
+///
+/// Returns JSON: `{ "id": <u32>, "colors": [<argb_u32>, ...] }`.
+/// Each `colors[i]` is an ARGB u32 (alpha in the high byte). JS parses
+/// with `JSON.parse` and the runtime in `ui/ac_palette.js` exposes
+/// `paletteColor(palette, index) → {r,g,b,a}` helpers.
+///
+/// Wave 7.7 (2026-05-24). Used by the dye-preview foundation — Phase
+/// B of `handoff-clothing-table-2026-05-24.md` § C. The spawn-time
+/// dye compositor (lib.rs::fetch_entity_surface_pixels_impl) already
+/// reads Palette records internally; this export is for any plugin
+/// that needs to inspect the raw colour table (dye picker thumbnails,
+/// character creation swatches, debug overlays).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_palette(palette_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::Palette;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", palette_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", palette_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let p = match Palette::unpack(&bytes) {
+        Ok(p) => p,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let mut out = String::with_capacity(p.colors.len() * 12 + 32);
+    out.push_str("{\"id\":");
+    out.push_str(&p.id.to_string());
+    out.push_str(",\"colors\":[");
+    let mut first = true;
+    for c in &p.colors {
+        if !first { out.push(','); }
+        first = false;
+        out.push_str(&c.to_string());
+    }
+    out.push_str("]}");
+    Ok(out)
+}
+
 /// Fetch one GfxObjDegradeInfo (DAT 0x11) — the distance-banded LOD
 /// chain a renderer consults when picking which alternate GfxObj to
 /// draw for a given camera distance.
