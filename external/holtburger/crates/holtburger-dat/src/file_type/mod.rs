@@ -6,6 +6,7 @@ pub mod clothing;
 pub mod combat_maneuver_table;
 pub mod degrade_info;
 pub mod did_mapper;
+pub mod dual_did_mapper;
 pub mod dxt;
 pub mod enum_mapper;
 pub mod env_cell;
@@ -51,6 +52,7 @@ pub use clothing::{
 pub use combat_maneuver_table::{CombatManeuver, CombatManeuverTable};
 pub use degrade_info::{GfxObjDegradeInfo, GfxObjInfo};
 pub use did_mapper::DidMapper;
+pub use dual_did_mapper::DualDidMapper;
 pub use enum_mapper::{EnumMapper, NumberingType};
 pub use env_cell::EnvCell;
 pub use environment::{CellStruct, Environment};
