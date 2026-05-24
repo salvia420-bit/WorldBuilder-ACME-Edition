@@ -168,10 +168,33 @@ pub fn parse_hex_u32(value: &str) -> std::result::Result<u32, String> {
 }
 
 pub fn read_input_bundle(opts: &DatShardOptions) -> Result<LoadedBundle> {
-    if let Some(input) = &opts.input_hba {
-        read_from_hba(input)
-    } else {
-        read_from_canonical_dats(opts)
+    // If both --input AND any --eor-* path are given, MERGE them:
+    // start from the HBA, then layer canonical-DAT records on top.
+    // The HBA carries non-retail namespaces (e.g. `holtburger/core`'s
+    // MotionKinematics) that the raw DATs lack; the raw DATs carry
+    // the full retail namespaces (`eor/cell`, `eor/local`, etc.) that
+    // a pre-built HBA may have pruned. Either alone leaves a gap;
+    // together they cover the union.
+    let want_canonical = opts.eor_portal.is_some()
+        || opts.eor_cell.is_some()
+        || opts.eor_local.is_some();
+    match (&opts.input_hba, want_canonical) {
+        (Some(input), false) => read_from_hba(input),
+        (None, true) => read_from_canonical_dats(opts),
+        (Some(input), true) => {
+            let mut hba_bundle = read_from_hba(input)?;
+            let dat_bundle = read_from_canonical_dats(opts)?;
+            for (key, bytes) in dat_bundle.records {
+                hba_bundle.records.insert(key, bytes);
+            }
+            // Use the canonical-DAT iteration numbers when present
+            // (more authoritative than the HBA's zeros).
+            hba_bundle.source_meta = dat_bundle.source_meta;
+            Ok(hba_bundle)
+        }
+        (None, false) => Err(ToolError::Validation(
+            "--input or one of --eor-portal/--eor-cell/--eor-local required".into(),
+        )),
     }
 }
 
@@ -213,16 +236,21 @@ fn read_from_hba(path: &Path) -> Result<LoadedBundle> {
 }
 
 fn read_from_canonical_dats(opts: &DatShardOptions) -> Result<LoadedBundle> {
-    let portal = opts
-        .eor_portal
-        .as_deref()
-        .ok_or_else(|| ToolError::Validation("--eor-portal or --input required".into()))?;
-
+    // Each canonical DAT is independently optional — the merge caller
+    // in `read_input_bundle` may have already provided some namespaces
+    // via `--input`. Iterations default to 0 for any DAT that wasn't
+    // passed.
     let mut records: BTreeMap<(String, u32), Vec<u8>> = BTreeMap::new();
-    let portal_db = DatDatabase::new(portal)
-        .map_err(|e| ToolError::DatOpen(portal.to_path_buf(), e.to_string()))?;
-    let portal_iter = portal_db.header.master_map_id;
-    ingest_dat_into(EOR_PORTAL_NAMESPACE, &portal_db, &mut records)?;
+
+    let portal_iter = if let Some(portal) = opts.eor_portal.as_deref() {
+        let db = DatDatabase::new(portal)
+            .map_err(|e| ToolError::DatOpen(portal.to_path_buf(), e.to_string()))?;
+        let it = db.header.master_map_id;
+        ingest_dat_into(EOR_PORTAL_NAMESPACE, &db, &mut records)?;
+        it
+    } else {
+        0
+    };
 
     let cell_iter = if let Some(path) = opts.eor_cell.as_deref() {
         let db = DatDatabase::new(path)

@@ -17,9 +17,13 @@ use holtburger_tools::error::Result;
     about = "Slice a holtburger asset bundle into content-addressable shards + a manifest + a boot pack"
 )]
 struct Args {
-    /// Existing HBA bundle to shard. Mutually-exclusive with
-    /// `--eor-portal` / `--eor-cell` / `--eor-local`.
-    #[arg(long, value_name = "HBA", conflicts_with_all = ["eor_portal", "eor_cell", "eor_local"])]
+    /// Existing HBA bundle to shard. Can be combined with
+    /// `--eor-portal` / `--eor-cell` / `--eor-local` — when both are
+    /// passed, the HBA is read first (so non-retail namespaces like
+    /// `holtburger/core` are preserved) and the canonical DATs layer
+    /// on top (so `eor/cell|portal|local` records the HBA may have
+    /// pruned re-appear).
+    #[arg(long, value_name = "HBA")]
     input: Option<PathBuf>,
 
     /// Canonical retail `client_portal.dat`. Read into the
