@@ -253,3 +253,54 @@ records and the DRW EOR-test suite.
   A, C1–C4, B1 (StringTable), B2 (PaletteSet + DegradeInfo) shipped.
   B1.b: KeyMap shipped. Layout + ActionMap deferred with explicit
   scope notes — see Milestone D above for the Layout chain.
+- 2026-05-23 — Milestone D (Layout chain) pushed:
+  - D1: MasterProperty + BasePropertyDesc + BaseProperty (commit
+    `a9b068fd`). Retail 0x39000001 parses identically to DRW's EOR
+    test (384 IdToStringMap entries + 383 BasePropertyDesc records,
+    102 with defaults, 27 with available_properties). Caught a
+    missing u8 bucket-size byte between EnumMapperData and
+    num_properties that's nowhere in dats.xml or acclient.h —
+    `MasterProperty.cs:33` was the only source.
+  - D2: MediaDesc (11 of 13 MediaType variants) + StateDesc with
+    composed BaseProperty/MediaDesc lists (commit `166a79be`). All
+    unit tests pass; no retail-DAT parity here because StateDesc
+    only exists inside Layout.
+  - D3: ElementDesc (recursive Children + States, conditional
+    maskmap fields on IncorporationFlags) + LayoutDesc (this
+    commit). Parser is structurally complete; retail parity test
+    is `#[ignore]`-d pending a StringInfo wire-format spike (see
+    "Milestone D StringInfo follow-on" below).
+
+## Milestone D StringInfo follow-on (deferred RE)
+
+D3's parity test exposed that `BaseProperty::StringInfo` is the last
+wire-format unknown blocking full Layout retail parity. Three knowns
+gathered during D3 execution:
+
+1. DRW dats.xml declares StringInfo as 12 bytes
+   (byte + u32 + u32 + byte + byte + byte) but explicitly marks the
+   schema `TODO: this doesn't match dats`. We confirmed it doesn't
+   match — implementing the 12-byte schema and parsing retail
+   Layout 0x21000000 desyncs at the next MediaDesc (reads invalid
+   type 0x100).
+2. acclient.h `struct StringInfo` (line 30308) is 8 fields:
+   `PStringBase<char> m_strToken`, `u32 m_stringID`,
+   `IDClass<DataID> m_tableID`, `HashTable<u32, StringInfoData*>
+   m_variables`, `PStringBase<u16> m_LiteralValue`, `char
+   m_Override`, `PStringBase<char> m_strEnglish`,
+   `PStringBase<char> m_strComment`. This is the runtime in-memory
+   form — wire serialization isn't guaranteed to mirror it.
+3. The downstream symptoms of an unresolved StringInfo are
+   `unknown MasterProperty key 0x00000000`,
+   `unknown MediaType 0x...`, `duplicate-type mismatch` errors, and
+   absurd allocation sizes from misread CompressedUInt counts in
+   recursive ElementDesc.Children — all of which the parity test
+   buckets as "blocked on StringInfo".
+
+Suggested approach: probe a small Layout with exactly one StringInfo
+BaseProperty (Layout 0x21000000 with 1 StringInfo at offset 0xD1 is
+the simplest), enumerate plausible wire layouts (DRW 12-byte,
+acclient-runtime 24-byte+, RynthSuite/Chorizite C# decomps if any),
+and find the one where the immediately-following bytes parse as a
+valid MediaDesc. Then validate against all 101 retail Layout
+records. Estimated effort: 2-3 hours.

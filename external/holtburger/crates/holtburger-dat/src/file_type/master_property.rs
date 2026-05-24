@@ -253,12 +253,11 @@ pub enum BaseProperty {
     InstanceId(u32),
     Bitfield32(u32),
     Bitfield64(u64),
-    /// String-info value. DRW marks the schema as `TODO: this doesn't
-    /// match dats`; we expose the raw bytes the parser consumed for
-    /// downstream re-interpretation rather than commit to a layout
-    /// we can't validate. Length is set to whatever the property
-    /// consumes between the type tag and the next outer field.
-    StringInfoOpaque(Vec<u8>),
+    // StringInfo variant intentionally omitted — DRW's 12-byte
+    // schema is wrong (their own TODO note + empirically desyncs the
+    // parser); acclient.h's `struct StringInfo` is the in-memory
+    // shape, may not match the wire. Reading hits the error path in
+    // `read_value_bytes` below.
     /// Recursive Array — entries use the master-lookup form.
     Array(Vec<BaseProperty>),
     /// Recursive Struct — entries use the master-lookup form, keyed
@@ -357,7 +356,17 @@ impl BaseProperty {
             BasePropertyType::StringInfo => Err(binrw::Error::Custom {
                 pos: reader.stream_position().unwrap_or(0),
                 err: Box::new(
-                    "BaseProperty StringInfo wire layout is undocumented in DRW (\"TODO: this doesn't match dats\"); cannot parse without trusted schema".to_string(),
+                    "BaseProperty StringInfo wire layout is not yet known. DRW dats.xml \
+                    declares 12 bytes (byte+u32+u32+byte+byte+byte) but marks it \
+                    `TODO: this doesn't match dats`; tried implementing per that schema \
+                    against retail Layout 0x21000000 and the parser desyncs (next \
+                    MediaDesc reads invalid type 0x100), so DRW's claim is wrong. \
+                    acclient.h `struct StringInfo` is the in-memory shape (8 fields \
+                    including PStrings + a HashTable<u32, StringInfoData*>) but the \
+                    on-wire serialization isn't guaranteed to mirror it. Needs a \
+                    dedicated RE spike — see Milestone D StringInfo follow-on in the \
+                    vitaeum-parity plan doc."
+                        .to_string(),
                 ),
             }),
             BasePropertyType::Invalid
