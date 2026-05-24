@@ -187,7 +187,7 @@ Single commit covering both:
 ### Skipped (low value at current scope)
 
 - RenderTexture (2), RenderMaterial (1), MaterialModifier (1), MaterialInstance (1), RenderMesh (?), MutateFilter (?) — modern-pipeline/AC2-era types, mostly unused in retail-1.6 timeframe
-- DataIDMapper (22), DualDataIDMapper (5), EnumMapper (40) — generic lookup tables, write only if a consumer demands
+- ~~DataIDMapper (22), DualDataIDMapper (5), EnumMapper (40)~~ ✅ **All three shipped 2026-05-23 (post-D close)** via the ACE-first discipline: `EnumMapper` (40 records, 3567 entries, commit `20cd820b`), `DidMapper`/DataIDMapper (22 records, 1130 entries, commit `eac9d462`), `DualDidMapper` (5 records, 610 entries, commit `69e5afd9`). All byte-exact, all gated on retail DAT presence. ActionMap (1 record, commit `36628df7`) also shipped from the previously-deferred list.
 - DatabaseProperties (2), MasterProperty (1), StringState (1), StringTableString (?), BSPNodeType (?) — rare system records
 
 Document why each is skipped if a future audit asks.
