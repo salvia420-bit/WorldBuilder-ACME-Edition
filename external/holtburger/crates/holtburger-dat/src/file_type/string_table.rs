@@ -92,6 +92,16 @@ pub struct StringTable {
     pub strings: HashMap<u32, StringTableString>,
 }
 
+impl StringTable {
+    /// Parse a StringTable record from raw bytes. Mirrors the
+    /// `Texture::unpack` / `Font::unpack` pattern so wasm-side callers
+    /// don't take a direct `binrw` dependency.
+    pub fn unpack(data: &[u8]) -> binrw::BinResult<Self> {
+        let mut cursor = binrw::io::Cursor::new(data);
+        <Self as binrw::BinRead>::read_options(&mut cursor, binrw::Endian::Little, ())
+    }
+}
+
 impl BinRead for StringTable {
     type Args<'a> = ();
 

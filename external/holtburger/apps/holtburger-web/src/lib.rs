@@ -5085,6 +5085,82 @@ pub async fn fetch_font(font_id: u32) -> Result<FontData, JsValue> {
     Ok(fetch_font_impl(source.as_ref(), font_id))
 }
 
+/// Fetch a single StringTable record (DAT type 0x23) and return its
+/// (hashKey, text) entries as a JSON string. The JS side parses with
+/// `JSON.parse` and builds a `Map<number, string>` for O(1) lookup by
+/// the hash key the retail UI uses (e.g. 0x014152D5 → "Left Alt").
+/// String tables in the English local DAT live in the `eor/local`
+/// namespace; the few in portal.dat live in `eor/portal`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_string_table(table_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::StringTable;
+    let source = global_source::global_source();
+    let ns = if (table_id >> 24) as u8 == 0x23 { "eor/local" } else { "eor/portal" };
+    let initial = [ResourceKey::new(ns, table_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new(ns, table_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok("[]".to_string()),
+    };
+    let table = match StringTable::unpack(&bytes) {
+        Ok(t) => t,
+        Err(_) => return Ok("[]".to_string()),
+    };
+    // Build JSON manually — avoids pulling serde_json or
+    // serde_wasm_bindgen. Output shape: [[hashKey, "text"], ...].
+    let mut out = String::with_capacity(table.strings.len() * 32);
+    out.push('[');
+    let mut first = true;
+    for (k, v) in &table.strings {
+        if !first { out.push(','); }
+        first = false;
+        out.push('[');
+        out.push_str(&k.to_string());
+        out.push(',');
+        out.push('"');
+        for c in v.strings.first().map(|s| s.as_str()).unwrap_or("").chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => {
+                    out.push_str(&format!("\\u{:04x}", c as u32));
+                }
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out.push(']');
+    }
+    out.push(']');
+    Ok(out)
+}
+
+/// Fetch a single LanguageString record (DAT type 0x31). Free-form
+/// locale text bound to a string ID — used for tooltips, dialog
+/// snippets, item-name keys. Returns the decoded text as a JS string,
+/// or an empty string if the record is missing.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_language_string(string_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::LanguageString;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", string_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", string_id)) else {
+        return Ok(String::new());
+    };
+    match LanguageString::unpack(&bytes) {
+        Ok(ls) => Ok(ls.value),
+        Err(_) => Ok(String::new()),
+    }
+}
+
 /// Phase 4 step 6 Phase B: surface decode with entity palette overrides.
 /// ACE's `CalculateObjDesc` (~/ace-server/Source/ACE.Server/WorldObjects/
 /// WorldObject_Networking.cs:1017 + Creature_Networking.cs:218) sets

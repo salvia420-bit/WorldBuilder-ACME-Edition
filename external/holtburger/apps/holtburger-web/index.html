@@ -891,6 +891,8 @@
         fetch_surface_pixels,
         fetch_surfaces_pixels,
         fetch_font,
+        fetch_string_table,
+        fetch_language_string,
         fetchEntityModelRender,
         fetchEntityCycleFrames,
         fetchEntityAnimationKeyframes,
@@ -1289,6 +1291,8 @@
           fetch_surface_pixels: (id) => fetch_surface_pixels(id >>> 0),
           fetch_surfaces_pixels,
           fetch_font: (id) => fetch_font(id >>> 0),
+          fetch_string_table: (id) => fetch_string_table(id >>> 0),
+          fetch_language_string: (id) => fetch_language_string(id >>> 0),
           hash32,
         };
 
@@ -1357,6 +1361,18 @@
               }
             })
             .catch((err) => console.warn("[ac-font] preload failed:", err));
+
+          // Preload the input-binding StringTable (0x23000005) — this
+          // is the table ActionMap (0x26000001) references for human-
+          // readable key/action labels. Future input-rebind UI uses
+          // `acString(0x23000005, hashId)` to render retail labels.
+          // Fire-and-forget; failures land in console.warn only.
+          import("./ui/ac_strings.js")
+            .then((m) => m.loadStringTable(0x23000005))
+            .then((map) => {
+              console.log(`[ac-strings] input-table loaded: ${map.size} entries`);
+            })
+            .catch((err) => console.warn("[ac-strings] preload failed:", err));
 
           // Phase E cold-boot plan (2026-05-21): eager-import the
           // scene3d module graph on page load when ?renderer=3d is

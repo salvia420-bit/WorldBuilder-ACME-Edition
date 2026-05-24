@@ -31,6 +31,16 @@ pub struct LanguageString {
     pub value: String,
 }
 
+impl LanguageString {
+    /// Parse a LanguageString record from raw bytes. Mirrors the
+    /// `Font::unpack` / `Texture::unpack` pattern so wasm-side callers
+    /// don't take a direct `binrw` dependency.
+    pub fn unpack(data: &[u8]) -> binrw::BinResult<Self> {
+        let mut cursor = binrw::io::Cursor::new(data);
+        <Self as binrw::BinRead>::read_options(&mut cursor, binrw::Endian::Little, ())
+    }
+}
+
 impl BinRead for LanguageString {
     type Args<'a> = ();
 
