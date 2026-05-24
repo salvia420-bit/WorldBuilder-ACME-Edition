@@ -253,11 +253,20 @@ pub enum BaseProperty {
     InstanceId(u32),
     Bitfield32(u32),
     Bitfield64(u64),
-    // StringInfo variant intentionally omitted — DRW's 12-byte
-    // schema is wrong (their own TODO note + empirically desyncs the
-    // parser); acclient.h's `struct StringInfo` is the in-memory
-    // shape, may not match the wire. Reading hits the error path in
-    // `read_value_bytes` below.
+    /// String-info value (DRW marks the schema TODO; we RE'd the
+    /// 16-byte wire layout against retail Layout 0x21000000). Stored
+    /// as four raw u32 fields — exact field semantics deferred to a
+    /// follow-on once we can correlate the values against retail
+    /// StringTable lookups. Layout: `[u32; 4]` little-endian.
+    StringInfo {
+        /// Possibly the StringInfo "token" or self-type tag — in
+        /// retail Layout 0x21000000 this equals the surrounding
+        /// `BasePropertyDesc.name` for the property.
+        word0: u32,
+        word1: u32,
+        word2: u32,
+        word3: u32,
+    },
     /// Recursive Array — entries use the master-lookup form.
     Array(Vec<BaseProperty>),
     /// Recursive Struct — entries use the master-lookup form, keyed
@@ -328,7 +337,16 @@ impl BaseProperty {
                             .to_string(),
                     ),
                 })?;
-                let n = read_u32_le(reader)? as usize;
+                let n_raw = read_u32_le(reader)?;
+                if n_raw > 65_536 {
+                    return Err(binrw::Error::Custom {
+                        pos: reader.stream_position().unwrap_or(0),
+                        err: Box::new(format!(
+                            "BaseProperty Array count {n_raw} exceeds sanity cap (upstream desync)"
+                        )),
+                    });
+                }
+                let n = n_raw as usize;
                 let mut items = Vec::with_capacity(n);
                 for _ in 0..n {
                     items.push(Self::read_with_master(reader, master)?);
@@ -344,7 +362,7 @@ impl BaseProperty {
                     ),
                 })?;
                 let _bucket = read_u8(reader)?;
-                let n = read_u8(reader)? as usize;
+                let n = read_u8(reader)? as usize; // u8, capped at 255 by type
                 let mut map = HashMap::with_capacity(n);
                 for _ in 0..n {
                     let k = read_u32_le(reader)?;
@@ -353,22 +371,19 @@ impl BaseProperty {
                 }
                 Ok(Self::Struct(map))
             }
-            BasePropertyType::StringInfo => Err(binrw::Error::Custom {
-                pos: reader.stream_position().unwrap_or(0),
-                err: Box::new(
-                    "BaseProperty StringInfo wire layout is not yet known. DRW dats.xml \
-                    declares 12 bytes (byte+u32+u32+byte+byte+byte) but marks it \
-                    `TODO: this doesn't match dats`; tried implementing per that schema \
-                    against retail Layout 0x21000000 and the parser desyncs (next \
-                    MediaDesc reads invalid type 0x100), so DRW's claim is wrong. \
-                    acclient.h `struct StringInfo` is the in-memory shape (8 fields \
-                    including PStrings + a HashTable<u32, StringInfoData*>) but the \
-                    on-wire serialization isn't guaranteed to mirror it. Needs a \
-                    dedicated RE spike — see Milestone D StringInfo follow-on in the \
-                    vitaeum-parity plan doc."
-                        .to_string(),
-                ),
-            }),
+            BasePropertyType::StringInfo => {
+                // RE'd against retail Layout 0x21000000 in the
+                // Milestone D StringInfo follow-on: 16 bytes = four
+                // u32 LE words. DRW's 12-byte schema is explicitly
+                // marked TODO and is wrong (validated by alignment
+                // check — element_id at +0x15 hits the dict-key
+                // exactly when we consume 16 bytes here, not 12).
+                let word0 = read_u32_le(reader)?;
+                let word1 = read_u32_le(reader)?;
+                let word2 = read_u32_le(reader)?;
+                let word3 = read_u32_le(reader)?;
+                Ok(Self::StringInfo { word0, word1, word2, word3 })
+            }
             BasePropertyType::Invalid
             | BasePropertyType::LongInteger
             | BasePropertyType::String

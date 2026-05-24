@@ -271,6 +271,65 @@ records and the DRW EOR-test suite.
     is `#[ignore]`-d pending a StringInfo wire-format spike (see
     "Milestone D StringInfo follow-on" below).
 
+## Milestone D StringInfo follow-on — partial (2026-05-23)
+
+First spike on StringInfo wire-format RE. Partial progress shipped;
+the schema is not fully resolved but the failure surface is now
+correctly observable.
+
+What landed (partial):
+- StringInfo decode placeholder: 16 bytes as four little-endian u32
+  words. This isn't a derivation from a documented source — it's an
+  alignment-based guess. The evidence: in retail Layout 0x21000000,
+  consuming 16 bytes after the StringInfo's master_id makes
+  child-element 1's `element_id` field at offset 0xE6 align exactly
+  to `0x1000041C`, which is the dict-key that wraps that ElementDesc.
+  No other consume-length (4, 8, 12, 17, 20, 24) produces that
+  alignment.
+- Sanity caps in `layout::checked_count`, `state_desc::checked_count`,
+  and `master_property.rs`'s Array variant. Without these, a misread
+  CompressedUInt from an upstream StringInfo desync produces a
+  ~268-million-element HashMap::with_capacity that OOM-kills the
+  test process. Caps surface a clear error instead.
+- `tests/string_info_probe.rs` dumps every StringInfo BasePropertyDesc
+  from MasterProperty (20 in retail) — useful for the next spike to
+  correlate keys with actual UI text.
+- `tests/layout_parity.rs` extended to bucket "exceeds sanity cap"
+  errors alongside "unknown MediaType" / "unknown MasterProperty key"
+  as downstream symptoms of an upstream StringInfo desync.
+
+Result on retail (Layout parity test, run via
+`cargo test -- --ignored --nocapture`):
+- 2/101 layouts fully parse (the no-StringInfo ones)
+- 94/101 blocked on downstream desync (the StringInfo-bearing ones)
+- 5/101 parse but with size mismatch (separate Layout-level shape gap)
+
+What's still wrong: the 16-byte assumption only holds for Layout
+0x21000000. Other layouts immediately desync, indicating StringInfo
+is variable-length on the wire. Most likely candidates:
+
+1. `m_strToken` is a real `PStringBase<char>` (CompressedUInt length
+   + bytes) and the 16-byte layout we observed in 0x21000000 was
+   coincidentally a fixed-binary-token form. Length byte 0x17 = 23
+   would mean the 23 bytes following are the token (binary or
+   ASCII).
+2. `m_variables` HashTable is non-empty in some StringInfos and
+   adds bytes proportional to its count.
+3. Some other PStringBase field (m_LiteralValue, m_strEnglish,
+   m_strComment) is non-trivially long.
+
+Next steps for the deeper RE:
+- Diff several StringInfo records (across multiple Layout records)
+  byte-by-byte and look for a length-prefixed pattern.
+- Try implementing StringInfo as the full acclient.h `struct
+  StringInfo` (8 fields including PStrings and a HashTable) and see
+  if it works.
+- Cross-check against Chorizite `ACBindings.Generated.Game.Properties`
+  StringInfoBaseProperty if it has wire-format hints.
+- If all else fails, fuzz-search: try every length 4-128, for each
+  scan retail layouts, find the one length that maximizes successful
+  parses.
+
 ## Milestone D StringInfo follow-on (deferred RE)
 
 D3's parity test exposed that `BaseProperty::StringInfo` is the last

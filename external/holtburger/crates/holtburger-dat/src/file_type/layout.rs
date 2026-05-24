@@ -56,6 +56,31 @@ use binrw::io::Seek;
 use std::collections::HashMap;
 use std::io::Read;
 
+/// Cap on dictionary entry counts inside Layout parsing. A misread
+/// CompressedUInt (typically from a StringInfo desync) can produce
+/// bogus huge counts; without this cap, HashMap::with_capacity will
+/// try to allocate gigabytes and OOM-kill the process. The cap chosen
+/// is well above any realistic UI count (the biggest retail Layout
+/// has under 200 nested elements) but below catastrophic allocation
+/// territory.
+const LAYOUT_DICT_COUNT_CAP: u32 = 65_536;
+
+fn checked_count<R: Read + Seek>(
+    reader: &mut R,
+    raw: u32,
+    field: &'static str,
+) -> binrw::BinResult<usize> {
+    if raw > LAYOUT_DICT_COUNT_CAP {
+        return Err(binrw::Error::Custom {
+            pos: reader.stream_position().unwrap_or(0),
+            err: Box::new(format!(
+                "{field} count {raw} exceeds sanity cap {LAYOUT_DICT_COUNT_CAP} (likely upstream desync — see StringInfo follow-on)"
+            )),
+        });
+    }
+    Ok(raw as usize)
+}
+
 mod incorporation_flags {
     pub const X: u32 = 0x02;
     pub const Y: u32 = 0x04;
@@ -136,7 +161,8 @@ impl ElementDesc {
 
         // States dictionary (header: u8 bucket_size + CompressedUInt count).
         let _states_bucket = u8::read(reader)?;
-        let num_states = read_compressed_u32(reader)? as usize;
+        let raw_states = read_compressed_u32(reader)?;
+        let num_states = checked_count(reader, raw_states, "ElementDesc.states")?;
         let mut states = HashMap::with_capacity(num_states);
         for _ in 0..num_states {
             let key = u32::read_le(reader)?;
@@ -146,7 +172,8 @@ impl ElementDesc {
 
         // Children dictionary — recursive ElementDesc.
         let _children_bucket = u8::read(reader)?;
-        let num_children = read_compressed_u32(reader)? as usize;
+        let raw_children = read_compressed_u32(reader)?;
+        let num_children = checked_count(reader, raw_children, "ElementDesc.children")?;
         let mut children = HashMap::with_capacity(num_children);
         for _ in 0..num_children {
             let key = u32::read_le(reader)?;
@@ -198,7 +225,8 @@ impl LayoutDesc {
 
         // Elements HashTable header.
         let _bucket = u8::read(reader)?;
-        let num_elements = read_compressed_u32(reader)? as usize;
+        let raw_elements = read_compressed_u32(reader)?;
+        let num_elements = checked_count(reader, raw_elements, "LayoutDesc.elements")?;
         let mut elements = HashMap::with_capacity(num_elements);
         for _ in 0..num_elements {
             let key = u32::read_le(reader)?;

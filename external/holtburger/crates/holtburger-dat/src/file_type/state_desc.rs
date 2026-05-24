@@ -25,6 +25,27 @@ use crate::utils::read_compressed_u32;
 use binrw::io::Seek;
 use std::io::Read;
 
+/// Same sanity cap as `layout::LAYOUT_DICT_COUNT_CAP`. Surfaces a clear
+/// error on misread CompressedUInt counts before HashMap::with_capacity
+/// can OOM the process.
+const STATE_COUNT_CAP: u32 = 65_536;
+
+fn checked_count<R: Read + Seek>(
+    reader: &mut R,
+    raw: u32,
+    field: &'static str,
+) -> binrw::BinResult<usize> {
+    if raw > STATE_COUNT_CAP {
+        return Err(binrw::Error::Custom {
+            pos: reader.stream_position().unwrap_or(0),
+            err: Box::new(format!(
+                "{field} count {raw} exceeds sanity cap {STATE_COUNT_CAP} (likely upstream desync)"
+            )),
+        });
+    }
+    Ok(raw as usize)
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct StateDesc {
     /// UIStateId enum (raw u32; see DRW's UIStateId table for canonical
@@ -52,13 +73,15 @@ impl StateDesc {
         let incorporation_flags = u32::read_le(reader)?;
         let _num_buckets = u8::read(reader)?;
 
-        let num_properties = read_compressed_u32(reader)? as usize;
+        let raw_props = read_compressed_u32(reader)?;
+        let num_properties = checked_count(reader, raw_props, "StateDesc.properties")?;
         let mut properties = Vec::with_capacity(num_properties);
         for _ in 0..num_properties {
             properties.push(BaseProperty::read_with_master(reader, master)?);
         }
 
-        let num_media = read_compressed_u32(reader)? as usize;
+        let raw_media = read_compressed_u32(reader)?;
+        let num_media = checked_count(reader, raw_media, "StateDesc.media")?;
         let mut media = Vec::with_capacity(num_media);
         for _ in 0..num_media {
             media.push(MediaDesc::read_le(reader)?);

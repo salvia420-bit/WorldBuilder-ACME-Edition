@@ -157,7 +157,8 @@ fn all_retail_layouts_parse() {
                     || msg.contains("unknown MediaType")
                     || msg.contains("unknown BasePropertyType")
                     || msg.contains("duplicate-type mismatch")
-                    || msg.contains("failed to fill whole buffer");
+                    || msg.contains("failed to fill whole buffer")
+                    || msg.contains("exceeds sanity cap");
                 if downstream_of_string_info {
                     string_info_blocked += 1;
                 } else {
