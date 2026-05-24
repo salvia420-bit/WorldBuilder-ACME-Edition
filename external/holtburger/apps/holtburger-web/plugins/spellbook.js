@@ -38,6 +38,8 @@
 // Their signatures are UNCHANGED — combat-bar.js does not need to be
 // touched as part of PR-Z.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
 const SPELL_BAR_SLOTS = 8;
 // Phase I.2 — number of numbered spell-bar tabs (retail had 7).
@@ -414,7 +416,7 @@ function showSpellDetail(meta, anchorX, anchorY, componentNames) {
 
   const name = document.createElement("div");
   name.className = "hb-sb-detail-name";
-  name.textContent = meta.name;
+  setAcText(name, meta.name);
   el.appendChild(name);
 
   const meta_str = document.createElement("div");
@@ -423,15 +425,17 @@ function showSpellDetail(meta, anchorX, anchorY, componentNames) {
   const durStr = meta.duration && meta.duration > 0
     ? ` · ${meta.duration >= 60 ? `${Math.round(meta.duration / 60)}m` : `${meta.duration}s`}`
     : "";
-  meta_str.textContent =
+  setAcText(
+    meta_str,
     `${schoolName} · Level ${meta.level} · ${meta.mana} mana${durStr}` +
-    (meta.untargeted ? " · self-cast" : " · targeted");
+      (meta.untargeted ? " · self-cast" : " · targeted"),
+  );
   el.appendChild(meta_str);
 
   if (meta.desc) {
     const desc = document.createElement("div");
     desc.className = "hb-sb-detail-desc";
-    desc.textContent = meta.desc;
+    setAcText(desc, meta.desc);
     el.appendChild(desc);
   }
 
@@ -439,7 +443,7 @@ function showSpellDetail(meta, anchorX, anchorY, componentNames) {
     const comps = document.createElement("div");
     comps.className = "hb-sb-detail-comps";
     const names = meta.components.map((c) => resolveComponentName(c, componentNames));
-    comps.textContent = `Components: ${names.join(", ")}`;
+    setAcText(comps, `Components: ${names.join(", ")}`);
     el.appendChild(comps);
   }
 
@@ -490,7 +494,7 @@ function doMount(parentEl, ctx) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "hb-sb-tab";
-    btn.textContent = String(i + 1);
+    setAcText(btn, String(i + 1));
     btn.dataset.tabIdx = String(i);
     btn.title = `Spell bar ${i + 1}`;
     btn.addEventListener("click", () => {
@@ -570,7 +574,7 @@ function doMount(parentEl, ctx) {
   // ── Hint band ──────────────────────────────────────────────────
   const hint = document.createElement("div");
   hint.className = "hb-sb-hint";
-  hint.textContent = "Double-click a spell to add it to the magic combat bar. Drag to a specific slot. Right-click for details. Delete to forget.";
+  setAcText(hint, "Double-click a spell to add it to the magic combat bar. Drag to a specific slot. Right-click for details. Delete to forget.");
   root.appendChild(hint);
 
   // ── List ───────────────────────────────────────────────────────
@@ -615,17 +619,17 @@ function doMount(parentEl, ctx) {
 
     const name = document.createElement("span");
     name.className = "hb-sb-row-name";
-    name.textContent = meta.name;
+    setAcText(name, meta.name);
     row.appendChild(name);
 
     const schoolTag = document.createElement("span");
     schoolTag.className = `hb-sb-row-tag school-${meta.school}`;
-    schoolTag.textContent = SCHOOL_NAMES[meta.school] ?? "?";
+    setAcText(schoolTag, SCHOOL_NAMES[meta.school] ?? "?");
     row.appendChild(schoolTag);
 
     const manaTag = document.createElement("span");
     manaTag.className = "hb-sb-row-tag";
-    manaTag.textContent = `${meta.mana}m`;
+    setAcText(manaTag, `${meta.mana}m`);
     row.appendChild(manaTag);
 
     // Phase J.1 — single-click selects (highlights) the row.
@@ -660,7 +664,7 @@ function doMount(parentEl, ctx) {
     if (!catalog) {
       // Loading state — hide all known rows + show the loader.
       for (const { row } of rowMap.values()) row.style.display = "none";
-      emptyEl.textContent = "Loading spell catalog…";
+      setAcText(emptyEl, "Loading spell catalog…");
       emptyEl.style.display = "";
       return;
     }
@@ -730,9 +734,12 @@ function doMount(parentEl, ctx) {
 
     // 4) Empty-state message.
     if (visibleCount === 0) {
-      emptyEl.textContent = knownIds.size === 0
-        ? "No spells known."
-        : "No spells match the current filter.";
+      setAcText(
+        emptyEl,
+        knownIds.size === 0
+          ? "No spells known."
+          : "No spells match the current filter.",
+      );
       emptyEl.style.display = "";
     } else {
       emptyEl.style.display = "none";

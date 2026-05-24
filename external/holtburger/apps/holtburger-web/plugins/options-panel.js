@@ -42,6 +42,7 @@
 // no pending state to persist yet.
 
 import * as graphicsSettings from "../ui/graphics_settings.js";
+import { setAcText } from "../ui/ac_font.js";
 
 const VIEW_STYLE_ID = "hb-options-view-style";
 
@@ -317,7 +318,7 @@ export const view = {
       b.type = "button";
       b.className = "hb-opt-tab" + (t.id === activeId ? " active" : "");
       b.dataset.tab = t.id;
-      b.textContent = t.label;
+      setAcText(b, t.label);
       b.addEventListener("click", () => switchTo(t.id));
       tabsEl.appendChild(b);
       tabBtns[t.id] = b;
@@ -335,7 +336,7 @@ export const view = {
     const cancelBtn = document.createElement("button");
     cancelBtn.type = "button";
     cancelBtn.className = "hb-opt-btn";
-    cancelBtn.textContent = "Cancel";
+    setAcText(cancelBtn, "Cancel");
     cancelBtn.addEventListener("click", () => {
       // graphics_settings.js commits on each control change, so a
       // pure "cancel = discard pending edits" path would need an
@@ -345,7 +346,7 @@ export const view = {
     const applyBtn = document.createElement("button");
     applyBtn.type = "button";
     applyBtn.className = "hb-opt-btn";
-    applyBtn.textContent = "Apply";
+    setAcText(applyBtn, "Apply");
     applyBtn.addEventListener("click", () => {
       // Persistence is per-control today; explicit Apply is a no-op
       // pending the diff-based pending-state model. Flash the button
@@ -356,7 +357,7 @@ export const view = {
     const okBtn = document.createElement("button");
     okBtn.type = "button";
     okBtn.className = "hb-opt-btn primary";
-    okBtn.textContent = "OK";
+    setAcText(okBtn, "OK");
     okBtn.addEventListener("click", () => {
       window.__mainPanel?.closeView?.();
     });

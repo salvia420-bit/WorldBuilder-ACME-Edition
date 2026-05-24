@@ -14,6 +14,8 @@
 // .hb-radar-disk wrapper rotates by `-heading` and the cardinals
 // counter-rotate so they stay upright relative to the screen.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const OVERLAY_ID = "hb-radar";
 const WIDTH = 120;
 const HEIGHT = 140;
@@ -250,7 +252,7 @@ export function mount(_ctx) {
   // by the rAF tick below once getPlayerWorldPos() returns valid data.
   const coords = document.createElement("div");
   coords.className = "hb-radar-coords";
-  coords.textContent = "";
+  setAcText(coords, "");
   overlay.appendChild(coords);
 
   document.body.appendChild(overlay);
@@ -295,7 +297,7 @@ export function mount(_ctx) {
     }
     try {
       const pos = sw?.getPlayerWorldPos?.();
-      if (pos) coords.textContent = fmtCoord(pos.x, pos.z);
+      if (pos) setAcText(coords, fmtCoord(pos.x, pos.z));
     } catch (_) {}
     rafId = requestAnimationFrame(tick);
   }

@@ -19,6 +19,8 @@
 // radar plugin uses. We compute (lbX, lbY) from world XYZ via the
 // 192-unit-per-landblock pitch.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const STYLE_ID = "hb-map-view-style";
 
 let stylesInjected = false;
@@ -137,10 +139,10 @@ export const view = {
     meta.className = "hb-map-meta";
     const dateEl = document.createElement("span");
     dateEl.className = "hb-map-meta-date";
-    dateEl.textContent = "Date: —";
+    setAcText(dateEl, "Date: —");
     const coordEl = document.createElement("span");
     coordEl.className = "hb-map-meta-coord";
-    coordEl.textContent = "—";
+    setAcText(coordEl, "—");
     meta.appendChild(dateEl);
     meta.appendChild(coordEl);
     root.appendChild(meta);
@@ -159,9 +161,9 @@ export const view = {
     const footer = document.createElement("div");
     footer.className = "hb-map-footer";
     const lbEl = document.createElement("span");
-    lbEl.textContent = "LB —";
+    setAcText(lbEl, "LB —");
     const helpEl = document.createElement("span");
-    helpEl.textContent = "Drag to pan · M closes";
+    setAcText(helpEl, "Drag to pan · M closes");
     footer.appendChild(lbEl);
     footer.appendChild(helpEl);
     root.appendChild(footer);
@@ -223,11 +225,11 @@ export const view = {
       player.style.top  = `${yPx}px`;
       player.style.display = "block";
       // Footer coords
-      coordEl.textContent = fmtCoord(pos.x, pos.z);
+      setAcText(coordEl, fmtCoord(pos.x, pos.z));
       const lbX = Math.max(0, Math.min(253, Math.floor(pos.x / LB_PITCH)));
       const lbY = Math.max(0, Math.min(253, Math.floor(pos.z / LB_PITCH)));
       const lbKey = (lbX << 8) | lbY;
-      lbEl.textContent = `LB 0x${lbKey.toString(16).toUpperCase().padStart(4, "0")} (${lbX}, ${lbY})`;
+      setAcText(lbEl, `LB 0x${lbKey.toString(16).toUpperCase().padStart(4, "0")} (${lbX}, ${lbY})`);
     }
 
     function updateDate() {
@@ -235,7 +237,7 @@ export const view = {
       // AC_LAUNCH_UNIX_EPOCH = 941500800 (1999-11-01), 11.34× compression.
       // We'll just show the current real-world date for now.
       const d = new Date();
-      dateEl.textContent = `Date: ${d.toLocaleDateString()}`;
+      setAcText(dateEl, `Date: ${d.toLocaleDateString()}`);
     }
     updateDate();
 

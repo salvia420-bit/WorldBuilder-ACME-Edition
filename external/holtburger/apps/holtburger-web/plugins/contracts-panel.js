@@ -15,6 +15,8 @@
 // Contract data not yet exposed by SessionHandle — view shows
 // placeholder rows with progress + cooldown columns.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const STYLE_ID = "hb-contracts-view-style";
 
 let stylesInjected = false;
@@ -216,7 +218,7 @@ export const view = {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "hb-contracts-tab" + (t.current ? " active" : "");
-      btn.textContent = t.label;
+      setAcText(btn, t.label);
       if (t.swap) btn.addEventListener("click", () => window.__mainPanel?.showView?.(t.swap));
       tabs.appendChild(btn);
     }
@@ -240,11 +242,11 @@ export const view = {
     detail.className = "hb-contracts-detail";
     const detailTitle = document.createElement("div");
     detailTitle.className = "hb-contracts-detail-title";
-    detailTitle.textContent = "—";
+    setAcText(detailTitle, "—");
     detail.appendChild(detailTitle);
     const detailBody = document.createElement("div");
     detailBody.className = "hb-contracts-detail-body";
-    detailBody.textContent = "Click a contract to view details.";
+    setAcText(detailBody, "Click a contract to view details.");
     detail.appendChild(detailBody);
 
     let selected = null;
@@ -252,14 +254,14 @@ export const view = {
       selected = c;
       list.querySelectorAll(".hb-contracts-row.selected").forEach((r) => r.classList.remove("selected"));
       rowEl?.classList.add("selected");
-      detailTitle.textContent = c.name;
-      detailBody.textContent = c.desc;
+      setAcText(detailTitle, c.name);
+      setAcText(detailBody, c.desc);
     }
 
     if (SAMPLE_CONTRACTS.length === 0) {
       const empty = document.createElement("div");
       empty.className = "hb-contracts-empty";
-      empty.textContent = "No active contracts. Speak with a contract NPC to accept one.";
+      setAcText(empty, "No active contracts. Speak with a contract NPC to accept one.");
       list.appendChild(empty);
     } else {
       for (const c of SAMPLE_CONTRACTS) {
@@ -268,15 +270,15 @@ export const view = {
         row.dataset.id = String(c.id);
         const name = document.createElement("span");
         name.className = "name";
-        name.textContent = c.name;
+        setAcText(name, c.name);
         row.appendChild(name);
         const prog = document.createElement("span");
         prog.className = "progress";
-        prog.textContent = c.progress;
+        setAcText(prog, c.progress);
         row.appendChild(prog);
         const cd = document.createElement("span");
         cd.className = "cooldown";
-        cd.textContent = c.cooldown;
+        setAcText(cd, c.cooldown);
         row.appendChild(cd);
         row.addEventListener("click", () => selectRow(c, row));
         list.appendChild(row);
@@ -295,7 +297,7 @@ export const view = {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "hb-contracts-btn";
-      btn.textContent = a.label;
+      setAcText(btn, a.label);
       btn.title = a.desc;
       btn.addEventListener("click", () => {
         if (!selected) {

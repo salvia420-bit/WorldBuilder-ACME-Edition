@@ -17,6 +17,8 @@
 // 1070 runtime: skills = [id, current, base, trained_state, xp]
 // per skill, attributes = [id, current, base, buffed_max] per attr.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const VIEW_STYLE_ID = "hb-charinfo-view-style";
 
 let stylesInjected = false;
@@ -204,12 +206,12 @@ function renderHead(headEl, stats) {
   headEl.innerHTML = "";
   const nameEl = document.createElement("div");
   nameEl.className = "hb-ci-head-name";
-  nameEl.textContent = stats?.name || "—";
+  setAcText(nameEl, stats?.name || "—");
   headEl.appendChild(nameEl);
   const levelEl = document.createElement("div");
   levelEl.className = "hb-ci-head-level";
   const level = stats?.levelInfo ? (tupleArrayAt(stats.levelInfo, 0) ?? 1) : 1;
-  levelEl.textContent = `Level ${level}`;
+  setAcText(levelEl, `Level ${level}`);
   headEl.appendChild(levelEl);
 }
 
@@ -219,7 +221,7 @@ function renderAttributes(bodyEl, stats, _skillTable) {
   if (!a) {
     const e = document.createElement("div");
     e.className = "hb-ci-empty";
-    e.textContent = "No attributes yet.";
+    setAcText(e, "No attributes yet.");
     bodyEl.appendChild(e);
     return;
   }
@@ -301,13 +303,13 @@ function renderTitles(bodyEl, _stats) {
 function section(text) {
   const el = document.createElement("div");
   el.className = "hb-ci-section";
-  el.textContent = text;
+  setAcText(el, text);
   return el;
 }
 function emptyMsg(text) {
   const el = document.createElement("div");
   el.className = "hb-ci-empty";
-  el.textContent = text;
+  setAcText(el, text);
   return el;
 }
 function row(iconUrl, name, value) {
@@ -319,11 +321,11 @@ function row(iconUrl, name, value) {
   el.appendChild(ic);
   const n = document.createElement("div");
   n.className = "hb-ci-name";
-  n.textContent = name;
+  setAcText(n, name);
   el.appendChild(n);
   const v = document.createElement("div");
   v.className = "hb-ci-value";
-  v.textContent = String(value);
+  setAcText(v, String(value));
   el.appendChild(v);
   return el;
 }
@@ -356,7 +358,7 @@ export const view = {
       btn.type = "button";
       btn.className = "hb-ci-tab" + (t.id === activeTab ? " active" : "");
       btn.dataset.tab = t.id;
-      btn.textContent = t.label;
+      setAcText(btn, t.label);
       btn.addEventListener("click", () => setTab(t.id));
       tabsEl.appendChild(btn);
       tabBtns[t.id] = btn;
@@ -374,9 +376,9 @@ export const view = {
     const footerEl = document.createElement("div");
     footerEl.className = "hb-ci-footer";
     const footL = document.createElement("span");
-    footL.textContent = "—";
+    setAcText(footL, "—");
     const footR = document.createElement("span");
-    footR.textContent = "";
+    setAcText(footR, "");
     footerEl.appendChild(footL);
     footerEl.appendChild(footR);
     root.appendChild(footerEl);
@@ -401,8 +403,8 @@ export const view = {
       }
       // Footer: skill credits if available.
       const lv = stats?.levelInfo;
-      footL.textContent = lv ? `XP: ${tupleArrayAt(lv, 1) ?? 0}` : "—";
-      footR.textContent = lv ? `Next: ${tupleArrayAt(lv, 2) ?? 0}` : "";
+      setAcText(footL, lv ? `XP: ${tupleArrayAt(lv, 1) ?? 0}` : "—");
+      setAcText(footR, lv ? `Next: ${tupleArrayAt(lv, 2) ?? 0}` : "");
     }
 
     // Load skill table then render.

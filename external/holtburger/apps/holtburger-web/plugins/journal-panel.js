@@ -19,6 +19,8 @@
 // the parchment frame + tab pattern. When server adds a `journal()`
 // method to SessionHandle we wire real entries here.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const STYLE_ID = "hb-journal-view-style";
 
 let stylesInjected = false;
@@ -213,7 +215,7 @@ export const view = {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "hb-journal-tab" + (t.current ? " active" : "");
-      btn.textContent = t.label;
+      setAcText(btn, t.label);
       if (t.swap) {
         btn.addEventListener("click", () => window.__mainPanel?.showView?.(t.swap));
       }

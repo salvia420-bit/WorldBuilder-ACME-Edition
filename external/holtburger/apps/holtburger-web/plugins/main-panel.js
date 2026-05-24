@@ -19,6 +19,8 @@
 // gmInventoryUI + gmExaminationUI relationship — different
 // gmXxxUI instances mount into the same container slot.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const OVERLAY_ID = "hb-main-panel";
 const STYLE_ID = "hb-main-panel-style";
 
@@ -148,7 +150,7 @@ function _mountCurrent() {
     // destroying the panel. The caller should have checked first.
     console.warn(`[main-panel] no view registered: ${id} (showing not-yet-built placeholder)`);
     _runCleanup();
-    titleName.textContent = id.charAt(0).toUpperCase() + id.slice(1);
+    setAcText(titleName, id.charAt(0).toUpperCase() + id.slice(1));
     bodyEl.innerHTML = `<div style="padding:24px;color:var(--hb-text-muted);font-style:italic;text-align:center;font-size:11px;">View "${id}" not built yet.</div>`;
     currentCleanup = null;
     overlay.dataset.stackDepth = String(stack.length);
@@ -157,7 +159,7 @@ function _mountCurrent() {
   }
   _runCleanup();
   const name = (typeof view.nameFor === "function") ? view.nameFor(ctx) : (view.name ?? id);
-  titleName.textContent = name;
+  setAcText(titleName, name);
   try {
     currentCleanup = view.mount(bodyEl, ctx) || null;
   } catch (e) {
@@ -248,17 +250,17 @@ export function mount(_ctx) {
   titleEl.className = "hb-mp-title";
   backBtn = document.createElement("span");
   backBtn.className = "hb-mp-back";
-  backBtn.textContent = "←";
+  setAcText(backBtn, "←");
   backBtn.title = "Back to previous";
   backBtn.addEventListener("click", () => closeView());
   titleEl.appendChild(backBtn);
   titleName = document.createElement("span");
   titleName.className = "hb-mp-title-name";
-  titleName.textContent = "Panel";
+  setAcText(titleName, "Panel");
   titleEl.appendChild(titleName);
   closeBtn = document.createElement("span");
   closeBtn.className = "hb-mp-close";
-  closeBtn.textContent = "×";
+  setAcText(closeBtn, "×");
   closeBtn.title = "Close";
   closeBtn.addEventListener("click", () => hide());
   titleEl.appendChild(closeBtn);

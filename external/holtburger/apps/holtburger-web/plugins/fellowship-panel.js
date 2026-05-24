@@ -17,6 +17,8 @@
 // the same set used by plugins/allegiance-panel.js. Fellowship is the
 // active tab here; the other tabs swap main-panel views.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const STYLE_ID = "hb-fellow-view-style";
 
 let stylesInjected = false;
@@ -217,7 +219,7 @@ function emit(msgText, cat = 0) {
 function buildAloneState(root, fellowshipName, opts, onCreate) {
   const empty = document.createElement("div");
   empty.className = "hb-fellow-empty";
-  empty.textContent = "You do not belong to a fellowship.";
+  setAcText(empty, "You do not belong to a fellowship.");
   root.appendChild(empty);
 
   const divider = document.createElement("div");
@@ -228,7 +230,7 @@ function buildAloneState(root, fellowshipName, opts, onCreate) {
   form.className = "hb-fellow-form";
   const h = document.createElement("div");
   h.className = "hb-fellow-form-h";
-  h.textContent = "Fellowship Name:";
+  setAcText(h, "Fellowship Name:");
   form.appendChild(h);
   const input = document.createElement("input");
   input.type = "text";
@@ -254,7 +256,7 @@ function buildAloneState(root, fellowshipName, opts, onCreate) {
     dot.className = "dot";
     row.appendChild(dot);
     const txt = document.createElement("span");
-    txt.textContent = o.label;
+    setAcText(txt, o.label);
     txt.style.color = "var(--hb-text-cream)";
     row.appendChild(txt);
     row.addEventListener("click", () => {
@@ -271,7 +273,7 @@ function buildAloneState(root, fellowshipName, opts, onCreate) {
   const createBtn = document.createElement("button");
   createBtn.type = "button";
   createBtn.className = "hb-fellow-create";
-  createBtn.textContent = "Create Fellowship";
+  setAcText(createBtn, "Create Fellowship");
   createBtn.addEventListener("click", () => onCreate(input.value.trim()));
   actions.appendChild(createBtn);
   root.appendChild(actions);
@@ -287,11 +289,11 @@ function buildInState(root, members) {
     head.className = "hb-fellow-member-h";
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = m.name;
+    setAcText(name, m.name);
     head.appendChild(name);
     const lvl = document.createElement("span");
     lvl.className = "level";
-    lvl.textContent = `Lv ${m.level ?? "?"}`;
+    setAcText(lvl, `Lv ${m.level ?? "?"}`);
     head.appendChild(lvl);
     row.appendChild(head);
     for (const kind of ["health", "stamina", "mana"]) {
@@ -330,7 +332,7 @@ export const view = {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "hb-fellow-tab" + (t.current ? " active" : "");
-      btn.textContent = t.label;
+      setAcText(btn, t.label);
       if (t.swap) {
         btn.addEventListener("click", () => window.__mainPanel?.showView?.(t.swap));
       } else if (!t.current) {

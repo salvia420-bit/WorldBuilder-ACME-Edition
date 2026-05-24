@@ -46,6 +46,8 @@
  *     Confirm in the queue tab flushes via the multi-item wire op.
  */
 
+import { setAcText } from "../ui/ac_font.js";
+
 const STYLE_ID = "hb-vendor-bar-styles";
 const OVERLAY_ID = "hb-vendor-bar";
 
@@ -519,7 +521,7 @@ function buildOverlay() {
     const b = document.createElement("button");
     b.className = "hvb-tab" + (t.id === "items" ? " active" : "");
     b.dataset.tab = t.id;
-    b.textContent = t.label;
+    setAcText(b, t.label);
     b.addEventListener("click", () => switchTab(t.id));
     tabs.appendChild(b);
   }
@@ -597,7 +599,7 @@ function buildOverlay() {
     b.className = `hvb-btn hvb-btn-${btn.id}`;
     b.dataset.action = btn.id;
     b.dataset.tabs = btn.tabs.join(",");
-    b.textContent = btn.label;
+    setAcText(b, btn.label);
     b.disabled = true;
     actions.appendChild(b);
   }
@@ -736,7 +738,7 @@ function render() {
       label += ` (${state.buyQueue.length})`;
     if (id === "selling" && state.sellQueue.length)
       label += ` (${state.sellQueue.length})`;
-    b.textContent = label;
+    setAcText(b, label);
     b.classList.toggle("active", id === state.currentTab);
   });
 
@@ -769,11 +771,11 @@ function renderItemsPane() {
   const myPyreals = countPyreals();
   if (sel) {
     const price = Math.round((sel.value || 0) * (vs.buyMultiplier || 1));
-    nameEl.textContent = sel.name || `wcid ${sel.wcid}`;
-    priceEl.textContent = `costs ${fmtPrice(price)} p (you have ${fmtPrice(myPyreals)} p)`;
+    setAcText(nameEl, sel.name || `wcid ${sel.wcid}`);
+    setAcText(priceEl, `costs ${fmtPrice(price)} p (you have ${fmtPrice(myPyreals)} p)`);
   } else {
-    nameEl.textContent = items.length ? "— select an item —" : "(no items in this category)";
-    priceEl.textContent = `(you have ${fmtPrice(myPyreals)} p)`;
+    setAcText(nameEl, items.length ? "— select an item —" : "(no items in this category)");
+    setAcText(priceEl, `(you have ${fmtPrice(myPyreals)} p)`);
   }
 
   // Icon strip
@@ -788,7 +790,7 @@ function renderItemsPane() {
     if ((it.stackSize || 1) > 1) {
       const badge = document.createElement("div");
       badge.className = "hvb-stack-badge";
-      badge.textContent = String(it.stackSize);
+      setAcText(badge, String(it.stackSize));
       cell.appendChild(badge);
     }
     cell.title = `${it.name} — ${fmtPrice((it.value || 0) * (vs.buyMultiplier || 1))}p`;
@@ -829,9 +831,9 @@ function renderQueuePane(which) {
   if (queue.length === 0) {
     const empty = document.createElement("div");
     empty.className = "hvb-queue-empty";
-    empty.textContent = which === "buying"
+    setAcText(empty, which === "buying"
       ? "Empty. Click an item in the Items tab + \"Add to List\"."
-      : "Empty. Drag inventory items onto this panel.";
+      : "Empty. Drag inventory items onto this panel.");
     list.appendChild(empty);
   }
 
@@ -846,7 +848,7 @@ function renderQueuePane(which) {
     setItemIcon(iconEl, q);
     const nameEl = document.createElement("div");
     nameEl.className = "hvb-queue-name";
-    nameEl.textContent = q.name;
+    setAcText(nameEl, q.name);
     const qtyEl = document.createElement("input");
     qtyEl.className = "hvb-queue-qty";
     qtyEl.type = "number";
@@ -860,7 +862,7 @@ function renderQueuePane(which) {
     });
     const priceEl = document.createElement("div");
     priceEl.className = "hvb-queue-price";
-    priceEl.textContent = `${fmtPrice(lineTotal)} p`;
+    setAcText(priceEl, `${fmtPrice(lineTotal)} p`);
     const rmEl = document.createElement("button");
     rmEl.className = "hvb-queue-remove";
     rmEl.textContent = "×";
@@ -879,7 +881,7 @@ function renderQueuePane(which) {
   }
 
   const label = which === "buying" ? "Cost" : "Credit";
-  totalEl.textContent = `${label}: ${fmtPrice(total)} p`;
+  setAcText(totalEl, `${label}: ${fmtPrice(total)} p`);
 
   // Enable Confirm only when queue is non-empty.
   const confirmBtn = ov.querySelector(`.hvb-btn-confirm-${which.slice(0, -3)}`);

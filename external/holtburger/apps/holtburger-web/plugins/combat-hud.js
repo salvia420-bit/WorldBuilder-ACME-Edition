@@ -38,6 +38,8 @@
 // path the existing combat-bar popover uses. The heightId values
 // (Hi=2, Med=1, Lo=0) match scene3d/picking.js's expected enum.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const OVERLAY_ID = "hb-combat-hud";
 const STYLE_ID   = "hb-combat-hud-style";
 const SP = "./data/ui-sprites";
@@ -165,7 +167,7 @@ function syncPowerFill() {
   const fill = ov.querySelector(".hch-slider-fill");
   const val = ov.querySelector(".hch-slider-val");
   if (fill) fill.style.width = `${Math.round(state.power * 100)}%`;
-  if (val) val.textContent = `${Math.round(state.power * 100)}%`;
+  if (val) setAcText(val, `${Math.round(state.power * 100)}%`);
   // Propagate to the shared combat bar state so picking.js's
   // fireAttackOnTarget honours the power level set here.
   if (window.__combatBarState) {
@@ -186,7 +188,7 @@ function build() {
   powerRow.className = "hch-row";
   const powerLabel = document.createElement("div");
   powerLabel.className = "hch-label";
-  powerLabel.textContent = "Power";
+  setAcText(powerLabel, "Power");
   const powerSlider = document.createElement("div");
   powerSlider.className = "hch-slider";
   const powerFill = document.createElement("div");
@@ -194,7 +196,7 @@ function build() {
   powerSlider.appendChild(powerFill);
   const powerVal = document.createElement("div");
   powerVal.className = "hch-slider-val";
-  powerVal.textContent = "100%";
+  setAcText(powerVal, "100%");
   powerRow.appendChild(powerLabel);
   powerRow.appendChild(powerSlider);
   powerRow.appendChild(powerVal);
@@ -225,7 +227,7 @@ function build() {
   accRow.className = "hch-row";
   const accLabel = document.createElement("div");
   accLabel.className = "hch-label";
-  accLabel.textContent = "Accuracy";
+  setAcText(accLabel, "Accuracy");
   const accSlider = document.createElement("div");
   accSlider.className = "hch-slider";
   const accFill = document.createElement("div");
@@ -234,7 +236,7 @@ function build() {
   accSlider.appendChild(accFill);
   const accVal = document.createElement("div");
   accVal.className = "hch-slider-val";
-  accVal.textContent = "—";
+  setAcText(accVal, "—");
   accRow.appendChild(accLabel);
   accRow.appendChild(accSlider);
   accRow.appendChild(accVal);
@@ -256,7 +258,7 @@ function build() {
     btn.className = "hch-height";
     btn.dataset.height = h.id;
     btn.dataset.heightValue = String(h.value);
-    btn.textContent = h.label;
+    setAcText(btn, h.label);
     btn.title = `Attack at ${h.label} height`;
     btn.addEventListener("click", () => {
       // Mirrors plugins/combat-bar.js's Hi/Med/Lo wiring — calls

@@ -24,6 +24,8 @@
 // Wasm source: `handle.playerEnchantments()` (new PR-JJ getter) —
 // re-pulled on every `playerStatsUpdated` event from the plugin bus.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const OVERLAY_ID = "hb-buffs-hud";
 const STYLE_ID = "hb-buffs-hud-style";
 
@@ -229,11 +231,11 @@ function render() {
   if (list.length === 0) {
     const empty = document.createElement("div");
     empty.className = "hb-buff-empty";
-    empty.textContent = filter === "debuff"
+    setAcText(empty, filter === "debuff"
       ? "No harmful spells active."
       : filter === "buff"
         ? "No beneficial spells active."
-        : "No active spells.";
+        : "No active spells.");
     ov.appendChild(empty);
     return;
   }
@@ -268,12 +270,12 @@ function render() {
     if (ench.layer > 0) {
       const layer = document.createElement("div");
       layer.className = "hb-buff-layer";
-      layer.textContent = String(ench.layer);
+      setAcText(layer, String(ench.layer));
       cell.appendChild(layer);
     }
     const time = document.createElement("div");
     time.className = "hb-buff-time";
-    time.textContent = fmtRemaining(remainingSeconds(ench));
+    setAcText(time, fmtRemaining(remainingSeconds(ench)));
     cell.appendChild(time);
 
     const casterName = state.getCasterName?.(ench.casterGuid)

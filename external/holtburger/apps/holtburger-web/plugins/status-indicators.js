@@ -16,6 +16,8 @@
 // their canonical sprite, no state wiring. Real state hooks (player
 // events for vitae level, burden %, link RTT, etc.) are follow-on.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const OVERLAY_ID = "hb-status-indicators";
 const WIDTH = 150;
 const HEIGHT = 30;
@@ -143,7 +145,7 @@ export function mount(_ctx) {
     el.style.backgroundImage = `url("./data/ui-sprites/${ind.inactive}.png")`;
     const tip = document.createElement("span");
     tip.className = "hb-indicator-tip";
-    tip.textContent = ind.name;
+    setAcText(tip, ind.name);
     el.appendChild(tip);
     // PR-JJ 2026-05-23: buffs/debuffs indicators are clickable —
     // they toggle the buffs-hud strip filtered to the matching type.
@@ -247,7 +249,7 @@ export function mount(_ctx) {
       const next = `Link: ${tier}  (rtt ${rttStr} · last recv ${ageStr})`;
       if (next !== linkLastTipText) {
         linkLastTipText = next;
-        linkTip.textContent = next;
+        setAcText(linkTip, next);
       }
     }
   }, 1000);

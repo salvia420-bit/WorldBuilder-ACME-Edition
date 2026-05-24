@@ -20,6 +20,8 @@
 // Companion tabs Friends/Squelch share the same layout via gmFloatyPanelUI
 // — those are not part of this view yet.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const STYLE_ID = "hb-alleg-view-style";
 
 let stylesInjected = false;
@@ -195,10 +197,10 @@ function r(parent, label, value) {
   row.className = "hb-alleg-row";
   const l = document.createElement("span");
   l.className = "label";
-  l.textContent = label;
+  setAcText(l, label);
   const v = document.createElement("span");
   v.className = "value";
-  v.textContent = value;
+  setAcText(v, value);
   row.appendChild(l);
   row.appendChild(v);
   parent.appendChild(row);
@@ -209,7 +211,7 @@ function makeSection(title) {
   if (title) {
     const h = document.createElement("div");
     h.className = "hb-alleg-section-h";
-    h.textContent = title;
+    setAcText(h, title);
     s.appendChild(h);
   }
   return s;
@@ -254,7 +256,7 @@ export const view = {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "hb-alleg-tab" + (t.current ? " active" : "");
-      btn.textContent = t.label;
+      setAcText(btn, t.label);
       if (t.swap) {
         btn.addEventListener("click", () => {
           window.__mainPanel?.showView?.(t.swap);
@@ -303,7 +305,7 @@ export const view = {
     vassalsBox.appendChild(vassalsHead);
     const empty = document.createElement("div");
     empty.className = "hb-alleg-empty";
-    empty.textContent = "No vassals — you have not yet sworn fealty as a patron.";
+    setAcText(empty, "No vassals — you have not yet sworn fealty as a patron.");
     vassalsBox.appendChild(empty);
     root.appendChild(vassalsBox);
 
@@ -317,7 +319,7 @@ export const view = {
     toggle.title = "Toggle ignore allegiance requests";
     toggleRow.appendChild(toggle);
     const toggleLabel = document.createElement("span");
-    toggleLabel.textContent = "Ignore Allegiance Requests";
+    setAcText(toggleLabel, "Ignore Allegiance Requests");
     toggleLabel.style.color = "var(--hb-text-cream)";
     toggleRow.appendChild(toggleLabel);
     toggle.addEventListener("click", () => {
@@ -338,7 +340,7 @@ export const view = {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "hb-alleg-btn";
-      btn.textContent = act.label;
+      setAcText(btn, act.label);
       btn.title = act.desc;
       btn.addEventListener("click", () => {
         // GameAction Swear / Break / Kick aren't exposed yet — log

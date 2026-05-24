@@ -22,6 +22,8 @@
 //   - Lower 234x ~120: items grid for pack items (32x32 slots).
 //   - Bottom 120x14: burden meter (placeholder until equipMask wiring).
 
+import { setAcText } from "../ui/ac_font.js";
+
 const OVERLAY_ID = "hb-inventory";
 // Title bar is now owned by main-panel (see plugins/main-panel.js).
 // All vertical offsets in the inventory CSS use TITLE_H = 0 since
@@ -473,7 +475,7 @@ function doMount(parentEl, _ctx) {
     el.appendChild(icon);
     const tip = document.createElement("span");
     tip.className = "hb-inv-doll-tip";
-    tip.textContent = s.name;
+    setAcText(tip, s.name);
     el.appendChild(tip);
     paperdoll.appendChild(el);
     dollSlotEls[s.equipMask] = { el, icon, tip, slot: s };
@@ -501,7 +503,7 @@ function doMount(parentEl, _ctx) {
   burdenRow.className = "hb-inv-burden";
   const burdenLbl = document.createElement("span");
   burdenLbl.className = "hb-inv-burden-label";
-  burdenLbl.textContent = "Burden";
+  setAcText(burdenLbl, "Burden");
   burdenRow.appendChild(burdenLbl);
   const burdenBar = document.createElement("div");
   burdenBar.className = "hb-inv-burden-bar";
@@ -511,7 +513,7 @@ function doMount(parentEl, _ctx) {
   burdenRow.appendChild(burdenBar);
   const burdenPct = document.createElement("span");
   burdenPct.className = "hb-inv-burden-label";
-  burdenPct.textContent = "0%";
+  setAcText(burdenPct, "0%");
   burdenRow.appendChild(burdenPct);
   overlay.appendChild(burdenRow);
 
@@ -572,14 +574,14 @@ function doMount(parentEl, _ctx) {
     if (stack) {
       const s = document.createElement("span");
       s.className = "hb-inv-stack";
-      s.textContent = stack.textContent;
+      setAcText(s, stack.textContent);
       slot.appendChild(s);
     }
     // Tooltip
     const tip = document.createElement("span");
     tip.className = "hb-inv-tip";
     const name = srcLi.querySelector(".name");
-    tip.textContent = name?.textContent ?? "(unnamed)";
+    setAcText(tip, name?.textContent ?? "(unnamed)");
     slot.appendChild(tip);
     // Forward draggable (vendor sells use the same pattern as the
     // source <li> with draggable=true).
@@ -620,7 +622,7 @@ function doMount(parentEl, _ctx) {
       const e = dollSlotEls[k];
       e.el.classList.remove("equipped");
       e.icon.style.display = "none";
-      e.tip.textContent = e.slot.name;
+      setAcText(e.tip, e.slot.name);
     }
   }
 
@@ -643,7 +645,7 @@ function doMount(parentEl, _ctx) {
     const tb = srcLi.dataset?.typeBit ?? "0x0";
     matched.icon.style.display = "block";
     matched.icon.style.background = TYPE_COLOR[tb] || "#777";
-    matched.tip.textContent = `${item.name || matched.slot.name} — ${matched.slot.name}`;
+    setAcText(matched.tip, `${item.name || matched.slot.name} — ${matched.slot.name}`);
     return true;
   }
 
