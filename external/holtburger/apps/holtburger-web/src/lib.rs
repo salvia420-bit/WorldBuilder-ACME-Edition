@@ -5354,6 +5354,136 @@ pub async fn fetch_clothing_table(clothing_id: u32) -> Result<String, JsValue> {
     serde_json::to_string(&ct).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Wave 7.8 — Phase C dye-preview compositor.
+///
+/// Mirrors the bottom half of `fetch_entity_surface_pixels_impl`
+/// (lib.rs:~L5432-5648) but takes a SurfaceTexture (0x05) DID
+/// directly — skipping the Surface (0x08) → SurfaceTexture
+/// indirection. This is the right shape for dye previews, where
+/// callers have a `CloTextureEffect.new_texture` (a SurfaceTexture
+/// DID) in hand and want to see what shade=N would render against
+/// it. The entity render path that ACE pre-bakes server-side
+/// composes the same SurfaceTexture(s) inside a Surface wrap; we
+/// short-circuit the wrap because the icon-or-swatch use case
+/// doesn't need it.
+///
+/// Returns a `SurfacePixels` (same shape as `fetch_entity_surfaces_
+/// pixels` returns per-element). When `surface_texture_did` doesn't
+/// resolve OR the wasm chain fails at any step, returns an empty
+/// `SurfacePixels` (width=0, height=0).
+///
+/// `sub_palettes` is the flat `[palette_did, offset, length, …]`
+/// triple buffer — same encoding as `fetch_entity_surfaces_pixels`
+/// uses. Each triple's first u32 is an ALREADY-RESOLVED Palette
+/// (0x04) DID per `pickPaletteForShade(loadPaletteSet(set), shade)`
+/// JS-side (mirrors ACE `GetPaletteID(shade)` in `CalculateObjDesc`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_dye_preview_pixels(
+    surface_texture_did: u32,
+    sub_palettes: Vec<u32>,
+) -> Result<SurfacePixels, JsValue> {
+    use holtburger_dat::file_type::{Palette, SurfaceTexture, Texture, TextureDecodeError};
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::surface_classify::{compute_stats, SurfaceCategory};
+    let generic_cat = SurfaceCategory::Generic.as_u8();
+    let empty = SurfacePixels {
+        width: 0,
+        height: 0,
+        pixels: Vec::new(),
+        surface_type: 0,
+        category: generic_cat,
+        normal_pixels: Vec::new(),
+        height_pixels: Vec::new(),
+        roughness_override: f32::NAN,
+        normal_scale_override: f32::NAN,
+    };
+    if sub_palettes.len() % 3 != 0 {
+        return Err(JsValue::from_str(
+            "fetch_dye_preview_pixels: sub_palettes must be flat [paletteDid, offset, length, ...] triples",
+        ));
+    }
+    let triples: Vec<(u32, u8, u8)> = sub_palettes
+        .chunks_exact(3)
+        .map(|c| (c[0], c[1] as u8, c[2] as u8))
+        .collect();
+    let source = global_source::global_source();
+    // Prefetch: SurfaceTexture itself + every overlay Palette. The
+    // closure runs the SurfaceTexture → Texture → intrinsic-Palette
+    // walk after the initial keys land so the shard cache drags in
+    // every transitive dependency before we attempt the actual
+    // compositor walk (matches the entity-surfaces-pixels pattern at
+    // lib.rs:~L5808).
+    let mut initial: Vec<ResourceKey<'_>> = Vec::with_capacity(1 + triples.len());
+    initial.push(ResourceKey::new("eor/portal", surface_texture_did));
+    for (id, _, _) in &triples {
+        initial.push(ResourceKey::new("eor/portal", *id));
+    }
+    let did_for_walk = surface_texture_did;
+    prefetch::ensure_walk_prefetched(&source, &initial, move |s| {
+        let Ok(stb) = s.get_file_by_key(ResourceKey::new("eor/portal", did_for_walk)) else { return; };
+        let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return; };
+        let Some(rs_id) = surf_tex.highest_res() else { return; };
+        let Ok(tb) = s.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else { return; };
+        let Ok(tex) = Texture::unpack(&tb) else { return; };
+        // Touch intrinsic-palette IDs so they land in the shard cache.
+        // to_rgba8 calls the palette-id callback for each unique
+        // palette the Texture references; just iterating it triggers
+        // the prefetch via the closure-call into the source.
+        let _ = tex.to_rgba8(|pal_id| {
+            let _ = s.get_file_by_key(ResourceKey::new("eor/portal", pal_id));
+            Err::<Palette, _>(TextureDecodeError::PaletteFetch("prefetch-only walk".to_string()))
+        });
+    }).await?;
+    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_texture_did)) else {
+        return Ok(empty);
+    };
+    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return Ok(empty); };
+    let Some(rs_id) = surf_tex.highest_res() else { return Ok(empty); };
+    let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else {
+        return Ok(empty);
+    };
+    let Ok(tex) = Texture::unpack(&tb) else { return Ok(empty); };
+    let rgba = tex.to_rgba8(|tex_palette_id| {
+        let pb = source
+            .get_file_by_key(ResourceKey::new("eor/portal", tex_palette_id))
+            .map_err(|e| TextureDecodeError::PaletteFetch(format!("base {tex_palette_id:#010X}: {e}")))?;
+        let mut composed = Palette::unpack(&pb)
+            .map_err(|e| TextureDecodeError::PaletteFetch(format!("Palette::unpack base {tex_palette_id:#010X}: {e}")))?;
+        for (sub_id, offset, length) in &triples {
+            let Ok(spb) = source.get_file_by_key(ResourceKey::new("eor/portal", *sub_id)) else { continue; };
+            let Ok(sp) = Palette::unpack(&spb) else { continue; };
+            let off = *offset as usize;
+            let len = (*length as usize).min(sp.colors.len());
+            for i in 0..len {
+                let dst = off + i;
+                if dst < composed.colors.len() {
+                    composed.colors[dst] = sp.colors[i];
+                }
+            }
+        }
+        Ok(composed)
+    });
+    match rgba {
+        Ok(pixels) => {
+            let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
+            let (category, _, _) = classify_with_overrides(&stats, 0, surface_texture_did);
+            Ok(SurfacePixels {
+                width: tex.width as u32,
+                height: tex.height as u32,
+                pixels,
+                surface_type: 0,
+                category,
+                normal_pixels: Vec::new(),
+                height_pixels: Vec::new(),
+                roughness_override: f32::NAN,
+                normal_scale_override: f32::NAN,
+            })
+        }
+        Err(_) => Ok(empty),
+    }
+}
+
 /// Fetch one Palette (DAT 0x04) — a 256-colour ARGB lookup table.
 ///
 /// Returns JSON: `{ "id": <u32>, "colors": [<argb_u32>, ...] }`.

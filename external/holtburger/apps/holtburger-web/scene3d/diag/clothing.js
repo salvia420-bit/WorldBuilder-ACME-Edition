@@ -7,6 +7,7 @@
 // `docs/handoff-clothing-table-2026-05-24.md`.
 
 import { getClothingDiagSnapshot } from "../../ui/ac_clothing.js";
+import { getDyePreviewDiagSnapshot } from "../../ui/ac_dye_preview.js";
 
 const DEFAULT_MAX_FAILURES = 20;
 const DEFAULT_MAX_APPEARANCE_CHANGES = 30;
@@ -48,9 +49,21 @@ export function attachClothing(diag) {
     dyeApplications: 0,
     recentDyes: [],
     dyesBySource: { spawn: 0, "hot-swap": 0 },
+    // Wave 7.8 — Phase C dye-preview compositor counters. Fired from
+    // ui/ac_dye_preview.js::composeDyePreview. previewsRendered =
+    // unique (clothing, setup, template, shadeBucket) combos
+    // actually rendered via wasm; previewCacheHits = subsequent
+    // requests for the same cache key. Failure breakdown bucketed
+    // by reason ("no target surface" / "no sub-pal effect" / etc).
+    dyePreviewsRendered: 0,
+    dyePreviewCacheHits: 0,
+    dyePreviewFailures: 0,
+    dyePreviewFailuresByReason: {},
+    recentDyePreviews: [],
     maxFailures: DEFAULT_MAX_FAILURES,
     maxRecentChanges: DEFAULT_MAX_APPEARANCE_CHANGES,
     maxRecentDyes: DEFAULT_MAX_DYE_APPLICATIONS,
+    maxRecentPreviews: 30,
 
     onLoadSucceeded(meta) {
       try {
@@ -122,10 +135,51 @@ export function attachClothing(diag) {
       } catch (_) {}
     },
 
-    /** Read-through to the runtime cache. */
+    /**
+     * Wave 7.8 — dye-preview compositor hooks. Fired from
+     * `ui/ac_dye_preview.js::composeDyePreview`.
+     */
+    onDyePreviewRendered(meta) {
+      try {
+        const m = meta || {};
+        clothing.dyePreviewsRendered += 1;
+        pushCapped(clothing.recentDyePreviews, {
+          clothingId: hexId(m.clothingId ?? 0),
+          setupDid: hexId(m.setupDid ?? 0),
+          paletteTemplate: (m.paletteTemplate ?? 0) | 0,
+          shade: Number(m.shade ?? 0),
+          targetSurfaceDid: hexId(m.targetSurfaceDid ?? 0),
+          tripleCount: (m.tripleCount ?? 0) | 0,
+          width: (m.width ?? 0) | 0,
+          height: (m.height ?? 0) | 0,
+          ts: performance.now(),
+        }, clothing.maxRecentPreviews);
+      } catch (_) {}
+    },
+    onDyePreviewCacheHit(_meta) {
+      try { clothing.dyePreviewCacheHits += 1; } catch (_) {}
+    },
+    onDyePreviewFailed(meta) {
+      try {
+        const m = meta || {};
+        clothing.dyePreviewFailures += 1;
+        const reason = m.reason || "unknown";
+        clothing.dyePreviewFailuresByReason[reason] =
+          (clothing.dyePreviewFailuresByReason[reason] || 0) + 1;
+      } catch (_) {}
+    },
+
+    /** Read-through to BOTH ClothingTable + dye-preview-compositor caches. */
     cached() {
-      try { return getClothingDiagSnapshot(); }
-      catch (_) { return { tables: [] }; }
+      const tables = (() => {
+        try { return getClothingDiagSnapshot(); }
+        catch (_) { return { tables: [] }; }
+      })();
+      const preview = (() => {
+        try { return getDyePreviewDiagSnapshot(); }
+        catch (_) { return null; }
+      })();
+      return { tables: tables.tables, preview };
     },
 
     summary() {
@@ -137,6 +191,10 @@ export function attachClothing(diag) {
         appearanceChanges: clothing.appearanceChanges,
         dyeApplications: clothing.dyeApplications,
         dyesBySource: { ...clothing.dyesBySource },
+        dyePreviewsRendered: clothing.dyePreviewsRendered,
+        dyePreviewCacheHits: clothing.dyePreviewCacheHits,
+        dyePreviewFailures: clothing.dyePreviewFailures,
+        dyePreviewCacheSize: cached.preview?.previewCacheSize ?? 0,
       };
     },
 
@@ -151,6 +209,11 @@ export function attachClothing(diag) {
         dyeApplications: clothing.dyeApplications,
         recentDyes: [...clothing.recentDyes],
         dyesBySource: { ...clothing.dyesBySource },
+        dyePreviewsRendered: clothing.dyePreviewsRendered,
+        dyePreviewCacheHits: clothing.dyePreviewCacheHits,
+        dyePreviewFailures: clothing.dyePreviewFailures,
+        dyePreviewFailuresByReason: { ...clothing.dyePreviewFailuresByReason },
+        recentDyePreviews: [...clothing.recentDyePreviews],
       };
     },
 
@@ -161,6 +224,11 @@ export function attachClothing(diag) {
       clothing.dyeApplications = 0;
       clothing.recentDyes.length = 0;
       clothing.dyesBySource = { spawn: 0, "hot-swap": 0 };
+      clothing.dyePreviewsRendered = 0;
+      clothing.dyePreviewCacheHits = 0;
+      clothing.dyePreviewFailures = 0;
+      clothing.dyePreviewFailuresByReason = {};
+      clothing.recentDyePreviews.length = 0;
     },
   };
 
