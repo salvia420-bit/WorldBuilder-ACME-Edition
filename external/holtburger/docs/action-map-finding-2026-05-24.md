@@ -56,35 +56,61 @@ input system uses for dispatch (e.g. `MoveForward`'s hash). Each
 inner value carries `action_class` + `action_name` (StringTable
 hash for the human label) + `description` + a `toggle_type`.
 
-## Where retail's real defaults live
+## Where retail's real defaults live (and why we can't extract them)
 
-`acclient.c` ships with hardcoded
-`CInputManager_WIN32::BindAction(QualifiedControl, idAction, idMap)`
-calls during startup. Each call passes a literal
-`ControlSpecification.m_dwKey` (which IS a packed keystroke, per
-acclient.h's bitfield), a `m_metamode` (shift/ctrl/alt state),
-and a `m_activation` (press/hold/repeat).
+**Hypothesis tested:** retail defaults are hardcoded `BindAction()`
+calls in `acclient.c` we could extract literally.
 
-Two known examples extracted from acclient.c L196307/196334:
+**Finding (2026-05-24 follow-up):** No. Searched the 31 MB
+Hex-Rays decompile for `BindAction` and `AddMapping` call sites:
 
-```c
-mouse_turn_qc.m_key.m_dwKey = 524545;   // 0x000801C1 — mouse wheel up
-mouse_turn_qc.m_dwKey       = 524801;   // 0x000802C1 — mouse wheel down
-```
+- `BindAction` definition exists at L13434 / L669899 — but only **two**
+  call sites in the entire decompile, both runtime mouse-turn special-
+  case rebinds at L196307/L196334 (`m_dwKey = 524545 / 524801`).
+- `AddMapping` has **5** call sites — all driven by **loops reading
+  from existing data structures** (`CInputMap::Copy()` rhs walking,
+  config-file parser at L678888 reading `PFileNode` entries).
+- `gmKeyboardUI::AddActionKeyMap` populates the in-game keybind UI
+  by calling `CInputMap::FindKeysForAction(map, action, &qclDefaults)`
+  on a CInputMap whose contents come from elsewhere.
 
-So 0xC1 is the mouse device-index byte (a DirectInput-assigned
-index, baked into the binary). 0x01 / 0x02 are wheel-up/down sub-
-controls. `0x0008` is the wheel offset.
+A `grep` for literal `m_dwKey = <N>` assignments anywhere in the
+binary returns exactly **3** results (the two mouse-turn quirks +
+one `m_dwKey = 0` init). There is **no hardcoded table** of
+retail default bindings in acclient.c.
 
-Extracting **all** retail defaults would require:
-1. Locating each `BindAction(QualifiedControl{...}, action, map)`
-   call in `acclient.c` (~250+ calls across various subsystems)
-2. Mapping each literal `m_dwKey` to (device, sub, offset)
-3. Resolving the `idAction` to a human-readable label
-4. Mapping device/sub/offset to a portable JS shape
-   (`KeyboardEvent.code` for keyboard, sentinel strings for mouse)
+The shipped defaults must come from one of:
 
-This is a multi-hour RE task. Out of scope for the current pass.
+- A `UserPreferences.ini` or similar config file the installer
+  places in the user's profile dir (we don't have one).
+- A binary resource section inside `acclient.exe` (we have the
+  exe but Hex-Rays output strips resource sections; the strings
+  dump shows no obvious keymap config blob).
+- The retail installer's `setup.exe` decoding a default-state
+  file at install time.
+
+We don't have the original AC installer or the per-user
+preferences file. Even with them, the `m_dwKey` packed format
+encodes a **DirectInput device index** (`m_idxDevice` byte) that
+is assigned dynamically at runtime — the literal `0xC1` we see
+for mouse in the two known examples is the index DirectInput
+gave to the mouse on the particular box where the binary was
+captured. Decoding it to a portable `KeyboardEvent.code` would
+require either reproducing DirectInput's device enumeration order
+or matching by the surrounding context (device-type lookups).
+
+**Conclusion:** extracting retail default keystrokes is not
+feasible from the artifacts we have. The Controls-tab path
+forward is what we already shipped: group retail actions by
+category, let users bind any key they want, no "(default)"
+column for the retail block. Closing as won't-do.
+
+If a future agent gets hold of the AC installer's default
+`UserPreferences.ini` or someone reverse-engineers
+`acclient.exe`'s resource section, the wiring contract is
+already in place — just populate
+`ACTION_CATEGORY_NAMES`-keyed default bindings into the
+`ui/keymap.js` layer.
 
 ## What we did instead
 
