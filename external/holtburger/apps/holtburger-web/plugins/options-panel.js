@@ -401,7 +401,7 @@ function renderControlsTab(bodyEl) {
   const note = document.createElement("div");
   note.style.marginBottom = "8px";
   note.style.opacity = "0.75";
-  setAcText(note, "Click Bind, press a key (Esc to cancel). Local actions below route through live JS handlers. Retail ActionMap entries are read-only labels — server-side dispatch isn't wired yet.");
+  setAcText(note, "Click Bind, press a key (Esc to cancel). Local actions below route through live JS handlers. Retail actions are grouped by their ActionMap category — the DAT carries action labels but NOT retail's keystroke defaults (those live in acclient.c's startup BindAction calls).");
   bodyEl.appendChild(note);
 
   const bindings = getKeybindings();
@@ -427,10 +427,17 @@ function renderControlsTab(bodyEl) {
     localList.appendChild(buildBindingRow(action.labelHash, action.label, action.defaultCode, bindings, refresh));
   }
 
-  // Retail ActionMap actions — informational, no live dispatch yet.
+  // Retail ActionMap actions — grouped by inputMap category. Each entry
+  // in __acKeybindings carries an `inputMap` field — the outer u32 dict
+  // key from ActionMap 0x26000000. That value is NOT a keystroke (it's
+  // an ActionMap category index per AC's CMasterInputMap); retail's
+  // actual keystroke defaults are hardcoded in acclient.c's startup
+  // BindAction() calls and would need a separate RE pass to extract.
+  // We group by category so users see Movement / Camera / Magic /
+  // Emotes / Panels / etc. clusters instead of a sorted alpha mush.
   const retailHeader = document.createElement("div");
   retailHeader.className = "hb-opt-section";
-  setAcText(retailHeader, "Retail ActionMap (read-only labels)");
+  setAcText(retailHeader, "Retail Actions (grouped by ActionMap category)");
   bodyEl.appendChild(retailHeader);
 
   const list = document.createElement("div");
@@ -449,23 +456,67 @@ function renderControlsTab(bodyEl) {
     return;
   }
 
-  // De-duplicate by labelHash to collapse the many input_maps that
-  // share the same action (alt-bindings, controller, etc.) into one
-  // visible row each.
-  const byLabel = new Map();
+  // Group by (inputMap category) → Map<labelHash, label>. Deduping by
+  // labelHash inside each category collapses alt-bindings into one row.
+  const byCategory = new Map();
   for (const a of actions) {
     if (!a.label) continue;
-    if (!byLabel.has(a.labelHash)) byLabel.set(a.labelHash, a.label);
+    let group = byCategory.get(a.inputMap);
+    if (!group) { group = new Map(); byCategory.set(a.inputMap, group); }
+    if (!group.has(a.labelHash)) group.set(a.labelHash, a.label);
   }
-  const rows = [...byLabel.entries()]
-    .sort(([, a], [, b]) => a.localeCompare(b))
-    .slice(0, 200);
 
-  for (const [hash, label] of rows) {
-    const hashHex = `0x${hash.toString(16).toUpperCase().padStart(8, "0")}`;
-    list.appendChild(buildBindingRow(hashHex, label, null, bindings, refresh));
+  // Stable category ordering: numerically by inputMap (0x000000xx first
+  // then 0x100000xx) so Movement/Camera lead, then combat/magic/etc.
+  const orderedCats = [...byCategory.keys()].sort((a, b) => a - b);
+
+  for (const inputMap of orderedCats) {
+    const group = byCategory.get(inputMap);
+    if (group.size === 0) continue;
+    const catName = ACTION_CATEGORY_NAMES[inputMap]
+      ?? `Category 0x${inputMap.toString(16).toUpperCase().padStart(8, "0")}`;
+
+    const catHeader = document.createElement("div");
+    catHeader.style.padding = "6px 4px 2px";
+    catHeader.style.fontSize = "10px";
+    catHeader.style.color = "#6acaca";
+    catHeader.style.textTransform = "uppercase";
+    catHeader.style.letterSpacing = "0.08em";
+    catHeader.style.borderBottom = "1px solid rgba(106, 202, 202, 0.3)";
+    catHeader.style.marginTop = "4px";
+    setAcText(catHeader, `${catName} — ${group.size}`, { color: "#6acaca" });
+    list.appendChild(catHeader);
+
+    const sortedActions = [...group.entries()].sort(([, a], [, b]) => a.localeCompare(b));
+    for (const [hash, label] of sortedActions) {
+      const hashHex = `0x${hash.toString(16).toUpperCase().padStart(8, "0")}`;
+      list.appendChild(buildBindingRow(hashHex, label, null, bindings, refresh));
+    }
   }
 }
+
+// inputMap (ActionMap outer-key) → human-readable category name.
+// Derived from the action labels in each category (see
+// /mnt/wbterminal1/tmp/claude-scratch/actionmap/ for the survey).
+// Categories with no named actions are omitted; renderer falls back to
+// "Category 0x…" for any unmapped value that does carry actions.
+const ACTION_CATEGORY_NAMES = {
+  0x00000004: "Movement",
+  0x00000005: "Camera",
+  0x00000006: "Camera (alt)",
+  0x10000002: "Combat Mode",
+  0x10000003: "Melee Combat",
+  0x10000004: "Missile Combat",
+  0x10000005: "Magic",
+  0x10000006: "Emotes",
+  0x10000007: "Selection",
+  0x10000008: "Options",
+  0x10000009: "UI Panels",
+  0x1000000A: "Chat",
+  0x1000000B: "Floating Chat",
+  0x1000000C: "Quickslots",
+  0x1000000D: "Chat Mode",
+};
 
 function renderAboutTab(bodyEl) {
   bodyEl.innerHTML = `
