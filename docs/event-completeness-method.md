@@ -143,6 +143,7 @@ The validator subtracts the manifest's expected events from the actual log and r
 - **Music tracks** — region music isn't enumerated here. Out of scope.
 - **Spell effects** (visual + sound) — server-pushed, would land via S3/P3 once the wire arm is wired. Not blocking.
 - **UI sounds** (button clicks, menu opens) — client-only, not part of the world simulation.
+- **UI assets + input bindings** (fonts, localized text lookups, key rebinds) — boot-time static-asset pipelines, not per-frame events. See [`ui-asset-completeness-method.md`](ui-asset-completeness-method.md) for the parallel contract + `__diag.{fonts,strings,input}` surfaces.
 
 ## Provenance + dependencies on shipped work
 

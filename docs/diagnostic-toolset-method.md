@@ -148,6 +148,7 @@ The 14 surfaces from plan §3, with their method-doc links and shipping status:
 | 1 | Placement completeness | [`world-completeness-method.md`](world-completeness-method.md) | ✓ SHIPPED (Wave-1) |
 | 2 | Event completeness | [`event-completeness-method.md`](event-completeness-method.md) | ◐ SHIPPED (Wave-1) — F.D-fu probes open |
 | 3 | Entity typed-class | [`entity-completeness-method.md`](entity-completeness-method.md) | ✓ SHIPPED (Wave-1) |
+| 3.5 | UI-asset + input-binding completeness | [`ui-asset-completeness-method.md`](ui-asset-completeness-method.md) | ✓ SHIPPED (Wave-7, 2026-05-24) — build-side validator deferred |
 | 4 | Wire packet conformance | [`wire-conformance-method.md`](wire-conformance-method.md) | ✓ SHIPPED (W1) |
 | 5 | DAT parser parity | [`dat-parity-method.md`](dat-parity-method.md) | ✓ SHIPPED (W2.A+B+D) |
 | 6 | Enum parity | [`enum-parity-method.md`](enum-parity-method.md) | ✓ SHIPPED (W2.C) |
@@ -167,7 +168,7 @@ The `diag-run-all` driver discovers these dynamically — when a sibling agent s
 
 The first 14 surfaces are **build-side**: each runs a Node-side script that drives a canonical oracle (ACE source, retail decomp, Chorizite, WB.Terminal command) and compares against captured runtime state. They legitimately "cheat" because they ARE the contract.
 
-Surface 15 is **observation-only** from the running wire-agent's `window.__diag` namespace. 10 sub-surfaces:
+Surface 15 is **observation-only** from the running wire-agent's `window.__diag` namespace. 13 sub-surfaces (Waves 1-4 + 5.A + 7):
 
 | sub-surface | observes | optional oracle |
 |---|---|---|
@@ -181,6 +182,9 @@ Surface 15 is **observation-only** from the running wire-agent's `window.__diag`
 | `__diag.pvs` | `cellContainers3d.visible` flips | `pvs-visibility-snapshot --out` |
 | `__diag.assets` | MaterialCache + AnimationCache error rings + `stuck()` | (none) |
 | `__diag.integrity` | sha256 of fetched bake bytes | manifest + per-LB JSONL `.sha256` sidecars |
+| `__diag.fonts` (W7) | `ui/ac_font.js` load lifecycle + atlas dims + fallback codepoints + `<ac-text>` count | (parser parity tests gate bytewise correctness) |
+| `__diag.strings` (W7) | `ui/ac_strings.js` StringTable/LanguageString/ActionMap loads + `acString` lookup misses | (parser parity tests gate bytewise correctness) |
+| `__diag.input` (W7) | `ui/keymap.js` rebind history + localStorage errors + conflict detector + ActionMap cross-ref | (none — operator-managed policy) |
 
 The runtime invariants and oracle producers all read like build-side validators **inverted** — same data flow, the diag layer just reads what was actually applied rather than what was supposed to be applied. When build-side and client-side disagree, build-side wins; client-side data tells you WHY.
 
@@ -208,6 +212,7 @@ The waves shipped chronologically:
 | Wave 4 | texture/mesh whole-DAT sweep | (out-of-band, multi-hour) | deferred |
 | **Wave 6** | **client-side `window.__diag` 10-surface observation layer + WB.T oracle producers + per-LB sidecars** | **2026-05-23** | **[[reference_wire_agent_diag_layer]]** |
 | **Wave 6 follow-ons** | motion link hook + assets stuck v2 + per-scenery diff + global-greedy matcher (spawn `goodMatches` 11→25 on Holtburg) | 2026-05-23 | (see commit 7c0b4545) |
+| **Wave 7** | **vitaeum-parity new-pipeline diag: `__diag.fonts` + `__diag.strings` + `__diag.input` covering Font / LanguageString / StringTable / ActionMap / KeyMap consumers** | **2026-05-24** | [`ui-asset-completeness-method.md`](ui-asset-completeness-method.md) |
 
 Key cross-references:
 - [[reference_worldbuilder_terminal]] — command catalog (147 commands today; +2 with W5.C)

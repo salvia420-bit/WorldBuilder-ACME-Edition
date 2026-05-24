@@ -68,7 +68,8 @@ function load() {
   try {
     const raw = localStorage.getItem(LS_KEY_KEYBINDINGS);
     cache = raw ? JSON.parse(raw) : {};
-  } catch (_) {
+  } catch (e) {
+    try { window.__diag?.input?.onStorageError?.({ op: "read", error: e }); } catch (_) {}
     cache = {};
   }
   return cache;
@@ -77,7 +78,9 @@ function load() {
 function persist() {
   try {
     localStorage.setItem(LS_KEY_KEYBINDINGS, JSON.stringify(cache ?? {}));
-  } catch (_) { /* quota / privacy mode — silent */ }
+  } catch (e) { /* quota / privacy mode — silent */
+    try { window.__diag?.input?.onStorageError?.({ op: "write", error: e }); } catch (_) {}
+  }
 }
 
 /**
@@ -98,14 +101,17 @@ export function getKeybindings() {
  */
 export function setBinding(labelHashHex, binding) {
   cache = load();
-  cache[labelHashHex] = {
+  const oldBinding = cache[labelHashHex] ? { ...cache[labelHashHex] } : null;
+  const newBinding = {
     code: binding.code,
     shift: !!binding.shift,
     ctrl: !!binding.ctrl,
     alt: !!binding.alt,
     meta: !!binding.meta,
   };
+  cache[labelHashHex] = newBinding;
   persist();
+  try { window.__diag?.input?.onRebind?.({ labelHash: labelHashHex, oldBinding, newBinding, op: "set" }); } catch (_) {}
 }
 
 /**
@@ -115,8 +121,10 @@ export function setBinding(labelHashHex, binding) {
 export function clearBinding(labelHashHex) {
   cache = load();
   if (cache[labelHashHex]) {
+    const oldBinding = { ...cache[labelHashHex] };
     delete cache[labelHashHex];
     persist();
+    try { window.__diag?.input?.onRebind?.({ labelHash: labelHashHex, oldBinding, newBinding: null, op: "clear" }); } catch (_) {}
     return true;
   }
   return false;

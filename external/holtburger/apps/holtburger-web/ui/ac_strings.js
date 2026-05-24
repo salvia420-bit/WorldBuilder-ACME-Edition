@@ -54,9 +54,11 @@ export async function loadStringTable(tableId) {
         map.set(key >>> 0, text);
       }
       tables.set(tableId, map);
+      try { window.__diag?.strings?.onTableLoaded?.({ tableId, entryCount: map.size }); } catch (_) {}
       return map;
     } catch (err) {
       console.warn(`[ac-strings] table 0x${tableId.toString(16)} load failed:`, err);
+      try { window.__diag?.strings?.onTableFailed?.({ tableId, error: err }); } catch (_) {}
       tables.set(tableId, new Map());
       return tables.get(tableId);
     } finally {
@@ -78,7 +80,12 @@ export async function loadStringTable(tableId) {
 export function acString(tableId, hashId) {
   const t = tables.get(tableId);
   if (!t) return null;
-  return t.get(hashId >>> 0) ?? null;
+  const v = t.get(hashId >>> 0);
+  if (v === undefined) {
+    try { window.__diag?.strings?.onLookupMiss?.({ tableId, hashId }); } catch (_) {}
+    return null;
+  }
+  return v ?? null;
 }
 
 /**
@@ -103,9 +110,11 @@ export async function loadLanguageString(stringId) {
     try {
       const text = await wasm.fetch_language_string(stringId >>> 0);
       languageStrings.set(stringId, text);
+      try { window.__diag?.strings?.onLanguageStringLoaded?.({ stringId, textLength: (text ?? "").length }); } catch (_) {}
       return text;
     } catch (err) {
       console.warn(`[ac-strings] language string 0x${stringId.toString(16)} load failed:`, err);
+      try { window.__diag?.strings?.onLanguageStringFailed?.({ stringId, error: err }); } catch (_) {}
       languageStrings.set(stringId, "");
       return "";
     } finally {
@@ -160,17 +169,24 @@ export async function loadActionMap(mapId = 0x26000000) {
       }
       const tableId = data.string_table_data_id >>> 0;
       const table = await loadStringTable(tableId);
-      const actions = data.actions.map((a) => ({
-        inputMap: a.input_map >>> 0,
-        actionHash: a.action_hash >>> 0,
-        labelHash: a.label_hash >>> 0,
-        toggle: a.toggle >>> 0,
-        label: table.get((a.label_hash >>> 0)) ?? null,
-      }));
+      let labelResolveFails = 0;
+      const actions = data.actions.map((a) => {
+        const label = table.get((a.label_hash >>> 0)) ?? null;
+        if (label === null) labelResolveFails += 1;
+        return {
+          inputMap: a.input_map >>> 0,
+          actionHash: a.action_hash >>> 0,
+          labelHash: a.label_hash >>> 0,
+          toggle: a.toggle >>> 0,
+          label,
+        };
+      });
       actionMapCache = { stringTableId: tableId, actions };
+      try { window.__diag?.strings?.onActionMapLoaded?.({ stringTableId: tableId, actionCount: actions.length, labelResolveFails }); } catch (_) {}
       return actionMapCache;
     } catch (err) {
       console.warn(`[ac-strings] action map 0x${mapId.toString(16)} load failed:`, err);
+      try { window.__diag?.strings?.onActionMapFailed?.({ mapId, error: err }); } catch (_) {}
       const empty = { stringTableId: 0, actions: [] };
       actionMapCache = empty;
       return empty;
@@ -186,4 +202,30 @@ export async function loadActionMap(mapId = 0x26000000) {
  */
 export function getActionMap() {
   return actionMapCache;
+}
+
+/**
+ * Diag-layer accessor — returns a snapshot of currently-cached state
+ * without triggering loads. Used by `scene3d/diag/strings.js` to
+ * read through cache contents that pre-date diag's install (e.g.
+ * tables loaded by index.html's dynamic-import boot path).
+ *
+ * @returns {{
+ *   tables: Array<{tableId: number, entryCount: number}>,
+ *   languageStrings: Array<{stringId: number, textLength: number}>,
+ *   actionMapLoaded: boolean,
+ * }}
+ */
+export function getStringsDiagSnapshot() {
+  return {
+    tables: Array.from(tables.entries()).map(([tableId, map]) => ({
+      tableId,
+      entryCount: map?.size ?? 0,
+    })),
+    languageStrings: Array.from(languageStrings.entries()).map(([stringId, text]) => ({
+      stringId,
+      textLength: (text ?? "").length,
+    })),
+    actionMapLoaded: !!actionMapCache,
+  };
 }

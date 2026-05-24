@@ -85,14 +85,24 @@ export async function loadAcFont(fontId = UI_FONT_ID) {
     try {
       const data = await wasm.fetch_font(fontId >>> 0);
       if (!data || !data.numGlyphs) {
+        try { window.__diag?.fonts?.onLoadFailed?.({ fontId, error: "empty data", source: "empty" }); } catch (_) {}
         runtimes.set(fontId, null);
         return null;
       }
       const runtime = _buildRuntime(data);
       runtimes.set(fontId, runtime);
+      try {
+        window.__diag?.fonts?.onLoadSucceeded?.({
+          fontId,
+          glyphCount: data.numGlyphs,
+          atlasWidth: data.atlasWidth,
+          atlasHeight: data.atlasHeight,
+        });
+      } catch (_) {}
       return runtime;
     } catch (err) {
       console.warn(`[ac-font] load failed (font 0x${fontId.toString(16)}):`, err);
+      try { window.__diag?.fonts?.onLoadFailed?.({ fontId, error: err, source: "fetch" }); } catch (_) {}
       runtimes.set(fontId, null);
       return null;
     } finally {
@@ -381,6 +391,7 @@ function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy) {
     const cp = ch.codePointAt(0);
     const g = runtime.glyphMap.get(cp);
     if (!g) {
+      try { window.__diag?.fonts?.onFallbackGlyph?.({ codepoint: cp }); } catch (_) {}
       if (!fallbackConfigured) {
         ctx.font = `${runtime.maxCharHeight * scale}px sans-serif`;
         ctx.textBaseline = "top";

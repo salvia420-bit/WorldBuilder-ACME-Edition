@@ -237,6 +237,7 @@ Tracked + non-blocking for the method's correctness:
 - **Per-player visibility filtering.** A player who can't see invisible objects shouldn't get them in `landblock_instance` for their session — that's a server-side scoping decision, orthogonal to the method.
 - **Procedural day-night cycle.** The skybox lerp from Region 0x13 is wall-clock-anchored deterministic (per `crates/holtburger-world/src/sky.rs`) but that's a separate determinism contract — not coupled to placement.
 - **Modder content.** A server running custom DATs has its own bake. The `bake-source.sha256` distinguishes "this bake is compatible with these DATs" vs "this bake is for some other DAT iteration".
+- **UI assets + input bindings.** Fonts (DAT 0x40), LanguageString (0x31), StringTable (0x23), ActionMap (0x26), and the client-side KeyMap rebind store are boot-time loads with their own contract — see [`ui-asset-completeness-method.md`](ui-asset-completeness-method.md). Their `__diag.{fonts,strings,input}` surfaces ship alongside this doc's `__diag.placements`.
 
 ## Glossary
 

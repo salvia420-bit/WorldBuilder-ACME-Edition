@@ -38,6 +38,9 @@ import { attachMotion as _attachMotion } from "./diag/motion.js";
 import { attachPvs as _attachPvs } from "./diag/pvs.js";
 import { attachAssets as _attachAssets } from "./diag/assets.js";
 import { attachIntegrity as _attachIntegrity } from "./diag/integrity.js";
+import { attachFonts as _attachFonts } from "./diag/fonts.js";
+import { attachStrings as _attachStrings } from "./diag/strings.js";
+import { attachInput as _attachInput } from "./diag/input.js";
 
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
@@ -453,6 +456,9 @@ export function installDiag() {
     ["pvs",        _attachPvs],
     ["assets",     _attachAssets],
     ["integrity",  _attachIntegrity],
+    ["fonts",      _attachFonts],
+    ["strings",    _attachStrings],
+    ["input",      _attachInput],
   ]) {
     try { fn?.(diag); } catch (e) {
       // eslint-disable-next-line no-console
