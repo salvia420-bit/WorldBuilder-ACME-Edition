@@ -235,6 +235,48 @@ export class AnimationCache {
     }
 
     /**
+     * Wave 7.5 (2026-05-24) — substitution-aware cache-key suffix.
+     *
+     * Pre-W7.5 the cache key was just (setupId, mtableId, motion,
+     * stance). modelChanges + textureChanges + paletteId +
+     * paletteSubsFlat were passed to fetchKeyframes but NOT folded
+     * into the cache key, so two spawns of the same setup with
+     * different equips returned the same cached entry — silently
+     * stale for any callsite that varied substitutions across calls
+     * (W7.3 despawn+respawn applyAppearance, W7.5 hot-swap, and any
+     * future plugin that needs to re-render an entity with new
+     * substitutions).
+     *
+     * Suffix is omitted (returns empty string) when every
+     * substitution arg is at its default (zero / empty), so the
+     * pre-W7.5 cache keys for plain spawns continue to match. The
+     * suffix uses a stable FNV-1a-like hash over the input bytes
+     * so identical equips across multiple entities share one
+     * cache slot.
+     */
+    static _substitutionSuffix(modelChanges, textureChanges, paletteId, paletteSubsFlat) {
+        const mc = modelChanges || new Uint32Array(0);
+        const tc = textureChanges || new Uint32Array(0);
+        const psf = paletteSubsFlat || new Uint32Array(0);
+        const pid = (paletteId ?? 0) >>> 0;
+        if (mc.length === 0 && tc.length === 0 && psf.length === 0 && pid === 0) {
+            return "";
+        }
+        // Simple stable mix. Pre-W7.5 stance keys had no suffix.
+        let h = 0x811C9DC5 >>> 0;
+        const mix = (v) => {
+            h = (h ^ ((v >>> 0))) >>> 0;
+            // h *= 0x01000193 mod 2^32 — emulate without BigInt.
+            h = Math.imul(h, 0x01000193) >>> 0;
+        };
+        mix(0xA1); for (let i = 0; i < mc.length; i++) mix(mc[i]);
+        mix(0xB2); for (let i = 0; i < tc.length; i++) mix(tc[i]);
+        mix(0xC3); mix(pid);
+        mix(0xD4); for (let i = 0; i < psf.length; i++) mix(psf[i]);
+        return `:sub:${h.toString(16)}`;
+    }
+
+    /**
      * Return a cached clip + rest-pose part meshes for the given
      * `(setupId, mtableId, motionCommand, stance)`. First call kicks
      * `fetchKeyframes(...)` (the wasm export) and builds the clip;
@@ -275,16 +317,21 @@ export class AnimationCache {
         // `(stance, fromMotion → motionCommand)` transition before
         // falling back to the cycle lookup.
         const fromMotion = (opts.fromMotion ?? 0) >>> 0;
+        const modelChanges = opts.modelChanges ?? new Uint32Array(0);
+        const textureChanges = opts.textureChanges ?? new Uint32Array(0);
+        const paletteId = (opts.paletteId ?? 0) >>> 0;
+        const paletteSubsFlat = opts.paletteSubsFlat ?? new Uint32Array(0);
+        // Wave 7.5: include substitutions in the key so different
+        // equips on the same setup/motion/stance don't collide.
+        const subSuffix = AnimationCache._substitutionSuffix(
+            modelChanges, textureChanges, paletteId, paletteSubsFlat);
+        const baseKey = AnimationCache.makeKey(setupId, mtableId, motionCommand, stance);
         const key = fromMotion === 0
-            ? AnimationCache.makeKey(setupId, mtableId, motionCommand, stance)
-            : `${AnimationCache.makeKey(setupId, mtableId, motionCommand, stance)}:link:${fromMotion.toString(16)}`;
+            ? `${baseKey}${subSuffix}`
+            : `${baseKey}:link:${fromMotion.toString(16)}${subSuffix}`;
         const hit = this.entries.get(key);
         if (hit) return hit;
         const promise = (async () => {
-            const modelChanges = opts.modelChanges ?? new Uint32Array(0);
-            const textureChanges = opts.textureChanges ?? new Uint32Array(0);
-            const paletteId = (opts.paletteId ?? 0) >>> 0;
-            const paletteSubsFlat = opts.paletteSubsFlat ?? new Uint32Array(0);
 
             const animData = await fetchKeyframes(
                 setupId,

@@ -67,17 +67,28 @@ The dye chain (CloSubPalette → PaletteSet → Palette → texture pixel substi
 - Add `__diag.clothing.dyeApplications` ring to observe which (sub_palette_id, offset, length) triples actually drove a surface fetch
 - Verify retail-fidelity by screenshotting dyed armor sets against retail screenshots
 
-### D. Hot-swap optimization for applyAppearance (Wave 7.4 candidate)
+### D. Hot-swap optimization for applyAppearance — ✅ SHIPPED (Wave 7.5)
 
-Today's W7.3 `applyAppearance` despawn+respawns. For NPCs in active animation (chatting, combat, casting) the rest-pose flicker is briefly visible. A hot-swap variant would:
-- Preserve `inst.root` + `inst.mixer` + currently-playing `inst.currentAction` across the rebuild.
-- Re-invoke `animationCache.get(setupId, mtableId, currentMotion, currentStance, fetchKeyframes, {modelChanges, textureChanges, paletteId, paletteSubsFlat})` with new opts.
-- Detach old `inst.parts` from `inst.root`, dispose owned materials/textures (geometries are cache-shared — don't dispose), attach new partGroups from the fresh `animEntry.partGroups`.
-- Rebuild the mixer's animation-clip binding against the new parts; restore action time + weight so the entity continues the same swing/walk cycle without a visible reset.
+Shipped 2026-05-24:
 
-Risk: medium. The mixer rebinding against new mesh handles is the load-bearing piece. Recommend writing this as an opt-in `applyAppearanceHotSwap` method first, A/B-gated against the despawn+respawn path via `?clothingHotSwap=1` URL flag, until visual parity is proven.
+1. **Load-bearing cache fix in `scene3d/animation.js`** — pre-W7.5 the AnimationCache key was `(setupId, mtableId, motion, stance)` and EXCLUDED `modelChanges` / `textureChanges` / `paletteId` / `paletteSubsFlat`. That meant two spawns of the same entity with different equips silently returned the SAME cached entry — so W7.3's despawn+respawn would re-render with stale clothing. W7.5 adds `AnimationCache._substitutionSuffix(...)` (FNV-1a-like hash) and appends it to the cache key when any substitution is non-default. Pre-W7.5 keys for plain spawns continue to match (empty suffix when all subs are zero/empty). Fixes BOTH despawn+respawn AND enables hot-swap.
 
-Estimated effort: 1 day including the A/B harness + manual verification under combat motion.
+2. **`EntityManager._applyAppearanceHotSwap(inst, newMeta, guid)`** — preserves `inst.root` + `inst.mixer` + `inst.currentAction`. Only the child Mesh contents of each `inst.parts[p]` Group get replaced. Mixer continues driving `parts[p].position` / `parts[p].quaternion` against the same clip — works because partGroup naming (`part_${p}`) is stable across substitutions on the same setupId. Disposes old entity-owned materials/textures after the new mesh tree is attached (in case the swap throws partway, we don't leave references to disposed assets).
+
+3. **`?clothingHotSwap=1` URL flag** — read in `EntityManager.constructor` into `this._hotSwapAppearance`. `applyAppearance` checks the flag and calls `_applyAppearanceHotSwap`; on topology mismatch (`partGroups.length !== inst.parts.length`) OR any thrown error, falls through to W7.3 despawn+respawn so the equip change still propagates either way.
+
+4. **Diag observability** — `__diag.clothing.recentChanges` entries carry `source: "hot-swap"` (Wave 7.5 path) or `source: "wire-update-object"` (Wave 7.3 fallback path). Counters share the same `appearanceChanges` total.
+
+Verified end-to-end with A/B harness running both flag-on and flag-off sessions against live ACE:
+- **default-despawn-respawn**: `source="wire-update-object"`, `sameInstReference: false` (new EntityInstance created)
+- **hot-swap-flag** (`?clothingHotSwap=1`): `source="hot-swap"`, **`sameInstReference: true`** — same EntityInstance object preserved across the equip change, proving `inst.root` + `inst.mixer` + `inst.currentAction` continuity
+
+Harness: `/mnt/wbterminal1/tmp/claude-scratch/wire-agent-new-pipelines-2026-05-24/run-diag-clothing-hotswap.mjs`.
+
+**Known limitations:**
+- Topology mismatch (e.g. swap to a setup with different part count) falls through to despawn+respawn. Same-setupId equip changes (the common case for clothing) always preserve topology.
+- Cache memory grows by `num_unique_equip_variants` per (setup, mtable, motion, stance) tuple. Bounded for starter zones; if dense vendor towns become a concern, add LRU eviction.
+- Manual combat-motion validation against real GPU is still recommended before defaulting the flag on. The current harness verifies wire path + diag + reference preservation but not visual continuity through an actual swing animation. To default-on, a follow-on should run side-by-side capture on a 1070-class GPU comparing hot-swap to despawn-respawn under a combat swing cycle.
 
 Estimated 1-2 weeks for the full dye experience. None of it is blocked by Wave 7.2 or the equip-change follow-on above.
 

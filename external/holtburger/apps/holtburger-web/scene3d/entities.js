@@ -728,6 +728,21 @@ export class EntityManager {
   constructor(scene3d, wasmExports) {
     this.scene3d = scene3d;
     this.wasmExports = wasmExports;
+    // Wave 7.5 (2026-05-24) — opt-in applyAppearance hot-swap. When
+    // `?clothingHotSwap=1` URL flag is set, applyAppearance attempts
+    // to swap the entity's part-mesh contents in place (preserving
+    // root + mixer + currently-playing action) instead of falling
+    // through to W7.3's despawn+respawn. Falls back to despawn+
+    // respawn when topology mismatch is detected OR when the hot-
+    // swap path throws. Default off — needs manual A/B validation
+    // under combat motion to prove visual parity.
+    this._hotSwapAppearance = false;
+    try {
+      if (typeof window !== "undefined" && window.location) {
+        const flag = new URLSearchParams(window.location.search).get("clothingHotSwap");
+        this._hotSwapAppearance = (flag === "1");
+      }
+    } catch (_) {}
     /** @type {Map<number, EntityInstance>} */
     this.entityMap = new Map();
     /** @type {AnimationCache} */
@@ -2122,6 +2137,23 @@ export class EntityManager {
     if (opts?.subPalettes) newMeta.subPalettes = opts.subPalettes;
     if (opts?.paletteId !== undefined) newMeta.paletteId = (opts.paletteId >>> 0);
 
+    // Wave 7.5 — try hot-swap when the URL flag is on. Hot-swap
+    // preserves root + mixer + currently-playing action; only the
+    // child Mesh contents of each inst.parts[p] Group get replaced.
+    // On topology mismatch or any error, falls through to the W7.3
+    // despawn+respawn path so the equip change still propagates.
+    if (this._hotSwapAppearance) {
+      try {
+        const swapped = await this._applyAppearanceHotSwap(inst, newMeta, g);
+        if (swapped) return true;
+        // swapped=false → topology mismatch or unhandled fallback;
+        // fall through to despawn+respawn.
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[applyAppearance] hot-swap threw on 0x${g.toString(16)}, falling back to despawn+respawn:`, e);
+      }
+    }
+
     // Preserve current world pose. `inst.root.position` is already in
     // AC world-frame (lbX*192 + local_x, etc); recompute LB-local so
     // the spawn path's `wx = lbX*192 + meta.x` rebuilds the same world
@@ -2155,6 +2187,180 @@ export class EntityManager {
 
     this.remove(g);
     await this.spawn(newMeta);
+    return true;
+  }
+
+  /**
+   * Wave 7.5 (2026-05-24): hot-swap variant of applyAppearance.
+   * Preserves `inst.root` + `inst.mixer` + currently-playing
+   * `inst.currentAction` — only the child Mesh contents of each
+   * `inst.parts[p]` Group get replaced. The mixer continues driving
+   * `parts[p].position` / `parts[p].quaternion` against the same
+   * clip (cache returns a fresh animEntry post-W7.5 substitution-
+   * aware cache key fix, but the clip's track NAMES match the old
+   * one because partGroup naming `part_${p}` is identical for same
+   * setupId).
+   *
+   * Returns true when the swap succeeded. Returns false when:
+   *  - new animEntry.partGroups.length !== inst.parts.length
+   *    (rig topology changed — caller should despawn+respawn)
+   *  - any other recoverable mismatch
+   * Throws on unexpected errors — caller's try/catch handles fallback.
+   *
+   * @private
+   */
+  async _applyAppearanceHotSwap(inst, newMeta, guid) {
+    const setupId = (newMeta.modelId ?? newMeta.setupId ?? 0) >>> 0;
+    if (!setupId) return false;
+    const mtableId = (newMeta.mtableId ?? 0) >>> 0;
+    // Use the entity's CURRENT motion/stance (mid-animation continuity),
+    // falling back to spawn-time defaults if currentAction is null.
+    const motion = (inst.currentMotion ?? newMeta.motionCommand ?? 0) >>> 0;
+    const stance = (inst.currentStance ?? newMeta.motionStance ?? 0) >>> 0;
+    const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+    if (typeof fetchKeyframes !== "function") return false;
+
+    const animEntry = await this.animationCache.get(
+      setupId, mtableId, motion, stance, fetchKeyframes,
+      {
+        modelChanges: newMeta.modelChanges ?? new Uint32Array(0),
+        textureChanges: newMeta.textureChanges ?? new Uint32Array(0),
+        paletteId: (newMeta.paletteId ?? 0) >>> 0,
+        paletteSubsFlat: newMeta.subPalettes ?? new Uint32Array(0),
+      }
+    );
+
+    const newPartGroups = Array.isArray(animEntry.partGroups)
+      ? animEntry.partGroups
+      : null;
+    if (!newPartGroups) return false;
+    if (newPartGroups.length !== inst.parts.length) {
+      // Topology mismatch — caller despawn+respawn.
+      return false;
+    }
+
+    // Collect new surface DIDs + decide entity-owned-materials vs cache.
+    const allSurfaceDids = new Set();
+    for (const pg of newPartGroups) {
+      if (!pg) continue;
+      for (const did of pg.surfaceDids) allSurfaceDids.add(did >>> 0);
+    }
+    const paletteId = (newMeta.paletteId ?? 0) >>> 0;
+    const subPalettes = newMeta.subPalettes ?? new Uint32Array(0);
+    const hasPaletteSubs = paletteId !== 0 || subPalettes.length > 0;
+
+    let entityMaterials = null;
+    if (hasPaletteSubs && typeof this.wasmExports?.fetchEntitySurfacesPixels === "function") {
+      const dids = new Uint32Array([...allSurfaceDids]);
+      if (dids.length > 0) {
+        const results = await this.wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes);
+        entityMaterials = new Map();
+        const newOwnedMaterials = [];
+        const newOwnedTextures = [];
+        for (let i = 0; i < dids.length; i += 1) {
+          const did = dids[i] >>> 0;
+          const sp = results[i];
+          if (!sp || sp.width === 0 || sp.height === 0) {
+            entityMaterials.set(did, this.materialCache?.fallbackMaterial ?? this._fallbackMaterial());
+            if (sp && typeof sp.free === "function") sp.free();
+            continue;
+          }
+          const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
+          if (typeof sp.free === "function") sp.free();
+          const mat = new THREE.MeshStandardMaterial({
+            map: tex, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, transparent: false,
+          });
+          mat.name = `entity-${guid.toString(16)}-surface-${did.toString(16)}`;
+          mat.userData = { ...(mat.userData || {}), __disposable: true };
+          newOwnedMaterials.push(mat);
+          newOwnedTextures.push(tex);
+          entityMaterials.set(did, mat);
+        }
+        // Swap owned-asset bookkeeping. Old materials/textures get
+        // disposed below after we detach the meshes referencing them.
+        inst._pendingOwnedMaterials = newOwnedMaterials;
+        inst._pendingOwnedTextures = newOwnedTextures;
+      }
+    } else if (allSurfaceDids.size > 0 && this.materialCache) {
+      try {
+        await this.materialCache.preload([...allSurfaceDids], this.wasmExports.fetch_surfaces_pixels);
+      } catch (e) {
+        try { window.__diag?.assets?.onMaterialError?.({ guid, dids: allSurfaceDids, error: e, source: "hot-swap" }); } catch (_) {}
+      }
+    }
+
+    // Capture old owned assets for disposal AFTER we've detached the
+    // meshes that hold material/geometry refs.
+    const oldOwnedMaterials = inst.ownedMaterials.slice();
+    const oldOwnedTextures = inst.ownedTextures.slice();
+
+    // Detach all child Meshes of each inst.parts[p], then attach
+    // new ones built from newPartGroups[p].
+    for (let p = 0; p < inst.parts.length; p += 1) {
+      const partGroup = inst.parts[p];
+      // remove existing child meshes
+      const oldChildren = partGroup.children.slice();
+      for (const child of oldChildren) {
+        partGroup.remove(child);
+      }
+      const conv = newPartGroups[p];
+      if (!conv) continue;
+      for (const grp of conv.groups) {
+        const did = grp.surfaceDid >>> 0;
+        let mat = null;
+        if (entityMaterials && entityMaterials.has(did)) {
+          mat = entityMaterials.get(did);
+        } else if (this.materialCache) {
+          mat = this.materialCache.getCached(did);
+        } else {
+          mat = this._fallbackMaterial();
+        }
+        const m = new THREE.Mesh(grp.geometry, mat);
+        m.name = `part_${p}_surface_${did.toString(16)}`;
+        m.userData = { guid, partIndex: p, surfaceDid: did };
+        if (this.scene3d?.shadowsEnabled || this.scene3d?.csmEnabled) {
+          m.castShadow = materialCanCastShadow(mat);
+        }
+        partGroup.add(m);
+        inst.registerGeometry(grp.geometry);
+      }
+    }
+
+    // Commit new owned-asset registry; dispose old ones now that
+    // nothing references them.
+    if (inst._pendingOwnedMaterials) {
+      inst.ownedMaterials.length = 0;
+      for (const m of inst._pendingOwnedMaterials) inst.ownedMaterials.push(m);
+      delete inst._pendingOwnedMaterials;
+    }
+    if (inst._pendingOwnedTextures) {
+      inst.ownedTextures.length = 0;
+      for (const t of inst._pendingOwnedTextures) inst.ownedTextures.push(t);
+      delete inst._pendingOwnedTextures;
+    }
+    inst._entityMaterials = entityMaterials;
+    for (const m of oldOwnedMaterials) {
+      try { m.dispose(); } catch (_) {}
+    }
+    for (const t of oldOwnedTextures) {
+      try { t.dispose(); } catch (_) {}
+    }
+
+    // Update meta with new substitutions so future operations see
+    // current state.
+    inst.meta = newMeta;
+
+    try {
+      window.__diag?.clothing?.onAppearanceChange?.({
+        guid,
+        source: "hot-swap",
+        modelChangesCount: ((newMeta.modelChanges?.length ?? 0) / 2) | 0,
+        textureChangesCount: ((newMeta.textureChanges?.length ?? 0) / 3) | 0,
+        subPalettesCount: ((newMeta.subPalettes?.length ?? 0) / 3) | 0,
+        paletteId: (newMeta.paletteId ?? 0) >>> 0,
+      });
+    } catch (_) {}
+
     return true;
   }
 
