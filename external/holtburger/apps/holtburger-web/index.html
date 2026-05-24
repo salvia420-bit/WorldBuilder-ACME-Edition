@@ -1365,6 +1365,12 @@
               m.loadAcFont(m.HEADING_FONT_ID)
                 .then((h) => h && console.log("[ac-font] heading runtime ready"))
                 .catch(() => {});
+              // Preload the chat-window font (0x40000027, 16×15, 1419
+              // glyphs) — Latin extended + smart-quote/symbol set for
+              // real chat text.
+              m.loadAcFont(m.CHAT_FONT_ID)
+                .then((c) => c && console.log("[ac-font] chat runtime ready"))
+                .catch(() => {});
             })
             .catch((err) => console.warn("[ac-font] preload failed:", err));
 

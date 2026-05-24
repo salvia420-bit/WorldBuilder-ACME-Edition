@@ -23,7 +23,7 @@
 // (acpedia), the actual retail panel is RESIZABLE — 410x100 is
 // just the default; resize-handle is a follow-on.
 
-import { setAcText, COMPACT_FONT_ID } from "../ui/ac_font.js";
+import { setAcText, CHAT_FONT_ID } from "../ui/ac_font.js";
 
 const OVERLAY_ID = "hb-chat-panel";
 const WIDTH = 410;
@@ -120,7 +120,10 @@ function ensureStyles() {
       overflow-x: hidden;
       padding: 0 4px;
       font-size: 11px;
-      line-height: 13px;
+      /* line-height 17px fits the chat-window font's 16px cell
+         (0x40000027) with 1px margin. Previously 13px for the compact
+         font's 12px cell. */
+      line-height: 17px;
       color: var(--hb-text-cream);
       pointer-events: auto;
       scrollbar-width: thin;
@@ -521,10 +524,11 @@ export function mount(_ctx) {
       line.style.fontStyle = "italic";
     }
     line.style.color = lineColor;
-    // Chat lines use the compact (10 px) font instead of the 16 px
-    // default — fits the chat panel's 11 px CSS line-height without
-    // overflowing per-line vertical space.
-    setAcText(line, srcLi.textContent || "", { color: lineColor, fontId: COMPACT_FONT_ID });
+    // Chat lines use the chat-window font (0x40000027, 16×15, 1419-
+    // glyph extended set) — covers accented Latin / smart quotes /
+    // symbols that compact's 1050-glyph set drops. Scroll line-height
+    // (17px) was bumped to accommodate the 16px cell.
+    setAcText(line, srcLi.textContent || "", { color: lineColor, fontId: CHAT_FONT_ID });
     scroll.appendChild(line);
     // Auto-scroll if pinned to bottom.
     if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40) {

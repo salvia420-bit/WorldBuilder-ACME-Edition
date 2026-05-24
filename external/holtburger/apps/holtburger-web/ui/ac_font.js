@@ -27,9 +27,9 @@ const UI_FONT_ID = 0x40000000;
 /**
  * Compact (10 px tall) variant of the standard UI font — same 1050
  * glyph set as `UI_FONT_ID` but half the vertical footprint. Pass
- * via `setAcText(el, text, {fontId: COMPACT_FONT_ID})` for chat
- * lines, tooltips, and any other crowded contexts where the
- * default 16 px overflows the CSS box.
+ * via `setAcText(el, text, {fontId: COMPACT_FONT_ID})` for tooltips
+ * and any other crowded contexts where the default 16 px overflows
+ * the CSS box.
  */
 export const COMPACT_FONT_ID = 0x4000001C;
 
@@ -42,6 +42,15 @@ export const COMPACT_FONT_ID = 0x4000001C;
  * mid-size pick.
  */
 export const HEADING_FONT_ID = 0x40000019;
+
+/**
+ * Chat-window variant — 16 × 15 cell, 1419 glyph set (Latin extended
+ * + smart quotes + symbols). Same height as the canonical UI font but
+ * covers the accented/symbolic characters real chat hits (player
+ * names with é/ñ, copy-pasted ™/©, smart-quoted dialog). Per
+ * `docs/ac-font-inventory-2026-05-24.md` the chat-window pick.
+ */
+export const CHAT_FONT_ID = 0x40000027;
 
 // Module-scoped per-font runtime cache. Each entry holds the
 // HTMLCanvasElement of the decoded foreground atlas and a Map<u32, glyph>.
