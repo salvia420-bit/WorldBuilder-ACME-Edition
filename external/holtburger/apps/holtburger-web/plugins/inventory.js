@@ -475,7 +475,7 @@ function doMount(parentEl, _ctx) {
     el.appendChild(icon);
     const tip = document.createElement("span");
     tip.className = "hb-inv-doll-tip";
-    setAcText(tip, s.name);
+    setAcText(tip, s.name, { color: "#f0d8a0" });
     el.appendChild(tip);
     paperdoll.appendChild(el);
     dollSlotEls[s.equipMask] = { el, icon, tip, slot: s };
@@ -503,7 +503,7 @@ function doMount(parentEl, _ctx) {
   burdenRow.className = "hb-inv-burden";
   const burdenLbl = document.createElement("span");
   burdenLbl.className = "hb-inv-burden-label";
-  setAcText(burdenLbl, "Burden");
+  setAcText(burdenLbl, "Burden", { color: "#a8a090" });
   burdenRow.appendChild(burdenLbl);
   const burdenBar = document.createElement("div");
   burdenBar.className = "hb-inv-burden-bar";
@@ -513,7 +513,7 @@ function doMount(parentEl, _ctx) {
   burdenRow.appendChild(burdenBar);
   const burdenPct = document.createElement("span");
   burdenPct.className = "hb-inv-burden-label";
-  setAcText(burdenPct, "0%");
+  setAcText(burdenPct, "0%", { color: "#a8a090" });
   burdenRow.appendChild(burdenPct);
   overlay.appendChild(burdenRow);
 
@@ -574,14 +574,14 @@ function doMount(parentEl, _ctx) {
     if (stack) {
       const s = document.createElement("span");
       s.className = "hb-inv-stack";
-      setAcText(s, stack.textContent);
+      setAcText(s, stack.textContent, { color: "#f0d8a0" });
       slot.appendChild(s);
     }
     // Tooltip
     const tip = document.createElement("span");
     tip.className = "hb-inv-tip";
     const name = srcLi.querySelector(".name");
-    setAcText(tip, name?.textContent ?? "(unnamed)");
+    setAcText(tip, name?.textContent ?? "(unnamed)", { color: "#f0d8a0" });
     slot.appendChild(tip);
     // Forward draggable (vendor sells use the same pattern as the
     // source <li> with draggable=true).
@@ -622,7 +622,7 @@ function doMount(parentEl, _ctx) {
       const e = dollSlotEls[k];
       e.el.classList.remove("equipped");
       e.icon.style.display = "none";
-      setAcText(e.tip, e.slot.name);
+      setAcText(e.tip, e.slot.name, { color: "#f0d8a0" });
     }
   }
 
@@ -645,7 +645,7 @@ function doMount(parentEl, _ctx) {
     const tb = srcLi.dataset?.typeBit ?? "0x0";
     matched.icon.style.display = "block";
     matched.icon.style.background = TYPE_COLOR[tb] || "#777";
-    setAcText(matched.tip, `${item.name || matched.slot.name} — ${matched.slot.name}`);
+    setAcText(matched.tip, `${item.name || matched.slot.name} — ${matched.slot.name}`, { color: "#f0d8a0" });
     return true;
   }
 

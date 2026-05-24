@@ -206,12 +206,12 @@ function renderHead(headEl, stats) {
   headEl.innerHTML = "";
   const nameEl = document.createElement("div");
   nameEl.className = "hb-ci-head-name";
-  setAcText(nameEl, stats?.name || "—");
+  setAcText(nameEl, stats?.name || "—", { color: "#f0c87c" });
   headEl.appendChild(nameEl);
   const levelEl = document.createElement("div");
   levelEl.className = "hb-ci-head-level";
   const level = stats?.levelInfo ? (tupleArrayAt(stats.levelInfo, 0) ?? 1) : 1;
-  setAcText(levelEl, `Level ${level}`);
+  setAcText(levelEl, `Level ${level}`, { color: "#f0d8a0" });
   headEl.appendChild(levelEl);
 }
 
@@ -221,7 +221,7 @@ function renderAttributes(bodyEl, stats, _skillTable) {
   if (!a) {
     const e = document.createElement("div");
     e.className = "hb-ci-empty";
-    setAcText(e, "No attributes yet.");
+    setAcText(e, "No attributes yet.", { color: "#a8a090" });
     bodyEl.appendChild(e);
     return;
   }
@@ -303,13 +303,13 @@ function renderTitles(bodyEl, _stats) {
 function section(text) {
   const el = document.createElement("div");
   el.className = "hb-ci-section";
-  setAcText(el, text);
+  setAcText(el, text, { color: "#6acaca" });
   return el;
 }
 function emptyMsg(text) {
   const el = document.createElement("div");
   el.className = "hb-ci-empty";
-  setAcText(el, text);
+  setAcText(el, text, { color: "#a8a090" });
   return el;
 }
 function row(iconUrl, name, value) {
@@ -321,11 +321,11 @@ function row(iconUrl, name, value) {
   el.appendChild(ic);
   const n = document.createElement("div");
   n.className = "hb-ci-name";
-  setAcText(n, name);
+  setAcText(n, name, { color: "#f0d8a0" });
   el.appendChild(n);
   const v = document.createElement("div");
   v.className = "hb-ci-value";
-  setAcText(v, String(value));
+  setAcText(v, String(value), { color: "#8aef6d" });
   el.appendChild(v);
   return el;
 }
@@ -358,7 +358,7 @@ export const view = {
       btn.type = "button";
       btn.className = "hb-ci-tab" + (t.id === activeTab ? " active" : "");
       btn.dataset.tab = t.id;
-      setAcText(btn, t.label);
+      setAcText(btn, t.label, { color: t.id === activeTab ? "#f0c87c" : "#f0e8d0" });
       btn.addEventListener("click", () => setTab(t.id));
       tabsEl.appendChild(btn);
       tabBtns[t.id] = btn;
@@ -376,9 +376,9 @@ export const view = {
     const footerEl = document.createElement("div");
     footerEl.className = "hb-ci-footer";
     const footL = document.createElement("span");
-    setAcText(footL, "—");
+    setAcText(footL, "—", { color: "#a8a090" });
     const footR = document.createElement("span");
-    setAcText(footR, "");
+    setAcText(footR, "", { color: "#a8a090" });
     footerEl.appendChild(footL);
     footerEl.appendChild(footR);
     root.appendChild(footerEl);
@@ -389,7 +389,9 @@ export const view = {
     function setTab(id) {
       activeTab = id;
       for (const k of Object.keys(tabBtns)) {
-        tabBtns[k].classList.toggle("active", k === id);
+        const btn = tabBtns[k];
+        btn.classList.toggle("active", k === id);
+        setAcText(btn, btn.textContent || k, { color: k === id ? "#f0c87c" : "#f0e8d0" });
       }
       rerender();
     }
@@ -403,8 +405,8 @@ export const view = {
       }
       // Footer: skill credits if available.
       const lv = stats?.levelInfo;
-      setAcText(footL, lv ? `XP: ${tupleArrayAt(lv, 1) ?? 0}` : "—");
-      setAcText(footR, lv ? `Next: ${tupleArrayAt(lv, 2) ?? 0}` : "");
+      setAcText(footL, lv ? `XP: ${tupleArrayAt(lv, 1) ?? 0}` : "—", { color: "#a8a090" });
+      setAcText(footR, lv ? `Next: ${tupleArrayAt(lv, 2) ?? 0}` : "", { color: "#a8a090" });
     }
 
     // Load skill table then render.

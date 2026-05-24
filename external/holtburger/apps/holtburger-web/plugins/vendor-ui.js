@@ -521,7 +521,7 @@ function buildOverlay() {
     const b = document.createElement("button");
     b.className = "hvb-tab" + (t.id === "items" ? " active" : "");
     b.dataset.tab = t.id;
-    setAcText(b, t.label);
+    setAcText(b, t.label, { color: t.id === "items" ? "#f0c87c" : "#f0d8a0" });
     b.addEventListener("click", () => switchTab(t.id));
     tabs.appendChild(b);
   }
@@ -599,7 +599,7 @@ function buildOverlay() {
     b.className = `hvb-btn hvb-btn-${btn.id}`;
     b.dataset.action = btn.id;
     b.dataset.tabs = btn.tabs.join(",");
-    setAcText(b, btn.label);
+    setAcText(b, btn.label, { color: "#d44" });
     b.disabled = true;
     actions.appendChild(b);
   }
@@ -738,7 +738,7 @@ function render() {
       label += ` (${state.buyQueue.length})`;
     if (id === "selling" && state.sellQueue.length)
       label += ` (${state.sellQueue.length})`;
-    setAcText(b, label);
+    setAcText(b, label, { color: id === state.currentTab ? "#f0c87c" : "#f0d8a0" });
     b.classList.toggle("active", id === state.currentTab);
   });
 
@@ -771,11 +771,11 @@ function renderItemsPane() {
   const myPyreals = countPyreals();
   if (sel) {
     const price = Math.round((sel.value || 0) * (vs.buyMultiplier || 1));
-    setAcText(nameEl, sel.name || `wcid ${sel.wcid}`);
-    setAcText(priceEl, `costs ${fmtPrice(price)} p (you have ${fmtPrice(myPyreals)} p)`);
+    setAcText(nameEl, sel.name || `wcid ${sel.wcid}`, { color: "#f0c87c" });
+    setAcText(priceEl, `costs ${fmtPrice(price)} p (you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
   } else {
-    setAcText(nameEl, items.length ? "— select an item —" : "(no items in this category)");
-    setAcText(priceEl, `(you have ${fmtPrice(myPyreals)} p)`);
+    setAcText(nameEl, items.length ? "— select an item —" : "(no items in this category)", { color: "#f0c87c" });
+    setAcText(priceEl, `(you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
   }
 
   // Icon strip
@@ -790,7 +790,7 @@ function renderItemsPane() {
     if ((it.stackSize || 1) > 1) {
       const badge = document.createElement("div");
       badge.className = "hvb-stack-badge";
-      setAcText(badge, String(it.stackSize));
+      setAcText(badge, String(it.stackSize), { color: "#f0e8d0" });
       cell.appendChild(badge);
     }
     cell.title = `${it.name} — ${fmtPrice((it.value || 0) * (vs.buyMultiplier || 1))}p`;
@@ -833,7 +833,7 @@ function renderQueuePane(which) {
     empty.className = "hvb-queue-empty";
     setAcText(empty, which === "buying"
       ? "Empty. Click an item in the Items tab + \"Add to List\"."
-      : "Empty. Drag inventory items onto this panel.");
+      : "Empty. Drag inventory items onto this panel.", { color: "#807868" });
     list.appendChild(empty);
   }
 
@@ -848,7 +848,7 @@ function renderQueuePane(which) {
     setItemIcon(iconEl, q);
     const nameEl = document.createElement("div");
     nameEl.className = "hvb-queue-name";
-    setAcText(nameEl, q.name);
+    setAcText(nameEl, q.name, { color: "#f0e8d0" });
     const qtyEl = document.createElement("input");
     qtyEl.className = "hvb-queue-qty";
     qtyEl.type = "number";
@@ -862,7 +862,7 @@ function renderQueuePane(which) {
     });
     const priceEl = document.createElement("div");
     priceEl.className = "hvb-queue-price";
-    setAcText(priceEl, `${fmtPrice(lineTotal)} p`);
+    setAcText(priceEl, `${fmtPrice(lineTotal)} p`, { color: "#f0c87c" });
     const rmEl = document.createElement("button");
     rmEl.className = "hvb-queue-remove";
     rmEl.textContent = "×";
@@ -881,7 +881,7 @@ function renderQueuePane(which) {
   }
 
   const label = which === "buying" ? "Cost" : "Credit";
-  setAcText(totalEl, `${label}: ${fmtPrice(total)} p`);
+  setAcText(totalEl, `${label}: ${fmtPrice(total)} p`, { color: "#f0c87c" });
 
   // Enable Confirm only when queue is non-empty.
   const confirmBtn = ov.querySelector(`.hvb-btn-confirm-${which.slice(0, -3)}`);
