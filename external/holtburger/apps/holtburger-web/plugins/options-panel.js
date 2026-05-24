@@ -252,7 +252,7 @@ const TABS = [
   { id: "graphics", label: "Graphics", render: renderGraphicsTab },
   { id: "audio",    label: "Audio",    render: stubTab("Audio", "Master volume / SFX / music / ambient / voice / chat sounds. Wires to AudioManager + AmbientRuntime — see scene3d/sound_table.js.") },
   { id: "mouse",    label: "Mouse",    render: stubTab("Mouse & Camera", "Mouse-turn sensitivity / invert / camera distance / FOV. Plumbing already exists in scene3d/picking.js + ui/graphics_settings.js (FOV slider).") },
-  { id: "controls", label: "Controls", render: stubTab("Controls", "Key bindings — retail's UIOption_ActionKeyMap. Read-only for now: see ~/.claude/skills/worldbuilder-terminal/ for the canonical UICommand list.") },
+  { id: "controls", label: "Controls", render: renderControlsTab },
   { id: "chat",     label: "Chat",     render: stubTab("Chat", "Channel colours / timestamps / per-channel mute. Plumbing partially in plugins/chat-panel.js (tab filters).") },
   { id: "network",  label: "Network",  render: stubTab("Network", "Server latency display / packet-loss warning / autoreconnect. Surfacing requires Login_WorldInfo bus event (api.js coverage row 8 — currently MISSING).") },
   { id: "char",     label: "Character",render: stubTab("Character", "Auto-loot prefs / fellowship-XP/loot share defaults / PK opt-in. Maps to retail's CharacterOptionsPanel UI command group.") },
@@ -269,6 +269,64 @@ function stubTab(title, blurb) {
       </div>
     `;
   };
+}
+
+function renderControlsTab(bodyEl) {
+  bodyEl.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "hb-opt-section";
+  setAcText(title, "Key Bindings");
+  bodyEl.appendChild(title);
+
+  const note = document.createElement("div");
+  note.style.marginBottom = "8px";
+  note.style.opacity = "0.75";
+  setAcText(note, "Read-only retail action labels (from ActionMap 0x26000001 → StringTable 0x23000005). Rebind UI is a follow-on.");
+  bodyEl.appendChild(note);
+
+  const list = document.createElement("div");
+  list.style.maxHeight = "320px";
+  list.style.overflowY = "auto";
+  list.style.background = "rgba(0, 0, 0, 0.35)";
+  list.style.border = "1px solid var(--hb-border-brass-dim)";
+  list.style.padding = "4px 6px";
+  list.style.fontFamily = "var(--hb-font-mono)";
+  list.style.fontSize = "11px";
+  bodyEl.appendChild(list);
+
+  const actions = window.__acKeybindings;
+  if (!Array.isArray(actions) || actions.length === 0) {
+    setAcText(list, "(loading — open the Controls tab again in a few seconds)");
+    return;
+  }
+
+  // De-duplicate by labelHash to collapse the many input_maps that
+  // share the same action (alt-bindings, controller, etc.) into one
+  // visible row each.
+  const byLabel = new Map();
+  for (const a of actions) {
+    if (!a.label) continue;
+    if (!byLabel.has(a.labelHash)) byLabel.set(a.labelHash, a.label);
+  }
+  const rows = [...byLabel.entries()]
+    .sort(([, a], [, b]) => a.localeCompare(b))
+    .slice(0, 200);
+
+  for (const [hash, label] of rows) {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.justifyContent = "space-between";
+    row.style.padding = "1px 4px";
+    row.style.borderBottom = "1px solid rgba(138, 117, 68, 0.15)";
+    const l = document.createElement("span");
+    setAcText(l, label);
+    const h = document.createElement("span");
+    h.style.opacity = "0.5";
+    setAcText(h, `0x${hash.toString(16).toUpperCase().padStart(8, "0")}`);
+    row.appendChild(l);
+    row.appendChild(h);
+    list.appendChild(row);
+  }
 }
 
 function renderAboutTab(bodyEl) {

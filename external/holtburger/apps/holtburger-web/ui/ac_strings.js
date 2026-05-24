@@ -122,3 +122,68 @@ export async function loadLanguageString(stringId) {
 export function languageString(stringId) {
   return languageStrings.get(stringId) ?? null;
 }
+
+// ---------------------------------------------------------------------
+// ActionMap loader — resolves action hash → label by chaining through
+// the referenced StringTable (string_table_data_id, usually 0x23000005).
+// Output of `loadActionMap()` is an array of resolved {inputMap,
+// actionHash, label, toggle} tuples.
+
+let actionMapPromise = null;
+let actionMapCache = null;
+
+/**
+ * Load + chain-resolve the retail ActionMap. The ActionMap itself
+ * lives at the supplied `mapId` (default 0x26000001 — the only
+ * record in the retail DAT). Loading also auto-loads the referenced
+ * StringTable so labels resolve immediately.
+ *
+ * @param {number} [mapId=0x26000001]
+ * @returns {Promise<{stringTableId: number, actions: Array<{inputMap: number, actionHash: number, label: string, labelHash: number, toggle: number}>}>}
+ */
+export async function loadActionMap(mapId = 0x26000000) {
+  if (actionMapCache) return actionMapCache;
+  if (actionMapPromise) return actionMapPromise;
+  actionMapPromise = (async () => {
+    const wasm = window.__hbWasm ?? window.__wasm ?? null;
+    if (!wasm?.fetch_action_map) {
+      const empty = { stringTableId: 0, actions: [] };
+      actionMapCache = empty;
+      return empty;
+    }
+    try {
+      const json = await wasm.fetch_action_map(mapId >>> 0);
+      const data = JSON.parse(json);
+      if (!data) {
+        actionMapCache = { stringTableId: 0, actions: [] };
+        return actionMapCache;
+      }
+      const tableId = data.string_table_data_id >>> 0;
+      const table = await loadStringTable(tableId);
+      const actions = data.actions.map((a) => ({
+        inputMap: a.input_map >>> 0,
+        actionHash: a.action_hash >>> 0,
+        labelHash: a.label_hash >>> 0,
+        toggle: a.toggle >>> 0,
+        label: table.get((a.label_hash >>> 0)) ?? null,
+      }));
+      actionMapCache = { stringTableId: tableId, actions };
+      return actionMapCache;
+    } catch (err) {
+      console.warn(`[ac-strings] action map 0x${mapId.toString(16)} load failed:`, err);
+      const empty = { stringTableId: 0, actions: [] };
+      actionMapCache = empty;
+      return empty;
+    } finally {
+      actionMapPromise = null;
+    }
+  })();
+  return actionMapPromise;
+}
+
+/**
+ * Sync accessor — returns the resolved ActionMap if loaded, else null.
+ */
+export function getActionMap() {
+  return actionMapCache;
+}

@@ -5161,6 +5161,51 @@ pub async fn fetch_language_string(string_id: u32) -> Result<String, JsValue> {
     }
 }
 
+/// Fetch the retail ActionMap (DAT type 0x26) — wires action hashes
+/// to their StringTable label-hash references. Returns a JSON shape:
+///
+///   { "string_table_data_id": <u32>,
+///     "actions": [{ "input_map": <u32>, "action_hash": <u32>,
+///                   "label_hash": <u32>, "toggle": <u32> }, ...] }
+///
+/// JS resolves `label_hash` through the loaded StringTable to get
+/// the human-readable action name ("Cast Spell", "Increase Power",
+/// etc.).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::ActionMap;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", map_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", map_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let map = match ActionMap::unpack(&bytes) {
+        Ok(m) => m,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let mut out = String::with_capacity(8192);
+    out.push_str("{\"string_table_data_id\":");
+    out.push_str(&map.string_table_data_id.to_string());
+    out.push_str(",\"actions\":[");
+    let mut first = true;
+    for (input_map_key, values) in &map.input_maps {
+        for (action_hash, v) in values {
+            if !first { out.push(','); }
+            first = false;
+            out.push_str(&format!(
+                "{{\"input_map\":{},\"action_hash\":{},\"label_hash\":{},\"toggle\":{}}}",
+                input_map_key, action_hash, v.user_binding.action_name, v.toggle_type,
+            ));
+        }
+    }
+    out.push_str("]}");
+    Ok(out)
+}
+
 /// Phase 4 step 6 Phase B: surface decode with entity palette overrides.
 /// ACE's `CalculateObjDesc` (~/ace-server/Source/ACE.Server/WorldObjects/
 /// WorldObject_Networking.cs:1017 + Creature_Networking.cs:218) sets

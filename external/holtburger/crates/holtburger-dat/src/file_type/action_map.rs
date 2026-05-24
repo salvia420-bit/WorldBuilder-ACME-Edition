@@ -83,6 +83,12 @@ pub struct ActionMap {
 }
 
 impl ActionMap {
+    /// Parse from raw bytes. Mirrors Font/Texture/StringTable unpack.
+    pub fn unpack(data: &[u8]) -> binrw::BinResult<Self> {
+        let mut cursor = binrw::io::Cursor::new(data);
+        Self::read_le(&mut cursor)
+    }
+
     pub fn read_le<R: Read + Seek>(reader: &mut R) -> binrw::BinResult<Self> {
         use binrw::BinRead;
 

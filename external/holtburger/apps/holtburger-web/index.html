@@ -893,6 +893,7 @@
         fetch_font,
         fetch_string_table,
         fetch_language_string,
+        fetch_action_map,
         fetchEntityModelRender,
         fetchEntityCycleFrames,
         fetchEntityAnimationKeyframes,
@@ -1293,6 +1294,7 @@
           fetch_font: (id) => fetch_font(id >>> 0),
           fetch_string_table: (id) => fetch_string_table(id >>> 0),
           fetch_language_string: (id) => fetch_language_string(id >>> 0),
+          fetch_action_map: (id) => fetch_action_map(id >>> 0),
           hash32,
         };
 
@@ -1368,9 +1370,16 @@
           // `acString(0x23000005, hashId)` to render retail labels.
           // Fire-and-forget; failures land in console.warn only.
           import("./ui/ac_strings.js")
-            .then((m) => m.loadStringTable(0x23000005))
-            .then((map) => {
+            .then(async (m) => {
+              const map = await m.loadStringTable(0x23000005);
               console.log(`[ac-strings] input-table loaded: ${map.size} entries`);
+              // Chain through ActionMap → resolved keybindings.
+              const am = await m.loadActionMap();
+              // Dev-facing exposure: `window.__acKeybindings` is a flat
+              // array of { inputMap, actionHash, label, ... } tuples.
+              // The options-panel Input tab reads from here.
+              window.__acKeybindings = am.actions;
+              console.log(`[ac-strings] action-map loaded: ${am.actions.length} actions`);
             })
             .catch((err) => console.warn("[ac-strings] preload failed:", err));
 
