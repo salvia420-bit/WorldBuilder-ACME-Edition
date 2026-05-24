@@ -23,6 +23,8 @@
 // (acpedia), the actual retail panel is RESIZABLE — 410x100 is
 // just the default; resize-handle is a follow-on.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const OVERLAY_ID = "hb-chat-panel";
 const WIDTH = 410;
 const HEIGHT = 100;
@@ -321,7 +323,7 @@ export function mount(_ctx) {
     btn.type = "button";
     btn.className = "hb-chat-tab-btn" + (t.id === "all" ? " active" : "");
     btn.dataset.tab = t.id;
-    btn.textContent = t.label;
+    setAcText(btn, t.label);
     tabsEl.appendChild(btn);
     tabBtns[t.id] = btn;
   }
@@ -382,7 +384,7 @@ export function mount(_ctx) {
   const channelBtn = document.createElement("button");
   channelBtn.type = "button";
   channelBtn.className = "hb-chat-channel-btn";
-  channelBtn.textContent = activeChannel.label;
+  setAcText(channelBtn, activeChannel.label);
   inputRow.appendChild(channelBtn);
 
   // Channel popup menu — built imperatively, opens above the button.
@@ -394,11 +396,11 @@ export function mount(_ctx) {
     item.className = "hb-chat-channel-item" + (c.id === activeChannel.id ? " selected" : "");
     item.dataset.channel = c.id;
     const lbl = document.createElement("span");
-    lbl.textContent = c.label;
+    setAcText(lbl, c.label);
     item.appendChild(lbl);
     const cmd = document.createElement("span");
     cmd.className = "hb-chat-channel-cmd";
-    cmd.textContent = c.cmd.trim() || "say";
+    setAcText(cmd, c.cmd.trim() || "say");
     item.appendChild(cmd);
     channelMenu.appendChild(item);
     channelItems[c.id] = item;
@@ -409,7 +411,7 @@ export function mount(_ctx) {
     const c = CHANNELS.find((x) => x.id === id);
     if (!c) return;
     activeChannel = c;
-    channelBtn.textContent = c.label;
+    setAcText(channelBtn, c.label);
     for (const k of Object.keys(channelItems)) {
       channelItems[k].classList.toggle("selected", k === id);
     }
@@ -449,7 +451,7 @@ export function mount(_ctx) {
   const sendBtn = document.createElement("button");
   sendBtn.type = "button";
   sendBtn.className = "hb-chat-send-btn";
-  sendBtn.textContent = "Send";
+  setAcText(sendBtn, "Send");
   sendBtn.title = "Send (Enter)";
   inputRow.appendChild(sendBtn);
 

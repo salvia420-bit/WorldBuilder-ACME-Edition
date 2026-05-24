@@ -41,6 +41,7 @@ const inFlight = new Map();
  * @returns {Promise<AcFontRuntime | null>}
  */
 export async function loadAcFont(fontId = UI_FONT_ID) {
+  registerAcText();
   const cached = runtimes.get(fontId);
   if (cached !== undefined) return cached;
 
@@ -96,6 +97,7 @@ export function getAcFont(fontId = UI_FONT_ID) {
  *   `opts.scale` (default 1).
  */
 export function renderAcText(text, opts = {}) {
+  registerAcText();
   const fontId = opts.fontId ?? UI_FONT_ID;
   const runtime = getAcFont(fontId);
   if (!runtime) return null;
@@ -151,6 +153,42 @@ export function renderAcText(text, opts = {}) {
 
   ctx.drawImage(tmp, 0, 0);
   return canvas;
+}
+
+/**
+ * Drop-in replacement for `el.textContent = text` that routes through
+ * `<ac-text>` for retail-font rendering. Reuses an inner `<ac-text>`
+ * element when one already exists so subsequent updates re-render the
+ * canvas in place; creates one on first call.
+ *
+ * Designed for buttons and other interactive elements where the text
+ * is wrapped inside the host element rather than swapping the host's
+ * tag name. For pure text containers (`<span>`, `<div>`), just declare
+ * them as `<ac-text>` directly.
+ *
+ * @param {HTMLElement} el — host element (button, span, div, …).
+ * @param {string} text — new text content.
+ */
+export function setAcText(el, text) {
+  if (!el) return;
+  // DO NOT call registerAcText() here — triggers customElements.define
+  // mid-mount-sequence which hangs the page (see registerAcText comment).
+  // setAcText is fire-and-forget during mount: we put `<ac-text>` in the
+  // DOM with text fallback. Registration happens via loadAcFont's path
+  // (the dynamic import in index.html after init_resource_source).
+  let inner = null;
+  for (const child of el.children) {
+    if (child.tagName === "AC-TEXT") {
+      inner = child;
+      break;
+    }
+  }
+  if (!inner) {
+    el.textContent = "";
+    inner = el.ownerDocument.createElement("ac-text");
+    el.appendChild(inner);
+  }
+  inner.textContent = String(text ?? "");
 }
 
 /**
@@ -282,7 +320,44 @@ function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy) {
 //   font-id="..."    — alternative Font DataID (default 0x40000000)
 //   shadow="off"     — disable drop shadow
 
-if (typeof customElements !== "undefined" && !customElements.get("ac-text")) {
+// Custom-element registration is guarded AND deferred. When `ac_font.js`
+// ends up in the page-init static-import graph (e.g. via `plugins/
+// chat-panel.js`), running `customElements.define` synchronously — at
+// module-load OR during a plugin's `mount()` call — blocks the page
+// from reaching DOMContentLoaded. Even though the spec says define is
+// synchronous, the upgrade-existing-elements flow + each upgrade's
+// connectedCallback + each connectedCallback's MutationObserver-attach
+// must interact badly with Firefox/Playwright during the page's
+// deferred-script execution window. Pushing the define to a microtask
+// after the current task settles avoids it. Validated on Firefox 150
+// (Playwright + real-GPU 1070) — pre-fix: hang at DCL; post-fix: page
+// loads cleanly with all HUD plugins migrated.
+let _acTextRegistered = false;
+let _acTextRegisterScheduled = false;
+export function registerAcText() {
+  if (_acTextRegistered) return;
+  if (typeof customElements === "undefined") return;
+  if (customElements.get("ac-text")) {
+    _acTextRegistered = true;
+    return;
+  }
+  if (_acTextRegisterScheduled) return;
+  _acTextRegisterScheduled = true;
+  // setTimeout(0) escapes the current task entirely (microtasks aren't
+  // enough — they still run inside the deferred-script execution
+  // window where the DCL hang originates).
+  setTimeout(() => {
+    if (_acTextRegistered) return;
+    if (customElements.get("ac-text")) {
+      _acTextRegistered = true;
+      return;
+    }
+    _registerAcTextImpl();
+    _acTextRegistered = true;
+  }, 0);
+}
+
+function _registerAcTextImpl() {
   class AcTextElement extends HTMLElement {
     static get observedAttributes() {
       return ["color", "scale", "font-id", "shadow"];

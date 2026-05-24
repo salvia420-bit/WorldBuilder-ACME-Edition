@@ -450,15 +450,64 @@ in retail AC bitmap font as visible proof.
 
 Follow-ons (not in this push):
 
-- Re-bake `dist/` so Font + atlases land in `boot.hba` (no HTTP
-  round-trip on first text render).
-- Migrate the long tail of HUD plugins (spellbook, chat-panel, radar,
-  vendor-ui, hotbar, combat-bar, target-bar, inventory, examine-target,
-  main-panel, character-info, map-panel, allegiance-panel,
-  fellowship-panel, journal-panel, combat-hud, status-indicators) to
-  `<ac-text>` for label-and-number text. Same pattern as vitals-hud.
 - LanguageString + StringTable consumers — e.g. real AC localized
   tooltips and key-binding labels. Parsers ship; no consumer wired.
 - Other 48 Font records (chat-window font, scrolling battle text,
   spell-effect labels) — `fetch_font(id)` works for any of them;
   pick by use case.
+
+## AC font wave 2 — bake + 5 plugins migrated (2026-05-24)
+
+Closes the two main follow-ons from the previous push:
+re-bake to land Font + atlases in `boot.hba`, and migrate the
+high-visibility HUD plugins to `<ac-text>`.
+
+What landed:
+
+- **dist/ re-bake** from `dats/assets.hba --input` (NOT raw DATs —
+  the raw-DAT path drops the `holtburger/core` namespace which
+  init_resource_source needs). New `boot.hba` (1.97 MB) contains
+  Font 0x40000000 + atlas Textures 0x06005EE5/0x06005EE6 inline.
+  Manifest at `/mnt/wbterminal2/holtburger-dist/manifest.json`.
+- Plugins migrated to use `setAcText(el, text)` for retail-font
+  rendering: `hotbar.js`, `combat-bar.js` (Stance/Height/Power/
+  Repeat/Charge/tab buttons), `target-bar.js` (target display),
+  `examine-target.js` (row labels + values + section headers),
+  `chat-panel.js` (tab buttons + channel button/menu + Send).
+- **Load-bearing bug fix in `ui/ac_font.js`:** the original
+  `customElements.define("ac-text", ...)` at module top-level hung
+  the page at DOMContentLoaded whenever `ac_font.js` was in the
+  page-init static-import graph — observed across SwiftShader
+  headless AND real-GPU Firefox on the 1070 Ti. Worse, even
+  deferring registration to first `setAcText()` call (which fires
+  during plugin mount sequence, inside the deferred-script
+  execution window) reproduced the hang.
+
+  Fix: `setAcText()` no longer triggers `customElements.define`.
+  It just creates `<ac-text>` elements with text-content fallback
+  (system font display). Registration happens via `loadAcFont()`
+  which is called from the dynamic `import("./ui/ac_font.js")`
+  preload in `index.html` AFTER `init_resource_source` resolves —
+  comfortably past DCL. Once registration runs, all existing
+  `<ac-text>` elements upgrade and switch to AC bitmap font.
+
+  Validated 2026-05-24 with all 5 plugin migrations active: page
+  reaches DCL cleanly, 39 `<ac-text>` elements present in the HUD.
+  Screenshot at `/mnt/wbterminal1/holtburger-captures/ac-font-
+  hud-wave2-2026-05-24.png`.
+
+Follow-ons (not in this push):
+
+- A pre-existing `start_session failed: ReferenceError:
+  MANIFEST_URL is not defined` at `index.html:6887` blocks
+  autoLogin from completing. The dynamic ac_font preload never
+  fires its `loadAcFont()` chain when this errors. Fixing the
+  MANIFEST_URL scope bug would let `<ac-text>` actually render in
+  retail font under autoLogin captures.
+- Long tail of remaining HUD plugins to `<ac-text>`: spellbook,
+  radar, vendor-ui, inventory, main-panel, character-info,
+  map-panel, allegiance-panel, fellowship-panel, journal-panel,
+  combat-hud, status-indicators, buffs-hud. Same `setAcText`
+  pattern; the safe-during-mount property is now guaranteed.
+- LanguageString + StringTable consumers (unchanged from above).
+- Other 48 Font records (unchanged from above).

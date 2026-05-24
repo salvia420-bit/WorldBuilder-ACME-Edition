@@ -18,6 +18,8 @@
 // Real DAT sprites:
 //   - 0x06004CFC : blue glowing orb (32x32) — examine icon at top-left.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const VIEW_ID_STYLE = "hb-examine-view-style";
 
 let stylesInjected = false;
@@ -129,10 +131,10 @@ function r(parent, label, value) {
   row.className = "hb-exa-row";
   const l = document.createElement("span");
   l.className = "hb-exa-label";
-  l.textContent = label;
+  setAcText(l, label);
   const v = document.createElement("span");
   v.className = "hb-exa-value";
-  v.textContent = String(value);
+  setAcText(v, String(value));
   row.appendChild(l);
   row.appendChild(v);
   parent.appendChild(row);
@@ -140,7 +142,7 @@ function r(parent, label, value) {
 function section(parent, text) {
   const s = document.createElement("div");
   s.className = "hb-exa-section";
-  s.textContent = text;
+  setAcText(s, text);
   parent.appendChild(s);
 }
 

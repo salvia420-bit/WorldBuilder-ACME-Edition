@@ -36,6 +36,8 @@
 // 5 — `selectionChanged` bus event is MISSING; future PR replaces
 // the poll). Name resolved via the JS entity-store lookup.
 
+import { setAcText } from "../ui/ac_font.js";
+
 const OVERLAY_ID = "hb-target-bar";
 const STYLE_ID   = "hb-target-bar-style";
 const SP = "./data/ui-sprites";
@@ -247,17 +249,17 @@ function renderTarget() {
   const targetEl = ov.querySelector(".htb-target");
   if (!guid) {
     targetEl.classList.add("empty");
-    targetEl.textContent = "— no target —";
+    setAcText(targetEl, "— no target —");
   } else {
     targetEl.classList.remove("empty");
     targetEl.innerHTML = "";
     const nameEl = document.createElement("span");
     nameEl.className = "htb-target-name";
-    nameEl.textContent = name || `Entity 0x${guid.toString(16).toUpperCase().padStart(8, "0")}`;
+    setAcText(nameEl, name || `Entity 0x${guid.toString(16).toUpperCase().padStart(8, "0")}`);
     targetEl.appendChild(nameEl);
     const meta = document.createElement("span");
     meta.className = "htb-target-meta";
-    meta.textContent = `0x${guid.toString(16).toUpperCase().padStart(8, "0")}`;
+    setAcText(meta, `0x${guid.toString(16).toUpperCase().padStart(8, "0")}`);
     targetEl.appendChild(meta);
   }
   // Enable / disable use + examine based on target presence.
@@ -362,7 +364,7 @@ function build() {
 
   const target = document.createElement("div");
   target.className = "htb-target empty";
-  target.textContent = "— no target —";
+  setAcText(target, "— no target —");
   // Click-target = examine for convenience (mirrors retail behavior).
   target.addEventListener("click", () => {
     if (!state.selectedGuid) return;

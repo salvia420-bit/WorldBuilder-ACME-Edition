@@ -6,6 +6,7 @@ import {
   SPELL_BAR_TABS,
   loadCatalog,
 } from "./spellbook.js";
+import { setAcText } from "../ui/ac_font.js";
 
 const STORAGE_KEY = "holtburger_combat_bar_v1";
 
@@ -373,7 +374,7 @@ function renderStanceHeader(bodyEl, client) {
   const row = document.createElement("div");
   row.className = "hb-cb-row hb-cb-stance-row";
   const label = document.createElement("label");
-  label.textContent = "Stance";
+  setAcText(label, "Stance");
   row.appendChild(label);
   const val = document.createElement("span");
   val.className = "hb-cb-stance-val";
@@ -386,8 +387,8 @@ function renderStanceHeader(bodyEl, client) {
 
   function refresh() {
     const w = stanceWord();
-    val.textContent = w;
-    btn.textContent = w === "Peace" ? "Combat" : "Peace";
+    setAcText(val, w);
+    setAcText(btn, w === "Peace" ? "Combat" : "Peace");
   }
   btn.addEventListener("click", () => {
     try {
@@ -436,7 +437,7 @@ function renderAttackControls(bodyEl, state) {
   const heightRow = document.createElement("div");
   heightRow.className = "hb-cb-row";
   const heightLabel = document.createElement("label");
-  heightLabel.textContent = "Height";
+  setAcText(heightLabel, "Height");
   heightRow.appendChild(heightLabel);
   const heightGroup = document.createElement("div");
   heightGroup.className = "hb-cb-heights";
@@ -450,7 +451,7 @@ function renderAttackControls(bodyEl, state) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "hb-cb-height-btn";
-    btn.textContent = h.label;
+    setAcText(btn, h.label);
     btn.dataset.value = String(h.value);
     if (state.attackHeight === h.value) btn.classList.add("active");
     btn.addEventListener("click", () => {
@@ -484,7 +485,7 @@ function renderAttackControls(bodyEl, state) {
   const powerRow = document.createElement("div");
   powerRow.className = "hb-cb-row hb-cb-power-row";
   const powerLabel = document.createElement("label");
-  powerLabel.textContent = currentStanceIsRanged() ? "Accuracy" : "Power";
+  setAcText(powerLabel, currentStanceIsRanged() ? "Accuracy" : "Power");
   powerRow.appendChild(powerLabel);
   const powerSlider = document.createElement("input");
   powerSlider.type = "range";
@@ -494,7 +495,7 @@ function renderAttackControls(bodyEl, state) {
   powerSlider.value = String(Math.round(state.powerLevel * 100));
   const powerVal = document.createElement("span");
   powerVal.className = "hb-cb-power-val";
-  powerVal.textContent = `${powerSlider.value}%`;
+  setAcText(powerVal, `${powerSlider.value}%`);
   // F1 — coalesce slider `input` syncs to one per animation frame.
   // The label / numeric readout updates synchronously (cheap, and
   // the user wants instant visual feedback), but `syncWindowState`
@@ -508,7 +509,7 @@ function renderAttackControls(bodyEl, state) {
   let _powerSyncRafId = 0;
   powerSlider.addEventListener("input", () => {
     state.powerLevel = Number(powerSlider.value) / 100;
-    powerVal.textContent = `${powerSlider.value}%`;
+    setAcText(powerVal, `${powerSlider.value}%`);
     if (_powerSyncRafId !== 0) return; // already scheduled this frame
     _powerSyncRafId = requestAnimationFrame(() => {
       _powerSyncRafId = 0;
@@ -543,7 +544,7 @@ function renderAttackControls(bodyEl, state) {
   });
   repeatLabel.appendChild(repeatBox);
   const repeatText = document.createElement("span");
-  repeatText.textContent = "Repeat";
+  setAcText(repeatText, "Repeat");
   repeatLabel.appendChild(repeatText);
   bodyEl.appendChild(repeatLabel);
 
@@ -560,7 +561,7 @@ function renderAttackControls(bodyEl, state) {
   });
   chargeLabel.appendChild(chargeBox);
   const chargeText = document.createElement("span");
-  chargeText.textContent = "Charge";
+  setAcText(chargeText, "Charge");
   chargeLabel.appendChild(chargeText);
   bodyEl.appendChild(chargeLabel);
 
@@ -767,8 +768,10 @@ function renderSpellPicker(bodyEl, state, client) {
   // Banner naming the stance — magic combat with wand/orb/staff equipped.
   const hint = document.createElement("div");
   hint.className = "hb-cb-magic-hint";
-  hint.textContent =
-    "Magic stance — click a self-spell to cast on yourself, or arm a target spell then click an enemy.";
+  setAcText(
+    hint,
+    "Magic stance — click a self-spell to cast on yourself, or arm a target spell then click an enemy.",
+  );
   bodyEl.appendChild(hint);
 
   // Phase I.2 — numbered tab strip (retail had 7).
@@ -779,7 +782,7 @@ function renderSpellPicker(bodyEl, state, client) {
     const tab = document.createElement("button");
     tab.type = "button";
     tab.className = "hb-cb-tab";
-    tab.textContent = String(i + 1);
+    setAcText(tab, String(i + 1));
     tab.dataset.tabIndex = String(i);
     tab.title = `Spell bar ${i + 1}`;
     tab.addEventListener("click", () => {

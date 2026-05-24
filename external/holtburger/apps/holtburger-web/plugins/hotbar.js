@@ -178,7 +178,7 @@ export function mount(ctx) {
     icon.className = "hb-hotbar-slot-icon";
     el.appendChild(icon);
 
-    const num = document.createElement("span");
+    const num = document.createElement("ac-text");
     num.className = "hb-hotbar-slot-num";
     num.textContent = String(i + 1);
     el.appendChild(num);
