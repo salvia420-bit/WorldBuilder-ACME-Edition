@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod char_gen;
 pub mod chat_pose_table;
+pub mod clothing;
 pub mod combat_maneuver_table;
 pub mod dxt;
 pub mod env_cell;
@@ -31,6 +32,10 @@ pub mod xp_table;
 pub use animation::Animation;
 pub use char_gen::CharGen;
 pub use chat_pose_table::{ChatEmoteData, ChatPoseTable};
+pub use clothing::{
+    CloObjectEffect, CloSubPalEffect, CloSubPalette, CloSubPaletteRange, CloTextureEffect,
+    ClothingBaseEffect, ClothingTable,
+};
 pub use combat_maneuver_table::{CombatManeuver, CombatManeuverTable};
 pub use env_cell::EnvCell;
 pub use environment::{CellStruct, Environment};
