@@ -12,6 +12,7 @@ pub mod game_time;
 pub mod gfx_obj;
 pub mod keymap;
 pub mod language_string;
+pub mod master_property;
 pub mod motion_kinematics;
 pub mod motion_table;
 pub mod object_desc;
@@ -49,6 +50,9 @@ pub use game_time::{GameTime, Season, TimeOfDay};
 pub use gfx_obj::GfxObj;
 pub use keymap::{CInputMap, ControlSpecification, DeviceKeyMapEntry, KeyMap, QualifiedControl};
 pub use language_string::LanguageString;
+pub use master_property::{
+    BaseProperty, BasePropertyDesc, BasePropertyType, EnumMapperData, MasterProperty,
+};
 pub use motion_kinematics::{MotionKinematics, MotionKinematicsTable};
 pub use motion_table::{MotionCommandKinematics, MotionTable, MotionTableMovementProfile};
 pub use object_desc::ObjectDesc;

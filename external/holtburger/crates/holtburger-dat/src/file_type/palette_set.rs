@@ -17,8 +17,6 @@
 //! 4-byte id + 4-byte count(4) + 4 × 4-byte palette IDs
 //! (0x040005F3, 0x040005F4, 0x040005F5, 0x040005F2).
 
-use binrw::BinRead;
-
 #[binrw::binread]
 #[derive(Debug, Clone, serde::Serialize)]
 #[br(little)]
