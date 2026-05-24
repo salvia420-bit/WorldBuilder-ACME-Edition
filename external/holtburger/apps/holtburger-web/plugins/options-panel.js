@@ -318,7 +318,26 @@ const LOCAL_ACTIONS = [
   { labelHash: "0xFF000007", label: "Hotbar Slot 7", defaultCode: "Digit7" },
   { labelHash: "0xFF000008", label: "Hotbar Slot 8", defaultCode: "Digit8" },
   { labelHash: "0xFF000009", label: "Hotbar Slot 9", defaultCode: "Digit9" },
+  { labelHash: "0xFF000010", label: "Close Panel / Popover", defaultCode: "Escape" },
+  { labelHash: "0xFF000011", label: "Delete Selected Spell", defaultCode: "Delete" },
 ];
+
+/** Stable identifiers for synthetic local actions — re-exported so
+ *  handlers can `resolveLocalBinding(LOCAL_ACTION_IDS.CLOSE, "Escape")`
+ *  without sprinkling hex literals. Keep in sync with LOCAL_ACTIONS. */
+export const LOCAL_ACTION_IDS = Object.freeze({
+  HOTBAR_1: "0xFF000001",
+  HOTBAR_2: "0xFF000002",
+  HOTBAR_3: "0xFF000003",
+  HOTBAR_4: "0xFF000004",
+  HOTBAR_5: "0xFF000005",
+  HOTBAR_6: "0xFF000006",
+  HOTBAR_7: "0xFF000007",
+  HOTBAR_8: "0xFF000008",
+  HOTBAR_9: "0xFF000009",
+  CLOSE:    "0xFF000010",
+  DELETE_SPELL: "0xFF000011",
+});
 
 function loadKeybindings() {
   if (keybindingsCache) return keybindingsCache;

@@ -15,7 +15,7 @@
 //     follow-on; for now it just logs via the chat-log.
 //   - Number key 1-9 fires the matching slot if it's bound.
 
-import { resolveLocalBinding, matchesBinding } from "./options-panel.js";
+import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./options-panel.js";
 
 const OVERLAY_ID = "hb-hotbar";
 const WIDTH = 310;
@@ -236,8 +236,7 @@ export function mount(ctx) {
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
     for (let slot = 1; slot <= SLOT_COUNT; slot++) {
-      const hash = `0xFF00000${slot}`;
-      const binding = resolveLocalBinding(hash, `Digit${slot}`);
+      const binding = resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_${slot}`], `Digit${slot}`);
       if (matchesBinding(ev, binding)) {
         fireSlot(slot - 1);
         return;

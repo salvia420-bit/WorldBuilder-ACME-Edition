@@ -39,6 +39,7 @@
 // touched as part of PR-Z.
 
 import { setAcText } from "../ui/ac_font.js";
+import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./options-panel.js";
 
 const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
 const SPELL_BAR_SLOTS = 8;
@@ -793,7 +794,7 @@ function doMount(parentEl, ctx) {
   // the spellbook. Confirms first so a stray keypress doesn't lose
   // the spell.
   function onDeleteKey(ev) {
-    if (ev.key !== "Delete") return;
+    if (!matchesBinding(ev, resolveLocalBinding(LOCAL_ACTION_IDS.DELETE_SPELL, "Delete"))) return;
     if (!selectedRowId) return;
     // Skip if user is typing in an input/textarea elsewhere.
     const tag = ev.target?.tagName;
@@ -821,7 +822,7 @@ function doMount(parentEl, ctx) {
     if (openDetail && !openDetail.contains(ev.target)) closeDetail();
   }
   function onPopoverEsc(ev) {
-    if (ev.key === "Escape") closeDetail();
+    if (matchesBinding(ev, resolveLocalBinding(LOCAL_ACTION_IDS.CLOSE, "Escape"))) closeDetail();
   }
   window.addEventListener("mousedown", onPopoverMouseDown, true);
   window.addEventListener("keydown", onPopoverEsc);

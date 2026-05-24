@@ -47,6 +47,7 @@
  */
 
 import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
+import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./options-panel.js";
 
 const STYLE_ID = "hb-vendor-bar-styles";
 const OVERLAY_ID = "hb-vendor-bar";
@@ -665,9 +666,9 @@ function buildOverlay() {
 }
 
 function onKeyDown(ev) {
-  if (ev.key === "Escape" && state.overlayEl?.dataset.open === "1") {
-    hideOverlay();
-  }
+  if (state.overlayEl?.dataset.open !== "1") return;
+  const binding = resolveLocalBinding(LOCAL_ACTION_IDS.CLOSE, "Escape");
+  if (matchesBinding(ev, binding)) hideOverlay();
 }
 
 function onDragEnter(ev) {
