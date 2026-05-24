@@ -24,6 +24,15 @@
 
 const UI_FONT_ID = 0x40000000;
 
+/**
+ * Compact (10 px tall) variant of the standard UI font — same 1050
+ * glyph set as `UI_FONT_ID` but half the vertical footprint. Pass
+ * via `setAcText(el, text, {fontId: COMPACT_FONT_ID})` for chat
+ * lines, tooltips, and any other crowded contexts where the
+ * default 16 px overflows the CSS box.
+ */
+export const COMPACT_FONT_ID = 0x4000001C;
+
 // Module-scoped per-font runtime cache. Each entry holds the
 // HTMLCanvasElement of the decoded foreground atlas and a Map<u32, glyph>.
 const runtimes = new Map();
@@ -208,6 +217,7 @@ export function setAcText(el, text, opts) {
   if (opts) {
     if (opts.color !== undefined) inner.setAttribute("color", String(opts.color));
     if (opts.scale !== undefined) inner.setAttribute("scale", String(opts.scale));
+    if (opts.fontId !== undefined) inner.setAttribute("font-id", String(opts.fontId));
   }
   inner.textContent = String(text ?? "");
 }

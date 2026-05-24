@@ -23,7 +23,7 @@
 // (acpedia), the actual retail panel is RESIZABLE — 410x100 is
 // just the default; resize-handle is a follow-on.
 
-import { setAcText } from "../ui/ac_font.js";
+import { setAcText, COMPACT_FONT_ID } from "../ui/ac_font.js";
 
 const OVERLAY_ID = "hb-chat-panel";
 const WIDTH = 410;
@@ -521,7 +521,10 @@ export function mount(_ctx) {
       line.style.fontStyle = "italic";
     }
     line.style.color = lineColor;
-    setAcText(line, srcLi.textContent || "", { color: lineColor });
+    // Chat lines use the compact (10 px) font instead of the 16 px
+    // default — fits the chat panel's 11 px CSS line-height without
+    // overflowing per-line vertical space.
+    setAcText(line, srcLi.textContent || "", { color: lineColor, fontId: COMPACT_FONT_ID });
     scroll.appendChild(line);
     // Auto-scroll if pinned to bottom.
     if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40) {
