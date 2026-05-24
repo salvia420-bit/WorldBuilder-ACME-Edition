@@ -5292,6 +5292,68 @@ pub async fn fetch_palette_set(set_id: u32) -> Result<String, JsValue> {
     Ok(out)
 }
 
+/// Fetch one ClothingTable (DAT 0x10) — wardrobe + dye + body-part
+/// substitution definitions used to render equipped items.
+///
+/// Returns JSON shape (serde_json-driven so the nested HashMap +
+/// recursive Vec structure stays accurate; serializing manually
+/// would be ~300 LOC of nested for-loops):
+///
+/// ```json
+/// {
+///   "id": 268435457,
+///   "clothing_base_effects": {
+///     "<setup_did>": {
+///       "clo_object_effects": [
+///         { "index": <u32>, "model_id": <gfxobj_did>,
+///           "clo_texture_effects": [
+///             { "old_texture": <did>, "new_texture": <did> }, ... ] },
+///         ...
+///       ]
+///     }, ...
+///   },
+///   "clothing_sub_pal_effects": {
+///     "<palette_template_key>": {
+///       "icon": <did>,
+///       "clo_sub_palettes": [
+///         { "palette_set": <did>,
+///           "ranges": [{ "offset": <u32>, "num_colors": <u32> }, ...] },
+///         ...
+///       ]
+///     }, ...
+///   }
+/// }
+/// ```
+///
+/// HashMap keys serialize as JSON strings (serde_json convention);
+/// the JS side parses them back to integers in `ui/ac_clothing.js`.
+///
+/// Note: the spawn-time path already plumbs ModelData.texture_changes
+/// + model_changes + sub_palettes into `fetch_entity_animation_keyframes`
+/// (~L10778) which composes the visible equipped state for ObjectCreate
+/// at line 10827-10830 (Vec<(u8, u32, u32)> tc / Vec<(u8, u32)> mc).
+/// This export exists for code that needs to *enumerate* a wardrobe
+/// (character creation, dye picker, examine-target UI) without going
+/// through the per-pixel surface compositor.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_clothing_table(clothing_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::ClothingTable;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", clothing_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", clothing_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let ct = match ClothingTable::unpack(&bytes) {
+        Ok(t) => t,
+        Err(_) => return Ok("null".to_string()),
+    };
+    serde_json::to_string(&ct).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 /// Fetch one GfxObjDegradeInfo (DAT 0x11) — the distance-banded LOD
 /// chain a renderer consults when picking which alternate GfxObj to
 /// draw for a given camera distance.

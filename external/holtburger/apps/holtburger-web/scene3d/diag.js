@@ -44,6 +44,7 @@ import { attachInput as _attachInput } from "./diag/input.js";
 import { attachCombat as _attachCombat } from "./diag/combat.js";
 import { attachPalettes as _attachPalettes } from "./diag/palettes.js";
 import { attachLod as _attachLod } from "./diag/lod.js";
+import { attachClothing as _attachClothing } from "./diag/clothing.js";
 
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
@@ -465,6 +466,7 @@ export function installDiag() {
     ["combat",     _attachCombat],
     ["palettes",   _attachPalettes],
     ["lod",        _attachLod],
+    ["clothing",   _attachClothing],
   ]) {
     try { fn?.(diag); } catch (e) {
       // eslint-disable-next-line no-console

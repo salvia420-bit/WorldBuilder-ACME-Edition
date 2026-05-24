@@ -136,6 +136,13 @@ pub struct ClothingTable {
     pub clothing_sub_pal_effects: HashMap<u32, CloSubPalEffect>,
 }
 
+impl ClothingTable {
+    pub fn unpack(data: &[u8]) -> binrw::BinResult<Self> {
+        let mut cursor = binrw::io::Cursor::new(data);
+        Self::read_le(&mut cursor)
+    }
+}
+
 impl BinRead for ClothingTable {
     type Args<'a> = ();
 

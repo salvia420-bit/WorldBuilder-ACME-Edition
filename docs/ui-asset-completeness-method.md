@@ -20,6 +20,7 @@ Five boot-time pipelines that load retail data once, cache it module-scoped, and
 | **CombatManeuverTable** *(W7.1)* | 0x30 (71 records) | `fetch_combat_maneuver_table(id) → JSON` | `ui/ac_combat_maneuver.js` + `scene3d/picking.js` melee dispatch |
 | **PaletteSet** *(W7.1)* | 0x0F (2681 records) | `fetch_palette_set(id) → JSON` | `ui/ac_palette_set.js` (standalone reader; ClothingTable composer also uses it via `fetch_entity_surface_pixels`) |
 | **GfxObjDegradeInfo** *(W7.1 — reader only)* | 0x11 (4131 records) | `fetch_gfx_obj_degrade_info(id) → JSON` | `ui/ac_lod.js` (loader + band picker; entity-spawn integration deferred — see `handoff-degrade-info-entity-lod-2026-05-24.md`) |
+| **ClothingTable** *(W7.2 — reader; spawn-time already plumbed)* | 0x10 (1917 records) | `fetch_clothing_table(id) → JSON` (serde_json) | `ui/ac_clothing.js` (loader + `getCloObjectEffects` + `getCloSubPalEffect`). Spawn-time substitution already lives in `fetch_entity_animation_keyframes`; equip-change UpdateObject path deferred — see `handoff-clothing-table-2026-05-24.md` § A. |
 
 The KeyMap pipeline is the one client-only entry: rebinds live in `localStorage["holtburger_keybindings_v1"]`. ACE has no server-side keybind protocol, so this is the canonical store.
 
@@ -137,6 +138,18 @@ Source: `scene3d/diag/combat.js`. Hooks at `ui/ac_combat_maneuver.js` `loadComba
 
 Source: `scene3d/diag/palettes.js`. Hooks at `ui/ac_palette_set.js` `loadPaletteSet` success/empty/catch.
 
+### `__diag.clothing` — ClothingTable load audit *(W7.2)*
+
+| API | What it reports |
+|---|---|
+| `summary()` | `{loaded, cached, failures}` |
+| `snapshot()` | Full picture: loaded tables (with `baseEffectCount` + `subPalEffectCount`) + cached state + failure ring |
+| `cached()` | Read-through to `getClothingDiagSnapshot()` |
+| `loaded` Map | Hook-observed ClothingTable loads |
+| `failures` ring | Load failures, max 20 |
+
+Source: `scene3d/diag/clothing.js`. Hooks at `ui/ac_clothing.js` `loadClothingTable` success/empty/catch. Per-equip-event coverage is deferred — see `docs/handoff-clothing-table-2026-05-24.md` § A.
+
 ### `__diag.lod` — GfxObjDegradeInfo chain audit *(W7.1)*
 
 | API | What it reports |
@@ -152,7 +165,7 @@ Source: `scene3d/diag/lod.js`. Hooks at `ui/ac_lod.js` `loadDegradeInfo` + `pick
 
 ### Composition
 
-All six install during `installDiag()` in `scene3d/index.js::preInit3D`, alongside the Wave-1-through-5 surfaces. No URL flag gates them; `__diag.{fonts,strings,input,combat,palettes,lod}` is always available for inspection from devtools.
+All seven install during `installDiag()` in `scene3d/index.js::preInit3D`, alongside the Wave-1-through-5 surfaces. No URL flag gates them; `__diag.{fonts,strings,input,combat,palettes,lod,clothing}` is always available for inspection from devtools.
 
 ---
 
@@ -213,6 +226,7 @@ Don't pile up dead diag — only ship a surface when the consumer ships.
 | 2026-05-24 | `c77b0daa` → `80ae3bcf` | KeyMap rebind UI + LOCAL_ACTIONS table in `ui/keymap.js` |
 | 2026-05-24 | `30d0d8c8` | Wave 7: UI-asset-completeness method + three `__diag` surfaces (`scene3d/diag/{fonts,strings,input}.js`) + host-file hooks |
 | 2026-05-24 | (this doc, Wave 7.1) | Three more wasm exports + JS runtimes for the previously-deferred vitaeum-parity parsers: CombatManeuverTable (with picking.js dispatch + `__diag.combat`), PaletteSet (standalone reader + `__diag.palettes`), GfxObjDegradeInfo (reader + band picker + `__diag.lod`). ClothingTable and LayoutDesc deferred with explicit handoff docs. |
+| 2026-05-24 | (this doc, Wave 7.2) | ClothingTable reader foundation: `fetch_clothing_table` (serde_json), `ui/ac_clothing.js` (`loadClothingTable` + `getCloObjectEffects` + `getCloSubPalEffect`), `__diag.clothing`. Original handoff doc was corrected: spawn-time clothing substitution was ALREADY plumbed through `fetch_entity_animation_keyframes` (lib.rs:~L10778-10830); the remaining work is the equip-mid-game UpdateObject (0xF7DB) wire path + `applyAppearance` rig hot-swap. |
 
 Cross-references:
 - [`diagnostic-toolset-method.md`](diagnostic-toolset-method.md) — umbrella; surface-15 sub-surface table updated alongside this doc
