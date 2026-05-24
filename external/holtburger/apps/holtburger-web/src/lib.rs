@@ -12221,6 +12221,21 @@ const ENTITY_UPDATE_KIND_VELOCITY: u32 = 4;
 /// drive walk-cycle frames; STOP=0x4 / 0 freeze the idle pose.
 #[cfg(target_arch = "wasm32")]
 const ENTITY_UPDATE_KIND_MOTION: u32 = 5;
+/// Wave 7.3 (2026-05-24): mid-game appearance change — `UpdateObject`
+/// (0xF7DB) carries the same `ObjectDescriptionData.model_data` payload
+/// as `ObjectCreate`, but for an already-spawned entity. Used by ACE
+/// when a player equips / unequips an item: server recomputes
+/// `Creature.CalculateObjDesc()` and broadcasts the new
+/// `model_changes` / `texture_changes` / `sub_palettes` triples + base
+/// `palette_id`. Position / weenie-metadata fields are zeroed in this
+/// kind — JS reuses the cached spawn metadata; only the four
+/// substitution fields carry data. JS dispatch in
+/// `scene3d/loop.js::drainEntityEvents3D` routes into
+/// `EntityManager.applyAppearance(guid, {modelChanges, textureChanges,
+/// subPalettes, paletteId})` which re-invokes the spawn-time animation
+/// cache with the new substitutions.
+#[cfg(target_arch = "wasm32")]
+const ENTITY_UPDATE_KIND_APPEARANCE: u32 = 6;
 /// Phase 4 step 6f: ItemType bit 0x10000 = Portal. We auto-fire
 /// `GameAction::IdentifyObject(guid)` on every ObjectCreate that
 /// matches this bit so ACE pushes back the portal's
@@ -17912,6 +17927,77 @@ async fn recv_loop(
                                     }
                                 }
                             }
+                        }
+                        GameMessage::UpdateObject(data) => {
+                            // Wave 7.3 (2026-05-24): mid-game appearance
+                            // change. ACE re-runs `Creature.CalculateObjDesc`
+                            // server-side when an item is equipped /
+                            // unequipped, then broadcasts the full
+                            // `ObjectDescriptionData` on opcode 0xF7DB.
+                            // We pack the four substitution-relevant
+                            // fields into an EntityUpdate kind=6 and let
+                            // the JS-side `applyAppearance` re-invoke
+                            // the spawn-time animation cache with the
+                            // new substitutions. All position / weenie-
+                            // metadata fields are zeroed — JS reuses
+                            // the cached spawn meta. Flat-encoding
+                            // pattern mirrors the ObjectCreate arm
+                            // above verbatim.
+                            let mut model_changes: Vec<u32> =
+                                Vec::with_capacity(data.model_data.model_changes.len() * 2);
+                            for mc in &data.model_data.model_changes {
+                                model_changes.push(mc.index as u32);
+                                model_changes.push(mc.animation_id);
+                            }
+                            let mut texture_changes: Vec<u32> =
+                                Vec::with_capacity(data.model_data.texture_changes.len() * 3);
+                            for tc in &data.model_data.texture_changes {
+                                texture_changes.push(tc.part_index as u32);
+                                texture_changes.push(tc.old_id);
+                                texture_changes.push(tc.new_id);
+                            }
+                            let mut sub_palettes: Vec<u32> =
+                                Vec::with_capacity(data.model_data.sub_palettes.len() * 3);
+                            for sp in &data.model_data.sub_palettes {
+                                sub_palettes.push(sp.id);
+                                sub_palettes.push(sp.offset as u32);
+                                sub_palettes.push(sp.length as u32);
+                            }
+                            let palette_id = data.model_data.palette_id.unwrap_or(0);
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_APPEARANCE,
+                                guid: u32::from(data.public_weenie_desc.guid),
+                                model_id: 0,
+                                landblock_id: 0,
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                qw: 1.0,
+                                qx: 0.0,
+                                qy: 0.0,
+                                qz: 0.0,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 1.0,
+                                icon_id: 0,
+                                palette_id,
+                                mtable_id: 0,
+                                model_changes,
+                                texture_changes,
+                                sub_palettes,
+                                portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
+                                motion_command: 0,
+                                motion_stance: 0,
+                                physics_script_did: 0,
+                                sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
+                            });
                         }
                         GameMessage::ObjectDelete(data) => {
                             entity_updates.borrow_mut().push(EntityUpdate {

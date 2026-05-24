@@ -48,6 +48,7 @@ const KIND_REMOVE = 2;
 const KIND_META_REFRESH = 3;
 const KIND_VELOCITY = 4;
 const KIND_MOTION = 5;
+const KIND_APPEARANCE = 6;
 
 // A2 (perf plan 2026-05-18) — module-scratch object passed to
 // `em.setVelocity` so we don't allocate a fresh `{guid,vx,vy,vz,omegaZ}`
@@ -724,6 +725,17 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
           (upd.motionCommand ?? 0) >>> 0,
           (upd.motionStance ?? 0) >>> 0
         );
+      } else if (kind === KIND_APPEARANCE) {
+        // Wave 7.3 — mid-game equip change. The wasm UpdateObject arm
+        // packs only the four substitution-relevant fields; everything
+        // else is zeroed. EntityManager.applyAppearance re-invokes the
+        // spawn-time animation cache with the new opts.
+        em.applyAppearance?.(upd.guid >>> 0, {
+          modelChanges: _sliceFromScratch(upd.modelChanges, 0),
+          textureChanges: _sliceFromScratch(upd.textureChanges, 1),
+          subPalettes: _sliceFromScratch(upd.subPalettes, 2),
+          paletteId: (upd.paletteId ?? 0) >>> 0,
+        });
       } else if (kind === KIND_META_REFRESH) {
         // Not yet consumed — Phase 7.5 will wire portal-destination
         // updates to nameplate / chip overlays.

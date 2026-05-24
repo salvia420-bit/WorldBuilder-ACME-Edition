@@ -2026,6 +2026,84 @@ export class EntityManager {
   }
 
   /**
+   * Wave 7.3 (2026-05-24): mid-game equip change. The wasm UpdateObject
+   * arm (lib.rs::GameMessage::UpdateObject) packs the four substitution-
+   * relevant fields (modelChanges / textureChanges / subPalettes /
+   * paletteId) into an `ENTITY_UPDATE_KIND_APPEARANCE` event; loop.js
+   * routes it here.
+   *
+   * V1 strategy: despawn + respawn. Hot-swap (preserve mixer + actions
+   * + bone state, replace only parts + materials) would avoid the
+   * brief flicker but would require careful animation-state sync that
+   * deserves its own validation. Despawn+respawn is robust + cheap +
+   * the next KIND_POSITION re-syncs the entity to its current pose,
+   * so the flicker is bounded to one frame in steady state.
+   *
+   * Pose preservation: read the current world pose off `inst.root`
+   * (entity-instance positions are stored in AC world-frame per the
+   * `picking.js::entityAcPosition` comment), convert back to LB-local
+   * for the spawn meta, and pass it through so the respawn lands at
+   * the current pose instead of the original spawn-time pose.
+   *
+   * Diag: fires `__diag.clothing.onAppearanceChange` with substitution
+   * counts BEFORE the despawn, so the observation lands even if the
+   * subsequent spawn errors.
+   *
+   * @param {number} guid
+   * @param {{modelChanges?: Uint32Array, textureChanges?: Uint32Array,
+   *          subPalettes?: Uint32Array, paletteId?: number}} opts
+   * @returns {Promise<boolean>} true if dispatched, false if no entity
+   *   existed for the guid.
+   */
+  async applyAppearance(guid, opts) {
+    const g = guid >>> 0;
+    const inst = this.entityMap.get(g);
+    if (!inst) return false;
+
+    const oldMeta = inst.meta || {};
+    const newMeta = { ...oldMeta };
+    if (opts?.modelChanges) newMeta.modelChanges = opts.modelChanges;
+    if (opts?.textureChanges) newMeta.textureChanges = opts.textureChanges;
+    if (opts?.subPalettes) newMeta.subPalettes = opts.subPalettes;
+    if (opts?.paletteId !== undefined) newMeta.paletteId = (opts.paletteId >>> 0);
+
+    // Preserve current world pose. `inst.root.position` is already in
+    // AC world-frame (lbX*192 + local_x, etc); recompute LB-local so
+    // the spawn path's `wx = lbX*192 + meta.x` rebuilds the same world
+    // coords. Falls through to spawn-time pose if any field is missing.
+    const root = inst.root;
+    if (root?.position) {
+      const lbId = (oldMeta.landblockId ?? 0) >>> 0;
+      const lbX = (lbId >>> 24) & 0xff;
+      const lbY = (lbId >>> 16) & 0xff;
+      newMeta.x = root.position.x - lbX * 192;
+      newMeta.y = root.position.y - lbY * 192;
+      newMeta.z = root.position.z;
+    }
+    if (root?.quaternion) {
+      newMeta.qw = root.quaternion.w;
+      newMeta.qx = root.quaternion.x;
+      newMeta.qy = root.quaternion.y;
+      newMeta.qz = root.quaternion.z;
+    }
+
+    try {
+      window.__diag?.clothing?.onAppearanceChange?.({
+        guid: g,
+        source: "wire-update-object",
+        modelChangesCount: (opts?.modelChanges?.length ?? 0) / 2 | 0,
+        textureChangesCount: (opts?.textureChanges?.length ?? 0) / 3 | 0,
+        subPalettesCount: (opts?.subPalettes?.length ?? 0) / 3 | 0,
+        paletteId: newMeta.paletteId ?? 0,
+      });
+    } catch (_) {}
+
+    this.remove(g);
+    await this.spawn(newMeta);
+    return true;
+  }
+
+  /**
    * Remove an entity by GUID. Tears down geometries, textures, mixer.
    */
   remove(guid) {

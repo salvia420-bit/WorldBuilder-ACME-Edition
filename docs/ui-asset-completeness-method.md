@@ -20,7 +20,7 @@ Five boot-time pipelines that load retail data once, cache it module-scoped, and
 | **CombatManeuverTable** *(W7.1)* | 0x30 (71 records) | `fetch_combat_maneuver_table(id) → JSON` | `ui/ac_combat_maneuver.js` + `scene3d/picking.js` melee dispatch |
 | **PaletteSet** *(W7.1)* | 0x0F (2681 records) | `fetch_palette_set(id) → JSON` | `ui/ac_palette_set.js` (standalone reader; ClothingTable composer also uses it via `fetch_entity_surface_pixels`) |
 | **GfxObjDegradeInfo** *(W7.1 — reader only)* | 0x11 (4131 records) | `fetch_gfx_obj_degrade_info(id) → JSON` | `ui/ac_lod.js` (loader + band picker; entity-spawn integration deferred — see `handoff-degrade-info-entity-lod-2026-05-24.md`) |
-| **ClothingTable** *(W7.2 — reader; spawn-time already plumbed)* | 0x10 (1917 records) | `fetch_clothing_table(id) → JSON` (serde_json) | `ui/ac_clothing.js` (loader + `getCloObjectEffects` + `getCloSubPalEffect`). Spawn-time substitution already lives in `fetch_entity_animation_keyframes`; equip-change UpdateObject path deferred — see `handoff-clothing-table-2026-05-24.md` § A. |
+| **ClothingTable** *(W7.2/W7.3 — reader + equip-mid-game)* | 0x10 (1917 records) | `fetch_clothing_table(id) → JSON` (serde_json) | `ui/ac_clothing.js` (loader + `getCloObjectEffects` + `getCloSubPalEffect`). Spawn-time substitution lives in `fetch_entity_animation_keyframes`. Wave 7.3 added `ENTITY_UPDATE_KIND_APPEARANCE=6` + `EntityManager.applyAppearance(guid, opts)` (despawn+respawn) so `UpdateObject` (0xF7DB) equip changes propagate live. Hot-swap optimization deferred — see `handoff-clothing-table-2026-05-24.md` § D. |
 
 The KeyMap pipeline is the one client-only entry: rebinds live in `localStorage["holtburger_keybindings_v1"]`. ACE has no server-side keybind protocol, so this is the canonical store.
 
@@ -138,17 +138,18 @@ Source: `scene3d/diag/combat.js`. Hooks at `ui/ac_combat_maneuver.js` `loadComba
 
 Source: `scene3d/diag/palettes.js`. Hooks at `ui/ac_palette_set.js` `loadPaletteSet` success/empty/catch.
 
-### `__diag.clothing` — ClothingTable load audit *(W7.2)*
+### `__diag.clothing` — ClothingTable load + equip-change audit *(W7.2 + W7.3)*
 
 | API | What it reports |
 |---|---|
-| `summary()` | `{loaded, cached, failures}` |
-| `snapshot()` | Full picture: loaded tables (with `baseEffectCount` + `subPalEffectCount`) + cached state + failure ring |
+| `summary()` | `{loaded, cached, failures, appearanceChanges}` |
+| `snapshot()` | Full picture: loaded tables (with `baseEffectCount` + `subPalEffectCount`) + cached state + failure ring + appearanceChanges counter + recentChanges ring |
 | `cached()` | Read-through to `getClothingDiagSnapshot()` |
 | `loaded` Map | Hook-observed ClothingTable loads |
 | `failures` ring | Load failures, max 20 |
+| `appearanceChanges` counter + `recentChanges` ring (W7.3) | Each `EntityManager.applyAppearance(guid, opts)` invocation records {guid, source, modelChangesCount, textureChangesCount, subPalettesCount, paletteId, ts}. Max 30 recent. |
 
-Source: `scene3d/diag/clothing.js`. Hooks at `ui/ac_clothing.js` `loadClothingTable` success/empty/catch. Per-equip-event coverage is deferred — see `docs/handoff-clothing-table-2026-05-24.md` § A.
+Source: `scene3d/diag/clothing.js`. Hooks at `ui/ac_clothing.js` `loadClothingTable` success/empty/catch + `entities.js::applyAppearance` (W7.3).
 
 ### `__diag.lod` — GfxObjDegradeInfo chain audit *(W7.1)*
 
@@ -226,7 +227,8 @@ Don't pile up dead diag — only ship a surface when the consumer ships.
 | 2026-05-24 | `c77b0daa` → `80ae3bcf` | KeyMap rebind UI + LOCAL_ACTIONS table in `ui/keymap.js` |
 | 2026-05-24 | `30d0d8c8` | Wave 7: UI-asset-completeness method + three `__diag` surfaces (`scene3d/diag/{fonts,strings,input}.js`) + host-file hooks |
 | 2026-05-24 | (this doc, Wave 7.1) | Three more wasm exports + JS runtimes for the previously-deferred vitaeum-parity parsers: CombatManeuverTable (with picking.js dispatch + `__diag.combat`), PaletteSet (standalone reader + `__diag.palettes`), GfxObjDegradeInfo (reader + band picker + `__diag.lod`). ClothingTable and LayoutDesc deferred with explicit handoff docs. |
-| 2026-05-24 | (this doc, Wave 7.2) | ClothingTable reader foundation: `fetch_clothing_table` (serde_json), `ui/ac_clothing.js` (`loadClothingTable` + `getCloObjectEffects` + `getCloSubPalEffect`), `__diag.clothing`. Original handoff doc was corrected: spawn-time clothing substitution was ALREADY plumbed through `fetch_entity_animation_keyframes` (lib.rs:~L10778-10830); the remaining work is the equip-mid-game UpdateObject (0xF7DB) wire path + `applyAppearance` rig hot-swap. |
+| 2026-05-24 | (this doc, Wave 7.2) | ClothingTable reader foundation: `fetch_clothing_table` (serde_json), `ui/ac_clothing.js` (`loadClothingTable` + `getCloObjectEffects` + `getCloSubPalEffect`), `__diag.clothing`. Original handoff doc was corrected: spawn-time clothing substitution was ALREADY plumbed through `fetch_entity_animation_keyframes` (lib.rs:~L10778-10830). |
+| 2026-05-24 | (this doc, Wave 7.3) | Equip-mid-game UpdateObject (0xF7DB) wire path: `ENTITY_UPDATE_KIND_APPEARANCE=6` + lib.rs handler + loop.js dispatch + `EntityManager.applyAppearance(guid, opts)` (despawn+respawn) + `__diag.clothing.onAppearanceChange` hook with `appearanceChanges` counter + `recentChanges` ring. Hot-swap optimization deferred — see `handoff-clothing-table-2026-05-24.md` § D. |
 
 Cross-references:
 - [`diagnostic-toolset-method.md`](diagnostic-toolset-method.md) — umbrella; surface-15 sub-surface table updated alongside this doc

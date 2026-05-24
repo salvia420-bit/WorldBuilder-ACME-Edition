@@ -188,7 +188,7 @@ Surface 15 is **observation-only** from the running wire-agent's `window.__diag`
 | `__diag.combat` (W7.1) | `ui/ac_combat_maneuver.js` CMT loads + per (stance, height, type) lookup hits/misses + resolved motion-command codes | (parser parity test on CMT 0x30000000) |
 | `__diag.palettes` (W7.1) | `ui/ac_palette_set.js` PaletteSet loads + cached read-through | (parser parity test on PaletteSet 0x0F000001) |
 | `__diag.lod` (W7.1) | `ui/ac_lod.js` GfxObjDegradeInfo loads + per-distance band hit/miss counters | (parser parity test on GfxObjDegradeInfo 0x11000001) |
-| `__diag.clothing` (W7.2) | `ui/ac_clothing.js` ClothingTable loads + cached read-through | (parser parity test on ClothingTable 0x10000001 — Setup 0x02001A18 slot 9 fixture) |
+| `__diag.clothing` (W7.2 + W7.3) | `ui/ac_clothing.js` ClothingTable loads + cached read-through + W7.3 equip-mid-game `applyAppearance` counter + recentChanges ring | (parser parity test on ClothingTable 0x10000001 — Setup 0x02001A18 slot 9 fixture) |
 
 The runtime invariants and oracle producers all read like build-side validators **inverted** — same data flow, the diag layer just reads what was actually applied rather than what was supposed to be applied. When build-side and client-side disagree, build-side wins; client-side data tells you WHY.
 
@@ -218,7 +218,8 @@ The waves shipped chronologically:
 | **Wave 6 follow-ons** | motion link hook + assets stuck v2 + per-scenery diff + global-greedy matcher (spawn `goodMatches` 11→25 on Holtburg) | 2026-05-23 | (see commit 7c0b4545) |
 | **Wave 7** | **vitaeum-parity new-pipeline diag: `__diag.fonts` + `__diag.strings` + `__diag.input` covering Font / LanguageString / StringTable / ActionMap / KeyMap consumers** | **2026-05-24** | [`ui-asset-completeness-method.md`](ui-asset-completeness-method.md) |
 | **Wave 7.1** | **vitaeum-parity deferred-parser wirings: CombatManeuverTable (full picking.js dispatch + `__diag.combat`) + PaletteSet (reader + `__diag.palettes`) + GfxObjDegradeInfo (reader + band picker + `__diag.lod`). ClothingTable + LayoutDesc deferred with handoff docs.** | **2026-05-24** | [`ui-asset-completeness-method.md`](ui-asset-completeness-method.md) + 3 handoff docs |
-| **Wave 7.2** | **ClothingTable reader foundation: `fetch_clothing_table` (serde_json) + `ui/ac_clothing.js` + `__diag.clothing`. Corrected handoff doc — spawn-time clothing substitution was ALREADY wired through `fetch_entity_animation_keyframes`. Remaining work is the equip-mid-game `UpdateObject` (0xF7DB) wire handler + `applyAppearance` rig hot-swap.** | **2026-05-24** | Updated [`handoff-clothing-table-2026-05-24.md`](handoff-clothing-table-2026-05-24.md) |
+| **Wave 7.2** | **ClothingTable reader foundation: `fetch_clothing_table` (serde_json) + `ui/ac_clothing.js` + `__diag.clothing`. Corrected handoff doc — spawn-time clothing substitution was ALREADY wired through `fetch_entity_animation_keyframes`.** | **2026-05-24** | Updated [`handoff-clothing-table-2026-05-24.md`](handoff-clothing-table-2026-05-24.md) |
+| **Wave 7.3** | **Equip-mid-game wire path: `GameMessage::UpdateObject` handler + `ENTITY_UPDATE_KIND_APPEARANCE=6` + loop.js dispatch + `EntityManager.applyAppearance` (despawn+respawn v1) + `__diag.clothing.onAppearanceChange` hook with counter + ring. Mid-game equip changes now propagate live; hot-swap optimization deferred to W7.4.** | **2026-05-24** | Updated [`handoff-clothing-table-2026-05-24.md`](handoff-clothing-table-2026-05-24.md) § A |
 
 Key cross-references:
 - [[reference_worldbuilder_terminal]] — command catalog (147 commands today; +2 with W5.C)

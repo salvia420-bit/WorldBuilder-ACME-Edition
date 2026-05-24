@@ -1,7 +1,7 @@
 # Handoff: ClothingTable (DAT 0x10) consumer wiring
 
 **For:** next agent picking up the equipment-visuals push.
-**Status (2026-05-24 update):** parser shipped (Milestone C4); reader foundation shipped (Wave 7.2 below); spawn-time substitution ALREADY exists in `fetch_entity_animation_keyframes`; **the genuinely missing piece is the mid-game equip-change path (UpdateObject 0xF7DB).**
+**Status (2026-05-24 update — Wave 7.3 SHIPPED):** parser shipped (Milestone C4); reader foundation shipped (Wave 7.2); spawn-time substitution ALREADY existed in `fetch_entity_animation_keyframes`; **mid-game equip-change path (UpdateObject 0xF7DB) shipped in Wave 7.3 via despawn+respawn**. Hot-swap optimization remains a future follow-on if visible flicker becomes a complaint.
 
 ## Wave 7.2 — what landed 2026-05-24 (this session's slice)
 
@@ -30,28 +30,24 @@ Verified end-to-end on `?wireframe=1&hud=none&plugins=none&diag=1` against live 
 
 The reader is useful today for character-creation / dye-picker / examine-target UIs that need to enumerate a wardrobe without triggering a spawn. The visible-equip-change feature still requires the equip-change wire path below.
 
-## What's left after Wave 7.2
+## What's left after Wave 7.3
 
-### A. Equip-mid-game (UpdateObject) follow-on — ~½ day
+### A. Equip-mid-game (UpdateObject) — ✅ SHIPPED (Wave 7.3)
 
-When a live player equips a new item, ACE sends `UpdateObject` (opcode `0xF7DB`) carrying the same `ObjectDescriptionData.model_data` payload as `ObjectCreate`. Today this opcode is **silently dropped** by holtburger-web's recv loop in `apps/holtburger-web/src/lib.rs` (no `GameMessage::UpdateObject(data) =>` arm after `~L17472`). Mid-game equip changes are invisible to other clients as a result.
+Shipped 2026-05-24:
 
-Required edits (estimated 4-6 hours including manual test against ACE):
+1. **`apps/holtburger-web/src/lib.rs`** — added `ENTITY_UPDATE_KIND_APPEARANCE = 6` constant (alongside kinds 0-5 at L12177-12223). Added `GameMessage::UpdateObject(data) =>` arm between ObjectCreate and ObjectDelete (~L17916); extracts `model_changes`/`texture_changes`/`sub_palettes`/`palette_id` via the same flat-encoding pattern as ObjectCreate (mirrors L17718-17787); pushes EntityUpdate with kind=6 + only the four substitution-relevant fields populated (everything else zeroed — JS reuses the cached spawn metadata).
+2. **`apps/holtburger-web/scene3d/loop.js`** — added `KIND_APPEARANCE = 6` const alongside existing kinds (L51); added kind=6 dispatch case in `drainEntityEvents3D` (~L727) routing into `em.applyAppearance(guid, {modelChanges, textureChanges, subPalettes, paletteId})`.
+3. **`apps/holtburger-web/scene3d/entities.js`** — added `async applyAppearance(guid, opts)` method (above `remove(guid)` at ~L2017). V1 uses despawn+respawn: captures the entity's current world pose off `inst.root.position` (converts back to LB-local for the spawn meta), merges the new substitutions into the saved meta, calls `remove(g)` then `await spawn(newMeta)`. The next KIND_POSITION snaps the entity to its current server pose, so the visible flicker is bounded to one frame in steady state.
+4. **`scene3d/diag/clothing.js`** — added `onAppearanceChange(meta)` hook + `appearanceChanges` counter + `recentChanges` ring (max 30). Fires BEFORE the despawn so observation lands even if the respawn errors out.
 
-1. **`apps/holtburger-web/src/lib.rs`** — add `ENTITY_UPDATE_KIND_APPEARANCE = 6` constant (existing kinds 0-5 at L12115-12161). Add the `GameMessage::UpdateObject(data) =>` arm; extract `data.model_data.{texture_changes, model_changes, sub_palettes}` using the same flat-encoding pattern as `ObjectCreate` at L17656-17675; push an EntityUpdate with kind=6 + the new flat arrays.
-2. **`apps/holtburger-web/scene3d/loop.js`** — add a kind=6 dispatch case alongside the existing kind=0..5 cases (~L575-721). Route into `em.applyAppearance(guid, {modelChanges, textureChanges, subPalettes, paletteId})`.
-3. **`apps/holtburger-web/scene3d/entities.js`** — add `applyAppearance(guid, opts)` to EntityManager. Steps:
-   - Look up the entity instance by guid (`entityMap.get(guid)`)
-   - Re-invoke `animationCache.get(setupId, mtableId, currentMotion, currentStance, fetchKeyframes, {modelChanges, textureChanges, paletteId, paletteSubsFlat})` with the NEW substitution args. The cache key includes the substitutions (see `AnimationCache.get` opts handling), so this returns a fresh-baked rig.
-   - Swap out the entity's `partGroups`, `materials`, and `mixer.target` in place — keep the same root Group + animation mixer state so the entity doesn't visually pop.
-   - Update `__diag.clothing` with an `onAppearanceChange` hook (add to `scene3d/diag/clothing.js` first).
-4. **`scene3d/diag/clothing.js`** — add `onAppearanceChange(meta)` hook + counter; surface in `summary()` as `appearanceChanges`. Add a `recentChanges` ring buffer (~max 30) so the diag harness can audit.
+Verified 2026-05-24 with a harness that exercises `applyAppearance` on a live spawned entity in the wire-agent: dispatched=true, entity survived despawn-respawn round-trip, `appearanceChanges` counter incremented 0→2, sample event captured with `{guid:0x80002157, source:"wire-update-object", modelChangesCount:1, textureChangesCount:1, subPalettesCount:0, paletteId:0}`. Harness: `/mnt/wbterminal1/tmp/claude-scratch/wire-agent-new-pipelines-2026-05-24/run-diag-clothing-equip.mjs`.
 
-Risk: medium. The applyAppearance hot-swap is the riskiest part — animation-mixer state sync (motion offset, action time) must persist across the rig rebuild OR the entity re-pops into rest-pose on every equip. Easier alternative: despawn + respawn the entity with the new appearance (cleaner but visible flicker).
+**What this guarantees:** wire opcode 0xF7DB now routes through the same animation-cache substitution path that ObjectCreate has been using since vitaeum-parity Milestone C4 + the spawn-time wire already plumbed (lib.rs:~L10778-10830). Mid-game equip changes are no longer silently dropped.
 
-Validation: hit `?diag=1` worker preset, equip-unequip an item on the local player, inspect `__diag.clothing.recentChanges` for the captured event + verify other clients in the same session see the visual change.
+**What it doesn't yet guarantee (deferred):** hot-swap that preserves animation-mixer state. Today's despawn+respawn snaps the entity back to rest-pose for one frame before the next motion event catches it up. For a chatting NPC or combat partner this is briefly visible. Hot-swap (preserve `inst.root` + `inst.mixer` + currently-playing action, swap only the part meshes + materials) is a future optimization — see § D below.
 
-### B. Character-creation enumeration UI — uses today's reader
+### B. Character-creation enumeration UI — uses the W7.2 reader
 
 The reader landed in 7.2 is sufficient for `ui/character-create.js` (or a future dye-picker plugin) to enumerate a wardrobe + render variant icons without going through the per-pixel surface compositor:
 
@@ -70,6 +66,18 @@ The dye chain (CloSubPalette → PaletteSet → Palette → texture pixel substi
 - Wire a dye-picker plugin UI (consumer of `getCloSubPalEffect`)
 - Add `__diag.clothing.dyeApplications` ring to observe which (sub_palette_id, offset, length) triples actually drove a surface fetch
 - Verify retail-fidelity by screenshotting dyed armor sets against retail screenshots
+
+### D. Hot-swap optimization for applyAppearance (Wave 7.4 candidate)
+
+Today's W7.3 `applyAppearance` despawn+respawns. For NPCs in active animation (chatting, combat, casting) the rest-pose flicker is briefly visible. A hot-swap variant would:
+- Preserve `inst.root` + `inst.mixer` + currently-playing `inst.currentAction` across the rebuild.
+- Re-invoke `animationCache.get(setupId, mtableId, currentMotion, currentStance, fetchKeyframes, {modelChanges, textureChanges, paletteId, paletteSubsFlat})` with new opts.
+- Detach old `inst.parts` from `inst.root`, dispose owned materials/textures (geometries are cache-shared — don't dispose), attach new partGroups from the fresh `animEntry.partGroups`.
+- Rebuild the mixer's animation-clip binding against the new parts; restore action time + weight so the entity continues the same swing/walk cycle without a visible reset.
+
+Risk: medium. The mixer rebinding against new mesh handles is the load-bearing piece. Recommend writing this as an opt-in `applyAppearanceHotSwap` method first, A/B-gated against the despawn+respawn path via `?clothingHotSwap=1` URL flag, until visual parity is proven.
+
+Estimated effort: 1 day including the A/B harness + manual verification under combat motion.
 
 Estimated 1-2 weeks for the full dye experience. None of it is blocked by Wave 7.2 or the equip-change follow-on above.
 

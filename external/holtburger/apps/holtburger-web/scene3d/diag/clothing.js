@@ -9,6 +9,7 @@
 import { getClothingDiagSnapshot } from "../../ui/ac_clothing.js";
 
 const DEFAULT_MAX_FAILURES = 20;
+const DEFAULT_MAX_APPEARANCE_CHANGES = 30;
 
 function errStr(e) {
   if (e == null) return "(null)";
@@ -28,7 +29,14 @@ export function attachClothing(diag) {
   const clothing = {
     loaded: new Map(),    // clothingId → {baseEffectCount, subPalEffectCount, loadedAt}
     failures: [],
+    // Wave 7.3 — mid-game equip-change observability. Fired from
+    // `EntityManager.applyAppearance(guid, opts)` BEFORE the despawn,
+    // so we always have observation even if the subsequent respawn
+    // errors out.
+    appearanceChanges: 0,
+    recentChanges: [],
     maxFailures: DEFAULT_MAX_FAILURES,
+    maxRecentChanges: DEFAULT_MAX_APPEARANCE_CHANGES,
 
     onLoadSucceeded(meta) {
       try {
@@ -55,6 +63,27 @@ export function attachClothing(diag) {
       } catch (_) {}
     },
 
+    /**
+     * Hook fired from `EntityManager.applyAppearance(guid, opts)` —
+     * meta carries the substitution counts + paletteId so the harness
+     * can audit which mid-game equip changes actually propagated.
+     */
+    onAppearanceChange(meta) {
+      try {
+        const m = meta || {};
+        clothing.appearanceChanges += 1;
+        pushCapped(clothing.recentChanges, {
+          guid: hexId(m.guid ?? 0),
+          source: m.source || "unknown",
+          modelChangesCount: (m.modelChangesCount ?? 0) | 0,
+          textureChangesCount: (m.textureChangesCount ?? 0) | 0,
+          subPalettesCount: (m.subPalettesCount ?? 0) | 0,
+          paletteId: hexId(m.paletteId ?? 0),
+          ts: performance.now(),
+        }, clothing.maxRecentChanges);
+      } catch (_) {}
+    },
+
     /** Read-through to the runtime cache. */
     cached() {
       try { return getClothingDiagSnapshot(); }
@@ -67,6 +96,7 @@ export function attachClothing(diag) {
         loaded: clothing.loaded.size,
         cached: cached.tables.length,
         failures: clothing.failures.length,
+        appearanceChanges: clothing.appearanceChanges,
       };
     },
 
@@ -76,11 +106,15 @@ export function attachClothing(diag) {
         loaded: Array.from(clothing.loaded.values()),
         cached: clothing.cached(),
         failures: [...clothing.failures],
+        appearanceChanges: clothing.appearanceChanges,
+        recentChanges: [...clothing.recentChanges],
       };
     },
 
     reset() {
       clothing.failures.length = 0;
+      clothing.appearanceChanges = 0;
+      clothing.recentChanges.length = 0;
     },
   };
 
