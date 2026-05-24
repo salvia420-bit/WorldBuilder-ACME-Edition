@@ -20,6 +20,8 @@ import * as THREE from "three";
 import { surfacePixelsToTexture } from "../scene3d/adapter.js";
 
 const DEFAULT_SIZE = 280;
+// Wave 7.9.B — D.3 callers pass 360×280 (square 280 would crop the
+// player rig at half-scale beside the pedestal).
 const ROTATION_SPEED = 0.008; // radians/frame at 60fps → ~30s/revolution
 
 export class DyeViewport {
@@ -27,26 +29,31 @@ export class DyeViewport {
    * @param {HTMLElement} container — parent element to mount the canvas in
    * @param {number} [size=280] — square size in CSS pixels
    */
-  constructor(container, size = DEFAULT_SIZE) {
-    this.size = size;
+  constructor(container, sizeOrWidth = DEFAULT_SIZE, height = null) {
+    // Wave 7.9.B — accept rectangular sizing for the D.3 player-mesh
+    // path. Default stays square 280×280 for callers that don't pass
+    // explicit dims.
+    const w = sizeOrWidth;
+    const h = height ?? sizeOrWidth;
+    this.size = { w, h };
     this.renderer = new THREE.WebGLRenderer({
       alpha: true,
       antialias: false,
       preserveDrawingBuffer: true,
     });
-    this.renderer.setSize(size, size);
+    this.renderer.setSize(w, h);
     this.renderer.setPixelRatio(1);
     this.renderer.setClearColor(0x1c160e, 0.0); // transparent — let tooltip bg show
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = "block";
-    this.renderer.domElement.style.width = `${size}px`;
-    this.renderer.domElement.style.height = `${size}px`;
+    this.renderer.domElement.style.width = `${w}px`;
+    this.renderer.domElement.style.height = `${h}px`;
 
     this.scene = new THREE.Scene();
     // Camera angled to show the armor 3/4 from slightly above. The
     // rig auto-fits via _frameRig once loaded.
-    this.camera = new THREE.PerspectiveCamera(35, 1, 0.05, 50);
+    this.camera = new THREE.PerspectiveCamera(35, w / h, 0.05, 50);
     this.camera.position.set(0, 1.4, 2.6);
     this.camera.lookAt(0, 0.85, 0);
 
@@ -64,6 +71,13 @@ export class DyeViewport {
 
     this.rigRoot = new THREE.Group();
     this.scene.add(this.rigRoot);
+
+    // Wave 7.9.B — D.3: secondary rig for the local player at half-
+    // scale next to the pedestal. Loaded lazily via loadPlayerMesh;
+    // stays empty when no local player is known.
+    this.playerRigRoot = new THREE.Group();
+    this.playerRigRoot.scale.setScalar(0.5);
+    this.scene.add(this.playerRigRoot);
 
     this._ownedMaterials = [];
     this._ownedTextures = [];
@@ -223,6 +237,122 @@ export class DyeViewport {
   }
 
   /**
+   * Wave 7.9.B — D.3 player-mesh-next-to-pedestal. Build a half-scale
+   * rig representing the local player + their current equipment.
+   * Mirrors loadDyedItem's part-assembly loop but places parts
+   * under playerRigRoot at +x offset (next to the pedestal). The
+   * player rig uses the player's CURRENT substitutions (no dye
+   * overlay applied) so the viewer can compare "what I look like
+   * now" vs "what this armor would look like dyed".
+   *
+   * Returns true on success. False when (a) no local player guid,
+   * (b) no entity instance for the player, (c) animationCache fails.
+   * Per the dispose-friendliness contract, calling this twice tears
+   * down the prior playerRigRoot contents.
+   *
+   * @param {number} setupId
+   * @param {number} mtableId
+   * @param {number} paletteId
+   * @param {Uint32Array} subPalettes — flat triple buffer (player's CURRENT)
+   * @returns {Promise<boolean>}
+   */
+  async loadPlayerMesh(setupId, mtableId, paletteId, subPalettes) {
+    if (this._disposed) return false;
+    if (!setupId) return false;
+    const em = window.liveScene3d?.entityManager;
+    if (!em?.animationCache?.get) return false;
+    const fetchKeyframes = em.wasmExports?.fetchEntityAnimationKeyframes;
+    if (typeof fetchKeyframes !== "function") return false;
+
+    let animEntry;
+    try {
+      animEntry = await em.animationCache.get(
+        setupId >>> 0, mtableId >>> 0, 0, 0, fetchKeyframes,
+        {
+          modelChanges: new Uint32Array(0),
+          textureChanges: new Uint32Array(0),
+          paletteId: paletteId >>> 0,
+          paletteSubsFlat: subPalettes ?? new Uint32Array(0),
+        },
+      );
+    } catch (_) { return false; }
+    if (!animEntry || !Array.isArray(animEntry.partGroups)) return false;
+
+    // Tear down prior player rig contents.
+    while (this.playerRigRoot.children.length > 0) {
+      this.playerRigRoot.remove(this.playerRigRoot.children[0]);
+    }
+
+    const hasDye = (paletteId >>> 0) !== 0 || (subPalettes && subPalettes.length > 0);
+    const allSurfaceDids = new Set();
+    for (const pg of animEntry.partGroups) {
+      if (!pg) continue;
+      for (const did of pg.surfaceDids) allSurfaceDids.add(did >>> 0);
+    }
+    const matByDid = new Map();
+    if (hasDye && typeof em.wasmExports?.fetchEntitySurfacesPixels === "function") {
+      try {
+        const dids = new Uint32Array([...allSurfaceDids]);
+        if (dids.length > 0) {
+          const results = await em.wasmExports.fetchEntitySurfacesPixels(
+            dids, paletteId >>> 0, subPalettes ?? new Uint32Array(0),
+          );
+          for (let i = 0; i < dids.length; i += 1) {
+            const did = dids[i] >>> 0;
+            const sp = results[i];
+            if (!sp || sp.width === 0 || sp.height === 0) {
+              if (sp?.free) try { sp.free(); } catch (_) {}
+              matByDid.set(did, this._fallbackMaterial());
+              continue;
+            }
+            const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
+            if (sp.free) try { sp.free(); } catch (_) {}
+            const mat = new THREE.MeshStandardMaterial({
+              map: tex, roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide,
+            });
+            this._ownedMaterials.push(mat);
+            this._ownedTextures.push(tex);
+            matByDid.set(did, mat);
+          }
+        }
+      } catch (_) {}
+    }
+
+    for (let p = 0; p < animEntry.partGroups.length; p += 1) {
+      const partGroup = new THREE.Group();
+      partGroup.name = `dye-preview-player-part-${p}`;
+      if (animEntry.restOrigins && animEntry.restOrigins.length >= (p + 1) * 3) {
+        partGroup.position.set(
+          animEntry.restOrigins[p*3+0],
+          animEntry.restOrigins[p*3+1],
+          animEntry.restOrigins[p*3+2],
+        );
+      }
+      if (animEntry.restOrientations && animEntry.restOrientations.length >= (p + 1) * 4) {
+        const rq = animEntry.restOrientations;
+        partGroup.quaternion.set(rq[p*4+1], rq[p*4+2], rq[p*4+3], rq[p*4+0]);
+      }
+      const conv = animEntry.partGroups[p];
+      if (conv) {
+        for (const grp of (conv.groups ?? [])) {
+          const did = grp.surfaceDid >>> 0;
+          let mat = matByDid.get(did)
+            ?? em.materialCache?.getCached?.(did)
+            ?? this._fallbackMaterial();
+          partGroup.add(new THREE.Mesh(grp.geometry, mat));
+        }
+      }
+      this.playerRigRoot.add(partGroup);
+    }
+
+    // Position the half-scale player rig off to the side of the
+    // pedestal. The .scale.setScalar(0.5) from the constructor
+    // pre-applies the half-scale; here we just translate.
+    this.playerRigRoot.position.set(1.0, 0.0, 0.0);
+    return true;
+  }
+
+  /**
    * Auto-fit camera + position rig above pedestal. The pedestal cap
    * sits at y≈0.24; we lift the rig so its lowest bounds touch
    * y=0.24 and re-target the camera + adjust distance to fill the
@@ -282,6 +412,18 @@ export class DyeViewport {
     }
   }
 
+  /**
+   * Wave 7.9.B — D.3 introspection helper for the diag harness.
+   * Returns counts of part-Groups currently mounted on each rig.
+   */
+  getRigStats() {
+    return {
+      dyedRigPartCount: this.rigRoot?.children?.length ?? 0,
+      playerRigPartCount: this.playerRigRoot?.children?.length ?? 0,
+      size: { ...this.size },
+    };
+  }
+
   /** Begin rAF render loop. Idempotent. */
   start() {
     if (this._rafId !== null || this._disposed) return;
@@ -290,7 +432,10 @@ export class DyeViewport {
       this._rafId = requestAnimationFrame(tick);
       this._rotation += ROTATION_SPEED;
       this.rigRoot.rotation.y = this._rotation;
-      // Pedestal stays still — only the rig spins.
+      // Pedestal + player rig stay still — only the dyed item spins.
+      // Player mesh as a static reference frame is more useful than
+      // a counter-rotating one (the player would just look like they
+      // were also dye-previewing themselves).
       try { this.renderer.render(this.scene, this.camera); } catch (_) {}
     };
     tick();
@@ -305,6 +450,10 @@ export class DyeViewport {
       this._rafId = null;
     }
     this._clearRig();
+    while (this.playerRigRoot.children.length > 0) {
+      const child = this.playerRigRoot.children[0];
+      this.playerRigRoot.remove(child);
+    }
     for (const t of this._ownedTextures) {
       try { t.dispose(); } catch (_) {}
     }

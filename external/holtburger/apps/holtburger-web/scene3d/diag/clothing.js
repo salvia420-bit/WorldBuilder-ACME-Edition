@@ -58,6 +58,13 @@ export function attachClothing(diag) {
     dyePreviewsShownByReason: {},
     recentDyePreviewsShown: [],
     maxRecentDyePreviewsShown: 30,
+    // Wave 7.9.B — D.4 whole-mesh local preview counters. Fire when
+    // Shift+drag-over routes the dye through applyAppearance on the
+    // local player rig (apply) + when the preview reverts at hide
+    // time (revert). Net should always be zero — every apply
+    // matched by a revert.
+    dyePreviewWholeMeshApplied: 0,
+    dyePreviewWholeMeshReverted: 0,
     // Wave 7.8 — Phase C dye-preview compositor counters. Fired from
     // ui/ac_dye_preview.js::composeDyePreview. previewsRendered =
     // unique (clothing, setup, template, shadeBucket) combos
@@ -142,6 +149,21 @@ export function attachClothing(diag) {
           ts: performance.now(),
         }, clothing.maxRecentDyes);
       } catch (_) {}
+    },
+
+    /**
+     * Wave 7.9.B — D.4 whole-mesh preview hooks. Fire when the
+     * plugin Shift+drag-over routes the dye through
+     * applyAppearance on the local player's actual rig in the
+     * main scene + when the preview reverts at hide/drag-end.
+     * Apply + Revert should be net-zero — every apply matched by
+     * a revert. Drift in the counters indicates a leak.
+     */
+    onDyePreviewWholeMeshApplied(_meta) {
+      try { clothing.dyePreviewWholeMeshApplied += 1; } catch (_) {}
+    },
+    onDyePreviewWholeMeshReverted(_meta) {
+      try { clothing.dyePreviewWholeMeshReverted += 1; } catch (_) {}
     },
 
     /**
@@ -239,6 +261,8 @@ export function attachClothing(diag) {
         dyePreviewCacheSize: cached.preview?.previewCacheSize ?? 0,
         dyePreviewsShown: clothing.dyePreviewsShown,
         dyePreviewsShownByReason: { ...clothing.dyePreviewsShownByReason },
+        dyePreviewWholeMeshApplied: clothing.dyePreviewWholeMeshApplied,
+        dyePreviewWholeMeshReverted: clothing.dyePreviewWholeMeshReverted,
       };
     },
 
@@ -279,6 +303,8 @@ export function attachClothing(diag) {
       clothing.dyePreviewsShown = 0;
       clothing.dyePreviewsShownByReason = {};
       clothing.recentDyePreviewsShown.length = 0;
+      clothing.dyePreviewWholeMeshApplied = 0;
+      clothing.dyePreviewWholeMeshReverted = 0;
     },
   };
 

@@ -145,9 +145,76 @@ function hideTooltip() {
     try { vp.dispose(); } catch (_) {}
     window[VIEWPORT_REF_KEY] = null;
   }
+  // Wave 7.9.B — D.4: revert any active whole-mesh preview on the
+  // local player rig. We stashed the original meta when the
+  // preview was applied; calling applyAppearance with those values
+  // restores the pre-preview state. Local-only — server isn't
+  // aware so the next ObjectCreate would revert anyway.
+  revertWholeMeshPreview();
 }
 
 const VIEWPORT_REF_KEY = "__hbDyePreviewViewport";
+const WHOLE_MESH_STASH_KEY = "__hbDyePreviewWholeMeshStash";
+
+function revertWholeMeshPreview() {
+  const stash = window[WHOLE_MESH_STASH_KEY];
+  if (!stash) return;
+  window[WHOLE_MESH_STASH_KEY] = null;
+  try {
+    const em = window.liveScene3d?.entityManager;
+    if (em?.applyAppearance && stash.guid) {
+      em.applyAppearance(stash.guid, {
+        modelChanges: stash.modelChanges ?? new Uint32Array(0),
+        textureChanges: stash.textureChanges ?? new Uint32Array(0),
+        subPalettes: stash.subPalettes ?? new Uint32Array(0),
+        paletteId: stash.paletteId ?? 0,
+      });
+      try {
+        window.__diag?.clothing?.onDyePreviewWholeMeshReverted?.({ guid: stash.guid });
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+async function applyWholeMeshPreview(triples) {
+  try {
+    const lpg = (typeof window.getLocalPlayerGuid === "function") ? (window.getLocalPlayerGuid() >>> 0) : 0;
+    if (!lpg) return false;
+    const em = window.liveScene3d?.entityManager;
+    if (!em?.applyAppearance) return false;
+    const inst = em.entityMap?.get?.(lpg);
+    const meta = inst?.meta;
+    if (!meta) return false;
+    // Stash the current substitutions so we can revert on hide.
+    // Stash once per drag session — if already stashed, leave the
+    // original values alone so subsequent Shift-drag-over events
+    // don't accidentally overwrite the true original with an
+    // already-previewed state.
+    if (!window[WHOLE_MESH_STASH_KEY]) {
+      window[WHOLE_MESH_STASH_KEY] = {
+        guid: lpg,
+        modelChanges: meta.modelChanges ?? new Uint32Array(0),
+        textureChanges: meta.textureChanges ?? new Uint32Array(0),
+        subPalettes: meta.subPalettes ?? new Uint32Array(0),
+        paletteId: meta.paletteId ?? 0,
+      };
+    }
+    await em.applyAppearance(lpg, {
+      modelChanges: new Uint32Array(0),
+      textureChanges: new Uint32Array(0),
+      subPalettes: triples ?? new Uint32Array(0),
+      paletteId: 0,
+    });
+    try {
+      window.__diag?.clothing?.onDyePreviewWholeMeshApplied?.({
+        guid: lpg, tripleCount: ((triples?.length ?? 0) / 3) | 0,
+      });
+    } catch (_) {}
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 
 async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
   const outcome = isDyePot(draggedItem?.wcid >>> 0);
@@ -198,9 +265,11 @@ async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
   el.appendChild(title);
 
   const viewportWrap = document.createElement("div");
+  // Wave 7.9.B — D.3 widens the viewport to 360px to fit the player
+  // mesh next to the pedestal.
   viewportWrap.style.cssText = [
     "display: block",
-    "width: 280px",
+    "width: 360px",
     "height: 280px",
     "border: 1px solid #6e5a2c",
     "background: linear-gradient(180deg, #2a2418, #1c160e 60%, #14110a)",
@@ -211,14 +280,37 @@ async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
 
   let composed = false;
   let viewport = null;
+  let playerMeshLoaded = false;
   try {
-    viewport = new DyeViewport(viewportWrap, 280);
+    viewport = new DyeViewport(viewportWrap, 360, 280);
     composed = await viewport.loadDyedItem(
       setupDid,
       (hoveredItem.mtableId ?? 0) >>> 0,
       0,
       triples ?? new Uint32Array(0),
     );
+    // D.3 — try to load the local player rig at half-scale next to
+    // the pedestal as a reference frame. Best-effort: silently skips
+    // if local player guid is unknown or no entity instance exists.
+    try {
+      const lpg = (typeof window.getLocalPlayerGuid === "function") ? (window.getLocalPlayerGuid() >>> 0) : 0;
+      if (lpg !== 0) {
+        const em = window.liveScene3d?.entityManager;
+        const playerInst = em?.entityMap?.get?.(lpg);
+        const playerMeta = playerInst?.meta;
+        if (playerMeta) {
+          const playerSetup = (playerMeta.modelId ?? playerMeta.setupId ?? 0) >>> 0;
+          if (playerSetup !== 0) {
+            playerMeshLoaded = await viewport.loadPlayerMesh(
+              playerSetup,
+              (playerMeta.mtableId ?? 0) >>> 0,
+              (playerMeta.paletteId ?? 0) >>> 0,
+              playerMeta.subPalettes ?? new Uint32Array(0),
+            );
+          }
+        }
+      }
+    } catch (_) { /* D.3 best-effort */ }
     if (!composed) {
       // Viewport built but rig couldn't load — fall through to the
       // flat composeDyePreview as a backup so the player still sees
@@ -267,6 +359,7 @@ async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
       shade: outcome.shade,
       composed,
       mode: viewport ? "viewport-3d" : "flat-fallback",
+      playerMeshLoaded,
     });
   } catch (_) {}
   return true;
@@ -322,7 +415,21 @@ export function mount(/* ctx */) {
       return;
     }
     const shown = await showTooltipFor(state, draggedItem, hoveredItem, detail.clientX, detail.clientY);
-    if (!shown) hideTooltip();
+    if (!shown) {
+      hideTooltip();
+      return;
+    }
+    // Wave 7.9.B — D.4: when Shift held, ALSO apply the dye to the
+    // local player's actual rig in the main scene for a whole-mesh
+    // preview. Local-only — reverts on hide / drag-end.
+    if (detail.shiftKey) {
+      const outcome = isDyePot(draggedItem.wcid >>> 0);
+      const clothingId = (hoveredItem.clothingBaseId ?? 0) >>> 0;
+      if (outcome && clothingId !== 0) {
+        const triples = await resolveDyeTriples(clothingId, outcome.paletteTemplate, outcome.shade);
+        if (triples) await applyWholeMeshPreview(triples);
+      }
+    }
   };
   window.addEventListener("hb:inventory-drag-over", state.handlerDragOver);
   if (state.handlerDragEnd) {

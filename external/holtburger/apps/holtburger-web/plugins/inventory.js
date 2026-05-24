@@ -731,6 +731,12 @@ function doMount(parentEl, _ctx) {
           draggedGuid: overlay.dataset.draggingGuid ?? null,
           clientX: ev.clientX,
           clientY: ev.clientY,
+          // Wave 7.9.B — shiftKey carries through so the dye-preview
+          // plugin can route Shift+drag-over into the whole-mesh
+          // applyAppearance local preview path.
+          shiftKey: !!ev.shiftKey,
+          altKey: !!ev.altKey,
+          ctrlKey: !!ev.ctrlKey,
         },
       }));
     } catch (_) {}

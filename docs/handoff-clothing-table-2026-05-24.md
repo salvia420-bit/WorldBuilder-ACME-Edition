@@ -103,9 +103,19 @@ The dye chain (CloSubPalette → PaletteSet → Palette → texture pixel substi
 - `__diag.clothing.recentDyePreviewsShown[].mode` distinguishes `"viewport-3d"` vs `"flat-fallback"`.
 - Verified: viewport mounts at 280×280, WebGL canvas has 3063/1024 = 75% non-transparent pixel coverage in the sampled region, mode tracked as `"viewport-3d"`, dispose-on-hide cleanly releases the context.
 
-**Phase D.3 follow-on (deferred):** player mesh next to the dyed item on the pedestal. Use the local player's setup (already known via `getLocalPlayerGuid()` → `entityMap` lookup) at half-scale to one side of the pedestal. Useful when the dyed item is a partial setup (e.g. just a helmet) and the player wants to see how it composes with the rest of their kit.
+**Phase D.3 — player mesh next to pedestal** ✅ shipped Wave 7.9.B.
+- DyeViewport widened to 360×280, gains a secondary `playerRigRoot` at half-scale (`.scale.setScalar(0.5)`) positioned at +x next to the pedestal.
+- New `loadPlayerMesh(setupId, mtableId, paletteId, subPalettes)` method mirrors `loadDyedItem`'s part-assembly loop. The player rig uses the player's CURRENT substitutions (no dye overlay) so the viewer compares "what I look like now" vs "what this armor would look like dyed".
+- Plugin best-effort populates the player rig from `getLocalPlayerGuid() + entityMap.get(lpg).meta` (modelId/setupId + paletteId + subPalettes). Silently skips when local player isn't known.
+- Static — only the dyed item spins; the player rig is a stationary reference frame.
+- Verified: viewport 360×280, dyedRig 34 parts + playerRig 34 parts (local player 0x50000098 setup 0x02000001 loaded successfully).
 
-**Phase D.4 follow-on (deferred):** Shift+drag-over → `applyAppearance(localGuid, {paletteId, subPalettes})` for whole-mesh local preview on the player's actual 3D rig in the main scene (uses W7.5 hot-swap path when the `?clothingHotSwap=1` flag is on). Reverts on next server ObjectCreate.
+**Phase D.4 — Shift+drag-over whole-mesh preview** ✅ shipped Wave 7.9.B.
+- `inventory.js` dragover event detail gains `shiftKey` / `altKey` / `ctrlKey` flags.
+- Plugin's drag-over handler routes `detail.shiftKey === true` through `applyWholeMeshPreview(triples)` → reads local player meta from entityMap, stashes original substitutions to `window.__hbDyePreviewWholeMeshStash`, calls `em.applyAppearance(lpg, { paletteId: 0, subPalettes: triples })` to drive the dye onto the player's actual 3D rig in the main scene (uses W7.5 hot-swap path when `?clothingHotSwap=1` is set).
+- On hideTooltip / drag-end: `revertWholeMeshPreview()` calls applyAppearance with the stashed original meta. Per-session stash (set once on first apply within a drag) so subsequent dragover events don't overwrite the true original.
+- Diag: `__diag.clothing.{dyePreviewWholeMeshApplied, dyePreviewWholeMeshReverted}` — apply+revert should be net-zero; drift = leak.
+- Verified: applyResult=ok, revertResult=ok, counters 0→1 / 0→1 (perfect symmetry, no leak).
 
 **Wiki-grounded design note:** Per the fandom dye-pages (Dyeing, Vial of Hennacin Dye, Hennacin Dye Pot) and `WorldObject_Networking.cs::CalculateObjDesc`, dye commit is a server-side recipe flow (Dye Pot + Dyeable armor → cooking check → updates item's `PaletteTemplate` + `Shade` properties → server emits the resulting `ModelData.{palette_id, sub_palettes}`). The CLIENT is purely a renderer of pre-computed overlays — any dye-picker UI is preview-only; the actual commit lives in the inventory recipe-application flow.
 
