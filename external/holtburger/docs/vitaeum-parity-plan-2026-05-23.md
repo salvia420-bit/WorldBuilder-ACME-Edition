@@ -152,18 +152,26 @@ If two or more parsers reveal that a downstream consumer wasn't actually plannin
 
 ### B1 — HIGH batch (UI / input infrastructure)
 
-Single commit covering all four:
+Scope discovery during execution forced a split — not all four are
+shippable at the same depth, so B1 was reduced to **StringTable only**
+with the rest documented as follow-on work:
 
-| Type | Prefix | Count | Why |
+| Type | Prefix | Count | Status |
 |---|---|---|---|
-| StringTable | 0x23 | 15 | Locale-keyed string lookup, pairs with C2 LanguageString |
-| Layout | 0x21 | 101 | UI screen layout descriptors |
-| ActionMap | 0x26 | 1 | Input action map |
-| Keymap | 0x14 | 2 | Keyboard binding map |
+| StringTable | 0x23 | 15 | ✅ **Shipped** in B1 — clean schema, full parity test |
+| Layout (LayoutDesc) | 0x21 | 101 | ⏸ Deferred — `ElementDesc` has conditional `maskmap` fields gated on `StateDesc.IncorporationFlags`, which itself drags in `BaseProperty` (a 13+-variant union with typeswitch). Needs a dedicated spike to do right. |
+| ActionMap | 0x26 | 1 | ⏸ Deferred — DRW `dats.xml` body is empty (`<type name="ActionMap" .../>`), but the single retail record is 12,303 bytes. No schema source at all; requires full RE from acclient.h `struct InputManager`/`ActionMap` decomp. |
+| KeyMap (MasterInputMap) | 0x14 | 2 | ⏸ Deferred — well-defined sub-types but uses `guid` primitive + `Dictionary` wire format (distinct from `HashTable`/`PackableHashTable`/`IntrusiveHashTable`) that holtburger-dat doesn't yet implement. |
 
-References as in C; WB.Terminal cross-decode required for at least one record per type.
+The three deferred types are tracked as a follow-on B1.b commit and
+should not block B2.
 
-**Why batched:** All small. Together they unlock retail-faithful UI port (Chorizite plan §13 needs these).
+**Why StringTable went first:** clean DRW schema (DBObj header +
+`u32 language` + `HashTable<u32, StringTableString>`), straightforward
+nested `StringTableString` shape (data_id + UTF-16 strings + variables +
+flag), and an existing HashTable-style helper pattern from `skill_table`.
+Real-DAT parity validated against all 15 retail records (6899 entries,
+7050 string variants).
 
 ### B2 — MEDIUM batch (rendering / LOD)
 
