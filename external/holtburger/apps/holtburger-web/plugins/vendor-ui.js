@@ -46,7 +46,7 @@
  *     Confirm in the queue tab flushes via the multi-item wire op.
  */
 
-import { setAcText } from "../ui/ac_font.js";
+import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
 
 const STYLE_ID = "hb-vendor-bar-styles";
 const OVERLAY_ID = "hb-vendor-bar";
@@ -174,7 +174,7 @@ function ensureStyles() {
   position: fixed;
   left: 50%; bottom: 220px;
   transform: translateX(-50%);
-  width: 720px; height: 110px;
+  width: 720px; height: 136px;
   z-index: 60;
   pointer-events: auto;
   font-family: var(--hb-font-serif);
@@ -183,6 +183,16 @@ function ensureStyles() {
   user-select: none;
 }
 #${OVERLAY_ID}[data-open="1"] { display: block; }
+#${OVERLAY_ID} .hvb-title-bar {
+  position: relative;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  background: linear-gradient(180deg, rgba(64, 50, 24, 0.85) 0%, rgba(40, 30, 14, 0.85) 100%);
+  border-bottom: 1px solid var(--hb-border-brass-dim);
+}
+#${OVERLAY_ID} .hvb-title-bar .hvb-title { letter-spacing: 0.04em; }
 #${OVERLAY_ID} .hvb-top-strip {
   position: relative;
   height: 22px;
@@ -507,6 +517,16 @@ function buildOverlay() {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
 
+  // Title bar — vendor name in heading font. render() refreshes the
+  // text whenever vendorState updates.
+  const titleBar = document.createElement("div");
+  titleBar.className = "hvb-title-bar";
+  const titleEl = document.createElement("span");
+  titleEl.className = "hvb-title";
+  setAcText(titleEl, "Vendor", { fontId: HEADING_FONT_ID, color: "#f0c87c" });
+  titleBar.appendChild(titleEl);
+  overlay.appendChild(titleBar);
+
   // Top strip — tabs + close
   const top = document.createElement("div");
   top.className = "hvb-top-strip";
@@ -729,6 +749,13 @@ function render() {
   if (!ov) return;
   const vs = state.vendorState;
   if (!vs) return;
+
+  // Refresh vendor-name title.
+  const titleEl = ov.querySelector(".hvb-title");
+  if (titleEl) {
+    const label = vs.vendorName ? `Vendor: ${vs.vendorName}` : "Vendor";
+    setAcText(titleEl, label, { fontId: HEADING_FONT_ID, color: "#f0c87c" });
+  }
 
   // Update tab labels with counts + active class.
   ov.querySelectorAll(".hvb-tab").forEach((b) => {
