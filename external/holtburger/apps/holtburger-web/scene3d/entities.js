@@ -849,12 +849,67 @@ export class EntityManager {
 
   async _spawnImpl(meta) {
     const guid = meta.guid >>> 0;
-    const setupId = (meta.modelId ?? meta.setupId ?? 0) >>> 0;
+    let setupId = (meta.modelId ?? meta.setupId ?? 0) >>> 0;
     if (!setupId) {
       // No real setup yet (PrivateUpdatePosition before ObjectCreate).
       // Skip — the next ObjectCreate will retry with a real setup_id.
       return null;
     }
+
+    // Wave 7.4 (2026-05-24): spawn-time entity LOD. If the camera is
+    // positioned + the setup has a GfxObjDegradeInfo chain + the
+    // entity's distance lands in one of the chain's bands, substitute
+    // setupId for the band's gfx_obj_id (0x01 prefix) BEFORE the
+    // animationCache.get call so the rig builder bakes the LOD-N
+    // mesh. fetch_entity_animation_keyframes already branches on
+    // `setup_id >> 24 != 0x02` and takes the GfxObj direct path
+    // (lib.rs:10840 region), so substituting a 0x01 prefix here is
+    // safe + matches the statics LOD path. Distance frozen at spawn —
+    // entities crossing the band threshold mid-game won't switch
+    // (handoff-degrade-info-entity-lod-2026-05-24.md § shape-a).
+    // Returns 0 when no chain / no band matches / no camera; on 0
+    // we fall through to the original full-detail setup. The wasm
+    // helper is fire-and-forget at the worst — failure to substitute
+    // never breaks spawn, only foregoes the LOD optimization.
+    const lodFetch = this.wasmExports?.fetch_entity_degrade_for_distance;
+    if (typeof lodFetch === "function") {
+      try {
+        const cameraPos = window.liveScene3d?.camera?.position;
+        if (cameraPos) {
+          const lbId = (meta.landblockId ?? 0) >>> 0;
+          const lbX = (lbId >>> 24) & 0xff;
+          const lbY = (lbId >>> 16) & 0xff;
+          const wx = lbX * 192 + (meta.x ?? 0);
+          const wy = lbY * 192 + (meta.y ?? 0);
+          const dx = cameraPos.x - wx;
+          const dy = cameraPos.y - wy;
+          const distance = Math.hypot(dx, dy);
+          if (distance > 0) {
+            const substitute = (await lodFetch(setupId, distance)) >>> 0;
+            try {
+              window.__diag?.lod?.onSpawnAttempt?.({
+                guid,
+                setupId,
+                distance,
+                substituted: substitute !== 0,
+              });
+            } catch (_) {}
+            if (substitute !== 0) {
+              try {
+                window.__diag?.lod?.onSpawnSubstitution?.({
+                  guid,
+                  originalSetupId: setupId,
+                  substituteSetupId: substitute,
+                  distance,
+                });
+              } catch (_) {}
+              setupId = substitute;
+            }
+          }
+        }
+      } catch (_) { /* spawn-time LOD must never break spawn */ }
+    }
+
     const mtableId = (meta.mtableId ?? 0) >>> 0;
     const initialMotion = (meta.motionCommand ?? 0) >>> 0;
     const initialStance = (meta.motionStance ?? 0) >>> 0;

@@ -5402,6 +5402,65 @@ pub async fn fetch_gfx_obj_degrade_info(degrade_id: u32) -> Result<String, JsVal
     Ok(out)
 }
 
+/// Wave 7.4 (2026-05-24): one-shot LOD pick for an entity at a given
+/// camera distance. Composes `resolve_did_degrade` (which walks
+/// SetupModel → first GfxObj → did_degrade) + GfxObjDegradeInfo
+/// unpack + band selection in wasm so JS gets a single call → single
+/// substitute setupId answer.
+///
+/// Returns the band's `gfx_obj_id` (0x01 prefix) suitable for direct
+/// substitution into `fetchEntityAnimationKeyframes` — that export
+/// already branches on `(setup_id >> 24) != 0x02` and takes the 0x01
+/// GfxObj direct path (lib.rs:10840-10925). When no LOD chain exists
+/// for the input setup OR no band's `[min_dist, max_dist)` window
+/// contains the input distance, returns 0 and the caller falls back
+/// to the original setup. Matches the statics path that already
+/// substitutes via `resolve_did_degrade` at spawn time.
+///
+/// Distance is in meters (camera-to-entity horizontal in AC world
+/// frame). 0.0 returns the original setup (no substitution); callers
+/// should pre-compute the actual distance.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_entity_degrade_for_distance(
+    setup_id: u32,
+    distance: f32,
+) -> Result<u32, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::GfxObjDegradeInfo;
+    if !distance.is_finite() || distance <= 0.0 {
+        return Ok(0);
+    }
+    let source = global_source::global_source();
+    // Prefetch the source setup chain so resolve_did_degrade can walk
+    // SetupModel → first GfxObj. Matches the prefetch shape used by
+    // fetch_entity_animation_keyframes ahead of its own degrade reads.
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let degrade_id = resolve_did_degrade(source.as_ref(), setup_id);
+    if degrade_id == 0 {
+        return Ok(0);
+    }
+    // Prefetch the chain itself before unpack — the source might not
+    // have walked into it during the setup-only prefetch above.
+    let initial2 = [ResourceKey::new("eor/portal", degrade_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial2, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", degrade_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok(0),
+    };
+    let di = match GfxObjDegradeInfo::unpack(&bytes) {
+        Ok(d) => d,
+        Err(_) => return Ok(0),
+    };
+    for band in &di.degrades {
+        if distance >= band.min_dist && distance < band.max_dist {
+            return Ok(band.gfx_obj_id);
+        }
+    }
+    Ok(0)
+}
+
 /// Phase 4 step 6 Phase B: surface decode with entity palette overrides.
 /// ACE's `CalculateObjDesc` (~/ace-server/Source/ACE.Server/WorldObjects/
 /// WorldObject_Networking.cs:1017 + Creature_Networking.cs:218) sets

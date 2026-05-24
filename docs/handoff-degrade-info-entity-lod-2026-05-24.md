@@ -1,7 +1,31 @@
 # Handoff: GfxObjDegradeInfo (DAT 0x11) entity-side LOD integration
 
-**For:** next agent picking up entity LOD wiring.
-**Status: parser + wasm export + JS reader shipped in Wave 7.1; entity-spawn integration NOT shipped.** This is the most contained of the three deferred items (~6 hours per the explore report). Statics + buildings already have a parallel LOD path via `resolve_did_degrade`; this handoff carries the mirror integration to entities.
+**For:** historical reference — closed.
+**Status (2026-05-24 update — Wave 7.4 SHIPPED):** parser + wasm reader + JS runtime + diag shipped in Wave 7.1; **entity-spawn integration shipped in Wave 7.4** (this session). Reader-side band picker (`ui/ac_lod.js::pickDegradeBand`) still useful for any future per-frame LOD code or LOD-aware plugins.
+
+## Wave 7.4 — what shipped 2026-05-24
+
+The handoff's "Required shape (a) spawn-time substitution" approach landed cleanly:
+
+1. **`apps/holtburger-web/src/lib.rs`** — new `fetch_entity_degrade_for_distance(setup_id: u32, distance: f32) -> u32` wasm export (~L5405 region). Composes the existing `resolve_did_degrade` walk (SetupModel → first GfxObj → did_degrade) + `GfxObjDegradeInfo::unpack` + band selection in Rust so JS gets a single call → single substitute setupId answer. Returns the band's `gfx_obj_id` (0x01 prefix) or 0 when no chain / no band matches / no camera. Distance is meters in AC world frame.
+2. **`apps/holtburger-web/index.html`** — exposed via `window.__hbWasm` (around L1300) and listed in the `init3D` wasmExports object (around L6086) so `EntityManager.wasmExports` carries it.
+3. **`apps/holtburger-web/scene3d/entities.js::_spawnImpl`** — added the spawn-time LOD gate at the top of `_spawnImpl` (~L860). Reads `window.liveScene3d.camera.position`, computes horizontal distance to the entity's world pose (`lbX*192 + meta.x`, `lbY*192 + meta.y`), calls the wasm helper, substitutes setupId if non-zero. Distance frozen at spawn — entities crossing a band threshold mid-game won't switch (matches the handoff's shape-a recommendation).
+4. **`apps/holtburger-web/scene3d/diag/lod.js`** — added `onSpawnAttempt` + `onSpawnSubstitution` hooks with `spawnAttempts` + `spawnSubstitutions` counters + `recentSubstitutions` ring (max 50 samples). `onSpawnAttempt` fires on every camera-positioned spawn regardless of result; `onSpawnSubstitution` fires only when the wasm helper returned a substitute.
+
+**Critical wasm-side compatibility note:** `fetch_entity_animation_keyframes` (lib.rs:~L10840) already branches on `(setup_id >> 24) != 0x02` and takes the GfxObj direct path for 0x01 prefixes. So substituting a 0x01 setupId from the LOD chain is safe — no entity render-path changes were needed. Matches the statics LOD path that uses the same convention.
+
+Verified end-to-end on `?wireframe=1&hud=none&plugins=none&diag=1` against live ACE:
+- **Direct wasm probe:** 14 of 21 spawned-entity setups have GfxObjDegradeInfo chains; helper returns valid substitutes at 15m distance.
+- **Spawn-time integration:** 70 `spawnAttempts` during boot drain + active probe; 1 `spawnSubstitution` actually fired — entity `0x7a9b3001` at 14.42m, setup `0x020006ef` → substitute `0x010019a5`. The other 69 attempts were correctly skipped (no chain OR distance out of band; both expected).
+
+Harness: `/mnt/wbterminal1/tmp/claude-scratch/wire-agent-new-pipelines-2026-05-24/run-diag-entity-lod.mjs`.
+
+**What this guarantees:** entities arriving in view with a registered LOD chain + at appropriate distance now spawn with the lower-detail GfxObj instead of the full SetupModel. Frees GPU work for distant NPCs/creatures matching the statics path that's been in place since the visual-fidelity waves.
+
+**Known limitations (deferred, see below):**
+- **First-part-only LOD** — `resolve_did_degrade` only consults the first GfxObj part of a SetupModel. Multi-part entities with per-part degrade chains only LOD their first part. Same as the statics behavior; matches the original handoff's flagged limitation.
+- **Spawn-time only** — entities crossing the threshold mid-game won't switch. Shape-(b) continuous per-frame LOD swap is the future optimization if this becomes a visible regression in dense Holtburg scenes.
+- **Camera-must-be-positioned** — boot-time entities that arrive before the camera is anchored skip the LOD check entirely (early-return on `cameraPos = null`). The next time those entities receive a wire update that triggers respawn (e.g. UpdateObject equip-change via W7.3 applyAppearance), the LOD check runs with a valid camera.
 
 ## What ships in Wave 7.1
 

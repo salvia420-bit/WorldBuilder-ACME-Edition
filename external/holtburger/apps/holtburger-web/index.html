@@ -898,6 +898,7 @@
         fetch_combat_maneuver_table,
         fetch_palette_set,
         fetch_gfx_obj_degrade_info,
+        fetch_entity_degrade_for_distance,
         fetch_clothing_table,
         fetchEntityModelRender,
         fetchEntityCycleFrames,
@@ -1303,6 +1304,7 @@
           fetch_combat_maneuver_table: (id) => fetch_combat_maneuver_table(id >>> 0),
           fetch_palette_set: (id) => fetch_palette_set(id >>> 0),
           fetch_gfx_obj_degrade_info: (id) => fetch_gfx_obj_degrade_info(id >>> 0),
+          fetch_entity_degrade_for_distance: (sid, dist) => fetch_entity_degrade_for_distance(sid >>> 0, +dist),
           fetch_clothing_table: (id) => fetch_clothing_table(id >>> 0),
           hash32,
         };
@@ -6081,6 +6083,11 @@ void main() {
             fetchEntityModelRender,
             fetchEntityCycleFrames,
             fetchEntityAnimationKeyframes,
+            // Wave 7.4 (2026-05-24) — spawn-time entity LOD: read by
+            // EntityManager._spawnImpl. Without this listed in init3D
+            // opts the export is invisible to entities.js and every
+            // entity renders at full detail regardless of distance.
+            fetch_entity_degrade_for_distance,
             // F.40 (2026-05-14) — batched fetchEntityAnimationKeyframes.
             // The animationCache's `getBatch` pre-warms N setups in
             // ONE wasm prefetch loop; spawns.js calls it before

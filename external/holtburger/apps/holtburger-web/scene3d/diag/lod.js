@@ -34,6 +34,15 @@ export function attachLod(diag) {
     bandMisses: 0,
     recentHits: [],
     recentMisses: [],
+    // Wave 7.4 — per-entity spawn-time LOD substitution observability.
+    // Two counters: `spawnAttempts` fires whenever _spawnImpl checks
+    // the LOD chain regardless of result (proves the wire is alive
+    // even when no entity is in-band), `spawnSubstitutions` fires
+    // only when a substitution actually happens. `recentSubstitutions`
+    // captures sample swaps for spot inspection.
+    spawnAttempts: 0,
+    spawnSubstitutions: 0,
+    recentSubstitutions: [],
     maxFailures: DEFAULT_MAX_FAILURES,
     maxBandSamples: DEFAULT_MAX_BAND_SAMPLES,
 
@@ -87,6 +96,39 @@ export function attachLod(diag) {
       } catch (_) {}
     },
 
+    /**
+     * Fired from `EntityManager._spawnImpl` for every attempted LOD
+     * check (camera positioned, wasm helper invoked) regardless of
+     * whether a substitution resulted. Proves the spawn-time wiring
+     * is alive even when no entity is in-band. Meta: {guid, setupId,
+     * distance, substituted: bool}.
+     */
+    onSpawnAttempt(_meta) {
+      try {
+        lod.spawnAttempts += 1;
+      } catch (_) {}
+    },
+
+    /**
+     * Fired from `EntityManager._spawnImpl` when
+     * `fetch_entity_degrade_for_distance(setupId, distance)` returns
+     * a non-zero substitute setup id. Meta:
+     *   {guid, originalSetupId, substituteSetupId, distance}
+     */
+    onSpawnSubstitution(meta) {
+      try {
+        const m = meta || {};
+        lod.spawnSubstitutions += 1;
+        pushCapped(lod.recentSubstitutions, {
+          guid: hexId(m.guid ?? 0),
+          originalSetupId: hexId(m.originalSetupId ?? 0),
+          substituteSetupId: hexId(m.substituteSetupId ?? 0),
+          distance: Number(m.distance ?? 0),
+          ts: performance.now(),
+        }, lod.maxBandSamples);
+      } catch (_) {}
+    },
+
     /** Read-through to the runtime cache. */
     cached() {
       try { return getLodDiagSnapshot(); }
@@ -101,6 +143,8 @@ export function attachLod(diag) {
         failures: lod.failures.length,
         bandHits: lod.bandHits,
         bandMisses: lod.bandMisses,
+        spawnAttempts: lod.spawnAttempts,
+        spawnSubstitutions: lod.spawnSubstitutions,
       };
     },
 
@@ -114,6 +158,9 @@ export function attachLod(diag) {
         bandMisses: lod.bandMisses,
         recentHits: [...lod.recentHits],
         recentMisses: [...lod.recentMisses],
+        spawnAttempts: lod.spawnAttempts,
+        spawnSubstitutions: lod.spawnSubstitutions,
+        recentSubstitutions: [...lod.recentSubstitutions],
       };
     },
 
@@ -123,6 +170,9 @@ export function attachLod(diag) {
       lod.bandMisses = 0;
       lod.recentHits.length = 0;
       lod.recentMisses.length = 0;
+      lod.spawnAttempts = 0;
+      lod.spawnSubstitutions = 0;
+      lod.recentSubstitutions.length = 0;
     },
   };
 
