@@ -41,6 +41,9 @@ import { attachIntegrity as _attachIntegrity } from "./diag/integrity.js";
 import { attachFonts as _attachFonts } from "./diag/fonts.js";
 import { attachStrings as _attachStrings } from "./diag/strings.js";
 import { attachInput as _attachInput } from "./diag/input.js";
+import { attachCombat as _attachCombat } from "./diag/combat.js";
+import { attachPalettes as _attachPalettes } from "./diag/palettes.js";
+import { attachLod as _attachLod } from "./diag/lod.js";
 
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
@@ -459,6 +462,9 @@ export function installDiag() {
     ["fonts",      _attachFonts],
     ["strings",    _attachStrings],
     ["input",      _attachInput],
+    ["combat",     _attachCombat],
+    ["palettes",   _attachPalettes],
+    ["lod",        _attachLod],
   ]) {
     try { fn?.(diag); } catch (e) {
       // eslint-disable-next-line no-console

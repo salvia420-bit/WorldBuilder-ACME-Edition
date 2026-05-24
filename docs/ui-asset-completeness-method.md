@@ -17,6 +17,9 @@ Five boot-time pipelines that load retail data once, cache it module-scoped, and
 | **StringTable** | 0x23 (15 records) | `fetch_string_table(id) → Map<u32, str>` | `ui/ac_strings.js::loadStringTable + acString` |
 | **ActionMap** | 0x26 (1 record) | `fetch_action_map(id) → ActionMap` | `ui/ac_strings.js::loadActionMap` + `ui/keymap.js` |
 | **KeyMap (rebind storage)** | (client-only, localStorage) | — | `ui/keymap.js::{setBinding, clearBinding, resolveLocalBinding}` |
+| **CombatManeuverTable** *(W7.1)* | 0x30 (71 records) | `fetch_combat_maneuver_table(id) → JSON` | `ui/ac_combat_maneuver.js` + `scene3d/picking.js` melee dispatch |
+| **PaletteSet** *(W7.1)* | 0x0F (2681 records) | `fetch_palette_set(id) → JSON` | `ui/ac_palette_set.js` (standalone reader; ClothingTable composer also uses it via `fetch_entity_surface_pixels`) |
+| **GfxObjDegradeInfo** *(W7.1 — reader only)* | 0x11 (4131 records) | `fetch_gfx_obj_degrade_info(id) → JSON` | `ui/ac_lod.js` (loader + band picker; entity-spawn integration deferred — see `handoff-degrade-info-entity-lod-2026-05-24.md`) |
 
 The KeyMap pipeline is the one client-only entry: rebinds live in `localStorage["holtburger_keybindings_v1"]`. ACE has no server-side keybind protocol, so this is the canonical store.
 
@@ -108,9 +111,48 @@ Source: `scene3d/diag/strings.js`. Hooks at `ui/ac_strings.js` `loadStringTable`
 
 Source: `scene3d/diag/input.js`. Hooks at `ui/keymap.js` `setBinding`, `clearBinding`, `load` catch, `persist` catch.
 
+### `__diag.combat` — CombatManeuverTable lookup audit *(W7.1)*
+
+| API | What it reports |
+|---|---|
+| `summary()` | `{tablesLoaded, tablesCached, failures, hits, misses, missByReason: {stance, height, type}}` |
+| `snapshot()` | Full picture: loaded tables + cached state + failure ring + hit sample + miss ring with reasons |
+| `cached()` | Read-through to `getCombatDiagSnapshot()` (boot-time pre-loaded tables) |
+| `loaded` Map | Hook-observed CMT loads with maneuver + stance counts |
+| `failures` ring | Load failures with error string, max 20 |
+| `hits` counter + `hitsSample` ring | Each successful (stance, height, type) → motion lookup with the picked motion u32 + chosen powerLevel + candidate count |
+| `misses` ring + `missByReason` counters | Failed lookups bucketed by which dict-level missed: stance / height / type |
+
+Source: `scene3d/diag/combat.js`. Hooks at `ui/ac_combat_maneuver.js` `loadCombatManeuverTable` success/empty/catch + `getCombatManeuver` hit/miss. Picking.js wires the lookup on every melee swing.
+
+### `__diag.palettes` — PaletteSet load audit *(W7.1)*
+
+| API | What it reports |
+|---|---|
+| `summary()` | `{loaded, cached, failures}` |
+| `snapshot()` | Full picture: loaded sets + cached state + failure ring |
+| `cached()` | Read-through to `getPaletteSetDiagSnapshot()` |
+| `loaded` Map | Hook-observed PaletteSet loads (setId → paletteCount, loadedAt) |
+| `failures` ring | Load failures, max 20 |
+
+Source: `scene3d/diag/palettes.js`. Hooks at `ui/ac_palette_set.js` `loadPaletteSet` success/empty/catch.
+
+### `__diag.lod` — GfxObjDegradeInfo chain audit *(W7.1)*
+
+| API | What it reports |
+|---|---|
+| `summary()` | `{loaded, cached, failures, bandHits, bandMisses}` |
+| `snapshot()` | Full picture: loaded chains + cached state + failure ring + recent band-hit/miss samples |
+| `cached()` | Read-through to `getLodDiagSnapshot()` (per-chain band counts + distance ranges) |
+| `loaded` Map | Hook-observed DegradeInfo loads |
+| `failures` ring | Load failures, max 20 |
+| `bandHits` / `bandMisses` counters + sample rings | Per `pickDegradeBand(runtime, distance)` call: hit records the chosen gfxObjId, miss records the queried distance |
+
+Source: `scene3d/diag/lod.js`. Hooks at `ui/ac_lod.js` `loadDegradeInfo` + `pickDegradeBand`. Entity-spawn LOD integration is the deferred follow-on (see `handoff-degrade-info-entity-lod-2026-05-24.md`).
+
 ### Composition
 
-All three install during `installDiag()` in `scene3d/index.js::preInit3D`, alongside the Wave-1-through-5 surfaces. No URL flag gates them; `__diag.{fonts,strings,input}` is always available for inspection from devtools.
+All six install during `installDiag()` in `scene3d/index.js::preInit3D`, alongside the Wave-1-through-5 surfaces. No URL flag gates them; `__diag.{fonts,strings,input,combat,palettes,lod}` is always available for inspection from devtools.
 
 ---
 
@@ -144,12 +186,19 @@ Verdicts to look for:
 
 ## 6. When this method's coverage extends
 
-If a future agent wires one of the other vitaeum-parity parsers into a JS consumer (ClothingTable, PaletteSet, DegradeInfo, CombatManeuverTable, Layout/MasterProperty UI port), add it here:
+Three of the five vitaeum-parity deferred items shipped in Wave 7.1 (CombatManeuverTable, PaletteSet, GfxObjDegradeInfo reader). Two remain deferred with concrete handoff docs:
+
+- **ClothingTable** — `handoff-clothing-table-2026-05-24.md`. Scoped as Clothing I (helmet + weapon MVS, ~9-12 days) + Clothing II (full body + dyes, ~15-20 days).
+- **LayoutDesc** — `handoff-layout-desc-2026-05-24.md`. Recommended defer until a concrete UX win is identified; 24-panel refactor estimated at multi-week per panel.
+- **GfxObjDegradeInfo entity-spawn integration** — `handoff-degrade-info-entity-lod-2026-05-24.md`. The reader shipped in 7.1; the actual entity-spawn substitution is a 6-hour follow-on.
+
+If a future agent wires one of these (or the next batch), add it here:
 
 1. Add a row to §1's pipeline table.
-2. If it has its own observability needs, add a fourth `__diag` sub-surface (probably `__diag.clothing`, `__diag.palettes`, `__diag.combat`) following the same hooks-at-pipeline-edge + read-through-for-cache pattern. The three Wave-7 surfaces in `scene3d/diag/{fonts,strings,input}.js` are the template.
+2. If it has its own observability needs, add a `__diag.<name>` sub-surface following the same hooks-at-pipeline-edge + read-through-for-cache pattern. Wave 7.1's `scene3d/diag/{combat,palettes,lod}.js` are the template.
 3. Update §4 with the surface description.
 4. Update the surface inventory in [`diagnostic-toolset-method.md`](diagnostic-toolset-method.md) §5 + the sub-surface table in §5.1.
+5. Mark the corresponding handoff doc closed with a link to the shipping commit.
 
 Don't pile up dead diag — only ship a surface when the consumer ships.
 
@@ -162,7 +211,8 @@ Don't pile up dead diag — only ship a surface when the consumer ships.
 | 2026-05-23 | `c36a1054` → `54c3c085` | vitaeum-parity wave: 4 milestone-C parsers + Layout chain + KeyMap + ActionMap |
 | 2026-05-24 | `e098dae2` → `c995132d` | AC font + LanguageString + StringTable + ActionMap consumers in `ui/ac_*.js` + HUD migration |
 | 2026-05-24 | `c77b0daa` → `80ae3bcf` | KeyMap rebind UI + LOCAL_ACTIONS table in `ui/keymap.js` |
-| 2026-05-24 | (this doc) | UI-asset-completeness method + three `__diag` surfaces (`scene3d/diag/{fonts,strings,input}.js`) + host-file hooks |
+| 2026-05-24 | `30d0d8c8` | Wave 7: UI-asset-completeness method + three `__diag` surfaces (`scene3d/diag/{fonts,strings,input}.js`) + host-file hooks |
+| 2026-05-24 | (this doc, Wave 7.1) | Three more wasm exports + JS runtimes for the previously-deferred vitaeum-parity parsers: CombatManeuverTable (with picking.js dispatch + `__diag.combat`), PaletteSet (standalone reader + `__diag.palettes`), GfxObjDegradeInfo (reader + band picker + `__diag.lod`). ClothingTable and LayoutDesc deferred with explicit handoff docs. |
 
 Cross-references:
 - [`diagnostic-toolset-method.md`](diagnostic-toolset-method.md) — umbrella; surface-15 sub-surface table updated alongside this doc

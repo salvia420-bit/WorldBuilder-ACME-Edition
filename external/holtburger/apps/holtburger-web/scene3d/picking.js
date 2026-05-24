@@ -1,7 +1,20 @@
 import * as THREE from "three";
+import { getCombatManeuver, loadCombatManeuverTable } from "../ui/ac_combat_maneuver.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
+
+// Default AttackType for the CombatManeuverTable lookup MVP. ACE's
+// AttackType enum has Punch/Kick/Slash/Thrust/etc. — proper inference
+// from the equipped weapon (unarmed → Punch, sword → Slash, bow →
+// Shoot) is deferred. Slash is the most common retail melee swing.
+const ATTACK_TYPE_SLASH = 8;
+
+// Eagerly kick the CMT load at module-import time so the lookup is
+// already cached by the time the first attack fires. Idempotent +
+// concurrent-safe (loadCombatManeuverTable dedupes via in-flight
+// Promise map).
+try { loadCombatManeuverTable(); } catch (_) {}
 
 // Phase I.1 — charge-attack tuning. Retail melee range is ~2.5m, missile
 // range varies by weapon (we approximate at 25m). These constants
@@ -397,10 +410,24 @@ export function setupClickPicking({
     if (inMelee && typeof sessionHandle.attack === "function") {
       console.log(`[fire-attack] melee height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m (range=${MELEE_RANGE_M}m)`);
       const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+      // CombatManeuverTable lookup — picks the retail MotionCommand for
+      // (stance, height, type=Slash, powerLevel). Used for diag
+      // observability today; full motion playback (entityManager.set
+      // SwingMotion) is deferred. setSwingPose remains the visual
+      // fallback so the local player still swings something. If the
+      // entity manager later exposes setSwingMotion(guid, motionCmd),
+      // gate on it preferentially.
+      const stance = (window.__getCurrentStanceLow?.() ?? 0) >>> 0;
+      const motionCmd = getCombatManeuver(stance, safeHeight, ATTACK_TYPE_SLASH, slider);
       const fire = () => fireOnce(() => {
         sessionHandle.attack(targetGuid, safeHeight, slider);
         if (localGuid !== 0) {
-          liveScene3d.entityManager?.setSwingPose?.(localGuid);
+          const em = liveScene3d.entityManager;
+          if (motionCmd && typeof em?.setSwingMotion === "function") {
+            em.setSwingMotion(localGuid, motionCmd);
+          } else {
+            em?.setSwingPose?.(localGuid);
+          }
         }
       });
       if (chargeEnabled && dist > MELEE_RANGE_M) {

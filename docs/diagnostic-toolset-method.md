@@ -168,7 +168,7 @@ The `diag-run-all` driver discovers these dynamically — when a sibling agent s
 
 The first 14 surfaces are **build-side**: each runs a Node-side script that drives a canonical oracle (ACE source, retail decomp, Chorizite, WB.Terminal command) and compares against captured runtime state. They legitimately "cheat" because they ARE the contract.
 
-Surface 15 is **observation-only** from the running wire-agent's `window.__diag` namespace. 13 sub-surfaces (Waves 1-4 + 5.A + 7):
+Surface 15 is **observation-only** from the running wire-agent's `window.__diag` namespace. 16 sub-surfaces (Waves 1-4 + 5.A + 7 + 7.1):
 
 | sub-surface | observes | optional oracle |
 |---|---|---|
@@ -185,6 +185,9 @@ Surface 15 is **observation-only** from the running wire-agent's `window.__diag`
 | `__diag.fonts` (W7) | `ui/ac_font.js` load lifecycle + atlas dims + fallback codepoints + `<ac-text>` count | (parser parity tests gate bytewise correctness) |
 | `__diag.strings` (W7) | `ui/ac_strings.js` StringTable/LanguageString/ActionMap loads + `acString` lookup misses | (parser parity tests gate bytewise correctness) |
 | `__diag.input` (W7) | `ui/keymap.js` rebind history + localStorage errors + conflict detector + ActionMap cross-ref | (none — operator-managed policy) |
+| `__diag.combat` (W7.1) | `ui/ac_combat_maneuver.js` CMT loads + per (stance, height, type) lookup hits/misses + resolved motion-command codes | (parser parity test on CMT 0x30000000) |
+| `__diag.palettes` (W7.1) | `ui/ac_palette_set.js` PaletteSet loads + cached read-through | (parser parity test on PaletteSet 0x0F000001) |
+| `__diag.lod` (W7.1) | `ui/ac_lod.js` GfxObjDegradeInfo loads + per-distance band hit/miss counters | (parser parity test on GfxObjDegradeInfo 0x11000001) |
 
 The runtime invariants and oracle producers all read like build-side validators **inverted** — same data flow, the diag layer just reads what was actually applied rather than what was supposed to be applied. When build-side and client-side disagree, build-side wins; client-side data tells you WHY.
 
@@ -213,6 +216,7 @@ The waves shipped chronologically:
 | **Wave 6** | **client-side `window.__diag` 10-surface observation layer + WB.T oracle producers + per-LB sidecars** | **2026-05-23** | **[[reference_wire_agent_diag_layer]]** |
 | **Wave 6 follow-ons** | motion link hook + assets stuck v2 + per-scenery diff + global-greedy matcher (spawn `goodMatches` 11→25 on Holtburg) | 2026-05-23 | (see commit 7c0b4545) |
 | **Wave 7** | **vitaeum-parity new-pipeline diag: `__diag.fonts` + `__diag.strings` + `__diag.input` covering Font / LanguageString / StringTable / ActionMap / KeyMap consumers** | **2026-05-24** | [`ui-asset-completeness-method.md`](ui-asset-completeness-method.md) |
+| **Wave 7.1** | **vitaeum-parity deferred-parser wirings: CombatManeuverTable (full picking.js dispatch + `__diag.combat`) + PaletteSet (reader + `__diag.palettes`) + GfxObjDegradeInfo (reader + band picker + `__diag.lod`). ClothingTable + LayoutDesc deferred with handoff docs.** | **2026-05-24** | [`ui-asset-completeness-method.md`](ui-asset-completeness-method.md) + 3 handoff docs |
 
 Key cross-references:
 - [[reference_worldbuilder_terminal]] — command catalog (147 commands today; +2 with W5.C)

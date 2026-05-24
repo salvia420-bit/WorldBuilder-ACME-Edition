@@ -50,6 +50,14 @@ pub struct GfxObjDegradeInfo {
     pub degrades: Vec<GfxObjInfo>,
 }
 
+impl GfxObjDegradeInfo {
+    pub fn unpack(data: &[u8]) -> binrw::BinResult<Self> {
+        use binrw::BinRead;
+        let mut cursor = binrw::io::Cursor::new(data);
+        Self::read_le(&mut cursor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

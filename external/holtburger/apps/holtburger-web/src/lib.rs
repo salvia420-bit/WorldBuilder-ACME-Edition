@@ -5206,6 +5206,140 @@ pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
     Ok(out)
 }
 
+/// Fetch one CombatManeuverTable (DAT 0x30) — the (stance, height,
+/// type) → motion_command lookup the combat plugin needs to replace
+/// its `setSwingPose` vibe-pose placeholder with a real motion.
+///
+/// Returns JSON: `{ "id": <u32>, "maneuvers": [{ "style": <u32>,
+/// "attack_height": <u32>, "attack_type": <u32>, "motion": <u32> }, ...] }`.
+/// `min_skill_level` is omitted — ACE notes every retail row is 0.
+///
+/// Lookup pattern (mirrors ACE
+/// `Source/Network/Structure/CombatManeuverTable.cs::GetMotion`):
+///   filter maneuvers by (style == stance) ∧ (attack_height == height)
+///   ∧ (attack_type == type) → list of motion candidates. Power-bar
+///   index picks one (see `ui/ac_combat_maneuver.js::getCombatManeuver`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_combat_maneuver_table(table_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::CombatManeuverTable;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", table_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", table_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let cmt = match CombatManeuverTable::unpack(&bytes) {
+        Ok(t) => t,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let mut out = String::with_capacity(cmt.combat_maneuvers.len() * 64);
+    out.push_str("{\"id\":");
+    out.push_str(&cmt.id.to_string());
+    out.push_str(",\"maneuvers\":[");
+    let mut first = true;
+    for m in &cmt.combat_maneuvers {
+        if !first { out.push(','); }
+        first = false;
+        out.push_str(&format!(
+            "{{\"style\":{},\"attack_height\":{},\"attack_type\":{},\"motion\":{}}}",
+            m.style, m.attack_height, m.attack_type, m.motion,
+        ));
+    }
+    out.push_str("]}");
+    Ok(out)
+}
+
+/// Fetch one PaletteSet (DAT 0x0F) — a bundle of Palette (0x04)
+/// DataIDs that a `shade` float indexes into for character skin/hair
+/// or for ClothingTable `CloSubPalette::palette_set` references.
+///
+/// Returns JSON: `{ "id": <u32>, "palettes": [<u32>, ...] }`.
+/// The full Clothing → palette compose chain is already exercised
+/// by `fetch_entity_surface_pixels` for entity surfaces; this export
+/// is the standalone reader for character-customization / dye-picker
+/// UIs that want to enumerate variants without going through the
+/// per-pixel composer.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_palette_set(set_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::PaletteSet;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", set_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", set_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let ps = match PaletteSet::unpack(&bytes) {
+        Ok(p) => p,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let mut out = String::with_capacity(ps.palettes.len() * 12 + 32);
+    out.push_str("{\"id\":");
+    out.push_str(&ps.id.to_string());
+    out.push_str(",\"palettes\":[");
+    let mut first = true;
+    for pid in &ps.palettes {
+        if !first { out.push(','); }
+        first = false;
+        out.push_str(&pid.to_string());
+    }
+    out.push_str("]}");
+    Ok(out)
+}
+
+/// Fetch one GfxObjDegradeInfo (DAT 0x11) — the distance-banded LOD
+/// chain a renderer consults when picking which alternate GfxObj to
+/// draw for a given camera distance.
+///
+/// Returns JSON: `{ "id": <u32>, "degrades": [{ "gfx_obj_id": <u32>,
+/// "degrade_mode": <u32>, "min_dist": <f32>, "ideal_dist": <f32>,
+/// "max_dist": <f32> }, ...] }`.
+///
+/// JS-side band selection lives in `ui/ac_lod.js::pickDegradeBand`.
+/// The existing statics.js LOD path uses `resolve_did_degrade` to
+/// get the chain DID, then loads ONE swap via `fetchModelMeshes`;
+/// entity LOD would use this export instead, walk the bands, and
+/// substitute the band's `gfx_obj_id` for the original setup before
+/// loading mesh keyframes. Entity-side integration is deferred — see
+/// `docs/handoff-degrade-info-entity-lod-2026-05-24.md`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_gfx_obj_degrade_info(degrade_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::GfxObjDegradeInfo;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", degrade_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", degrade_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let di = match GfxObjDegradeInfo::unpack(&bytes) {
+        Ok(d) => d,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let mut out = String::with_capacity(di.degrades.len() * 96 + 32);
+    out.push_str("{\"id\":");
+    out.push_str(&di.id.to_string());
+    out.push_str(",\"degrades\":[");
+    let mut first = true;
+    for d in &di.degrades {
+        if !first { out.push(','); }
+        first = false;
+        out.push_str(&format!(
+            "{{\"gfx_obj_id\":{},\"degrade_mode\":{},\"min_dist\":{},\"ideal_dist\":{},\"max_dist\":{}}}",
+            d.gfx_obj_id, d.degrade_mode, d.min_dist, d.ideal_dist, d.max_dist,
+        ));
+    }
+    out.push_str("]}");
+    Ok(out)
+}
+
 /// Phase 4 step 6 Phase B: surface decode with entity palette overrides.
 /// ACE's `CalculateObjDesc` (~/ace-server/Source/ACE.Server/WorldObjects/
 /// WorldObject_Networking.cs:1017 + Creature_Networking.cs:218) sets

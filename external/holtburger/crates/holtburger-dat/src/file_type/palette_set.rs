@@ -31,6 +31,14 @@ pub struct PaletteSet {
     pub palettes: Vec<u32>,
 }
 
+impl PaletteSet {
+    pub fn unpack(data: &[u8]) -> binrw::BinResult<Self> {
+        use binrw::BinRead;
+        let mut cursor = binrw::io::Cursor::new(data);
+        Self::read_le(&mut cursor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
