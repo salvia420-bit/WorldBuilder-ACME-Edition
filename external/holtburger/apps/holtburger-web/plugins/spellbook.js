@@ -39,7 +39,7 @@
 // touched as part of PR-Z.
 
 import { setAcText } from "../ui/ac_font.js";
-import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./options-panel.js";
+import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 
 const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
 const SPELL_BAR_SLOTS = 8;

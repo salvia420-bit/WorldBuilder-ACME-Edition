@@ -43,6 +43,13 @@
 
 import * as graphicsSettings from "../ui/graphics_settings.js";
 import { setAcText } from "../ui/ac_font.js";
+import {
+  LOCAL_ACTIONS,
+  getKeybindings,
+  setBinding,
+  clearBinding,
+  formatBinding,
+} from "../ui/keymap.js";
 
 const VIEW_STYLE_ID = "hb-options-view-style";
 
@@ -272,105 +279,14 @@ function stubTab(title, blurb) {
 }
 
 // ---------------------------------------------------------------------
-// Controls tab — keybinding capture + persist.
+// Controls tab — keybinding capture + persist UI.
 //
-// ACE has no server-side keybind protocol; the model is purely
-// client-side, mirroring acclient.c's UIOption_ActionKeyMap. Each row
-// in the Controls tab is one retail action (deduped from
-// window.__acKeybindings by labelHash). The user clicks "Bind", we
-// capture the next keydown, encode it as a portable JS shape, and
-// persist to localStorage at LS_KEY_KEYBINDINGS. Esc cancels capture.
-//
-// Storage shape (LS_KEY_KEYBINDINGS = "holtburger_keybindings_v1"):
-//   { [labelHash_hex_8]: { code, shift, ctrl, alt, meta } }
-// where `code` is a KeyboardEvent.code string ("KeyW", "F5", "Space")
-// and the four mods are booleans. The hex labelHash is the stable
-// identifier — labels are localised and `inputMap` differs per
-// alt-binding, but labelHash is invariant for an action.
-//
-// The 389 actions in window.__acKeybindings already carry retail
-// defaults via `inputMap`, but we don't reverse-decode that bitfield
-// to a KeyboardEvent.code today — too many edge cases (controller,
-// chord modifiers, alt-bindings). Default rows render "—" until the
-// user binds them. Existing handlers (WASD, F5, 1-9) stay hardcoded
-// for now; future work threads these bindings into the dispatcher.
+// Data layer (storage, defaults, matchers, the LOCAL_ACTIONS table)
+// lives in ../ui/keymap.js. This block owns capture orchestration and
+// the row-rendering helper.
 
-const LS_KEY_KEYBINDINGS = "holtburger_keybindings_v1";
-let keybindingsCache = null;
 let captureFor = null; // labelHash (hex string) currently in capture mode
 let captureHandler = null;
-
-// Local-action table — the keys the JS-side code actually consults.
-// Distinct from the 389 retail-ActionMap entries (which are read-only
-// for now). Synthetic labelHashes use the `0xFF00…` prefix to avoid
-// collision with retail's lower-bit hashes; the prefix lets storage
-// share `LS_KEY_KEYBINDINGS` with retail rebinds.
-//
-// Add a row here whenever a JS handler should consult getKeybindings —
-// the row's labelHash + defaultCode is the contract.
-const LOCAL_ACTIONS = [
-  { labelHash: "0xFF000001", label: "Hotbar Slot 1", defaultCode: "Digit1" },
-  { labelHash: "0xFF000002", label: "Hotbar Slot 2", defaultCode: "Digit2" },
-  { labelHash: "0xFF000003", label: "Hotbar Slot 3", defaultCode: "Digit3" },
-  { labelHash: "0xFF000004", label: "Hotbar Slot 4", defaultCode: "Digit4" },
-  { labelHash: "0xFF000005", label: "Hotbar Slot 5", defaultCode: "Digit5" },
-  { labelHash: "0xFF000006", label: "Hotbar Slot 6", defaultCode: "Digit6" },
-  { labelHash: "0xFF000007", label: "Hotbar Slot 7", defaultCode: "Digit7" },
-  { labelHash: "0xFF000008", label: "Hotbar Slot 8", defaultCode: "Digit8" },
-  { labelHash: "0xFF000009", label: "Hotbar Slot 9", defaultCode: "Digit9" },
-  { labelHash: "0xFF000010", label: "Close Panel / Popover", defaultCode: "Escape" },
-  { labelHash: "0xFF000011", label: "Delete Selected Spell", defaultCode: "Delete" },
-];
-
-/** Stable identifiers for synthetic local actions — re-exported so
- *  handlers can `resolveLocalBinding(LOCAL_ACTION_IDS.CLOSE, "Escape")`
- *  without sprinkling hex literals. Keep in sync with LOCAL_ACTIONS. */
-export const LOCAL_ACTION_IDS = Object.freeze({
-  HOTBAR_1: "0xFF000001",
-  HOTBAR_2: "0xFF000002",
-  HOTBAR_3: "0xFF000003",
-  HOTBAR_4: "0xFF000004",
-  HOTBAR_5: "0xFF000005",
-  HOTBAR_6: "0xFF000006",
-  HOTBAR_7: "0xFF000007",
-  HOTBAR_8: "0xFF000008",
-  HOTBAR_9: "0xFF000009",
-  CLOSE:    "0xFF000010",
-  DELETE_SPELL: "0xFF000011",
-});
-
-function loadKeybindings() {
-  if (keybindingsCache) return keybindingsCache;
-  try {
-    const raw = localStorage.getItem(LS_KEY_KEYBINDINGS);
-    keybindingsCache = raw ? JSON.parse(raw) : {};
-  } catch (_) {
-    keybindingsCache = {};
-  }
-  return keybindingsCache;
-}
-
-function saveKeybindings() {
-  try {
-    localStorage.setItem(LS_KEY_KEYBINDINGS, JSON.stringify(keybindingsCache ?? {}));
-  } catch (_) { /* quota / privacy mode — silent */ }
-}
-
-function formatBinding(b) {
-  if (!b || !b.code) return "—";
-  const parts = [];
-  if (b.ctrl) parts.push("Ctrl");
-  if (b.alt) parts.push("Alt");
-  if (b.shift) parts.push("Shift");
-  if (b.meta) parts.push("Meta");
-  // Strip "Key" / "Digit" prefix for cleaner labels: "KeyW" → "W".
-  let key = b.code;
-  if (key.startsWith("Key")) key = key.slice(3);
-  else if (key.startsWith("Digit")) key = key.slice(5);
-  else if (key.startsWith("Numpad")) key = `Num ${key.slice(6)}`;
-  parts.push(key);
-  return parts.join("+");
-}
 
 function endCapture() {
   if (captureHandler) {
@@ -404,28 +320,17 @@ function startCapture(labelHashHex, refresh) {
     ev.preventDefault();
     ev.stopPropagation();
 
-    keybindingsCache = loadKeybindings();
-    keybindingsCache[labelHashHex] = {
+    setBinding(labelHashHex, {
       code: ev.code,
       shift: ev.shiftKey,
       ctrl: ev.ctrlKey,
       alt: ev.altKey,
       meta: ev.metaKey,
-    };
-    saveKeybindings();
+    });
     endCapture();
     refresh();
   };
   window.addEventListener("keydown", captureHandler, true);
-}
-
-function clearBinding(labelHashHex, refresh) {
-  keybindingsCache = loadKeybindings();
-  if (keybindingsCache[labelHashHex]) {
-    delete keybindingsCache[labelHashHex];
-    saveKeybindings();
-    refresh();
-  }
 }
 
 // Build one row in the keybinding table. Used for both the local
@@ -479,7 +384,7 @@ function buildBindingRow(labelHashHex, label, defaultCode, bindings, refresh) {
   clearBtn.style.cursor = "pointer";
   clearBtn.disabled = !userBinding;
   setAcText(clearBtn, "×");
-  clearBtn.addEventListener("click", () => clearBinding(labelHashHex, refresh));
+  clearBtn.addEventListener("click", () => { if (clearBinding(labelHashHex)) refresh(); });
   row.appendChild(clearBtn);
 
   return row;
@@ -499,7 +404,7 @@ function renderControlsTab(bodyEl) {
   setAcText(note, "Click Bind, press a key (Esc to cancel). Local actions below route through live JS handlers. Retail ActionMap entries are read-only labels — server-side dispatch isn't wired yet.");
   bodyEl.appendChild(note);
 
-  const bindings = loadKeybindings();
+  const bindings = getKeybindings();
   const refresh = () => renderControlsTab(bodyEl);
 
   // Local (functional) actions — JS handlers consult these.
@@ -560,49 +465,6 @@ function renderControlsTab(bodyEl) {
     const hashHex = `0x${hash.toString(16).toUpperCase().padStart(8, "0")}`;
     list.appendChild(buildBindingRow(hashHex, label, null, bindings, refresh));
   }
-}
-
-/**
- * Read the current keybindings table from localStorage.
- *
- * Exposed for future dispatchers that want to consult user-bound
- * keys before invoking hardcoded handlers. Returns a plain object
- * keyed by labelHash hex (`"0x..."`) — values are `{code, shift,
- * ctrl, alt, meta}` per `KeyboardEvent`.
- */
-export function getKeybindings() {
-  return loadKeybindings();
-}
-
-/**
- * Check if a KeyboardEvent matches a stored binding shape. Useful
- * for handlers that route through getKeybindings().
- *
- * @param {KeyboardEvent} ev
- * @param {{code: string, shift?: boolean, ctrl?: boolean, alt?: boolean, meta?: boolean}} binding
- * @returns {boolean}
- */
-export function matchesBinding(ev, binding) {
-  if (!binding || !binding.code) return false;
-  return ev.code === binding.code
-    && ev.shiftKey === !!binding.shift
-    && ev.ctrlKey === !!binding.ctrl
-    && ev.altKey === !!binding.alt
-    && ev.metaKey === !!binding.meta;
-}
-
-/**
- * Resolve a synthetic-local-action keybinding to its effective
- * binding shape — user override if set, otherwise the default.
- *
- * @param {string} labelHashHex — e.g. "0xFF000001" for Hotbar Slot 1.
- * @param {string} defaultCode — KeyboardEvent.code default ("Digit1").
- * @returns {{code: string, shift: boolean, ctrl: boolean, alt: boolean, meta: boolean}}
- */
-export function resolveLocalBinding(labelHashHex, defaultCode) {
-  const b = loadKeybindings()[labelHashHex];
-  if (b && b.code) return b;
-  return { code: defaultCode, shift: false, ctrl: false, alt: false, meta: false };
 }
 
 function renderAboutTab(bodyEl) {

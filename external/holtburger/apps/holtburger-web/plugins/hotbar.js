@@ -15,7 +15,7 @@
 //     follow-on; for now it just logs via the chat-log.
 //   - Number key 1-9 fires the matching slot if it's bound.
 
-import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./options-panel.js";
+import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 
 const OVERLAY_ID = "hb-hotbar";
 const WIDTH = 310;

@@ -47,7 +47,7 @@
  */
 
 import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
-import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./options-panel.js";
+import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 
 const STYLE_ID = "hb-vendor-bar-styles";
 const OVERLAY_ID = "hb-vendor-bar";

@@ -1,4 +1,5 @@
 import { renderGraphicsTab } from "./graphics_settings.js";
+import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./keymap.js";
 
 const STYLE_ID = "hb-bar-style";
 const BAR_CLASS = "hb-bar";
@@ -924,7 +925,9 @@ export function mountBar({ client, root, slots: slotsOpt }) {
       if (ev.target.closest(`.${BAR_CLASS}`)) return;
       closeSettings();
     };
-    const onKey = (ev) => { if (ev.key === "Escape") closeSettings(); };
+    const onKey = (ev) => {
+      if (matchesBinding(ev, resolveLocalBinding(LOCAL_ACTION_IDS.CLOSE, "Escape"))) closeSettings();
+    };
     window.addEventListener("mousedown", onDocDown, true);
     window.addEventListener("keydown", onKey);
 
