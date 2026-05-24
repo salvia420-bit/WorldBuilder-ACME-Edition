@@ -209,6 +209,39 @@ export async function composeDyePreview(clothingId, setupDid, paletteTemplate, s
  * @param {number} iconDid — Surface DataID (0x08xxxxxx)
  * @returns {Promise<HTMLCanvasElement | null>}
  */
+/**
+ * Wave 7.9.A — resolve a (clothingId, paletteTemplate, shade) tuple
+ * to the flat `[palette_did, offset, length, ...]` triple buffer that
+ * the wasm dye compositor + the entity render path both consume.
+ * Extracted from `composeDyePreview` so the 3D viewport plugin can
+ * call it without going through the full canvas-composing path.
+ *
+ * Returns `null` when ClothingTable or the sub-pal effect for the
+ * requested paletteTemplate isn't available.
+ *
+ * @param {number} clothingId — ClothingTable DataID
+ * @param {number} paletteTemplate — sub-pal effect key
+ * @param {number} shade — 0..1
+ * @returns {Promise<Uint32Array | null>}
+ */
+export async function resolveDyeTriples(clothingId, paletteTemplate, shade) {
+  const ct = await loadClothingTable(clothingId);
+  if (!ct) return null;
+  const subPalEffect = getCloSubPalEffect(ct, paletteTemplate);
+  if (!subPalEffect) return null;
+  const triples = [];
+  for (const sp of (subPalEffect.clo_sub_palettes || [])) {
+    const set = await loadPaletteSet(sp.palette_set);
+    if (!set) continue;
+    const palDid = pickPaletteForShade(set, shade);
+    if (!palDid) continue;
+    for (const range of (sp.ranges || [])) {
+      triples.push(palDid >>> 0, range.offset | 0, range.num_colors | 0);
+    }
+  }
+  return new Uint32Array(triples);
+}
+
 export async function loadIconThumbnail(iconDid) {
   const key = iconDid >>> 0;
   if (key === 0) return null;

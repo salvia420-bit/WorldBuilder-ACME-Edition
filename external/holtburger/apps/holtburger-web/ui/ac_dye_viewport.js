@@ -1,0 +1,321 @@
+/**
+ * Mini 3D viewport for dye-preview tooltips.
+ *
+ * Wave 7.9.A — adds a tiny THREE.js scene to the dye-preview tooltip
+ * so the player sees the rotating armor mesh with the chosen dye
+ * applied, on a pedestal. Borrows the existing animationCache for
+ * rig parts + composes materials via fetchEntitySurfacesPixels —
+ * byte-parity with the spawn-time render path.
+ *
+ * Each viewport owns its own WebGLRenderer + Scene + Camera +
+ * rAF loop. WebGL contexts are bounded (Chrome caps ~16); the
+ * plugin disposes the viewport when the tooltip hides so contexts
+ * don't accumulate.
+ *
+ * Player mesh next-to-armor is deferred to D.3 — pedestal-only for
+ * the MVS.
+ */
+
+import * as THREE from "three";
+import { surfacePixelsToTexture } from "../scene3d/adapter.js";
+
+const DEFAULT_SIZE = 280;
+const ROTATION_SPEED = 0.008; // radians/frame at 60fps → ~30s/revolution
+
+export class DyeViewport {
+  /**
+   * @param {HTMLElement} container — parent element to mount the canvas in
+   * @param {number} [size=280] — square size in CSS pixels
+   */
+  constructor(container, size = DEFAULT_SIZE) {
+    this.size = size;
+    this.renderer = new THREE.WebGLRenderer({
+      alpha: true,
+      antialias: false,
+      preserveDrawingBuffer: true,
+    });
+    this.renderer.setSize(size, size);
+    this.renderer.setPixelRatio(1);
+    this.renderer.setClearColor(0x1c160e, 0.0); // transparent — let tooltip bg show
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    container.appendChild(this.renderer.domElement);
+    this.renderer.domElement.style.display = "block";
+    this.renderer.domElement.style.width = `${size}px`;
+    this.renderer.domElement.style.height = `${size}px`;
+
+    this.scene = new THREE.Scene();
+    // Camera angled to show the armor 3/4 from slightly above. The
+    // rig auto-fits via _frameRig once loaded.
+    this.camera = new THREE.PerspectiveCamera(35, 1, 0.05, 50);
+    this.camera.position.set(0, 1.4, 2.6);
+    this.camera.lookAt(0, 0.85, 0);
+
+    // Lights: ambient + key directional, warm-tinted to feel AC-ish.
+    this.scene.add(new THREE.AmbientLight(0xfff0d0, 0.55));
+    const key = new THREE.DirectionalLight(0xfff0c8, 0.95);
+    key.position.set(2.5, 4, 2);
+    this.scene.add(key);
+    const fill = new THREE.DirectionalLight(0x8090a0, 0.35);
+    fill.position.set(-2, 1, -2);
+    this.scene.add(fill);
+
+    this.pedestal = this._buildPedestal();
+    this.scene.add(this.pedestal);
+
+    this.rigRoot = new THREE.Group();
+    this.scene.add(this.rigRoot);
+
+    this._ownedMaterials = [];
+    this._ownedTextures = [];
+    this._rafId = null;
+    this._rotation = 0;
+    this._disposed = false;
+  }
+
+  _buildPedestal() {
+    // Two-tone stone pedestal: base + cap. Simple geometric shapes
+    // (no DAT lookup — wide-Holtburg surveys turned up no
+    // canonical "display pedestal" wcid + this avoids another
+    // wire dependency). Looks reasonable as a tooltip prop.
+    const group = new THREE.Group();
+    const baseGeom = new THREE.CylinderGeometry(0.42, 0.5, 0.18, 24);
+    const baseMat = new THREE.MeshStandardMaterial({
+      color: 0x4a3d28, roughness: 0.92, metalness: 0.05,
+    });
+    const base = new THREE.Mesh(baseGeom, baseMat);
+    base.position.y = 0.09;
+    group.add(base);
+    const capGeom = new THREE.CylinderGeometry(0.36, 0.4, 0.06, 24);
+    const capMat = new THREE.MeshStandardMaterial({
+      color: 0x6b5a3e, roughness: 0.78, metalness: 0.1,
+    });
+    const cap = new THREE.Mesh(capGeom, capMat);
+    cap.position.y = 0.21;
+    group.add(cap);
+    return group;
+  }
+
+  /**
+   * Load the dyed armor rig into the viewport. Replaces any existing
+   * rig in place. Returns true on success.
+   *
+   * @param {number} setupId      — SetupModel DataID (0x02xxxxxx)
+   * @param {number} mtableId     — MotionTable (0 ok for static items)
+   * @param {number} paletteId    — base palette (0 = texture intrinsic)
+   * @param {Uint32Array} subPalettes — flat [palette_did, offset, length, ...]
+   *                                    triples — already resolved via
+   *                                    pickPaletteForShade JS-side
+   * @returns {Promise<boolean>}
+   */
+  async loadDyedItem(setupId, mtableId, paletteId, subPalettes) {
+    if (this._disposed) return false;
+    const em = window.liveScene3d?.entityManager;
+    if (!em?.animationCache?.get) return false;
+    const fetchKeyframes = em.wasmExports?.fetchEntityAnimationKeyframes;
+    if (typeof fetchKeyframes !== "function") return false;
+
+    let animEntry;
+    try {
+      animEntry = await em.animationCache.get(
+        setupId >>> 0,
+        mtableId >>> 0,
+        0,
+        0,
+        fetchKeyframes,
+        {
+          modelChanges: new Uint32Array(0),
+          textureChanges: new Uint32Array(0),
+          paletteId: paletteId >>> 0,
+          paletteSubsFlat: subPalettes ?? new Uint32Array(0),
+        },
+      );
+    } catch (_) {
+      return false;
+    }
+    if (!animEntry || !Array.isArray(animEntry.partGroups)) return false;
+
+    // Tear down prior rig contents (geometry refs are cache-shared —
+    // do NOT dispose; materials/textures owned by us → dispose).
+    this._clearRig();
+
+    // Build entity-owned materials via wasm compositor (mirrors
+    // entities.js:1033 path so we get the right dyed pixels). When
+    // paletteId == 0 && subPalettes empty, fall through to the
+    // shared MaterialCache so we don't pay for fresh decode every
+    // preview.
+    const hasDye = (paletteId >>> 0) !== 0 || (subPalettes && subPalettes.length > 0);
+    const allSurfaceDids = new Set();
+    for (const pg of animEntry.partGroups) {
+      if (!pg) continue;
+      for (const did of pg.surfaceDids) allSurfaceDids.add(did >>> 0);
+    }
+
+    const matByDid = new Map();
+    if (hasDye && typeof em.wasmExports?.fetchEntitySurfacesPixels === "function") {
+      try {
+        const dids = new Uint32Array([...allSurfaceDids]);
+        if (dids.length > 0) {
+          const results = await em.wasmExports.fetchEntitySurfacesPixels(
+            dids, paletteId >>> 0, subPalettes ?? new Uint32Array(0),
+          );
+          for (let i = 0; i < dids.length; i += 1) {
+            const did = dids[i] >>> 0;
+            const sp = results[i];
+            if (!sp || sp.width === 0 || sp.height === 0) {
+              if (sp?.free) try { sp.free(); } catch (_) {}
+              matByDid.set(did, this._fallbackMaterial());
+              continue;
+            }
+            const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
+            if (sp.free) try { sp.free(); } catch (_) {}
+            const mat = new THREE.MeshStandardMaterial({
+              map: tex, roughness: 0.85, metalness: 0.0,
+              side: THREE.DoubleSide,
+            });
+            this._ownedMaterials.push(mat);
+            this._ownedTextures.push(tex);
+            matByDid.set(did, mat);
+          }
+        }
+      } catch (_) { /* fall through to cache fallback */ }
+    }
+
+    // Build per-part Group + child meshes. Mirrors entities.js:1144
+    // rig-build loop but without restPose, mixer, scene parenting,
+    // shadows — preview-grade simplification.
+    let bounds = new THREE.Box3();
+    for (let p = 0; p < animEntry.partGroups.length; p += 1) {
+      const partGroup = new THREE.Group();
+      partGroup.name = `dye-preview-part-${p}`;
+      if (Array.isArray(animEntry.restOrigins) || ArrayBuffer.isView(animEntry.restOrigins)) {
+        const ro = animEntry.restOrigins;
+        if (ro.length >= (p + 1) * 3) {
+          partGroup.position.set(ro[p*3+0], ro[p*3+1], ro[p*3+2]);
+        }
+      }
+      if (Array.isArray(animEntry.restOrientations) || ArrayBuffer.isView(animEntry.restOrientations)) {
+        const rq = animEntry.restOrientations;
+        if (rq.length >= (p + 1) * 4) {
+          // AC wire order (qw, qx, qy, qz) → three.js (qx, qy, qz, qw)
+          partGroup.quaternion.set(rq[p*4+1], rq[p*4+2], rq[p*4+3], rq[p*4+0]);
+        }
+      }
+      const conv = animEntry.partGroups[p];
+      if (conv) {
+        for (const grp of (conv.groups ?? [])) {
+          const did = (grp.surfaceDid >>> 0);
+          let mat = matByDid.get(did);
+          if (!mat) {
+            mat = em.materialCache?.getCached?.(did) ?? this._fallbackMaterial();
+          }
+          const mesh = new THREE.Mesh(grp.geometry, mat);
+          partGroup.add(mesh);
+          mesh.updateMatrixWorld();
+          const meshBox = new THREE.Box3().setFromObject(mesh);
+          bounds = bounds.isEmpty() ? meshBox : bounds.union(meshBox);
+        }
+      }
+      this.rigRoot.add(partGroup);
+    }
+
+    this._frameRig(bounds);
+    return true;
+  }
+
+  /**
+   * Auto-fit camera + position rig above pedestal. The pedestal cap
+   * sits at y≈0.24; we lift the rig so its lowest bounds touch
+   * y=0.24 and re-target the camera + adjust distance to fill the
+   * frame. Falls through to defaults if bounds are empty.
+   */
+  _frameRig(bounds) {
+    if (!bounds || bounds.isEmpty()) {
+      this.rigRoot.position.set(0, 0.3, 0);
+      this.camera.position.set(0, 1.4, 2.6);
+      this.camera.lookAt(0, 0.85, 0);
+      return;
+    }
+    const size = new THREE.Vector3();
+    bounds.getSize(size);
+    const center = new THREE.Vector3();
+    bounds.getCenter(center);
+    // Translate rig so its base is on the pedestal cap (y=0.24) and
+    // its xz-center is at origin.
+    this.rigRoot.position.set(-center.x, 0.24 - bounds.min.y, -center.z);
+    // Frame the camera: distance = max half-size / tan(fov/2) * a
+    // little slack. fov is in degrees.
+    const fov = (this.camera.fov * Math.PI) / 180;
+    const halfMax = Math.max(size.x, size.y, size.z) * 0.5;
+    const distance = (halfMax / Math.tan(fov * 0.5)) * 1.9 + 0.4;
+    const targetY = 0.24 + size.y * 0.5;
+    this.camera.position.set(
+      distance * Math.sin(Math.PI / 5),
+      targetY + halfMax * 0.6,
+      distance * Math.cos(Math.PI / 5),
+    );
+    this.camera.lookAt(0, targetY, 0);
+    this.camera.updateProjectionMatrix();
+  }
+
+  _fallbackMaterial() {
+    if (!this._fallback) {
+      this._fallback = new THREE.MeshStandardMaterial({
+        color: 0x888888, roughness: 0.9, metalness: 0.0,
+        side: THREE.DoubleSide,
+      });
+      this._ownedMaterials.push(this._fallback);
+    }
+    return this._fallback;
+  }
+
+  _clearRig() {
+    while (this.rigRoot.children.length > 0) {
+      const child = this.rigRoot.children[0];
+      this.rigRoot.remove(child);
+      // child meshes own geometries that are AnimationCache-shared
+      // (don't dispose); materials owned by us (disposed in dispose()).
+      child.traverse((node) => {
+        if (node.isMesh && node.geometry?.userData?.__disposable === true) {
+          try { node.geometry.dispose(); } catch (_) {}
+        }
+      });
+    }
+  }
+
+  /** Begin rAF render loop. Idempotent. */
+  start() {
+    if (this._rafId !== null || this._disposed) return;
+    const tick = () => {
+      if (this._disposed) return;
+      this._rafId = requestAnimationFrame(tick);
+      this._rotation += ROTATION_SPEED;
+      this.rigRoot.rotation.y = this._rotation;
+      // Pedestal stays still — only the rig spins.
+      try { this.renderer.render(this.scene, this.camera); } catch (_) {}
+    };
+    tick();
+  }
+
+  /** Stop rAF + tear down WebGL context. Idempotent. */
+  dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    if (this._rafId !== null) {
+      cancelAnimationFrame(this._rafId);
+      this._rafId = null;
+    }
+    this._clearRig();
+    for (const t of this._ownedTextures) {
+      try { t.dispose(); } catch (_) {}
+    }
+    for (const m of this._ownedMaterials) {
+      try { m.dispose(); } catch (_) {}
+    }
+    this._ownedTextures.length = 0;
+    this._ownedMaterials.length = 0;
+    try { this.renderer.dispose(); } catch (_) {}
+    try { this.renderer.forceContextLoss(); } catch (_) {}
+    const el = this.renderer.domElement;
+    if (el?.parentNode) el.parentNode.removeChild(el);
+  }
+}

@@ -93,7 +93,19 @@ The dye chain (CloSubPalette → PaletteSet → Palette → texture pixel substi
 
 **Phase D.1 follow-on (deferred):** Replace the small hardcoded `DYEPOT_OUTCOMES` table (9 canonical dye pots) with full ACE-recipe-data extraction. The dye color outcome lives in `Recipe.RecipeMod[].{IntRequirements, FloatRequirements}` keyed by recipe id (3844 base, 9068 rare eternal). Approaches: (a) static JS table baked from the ACE recipe DB, (b) new wasm export `fetch_dye_recipe_for_wcid(wcid) → {paletteTemplate, shade}` reading a baked recipe JSON, (c) sniff actual dye-recipe wire frames if/when ACE pushes them to the client.
 
-**Phase D.2 follow-on (deferred):** Shift+drag-over → `applyAppearance(localGuid, {paletteId, subPalettes})` for whole-mesh local preview on the player's 3D rig (uses W7.5 hot-swap path when the `?clothingHotSwap=1` flag is on). Reverts on next server ObjectCreate.
+**Phase D.2 — 3D rotating viewport on pedestal** ✅ shipped Wave 7.9.A.
+- `ui/ac_dye_viewport.js::DyeViewport` — small THREE.js scene (280×280) with its own renderer + camera + lights + auto-rotate rAF loop. Two-tone cylinder pedestal (warm stone color, no DAT lookup needed).
+- Borrows existing `EntityManager.animationCache.get` for rig parts + `fetchEntitySurfacesPixels` for dyed materials — byte-parity with spawn-time render path.
+- Auto-frames camera against the rig's bounding box so different setup IDs (helmet vs full armor vs weapon) all fit cleanly.
+- `loadDyedItem(setupId, mtableId, paletteId, subPalettes)` swaps rig in place; `start()` begins rotation; `dispose()` releases WebGL context + frees owned materials/textures (cache-shared geometries left alone).
+- Plugin tooltip widened to 280×280 + replaces the W7.8 flat canvas with the viewport. Falls through to flat canvas when viewport can't build a rig (e.g. setupId 0). Dispose-on-hide so WebGL contexts don't accumulate (Chrome caps ~16).
+- New helper `ui/ac_dye_preview.js::resolveDyeTriples(clothingId, paletteTemplate, shade)` extracts the W7.8 triple-resolution path so the viewport can call wasm directly without going through the flat-canvas composer.
+- `__diag.clothing.recentDyePreviewsShown[].mode` distinguishes `"viewport-3d"` vs `"flat-fallback"`.
+- Verified: viewport mounts at 280×280, WebGL canvas has 3063/1024 = 75% non-transparent pixel coverage in the sampled region, mode tracked as `"viewport-3d"`, dispose-on-hide cleanly releases the context.
+
+**Phase D.3 follow-on (deferred):** player mesh next to the dyed item on the pedestal. Use the local player's setup (already known via `getLocalPlayerGuid()` → `entityMap` lookup) at half-scale to one side of the pedestal. Useful when the dyed item is a partial setup (e.g. just a helmet) and the player wants to see how it composes with the rest of their kit.
+
+**Phase D.4 follow-on (deferred):** Shift+drag-over → `applyAppearance(localGuid, {paletteId, subPalettes})` for whole-mesh local preview on the player's actual 3D rig in the main scene (uses W7.5 hot-swap path when the `?clothingHotSwap=1` flag is on). Reverts on next server ObjectCreate.
 
 **Wiki-grounded design note:** Per the fandom dye-pages (Dyeing, Vial of Hennacin Dye, Hennacin Dye Pot) and `WorldObject_Networking.cs::CalculateObjDesc`, dye commit is a server-side recipe flow (Dye Pot + Dyeable armor → cooking check → updates item's `PaletteTemplate` + `Shade` properties → server emits the resulting `ModelData.{palette_id, sub_palettes}`). The CLIENT is purely a renderer of pre-computed overlays — any dye-picker UI is preview-only; the actual commit lives in the inventory recipe-application flow.
 

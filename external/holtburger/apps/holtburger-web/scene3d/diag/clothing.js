@@ -167,6 +167,10 @@ export function attachClothing(diag) {
           paletteTemplate: (m.paletteTemplate ?? 0) | 0,
           shade: Number(m.shade ?? 0),
           composed: !!m.composed,
+          // Wave 7.9.A — distinguishes 3D viewport vs flat-canvas
+          // fallback (set by dye-preview plugin when DyeViewport
+          // succeeds vs falls through to composeDyePreview).
+          mode: m.mode || null,
           reason,
           ts: performance.now(),
         }, clothing.maxRecentDyePreviewsShown);

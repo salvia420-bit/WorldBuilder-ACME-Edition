@@ -34,7 +34,8 @@
  * toggles whether previews fire (default: on).
  */
 
-import { composeDyePreview } from "../ui/ac_dye_preview.js";
+import { composeDyePreview, resolveDyeTriples } from "../ui/ac_dye_preview.js";
+import { DyeViewport } from "../ui/ac_dye_viewport.js";
 
 const TOOLTIP_ID = "hb-dye-preview-tooltip";
 const PLUGIN_STATE_KEY = "__hbDyePreviewState";
@@ -137,7 +138,16 @@ function positionTooltip(el, clientX, clientY) {
 function hideTooltip() {
   const el = document.getElementById(TOOLTIP_ID);
   if (el) el.style.display = "none";
+  // Dispose any owned WebGL viewport so contexts don't accumulate
+  // (Chrome caps ~16; even at one preview per hover we'd exhaust).
+  const vp = window[VIEWPORT_REF_KEY];
+  if (vp) {
+    try { vp.dispose(); } catch (_) {}
+    window[VIEWPORT_REF_KEY] = null;
+  }
 }
+
+const VIEWPORT_REF_KEY = "__hbDyePreviewViewport";
 
 async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
   const outcome = isDyePot(draggedItem?.wcid >>> 0);
@@ -173,8 +183,12 @@ async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
     try { window.__diag?.clothing?.onDyePreviewShown?.({ source: "drag-over", reason: "missing-armor-metadata", dyePotWcid: draggedItem.wcid }); } catch (_) {}
     return true;
   }
-  // Compose via W7.8 ac_dye_preview.
-  const canvas = await composeDyePreview(clothingId, setupDid, outcome.paletteTemplate, outcome.shade);
+  // Wave 7.9.A — replace the flat canvas with a small THREE.js
+  // viewport so the player sees the armor in 3D, rotating on a
+  // pedestal. Compute the dye triples once + pass to viewport
+  // (which uses animationCache for parts + fetchEntitySurfacesPixels
+  // for materials — same wasm path as the spawn-time render).
+  const triples = await resolveDyeTriples(clothingId, outcome.paletteTemplate, outcome.shade);
   const el = createTooltip();
   el.innerHTML = "";
   const title = document.createElement("div");
@@ -182,31 +196,58 @@ async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
   title.style.marginBottom = "6px";
   title.textContent = `${outcome.name} → ${hoveredItem.name ?? "Armor"}`;
   el.appendChild(title);
-  if (canvas) {
-    // Scale the preview canvas down to a tooltip-appropriate size
-    // (max 200px tall) while preserving aspect.
-    const wrap = document.createElement("div");
-    const maxH = 160;
-    const scale = Math.min(1, maxH / Math.max(1, canvas.height));
-    wrap.style.cssText = [
-      "display: block",
-      `width: ${Math.round(canvas.width * scale)}px`,
-      `height: ${Math.round(canvas.height * scale)}px`,
-      "border: 1px solid #6e5a2c",
-      "background: #1c160e",
-      "image-rendering: pixelated",
-    ].join(";");
-    canvas.style.width = `${Math.round(canvas.width * scale)}px`;
-    canvas.style.height = `${Math.round(canvas.height * scale)}px`;
-    canvas.style.imageRendering = "pixelated";
-    wrap.appendChild(canvas);
-    el.appendChild(wrap);
-  } else {
-    const fallback = document.createElement("div");
-    fallback.style.opacity = "0.7";
-    fallback.textContent = "(no preview — texture not dye-responsive)";
-    el.appendChild(fallback);
+
+  const viewportWrap = document.createElement("div");
+  viewportWrap.style.cssText = [
+    "display: block",
+    "width: 280px",
+    "height: 280px",
+    "border: 1px solid #6e5a2c",
+    "background: linear-gradient(180deg, #2a2418, #1c160e 60%, #14110a)",
+    "border-radius: 4px",
+    "overflow: hidden",
+  ].join(";");
+  el.appendChild(viewportWrap);
+
+  let composed = false;
+  let viewport = null;
+  try {
+    viewport = new DyeViewport(viewportWrap, 280);
+    composed = await viewport.loadDyedItem(
+      setupDid,
+      (hoveredItem.mtableId ?? 0) >>> 0,
+      0,
+      triples ?? new Uint32Array(0),
+    );
+    if (!composed) {
+      // Viewport built but rig couldn't load — fall through to the
+      // flat composeDyePreview as a backup so the player still sees
+      // something.
+      try { viewport.dispose(); } catch (_) {}
+      viewport = null;
+      viewportWrap.innerHTML = "";
+      const fallbackCanvas = await composeDyePreview(clothingId, setupDid, outcome.paletteTemplate, outcome.shade);
+      if (fallbackCanvas) {
+        const maxH = 240;
+        const scale = Math.min(1, maxH / Math.max(1, fallbackCanvas.height));
+        fallbackCanvas.style.width = `${Math.round(fallbackCanvas.width * scale)}px`;
+        fallbackCanvas.style.height = `${Math.round(fallbackCanvas.height * scale)}px`;
+        fallbackCanvas.style.imageRendering = "pixelated";
+        viewportWrap.appendChild(fallbackCanvas);
+        composed = true;
+      } else {
+        viewportWrap.innerHTML = '<div style="padding:8px;opacity:0.7;">(no preview available)</div>';
+      }
+    } else {
+      viewport.start();
+      window[VIEWPORT_REF_KEY] = viewport;
+    }
+  } catch (e) {
+    if (viewport) try { viewport.dispose(); } catch (_) {}
+    viewport = null;
+    viewportWrap.innerHTML = `<div style="padding:8px;opacity:0.7;">(viewport error: ${String(e?.message ?? e).slice(0, 60)})</div>`;
   }
+
   const note = document.createElement("div");
   note.style.opacity = "0.7";
   note.style.fontSize = "11px";
@@ -224,7 +265,8 @@ async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
       setupDid,
       paletteTemplate: outcome.paletteTemplate,
       shade: outcome.shade,
-      composed: !!canvas,
+      composed,
+      mode: viewport ? "viewport-3d" : "flat-fallback",
     });
   } catch (_) {}
   return true;
