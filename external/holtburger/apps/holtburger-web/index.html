@@ -767,6 +767,7 @@
             <code>GameMessage::CharacterCreate</code>.
           </p>
           <div class="row"><label><span>Name</span><input type="text" name="char_name" placeholder="e.g. PhaseyTwoAFive" required minlength="1" maxlength="32" /></label></div>
+          <div id="create-name-hint" class="hint" hidden style="white-space:pre-line;margin-top:6px;padding:8px 10px;border-left:2px solid var(--hb-border-brass-dim,#806838);background:rgba(0,0,0,0.25);"></div>
           <button type="submit" id="create-button">Create character</button>
         </fieldset>
       </form>
@@ -1380,6 +1381,16 @@
               // The options-panel Input tab reads from here.
               window.__acKeybindings = am.actions;
               console.log(`[ac-strings] action-map loaded: ${am.actions.length} actions`);
+              // Cache retail LanguageString naming hints for the char-create
+              // form. 0x31000019 = generic naming-screen intro; 0x31000011 =
+              // Aluvian-male names (matches the hardcoded Aluvian/Male/
+              // Adventurer that holtburger_core::CharacterGenBuilder builds).
+              const [intro, aluvianMale] = await Promise.all([
+                m.loadLanguageString(0x31000019),
+                m.loadLanguageString(0x31000011),
+              ]);
+              window.__acCharCreateHints = { intro, aluvianMale };
+              console.log(`[ac-strings] char-create hints loaded`);
             })
             .catch((err) => console.warn("[ac-strings] preload failed:", err));
 
@@ -6915,6 +6926,14 @@ void main() {
           renderCharacterList();
           if (handle.canCreateCharacter) {
             createForm.hidden = false;
+            // Populate the retail LanguageString naming hint below the
+            // input. Cache is filled by the ac_strings preload (~L1372).
+            const hintEl = document.getElementById("create-name-hint");
+            const cache = window.__acCharCreateHints;
+            if (hintEl && cache?.intro && cache?.aluvianMale) {
+              hintEl.hidden = false;
+              hintEl.textContent = `${cache.intro}\n\n${cache.aluvianMale}`;
+            }
           } else {
             createForm.hidden = true;
             createStatus.innerHTML =
