@@ -394,14 +394,66 @@ have no portals) and for portals with vertices behind the camera
 near plane (conservatively skipped pending future near-plane
 polygon clip).
 
-Limitations carried forward (future polish):
-- **Near-plane polygon clip**: a portal with any vertex behind the
-  camera (w ≤ 0) is currently skipped wholesale; retail clipped
-  the polygon against the near plane first. Today's fallback is the
-  Phase 4 union, which catches these cells via AABB cull.
-- **Depth-clear on building entry** (`WB.GameScene.cs:1610`) — not
-  ported; only matters if Z-fighting between cottage floor and
-  terrain surfaces.
+**Phase 5 polish shipped 2026-05-25**:
+
+- **Near-plane polygon clip** — closed in commit `a4e6cf04`.
+  `pview_project_polygon` now does Sutherland-Hodgman against the
+  half-space `z + w ≥ 0` in clip space BEFORE perspective divide,
+  so portals straddling the camera near plane survive (vertices on
+  the wrong side get clipped to plane intersections instead of
+  dropping the whole polygon). Validated by the wire-agent harness
+  `run-diag-pview-near-portal.cjs`: inside cottage 0xA9B40100, max
+  `pviewCount` across an 8-yaw sweep reaches 5 (pre-fix capped at
+  1 because nearby portals had at least one vertex with `w ≤ 0`).
+  Unit tests in `crates/holtburger-world/src/spatial/tests.rs`
+  cover the four canonical SH cases (fully-ahead, fully-behind,
+  straddling, degenerate).
+
+- **Depth-clear on building entry** — closed in commit `476362fd`,
+  mirroring `WB.GameScene.cs:1610`'s `PView::DrawCells` sequence.
+  Three.js render-layer split: terrain/buildings/statics on layer 0,
+  cellsGroup + entitiesGroup on layer 1. The atmosphere
+  EffectComposer chain gains (when `isCurrentCellIndoor()` is true)
+  a `CameraLayerMaskPass(World)` → existing world `RenderPass` →
+  `ClearPass(depth-only)` → `CameraLayerMaskPass(Cells)` → new cells
+  `RenderPass` → `CameraLayerMaskPass(Restore)` insertion. Outdoor
+  case: all the new passes are `enabled = false`, render is
+  byte-identical to pre-fix. Wire-agent harness
+  `run-diag-zfighting-cottage.cjs` asserts (a) the indoor split is
+  wired, (b) `<1%` of lit pixels in the rendered cottage interior
+  match the Z-fight checkerboard pattern. Live measurement:
+  `zfightRate = 0.32%`.
+
+**Observability shipped alongside**:
+
+- `run-diag-pview-depth-tuning.cjs` (commit `6aa13f52`) — parametric
+  `max_depth` arg added to `getRenderSetWithPView(mvp, max_depth)`
+  + `getRenderSetWithPViewInstrumented` sibling that exposes
+  max-depth-reached per call. Empirical sweep across 6 stops × 8
+  yaws × 7 depth caps confirms `PVIEW_MAX_DEPTH = 8` is more than
+  enough — every measured pose stayed within depth 1 of the current
+  cell. The Sutherland-Hodgman polygon-clip cascade prunes deep
+  branches faster than the cap engages.
+
+- `run-diag-pview-vs-frustum-sweep.cjs` (commit `125c7635`) — over-
+  render comparison harness. 5 locations × 8 yaws = 40 samples.
+  Indoor mean PView reduction vs Phase-4 frustum cull: **73.8%**
+  (cottage A 92.4%, B 81.3%, C 90.0%, Mite Maze 31.5%, outdoor town
+  square 48.9% — the JS-layer union of PView with frustum in
+  cells.js still falls back to frustum for outdoor LandCell-rooted
+  walks). Raw data + Markdown report at
+  `HOLTBURGER_DIAG_OUT/pview-vs-frustum-sweep-<TS>/`.
+
+All six wire-agent harnesses currently green:
+```
+pvs-holtburg-cottage-outside     PASS PASS OK
+pvs-holtburg-cottage-inside      PASS PASS OK
+pview-near-portal                PASS PASS OK
+pview-depth-tuning               PASS PASS OK
+pview-vs-frustum-sweep           PASS PASS OK
+zfighting-cottage                PASS PASS OK
+6 OK, 0 documented gap(s), 0 UNEXPECTED
+```
 
 ## Cross-references
 
