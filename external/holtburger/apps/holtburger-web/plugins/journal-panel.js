@@ -18,10 +18,98 @@
 // Player journal data isn't exposed yet — placeholder content surfaces
 // the parchment frame + tab pattern. When server adds a `journal()`
 // method to SessionHandle we wire real entries here.
+//
+// Layout-port 2026-05-24: wired retail gmJournalUI (LayoutDesc
+// 0x21000066, 300×500 active panel + 300×600 chrome wrapper) — sizes
+// and positions for the top tab strip, header search/filter row, quest
+// list region, right scrollbar slot, footer pagination row, and the
+// three bottom action buttons come from the DAT. Text content
+// (button labels, sample entries) is hand-tuned (v1 fetch_layout
+// serializes geometry only — StateDesc + BaseProperty text content
+// is a follow-on, G3 in the layout-port plan).
+//
+// Note on dimensions: retail's gmJournalUI lives in a 300×600 frame
+// (chrome group 0x10000116). Our main-panel body slot is 300×337.
+// Layout positions are applied verbatim — content below y=337 lives
+// inside an overflow:auto root so footer/buttons remain reachable.
+//
+// Element-id map (confirmed by journal_panel_layout_dump 2026-05-24):
+//   Main group 0x1000055B (300×500, 26 children):
+//     0x10000110 — backdrop fill (0,0) 300×500
+//     0x10000565 — top-left tab area (0,0) 54×33
+//     0x10000566 — bottom-right indicator (235,468) 65×32
+//     0x10000567 — top tab 1 / Journal (50,14) 60×18, default_state=1 (active)
+//     0x10000568 — top tab 2 / Contracts (126,14) 44×18
+//     0x10000569 — top tab 3 / title area (164,14) 120×18
+//     0x1000056A — section label A (16,40) 40×18 — "Title:" / filter label
+//     0x1000056B — search/title field (50,40) 234×18
+//     0x1000056C — section label B (16,66) 50×18 — "Filter:" / status
+//     0x1000056D — quest entry list (16,84) 256×330
+//     0x1000056E — right scrollbar (272,84) 16×330
+//     0x1000056F — bottom-left action button (20,464) 60×32, default_state=1
+//     0x10000570 — bottom-middle action button (100,464) 100×32
+//     0x10000571 — bottom-right action button (200,464) 60×32, default_state=1
+//     Footer row 1 (y=420):
+//       0x10000572 — footer label A (16,420) 64×18
+//       0x10000573 — footer text (84,420) 150×18
+//       0x10000574 — footer right indicator (240,420) 52×18, default_state=1
+//     Footer row 2 (y=442) — page indicator / pagination digits:
+//       0x10000575 — page label (16,442) 64×18 — "Page:"
+//       0x10000576 — pg digit 1 (84,442) 20×18
+//       0x10000577 — pg sep (106,442) 10×18
+//       0x10000578 — pg digit 2 (120,442) 20×18
+//       0x10000579 — pg sep (142,442) 10×18
+//       0x1000057A — pg digit 3 (156,442) 20×18
+//       0x1000057B — pg sep (178,442) 10×18
+//       0x1000057C — pg label (84,442) 120×18 — overlay over digits
+//       0x1000057D — pg action indicator (240,442) 40×18, default_state=1
+//   Chrome group 0x10000116 (300×600, 5 children) — frame
+//     0x10000117 — header strip (0,0) 300×33
+//     0x10000118 — left edge (0,33) 22×535
+//     0x10000110 — body backdrop (22,33) 257×535
+//     0x10000119 — right edge (279,33) 21×535
+//     0x1000011A — footer strip (0,568) 300×32
+//
+// We DON'T wire chrome group elements — main-panel.js owns the panel
+// frame chrome (title bar / borders / footer). Wiring the main group's
+// content positions is the bulk of the port.
 
 import { setAcText } from "../ui/ac_font.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 
 const STYLE_ID = "hb-journal-view-style";
+
+// gmJournalUI — retail layout that drives the journal panel content.
+const JOURNAL_LAYOUT_ID = 0x21000066;
+const JE = {
+  // Main group children (positions relative to the journal root).
+  backdrop:        0x10000110,
+  topTab1Anchor:   0x10000565,
+  bottomRightInd:  0x10000566,
+  tabJournal:      0x10000567,
+  tabContracts:    0x10000568,
+  tabTitle:        0x10000569,
+  lblSection:      0x1000056A,
+  searchField:     0x1000056B,
+  lblFilter:       0x1000056C,
+  entryList:       0x1000056D,
+  scrollbar:       0x1000056E,
+  btnLeft:         0x1000056F,
+  btnMiddle:       0x10000570,
+  btnRight:        0x10000571,
+  footLblA:        0x10000572,
+  footText:        0x10000573,
+  footRightInd:    0x10000574,
+  pageLbl:         0x10000575,
+  pgDigit1:        0x10000576,
+  pgSep1:          0x10000577,
+  pgDigit2:        0x10000578,
+  pgSep2:          0x10000579,
+  pgDigit3:        0x1000057A,
+  pgSep3:          0x1000057B,
+  pgLbl:           0x1000057C,
+  pgActionInd:     0x1000057D,
+};
 
 let stylesInjected = false;
 function ensureStyles() {
@@ -37,19 +125,19 @@ function ensureStyles() {
       pointer-events: auto;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
+      overflow-y: auto;
+      overflow-x: hidden;
       background: url("./data/ui-sprites/0x060022BA.png") repeat;
+      scrollbar-width: thin;
+      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
     }
-    .hb-journal-tabs {
-      flex: 0 0 auto;
-      display: flex;
-      gap: 1px;
-      padding: 4px 4px 0;
-    }
+    /* Tab strip lives at y=14 per retail gmJournalUI 0x21000066
+       (elements 0x10000567/68/69). applyJournalLayout pins these per
+       element-id; CSS just provides paint. */
     .hb-journal-tab {
-      padding: 3px 10px;
+      position: absolute;
+      box-sizing: border-box;
+      padding: 0 6px;
       font-size: 10px;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream-bright);
@@ -60,6 +148,9 @@ function ensureStyles() {
       user-select: none;
       text-transform: uppercase;
       letter-spacing: 0.04em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .hb-journal-tab:hover { background: var(--hb-overlay-hover); }
     .hb-journal-tab.active {
@@ -68,15 +159,13 @@ function ensureStyles() {
       border-color: var(--hb-border-brass);
     }
     /* Parchment frame: 9-slice composed from the 5 dedicated parchment
-       sprites. We render it as nested CSS divs:
-         outer (.hb-journal-parchment) is the body fill + has the
-         torn TOP edge image absolute-positioned at the top, the
-         torn BOTTOM edge at bottom, and vertical strips on L/R. */
+       sprites — fills the quest list region (retail 0x1000056D).
+       Applied via applyJournalLayout — the inline left/top/width/height
+       lock it to the layout's position. */
     .hb-journal-parchment {
-      flex: 1 1 auto;
-      position: relative;
-      margin: 0 6px 6px;
-      padding: 18px 14px;
+      position: absolute;
+      box-sizing: border-box;
+      padding: 14px 12px;
       background: url("./data/ui-sprites/0x0600126F.png") repeat;
       color: #2a1a08;            /* dark ink colour on the cream parchment */
       overflow-y: auto;
@@ -86,16 +175,13 @@ function ensureStyles() {
     /* Torn-edge sprite assignments swapped per user 2026-05-22:
        0x06001273 sprite has its torn frill on the BOTTOM edge of the
        sprite — anchor it to the parchment's TOP and let it overhang
-       upward into the dark backdrop. Mirror for 0x06001270 at bottom.
-       Strips are positioned ABOVE/BELOW the parchment box (negative
-       offsets) so the full frill artwork is visible against the
-       dark leather backdrop instead of clipping into the cream fill. */
+       upward into the dark backdrop. Mirror for 0x06001270 at bottom. */
     .hb-journal-parchment::before,
     .hb-journal-parchment::after {
       content: "";
       position: absolute;
       left: -4px; right: -4px;
-      height: 18px;
+      height: 14px;
       pointer-events: none;
       background-repeat: no-repeat;
       background-size: 100% 100%;
@@ -109,12 +195,12 @@ function ensureStyles() {
       bottom: -2px;
       background-image: url("./data/ui-sprites/0x06001270.png");
     }
-    /* Vertical L/R edge strips. */
+    /* Vertical L/R edge strips. Inset within the parchment box. */
     .hb-journal-edge-l,
     .hb-journal-edge-r {
       position: absolute;
       top: 0; bottom: 0;
-      width: 8px;
+      width: 6px;
       background-repeat: no-repeat;
       background-size: 100% 100%;
       pointer-events: none;
@@ -127,13 +213,22 @@ function ensureStyles() {
       right: 0;
       background-image: url("./data/ui-sprites/0x06001272.png");
     }
+    /* Scrollbar slot — retail 0x1000056E (272,84) 16×330. Decorative;
+       browser-managed scrollbar inside .hb-journal-parchment overlays it. */
+    .hb-journal-scrollbar {
+      position: absolute;
+      box-sizing: border-box;
+      border-left: 1px solid var(--hb-border-brass-dim);
+      background: rgba(0, 0, 0, 0.4);
+      pointer-events: none;
+    }
     .hb-journal-content {
       position: relative;
       z-index: 1;
-      padding: 0 6px;
+      padding: 0 4px;
     }
     .hb-journal-title {
-      font-size: 14px;
+      font-size: 13px;
       color: #6b3a0a;
       letter-spacing: 0.04em;
       margin-bottom: 8px;
@@ -167,11 +262,175 @@ function ensureStyles() {
     .hb-journal-entry-status.failed   { color: #802020; }
     .hb-journal-entry-body { color: #3a2210; }
     .hb-journal-empty {
-      padding: 24px 12px;
+      padding: 16px 8px;
       color: #5a3a18;
       font-style: italic;
       text-align: center;
       font-size: 11px;
+    }
+    /* Header row fields (retail 0x1000056A/B/C). Section labels + the
+       search/title field. */
+    .hb-journal-hdr-label {
+      position: absolute;
+      box-sizing: border-box;
+      font-size: 10px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-gold);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+      letter-spacing: 0.04em;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+    }
+    .hb-journal-hdr-field {
+      position: absolute;
+      box-sizing: border-box;
+      font-size: 10px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      padding: 0 4px;
+      display: flex;
+      align-items: center;
+    }
+    /* Bottom action buttons — retail 0x1000056F/70/71. */
+    .hb-journal-btn {
+      position: absolute;
+      box-sizing: border-box;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--hb-text-gold);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.95);
+      background: url("./data/ui-sprites/0x06004CDA.png") center/100% 100% no-repeat;
+      border: none;
+      cursor: pointer;
+      user-select: none;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .hb-journal-btn:hover {
+      background: url("./data/ui-sprites/0x06004CDB.png") center/100% 100% no-repeat;
+      color: var(--hb-text-cream-bright);
+    }
+    .hb-journal-btn.active {
+      background: url("./data/ui-sprites/0x06004CDB.png") center/100% 100% no-repeat;
+      color: var(--hb-text-cream-bright);
+    }
+    /* Footer row 1 (y=420) — status text + indicator. */
+    .hb-journal-footer-lbl,
+    .hb-journal-footer-text {
+      position: absolute;
+      box-sizing: border-box;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-cream);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+      letter-spacing: 0.04em;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+    }
+    .hb-journal-footer-lbl { color: var(--hb-text-gold); }
+    .hb-journal-footer-ind {
+      position: absolute;
+      box-sizing: border-box;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-cream-bright);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--hb-border-brass-dim);
+      padding: 0 4px;
+      letter-spacing: 0.04em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* Footer row 2 (y=442) — pagination digits + separators. */
+    .hb-journal-pg-lbl {
+      position: absolute;
+      box-sizing: border-box;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-gold);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+      letter-spacing: 0.04em;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+    }
+    .hb-journal-pg-digit {
+      position: absolute;
+      box-sizing: border-box;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-cream-bright);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--hb-border-brass-dim);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-variant-numeric: tabular-nums;
+    }
+    .hb-journal-pg-sep {
+      position: absolute;
+      box-sizing: border-box;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-cream);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .hb-journal-pg-text {
+      position: absolute;
+      box-sizing: border-box;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-cream);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      /* Sits behind / overlapping digits in retail; we hide by default. */
+      display: none;
+    }
+    .hb-journal-pg-action {
+      position: absolute;
+      box-sizing: border-box;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-gold);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.95);
+      background: url("./data/ui-sprites/0x06004CDB.png") center/100% 100% no-repeat;
+      cursor: pointer;
+      user-select: none;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    /* Bottom-right corner indicator (retail 0x10000566 — 65×32 at 235,468).
+       In retail this is a sealed-wax stamp / parchment seal at the
+       bottom-right of the journal page. */
+    .hb-journal-seal {
+      position: absolute;
+      box-sizing: border-box;
+      background: url("./data/ui-sprites/0x06004CCA.png") center/100% 100% no-repeat;
+      pointer-events: none;
+      opacity: 0.6;
     }
   `;
   document.head.appendChild(style);
@@ -196,6 +455,77 @@ const SAMPLE_ENTRIES = [
   },
 ];
 
+// Apply gmJournalUI 0x21000066 layout to the journal plugin's sub-
+// elements. Each ref gets explicit left/top/width/height from the
+// LayoutDesc. Text content (button labels, tab labels, footer copy)
+// stays hand-tuned (v1 fetch_layout serializes geometry only —
+// StateDesc + BaseProperty text content is a G3 follow-on).
+//
+// The journal view mounts via user-initiated showView("journal")
+// AFTER wasm is ready, so no retry loop is needed (unlike radar /
+// chat-panel which mount during early boot). The cached-layout fast
+// path keeps re-opens synchronous.
+function applyJournalLayout(refs) {
+  const apply = (layout) => {
+    if (!layout) return;
+    let applied = 0;
+    const pairs = [
+      [JE.tabJournal,     refs.tabJournalEl],
+      [JE.tabContracts,   refs.tabContractsEl],
+      [JE.tabTitle,       refs.tabTitleEl],
+      [JE.lblSection,     refs.lblSectionEl],
+      [JE.searchField,    refs.searchFieldEl],
+      [JE.lblFilter,      refs.lblFilterEl],
+      [JE.entryList,      refs.parchmentEl],
+      [JE.scrollbar,      refs.scrollbarEl],
+      [JE.btnLeft,        refs.btnLeftEl],
+      [JE.btnMiddle,      refs.btnMiddleEl],
+      [JE.btnRight,       refs.btnRightEl],
+      [JE.footLblA,       refs.footLblAEl],
+      [JE.footText,       refs.footTextEl],
+      [JE.footRightInd,   refs.footRightIndEl],
+      [JE.pageLbl,        refs.pageLblEl],
+      [JE.pgDigit1,       refs.pgDigit1El],
+      [JE.pgSep1,         refs.pgSep1El],
+      [JE.pgDigit2,       refs.pgDigit2El],
+      [JE.pgSep2,         refs.pgSep2El],
+      [JE.pgDigit3,       refs.pgDigit3El],
+      [JE.pgSep3,         refs.pgSep3El],
+      [JE.pgLbl,          refs.pgLblEl],
+      [JE.pgActionInd,    refs.pgActionEl],
+      [JE.bottomRightInd, refs.sealEl],
+    ];
+    for (const [id, el] of pairs) {
+      if (!el) continue;
+      const desc = findElementById(layout, id);
+      if (!desc) continue;
+      applyBox(el, desc);
+      applied += 1;
+    }
+    try {
+      window.__diag?.layout?.onJournalApplied?.({ applied });
+    } catch (_) {}
+  };
+  const cached = getCachedLayout(JOURNAL_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(JOURNAL_LAYOUT_ID).then(apply).catch(() => {});
+}
+
+// Apply a LayoutDesc Element's geometry to a DOM element. Clears
+// CSS `right`/`bottom` anchors so explicit left/top wins, and uses
+// explicit `transform: none` to defeat any centering translates in the
+// underlying CSS rule (radar lesson — clearing transform to "" lets
+// the CSS rule's translate re-apply).
+function applyBox(el, layoutEl) {
+  el.style.right = "";
+  el.style.bottom = "";
+  el.style.transform = "none";
+  if (typeof layoutEl.x === "number") el.style.left = `${layoutEl.x}px`;
+  if (typeof layoutEl.y === "number") el.style.top = `${layoutEl.y}px`;
+  if (typeof layoutEl.width === "number") el.style.width = `${layoutEl.width}px`;
+  if (typeof layoutEl.height === "number") el.style.height = `${layoutEl.height}px`;
+}
+
 export const view = {
   name: "Journal",
   nameFor: () => "Quest Journal",
@@ -204,26 +534,58 @@ export const view = {
     const root = document.createElement("div");
     root.className = "hb-journal-root";
 
-    // Companion tab strip: Journal / Contracts (Quest Journal panel +
-    // Contracts panel share this pair in retail).
-    const tabs = document.createElement("div");
-    tabs.className = "hb-journal-tabs";
-    for (const t of [
-      { id: "journal",   label: "Journal",   current: true },
-      { id: "contracts", label: "Contracts", swap: "contracts" },
-    ]) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "hb-journal-tab" + (t.current ? " active" : "");
-      setAcText(btn, t.label);
-      if (t.swap) {
-        btn.addEventListener("click", () => window.__mainPanel?.showView?.(t.swap));
-      }
-      tabs.appendChild(btn);
-    }
-    root.appendChild(tabs);
+    // Tab strip (retail 0x10000567 Journal / 0x10000568 Contracts /
+    // 0x10000569 title-area). default_state=1 on 0x10000567 → active.
+    const tabJournal = document.createElement("button");
+    tabJournal.type = "button";
+    tabJournal.className = "hb-journal-tab active";
+    tabJournal.dataset.tab = "journal";
+    setAcText(tabJournal, "Journal");
+    root.appendChild(tabJournal);
 
-    // Parchment frame
+    const tabContracts = document.createElement("button");
+    tabContracts.type = "button";
+    tabContracts.className = "hb-journal-tab";
+    tabContracts.dataset.tab = "contracts";
+    setAcText(tabContracts, "Contracts");
+    tabContracts.addEventListener("click", () => {
+      window.__mainPanel?.showView?.("contracts");
+    });
+    root.appendChild(tabContracts);
+
+    // Third tab slot — retail layout reserves this 120×18 slot at
+    // (164,14). Retail uses it for a title/header text field; we leave
+    // it as a passive display slot until G3 surfaces its StateDesc text.
+    const tabTitle = document.createElement("div");
+    tabTitle.className = "hb-journal-tab";
+    tabTitle.dataset.tab = "title";
+    tabTitle.style.cursor = "default";
+    tabTitle.style.pointerEvents = "none";
+    setAcText(tabTitle, "Quest Log");
+    root.appendChild(tabTitle);
+
+    // Section labels (retail 0x1000056A "Title:" / 0x1000056C "Filter:")
+    const lblSection = document.createElement("div");
+    lblSection.className = "hb-journal-hdr-label";
+    lblSection.dataset.label = "section";
+    setAcText(lblSection, "Title:");
+    root.appendChild(lblSection);
+
+    // Search/title field (retail 0x1000056B)
+    const searchField = document.createElement("div");
+    searchField.className = "hb-journal-hdr-field";
+    searchField.dataset.field = "search";
+    setAcText(searchField, "");
+    root.appendChild(searchField);
+
+    const lblFilter = document.createElement("div");
+    lblFilter.className = "hb-journal-hdr-label";
+    lblFilter.dataset.label = "filter";
+    setAcText(lblFilter, "Filter:");
+    root.appendChild(lblFilter);
+
+    // Parchment region — retail 0x1000056D (16,84) 256×330. The
+    // parchment 9-slice + entry list + scroll lives here.
     const parch = document.createElement("div");
     parch.className = "hb-journal-parchment";
     const edgeL = document.createElement("div");
@@ -285,7 +647,146 @@ export const view = {
     parch.appendChild(content);
     root.appendChild(parch);
 
+    // Scrollbar slot (retail 0x1000056E)
+    const scrollbar = document.createElement("div");
+    scrollbar.className = "hb-journal-scrollbar";
+    root.appendChild(scrollbar);
+
+    // Bottom action buttons (retail 0x1000056F left / 0x10000570 middle
+    // / 0x10000571 right). default_state=1 on left + right (active
+    // visual state in retail; we render via .hb-journal-btn).
+    const btnLeft = document.createElement("button");
+    btnLeft.type = "button";
+    btnLeft.className = "hb-journal-btn active";
+    btnLeft.dataset.btn = "left";
+    setAcText(btnLeft, "Prev");
+    root.appendChild(btnLeft);
+
+    const btnMiddle = document.createElement("button");
+    btnMiddle.type = "button";
+    btnMiddle.className = "hb-journal-btn";
+    btnMiddle.dataset.btn = "middle";
+    setAcText(btnMiddle, "Details");
+    root.appendChild(btnMiddle);
+
+    const btnRight = document.createElement("button");
+    btnRight.type = "button";
+    btnRight.className = "hb-journal-btn active";
+    btnRight.dataset.btn = "right";
+    setAcText(btnRight, "Next");
+    root.appendChild(btnRight);
+
+    // Footer row 1 (y=420) — status text row
+    const footLblA = document.createElement("div");
+    footLblA.className = "hb-journal-footer-lbl";
+    footLblA.dataset.row = "1";
+    setAcText(footLblA, "Status:");
+    root.appendChild(footLblA);
+
+    const footText = document.createElement("div");
+    footText.className = "hb-journal-footer-text";
+    footText.dataset.row = "1";
+    setAcText(footText, `${SAMPLE_ENTRIES.length} entries`);
+    root.appendChild(footText);
+
+    const footRightInd = document.createElement("div");
+    footRightInd.className = "hb-journal-footer-ind";
+    footRightInd.dataset.row = "1";
+    setAcText(footRightInd, "Active");
+    root.appendChild(footRightInd);
+
+    // Footer row 2 (y=442) — pagination digits + separators
+    const pageLbl = document.createElement("div");
+    pageLbl.className = "hb-journal-pg-lbl";
+    setAcText(pageLbl, "Page:");
+    root.appendChild(pageLbl);
+
+    const pgDigit1 = document.createElement("div");
+    pgDigit1.className = "hb-journal-pg-digit";
+    pgDigit1.dataset.digit = "1";
+    setAcText(pgDigit1, "1");
+    root.appendChild(pgDigit1);
+
+    const pgSep1 = document.createElement("div");
+    pgSep1.className = "hb-journal-pg-sep";
+    pgSep1.dataset.sep = "1";
+    setAcText(pgSep1, "/");
+    root.appendChild(pgSep1);
+
+    const pgDigit2 = document.createElement("div");
+    pgDigit2.className = "hb-journal-pg-digit";
+    pgDigit2.dataset.digit = "2";
+    setAcText(pgDigit2, "1");
+    root.appendChild(pgDigit2);
+
+    const pgSep2 = document.createElement("div");
+    pgSep2.className = "hb-journal-pg-sep";
+    pgSep2.dataset.sep = "2";
+    setAcText(pgSep2, "·");
+    root.appendChild(pgSep2);
+
+    const pgDigit3 = document.createElement("div");
+    pgDigit3.className = "hb-journal-pg-digit";
+    pgDigit3.dataset.digit = "3";
+    setAcText(pgDigit3, String(SAMPLE_ENTRIES.length));
+    root.appendChild(pgDigit3);
+
+    const pgSep3 = document.createElement("div");
+    pgSep3.className = "hb-journal-pg-sep";
+    pgSep3.dataset.sep = "3";
+    setAcText(pgSep3, "");
+    root.appendChild(pgSep3);
+
+    const pgLbl = document.createElement("div");
+    pgLbl.className = "hb-journal-pg-text";
+    pgLbl.dataset.field = "pgtext";
+    setAcText(pgLbl, "of");
+    root.appendChild(pgLbl);
+
+    const pgAction = document.createElement("button");
+    pgAction.type = "button";
+    pgAction.className = "hb-journal-pg-action";
+    pgAction.dataset.action = "page";
+    setAcText(pgAction, "Go");
+    root.appendChild(pgAction);
+
+    // Bottom-right seal/stamp (retail 0x10000566)
+    const seal = document.createElement("div");
+    seal.className = "hb-journal-seal";
+    root.appendChild(seal);
+
     parentEl.appendChild(root);
+
+    // Apply retail layout AFTER elements are in the DOM. journal mounts
+    // via user-initiated showView("journal") so wasm is ready by then;
+    // the cached-layout fast path keeps re-opens synchronous.
+    applyJournalLayout({
+      tabJournalEl:   tabJournal,
+      tabContractsEl: tabContracts,
+      tabTitleEl:     tabTitle,
+      lblSectionEl:   lblSection,
+      searchFieldEl:  searchField,
+      lblFilterEl:    lblFilter,
+      parchmentEl:    parch,
+      scrollbarEl:    scrollbar,
+      btnLeftEl:      btnLeft,
+      btnMiddleEl:    btnMiddle,
+      btnRightEl:     btnRight,
+      footLblAEl:     footLblA,
+      footTextEl:     footText,
+      footRightIndEl: footRightInd,
+      pageLblEl:      pageLbl,
+      pgDigit1El:     pgDigit1,
+      pgSep1El:       pgSep1,
+      pgDigit2El:     pgDigit2,
+      pgSep2El:       pgSep2,
+      pgDigit3El:     pgDigit3,
+      pgSep3El:       pgSep3,
+      pgLblEl:        pgLbl,
+      pgActionEl:     pgAction,
+      sealEl:         seal,
+    });
+
     return () => { root.remove(); };
   },
 };
@@ -295,6 +796,6 @@ export const manifest = {
   name: "Journal",
   icon: "📜",
   iconHidden: true,
-  version: "0.1.0",
+  version: "0.2.0",
   description: "Quest Journal (gmJournalUI 0x21000066, parchment 9-slice)",
 };
