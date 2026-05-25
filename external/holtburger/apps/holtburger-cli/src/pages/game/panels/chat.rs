@@ -72,6 +72,12 @@ pub struct ChatState {
     pub scroll_offsets: [usize; ChatView::ALL.len()],
     total_lines_per_view: [usize; ChatView::ALL.len()],
     pub last_incoming_tell_sender: Option<String>,
+    /// Name of the most recent player this client sent a tell to.
+    /// Drives `/retell` / `/rt` (acclient.c:417862-417890,
+    /// gmCCommunicationSystem::GetLastTelleeName). Separate from
+    /// `last_incoming_tell_sender` so /reply and /retell can target
+    /// different players.
+    pub last_outgoing_tell_target: Option<String>,
 }
 
 impl Default for ChatState {
@@ -85,6 +91,7 @@ impl Default for ChatState {
             scroll_offsets: [0; ChatView::ALL.len()],
             total_lines_per_view: [0; ChatView::ALL.len()],
             last_incoming_tell_sender: None,
+            last_outgoing_tell_target: None,
         }
     }
 }

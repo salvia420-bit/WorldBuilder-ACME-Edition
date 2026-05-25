@@ -7238,12 +7238,46 @@ void main() {
           // doesn't always — ACE only echoes Talk back via
           // ChannelBroadcast for channels the player is subscribed
           // to).
-          // Track the last person who sent us a Tell so `/r <msg>`
-          // (reply-to-last-teller, retail UX) has a target. Updated
-          // by the incoming-Tell handler (chat panel populates this
-          // via window.__lastTellerName when an OutgoingTell or Tell
-          // event arrives).
-          window.__lastTellerName = null;
+          // Two distinct sticky targets, matching retail
+          // gmCCommunicationSystem state:
+          //   __chatLastIncomingTellSender — name of last player who
+          //     sent YOU a tell. Drives `/reply` `/r` `/rp`. Populated
+          //     by the kind=2 chat-received drain when chat_type ==
+          //     ChatMessageType::Tell (0x03).
+          //   __chatLastOutgoingTellTarget — name of last player YOU
+          //     sent a tell to. Drives `/retell` `/rt`. Populated
+          //     synchronously when a tell is dispatched below.
+          // Retail decomp: acclient.c:417665-417906 + 417862-417890.
+          window.__chatLastIncomingTellSender = null;
+          window.__chatLastOutgoingTellTarget = null;
+
+          // Retail-strict comma parser. acclient.c:417984-418036's
+          // DoTell does `_strchr(argv, 44)` (comma) and splits there;
+          // on miss it prints "Use comma after the name for targeted
+          // chat." We mirror that verbatim so AC veterans see the UX
+          // they're used to. Returns { target, message } or null on
+          // miss (no comma, empty target, or empty message).
+          function parseCommaTell(rest) {
+            const commaIdx = rest.indexOf(",");
+            if (commaIdx < 0) return null;
+            const target = rest.slice(0, commaIdx).trim();
+            const msg = rest.slice(commaIdx + 1).trim();
+            if (!target || !msg) return null;
+            return { target, message: msg };
+          }
+          window.__parseCommaTell = parseCommaTell;
+
+          // Retail aliased the tell verb five ways (tell/t/send/
+          // whisper/w → DoTell). acclient.c:428178-428288.
+          const TELL_ALIASES = new Set(["tell", "t", "send", "whisper", "w"]);
+          const REPLY_ALIASES = new Set(["reply", "r", "rp"]);
+          const RETELL_ALIASES = new Set(["retell", "rt"]);
+          // Local speech aliases. Strip the slash-prefix and dispatch
+          // through the Talk path. Without this, `/say hi` falls into
+          // sendChat() verbatim and ACE shouts back the literal
+          // string "/say hi" because ACE's GameActionTalk does not
+          // parse client-side slash commands.
+          const SAY_ALIASES = new Set(["say", "s"]);
 
           // Slash-command → wire-opcode router. Retail's client
           // parses these locally and sends the matching GameAction;
@@ -7264,36 +7298,72 @@ void main() {
             const cmd = (sp < 0 ? message.slice(1) : message.slice(1, sp)).toLowerCase();
             const rest = sp < 0 ? "" : message.slice(sp + 1);
 
-            // Tells: `/tell <name> <msg>` or `/t <name> <msg>`.
-            if (cmd === "tell" || cmd === "t") {
-              const sp2 = rest.indexOf(" ");
-              if (sp2 < 0) {
+            // Tells: `/tell <name>, <msg>` (comma-delimited, retail-
+            // strict). Aliases: tell, t, send, whisper, w.
+            if (TELL_ALIASES.has(cmd)) {
+              const parsed = parseCommaTell(rest);
+              if (!parsed) {
                 return { dispatched: true, echo: null,
-                         error: `Usage: /${cmd} <name> <message>` };
+                         error: "Use comma after the name for targeted chat." };
               }
-              const target = rest.slice(0, sp2);
-              const msg = rest.slice(sp2 + 1);
-              if (!target || !msg) {
-                return { dispatched: true, echo: null,
-                         error: `Usage: /${cmd} <name> <message>` };
-              }
-              handle.sendTell(target, msg);
-              window.__lastTellerName = target;  // for /r tracking
-              return { dispatched: true, echo: `You tell ${target}, "${msg}"` };
+              handle.sendTell(parsed.target, parsed.message);
+              window.__chatLastOutgoingTellTarget = parsed.target;
+              return { dispatched: true,
+                       echo: `You tell ${parsed.target}, "${parsed.message}"` };
             }
 
-            // Reply to last teller: `/r <msg>`.
-            if (cmd === "r") {
-              if (!window.__lastTellerName) {
+            // Reply to last incoming teller: `/reply <msg>` (aliases
+            // reply, r, rp). acclient.c:417699-417703 — retail keyed
+            // off the last teller's character ID. We key off name
+            // because our wire path is TellByName (opcode 0x005D);
+            // server-side lookup is the same either way.
+            if (REPLY_ALIASES.has(cmd)) {
+              if (!window.__chatLastIncomingTellSender) {
                 return { dispatched: true, echo: null,
                          error: "No one has sent you a tell to reply to." };
               }
-              if (!rest) {
+              if (!rest.trim()) {
                 return { dispatched: true, echo: null,
-                         error: "Usage: /r <message>" };
+                         error: `Usage: /${cmd} <message>` };
               }
-              handle.sendTell(window.__lastTellerName, rest);
-              return { dispatched: true, echo: `You tell ${window.__lastTellerName}, "${rest}"` };
+              const target = window.__chatLastIncomingTellSender;
+              handle.sendTell(target, rest.trim());
+              window.__chatLastOutgoingTellTarget = target;
+              return { dispatched: true,
+                       echo: `You tell ${target}, "${rest.trim()}"` };
+            }
+
+            // Local speech: `/say <msg>` or `/s <msg>`. ACE doesn't
+            // parse slash-prefixes server-side, so we strip them
+            // client-side and dispatch as a plain Talk. Echo matches
+            // the plain-message fall-through ("> msg") since ACE
+            // doesn't broadcast Talk back to the sender.
+            if (SAY_ALIASES.has(cmd)) {
+              if (!rest.trim()) {
+                return { dispatched: true, echo: null,
+                         error: `Usage: /${cmd} <message>` };
+              }
+              const msg = rest.trim();
+              handle.sendChat(msg);
+              return { dispatched: true, echo: `> ${msg}` };
+            }
+
+            // Retell to last outgoing target: `/retell <msg>` or
+            // `/rt <msg>`. acclient.c:417862-417890 — `@retell` /
+            // GetLastTelleeName().
+            if (RETELL_ALIASES.has(cmd)) {
+              if (!window.__chatLastOutgoingTellTarget) {
+                return { dispatched: true, echo: null,
+                         error: "You haven't sent a tell yet." };
+              }
+              if (!rest.trim()) {
+                return { dispatched: true, echo: null,
+                         error: `Usage: /${cmd} <message>` };
+              }
+              const target = window.__chatLastOutgoingTellTarget;
+              handle.sendTell(target, rest.trim());
+              return { dispatched: true,
+                       echo: `You tell ${target}, "${rest.trim()}"` };
             }
 
             // Allegiance channels — ChatChannel enum values from
@@ -7803,6 +7873,18 @@ void main() {
                 // by category — no prefix-string heuristic.
                 const text = evt.stringPayload || "";
                 const category = evt.u32Payload2;
+                // Incoming-tell stickiness for /reply. chat_type ==
+                // ChatMessageType::Tell (0x03) only — exclude the
+                // OutgoingTell (0x04) echo and AdminTell paths.
+                // Sender is parsed from the wasm-formatted line
+                // ("X tells you, \"Y\"") because the protocol-level
+                // event carries it as sender_name but lib.rs folds
+                // it into stringPayload before publishing. The
+                // non-greedy `.+?` handles multi-word names.
+                if ((evt.u32Payload >>> 0) === 0x03) {
+                  const m = text.match(/^(.+?) tells you, "/);
+                  if (m) window.__chatLastIncomingTellSender = m[1];
+                }
                 appendChatLine(
                   text,
                   typeof category === "number" ? category : 0,

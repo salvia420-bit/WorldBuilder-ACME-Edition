@@ -14,24 +14,34 @@ fn parse_option_value(raw: &str) -> Option<bool> {
     }
 }
 
-fn parse_targeted_chat_command<'a>(
+/// Retail-strict comma parser for the /tell verb family. Mirrors
+/// acclient.c:417984-418036 (DoTell): the first comma terminates the
+/// target name, the rest is the message. Names like "The Buffing Bunny"
+/// are unambiguous because retail blocks commas in character names at
+/// creation.
+///
+/// Returns:
+///   `Some(Ok((target, msg)))` — comma found, both halves non-empty
+///   `Some(Err(()))`           — verb matched but no comma / empty halves
+///   `None`                    — verb didn't match (caller should fall through)
+fn parse_comma_targeted_command<'a>(
     command: &'a str,
     aliases: &[&str],
-) -> Option<(&'a str, &'a str)> {
+) -> Option<Result<(&'a str, &'a str), ()>> {
     let (verb, rest) = command.split_once(char::is_whitespace)?;
     if !aliases.contains(&verb) {
         return None;
     }
-
     let rest = rest.trim_start();
-    let (target, message) = rest.split_once(char::is_whitespace)?;
-    let message = message.trim_start();
-
+    let Some((target, message)) = rest.split_once(',') else {
+        return Some(Err(()));
+    };
+    let target = target.trim();
+    let message = message.trim();
     if target.is_empty() || message.is_empty() {
-        return None;
+        return Some(Err(()));
     }
-
-    Some((target, message))
+    Some(Ok((target, message)))
 }
 
 fn parse_message_only_command<'a>(command: &'a str, aliases: &[&str]) -> Option<&'a str> {
@@ -623,25 +633,68 @@ impl GameState {
             return result.with_redraw(true);
         }
 
-        if let Some((target, message)) = parse_targeted_chat_command(command, &["/tell", "/t"]) {
+        // Retail had five tell aliases all dispatched to DoTell
+        // (acclient.c:428178-428288): tell/t/send/whisper/w.
+        const TELL_ALIASES: &[&str] = &["/tell", "/t", "/send", "/whisper", "/w"];
+        match parse_comma_targeted_command(command, TELL_ALIASES) {
+            Some(Ok((target, message))) => {
+                self.chat.last_outgoing_tell_target = Some(target.to_string());
+                result.commands.push(ClientCommand::Tell {
+                    target: target.to_string(),
+                    message: message.to_string(),
+                });
+                result.merge(self.finish_input_command_submission(command));
+                return result.with_redraw(true);
+            }
+            Some(Err(())) => {
+                self.chat.log(
+                    ChatMessageTags::warning(),
+                    "Use comma after the name for targeted chat.".to_string(),
+                );
+                result.merge(self.finish_input_command_submission(command));
+                return result.with_redraw(true);
+            }
+            None => {}
+        }
+
+        if matches!(
+            command,
+            "/tell" | "/t" | "/send" | "/whisper" | "/w"
+        ) {
+            self.log_command_usage("Usage: /tell <NAME>, <MSG>");
+            return result.with_redraw(true);
+        }
+
+        if let Some(message) = parse_message_only_command(command, &["/reply", "/r", "/rp"]) {
+            let Some(target) = self.chat.last_incoming_tell_sender.clone() else {
+                self.chat.log(
+                    ChatMessageTags::warning(),
+                    "No incoming tell to reply to yet.".to_string(),
+                );
+                return result.with_redraw(true);
+            };
+
+            self.chat.last_outgoing_tell_target = Some(target.clone());
             result.commands.push(ClientCommand::Tell {
-                target: target.to_string(),
+                target,
                 message: message.to_string(),
             });
             result.merge(self.finish_input_command_submission(command));
             return result.with_redraw(true);
         }
 
-        if command == "/tell" || command == "/t" {
-            self.log_command_usage("Usage: /tell <NAME> <MSG>");
+        if matches!(command, "/reply" | "/r" | "/rp") {
+            self.log_command_usage("Usage: /reply <MSG>");
             return result.with_redraw(true);
         }
 
-        if let Some(message) = parse_message_only_command(command, &["/reply", "/r"]) {
-            let Some(target) = self.chat.last_incoming_tell_sender.clone() else {
+        // Retell to last outgoing target. acclient.c:417862-417890
+        // (gmCCommunicationSystem::GetLastTelleeName).
+        if let Some(message) = parse_message_only_command(command, &["/retell", "/rt"]) {
+            let Some(target) = self.chat.last_outgoing_tell_target.clone() else {
                 self.chat.log(
                     ChatMessageTags::warning(),
-                    "No incoming tell to reply to yet.".to_string(),
+                    "You haven't sent a tell yet.".to_string(),
                 );
                 return result.with_redraw(true);
             };
@@ -654,8 +707,24 @@ impl GameState {
             return result.with_redraw(true);
         }
 
-        if command == "/reply" || command == "/r" {
-            self.log_command_usage("Usage: /reply <MSG>");
+        if matches!(command, "/retell" | "/rt") {
+            self.log_command_usage("Usage: /retell <MSG>");
+            return result.with_redraw(true);
+        }
+
+        // Local speech aliases. Without this branch, `/say hi` falls
+        // into the catch-all Talk arm and ACE shouts back the literal
+        // string "/say hi" (ACE doesn't parse `/`-prefixes server-side).
+        if let Some(message) = parse_message_only_command(command, &["/say", "/s"]) {
+            result
+                .commands
+                .push(ClientCommand::Talk(message.to_string()));
+            result.merge(self.finish_input_command_submission(command));
+            return result.with_redraw(true);
+        }
+
+        if matches!(command, "/say" | "/s") {
+            self.log_command_usage("Usage: /say <MSG>");
             return result.with_redraw(true);
         }
 
