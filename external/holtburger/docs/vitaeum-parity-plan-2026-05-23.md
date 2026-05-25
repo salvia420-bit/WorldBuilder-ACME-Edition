@@ -555,3 +555,57 @@ Remaining open follow-ons:
 - Other 48 Font records (chat-window, scrolling battle text,
   spell-effect labels) — `fetch_font(id)` works for any of them.
 - Full-world bake scope-up: 13×13 → 255×255.
+
+## Retail keystroke defaults wired through KeyMap (2026-05-24, later)
+
+Closes the deferred Controls-tab "(default)" column work. The
+`action-map-finding-2026-05-24.md` doc reached a "won't-do"
+conclusion because retail defaults seemed to live nowhere
+extractable; the next-day discovery (memory note
+`project_retail_keymap_discovery_2026-05-24.md`) found them in
+DAT type 0x14 (`MasterInputMap`) — two records, the canonical one
+being `0x14000000` ("gmDefaultMap", 2391 bytes, 133 mappings).
+
+Steps that landed:
+
+1. `keymap.rs` parser already shipped pre-push; this push added the
+   `unpack(&[u8])` helper for caller-pattern parity with Font /
+   StringTable / ActionMap and renamed the `unknown` u32 field to
+   `action_hash` (DRW labels it "Unknown" but it's the ActionMap
+   inner-dict key; 114-hit/0-miss cross-check confirms it).
+2. Standalone dump example
+   `apps/holtburger-tools/examples/keymap_dump.rs` +
+   `keymap_actionmap_xcheck.rs` validator example.
+3. Wasm export `fetch_key_map(id) → JSON` mirrors
+   `fetch_action_map` shape; emitted as a flat `mappings[]` array.
+   `DEFAULT_KEYMAP_ID` (0x14000000) added to
+   `BOOT_ESSENTIAL_PORTAL_IDS` for next re-bake.
+4. JS resolver in `apps/holtburger-web/ui/keymap.js`:
+   `DIK_TO_KEYBOARD_EVENT_CODE` static table (103 entries),
+   `qualifiedControlToBinding(mapping, devices)` decode helper,
+   `loadRetailKeyMap(id=0x14000000)` async/cached loader returning
+   `{raw, byActionHash, byCategoryAction}`,
+   `lookupRetailDefault(inputMap, actionHash)` sync join-key
+   accessor.
+5. `plugins/options-panel.js` Retail Actions section calls
+   `lookupRetailDefault` per (category, actionHash) and passes
+   the resulting binding to `buildBindingRow`'s third arg.
+   `buildBindingRow` extended to accept object-form bindings
+   (modifier-aware) in addition to the original string-code form
+   used by local actions.
+6. `index.html` eager-imports `loadRetailKeyMap` after the
+   ActionMap load so the Controls tab opens with defaults
+   pre-populated.
+
+JS-side smoke test (offline against the real `gmDefaultMap`
+bytes via `keymap_emit_json` and the resolver running in Node):
+131 keyboard mappings decoded cleanly, 2 mouse-button bindings
+correctly filtered out, 0 unmapped DIK scan codes, 112 unique
+action hashes (the multi-bind action delta — `W` + `ArrowUp` both
+"Move Forward" etc.).
+
+Addendum at the bottom of `action-map-finding-2026-05-24.md`
+reverses the doc's "won't-do" conclusion with the full
+explanation + a list of carried-forward limitations
+(mouse-only quirks filtered out, alt-bindings collapsed to
+primary, two non-canonical modifier bits ignored).

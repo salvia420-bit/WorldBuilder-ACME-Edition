@@ -31,7 +31,15 @@
 //!   QualifiedControl (16 bytes):
 //!     ControlSpecification key            (8 bytes)
 //!     u32                  activation
-//!     u32                  unknown
+//!     u32                  action_hash    (DRW calls this `Unknown`; it
+//!                                          is the ActionMap inner-dict
+//!                                          key — confirmed empirically:
+//!                                          KeyMap.input_maps[cat]
+//!                                            .mappings[i].action_hash
+//!                                          ==
+//!                                          ActionMap.input_maps[cat]
+//!                                            .keys()
+//!                                          for every cat/i in retail.)
 //!
 //!   CInputMap:
 //!     u32                          num_mappings
@@ -70,7 +78,10 @@ pub struct ControlSpecification {
 pub struct QualifiedControl {
     pub key: ControlSpecification,
     pub activation: u32,
-    pub unknown: u32,
+    /// DRW labels this `Unknown`; empirically it is the ActionMap
+    /// inner-dict key (the action this binding fires) — see the
+    /// header comment for the parity check.
+    pub action_hash: u32,
 }
 
 #[binrw::binread]
@@ -91,6 +102,14 @@ pub struct KeyMap {
     pub devices: Vec<DeviceKeyMapEntry>,
     pub meta_keys: Vec<ControlSpecification>,
     pub input_maps: HashMap<u32, CInputMap>,
+}
+
+impl KeyMap {
+    /// Parse from raw bytes. Mirrors Font/Texture/ActionMap unpack.
+    pub fn unpack(data: &[u8]) -> binrw::BinResult<Self> {
+        let mut cursor = binrw::io::Cursor::new(data);
+        Self::read_le(&mut cursor)
+    }
 }
 
 impl BinRead for KeyMap {

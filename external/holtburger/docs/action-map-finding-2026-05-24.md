@@ -136,3 +136,124 @@ The note in the Controls tab now reads:
   - `action_map.bin` — 12,303-byte DAT record
   - `string_table.bin` — 60,500-byte StringTable 0x23000005
   - `analyze.rs` — copy of the script for reference
+
+## Addendum (2026-05-24, later that day) — actually they ARE in the DAT
+
+The "won't-do" conclusion above is **wrong**. Retail's factory-default
+keystroke bindings live in `client_portal.dat` after all — as **DAT
+type 0x14** (`DB_TYPE_KEYMAP` / DRW's `MasterInputMap`), two records:
+
+- `0x14000000` — 2391 bytes, name = `"gmDefaultMap"`. **The factory
+  default keymap.** 14 input_map categories, 133 mappings.
+- `0x14000002` — 1005 bytes, name = `"DefaultMap"`. Alt/secondary
+  map.
+
+ACE doesn't parse this type (server doesn't dispatch keystrokes) which
+is why the search missed it. DRW has the schema. The wire format:
+
+```
+MasterInputMap:
+  u32 id
+  PString<u8> name
+  u8[16] guid_map
+  u32 num_devices + [DeviceKeyMapEntry; n]   // DeviceType + DI guid
+  u32 num_meta_keys + [ControlSpecification; n]
+  u32 num_input_maps + Dictionary<u32, CInputMap>
+
+QualifiedControl (16 bytes):
+  ControlSpecification key       // 2 × u32: key (DIK + dev) + modifier
+  u32                  activation
+  u32                  action_hash // DRW calls this `Unknown` — it is
+                                   // actually the ActionMap inner-dict
+                                   // key. Cross-checked 114-hit/0-miss
+                                   // against gmDefaultMap.
+```
+
+The `key` u32 decomposes as `(idxDevice | eSubControl | ofsKey)`:
+the low byte indexes into `devices[]`, the high u16 is the
+DirectInput scan code (`DIK_*`). `modifier` is a bitfield —
+`0x80000000`=shift, `0x40000000`=ctrl, `0x20000000`=alt,
+`0x10000000`=meta — matching the modifier-bit assignments declared
+in `meta_keys[]`.
+
+The wrong-path investigation in this doc happened to also reveal
+that the `action_hash` field (which DRW labels "Unknown") is the
+linking field — 114-hit/0-miss cross-check verified that every
+KeyMap mapping's `action_hash` matches an ActionMap entry's inner-dict
+key in the same `input_map` category. That's the join.
+
+**What we shipped to close this:**
+
+- Rust parser at `crates/holtburger-dat/src/file_type/keymap.rs`
+  (already existed; only the `unknown` → `action_hash` rename + the
+  `unpack()` helper were added in this push).
+- Standalone dump example
+  `apps/holtburger-tools/examples/keymap_dump.rs` and the cross-check
+  validator `keymap_actionmap_xcheck.rs`.
+- Wasm export `fetch_key_map(id) → JSON` in
+  `apps/holtburger-web/src/lib.rs`. Bundled into `window.__hbWasm`.
+- JS resolver in `apps/holtburger-web/ui/keymap.js`:
+  - `DIK_TO_KEYBOARD_EVENT_CODE` static table (103 entries — the
+    full retail keyboard subset).
+  - `qualifiedControlToBinding(mapping, devices)` decodes one
+    wire mapping into `{code, shift, ctrl, alt, meta}` shape.
+  - `loadRetailKeyMap(id=0x14000000)` is async + cached, returns
+    `{raw, byActionHash, byCategoryAction}`. Boots in parallel
+    with the ActionMap chain in `index.html`.
+  - `lookupRetailDefault(inputMap, actionHash)` is the sync
+    join-key lookup the Controls tab uses.
+- `apps/holtburger-tools/src/dat_shard.rs` adds `0x14000000` to
+  `BOOT_ESSENTIAL_PORTAL_IDS` so the next re-bake lands the
+  keymap in `boot.hba` (until then it lazy-fetches over HTTP).
+- The note in the Controls tab now reads:
+
+  > Click Bind, press a key (Esc to cancel). Local actions below
+  > route through live JS handlers. Retail actions are grouped by
+  > their ActionMap category and show their factory-default key
+  > (from KeyMap 0x14000000 / gmDefaultMap).
+
+- The Retail Actions section now shows the `(default)` column,
+  populated from `gmDefaultMap`.
+
+**Limitations carried forward from the won't-do conclusion:**
+
+- The two mouse-turn quirks (`m_dwKey = 524545 / 524801`) ARE in
+  the KeyMap data — they're mouse bindings filtered out at the
+  `device_type != 1` boundary in `qualifiedControlToBinding`. The
+  Controls tab is keyboard-only by design.
+- Alt-bindings (multiple keys → same action, e.g. `W` and
+  `ArrowUp` both moving forward) are visible in the `byActionHash`
+  map but only the *primary* (modifier-less or first) is shown
+  in the row. The capture flow still rebinds to a single key.
+  Extending to N-bindings-per-row is a future UI enhancement.
+- The `0x08000000` / `0x04000000` modifier bits used by two of
+  `gmDefaultMap`'s `meta_keys` entries (mapping the `Tab` and
+  `Q` keys as user-extensible meta slots) are NOT surfaced as
+  KeyboardEvent modifiers — only the four canonical
+  shift/ctrl/alt/meta bits are.
+
+## Reference screenshot
+
+`docs/keymap-controls-tab-2026-05-24.png` — Options → Controls
+tab showing retail defaults populated. Local Actions section ends
+with Escape / Delete, then the Retail Actions section opens with
+the MOVEMENT category: `Autorun → Q (default)`, `Crouch → H
+(default)`, etc.
+
+## Verification
+
+End-to-end (Playwright + headless chromium with autoLogin against
+local ACE on the same box):
+
+- `bootState`: in-world
+- `__hbWasm.fetch_key_map`: present
+- `loadRetailKeyMap()`: returns `{raw, byActionHash, byCategoryAction}`
+- `gmDefaultMap` (0x14000000): parsed, 133 mappings → 131 keyboard
+  bindings + 2 mouse skipped + 0 unmapped DIK codes
+- Controls tab in-DOM: 122 `(default)` markers rendered (11 local
+  + 111 retail-action defaults from the 112-row
+  `byCategoryAction` map minus a couple of dedup'd alt categories)
+- Sample retail rows visible in the DOM scrape: "Autorun → Q",
+  "Crouch → H", "Move Forward → W", "Strafe Left → A", etc.
+
+Verifier source: `/mnt/wbterminal1/tmp/claude-scratch/keymap/verify_keymap_e2e.cjs`

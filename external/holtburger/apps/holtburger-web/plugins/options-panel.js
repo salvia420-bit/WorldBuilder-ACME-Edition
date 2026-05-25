@@ -49,6 +49,9 @@ import {
   setBinding,
   clearBinding,
   formatBinding,
+  loadRetailKeyMap,
+  getRetailKeyMap,
+  lookupRetailDefault,
 } from "../ui/keymap.js";
 
 const VIEW_STYLE_ID = "hb-options-view-style";
@@ -335,8 +338,18 @@ function startCapture(labelHashHex, refresh) {
 
 // Build one row in the keybinding table. Used for both the local
 // (functional) actions and the read-only retail-ActionMap rows.
-// `defaultCode` is shown when no user override exists.
-function buildBindingRow(labelHashHex, label, defaultCode, bindings, refresh) {
+// `defaultBinding` is what's shown when no user override exists. It
+// accepts:
+//   - a string (KeyboardEvent.code, e.g. "Digit1") — for local actions
+//     that ship hard-coded defaults;
+//   - a {code, shift, ctrl, alt, meta} object — for retail-KeyMap
+//     defaults that may carry modifiers;
+//   - null — for retail actions with no default in the loaded KeyMap.
+function buildBindingRow(labelHashHex, label, defaultBinding, bindings, refresh) {
+  const defaultBindingObj = (typeof defaultBinding === "string")
+    ? { code: defaultBinding, shift: false, ctrl: false, alt: false, meta: false }
+    : defaultBinding;
+
   const row = document.createElement("div");
   row.style.display = "flex";
   row.style.alignItems = "center";
@@ -355,8 +368,8 @@ function buildBindingRow(labelHashHex, label, defaultCode, bindings, refresh) {
   k.style.opacity = "0.85";
   const inCapture = captureFor === labelHashHex;
   const userBinding = bindings[labelHashHex];
-  const effectiveBinding = userBinding ?? (defaultCode ? { code: defaultCode } : null);
-  const isDefault = !userBinding && !!defaultCode;
+  const effectiveBinding = userBinding ?? defaultBindingObj;
+  const isDefault = !userBinding && !!defaultBindingObj;
   const text = inCapture
     ? "Press a key… (Esc=cancel)"
     : (effectiveBinding ? formatBinding(effectiveBinding) + (isDefault ? " (default)" : "") : "—");
@@ -401,7 +414,7 @@ function renderControlsTab(bodyEl) {
   const note = document.createElement("div");
   note.style.marginBottom = "8px";
   note.style.opacity = "0.75";
-  setAcText(note, "Click Bind, press a key (Esc to cancel). Local actions below route through live JS handlers. Retail actions are grouped by their ActionMap category — the DAT carries action labels but NOT retail's keystroke defaults (those live in acclient.c's startup BindAction calls).");
+  setAcText(note, "Click Bind, press a key (Esc to cancel). Local actions below route through live JS handlers. Retail actions are grouped by their ActionMap category and show their factory-default key (from KeyMap 0x14000000 / gmDefaultMap).");
   bodyEl.appendChild(note);
 
   const bindings = getKeybindings();
@@ -428,13 +441,12 @@ function renderControlsTab(bodyEl) {
   }
 
   // Retail ActionMap actions — grouped by inputMap category. Each entry
-  // in __acKeybindings carries an `inputMap` field — the outer u32 dict
-  // key from ActionMap 0x26000000. That value is NOT a keystroke (it's
-  // an ActionMap category index per AC's CMasterInputMap); retail's
-  // actual keystroke defaults are hardcoded in acclient.c's startup
-  // BindAction() calls and would need a separate RE pass to extract.
-  // We group by category so users see Movement / Camera / Magic /
-  // Emotes / Panels / etc. clusters instead of a sorted alpha mush.
+  // in __acKeybindings carries an `inputMap` field (ActionMap outer-dict
+  // key — categories like Movement / Camera / Magic). Defaults for each
+  // action come from the retail KeyMap (gmDefaultMap, DAT 0x14000000),
+  // joined by (inputMap, actionHash) — the action_hash field in KeyMap
+  // mappings matches ActionMap's inner-dict key 114-hit / 0-miss across
+  // gmDefaultMap (see external/holtburger/docs/keymap_actionmap_xcheck).
   const retailHeader = document.createElement("div");
   retailHeader.className = "hb-opt-section";
   setAcText(retailHeader, "Retail Actions (grouped by ActionMap category)");
@@ -456,14 +468,25 @@ function renderControlsTab(bodyEl) {
     return;
   }
 
-  // Group by (inputMap category) → Map<labelHash, label>. Deduping by
-  // labelHash inside each category collapses alt-bindings into one row.
+  // Kick off retail KeyMap load if it hasn't started yet. Defaults are
+  // shown only when the load completes — re-render once loaded so users
+  // who open the tab during the (~1s) wasm fetch see the "(default)" col
+  // appear without manual refresh.
+  if (!getRetailKeyMap()) {
+    loadRetailKeyMap().then((km) => { if (km) refresh(); }).catch(() => {});
+  }
+
+  // Group by (inputMap category) → Map<labelHash, {label, actionHash}>.
+  // Deduping by labelHash collapses alt-bindings into one row; we keep
+  // the first actionHash seen so KeyMap lookup has a join key.
   const byCategory = new Map();
   for (const a of actions) {
     if (!a.label) continue;
     let group = byCategory.get(a.inputMap);
     if (!group) { group = new Map(); byCategory.set(a.inputMap, group); }
-    if (!group.has(a.labelHash)) group.set(a.labelHash, a.label);
+    if (!group.has(a.labelHash)) {
+      group.set(a.labelHash, { label: a.label, actionHash: a.actionHash });
+    }
   }
 
   // Stable category ordering: numerically by inputMap (0x000000xx first
@@ -487,10 +510,11 @@ function renderControlsTab(bodyEl) {
     setAcText(catHeader, `${catName} — ${group.size}`, { color: "#6acaca" });
     list.appendChild(catHeader);
 
-    const sortedActions = [...group.entries()].sort(([, a], [, b]) => a.localeCompare(b));
-    for (const [hash, label] of sortedActions) {
-      const hashHex = `0x${hash.toString(16).toUpperCase().padStart(8, "0")}`;
-      list.appendChild(buildBindingRow(hashHex, label, null, bindings, refresh));
+    const sortedActions = [...group.entries()].sort(([, a], [, b]) => a.label.localeCompare(b.label));
+    for (const [labelHash, info] of sortedActions) {
+      const hashHex = `0x${labelHash.toString(16).toUpperCase().padStart(8, "0")}`;
+      const retailDefault = lookupRetailDefault(inputMap, info.actionHash);
+      list.appendChild(buildBindingRow(hashHex, info.label, retailDefault, bindings, refresh));
     }
   }
 }

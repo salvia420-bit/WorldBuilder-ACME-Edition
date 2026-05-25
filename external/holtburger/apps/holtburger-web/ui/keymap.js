@@ -160,6 +160,207 @@ export function resolveLocalBinding(labelHashHex, defaultCode) {
   return { code: defaultCode, shift: false, ctrl: false, alt: false, meta: false };
 }
 
+// ---------------------------------------------------------------------
+// Retail KeyMap (DAT type 0x14) resolver — loads gmDefaultMap and
+// exposes a Map<actionHash, [{inputMap, code, shift, ctrl, alt, meta}]>
+// so the Controls tab can show retail's factory defaults.
+//
+// The KeyMap parser confirmed (114-hit / 0-miss vs ActionMap) that
+// `QualifiedControl.action_hash` matches the ActionMap inner-dict key
+// in the same input_map category — that's the link tying a binding
+// to a retail action.
+//
+// `key` u32 layout (idxDevice | eSubControl | ofsKey):
+//   bits  0-7  : index into devices[]  — keyboard if devices[idx].type == 1
+//   bits  8-15 : eSubControl byte      — mouse button index for mice
+//   bits 16-31 : ofsKey u16            — DirectInput scan code (DIK_*)
+//
+// `modifier` u32 bitfield (per gmDefaultMap.meta_keys):
+//   0x80000000 = shift
+//   0x40000000 = ctrl
+//   0x20000000 = alt
+//   0x10000000 = meta (Windows key)
+//   0x08000000 / 0x04000000 — gmDefaultMap reserves these for two
+//                            user-extensible meta slots (TAB / Q in
+//                            the retail record) but options-panel
+//                            doesn't surface them; ignored here.
+
+/**
+ * DirectInput keyboard scan code (`DIK_*`) → `KeyboardEvent.code`.
+ *
+ * Sparse; entries beyond this set fall back to the raw hex offset.
+ * Sourced by reading retail's gmDefaultMap mappings against
+ * `acclient.h` `dinput.h` enum constants.
+ */
+export const DIK_TO_KEYBOARD_EVENT_CODE = Object.freeze({
+  0x01: "Escape",
+  0x02: "Digit1", 0x03: "Digit2", 0x04: "Digit3", 0x05: "Digit4",
+  0x06: "Digit5", 0x07: "Digit6", 0x08: "Digit7", 0x09: "Digit8",
+  0x0A: "Digit9", 0x0B: "Digit0",
+  0x0C: "Minus", 0x0D: "Equal", 0x0E: "Backspace", 0x0F: "Tab",
+  0x10: "KeyQ", 0x11: "KeyW", 0x12: "KeyE", 0x13: "KeyR",
+  0x14: "KeyT", 0x15: "KeyY", 0x16: "KeyU", 0x17: "KeyI",
+  0x18: "KeyO", 0x19: "KeyP",
+  0x1A: "BracketLeft", 0x1B: "BracketRight", 0x1C: "Enter",
+  0x1D: "ControlLeft",
+  0x1E: "KeyA", 0x1F: "KeyS", 0x20: "KeyD", 0x21: "KeyF",
+  0x22: "KeyG", 0x23: "KeyH", 0x24: "KeyJ", 0x25: "KeyK",
+  0x26: "KeyL",
+  0x27: "Semicolon", 0x28: "Quote", 0x29: "Backquote",
+  0x2A: "ShiftLeft", 0x2B: "Backslash",
+  0x2C: "KeyZ", 0x2D: "KeyX", 0x2E: "KeyC", 0x2F: "KeyV",
+  0x30: "KeyB", 0x31: "KeyN", 0x32: "KeyM",
+  0x33: "Comma", 0x34: "Period", 0x35: "Slash",
+  0x36: "ShiftRight", 0x37: "NumpadMultiply",
+  0x38: "AltLeft", 0x39: "Space", 0x3A: "CapsLock",
+  0x3B: "F1", 0x3C: "F2", 0x3D: "F3", 0x3E: "F4", 0x3F: "F5",
+  0x40: "F6", 0x41: "F7", 0x42: "F8", 0x43: "F9", 0x44: "F10",
+  0x45: "NumLock", 0x46: "ScrollLock",
+  0x47: "Numpad7", 0x48: "Numpad8", 0x49: "Numpad9",
+  0x4A: "NumpadSubtract",
+  0x4B: "Numpad4", 0x4C: "Numpad5", 0x4D: "Numpad6",
+  0x4E: "NumpadAdd",
+  0x4F: "Numpad1", 0x50: "Numpad2", 0x51: "Numpad3",
+  0x52: "Numpad0", 0x53: "NumpadDecimal",
+  0x57: "F11", 0x58: "F12",
+  0x9C: "NumpadEnter", 0x9D: "ControlRight",
+  0xB5: "NumpadDivide", 0xB7: "PrintScreen", 0xB8: "AltRight",
+  0xC5: "Pause",
+  0xC7: "Home", 0xC8: "ArrowUp", 0xC9: "PageUp",
+  0xCB: "ArrowLeft", 0xCD: "ArrowRight",
+  0xCF: "End", 0xD0: "ArrowDown", 0xD1: "PageDown",
+  0xD2: "Insert", 0xD3: "Delete",
+  0xDB: "MetaLeft", 0xDC: "MetaRight",
+});
+
+/**
+ * Convert a wire-format QualifiedControl mapping to a binding shape.
+ *
+ * Returns `null` if the mapping is a mouse binding (the Controls tab
+ * only renders keyboard rebinds), or if `ofsKey` is outside the DIK
+ * lookup table (e.g. virtual / joystick records).
+ *
+ * @param {{key: number, modifier: number}} mapping
+ * @param {Array<{type: number}>} devices — KeyMap.devices[]
+ * @returns {null | {code: string, shift: boolean, ctrl: boolean, alt: boolean, meta: boolean}}
+ */
+export function qualifiedControlToBinding(mapping, devices) {
+  const idxDevice = mapping.key & 0xFF;
+  const dev = devices?.[idxDevice];
+  if (!dev || dev.type !== 1) return null; // 1 = Keyboard
+  const ofsKey = (mapping.key >>> 16) & 0xFFFF;
+  const code = DIK_TO_KEYBOARD_EVENT_CODE[ofsKey];
+  if (!code) return null;
+  return {
+    code,
+    shift: !!(mapping.modifier & 0x80000000),
+    ctrl:  !!(mapping.modifier & 0x40000000),
+    alt:   !!(mapping.modifier & 0x20000000),
+    meta:  !!(mapping.modifier & 0x10000000),
+  };
+}
+
+let retailKeyMapPromise = null;
+let retailKeyMapCache = null;
+
+/**
+ * Load + index the retail KeyMap (DAT type 0x14). Default record is
+ * `0x14000000` ("gmDefaultMap"), the factory binding set.
+ *
+ * Returns `{ raw, byActionHash, byCategoryAction }`:
+ *   - `raw` is the wasm JSON output verbatim.
+ *   - `byActionHash` is a Map<number, Array<binding>>; a single action
+ *      may have N bindings (W + UpArrow both move forward).
+ *   - `byCategoryAction` is a Map<string, binding-with-category> keyed
+ *      by `"<inputMap>:<actionHash>"`, holding the *primary* binding
+ *      for the Controls tab to show as the default. Primary = first
+ *      modifier-less keyboard binding, falling back to first overall.
+ *
+ * Wasm-bindgen accessor is `wasm.fetch_key_map(id)`; same lookup
+ * pattern as `loadActionMap()`.
+ *
+ * @param {number} [id=0x14000000]
+ * @returns {Promise<null | {raw: object, byActionHash: Map<number, Array>, byCategoryAction: Map<string, object>}>}
+ */
+export async function loadRetailKeyMap(id = 0x14000000) {
+  if (retailKeyMapCache) return retailKeyMapCache;
+  if (retailKeyMapPromise) return retailKeyMapPromise;
+  retailKeyMapPromise = (async () => {
+    const wasm = window.__hbWasm ?? window.__wasm ?? null;
+    if (!wasm?.fetch_key_map) {
+      retailKeyMapCache = null;
+      return null;
+    }
+    try {
+      const json = await wasm.fetch_key_map(id >>> 0);
+      const raw = json === "null" ? null : JSON.parse(json);
+      if (!raw) {
+        retailKeyMapCache = null;
+        return null;
+      }
+      const byActionHash = new Map();
+      for (const m of raw.mappings) {
+        const binding = qualifiedControlToBinding(m, raw.devices);
+        if (!binding) continue;
+        const enriched = { inputMap: m.input_map >>> 0, ...binding };
+        let arr = byActionHash.get(m.action_hash >>> 0);
+        if (!arr) { arr = []; byActionHash.set(m.action_hash >>> 0, arr); }
+        arr.push(enriched);
+      }
+      const byCategoryAction = new Map();
+      for (const [actionHash, bindings] of byActionHash) {
+        // Group bindings by inputMap (same action may have variants in
+        // multiple categories), then pick a primary per category.
+        const byCat = new Map();
+        for (const b of bindings) {
+          let arr = byCat.get(b.inputMap);
+          if (!arr) { arr = []; byCat.set(b.inputMap, arr); }
+          arr.push(b);
+        }
+        for (const [cat, arr] of byCat) {
+          const plain = arr.find((b) => !b.shift && !b.ctrl && !b.alt && !b.meta);
+          byCategoryAction.set(`${cat}:${actionHash}`, plain ?? arr[0]);
+        }
+      }
+      retailKeyMapCache = { raw, byActionHash, byCategoryAction };
+      try {
+        window.__diag?.input?.onRetailKeyMapLoaded?.({
+          id, mappings: raw.mappings.length, actions: byActionHash.size,
+        });
+      } catch (_) {}
+      return retailKeyMapCache;
+    } catch (err) {
+      console.warn(`[keymap] retail key map 0x${id.toString(16)} load failed:`, err);
+      retailKeyMapCache = null;
+      return null;
+    } finally {
+      retailKeyMapPromise = null;
+    }
+  })();
+  return retailKeyMapPromise;
+}
+
+/** Sync accessor — returns the resolved KeyMap if loaded, else null. */
+export function getRetailKeyMap() {
+  return retailKeyMapCache;
+}
+
+/**
+ * Look up the retail default binding for an action in a given input_map
+ * category. Returns `null` if the action is unbound by default
+ * (e.g. it's a category-only ActionMap stub like "Chat Mode → Enter")
+ * or if the KeyMap hasn't loaded yet.
+ *
+ * @param {number} inputMap — ActionMap outer-dict key.
+ * @param {number} actionHash — ActionMap inner-dict key.
+ * @returns {null | {code: string, shift: boolean, ctrl: boolean, alt: boolean, meta: boolean}}
+ */
+export function lookupRetailDefault(inputMap, actionHash) {
+  const km = retailKeyMapCache;
+  if (!km) return null;
+  return km.byCategoryAction.get(`${inputMap >>> 0}:${actionHash >>> 0}`) ?? null;
+}
+
 /**
  * Format a binding as a human-readable label. "—" if empty.
  * "Ctrl+Shift+F5" / "W" / "Escape" / "Num 7".

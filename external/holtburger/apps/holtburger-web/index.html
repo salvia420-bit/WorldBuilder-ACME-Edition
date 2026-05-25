@@ -895,6 +895,7 @@
         fetch_string_table,
         fetch_language_string,
         fetch_action_map,
+        fetch_key_map,
         fetch_combat_maneuver_table,
         fetch_palette_set,
         fetch_palette,
@@ -1312,6 +1313,7 @@
           fetch_string_table: (id) => fetch_string_table(id >>> 0),
           fetch_language_string: (id) => fetch_language_string(id >>> 0),
           fetch_action_map: (id) => fetch_action_map(id >>> 0),
+          fetch_key_map: (id) => fetch_key_map(id >>> 0),
           fetch_combat_maneuver_table: (id) => fetch_combat_maneuver_table(id >>> 0),
           fetch_palette_set: (id) => fetch_palette_set(id >>> 0),
           fetch_palette: (id) => fetch_palette(id >>> 0),
@@ -1413,6 +1415,17 @@
               // The options-panel Input tab reads from here.
               window.__acKeybindings = am.actions;
               console.log(`[ac-strings] action-map loaded: ${am.actions.length} actions`);
+              // Chain the retail KeyMap (gmDefaultMap, DAT 0x14000000)
+              // so the Controls tab shows retail's factory defaults
+              // when first opened. Fire-and-forget — failures land in
+              // console.warn from inside the resolver.
+              try {
+                const keymapMod = await import("./ui/keymap.js");
+                const km = await keymapMod.loadRetailKeyMap();
+                if (km) {
+                  console.log(`[keymap] retail key map loaded: ${km.byActionHash.size} actions, ${km.byCategoryAction.size} (category, action) defaults`);
+                }
+              } catch (_) {}
               // Cache retail LanguageString naming hints for the char-create
               // form. 0x31000019 = generic naming-screen intro; 0x31000011 =
               // Aluvian-male names (matches the hardcoded Aluvian/Male/

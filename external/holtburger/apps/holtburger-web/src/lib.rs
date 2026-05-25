@@ -5206,6 +5206,93 @@ pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
     Ok(out)
 }
 
+/// Fetch one KeyMap (DAT 0x14) — retail's factory-default keystroke
+/// bindings. The single record `0x14000000` ("gmDefaultMap") + the
+/// alt `0x14000002` ("DefaultMap") are the two records retail ships.
+///
+/// Returns JSON:
+/// ```json
+/// {
+///   "id": <u32>,
+///   "name": <string>,
+///   "devices": [{"type": <u8>}, ...],
+///   "meta_keys": [{"key": <u32>, "modifier": <u32>}, ...],
+///   "mappings": [
+///     {"input_map": <u32>, "key": <u32>, "modifier": <u32>,
+///      "activation": <u32>, "action_hash": <u32>},
+///     ...
+///   ]
+/// }
+/// ```
+///
+/// Per-mapping unpack (handled by the JS resolver in `ui/keymap.js`):
+/// `key` decomposes into `(idxDevice, eSubControl, ofsKey)` — the
+/// low byte is the device index into `devices[]`, the high u16 is the
+/// DirectInput scan code (DIK_*) for keyboard devices. `modifier`
+/// bitfield uses 0x80000000=shift, 0x40000000=ctrl, 0x20000000=alt,
+/// 0x10000000=meta. `action_hash` matches the ActionMap inner-dict
+/// key in the same `input_map` category (114-hit/0-miss cross-check
+/// against retail).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_key_map(map_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::KeyMap;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", map_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", map_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let km = match KeyMap::unpack(&bytes) {
+        Ok(k) => k,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let mut out = String::with_capacity(km.input_maps.values().map(|m| m.mappings.len()).sum::<usize>() * 96);
+    out.push_str("{\"id\":");
+    out.push_str(&km.id.to_string());
+    out.push_str(",\"name\":\"");
+    // Escape any quote/backslash in name — retail names are ASCII
+    // ("gmDefaultMap" / "DefaultMap") so this just guards a future drift.
+    for ch in km.name.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push_str("\",\"devices\":[");
+    let mut first = true;
+    for d in &km.devices {
+        if !first { out.push(','); }
+        first = false;
+        out.push_str(&format!("{{\"type\":{}}}", d.device_type));
+    }
+    out.push_str("],\"meta_keys\":[");
+    first = true;
+    for mk in &km.meta_keys {
+        if !first { out.push(','); }
+        first = false;
+        out.push_str(&format!("{{\"key\":{},\"modifier\":{}}}", mk.key, mk.modifier));
+    }
+    out.push_str("],\"mappings\":[");
+    first = true;
+    for (input_map_key, cinput) in &km.input_maps {
+        for m in &cinput.mappings {
+            if !first { out.push(','); }
+            first = false;
+            out.push_str(&format!(
+                "{{\"input_map\":{},\"key\":{},\"modifier\":{},\"activation\":{},\"action_hash\":{}}}",
+                input_map_key, m.key.key, m.key.modifier, m.activation, m.action_hash,
+            ));
+        }
+    }
+    out.push_str("]}");
+    Ok(out)
+}
+
 /// Fetch one CombatManeuverTable (DAT 0x30) — the (stance, height,
 /// type) → motion_command lookup the combat plugin needs to replace
 /// its `setSwingPose` vibe-pose placeholder with a real motion.

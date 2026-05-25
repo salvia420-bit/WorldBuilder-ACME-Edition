@@ -83,6 +83,9 @@ pub const BOOT_ESSENTIAL_PORTAL_IDS: &[u32] = &[
     UI_FONT_ID,
     UI_FONT_ATLAS_FG_ID,
     UI_FONT_ATLAS_BG_ID,
+    // gmDefaultMap — retail keystroke defaults (Controls tab in
+    // options-panel resolves QualifiedControl bindings from this).
+    DEFAULT_KEYMAP_ID,
 ];
 
 /// Standard 16×16-cell UI Font record (1050 glyphs starting at U+0020).
@@ -92,6 +95,9 @@ pub const UI_FONT_ID: u32 = 0x40000000;
 pub const UI_FONT_ATLAS_FG_ID: u32 = 0x06005EE5;
 /// Background (drop-shadow / fill) Texture referenced by [`UI_FONT_ID`].
 pub const UI_FONT_ATLAS_BG_ID: u32 = 0x06005EE6;
+/// "gmDefaultMap" — retail factory-default keystroke bindings,
+/// referenced by the Controls tab in the options panel.
+pub const DEFAULT_KEYMAP_ID: u32 = 0x14000000;
 
 /// Caller-supplied dat-shard options. Mirrors the CLI argv shape.
 #[derive(Debug, Clone)]
