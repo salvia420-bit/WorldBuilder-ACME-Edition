@@ -17,13 +17,51 @@
 // events for vitae level, burden %, link RTT, etc.) are follow-on.
 
 import { setAcText } from "../ui/ac_font.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 
 const OVERLAY_ID = "hb-status-indicators";
 const WIDTH = 150;
 const HEIGHT = 30;
 const ICON_SIZE = 20;
 
-// 6 indicators with (active, inactive) sprite pairs.
+/** gmFloatyIndicatorsUI — retail layout 0x21000071 (150×30, 23 children).
+ *  Element-id map confirmed by status_indicators_layout_dump 2026-05-24
+ *  + acclient.c GetUIElementType() returns:
+ *    0x10000610 — root (150×30)
+ *    chrome (16 elements, read_order 1-16) — 4 corner pieces + 4 edges
+ *      in 2 variants (frame fill type=3 + frame border type=2). Not
+ *      addressable from JS — purely decorative 9-slice frame; we
+ *      already render the frame via CSS border-image.
+ *    indicator slots (7 elements, read_order 17-23, all 20×20 at y=5):
+ *      0x100000F8 x=5   type=268435459 (LinkStatus, 6 states)
+ *      0x100000F5 x=25  type=268435458 (Effects, 3 states) — buffs
+ *      0x100000F6 x=45  type=268435458 (Effects, 3 states) — debuffs
+ *      0x100000F4 x=65  type=268435462 (Vitae, 3 states)
+ *      0x100000F7 x=85  type=268435457 (Burden, 5 states)
+ *      0x100000F3 x=105 type=268435460 (MiniGame, 3 states)
+ *      0x100000FA x=125 type=0 (generic 2-state) — likely PortalStorm
+ *
+ *  acclient.h class hierarchy for the 6 retail indicator subtypes:
+ *    gmUIElement_BurdenIndicator      268435457 (0x10000001)
+ *    gmUIElement_EffectsIndicator     268435458 (0x10000002) ×2
+ *    gmUIElement_LinkStatusIndicator  268435459 (0x10000003)
+ *    gmUIElement_MiniGameIndicator    268435460 (0x10000004)
+ *    gmUIElement_PortalStormIndicator 268435461 (0x10000005)
+ *    gmUIElement_VitaeIndicator       268435462 (0x10000006)
+ */
+const STATUS_INDICATORS_LAYOUT_ID = 0x21000071;
+const STATUS_ELEMS = {
+  linkstatus:  0x100000F8,
+  buffs:       0x100000F5,
+  debuffs:     0x100000F6,
+  vitae:       0x100000F4,
+  burden:      0x100000F7,
+  minigame:    0x100000F3,
+  portalstorm: 0x100000FA,
+};
+
+// 7 indicators with (active, inactive) sprite pairs, ordered LEFT→RIGHT
+// to match retail layout 0x21000071 read_order.
 //
 // PR-JJ 2026-05-23 corrections: two prior-agent mislabels were caught
 // by visual sprite inspection (blue/red starburst pair):
@@ -36,16 +74,23 @@ const ICON_SIZE = 20;
 // indicators' active state from `handle.playerEnchantments()` and
 // owns click-to-toggle of the active-spells strip.
 //
-// The previous "Effects" slot (0x060074A0/A1) is re-purposed as
-// `linkup` / Activity (generic connection-state dot) — its real retail
-// meaning is TBD; it's not the effects indicator, that's `buffs`.
+// PR-LL 2026-05-24: layout wiring + retail-correct slot order. Added
+// `minigame` and `portalstorm` slots (real retail subclasses); dropped
+// the prior speculative `linkup` slot whose sprite (0x060074A0/A1) had
+// no retail UIElementType backing. Order now matches retail read_order
+// 17→23 — left-to-right: linkstatus, buffs, debuffs, vitae, burden,
+// minigame, portalstorm. Sprite DIDs for the new minigame/portalstorm
+// slots are placeholders (re-using the linkup pair) until extracted
+// from retail StateDesc — show/hide logic stays no-op until real game
+// events land.
 const INDICATORS = [
-  { id: "burden",     name: "Burden",          active: "0x06007498", inactive: "0x06007498" },
-  { id: "buffs",      name: "Beneficial Spells", active: "0x0600749C", inactive: "0x0600749D" },
-  { id: "debuffs",    name: "Harmful Spells",  active: "0x0600749E", inactive: "0x0600749F" },
-  { id: "linkstatus", name: "Link Status",     active: "0x06004CE8", inactive: "0x06004CE8" },
-  { id: "linkup",     name: "Activity",        active: "0x060074A0", inactive: "0x060074A1" },
-  { id: "vitae",      name: "Vitae",           active: "0x06007499", inactive: "0x060074A4" },
+  { id: "linkstatus",  name: "Link Status",       active: "0x06004CE8", inactive: "0x06004CE8" },
+  { id: "buffs",       name: "Beneficial Spells", active: "0x0600749C", inactive: "0x0600749D" },
+  { id: "debuffs",     name: "Harmful Spells",    active: "0x0600749E", inactive: "0x0600749F" },
+  { id: "vitae",       name: "Vitae",             active: "0x06007499", inactive: "0x060074A4" },
+  { id: "burden",      name: "Burden",            active: "0x06007498", inactive: "0x06007498" },
+  { id: "minigame",    name: "Mini-Game",         active: "0x060074A0", inactive: "0x060074A1" },
+  { id: "portalstorm", name: "Portal Storm",      active: "0x060074A0", inactive: "0x060074A1" },
 ];
 
 let stylesInjected = false;
@@ -63,19 +108,31 @@ function ensureStyles() {
       width: ${WIDTH}px;
       height: ${HEIGHT}px;
       box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      gap: 2px;
-      padding: 4px 6px;
+      /* Indicators are absolute-positioned per gmFloatyIndicatorsUI
+         0x21000071. Layout-driven coords replace the prior flexbox
+         + gap auto-flow once applyStatusIndicatorsLayout resolves.
+         Frame chrome is rendered by the ::before pseudo (below) so
+         absolute children's coordinates match retail layout 1:1
+         (a child top of 5px lands at retail (5,5) — INSIDE the 5px
+         brass frame). Putting the chrome on the parent's border
+         property would shift absolute children inward by the border
+         width. */
       pointer-events: none;
       font-family: var(--hb-font-serif);
+      box-shadow: var(--hb-shadow-panel);
+    }
+    #${OVERLAY_ID}::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
       background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
       border: 5px solid transparent;
       border-image: url("./sprites/acsprites/panel.png") 5 / 5px / 0 stretch;
-      box-shadow: var(--hb-shadow-panel);
+      box-sizing: border-box;
     }
     #${OVERLAY_ID} .hb-indicator {
-      position: relative;
+      position: absolute;
       width: ${ICON_SIZE}px;
       height: ${ICON_SIZE}px;
       background-repeat: no-repeat;
@@ -129,6 +186,44 @@ export const manifest = {
   description: "Top-left status icons (gmFloatyIndicatorsUI 0x21000071)",
 };
 
+// Apply gmFloatyIndicatorsUI 0x21000071 layout to each indicator slot.
+// status-indicators mounts during early boot via mountBar() — eor/local
+// shards may not be available yet, so we retry every 2s up to 8 times
+// (~16s total) before giving up. Same pattern as radar.js.
+function applyStatusIndicatorsLayout(refs, attempt = 0) {
+  const apply = (layout) => {
+    if (!layout) {
+      if (attempt < 8) {
+        setTimeout(() => applyStatusIndicatorsLayout(refs, attempt + 1), 2000);
+      }
+      return;
+    }
+    let applied = 0;
+    for (const [id, el] of Object.entries(refs)) {
+      if (!el) continue;
+      const elemId = STATUS_ELEMS[id];
+      if (!elemId) continue;
+      const desc = findElementById(layout, elemId);
+      if (!desc) continue;
+      // Explicit "none" override — the CSS rule sets `position:
+      // absolute` only; there's no centering translate to compete with,
+      // but stay defensive in case future tweaks add one.
+      el.style.transform = "none";
+      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
+      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
+      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
+      applied += 1;
+    }
+    try {
+      window.__diag?.layout?.onStatusIndicatorsApplied?.({ applied });
+    } catch (_) {}
+  };
+  const cached = getCachedLayout(STATUS_INDICATORS_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(STATUS_INDICATORS_LAYOUT_ID).then(apply).catch(() => {});
+}
+
 export function mount(_ctx) {
   ensureStyles();
   const existing = document.getElementById(OVERLAY_ID);
@@ -137,6 +232,7 @@ export function mount(_ctx) {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
 
+  const indicatorEls = {};
   for (const ind of INDICATORS) {
     const el = document.createElement("div");
     el.className = "hb-indicator";
@@ -160,9 +256,15 @@ export function mount(_ctx) {
       });
     }
     overlay.appendChild(el);
+    indicatorEls[ind.id] = el;
   }
 
   document.body.appendChild(overlay);
+
+  // Apply retail layout positions for sub-elements. mountBar() runs
+  // BEFORE wasm is ready, so applyStatusIndicatorsLayout has an 8 × 2s
+  // retry loop matching the radar plugin's pattern.
+  applyStatusIndicatorsLayout(indicatorEls);
 
   // Wire setActive(indicatorId, bool) onto window for ad-hoc toggling
   // until real player-event subscriptions land. Useful for debugging.
