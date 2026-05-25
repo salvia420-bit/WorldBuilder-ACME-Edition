@@ -394,6 +394,41 @@ have no portals) and for portals with vertices behind the camera
 near plane (conservatively skipped pending future near-plane
 polygon clip).
 
+**Phase 6 outdoor-exit filter shipped 2026-05-25**:
+
+- Symptom (user-observed on login): high-Z attic / roof cells in
+  Holtburg LB 0xA9B4 (`0xA9B40158`, `0xA9B40166`, `0xA9B4016B`, etc.)
+  appearing as "floating dungeons in the sky" at world Y ~193-197
+  — 100 m above the player's camera. They have cell-local Z=94 +
+  static-object meshes at +100 local (likely banner / chimney /
+  weather-vane props on top of Holtburg's tallest buildings).
+- Root cause: Phase 4 AABB-vs-frustum cull doesn't know about portal
+  topology. These cells have portals only to OTHER indoor cells
+  (no `0xFFFF` outdoor-exit sentinel), so in retail PView they'd
+  only render from inside the building looking up the stairwell.
+  Our union of PView with AABB-frustum kept them visible whenever
+  their AABB intersected the camera frustum.
+- Fix (commit forthcoming): `compute_visibility_with_frustum`
+  outdoor branch now requires each candidate EnvCell to have at
+  least one portal with `other_cell_id & 0xFFFF >= 0xFFFE` (the AC
+  outdoor-exit sentinel). The parallel snapshot-based path in
+  `getRenderSetWithFrustum` (lib.rs) builds the same per-cell
+  outdoor-exit lookup from `snap.cell_portal_polygons`. The filter
+  applies ONLY to the outdoor branch — indoor PVS visibility still
+  reaches attic / interior cells via the BFS-augmented
+  cell_portal_graph.
+- Validated by new wire-agent harness
+  `run-diag-no-floating-cottages.cjs` (registered with
+  `expectsPass: true`): from Holtburg town square, 0 cells visible
+  with first-mesh world Y > camY+50 (was multiple pre-fix). Total
+  visible cells dropped from 66 → 40, all ground-level cottages
+  with proper outdoor exits.
+- Unit-test coverage in
+  `crates/holtburger-world/src/spatial/tests.rs`: two new tests
+  cover (a) outdoor camera + attic cell + ground-floor cell ⇒ only
+  ground-floor visible, (b) indoor camera + attic neighbour ⇒
+  attic stays visible (filter doesn't fire).
+
 **Phase 5 polish shipped 2026-05-25**:
 
 - **Near-plane polygon clip** — closed in commit `a4e6cf04`.

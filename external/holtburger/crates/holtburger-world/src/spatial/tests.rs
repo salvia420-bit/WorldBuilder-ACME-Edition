@@ -1328,6 +1328,129 @@ mod cell_graph {
     }
 
     #[test]
+    fn compute_visibility_with_frustum_outdoor_filters_to_outdoor_exit_cells() {
+        // Phase 6 outdoor-exit filter: from outdoor (current cell not
+        // in cell_aabbs), only cells whose portal-graph contains the
+        // outdoor-exit sentinel (low-16 ≥ 0xFFFE) should be included
+        // in the visible set, even when all cells' AABBs intersect
+        // the camera frustum.
+        let mut scene = SpatialScene::new();
+        let lb_high = 0xA9B4_0000u32;
+        let outdoor_cell = lb_high | 0x0019; // outdoor LandCell, NOT in cell_aabbs
+        let exit_cell = lb_high | 0x0100; // ground-floor cottage with door
+        let attic_cell = lb_high | 0x0166; // upstairs attic, interior-only
+        let satellite_cell = lb_high | 0x017B; // no portals at all
+
+        // AABBs covering a tight region all in the camera frustum.
+        let bbox = Aabb::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 200.0));
+        scene.insert_cell_aabb(exit_cell, bbox);
+        scene.insert_cell_aabb(attic_cell, bbox);
+        scene.insert_cell_aabb(satellite_cell, bbox);
+
+        // Portal-graph topology:
+        //   exit_cell → outdoor sentinel (0xFFFF) — has outdoor exit
+        //   exit_cell → attic_cell — also has interior portal
+        //   attic_cell → exit_cell — only interior portal
+        //   satellite_cell: no entries
+        let outdoor_sentinel = lb_high | 0xFFFF;
+        scene.insert_cell_portal(exit_cell, outdoor_sentinel);
+        scene.insert_cell_portal(exit_cell, attic_cell);
+        scene.insert_cell_portal(attic_cell, exit_cell);
+
+        // Frustum that contains all three cells' AABBs (identity MVP
+        // collapses to a viewport-sized frustum; just construct one
+        // big enough explicitly via 6 planes facing inward).
+        let big = holtburger_common::Plane {
+            normal: Vector3::new(1.0, 0.0, 0.0),
+            d: 10_000.0,
+        };
+        let frustum = holtburger_common::Frustum::new([
+            big,
+            holtburger_common::Plane {
+                normal: Vector3::new(-1.0, 0.0, 0.0),
+                d: 10_000.0,
+            },
+            holtburger_common::Plane {
+                normal: Vector3::new(0.0, 1.0, 0.0),
+                d: 10_000.0,
+            },
+            holtburger_common::Plane {
+                normal: Vector3::new(0.0, -1.0, 0.0),
+                d: 10_000.0,
+            },
+            holtburger_common::Plane {
+                normal: Vector3::new(0.0, 0.0, 1.0),
+                d: 10_000.0,
+            },
+            holtburger_common::Plane {
+                normal: Vector3::new(0.0, 0.0, -1.0),
+                d: 10_000.0,
+            },
+        ]);
+
+        let visible = scene.compute_visibility_with_frustum(outdoor_cell, &frustum);
+
+        // Outdoor cell is always present in the set (caller anchor).
+        assert!(
+            visible.contains(&outdoor_cell),
+            "current cell must always be in visible set"
+        );
+        // exit_cell has outdoor exit → must be visible.
+        assert!(
+            visible.contains(&exit_cell),
+            "cell with 0xFFFF portal must render from outdoor camera"
+        );
+        // attic_cell has only interior portals → must be culled.
+        assert!(
+            !visible.contains(&attic_cell),
+            "interior-only cell (no outdoor exit) must be culled from outdoor camera"
+        );
+        // satellite_cell has no portal entries at all → must be culled.
+        assert!(
+            !visible.contains(&satellite_cell),
+            "cell with no portal entries must be culled from outdoor camera"
+        );
+    }
+
+    #[test]
+    fn compute_visibility_with_frustum_indoor_does_not_apply_outdoor_filter() {
+        // Phase 6 outdoor-exit filter must NOT trigger when the camera
+        // is inside an EnvCell — indoor visibility still uses BFS-1
+        // (with the visible_cells-augmented portal graph) and frustum-
+        // prunes that set. Interior cells without outdoor exits must
+        // remain visible from inside.
+        let mut scene = SpatialScene::new();
+        let lb_high = 0xA9B4_0000u32;
+        let cell_in = lb_high | 0x0100;
+        let cell_attic = lb_high | 0x0166;
+
+        let bbox = Aabb::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 10.0));
+        scene.insert_cell_aabb(cell_in, bbox);
+        scene.insert_cell_aabb(cell_attic, bbox);
+
+        scene.insert_cell_portal(cell_in, cell_attic);
+        scene.insert_cell_portal(cell_attic, cell_in);
+
+        // Same big frustum as above.
+        let big_planes = [
+            holtburger_common::Plane { normal: Vector3::new(1.0, 0.0, 0.0), d: 10_000.0 },
+            holtburger_common::Plane { normal: Vector3::new(-1.0, 0.0, 0.0), d: 10_000.0 },
+            holtburger_common::Plane { normal: Vector3::new(0.0, 1.0, 0.0), d: 10_000.0 },
+            holtburger_common::Plane { normal: Vector3::new(0.0, -1.0, 0.0), d: 10_000.0 },
+            holtburger_common::Plane { normal: Vector3::new(0.0, 0.0, 1.0), d: 10_000.0 },
+            holtburger_common::Plane { normal: Vector3::new(0.0, 0.0, -1.0), d: 10_000.0 },
+        ];
+        let frustum = holtburger_common::Frustum::new(big_planes);
+
+        let visible = scene.compute_visibility_with_frustum(cell_in, &frustum);
+        assert!(visible.contains(&cell_in), "current cell always visible");
+        assert!(
+            visible.contains(&cell_attic),
+            "interior-only neighbour must be visible from indoor camera"
+        );
+    }
+
+    #[test]
     fn stair_z_threshold_transitions_cell() {
         // Phase 6 step D: walking up stairs is just `current_cell`
         // changing as Z crosses the boundary between two Z-stacked

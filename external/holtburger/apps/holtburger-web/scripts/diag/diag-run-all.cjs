@@ -116,6 +116,24 @@ const HARNESSES = [
       "Wall-clock ~10 min (5 sessions × ~120s each).",
   },
   {
+    name: "no-floating-cottages",
+    script: "run-diag-no-floating-cottages.cjs",
+    surface: "SessionHandle.getRenderSetWithFrustum (outdoor-exit filter)",
+    methodDoc: "docs/cell-portal-method.md §Phase 6 outdoor-exit filter",
+    expectsPass: true,
+    notes:
+      "Validates the Phase 6 outdoor-exit filter (2026-05-25). " +
+      "From outdoor LandCells, compute_visibility_with_frustum now " +
+      "includes only EnvCells with at least one outdoor-exit portal " +
+      "(other_cell_id low-16 ≥ 0xFFFE). Interior-only chains (attic / " +
+      "roof / satellite-window cells) stay culled. After @telepoi " +
+      "Holtburg (camera at world Y ~94), asserts 0 visible cells have " +
+      "first-mesh world Y > camY+50 (i.e. nothing 'floating in the sky'). " +
+      "Pre-fix: cells 0xA9B40158, 0xA9B40166, 0xA9B4016B and similar " +
+      "rendered at Y 193-197 — the 'dungeons in the sky' the user saw " +
+      "on login. Post-fix: 40 visible cells (was 66), zero floating.",
+  },
+  {
     name: "zfighting-cottage",
     script: "run-diag-zfighting-cottage.cjs",
     surface: "atmospherePipeline.depthClearPass / cellsRenderPass",

@@ -14975,7 +14975,31 @@ impl SessionHandle {
             }
         } else {
             // Outdoor: iterate every loaded EnvCell AABB, frustum-cull.
+            //
+            // Phase 6 outdoor-exit filter (2026-05-25): only include
+            // EnvCells with at least one outdoor-exit portal
+            // (other_cell_id low-16 ≥ 0xFFFE — the AC outdoor sentinel).
+            // Interior-only chains (attic / roof / satellite-window
+            // cells) get culled here even though their AABB is in the
+            // frustum; retail PView from outdoor wouldn't reach them.
+            // Fixes the "floating dungeons in the sky" symptom over
+            // Holtburg town square (cells 0xA9B40158, 0xA9B40166,
+            // 0xA9B4016B etc. were appearing at world Y ~193-197).
+            //
+            // Build a (cell_id → has_outdoor_exit) lookup from the
+            // snapshot's portal-polygon list. A cell qualifies when
+            // ANY of its portals has other_cell_id with low-16 ≥ 0xFFFE.
+            let mut outdoor_exit_cells: std::collections::HashSet<u32> =
+                std::collections::HashSet::new();
+            for (from, to, _verts) in &snap.cell_portal_polygons {
+                if (*to & 0xFFFF) >= 0xFFFE {
+                    outdoor_exit_cells.insert(*from);
+                }
+            }
             for (cell_id, ext) in &snap.cell_aabbs {
+                if !outdoor_exit_cells.contains(cell_id) {
+                    continue;
+                }
                 let aabb = holtburger_common::Aabb::new(
                     holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
                     holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),

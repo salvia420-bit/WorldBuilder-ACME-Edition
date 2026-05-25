@@ -828,8 +828,40 @@ impl SpatialScene {
         } else {
             // Outdoor path: frustum-cull every loaded EnvCell AABB.
             // This is the LandCell↔EnvCell visibility bridge.
+            //
+            // Phase 6 outdoor-exit filter (2026-05-25): only include
+            // EnvCells whose portal records contain at least one
+            // outdoor-exit sentinel (`other_cell_id & 0xFFFF >= 0xFFFE`,
+            // typically 0xFFFF). Interior-only chains (upstairs cells,
+            // attics, satellite-window cells) reachable solely through
+            // indoor portals stay culled — retail PView from an outdoor
+            // camera wouldn't reach them either.
+            //
+            // Symptom this fixes: standing in Holtburg town square,
+            // high-Z attic / roof cells (e.g. 0xA9B40158, 0xA9B40166,
+            // 0xA9B4016B) appeared as "floating dungeons in the sky"
+            // because their AABBs intersected the camera frustum even
+            // though no portal-graph path from outdoor to those cells
+            // exists.
+            //
+            // A cell qualifies as having an outdoor exit when at least
+            // one neighbour in `cell_portal_graph` has low-16 bits
+            // ≥ 0xFFFE (the AC outdoor-exit sentinel). Cells with no
+            // entry in cell_portal_graph at all are excluded (they
+            // can't be reached by anything; renderer doesn't need them
+            // from outdoor).
             for (&cell, aabb) in &self.cell_aabbs {
-                if frustum.intersects_aabb(aabb) {
+                if !frustum.intersects_aabb(aabb) {
+                    continue;
+                }
+                let has_outdoor_exit = self
+                    .cell_portal_graph
+                    .get(&cell)
+                    .map(|edges| {
+                        edges.iter().any(|&n| (n & 0xFFFF) >= 0xFFFE)
+                    })
+                    .unwrap_or(false);
+                if has_outdoor_exit {
                     visible.insert(cell);
                 }
             }
