@@ -1364,7 +1364,13 @@
                   sessionStorage.setItem(RELOAD_KEY, "1");
                   console.log("[Phase 5.0] ?nosw=1 — unregistered SW + cleared caches; reloading once");
                   location.reload();
-                  return;
+                  // Halt the rest of init while the reload kicks in.
+                  // `return` is illegal at script top level; this
+                  // never-resolving promise (await is module-top-level
+                  // legal) keeps boot from continuing until the
+                  // navigation completes. The new page load starts
+                  // fresh.
+                  await new Promise(() => {});
                 }
                 console.log("[Phase 5.0] ?nosw=1 — SW already unregistered this session");
               } else {
