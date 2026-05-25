@@ -1420,11 +1420,17 @@
           // wasm-side cache short-circuit instead of repeating the
           // fetch+parse. Double-connect dance gets a free second
           // Connect.
-          prefetch_world_bootstrap()
-            .then(() => console.log("[boot] WorldBootstrap eagerly prefetched"))
-            .catch((e) =>
-              console.warn("[boot] eager WorldBootstrap prefetch failed:", e)
-            );
+          // Expose a Promise that resolves once WorldBootstrap is
+          // loaded. autoLogin awaits this BEFORE clicking Spawn so
+          // PlayerCreate lands on a ready WorldState (otherwise
+          // wasm prints "MovementSystem disabled this session" and
+          // WASD does nothing for the rest of the run).
+          window.__worldBootstrapReady = prefetch_world_bootstrap()
+            .then(() => { console.log("[boot] WorldBootstrap eagerly prefetched"); return true; })
+            .catch((e) => {
+              console.warn("[boot] eager WorldBootstrap prefetch failed:", e);
+              return false;
+            });
 
           // Kick off the canonical UI bitmap-font load — fire-and-forget.
           // Once it resolves, `renderAcText` / `<ac-text>` start producing
@@ -8851,6 +8857,25 @@ void main() {
                 `autoSpawn target "${autoSpawn}" not found (have: ${buttons.map((b) => b.parentElement?.dataset?.name).join(", ")})`,
               );
               return;
+            }
+            // Wait for WorldBootstrap before clicking spawn — otherwise
+            // PlayerCreate fires before WorldState is constructable, and
+            // wasm prints "MovementSystem disabled this session" with
+            // WASD permanently broken for the rest of the run. The
+            // prefetch was kicked off post-init; this `await` is usually
+            // a microtask (already resolved) but on a cold tunnel can be
+            // several seconds. Cap at the spawn timeout so a stuck
+            // prefetch surfaces as a normal autoSpawn timeout rather
+            // than hanging forever.
+            if (window.__worldBootstrapReady) {
+              const waitDeadline = Date.now() + Math.min(15000, spawnTimeoutMs);
+              const ready = await Promise.race([
+                window.__worldBootstrapReady,
+                new Promise((r) => setTimeout(() => r("timeout"), waitDeadline - Date.now())),
+              ]);
+              if (ready === "timeout") {
+                console.warn("[autoLogin] WorldBootstrap not loaded after 15s; spawning anyway (movement may be disabled)");
+              }
             }
             target.click();
             const spawnAttemptTs = Date.now();
