@@ -425,6 +425,9 @@ export class CameraSwitcher {
         let dragging = false;
         let lastX = 0;
         let lastY = 0;
+        let downX = 0;
+        let downY = 0;
+        let candidateGuid = null;
         const onContextMenu = (ev) => {
           ev.preventDefault();
           return false;
@@ -434,6 +437,13 @@ export class CameraSwitcher {
           dragging = true;
           lastX = ev.clientX;
           lastY = ev.clientY;
+          downX = ev.clientX;
+          downY = ev.clientY;
+          candidateGuid =
+            typeof window !== "undefined" &&
+            typeof window.__pickEntityAt === "function"
+              ? window.__pickEntityAt(ev.clientX, ev.clientY)
+              : null;
           ev.preventDefault();
         };
         const onMouseMove = (ev) => {
@@ -452,6 +462,20 @@ export class CameraSwitcher {
         const onMouseUp = (ev) => {
           if (ev.button !== 2) return;
           dragging = false;
+          const dx = ev.clientX - downX;
+          const dy = ev.clientY - downY;
+          // 5px² — small enough to not eat deliberate orbits
+          if (dx * dx + dy * dy < 25 && candidateGuid != null) {
+            if (
+              typeof window !== "undefined" &&
+              typeof window.__showExamineFor === "function"
+            ) {
+              try {
+                window.__showExamineFor(candidateGuid);
+              } catch (_) {}
+            }
+          }
+          candidateGuid = null;
         };
         this.domElement.addEventListener("contextmenu", onContextMenu);
         this.domElement.addEventListener("mousedown", onMouseDown);

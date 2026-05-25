@@ -1817,6 +1817,104 @@ export class EntityManager {
     };
   }
 
+  async setSwingMotion(guid, motionCmd) {
+    const g = guid >>> 0;
+    const inst = this.entityMap.get(g);
+    if (!inst) return;
+    const stance =
+      ((inst.currentStance ?? inst.lastStance ?? (typeof window !== "undefined" ? window.__getCurrentStanceLow?.() : 0)) ?? 0) >>> 0;
+    const setupId = (inst.meta?.modelId ?? inst.meta?.setupId ?? 0) >>> 0;
+    const mtableId = (inst.meta?.mtableId ?? 0) >>> 0;
+    const isHuman = inst.parts && inst.parts.length >= 16;
+    const result = classifyMotionCommandTyped(mtableId, stance, motionCmd >>> 0);
+    const canPlayReal =
+      isHuman &&
+      result &&
+      (result.kind === "swing" || result.kind === "cast") &&
+      (result.resolvedCommand >>> 0) !== 0 &&
+      result.source === "wasm-link";
+    const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+    if (!canPlayReal || typeof fetchKeyframes !== "function") {
+      this.setSwingPose(g);
+      return;
+    }
+    const resolvedCmd = result.resolvedCommand >>> 0;
+    let entry;
+    try {
+      entry = await this.animationCache.get(
+        setupId,
+        mtableId,
+        resolvedCmd,
+        stance,
+        fetchKeyframes,
+        {
+          modelChanges: inst.meta?.modelChanges ?? new Uint32Array(0),
+          textureChanges: inst.meta?.textureChanges ?? new Uint32Array(0),
+          paletteId: (inst.meta?.paletteId ?? 0) >>> 0,
+          paletteSubsFlat: inst.meta?.subPalettes ?? new Uint32Array(0),
+          fromMotion: READY_SUBSTATE,
+        },
+      );
+    } catch (_) {
+      this.setSwingPose(g);
+      return;
+    }
+    if (!this.entityMap.has(g)) return;
+    const clip = entry?.clip;
+    if (!clip) {
+      this.setSwingPose(g);
+      return;
+    }
+    const swingKey = `swing:${resolvedCmd.toString(16)}:${stance.toString(16)}`;
+    let action = inst.actions.get(swingKey);
+    if (!action) {
+      inst.evictOldestUnused?.();
+      action = inst.mixer.clipAction(clip);
+      inst.actions.set(swingKey, action);
+    }
+    inst.actionLastUsedMs.set(swingKey, performance.now());
+    if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
+      inst.hookTimelines.set(swingKey, entry.hooks);
+    }
+    inst.actionLastHookTime.set(swingKey, 0);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    action.enabled = true;
+    const dur = +result.durationSec;
+    if (Number.isFinite(dur) && dur > 0 && Number.isFinite(clip.duration) && clip.duration > 0) {
+      action.setEffectiveTimeScale(clip.duration / dur);
+    } else {
+      action.setEffectiveTimeScale(1.0);
+    }
+    action.setEffectiveWeight(1.0);
+    action.reset();
+    action.play();
+    const prior = inst.currentAction;
+    if (prior && prior !== action) {
+      try { action.crossFadeFrom(prior, 0.1, false); } catch (_) {}
+    }
+    inst._swingTween = null;
+    inst.currentAction = action;
+    inst.currentActionKey = swingKey;
+    if (inst._swingRestoreTimer) clearTimeout(inst._swingRestoreTimer);
+    const restoreDelayMs = Math.max(
+      80,
+      Math.round(((Number.isFinite(dur) && dur > 0) ? dur : (clip.duration || 0.4)) * 1000),
+    );
+    inst._swingRestoreTimer = setTimeout(() => {
+      inst._swingRestoreTimer = null;
+      if (!this.entityMap.has(g)) return;
+      if (inst.currentActionKey !== swingKey) return;
+      this.setMotion(g, CMD_LOW_READY, stance);
+    }, restoreDelayMs);
+    console.log(
+      "[entities/swingMotion] guid=0x" + g.toString(16) +
+      " cmd=0x" + (motionCmd >>> 0).toString(16) +
+      " anim=" + result.animId +
+      " dur=" + (Number.isFinite(dur) ? dur.toFixed(2) : "0.00") + "s",
+    );
+  }
+
   _tickSwingTween(inst, nowMs) {
     const tw = inst._swingTween;
     if (!tw) return;
