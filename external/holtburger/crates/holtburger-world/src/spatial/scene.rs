@@ -1448,28 +1448,123 @@ impl SpatialScene {
 // ------------------------------------------------------------------
 
 /// Project a 3D polygon through a column-major 4×4 MVP to NDC.
-/// Returns the 2D NDC vertices (x/w, y/w). Returns an empty vec if
-/// ANY vertex falls behind the near plane (w ≤ 0) — proper polygon
-/// clipping against the near plane is future polish; for now we
-/// conservatively skip such polygons.
+/// Returns the 2D NDC vertices (x/w, y/w).
+///
+/// Clips the polygon against the near plane in homogeneous clip
+/// space BEFORE perspective divide (Sutherland-Hodgman against the
+/// half-space `z + w >= 0`, the standard OpenGL/Three.js near
+/// plane). This handles polygons that straddle the camera near
+/// plane — vertices with `w <= 0` would otherwise produce
+/// degenerate divide-by-zero or sign-flipped NDC coordinates. After
+/// near-plane clipping every surviving vertex has `z + w >= 0`,
+/// guaranteeing `w > 0` for normal frustums so the perspective
+/// divide is safe.
+///
+/// Returns an empty vec if the polygon is fully behind the near
+/// plane (no vertices survive clipping).
+///
+/// 2026-05-25: replaces the earlier "skip if any vertex has
+/// w <= 1e-6" early-return that wholesale dropped portals when the
+/// camera was near a doorway — that was the Phase 5 PView "Known
+/// scope gap" #1 in `docs/cell-portal-method.md`.
 pub fn pview_project_polygon(
     verts: &[Vector3],
     mvp: &[f32; 16],
 ) -> Vec<[f32; 2]> {
-    let mut out = Vec::with_capacity(verts.len());
+    if verts.len() < 3 {
+        return Vec::new();
+    }
+    // Pass 1: lift each Vector3 to clip-space (x, y, z, w) via the
+    // column-major MVP. m[col*4 + row] convention.
+    let mut clip: Vec<[f32; 4]> = Vec::with_capacity(verts.len());
     for v in verts {
-        // Column-major matrix · column vector (x, y, z, 1).
-        // m[col*4 + row] convention.
         let x = mvp[0] * v.x + mvp[4] * v.y + mvp[8] * v.z + mvp[12];
         let y = mvp[1] * v.x + mvp[5] * v.y + mvp[9] * v.z + mvp[13];
-        let _z = mvp[2] * v.x + mvp[6] * v.y + mvp[10] * v.z + mvp[14];
+        let z = mvp[2] * v.x + mvp[6] * v.y + mvp[10] * v.z + mvp[14];
         let w = mvp[3] * v.x + mvp[7] * v.y + mvp[11] * v.z + mvp[15];
-        if w <= 1e-6 {
+        clip.push([x, y, z, w]);
+    }
+
+    // Pass 2: Sutherland-Hodgman clip against the near plane
+    // half-space `z + w >= 0`. For each edge prev→curr emit:
+    //   - both inside: curr
+    //   - prev outside, curr inside: intersection, then curr
+    //   - prev inside, curr outside: intersection
+    //   - both outside: nothing
+    // Intersection along the edge with parameter
+    //   t = (prev.z + prev.w) / ((prev.z + prev.w) - (curr.z + curr.w))
+    // applied componentwise on (x, y, z, w).
+    let clipped = pview_clip_against_near_plane(&clip);
+    if clipped.is_empty() {
+        return Vec::new();
+    }
+
+    // Pass 3: perspective divide. After near-plane clipping w > 0
+    // for any normal frustum (since z >= -w). Guard against
+    // pathological w == 0 anyway.
+    let mut out = Vec::with_capacity(clipped.len());
+    for c in &clipped {
+        let w = c[3];
+        if w.abs() < 1e-12 {
+            // Degenerate (camera origin coincides with vertex).
+            // Treat as behind-clip and bail.
             return Vec::new();
         }
-        out.push([x / w, y / w]);
+        out.push([c[0] / w, c[1] / w]);
     }
     out
+}
+
+/// Sutherland-Hodgman near-plane clip in homogeneous clip space.
+/// Treats `subject` as a polygon (any winding). Clips against the
+/// half-space `z + w >= 0` (OpenGL/Three.js near plane convention).
+/// Returns the clipped polygon's clip-space vertices or empty if
+/// the whole polygon is behind the near plane.
+fn pview_clip_against_near_plane(subject: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    let n = subject.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    let inside = |v: &[f32; 4]| -> bool { v[2] + v[3] >= 0.0 };
+    let intersect = |a: &[f32; 4], b: &[f32; 4]| -> [f32; 4] {
+        // a's signed distance to plane: a.z + a.w.
+        // Parameterize t along a→b where (1-t)*a + t*b lands on
+        // the plane.
+        let da = a[2] + a[3];
+        let db = b[2] + b[3];
+        let denom = da - db;
+        // If parallel (rare), fall back to a — caller logic stays
+        // consistent (we already know one side; intersection is
+        // numerically nearby).
+        let t = if denom.abs() < 1e-12 {
+            0.0
+        } else {
+            da / denom
+        };
+        [
+            a[0] + t * (b[0] - a[0]),
+            a[1] + t * (b[1] - a[1]),
+            a[2] + t * (b[2] - a[2]),
+            a[3] + t * (b[3] - a[3]),
+        ]
+    };
+
+    let mut output: Vec<[f32; 4]> = Vec::with_capacity(n + 2);
+    for i in 0..n {
+        let curr = subject[i];
+        let prev = subject[(i + n - 1) % n];
+        let curr_in = inside(&curr);
+        let prev_in = inside(&prev);
+        if curr_in {
+            if !prev_in {
+                output.push(intersect(&prev, &curr));
+            }
+            output.push(curr);
+        } else if prev_in {
+            output.push(intersect(&prev, &curr));
+        }
+    }
+    output
 }
 
 /// Sutherland-Hodgman polygon vs convex-polygon clip. Treats `clip`

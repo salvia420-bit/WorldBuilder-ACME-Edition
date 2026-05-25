@@ -64,6 +64,23 @@ const HARNESSES = [
       "(current cell at minimum), extra == 0 (no over-render outside PVS).",
   },
   {
+    name: "pview-near-portal",
+    script: "run-diag-pview-near-portal.cjs",
+    surface: "SessionHandle.getRenderSetWithPView",
+    methodDoc: "docs/cell-portal-method.md §Known scope gap",
+    expectsPass: true,
+    notes:
+      "Validates the Phase 5 near-plane clip fix (2026-05-25). " +
+      "pview_project_polygon now Sutherland-Hodgman-clips portal polygons " +
+      "against z + w >= 0 in clip space BEFORE perspective divide, so portals " +
+      "straddling the camera near plane survive instead of being wholesale " +
+      "dropped (pre-fix bug — see method doc §Known scope gap item #1). " +
+      "Inside cottage 0xA9B40100, the harness cycles the camera through 8 " +
+      "yaws and requires max pviewCount >= 2 across the sweep (at least one " +
+      "yaw must see through at least one portal — pre-fix this would " +
+      "consistently collapse to {current_cell}=1 at every angle).",
+  },
+  {
     name: "pview-depth-tuning",
     script: "run-diag-pview-depth-tuning.cjs",
     surface: "SessionHandle.getRenderSetWithPView(mvp, max_depth)",
@@ -77,6 +94,26 @@ const HARNESSES = [
       "getRenderSetWithPViewInstrumented sibling), and emits a Markdown " +
       "report with a PVIEW_MAX_DEPTH recommendation (keep 8 / raise to N+2 / " +
       "lower). Wall-clock ~6 min.",
+  },
+  {
+    name: "pview-vs-frustum-sweep",
+    script: "run-diag-pview-vs-frustum-sweep.cjs",
+    surface: "SessionHandle::getRenderSetWith{Frustum,PView}",
+    methodDoc: "docs/cell-portal-method.md (Phase 5 PView)",
+    expectsPass: true,
+    notes:
+      "OBSERVABILITY / MEASUREMENT harness (not a regression gate). " +
+      "Quantifies how much over-render raw Phase-5 PView would eliminate vs " +
+      "Phase-4 AABB-vs-frustum across 5 representative Holtburg poses × 8 " +
+      "camera yaws (40 samples): outdoor town square, three cottage " +
+      "interiors, Mite Maze entrance. Each location boots a fresh chromium " +
+      "session so the @teleloc lands cleanly (ACE empirically drops a " +
+      "second back-to-back teleport). Reports mean/min/max reduction overall, " +
+      "indoor-only (the headline number), and outdoor-only. PASS criterion " +
+      "is intentionally loose — indoor mean reduction > 0% — because this " +
+      "is a comparison harness, not a strict bound. Drops a raw.json + " +
+      "report.md under HOLTBURGER_DIAG_OUT/pview-vs-frustum-sweep-<TS>/. " +
+      "Wall-clock ~10 min (5 sessions × ~120s each).",
   },
   // Future:
   //   - clothing.cjs  → __diag.clothing

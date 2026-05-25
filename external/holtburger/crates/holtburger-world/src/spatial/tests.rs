@@ -1851,3 +1851,180 @@ mod cell_graph {
         );
     }
 }
+
+/// Phase 5 PView near-plane clip tests (2026-05-25).
+///
+/// Validates that `pview_project_polygon` clips portal polygons
+/// against the near plane in clip space BEFORE perspective divide,
+/// so that polygons straddling the camera produce correct NDC
+/// vertices instead of being wholesale dropped (the pre-fix
+/// "skip if any w <= ε" behaviour).
+mod pview_near_plane {
+    use super::*;
+
+    /// Build a column-major IDENTITY MVP. With `mvp[15] = 1.0` and
+    /// no perspective row, a vertex `(vx, vy, vz)` lifts to clip
+    /// space `(vx, vy, vz, 1)`. This lets tests work in clip-space
+    /// coords directly by choosing input vertex values, since w
+    /// will always be 1.
+    fn identity_mvp() -> [f32; 16] {
+        let mut m = [0.0f32; 16];
+        m[0] = 1.0;
+        m[5] = 1.0;
+        m[10] = 1.0;
+        m[15] = 1.0;
+        m
+    }
+
+    /// Polygon fully ahead of the near plane → projection should
+    /// equal the manual divide-by-w (which is just x/1, y/1 = (x, y)
+    /// under identity MVP).
+    #[test]
+    fn polygon_fully_ahead_projects_unchanged() {
+        // All three vertices have z = +0.5, so z + w = 1.5 >= 0 →
+        // fully inside. With identity MVP and w = 1, NDC = (x, y).
+        let verts = vec![
+            Vector3::new(0.2, 0.3, 0.5),
+            Vector3::new(0.4, 0.1, 0.5),
+            Vector3::new(0.3, 0.5, 0.5),
+        ];
+        let mvp = identity_mvp();
+        let out = pview_project_polygon(&verts, &mvp);
+        assert_eq!(out.len(), 3, "polygon fully ahead should preserve vertex count");
+        // Manual divide-by-w (w = 1): NDC == input xy.
+        for (proj, v) in out.iter().zip(verts.iter()) {
+            assert!(
+                (proj[0] - v.x).abs() < 1e-6 && (proj[1] - v.y).abs() < 1e-6,
+                "expected NDC ({}, {}), got ({}, {})",
+                v.x, v.y, proj[0], proj[1]
+            );
+        }
+    }
+
+    /// Polygon fully behind the near plane → no vertices survive
+    /// clipping, returns empty.
+    #[test]
+    fn polygon_fully_behind_returns_empty() {
+        // All verts at z = -10 with w = 1 → z + w = -9 < 0 → outside.
+        let verts = vec![
+            Vector3::new(0.0, 0.0, -10.0),
+            Vector3::new(1.0, 0.0, -10.0),
+            Vector3::new(0.0, 1.0, -10.0),
+        ];
+        let mvp = identity_mvp();
+        let out = pview_project_polygon(&verts, &mvp);
+        assert!(out.is_empty(), "fully-behind polygon should yield empty NDC list, got {:?}", out);
+    }
+
+    /// Polygon straddling the near plane → clipping produces a
+    /// new polygon with intersection vertices at the near plane.
+    /// All output vertices must be in normalized NDC range.
+    #[test]
+    fn polygon_straddling_near_plane_clips_to_valid_ndc() {
+        // One vertex behind (z = -2, w = 1 → z + w = -1 < 0), two
+        // ahead (z = +2, w = 1 → z + w = +3 >= 0). The clipped
+        // polygon should be a quad: the two surviving "ahead"
+        // vertices plus two intersection vertices on edges to the
+        // behind vertex.
+        let verts = vec![
+            Vector3::new(0.0, 0.0, -2.0), // behind
+            Vector3::new(1.0, 0.0, 2.0),  // ahead
+            Vector3::new(0.0, 1.0, 2.0),  // ahead
+        ];
+        let mvp = identity_mvp();
+        let out = pview_project_polygon(&verts, &mvp);
+        // Expected output is a quad: 2 originals + 2 intersections.
+        assert!(
+            out.len() == 3 || out.len() == 4,
+            "straddling triangle should yield 3 or 4 NDC verts, got {}: {:?}",
+            out.len(), out
+        );
+        // Every output vertex should be a finite, in-range NDC coord
+        // ([-1, 1]² for inputs that all sit in that range).
+        for p in &out {
+            assert!(p[0].is_finite() && p[1].is_finite(), "NDC coord not finite: {:?}", p);
+            assert!(
+                p[0] >= -1.0 - 1e-5 && p[0] <= 1.0 + 1e-5,
+                "NDC x out of [-1,1]: {}", p[0]
+            );
+            assert!(
+                p[1] >= -1.0 - 1e-5 && p[1] <= 1.0 + 1e-5,
+                "NDC y out of [-1,1]: {}", p[1]
+            );
+        }
+    }
+
+    /// Specific brief case: triangle with clip-space verts
+    /// (0, 0, -2, 1), (1, 0, 2, 1), (0, 1, 2, 1) — first behind
+    /// near plane, other two ahead. Under identity MVP the input
+    /// Vector3 values ARE the clip-space x/y/z (with w = 1).
+    ///
+    /// The clipper should:
+    ///   - drop the (0, 0, -2) vertex
+    ///   - keep (1, 0, 2) and (0, 1, 2)
+    ///   - inject two intersection vertices at t = 1/3 along each
+    ///     "behind→ahead" edge (where z + w = 0, i.e. z = -1)
+    ///
+    /// Edge v0→v1 ((0,0,-2,1)→(1,0,2,1)):
+    ///   t = (-2 + 1) / ((-2 + 1) - (2 + 1)) = -1 / -4 = 0.25
+    ///   intersection = (0.25, 0, -1.25, 1)
+    /// Edge v0→v2 ((0,0,-2,1)→(0,1,2,1)):
+    ///   t = -1 / -4 = 0.25
+    ///   intersection = (0, 0.25, -1.25, 1)
+    ///
+    /// Final NDC (divide by w=1): expect roughly four vertices in
+    /// the unit box.
+    #[test]
+    fn polygon_brief_case_one_behind_two_ahead() {
+        let verts = vec![
+            Vector3::new(0.0, 0.0, -2.0),
+            Vector3::new(1.0, 0.0, 2.0),
+            Vector3::new(0.0, 1.0, 2.0),
+        ];
+        let mvp = identity_mvp();
+        let out = pview_project_polygon(&verts, &mvp);
+        assert_eq!(
+            out.len(), 4,
+            "brief-case triangle should clip to a quad, got {}: {:?}",
+            out.len(), out
+        );
+        // All NDC verts in [-1, 1]².
+        for p in &out {
+            assert!(p[0].is_finite() && p[1].is_finite(), "non-finite NDC: {:?}", p);
+            assert!(
+                p[0] >= -1.0 - 1e-5 && p[0] <= 1.0 + 1e-5,
+                "NDC x out of range: {}", p[0]
+            );
+            assert!(
+                p[1] >= -1.0 - 1e-5 && p[1] <= 1.0 + 1e-5,
+                "NDC y out of range: {}", p[1]
+            );
+        }
+        // Specifically check that both ahead-vertices survived
+        // (NDC (1, 0) and (0, 1) under identity).
+        let has_v1 = out.iter().any(|p| (p[0] - 1.0).abs() < 1e-5 && p[1].abs() < 1e-5);
+        let has_v2 = out.iter().any(|p| p[0].abs() < 1e-5 && (p[1] - 1.0).abs() < 1e-5);
+        assert!(has_v1, "expected (1, 0) in NDC output, got {:?}", out);
+        assert!(has_v2, "expected (0, 1) in NDC output, got {:?}", out);
+        // And check the two intersection vertices landed at the
+        // expected coords (0.25, 0) and (0, 0.25).
+        let has_i1 = out.iter().any(|p| (p[0] - 0.25).abs() < 1e-5 && p[1].abs() < 1e-5);
+        let has_i2 = out.iter().any(|p| p[0].abs() < 1e-5 && (p[1] - 0.25).abs() < 1e-5);
+        assert!(has_i1, "expected near-plane intersection (0.25, 0) in NDC output, got {:?}", out);
+        assert!(has_i2, "expected near-plane intersection (0, 0.25) in NDC output, got {:?}", out);
+    }
+
+    /// Sanity-check that returning an empty vec for an under-sized
+    /// polygon is preserved.
+    #[test]
+    fn polygon_too_small_returns_empty() {
+        let mvp = identity_mvp();
+        assert!(pview_project_polygon(&[], &mvp).is_empty());
+        assert!(pview_project_polygon(&[Vector3::new(0.0, 0.0, 0.5)], &mvp).is_empty());
+        let two = vec![
+            Vector3::new(0.0, 0.0, 0.5),
+            Vector3::new(1.0, 0.0, 0.5),
+        ];
+        assert!(pview_project_polygon(&two, &mvp).is_empty());
+    }
+}

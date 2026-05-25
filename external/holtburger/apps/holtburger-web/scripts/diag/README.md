@@ -45,6 +45,8 @@ Per-run outputs land in `$HOLTBURGER_DIAG_OUT/`, defaulting to
 |---|---|---|---|
 | `run-diag-pvs-holtburg-cottage.cjs` | `__diag.pvs` | LandCell↔EnvCell edge gap (shortfall #3) | FAIL (`missing=17`) — DOC-GAP |
 | `run-diag-pvs-holtburg-cottage-inside.cjs` | `__diag.pvs` | Phase 3 visible_cells fix (commit `344d0b6d`) | PASS (17/17) — OK |
+| `run-diag-pview-vs-frustum-sweep.cjs` | `getRenderSetWith{Frustum,PView}` | Phase 5 over-render measurement (5 poses × 8 yaws, observability) | PASS (indoor mean reduction > 0%) — OK |
+| `run-diag-pview-near-portal.cjs` | `getRenderSetWithPView` | Phase 5 near-plane clip fix (2026-05-25) | PASS (`max pviewCount >= 2` across 8-yaw cycle) — OK |
 
 ## Aggregator semantics
 
