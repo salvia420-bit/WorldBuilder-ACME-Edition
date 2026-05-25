@@ -25,7 +25,7 @@
 //   0x100004A9 — fill marker    (varies; retail's "cursor" inside
 //                                the meter, x/w differs per bar)
 
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { applyLayoutRegions } from "../ui/ac_layout.js";
 
 const OVERLAY_ID = "hb-vitals-hud";
 
@@ -256,62 +256,39 @@ function renderVitals(overlay, vitals) {
 // 2s up to 8 times if `loadLayout` returns null. Render still works
 // from CSS defaults during the retry window — layout-driven sizing
 // only refines positions/dimensions.
-function applyVitalsLayout(refs, attempt = 0) {
-  const apply = (layout) => {
-    if (!layout) {
-      if (attempt < 8) {
-        setTimeout(() => applyVitalsLayout(refs, attempt + 1), 2000);
-      }
-      return;
+function applyVitalsLayout(refs) {
+  // Build the {element_id → DOM ref} map for applyLayoutRegions.
+  // Root sizes the overlay; per-vital rows size each HP/ST/MN strip.
+  const elemRefs = { [VITALS_ELEMS.root]: refs.overlay };
+  if (refs.rowsByType) {
+    for (const [type, entry] of refs.rowsByType) {
+      const elemId = VITAL_ELEM_BY_TYPE[type];
+      if (!elemId || !entry?.rowEl) continue;
+      elemRefs[elemId] = entry.rowEl;
     }
-    let applied = 0;
-    // Root frame — size the overlay to the retail dimensions.
-    const root = findElementById(layout, VITALS_ELEMS.root);
-    if (root && refs.overlay) {
-      // The overlay's screen anchor (top/left) is a Holtburger UX
-      // choice and is NOT touched by layout — only width/height.
-      if (typeof root.width === "number") {
-        refs.overlay.style.width = `${root.width}px`;
+  }
+  applyLayoutRegions(VITALS_LAYOUT_ID, elemRefs, {
+    // mountBar-early-mount (retry default).
+    beforeApplyEl: (el) => {
+      // Per-row absolute positioning so the layout-driven left/top
+      // wins over the overlay's flex-column flow. The row class is
+      // `hud-vital ${type}` (per addVitalRow), not `hud-vital-row`.
+      if (el.classList.contains("hud-vital")) {
+        el.style.position = "absolute";
       }
-      if (typeof root.height === "number") {
-        refs.overlay.style.height = `${root.height}px`;
-      }
-      applied += 1;
-    }
-    // Per-vital bar rows — explicit (left, top, width, height).
-    // Retail's gmFloatyVitalsUI uses absolute positioning inside the
-    // root (it's a fixed-layout panel, not a flexbox). Clear the
-    // overlay's `flex-direction: column` defaults won't fight us
-    // because position:absolute takes elements out of flow.
-    if (refs.rowsByType) {
-      for (const [type, entry] of refs.rowsByType) {
-        const elemId = VITAL_ELEM_BY_TYPE[type];
-        if (!elemId) continue;
-        const desc = findElementById(layout, elemId);
-        if (!desc || !entry?.rowEl) continue;
-        entry.rowEl.style.position = "absolute";
-        if (typeof desc.x === "number") entry.rowEl.style.left = `${desc.x}px`;
-        if (typeof desc.y === "number") entry.rowEl.style.top = `${desc.y}px`;
-        if (typeof desc.width === "number") entry.rowEl.style.width = `${desc.width}px`;
-        if (typeof desc.height === "number") entry.rowEl.style.height = `${desc.height}px`;
-        // The inner `.hud-vital-bar` needs to inherit the row width
-        // (its CSS default is a fixed 250px). Make it fill the row
-        // since the row is now retail-sized.
-        const barEl = entry.rowEl.querySelector(".hud-vital-bar");
-        if (barEl) {
-          barEl.style.width = "100%";
-          barEl.style.height = "100%";
+    },
+    afterApply: (_layout, applied) => {
+      // The inner .hud-vital-bar needs to fill its row (CSS default
+      // is fixed 250-px). Apply after rows have their new widths.
+      if (refs.rowsByType) {
+        for (const [, entry] of refs.rowsByType) {
+          const barEl = entry?.rowEl?.querySelector(".hud-vital-bar");
+          if (barEl) { barEl.style.width = "100%"; barEl.style.height = "100%"; }
         }
-        applied += 1;
       }
-    }
-    try {
-      window.__diag?.layout?.onVitalsApplied?.({ applied });
-    } catch (_) {}
-  };
-  const cached = getCachedLayout(VITALS_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(VITALS_LAYOUT_ID).then(apply).catch(() => {});
+      try { window.__diag?.layout?.onVitalsApplied?.({ applied }); } catch (_) {}
+    },
+  });
 }
 
 export const manifest = {

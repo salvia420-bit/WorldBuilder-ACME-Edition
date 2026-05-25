@@ -5215,7 +5215,8 @@ pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
 /// in `client_portal.dat` (namespace `eor/portal`). Both records
 /// must be available; if either is missing we return `null`.
 ///
-/// Returns JSON shape:
+/// Returns JSON shape (v2 — additive `states` field, all v1 fields
+/// preserved):
 /// ```json
 /// {
 ///   "id": <u32>,
@@ -5232,6 +5233,46 @@ pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
 ///       "z_level": <u32?>,
 ///       "left_edge": <u32>, "top_edge": <u32>,
 ///       "right_edge": <u32>, "bottom_edge": <u32>,
+///       "states": {
+///         // UIStateId → StateDesc; usually empty {}; populated for
+///         // multi-state elements (lock buttons, dropdowns, etc.):
+///         "<u32 state_id>": {
+///           "state_id": <u32>,
+///           "pass_to_children": <bool>,
+///           "incorporation_flags": <u32>,
+///           "properties": {
+///             // dict_key → BaseProperty variant
+///             "<u32>": { "Bool": <bool> } |
+///                      { "Integer": <i32> } |
+///                      { "Float": <f32> } |
+///                      { "Vector": {"x":..,"y":..,"z":..} } |
+///                      { "Color": {"b":..,"g":..,"r":..,"a":..} } |
+///                      { "Enum": <u32> } |
+///                      { "DataId": <u32> } |        // sprite, etc.
+///                      { "InstanceId": <u32> } |
+///                      { "Bitfield32": <u32> } |
+///                      { "Bitfield64": <u64> } |
+///                      { "StringInfo": {"token":..,"string_id":..,
+///                                       "table_id":..,
+///                                       "override_flag":..,
+///                                       "unknown1":..,"unknown2":..} } |
+///                      { "Array": [...] } |
+///                      { "Struct": {<u32>: ...} }
+///           },
+///           "media": [
+///             // MediaDesc variant — tagged by name
+///             { "Image": {"file":<u32>,"draw_mode":<u32>} } |
+///             { "Alpha": {"file":<u32>} } |
+///             { "Sound": {"file":<u32>,"sound":<u32>} } |
+///             { "Animation": {"duration":<f32>,"draw_mode":<u32>,
+///                             "frames":[<u32>,...]} } |
+///             { "Cursor":{...} } | { "Movie":{...} } |
+///             { "Jump":{...} } | { "Message":{...} } |
+///             { "Pause":{...} } | { "State":{...} } | { "Fade":{...} }
+///           ]
+///         },
+///         ...
+///       },
 ///       "children": [ ... same shape, recursive ... ]
 ///     },
 ///     ...
@@ -5239,10 +5280,10 @@ pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
 /// }
 /// ```
 ///
-/// StateDesc / BaseProperty / MediaDesc data is intentionally NOT
-/// included in v1 — the first consumers (paperdoll Y-coords) only
-/// need element geometry. Extend the serializer when a richer
-/// consumer materializes.
+/// States/properties/media land as the structured serde::Serialize
+/// form — discriminant-tagged enums (`{"DataId": 0x06000123}` etc.)
+/// so the JS side can switch on the variant name. Empty `states: {}`
+/// is the common case (most elements have no overrides).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
@@ -5300,6 +5341,19 @@ pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
         out.push_str(&el.right_edge.to_string());
         out.push_str(",\"bottom_edge\":");
         out.push_str(&el.bottom_edge.to_string());
+        // States (v2 additive): UIStateId → StateDesc tree. Each
+        // StateDesc carries property overrides (BaseProperty values
+        // keyed by MasterPropertyId — sprite DataIDs, colors, text-
+        // refs, behavior flags) + media triggers (background image
+        // DataIDs, animation frame sequences, sound IDs, etc.).
+        // Serialized via serde_json so the JS side gets the full
+        // typed BaseProperty / MediaDesc tree without losing the
+        // discriminant tags.
+        out.push_str(",\"states\":");
+        match serde_json::to_string(&el.states) {
+            Ok(s) => out.push_str(&s),
+            Err(_) => out.push_str("{}"),
+        }
         out.push_str(",\"children\":[");
         let mut first = true;
         for (ck, cv) in &el.children {

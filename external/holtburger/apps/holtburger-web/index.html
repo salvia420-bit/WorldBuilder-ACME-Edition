@@ -1428,6 +1428,48 @@
                   console.log(`[keymap] retail key map loaded: ${km.byActionHash.size} actions, ${km.byCategoryAction.size} (category, action) defaults`);
                 }
               } catch (_) {}
+              // Eager-prefetch hot LayoutDescs (G1 in the layout-port
+              // plan). Each loadLayout(id) populates ui/ac_layout.js's
+              // resolved-cache; by the time plugins mount, their layouts
+              // are sync cache-hits via getCachedLayout(). Drops the
+              // first-render wasm round-trip + eor/local prefetch race
+              // for each panel. Fire-and-forget — individual failures
+              // silently fall back to the per-plugin retry loops.
+              try {
+                const layoutMod = await import("./ui/ac_layout.js");
+                const hotLayouts = [
+                  // mountBar early-mount plugins (highest urgency)
+                  0x2100006E, // gmFloatyPanelUI (main-panel container)
+                  0x2100006C, // gmFloatyVitalsUI
+                  0x21000071, // gmFloatyIndicatorsUI (status-indicators)
+                  0x21000070, // gmFloatyToolbarUI (hotbar chrome)
+                  0x21000016, // gmToolbarUI (hotbar slots + target-bar)
+                  0x21000074, // gmRadarUI
+                  0x2100006F, // gmFloatyMainChatUI
+                  0x21000007, // gmCombatUI
+                  // User-opens-on-demand panels (cache before they open)
+                  0x21000023, // gmInventoryUI
+                  0x21000024, // gmPaperDollUI
+                  0x21000029, // gmConfigUI (options)
+                  0x21000032, // gmSpellbookUI
+                  0x21000026, // gmMapUI
+                  0x21000066, // gmJournalUI
+                  0x21000069, // gmContractsUI
+                  0x2100002F, // gmAllegianceUI
+                  0x21000030, // gmFellowshipUI
+                  0x2100001A, // gmCharacterInfoUI
+                  0x2100002C, // gmAttributeUI
+                  0x2100002D, // gmSkillUI
+                  0x2100005E, // gmCharacterTitleUI
+                  0x21000012, // gmVendorUI
+                  0x2100006B, // gmFloatyExaminationUI
+                ];
+                const loaded = await Promise.all(
+                  hotLayouts.map((id) => layoutMod.loadLayout(id).catch(() => null))
+                );
+                const ok = loaded.filter(Boolean).length;
+                console.log(`[ac-layout] eager prefetch: ${ok}/${hotLayouts.length} layouts cached`);
+              } catch (_) {}
               // Cache retail LanguageString naming hints for the char-create
               // form. 0x31000019 = generic naming-screen intro; 0x31000011 =
               // Aluvian-male names (matches the hardcoded Aluvian/Male/

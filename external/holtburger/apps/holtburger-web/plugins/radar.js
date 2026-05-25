@@ -15,7 +15,7 @@
 // counter-rotate so they stay upright relative to the screen.
 
 import { setAcText } from "../ui/ac_font.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { applyLayoutRegions } from "../ui/ac_layout.js";
 
 const OVERLAY_ID = "hb-radar";
 const WIDTH = 120;
@@ -191,65 +191,39 @@ export const manifest = {
 // so the rAF tick's per-cardinal rotation uses the cardinal's own
 // center as its origin (default `transform-origin: 50% 50%`) instead
 // of being chained onto the existing centering translate.
-function applyRadarLayout(refs, attempt = 0) {
-  const apply = (layout) => {
-    // Radar mounts during early boot; eor/local shards may not yet
-    // be available. Retry every 2s up to 8 times (~16s total) before
-    // giving up — by then boot has definitely reached in-world or
-    // hit a fatal asset error.
-    if (!layout) {
-      if (attempt < 8) {
-        setTimeout(() => applyRadarLayout(refs, attempt + 1), 2000);
-      }
-      return;
-    }
-    let applied = 0;
-    const pairs = [
-      [RADAR_ELEMS.disk,   refs.diskEl],
-      [RADAR_ELEMS.lock,   refs.lockEl],
-      [RADAR_ELEMS.move,   refs.moveEl],
-      [RADAR_ELEMS.n,      refs.cardinalEls?.n],
-      [RADAR_ELEMS.e,      refs.cardinalEls?.e],
-      [RADAR_ELEMS.s,      refs.cardinalEls?.s],
-      [RADAR_ELEMS.w,      refs.cardinalEls?.w],
-      [RADAR_ELEMS.coords, refs.coordsEl],
-    ];
-    for (const [id, el] of pairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      // Cardinals: clear the CSS centering anchors + reset the rAF
-      // tick's captured base transform so it picks up the new
-      // (empty) base after we wipe transform.
+function applyRadarLayout(refs) {
+  applyLayoutRegions(RADAR_LAYOUT_ID, {
+    [RADAR_ELEMS.disk]:   refs.diskEl,
+    [RADAR_ELEMS.lock]:   refs.lockEl,
+    [RADAR_ELEMS.move]:   refs.moveEl,
+    [RADAR_ELEMS.n]:      refs.cardinalEls?.n,
+    [RADAR_ELEMS.e]:      refs.cardinalEls?.e,
+    [RADAR_ELEMS.s]:      refs.cardinalEls?.s,
+    [RADAR_ELEMS.w]:      refs.cardinalEls?.w,
+    [RADAR_ELEMS.coords]: refs.coordsEl,
+  }, {
+    // mountBar early-mount: retry is on by default in applyLayoutRegions.
+    beforeApplyEl: (el) => {
+      // Cardinals: clear centering anchors + override transform to
+      // "none" so the rAF tick's per-cardinal counter-rotation works
+      // around the cardinal's own center (default transform-origin
+      // 50% 50%) instead of being chained onto the CSS translate(-50%).
       if (el.classList.contains("hb-radar-cardinal")) {
         el.style.right = "";
         el.style.bottom = "";
-        // Explicit "none" overrides the CSS centering translate
-        // (`translateX(-50%)` for N/S, `translateY(-50%)` for E/W).
-        // An empty string would let the CSS rule re-apply. The rAF
-        // tick captures dataset.baseTransform=="none" and special-
-        // cases it to "" before chaining rotate(heading).
         el.style.transform = "none";
         delete el.dataset.baseTransform;
       }
-      // Lock + move buttons: CSS uses `right: 4px` for the move handle.
-      // Clear right so explicit left wins.
+      // Lock + move buttons: CSS uses `right: 4px` for move; clear so
+      // explicit left wins.
       if (el === refs.lockEl || el === refs.moveEl) {
         el.style.right = "";
       }
-      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
-      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
-      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
-      applied += 1;
-    }
-    try {
-      window.__diag?.layout?.onRadarApplied?.({ applied });
-    } catch (_) {}
-  };
-  const cached = getCachedLayout(RADAR_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(RADAR_LAYOUT_ID).then(apply).catch(() => {});
+    },
+    afterApply: (_layout, applied) => {
+      try { window.__diag?.layout?.onRadarApplied?.({ applied }); } catch (_) {}
+    },
+  });
 }
 
 export function mount(_ctx) {

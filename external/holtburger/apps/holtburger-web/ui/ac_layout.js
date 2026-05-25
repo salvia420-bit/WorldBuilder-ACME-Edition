@@ -137,3 +137,185 @@ function countElements(elements) {
   }
   return n;
 }
+
+/**
+ * Shared apply-layout-regions helper — DRYs out the ~30 LOC of
+ * dispatch + retry + box-application that every plugin port
+ * (inventory/radar/chat/vendor/spellbook/character-info/etc.)
+ * replicates today.
+ *
+ * Usage:
+ *   import { applyLayoutRegions } from "../ui/ac_layout.js";
+ *   applyLayoutRegions(0x21000074, {
+ *     [RADAR_ELEMS.disk]:  diskEl,
+ *     [RADAR_ELEMS.lock]:  lockEl,
+ *     [RADAR_ELEMS.move]:  moveEl,
+ *     // ...
+ *   }, {
+ *     // optional — see `opts` below
+ *   });
+ *
+ * @param {number} layoutId — LayoutDesc DAT id (e.g. 0x21000074).
+ * @param {Record<number | string, Element>} refs — element_id (number
+ *        or hex string "0x10000619") → DOM element. Keys not present
+ *        in the layout are silently skipped (logged via diag).
+ * @param {object} [opts]
+ * @param {boolean} [opts.retry=true] — wrap in 8 × 2s retry loop for
+ *        plugins that mount before window.__hbWasm is populated
+ *        (mountBar early-mount path). Disable for user-initiated
+ *        showView() panels where wasm is guaranteed ready.
+ * @param {(layout: object, applied: number, missed: number) => void}
+ *        [opts.afterApply] — called after each apply pass; useful
+ *        for per-plugin diag emission or post-positioning hooks.
+ * @param {(el: Element, desc: object) => void} [opts.beforeApplyEl] —
+ *        called per-element before applyBox; useful for clearing CSS
+ *        `right`/`bottom` or special transforms (see radar
+ *        cardinals' `transform="none"` precedent).
+ * @param {{x: number, y: number}} [opts.parentOrigin] — translate
+ *        every element's (x, y) by (origin.x, origin.y). Useful when
+ *        the DOM keeps a child as a sibling of its retail parent
+ *        (e.g. inventory's burden bar lives inside paperdoll in
+ *        retail but is a sibling in our DOM; pass paperdollOrigin to
+ *        anchor correctly).
+ * @returns {void} — synchronous if layout is already cached;
+ *        otherwise fires async load + apply when resolved.
+ */
+export function applyLayoutRegions(layoutId, refs, opts = {}) {
+  const { retry = true, afterApply, beforeApplyEl, parentOrigin } = opts;
+  const ox = parentOrigin?.x ?? 0;
+  const oy = parentOrigin?.y ?? 0;
+  let attempt = 0;
+  const maxRetries = retry ? 8 : 0;
+
+  const doApply = (layout) => {
+    if (!layout) {
+      if (attempt < maxRetries) {
+        attempt += 1;
+        setTimeout(kickoff, 2000);
+      }
+      return;
+    }
+    let applied = 0;
+    let missed = 0;
+    for (const [idAny, el] of Object.entries(refs)) {
+      if (!el) continue;
+      // Object.entries coerces numeric keys (`[0x10000619]: el`) to
+      // their *decimal* string form ("268436505"), not hex. Number()
+      // round-trips that correctly AND still parses "0x..." hex
+      // strings — covers every caller pattern in the codebase.
+      const id = Number(idAny) >>> 0;
+      const desc = findElementById(layout, id);
+      if (!desc) { missed += 1; continue; }
+      if (typeof beforeApplyEl === "function") {
+        try { beforeApplyEl(el, desc); } catch (_) {}
+      }
+      if (typeof desc.x === "number") el.style.left = `${ox + desc.x}px`;
+      if (typeof desc.y === "number") el.style.top = `${oy + desc.y}px`;
+      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
+      applied += 1;
+    }
+    try {
+      window.__diag?.layout?.onRegionsApplied?.({ layoutId, applied, missed });
+    } catch (_) {}
+    if (typeof afterApply === "function") {
+      try { afterApply(layout, applied, missed); } catch (_) {}
+    }
+  };
+
+  const kickoff = () => {
+    const cached = getCachedLayout(layoutId);
+    if (cached) { doApply(cached); return; }
+    loadLayout(layoutId).then(doApply).catch(() => {});
+  };
+  kickoff();
+}
+
+// ---------------------------------------------------------------------
+// State / property / media helpers (v2 fetch_layout payload).
+//
+// Most elements have `states: {}` (no overrides). Multi-state elements
+// (lock buttons, dropdowns, frame-chrome with locked/unlocked variants)
+// carry a `<UIStateId>: StateDesc` map. StateDesc.properties is keyed
+// by MasterPropertyId; StateDesc.media is a list of MediaDesc variants
+// (Image / Alpha / Sound / Animation / etc.). BaseProperty variants
+// are discriminant-tagged: `{"DataId": 0x06000123}` etc.
+//
+// Common consumer patterns:
+//   - Lookup a background-image DataID for state `0`:
+//       getStateMediaByType(states["0"], "Image") → {file, draw_mode}
+//   - Lookup a color override:
+//       getStateProperty(state, MASTER_PROP_FG_COLOR) → {Color: {...}}
+//   - Lookup a sprite DataID:
+//       getStateProperty(state, MASTER_PROP_SPRITE) → {DataId: 0x06...}
+
+/**
+ * Get the state-overrides map (`UIStateId → StateDesc`) for an element.
+ * Returns an empty object if the element has no states. Keys are
+ * strings (JSON object property convention).
+ */
+export function getElementStates(element) {
+  return element?.states ?? {};
+}
+
+/**
+ * Look up a BaseProperty override by `dict_key` (typically the same
+ * as MasterPropertyId) in a StateDesc. Returns the wrapped variant
+ * object (e.g. `{ DataId: 0x06000123 }`) or null.
+ */
+export function getStateProperty(stateDesc, dictKey) {
+  if (!stateDesc?.properties) return null;
+  // Serde serializes HashMap<u32, ...> with stringified keys.
+  return stateDesc.properties[String(dictKey)]
+      ?? stateDesc.properties[dictKey]
+      ?? null;
+}
+
+/**
+ * Extract the *value* from a BaseProperty variant, no matter which
+ * discriminant. For scalar variants (Bool/Integer/Float/Enum/DataId/
+ * InstanceId/Bitfield32/Bitfield64), returns the raw value. For
+ * compound variants (Vector/Color/StringInfo/Array/Struct), returns
+ * the inner object/array. Returns `undefined` if the variant is
+ * unknown or the property is null.
+ */
+export function basePropertyValue(prop) {
+  if (!prop || typeof prop !== "object") return undefined;
+  for (const k of Object.keys(prop)) return prop[k]; // single-discriminant
+  return undefined;
+}
+
+/**
+ * Find the first MediaDesc of a given variant ("Image" / "Alpha" /
+ * "Sound" / "Animation" / "Cursor" / "Movie" / "Jump" / "Message" /
+ * "Pause" / "State" / "Fade") in a StateDesc. Returns the inner
+ * payload (e.g. `{file: 0x06..., draw_mode: 0}` for "Image") or null.
+ */
+export function getStateMediaByType(stateDesc, variantName) {
+  if (!stateDesc?.media || !Array.isArray(stateDesc.media)) return null;
+  for (const m of stateDesc.media) {
+    if (m && typeof m === "object" && m[variantName]) return m[variantName];
+  }
+  return null;
+}
+
+/**
+ * Variant of applyLayoutRegions that returns a Promise resolving
+ * when the first successful apply completes (or null on giveup).
+ * Useful for plugins that need to do something AFTER positions land.
+ */
+export async function applyLayoutRegionsAsync(layoutId, refs, opts = {}) {
+  // Re-implement as a thin wrapper that resolves at the right time.
+  return new Promise((resolve) => {
+    const wrappedOpts = {
+      ...opts,
+      afterApply: (layout, applied, missed) => {
+        if (typeof opts.afterApply === "function") {
+          try { opts.afterApply(layout, applied, missed); } catch (_) {}
+        }
+        resolve({ layout, applied, missed });
+      },
+    };
+    applyLayoutRegions(layoutId, refs, wrappedOpts);
+  });
+}
