@@ -3,19 +3,24 @@
 // with Pack on the right. The existing plugins/hotbar.js renders only
 // the bottom 9-slot row of gmToolbarUI; PR-KK adds the rest.
 //
-// Layout decoded via chorizite-dump-layout-tree on 0x21000016:
+// Layout decoded via target_bar_layout_dump (2026-05-24) — root
+// 0x10000191 is 300×122; panel-shortcut + action elements live inside:
 //   Row 1 (y=0,  h=27): 5 panel-shortcut buttons
-//     0x10000197 Allegiance Panel  (sprite 0x0600111F / 0x06001121)
-//     0x10000198 Spellbook Panel   (sprite 0x06001119 / 0x0600111B)
-//     0x10000199 Attributes Panel  (sprite 0x06001122 / 0x06001124)
-//     0x1000055A Map Panel         (sprite 0x060069AE / 0x060069AF)
-//     0x1000019A Options Panel     (sprite 0x06001116 / 0x06001118)
-//     + 4 combat-stance variants (0x10000192-195, sprites 0x06004CEC..F3)
+//     0x10000192-195 combat-stance variants (mutually exclusive,
+//                    each 55×58 at x=0, spans rows 1+2 — left edge)
+//     0x10000196 separator (55,0) 7×27
+//     0x10000197 Allegiance Panel  (55,0)  35×27  (sprite 0x0600111F / 0x06001121)
+//     0x10000198 Spellbook Panel   (85,0)  34×27  (sprite 0x06001119 / 0x0600111B)
+//     0x10000199 Attributes Panel  (115,0) 34×27  (sprite 0x06001122 / 0x06001124)
+//     0x1000055A Map Panel         (145,0) 34×27  (sprite 0x060069AE / 0x060069AF)
+//     0x1000019A Options Panel     (175,0) 34×27  (sprite 0x06001116 / 0x06001118)
+//     0x1000019B extra slot        (204,0) 34×27  (not wired; retail blank/holiday)
+//     0x1000019C separator         (236,0) 10×27
 //   Row 2 (y=27, h=31): action row
-//     0x1000019D Use Selected      (sprite 0x06001129 N / 0x0600112A P / 0x0600120E G)
-//     0x1000019E Target display    (140x31, sprite 0x06001126 frame + child icon/text)
-//     0x100001A5 Examine Selected  (sprite 0x06001127 N / 0x06001128 P)
-//   Right edge: 0x100001B1 Pack/Main-Pack 63x58 (sprite 0x06004CF7 N / 0x06004CF8 H)
+//     0x1000019D Use Selected      (55,27)  23×31  (sprite 0x06001129 N / 0x0600112A P / 0x0600120E G)
+//     0x1000019E Target display    (78,27)  140×31 (sprite 0x06001126 frame + child icon/text)
+//     0x100001A5 Examine Selected  (218,27) 22×31  (sprite 0x06001127 N / 0x06001128 P)
+//   Right edge: 0x100001B1 Pack/Main-Pack (238,0) 63×58 (sprite 0x06004CF7 N / 0x06004CF8 H)
 //
 // Wires per acclient.c:241593-241627 retail dispatch:
 //   - Use Selected (0x1000019D)         → ItemHolder::UseObject(selectedID)
@@ -37,6 +42,24 @@
 // the poll). Name resolved via the JS entity-store lookup.
 
 import { setAcText } from "../ui/ac_font.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+
+/** gmToolbarUI — retail layout that drives the target-bar middle rows.
+ *  Element-id map confirmed by target_bar_layout_dump 2026-05-24.
+ *  Positions are relative to the root 0x10000191 (300×122 panel). */
+const TARGET_BAR_LAYOUT_ID = 0x21000016;
+const TB_ELEMS = {
+  stance:     0x10000192, // 4 stance variants (192-195) all share (0,0) 55×58
+  allegiance: 0x10000197, //  (55, 0)  35×27
+  spellbook:  0x10000198, //  (85, 0)  34×27
+  attributes: 0x10000199, //  (115,0)  34×27
+  map:        0x1000055A, //  (145,0)  34×27
+  options:    0x1000019A, //  (175,0)  34×27
+  use:        0x1000019D, //  (55, 27) 23×31
+  target:     0x1000019E, //  (78, 27) 140×31
+  examine:    0x100001A5, //  (218,27) 22×31
+  pack:       0x100001B1, //  (238,0)  63×58
+};
 
 const OVERLAY_ID = "hb-target-bar";
 const STYLE_ID   = "hb-target-bar-style";
@@ -70,22 +93,22 @@ function ensureStyles() {
       transform: translateX(-50%);
       z-index: 49;
       width: 300px;
+      height: 58px;
       pointer-events: auto;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream);
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
+      /* Layout-driven: row 1 (.htb-top) + row 2 (.htb-action) +
+         stance/pack overlap both rows via absolute positioning. */
     }
     /* ─ Top row: 5 panel-shortcut sprites + combat stance ─ */
     #${OVERLAY_ID} .htb-top {
-      display: flex;
-      align-items: center;
-      gap: 1px;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 300px;
       height: 27px;
       background: rgba(20, 14, 8, 0.85);
       border: 1px solid var(--hb-border-brass-dim);
-      padding: 0 2px;
     }
     #${OVERLAY_ID} .htb-panel-btn {
       width: 34px; height: 27px;
@@ -125,10 +148,11 @@ function ensureStyles() {
 
     /* ─ Action row: Use | Target | Examine | Pack ─ */
     #${OVERLAY_ID} .htb-action {
-      display: flex;
-      align-items: stretch;
-      gap: 1px;
-      height: 33px;
+      position: absolute;
+      top: 27px;
+      left: 0;
+      width: 300px;
+      height: 31px;
     }
     #${OVERLAY_ID} .htb-use,
     #${OVERLAY_ID} .htb-examine {
@@ -279,10 +303,13 @@ function renderStance() {
 function build() {
   const ov = document.createElement("div");
   ov.id = OVERLAY_ID;
+  // Refs we hand to applyTargetBarLayout — one per layout-positioned element.
+  const refs = { panelBtns: {} };
 
   // ── Top row — 5 panel shortcuts + combat-stance toggle ─────
   const top = document.createElement("div");
   top.className = "htb-top";
+  refs.topRow = top;
   for (const b of TOP_BUTTONS) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -300,6 +327,7 @@ function build() {
       window.__mainPanel?.toggleView?.(b.view);
     });
     top.appendChild(btn);
+    refs.panelBtns[b.id] = btn;
   }
   const stance = document.createElement("button");
   stance.type = "button";
@@ -341,11 +369,13 @@ function build() {
     }
   });
   top.appendChild(stance);
+  refs.stanceBtn = stance;
   ov.appendChild(top);
 
   // ── Action row — Use | Target | Examine | Pack ─────────────
   const action = document.createElement("div");
   action.className = "htb-action";
+  refs.actionRow = action;
 
   const useBtn = document.createElement("button");
   useBtn.type = "button";
@@ -361,6 +391,7 @@ function build() {
     }
   });
   action.appendChild(useBtn);
+  refs.useBtn = useBtn;
 
   const target = document.createElement("div");
   target.className = "htb-target empty";
@@ -375,6 +406,7 @@ function build() {
     });
   });
   action.appendChild(target);
+  refs.targetEl = target;
 
   const examineBtn = document.createElement("button");
   examineBtn.type = "button";
@@ -389,6 +421,7 @@ function build() {
     });
   });
   action.appendChild(examineBtn);
+  refs.examineBtn = examineBtn;
 
   const packBtn = document.createElement("button");
   packBtn.type = "button";
@@ -398,10 +431,126 @@ function build() {
     window.__mainPanel?.toggleView?.("inventory");
   });
   action.appendChild(packBtn);
+  refs.packBtn = packBtn;
 
   ov.appendChild(action);
   document.body.appendChild(ov);
-  return ov;
+  return { overlay: ov, refs };
+}
+
+// Apply gmToolbarUI 0x21000016 layout to the target-bar plugin's
+// sub-elements. The retail layout uses absolute positioning within a
+// 300×122 frame; we switch each row container to `position: relative`
+// and each child to `position: absolute` with explicit x/y from the
+// LayoutDesc. CSS centering and flex-gap behavior are overridden via
+// `transform = "none"` (mirrors the radar pattern).
+function applyTargetBarLayout(refs, attempt = 0) {
+  const apply = (layout) => {
+    // target-bar mounts during early boot via mountBar(); eor/local
+    // shards may not yet be available. Retry every 2s up to 8 times.
+    if (!layout) {
+      if (attempt < 8) {
+        setTimeout(() => applyTargetBarLayout(refs, attempt + 1), 2000);
+      }
+      return;
+    }
+    // Layout positions are relative to the root 0x10000191. Row 1
+    // children have y=0; row 2 children have y=27; Pack spans
+    // both rows at y=0,h=58. To keep the existing two-row DOM
+    // structure (top + action), translate row 2's child y values
+    // by -27 (subtract the row offset) — but we keep .htb-top at
+    // height=27 + .htb-action at height=31, so the row layout
+    // remains visually aligned.
+    //
+    // The Pack button is special: it's a row-1 sibling spanning
+    // y=0..58, h=58, currently nested in .htb-action. We pop it
+    // out of the action row and parent to the overlay so it can
+    // overlap both rows. Done lazily here.
+    let applied = 0;
+
+    // Helper — apply x/y/w/h from a LayoutDesc element to a DOM ref,
+    // wiping CSS-driven margin/centering so absolute coords win.
+    // box-sizing: border-box so width/height match retail's outer box
+    // including any CSS border/padding the existing styles applied.
+    const applyEl = (el, desc, yOffset = 0) => {
+      if (!el || !desc) return 0;
+      el.style.position = "absolute";
+      el.style.margin = "0";
+      el.style.boxSizing = "border-box";
+      // Explicit "none" overrides any CSS translate centering. Empty
+      // string would let the cascade re-apply (per ac_layout.js gotcha).
+      el.style.transform = "none";
+      el.style.right = "";
+      el.style.bottom = "";
+      el.style.flex = "";
+      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
+      if (typeof desc.y === "number") el.style.top = `${desc.y - yOffset}px`;
+      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
+      return 1;
+    };
+
+    // Both row containers are `position: absolute` per their CSS, so
+    // they're already containing blocks for their absolutely-positioned
+    // children AND removed from flow (so they don't push each other
+    // down). We don't touch position here — only clear any padding/gap
+    // that the old flex CSS might have left dangling.
+    if (refs.topRow) {
+      refs.topRow.style.padding = "0";
+      refs.topRow.style.gap = "0";
+    }
+    if (refs.actionRow) {
+      refs.actionRow.style.padding = "0";
+      refs.actionRow.style.gap = "0";
+    }
+
+    // Row 1 — 5 panel-shortcut sprites at retail x positions.
+    applied += applyEl(refs.panelBtns.allegiance, findElementById(layout, TB_ELEMS.allegiance));
+    applied += applyEl(refs.panelBtns.spellbook,  findElementById(layout, TB_ELEMS.spellbook));
+    applied += applyEl(refs.panelBtns.attributes, findElementById(layout, TB_ELEMS.attributes));
+    applied += applyEl(refs.panelBtns.map,        findElementById(layout, TB_ELEMS.map));
+    applied += applyEl(refs.panelBtns.options,    findElementById(layout, TB_ELEMS.options));
+
+    // Stance button — retail places this at (0,0) 55×58 spanning rows
+    // 1+2 on the LEFT. Our hand-tuned panel has stance on the right.
+    // Retail-faithful position is more semantically meaningful (the
+    // stance is mode-defining), but disrupts the top row's flow. Wire
+    // it to the retail x=0,y=0 with retail size 55×58. Since stance
+    // lives inside .htb-top (h=27), we'll detach + re-parent to overlay
+    // so it can span both rows. Stays inside refs map for restyling.
+    const stanceDesc = findElementById(layout, TB_ELEMS.stance);
+    if (refs.stanceBtn && stanceDesc) {
+      // Re-parent to overlay so it can span both rows.
+      if (refs.stanceBtn.parentElement !== refs.overlay && refs.overlay) {
+        refs.overlay.appendChild(refs.stanceBtn);
+      }
+      refs.stanceBtn.style.marginLeft = "";
+      applied += applyEl(refs.stanceBtn, stanceDesc);
+    }
+
+    // Row 2 — Use | Target | Examine. Layout y=27 but .htb-action is
+    // already at its own row anchor, so subtract 27 to get inner y=0.
+    applied += applyEl(refs.useBtn,     findElementById(layout, TB_ELEMS.use),     27);
+    applied += applyEl(refs.targetEl,   findElementById(layout, TB_ELEMS.target),  27);
+    applied += applyEl(refs.examineBtn, findElementById(layout, TB_ELEMS.examine), 27);
+
+    // Pack — retail says (238,0) 63×58 spanning both rows. Re-parent
+    // out of .htb-action to the overlay so it can overlap.
+    const packDesc = findElementById(layout, TB_ELEMS.pack);
+    if (refs.packBtn && packDesc) {
+      if (refs.packBtn.parentElement !== refs.overlay && refs.overlay) {
+        refs.overlay.appendChild(refs.packBtn);
+      }
+      applied += applyEl(refs.packBtn, packDesc);
+    }
+
+    try {
+      window.__diag?.layout?.onTargetBarApplied?.({ applied });
+    } catch (_) {}
+  };
+  const cached = getCachedLayout(TARGET_BAR_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(TARGET_BAR_LAYOUT_ID).then(apply).catch(() => {});
 }
 
 export const manifest = {
@@ -417,7 +566,16 @@ export function mount(_ctx) {
   ensureStyles();
   const existing = document.getElementById(OVERLAY_ID);
   if (existing) existing.remove();
-  state.overlayEl = build();
+  const { overlay, refs } = build();
+  state.overlayEl = overlay;
+  // Stash overlay on refs so applyTargetBarLayout can re-parent
+  // stance + Pack to it (they span both rows).
+  refs.overlay = overlay;
+
+  // Apply retail layout positions for sub-elements (5 panel shortcuts
+  // + Use/Target/Examine + Pack + stance). Mounts via mountBar() so
+  // includes the 8 × 2s retry loop for early-boot eor/local shards.
+  applyTargetBarLayout(refs);
 
   // Poll selection state at 4Hz (selectionChanged bus event is MISSING
   // per api.js coverage row 5; future PR replaces the poll).
