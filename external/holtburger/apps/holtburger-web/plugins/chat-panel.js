@@ -1,6 +1,7 @@
-// Bottom-left chat panel — retail-styled mirror of the existing
-// `#chat-log` `<ul>` defined in index.html (Phase 4 step 4). The
-// non-agent-mode page already does all the heavy lifting:
+// Bottom-left chat panel — retail port of gmFloatyMainChatUI
+// (LayoutDesc 0x2100006F, root element 0x10000600 at 410×100).
+//
+// The non-agent-mode page already does all the heavy lifting:
 //
 //   - `appendChatLine(text, category)` (index.html:5926) is the
 //     canonical entry point.
@@ -18,17 +19,77 @@
 // to the existing `#chat-input` so all send paths stay in one
 // place (no duplicated wasm/ACE wiring).
 //
-// Retail layout source: gmFloatyMainChatUI (0x2100006F) StateDesc
-// has Width=410, Height=100. Per the Chat Interface wiki page
-// (acpedia), the actual retail panel is RESIZABLE — 410x100 is
-// just the default; resize-handle is a follow-on.
+// Retail layout source: gmFloatyMainChatUI 0x2100006F.
+// Per chat_panel_layout_dump 2026-05-24 the root element 0x10000600
+// holds 23 children:
+//   - 16 frame corners/edges (0x10000693-0x100006A2; decorative)
+//   - 0x10000010 chat-log container (5, 5) 400×73
+//     - 0x10000011 text area (16, 0) 368×73  (16-px left gutter
+//       clears the 4 left-edge filter buttons)
+//     - 0x1000048C "new messages" badge (0, 57) 16×16 (m_chatNew-
+//       NonVisibleTextIndicator per acclient.h gmMainChatUI:54906)
+//     - 0x10000012 right-side scrollbar (384, 0) 16×73
+//   - 0x1000046F top-right Maximize button (368, 5) 16×16
+//     (acclient.c:254293 GetChildRecursive(0x1000046Fu) → ToggleMaximize)
+//   - 0x10000522/3/4/5 left-edge filter buttons (5, 5+17k) 16×16
+//     (not referenced anywhere in acclient.c — pure layout artifacts;
+//      retail used them as filter-tab toggles bound to the
+//      gmMainChatUI::m_llTextTypeFilter bitmask via UIElement events.
+//      We bind them to All / Local / Tells / Channels per the default
+//      4-tab consolidation in layout-port-plan-2026-05-24.md.)
+//   - 0x10000013 input row (5, 78) 400×17
+//     - 0x10000014 channel selector (0, 0) 46×17 (talk-focus dropdown
+//       anchor per acclient.c:255043 GetChildRecursive(0x10000014u)
+//       → InitTalkFocusMenu populates m_aTalkFocusButtons SmartArray)
+//     - 0x10000016 text input (46, 0) 306×17 (m_chatEntry per
+//       acclient.c:287807 GetChildRecursive(0x10000011u))
+//     - 0x10000019 send button (354, 0) 46×17, 3 states
+//
+// Per the Chat Interface wiki page (acpedia), the actual retail panel
+// is RESIZABLE — 410×100 is just the default. Resize-handle is kept.
 
 import { setAcText, CHAT_FONT_ID } from "../ui/ac_font.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 
 const OVERLAY_ID = "hb-chat-panel";
 const WIDTH = 410;
 const HEIGHT = 100;
 const MAX_LINES = 48;          // ring buffer; ~6x what fits on-screen
+
+// gmFloatyMainChatUI — retail layout that drives the chat panel.
+// Element-id map confirmed by chat_panel_layout_dump 2026-05-24:
+const CHAT_LAYOUT_ID         = 0x2100006F;
+// Root (0x10000600), inner log-text container (0x10000011), in-log badge
+// (0x1000048C), and explicit scrollbar (0x10000012) are intentionally NOT
+// wired today — our DOM places the log + scrollbar via CSS, and the badge
+// is a Holtburger-specific concept. Listed here for the next layout pass.
+const CHAT_ELEM_LOG_CONT     = 0x10000010;
+const CHAT_ELEM_TOPRIGHT_BTN = 0x1000046F;
+const CHAT_ELEM_TAB_A        = 0x10000522;  // left-edge filter button A (5,5)
+const CHAT_ELEM_TAB_B        = 0x10000523;  // left-edge filter button B (5,22)
+const CHAT_ELEM_TAB_C        = 0x10000524;  // left-edge filter button C (5,39)
+const CHAT_ELEM_TAB_D        = 0x10000525;  // left-edge filter button D (5,56)
+const CHAT_ELEM_INPUT_ROW    = 0x10000013;
+const CHAT_ELEM_CHANNEL_SEL  = 0x10000014;
+const CHAT_ELEM_INPUT_FIELD  = 0x10000016;
+const CHAT_ELEM_SEND_BTN     = 0x10000019;
+
+// 4-tab consolidation (defaults per layout-port-plan-2026-05-24.md
+// "Option B" recipe). acclient.c has no code-side references for
+// 0x10000522-0x10000525 to derive retail's exact intent, so we
+// pick semantically-distinct buckets to cover the LTT bitmask space:
+//   - All:      no filter, every category shows
+//   - Local:    cat-1 (local) + cat-4 (spoken/emote)
+//   - Tells:    cat-2 (direct messages)
+//   - Channels: cat-3 + cat-12-17, cat-22-23 (channels + LFG + Trade etc)
+// Combat / Magic / System are subsumed into All. The cost of retail
+// fidelity = filter granularity reduction (was 7-tab horizontal strip).
+const TABS = [
+  { id: "all",      label: "All",      elem: CHAT_ELEM_TAB_A },
+  { id: "local",    label: "Local",    elem: CHAT_ELEM_TAB_B },
+  { id: "tell",     label: "Tell",     elem: CHAT_ELEM_TAB_C },
+  { id: "channels", label: "Chan",     elem: CHAT_ELEM_TAB_D },
+];
 
 // CHAT_CATEGORY_* colours — mirror the index.html `#chat-log .cat-N`
 // palette but adjusted for legibility against our dark stone background
@@ -75,32 +136,32 @@ function ensureStyles() {
       box-shadow: var(--hb-shadow-panel);
       color: var(--hb-text-cream);
     }
-    /* Tab strip — mirrors index.html's #chat-tabs filter set (line 626-633). */
-    #${OVERLAY_ID} .hb-chat-tabs {
-      position: absolute;
-      top: 2px;
-      left: 4px;
-      right: 4px;
-      height: 16px;
-      display: flex;
-      gap: 1px;
-      pointer-events: auto;
-      align-items: stretch;
-      border-bottom: 1px solid var(--hb-border-brass-dim);
-    }
+    /* Left-edge vertical filter strip — replaces the previous 7-button
+       horizontal top strip per gmFloatyMainChatUI Option B port
+       (layout-port-plan-2026-05-24.md). Layout assigns each button
+       16×16 at (5, 5+17k); applyChatLayout() overrides via element_id
+       0x10000522-0x10000525 once the LayoutDesc arrives.
+       z-index 2 keeps the buttons above the .hb-chat-scroll text area
+       (which extends across the left gutter via 21-px left padding,
+       mirroring the layout's 0x10000010 container that contains both
+       the text inset 0x10000011 AND wraps over the gutter region). */
     #${OVERLAY_ID} .hb-chat-tab-btn {
-      flex: 0 1 auto;
-      padding: 1px 5px;
-      font-size: 9px;
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      box-sizing: border-box;
+      padding: 0;
+      font-size: 8px;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream-bright);
-      background: rgba(0, 0, 0, 0.35);
+      background: rgba(0, 0, 0, 0.4);
       border: 1px solid var(--hb-border-brass-dim);
-      border-bottom: none;
       cursor: pointer;
       user-select: none;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
+      text-align: center;
+      line-height: 14px;
+      pointer-events: auto;
+      z-index: 2;
     }
     #${OVERLAY_ID} .hb-chat-tab-btn:hover {
       background: var(--hb-overlay-hover);
@@ -110,15 +171,52 @@ function ensureStyles() {
       color: var(--hb-text-gold);
       border-color: var(--hb-border-brass);
     }
+    /* Top-right Maximize button (0x1000046F at 368,5 16×16). Per
+       acclient.c:254293 the retail behavior toggles m_Maximized →
+       expand/collapse the chat panel between collapsed (default
+       height) and m_OldHeight. We surface a placeholder click handler
+       (functional toggle is a follow-on; layout-port lands the
+       button geometry first). */
+    #${OVERLAY_ID} .hb-chat-topright-btn {
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      box-sizing: border-box;
+      padding: 0;
+      font-size: 10px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream-bright);
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--hb-border-brass-dim);
+      cursor: pointer;
+      user-select: none;
+      text-align: center;
+      line-height: 14px;
+      pointer-events: auto;
+      z-index: 2;
+    }
+    #${OVERLAY_ID} .hb-chat-topright-btn:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    /* Chat scrollback container — per layout 0x10000010 it sits at
+       (5, 5) 400×73 inside the panel; per 0x10000011 the text area
+       is inset (16, 0) 368×73 to clear the 4 left-edge filter
+       buttons. We collapse the wrapper into one scrollable div and
+       use padding-left to mimic the 16-px gutter. The right-edge
+       16-px scrollbar gutter (0x10000012 at (384, 0) 16×73) is left
+       as a TODO — for now we use CSS scrollbar-width:thin and
+       trust the browser's renderer. */
     #${OVERLAY_ID} .hb-chat-scroll {
       position: absolute;
-      top: 24px;
-      left: 4px;
-      right: 4px;
-      bottom: 22px;
+      top: 5px;
+      left: 5px;
+      width: 400px;
+      height: 73px;
+      box-sizing: border-box;
+      padding: 0 4px 0 21px;   /* 21 = 5 (panel inset) + 16 (button gutter) - 5 (left:5) = 16 */
       overflow-y: auto;
       overflow-x: hidden;
-      padding: 0 4px;
       font-size: 11px;
       /* line-height 17px fits the chat-window font's 16px cell
          (0x40000027) with 1px margin. Previously 13px for the compact
@@ -136,15 +234,13 @@ function ensureStyles() {
       word-break: break-word;
       text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
     }
-    /* Mirror the index.html tab filter rules exactly — same cat-N
-       classes are applied to .hb-chat-line in mirrorOne(), so the
-       :not() exclusion chains line up. */
+    /* 4-tab filter chains. "all" shows everything; "local" keeps
+       cat-1 + cat-4 (spoken/emote); "tell" cat-2; "channels" the
+       broad channel + LFG/trade/etc. set. Combat/Magic/System are
+       subsumed by "all" — see TABS comment above. */
     #${OVERLAY_ID} .hb-chat-scroll[data-tab="local"] .hb-chat-line:not(.cat-1):not(.cat-4):not(.echo) { display: none; }
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="combat"] .hb-chat-line:not(.cat-5):not(.cat-6):not(.echo) { display: none; }
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="channels"] .hb-chat-line:not(.cat-3):not(.cat-12):not(.cat-13):not(.cat-14):not(.cat-15):not(.cat-16):not(.cat-17):not(.cat-22):not(.cat-23):not(.echo) { display: none; }
     #${OVERLAY_ID} .hb-chat-scroll[data-tab="tell"] .hb-chat-line:not(.cat-2):not(.echo) { display: none; }
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="magic"] .hb-chat-line:not(.cat-7):not(.echo) { display: none; }
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="system"] .hb-chat-line:not(.cat-0):not(.cat-8):not(.cat-9):not(.cat-10):not(.cat-11):not(.cat-18):not(.cat-19):not(.cat-20):not(.cat-21):not(.echo) { display: none; }
+    #${OVERLAY_ID} .hb-chat-scroll[data-tab="channels"] .hb-chat-line:not(.cat-3):not(.cat-12):not(.cat-13):not(.cat-14):not(.cat-15):not(.cat-16):not(.cat-17):not(.cat-22):not(.cat-23):not(.echo) { display: none; }
     /* Resize handle — bottom-right corner, drag to grow/shrink. Wiki
        says retail chat windows are resizable, with size persisted
        per-character. Persistence is a follow-on. */
@@ -162,84 +258,48 @@ function ensureStyles() {
       z-index: 4;
     }
     #${OVERLAY_ID} .hb-chat-resize:hover { opacity: 1; }
+    /* Input row container — per layout 0x10000013 at (5, 78) 400×17.
+       Sub-elements (channel selector, text input, send button) are
+       positioned absolutely inside via applyChatLayout(). */
     #${OVERLAY_ID} .hb-chat-input-row {
       position: absolute;
-      bottom: 2px;
-      left: 4px;
-      right: 4px;
-      height: 18px;
-      display: flex;
-      align-items: center;
-      gap: 4px;
+      left: 5px;
+      top: 78px;
+      width: 400px;
+      height: 17px;
+      box-sizing: border-box;
       font-size: 10px;
       color: var(--hb-text-cream);
     }
-    #${OVERLAY_ID} .hb-chat-tab {
-      padding: 2px 6px;
-      font-size: 10px;
-      color: var(--hb-text-cream);
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid var(--hb-border-brass-dim);
-    }
-    #${OVERLAY_ID} .hb-chat-input {
-      flex: 1;
-      background: rgba(0, 0, 0, 0.55);
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      font-family: var(--hb-font-serif);
-      font-size: 10px;
-      padding: 1px 4px;
-      outline: none;
-      pointer-events: auto;
-    }
-    #${OVERLAY_ID} .hb-chat-input:focus {
-      border-color: var(--hb-border-brass);
-    }
-    /* PR-LL 2026-05-23: explicit Send button, bottom-right of input row. */
-    #${OVERLAY_ID} .hb-chat-send-btn {
-      flex: 0 0 auto;
-      padding: 2px 10px;
-      margin-right: 12px;
-      font-family: var(--hb-font-serif);
-      font-size: 10px;
-      font-weight: 600;
-      color: var(--hb-text-gold);
-      background: linear-gradient(180deg, rgba(120, 84, 32, 0.55) 0%, rgba(50, 35, 15, 0.7) 100%);
-      border: 1px solid var(--hb-border-brass);
-      cursor: pointer;
-      user-select: none;
-      letter-spacing: 0.04em;
-      pointer-events: auto;
-    }
-    #${OVERLAY_ID} .hb-chat-send-btn:hover {
-      background: linear-gradient(180deg, rgba(150, 105, 40, 0.65) 0%, rgba(70, 50, 20, 0.75) 100%);
-      color: var(--hb-text-cream-bright);
-    }
-    #${OVERLAY_ID} .hb-chat-send-btn:active {
-      background: linear-gradient(180deg, rgba(40, 25, 10, 0.75) 0%, rgba(80, 55, 20, 0.6) 100%);
-    }
-    /* Channel selector — click the "Local" tag (now a button) to open
-       an imperative popup menu with all the outgoing chat channels.
-       Selecting one updates the button label and prefixes outgoing
-       text with the channel's slash-command on send. */
+    /* Channel selector — per layout 0x10000014 at (0, 0) 46×17 inside
+       the input row. Click opens the talk-focus dropdown menu above. */
     #${OVERLAY_ID} .hb-chat-channel-btn {
-      padding: 2px 8px 2px 6px;
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 46px;
+      height: 17px;
+      box-sizing: border-box;
+      padding: 1px 4px 1px 4px;
       font-family: var(--hb-font-serif);
-      font-size: 10px;
+      font-size: 9px;
       color: var(--hb-text-gold);
       background: rgba(0, 0, 0, 0.5);
       border: 1px solid var(--hb-border-brass);
       cursor: pointer;
       user-select: none;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
-      position: relative;
+      letter-spacing: 0.02em;
+      text-align: left;
       pointer-events: auto;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     #${OVERLAY_ID} .hb-chat-channel-btn::after {
       content: "▾";
-      margin-left: 4px;
-      font-size: 8px;
+      margin-left: 2px;
+      font-size: 7px;
       color: var(--hb-text-cream);
     }
     #${OVERLAY_ID} .hb-chat-channel-btn:hover {
@@ -284,6 +344,57 @@ function ensureStyles() {
       background: var(--hb-overlay-active);
       color: var(--hb-text-gold);
     }
+    /* Text input — per layout 0x10000016 at (46, 0) 306×17 inside
+       the input row. */
+    #${OVERLAY_ID} .hb-chat-input {
+      position: absolute;
+      left: 46px;
+      top: 0;
+      width: 306px;
+      height: 17px;
+      box-sizing: border-box;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      color: var(--hb-text-cream);
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      padding: 1px 4px;
+      outline: none;
+      pointer-events: auto;
+    }
+    #${OVERLAY_ID} .hb-chat-input:focus {
+      border-color: var(--hb-border-brass);
+    }
+    /* Send button — per layout 0x10000019 at (354, 0) 46×17 inside
+       the input row, 3 states (idle/hover/active). */
+    #${OVERLAY_ID} .hb-chat-send-btn {
+      position: absolute;
+      left: 354px;
+      top: 0;
+      width: 46px;
+      height: 17px;
+      box-sizing: border-box;
+      padding: 0;
+      font-family: var(--hb-font-serif);
+      font-size: 9px;
+      font-weight: 600;
+      color: var(--hb-text-gold);
+      background: linear-gradient(180deg, rgba(120, 84, 32, 0.55) 0%, rgba(50, 35, 15, 0.7) 100%);
+      border: 1px solid var(--hb-border-brass);
+      cursor: pointer;
+      user-select: none;
+      letter-spacing: 0.04em;
+      pointer-events: auto;
+      text-align: center;
+      line-height: 15px;
+    }
+    #${OVERLAY_ID} .hb-chat-send-btn:hover {
+      background: linear-gradient(180deg, rgba(150, 105, 40, 0.65) 0%, rgba(70, 50, 20, 0.75) 100%);
+      color: var(--hb-text-cream-bright);
+    }
+    #${OVERLAY_ID} .hb-chat-send-btn:active {
+      background: linear-gradient(180deg, rgba(40, 25, 10, 0.75) 0%, rgba(80, 55, 20, 0.6) 100%);
+    }
   `;
   document.head.appendChild(style);
 }
@@ -305,6 +416,61 @@ export const manifest = {
   description: "Bottom-left chat panel (retail gmFloatyMainChatUI 0x2100006F)",
 };
 
+// Apply gmFloatyMainChatUI 0x2100006F layout to the chat-panel's
+// sub-elements. Mirrors radar.js's applyRadarLayout — 8 × 2s retry
+// loop because chat-panel mounts via mountBar() before
+// init_resource_source has populated window.__hbWasm. The 4 left-edge
+// filter buttons get their explicit positions overridden via element_id
+// 0x10000522-0x10000525 (the CSS `position: absolute` rule has no
+// top/left fallback, so this populates the geometry from the DAT).
+function applyChatLayout(refs, attempt = 0) {
+  const apply = (layout) => {
+    if (!layout) {
+      if (attempt < 8) {
+        setTimeout(() => applyChatLayout(refs, attempt + 1), 2000);
+      }
+      return;
+    }
+    let applied = 0;
+    // Element pairs: (element_id, DOM ref). We apply x/y/width/height
+    // from the LayoutDesc. The chat-log container, input row, etc are
+    // already CSS-positioned to the layout values; this re-asserts
+    // them from the DAT so the asset stays source-of-truth.
+    const pairs = [
+      [CHAT_ELEM_LOG_CONT,     refs.scrollEl],     // (5,5) 400×73
+      [CHAT_ELEM_INPUT_ROW,    refs.inputRowEl],   // (5,78) 400×17
+      [CHAT_ELEM_TOPRIGHT_BTN, refs.toprightEl],   // (368,5) 16×16
+      [CHAT_ELEM_TAB_A,        refs.tabEls?.A],    // (5,5) 16×16
+      [CHAT_ELEM_TAB_B,        refs.tabEls?.B],    // (5,22) 16×16
+      [CHAT_ELEM_TAB_C,        refs.tabEls?.C],    // (5,39) 16×16
+      [CHAT_ELEM_TAB_D,        refs.tabEls?.D],    // (5,56) 16×16
+      [CHAT_ELEM_CHANNEL_SEL,  refs.channelEl],    // (0,0) 46×17
+      [CHAT_ELEM_INPUT_FIELD,  refs.inputEl],      // (46,0) 306×17
+      [CHAT_ELEM_SEND_BTN,     refs.sendEl],       // (354,0) 46×17
+    ];
+    for (const [id, el] of pairs) {
+      if (!el) continue;
+      const desc = findElementById(layout, id);
+      if (!desc) continue;
+      // Clear any CSS `right`/`bottom` anchors that would fight an
+      // explicit `left`/`top` override.
+      el.style.right = "";
+      el.style.bottom = "";
+      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
+      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
+      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
+      applied += 1;
+    }
+    try {
+      window.__diag?.layout?.onChatApplied?.({ applied });
+    } catch (_) {}
+  };
+  const cached = getCachedLayout(CHAT_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(CHAT_LAYOUT_ID).then(apply).catch(() => {});
+}
+
 export function mount(_ctx) {
   ensureStyles();
   const existing = document.getElementById(OVERLAY_ID);
@@ -313,29 +479,52 @@ export function mount(_ctx) {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
 
-  // Tab strip — same set + order as index.html:625-633.
-  const TABS = [
-    { id: "all",      label: "All" },
-    { id: "local",    label: "Local" },
-    { id: "tell",     label: "Tells" },
-    { id: "channels", label: "Channels" },
-    { id: "combat",   label: "Combat" },
-    { id: "magic",    label: "Magic" },
-    { id: "system",   label: "System" },
-  ];
-  const tabsEl = document.createElement("div");
-  tabsEl.className = "hb-chat-tabs";
+  // Left-edge vertical filter strip (replaces the previous 7-button
+  // horizontal top strip). Layout assigns explicit positions to each
+  // button via element_id 0x10000522-0x10000525; applyChatLayout()
+  // populates them from the DAT.
+  const tabEls = {};
   const tabBtns = {};
   for (const t of TABS) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "hb-chat-tab-btn" + (t.id === "all" ? " active" : "");
     btn.dataset.tab = t.id;
-    setAcText(btn, t.label);
-    tabsEl.appendChild(btn);
+    btn.title = t.label;
+    // Show 1-character abbreviation since the buttons are only 16×16:
+    //   A → All, L → Local, T → Tell, C → Channels
+    setAcText(btn, t.label.charAt(0));
+    overlay.appendChild(btn);
     tabBtns[t.id] = btn;
+    // tabEls keyed A/B/C/D so applyChatLayout pair-loop reads the
+    // layout-element index 0..3 cleanly.
+    const slot = String.fromCharCode("A".charCodeAt(0) + TABS.indexOf(t));
+    tabEls[slot] = btn;
   }
-  overlay.appendChild(tabsEl);
+
+  // Top-right Maximize button (0x1000046F at 368,5 16×16). Retail
+  // toggles the chat panel between collapsed (default height) and
+  // m_OldHeight per acclient.c:254293. We surface a placeholder
+  // toggle that logs to console + flips a `data-maximized` flag for
+  // a future expansion handler.
+  const toprightBtn = document.createElement("button");
+  toprightBtn.type = "button";
+  toprightBtn.className = "hb-chat-topright-btn";
+  toprightBtn.title = "Maximize";
+  setAcText(toprightBtn, "▲");
+  toprightBtn.addEventListener("click", () => {
+    const next = overlay.dataset.maximized === "1" ? "0" : "1";
+    overlay.dataset.maximized = next;
+    setAcText(toprightBtn, next === "1" ? "▼" : "▲");
+    try {
+      console.log(`[chat-panel] maximize toggled → ${next === "1" ? "expanded" : "collapsed"}`);
+    } catch (_) {}
+  });
+  // Inline default position (the layout override lands after wasm
+  // is ready; this prevents a 0,0 flicker on first paint).
+  toprightBtn.style.left = "368px";
+  toprightBtn.style.top = "5px";
+  overlay.appendChild(toprightBtn);
 
   // Scrollback area — its [data-tab] drives the CSS filter chains
   // defined alongside this block in ensureStyles().
@@ -356,8 +545,9 @@ export function mount(_ctx) {
     // Re-pin to bottom on tab change.
     scroll.scrollTop = scroll.scrollHeight;
   }
-  tabsEl.addEventListener("click", (ev) => {
-    const btn = ev.target.closest("button[data-tab]");
+  // Single click handler for all 4 tab buttons.
+  overlay.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".hb-chat-tab-btn[data-tab]");
     if (!btn) return;
     setTab(btn.dataset.tab);
   });
@@ -384,18 +574,20 @@ export function mount(_ctx) {
   ];
   let activeChannel = CHANNELS[0];
 
-  // Input row
+  // Input row container — per layout 0x10000013 at (5, 78) 400×17.
   const inputRow = document.createElement("div");
   inputRow.className = "hb-chat-input-row";
 
-  // Channel button (was a static span; now an imperative dropdown).
+  // Channel selector button — talk-focus dropdown anchor.
+  // Per retail (acclient.c:255043) this is element_id 0x10000014 and
+  // is `Container Type=6` in the layout (i.e. a popup-menu container).
   const channelBtn = document.createElement("button");
   channelBtn.type = "button";
   channelBtn.className = "hb-chat-channel-btn";
   setAcText(channelBtn, activeChannel.label);
   inputRow.appendChild(channelBtn);
 
-  // Channel popup menu — built imperatively, opens above the button.
+  // Channel popup menu — opens above the button.
   const channelMenu = document.createElement("div");
   channelMenu.className = "hb-chat-channel-menu";
   const channelItems = {};
@@ -446,16 +638,16 @@ export function mount(_ctx) {
     closeChannelMenu();
   });
 
+  // Text input — per layout 0x10000016 at (46, 0) 306×17.
   const input = document.createElement("input");
   input.className = "hb-chat-input";
   input.type = "text";
   input.placeholder = "type here…";
   inputRow.appendChild(input);
 
+  // Send button — per layout 0x10000019 at (354, 0) 46×17, 3 states.
   // PR-LL 2026-05-23: explicit Send button on the right of the input
-  // row. Same submit path as Enter. Users on touch / inconsistent
-  // keyboards asked for a button; also gives the input a clear
-  // "fire" affordance.
+  // row. Same submit path as Enter.
   const sendBtn = document.createElement("button");
   sendBtn.type = "button";
   sendBtn.className = "hb-chat-send-btn";
@@ -495,6 +687,23 @@ export function mount(_ctx) {
   // user direction 2026-05-22. Resize is on the bottom-right corner.
 
   document.body.appendChild(overlay);
+
+  // Apply retail layout positions for sub-elements. The CSS values
+  // above already match retail; this re-asserts from the DAT so the
+  // asset stays the source of truth for future tweaks.
+  // NOTE: the right-side scrollbar (0x10000012 at 384,0 16×73) is
+  // currently expressed via CSS `scrollbar-width: thin` on the
+  // .hb-chat-scroll container; the layout's explicit scrollbar
+  // element is decorative-only here and not surfaced as DOM.
+  applyChatLayout({
+    scrollEl:     scroll,
+    inputRowEl:   inputRow,
+    toprightEl:   toprightBtn,
+    tabEls,
+    channelEl:    channelBtn,
+    inputEl:      input,
+    sendEl:       sendBtn,
+  });
 
   // Mirror an <li> from #chat-log into our retail scrollback. We tag
   // each mirrored line with `data-empty` if the source was the empty
