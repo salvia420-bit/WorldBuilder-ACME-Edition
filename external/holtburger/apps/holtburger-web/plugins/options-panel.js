@@ -53,8 +53,45 @@ import {
   getRetailKeyMap,
   lookupRetailDefault,
 } from "../ui/keymap.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 
 const VIEW_STYLE_ID = "hb-options-view-style";
+
+// gmConfigUI — retail layout that drives the options panel.
+// Element-id map confirmed by options_panel_layout_dump 2026-05-24:
+//   0x100001FF — root panel (292×600 at 0,0)
+//   0x10000200 — type-5 tab list (276×560 at 0,0)
+//                In retail this is the combined tab strip + content
+//                area (the 8 tab buttons live INSIDE the type-5
+//                container, populated from StringId pairs via
+//                StateDesc — which v1 fetch_layout does not yet
+//                serialize, see G3 in layout-port-plan-2026-05-24.md).
+//                Our impl splits this into a flex `.hb-opt-tabs`
+//                strip on top + a scrollable `.hb-opt-body` below,
+//                both contained within this layout-driven rectangle.
+//   0x10000201 — scrollbar track (16×560 at 276,0)
+//                Retail had an explicit scrollbar element to the
+//                right of the tab list; we use CSS scrollbar on
+//                .hb-opt-body so this element is intentionally
+//                non-DOM (geometry stays available for future
+//                explicit-scrollbar pass).
+//   0x100001FC — Apply button   (80×32 at 16,564)  StringId 163200057
+//   0x100001FD — OK button      (80×32 at 106,564) StringId 164267204
+//   0x100001FE — Cancel button  (80×32 at 196,564) StringId 253245491
+//
+// Per the plugin head-comment, sub-layout 0x21000293 holds per-tab
+// content templates. That layout is referenced via StateDesc inside
+// 0x10000200 (the type-5 tab list) and is NOT surfaced by v1
+// fetch_layout (G3). Tab-label strings + per-tab content layouts
+// remain hand-tuned until G3 lands.
+const OPTIONS_LAYOUT_ID         = 0x21000029;
+// Reference-only:
+//   0x100001FF — 292×600 root (size applied via main-panel overlay resize).
+//   0x10000201 — (276,0) 16×560 scrollbar slot, replaced by CSS scrollbar.
+const OPT_ELEM_TAB_LIST         = 0x10000200;
+const OPT_ELEM_BTN_APPLY        = 0x100001FC;
+const OPT_ELEM_BTN_OK           = 0x100001FD;
+const OPT_ELEM_BTN_CANCEL       = 0x100001FE;
 
 function ensureStyles() {
   if (document.getElementById(VIEW_STYLE_ID)) return;
@@ -68,6 +105,16 @@ function ensureStyles() {
       pointer-events: auto;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream);
+      overflow: hidden;
+    }
+    /* Tab strip + body live inside the retail tab-list area
+       (0x10000200 — 276×560 at 0,0). applyOptionsPanelLayout()
+       positions .hb-opt-tablist absolutely; .hb-opt-tabs is the
+       fixed-height strip on top (28px) and .hb-opt-body fills the
+       remaining height inside the tablist box. */
+    .hb-opt-tablist {
+      position: absolute;
+      box-sizing: border-box;
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -218,18 +265,14 @@ function ensureStyles() {
       color: var(--hb-text-cream);
       font-style: normal;
     }
-    .hb-opt-footer {
-      flex: 0 0 auto;
-      display: flex;
-      gap: 4px;
-      justify-content: flex-end;
-      padding: 6px 8px;
-      border-top: 1px solid var(--hb-border-brass-dim);
-      background: rgba(0, 0, 0, 0.35);
-    }
+    /* Cancel / Apply / OK buttons live as direct root children
+       (matching retail's gmConfigUI 0x100001FC/FD/FE — siblings of
+       the tab list 0x10000200 under panel root 0x100001FF).
+       applyOptionsPanelLayout writes their explicit x/y/w/h
+       (80×32 at 16/106/196, y=564). */
     .hb-opt-btn {
-      width: 64px;
-      height: 22px;
+      position: absolute;
+      box-sizing: border-box;
       padding: 0;
       background: linear-gradient(180deg, rgba(120, 84, 32, 0.55) 0%, rgba(50, 35, 15, 0.7) 100%);
       color: var(--hb-text-cream-bright);
@@ -565,6 +608,107 @@ function renderGraphicsTab(bodyEl) {
   });
 }
 
+// Apply gmConfigUI 0x21000029 layout to the options-panel sub-elements.
+// Options panel mounts via main-panel.showView() (user-initiated), so
+// wasm IS ready by then — no 8 × 2s retry loop needed. We still guard
+// against a transient null layout (G3 / shard prefetch) by retrying
+// 3 × 1s; if it never lands we keep the hand-tuned fallback positions
+// from CSS.
+//
+// Retail dims:
+//   - root (panel): 292×600 — sized via parentEl resize in view.mount
+//   - tab list (combined tab strip + content area): 276×560 at (0,0)
+//   - Apply/OK/Cancel buttons: 80×32 at (16/106/196, 564)
+//
+// Geometry is applied relative to the view root (the main-panel
+// body), so .hb-opt-root spans the full 292×600 body and child
+// elements get layout-driven x/y/width/height.
+function applyOptionsPanelLayout(refs, attempt = 0) {
+  const apply = (layout) => {
+    if (!layout) {
+      if (attempt < 3) {
+        setTimeout(() => applyOptionsPanelLayout(refs, attempt + 1), 1000);
+      }
+      return;
+    }
+    let applied = 0;
+    // Pairs: (element_id, DOM ref). We map retail elements to our DOM:
+    //   - tab list (0x10000200) → .hb-opt-tablist wrapper (which holds
+    //     both the tab strip and the scrolled body)
+    //   - Apply/OK/Cancel buttons → direct children of .hb-opt-root
+    //     (same as retail; the buttons are root-level, not nested in
+    //     a footer wrapper)
+    // Root (0x100001FF) and scrollbar (0x10000201) are intentionally
+    // NOT in this map: root sizing is applied to the main-panel
+    // overlay directly (so the retail chrome dims drive both the
+    // visible window and the body); the scrollbar element is replaced
+    // by a CSS scrollbar on .hb-opt-body, per the head-comment.
+    const pairs = [
+      [OPT_ELEM_TAB_LIST,   refs.tablistEl],
+      [OPT_ELEM_BTN_APPLY,  refs.applyBtnEl],
+      [OPT_ELEM_BTN_OK,     refs.okBtnEl],
+      [OPT_ELEM_BTN_CANCEL, refs.cancelBtnEl],
+    ];
+    for (const [id, el] of pairs) {
+      if (!el) continue;
+      const desc = findElementById(layout, id);
+      if (!desc) continue;
+      // Clear conflicting CSS anchors (right/bottom) so explicit
+      // left/top win — same pattern as radar/chat-panel ports.
+      el.style.right = "";
+      el.style.bottom = "";
+      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
+      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
+      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
+      applied += 1;
+    }
+    // Per-tab content (0x21000293) is NOT applied here — that
+    // layout drives the inner widgets per tab (Graphics radio
+    // buttons, Audio sliders, etc) and is gated by StateDesc which
+    // v1 fetch_layout does not yet serialize. See G3 in
+    // docs/layout-port-plan-2026-05-24.md.
+    try {
+      window.__diag?.layout?.onOptionsPanelApplied?.({ applied });
+    } catch (_) {}
+  };
+  const cached = getCachedLayout(OPTIONS_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(OPTIONS_LAYOUT_ID).then(apply).catch(() => {});
+}
+
+// Resize the main-panel overlay to match retail's 292×600 root
+// while this view is mounted; restore previous dims on cleanup.
+// Border-box accounts for the 6-px border on each side; the
+// 25-px title strip is part of main-panel's chrome (gmFloatyPanelUI
+// equivalent) and sits ABOVE the body — so overlay height = 25
+// (title) + 600 (body) + 12 (top/bottom border) = 637.
+//
+// retail width = 292 + 12 (border) = 304 (overlay box-sizing:border-box
+//   makes the inner content area = 292).
+const OPTIONS_OVERLAY_WIDTH = 292 + 12;   // 304
+const OPTIONS_OVERLAY_HEIGHT = 25 + 600 + 12; // 637
+
+function resizeMainPanelForOptions() {
+  const overlay = document.getElementById("hb-main-panel");
+  if (!overlay) return null;
+  const prev = {
+    width: overlay.style.width,
+    height: overlay.style.height,
+  };
+  overlay.style.width = `${OPTIONS_OVERLAY_WIDTH}px`;
+  overlay.style.height = `${OPTIONS_OVERLAY_HEIGHT}px`;
+  return prev;
+}
+
+function restoreMainPanelSize(prev) {
+  if (!prev) return;
+  const overlay = document.getElementById("hb-main-panel");
+  if (!overlay) return;
+  overlay.style.width = prev.width;
+  overlay.style.height = prev.height;
+}
+
 // Public view export — main-panel registration site is in index.html
 // (`mainPanelPlugin.registerView("options", optionsPanelPlugin.view)`).
 export const view = {
@@ -575,8 +719,25 @@ export const view = {
   },
   mount: (parentEl, ctx) => {
     ensureStyles();
+    // Resize main-panel to retail's 292×600 root for the duration of
+    // this view (restored in cleanup).
+    const prevMainPanelSize = resizeMainPanelForOptions();
+
     const root = document.createElement("div");
     root.className = "hb-opt-root";
+
+    // Tab list wrapper — corresponds to retail element 0x10000200
+    // (the type-5 tab list container). applyOptionsPanelLayout()
+    // positions it absolutely (276×560 at 0,0). Holds both the tab
+    // strip and the scrolled body in our impl (retail puts both
+    // inside the type-5 element, populated via StateDesc).
+    const tablistEl = document.createElement("div");
+    tablistEl.className = "hb-opt-tablist";
+    // Fallback CSS-driven dims if layout doesn't load.
+    tablistEl.style.left = "0";
+    tablistEl.style.top = "0";
+    tablistEl.style.width = "276px";
+    tablistEl.style.height = "560px";
 
     // Tab strip
     const tabsEl = document.createElement("div");
@@ -594,30 +755,32 @@ export const view = {
       tabsEl.appendChild(b);
       tabBtns[t.id] = b;
     }
-    root.appendChild(tabsEl);
+    tablistEl.appendChild(tabsEl);
 
-    // Body — re-rendered per tab
+    // Body — re-rendered per tab. Lives inside tablistEl so the
+    // tab strip + body together form the type-5 area.
     const bodyEl = document.createElement("div");
     bodyEl.className = "hb-opt-body";
-    root.appendChild(bodyEl);
+    tablistEl.appendChild(bodyEl);
 
-    // Footer with Apply / OK / Cancel
-    const footer = document.createElement("div");
-    footer.className = "hb-opt-footer";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.className = "hb-opt-btn";
-    setAcText(cancelBtn, "Cancel");
-    cancelBtn.addEventListener("click", () => {
-      // graphics_settings.js commits on each control change, so a
-      // pure "cancel = discard pending edits" path would need an
-      // explicit pending-vs-saved diff. For now: close panel.
-      window.__mainPanel?.closeView?.();
-    });
+    root.appendChild(tablistEl);
+
+    // Cancel / Apply / OK buttons as direct root children (same as
+    // retail — they're siblings of the tab list under panel root).
+    // Layout positions them at (16/106/196, 564) all 80×32. Per
+    // the head-comment dump:
+    //   0x100001FC ← Apply  (left)
+    //   0x100001FD ← OK     (middle)
+    //   0x100001FE ← Cancel (right)
     const applyBtn = document.createElement("button");
     applyBtn.type = "button";
     applyBtn.className = "hb-opt-btn";
     setAcText(applyBtn, "Apply");
+    // Fallback CSS dims (layout overrides these).
+    applyBtn.style.left = "16px";
+    applyBtn.style.top = "564px";
+    applyBtn.style.width = "80px";
+    applyBtn.style.height = "32px";
     applyBtn.addEventListener("click", () => {
       // Persistence is per-control today; explicit Apply is a no-op
       // pending the diff-based pending-state model. Flash the button
@@ -625,19 +788,52 @@ export const view = {
       applyBtn.classList.add("active");
       setTimeout(() => applyBtn.classList.remove("active"), 200);
     });
+
     const okBtn = document.createElement("button");
     okBtn.type = "button";
     okBtn.className = "hb-opt-btn primary";
     setAcText(okBtn, "OK");
+    okBtn.style.left = "106px";
+    okBtn.style.top = "564px";
+    okBtn.style.width = "80px";
+    okBtn.style.height = "32px";
     okBtn.addEventListener("click", () => {
       window.__mainPanel?.closeView?.();
     });
-    footer.appendChild(cancelBtn);
-    footer.appendChild(applyBtn);
-    footer.appendChild(okBtn);
-    root.appendChild(footer);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "hb-opt-btn";
+    setAcText(cancelBtn, "Cancel");
+    cancelBtn.style.left = "196px";
+    cancelBtn.style.top = "564px";
+    cancelBtn.style.width = "80px";
+    cancelBtn.style.height = "32px";
+    cancelBtn.addEventListener("click", () => {
+      // graphics_settings.js commits on each control change, so a
+      // pure "cancel = discard pending edits" path would need an
+      // explicit pending-vs-saved diff. For now: close panel.
+      window.__mainPanel?.closeView?.();
+    });
+
+    // Append in retail read-order: Apply, OK, Cancel.
+    root.appendChild(applyBtn);
+    root.appendChild(okBtn);
+    root.appendChild(cancelBtn);
 
     parentEl.appendChild(root);
+
+    // Apply retail layout positions to tab list + 3 buttons.
+    // Wasm is ready at this point (view mounted via user-initiated
+    // showView, not early-boot mountBar), so layout typically lands
+    // on first call. 3 × 1s retry covers transient null from a
+    // late-arriving eor/local shard.
+    applyOptionsPanelLayout({
+      tablistEl,
+      applyBtnEl: applyBtn,
+      okBtnEl: okBtn,
+      cancelBtnEl: cancelBtn,
+    });
 
     function switchTo(tabId) {
       // Cancel any in-flight keybind capture when leaving Controls.
@@ -660,6 +856,7 @@ export const view = {
     return () => {
       endCapture();
       root.remove();
+      restoreMainPanelSize(prevMainPanelSize);
     };
   },
 };
