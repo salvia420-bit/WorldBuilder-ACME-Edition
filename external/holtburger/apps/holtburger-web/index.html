@@ -6879,6 +6879,27 @@ void main() {
         if (passInput && passUrl != null) {
           passInput.value = passUrl;
         }
+        // bridge_url / server_host / server_port also come from URL
+        // params for the cloudflared / Tailscale tunnel workflows
+        // where the user is connecting from a remote browser. Without
+        // this the form defaults to `ws://127.0.0.1:8080/` and
+        // 127.0.0.1:9000 (i.e. the BROWSER'S loopback) which never
+        // reaches the bridge/ACE running on the server's box.
+        const bridgeUrlParam = bootParams.get("bridge_url");
+        if (bridgeUrlParam) {
+          const el = loginForm.querySelector('[name="bridge_url"]');
+          if (el) el.value = bridgeUrlParam;
+        }
+        const serverHostParam = bootParams.get("server_host");
+        if (serverHostParam) {
+          const el = loginForm.querySelector('[name="server_host"]');
+          if (el) el.value = serverHostParam;
+        }
+        const serverPortParam = bootParams.get("server_port");
+        if (serverPortParam) {
+          const el = loginForm.querySelector('[name="server_port"]');
+          if (el) el.value = serverPortParam;
+        }
       } catch (e) {
         console.warn("[boot] login pre-fill failed:", e);
       }
