@@ -23,6 +23,14 @@
 //   - Bottom 120x14: burden meter (placeholder until equipMask wiring).
 
 import { setAcText } from "../ui/ac_font.js";
+import { loadLayout, findElementById, parseElementIdHex, getCachedLayout } from "../ui/ac_layout.js";
+
+/** gmPaperDollUI — retail LayoutDesc that carries the body-slot Y
+ *  coordinates the paperdoll uses. The X coords are NOT in this
+ *  layout (retail computes them via parent-flow at runtime); we keep
+ *  the hand-tuned X values from PAPERDOLL_SLOTS and override only Y. */
+const PAPERDOLL_LAYOUT_ID = 0x21000024;
+
 
 const OVERLAY_ID = "hb-inventory";
 // Title bar is now owned by main-panel (see plugins/main-panel.js).
@@ -433,6 +441,47 @@ export const manifest = {
   description: "Right-side inventory window (gmInventoryUI 0x21000023)",
 };
 
+// Drive paperdoll body-slot (x, y) from gmPaperDollUI's LayoutDesc
+// (DAT 0x21000024) once the layout is loaded. Each slot's
+// `dataset.elemId` is the retail ElementDesc.element_id we look up.
+//
+// 2026-05-24 finding (paperdoll_layout_dump example): LayoutDesc
+// carries BOTH x and y for every element — earlier in-code comment
+// claiming "no X data is set" was incorrect. Retail's paperdoll
+// places weapons in a top row at y=8 (sword, shield, wand, missile,
+// necklace) above the body diagram which starts at the head slot
+// (y=28). Both the prior hand-tuned X and Y values diverged from
+// retail in non-obvious ways; switching to layout-driven values
+// gives the authentic retail anatomy.
+//
+// Hand-tuned PAPERDOLL_SLOTS values stay in effect until the layout
+// resolves (cached after first call — re-mounts are cheap). If the
+// layout is unavailable or an element_id isn't in it (Aetheria
+// 0x1000050E is missing from gmPaperDollUI — Throne-of-Destiny-era
+// slot, post-dates this layout) the hand-tuned value persists.
+function applyPaperdollLayoutY(dollSlotEls) {
+  const apply = (layout) => {
+    if (!layout) return;
+    let updated = 0;
+    let missed = 0;
+    for (const slot of Object.values(dollSlotEls)) {
+      const id = parseElementIdHex(slot.slot.elemId);
+      const el = findElementById(layout, id);
+      if (!el) { missed += 1; continue; }
+      if (typeof el.x === "number") slot.el.style.left = `${el.x}px`;
+      if (typeof el.y === "number") slot.el.style.top = `${el.y}px`;
+      updated += 1;
+    }
+    try {
+      window.__diag?.layout?.onPaperdollApplied?.({ updated, missed });
+    } catch (_) {}
+  };
+  // Synchronous if already cached, else fire-and-forget the load.
+  const cached = getCachedLayout(PAPERDOLL_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(PAPERDOLL_LAYOUT_ID).then(apply).catch(() => {});
+}
+
 // Inventory view — mounted inside main-panel's body slot. Returns
 // a cleanup fn the container calls on view swap.
 export const view = {
@@ -467,6 +516,7 @@ function doMount(parentEl, _ctx) {
     el.className = "hb-inv-doll-slot";
     el.dataset.equipMask = String(s.equipMask);
     el.dataset.name = s.name;
+    el.dataset.elemId = s.elemId;
     el.style.left = `${s.x}px`;
     el.style.top = `${s.y}px`;
     const icon = document.createElement("div");
@@ -481,6 +531,11 @@ function doMount(parentEl, _ctx) {
     dollSlotEls[s.equipMask] = { el, icon, tip, slot: s };
   }
   overlay.appendChild(paperdoll);
+
+  // Override Y coords from gmPaperDollUI LayoutDesc (DAT 0x21000024)
+  // once it's loaded. Falls through silently if the layout isn't
+  // available — the hand-tuned defaults render correctly either way.
+  applyPaperdollLayoutY(dollSlotEls);
 
   // Bag column — 4 placeholder tabs for now (Main, Bag 1, 2, 3).
   const bagCol = document.createElement("div");

@@ -609,3 +609,61 @@ reverses the doc's "won't-do" conclusion with the full
 explanation + a list of carried-forward limitations
 (mouse-only quirks filtered out, alt-bindings collapsed to
 primary, two non-canonical modifier bits ignored).
+
+## LayoutDesc consumer — paperdoll port (2026-05-24, later)
+
+First production consumer of the Milestone-D Layout chain. The
+LayoutDesc parser shipped earlier (101/101 retail records parse)
+but no JS-side consumer existed; plugins referenced layout IDs
+only in comments (e.g. inventory.js `// 0x21000024 gmPaperDollUI`)
+and reproduced the data as hand-tuned constants.
+
+What landed:
+
+- `MasterProperty::unpack(&[u8])` + `LayoutDesc::unpack(&[u8],
+  &MasterProperty)` helpers so callers don't need binrw directly.
+- `fetch_layout(id) → JSON` wasm export. Chains
+  MasterProperty 0x39000001 from `eor/portal` (cached) and the
+  Layout itself from `eor/local`. v1 serializes the element-tree
+  geometry only (id, type, default_state, x/y/w/h/z_level,
+  edges, children); StateDesc / BaseProperty / MediaDesc omitted
+  until a consumer needs them.
+- `apps/holtburger-web/ui/ac_layout.js` — `loadLayout(id)`
+  async/cached, `findElementById(layout, elemId)` depth-first
+  tree walker, `parseElementIdHex(s)` helper.
+- `apps/holtburger-web/plugins/inventory.js` — paperdoll body
+  slots driven by gmPaperDollUI (0x21000024) at runtime.
+  `applyPaperdollLayoutY` overrides both `x` and `y` per
+  ElementDesc (load-bearing correction: prior comment claimed
+  "no X data is set in the LayoutDesc" — wrong, every element
+  has x set; both axes are layout-driven now). Hand-tuned values
+  remain as fallback for Aetheria 0x1000050E which post-dates
+  gmPaperDollUI (Throne-of-Destiny-era slot).
+- `apps/holtburger-tools/examples/paperdoll_layout_dump.rs` — dev
+  tool that prints the layout tree and a per-element-id
+  expected-Y table for the JS consumer to assert against.
+
+Load-bearing finding from `paperdoll_layout_dump`: retail's
+gmPaperDollUI has a **weapons-at-top row** (Necklace, Right hand,
+Shield, Wand/staff, Missile all at y=8) which the prior hand-tuned
+table had completely wrong (those were scattered across rows
+4-6 of the body diagram instead). Switching to layout-driven
+gives the authentic retail anatomy.
+
+Verified end-to-end:
+- `master_property_parity` test: 1 record, byte-exact
+- `layout_parity` test: 101 records, byte-exact
+- Playwright with autoLogin + Inventory panel: 21/21
+  `(x, y)` matches between rendered DOM and expected
+  paperdoll_layout_dump output. Aetheria (1 slot) correctly
+  falls back to hand-tuned. Screenshot at
+  `docs/layout-paperdoll-2026-05-24.png` shows the retail
+  paperdoll anatomy.
+
+Follow-ons (not in this push):
+- Wider LayoutDesc consumers: each plugin's "ported from layout
+  0x21NNNN" comment is a candidate — `0x21000023 gmInventoryUI`,
+  `0x21000029 gmConfigUI`, `0x2100002C gmAttributeUI`, etc.
+- Richer fetch_layout payload: serialize StateDesc /
+  BaseProperty / MediaDesc when a consumer needs background
+  images, text states, or per-element behavior data.

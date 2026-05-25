@@ -186,6 +186,14 @@ pub struct LayoutDesc {
 }
 
 impl LayoutDesc {
+    /// Parse from raw bytes given a pre-parsed MasterProperty (the
+    /// singleton 0x39000001 needed to resolve BaseProperty type
+    /// tags inside the recursive Element/State tree).
+    pub fn unpack(data: &[u8], master: &MasterProperty) -> binrw::BinResult<Self> {
+        let mut cursor = binrw::io::Cursor::new(data);
+        Self::read_le(&mut cursor, master)
+    }
+
     pub fn read_le<R: Read + Seek>(
         reader: &mut R,
         master: &MasterProperty,

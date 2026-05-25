@@ -5206,6 +5206,128 @@ pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
     Ok(out)
 }
 
+/// Fetch one LayoutDesc (DAT 0x21) and serialize its element tree
+/// for the JS-side layout consumer chain (real AC UI port).
+///
+/// LayoutDesc records live in `client_local_English.dat`
+/// (namespace `eor/local`); their BaseProperty type tags resolve
+/// against the singleton MasterProperty (0x39000001) which lives
+/// in `client_portal.dat` (namespace `eor/portal`). Both records
+/// must be available; if either is missing we return `null`.
+///
+/// Returns JSON shape:
+/// ```json
+/// {
+///   "id": <u32>,
+///   "width": <u32>,
+///   "height": <u32>,
+///   "elements": [
+///     {
+///       "key": <u32>,              // outer-dict key (element handle)
+///       "element_id": <u32>,       // ElementDesc.element_id
+///       "element_type": <u32>,
+///       "default_state": <u32>,
+///       "x": <u32?>, "y": <u32?>,
+///       "width": <u32?>, "height": <u32?>,
+///       "z_level": <u32?>,
+///       "left_edge": <u32>, "top_edge": <u32>,
+///       "right_edge": <u32>, "bottom_edge": <u32>,
+///       "children": [ ... same shape, recursive ... ]
+///     },
+///     ...
+///   ]
+/// }
+/// ```
+///
+/// StateDesc / BaseProperty / MediaDesc data is intentionally NOT
+/// included in v1 — the first consumers (paperdoll Y-coords) only
+/// need element geometry. Extend the serializer when a richer
+/// consumer materializes.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::{LayoutDesc, MasterProperty};
+    let source = global_source::global_source();
+    const MASTER_PROPERTY_ID: u32 = 0x39000001;
+    let initial = [
+        ResourceKey::new("eor/local", layout_id),
+        ResourceKey::new("eor/portal", MASTER_PROPERTY_ID),
+    ];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+
+    let layout_bytes = match source.get_file_by_key(ResourceKey::new("eor/local", layout_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let master_bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", MASTER_PROPERTY_ID)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+
+    let master = match MasterProperty::unpack(&master_bytes) {
+        Ok(m) => m,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let layout = match LayoutDesc::unpack(&layout_bytes, &master) {
+        Ok(l) => l,
+        Err(_) => return Ok("null".to_string()),
+    };
+
+    fn emit_element(
+        out: &mut String,
+        key: u32,
+        el: &holtburger_dat::file_type::ElementDesc,
+    ) {
+        out.push_str("{\"key\":");
+        out.push_str(&key.to_string());
+        out.push_str(",\"element_id\":");
+        out.push_str(&el.element_id.to_string());
+        out.push_str(",\"element_type\":");
+        out.push_str(&el.element_type.to_string());
+        out.push_str(",\"default_state\":");
+        out.push_str(&el.default_state.to_string());
+        if let Some(x) = el.x { out.push_str(",\"x\":"); out.push_str(&x.to_string()); }
+        if let Some(y) = el.y { out.push_str(",\"y\":"); out.push_str(&y.to_string()); }
+        if let Some(w) = el.width { out.push_str(",\"width\":"); out.push_str(&w.to_string()); }
+        if let Some(h) = el.height { out.push_str(",\"height\":"); out.push_str(&h.to_string()); }
+        if let Some(z) = el.z_level { out.push_str(",\"z_level\":"); out.push_str(&z.to_string()); }
+        out.push_str(",\"left_edge\":");
+        out.push_str(&el.left_edge.to_string());
+        out.push_str(",\"top_edge\":");
+        out.push_str(&el.top_edge.to_string());
+        out.push_str(",\"right_edge\":");
+        out.push_str(&el.right_edge.to_string());
+        out.push_str(",\"bottom_edge\":");
+        out.push_str(&el.bottom_edge.to_string());
+        out.push_str(",\"children\":[");
+        let mut first = true;
+        for (ck, cv) in &el.children {
+            if !first { out.push(','); }
+            first = false;
+            emit_element(out, *ck, cv);
+        }
+        out.push_str("]}");
+    }
+
+    let mut out = String::with_capacity(layout.elements.len() * 256);
+    out.push_str("{\"id\":");
+    out.push_str(&layout.id.to_string());
+    out.push_str(",\"width\":");
+    out.push_str(&layout.width.to_string());
+    out.push_str(",\"height\":");
+    out.push_str(&layout.height.to_string());
+    out.push_str(",\"elements\":[");
+    let mut first = true;
+    for (k, el) in &layout.elements {
+        if !first { out.push(','); }
+        first = false;
+        emit_element(&mut out, *k, el);
+    }
+    out.push_str("]}");
+    Ok(out)
+}
+
 /// Fetch one KeyMap (DAT 0x14) — retail's factory-default keystroke
 /// bindings. The single record `0x14000000` ("gmDefaultMap") + the
 /// alt `0x14000002` ("DefaultMap") are the two records retail ships.
