@@ -1,9 +1,17 @@
 # Handoff: LayoutDesc (DAT 0x21) consumer wiring
 
-**For:** next agent considering retail-UI port from Layout records.
-**Status: parser shipped (101/101 byte-exact); wasm export NOT shipped; consumer NOT shipped.** Recommended action: **DEFER** until a concrete UX win is identified.
+**For:** historical reference — SUPERSEDED.
+**Status (2026-05-25 update): consumer shipped across 17 plugins.** This handoff's "DEFER" recommendation was overruled by the layout-port wave the same day it was written. The decision proved correct in retrospect: hand-tuned plugin values diverged from retail in surprising ways (e.g. gmPaperDollUI's weapons-at-top row that the hand-tune had scattered across rows 4-6), and the runtime-driven approach delivered visible authenticity gains.
 
-## Why this is deferred, not in-progress
+**See:** `external/holtburger/docs/layout-port-plan-2026-05-24.md` for the canonical record of what shipped. Brief summary of the actual state:
+
+- `fetch_layout(id)` wasm export shipped — composes MasterProperty + LayoutDesc, walks the element tree, emits geometry-only JSON (StateDesc/BaseProperty/MediaDesc deferred — see G3 below).
+- `ui/ac_layout.js` runtime shipped — `loadLayout`, `findElementById`, `getCachedLayout`, `parseElementIdHex`, `applyLayoutRegions(layoutId, refs)` helper (G2).
+- 17 plugins wired across Tier 1 / 2 / 3 of the layout-port plan (every plugin that referenced a retail LayoutDesc in its head-comment).
+- G1 eager-prefetch of high-frequency layouts into boot.hba.
+- G3 (StateDesc/BaseProperty/MediaDesc payload) shipped then reverted in commit `4f7f5033` pending production-quality reland — the one remaining infrastructure follow-on.
+
+## Original "Why this is deferred" rationale (preserved for context)
 
 The vitaeum-parity Milestone D shipped the full LayoutDesc chain (LayoutDesc + ElementDesc + StateDesc + MediaDesc + MasterProperty + BasePropertyDesc + BaseProperty) — 101/101 retail records parse byte-exact. The parser is production-ready.
 

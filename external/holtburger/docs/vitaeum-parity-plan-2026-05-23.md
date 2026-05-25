@@ -757,3 +757,91 @@ Verified e2e (Playwright + autoLogin + 18s wait covering retry
 loop): 8/8 region matches (disk, lock, move, N/E/S/W, coords).
 Inventory regression test re-run after the ac_layout.js fix:
 still 4/4. Screenshot at `docs/layout-radar-2026-05-24.png`.
+
+## Status — closed (2026-05-25)
+
+Everything Milestone A through D shipped, plus the downstream
+consumer waves that this plan listed as out-of-scope. Summary of the
+post-doc deltas:
+
+### Layout-port wave — all 17 catalogued plugins wired
+See `docs/layout-port-plan-2026-05-24.md` (which now carries its own
+"Status log" closing all of Tier 1 / 2 / 3). G1+G2+G3 infrastructure
+landed in `c3b1ac02`; G3 states emission temporarily reverted in
+`4f7f5033` pending production-quality reland.
+
+### Wire-agent Wave 7 — parser → consumer wiring shipped
+Wave 7.1 (commit `54bbe206`) wired the 3 deferred vitaeum-parity
+parsers as standalone readers + diag surfaces:
+- CombatManeuverTable (DAT 0x30) → `ui/ac_combat_maneuver.js` + picking.js melee dispatch (replaces vibe-pose with real motion lookup)
+- PaletteSet (DAT 0x0F) → `ui/ac_palette_set.js`
+- GfxObjDegradeInfo (DAT 0x11) → `ui/ac_lod.js`
+
+Wave 7.2 (`75e603bb`) shipped the ClothingTable reader runtime +
+diag. Wave 7.3 (`c997901e`) wired the UpdateObject (0xF7DB) wire
+handler + applyAppearance equip-mid-game path. Wave 7.4 (`11c2a591`)
+landed DegradeInfo entity-spawn LOD substitution. Wave 7.5
+(`a2371534`) added the hot-swap optimization for applyAppearance
+(opt-in via `?clothingHotSwap=1`) + AnimationCache substitution-aware
+key. Wave 7.6 (`3885c43e`) closed the memory-growth follow-on with
+strict-LRU eviction. Wave 7.7 (`c2c5c7a2`) shipped the Clothing II
+dye foundation (observability + palette reader). Wave 7.8
+(`7d1b3259`) shipped the CPU preview compositor. Wave 7.9
+(`bfc20d16`) + 7.9.A (`ee4c13ca`) + 7.9.B (`68562a6e`) shipped the
+dye-preview tooltip plugin, 3D rotating viewport on pedestal, player
+mesh next to pedestal, and Shift+drag-over whole-mesh preview.
+
+See `docs/handoff-clothing-table-2026-05-24.md` and
+`docs/handoff-degrade-info-entity-lod-2026-05-24.md` for the living
+status of each chain.
+
+### AC font + keymap follow-ons — shipped
+The handoff-ac-font follow-ons that this plan considered downstream:
+- Chat-window font 0x40000027 + heading font 0x40000019 declared as
+  named exports in `ui/ac_font.js`; chat-panel.js consumes the chat
+  font for log lines.
+- Rebind UI in Controls tab — `captureFor` / `captureHandler` /
+  `setBinding` / `clearBinding` orchestration shipped in
+  options-panel.js.
+- gmDefaultMap retail defaults wired through Controls tab (`(default)`
+  column) — `f556b24e`.
+
+### Chat wire opcodes — bonus shipped
+Beyond layout: `/tell` + reply/retell split, retail-strict comma
+parser, `/a /f /p /m /v /co /h` channel-slash commands, and
+`/cg /ct /clfg /crp /society /olthoi` all route to TurbineChat with
+the right wire opcodes (`fd7deb25`, `b9c2bff0`, `842b3af4`).
+
+### What's still open post-Wave-7
+
+Heterogeneous list — *not* parallel-agent shaped. Each is its own
+session:
+
+1. **Full-world bake 13×13 → 255×255 (65,025 LBs)** — original
+   handoff-vitaeum-parity §"Downstream"; ops/storage work, not
+   parser work.
+2. **CJK font fallback** `0x40000017` for non-Latin chat — small.
+3. **Scrolling battle-text font** `0x40000031` — small.
+4. **3D damage popups** `0x4000000F` / `0x40000010` — small.
+5. **LanguageString consumer in character-creation** (Sho-naming
+   hint tooltip) — `loadLanguageString` runtime is shipped but no
+   character-create consumer exists.
+6. **Dye Phase D.1** — replace hardcoded `DYEPOT_OUTCOMES` table
+   with full ACE-recipe-data extraction. See handoff-clothing-table.
+7. **DegradeInfo shape-(b)** continuous per-frame LOD swap (entities
+   crossing the threshold mid-game don't switch today).
+8. **Multi-part entity LOD** — `resolve_did_degrade` only consults
+   the first GfxObj part of a SetupModel.
+9. **Hot-swap default-on** — gated by `?clothingHotSwap=1` pending
+   1070-class combat-motion A/B validation.
+10. **G3 states emission reland** — production-quality re-introduction
+    of StateDesc/BaseProperty/MediaDesc in `fetch_layout`.
+11. **AnimationCache watermark tuning** — Wave 7.6 set 256 default
+    with `?animCacheMax=N` override; tune from real usage.
+12. **buffs-hud retail-layout check** — confirm `gmFloatyBuffsUI` in
+    `acclient.h` before declaring Holtburger-only.
+
+The skipped low-value parsers (RenderTexture, RenderMaterial,
+MaterialModifier, MaterialInstance, RenderMesh, MutateFilter,
+DatabaseProperties, StringState, BSPNodeType) remain skipped per the
+original go/no-go: write only on concrete consumer demand.

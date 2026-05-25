@@ -13,6 +13,14 @@ Status: **shipped 2026-05-19** (first ship is structural / canonical-oracle
 parse parity; field-level Rust-vs-Chorizite shape comparison is the Wave 2.D
 follow-on bucket — see §"Wave 2.D follow-ons" below).
 
+**Status update (2026-05-25):** the W2.D EnvCell FAIL row closed in commit
+`7b17c17d` ("EnvCell CellPortal fix + Wave 4 cold sweep") — the flagmask
+bug (`ENVCELL_FLAG_HAS_STATIC_OBJS = 0x02` etc., not `0x01`) and the
+missing `polygon_id` field on `CellPortal` were both patched. Counts
+should now read 11 PASS / 13 GAP / 0 FAIL. The remaining Wave 2.D
+follow-ons (field-level drift sweep over the 22 production-shape parsers)
+are still deferred per the original go/no-go.
+
 ## The contract
 
 Every record byte under `~/ac_base_dats/{client_portal,client_cell_1,client_local_English}.dat`:

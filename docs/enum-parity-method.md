@@ -10,6 +10,16 @@ Companion to [`world-completeness-method.md`](world-completeness-method.md)
 Status: **shipped 2026-05-19**, baseline audit run, follow-on PRs surface
 the drift it found.
 
+**Status update (2026-05-25):** baseline audit landed 16 FAIL rows + 45
+GAP rows. None have been individually closed since the first ship —
+the deliberate policy (per the original go/no-go) is **per-failure
+escalation**: a FAIL row gets fixed when its drift causes a runtime
+regression observable in `__diag` or the wire-agent. No `__diag.enums.*`
+client-side surface exists yet; when the first enum FAIL surfaces at
+runtime (e.g. a motion command misinterpreted because of a stance-bit
+mismatch), wire the minimal observation hook then — not pre-emptively.
+GAP rows remain a passive backlog and don't gate the validator.
+
 ## The contract
 
 For every enum that exists in BOTH ports:

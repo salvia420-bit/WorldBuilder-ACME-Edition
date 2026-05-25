@@ -134,47 +134,46 @@ and tanks autoLogin.
 
 ## What's left (open follow-ons)
 
-### Easy wins (rebake-free)
+### Status update 2026-05-25
 
-1. **Rebind UI in the Controls tab.** The Input tab today is
-   read-only — labels only, no current key shown. Wire to a
-   keystroke capture flow + persist to localStorage. ACE doesn't
-   define a server-side keybind protocol; this is purely client.
-   Per `acclient.c` retail uses `UIOption_ActionKeyMap` for this.
+The "easy wins" are mostly shipped:
+- ✅ **Rebind UI in the Controls tab** shipped — `captureFor` / `captureHandler` / `setBinding` / `clearBinding` orchestration is in `plugins/options-panel.js`. Plus the bonus: retail gmDefaultMap defaults populate the `(default)` column (commit `f556b24e`).
+- ✅ **Chat font 0x40000027** wired in chat-panel.js (named export `CHAT_FONT_ID` in `ui/ac_font.js`).
+- ✅ **Heading font 0x40000019** declared (named export `HEADING_FONT_ID`). Consumer wiring still open if any panel wants visible heading text.
 
-2. **Multi-font support beyond UI + compact.** 47 unused Font
-   records. Pick the right one for context:
-   - 0x40000007–0x40000018 (21x22 cell, 1912 glyphs) — possibly
-     the bold/heading variant.
-   - 0x40000017 / 0x40000021 (226735 bytes) — huge, likely the
-     Asian-language font.
-   - Probe with `od -An -tu4 -N12 -j4 font.bin` to read cell dims.
+### Still open
 
-3. **Wire LanguageString into character creation.**
-   `loadLanguageString(0x31000010)` already returns the
-   Sho-naming hint. Plug it into a tooltip / sidebar in
-   character-creation UI.
+1. **Multi-font: remaining 45 unused records.** The high-value
+   picks beyond CHAT + HEADING:
+   - `0x40000017` — CJK fallback for non-Latin chat (smallest of
+     the 5 CJK sizes). Currently high-codepoint chars silently
+     drop in chat lines.
+   - `0x40000031` — scrolling battle-text font (22×13, narrow
+     aspect for damage tickers).
+   - `0x4000000F` / `0x40000010` — large display fonts for 3D
+     damage popups.
+   - See `ac-font-inventory-2026-05-24.md` for the full ladder.
 
-### Medium effort (rebake worth batching)
+2. **Wire LanguageString into character creation.**
+   `loadLanguageString(0x31000010)` runtime exists (`ui/ac_strings.js`)
+   but no character-create consumer was built. Plug into a tooltip /
+   sidebar.
 
-4. **Re-bake to include compact font 0x4000001C + atlases in
-   boot.hba.** Currently lazy-fetched over HTTP on first chat-line
-   render (3 round-trips). Add IDs to `BOOT_ESSENTIAL_PORTAL_IDS`
-   in `apps/holtburger-tools/src/dat_shard.rs`. Also add
-   ActionMap (`0x26000000`) for the same reason — Controls tab
-   first-render is HTTP-gated today.
-
-### Big efforts (separate sessions)
-
-5. **Full-world bake scope-up: 13×13 → 255×255 Dereth (65,025
-   landblocks).** Operations work, not parser work. Per
-   `project_world_expand_step_1.md`.
-
-6. **Layer color forwarding into more migrations.** Some
+3. **Layer color forwarding into more migrations.** Some
    character-info / inventory / vendor-ui sites have CSS color
    tokens (`--hb-text-gold`, `--hb-text-numeric-green`) that
    render white today. Pass `{color}` through `setAcText` for
    them; values are concrete hex via `getComputedStyle` resolution.
+
+4. **Full-world bake scope-up: 13×13 → 255×255 Dereth (65,025
+   landblocks).** Operations work, not parser work. Per
+   `project_world_expand_step_1.md`. No commits on this since the
+   handoff was written.
+
+5. **Compact font 0x4000001C + ActionMap 0x26000000 boot.hba
+   inlining.** Both still lazy-fetched over HTTP on first use.
+   Add IDs to `BOOT_ESSENTIAL_PORTAL_IDS` in
+   `apps/holtburger-tools/src/dat_shard.rs` and re-bake.
 
 ## Files at a glance
 

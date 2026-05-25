@@ -1,10 +1,26 @@
 # Handoff: vitaeum-parity follow-on work
 
-**For:** next agent picking up the holtburger-dat parser-coverage push.
+**For:** historical reference — MOSTLY CLOSED.
 **Session that produced this:** 2026-05-23, ~17 commits on master,
 ending at `54c3c085`.
-**Status: shippable.** Everything that landed is tested, no broken
-state. This doc directs you to keep going.
+**Status (2026-05-25 update):** the "Downstream work the parser
+coverage unlocks" list at the bottom of this doc has been largely
+closed by Wave 7 (commits `54bbe206` → `68562a6e`) and the
+layout-port wave (commits `e606604a` → `0c5e26b0`). See the
+"Status — closed" section at the bottom of
+`docs/vitaeum-parity-plan-2026-05-23.md` for the canonical record of
+what shipped.
+
+Brief summary of remaining open follow-ons (the only items still
+matching this handoff's scope):
+- **Full-world bake 13×13 → 255×255 (65,025 LBs)** — original §"Downstream" #1. Still open. Ops/storage work.
+- **G3 states emission reland** — re-introduce StateDesc/BaseProperty/MediaDesc in `fetch_layout` (the layout-port G3 was temporarily reverted in `4f7f5033`).
+- **Long-tail font wirings** — CJK fallback `0x40000017`, scrolling battle text `0x40000031`, 3D damage popups `0x4000000F` / `0x40000010`.
+- **LanguageString consumer in character-creation** — `loadLanguageString` runtime ships; no character-create consumer.
+
+The "Skipped during this push" list is unchanged — those parsers
+remain skipped per the original go/no-go (write only on concrete
+consumer demand).
 
 ## Don't read everything inline — use Explore agents
 

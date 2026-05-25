@@ -12,6 +12,22 @@ per the [diagnostic toolset plan](diagnostic-toolset-plan-2026-05-19.md)
 
 Status: **shipped 2026-05-19** (W3.C).
 
+**Status update (2026-05-25):** W3.E (Rust port of the swing classifier
++ wasm export) DID ship 2026-05-19 — see memory
+`project_w3e_done_2026-05-19`. The note above at line 53 ("is **not yet
+implemented** as of 2026-05-19") was written EARLY in the day and the
+W3.E ship happened later that same day; the doc was never refreshed.
+Shipped artifacts: `parseMotionLinkForSwingBytes` free wasm export +
+`SessionHandle::lookupMotionLinkForSwing` method (both in
+`apps/holtburger-web/src/lib.rs`) + `classifyMotionCommandTyped`
+non-breaking widening in `scene3d/entities.js` + `validate_motion_pose
+.cjs --js-vs-cs` flag (52/52 of C# PASS rows match JS, target was
+≥30/52). The wave-7 commit `7c0b4545` later added runtime
+observability over the motion-link lookup path. Wave 7.1 (`54bbe206`)
+wired `CombatManeuverTable` (DAT 0x30) into `picking.js` melee
+dispatch, replacing the vibe-pose placeholder with a real motion-link
+consult. The W3.C-era "oracle only" gap is fully closed.
+
 ## The contract
 
 For any retail motion table `T` ∈ portal.dat, any stance `S`, any

@@ -18,6 +18,12 @@ Status:
   baseline stable; **acceptance bar not met** because the wasm side
   doesn't expose a pure-prediction subject signal — see
   §"Wave 3.A — live-replay infrastructure" below for the documented gap.
+- **W3.F (pure-prediction shadow): shipped 2026-05-19** in commit
+  `902b8887`. Closes the W3.A acceptance gap: wasm now exports
+  `get_last_client_prediction` + `set_last_client_prediction`; the
+  C# OracleSim integrates with tick-count-driven sub-stepping. 5/5
+  runs PASS at maxDrift 0.04–0.09m (≤0.10m budget), ~30× reduction
+  vs W3.A. See memory `project_wave3f_done_2026-05-19`.
 - W3.D collision + on-ground state machine: still deferred — see §"Scope
   honesty" below.
 

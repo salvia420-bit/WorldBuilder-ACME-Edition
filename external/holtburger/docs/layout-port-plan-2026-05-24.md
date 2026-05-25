@@ -1,6 +1,7 @@
 # Layout-port plan — wire remaining plugins to retail LayoutDescs
 
 **Started:** 2026-05-24, after the radar/compass port (commit `5a1b957e`).
+**Status: ESSENTIALLY COMPLETE (2026-05-25).** All 17 catalogued plugins wired across Tier 1 / 2 / 3 + G1/G2/G3 infrastructure landed. See "Status log" at bottom for the full delta.
 **Status doc parent:** `vitaeum-parity-plan-2026-05-23.md` "Inventory window port" + "Radar / compass" sections.
 **Pattern:** Each plugin reads ElementDesc positions/sizes from `client_local_English.dat`'s LayoutDesc records (0x21NNNNNN range) at runtime via `ui/ac_layout.js`'s `loadLayout(id)` + `findElementById(layout, elemId)`. Hand-tuned CSS stays as fallback.
 
@@ -8,15 +9,40 @@
 
 24 plugins total. 21 reference a retail LayoutDesc in their head-comment; 3 don't (Holtburger additions or composite components).
 
-### Wired (3 layouts across 2 plugins)
+### Wired (17 plugins, all tiers — shipped 2026-05-24 → 2026-05-25)
 
 | Plugin | Layout | Retail name | Commit | What's wired |
 |---|---|---|---|---|
 | `inventory.js` | `0x21000023` | gmInventoryUI | `998bbc8a` | paperdoll area + bag column + items grid + burden bar |
 | `inventory.js` | `0x21000024` | gmPaperDollUI | `e606604a` / `998bbc8a` | 21/22 body slots + burden bar position |
 | `radar.js` | `0x21000074` | gmRadarUI | `5a1b957e` | disk + lock + move + 4 cardinals + coords strip (8/8 elements) |
+| `vitals-hud.js` | `0x2100006C` | gmFloatyVitalsUI | `3daad340` | 3 bars + labels |
+| `status-indicators.js` | `0x21000071` | gmFloatyIndicatorsUI | `e777d0ef` | 30 elements / 32 image DIDs |
+| `hotbar.js` | `0x21000016` + `0x21000070` | gmToolbarUI + gmFloatyToolbarUI | `6b94007c` | chrome + slots |
+| `target-bar.js` | `0x21000016` | gmToolbarUI | `15e95b8d` | 5 panel shortcuts + buttons |
+| `combat-hud.js` | `0x21000007` | gmCombatUI | `1c4ad1bf` | stance + power-bar + height triangle |
+| `chat-panel.js` | `0x2100006F` | gmFloatyMainChatUI | `36830702` | **Option B** (full retail port, 4-button left-edge strip) |
+| `map-panel.js` | `0x21000026` | gmMapUI | `246f571d` | 11 elements |
+| `options-panel.js` | `0x21000029` | gmConfigUI | `4004918b` | tab strip + content area |
+| `character-info.js` | `0x2100001A` + `0x2100002C` + `0x2100002D` + `0x2100005E` | gmCharacterInfoUI + Attribute/Skill/Title | `442c7e4c` | parent + 3 child layouts |
+| `spellbook.js` | `0x21000032` | gmSpellbookUI | `2b20c6ec` | school tabs + spell grid + detail pane |
+| `vendor-ui.js` | `0x21000012` | gmVendorUI | `c72d9d06` | 28 elements |
+| `journal-panel.js` | `0x21000066` | gmJournalUI | `31e10745` | 23 elements |
+| `contracts-panel.js` | `0x21000069` | gmContractsUI | `947df036` | 19 elements |
+| `allegiance-panel.js` | `0x2100002F` | gmAllegianceUI | `17d26c9b` | 22 elements |
+| `fellowship-panel.js` | `0x21000030` | gmFellowshipUI | `3e3977f7` | 24 elements |
+| `examine-target.js` | `0x2100006B` | gmFloatyExaminationUI | `d93c1e68` | rows of label/value |
+| `main-panel.js` | `0x2100006E` | gmFloatyPanelUI | `0c5e26b0` | container chrome (conservative wiring) |
 
-### Candidates — open layout-port work (16 layouts)
+### Open candidates — none in the catalogued plugin set
+
+Every plugin that referenced a retail LayoutDesc in its head-comment is now wired. Tier 1/2/3 of the original plan are fully closed.
+
+The "Not-applicable" set below is unchanged (Holtburger-only abstractions / no retail layout).
+
+### Original candidate list (historical — for reference)
+
+The Tier 1/2/3 partitioning below was the planning structure used to drive the parallel ports. Kept inline for posterity; every row has shipped per the "Wired" table above.
 
 Ordered by likely-visual-impact descending; effort is rough.
 
@@ -112,34 +138,27 @@ Replace the 7-button top tab strip with retail's 4-button left-edge strip. Reduc
 **Option C — pure data layer, no visual change:**
 Wire `loadLayout(0x2100006F)` and `findElementById` calls but apply only invisible sizing — frame corners, decorative edges, scroll behavior. Hand-tuned positions for everything user-visible stay in place. Useful as scaffolding for the future. Effort: ~30 min.
 
-## Cross-cutting groundwork
+## Cross-cutting groundwork — ALL SHIPPED in `c3b1ac02` (2026-05-25)
 
-Before tackling individual ports, two infrastructure pieces would compound:
+### G1 — Lazy layout pre-bake in `boot.hba` ✅
 
-### G1 — Lazy layout pre-bake in `boot.hba`
+Eager-prefetch landed (serialized in `d1a8dcd3` to avoid wasm RefCell re-entry). Frequently-loaded layouts bundle into boot.hba and skip the per-shard HTTP fetch.
 
-Add the most-frequently-loaded layouts to `BOOT_ESSENTIAL_PORTAL_IDS` so they bundle into boot.hba and skip the per-shard HTTP fetch. Candidates: `0x21000023` (inventory), `0x21000024` (paperdoll), `0x21000074` (radar), `0x21000070` (hotbar), `0x2100006F` (chat), `0x2100006C` (vitals), `0x2100006E` (main-panel container). Plus the master record `0x39000001` (already chained per call). Effort: 15 min + re-bake.
+### G2 — Plugin-side `applyLayoutRegions(layoutId, refs)` helper ✅
 
-### G2 — Plugin-side `applyLayoutRegions(layoutId, refs)` helper
+Shared helper extracted into `ui/ac_layout.js`. Reduced every subsequent port by ~30 LOC.
 
-Each plugin port replicates a similar `applyXxxLayout` helper. Extract a common helper into `ui/ac_layout.js` that takes a layoutId + `{ elemId → DOM ref }` map and applies x/y/w/h. Plus a `withParentOrigin(parentLayoutId, parentElemId)` mode for the burden-bar pattern (anchor inside a parent panel). Effort: ~1 hour, reduces every subsequent port by ~30 LOC.
+### G3 — Richer `fetch_layout` payload (StateDesc / BaseProperty / MediaDesc) ⚠️ PARTIALLY REVERTED
 
-### G3 — Richer `fetch_layout` payload (StateDesc / BaseProperty / MediaDesc)
+States emission temporarily reverted in `4f7f5033` for runtime A/B (regression observed). A production-quality reland is the main remaining infrastructure follow-on for this plan. Geometry-only payload is what the 17 wired plugins currently consume.
 
-Current wasm `fetch_layout` v1 emits geometry only. The StateDesc tree carries background image DataIDs, hover/active state colors, text content references, behavior flags. Adding these would unlock layouts that depend on multi-state rendering (lock-button's locked/unlocked sprites; channel-selector's dropdown-open state). Effort: 2–3 hours of wasm + serializer + JS unpack.
+## Order shipped (historical record)
 
-## Suggested order
+The plan's suggested order was followed approximately. Final shipping order across two parallel waves:
 
-1. **G1** re-bake — closes a stale follow-on, ~15 min ops work, makes Tier 1 ports faster.
-2. **G2** helper extraction — refactor while the pattern is fresh (one inventory + one radar to consolidate from).
-3. **Chat (Option A)** — answers the user's direct question, ~1.5 hours, visible-but-conservative.
-4. **Hotbar** — same size class as chat; quick win.
-5. **Vitals HUD + status-indicators + target-bar** — small focused HUD strip ports.
-6. **G3** richer payload — needed before character-info / spellbook / options-panel (state-driven UIs).
-7. **Vendor + spellbook + map + journal + contracts + allegiance + fellowship + character-info + options-panel** — sequential, each ~2 hours.
-8. **Main-panel container** — last; once individual panels are consistent, port the wrapping `gmFloatyPanelUI` to drive chrome.
-
-Total: ~25–30 hours of layout-port work to consume the full inventory. Spread across sessions.
+1. Wave 1 (2026-05-24 evening): `vitals-hud` → `status-indicators` → `hotbar` → `target-bar` → `combat-hud` → `chat-panel` (Option B chosen — full retail port)
+2. Wave 2 (2026-05-24 → 2026-05-25): `map-panel` → `options-panel` → `character-info` → `spellbook` → `vendor-ui` → `journal-panel` → `contracts-panel` → `allegiance-panel` → `fellowship-panel` → `examine-target` → `main-panel`
+3. Infrastructure: G1+G2+G3 landed as a single commit (`c3b1ac02`); G3 states emission later reverted (`4f7f5033`); `loadLayout` race guard (`4ec03367`); G1 serialization fix (`d1a8dcd3`); `scene3d` layoutMarginW plumbing (`e554b399`).
 
 ## How to add a new layout port (recipe)
 
@@ -179,3 +198,15 @@ These can re-occur on any plugin that mounts before wasm is ready:
 3. **Boot-order: `mountBar()` runs BEFORE `window.__hbWasm`** — any plugin mounted via the bar (not user-initiated panel-open) must handle the wasm-not-yet-ready case. The radar's 8 × 2s retry loop is the established pattern.
 
 4. **Hand-tuned values often diverge from retail in surprising ways** — the paperdoll case had weapons scattered across the body diagram instead of in a top row at y=8. Visual differences are usually authentic-retail; ask the user before reverting.
+
+## Status log
+
+- **2026-05-24 22:49** — Plan doc created (this file). Inventory + radar wired. G1/G2/G3 listed as open infrastructure work.
+- **2026-05-24 evening → 2026-05-25** — Wave 1 + Wave 2 ports shipped. 17 plugins wired. G1+G2+G3 infrastructure landed as `c3b1ac02`.
+- **2026-05-25** — G3 states emission temporarily reverted (`4f7f5033`) pending production-quality reland. `loadLayout` race guard added (`4ec03367`) for `init_resource_source` ordering. G1 serialization fix (`d1a8dcd3`) for wasm RefCell re-entry.
+
+## What's still open
+
+1. **G3 states emission reland (production-quality)** — re-introduce StateDesc / BaseProperty / MediaDesc serialization in `fetch_layout` so plugins can consume multi-state rendering (lock-button locked/unlocked sprites, channel-selector dropdown-open state, etc.). Estimated 3h + careful A/B validation.
+2. **buffs-hud retail-layout check** — head-comment didn't reference a layout; `acclient.h` mention of `gmFloatyBuffsUI` should be confirmed before declaring it Holtburger-only. Estimated 30 min.
+3. **Background frames / decorative edges in `inventory.js`** — gmInventoryUI's `0x100001D0` (background frame) and `0x100001D1` (bottom edge line) intentionally left unwired (cosmetic, replaced by main-panel's brass-rim chrome). Revisit if the G3 reland enables image-DID consumption.
