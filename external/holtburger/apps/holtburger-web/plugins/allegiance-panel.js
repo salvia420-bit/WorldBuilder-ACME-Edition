@@ -8,19 +8,95 @@
 //   0x06001AAF — dark mottled background panel
 //   0x06004D0B — small black corner accent
 //
-// Layout structure (300×600 px, from gmAllegianceUI-0x2100002F.json):
-//   - Top: patron section (300×45)
-//   - Y=45:  monarch section (300×63)
-//   - Y=108: rank section (300×45)
-//   - Y=153: small status row
-//   - Y=171: VASSALS scroll list (279×350 + 16×350 scrollbar)
-//   - Y=535: ignore-requests toggle
-//   - Y=562: Swear / Break / Kick buttons (88×33 each)
+// Layout structure (300×600 native, from gmAllegianceUI 0x2100002F).
+// Element-id map confirmed by allegiance_panel_layout_dump 2026-05-24:
 //
-// Companion tabs Friends/Squelch share the same layout via gmFloatyPanelUI
-// — those are not part of this view yet.
+//   Root 0x1000024F — 300×600 outer panel (11 children + 1 sibling).
+//     Patron section 0x10000250 type=3 (0,0) 300×45 — "Followers/Rank" header
+//       0x10000251 type=0 (0,0)   300×18 — header strip / icon row
+//       0x10000252 type=0 (0,18)  120×18 — "Followers:" label column
+//       0x10000253 type=0 (120,18)280×18 — Rank value column (1 state)
+//       0x10000254 type=3 (0,36)  300×9  — divider
+//     Monarch section 0x10000255 type=3 (0,45) 300×63 (2 states)
+//       0x10000256 type=0 (0,0)   210×18 — Patron row
+//       0x10000257 type=0 (0,18)  210×18 — Monarch row
+//       0x10000490 type=3 (210,0) 90×36  — selector box (Patron/Monarch picker)
+//         0x10000491 type=0 (0,0) 90×18  — selector top
+//         0x10000492 type=0 (0,18)90×18  — selector bottom
+//       0x10000258 type=0 (0,36)  280×18 — Allegiance-name row
+//       0x10000259 type=3 (0,54)  300×9  — divider
+//     XP section 0x1000025A type=3 (0,108) 300×45 (2 states)
+//       0x1000025B type=0 (0,0)   100×18 — XP Generated label
+//       0x1000025C type=0 (0,18)  280×18 — XP Available row
+//       0x10000490 type=3 (220,0) 80×36  — selector box (reuses elem id)
+//         0x10000491 (0,0) 80×18 — selector top
+//         0x10000492 (0,18)80×18 — selector bottom
+//       0x1000025D type=3 (0,36)  300×9  — divider
+//     Status row 0x1000025E (0,153) 100×18 — small status left
+//     Status row 0x1000025F (179,153)100×18 — small status right
+//     Vassal list 0x10000260 type=5 (0,171) 279×350 (R2 B1 edges)
+//     Vassal scrollbar 0x10000261 (280,171) 16×350
+//     Ignore-toggle row 0x10000262 (9,535) 275×14
+//     Swear button 0x10000263 (9,562)   88×33 default_state=13
+//     Break button 0x10000264 (106,562) 88×33 default_state=13
+//     Kick  button 0x10000265 (203,562) 88×32 default_state=13
+//
+//   Vassal-row template 0x10000266 — 279×32 sibling at (0,0) (2 states).
+//     0x10000267 type=3 (0,0)   279×16 — row body (1 state)
+//       0x10000268 type=0 (0,0) 279×16 — name cell template
+//     0x100004AA type=0 (0,16)  100×16 — vassal-XP left column
+//     0x10000269 type=0 (100,16)179×16 — vassal-XP right column
+//
+// Companion tabs Friends/Squelch share the panel via gmFloatyPanelUI —
+// those still swap views via window.__mainPanel.showView.
+//
+// SCALE: native layout is 300×600; our main-panel body is 300×337.
+// We use scaleY = 337 / 600 ≈ 0.562 compression on every Y/height
+// value applied from the layout (preserving retail-Y fidelity). X is
+// applied unchanged. The Y compression squeezes the 9-px dividers and
+// 18-px header rows but the proportions stay retail-correct. Picked
+// option (a) per layout-port-plan-2026-05-24.md instead of option (b)
+// (which would force the user to scroll the whole panel).
 
 import { setAcText } from "../ui/ac_font.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+
+// gmAllegianceUI 0x2100002F — element_id constants from
+// allegiance_panel_layout_dump 2026-05-24. See head-comment block for
+// the full element-purpose mapping.
+const ALLEGIANCE_LAYOUT_ID = 0x2100002F;
+const ALLEGIANCE_NATIVE_H = 600;
+const ALLEGIANCE_ELEMS = {
+  // Top patron section (Followers / Rank).
+  patronSection:    0x10000250,
+  patronHeaderRow:  0x10000251,  // (0,0) 300×18
+  patronLabelCol:   0x10000252,  // (0,18) 120×18 — Followers: label
+  patronValueCol:   0x10000253,  // (120,18) 280×18 — rank value
+  patronDivider:    0x10000254,  // (0,36) 300×9
+  // Monarch section (Patron / Monarch / Allegiance).
+  monarchSection:   0x10000255,  // (0,45) 300×63
+  monarchPatronRow: 0x10000256,  // (0,0) 210×18
+  monarchMonarchRow:0x10000257,  // (0,18) 210×18
+  monarchAllegRow:  0x10000258,  // (0,36) 280×18
+  monarchDivider:   0x10000259,  // (0,54) 300×9
+  // XP section (XP Generated / XP Available).
+  xpSection:        0x1000025A,  // (0,108) 300×45
+  xpGenLabel:       0x1000025B,  // (0,0) 100×18
+  xpAvailRow:       0x1000025C,  // (0,18) 280×18
+  xpDivider:        0x1000025D,  // (0,36) 300×9
+  // Mid-status row.
+  statusLeft:       0x1000025E,  // (0,153) 100×18
+  statusRight:      0x1000025F,  // (179,153) 100×18
+  // Vassals scroll list + scrollbar.
+  vassalList:       0x10000260,  // (0,171) 279×350
+  vassalScrollbar:  0x10000261,  // (280,171) 16×350
+  // Ignore-allegiance-requests toggle row.
+  ignoreToggleRow:  0x10000262,  // (9,535) 275×14
+  // Swear / Break / Kick action buttons.
+  swearBtn:         0x10000263,  // (9,562) 88×33
+  breakBtn:         0x10000264,  // (106,562) 88×33
+  kickBtn:          0x10000265,  // (203,562) 88×32
+};
 
 const STYLE_ID = "hb-alleg-view-style";
 
@@ -38,20 +114,27 @@ function ensureStyles() {
       pointer-events: auto;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream);
-      display: flex;
-      flex-direction: column;
       overflow: hidden;
       background: url("./data/ui-sprites/0x06001AAF.png") repeat-x;
     }
+    /* Tab strip — Holtburger UX addition (retail packs Allegiance +
+       Fellowship + Friends + Squelch into separate panels referenced
+       via gmFloatyPanelUI). Kept on top so user can swap views; not
+       in the retail layout's element tree. */
     .hb-alleg-tabs {
-      flex: 0 0 auto;
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 20px;
+      box-sizing: border-box;
       display: flex;
       gap: 1px;
-      padding: 4px 4px 0;
+      padding: 2px 4px 0;
       border-bottom: 1px solid var(--hb-border-brass-dim);
+      background: rgba(0, 0, 0, 0.35);
+      z-index: 5;
     }
     .hb-alleg-tab {
-      padding: 3px 8px;
+      padding: 2px 8px;
       font-size: 9px;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream-bright);
@@ -69,80 +152,100 @@ function ensureStyles() {
       color: var(--hb-text-gold);
       border-color: var(--hb-border-brass);
     }
+    /* Layout-anchored region — applyAllegianceLayout populates explicit
+       left/top/width/height for every retail element. We mark each
+       region with a dedicated class so the e2e verifier can read the
+       bounding box for parity confirmation. All regions live below the
+       20px Holtburger tab strip — body region starts at y=20. */
     .hb-alleg-section {
-      flex: 0 0 auto;
+      position: absolute;
+      box-sizing: border-box;
       padding: 4px 8px;
-      border-bottom: 1px solid var(--hb-border-brass-dim);
       background: rgba(0, 0, 0, 0.25);
-    }
-    .hb-alleg-section-h {
-      font-size: 9px;
-      color: var(--hb-text-cream-bright);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 2px;
+      border-bottom: 1px solid var(--hb-border-brass-dim);
+      overflow: hidden;
     }
     .hb-alleg-row {
+      position: absolute;
+      box-sizing: border-box;
       display: flex;
       justify-content: space-between;
       gap: 6px;
+      padding: 0 6px;
       font-size: 10px;
-      line-height: 14px;
+      align-items: center;
+      overflow: hidden;
     }
     .hb-alleg-row .label { color: var(--hb-text-cream); }
     .hb-alleg-row .value { color: var(--hb-text-gold); font-variant-numeric: tabular-nums; }
-    .hb-alleg-section-divider {
-      height: 4px;
+    .hb-alleg-divider {
+      position: absolute;
+      box-sizing: border-box;
       background: url("./data/ui-sprites/0x06001420.png") center/auto 100% no-repeat;
-      margin: 4px 0 0;
+    }
+    .hb-alleg-selector {
+      position: absolute;
+      box-sizing: border-box;
+      border: 1px solid var(--hb-border-brass-dim);
+      background: rgba(0, 0, 0, 0.45);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      color: var(--hb-text-cream-bright);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .hb-alleg-selector:hover {
+      background: var(--hb-overlay-hover);
+      border-color: var(--hb-border-brass);
     }
     .hb-alleg-vassals {
-      flex: 1 1 auto;
+      position: absolute;
+      box-sizing: border-box;
       overflow-y: auto;
       padding: 4px;
       background: rgba(0, 0, 0, 0.6);
       border: 1px solid var(--hb-border-brass-dim);
-      margin: 6px 6px 4px;
       scrollbar-width: thin;
       scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
     }
-    .hb-alleg-vassals-h {
-      display: flex;
-      justify-content: space-between;
-      font-size: 9px;
-      color: var(--hb-text-cream-bright);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      padding: 2px 4px;
-      border-bottom: 1px solid var(--hb-border-brass-dim);
-      margin-bottom: 4px;
+    .hb-alleg-vassal-scrollbar {
+      position: absolute;
+      box-sizing: border-box;
+      pointer-events: none;
+      background: rgba(0, 0, 0, 0.5);
+      border-left: 1px solid var(--hb-border-brass-dim);
     }
     .hb-alleg-vassal-row {
       display: flex;
       justify-content: space-between;
       font-size: 10px;
       padding: 1px 4px;
-      line-height: 16px;
+      line-height: 14px;
       border-bottom: 1px solid rgba(138, 117, 68, 0.18);
     }
     .hb-alleg-vassal-row:last-child { border-bottom: none; }
     .hb-alleg-vassal-row .name { color: var(--hb-text-cream); }
     .hb-alleg-vassal-row .xp { color: var(--hb-text-numeric-green); }
     .hb-alleg-empty {
-      padding: 18px 12px;
+      padding: 14px 12px;
       color: var(--hb-text-muted);
       font-style: italic;
       text-align: center;
       font-size: 10px;
     }
     .hb-alleg-toggle-row {
-      flex: 0 0 auto;
-      padding: 4px 8px;
+      position: absolute;
+      box-sizing: border-box;
       display: flex;
       align-items: center;
       gap: 6px;
-      border-top: 1px solid var(--hb-border-brass-dim);
-      font-size: 10px;
+      font-size: 9px;
+      color: var(--hb-text-cream);
+      overflow: hidden;
     }
     .hb-alleg-toggle {
       width: 10px; height: 10px;
@@ -150,23 +253,16 @@ function ensureStyles() {
       background: rgba(0, 0, 0, 0.65);
       border: 1px solid var(--hb-border-brass-dim);
       cursor: pointer;
+      flex: 0 0 10px;
     }
     .hb-alleg-toggle.on {
       background: var(--hb-text-numeric-green);
       border-color: var(--hb-border-brass);
       box-shadow: 0 0 4px rgba(120, 220, 120, 0.6);
     }
-    .hb-alleg-actions {
-      flex: 0 0 auto;
-      padding: 6px 8px;
-      display: flex;
-      gap: 6px;
-      justify-content: space-between;
-      background: rgba(0, 0, 0, 0.35);
-      border-top: 1px solid var(--hb-border-brass-dim);
-    }
     .hb-alleg-btn {
-      flex: 1 1 auto;
+      position: absolute;
+      box-sizing: border-box;
       padding: 4px 8px;
       font-family: var(--hb-font-serif);
       font-size: 10px;
@@ -177,6 +273,9 @@ function ensureStyles() {
       text-transform: uppercase;
       letter-spacing: 0.06em;
       user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .hb-alleg-btn:hover {
       background: var(--hb-overlay-active);
@@ -192,36 +291,6 @@ function ensureStyles() {
   document.head.appendChild(style);
 }
 
-function r(parent, label, value) {
-  const row = document.createElement("div");
-  row.className = "hb-alleg-row";
-  const l = document.createElement("span");
-  l.className = "label";
-  setAcText(l, label);
-  const v = document.createElement("span");
-  v.className = "value";
-  setAcText(v, value);
-  row.appendChild(l);
-  row.appendChild(v);
-  parent.appendChild(row);
-}
-function makeSection(title) {
-  const s = document.createElement("div");
-  s.className = "hb-alleg-section";
-  if (title) {
-    const h = document.createElement("div");
-    h.className = "hb-alleg-section-h";
-    setAcText(h, title);
-    s.appendChild(h);
-  }
-  return s;
-}
-function divider() {
-  const d = document.createElement("div");
-  d.className = "hb-alleg-section-divider";
-  return d;
-}
-
 function emit(msgText, cat = 0) {
   // Append a line to the chat log so the user sees feedback. Mirrors
   // index.html's appendChatLine pattern (category 0 = system / green).
@@ -234,6 +303,155 @@ function emit(msgText, cat = 0) {
   log.appendChild(li);
 }
 
+// Apply gmAllegianceUI 0x2100002F layout to the allegiance plugin's
+// sub-regions. Native layout is 300×600; we squeeze into the main-
+// panel body's 300×337 by SCALING vertical offsets/heights by
+// `scaleY = bodyH / 600`. Horizontal positions and widths are passed
+// through unchanged.
+//
+// View mounts via main-panel.showView which only fires AFTER wasm is
+// ready (user-initiated panel open), so no retry loop is required.
+function applyAllegianceLayout(refs) {
+  const apply = (layout) => {
+    if (!layout) return;
+    let applied = 0;
+    const bodyH = refs.rootEl?.getBoundingClientRect().height || 337;
+    // Holtburger tab strip lives at y=0..20 OUTSIDE the retail layout.
+    // The retail anchor space starts AT the tabs' bottom edge, so we
+    // shift retail Y by +TAB_OFFSET after compression.
+    const TAB_OFFSET = 20;
+    const scaleY = (bodyH - TAB_OFFSET) / ALLEGIANCE_NATIVE_H;
+
+    const applyBox = (el, desc) => {
+      if (!el || !desc) return false;
+      el.style.right = "";
+      el.style.bottom = "";
+      el.style.transform = "none";
+      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
+      if (typeof desc.y === "number") el.style.top = `${Math.round(desc.y * scaleY) + TAB_OFFSET}px`;
+      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+      if (typeof desc.height === "number") {
+        el.style.height = `${Math.max(1, Math.round(desc.height * scaleY))}px`;
+      }
+      return true;
+    };
+
+    // ── Top patron section + child rows + divider ──────────────────
+    if (refs.patronSectionEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.patronSection);
+      if (applyBox(refs.patronSectionEl, desc)) applied += 1;
+    }
+    // patron-section's inner rows have x/y RELATIVE to the section
+    // (parent (0,0)+section.y), so we re-anchor inside the section
+    // using `position:absolute` against the section container. The
+    // retail tree places them at section-local (0,0) (0,18) (120,18)
+    // (0,36); we just feed those offsets to applyBox _without_
+    // applying the parent y-shift again. The simplest approach is
+    // to set the row's position relative to .hb-alleg-root and let
+    // the section function purely as a visual band. That matches
+    // how `applyBox` writes ROOT-relative coords; the rows below get
+    // their absolute layout coords (section.y + row.y) computed via
+    // the retail tree-walk + manual offset.
+    //
+    // ApplyBox writes ROOT-relative coords; row.desc.y is RELATIVE
+    // TO PARENT. We add the parent's y. The plugin builds its rows
+    // as siblings of the section (not children) for simpler
+    // absolute-anchoring.
+    const applyChildOf = (parentId, childId, el) => {
+      const parent = findElementById(layout, parentId);
+      const child = findElementById(layout, childId);
+      if (!parent || !child || !el) return false;
+      const px = typeof parent.x === "number" ? parent.x : 0;
+      const py = typeof parent.y === "number" ? parent.y : 0;
+      const cx = typeof child.x === "number" ? child.x : 0;
+      const cy = typeof child.y === "number" ? child.y : 0;
+      el.style.right = "";
+      el.style.bottom = "";
+      el.style.transform = "none";
+      el.style.left = `${px + cx}px`;
+      el.style.top = `${Math.round((py + cy) * scaleY) + TAB_OFFSET}px`;
+      if (typeof child.width === "number") el.style.width = `${child.width}px`;
+      if (typeof child.height === "number") {
+        el.style.height = `${Math.max(1, Math.round(child.height * scaleY))}px`;
+      }
+      return true;
+    };
+
+    // Patron section children.
+    if (applyChildOf(ALLEGIANCE_ELEMS.patronSection, ALLEGIANCE_ELEMS.patronHeaderRow, refs.patronHeaderRowEl)) applied += 1;
+    if (applyChildOf(ALLEGIANCE_ELEMS.patronSection, ALLEGIANCE_ELEMS.patronLabelCol,  refs.patronLabelEl))     applied += 1;
+    if (applyChildOf(ALLEGIANCE_ELEMS.patronSection, ALLEGIANCE_ELEMS.patronValueCol,  refs.patronValueEl))     applied += 1;
+    if (applyChildOf(ALLEGIANCE_ELEMS.patronSection, ALLEGIANCE_ELEMS.patronDivider,   refs.patronDividerEl))   applied += 1;
+
+    // Monarch section + rows + divider.
+    if (refs.monarchSectionEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.monarchSection);
+      if (applyBox(refs.monarchSectionEl, desc)) applied += 1;
+    }
+    if (applyChildOf(ALLEGIANCE_ELEMS.monarchSection, ALLEGIANCE_ELEMS.monarchPatronRow, refs.monarchPatronRowEl)) applied += 1;
+    if (applyChildOf(ALLEGIANCE_ELEMS.monarchSection, ALLEGIANCE_ELEMS.monarchMonarchRow,refs.monarchMonarchRowEl)) applied += 1;
+    if (applyChildOf(ALLEGIANCE_ELEMS.monarchSection, ALLEGIANCE_ELEMS.monarchAllegRow, refs.monarchAllegRowEl)) applied += 1;
+    if (applyChildOf(ALLEGIANCE_ELEMS.monarchSection, ALLEGIANCE_ELEMS.monarchDivider, refs.monarchDividerEl)) applied += 1;
+
+    // XP section + rows + divider.
+    if (refs.xpSectionEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.xpSection);
+      if (applyBox(refs.xpSectionEl, desc)) applied += 1;
+    }
+    if (applyChildOf(ALLEGIANCE_ELEMS.xpSection, ALLEGIANCE_ELEMS.xpGenLabel, refs.xpGenLabelEl)) applied += 1;
+    if (applyChildOf(ALLEGIANCE_ELEMS.xpSection, ALLEGIANCE_ELEMS.xpAvailRow, refs.xpAvailRowEl)) applied += 1;
+    if (applyChildOf(ALLEGIANCE_ELEMS.xpSection, ALLEGIANCE_ELEMS.xpDivider, refs.xpDividerEl)) applied += 1;
+
+    // Status rows (top-level direct children of root, not inside any section).
+    if (refs.statusLeftEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.statusLeft);
+      if (applyBox(refs.statusLeftEl, desc)) applied += 1;
+    }
+    if (refs.statusRightEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.statusRight);
+      if (applyBox(refs.statusRightEl, desc)) applied += 1;
+    }
+
+    // Vassals scrollable list + scrollbar.
+    if (refs.vassalListEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.vassalList);
+      if (applyBox(refs.vassalListEl, desc)) applied += 1;
+    }
+    if (refs.vassalScrollbarEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.vassalScrollbar);
+      if (applyBox(refs.vassalScrollbarEl, desc)) applied += 1;
+    }
+
+    // Ignore-toggle row.
+    if (refs.toggleRowEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.ignoreToggleRow);
+      if (applyBox(refs.toggleRowEl, desc)) applied += 1;
+    }
+
+    // Action buttons (Swear / Break / Kick).
+    if (refs.swearBtnEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.swearBtn);
+      if (applyBox(refs.swearBtnEl, desc)) applied += 1;
+    }
+    if (refs.breakBtnEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.breakBtn);
+      if (applyBox(refs.breakBtnEl, desc)) applied += 1;
+    }
+    if (refs.kickBtnEl) {
+      const desc = findElementById(layout, ALLEGIANCE_ELEMS.kickBtn);
+      if (applyBox(refs.kickBtnEl, desc)) applied += 1;
+    }
+
+    try {
+      window.__diag?.layout?.onAllegianceApplied?.({ applied });
+    } catch (_) {}
+  };
+
+  const cached = getCachedLayout(ALLEGIANCE_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(ALLEGIANCE_LAYOUT_ID).then(apply).catch(() => {});
+}
+
 export const view = {
   name: "Allegiance",
   nameFor: () => "Allegiance",
@@ -244,7 +462,8 @@ export const view = {
 
     // Companion-tab strip — retail puts Allegiance/Fellowship/Friends/
     // Squelch in one panel. Friends + Squelch are not wired yet;
-    // clicking them swaps the main-panel view (or stays stub).
+    // clicking them swaps the main-panel view (or stays stub). This is
+    // Holtburger chrome — no retail element-id maps here.
     const tabs = document.createElement("div");
     tabs.className = "hb-alleg-tabs";
     for (const t of [
@@ -268,90 +487,203 @@ export const view = {
     }
     root.appendChild(tabs);
 
-    // Patron section
-    const patronSec = makeSection(null);
-    const patronHead = document.createElement("div");
-    patronHead.className = "hb-alleg-row";
-    patronHead.innerHTML = `<span class="label">Followers:</span><span class="value">0</span>`;
-    patronSec.appendChild(patronHead);
-    const rankRow = document.createElement("div");
-    rankRow.className = "hb-alleg-row";
-    rankRow.innerHTML = `<span class="label">Rank:</span><span class="value">[0]</span>`;
-    patronSec.appendChild(rankRow);
-    patronSec.appendChild(divider());
-    root.appendChild(patronSec);
+    // ── Patron section + 4 children ────────────────────────────────
+    // Section is a sized band; child rows are absolute-positioned
+    // siblings of the section (so applyChildOf can write ROOT-
+    // relative coords from layout.parent.y + layout.child.y).
+    const patronSectionEl = document.createElement("div");
+    patronSectionEl.className = "hb-alleg-section";
+    patronSectionEl.dataset.elId = "0x10000250";
+    root.appendChild(patronSectionEl);
 
-    // Patron / Monarch
-    const monarchSec = makeSection("Patron / Monarch");
-    r(monarchSec, "Patron", "—");
-    r(monarchSec, "Monarch", "—");
-    r(monarchSec, "Allegiance", "—");
-    monarchSec.appendChild(divider());
-    root.appendChild(monarchSec);
+    const patronHeaderRowEl = document.createElement("div");
+    patronHeaderRowEl.className = "hb-alleg-row";
+    patronHeaderRowEl.dataset.elId = "0x10000251";
+    patronHeaderRowEl.innerHTML = `<span class="label">Allegiance Information</span>`;
+    root.appendChild(patronHeaderRowEl);
 
-    // Allegiance XP
-    const xpSec = makeSection("Allegiance XP");
-    r(xpSec, "XP Generated", "0");
-    r(xpSec, "XP Available", "0");
-    xpSec.appendChild(divider());
-    root.appendChild(xpSec);
+    const patronLabelEl = document.createElement("div");
+    patronLabelEl.className = "hb-alleg-row";
+    patronLabelEl.dataset.elId = "0x10000252";
+    patronLabelEl.innerHTML = `<span class="label">Followers:</span><span class="value">0</span>`;
+    root.appendChild(patronLabelEl);
 
-    // Vassals list
-    const vassalsBox = document.createElement("div");
-    vassalsBox.className = "hb-alleg-vassals";
-    const vassalsHead = document.createElement("div");
-    vassalsHead.className = "hb-alleg-vassals-h";
-    vassalsHead.innerHTML = `<span>Vassals</span><span>XP Produced</span>`;
-    vassalsBox.appendChild(vassalsHead);
+    const patronValueEl = document.createElement("div");
+    patronValueEl.className = "hb-alleg-row";
+    patronValueEl.dataset.elId = "0x10000253";
+    patronValueEl.innerHTML = `<span class="label">Rank:</span><span class="value">[0]</span>`;
+    root.appendChild(patronValueEl);
+
+    const patronDividerEl = document.createElement("div");
+    patronDividerEl.className = "hb-alleg-divider";
+    patronDividerEl.dataset.elId = "0x10000254";
+    root.appendChild(patronDividerEl);
+
+    // ── Monarch section + 4 children + 1 divider ───────────────────
+    const monarchSectionEl = document.createElement("div");
+    monarchSectionEl.className = "hb-alleg-section";
+    monarchSectionEl.dataset.elId = "0x10000255";
+    root.appendChild(monarchSectionEl);
+
+    const monarchPatronRowEl = document.createElement("div");
+    monarchPatronRowEl.className = "hb-alleg-row";
+    monarchPatronRowEl.dataset.elId = "0x10000256";
+    monarchPatronRowEl.innerHTML = `<span class="label">Patron:</span><span class="value">—</span>`;
+    root.appendChild(monarchPatronRowEl);
+
+    const monarchMonarchRowEl = document.createElement("div");
+    monarchMonarchRowEl.className = "hb-alleg-row";
+    monarchMonarchRowEl.dataset.elId = "0x10000257";
+    monarchMonarchRowEl.innerHTML = `<span class="label">Monarch:</span><span class="value">—</span>`;
+    root.appendChild(monarchMonarchRowEl);
+
+    const monarchAllegRowEl = document.createElement("div");
+    monarchAllegRowEl.className = "hb-alleg-row";
+    monarchAllegRowEl.dataset.elId = "0x10000258";
+    monarchAllegRowEl.innerHTML = `<span class="label">Allegiance:</span><span class="value">—</span>`;
+    root.appendChild(monarchAllegRowEl);
+
+    const monarchDividerEl = document.createElement("div");
+    monarchDividerEl.className = "hb-alleg-divider";
+    monarchDividerEl.dataset.elId = "0x10000259";
+    root.appendChild(monarchDividerEl);
+
+    // ── XP section + 2 children + 1 divider ────────────────────────
+    const xpSectionEl = document.createElement("div");
+    xpSectionEl.className = "hb-alleg-section";
+    xpSectionEl.dataset.elId = "0x1000025A";
+    root.appendChild(xpSectionEl);
+
+    const xpGenLabelEl = document.createElement("div");
+    xpGenLabelEl.className = "hb-alleg-row";
+    xpGenLabelEl.dataset.elId = "0x1000025B";
+    xpGenLabelEl.innerHTML = `<span class="label">XP Generated:</span><span class="value">0</span>`;
+    root.appendChild(xpGenLabelEl);
+
+    const xpAvailRowEl = document.createElement("div");
+    xpAvailRowEl.className = "hb-alleg-row";
+    xpAvailRowEl.dataset.elId = "0x1000025C";
+    xpAvailRowEl.innerHTML = `<span class="label">XP Available:</span><span class="value">0</span>`;
+    root.appendChild(xpAvailRowEl);
+
+    const xpDividerEl = document.createElement("div");
+    xpDividerEl.className = "hb-alleg-divider";
+    xpDividerEl.dataset.elId = "0x1000025D";
+    root.appendChild(xpDividerEl);
+
+    // ── Status rows (small mid-panel state strip) ──────────────────
+    const statusLeftEl = document.createElement("div");
+    statusLeftEl.className = "hb-alleg-row";
+    statusLeftEl.dataset.elId = "0x1000025E";
+    statusLeftEl.innerHTML = `<span class="label">Status:</span><span class="value">—</span>`;
+    root.appendChild(statusLeftEl);
+
+    const statusRightEl = document.createElement("div");
+    statusRightEl.className = "hb-alleg-row";
+    statusRightEl.dataset.elId = "0x1000025F";
+    statusRightEl.innerHTML = `<span class="label">Title:</span><span class="value">—</span>`;
+    root.appendChild(statusRightEl);
+
+    // ── Vassal list + scrollbar ────────────────────────────────────
+    const vassalListEl = document.createElement("div");
+    vassalListEl.className = "hb-alleg-vassals";
+    vassalListEl.dataset.elId = "0x10000260";
     const empty = document.createElement("div");
     empty.className = "hb-alleg-empty";
     setAcText(empty, "No vassals — you have not yet sworn fealty as a patron.");
-    vassalsBox.appendChild(empty);
-    root.appendChild(vassalsBox);
+    vassalListEl.appendChild(empty);
+    root.appendChild(vassalListEl);
 
-    // Ignore-allegiance-requests toggle (per retail wiki)
-    const toggleRow = document.createElement("div");
-    toggleRow.className = "hb-alleg-toggle-row";
+    const vassalScrollbarEl = document.createElement("div");
+    vassalScrollbarEl.className = "hb-alleg-vassal-scrollbar";
+    vassalScrollbarEl.dataset.elId = "0x10000261";
+    root.appendChild(vassalScrollbarEl);
+
+    // ── Ignore-allegiance-requests toggle row ──────────────────────
+    const toggleRowEl = document.createElement("div");
+    toggleRowEl.className = "hb-alleg-toggle-row";
+    toggleRowEl.dataset.elId = "0x10000262";
     let ignore = false;
     const toggle = document.createElement("span");
     toggle.className = "hb-alleg-toggle";
     toggle.setAttribute("role", "button");
     toggle.title = "Toggle ignore allegiance requests";
-    toggleRow.appendChild(toggle);
+    toggleRowEl.appendChild(toggle);
     const toggleLabel = document.createElement("span");
     setAcText(toggleLabel, "Ignore Allegiance Requests");
     toggleLabel.style.color = "var(--hb-text-cream)";
-    toggleRow.appendChild(toggleLabel);
+    toggleRowEl.appendChild(toggleLabel);
     toggle.addEventListener("click", () => {
       ignore = !ignore;
       toggle.classList.toggle("on", ignore);
       emit(`[allegiance] Ignore-requests ${ignore ? "enabled" : "disabled"} (client-side only)`);
     });
-    root.appendChild(toggleRow);
+    root.appendChild(toggleRowEl);
 
-    // Actions
-    const actions = document.createElement("div");
-    actions.className = "hb-alleg-actions";
-    for (const act of [
-      { id: "swear", label: "Swear", desc: "swear fealty to selected target" },
-      { id: "break", label: "Break", desc: "break fealty (leave your patron)" },
-      { id: "kick",  label: "Kick",  desc: "kick a vassal from your allegiance" },
-    ]) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "hb-alleg-btn";
-      setAcText(btn, act.label);
-      btn.title = act.desc;
-      btn.addEventListener("click", () => {
-        // GameAction Swear / Break / Kick aren't exposed yet — log
-        // to chat so the user sees the trigger fired.
-        emit(`[allegiance] ${act.label}: ${act.desc} (game-action not wired yet)`);
-      });
-      actions.appendChild(btn);
-    }
-    root.appendChild(actions);
+    // ── Action buttons (Swear / Break / Kick) ──────────────────────
+    const swearBtnEl = document.createElement("button");
+    swearBtnEl.type = "button";
+    swearBtnEl.className = "hb-alleg-btn";
+    swearBtnEl.dataset.elId = "0x10000263";
+    setAcText(swearBtnEl, "Swear");
+    swearBtnEl.title = "swear fealty to selected target";
+    swearBtnEl.addEventListener("click", () => {
+      emit(`[allegiance] Swear: swear fealty to selected target (game-action not wired yet)`);
+    });
+    root.appendChild(swearBtnEl);
+
+    const breakBtnEl = document.createElement("button");
+    breakBtnEl.type = "button";
+    breakBtnEl.className = "hb-alleg-btn";
+    breakBtnEl.dataset.elId = "0x10000264";
+    setAcText(breakBtnEl, "Break");
+    breakBtnEl.title = "break fealty (leave your patron)";
+    breakBtnEl.addEventListener("click", () => {
+      emit(`[allegiance] Break: break fealty (leave your patron) (game-action not wired yet)`);
+    });
+    root.appendChild(breakBtnEl);
+
+    const kickBtnEl = document.createElement("button");
+    kickBtnEl.type = "button";
+    kickBtnEl.className = "hb-alleg-btn";
+    kickBtnEl.dataset.elId = "0x10000265";
+    setAcText(kickBtnEl, "Kick");
+    kickBtnEl.title = "kick a vassal from your allegiance";
+    kickBtnEl.addEventListener("click", () => {
+      emit(`[allegiance] Kick: kick a vassal from your allegiance (game-action not wired yet)`);
+    });
+    root.appendChild(kickBtnEl);
 
     parentEl.appendChild(root);
+
+    // Apply retail gmAllegianceUI layout AFTER all elements live in
+    // the DOM so getBoundingClientRect() returns the actual body height
+    // for scaleY computation.
+    applyAllegianceLayout({
+      rootEl: root,
+      patronSectionEl,
+      patronHeaderRowEl,
+      patronLabelEl,
+      patronValueEl,
+      patronDividerEl,
+      monarchSectionEl,
+      monarchPatronRowEl,
+      monarchMonarchRowEl,
+      monarchAllegRowEl,
+      monarchDividerEl,
+      xpSectionEl,
+      xpGenLabelEl,
+      xpAvailRowEl,
+      xpDividerEl,
+      statusLeftEl,
+      statusRightEl,
+      vassalListEl,
+      vassalScrollbarEl,
+      toggleRowEl,
+      swearBtnEl,
+      breakBtnEl,
+      kickBtnEl,
+    });
 
     return () => { root.remove(); };
   },
@@ -362,6 +694,6 @@ export const manifest = {
   name: "Allegiance",
   icon: "🛡",
   iconHidden: true,
-  version: "0.1.0",
+  version: "0.2.0",
   description: "Allegiance + companion-tab view (gmAllegianceUI 0x2100002F)",
 };
