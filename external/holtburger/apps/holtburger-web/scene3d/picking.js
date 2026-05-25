@@ -100,6 +100,14 @@ export function setupClickPicking({
   }
 
   const raycaster = new THREE.Raycaster();
+  // Phase 5 PView depth-clear (commit 476362fd) put cellsGroup +
+  // entitiesGroup on render layer 1 so the world / cells passes can
+  // be rendered separately with a depth-clear between them. THREE
+  // Raycaster defaults to layer 0 only, which silently skipped every
+  // entity / cell static — clicking on doors / NPCs / chests stopped
+  // working. Enable layer 1 so picking sees the same scene the camera
+  // sees.
+  raycaster.layers.enable(1);
   const ndc = new THREE.Vector2();
 
   // Phase I.1 — charge-attack state machine. One pursuit in flight at
