@@ -562,7 +562,15 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // to `.visible=false`; the visibility tick flips them on as the
   // player walks/looks. By this point the GPU programs are ready, so
   // the first-frame-visible cost is minimal.
+  //
+  // Phase 5 PView render-order fix (2026-05-25): assign every node in the
+  // new cell container to layer 1 (RENDER_LAYER_INDOOR). Three.js layer
+  // masks are per-object — they don't inherit from `scene3d.cellsGroup`'s
+  // mask. Without this, EnvCell meshes render on layer 0 (alongside terrain)
+  // and the depth-clear split in atmosphere_pipeline.js can't isolate them.
+  // Recursive traverse covers cellContainer, meshGroup, and every Mesh.
   for (const { container, cellId } of newCells) {
+    container.traverse((o) => o.layers.set(1));
     scene3d.cellsGroup.add(container);
     scene3d.cellContainers3d.set(cellId, container);
   }
@@ -701,18 +709,33 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // visibility alone until the first non-zero cell.
   if (cellId === 0) return;
 
-  // Outdoor groups toggle as one batch: terrain + buildings + statics
-  // all hide when indoor. (Lights stay on; entities stay visible —
-  // they're rendered separately.)
-  const wantOutdoor = !isIndoor;
-  if (scene3d.terrainGroup && scene3d.terrainGroup.visible !== wantOutdoor) {
-    scene3d.terrainGroup.visible = wantOutdoor;
+  // Phase 5 PView render-order fix (2026-05-25, WB.GameScene.cs:1610):
+  // terrain + outdoor buildings + outdoor statics stay VISIBLE when
+  // indoor. Previously this code hid them; that broke retail behaviour
+  // through cottage doorways (the doorway-shaped portal opening would
+  // show the clear color instead of the landscape outside) and was an
+  // incomplete substitute for the proper depth-clear-between-passes
+  // pattern WB uses.
+  //
+  // The atmosphere pipeline's `preFrameSkySync` now reads the SAME
+  // indoor flag (via skyDome._lastIsIndoor) and:
+  //   1. Renders terrain/buildings/statics on layer 0 first.
+  //   2. Clears the depth buffer (color stays).
+  //   3. Renders EnvCells + entities on layer 1 with fresh depth.
+  // Cottage floors win the second pass; terrain shows through portals
+  // because the color buffer still holds the landscape paint.
+  //
+  // We explicitly force visible=true here so any prior frame's hidden
+  // state (from before this fix or from a transitional flip) is cleared.
+  // Cost is one comparison per group per tick — negligible.
+  if (scene3d.terrainGroup && !scene3d.terrainGroup.visible) {
+    scene3d.terrainGroup.visible = true;
   }
-  if (scene3d.buildingsGroup && scene3d.buildingsGroup.visible !== wantOutdoor) {
-    scene3d.buildingsGroup.visible = wantOutdoor;
+  if (scene3d.buildingsGroup && !scene3d.buildingsGroup.visible) {
+    scene3d.buildingsGroup.visible = true;
   }
-  if (scene3d.staticsGroup && scene3d.staticsGroup.visible !== wantOutdoor) {
-    scene3d.staticsGroup.visible = wantOutdoor;
+  if (scene3d.staticsGroup && !scene3d.staticsGroup.visible) {
+    scene3d.staticsGroup.visible = true;
   }
 
   // Per-cell: build a Set out of the renderSet array for O(1) lookups.

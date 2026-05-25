@@ -219,6 +219,13 @@ export function createOrthoCamera(canvas) {
   );
   cam.zoom = 1.0;
   cam.updateProjectionMatrix();
+  // Phase 5 PView render-order fix (2026-05-25) — mirror the main camera's
+  // layer mask. cellsGroup + entitiesGroup live on layer 1 (RENDER_LAYER_INDOOR)
+  // so the renderer can interleave a depth-clear between terrain and EnvCells
+  // when the camera is inside a building. Topdown camera defaults to layer 0
+  // (terrain only) which would hide all NPCs + cottage interiors — enable
+  // layer 1 so the topdown view stays complete.
+  cam.layers.enable(1);
   return cam;
 }
 

@@ -1312,6 +1312,15 @@ export class EntityManager {
     ) {
       this.scene3d.materialCache.addFillCompanions(root);
     }
+    // Phase 5 PView render-order fix (2026-05-25): entities live on layer 1
+    // (RENDER_LAYER_INDOOR) alongside EnvCells so the depth-clear split in
+    // atmosphere_pipeline.js draws cells + entities AFTER terrain when the
+    // camera is inside a cottage. Three.js layer masks are per-object so we
+    // walk the entity subtree after every child (model + nameplate + wire-
+    // companion fills) is attached to ensure no node sits on layer 0.
+    if (this.scene3d?.entitiesGroup) {
+      root.traverse((o) => o.layers.set(1));
+    }
     this.entityMap.set(guid, inst);
     // Diagnostic hook (always-on; cheap when __diag not installed). Fires
     // AFTER the entity is committed to the live scene graph so observed

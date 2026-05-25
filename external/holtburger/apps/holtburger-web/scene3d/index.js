@@ -548,6 +548,27 @@ export async function preInit3D(canvas) {
   const entitiesGroup = new THREE.Group(); entitiesGroup.name = "entities";
   worldRoot.add(terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup);
 
+  // Phase 5 PView render-order fix (2026-05-25) — mirrors WB.GameScene.cs:1610.
+  // Two-layer split so the renderer can interleave a depth-clear between
+  // "terrain + outdoor buildings + outdoor statics" (layer 0) and "EnvCells
+  // + entities" (layer 1) WHEN the camera is inside an EnvCell. The depth
+  // clear removes terrain-Z so cottage floors don't Z-fight the terrain
+  // they sit on. Outdoor case unchanged: camera enables both layers and the
+  // composer's single world RenderPass draws everything in one shot.
+  //
+  // Why entitiesGroup is on layer 1 too: entities can be inside cottages
+  // (NPCs, the local player) and must render AFTER the depth-clear so cell
+  // walls don't overpaint them. For outdoor entities (around the academy
+  // ring) this is invisible — the single-pass camera enables both layers.
+  //
+  // cellsGroup itself gets layer 1; child cell containers receive layer 1
+  // on attach in cells.js::buildEnvCellsForLandblock (Three.js layer masks
+  // are per-object, not inherited from parent).
+  const RENDER_LAYER_WORLD = 0; // terrain + outdoor buildings + outdoor statics
+  const RENDER_LAYER_INDOOR = 1; // EnvCells + entities
+  cellsGroup.layers.set(RENDER_LAYER_INDOOR);
+  entitiesGroup.layers.set(RENDER_LAYER_INDOOR);
+
   // Hello-world cube — kept for the Phase 7.0 capture path's assertion.
   // Wire-agent uses MeshBasicMaterial wire so the cube doesn't stand out
   // as the lone textured mesh in an otherwise all-wire scene.
@@ -581,6 +602,15 @@ export async function preInit3D(canvas) {
   const camera = new THREE.PerspectiveCamera(60, cssW / cssH, 0.1, 5000);
   camera.position.set(15, 15, 15);
   camera.lookAt(0, 0, 5);
+  // Phase 5 PView render-order fix (2026-05-25): camera defaults to layer 0
+  // only; enable layer 1 so the outdoor single-pass render captures cellsGroup
+  // + entitiesGroup as it always has. The atmosphere pipeline + the direct-
+  // render fallback both flip masks per-frame when indoor to drive the
+  // WB-1610 terrain → depth-clear → cells render order; the rest of the time
+  // both layers stay enabled. This mask is also restored after each indoor
+  // split (so any consumer that reads camera.layers — raycaster pickers,
+  // CSM, etc. — sees the "both layers" state under steady-state outdoor).
+  camera.layers.enable(RENDER_LAYER_INDOOR);
 
   // Phase 0.2 — detail tile cache (gated on `quality.flags.detailFlag`).
   const forceDetail = (() => {
@@ -1189,6 +1219,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       }
       if (scene3dForBuilders.cellsGroup) {
         total += mc.addFillCompanions(scene3dForBuilders.cellsGroup);
+        // Phase 5 PView render-order fix (2026-05-25): keep cellsGroup
+        // (companion meshes included) on layer 1 so the depth-clear split
+        // in atmosphere_pipeline.js renders cottage interiors after the
+        // terrain depth clear.
+        scene3dForBuilders.cellsGroup.traverse((o) => o.layers.set(1));
       }
       // eslint-disable-next-line no-console
       console.log(`[wire-fill] attached ${total} solid-fill companion meshes`);
@@ -1505,6 +1540,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
       }
     }
+    // Phase 5 PView render-order fix (2026-05-25): when the camera is
+    // inside an EnvCell, split the world render into:
+    //   1. Layer-0 pass (terrain + buildings + outdoor statics)
+    //   2. Depth-clear
+    //   3. Layer-1 pass (EnvCells + entities)
+    // Mirrors WB.GameScene.cs:1610. Outdoor: single autoClear render.
+    // Reads the same `_lastIsIndoor` flag the atmosphere composer uses
+    // (see atmosphere_pipeline.preFrameSkySync) so the two paths stay
+    // in lockstep. This branch is the fallback for the ~8s atmosphere
+    // bake window, `?atmosphere=off`, and atmosphere init failures.
+    const isIndoorRender = !!liveScene3dRef?.skyDome?._lastIsIndoor;
+    const camLayersBefore = activeCam.layers.mask;
     if (skyRendered) {
       // Preserve sky color paint across the world render. Clear ONLY
       // the depth buffer so the world's depth-test starts fresh; the
@@ -1513,13 +1560,42 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       const prevAutoClear = renderer.autoClear;
       renderer.autoClear = false;
       renderer.clearDepth();
-      renderer.render(scene, activeCam);
+      if (isIndoorRender) {
+        // World pass: terrain + buildings + statics (layer 0).
+        activeCam.layers.mask = (1 << 0);
+        renderer.render(scene, activeCam);
+        // Mid-frame depth clear (color buffer stays — sky + outdoor
+        // colour both preserved).
+        renderer.clearDepth();
+        // Cells pass: EnvCells + entities (layer 1) with fresh depth.
+        activeCam.layers.mask = (1 << 1);
+        renderer.render(scene, activeCam);
+      } else {
+        renderer.render(scene, activeCam);
+      }
       renderer.autoClear = prevAutoClear;
     } else {
-      // No sky pass this frame (indoor or pre-construction). Normal
-      // autoClear-true render clears color+depth as usual.
-      renderer.render(scene, activeCam);
+      // No sky pass this frame (pre-bake / pre-construction).
+      if (isIndoorRender) {
+        // First pass — autoClear writes color+depth from clear color.
+        // Layer 0 only.
+        activeCam.layers.mask = (1 << 0);
+        renderer.render(scene, activeCam);
+        // Depth clear, then layer-1 pass on top.
+        const prevAutoClear = renderer.autoClear;
+        renderer.autoClear = false;
+        renderer.clearDepth();
+        activeCam.layers.mask = (1 << 1);
+        renderer.render(scene, activeCam);
+        renderer.autoClear = prevAutoClear;
+      } else {
+        renderer.render(scene, activeCam);
+      }
     }
+    // Restore the camera's layer mask to its pre-split value so
+    // downstream consumers (raycasters, CSM matrices) observe the
+    // outdoor-equivalent state.
+    activeCam.layers.mask = camLayersBefore;
     scheduleNext();
   }
   // Initial kickoff is always a bare rAF — even in render-on-demand
@@ -1863,7 +1939,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       if (this.wireframeMode && this.materialCache) {
         const self = this;
         return Promise.resolve(p).then((r) => {
-          if (self.cellsGroup) self.materialCache.addFillCompanions(self.cellsGroup);
+          if (self.cellsGroup) {
+            self.materialCache.addFillCompanions(self.cellsGroup);
+            // Phase 5 PView render-order fix (2026-05-25): re-stamp layer 1
+            // across cellsGroup after fill companions land. addFillCompanions
+            // creates new Mesh siblings that default to layer 0; without this
+            // sweep they'd ghost-render in the indoor world pass (layer 0) and
+            // miss the post-clearDepth cells pass.
+            self.cellsGroup.traverse((o) => o.layers.set(1));
+          }
           return r;
         });
       }

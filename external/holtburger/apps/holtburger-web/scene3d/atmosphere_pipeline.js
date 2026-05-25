@@ -32,8 +32,10 @@
 import * as THREE from "three";
 import {
   BloomEffect,
+  ClearPass,
   EffectComposer,
   EffectPass,
+  Pass,
   RenderPass,
   ToneMappingEffect,
   ToneMappingMode,
@@ -42,6 +44,47 @@ import {
 } from "postprocessing";
 import { AerialPerspectiveEffect, AtmosphereParameters } from "@takram/three-atmosphere";
 import { DitheringEffect, LensFlareEffect } from "@takram/three-geospatial-effects";
+
+// Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
+// Mirrors `scene3d/index.js` (RENDER_LAYER_WORLD/RENDER_LAYER_INDOOR).
+// Layer 0 = terrain + outdoor buildings + outdoor statics.
+// Layer 1 = EnvCells + entities. Both layers enabled for outdoor;
+// layer 0 then layer 1 (with a depth-clear between) for indoor.
+const CAM_LAYER_MASK_BOTH = (1 << 0) | (1 << 1);
+const CAM_LAYER_MASK_WORLD_ONLY = (1 << 0);
+const CAM_LAYER_MASK_INDOOR_ONLY = (1 << 1);
+
+/**
+ * Tiny pmndrs Pass subclass that sets the camera's layer mask before the
+ * next downstream RenderPass executes. Holds no GPU state — just mutates
+ * the shared camera reference. needsSwap=false so the composer keeps using
+ * the same input/output buffers across the mask switch.
+ *
+ * Used to split a single indoor frame into:
+ *   1. world pass  (mask = WORLD_ONLY)  → terrain/buildings/statics
+ *   2. depth clear pass                 → wipe terrain Z so cottage floors
+ *                                          don't Z-fight terrain underneath
+ *   3. cells pass  (mask = INDOOR_ONLY) → EnvCells + entities
+ * Mirrors `WB.GameScene.cs:1610`'s `gl.Clear(ClearBufferMask.DepthBufferBit)`
+ * between RenderTerrain and EnvCellManager.Render.
+ */
+class CameraLayerMaskPass extends Pass {
+  constructor(camera, mask, label = "CameraLayerMask") {
+    super(label);
+    this.camera = camera;
+    this.mask = mask;
+    this.needsSwap = false;
+  }
+  // Empty render — the visible effect is the side-effect on the camera.
+  render(_renderer, _inputBuffer, _outputBuffer, _deltaTime, _stencilTest) {
+    if (this.camera && this.camera.layers) {
+      this.camera.layers.mask = this.mask;
+    }
+  }
+  setCamera(cam) {
+    if (cam) this.camera = cam;
+  }
+}
 
 /**
  * Construct an atmosphere-enabled composer over the existing renderer.
@@ -123,12 +166,70 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     composer.addPass(skyRenderPass);
   }
 
+  // Phase 5 PView render-order fix (2026-05-25) — pre-world layer mask.
+  // Force the camera's mask to BOTH (outdoor steady state) by default;
+  // preFrameSkySync flips it to WORLD_ONLY when indoor before the world
+  // pass runs. The mask is restored to BOTH by `cellsPostMaskPass` after
+  // the indoor split so downstream consumers (raycasters, CSM) see the
+  // outdoor-equivalent state.
+  const worldMaskPass = new CameraLayerMaskPass(
+    camera,
+    CAM_LAYER_MASK_BOTH,
+    "CameraLayerMask(World)"
+  );
+  composer.addPass(worldMaskPass);
+
   const worldRenderPass = new RenderPass(scene, camera);
   if (skyRenderPass) {
     worldRenderPass.clear = false;
     worldRenderPass.clearDepth = true;
   }
   composer.addPass(worldRenderPass);
+
+  // Phase 5 PView render-order fix (2026-05-25) — indoor depth-clear +
+  // cells pass. Both are `enabled=false` by default (outdoor steady state);
+  // preFrameSkySync flips them on when indoor and configures
+  // `worldMaskPass` to write WORLD_ONLY so the world pass renders only
+  // terrain + outdoor buildings + outdoor statics.
+  //
+  // ClearPass(false, true, false): color=keep, depth=wipe, stencil=keep.
+  // Mirrors `gl.Clear(ClearBufferMask.DepthBufferBit)` at GameScene.cs:1610.
+  // The render-target is the composer's input buffer (still being written
+  // to between this and `fxPass`); the clear operates on its depth texture
+  // (`composer.inputBuffer.depthTexture`).
+  const depthClearPass = new ClearPass(false, true, false);
+  depthClearPass.enabled = false;
+  composer.addPass(depthClearPass);
+
+  const cellsMaskPass = new CameraLayerMaskPass(
+    camera,
+    CAM_LAYER_MASK_INDOOR_ONLY,
+    "CameraLayerMask(Cells)"
+  );
+  cellsMaskPass.enabled = false;
+  composer.addPass(cellsMaskPass);
+
+  // cellsRenderPass renders the same scene + camera but with the camera
+  // mask set to layer 1 only. Inside `RenderPass.render` we have
+  // `clear=false, clearDepth=false` so neither the color nor depth buffer
+  // is touched — only cells write fresh depth into the just-cleared depth
+  // buffer. Render target is the same input buffer the world pass wrote.
+  const cellsRenderPass = new RenderPass(scene, camera);
+  cellsRenderPass.clear = false;
+  cellsRenderPass.clearDepth = false;
+  cellsRenderPass.enabled = false;
+  composer.addPass(cellsRenderPass);
+
+  // Restore the camera's mask to BOTH after the indoor split so downstream
+  // consumers (CSM cascade matrices, picking raycasters, plugin scripts
+  // that read `camera.layers`) observe the steady-state outdoor mask.
+  // No-op when the indoor split was disabled (mask already = BOTH).
+  const cellsPostMaskPass = new CameraLayerMaskPass(
+    camera,
+    CAM_LAYER_MASK_BOTH,
+    "CameraLayerMask(Restore)"
+  );
+  composer.addPass(cellsPostMaskPass);
 
   // Aerial perspective. sunLight+skyLight stay false in K.2 — turning
   // them on requires a normal buffer (geometry pass) and a real
@@ -232,30 +333,73 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     dithering,
     skyRenderPass,
     worldRenderPass,
+    // Phase 5 PView render-order fix (2026-05-25) — exposed for diag
+    // probes + the zfighting harness, which reads `depthClearPass.enabled`
+    // to confirm the indoor split is wired.
+    worldMaskPass,
+    depthClearPass,
+    cellsMaskPass,
+    cellsRenderPass,
+    cellsPostMaskPass,
     fxPass,
 
     /**
      * Pre-frame: sync sky camera, flip sky enabled/world clear flags
-     * based on indoor state.
+     * based on indoor state, AND configure the Phase 5 PView render
+     * order (terrain → depth-clear → EnvCells) when indoor.
+     *
+     * Outdoor (default): worldMaskPass writes BOTH layers, world pass
+     * renders everything in one shot, depth-clear + cells passes are
+     * disabled. Mask is restored to BOTH by cellsPostMaskPass (no-op).
+     *
+     * Indoor: worldMaskPass writes WORLD_ONLY → world pass renders only
+     * terrain + outdoor buildings + outdoor statics. ClearPass wipes the
+     * depth buffer. cellsMaskPass writes INDOOR_ONLY → cells pass renders
+     * cellsGroup + entitiesGroup with fresh depth → no Z-fighting
+     * between cottage floors and terrain underneath. cellsPostMaskPass
+     * restores the mask to BOTH for downstream consumers.
+     *
+     * Note: `skyDome._lastIsIndoor` is the canonical indoor flag used
+     * across the renderer (sky_dome.js wires it from
+     * `sessionHandle.isCurrentCellIndoor()` once per tick). Reading the
+     * cached value here means we never call into wasm during the render
+     * dispatch — important for the `?nullRender=1` and capture-script
+     * cadences that throttle the wasm session.
      */
     preFrameSkySync(skyDome, mainCamera) {
-      if (!skyRenderPass) return;
-      if (!skyDome) {
-        skyRenderPass.enabled = false;
-        return;
+      const isIndoor = !!skyDome?._lastIsIndoor;
+
+      // Sky-K.2 sky-pass + sky-camera sync (existing behaviour).
+      if (skyRenderPass) {
+        skyRenderPass.enabled = !!skyDome && !isIndoor;
+        if (skyRenderPass.enabled && typeof skyDome.syncSkyCamera === "function") {
+          skyDome.syncSkyCamera(mainCamera);
+        }
       }
-      const isIndoor = !!skyDome._lastIsIndoor;
-      skyRenderPass.enabled = !isIndoor;
-      if (!isIndoor && typeof skyDome.syncSkyCamera === "function") {
-        skyDome.syncSkyCamera(mainCamera);
-      }
-      if (isIndoor) {
-        worldRenderPass.clear = true;
+
+      // World pass clear flags (existing behaviour).
+      if (isIndoor || !skyRenderPass) {
+        worldRenderPass.clear = isIndoor || !skyRenderPass;
         worldRenderPass.clearDepth = false;
       } else {
         worldRenderPass.clear = false;
         worldRenderPass.clearDepth = true;
       }
+
+      // Phase 5 PView render-order fix (2026-05-25). Mirrors WB
+      // GameScene.cs:1610. When indoor:
+      //   1. World pass renders layer 0 (terrain/buildings/statics).
+      //   2. Depth-clear wipes terrain Z so cottage floors don't fight.
+      //   3. Cells pass renders layer 1 (EnvCells + entities) on top.
+      // When outdoor: single world pass renders both layers in one shot,
+      // matching the pre-fix behaviour (no perf cost outdoors).
+      worldMaskPass.mask = isIndoor ? CAM_LAYER_MASK_WORLD_ONLY : CAM_LAYER_MASK_BOTH;
+      depthClearPass.enabled = isIndoor;
+      cellsMaskPass.enabled = isIndoor;
+      cellsRenderPass.enabled = isIndoor;
+      // cellsPostMaskPass is always enabled — mask=BOTH no matter what,
+      // so steady-state outdoor consumers observe the unsplit mask. The
+      // single mask write is ~free.
     },
 
     /**
@@ -271,7 +415,11 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     render(cam, dt = 0) {
       if (cam && cam !== activeCamera) {
         worldRenderPass.camera = cam;
+        cellsRenderPass.camera = cam;
         aerialPerspective.camera = cam;
+        worldMaskPass.setCamera(cam);
+        cellsMaskPass.setCamera(cam);
+        cellsPostMaskPass.setCamera(cam);
         activeCamera = cam;
       }
       composer.render(dt);
@@ -309,7 +457,11 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     setCamera(cam) {
       if (!cam || cam === activeCamera) return;
       worldRenderPass.camera = cam;
+      cellsRenderPass.camera = cam;
       aerialPerspective.camera = cam;
+      worldMaskPass.setCamera(cam);
+      cellsMaskPass.setCamera(cam);
+      cellsPostMaskPass.setCamera(cam);
       activeCamera = cam;
     },
 

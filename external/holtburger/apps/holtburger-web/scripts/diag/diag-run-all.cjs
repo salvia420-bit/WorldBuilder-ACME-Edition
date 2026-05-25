@@ -115,6 +115,24 @@ const HARNESSES = [
       "report.md under HOLTBURGER_DIAG_OUT/pview-vs-frustum-sweep-<TS>/. " +
       "Wall-clock ~10 min (5 sessions × ~120s each).",
   },
+  {
+    name: "zfighting-cottage",
+    script: "run-diag-zfighting-cottage.cjs",
+    surface: "atmospherePipeline.depthClearPass / cellsRenderPass",
+    methodDoc: "docs/cell-portal-method.md (Phase 5 PView render order)",
+    expectsPass: true,
+    notes:
+      "Validates Phase 5 PView render-order fix (WB.GameScene.cs:1610 mirror). " +
+      "After @teleloc to Holtburg cottage 0xA9B40100, asserts: " +
+      "(a) atmospherePipeline.depthClearPass.enabled && cellsRenderPass.enabled " +
+      "(the indoor split is wired), and (b) the rendered screenshot shows " +
+      "< 1% of lit pixels in the Z-fight checkerboard pattern (where both the " +
+      "horizontal and vertical neighbour differ by > 20 luma steps). Pre-fix " +
+      "the cottage floor (cell-Z=67) would Z-fight terrain underneath " +
+      "(terrain-Z≈66.x); post-fix the depth-clear between world + cells passes " +
+      "isolates cell-floor depth from terrain depth so cottage floors render " +
+      "cleanly.",
+  },
   // Future:
   //   - clothing.cjs  → __diag.clothing
   //   - entity_lod.cjs → __diag.lod
