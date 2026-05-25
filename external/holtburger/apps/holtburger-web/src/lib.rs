@@ -5347,19 +5347,14 @@ pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
         out.push_str(&el.right_edge.to_string());
         out.push_str(",\"bottom_edge\":");
         out.push_str(&el.bottom_edge.to_string());
-        // States (v2 additive): UIStateId → StateDesc tree. Each
-        // StateDesc carries property overrides (BaseProperty values
-        // keyed by MasterPropertyId — sprite DataIDs, colors, text-
-        // refs, behavior flags) + media triggers (background image
-        // DataIDs, animation frame sequences, sound IDs, etc.).
-        // Serialized via serde_json so the JS side gets the full
-        // typed BaseProperty / MediaDesc tree without losing the
-        // discriminant tags.
-        out.push_str(",\"states\":");
-        match serde_json::to_string(&el.states) {
-            Ok(s) => out.push_str(&s),
-            Err(_) => out.push_str("{}"),
-        }
+        // G3 states emission temporarily reverted to rule out the
+        // serde_json::to_string path as a cause of runtime issues
+        // observed through cloudflared. The Rust struct still parses
+        // states; we just don't serialize them. JS helpers
+        // (getElementStates / getStateProperty / getStateMediaByType)
+        // see empty `states: {}` on every element and behave as no-op
+        // until this is re-enabled.
+        out.push_str(",\"states\":{}");
         out.push_str(",\"children\":[");
         let mut first = true;
         for (ck, cv) in &el.children {
