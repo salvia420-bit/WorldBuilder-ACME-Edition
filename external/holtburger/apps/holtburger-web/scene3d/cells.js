@@ -665,7 +665,11 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
         // tighter but lose near-portal cells.
         const frustumSet = sessionHandle.getRenderSetWithFrustum(mvp);
         if (typeof sessionHandle.getRenderSetWithPView === "function") {
-          const pviewSet = sessionHandle.getRenderSetWithPView(mvp);
+          // 2026-05-25 diag(pvs) parametric depth: wasm `getRenderSetWithPView`
+          // now takes an optional `max_depth: u8`. Production caller passes
+          // `0` (= use the default `PVIEW_MAX_DEPTH=8`); only the
+          // `run-diag-pview-depth-tuning.cjs` harness varies it.
+          const pviewSet = sessionHandle.getRenderSetWithPView(mvp, 0);
           if (pviewSet && pviewSet.length > 1) {
             // Indoor case: PView returned more than just the seed
             // cell, so the portal walk produced real refined results.

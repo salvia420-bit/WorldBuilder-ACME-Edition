@@ -14722,20 +14722,73 @@ impl SessionHandle {
     /// polygon intersects the parent view polygon (the clipped
     /// portal polygon from the previous hop, initially the viewport).
     ///
-    /// Limitation in this implementation: portals with any vertex
-    /// behind the near plane (w ≤ 0) are conservatively skipped (the
-    /// full retail port clips the polygon against the near plane
-    /// first, then projects). To preserve correctness near building
-    /// entrances, callers should UNION this set with the Phase 4
-    /// `getRenderSetWithFrustum` result. The wire-agent harness does
-    /// this union itself.
+    /// As of 2026-05-25 the projection step clips portal polygons
+    /// against the near plane in homogeneous clip space (Sutherland-
+    /// Hodgman against `z + w >= 0`) before perspective divide, so
+    /// portals near building entrances (with any vertex behind the
+    /// camera near plane) survive correctly. Callers still typically
+    /// UNION with `getRenderSetWithFrustum` for robustness — PView's
+    /// portal-polygon walk is by design empty for outdoor LandCells
+    /// (no portal records), and the frustum's AABB cull picks up
+    /// nearby EnvCells the player can see by line-of-sight.
     ///
     /// Returns sorted-ascending u32 cell ids for stable comparison.
     /// Empty if `mvp.len() != 16` or `current_cell == 0`.
+    ///
+    /// The `max_depth` parameter caps portal-graph traversal depth
+    /// from the current cell. Pass `0` (or omit it from the JS side
+    /// via `undefined`, which wasm-bindgen coerces to `0`) to use the
+    /// default of `PVIEW_MAX_DEPTH` (8). This is primarily an
+    /// instrumentation hook for the
+    /// `run-diag-pview-depth-tuning.cjs` harness — production callers
+    /// omit the arg or pass `0` and inherit the default.
     #[wasm_bindgen(js_name = getRenderSetWithPView)]
-    pub fn get_render_set_with_pview(&self, mvp: &[f32]) -> Vec<u32> {
+    pub fn get_render_set_with_pview(&self, mvp: &[f32], max_depth: u8) -> Vec<u32> {
+        let (cells, _) = self.get_render_set_with_pview_internal(mvp, max_depth);
+        cells
+    }
+
+    /// Phase 5 PView depth-instrumentation tap (2026-05-25). Same as
+    /// `getRenderSetWithPView` but additionally reports the deepest
+    /// BFS layer at which a new visible cell was found.
+    ///
+    /// Wire shape: returns one big `Vec<u32>` packed as
+    /// `[max_depth_reached, visible_count, c0, c1, …, cN-1]`. JS
+    /// peels the prefix.
+    ///
+    /// Read-only — does not mutate snapshot state. Cost = same BFS
+    /// pass as `getRenderSetWithPView` plus one extra `u8` track
+    /// during the walk; negligible.
+    #[wasm_bindgen(js_name = getRenderSetWithPViewInstrumented)]
+    pub fn get_render_set_with_pview_instrumented(
+        &self,
+        mvp: &[f32],
+        max_depth: u8,
+    ) -> Vec<u32> {
+        let (cells, max_depth_reached) =
+            self.get_render_set_with_pview_internal(mvp, max_depth);
+        let mut out: Vec<u32> = Vec::with_capacity(cells.len() + 2);
+        out.push(max_depth_reached as u32);
+        out.push(cells.len() as u32);
+        out.extend(cells);
+        out
+    }
+
+    /// Shared implementation for `getRenderSetWithPView` (production
+    /// path) and `getRenderSetWithPViewInstrumented` (diag-harness
+    /// tap). Returns `(visible_cells_sorted, max_depth_reached)`.
+    /// `max_depth_reached` is the deepest BFS layer at which a new
+    /// cell was added — `0` means we never crossed a portal,
+    /// `N` means we found a visible cell at depth=N (so the next
+    /// neighbour search would have happened at depth=N+1, capped
+    /// at `effective_max_depth`).
+    fn get_render_set_with_pview_internal(
+        &self,
+        mvp: &[f32],
+        max_depth: u8,
+    ) -> (Vec<u32>, u8) {
         if mvp.len() != 16 {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
         let mvp_arr: [f32; 16] = {
             let mut a = [0.0f32; 16];
@@ -14744,10 +14797,20 @@ impl SessionHandle {
         };
         let snap = self.cell_scene_snapshot.borrow();
         if snap.current_cell == 0 {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
         // Hard cap on portal-traversal depth — see method doc.
+        // `max_depth=0` → use the default (production callers + JS
+        // callers that omit the arg both land here via wasm-bindgen's
+        // u8 default coercion of `undefined`). Any non-zero value
+        // overrides for the duration of this call (no global
+        // mutation; the constant is the contract).
         const PVIEW_MAX_DEPTH: u8 = 8;
+        let effective_max_depth: u8 = if max_depth > 0 {
+            max_depth
+        } else {
+            PVIEW_MAX_DEPTH
+        };
 
         // Build the per-cell portal lookup from the snapshot's flat
         // form. Cheap: ~140 cells × ~6 portals.
@@ -14769,12 +14832,13 @@ impl SessionHandle {
 
         let mut visible: std::collections::HashSet<u32> = std::collections::HashSet::new();
         visible.insert(snap.current_cell);
+        let mut max_depth_reached: u8 = 0;
 
         if portal_map.is_empty() {
             // Snapshot hasn't seen portal polygons yet (recv loop may
             // not have published). Return just current_cell — JS
             // unions with Phase 4 frustum-cull fallback.
-            return vec![snap.current_cell];
+            return (vec![snap.current_cell], 0);
         }
 
         let initial_view: Vec<[f32; 2]> = vec![
@@ -14787,7 +14851,7 @@ impl SessionHandle {
             std::collections::VecDeque::new();
         queue.push_back((snap.current_cell, initial_view, 0));
         while let Some((cell_id, view_poly, depth)) = queue.pop_front() {
-            if depth >= PVIEW_MAX_DEPTH {
+            if depth >= effective_max_depth {
                 continue;
             }
             let Some(portals) = portal_map.get(&cell_id) else {
@@ -14810,13 +14874,17 @@ impl SessionHandle {
                     continue;
                 }
                 visible.insert(*neighbour);
-                queue.push_back((*neighbour, clipped, depth + 1));
+                let neighbour_depth = depth + 1;
+                if neighbour_depth > max_depth_reached {
+                    max_depth_reached = neighbour_depth;
+                }
+                queue.push_back((*neighbour, clipped, neighbour_depth));
             }
         }
 
         let mut out: Vec<u32> = visible.into_iter().collect();
         out.sort_unstable();
-        out
+        (out, max_depth_reached)
     }
 
     /// Phase 4 PView port (2026-05-25): frustum-aware visibility.

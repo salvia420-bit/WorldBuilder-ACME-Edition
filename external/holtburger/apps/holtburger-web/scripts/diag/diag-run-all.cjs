@@ -63,6 +63,21 @@ const HARNESSES = [
       "cell_portal_graph) + Phase 4 (frustum cull) together: observedCount >= 1 " +
       "(current cell at minimum), extra == 0 (no over-render outside PVS).",
   },
+  {
+    name: "pview-depth-tuning",
+    script: "run-diag-pview-depth-tuning.cjs",
+    surface: "SessionHandle.getRenderSetWithPView(mvp, max_depth)",
+    methodDoc: "docs/cell-portal-method.md §Phase 5 PView port",
+    expectsPass: true,
+    notes:
+      "MEASUREMENT harness (always exits 0 with a report; no pass/fail). " +
+      "Sweeps the new parametric `max_depth` arg on getRenderSetWithPView " +
+      "across 6 stops × 8 yaws × 7 depth caps (~336 calls), records the " +
+      "deepest BFS layer at which a new cell was added (via the " +
+      "getRenderSetWithPViewInstrumented sibling), and emits a Markdown " +
+      "report with a PVIEW_MAX_DEPTH recommendation (keep 8 / raise to N+2 / " +
+      "lower). Wall-clock ~6 min.",
+  },
   // Future:
   //   - clothing.cjs  → __diag.clothing
   //   - entity_lod.cjs → __diag.lod
