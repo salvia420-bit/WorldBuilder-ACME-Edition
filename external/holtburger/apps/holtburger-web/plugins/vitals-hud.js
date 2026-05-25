@@ -9,6 +9,23 @@
 // `mount()` lifecycle, subscribed to `client.events.playerStatsUpdated`
 // for refresh, and registered with `iconHidden: true` so it doesn't
 // claim a bar slot.
+//
+// Layout-driven positions: retail's gmFloatyVitalsUI (LayoutDesc
+// 0x2100006C) packs three 150×16 horizontal bars inside a 160×58
+// frame. Element-id map confirmed by vitals_hud_layout_dump 2026-05-24:
+//   0x100005F9 — root panel (160×58, has 19 children: 16 frame
+//                corners/edges + 3 vital bars)
+//   0x100000E6 — HP bar (type=7 meter, 150×16 at 5,5)
+//   0x100000EC — Stamina bar (type=7 meter, 150×16 at 5,21)
+//   0x100000EE — Mana bar (type=7 meter, 150×16 at 5,37)
+// Each bar shares the same inner 3-slice sprite layout:
+//   0x100000E8 — left rim cap   (10×16 at 0,0)
+//   0x100000E9 — middle fill    (130×16 at 10,0)
+//   0x100000EA — right rim cap  (10×16 at 140,0)
+//   0x100004A9 — fill marker    (varies; retail's "cursor" inside
+//                                the meter, x/w differs per bar)
+
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 
 const OVERLAY_ID = "hb-vitals-hud";
 
@@ -16,6 +33,19 @@ const OVERLAY_ID = "hb-vitals-hud";
 // movement/types.rs::VitalsKind` + the original index.html mapping.
 const VITAL_SHORT = { 1: "HP", 3: "ST", 5: "MN" };
 const VITAL_CLASS = { 1: "health", 3: "stamina", 5: "mana" };
+
+/** gmFloatyVitalsUI — retail layout that drives the vitals HUD.
+ *  Element-id constants for the consumer; full purpose-map in the
+ *  head comment above. */
+const VITALS_LAYOUT_ID = 0x2100006C;
+const VITALS_ELEMS = {
+  root: 0x100005F9,
+  hp:   0x100000E6,
+  st:   0x100000EC,
+  mn:   0x100000EE,
+};
+// Per-vital-type → retail element_id for the bar row.
+const VITAL_ELEM_BY_TYPE = { 1: VITALS_ELEMS.hp, 3: VITALS_ELEMS.st, 5: VITALS_ELEMS.mn };
 
 let stylesInjected = false;
 function ensureStyles() {
@@ -36,10 +66,15 @@ function ensureStyles() {
       top: 6px;
       left: 260px;
       z-index: 50;
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
-      padding: 4px;
+      /* Retail layout (gmFloatyVitalsUI 0x2100006C) positions the 3
+         bar rows absolutely inside the root panel at (5,5/21/37).
+         When applyVitalsLayout() runs, it sets position:absolute on
+         each row + applies retail (x,y,w,h). The container holds
+         box dims (160×58 from layout root); padding stays at 0 so
+         row offsets land at retail-exact positions inside the
+         border-image chrome. */
+      box-sizing: content-box;
+      padding: 0;
       background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
       border: 6px solid transparent;
       border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
@@ -164,6 +199,7 @@ function renderVitals(overlay, vitals) {
   // buffed_max] × N`. Same loop as the old index.html block, but we
   // mutate per-field instead of regenerating innerHTML.
   const seen = new Set();
+  let addedNewRow = false;
   for (let i = 0; i + 3 < vitals.length; i += 4) {
     const type = vitals[i];
     const current = vitals[i + 1];
@@ -179,6 +215,7 @@ function renderVitals(overlay, vitals) {
       entry = buildVitalRow(type);
       refs.set(type, entry);
       overlay.appendChild(entry.rowEl);
+      addedNewRow = true;
     }
 
     if (entry.lastPctStr !== pctStr) {
@@ -201,7 +238,80 @@ function renderVitals(overlay, vitals) {
     }
   }
 
+  // Re-apply gmFloatyVitalsUI layout to the newly-added bar rows so
+  // their position/size mirror the retail layout. Cached after the
+  // first successful apply, so this is a sync no-op when wasm + the
+  // local shard have already landed.
+  if (addedNewRow) {
+    applyVitalsLayout({ overlay, rowsByType: refs });
+  }
+
   overlay.hidden = false;
+}
+
+// Apply gmFloatyVitalsUI 0x2100006C to the vitals overlay + each bar row.
+//
+// Mounts BEFORE `init_resource_source` populates `window.__hbWasm`
+// (vitals-hud is bar-mounted at page load like radar). Retry every
+// 2s up to 8 times if `loadLayout` returns null. Render still works
+// from CSS defaults during the retry window — layout-driven sizing
+// only refines positions/dimensions.
+function applyVitalsLayout(refs, attempt = 0) {
+  const apply = (layout) => {
+    if (!layout) {
+      if (attempt < 8) {
+        setTimeout(() => applyVitalsLayout(refs, attempt + 1), 2000);
+      }
+      return;
+    }
+    let applied = 0;
+    // Root frame — size the overlay to the retail dimensions.
+    const root = findElementById(layout, VITALS_ELEMS.root);
+    if (root && refs.overlay) {
+      // The overlay's screen anchor (top/left) is a Holtburger UX
+      // choice and is NOT touched by layout — only width/height.
+      if (typeof root.width === "number") {
+        refs.overlay.style.width = `${root.width}px`;
+      }
+      if (typeof root.height === "number") {
+        refs.overlay.style.height = `${root.height}px`;
+      }
+      applied += 1;
+    }
+    // Per-vital bar rows — explicit (left, top, width, height).
+    // Retail's gmFloatyVitalsUI uses absolute positioning inside the
+    // root (it's a fixed-layout panel, not a flexbox). Clear the
+    // overlay's `flex-direction: column` defaults won't fight us
+    // because position:absolute takes elements out of flow.
+    if (refs.rowsByType) {
+      for (const [type, entry] of refs.rowsByType) {
+        const elemId = VITAL_ELEM_BY_TYPE[type];
+        if (!elemId) continue;
+        const desc = findElementById(layout, elemId);
+        if (!desc || !entry?.rowEl) continue;
+        entry.rowEl.style.position = "absolute";
+        if (typeof desc.x === "number") entry.rowEl.style.left = `${desc.x}px`;
+        if (typeof desc.y === "number") entry.rowEl.style.top = `${desc.y}px`;
+        if (typeof desc.width === "number") entry.rowEl.style.width = `${desc.width}px`;
+        if (typeof desc.height === "number") entry.rowEl.style.height = `${desc.height}px`;
+        // The inner `.hud-vital-bar` needs to inherit the row width
+        // (its CSS default is a fixed 250px). Make it fill the row
+        // since the row is now retail-sized.
+        const barEl = entry.rowEl.querySelector(".hud-vital-bar");
+        if (barEl) {
+          barEl.style.width = "100%";
+          barEl.style.height = "100%";
+        }
+        applied += 1;
+      }
+    }
+    try {
+      window.__diag?.layout?.onVitalsApplied?.({ applied });
+    } catch (_) {}
+  };
+  const cached = getCachedLayout(VITALS_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(VITALS_LAYOUT_ID).then(apply).catch(() => {});
 }
 
 export const manifest = {
@@ -223,6 +333,12 @@ export function mount(ctx) {
   overlay.id = OVERLAY_ID;
   overlay.hidden = true;
   document.body.appendChild(overlay);
+
+  // Size the overlay to retail dimensions on first mount. Bar rows
+  // are positioned by `renderVitals` as they're added; layout sticks
+  // because `applyVitalsLayout` accepts the rowsByType map and the
+  // layout is cached after the first success.
+  applyVitalsLayout({ overlay, rowsByType: overlay.__vitalRefs });
 
   // The plugin-client is created post-login (window.__pluginClient
   // is set inside the loginForm submit handler in index.html). Bar
