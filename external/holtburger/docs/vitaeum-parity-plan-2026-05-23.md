@@ -662,8 +662,53 @@ Verified end-to-end:
 
 Follow-ons (not in this push):
 - Wider LayoutDesc consumers: each plugin's "ported from layout
-  0x21NNNN" comment is a candidate — `0x21000023 gmInventoryUI`,
-  `0x21000029 gmConfigUI`, `0x2100002C gmAttributeUI`, etc.
+  0x21NNNN" comment is a candidate — `0x21000029 gmConfigUI`,
+  `0x2100002C gmAttributeUI`, etc.
 - Richer fetch_layout payload: serialize StateDesc /
   BaseProperty / MediaDesc when a consumer needs background
   images, text states, or per-element behavior data.
+
+### Inventory window port — wider regions (2026-05-24, same day)
+
+Follow-up to the body-slot wiring above. The
+`inventory_layouts_dump` example revealed that both
+gmInventoryUI (0x21000023) and gmPaperDollUI (0x21000024)
+carry region-level positions our inventory.js was hand-tuning
+incorrectly. Notably:
+
+- **Burden bar lives INSIDE the paperdoll panel** (0x100005BE
+  at (42, 190) within gmPaperDollUI's 224×214 area, anchored
+  bottom). Our prior hand-tune placed it as a sibling of the
+  paperdoll, BELOW it.
+- **Bag column extends past the paperdoll** (61×339 at (239, 23)
+  within the 300×362 window; was 60×214 — 125px too short).
+- **Items grid is 234×120 at y=237** (was 224×~106 with CSS
+  `right:6; bottom:6` filling whatever was left).
+- **Paperdoll origin in the window is (0, 23)**, not (6, 4) —
+  the difference is the retail title-bar offset.
+
+What landed:
+- `INVENTORY_LAYOUT_ID = 0x21000023` + four named element-id
+  constants in inventory.js.
+- `applyInventoryLayout({paperdollEl, bagcolEl, burdenEl,
+  itemsEl, dollSlotEls})` chain-loads both layouts via
+  `Promise.all`. Tracks the paperdoll-panel origin from
+  gmInventoryUI and adds the burden's (42, 190)-inside-paperdoll
+  offset to anchor it in overlay coords (so the DOM can keep
+  burden as a paperdoll sibling while still rendering at the
+  retail location).
+- `apps/holtburger-tools/examples/inventory_layouts_dump.rs`
+  for the offline element-tree survey.
+
+Verified end-to-end (Playwright + autoLogin + Inventory panel):
+- 4/4 region matches between rendered DOM and retail layout
+  (paperdoll, bagcol, items grid, burden bar)
+- 21/22 body slots from gmPaperDollUI (1 fallback: Aetheria)
+- Screenshot at `docs/layout-inventory-full-2026-05-24.png`
+  shows the burden bar inside the paperdoll panel.
+
+Remaining un-wired in gmInventoryUI: background frame
+(0x100001D0, type=3) and bottom edge line (0x100001D1) —
+both cosmetic, already replaced by main-panel's brass-rim
+chrome. Title bar + close button are main-panel-owned and
+intentionally not driven by this layout.

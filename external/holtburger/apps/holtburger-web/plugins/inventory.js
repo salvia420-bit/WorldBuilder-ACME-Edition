@@ -25,11 +25,23 @@
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, parseElementIdHex, getCachedLayout } from "../ui/ac_layout.js";
 
-/** gmPaperDollUI — retail LayoutDesc that carries the body-slot Y
- *  coordinates the paperdoll uses. The X coords are NOT in this
- *  layout (retail computes them via parent-flow at runtime); we keep
- *  the hand-tuned X values from PAPERDOLL_SLOTS and override only Y. */
+/** Retail LayoutDescs covering the inventory window.
+ *
+ *  - `gmInventoryUI` (0x21000023, 300×362) — outer-window children
+ *    laying out the paperdoll area, bag column, items grid, title,
+ *    and close button. Top-level element 0x100001CC.
+ *  - `gmPaperDollUI` (0x21000024, 224×214) — body-slot positions
+ *    plus the burden bar (0x100005BE at (42, 190) inside the panel).
+ *
+ *  Per ElementDesc.element_id mapping (cross-checked against
+ *  paperdoll_layout_dump output + retail-anatomy validation):
+ */
+const INVENTORY_LAYOUT_ID = 0x21000023;
 const PAPERDOLL_LAYOUT_ID = 0x21000024;
+const INV_ELEM_PAPERDOLL_AREA = 0x100001CD;
+const INV_ELEM_BAG_COLUMN    = 0x100001CE;
+const INV_ELEM_ITEMS_GRID    = 0x100001CF;
+const PAPERDOLL_ELEM_BURDEN  = 0x100005BE;
 
 
 const OVERLAY_ID = "hb-inventory";
@@ -441,45 +453,113 @@ export const manifest = {
   description: "Right-side inventory window (gmInventoryUI 0x21000023)",
 };
 
-// Drive paperdoll body-slot (x, y) from gmPaperDollUI's LayoutDesc
-// (DAT 0x21000024) once the layout is loaded. Each slot's
-// `dataset.elemId` is the retail ElementDesc.element_id we look up.
+// Apply retail layout to the inventory window — body slot positions
+// from gmPaperDollUI + outer-window region positions from
+// gmInventoryUI. Refs:
+//   - paperdollEl  → top-level paperdoll panel container
+//   - bagcolEl     → narrow right-side bag-tab column
+//   - burdenEl     → burden meter (encumbrance bar)
+//   - itemsEl      → grid of pack-content slots below the paperdoll
+//   - dollSlotEls  → map of equipMask → { el, slot } for body slots
 //
-// 2026-05-24 finding (paperdoll_layout_dump example): LayoutDesc
-// carries BOTH x and y for every element — earlier in-code comment
-// claiming "no X data is set" was incorrect. Retail's paperdoll
-// places weapons in a top row at y=8 (sword, shield, wand, missile,
-// necklace) above the body diagram which starts at the head slot
-// (y=28). Both the prior hand-tuned X and Y values diverged from
-// retail in non-obvious ways; switching to layout-driven values
-// gives the authentic retail anatomy.
+// Retail anatomy (from inventory_layouts_dump 2026-05-24):
+//   - Paperdoll area at (0, 23) inside the 300×362 window
+//   - Bag column at (239, 23), 61×339 — extends past paperdoll
+//   - Items grid at (0, 237), 234×120 — directly below paperdoll
+//   - Burden bar at (42, 190) INSIDE the paperdoll panel (224×214),
+//     anchored to the bottom via right_edge=2, bottom_edge=1. Width
+//     is 120, height 14.
 //
-// Hand-tuned PAPERDOLL_SLOTS values stay in effect until the layout
-// resolves (cached after first call — re-mounts are cheap). If the
-// layout is unavailable or an element_id isn't in it (Aetheria
-// 0x1000050E is missing from gmPaperDollUI — Throne-of-Destiny-era
-// slot, post-dates this layout) the hand-tuned value persists.
-function applyPaperdollLayoutY(dollSlotEls) {
-  const apply = (layout) => {
-    if (!layout) return;
-    let updated = 0;
-    let missed = 0;
-    for (const slot of Object.values(dollSlotEls)) {
-      const id = parseElementIdHex(slot.slot.elemId);
-      const el = findElementById(layout, id);
-      if (!el) { missed += 1; continue; }
-      if (typeof el.x === "number") slot.el.style.left = `${el.x}px`;
-      if (typeof el.y === "number") slot.el.style.top = `${el.y}px`;
-      updated += 1;
+// Both layouts cache after the first call; re-mounts re-apply
+// synchronously. Falls through silently if either layout fails to
+// load — the hand-tuned defaults in CSS stay in effect.
+function applyInventoryLayout(refs) {
+  const apply = ([inv, doll]) => {
+    let appliedRegions = 0;
+    let slotUpdates = { updated: 0, missed: 0 };
+    // Paperdoll-panel origin in overlay coords. Used to anchor the
+    // burden bar (retail places it inside the paperdoll at (42, 190)
+    // but our DOM keeps the burden as a sibling of paperdoll). CSS
+    // default (6, 4) is the fallback when gmInventoryUI doesn't load.
+    let paperdollOrigin = { x: 6, y: 4 };
+
+    if (inv) {
+      const paperdollArea = findElementById(inv, INV_ELEM_PAPERDOLL_AREA);
+      const bagcol = findElementById(inv, INV_ELEM_BAG_COLUMN);
+      const itemsGrid = findElementById(inv, INV_ELEM_ITEMS_GRID);
+
+      if (paperdollArea && refs.paperdollEl) {
+        applyBox(refs.paperdollEl, paperdollArea);
+        if (typeof paperdollArea.x === "number") paperdollOrigin.x = paperdollArea.x;
+        if (typeof paperdollArea.y === "number") paperdollOrigin.y = paperdollArea.y;
+        appliedRegions += 1;
+      }
+      if (bagcol && refs.bagcolEl) {
+        // CSS uses `right: 6px` to anchor; clear so explicit left wins.
+        refs.bagcolEl.style.right = "";
+        applyBox(refs.bagcolEl, bagcol);
+        appliedRegions += 1;
+      }
+      if (itemsGrid && refs.itemsEl) {
+        refs.itemsEl.style.right = "";
+        refs.itemsEl.style.bottom = "";
+        applyBox(refs.itemsEl, itemsGrid);
+        appliedRegions += 1;
+      }
     }
+
+    if (doll) {
+      // Body slots — uses the same map findElementById walks.
+      slotUpdates = applySlotPositions(doll, refs.dollSlotEls);
+
+      // Burden bar at (42, 190) inside the paperdoll panel — translate
+      // to overlay coords using the just-applied (or CSS-default)
+      // paperdoll origin.
+      const burden = findElementById(doll, PAPERDOLL_ELEM_BURDEN);
+      if (burden && refs.burdenEl) {
+        if (typeof burden.x === "number") refs.burdenEl.style.left = `${paperdollOrigin.x + burden.x}px`;
+        if (typeof burden.y === "number") refs.burdenEl.style.top = `${paperdollOrigin.y + burden.y}px`;
+        if (typeof burden.width === "number") refs.burdenEl.style.width = `${burden.width}px`;
+        if (typeof burden.height === "number") refs.burdenEl.style.height = `${burden.height}px`;
+        appliedRegions += 1;
+      }
+    }
+
     try {
-      window.__diag?.layout?.onPaperdollApplied?.({ updated, missed });
+      window.__diag?.layout?.onInventoryApplied?.({
+        appliedRegions, slotUpdates,
+        invLoaded: !!inv, dollLoaded: !!doll,
+      });
     } catch (_) {}
   };
-  // Synchronous if already cached, else fire-and-forget the load.
-  const cached = getCachedLayout(PAPERDOLL_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(PAPERDOLL_LAYOUT_ID).then(apply).catch(() => {});
+
+  const cachedInv = getCachedLayout(INVENTORY_LAYOUT_ID);
+  const cachedDoll = getCachedLayout(PAPERDOLL_LAYOUT_ID);
+  if (cachedInv && cachedDoll) { apply([cachedInv, cachedDoll]); return; }
+  Promise.all([
+    loadLayout(INVENTORY_LAYOUT_ID),
+    loadLayout(PAPERDOLL_LAYOUT_ID),
+  ]).then(apply).catch(() => {});
+}
+
+function applyBox(el, layoutEl) {
+  if (typeof layoutEl.x === "number") el.style.left = `${layoutEl.x}px`;
+  if (typeof layoutEl.y === "number") el.style.top = `${layoutEl.y}px`;
+  if (typeof layoutEl.width === "number") el.style.width = `${layoutEl.width}px`;
+  if (typeof layoutEl.height === "number") el.style.height = `${layoutEl.height}px`;
+}
+
+function applySlotPositions(layout, dollSlotEls) {
+  let updated = 0, missed = 0;
+  for (const slot of Object.values(dollSlotEls)) {
+    const id = parseElementIdHex(slot.slot.elemId);
+    const el = findElementById(layout, id);
+    if (!el) { missed += 1; continue; }
+    if (typeof el.x === "number") slot.el.style.left = `${el.x}px`;
+    if (typeof el.y === "number") slot.el.style.top = `${el.y}px`;
+    updated += 1;
+  }
+  return { updated, missed };
 }
 
 // Inventory view — mounted inside main-panel's body slot. Returns
@@ -532,11 +612,6 @@ function doMount(parentEl, _ctx) {
   }
   overlay.appendChild(paperdoll);
 
-  // Override Y coords from gmPaperDollUI LayoutDesc (DAT 0x21000024)
-  // once it's loaded. Falls through silently if the layout isn't
-  // available — the hand-tuned defaults render correctly either way.
-  applyPaperdollLayoutY(dollSlotEls);
-
   // Bag column — 4 placeholder tabs for now (Main, Bag 1, 2, 3).
   const bagCol = document.createElement("div");
   bagCol.className = "hb-inv-bagcol";
@@ -581,6 +656,19 @@ function doMount(parentEl, _ctx) {
   // ("examine", ctx) — the WHOLE pane transitions, not just our lower
   // region. The user's eyes don't have to move because main-panel sits
   // in the same screen position regardless of which view is mounted.
+
+  // Apply retail layout: body slots + paperdoll/bagcol/items region
+  // boxes + burden bar position. Falls through to CSS defaults if the
+  // layouts can't load. All four refs must be present in the DOM at
+  // this point — applyInventoryLayout reads style.left/top off the
+  // paperdoll to anchor the burden bar.
+  applyInventoryLayout({
+    paperdollEl: paperdoll,
+    bagcolEl: bagCol,
+    burdenEl: burdenRow,
+    itemsEl: itemsGrid,
+    dollSlotEls,
+  });
 
   parentEl.appendChild(overlay);
 
