@@ -9,20 +9,45 @@
  * Inventory/Skills/Magic/etc."; vendor is its OWN top-level floaty
  * window in acclient.c, never sharing the main-panel slot.
  *
- * Layout decoded from chorizite-dump-layout-tree on 0x21000012:
- *   - Root 800×110, design-canvas y=500.
- *   - Tabs (3): Items / Buying / Selling — 92×20 each, top-left.
- *     Active uses sprite 0x06005F11, inactive 0x06005F12 (book-tab).
- *   - Body: 800×90 tab-content area.
- *   - Items tab content:
- *       * Category dropdown 117×18 (y=4)
- *       * Icon strip 710×32 (y=30) — horizontal scroll, click to preview
- *       * Selected-item name 590×15 (y=0 of body) + price 590×15 (y=15)
- *       * Buy button 64×22 (y=4, right)
- *       * Add to List button 64×22 (y=30, right)
- *   - Top strip background 800×20, sprite 0x06005F10.
- *   - Close X 22×20, sprites 0x060012A9 (pressed) / 0x060012AA (normal).
- *   - Buttons use sprite 0x06004C4C (normal) / 4D (pressed) / 4E (ghosted).
+ * Layout 0x21000012 — gmVendorUI. Full port via applyVendorLayout()
+ * (2026-05-24); element_id → purpose map confirmed by
+ * vendor_ui_layout_dump:
+ *
+ *   Root 0x100000B7 — 800×110, design-canvas y=500.
+ *   Outer panel 0x100000B8 — 800×110 wrapper for tabs + panes.
+ *   Tabs (3): 92×20 each, top-left.
+ *     0x100000B9 Items   (  0,0)
+ *     0x100000BA Buying  ( 92,0)
+ *     0x100000BB Selling (184,0)
+ *   Top strip background 0x1000008D — 800×20, sprite 0x06005F10.
+ *   Close X 0x100000D6 — 22×20 at (776,0), 2 states (0x060012A9/AA).
+ *
+ *   Items pane 0x100000BC — 800×90 at (0,20).
+ *     0x100000BF category dropdown — 117×18 at (4,4)
+ *     0x100000C0 selected-item name — 590×15 at (125,0)
+ *     0x100000C1 selected-item price — 590×15 at (125,15)
+ *     0x100000BD icon strip — 710×32 at (10,30)
+ *     0x100000BE rates / status line — 710×16 at (10,63)
+ *     0x100000C2 Buy button — 64×22 at (732,4)
+ *     0x100000C3 Add to List button — 64×22 at (732,30)
+ *
+ *   Buying pane 0x100000C4 — 800×90 at (0,20).
+ *     0x100000C5 queue list area — 710×32 at (10,30)
+ *     0x100000C6 queue footer (total) — 710×16 at (10,63)
+ *     0x100000C7 selected-name (590×15 at 125,0)
+ *     0x100000C8 selected-price (590×15 at 125,15)
+ *     0x100000C9 Confirm — 64×22 at (732,4)
+ *     0x100000CA Clear — 64×22 at (732,30)
+ *     0x100000CB Total label — 65×14 at (4,1)
+ *     0x100000CC Sub-total label — 65×14 at (4,15)
+ *
+ *   Selling pane 0x100000CD — mirrors Buying (0x100000CE-D5).
+ *
+ *   Standalone sprites: 0x100000DA-DC (800×90 pane backgrounds);
+ *   0x100000DD-E1 (button state-sprite refs); 0x1000048E (orphan,
+ *   2 states; likely a sound/animation cue not yet mapped).
+ *
+ * Buttons use sprite 0x06004C4C (normal) / 4D (pressed) / 4E (ghosted).
  *
  * Wire wiring (DO NOT regress):
  *   - Buy:  handle.buyFromVendor(vendorGuid, [vendorItemGuid…], [amount…])
@@ -48,6 +73,52 @@
 
 import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+
+// gmVendorUI 0x21000012 — element_id constants from
+// vendor_ui_layout_dump 2026-05-24. See head-comment block above for
+// the full element-purpose mapping.
+const VENDOR_LAYOUT_ID = 0x21000012;
+const VENDOR_ELEMS = {
+  // Outer panel wrapper inside the root.
+  outer:        0x100000B8,
+  // Tabs (top-left row).
+  tabItems:     0x100000B9,
+  tabBuying:    0x100000BA,
+  tabSelling:   0x100000BB,
+  // Top strip + close (sit outside the panes).
+  topStrip:     0x1000008D,
+  closeBtn:     0x100000D6,
+  // Items pane + its 7 children.
+  itemsPane:    0x100000BC,
+  itemsCat:     0x100000BF,  // category dropdown
+  itemsName:    0x100000C0,  // selected-item name
+  itemsPrice:   0x100000C1,  // selected-item price
+  itemsStrip:   0x100000BD,  // icon strip
+  itemsRates:   0x100000BE,  // rates / status line
+  itemsBuyBtn:  0x100000C2,  // Buy
+  itemsAddBtn:  0x100000C3,  // Add to List
+  // Buying pane + its 8 children.
+  buyingPane:    0x100000C4,
+  buyingList:    0x100000C5,
+  buyingFooter:  0x100000C6,
+  buyingName:    0x100000C7,
+  buyingPrice:   0x100000C8,
+  buyingConfirmBtn: 0x100000C9,
+  buyingClearBtn:   0x100000CA,
+  buyingTotalLbl:   0x100000CB,
+  buyingSubLbl:     0x100000CC,
+  // Selling pane + its 8 children.
+  sellingPane:    0x100000CD,
+  sellingList:    0x100000CE,
+  sellingFooter:  0x100000CF,
+  sellingName:    0x100000D0,
+  sellingPrice:   0x100000D1,
+  sellingConfirmBtn: 0x100000D2,
+  sellingClearBtn:   0x100000D3,
+  sellingTotalLbl:   0x100000D4,
+  sellingSubLbl:     0x100000D5,
+};
 
 const STYLE_ID = "hb-vendor-bar-styles";
 const OVERLAY_ID = "hb-vendor-bar";
@@ -170,41 +241,46 @@ function ensureStyles() {
   // 0x060012A9/AA — close X pressed/normal (22×20)
   // 0x06004CC2 — body strip placeholder (48×48, tiled)
   const SP = "./data/ui-sprites";
+  // Retail port (2026-05-24): every visual element uses the
+  // gmVendorUI 0x21000012 element positions as the source of truth.
+  // CSS sets sensible defaults so the panel is usable before
+  // applyVendorLayout() lands; absolute positioning everywhere so the
+  // layout-driven overrides land cleanly. Panel matches retail
+  // 800×110 dims (was 720×136 in the hand-tuned version which added a
+  // separate 26px title bar — retail folds the vendor identity into
+  // the active tab + close button, so the title bar is gone).
   style.textContent = `
 #${OVERLAY_ID} {
   position: fixed;
   left: 50%; bottom: 220px;
   transform: translateX(-50%);
-  width: 720px; height: 136px;
+  width: 800px; height: 110px;
   z-index: 60;
   pointer-events: auto;
   font-family: var(--hb-font-serif);
   color: var(--hb-text-cream);
   display: none;
   user-select: none;
+  box-sizing: border-box;
 }
 #${OVERLAY_ID}[data-open="1"] { display: block; }
-#${OVERLAY_ID} .hvb-title-bar {
-  position: relative;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  background: linear-gradient(180deg, rgba(64, 50, 24, 0.85) 0%, rgba(40, 30, 14, 0.85) 100%);
-  border-bottom: 1px solid var(--hb-border-brass-dim);
-}
-#${OVERLAY_ID} .hvb-title-bar .hvb-title { letter-spacing: 0.04em; }
+/* Top strip background — element 0x1000008D, 800×20 at (0,0).
+   Sprite 0x06005F10 tiles horizontally. */
 #${OVERLAY_ID} .hvb-top-strip {
-  position: relative;
-  height: 22px;
-  display: flex;
-  align-items: flex-end;
-  padding: 0 28px 0 8px;
+  position: absolute;
+  left: 0; top: 0;
+  width: 800px; height: 20px;
   background: url("${SP}/0x06005F10.png") repeat-x;
-  background-size: auto 22px;
+  background-size: auto 20px;
+  box-sizing: border-box;
+  z-index: 1;
 }
-#${OVERLAY_ID} .hvb-tabs { display: flex; gap: 0; align-items: flex-end; }
+/* Tabs — each 92×20, layout-positioned (0x100000B9/BA/BB at
+   x = 0/92/184, y=0). The CSS default just sets sizing; applyVendorLayout
+   overrides left/top from the LayoutDesc. */
 #${OVERLAY_ID} .hvb-tab {
+  position: absolute;
+  top: 0;
   width: 92px; height: 20px;
   background: url("${SP}/0x06005F12.png") no-repeat center / 100% 100%;
   color: var(--hb-text-cream);
@@ -212,26 +288,36 @@ function ensureStyles() {
   border: 0; cursor: pointer; padding: 0 6px;
   text-shadow: 0 1px 0 rgba(0,0,0,.85);
   line-height: 20px;
+  z-index: 3;
+  box-sizing: border-box;
 }
+#${OVERLAY_ID} .hvb-tab[data-tab="items"]   { left: 0; }
+#${OVERLAY_ID} .hvb-tab[data-tab="buying"]  { left: 92px; }
+#${OVERLAY_ID} .hvb-tab[data-tab="selling"] { left: 184px; }
 #${OVERLAY_ID} .hvb-tab.active {
   background-image: url("${SP}/0x06005F11.png");
   color: var(--hb-text-gold);
 }
 #${OVERLAY_ID} .hvb-tab:hover:not(.active) { color: var(--hb-text-cream-bright); }
+/* Close button — element 0x100000D6, 22×20 at (776,0). */
 #${OVERLAY_ID} .hvb-close {
   position: absolute;
-  top: 1px; right: 2px;
+  left: 776px; top: 0;
   width: 22px; height: 20px;
   background: url("${SP}/0x060012AA.png") no-repeat center / contain;
   border: 0; cursor: pointer; padding: 0;
   font-size: 0; color: transparent;
+  z-index: 4;
+  box-sizing: border-box;
 }
 #${OVERLAY_ID} .hvb-close:active {
   background-image: url("${SP}/0x060012A9.png");
 }
+/* Body — 800×90 at (0,20). Hosts the 3 panes. */
 #${OVERLAY_ID} .hvb-body {
-  position: relative;
-  height: 88px;
+  position: absolute;
+  left: 0; top: 20px;
+  width: 800px; height: 90px;
   background: url("${SP}/0x06004CC2.png") repeat;
   background-color: #2a1d12;
   background-blend-mode: multiply;
@@ -239,52 +325,65 @@ function ensureStyles() {
   border-bottom: 1px solid var(--hb-border-brass-deep);
   border-left: 1px solid var(--hb-border-brass-deep);
   border-right: 1px solid var(--hb-border-brass-deep);
-  overflow: hidden;
+  overflow: visible;
+  box-sizing: border-box;
 }
+/* Each pane is sized 800×90 with absolute children pinned to retail
+   x/y inside the body. The pane itself stays at (0, 0) inside .hvb-body
+   so layout-driven children compute relative to the pane origin. */
 #${OVERLAY_ID} .hvb-pane {
-  position: absolute; inset: 0;
+  position: absolute;
+  left: 0; top: 0;
+  width: 800px; height: 90px;
   display: none;
-  padding: 4px 80px 4px 8px;
   box-sizing: border-box;
 }
 #${OVERLAY_ID} .hvb-pane.active { display: block; }
 
-/* Items pane */
-#${OVERLAY_ID} .hvb-cat-row {
-  display: flex; align-items: center;
-  gap: 6px; height: 28px;
-}
+/* Items pane — children are absolute and positioned via layout. */
 #${OVERLAY_ID} .hvb-category {
+  position: absolute;
+  left: 4px; top: 4px;
   width: 117px; height: 18px;
   background: var(--hb-overlay-dark-deep);
   color: var(--hb-text-cream);
   border: 1px solid var(--hb-border-brass-dim);
   font-family: inherit; font-size: 10px;
   padding: 0 2px;
+  box-sizing: border-box;
 }
 #${OVERLAY_ID} .hvb-selected-name {
-  flex: 1 1 auto; min-width: 0;
+  position: absolute;
+  left: 125px; top: 0;
+  width: 590px; height: 15px;
   color: var(--hb-text-gold);
   font-size: 13px; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   text-align: center;
   text-shadow: 0 1px 0 rgba(0,0,0,.85);
+  line-height: 15px;
+  box-sizing: border-box;
 }
 #${OVERLAY_ID} .hvb-selected-price {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 125px; top: 15px;
+  width: 590px; height: 15px;
   color: var(--hb-text-cream-bright);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
-  margin-right: 6px;
+  text-align: center;
+  line-height: 15px;
+  box-sizing: border-box;
 }
 #${OVERLAY_ID} .hvb-icon-strip {
-  height: 36px;
-  margin-top: 4px;
+  position: absolute;
+  left: 10px; top: 30px;
+  width: 710px; height: 32px;
   display: flex; gap: 2px;
   overflow-x: auto; overflow-y: hidden;
   scrollbar-width: thin;
   scrollbar-color: var(--hb-border-brass) rgba(0,0,0,.5);
-  padding-bottom: 4px;
+  box-sizing: border-box;
 }
 #${OVERLAY_ID} .hvb-icon-cell {
   flex: 0 0 32px;
@@ -321,15 +420,13 @@ function ensureStyles() {
   font-variant-numeric: tabular-nums;
 }
 
-/* Action buttons (right edge) */
-#${OVERLAY_ID} .hvb-actions {
-  position: absolute;
-  top: 4px; right: 4px;
-  display: flex; flex-direction: column;
-  gap: 4px;
-  width: 68px;
-}
+/* Action buttons — absolute-positioned per the pane's layout
+   children. Items pane: 0x100000C2 Buy at (732,4), 0x100000C3 Add
+   at (732,30); both 64×22. Buying/Selling panes mirror at
+   0x100000C9/CA + 0x100000D2/D3. CSS defaults pin them at the
+   retail offsets; applyVendorLayout re-asserts from the DAT. */
 #${OVERLAY_ID} .hvb-btn {
+  position: absolute;
   width: 64px; height: 22px;
   background: url("${SP}/0x06004C4C.png") no-repeat center / contain;
   border: 0;
@@ -337,7 +434,10 @@ function ensureStyles() {
   color: #d44; text-shadow: 0 1px 0 rgba(0,0,0,.85);
   cursor: pointer; padding: 0;
   letter-spacing: .02em;
+  box-sizing: border-box;
 }
+#${OVERLAY_ID} .hvb-btn[data-slot="top"]    { left: 732px; top: 4px; }
+#${OVERLAY_ID} .hvb-btn[data-slot="bottom"] { left: 732px; top: 30px; }
 #${OVERLAY_ID} .hvb-btn:active:not(:disabled) {
   background-image: url("${SP}/0x06004C4D.png");
   color: #b22;
@@ -347,15 +447,19 @@ function ensureStyles() {
   color: #888; cursor: not-allowed;
 }
 
-/* Queue (Buying / Selling) panes */
+/* Queue (Buying / Selling) panes — the queue list maps to the
+   icon-strip rect 0x100000C5/CE (710×32 at 10,30). The narrow row
+   layout means at most 2 rows are visible at a time without scrolling. */
 #${OVERLAY_ID} .hvb-queue-list {
-  height: 60px;
+  position: absolute;
+  left: 10px; top: 30px;
+  width: 710px; height: 32px;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--hb-border-brass) rgba(0,0,0,.5);
   border: 1px solid var(--hb-border-brass-dim);
   background: rgba(0,0,0,.35);
-  margin-top: 2px;
+  box-sizing: border-box;
 }
 #${OVERLAY_ID} .hvb-queue-row {
   display: grid;
@@ -403,16 +507,18 @@ function ensureStyles() {
 }
 #${OVERLAY_ID} .hvb-queue-remove:hover { color: #f44; }
 #${OVERLAY_ID} .hvb-queue-empty {
-  padding: 10px; text-align: center;
+  padding: 4px; text-align: center;
   color: var(--hb-text-muted-3); font-style: italic;
   font-size: 10px;
 }
+/* Queue footer — element 0x100000C6/CF (710×16 at 10,63). */
 #${OVERLAY_ID} .hvb-queue-footer {
   position: absolute;
-  bottom: 4px; left: 8px; right: 80px;
+  left: 10px; top: 63px;
+  width: 710px; height: 16px;
   display: flex; align-items: center; gap: 6px;
   font-size: 11px;
-  height: 22px;
+  box-sizing: border-box;
 }
 #${OVERLAY_ID} .hvb-queue-total {
   color: var(--hb-text-gold);
@@ -421,15 +527,23 @@ function ensureStyles() {
   margin-right: auto;
 }
 
-/* Sell drop zone */
+/* Sell drop zone — sits at the top-left of the selling pane, mapping
+   into the queue list area. Visual cue when an inventory item is being
+   dragged over the panel. */
 #${OVERLAY_ID} .hvb-sell-drop {
-  height: 16px; margin-bottom: 2px;
+  position: absolute;
+  left: 10px; top: 30px;
+  width: 710px; height: 32px;
   border: 1px dashed var(--hb-border-brass-dim);
   background: rgba(0,0,0,.2);
-  text-align: center; line-height: 16px;
+  text-align: center;
+  line-height: 30px;
   color: var(--hb-text-muted-3); font-size: 9px;
   font-style: italic;
   transition: all 120ms;
+  pointer-events: none;
+  z-index: 1;
+  box-sizing: border-box;
 }
 #${OVERLAY_ID}.hvb-drag-over .hvb-sell-drop {
   background: rgba(120,200,120,.2);
@@ -437,15 +551,33 @@ function ensureStyles() {
   color: var(--hb-text-cream); font-style: normal; font-weight: 600;
 }
 
-/* Rates strip — bottom-most */
+/* Rates strip — element 0x100000BE (710×16 at 10,63). */
 #${OVERLAY_ID} .hvb-rates {
   position: absolute;
-  bottom: 4px; right: 80px;
+  left: 10px; top: 63px;
+  width: 710px; height: 16px;
+  font-size: 10px;
+  color: var(--hb-text-muted-2);
+  letter-spacing: .02em;
+  line-height: 16px;
+  box-sizing: border-box;
+}
+#${OVERLAY_ID} .hvb-rates b { color: var(--hb-text-gold-dim); font-weight: 600; }
+/* Total / Sub-total labels on Buying/Selling panes — elements
+   0x100000CB/CC + 0x100000D4/D5 (65×14 at 4,1 / 4,15). */
+#${OVERLAY_ID} .hvb-total-lbl,
+#${OVERLAY_ID} .hvb-sub-lbl {
+  position: absolute;
+  left: 4px;
+  width: 65px; height: 14px;
   font-size: 9px;
   color: var(--hb-text-muted-2);
   letter-spacing: .02em;
+  line-height: 14px;
+  box-sizing: border-box;
 }
-#${OVERLAY_ID} .hvb-rates b { color: var(--hb-text-gold-dim); font-weight: 600; }
+#${OVERLAY_ID} .hvb-total-lbl { top: 1px; }
+#${OVERLAY_ID} .hvb-sub-lbl   { top: 15px; }
 
 /* Toast */
 #${OVERLAY_ID} .hvb-toast {
@@ -518,140 +650,270 @@ function buildOverlay() {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
 
-  // Title bar — vendor name in heading font. render() refreshes the
-  // text whenever vendorState updates.
-  const titleBar = document.createElement("div");
-  titleBar.className = "hvb-title-bar";
-  const titleEl = document.createElement("span");
-  titleEl.className = "hvb-title";
-  setAcText(titleEl, "Vendor", { fontId: HEADING_FONT_ID, color: "#f0c87c" });
-  titleBar.appendChild(titleEl);
-  overlay.appendChild(titleBar);
+  // Top strip background (0x1000008D, 800×20 at 0,0). Behind tabs.
+  const topStrip = document.createElement("div");
+  topStrip.className = "hvb-top-strip";
+  overlay.appendChild(topStrip);
 
-  // Top strip — tabs + close
-  const top = document.createElement("div");
-  top.className = "hvb-top-strip";
-
-  const tabs = document.createElement("div");
-  tabs.className = "hvb-tabs";
+  // Tabs — Items / Buying / Selling. CSS defaults pin them at the
+  // retail (0/92/184, 0) offsets; applyVendorLayout re-asserts.
+  const tabEls = {};
   for (const t of [
     { id: "items",   label: "Items"   },
     { id: "buying",  label: "Buying"  },
     { id: "selling", label: "Selling" },
   ]) {
     const b = document.createElement("button");
+    b.type = "button";
     b.className = "hvb-tab" + (t.id === "items" ? " active" : "");
     b.dataset.tab = t.id;
     setAcText(b, t.label, { color: t.id === "items" ? "#f0c87c" : "#f0d8a0" });
     b.addEventListener("click", () => switchTab(t.id));
-    tabs.appendChild(b);
+    overlay.appendChild(b);
+    tabEls[t.id] = b;
   }
-  top.appendChild(tabs);
 
-  const close = document.createElement("button");
-  close.className = "hvb-close";
-  close.title = "Close (Esc)";
-  close.textContent = "x";
-  close.addEventListener("click", hideOverlay);
-  top.appendChild(close);
-  overlay.appendChild(top);
+  // Close X — sits at (776, 0). Vendor name is conveyed by the active
+  // tab + the selected-name field; no separate title bar (retail
+  // doesn't have one).
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "hvb-close";
+  closeBtn.title = "Close (Esc)";
+  closeBtn.textContent = "x";
+  closeBtn.addEventListener("click", hideOverlay);
+  overlay.appendChild(closeBtn);
 
-  // Body — 3 panes
+  // Body — hosts the 3 panes. Each pane is absolute-positioned at
+  // (0,0) inside the body so layout-driven child positions land
+  // relative to the pane origin (which is the retail layout's
+  // pane origin).
   const body = document.createElement("div");
   body.className = "hvb-body";
 
-  // Items pane
+  // ── Items pane ──────────────────────────────────────────────────
+  // Build DOM imperatively so we can stash refs for applyVendorLayout.
   const itemsPane = document.createElement("div");
   itemsPane.className = "hvb-pane hvb-pane-items active";
   itemsPane.dataset.pane = "items";
-  itemsPane.innerHTML = `
-    <div class="hvb-cat-row">
-      <select class="hvb-category"></select>
-      <div class="hvb-selected-name">— select an item —</div>
-      <div class="hvb-selected-price"></div>
-    </div>
-    <div class="hvb-icon-strip"></div>
-    <div class="hvb-rates"></div>
-  `;
-  body.appendChild(itemsPane);
 
-  // Buying pane
-  const buyingPane = document.createElement("div");
-  buyingPane.className = "hvb-pane hvb-pane-buying";
-  buyingPane.dataset.pane = "buying";
-  buyingPane.innerHTML = `
-    <div class="hvb-queue-list"></div>
-    <div class="hvb-queue-footer">
-      <span class="hvb-queue-total">Cost: 0 p</span>
-    </div>
-  `;
-  body.appendChild(buyingPane);
-
-  // Selling pane
-  const sellingPane = document.createElement("div");
-  sellingPane.className = "hvb-pane hvb-pane-selling";
-  sellingPane.dataset.pane = "selling";
-  sellingPane.innerHTML = `
-    <div class="hvb-sell-drop">Drag inventory items here to sell</div>
-    <div class="hvb-queue-list"></div>
-    <div class="hvb-queue-footer">
-      <span class="hvb-queue-total">Credit: 0 p</span>
-    </div>
-  `;
-  body.appendChild(sellingPane);
-
-  overlay.appendChild(body);
-
-  // Action buttons (right edge, span whole body)
-  const actions = document.createElement("div");
-  actions.className = "hvb-actions";
-  // Items tab: Buy (instant) + Add to List (queue)
-  // Buying / Selling tabs: Clear + Confirm
-  // We render all 4 buttons; show/hide on tab switch.
-  for (const btn of [
-    { id: "buy",        label: "Buy",         tabs: ["items"]   },
-    { id: "add",        label: "Add to List", tabs: ["items"]   },
-    { id: "clear-buy",  label: "Clear",       tabs: ["buying"]  },
-    { id: "confirm-buy",label: "Confirm",     tabs: ["buying"]  },
-    { id: "clear-sell", label: "Clear",       tabs: ["selling"] },
-    { id: "confirm-sell",label:"Confirm",     tabs: ["selling"] },
-  ]) {
-    const b = document.createElement("button");
-    b.className = `hvb-btn hvb-btn-${btn.id}`;
-    b.dataset.action = btn.id;
-    b.dataset.tabs = btn.tabs.join(",");
-    setAcText(b, btn.label, { color: "#d44" });
-    b.disabled = true;
-    actions.appendChild(b);
-  }
-  overlay.appendChild(actions);
-
-  document.body.appendChild(overlay);
-
-  // Wire action buttons
-  actions.querySelector(".hvb-btn-buy").addEventListener("click", handleBuyInstant);
-  actions.querySelector(".hvb-btn-add").addEventListener("click", handleAddToBuying);
-  actions.querySelector(".hvb-btn-clear-buy").addEventListener("click", () => {
-    state.buyQueue = []; render();
-  });
-  actions.querySelector(".hvb-btn-confirm-buy").addEventListener("click", handleConfirmBuy);
-  actions.querySelector(".hvb-btn-clear-sell").addEventListener("click", () => {
-    state.sellQueue = []; render();
-  });
-  actions.querySelector(".hvb-btn-confirm-sell").addEventListener("click", handleConfirmSell);
-
-  // Category dropdown
-  const cat = itemsPane.querySelector(".hvb-category");
+  const itemsCat = document.createElement("select");
+  itemsCat.className = "hvb-category";
   for (const c of CATEGORY_TABLE) {
     const opt = document.createElement("option");
     opt.value = c.id; opt.textContent = c.label;
-    cat.appendChild(opt);
+    itemsCat.appendChild(opt);
   }
-  cat.addEventListener("change", (e) => {
+  itemsCat.addEventListener("change", (e) => {
     state.categoryFilter = e.target.value;
     state.selectedItemGuid = null;
     render();
   });
+  itemsPane.appendChild(itemsCat);
+
+  const itemsName = document.createElement("div");
+  itemsName.className = "hvb-selected-name";
+  setAcText(itemsName, "— select an item —", { color: "#f0c87c" });
+  itemsPane.appendChild(itemsName);
+
+  const itemsPrice = document.createElement("div");
+  itemsPrice.className = "hvb-selected-price";
+  itemsPane.appendChild(itemsPrice);
+
+  const itemsStrip = document.createElement("div");
+  itemsStrip.className = "hvb-icon-strip";
+  itemsPane.appendChild(itemsStrip);
+
+  const itemsRates = document.createElement("div");
+  itemsRates.className = "hvb-rates";
+  itemsPane.appendChild(itemsRates);
+
+  // Items-pane action buttons (Buy + Add to List).
+  const itemsBuyBtn = document.createElement("button");
+  itemsBuyBtn.type = "button";
+  itemsBuyBtn.className = "hvb-btn hvb-btn-buy";
+  itemsBuyBtn.dataset.slot = "top";
+  itemsBuyBtn.disabled = true;
+  setAcText(itemsBuyBtn, "Buy", { color: "#d44" });
+  itemsBuyBtn.addEventListener("click", handleBuyInstant);
+  itemsPane.appendChild(itemsBuyBtn);
+
+  const itemsAddBtn = document.createElement("button");
+  itemsAddBtn.type = "button";
+  itemsAddBtn.className = "hvb-btn hvb-btn-add";
+  itemsAddBtn.dataset.slot = "bottom";
+  itemsAddBtn.disabled = true;
+  setAcText(itemsAddBtn, "Add to List", { color: "#d44" });
+  itemsAddBtn.addEventListener("click", handleAddToBuying);
+  itemsPane.appendChild(itemsAddBtn);
+
+  body.appendChild(itemsPane);
+
+  // ── Buying pane ─────────────────────────────────────────────────
+  const buyingPane = document.createElement("div");
+  buyingPane.className = "hvb-pane hvb-pane-buying";
+  buyingPane.dataset.pane = "buying";
+
+  const buyingTotalLbl = document.createElement("div");
+  buyingTotalLbl.className = "hvb-total-lbl";
+  setAcText(buyingTotalLbl, "Total", { color: "#a89870" });
+  buyingPane.appendChild(buyingTotalLbl);
+
+  const buyingSubLbl = document.createElement("div");
+  buyingSubLbl.className = "hvb-sub-lbl";
+  setAcText(buyingSubLbl, "Sub", { color: "#a89870" });
+  buyingPane.appendChild(buyingSubLbl);
+
+  const buyingName = document.createElement("div");
+  buyingName.className = "hvb-selected-name";
+  buyingPane.appendChild(buyingName);
+
+  const buyingPrice = document.createElement("div");
+  buyingPrice.className = "hvb-selected-price";
+  buyingPane.appendChild(buyingPrice);
+
+  const buyingList = document.createElement("div");
+  buyingList.className = "hvb-queue-list";
+  buyingPane.appendChild(buyingList);
+
+  const buyingFooter = document.createElement("div");
+  buyingFooter.className = "hvb-queue-footer";
+  const buyingTotal = document.createElement("span");
+  buyingTotal.className = "hvb-queue-total";
+  setAcText(buyingTotal, "Cost: 0 p", { color: "#f0c87c" });
+  buyingFooter.appendChild(buyingTotal);
+  buyingPane.appendChild(buyingFooter);
+
+  const buyingConfirmBtn = document.createElement("button");
+  buyingConfirmBtn.type = "button";
+  buyingConfirmBtn.className = "hvb-btn hvb-btn-confirm-buy";
+  buyingConfirmBtn.dataset.slot = "top";
+  buyingConfirmBtn.disabled = true;
+  setAcText(buyingConfirmBtn, "Confirm", { color: "#d44" });
+  buyingConfirmBtn.addEventListener("click", handleConfirmBuy);
+  buyingPane.appendChild(buyingConfirmBtn);
+
+  const buyingClearBtn = document.createElement("button");
+  buyingClearBtn.type = "button";
+  buyingClearBtn.className = "hvb-btn hvb-btn-clear-buy";
+  buyingClearBtn.dataset.slot = "bottom";
+  buyingClearBtn.disabled = true;
+  setAcText(buyingClearBtn, "Clear", { color: "#d44" });
+  buyingClearBtn.addEventListener("click", () => {
+    state.buyQueue = []; render();
+  });
+  buyingPane.appendChild(buyingClearBtn);
+
+  body.appendChild(buyingPane);
+
+  // ── Selling pane ────────────────────────────────────────────────
+  const sellingPane = document.createElement("div");
+  sellingPane.className = "hvb-pane hvb-pane-selling";
+  sellingPane.dataset.pane = "selling";
+
+  const sellingTotalLbl = document.createElement("div");
+  sellingTotalLbl.className = "hvb-total-lbl";
+  setAcText(sellingTotalLbl, "Total", { color: "#a89870" });
+  sellingPane.appendChild(sellingTotalLbl);
+
+  const sellingSubLbl = document.createElement("div");
+  sellingSubLbl.className = "hvb-sub-lbl";
+  setAcText(sellingSubLbl, "Sub", { color: "#a89870" });
+  sellingPane.appendChild(sellingSubLbl);
+
+  const sellingName = document.createElement("div");
+  sellingName.className = "hvb-selected-name";
+  sellingPane.appendChild(sellingName);
+
+  const sellingPrice = document.createElement("div");
+  sellingPrice.className = "hvb-selected-price";
+  sellingPane.appendChild(sellingPrice);
+
+  // Drop-zone hint (visible only when dragging). Sits OVER the queue
+  // list but pointer-events: none so it never blocks pointer activity.
+  const sellingDrop = document.createElement("div");
+  sellingDrop.className = "hvb-sell-drop";
+  setAcText(sellingDrop, "Drag inventory items here to sell", { color: "#807868" });
+  sellingPane.appendChild(sellingDrop);
+
+  const sellingList = document.createElement("div");
+  sellingList.className = "hvb-queue-list";
+  sellingPane.appendChild(sellingList);
+
+  const sellingFooter = document.createElement("div");
+  sellingFooter.className = "hvb-queue-footer";
+  const sellingTotal = document.createElement("span");
+  sellingTotal.className = "hvb-queue-total";
+  setAcText(sellingTotal, "Credit: 0 p", { color: "#f0c87c" });
+  sellingFooter.appendChild(sellingTotal);
+  sellingPane.appendChild(sellingFooter);
+
+  const sellingConfirmBtn = document.createElement("button");
+  sellingConfirmBtn.type = "button";
+  sellingConfirmBtn.className = "hvb-btn hvb-btn-confirm-sell";
+  sellingConfirmBtn.dataset.slot = "top";
+  sellingConfirmBtn.disabled = true;
+  setAcText(sellingConfirmBtn, "Confirm", { color: "#d44" });
+  sellingConfirmBtn.addEventListener("click", handleConfirmSell);
+  sellingPane.appendChild(sellingConfirmBtn);
+
+  const sellingClearBtn = document.createElement("button");
+  sellingClearBtn.type = "button";
+  sellingClearBtn.className = "hvb-btn hvb-btn-clear-sell";
+  sellingClearBtn.dataset.slot = "bottom";
+  sellingClearBtn.disabled = true;
+  setAcText(sellingClearBtn, "Clear", { color: "#d44" });
+  sellingClearBtn.addEventListener("click", () => {
+    state.sellQueue = []; render();
+  });
+  sellingPane.appendChild(sellingClearBtn);
+
+  body.appendChild(sellingPane);
+  overlay.appendChild(body);
+  document.body.appendChild(overlay);
+
+  // Stash a complete element-ref bundle on the overlay so
+  // applyVendorLayout() can walk them at render time. Lifetime mirrors
+  // the singleton state.overlayEl.
+  state.refs = {
+    tabs: tabEls,
+    closeBtn,
+    topStrip,
+    body,
+    panes: { items: itemsPane, buying: buyingPane, selling: sellingPane },
+    items: {
+      pane:    itemsPane,
+      cat:     itemsCat,
+      name:    itemsName,
+      price:   itemsPrice,
+      strip:   itemsStrip,
+      rates:   itemsRates,
+      buyBtn:  itemsBuyBtn,
+      addBtn:  itemsAddBtn,
+    },
+    buying: {
+      pane:       buyingPane,
+      list:       buyingList,
+      footer:     buyingFooter,
+      name:       buyingName,
+      price:      buyingPrice,
+      confirmBtn: buyingConfirmBtn,
+      clearBtn:   buyingClearBtn,
+      totalLbl:   buyingTotalLbl,
+      subLbl:     buyingSubLbl,
+    },
+    selling: {
+      pane:       sellingPane,
+      list:       sellingList,
+      footer:     sellingFooter,
+      name:       sellingName,
+      price:      sellingPrice,
+      confirmBtn: sellingConfirmBtn,
+      clearBtn:   sellingClearBtn,
+      totalLbl:   sellingTotalLbl,
+      subLbl:     sellingSubLbl,
+    },
+  };
 
   // Drag-drop for Sell — accepts inventory drags from inventory.js.
   overlay.addEventListener("dragenter", onDragEnter);
@@ -662,7 +924,130 @@ function buildOverlay() {
   // Esc to close.
   document.addEventListener("keydown", onKeyDown);
 
+  // Apply retail layout. vendor-ui opens on a VendorOpened server event
+  // — wasm is guaranteed ready by then, so no retry loop (unlike
+  // mountBar-loaded plugins). Falls through to CSS defaults if the
+  // layout fetch fails.
+  applyVendorLayout(state.refs);
+
   return overlay;
+}
+
+/**
+ * Apply gmVendorUI 0x21000012 layout to every wirable element in the
+ * vendor bar. Mirrors applyRadarLayout / applyInventoryLayout.
+ *
+ * Layout coordinates are relative to:
+ *   - The overlay root for top-strip, close, tabs.
+ *   - The pane root for each pane's children (the pane itself is at
+ *     (0, 20) of the outer panel = (0, 0) of the body).
+ *
+ * Because the pane's own (0, 20) translation is baked into CSS via
+ * the .hvb-body container's `top: 20px`, layout-driven children of
+ * the pane land at the same screen position they would with the
+ * retail panel.
+ */
+function applyVendorLayout(refs) {
+  const apply = (layout) => {
+    if (!layout) return;
+    let applied = 0;
+    // Top-level pairs: positioned relative to the overlay root.
+    const topPairs = [
+      [VENDOR_ELEMS.topStrip,   refs.topStrip],
+      [VENDOR_ELEMS.closeBtn,   refs.closeBtn],
+      [VENDOR_ELEMS.tabItems,   refs.tabs.items],
+      [VENDOR_ELEMS.tabBuying,  refs.tabs.buying],
+      [VENDOR_ELEMS.tabSelling, refs.tabs.selling],
+    ];
+    for (const [id, el] of topPairs) {
+      if (!el) continue;
+      const desc = findElementById(layout, id);
+      if (!desc) continue;
+      applyBox(el, desc);
+      applied += 1;
+    }
+    // Items pane + 7 children. Pane itself anchors at (0, 20) of the
+    // outer panel — but we host the panes inside .hvb-body which is
+    // already at (0, 20). So we DON'T re-apply pane x/y/w/h —
+    // applyBox would clobber the CSS that pins the pane at (0,0)
+    // inside .hvb-body. Layout x/y on pane children is taken at face
+    // value (relative to the pane), which matches our absolute-
+    // positioned children.
+    const itemsPairs = [
+      [VENDOR_ELEMS.itemsCat,    refs.items.cat],
+      [VENDOR_ELEMS.itemsName,   refs.items.name],
+      [VENDOR_ELEMS.itemsPrice,  refs.items.price],
+      [VENDOR_ELEMS.itemsStrip,  refs.items.strip],
+      [VENDOR_ELEMS.itemsRates,  refs.items.rates],
+      [VENDOR_ELEMS.itemsBuyBtn, refs.items.buyBtn],
+      [VENDOR_ELEMS.itemsAddBtn, refs.items.addBtn],
+    ];
+    for (const [id, el] of itemsPairs) {
+      if (!el) continue;
+      const desc = findElementById(layout, id);
+      if (!desc) continue;
+      applyBox(el, desc);
+      applied += 1;
+    }
+    // Buying pane children.
+    const buyingPairs = [
+      [VENDOR_ELEMS.buyingList,        refs.buying.list],
+      [VENDOR_ELEMS.buyingFooter,      refs.buying.footer],
+      [VENDOR_ELEMS.buyingName,        refs.buying.name],
+      [VENDOR_ELEMS.buyingPrice,       refs.buying.price],
+      [VENDOR_ELEMS.buyingConfirmBtn,  refs.buying.confirmBtn],
+      [VENDOR_ELEMS.buyingClearBtn,    refs.buying.clearBtn],
+      [VENDOR_ELEMS.buyingTotalLbl,    refs.buying.totalLbl],
+      [VENDOR_ELEMS.buyingSubLbl,      refs.buying.subLbl],
+    ];
+    for (const [id, el] of buyingPairs) {
+      if (!el) continue;
+      const desc = findElementById(layout, id);
+      if (!desc) continue;
+      applyBox(el, desc);
+      applied += 1;
+    }
+    // Selling pane children.
+    const sellingPairs = [
+      [VENDOR_ELEMS.sellingList,        refs.selling.list],
+      [VENDOR_ELEMS.sellingFooter,      refs.selling.footer],
+      [VENDOR_ELEMS.sellingName,        refs.selling.name],
+      [VENDOR_ELEMS.sellingPrice,       refs.selling.price],
+      [VENDOR_ELEMS.sellingConfirmBtn,  refs.selling.confirmBtn],
+      [VENDOR_ELEMS.sellingClearBtn,    refs.selling.clearBtn],
+      [VENDOR_ELEMS.sellingTotalLbl,    refs.selling.totalLbl],
+      [VENDOR_ELEMS.sellingSubLbl,      refs.selling.subLbl],
+    ];
+    for (const [id, el] of sellingPairs) {
+      if (!el) continue;
+      const desc = findElementById(layout, id);
+      if (!desc) continue;
+      applyBox(el, desc);
+      applied += 1;
+    }
+    try {
+      window.__diag?.layout?.onVendorApplied?.({ applied });
+    } catch (_) {}
+  };
+  const cached = getCachedLayout(VENDOR_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(VENDOR_LAYOUT_ID).then(apply).catch(() => {});
+}
+
+// Apply a LayoutDesc Element's geometry to a DOM element. Clears
+// CSS `right`/`bottom` anchors so explicit left/top wins, and uses
+// `transform: none` to defeat any centering translates in the
+// underlying CSS rule. box-sizing on the target element is set to
+// border-box upstream so the layout's width/height land cleanly.
+function applyBox(el, layoutEl) {
+  el.style.right = "";
+  el.style.bottom = "";
+  // Defeat any CSS-rule transforms that would offset the element.
+  el.style.transform = "none";
+  if (typeof layoutEl.x === "number") el.style.left = `${layoutEl.x}px`;
+  if (typeof layoutEl.y === "number") el.style.top = `${layoutEl.y}px`;
+  if (typeof layoutEl.width === "number") el.style.width = `${layoutEl.width}px`;
+  if (typeof layoutEl.height === "number") el.style.height = `${layoutEl.height}px`;
 }
 
 function onKeyDown(ev) {
@@ -751,35 +1136,35 @@ function render() {
   const vs = state.vendorState;
   if (!vs) return;
 
-  // Refresh vendor-name title.
-  const titleEl = ov.querySelector(".hvb-title");
-  if (titleEl) {
-    const label = vs.vendorName ? `Vendor: ${vs.vendorName}` : "Vendor";
-    setAcText(titleEl, label, { fontId: HEADING_FONT_ID, color: "#f0c87c" });
+  // Tabs — Items always shows just "Items"; Buying / Selling show the
+  // vendor name on first tab (so the user can identify the vendor) +
+  // queue count on the others. The retail panel has no separate title
+  // bar — vendor identity sits inside the active tab + selected-name
+  // field, which we mirror here.
+  for (const id of ["items", "buying", "selling"]) {
+    const b = state.refs.tabs[id];
+    if (!b) continue;
+    let label;
+    if (id === "items") {
+      label = vs.vendorName ? `Items — ${vs.vendorName}` : "Items";
+    } else if (id === "buying") {
+      label = state.buyQueue.length ? `Buying (${state.buyQueue.length})` : "Buying";
+    } else {
+      label = state.sellQueue.length ? `Selling (${state.sellQueue.length})` : "Selling";
+    }
+    setAcText(b, label, {
+      color: id === state.currentTab ? "#f0c87c" : "#f0d8a0",
+      fontId: id === "items" && id === state.currentTab ? HEADING_FONT_ID : undefined,
+    });
+    b.classList.toggle("active", id === state.currentTab);
   }
 
-  // Update tab labels with counts + active class.
-  ov.querySelectorAll(".hvb-tab").forEach((b) => {
-    const id = b.dataset.tab;
-    let label = id[0].toUpperCase() + id.slice(1);
-    if (id === "buying" && state.buyQueue.length)
-      label += ` (${state.buyQueue.length})`;
-    if (id === "selling" && state.sellQueue.length)
-      label += ` (${state.sellQueue.length})`;
-    setAcText(b, label, { color: id === state.currentTab ? "#f0c87c" : "#f0d8a0" });
-    b.classList.toggle("active", id === state.currentTab);
-  });
-
-  // Show only the active pane.
-  ov.querySelectorAll(".hvb-pane").forEach((p) => {
-    p.classList.toggle("active", p.dataset.pane === state.currentTab);
-  });
-
-  // Show only the action buttons that belong to the active tab.
-  ov.querySelectorAll(".hvb-btn").forEach((b) => {
-    const tabs = (b.dataset.tabs || "").split(",");
-    b.style.display = tabs.includes(state.currentTab) ? "block" : "none";
-  });
+  // Show only the active pane. Buttons live inside their owning pane,
+  // so pane visibility hides/shows their action buttons too.
+  for (const id of ["items", "buying", "selling"]) {
+    const pane = state.refs.panes[id];
+    if (pane) pane.classList.toggle("active", id === state.currentTab);
+  }
 
   if (state.currentTab === "items") renderItemsPane();
   else if (state.currentTab === "buying") renderQueuePane("buying");
@@ -787,28 +1172,25 @@ function render() {
 }
 
 function renderItemsPane() {
-  const ov = state.overlayEl;
+  const refs = state.refs.items;
   const vs = state.vendorState;
   const cat = CATEGORY_TABLE.find((c) => c.id === state.categoryFilter) ?? CATEGORY_TABLE[0];
   const items = vs.items.filter((it) => state.categoryFilter === "all" || (it.itemType & cat.mask));
 
-  // Selected item header
-  const nameEl = ov.querySelector(".hvb-selected-name");
-  const priceEl = ov.querySelector(".hvb-selected-price");
+  // Selected item header (within items pane).
   const sel = items.find((i) => i.itemGuid === state.selectedItemGuid);
   const myPyreals = countPyreals();
   if (sel) {
     const price = Math.round((sel.value || 0) * (vs.buyMultiplier || 1));
-    setAcText(nameEl, sel.name || `wcid ${sel.wcid}`, { color: "#f0c87c" });
-    setAcText(priceEl, `costs ${fmtPrice(price)} p (you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
+    setAcText(refs.name, sel.name || `wcid ${sel.wcid}`, { color: "#f0c87c" });
+    setAcText(refs.price, `costs ${fmtPrice(price)} p (you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
   } else {
-    setAcText(nameEl, items.length ? "— select an item —" : "(no items in this category)", { color: "#f0c87c" });
-    setAcText(priceEl, `(you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
+    setAcText(refs.name, items.length ? "— select an item —" : "(no items in this category)", { color: "#f0c87c" });
+    setAcText(refs.price, `(you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
   }
 
   // Icon strip
-  const strip = ov.querySelector(".hvb-icon-strip");
-  strip.innerHTML = "";
+  refs.strip.innerHTML = "";
   for (const it of items) {
     const cell = document.createElement("div");
     cell.className = "hvb-icon-cell";
@@ -830,39 +1212,33 @@ function renderItemsPane() {
       state.selectedItemGuid = it.itemGuid;
       handleBuyInstant();
     });
-    strip.appendChild(cell);
+    refs.strip.appendChild(cell);
   }
 
   // Rates strip
-  const rates = ov.querySelector(".hvb-rates");
-  rates.innerHTML =
+  refs.rates.innerHTML =
     `Sells <b>${Math.round((vs.buyMultiplier || 1) * 100)}%</b> · ` +
     `Buys <b>${Math.round((vs.sellMultiplier || 1) * 100)}%</b>`;
 
   // Enable Buy / Add buttons only when something is selected.
-  const buyBtn = ov.querySelector(".hvb-btn-buy");
-  const addBtn = ov.querySelector(".hvb-btn-add");
-  buyBtn.disabled = !sel;
-  addBtn.disabled = !sel;
+  refs.buyBtn.disabled = !sel;
+  refs.addBtn.disabled = !sel;
 }
 
 function renderQueuePane(which) {
-  const ov = state.overlayEl;
-  const pane = ov.querySelector(`.hvb-pane-${which}`);
-  const list = pane.querySelector(".hvb-queue-list");
-  const totalEl = pane.querySelector(".hvb-queue-total");
+  const refs = state.refs[which];
   const vs = state.vendorState;
   const queue = which === "buying" ? state.buyQueue : state.sellQueue;
   const mult = which === "buying" ? (vs.buyMultiplier || 1) : (vs.sellMultiplier || 1);
 
-  list.innerHTML = "";
+  refs.list.innerHTML = "";
   if (queue.length === 0) {
     const empty = document.createElement("div");
     empty.className = "hvb-queue-empty";
     setAcText(empty, which === "buying"
       ? "Empty. Click an item in the Items tab + \"Add to List\"."
       : "Empty. Drag inventory items onto this panel.", { color: "#807868" });
-    list.appendChild(empty);
+    refs.list.appendChild(empty);
   }
 
   let total = 0;
@@ -905,17 +1281,23 @@ function renderQueuePane(which) {
     row.appendChild(qtyEl);
     row.appendChild(priceEl);
     row.appendChild(rmEl);
-    list.appendChild(row);
+    refs.list.appendChild(row);
   }
 
+  // Update the queue-footer "Cost: …" / "Credit: …" total label.
+  const totalEl = refs.footer.querySelector(".hvb-queue-total");
   const label = which === "buying" ? "Cost" : "Credit";
   setAcText(totalEl, `${label}: ${fmtPrice(total)} p`, { color: "#f0c87c" });
+  // Mirror the running total into the per-pane selected-price field
+  // so it lines up with the layout-driven 590×15 slot at (125,15).
+  setAcText(refs.price, `${vs.vendorName || "Vendor"} — ${label.toLowerCase()} ${fmtPrice(total)} p`, { color: "#f0e8d0" });
+  setAcText(refs.name, queue.length
+    ? `${queue.length} item${queue.length === 1 ? "" : "s"} on the list`
+    : (which === "buying" ? "Buying list" : "Selling list"),
+    { color: "#f0c87c" });
 
-  // Enable Confirm only when queue is non-empty.
-  const confirmBtn = ov.querySelector(`.hvb-btn-confirm-${which.slice(0, -3)}`);
-  const clearBtn = ov.querySelector(`.hvb-btn-clear-${which.slice(0, -3)}`);
-  if (confirmBtn) confirmBtn.disabled = queue.length === 0;
-  if (clearBtn) clearBtn.disabled = queue.length === 0;
+  refs.confirmBtn.disabled = queue.length === 0;
+  refs.clearBtn.disabled = queue.length === 0;
 }
 
 function countPyreals() {
@@ -1093,11 +1475,7 @@ export function mount(ctx) {
     // ACE refreshes kind=12 after every buy. Drop the queues only
     // when switching vendors.
     showOverlay();
-    const ov = state.overlayEl;
-    if (ov) {
-      const cat = ov.querySelector(".hvb-category");
-      if (cat) cat.value = "all";
-    }
+    if (state.refs?.items?.cat) state.refs.items.cat.value = "all";
     render();
   }
 
@@ -1121,34 +1499,48 @@ export function mount(ctx) {
   };
 }
 
-// Debug helper: pop a synthetic vendor from DevTools.
-//   __vendorBarDebug() — fake "Lin the Trader" w/ a handful of stock
+// Debug helpers: pop a synthetic vendor from DevTools / e2e verifier.
+//   __vendorBarDebug()  — legacy, fake "Lin the Trader" w/ a handful of stock
+//   __vendorPluginDebug — namespaced API for e2e verifier (open / close /
+//     switchTab / refs). Also exposed inside mount() for parity once the
+//     poll-hook completes; this module-scope copy lets the verifier
+//     drive the plugin even when wasm/__sessionHandle isn't wired.
 if (typeof window !== "undefined") {
-  window.__vendorBarDebug = function () {
+  const DEBUG_SNAPSHOT = {
+    vendorGuid: 0xDEADBEEF,
+    vendorName: "Lin the Trader (debug)",
+    buyMultiplier: 1.1,
+    sellMultiplier: 0.4,
+    alternateCurrencyWcid: 0,
+    alternateCurrencyAmount: 0,
+    alternateCurrencyName: "",
+    items: [
+      { itemGuid: 1, wcid: 0x010, name: "Bread",        value: 5,    stackSize: 1, itemType: 0x20,    iconId: 0 },
+      { itemGuid: 2, wcid: 0x011, name: "Healing Kit",  value: 30,   stackSize: 1, itemType: 0x80,    iconId: 0 },
+      { itemGuid: 3, wcid: 0x012, name: "Lockpick",     value: 50,   stackSize: 5, itemType: 0x80,    iconId: 0 },
+      { itemGuid: 4, wcid: 0x013, name: "Mana Charge",  value: 1200, stackSize: 1, itemType: 0x80,    iconId: 0 },
+      { itemGuid: 5, wcid: 0x014, name: "Trade Note",   value: 100,  stackSize: 1, itemType: 0x40000, iconId: 0 },
+      { itemGuid: 6, wcid: 0x015, name: "Iron Dagger",  value: 80,   stackSize: 1, itemType: 0x01,    iconId: 0 },
+      { itemGuid: 7, wcid: 0x016, name: "Leather Cap",  value: 45,   stackSize: 1, itemType: 0x02,    iconId: 0 },
+    ],
+  };
+  const openDebug = (snapshot) => {
     ensureStyles();
-    state.vendorState = {
-      vendorGuid: 0xDEADBEEF,
-      vendorName: "Lin the Trader (debug)",
-      buyMultiplier: 1.1,
-      sellMultiplier: 0.4,
-      alternateCurrencyWcid: 0,
-      alternateCurrencyAmount: 0,
-      alternateCurrencyName: "",
-      items: [
-        { itemGuid: 1, wcid: 0x010, name: "Bread",        value: 5,    stackSize: 1, itemType: 0x20,    iconId: 0 },
-        { itemGuid: 2, wcid: 0x011, name: "Healing Kit",  value: 30,   stackSize: 1, itemType: 0x80,    iconId: 0 },
-        { itemGuid: 3, wcid: 0x012, name: "Lockpick",     value: 50,   stackSize: 5, itemType: 0x80,    iconId: 0 },
-        { itemGuid: 4, wcid: 0x013, name: "Mana Charge",  value: 1200, stackSize: 1, itemType: 0x80,    iconId: 0 },
-        { itemGuid: 5, wcid: 0x014, name: "Trade Note",   value: 100,  stackSize: 1, itemType: 0x40000, iconId: 0 },
-        { itemGuid: 6, wcid: 0x015, name: "Iron Dagger",  value: 80,   stackSize: 1, itemType: 0x01,    iconId: 0 },
-        { itemGuid: 7, wcid: 0x016, name: "Leather Cap",  value: 45,   stackSize: 1, itemType: 0x02,    iconId: 0 },
-      ],
-    };
+    state.vendorState = snapshot || DEBUG_SNAPSHOT;
     state.currentTab = "items";
     state.selectedItemGuid = null;
     state.buyQueue = [];
     state.sellQueue = [];
+    state.categoryFilter = "all";
     showOverlay();
+    if (state.refs?.items?.cat) state.refs.items.cat.value = "all";
     render();
+  };
+  window.__vendorBarDebug = () => openDebug();
+  window.__vendorPluginDebug = {
+    open: openDebug,
+    close: () => hideOverlay(),
+    switchTab: (id) => { state.currentTab = id; render(); },
+    refs: () => state.refs,
   };
 }
