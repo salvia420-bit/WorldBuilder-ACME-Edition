@@ -1330,15 +1330,41 @@
         // IndexedDB-backed shard caching. Fail-soft: if SW is
         // unsupported (old browser) the page works in network-only
         // mode through the legacy HTTP cache.
+        //
+        // `?nosw=1` skips registration AND unregisters any existing
+        // SW. Useful for cloudflared / Tailscale tunnels where the SW's
+        // shard-cache logic can choke on the tunnel's response stream
+        // (Firefox: "ServiceWorker intercepted the request and
+        // encountered an unexpected error"). With nosw=1 the page
+        // falls back to plain browser fetches.
+        // (Local URL parse — `bootParams` further down the script
+        // isn't in scope yet here.)
+        const swDisabled = new URLSearchParams(window.location.search).get("nosw") === "1";
         if ("serviceWorker" in navigator) {
-          try {
-            await navigator.serviceWorker.register("./service-worker.js");
-            console.log("[Phase 5.0] service-worker registered");
-          } catch (e) {
-            console.warn(
-              "[Phase 5.0] service-worker registration failed:",
-              String(e).slice(0, 120)
-            );
+          if (swDisabled) {
+            try {
+              const regs = await navigator.serviceWorker.getRegistrations();
+              for (const r of regs) {
+                try { await r.unregister(); } catch (_) {}
+              }
+              if (regs.length > 0) {
+                console.log(`[Phase 5.0] ?nosw=1 — unregistered ${regs.length} existing SW(s); reload to take effect`);
+              } else {
+                console.log("[Phase 5.0] ?nosw=1 — SW registration skipped (no existing SW found)");
+              }
+            } catch (e) {
+              console.warn("[Phase 5.0] SW unregister failed:", String(e).slice(0, 120));
+            }
+          } else {
+            try {
+              await navigator.serviceWorker.register("./service-worker.js");
+              console.log("[Phase 5.0] service-worker registered");
+            } catch (e) {
+              console.warn(
+                "[Phase 5.0] service-worker registration failed:",
+                String(e).slice(0, 120)
+              );
+            }
           }
         }
 
