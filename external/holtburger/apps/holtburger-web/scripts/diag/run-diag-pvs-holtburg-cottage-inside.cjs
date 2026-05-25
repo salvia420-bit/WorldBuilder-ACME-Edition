@@ -1,15 +1,23 @@
 // Wire-agent harness — Holtburg cottage PVS, INSIDE variant.
 //
-// Validates the Phase 3 visible_cells fix (commit 344d0b6d, lib.rs
-// ~L10149). Uses `@teleloc 0xA9B40100 88 131 67` to land the player
-// inside Holtburg cottage cell 0xA9B40100, then runs
-// `__diag.pvs.observedVsBaked` against the same oracle the outside
-// variant uses.
+// Validates the visibility pipeline from inside a cottage. After
+// `@teleloc 0xA9B40100 88 131 67`, the player is inside Holtburg
+// cottage cell 0xA9B40100. The runtime visible set should be a
+// SUBSET of the cell's DAT-baked PVS (17 cells) — frustum culling
+// (Phase 4 PView port, 2026-05-25) trims the BFS-1 result down to
+// only the cells the camera actually points at, which is retail
+// behaviour.
 //
-// With the fix in place: PASS — 17/17 oracle cells visible,
-// missing=[], extra=[], ok=true. Without it (pre-fix): would have
-// shown missing=13 (BFS-1 reaches only 4 of the 17 direct-portal
-// neighbors).
+// Acceptance criterion (post Phase 4):
+//   - observedCount >= 1 (at least the current cell)
+//   - extra == 0       (every observed cell is in the PVS — no over-render)
+// `missing` is allowed and expected — it just means the camera
+// isn't pointing at every PVS cell at once.
+//
+// Pre-Phase-4 the criterion was `missing == 0 && extra == 0` (i.e.
+// observed exactly == PVS) which only worked when there was no
+// frustum cull. Phase 4 made the criterion looser but more accurate
+// to retail.
 //
 // Cottage 0xA9B40100 in Holtburg (LB 0xA9B4) per `get-dungeon-info`:
 //   - origin: (84.09, 131.54, 66)
@@ -129,23 +137,32 @@ const OUT_ROOT =
 
   console.log("\n=== observedVsBaked diff ===");
   console.log(JSON.stringify(diag, null, 2));
+
+  // Phase 4 acceptance: subset-of-PVS, not exact-match.
+  const observedCount = diag.observedCount ?? 0;
+  const extraCount = diag.extra?.length ?? 0;
+  const pass = !diag.error && observedCount >= 1 && extraCount === 0;
+
   console.log("\n=== Verdict ===");
   if (diag.error) {
     console.log(`  ERROR: ${diag.error}`);
   } else {
-    console.log(`  Oracle: ${diag.oracleCount}   Observed: ${diag.observedCount}   missing: ${diag.missing?.length ?? 0}   extra: ${diag.extra?.length ?? 0}   ok: ${diag.ok}`);
+    console.log(`  Oracle: ${diag.oracleCount}   Observed: ${diag.observedCount}   missing: ${diag.missing?.length ?? 0}   extra: ${extraCount}`);
+    console.log(`  pass criterion: observedCount >= 1 && extra == 0 → ${pass}`);
     if (probe.currentCell?.cellHex?.toLowerCase() !== "0xa9b40100"
         && (probe.currentCell?.cellIdx ?? 0) < 0x0100) {
       console.log(`  WARN: player NOT in an EnvCell — teleport may have failed (account needs Developer access).`);
-    } else if (diag.ok) {
-      console.log(`  → PASS. visible_cells consumption reaches the full DAT-baked PVS.`);
+    } else if (pass) {
+      console.log(`  → PASS. Observed cells are a subset of the DAT PVS, frustum culling working as expected.`);
+    } else if (extraCount > 0) {
+      console.log(`  → FAIL. Observed cells leak outside the DAT PVS (over-render). Sample extras: ${(diag.extra ?? []).slice(0, 5).join(", ")}`);
     } else {
-      console.log(`  → FAIL. Phase 3 fix may not be propagating, or teleport landed somewhere unexpected.`);
+      console.log(`  → FAIL. Zero EnvCells observed inside the cottage. Phase 3/4 fix not propagating?`);
     }
   }
   console.log(`\nOUT=${OUT}`);
   await browser.close();
 
   if (diag?.error) process.exit(2);
-  process.exit(diag?.ok === true ? 0 : 1);
+  process.exit(pass ? 0 : 1);
 })();

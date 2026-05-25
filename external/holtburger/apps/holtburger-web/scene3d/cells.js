@@ -45,6 +45,13 @@ import {
 } from "./adapter.js";
 import { materialCanCastShadow } from "./materials.js";
 
+// Phase 4 PView port (2026-05-25): module-scope scratch for the
+// per-frame MVP matrix passed to `getRenderSetWithFrustum`. Allocated
+// lazily on first call so capture-time setups without a Three.js
+// scene don't pay for them.
+let _mvpScratch = null;
+let _mvpMatrixScratch = null;
+
 /**
  * Top-level: load every EnvCell for a single landblock and add the
  * resulting Groups under `scene3d.cellsGroup`. Idempotent — second
@@ -609,8 +616,49 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   let isIndoor = false;
   try {
     cellId = sessionHandle.getCurrentCellId() >>> 0;
-    renderSetArr = sessionHandle.getRenderSet(1);
     isIndoor = !!sessionHandle.isCurrentCellIndoor();
+
+    // Phase 4 PView port (2026-05-25): if the wasm exposes the
+    // frustum-aware visibility method AND we have a live camera with
+    // a valid view+projection, use it. Mirrors WB's
+    // `EnvCellManager.GetVisibleCells` (cottage-interior visible from
+    // outside via frustum culling on EnvCell AABBs). Fallback to the
+    // legacy depth-1 BFS render set when either the helper is absent
+    // (older wasm), the camera isn't initialised yet, or the matrix
+    // composition throws.
+    const camera =
+      scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+    const worldRoot = scene3d.worldRoot ?? null;
+    const useFrustum =
+      typeof sessionHandle.getRenderSetWithFrustum === "function" &&
+      camera &&
+      camera.projectionMatrix &&
+      camera.matrixWorldInverse &&
+      worldRoot;
+    if (useFrustum) {
+      try {
+        // Cell AABBs in the wasm spatial scene are stored in AC world
+        // coords (Z-up). The camera lives outside `worldRoot` so its
+        // view matrix is in THREE world coords (Y-up). To frustum-cull
+        // AABBs in AC space, fold `worldRoot.matrixWorld` (the
+        // -π/2 X-rotation that maps AC→THREE per adapter.js:1155) into
+        // the MVP. Then the frustum extracted from that matrix is
+        // already in AC space; AABBs test directly.
+        //
+        // Composition: mvp = projection · matrixWorldInverse · worldRoot.matrixWorld
+        // Three.js's Matrix4.multiplyMatrices(a, b) computes a·b.
+        const mvp = _mvpScratch ?? (_mvpScratch = new Float32Array(16));
+        const m = _mvpMatrixScratch ?? (_mvpMatrixScratch = new THREE.Matrix4());
+        m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        m.multiply(worldRoot.matrixWorld);
+        for (let i = 0; i < 16; i++) mvp[i] = m.elements[i];
+        renderSetArr = sessionHandle.getRenderSetWithFrustum(mvp);
+      } catch (_) {
+        renderSetArr = sessionHandle.getRenderSet(1);
+      }
+    } else {
+      renderSetArr = sessionHandle.getRenderSet(1);
+    }
   } catch (_) {
     return;
   }

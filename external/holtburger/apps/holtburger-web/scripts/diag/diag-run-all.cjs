@@ -42,12 +42,14 @@ const HARNESSES = [
     script: "run-diag-pvs-holtburg-cottage.cjs",
     surface: "__diag.pvs",
     methodDoc: "docs/cell-portal-method.md §Known scope gap",
-    expectsPass: false,
+    expectsPass: true,
     notes:
-      "Documents the LandCell↔EnvCell edge gap (shortfall #3). Player teleports " +
-      "to Holtburg, walks around outside; observedVsBaked reports 17 missing " +
-      "because outdoor LandCells have no edges into adjacent EnvCells. Will pass " +
-      "when retail PView's screen-space portal-polygon clip is ported.",
+      "Validates the Phase 4 PView port (LandCell→EnvCell visibility bridge). " +
+      "Player teleports to Holtburg, walks around outside; observed visible-cell " +
+      "set should include at least one EnvCell because " +
+      "getRenderSetWithFrustum iterates loaded EnvCell AABBs and keeps those " +
+      "in the camera frustum. Pre-fix the count was always 0; post-fix it " +
+      "depends on camera direction but must be > 0 when any cottage is in view.",
   },
   {
     name: "pvs-holtburg-cottage-inside",
@@ -56,10 +58,10 @@ const HARNESSES = [
     methodDoc: "docs/cell-portal-method.md §Known scope gap",
     expectsPass: true,
     notes:
-      "Validates Phase 3 visible_cells fix (commit 344d0b6d). Player " +
-      "@teleloc's into cottage 0xA9B40100; observedVsBaked should show 17/17 " +
-      "oracle cells visible because cell_portal_graph now consumes visible_cells[] " +
-      "alongside portals[].",
+      "Validates that inside a cottage, the observed visible set is a SUBSET " +
+      "of the DAT-baked PVS (frustum-culled). Phase 3 (visible_cells in " +
+      "cell_portal_graph) + Phase 4 (frustum cull) together: observedCount >= 1 " +
+      "(current cell at minimum), extra == 0 (no over-render outside PVS).",
   },
   // Future:
   //   - clothing.cjs  → __diag.clothing

@@ -552,6 +552,97 @@ impl Default for Aabb {
     }
 }
 
+/// 6-plane view frustum, used for AABB-vs-frustum culling per
+/// WB.GameScene.cs:1584 + EnvCellManager.GetVisibleCells. Each plane
+/// is normalized so that `plane.distance_to_point(p) >= 0` means `p`
+/// is on the inside (visible) side. AABBs are culled when ANY plane
+/// reports the AABB's most-positive corner as negative — the standard
+/// "n-vertex test".
+///
+/// 2026-05-25: added for the Phase 4 PView port — see
+/// docs/cell-portal-method.md §"Known scope gap" #3 (LandCell↔EnvCell
+/// visibility via outdoor frustum culling).
+#[derive(Debug, Clone, Copy)]
+pub struct Frustum {
+    /// Plane order: left, right, bottom, top, near, far. Each
+    /// pre-normalized; `distance_to_point >= 0` iff inside.
+    pub planes: [Plane; 6],
+}
+
+impl Frustum {
+    /// Build a frustum from 6 pre-normalized planes (left, right,
+    /// bottom, top, near, far). All planes face inward (positive
+    /// distance = inside).
+    pub fn new(planes: [Plane; 6]) -> Self {
+        Self { planes }
+    }
+
+    /// Extract a frustum from a **column-major** 4×4 view-projection
+    /// matrix in the layout Three.js / glm / WebGL produce: `m[col*4 + row]`,
+    /// so `m[0..4]` is the first column, `m[4..8]` the second, etc.
+    /// Standard Gribb–Hartmann extraction; planes are normalized so
+    /// `distance_to_point` is in world units.
+    ///
+    /// This matches `THREE.Frustum.setFromProjectionMatrix` exactly,
+    /// so callers can pass `camera.projectionMatrix * camera.matrixWorldInverse`
+    /// as a 16-float flat array and get the same six planes Three.js
+    /// would compute itself.
+    pub fn from_view_projection_matrix(m: &[f32; 16]) -> Self {
+        let p = |a: f32, b: f32, c: f32, d: f32| -> Plane {
+            let len = (a * a + b * b + c * c).sqrt().max(1e-12);
+            Plane {
+                normal: Vector3::new(a / len, b / len, c / len),
+                d: d / len,
+            }
+        };
+        // Column-major: `m[col*4 + row]`. Row r of the matrix is
+        // `[m[r], m[4+r], m[8+r], m[12+r]]`. Gribb–Hartmann combines
+        // row3 with each of row0..row2.
+        let r0 = (m[0], m[4], m[8], m[12]); // row 0 (x)
+        let r1 = (m[1], m[5], m[9], m[13]); // row 1 (y)
+        let r2 = (m[2], m[6], m[10], m[14]); // row 2 (z)
+        let r3 = (m[3], m[7], m[11], m[15]); // row 3 (w)
+        let planes = [
+            p(r3.0 + r0.0, r3.1 + r0.1, r3.2 + r0.2, r3.3 + r0.3), // left
+            p(r3.0 - r0.0, r3.1 - r0.1, r3.2 - r0.2, r3.3 - r0.3), // right
+            p(r3.0 + r1.0, r3.1 + r1.1, r3.2 + r1.2, r3.3 + r1.3), // bottom
+            p(r3.0 - r1.0, r3.1 - r1.1, r3.2 - r1.2, r3.3 - r1.3), // top
+            p(r3.0 + r2.0, r3.1 + r2.1, r3.2 + r2.2, r3.3 + r2.3), // near
+            p(r3.0 - r2.0, r3.1 - r2.1, r3.2 - r2.2, r3.3 - r2.3), // far
+        ];
+        Self { planes }
+    }
+
+    /// Test whether an AABB is at least partially inside the frustum.
+    /// Returns `true` if the AABB is fully inside OR straddles the
+    /// frustum boundary. Returns `false` only when the AABB is fully
+    /// outside (every plane reports the most-positive corner as
+    /// negative).
+    ///
+    /// Standard "n-vertex test": for each plane, pick the AABB corner
+    /// that's farthest in the +normal direction. If that corner is on
+    /// the negative side, the whole AABB is outside.
+    pub fn intersects_aabb(&self, aabb: &Aabb) -> bool {
+        for plane in &self.planes {
+            // Corner of AABB farthest along +plane.normal.
+            let corner = Vector3::new(
+                if plane.normal.x >= 0.0 { aabb.max.x } else { aabb.min.x },
+                if plane.normal.y >= 0.0 { aabb.max.y } else { aabb.min.y },
+                if plane.normal.z >= 0.0 { aabb.max.z } else { aabb.min.z },
+            );
+            if plane.distance_to_point(&corner) < 0.0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Test whether a point is inside the frustum.
+    pub fn contains_point(&self, p: &Vector3) -> bool {
+        self.planes.iter().all(|plane| plane.distance_to_point(p) >= 0.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

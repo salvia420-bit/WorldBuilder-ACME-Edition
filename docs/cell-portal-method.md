@@ -285,21 +285,39 @@ square: **zero of those 123 EnvCells ever flag `.visible = true`**.
    `getRenderSet(1)` from inside an EnvCell now matches retail's per-cell
    PVS set — no depth parameter bump needed.
 
-3. **No LandCell↔EnvCell edges.** Outdoor terrain cells (idx
-   < 0x0100) have no portal records, so they're never inserted into
-   `cell_portal_graph`. From any outdoor LandCell, BFS depth=1
-   returns `{current_cell}` only — zero EnvCells ever become
-   neighbors of an outdoor cell. Symptom: from outside a Holtburg
-   cottage, you see zero of its interior through the open doorway,
-   even at point-blank range. Retail PView's `ClipPortals` /
-   `OtherPortalClip` (acclient.c, see PView class symbols in
-   `external/chorizite/Chorizite/Chorizite.Core/acclient.map:8156-8170`)
-   handles this case via screen-space portal-polygon clipping
-   against the camera frustum — there is no equivalent code in
-   holtburger-web today. **Still open.** Wire-agent harness
-   `run-diag-pvs-holtburg-cottage` (outside variant) reproduces this
-   gap as `observedCount=0, missing=17` from a player standing outside
-   the cottage's exterior in Holtburg town.
+3. **~~No LandCell↔EnvCell edges~~** — **CLOSED 2026-05-25 (Phase 4)**.
+   Approximated via WB.EnvCellManager strategy
+   (`Editors/Landscape/EnvCellManager.cs:1316`): when the player's
+   current cell isn't a registered EnvCell (i.e. they're on outdoor
+   terrain), iterate every loaded EnvCell AABB and keep those whose
+   AABB intersects the camera frustum. This is what makes Holtburg
+   cottage interiors visible from outside the building. The
+   implementation lives in `SpatialScene::compute_visibility_with_frustum`
+   (`crates/holtburger-world/src/spatial/scene.rs`) and the wasm
+   export `SessionHandle::getRenderSetWithFrustum` consumes a
+   16-float column-major MVP matrix from JS. `cells.js` composes
+   `projection · matrixWorldInverse · worldRoot.matrixWorld` so the
+   frustum is in AC world coords (Z-up) — matching the AABBs in the
+   spatial scene without a per-AABB transform.
+
+   This is NOT the full retail `PView::ClipPortals` / `OtherPortalClip`
+   screen-space portal-polygon clip — it's the more pragmatic
+   AABB-vs-frustum approach WB uses. Two known consequences vs. true
+   PView:
+   - **Over-render at building edges**: an EnvCell whose AABB
+     straddles the frustum will render even if no portal-polygon
+     would actually be visible. Cheap cost; not a correctness bug.
+   - **No depth-clear trick** for "camera-inside-building" rendering
+     order (WB's `GameScene.cs:1610` does this; we don't yet).
+     Future polish if Z-fighting surfaces between cottage floor
+     and terrain.
+
+   Validated 2026-05-25 via the wire-agent harness
+   `run-diag-pvs-holtburg-cottage` (outside variant): after
+   `@telepoi Holtburg` + walking, the runtime visible set contains
+   66 cottage EnvCells (all 17 of the 0xA9B40100-PVS, plus 49
+   other cottages in the camera frustum — every cottage the camera
+   actually sees). Pre-fix: 0 visible.
 
 **User-visible symptom shape** (confirmed 2026-05-25 via direct user
 observation): walking into a Holtburg building visually "enters" the
@@ -354,11 +372,13 @@ this was the pattern to mirror.
   only on UNEXPECTED (regression on a closed shortfall, or
   unexpected closure of an open shortfall).
 
-**Out of scope (still):** porting the actual retail `PView` algorithm
-— specifically the portal-polygon screen-space frustum clip that lets
-outdoor cells see into adjacent EnvCells through their doorways. This
-is what closes the remaining shortfall #3. Estimate: at least
-post-Wave-8.
+**Phase 4 (LandCell↔EnvCell visibility via frustum cull) shipped
+2026-05-25.** All three shortfalls now closed at the holtburger-web
+runtime; the implementation is the WB.EnvCellManager hybrid (BFS for
+indoor, AABB-vs-frustum for outdoor), not the full retail
+`PView::ClipPortals` portal-polygon screen-space clip. The latter
+remains future-polish if Z-fighting / over-render at building edges
+becomes user-visible.
 
 ## Cross-references
 

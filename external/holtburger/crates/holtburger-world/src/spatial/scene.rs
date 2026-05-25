@@ -6,7 +6,7 @@ use super::{
 };
 use crate::entity::EntityMotionSnapshot;
 use holtburger_common::position::WorldPosition;
-use holtburger_common::{Aabb, Guid, Triangle, Vector3};
+use holtburger_common::{Aabb, Frustum, Guid, Triangle, Vector3};
 use holtburger_dat::file_type::SkyDesc;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -586,6 +586,14 @@ impl SpatialScene {
         self.cell_aabbs.get(&cell_id).copied()
     }
 
+    /// Iterate every (cell_id, world-space AABB) pair currently loaded.
+    /// Phase 4 PView port (2026-05-25): used to snapshot the
+    /// frustum-cullable set into `CellSceneSnapshot.cell_aabbs` per
+    /// TickMovement.
+    pub fn cell_aabbs_iter(&self) -> impl Iterator<Item = (u32, Aabb)> + '_ {
+        self.cell_aabbs.iter().map(|(&id, &aabb)| (id, aabb))
+    }
+
     /// 2026-05-10 indoor collision: insert a world-space triangle
     /// into the per-cell physics index. Called by the wasm bundle's
     /// `populateCellPhysicsForLandblock` populator after transforming
@@ -709,6 +717,67 @@ impl SpatialScene {
             }
         }
         visited
+    }
+
+    /// Phase 4 PView port (2026-05-25): compute the visible cell set
+    /// using a view frustum, mirroring WB's
+    /// `EnvCellManager.GetVisibleCells` strategy (Editors/Landscape/
+    /// EnvCellManager.cs:1316). Two modes based on whether `current` is
+    /// an indoor EnvCell (registered in `cell_aabbs`) or an outdoor
+    /// LandCell:
+    ///
+    /// - **Indoor**: BFS-1 over `cell_portal_graph` (which since the
+    ///   2026-05-25 visible_cells fix now reaches the full DAT-baked
+    ///   PVS from any EnvCell). Each neighbour is then AABB-frustum-
+    ///   culled, dropping cells the camera can't see.
+    /// - **Outdoor**: iterate every loaded EnvCell AABB and keep those
+    ///   the frustum intersects. This is what makes Holtburg cottage
+    ///   interiors visible from outside the building — the LandCell-
+    ///   to-EnvCell graph edge that retail PView's screen-space portal-
+    ///   polygon clip would have produced is approximated by "any
+    ///   EnvCell whose AABB straddles the camera frustum is potentially
+    ///   visible".
+    ///
+    /// The current cell is always included (even if outdoor or out of
+    /// the frustum) so callers don't lose the "where am I" anchor.
+    pub fn compute_visibility_with_frustum(
+        &self,
+        current: u32,
+        frustum: &Frustum,
+    ) -> HashSet<u32> {
+        let mut visible: HashSet<u32> = HashSet::new();
+        if current == 0 {
+            return visible;
+        }
+        visible.insert(current);
+
+        let in_envcell = self.cell_aabbs.contains_key(&current);
+        if in_envcell {
+            // Indoor path: BFS portal-graph + frustum-prune.
+            let bfs = self.render_set(current, 1);
+            for cell in bfs {
+                if cell == current {
+                    continue;
+                }
+                if let Some(aabb) = self.cell_aabbs.get(&cell) {
+                    if frustum.intersects_aabb(aabb) {
+                        visible.insert(cell);
+                    }
+                } else {
+                    // No AABB registered — keep (matches BFS semantics).
+                    visible.insert(cell);
+                }
+            }
+        } else {
+            // Outdoor path: frustum-cull every loaded EnvCell AABB.
+            // This is the LandCell↔EnvCell visibility bridge.
+            for (&cell, aabb) in &self.cell_aabbs {
+                if frustum.intersects_aabb(aabb) {
+                    visible.insert(cell);
+                }
+            }
+        }
+        visible
     }
 
     pub fn sweep_sphere_against_buildings(

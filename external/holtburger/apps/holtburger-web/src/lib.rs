@@ -14080,6 +14080,17 @@ struct CellSceneSnapshot {
     current_cell: u32,
     is_indoor: bool,
     render_set: Vec<u32>,
+    /// Phase 4 PView port (2026-05-25): per-cell world-space AABBs
+    /// for frustum culling, mirroring WB's
+    /// EnvCellManager.GetVisibleCells. Each entry is
+    /// `(cell_id, [min_x, min_y, min_z, max_x, max_y, max_z])`.
+    /// Cloned from `world.scene.cell_aabbs` per TickMovement —
+    /// ~140 entries × 28 bytes = ~4 KB, negligible vs the existing
+    /// snapshot churn. JS-side rAF tick reads these via the new
+    /// `getRenderSetWithFrustum(mvp)` export so frustum culling
+    /// runs at render frequency while AABB data refreshes only on
+    /// landblock load/unload.
+    cell_aabbs: Vec<(u32, [f32; 6])>,
 }
 
 /// Phase 6 step E follow-up (2026-05-09): JS-facing payload for a door
@@ -14613,6 +14624,110 @@ impl SessionHandle {
         // depth without &World — return the canonical depth=1 set
         // instead of pretending we did the work.
         snap.render_set.clone()
+    }
+
+    /// Phase 4 PView port (2026-05-25): frustum-aware visibility.
+    /// Takes a 16-float **column-major** view-projection matrix (same
+    /// memory layout as `THREE.Matrix4.elements` — pass it directly
+    /// from `new Matrix4().multiplyMatrices(camera.projectionMatrix,
+    /// camera.matrixWorldInverse).elements`) and returns the cell ids
+    /// whose world-space AABB intersects the frustum.
+    ///
+    /// Strategy mirrors WB's
+    /// `EnvCellManager.GetVisibleCells` (Editors/Landscape/
+    /// EnvCellManager.cs:1316):
+    ///
+    /// - **Indoor** (current cell is an EnvCell with a registered
+    ///   AABB): frustum-prune the snapshot's BFS-1 render set. The
+    ///   render set already carries the full DAT-baked PVS (since
+    ///   the 2026-05-25 visible_cells fix added those edges to
+    ///   `cell_portal_graph`), so this drops cells the camera can't
+    ///   see.
+    /// - **Outdoor** (current cell isn't in `cell_aabbs`): iterate
+    ///   every loaded EnvCell AABB and keep those the frustum
+    ///   intersects. This is what makes Holtburg cottage interiors
+    ///   visible from outside the building — closes the LandCell↔
+    ///   EnvCell shortfall (`#3` in docs/cell-portal-method.md
+    ///   §"Known scope gap").
+    ///
+    /// `current_cell` is always included so callers don't lose the
+    /// "where am I" anchor between mvp updates. Returns sorted-ascending
+    /// for stable set-equality on the JS side.
+    ///
+    /// Returns an empty vec if `mvp.len() != 16` or `current_cell == 0`
+    /// (pre-spawn). JS callers fall back to the legacy
+    /// `getRenderSet(1)` path in that case.
+    #[wasm_bindgen(js_name = getRenderSetWithFrustum)]
+    pub fn get_render_set_with_frustum(&self, mvp: &[f32]) -> Vec<u32> {
+        if mvp.len() != 16 {
+            return Vec::new();
+        }
+        let mvp_arr: [f32; 16] = {
+            let mut a = [0.0f32; 16];
+            a.copy_from_slice(mvp);
+            a
+        };
+        let frustum = holtburger_common::Frustum::from_view_projection_matrix(&mvp_arr);
+        let snap = self.cell_scene_snapshot.borrow();
+        if snap.current_cell == 0 {
+            return Vec::new();
+        }
+
+        // Lookup helper: cell_id → AABB (linear scan; ~140 entries).
+        let aabb_for = |cell_id: u32| -> Option<holtburger_common::Aabb> {
+            snap.cell_aabbs.iter().find_map(|(id, ext)| {
+                if *id == cell_id {
+                    Some(holtburger_common::Aabb::new(
+                        holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
+                        holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
+                    ))
+                } else {
+                    None
+                }
+            })
+        };
+
+        // Snapshot.is_indoor decides which branch (matches the same
+        // `pose.is_indoors()` the recv-loop used to publish — keeps the
+        // JS branch consistent with what was sampled).
+        let mut visible: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        visible.insert(snap.current_cell);
+
+        if snap.is_indoor {
+            // Indoor: BFS already computed in snap.render_set; frustum-
+            // prune the neighbours, keep cells whose AABB straddles the
+            // frustum (or that lack a registered AABB — treat as "keep").
+            for &cell in &snap.render_set {
+                if cell == snap.current_cell {
+                    continue;
+                }
+                match aabb_for(cell) {
+                    Some(aabb) => {
+                        if frustum.intersects_aabb(&aabb) {
+                            visible.insert(cell);
+                        }
+                    }
+                    None => {
+                        visible.insert(cell);
+                    }
+                }
+            }
+        } else {
+            // Outdoor: iterate every loaded EnvCell AABB, frustum-cull.
+            for (cell_id, ext) in &snap.cell_aabbs {
+                let aabb = holtburger_common::Aabb::new(
+                    holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
+                    holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
+                );
+                if frustum.intersects_aabb(&aabb) {
+                    visible.insert(*cell_id);
+                }
+            }
+        }
+
+        let mut out: Vec<u32> = visible.into_iter().collect();
+        out.sort_unstable();
+        out
     }
 
     /// Phase 6 step D: convenience flag — was the snapshot published
@@ -16852,10 +16967,30 @@ fn publish_cell_scene_snapshot(
     let render = world.scene.render_set(current, 1);
     let mut render_vec: Vec<u32> = render.into_iter().collect();
     render_vec.sort_unstable();
+
+    // Phase 4 PView port (2026-05-25): snapshot every loaded cell AABB
+    // so the SessionHandle's `getRenderSetWithFrustum(mvp)` rAF tick
+    // can frustum-cull at render frequency without re-entering the
+    // recv loop. ~140 entries × 28 bytes typical; cheap clone.
+    let cell_aabbs: Vec<(u32, [f32; 6])> = world
+        .scene
+        .cell_aabbs_iter()
+        .map(|(id, aabb)| {
+            (
+                id,
+                [
+                    aabb.min.x, aabb.min.y, aabb.min.z,
+                    aabb.max.x, aabb.max.y, aabb.max.z,
+                ],
+            )
+        })
+        .collect();
+
     *snapshot.borrow_mut() = CellSceneSnapshot {
         current_cell: current,
         is_indoor: pose.is_indoors(),
         render_set: render_vec,
+        cell_aabbs,
     };
 }
 
