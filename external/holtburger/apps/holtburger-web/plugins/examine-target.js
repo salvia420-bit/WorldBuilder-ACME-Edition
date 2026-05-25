@@ -17,8 +17,62 @@
 //
 // Real DAT sprites:
 //   - 0x06004CFC : blue glowing orb (32x32) — examine icon at top-left.
+//
+// gmFloatyExaminationUI 0x2100006B — retail layout that drives the
+// examine popup. Element-id map confirmed by examine_target_layout_dump
+// 2026-05-24. Retail native size: 310×400 (popup) within 800×600 canvas;
+// our embed shrinks to main-panel's body (300×337 — 25-px title bar of
+// main-panel takes the place of retail's own 20-px title bar at y=5,
+// so popup-relative offsets land cleanly inside the body slot).
+//
+// Native popup root (0x100005F2, 310×400 at 20,20) holds:
+//   - 16 frame elements (0x10000673..0x10000682) — brass corners + edges
+//   - 0x1000012D / 0x10000529 — title backdrop band (300×20 at 5,5)
+//   - 0x10000528 — title separator (300×5 at 5,25)
+//   - 0x100005F3 — close button (14×14 at 284,8, 2 states)
+//   - Three alternative content panels (300×365 at 5,30):
+//     * 0x1000012E — text-list pane (inscribed-text / journal style)
+//     * 0x10000140 — armor/weapon detail pane (header + 3 stat rows +
+//       scrollable description + footer)
+//     * 0x10000153 — creature/identification pane (3 horizontal sections
+//       + large icon + content area + bottom-centre icon)
+//
+// v1 fetch_layout limitation: geometry only. StateDesc/BaseProperty
+// not serialized. We wire popup-frame geometry + header + content
+// region + scrollbar; the per-row label/value semantics stay
+// hand-tuned (driven by getItemByGuid / EntityMap, not by the layout).
 
 import { setAcText } from "../ui/ac_font.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+
+const EXAMINE_LAYOUT_ID = 0x2100006B;
+// Retail popup root is 310x400 inside an 800x600 canvas. Our embed
+// repurposes the body slot of main-panel (300x337) so popup-relative
+// child offsets land inside the body. The retail 25-px title region
+// (5+20) is consumed by main-panel's own 25-px title bar — we expose
+// the entire main-panel body as if it were the popup's content frame
+// (y=30 in popup-space) starting at y=0 in our parent's space.
+// Reference-only: popup-space y=30 is where the pane content begins
+// (main-panel's own title bar consumes the retail 25-px title region).
+const EXAMINE_ELEMS = {
+  popupRoot:    0x100005F2,  // outer popup frame (310x400)
+  titleBand:    0x1000012D,  // header backdrop strip (300x20 at 5,5)
+  titleSep:     0x10000528,  // title separator line (300x5 at 5,25)
+  closeBtn:     0x100005F3,  // close button (14x14 at 284,8, 2 states)
+  // Creature/identification pane (0x10000153 — 300x365 at popup 5,30):
+  creaturePane:    0x10000153,  // outer pane wrapper
+  creatureHeader:  0x1000015E,  // creature header (232x38 at 6,2)
+  creatureIcon:    0x1000015F,  // 32x32 icon top-right (at 244,6)
+  creatureSection1: 0x10000158,  // horizontal divider at y=42
+  creatureSection2: 0x1000015A,  // horizontal divider at y=92
+  creatureSection3: 0x1000015C,  // horizontal divider at y=268
+  creatureRow1:    0x10000160,  // first property row (278x19 at 11,52)
+  creatureRow2:    0x10000162,  // second property row (278x19 at 11,71)
+  creatureBody:    0x10000163,  // main scrollable body (264x168 at 11,100)
+  creatureScroll:  0x10000164,  // right-side scrollbar (16x171 at 284,99)
+  creatureFooter:  0x10000165,  // footer status line (278x19 at 11,276)
+  creatureBottomIcon: 0x1000032D, // centre bottom icon (32x32 at 134,298)
+};
 
 const VIEW_ID_STYLE = "hb-examine-view-style";
 
@@ -38,6 +92,11 @@ function ensureStyles() {
       color: var(--hb-text-cream);
       overflow: hidden;
     }
+    /* Creature-pane sections — applyExamineLayout reasserts retail
+       offsets relative to .hb-exa-root. They're popup-relative offsets
+       in the layout but we map them into our parent (main-panel body)
+       by subtracting EXAMINE_POPUP_TITLE_Y so y=30 in popup-space
+       lands at y=0 in our space. */
     .hb-exa-head {
       position: absolute;
       top: 6px;
@@ -47,9 +106,11 @@ function ensureStyles() {
       display: flex;
       align-items: center;
       gap: 8px;
+      box-sizing: border-box;
     }
     .hb-exa-icon {
-      width: 40px; height: 40px;
+      position: absolute;
+      width: 32px; height: 32px;
       background: url("./data/ui-sprites/0x06004CFC.png") center/contain no-repeat;
       filter: drop-shadow(0 0 4px rgba(80, 140, 255, 0.7));
       image-rendering: pixelated;
@@ -81,8 +142,19 @@ function ensureStyles() {
       padding: 4px;
       background: rgba(0, 0, 0, 0.4);
       border: 1px solid var(--hb-border-brass-dim);
+      box-sizing: border-box;
       scrollbar-width: thin;
       scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
+    }
+    /* Section divider rendered as a hairline along the retail 4-px
+       separator's top edge. Layout 0x10000158/0x1000015A/0x1000015C
+       drive position via applyExamineLayout. */
+    .hb-exa-divider {
+      position: absolute;
+      left: 0;
+      background: var(--hb-border-brass-dim);
+      box-sizing: border-box;
+      pointer-events: none;
     }
     .hb-exa-row {
       display: flex;
@@ -92,6 +164,14 @@ function ensureStyles() {
       font-size: 10px;
       line-height: 14px;
       border-bottom: 1px solid rgba(138, 117, 68, 0.18);
+      box-sizing: border-box;
+    }
+    /* applyExamineLayout-driven property rows above the body. Border-box
+       so the layout's exact 278x19 lands without padding/border
+       inflating getBoundingClientRect.height. */
+    .hb-exa-row1, .hb-exa-row2 {
+      box-sizing: border-box;
+      overflow: hidden;
     }
     .hb-exa-row:last-child { border-bottom: none; }
     .hb-exa-label {
@@ -115,6 +195,85 @@ function ensureStyles() {
     }
   `;
   document.head.appendChild(style);
+}
+
+// Apply retail gmFloatyExaminationUI 0x2100006B layout positions to
+// the examine pane's sub-elements. The popup-relative coordinates in
+// the LayoutDesc are translated into our parent's space by subtracting
+// EXAMINE_POPUP_TITLE_Y (30px) so popup y=30 (content top) lands at
+// our y=0. Pane lives inside main-panel's body which already strips
+// the retail title-bar rows.
+//
+// Examine view is mounted via user-initiated pushView("examine") AFTER
+// wasm is ready (inventory click / right-click world entity / debug
+// stub), so no retry loop is needed.
+function applyExamineLayout(refs) {
+  const apply = (layout) => {
+    if (!layout) return;
+    const popup = findElementById(layout, EXAMINE_ELEMS.popupRoot);
+    if (!popup) return;
+    let applied = 0;
+    // Per-element popup-relative descriptors translated by popup-title-y.
+    const applyPopupChild = (id, el, opts = {}) => {
+      if (!el) return false;
+      const desc = findElementById(popup, id) || findElementById(layout, id);
+      if (!desc) return false;
+      el.style.right = "";
+      el.style.bottom = "";
+      el.style.transform = "none";
+      const ox = opts.offsetX ?? 0;
+      const oy = opts.offsetY ?? 0;
+      if (typeof desc.x === "number") el.style.left = `${desc.x + ox}px`;
+      if (typeof desc.y === "number") el.style.top = `${desc.y + oy}px`;
+      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
+      applied += 1;
+      return true;
+    };
+    // Creature-pane children land popup-relative; subtract the
+    // EXAMINE_POPUP_TITLE_Y so y=30 (popup content origin) lands at
+    // y=0 inside our root, and offset by the pane's own (5, 30) origin
+    // because the layout records its children relative to the pane
+    // itself, not the popup root. Net: subtract popup-title-y (30)
+    // from popup-space y, leaving children at the layout's pane-
+    // relative y. For the icon at popup (5+244, 5+30+6) = popup (249, 36)
+    // we want screen (244, 6) relative to our pane's content.
+    // The simplest mapping: take the *pane-child* coords directly as
+    // our root-relative coords (since the pane itself is at popup
+    // (5,30) and our root starts at popup (5,30) too).
+    applyPopupChild(EXAMINE_ELEMS.creatureHeader, refs.headEl);
+    applyPopupChild(EXAMINE_ELEMS.creatureIcon, refs.iconEl);
+    applyPopupChild(EXAMINE_ELEMS.creatureBody, refs.bodyEl);
+    applyPopupChild(EXAMINE_ELEMS.creatureRow1, refs.row1El);
+    applyPopupChild(EXAMINE_ELEMS.creatureRow2, refs.row2El);
+    applyPopupChild(EXAMINE_ELEMS.creatureFooter, refs.footerEl);
+    // Section dividers — render as hairlines along the top edge of
+    // each 4-px separator in the retail layout. Each gets explicit
+    // height = 1px after the layout's y is applied (the layout's 4-px
+    // separator height is its sprite gutter; we draw the actual rule
+    // at its top edge for a crisper retail-AC line).
+    const applyDivider = (id, el) => {
+      if (!el) return;
+      const desc = findElementById(popup, id) || findElementById(layout, id);
+      if (!desc) return;
+      el.style.right = "";
+      el.style.bottom = "";
+      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
+      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
+      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+      el.style.height = "1px";
+      applied += 1;
+    };
+    applyDivider(EXAMINE_ELEMS.creatureSection1, refs.divider1El);
+    applyDivider(EXAMINE_ELEMS.creatureSection2, refs.divider2El);
+    applyDivider(EXAMINE_ELEMS.creatureSection3, refs.divider3El);
+    try {
+      window.__diag?.layout?.onExamineApplied?.({ applied });
+    } catch (_) {}
+  };
+  const cached = getCachedLayout(EXAMINE_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(EXAMINE_LAYOUT_ID).then(apply).catch(() => {});
 }
 
 // Type-bit → label (mirrors inventory.js TYPE_COLOR map).
@@ -227,11 +386,11 @@ export const view = {
     const root = document.createElement("div");
     root.className = "hb-exa-root";
 
+    // Head band — retail places the icon at (244, 6) (right side) and
+    // the header text block at (6, 2) 232x38. applyExamineLayout
+    // overrides these inline positions once the layout loads.
     const head = document.createElement("div");
     head.className = "hb-exa-head";
-    const iconEl = document.createElement("div");
-    iconEl.className = "hb-exa-icon";
-    head.appendChild(iconEl);
     const nameCol = document.createElement("div");
     nameCol.className = "hb-exa-namecol";
     const nameEl = document.createElement("div");
@@ -245,11 +404,91 @@ export const view = {
     head.appendChild(nameCol);
     root.appendChild(head);
 
+    // Icon — separate from .hb-exa-head so applyExamineLayout can
+    // position it independently per retail (244, 6) 32x32. CSS still
+    // gives it a fallback position inside the head band for the
+    // wasm-not-yet-loaded paint frame.
+    const iconEl = document.createElement("div");
+    iconEl.className = "hb-exa-icon";
+    iconEl.style.right = "8px";
+    iconEl.style.top = "6px";
+    root.appendChild(iconEl);
+
+    // Property rows above the main body — retail 0x10000160 (Row1) and
+    // 0x10000162 (Row2) at popup-space (11, 52) / (11, 71) 278x19.
+    // Optional summary lines — visibility:hidden when no content so the
+    // layout rectangle is preserved (for retail-faithful chrome anatomy)
+    // but no visual artifact appears.
+    const row1El = document.createElement("div");
+    row1El.className = "hb-exa-row hb-exa-row1";
+    row1El.style.position = "absolute";
+    row1El.style.left = "8px";
+    row1El.style.right = "8px";
+    row1El.style.visibility = "hidden";
+    root.appendChild(row1El);
+    const row2El = document.createElement("div");
+    row2El.className = "hb-exa-row hb-exa-row2";
+    row2El.style.position = "absolute";
+    row2El.style.left = "8px";
+    row2El.style.right = "8px";
+    row2El.style.visibility = "hidden";
+    root.appendChild(row2El);
+
+    // Section dividers — three horizontal rules per retail at popup-
+    // space y={42, 92, 268} 300x4. applyExamineLayout overrides.
+    const divider1El = document.createElement("div");
+    divider1El.className = "hb-exa-divider hb-exa-divider-1";
+    divider1El.style.top = "44px";  // CSS fallback close to retail y=42
+    root.appendChild(divider1El);
+    const divider2El = document.createElement("div");
+    divider2El.className = "hb-exa-divider hb-exa-divider-2";
+    divider2El.style.top = "94px";  // CSS fallback close to retail y=92
+    root.appendChild(divider2El);
+    const divider3El = document.createElement("div");
+    divider3El.className = "hb-exa-divider hb-exa-divider-3";
+    divider3El.style.top = "270px";  // CSS fallback close to retail y=268
+    root.appendChild(divider3El);
+
     const body = document.createElement("div");
     body.className = "hb-exa-body";
     root.appendChild(body);
 
+    // Footer status line — retail 0x10000165 (278x19 at popup 11,276).
+    // We use it as an out-of-band "loading"/"action" line when present.
+    // Hidden via visibility (not display) to preserve the layout rectangle.
+    const footerEl = document.createElement("div");
+    footerEl.className = "hb-exa-footer";
+    footerEl.style.position = "absolute";
+    footerEl.style.left = "8px";
+    footerEl.style.right = "8px";
+    footerEl.style.bottom = "8px";
+    footerEl.style.height = "19px";
+    footerEl.style.fontSize = "10px";
+    footerEl.style.color = "var(--hb-text-muted)";
+    footerEl.style.textAlign = "center";
+    footerEl.style.boxSizing = "border-box";
+    footerEl.style.visibility = "hidden";
+    root.appendChild(footerEl);
+
     parentEl.appendChild(root);
+
+    // Apply retail layout positions to the popup-frame anatomy. Body,
+    // dividers, head, icon, optional summary rows + footer all pull
+    // x/y/w/h from the LayoutDesc. The per-row label/value content
+    // inside .hb-exa-body stays hand-tuned (v1 fetch_layout does not
+    // serialize StateDesc/BaseProperty, so the labels themselves
+    // aren't recoverable from the DAT yet).
+    applyExamineLayout({
+      headEl: head,
+      iconEl,
+      bodyEl: body,
+      row1El,
+      row2El,
+      divider1El,
+      divider2El,
+      divider3El,
+      footerEl,
+    });
 
     if (ctx?.fromInventory) {
       populateFromInventory(body, ctx, nameEl, guidEl);
@@ -292,5 +531,53 @@ export function mount(_ctx) {
 
   return () => {
     delete window.__showExamineFor;
+  };
+}
+
+// Debug helper: pop a synthetic examine target from DevTools / e2e
+// verifier. Mirrors __vendorPluginDebug — drives the view through the
+// main-panel stack even when wasm/__sessionHandle isn't fully wired
+// (or when the entity-map doesn't yet have the synthetic GUID).
+// Provides a synthetic EntityMap entry temporarily so populateFromEntity
+// has something to render.
+if (typeof window !== "undefined") {
+  const DEBUG_SNAPSHOT = {
+    guid: 0xCAFEBABE,
+    name: "Cragstone Drudge (debug)",
+    type: 16,           // Creature
+    classId: 0x1F4E,
+    wcid: 8023,
+    level: 7,
+    health: 84,
+    stamina: 112,
+    mana: 50,
+    heading: 0.78,
+    motionState: 0x00000001,
+    position: { x: -14523.4, y: 0.0, z: 28310.8 },
+    landblock: 0x8602FFFE,
+  };
+  const openDebug = (snapshot) => {
+    const snap = { ...DEBUG_SNAPSHOT, ...(snapshot || {}) };
+    const guid = (snap.guid >>> 0) || DEBUG_SNAPSHOT.guid;
+    // Plant a synthetic entity in the EntityManager's map if available
+    // so populateFromEntity has data to render. Skip if the live game
+    // already has the GUID populated (don't clobber).
+    const em = window.liveScene3d?.entityManager;
+    if (em && em.entityMap && typeof em.entityMap.set === "function") {
+      const existing = em.entityMap.get(guid) || em.entityMap.get(String(guid));
+      if (!existing) {
+        try { em.entityMap.set(guid, { ...snap, guid }); } catch (_) {}
+      }
+    }
+    const ctx = { guid, name: snap.name, fromEntity: true };
+    if (window.__mainPanel?.pushView) {
+      window.__mainPanel.pushView("examine", ctx);
+    } else if (window.__mainPanel?.showView) {
+      window.__mainPanel.showView("examine", ctx);
+    }
+  };
+  window.__examineTargetDebug = {
+    open: openDebug,
+    close: () => window.__mainPanel?.closeView?.(),
   };
 }
