@@ -10145,6 +10145,35 @@ pub async fn fetch_env_cells_in_landblock(
                 }
                 pending.portals.push((envcell.cell_id, neighbour));
             }
+            // Phase 3 visibility-from-inside fix (2026-05-25): ALSO push
+            // edges from `envcell.visible_cells[]` — the dat-baked PVS
+            // (depth=∞ transitive closure of the portal graph, authored
+            // by Turbine's level-build tools). Without this, runtime BFS
+            // depth=1 reaches only direct portal neighbours from inside
+            // an EnvCell. WB.Terminal's `pvs-visibility-snapshot
+            // 0xA9B40100 1` showed `live=4 vs dat=17` for exactly this
+            // reason: cell 0xA9B40100's 17-entry VisibleCells is the
+            // retail-correct PVS; BFS-1 over direct-portals reaches only
+            // 4 of them. Pushing both sources into the same graph means
+            // `render_set(cell, 1)` from inside an EnvCell now returns
+            // the full DAT-baked PVS — matching the
+            // `pvs-visibility-snapshot` oracle.
+            //
+            // `insert_cell_portal` dedupes (scene.rs:513), so duplicate
+            // edges (portal-direct + visible_cells overlap) are safe.
+            //
+            // Does NOT fix the LandCell↔EnvCell gap — outdoor cells
+            // still have no edges, so from outside a cottage BFS-1 still
+            // returns {current_cell} only. That's a separate shortfall
+            // documented in `docs/cell-portal-method.md` §"Known scope
+            // gap".
+            for &vis in &envcell.visible_cells {
+                let neighbour = landblock_high | (vis as u32);
+                if neighbour == 0 || neighbour == envcell.cell_id {
+                    continue;
+                }
+                pending.portals.push((envcell.cell_id, neighbour));
+            }
         });
 
         // 2026-05-10 indoor collision (Phase 6 step G follow-on):

@@ -266,20 +266,24 @@ match to memory `project_holtburger_envcell_vs_building` — 123 cells /
 12 buildings). 16 seconds of walking N/E/S/W around Holtburg town
 square: **zero of those 123 EnvCells ever flag `.visible = true`**.
 
-**Three concrete shortfalls from retail PView:**
+**Three concrete shortfalls from retail PView (status as of 2026-05-25):**
 
-1. **`visible_cells[]` bytes parsed but never consumed at runtime.**
-   `env_cell.rs:88` reads the field; `apps/holtburger-web/src/lib.rs`
-   never uses it. Production `scene.cell_portal_graph` is built only
-   from `EnvCell.portals[].other_cell_id` (line 10101-10108) — the
-   direct-neighbor pairs, NOT the pre-baked PVS transitive closure.
+1. **~~`visible_cells[]` bytes parsed but never consumed at runtime~~** —
+   **CLOSED 2026-05-25 (Phase 3).** `apps/holtburger-web/src/lib.rs` now
+   iterates `envcell.visible_cells[]` alongside `envcell.portals[]` and
+   pushes both into `pending.portals` (line 10149-10169). `cell_portal_graph`
+   is now the union of direct-portal-neighbor edges + DAT-baked PVS edges.
+   `insert_cell_portal` dedupes (scene.rs:513) so overlapping entries are
+   safe. Validated by wire-agent harness `run-diag-pvs-holtburg-cottage-inside`:
+   after `@teleloc 0xA9B40100`, `observedVsBaked` returns 17/17 oracle cells
+   visible (ok=true, missing=[], extra=[]).
 
-2. **Runtime BFS depth=1.** Per `cells.js:612` and `:694`,
-   `sessionHandle.getRenderSet(1)` is called every frame. So even
-   when in-cottage, the runtime visibility extends only one portal
-   hop from the player's current cell. Retail PView's
-   `AddViewToPortals` walks the portal-polygon frustum-clip chain
-   to whatever depth the screen-space allows — not a fixed depth.
+2. **~~Runtime BFS depth=1 too shallow~~** — **CLOSED 2026-05-25** as a
+   side-effect of #1. With `visible_cells[]` edges in the graph, BFS depth=1
+   from any EnvCell now reaches the full DAT-baked PVS (which is itself the
+   depth=∞ portal-graph closure baked by Turbine's level-build tools). So
+   `getRenderSet(1)` from inside an EnvCell now matches retail's per-cell
+   PVS set — no depth parameter bump needed.
 
 3. **No LandCell↔EnvCell edges.** Outdoor terrain cells (idx
    < 0x0100) have no portal records, so they're never inserted into
@@ -292,7 +296,10 @@ square: **zero of those 123 EnvCells ever flag `.visible = true`**.
    `external/chorizite/Chorizite/Chorizite.Core/acclient.map:8156-8170`)
    handles this case via screen-space portal-polygon clipping
    against the camera frustum — there is no equivalent code in
-   holtburger-web today.
+   holtburger-web today. **Still open.** Wire-agent harness
+   `run-diag-pvs-holtburg-cottage` (outside variant) reproduces this
+   gap as `observedCount=0, missing=17` from a player standing outside
+   the cottage's exterior in Holtburg town.
 
 **User-visible symptom shape** (confirmed 2026-05-25 via direct user
 observation): walking into a Holtburg building visually "enters" the
@@ -325,25 +332,33 @@ this was the pattern to mirror.
   §"The two diagnostic commands" above; can bake the oracle for
   any retail cell ID.
 
-**What's missing to make the gap actionable as a falsifiable test:**
+**Falsifiability mechanism shipped 2026-05-25 (Phase 1 + 2 + 3):**
 
-- `__diag.pvs.observedVsBaked(oracleUrl)` — a one-call wrapper
-  composing `loadOracle` + `diff`. Added 2026-05-25 (see
-  `scene3d/diag/pvs.js`).
-
-- A baked oracle fixture for a known Holtburg cottage entrance
-  scenario, checked into the harness fixtures dir.
-
-- A wire-agent harness that boots, teleports to Holtburg,
-  walks toward the target cottage, fires `observedVsBaked`,
-  asserts the diff. Until PView is ported, this assertion fails
-  by design — and the failing diff vector tells us *which* of
-  the three shortfalls above is the proximate cause.
+- `__diag.pvs.observedVsBaked(oracleUrl)` — one-call wrapper
+  composing `loadOracle` + `diff`. In `scene3d/diag/pvs.js`.
+- Baked oracle `apps/holtburger-web/oracles/pvs/0xA9B40100.json`
+  (17 cells visible from Holtburg cottage 0xA9B40100).
+- Two wire-agent harnesses at
+  `/mnt/wbterminal1/tmp/claude-scratch/wire-agent-new-pipelines-2026-05-24/`:
+  - `run-diag-pvs-holtburg-cottage.mjs` — outside variant. After
+    `@telepoi Holtburg` + walking, runs `observedVsBaked`. Today
+    reports `observedCount=0, missing=17, ok=false` — documents
+    the remaining LandCell↔EnvCell gap.
+  - `run-diag-pvs-holtburg-cottage-inside.mjs` — inside variant.
+    Uses `@teleloc 0xA9B40100 88 131 67` to land the player
+    inside the cottage. After Phase 3 fix: PASSES (17/17 oracle
+    cells visible).
+- `diag-run-all.mjs` aggregator runs both and reports a matrix:
+  outside = DOC-GAP (consistent failure documenting the open
+  shortfall), inside = OK (Phase 3 fix validated). Exits non-zero
+  only on UNEXPECTED (regression on a closed shortfall, or
+  unexpected closure of an open shortfall).
 
 **Out of scope (still):** porting the actual retail `PView` algorithm
-is a large piece of work tracked separately (estimate: at least
-post-Wave-8). This addendum only documents the gap and the
-falsifiability mechanism.
+— specifically the portal-polygon screen-space frustum clip that lets
+outdoor cells see into adjacent EnvCells through their doorways. This
+is what closes the remaining shortfall #3. Estimate: at least
+post-Wave-8.
 
 ## Cross-references
 
