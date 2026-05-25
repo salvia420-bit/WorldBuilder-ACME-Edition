@@ -1344,11 +1344,29 @@
           if (swDisabled) {
             try {
               const regs = await navigator.serviceWorker.getRegistrations();
+              const hadSW = regs.length > 0;
               for (const r of regs) {
                 try { await r.unregister(); } catch (_) {}
               }
-              if (regs.length > 0) {
-                console.log(`[Phase 5.0] ?nosw=1 — unregistered ${regs.length} existing SW(s); reload to take effect`);
+              // Also nuke the SW's caches so a previously-broken
+              // entry can't leak through.
+              try {
+                const keys = await caches.keys();
+                await Promise.all(keys.map((k) => caches.delete(k)));
+              } catch (_) {}
+              if (hadSW) {
+                // The existing SW is still controlling THIS page until
+                // navigation. Force a fresh fetch by reloading once
+                // (sessionStorage gate stops an infinite loop on
+                // browsers that ignore SW unregister immediately).
+                const RELOAD_KEY = "holtburger.noswReloadDone";
+                if (!sessionStorage.getItem(RELOAD_KEY)) {
+                  sessionStorage.setItem(RELOAD_KEY, "1");
+                  console.log("[Phase 5.0] ?nosw=1 — unregistered SW + cleared caches; reloading once");
+                  location.reload();
+                  return;
+                }
+                console.log("[Phase 5.0] ?nosw=1 — SW already unregistered this session");
               } else {
                 console.log("[Phase 5.0] ?nosw=1 — SW registration skipped (no existing SW found)");
               }
