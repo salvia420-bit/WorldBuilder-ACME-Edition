@@ -12324,6 +12324,18 @@ enum SessionCommand {
     /// access-level gates and fellowship/allegiance membership
     /// requirements; failed sends return `WeenieError` over the wire.
     SendChannel { channel: u32, message: String },
+    /// `SessionHandle.sendTurbineChannel(chat_type, message)` —
+    /// sends a `GameMessage::TurbineChat` with a `RequestSendToRoomById`
+    /// payload routed to the room_id ACE advertised in its
+    /// `SetTurbineChatChannels` event. `chat_type` is the
+    /// `TurbineChatType` repr (General=1, Trade=2, Lfg=3, Roleplay=4,
+    /// Society=5, SocietyCelHan=6, SocietyEldWeb=7, SocietyRadBlo=8,
+    /// Olthoi=9, Allegiance=10). The recv loop reads the cached
+    /// `turbine_chat_state` to look up the channel, then increments
+    /// the rolling `next_context_id`. Failures (channel not yet
+    /// advertised, chat_type unknown, turbine chat disabled at
+    /// CharacterList) surface as an error string back to JS.
+    SendTurbineChannel { chat_type: u32, message: String },
     /// Phase 4 step 5 (interactive entities): the JS side clicked an
     /// entity sprite. Recv loop wraps in `GameAction::Use(Box<UseActionData>)`
     /// and dispatches via `session.send_action`. ACE handles the
@@ -15201,6 +15213,24 @@ impl SessionHandle {
             })
     }
 
+    /// Send a TurbineChat channel message (`/cg /ct /clfg /crp
+    /// /society /olthoi`). `chat_type` is the `TurbineChatType`
+    /// u32 (General=1, Trade=2, Lfg=3, Roleplay=4, Society=5,
+    /// Olthoi=9, etc.). Fails if turbine chat isn't enabled or the
+    /// channel hasn't been advertised by ACE yet.
+    #[wasm_bindgen(js_name = sendTurbineChannel)]
+    pub fn send_turbine_channel(&self, chat_type: u32, message: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if message.is_empty() {
+            return Err(JsValue::from_str("send_turbine_channel: empty message"));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SendTurbineChannel { chat_type, message })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("send_turbine_channel: cmd channel closed ({e})"))
+            })
+    }
+
     /// Phase 4 step 5 (interactive entities): the player clicked an
     /// entity sprite. Wraps the target guid in a
     /// `GameAction::Use(UseActionData { guid })` and dispatches via
@@ -16005,6 +16035,25 @@ pub async fn start_session(
     let latest_container_contents: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // TurbineChat state (2026-05-25): tracks whether ACE has the
+    // Turbine-style chat infrastructure enabled (from CharacterList
+    // packet's `use_turbine_chat` flag) + the per-channel-type room
+    // IDs ACE pushes via `GameEvent::SetTurbineChatChannels` shortly
+    // after EnteredWorld. The `next_context_id` is the rolling
+    // counter that goes into every outgoing TurbineChat request —
+    // ACE echoes it back on `ChannelBroadcast` so the client can
+    // match request → response.
+    //
+    // Wire path: when JS sends `/cg msg` (etc.) the JS slash router
+    // calls `sendTurbineChannel(chatType, msg)` which queues
+    // `SessionCommand::SendTurbineChannel`. The recv-loop arm reads
+    // this cell to look up the room_id for chatType, then dispatches
+    // `GameMessage::TurbineChat` with RequestSendToRoomById payload.
+    let turbine_chat_state: std::rc::Rc<
+        std::cell::RefCell<holtburger_core::client::types::TurbineChatState>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(
+        holtburger_core::client::types::TurbineChatState::default(),
+    ));
     // PR-JJ (2026-05-23): local player's active enchantments snapshot,
     // refreshed by the recv loop's stats_changed publish block.
     let latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>> =
@@ -16073,6 +16122,7 @@ pub async fn start_session(
         let last_ping_rtt_ms_inner = last_ping_rtt_ms.clone();
         let collision_scene_inner = collision_scene.clone();
         let terrain_heights_shadow_inner = terrain_heights_shadow.clone();
+        let turbine_chat_state_inner = turbine_chat_state.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
                 session,
@@ -16095,6 +16145,7 @@ pub async fn start_session(
                 last_ping_rtt_ms_inner,
                 collision_scene_inner,
                 terrain_heights_shadow_inner,
+                turbine_chat_state_inner,
             )
             .await;
         });
@@ -16868,6 +16919,9 @@ async fn recv_loop(
     terrain_heights_shadow: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
     >,
+    turbine_chat_state: std::rc::Rc<
+        std::cell::RefCell<holtburger_core::client::types::TurbineChatState>,
+    >,
 ) {
     use futures::StreamExt;
     use holtburger_protocol::messages::{
@@ -17368,6 +17422,17 @@ async fn recv_loop(
                                 .collect();
                             let count = new_list.len() as u32;
                             *character_list.borrow_mut() = new_list;
+                            // TurbineChat: server advertises Turbine-style
+                            // chat capability in this packet. When
+                            // disabled, also clear any stale channel list
+                            // from a prior session.
+                            {
+                                let mut tcs = turbine_chat_state.borrow_mut();
+                                tcs.enabled = data.use_turbine_chat;
+                                if !data.use_turbine_chat {
+                                    tcs.channels = None;
+                                }
+                            }
                             if let Some(tx) = charlist_tx.take() {
                                 let _ = tx.send(CharListReady {
                                     account_name: account_name.clone(),
@@ -18935,6 +19000,19 @@ async fn recv_loop(
                             // _no-op_ — those land in steps 5+
                             // (interactive entities, vitals, inventory).
                             match event_msg.event {
+                                // TurbineChat channel-list bootstrap.
+                                // ACE pushes this shortly after the
+                                // EnteredWorld handshake (or on
+                                // re-subscribe) carrying the room-IDs
+                                // for /cg /ct /clfg /crp /society
+                                // /olthoi. We stash it so the
+                                // SendTurbineChannel command arm can
+                                // resolve channel kind → room_id.
+                                holtburger_protocol::messages::GameEvent::SetTurbineChatChannels(
+                                    data,
+                                ) => {
+                                    turbine_chat_state.borrow_mut().channels = Some(*data);
+                                }
                                 holtburger_protocol::messages::GameEvent::Tell(data) => {
                                     let category = chat_category_for_message_type(data.chat_type);
                                     queued_events.borrow_mut().push(ClientEvent {
@@ -20001,6 +20079,118 @@ async fn recv_loop(
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("send_channel: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::SendTurbineChannel { chat_type, message }) => {
+                        // Mirror holtburger-core's
+                        // resolve_turbine_channel + send-TurbineChat
+                        // path (crates/holtburger-core/src/client/
+                        // commands.rs:294-321). Look up the
+                        // pre-advertised channel for chat_type, fail
+                        // gracefully if turbine chat is disabled or
+                        // the channel hasn't been advertised yet.
+                        use holtburger_protocol::messages::chat::turbine::{
+                            TurbineChatBlobType, TurbineChatDispatchType,
+                            TurbineChatMessageData, TurbineChatPayload, TurbineChatType,
+                            TurbineChatTypeId,
+                        };
+                        let chat_type_enum = match TurbineChatType::from_repr(chat_type) {
+                            Some(t) => t,
+                            None => {
+                                queued_events.borrow_mut().push(ClientEvent {
+                                    kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                    string_payload: Some(format!(
+                                        "send_turbine_channel: unknown chat_type 0x{chat_type:X}"
+                                    )),
+                                    u32_payload: None,
+                                    u32_payload_2: None,
+                                    f32_payload: None,
+                                });
+                                continue;
+                            }
+                        };
+                        // Snapshot resolved state OUT of the borrow so
+                        // the mutable next_context_id update doesn't
+                        // re-enter the cell.
+                        let resolved = {
+                            let mut tcs = turbine_chat_state.borrow_mut();
+                            if !tcs.enabled {
+                                None
+                            } else if let Some(channels) = tcs.channels.as_ref() {
+                                if let Some(room_id) =
+                                    channels.channel_for_type(chat_type_enum)
+                                {
+                                    let context_id = tcs.next_context_id;
+                                    tcs.next_context_id =
+                                        tcs.next_context_id.wrapping_add(1).max(1);
+                                    Some((room_id, context_id))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        };
+                        let Some((room_id, context_id)) = resolved else {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(format!(
+                                    "send_turbine_channel: channel {chat_type_enum:?} not advertised (turbine chat may be disabled or not yet bootstrapped)"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            continue;
+                        };
+                        // Player guid from the LoopState — we're only
+                        // dispatching this command after InWorld in
+                        // the JS-side router, but defend anyway.
+                        let sender_id = if let LoopState::InWorld { player_guid } = &state {
+                            u32::from(*player_guid)
+                        } else {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(
+                                    "send_turbine_channel: not in world yet".to_string(),
+                                ),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            continue;
+                        };
+                        let tc_msg = TurbineChatMessageData {
+                            blob_type: TurbineChatBlobType::RequestBinary,
+                            dispatch_type: TurbineChatDispatchType::SendToRoomById,
+                            target_type: 1,
+                            target_id: 0,
+                            transport_type: 0,
+                            transport_id: 0,
+                            cookie: 0,
+                            payload: TurbineChatPayload::RequestSendToRoomById {
+                                context_id,
+                                room_id,
+                                message,
+                                extra_data_size: 0x0C,
+                                sender_id,
+                                hresult: 0,
+                                chat_type: TurbineChatTypeId::Known(chat_type_enum),
+                            },
+                        };
+                        if let Err(e) = session
+                            .send_message(&GameMessage::TurbineChat(Box::new(tc_msg)))
+                            .await
+                        {
+                            log::warn!("recv_loop: send_message(TurbineChat): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("send_turbine_channel: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
                                 f32_payload: None,

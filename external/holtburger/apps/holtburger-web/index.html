@@ -7322,16 +7322,29 @@ void main() {
                        echo: `[${labels[cmd]}] You say, "${rest}"` };
             }
 
-            // Turbine channels (/cg /ct /clfg /crp) — wire path
-            // requires turbine_chat room_id + context_id state that
-            // lives in holtburger-core but isn't yet plumbed through
-            // the wasm bridge. Surface this clearly instead of
-            // falling through to Talk and shouting it locally.
-            const TURBINE_CMDS = { cg: "General", ct: "Trade",
-                                   clfg: "LFG", crp: "Roleplay" };
+            // Turbine channels (/cg /ct /clfg /crp /society /olthoi).
+            // chat_type values come from TurbineChatType in
+            // crates/holtburger-protocol/src/messages/chat/turbine.rs:
+            //   General=1 Trade=2 Lfg=3 Roleplay=4 Society=5 Olthoi=9.
+            // SocietyCelHan/EldWeb/RadBlo (6/7/8) are advertised only
+            // to society members — we ship the umbrella /society=5
+            // and let ACE return "no channel" if the player isn't in
+            // a society.
+            const TURBINE_CMDS = { cg: { type: 1, label: "General" },
+                                   ct: { type: 2, label: "Trade" },
+                                   clfg: { type: 3, label: "LFG" },
+                                   crp: { type: 4, label: "Roleplay" },
+                                   society: { type: 5, label: "Society" },
+                                   olthoi: { type: 9, label: "Olthoi" } };
             if (TURBINE_CMDS[cmd]) {
-              return { dispatched: true, echo: null,
-                       error: `${TURBINE_CMDS[cmd]} channel not yet wired (TurbineChat plumbing pending).` };
+              const entry = TURBINE_CMDS[cmd];
+              try { handle.sendTurbineChannel(entry.type, rest); }
+              catch (e) {
+                return { dispatched: true, echo: null,
+                         error: `${entry.label}: ${e?.message || e}` };
+              }
+              return { dispatched: true,
+                       echo: `[${entry.label}] ${rest}` };
             }
 
             // /me <action> — emotes use a separate GameAction; not
