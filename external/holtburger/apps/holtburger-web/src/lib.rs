@@ -7459,6 +7459,7 @@ thread_local! {
             const { std::cell::RefCell::new(CellGraphPending {
                 aabbs: Vec::new(),
                 portals: Vec::new(),
+                portal_polygons: Vec::new(),
             }) };
 
     /// Phase 6 step E follow-up (2026-05-09): pending building-origin
@@ -7540,6 +7541,11 @@ struct SkyShadow {
 struct CellGraphPending {
     aabbs: Vec<(u32, holtburger_common::Aabb)>,
     portals: Vec<(u32, u32)>,
+    /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
+    /// world space (already transformed through the EnvCell's
+    /// `position` frame). Drained alongside `portals` and `aabbs`
+    /// into `world.scene.cell_portal_polygons` on each TickMovement.
+    portal_polygons: Vec<(u32, holtburger_world::CellPortalPolygon)>,
 }
 
 /// Phase 6 step B follow-up: drain the pending building-AABB pile
@@ -7695,6 +7701,10 @@ fn drain_pending_cell_graph_into(scene: &mut holtburger_world::SpatialScene) -> 
         let aabbs = buf.aabbs.len();
         for (cell_id, aabb) in buf.aabbs.drain(..) {
             scene.insert_cell_aabb(cell_id, aabb);
+        }
+        // Phase 5 PView port: drain portal polygons alongside edges.
+        for (cell_id, poly) in buf.portal_polygons.drain(..) {
+            scene.insert_cell_portal_polygon(cell_id, poly);
         }
         (portals, aabbs)
     })
@@ -10262,6 +10272,68 @@ pub async fn fetch_env_cells_in_landblock(
                                         ),
                                     ));
                                 }
+                            });
+                        }
+
+                        // Phase 5 PView port (2026-05-25): extract
+                        // portal polygons from this cell's DRAWING
+                        // polygons map keyed by each EnvCell.portals[i]
+                        // .polygon_id. Vertices follow the same
+                        // cell-local → world transform the physics
+                        // walk above used. Pushed into
+                        // CELL_GRAPH_PENDING.portal_polygons; drained
+                        // into world.scene.cell_portal_polygons on
+                        // the next TickMovement. The PView walk
+                        // (SessionHandle::getRenderSetWithPView) reads
+                        // them per-frame for screen-space portal-
+                        // polygon clipping.
+                        for portal in &envcell.portals {
+                            let Some(poly) =
+                                cell_struct.polygons.get(&portal.polygon_id)
+                            else {
+                                continue;
+                            };
+                            if poly.num_pts < 3 {
+                                continue;
+                            }
+                            let mut world_verts: Vec<holtburger_common::Vector3> =
+                                Vec::with_capacity(poly.num_pts as usize);
+                            let mut all_ok = true;
+                            for &vid in &poly.vertex_ids {
+                                let key = vid as u16;
+                                let Some(sw) =
+                                    cell_struct.vertex_array.vertices.get(&key)
+                                else {
+                                    all_ok = false;
+                                    break;
+                                };
+                                let local = holtburger_common::Vector3::new(
+                                    sw.origin.x,
+                                    sw.origin.y,
+                                    sw.origin.z,
+                                );
+                                let rotated =
+                                    cell_orientation.rotate_vector(local);
+                                world_verts.push(holtburger_common::Vector3::new(
+                                    cell_origin.x + rotated.x,
+                                    cell_origin.y + rotated.y,
+                                    cell_origin.z + rotated.z,
+                                ));
+                            }
+                            if !all_ok || world_verts.len() < 3 {
+                                continue;
+                            }
+                            let other_cell_id =
+                                landblock_high | (portal.other_cell_id as u32);
+                            CELL_GRAPH_PENDING.with(|pending| {
+                                let mut pending = pending.borrow_mut();
+                                pending.portal_polygons.push((
+                                    envcell.cell_id,
+                                    holtburger_world::CellPortalPolygon {
+                                        other_cell_id,
+                                        vertices: world_verts,
+                                    },
+                                ));
                             });
                         }
                     }
@@ -14091,6 +14163,14 @@ struct CellSceneSnapshot {
     /// runs at render frequency while AABB data refreshes only on
     /// landblock load/unload.
     cell_aabbs: Vec<(u32, [f32; 6])>,
+    /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
+    /// world coords. Flat layout for cheap Clone:
+    /// `(from_cell_id, to_cell_id, vertices_flat_x_y_z)`. Reconstructed
+    /// into a HashMap in `getRenderSetWithPView`. Typical size:
+    /// ~140 cells × ~6 portals × 4 verts × 12 bytes ≈ 40 KB. Cloned
+    /// per TickMovement; data only changes on landblock load/unload
+    /// so this could be cached by-LB-key in a future pass.
+    cell_portal_polygons: Vec<(u32, u32, Vec<f32>)>,
 }
 
 /// Phase 6 step E follow-up (2026-05-09): JS-facing payload for a door
@@ -14624,6 +14704,119 @@ impl SessionHandle {
         // depth without &World — return the canonical depth=1 set
         // instead of pretending we did the work.
         snap.render_set.clone()
+    }
+
+    /// Phase 5 PView port (2026-05-25): full screen-space portal-
+    /// polygon clipping. Takes a 16-float column-major MVP (same
+    /// shape as `getRenderSetWithFrustum` accepts) and returns the
+    /// cell ids reachable from the current cell via portals whose
+    /// projected polygon admits any pixels through the camera
+    /// frustum.
+    ///
+    /// This is the retail-faithful version of
+    /// `getRenderSetWithFrustum`. The latter does AABB-vs-frustum
+    /// culling (cheap, conservative — may render cells you don't
+    /// actually see through doorways from your angle). PView walks
+    /// the portal-polygon chain like `PView::ClipPortals` does in
+    /// acclient, so a cell is visible iff its portal's projected
+    /// polygon intersects the parent view polygon (the clipped
+    /// portal polygon from the previous hop, initially the viewport).
+    ///
+    /// Limitation in this implementation: portals with any vertex
+    /// behind the near plane (w ≤ 0) are conservatively skipped (the
+    /// full retail port clips the polygon against the near plane
+    /// first, then projects). To preserve correctness near building
+    /// entrances, callers should UNION this set with the Phase 4
+    /// `getRenderSetWithFrustum` result. The wire-agent harness does
+    /// this union itself.
+    ///
+    /// Returns sorted-ascending u32 cell ids for stable comparison.
+    /// Empty if `mvp.len() != 16` or `current_cell == 0`.
+    #[wasm_bindgen(js_name = getRenderSetWithPView)]
+    pub fn get_render_set_with_pview(&self, mvp: &[f32]) -> Vec<u32> {
+        if mvp.len() != 16 {
+            return Vec::new();
+        }
+        let mvp_arr: [f32; 16] = {
+            let mut a = [0.0f32; 16];
+            a.copy_from_slice(mvp);
+            a
+        };
+        let snap = self.cell_scene_snapshot.borrow();
+        if snap.current_cell == 0 {
+            return Vec::new();
+        }
+        // Hard cap on portal-traversal depth — see method doc.
+        const PVIEW_MAX_DEPTH: u8 = 8;
+
+        // Build the per-cell portal lookup from the snapshot's flat
+        // form. Cheap: ~140 cells × ~6 portals.
+        let mut portal_map: std::collections::HashMap<u32, Vec<(u32, Vec<holtburger_common::Vector3>)>> =
+            std::collections::HashMap::new();
+        for (from, to, flat) in &snap.cell_portal_polygons {
+            if flat.len() < 9 || flat.len() % 3 != 0 {
+                continue;
+            }
+            let mut verts: Vec<holtburger_common::Vector3> =
+                Vec::with_capacity(flat.len() / 3);
+            for chunk in flat.chunks_exact(3) {
+                verts.push(holtburger_common::Vector3::new(
+                    chunk[0], chunk[1], chunk[2],
+                ));
+            }
+            portal_map.entry(*from).or_default().push((*to, verts));
+        }
+
+        let mut visible: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        visible.insert(snap.current_cell);
+
+        if portal_map.is_empty() {
+            // Snapshot hasn't seen portal polygons yet (recv loop may
+            // not have published). Return just current_cell — JS
+            // unions with Phase 4 frustum-cull fallback.
+            return vec![snap.current_cell];
+        }
+
+        let initial_view: Vec<[f32; 2]> = vec![
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ];
+        let mut queue: std::collections::VecDeque<(u32, Vec<[f32; 2]>, u8)> =
+            std::collections::VecDeque::new();
+        queue.push_back((snap.current_cell, initial_view, 0));
+        while let Some((cell_id, view_poly, depth)) = queue.pop_front() {
+            if depth >= PVIEW_MAX_DEPTH {
+                continue;
+            }
+            let Some(portals) = portal_map.get(&cell_id) else {
+                continue;
+            };
+            for (neighbour, verts) in portals {
+                if (*neighbour & 0xFFFF) >= 0xFFFE {
+                    continue;
+                }
+                if visible.contains(neighbour) {
+                    continue;
+                }
+                let projected = holtburger_world::pview_project_polygon(verts, &mvp_arr);
+                if projected.is_empty() {
+                    continue;
+                }
+                let clipped =
+                    holtburger_world::pview_clip_polygon_against_polygon(&projected, &view_poly);
+                if clipped.len() < 3 {
+                    continue;
+                }
+                visible.insert(*neighbour);
+                queue.push_back((*neighbour, clipped, depth + 1));
+            }
+        }
+
+        let mut out: Vec<u32> = visible.into_iter().collect();
+        out.sort_unstable();
+        out
     }
 
     /// Phase 4 PView port (2026-05-25): frustum-aware visibility.
@@ -16986,11 +17179,28 @@ fn publish_cell_scene_snapshot(
         })
         .collect();
 
+    // Phase 5 PView port (2026-05-25): snapshot every loaded portal
+    // polygon flat-encoded for cheap clone. See
+    // `compute_visibility_with_pview` for the consuming algorithm.
+    let mut cell_portal_polygons: Vec<(u32, u32, Vec<f32>)> = Vec::new();
+    for (cell_id, polys) in world.scene.cell_portal_polygons_iter() {
+        for poly in polys {
+            let mut flat: Vec<f32> = Vec::with_capacity(poly.vertices.len() * 3);
+            for v in &poly.vertices {
+                flat.push(v.x);
+                flat.push(v.y);
+                flat.push(v.z);
+            }
+            cell_portal_polygons.push((cell_id, poly.other_cell_id, flat));
+        }
+    }
+
     *snapshot.borrow_mut() = CellSceneSnapshot {
         current_cell: current,
         is_indoor: pose.is_indoors(),
         render_set: render_vec,
         cell_aabbs,
+        cell_portal_polygons,
     };
 }
 

@@ -36,15 +36,16 @@ pub use sky::{
     calc_present_day_group,
 };
 pub use spatial::{
-    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, ContactState,
-    GenericSweptHit, LocalDriveControl, LocalDriveGait, NoopSpatialPhysics, PLAYER_CAPSULE_HEIGHT,
-    PLAYER_CAPSULE_RADIUS, RuntimeBodyResetCause, RuntimeSpatialBodyView,
+    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, CellPortalPolygon,
+    ContactState, GenericSweptHit, LocalDriveControl, LocalDriveGait, NoopSpatialPhysics,
+    PLAYER_CAPSULE_HEIGHT, PLAYER_CAPSULE_RADIUS, RuntimeBodyResetCause, RuntimeSpatialBodyView,
     SelfPlayerDriveProjectionState, SolveBodyInput, SolveProjectionBasis, SolvedBodyKinematics,
     SpatialBody, SpatialBodyEvent, SpatialBodyId, SpatialEntitySample, SpatialPhysics,
     SpatialSampleMode, SpatialSamplingConfig, SpatialSamplingState, SpatialScene,
     SpatialSolveBatch, SpatialSolveRequest, StaticAabbEntry, SweptSphereHit,
     advance_body_kinematics, clamp_delta_against_buildings, project_pose_forward_distance,
-    sweep_sphere_against_aabbs, sweep_sphere_against_static_aabbs, sweep_sphere_against_triangles,
+    pview_clip_polygon_against_polygon, pview_project_polygon, sweep_sphere_against_aabbs,
+    sweep_sphere_against_static_aabbs, sweep_sphere_against_triangles,
 };
 pub use state::{
     PlayerMotionTableLookupError, PlayerMotionTableResolution, PlayerMotionTableSource,

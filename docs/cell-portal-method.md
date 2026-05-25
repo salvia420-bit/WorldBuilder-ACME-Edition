@@ -373,12 +373,35 @@ this was the pattern to mirror.
   unexpected closure of an open shortfall).
 
 **Phase 4 (LandCell↔EnvCell visibility via frustum cull) shipped
-2026-05-25.** All three shortfalls now closed at the holtburger-web
-runtime; the implementation is the WB.EnvCellManager hybrid (BFS for
-indoor, AABB-vs-frustum for outdoor), not the full retail
-`PView::ClipPortals` portal-polygon screen-space clip. The latter
-remains future-polish if Z-fighting / over-render at building edges
-becomes user-visible.
+2026-05-25.** All three shortfalls closed at the runtime.
+
+**Phase 5 (full retail PView screen-space portal-polygon clip) shipped
+2026-05-25.** `SessionHandle::getRenderSetWithPView(mvp)` walks the
+portal-polygon chain from the current cell, clipping each portal's
+projected polygon against the parent view polygon via Sutherland–
+Hodgman (mirrors retail `PView::ClipPortals` /
+`PView::OtherPortalClip` / `PView::AddViewToPortals`). Portal
+polygon vertices flow from `Environment.cells[id].polygons[poly_id]`
+through the existing wasm landblock-load path, transformed by the
+EnvCell's `position` frame into world coords + cached in
+`SpatialScene::cell_portal_polygons`. Live inside cottage 0xA9B40100:
+PView returns 2 visible cells (current + the cottage cell visible
+through one specific doorway) vs Phase 4's 18 (the full PVS in
+frustum). The JS layer in `cells.js` UNIONs both — PView's
+precision for the indoor case, the frustum cull for outdoor cameras
+(LandCell-rooted walks return just `{current}` because outdoor cells
+have no portals) and for portals with vertices behind the camera
+near plane (conservatively skipped pending future near-plane
+polygon clip).
+
+Limitations carried forward (future polish):
+- **Near-plane polygon clip**: a portal with any vertex behind the
+  camera (w ≤ 0) is currently skipped wholesale; retail clipped
+  the polygon against the near plane first. Today's fallback is the
+  Phase 4 union, which catches these cells via AABB cull.
+- **Depth-clear on building entry** (`WB.GameScene.cs:1610`) — not
+  ported; only matters if Z-fighting between cottage floor and
+  terrain surfaces.
 
 ## Cross-references
 

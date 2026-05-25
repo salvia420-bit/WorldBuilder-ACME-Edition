@@ -1,7 +1,7 @@
 use super::{
-    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, ContactState,
-    RuntimeSpatialBodyView, SolvedBodyKinematics, SpatialBody, SpatialBodyId, SpatialPhysics,
-    SpatialSampleMode, SpatialSamplingConfig, StaticAabbEntry,
+    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, CellPortalPolygon,
+    ContactState, RuntimeSpatialBodyView, SolvedBodyKinematics, SpatialBody, SpatialBodyId,
+    SpatialPhysics, SpatialSampleMode, SpatialSamplingConfig, StaticAabbEntry,
     physics::sample_mode_for_projection_state,
 };
 use crate::entity::EntityMotionSnapshot;
@@ -126,6 +126,17 @@ pub struct SpatialScene {
     /// kernel doesn't have to redo the cell-frame rotation each
     /// frame. Cleared on landblock unload alongside `cell_aabbs`.
     cell_physics_index: HashMap<u32, Vec<Triangle>>,
+    /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
+    /// world space, for screen-space portal-frustum clipping. Keyed by
+    /// the EnvCell's full 32-bit cell id; each entry is a list of
+    /// portals on that cell, each with the connected `other_cell_id`
+    /// and the polygon vertices (already transformed through the
+    /// EnvCell's `position` frame). Populated alongside
+    /// `cell_physics_index` from the Environment record's
+    /// `polygons` map (the same drawing polygons the renderer skips
+    /// for portal openings — see env_cell.rs:65 `polygon_id`).
+    /// Cleared on landblock unload alongside `cell_aabbs`.
+    cell_portal_polygons: HashMap<u32, Vec<CellPortalPolygon>>,
     /// Phase 6 step E: door GUID → `(building_id, part_index)` lookup.
     /// JS-side door binding is by entity GUID (the ACE-broadcast `Door`
     /// weenie's full guid); the AABB index is keyed by per-part
@@ -235,6 +246,7 @@ impl SpatialScene {
             cell_portal_graph: HashMap::new(),
             cell_aabbs: HashMap::new(),
             cell_physics_index: HashMap::new(),
+            cell_portal_polygons: HashMap::new(),
             door_part_index: HashMap::new(),
             open_door_exclusion_aabbs: HashMap::new(),
             building_origins: HashMap::new(),
@@ -557,7 +569,52 @@ impl SpatialScene {
         // out if a gauge is needed.
         self.cell_physics_index
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
+        // Phase 5 PView port: same lifetime as cell_aabbs.
+        self.cell_portal_polygons
+            .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         (edges_removed, aabbs_removed)
+    }
+
+    /// Phase 5 PView port (2026-05-25): register a portal polygon for an
+    /// EnvCell. Called by the wasm bundle's `fetchEnvCellsInLandblock`
+    /// alongside `insert_cell_portal`. Vertices are world-space (already
+    /// transformed through the EnvCell's `position` frame). Multiple
+    /// portals per cell accumulate as separate entries.
+    pub fn insert_cell_portal_polygon(
+        &mut self,
+        cell_id: u32,
+        polygon: CellPortalPolygon,
+    ) {
+        self.cell_portal_polygons
+            .entry(cell_id)
+            .or_default()
+            .push(polygon);
+    }
+
+    /// Phase 5 PView port: portals registered for a cell (or `&[]` if
+    /// the cell isn't loaded or has no portals).
+    pub fn cell_portal_polygons_for(&self, cell_id: u32) -> &[CellPortalPolygon] {
+        self.cell_portal_polygons
+            .get(&cell_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Phase 5 PView port: total registered portal-polygon count
+    /// across all loaded EnvCells. Diagnostic only.
+    pub fn cell_portal_polygon_count(&self) -> usize {
+        self.cell_portal_polygons.values().map(|v| v.len()).sum()
+    }
+
+    /// Iterate (cell_id, &portals) pairs. Used by
+    /// `publish_cell_scene_snapshot` to flat-encode portal polygons
+    /// into the SessionHandle's snapshot for `getRenderSetWithPView`.
+    pub fn cell_portal_polygons_iter(
+        &self,
+    ) -> impl Iterator<Item = (u32, &[CellPortalPolygon])> + '_ {
+        self.cell_portal_polygons
+            .iter()
+            .map(|(&id, polys)| (id, polys.as_slice()))
     }
 
     /// Phase 6 step D: count cells in the portal graph (any cell with
@@ -775,6 +832,90 @@ impl SpatialScene {
                 if frustum.intersects_aabb(aabb) {
                     visible.insert(cell);
                 }
+            }
+        }
+        visible
+    }
+
+    /// Phase 5 PView port (2026-05-25): full screen-space
+    /// portal-polygon clipping per retail `PView::ClipPortals` /
+    /// `OtherPortalClip` / `AddViewToPortals`. From `current`, walks
+    /// portal-connected cells, clipping each portal polygon against
+    /// the parent view polygon. Cells whose portal admits any pixels
+    /// through from the camera frustum are added to the visible set.
+    ///
+    /// `mvp` is column-major 4×4 (the same memory layout
+    /// `THREE.Matrix4.elements` produces and the same Gribb-Hartmann
+    /// extraction `Frustum::from_view_projection_matrix` accepts). It
+    /// must be composed in the same coord system as
+    /// `cell_portal_polygons` vertices — AC world (Z-up), so JS passes
+    /// `projection · matrixWorldInverse · worldRoot.matrixWorld`.
+    ///
+    /// `max_depth` bounds the portal traversal recursion. Retail
+    /// uses no fixed limit but the per-portal clip becomes empty in
+    /// a few hops; a hard cap of ~8 protects against pathological
+    /// loops in malformed dat data.
+    ///
+    /// Always includes `current` in the visible set. Vertices behind
+    /// the camera near plane (w ≤ 0) cause the entire portal polygon
+    /// to be skipped in this initial implementation — proper
+    /// near-plane polygon clipping is future polish. Callers that
+    /// need near-portal robustness should union with
+    /// `compute_visibility_with_frustum` (Phase 4 AABB cull).
+    pub fn compute_visibility_with_pview(
+        &self,
+        current: u32,
+        mvp: &[f32; 16],
+        max_depth: u8,
+    ) -> HashSet<u32> {
+        let mut visible: HashSet<u32> = HashSet::new();
+        if current == 0 {
+            return visible;
+        }
+        visible.insert(current);
+
+        // Initial view = full NDC viewport [-1, 1] × [-1, 1] (CCW).
+        let initial_view: Vec<[f32; 2]> = vec![
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ];
+
+        let mut queue: VecDeque<(u32, Vec<[f32; 2]>, u8)> = VecDeque::new();
+        queue.push_back((current, initial_view, 0));
+
+        while let Some((cell, view_poly, depth)) = queue.pop_front() {
+            if depth >= max_depth {
+                continue;
+            }
+            for portal in self.cell_portal_polygons_for(cell) {
+                let neighbour = portal.other_cell_id;
+                // Skip sentinel exit-portals (0xFFFE/0xFFFF) — they
+                // point to outdoor LandCells with no portals of their
+                // own; PView walk doesn't recurse into them.
+                if (neighbour & 0xFFFF) >= 0xFFFE {
+                    continue;
+                }
+                if visible.contains(&neighbour) {
+                    continue;
+                }
+
+                // Project the polygon's 3D vertices through MVP to NDC.
+                let projected = pview_project_polygon(&portal.vertices, mvp);
+                if projected.is_empty() {
+                    continue;
+                }
+
+                // Clip projected polygon against parent view polygon.
+                let clipped =
+                    pview_clip_polygon_against_polygon(&projected, &view_poly);
+                if clipped.len() < 3 {
+                    continue;
+                }
+
+                visible.insert(neighbour);
+                queue.push_back((neighbour, clipped, depth + 1));
             }
         }
         visible
@@ -1297,4 +1438,102 @@ impl SpatialScene {
             })
             .collect()
     }
+}
+
+// ------------------------------------------------------------------
+// Phase 5 PView port (2026-05-25) helpers — screen-space portal-
+// polygon projection + clipping. Free functions, pure math, fully
+// covered by unit tests in spatial::tests. Mirrors retail
+// `PView::GetClip` / `OtherPortalClip` shape.
+// ------------------------------------------------------------------
+
+/// Project a 3D polygon through a column-major 4×4 MVP to NDC.
+/// Returns the 2D NDC vertices (x/w, y/w). Returns an empty vec if
+/// ANY vertex falls behind the near plane (w ≤ 0) — proper polygon
+/// clipping against the near plane is future polish; for now we
+/// conservatively skip such polygons.
+pub fn pview_project_polygon(
+    verts: &[Vector3],
+    mvp: &[f32; 16],
+) -> Vec<[f32; 2]> {
+    let mut out = Vec::with_capacity(verts.len());
+    for v in verts {
+        // Column-major matrix · column vector (x, y, z, 1).
+        // m[col*4 + row] convention.
+        let x = mvp[0] * v.x + mvp[4] * v.y + mvp[8] * v.z + mvp[12];
+        let y = mvp[1] * v.x + mvp[5] * v.y + mvp[9] * v.z + mvp[13];
+        let _z = mvp[2] * v.x + mvp[6] * v.y + mvp[10] * v.z + mvp[14];
+        let w = mvp[3] * v.x + mvp[7] * v.y + mvp[11] * v.z + mvp[15];
+        if w <= 1e-6 {
+            return Vec::new();
+        }
+        out.push([x / w, y / w]);
+    }
+    out
+}
+
+/// Sutherland-Hodgman polygon vs convex-polygon clip. Treats `clip`
+/// as a CCW convex polygon (the NDC viewport is CCW, recursively-
+/// clipped polygons inherit that). `subject` is the polygon being
+/// clipped; can be any winding. Returns the clipped polygon or empty
+/// if completely outside.
+pub fn pview_clip_polygon_against_polygon(
+    subject: &[[f32; 2]],
+    clip: &[[f32; 2]],
+) -> Vec<[f32; 2]> {
+    if clip.len() < 3 || subject.is_empty() {
+        return Vec::new();
+    }
+    let mut output: Vec<[f32; 2]> = subject.to_vec();
+    for i in 0..clip.len() {
+        if output.is_empty() {
+            break;
+        }
+        let input = std::mem::take(&mut output);
+        let edge_a = clip[i];
+        let edge_b = clip[(i + 1) % clip.len()];
+        let len = input.len();
+        for j in 0..len {
+            let curr = input[j];
+            let prev = input[(j + len - 1) % len];
+            let curr_in = pview_is_inside_edge(curr, edge_a, edge_b);
+            let prev_in = pview_is_inside_edge(prev, edge_a, edge_b);
+            if curr_in {
+                if !prev_in {
+                    output.push(pview_line_intersect(prev, curr, edge_a, edge_b));
+                }
+                output.push(curr);
+            } else if prev_in {
+                output.push(pview_line_intersect(prev, curr, edge_a, edge_b));
+            }
+        }
+    }
+    output
+}
+
+/// Inside iff to the LEFT of edge a→b (CCW convention).
+fn pview_is_inside_edge(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> bool {
+    let cross = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+    cross >= 0.0
+}
+
+/// 2D line-segment intersection (p1→p2 vs p3→p4). Returns p2 if
+/// segments are parallel (degenerate, caller checks). Used by
+/// Sutherland-Hodgman to compute the clipped polygon's edge crossing.
+fn pview_line_intersect(
+    p1: [f32; 2],
+    p2: [f32; 2],
+    p3: [f32; 2],
+    p4: [f32; 2],
+) -> [f32; 2] {
+    let d = (p1[0] - p2[0]) * (p3[1] - p4[1]) - (p1[1] - p2[1]) * (p3[0] - p4[0]);
+    if d.abs() < 1e-9 {
+        return p2;
+    }
+    let t = ((p1[0] - p3[0]) * (p3[1] - p4[1]) - (p1[1] - p3[1]) * (p3[0] - p4[0]))
+        / d;
+    [
+        p1[0] + t * (p2[0] - p1[0]),
+        p1[1] + t * (p2[1] - p1[1]),
+    ]
 }

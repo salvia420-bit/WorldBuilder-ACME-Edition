@@ -652,7 +652,36 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
         m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
         m.multiply(worldRoot.matrixWorld);
         for (let i = 0; i < 16; i++) mvp[i] = m.elements[i];
-        renderSetArr = sessionHandle.getRenderSetWithFrustum(mvp);
+        // Phase 5 PView port (2026-05-25): when the wasm exposes the
+        // screen-space portal-polygon walk, UNION it with the Phase 4
+        // AABB-frustum cull. PView is tighter (precise portal-clip
+        // visibility) but has two limitations: (a) LandCell-rooted
+        // walks return {current_cell} only because outdoor cells have
+        // no portals, and (b) portals with any vertex behind the
+        // camera near plane are conservatively skipped. The frustum
+        // cull catches both cases — its AABB-vs-frustum is correct
+        // from outdoor cameras and isn't sensitive to near-plane
+        // geometry. Union = correctness; intersection would be
+        // tighter but lose near-portal cells.
+        const frustumSet = sessionHandle.getRenderSetWithFrustum(mvp);
+        if (typeof sessionHandle.getRenderSetWithPView === "function") {
+          const pviewSet = sessionHandle.getRenderSetWithPView(mvp);
+          if (pviewSet && pviewSet.length > 1) {
+            // Indoor case: PView returned more than just the seed
+            // cell, so the portal walk produced real refined results.
+            // Union with frustum to keep near-portal-robust cells.
+            const union = new Set();
+            for (const v of pviewSet) union.add(v >>> 0);
+            for (const v of frustumSet) union.add(v >>> 0);
+            renderSetArr = Array.from(union);
+          } else {
+            // Outdoor case (or PView returned just {current}):
+            // PView gives nothing useful, use the frustum cull alone.
+            renderSetArr = frustumSet;
+          }
+        } else {
+          renderSetArr = frustumSet;
+        }
       } catch (_) {
         renderSetArr = sessionHandle.getRenderSet(1);
       }

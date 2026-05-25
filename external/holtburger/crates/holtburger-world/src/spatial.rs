@@ -12,7 +12,7 @@ pub use physics::{
     highest_floor_z_under, project_pose_forward_distance, sweep_sphere_against_aabbs,
     sweep_sphere_against_static_aabbs, sweep_sphere_against_triangles,
 };
-pub use scene::SpatialScene;
+pub use scene::{SpatialScene, pview_clip_polygon_against_polygon, pview_project_polygon};
 pub use types::*;
 
 #[cfg(test)]

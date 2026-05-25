@@ -46,6 +46,27 @@ pub struct BuildingAabbEntry {
     pub active: bool,
 }
 
+/// Phase 5 PView port (2026-05-25): one portal polygon on an EnvCell,
+/// transformed into world coords. Stored in
+/// `SpatialScene::cell_portal_polygons` keyed by the EnvCell's
+/// `cell_id`; the polygon's vertices are projected to screen space at
+/// PView walk time and clipped against the parent view polygon.
+///
+/// `other_cell_id` is the full 32-bit id of the cell on the far side
+/// (`landblock_high | EnvCell.portals[i].other_cell_id` for indoor
+/// neighbours; `landblock_high | 0xFFFF` for outward-facing portals
+/// that exit to outdoor LandCells).
+///
+/// Vertices are stored as a `Vec<Vector3>` rather than a fixed-size
+/// array because portal polygons in AC are convex but not constrained
+/// to triangles — typical retail cottages have rectangular doorways
+/// (4 verts) but some dungeons have more complex portal shapes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CellPortalPolygon {
+    pub other_cell_id: u32,
+    pub vertices: Vec<Vector3>,
+}
+
 /// Workstream C (3D camera collision, 2026-05-11): world-space AABB for
 /// a non-building static placement (signs, props, foliage, trees).
 /// Statics are loaded from `LandblockInfo.objects` (the `Stab` list)
