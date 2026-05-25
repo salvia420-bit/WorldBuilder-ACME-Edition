@@ -12,6 +12,26 @@
 
 ---
 
+## Status — Wave B executed 2026-05-25 (later same day)
+
+Three more items shipped after Wave A:
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 1 | Sequence-Manager validation per packet group | **SHIPPED (observability MVP)** | Wave B2 added per-(opcode, target) seq tracking in `src/lib.rs` recv_loop. Helper `check_sequence_gap()` (4-state: first/ok/gap/duplicate/stale) gated behind `?seqDebug=1` URL knob; LRU-evicted at 4096 entries; emits `console.warn` `[seq-gap] opcode=0xXX target=0xXX last=N got=N kind=...`. **Log-only — no drop/queue/reorder.** This gives observability without risking false-positive gating. Discord evidence: gmriggs #tool-dev 2026-03-19 silent PropertyInt.Level reverts. `cargo check` clean (no new warnings). |
+| 8 | Chat-channel infrastructure | **SHIPPED (granularity + opacity slice)** | Wave B1 split the consolidated `Channels` tab in `plugins/chat-panel.js` into 3 retail-meaningful buckets: **Chan** (cat-3, 12-15, 22-23), **Alleg** (cat-17 only), **Fell** (cat-16 only). 4 tabs → 6 in a horizontal strip above the chat log (derivative of retail's 4-edge filter buttons 0x10000522-0x10000525, documented in source). Per-panel opacity-on-mouseout via `?chatFade=1` URL knob (persisted in `hb_chat_panel_fade` localStorage) — 0.45 at rest, 1.0 on hover, 150ms in / 300ms out. Discord evidence: #general 1752-1755 "3 diff windows transparent for allegiance, general, local… goes opaque on mouseover". |
+| 23 | Right-click radial menu (full) | **SHIPPED (Examine + Use + Attack MVP)** | Wave B3 replaced Wave A3's direct-invoke Examine with `plugins/radial-menu.js` — a retail-styled vertical context menu (AC's actual "radial" was list-style internally per acclient.c convention). Entries are contextual: **Examine** always; **Use** if `__sessionHandle.useObject` exists; **Attack** if entity is a Creature AND a combat stance is active. Keyboard nav (arrows + Enter), Esc/outside-click/right-click cancellation, viewport-edge auto-flip. `scene3d/camera.js:468-486` swapped to invoke `window.__openRadialMenuFor(guid, clientX, clientY)` with `__showExamineFor` fallback for defensive plugin-not-loaded scenarios. `index.html:984` imports the plugin. **Drop/Wield/Trade gated on future wasm exports** (commented in source) — kept out of the MVP entry list since wiring dead entries would mislead. |
+
+**Files touched this wave:** `src/lib.rs` (+187 LOC Rust), `plugins/chat-panel.js` (+82, -63 LOC), `scene3d/camera.js` (+7 LOC), `plugins/radial-menu.js` (NEW 250 LOC), `index.html` (+1 LOC import). `cargo check` clean; `node --check` clean on all JS.
+
+**Recommended Wave C** (next priorities by Discord impact × Holtburger leverage):
+1. **Equipment paper-doll + container browse (#10)** — Phase K follow-on; gameplay-completeness; vendor-ui drag-drop pattern is the template.
+2. **Allegiance/Fellowship/Friends panels (#4, #5, #20)** — now that chat has Alleg/Fell tabs, the panels are the natural next step; opcodes 0x001D/0x001E/SwearAllegiance + Fellowship opcodes already live in opcodes.rs.
+3. **Trade system multi-step UI (#3)** — opcodes live, no UI; multi-packet handshake.
+4. **Weather: rain particles + lightning flash (#12)** — visual polish; `weather_state.js` infra exists, particle layer + Wave (0x0A) sound queue.
+
+---
+
 ## Status — Wave A executed 2026-05-25
 
 Three items from this report were addressed in a single team-agent wave on the same day this report was written.
@@ -47,7 +67,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 
 ## Critical Gaps (Tier 1 — load-bearing, multi-channel Discord evidence)
 
-### 1. Sequence-Manager validation per packet group
+### 1. Sequence-Manager validation per packet group — SHIPPED 2026-05-25 (Wave B2, observability)
 **Severity:** load-bearing
 **Discord evidence:**
 > "sequence types…if client detects gaps…will refuse to process" — gmriggs, #tool-dev 2026-03-19
@@ -112,7 +132,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Holtburger status:** Nothing in `loop.js` surfaces an "I just got dropped" signal. If the server stops sending events, the client just goes quiet.
 **Remediation:** Wasm-side bus event when no events received for N seconds *and* player position is outside any loaded cell; UI toast "Reconnecting / Out of bounds — server returning you home".
 
-### 8. Chat-channel infrastructure
+### 8. Chat-channel infrastructure — SHIPPED 2026-05-25 (Wave B1, granularity + opacity slice)
 **Severity:** load-bearing (Discord's most-quoted single topic in #general)
 **Discord evidence:**
 > "The channels are just hard-coded in the client" — #general line 117
@@ -198,9 +218,9 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Not directly quoted but ACE has Buy/Rent/Abandon/Guest perms/Teleport/Hooks. Chorizite has full House category.
 **Holtburger:** All house opcodes commented out (opcodes.rs lines for `BuyHouse, HouseQuery, AbandonHouse, RentHouse, SetOpenHouseStatus, BootSpecificHouseGuest, ModifyAllegianceGuestPermission`).
 
-### 23. Right-click radial menus (Examine/Drop/Use/Trade/Identify) — PARTIALLY ADDRESSED 2026-05-25 (Wave A3)
+### 23. Right-click radial menus (Examine/Drop/Use/Trade/Identify) — SHIPPED 2026-05-25 (Wave B3, Examine+Use+Attack MVP)
 **Discord:** Implicit in plugin discussions; the only fast-path for in-3D interaction.
-**Holtburger:** Right-click → direct-invoke Examine shipped via Wave A3 (drag-threshold disambiguation in `scene3d/camera.js`). Radial menu with Use/Drop/Wield/Trade/Identify entries still pending — that's the Wave B follow-on.
+**Holtburger:** Wave A3 added drag-threshold direct-invoke Examine; Wave B3 promoted that into a full retail-styled vertical context menu via `plugins/radial-menu.js`. Contextual entries: Examine (always) / Use (if wasm export exists) / Attack (creature + combat-stance). Keyboard nav (arrows + Enter), Esc/outside-click/right-click cancel, viewport-edge auto-flip. Drop/Wield/Trade entries gated on future wasm exports (commented in source for the next-wave author).
 
 ### 24. Salvage operations + Mana queries
 **Discord:** "vtank won't salvage…but /vt testitem shows items" — #general line 2263; "/ub autosalvage force" workaround line 2266
@@ -316,10 +336,17 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 2. ~~Swing-pose classifier wiring (#26)~~ — `EntityManager.setSwingMotion` shipped (`scene3d/entities.js:1820`).
 3. ~~Identify panel UI (#9)~~ — right-click drag-threshold trigger shipped (`scene3d/camera.js:428-478`); panel itself was already retail-correct.
 
-### Wave B — next priorities
+### Wave B — SHIPPED 2026-05-25 (later same day)
 
-4. **Chat-channel infrastructure (#8)** — Discord's most-quoted #general topic. Sets up the social shell that makes #4 (Allegiance), #5 (Fellowship), #20 (Friends/Squelch/Titles) cheap follow-ons.
-5. **Sequence-manager validation (#1)** — silent failure mode today; gmriggs flagged property reverts. Per-group seq gating on `pollEntityUpdates()` drain.
-6. **Right-click radial menu finish (#23)** — Wave A3 shipped the direct-invoke Examine MVP; promote to Use/Drop/Wield/Trade with retail context-menu styling.
+4. ~~Chat-channel infrastructure (#8)~~ — granularity (4 tabs → 6) + opacity-on-mouseout shipped in `plugins/chat-panel.js`.
+5. ~~Sequence-manager validation (#1)~~ — observability MVP shipped in `src/lib.rs` recv_loop; log-only, gated by `?seqDebug=1`.
+6. ~~Right-click radial menu finish (#23)~~ — full menu with Examine/Use/Attack MVP shipped in `plugins/radial-menu.js`; Drop/Wield/Trade pending wasm exports.
+
+### Wave C — next priorities
+
+7. **Equipment paper-doll + container browse (#10)** — Phase K follow-on; vendor-ui drag-drop is the template.
+8. **Allegiance/Fellowship/Friends panels (#4, #5, #20)** — chat now has Alleg/Fell tabs; panels are the natural next step. SwearAllegiance/BreakAllegiance + Fellowship opcodes already live.
+9. **Trade system multi-step UI (#3)** — opcodes live (`OpenTradeNegotiations` through `AcceptTrade`), no UI.
+10. **Weather rain + lightning (#12)** — `weather_state.js` infra exists; particle layer + Wave (0x0A) sound queue needed.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.

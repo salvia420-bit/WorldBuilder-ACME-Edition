@@ -468,6 +468,13 @@ export class CameraSwitcher {
           if (dx * dx + dy * dy < 25 && candidateGuid != null) {
             if (
               typeof window !== "undefined" &&
+              typeof window.__openRadialMenuFor === "function"
+            ) {
+              try {
+                window.__openRadialMenuFor(candidateGuid, ev.clientX, ev.clientY);
+              } catch (_) {}
+            } else if (
+              typeof window !== "undefined" &&
               typeof window.__showExamineFor === "function"
             ) {
               try {

@@ -35,6 +35,174 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     #[wasm_bindgen(js_namespace = console, js_name = log)]
     fn console_log_str(s: &str);
+    // Sequence-gap observability (2026-05-25) — `[seq-gap]` warnings
+    // surface gmriggs's "client refuses to process out-of-order
+    // sequence types" bug (Discord #tool-dev 2026-03-19). Gated by the
+    // `?seqDebug=1` URL knob so production stays silent. Same extern
+    // pattern as `console_log_str` above — keeps `web-sys` out of the
+    // dep graph.
+    #[wasm_bindgen(js_namespace = console, js_name = warn)]
+    fn console_warn_str(s: &str);
+}
+
+// Read `window.location.search` (the `?key=val&...` query string) so
+// the recv_loop can parse `?seqDebug=1` without dragging in `web-sys`'s
+// `Window` / `Location` / `UrlSearchParams` modules. Inline-JS keeps
+// us out of the `web-sys` dep weight per the Cargo.toml comment at
+// line 39 ("avoids dragging `web-sys` along"). Returns `""` on
+// environments without a `window` (workers, node tests).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(inline_js = "export function js_location_search() { try { return (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') ? window.location.search : ''; } catch (_) { return ''; } }")]
+extern "C" {
+    fn js_location_search() -> String;
+}
+
+/// Parse `?seqDebug=1` (or `&seqDebug=1`) out of the URL query string.
+/// True when the flag is present and equals `"1"`. Read once at
+/// recv_loop start and stashed as a local `bool` — no perf cost when off.
+#[cfg(target_arch = "wasm32")]
+fn parse_seq_debug_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "seqDebug=1")
+}
+
+/// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
+/// (the wire opcode read at `game_event.rs:97`). Used by the
+/// `[seq-gap]` observability hook to bucket sequence trackers per
+/// event-family. Returns `None` for `GameEvent::Unknown` (the wire
+/// opcode is preserved inside that variant — see arm below).
+#[cfg(target_arch = "wasm32")]
+fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u32 {
+    use holtburger_protocol::messages::GameEvent;
+    match event {
+        GameEvent::PlayerDescription(_) => 0x0013,
+        GameEvent::PingResponse(_) => 0x01EA,
+        GameEvent::ViewContents(_) => 0x0196,
+        GameEvent::InventoryPutObjInContainer(_) => 0x0022,
+        GameEvent::InventoryPutObjectIn3D(_) => 0x019A,
+        GameEvent::WieldObject(_) => 0x0023,
+        GameEvent::Tell(_) => 0x02BD,
+        GameEvent::ChannelBroadcast(_) => 0x0147,
+        GameEvent::SetTurbineChatChannels(_) => 0x0295,
+        GameEvent::PopupString(_) => 0x0004,
+        GameEvent::CommunicationTransientString(_) => 0x02EB,
+        GameEvent::StartGame => 0x0282,
+        GameEvent::AttackDone(_) => 0x01A7,
+        GameEvent::AttackerNotification(_) => 0x01B1,
+        GameEvent::DefenderNotification(_) => 0x01B2,
+        GameEvent::EvasionAttackerNotification(_) => 0x01B3,
+        GameEvent::EvasionDefenderNotification(_) => 0x01B4,
+        GameEvent::CombatCommenceAttack => 0x01B8,
+        GameEvent::VictimNotification(_) => 0x01AC,
+        GameEvent::KillerNotification(_) => 0x01AD,
+        GameEvent::MagicUpdateEnchantment(_) => 0x02C2,
+        GameEvent::MagicUpdateMultipleEnchantments(_) => 0x02C4,
+        GameEvent::MagicRemoveEnchantment(_) => 0x02C3,
+        GameEvent::MagicRemoveMultipleEnchantments(_) => 0x02C5,
+        GameEvent::MagicPurgeEnchantments(_) => 0x02C6,
+        GameEvent::MagicPurgeBadEnchantments(_) => 0x0312,
+        GameEvent::MagicUpdateSpell(_) => 0x02C1,
+        GameEvent::MagicRemoveSpell(_) => 0x01A8,
+        GameEvent::MagicDispelEnchantment(_) => 0x02C7,
+        GameEvent::MagicDispelMultipleEnchantments(_) => 0x02C8,
+        GameEvent::WeenieError(_) => 0x028A,
+        GameEvent::WeenieErrorWithString(_) => 0x028B,
+        GameEvent::UseDone(_) => 0x01C7,
+        GameEvent::IdentifyObjectResponse(_) => 0x00C9,
+        GameEvent::InventoryServerSaveFailed(_) => 0x00A0,
+        GameEvent::CharacterConfirmationRequest(_) => 0x0274,
+        GameEvent::CharacterConfirmationDone(_) => 0x0276,
+        GameEvent::CloseGroundContainer(_) => 0x0052,
+        GameEvent::UpdateHealth(_) => 0x01C0,
+        GameEvent::QueryItemManaResponse(_) => 0x0264,
+        GameEvent::FellowshipFullUpdate(_) => 0x02BE,
+        GameEvent::FellowshipDisband => 0x02BF,
+        GameEvent::FellowshipUpdateFellow(_) => 0x02C0,
+        GameEvent::RegisterTrade(_) => 0x01FD,
+        GameEvent::OpenTrade(_) => 0x01FE,
+        GameEvent::CloseTrade(_) => 0x01FF,
+        GameEvent::AddToTrade(_) => 0x0200,
+        GameEvent::AcceptTrade(_) => 0x0202,
+        GameEvent::DeclineTrade(_) => 0x0203,
+        GameEvent::ResetTrade(_) => 0x0205,
+        GameEvent::TradeFailure(_) => 0x0207,
+        GameEvent::ClearTradeAcceptance => 0x0208,
+        GameEvent::BookDataResponse(_) => 0x00B4,
+        GameEvent::BookPageDataResponse(_) => 0x00B8,
+        GameEvent::ApproachVendor(_) => 0x0062,
+        GameEvent::FellowshipQuit(_) => 0x00A3,
+        GameEvent::FellowshipDismiss(_) => 0x00A4,
+        GameEvent::FellowshipFellowUpdateDone => 0x01C9,
+        GameEvent::FellowshipFellowStatsDone => 0x01CA,
+        GameEvent::Unknown(raw, _) => *raw,
+    }
+}
+
+/// Per-(opcode, target_guid) sequence-gap observer for the recv_loop.
+/// 4 outcomes:
+///   - first sighting → insert, silent
+///   - incoming == last+1 → advance, silent (steady-state)
+///   - incoming >  last+1 → GAP (skipped frames), warn + advance
+///   - incoming == last   → DUPLICATE, warn + hold
+///   - incoming <  last   → STALE (reorder), warn + hold
+/// LOG-ONLY: never drops, queues, or reorders packets — observability
+/// only. Bounded at `SEQ_TRACKER_CAP` entries via lowest-seq eviction
+/// so long-lived sessions with many spawned-and-despawned entities
+/// don't grow the map unbounded.
+#[cfg(target_arch = "wasm32")]
+const SEQ_TRACKER_CAP: usize = 4096;
+
+#[cfg(target_arch = "wasm32")]
+fn check_sequence_gap(
+    tracker: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>,
+    >,
+    opcode: u32,
+    target: u32,
+    incoming_seq: u32,
+) {
+    let mut map = tracker.borrow_mut();
+    let key = (opcode, target);
+    match map.get(&key).copied() {
+        None => {
+            if map.len() >= SEQ_TRACKER_CAP {
+                if let Some(victim_key) = map
+                    .iter()
+                    .min_by_key(|(_, seq)| **seq)
+                    .map(|(k, _)| *k)
+                {
+                    map.remove(&victim_key);
+                }
+            }
+            map.insert(key, incoming_seq);
+        }
+        Some(last) if incoming_seq == last + 1 => {
+            map.insert(key, incoming_seq);
+        }
+        Some(last) if incoming_seq > last + 1 => {
+            console_warn_str(&format!(
+                "[seq-gap] opcode=0x{:04X} target=0x{:08X} last={} got={} skipped={} kind=gap",
+                opcode,
+                target,
+                last,
+                incoming_seq,
+                incoming_seq - last - 1
+            ));
+            map.insert(key, incoming_seq);
+        }
+        Some(last) if incoming_seq == last => {
+            console_warn_str(&format!(
+                "[seq-gap] opcode=0x{:04X} target=0x{:08X} last={} got={} kind=duplicate",
+                opcode, target, last, incoming_seq
+            ));
+        }
+        Some(last) => {
+            console_warn_str(&format!(
+                "[seq-gap] opcode=0x{:04X} target=0x{:08X} last={} got={} kind=stale",
+                opcode, target, last, incoming_seq
+            ));
+        }
+    }
 }
 
 // Per-tick / per-input / per-reconcile diagnostic traces (the noisy
@@ -17447,6 +17615,15 @@ async fn recv_loop(
     // from flooding under high-rAF cadence. `None` until first emit.
     let mut last_local_player_position_emit: Option<web_time::Instant> = None;
 
+    // Sequence-gap observability (2026-05-25). Gated by `?seqDebug=1`
+    // — read once here and stashed; the flag is checked before every
+    // `check_sequence_gap` call so production builds with the flag
+    // off pay zero cost beyond a single `bool` check.
+    let seq_debug: bool = parse_seq_debug_flag(&js_location_search());
+    let seq_tracker: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+
     // Wave 3 prereq (2026-05-19) — InWorld PingRequest keepalive. The cli
     // sends one every 5s when InWorld via its `should_send_keepalive_ping`
     // helper (`crates/holtburger-core/src/client/runtime.rs:9-12`); the
@@ -19465,6 +19642,16 @@ async fn recv_loop(
                             // intentionally fall through to a catch-all
                             // _no-op_ — those land in steps 5+
                             // (interactive entities, vitals, inventory).
+                            if seq_debug {
+                                let opcode = game_event_opcode_for(&event_msg.event);
+                                let target_u32: u32 = event_msg.target.into();
+                                check_sequence_gap(
+                                    &seq_tracker,
+                                    opcode,
+                                    target_u32,
+                                    event_msg.sequence,
+                                );
+                            }
                             match event_msg.event {
                                 // TurbineChat channel-list bootstrap.
                                 // ACE pushes this shortly after the
