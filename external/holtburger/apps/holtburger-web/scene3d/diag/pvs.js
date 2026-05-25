@@ -147,6 +147,27 @@ export function attachPvs(diag) {
     },
 
     /**
+     * One-call wrapper: fetch a `pvs-visibility-snapshot` oracle from
+     * `url`, diff against the currently-observed visible-cell set,
+     * return the diff. Composes `loadOracle` + `diff`.
+     *
+     * Added 2026-05-25 to make the LandCell↔EnvCell / PView gap
+     * falsifiable in a single harness assertion — see
+     * `docs/cell-portal-method.md` §"Known scope gap" for the
+     * three-way decomposition of failure modes that the resulting
+     * diff vector identifies.
+     *
+     * Returns `{error}` on fetch/parse failure, otherwise the same
+     * shape as `diff(oracle)` (with `ok`, `missing`, `extra`,
+     * `observedCount`, `oracleCount`, `oracleCellHex`).
+     */
+    async observedVsBaked(oracleUrl) {
+      const oracle = await this.loadOracle(oracleUrl);
+      if (oracle?.error) return { error: oracle.error, ok: false };
+      return this.diff(oracle);
+    },
+
+    /**
      * Fetch a WB.T `pvs-visibility-snapshot` oracle from disk and parse
      * it. Returns the JSON object (suitable to pass directly to diff())
      * or `{error}` on failure. Caches per-URL on `_oracleCache`.

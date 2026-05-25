@@ -12,6 +12,12 @@ and §6 Wave 5 W5.A.
 
 Status: **shipped 2026-05-20**.
 
+**Status update (2026-05-25):** added §"Known scope gap (added 2026-05-25):
+LandCell↔EnvCell visibility + runtime PView" below — captures a real
+gap surfaced live in Holtburg via wire-agent probes
+(`/mnt/wbterminal1/tmp/claude-scratch/envcell-contamination-2026-05-25/`).
+Validator unchanged.
+
 ## The contract
 
 For every landblock `lb` in a sampled cohort, every directed portal edge
@@ -245,6 +251,99 @@ What this method does **NOT** cover:
   Queen Lair) have portals that the server enables/disables at runtime
   via `PortalDescriptor` changes. The DAT's baked graph doesn't model
   these; they're server-state. Outside this brick's scope.
+
+## Known scope gap (added 2026-05-25): LandCell↔EnvCell visibility + runtime PView
+
+The W5.A sweep validates the **DAT-baked** cell-portal graph against
+itself (BFS-N from `CellPortals` is a subset of the baked `VisibleCells`).
+It does NOT validate that holtburger-web's *runtime* visibility pipeline
+reaches the same conclusion as retail's `PView::DrawCells`. Surfaced
+2026-05-25 via wire-agent probes against live ACE:
+
+**Observed:** `@telepoi Holtburg` lands the test character in LB 0xA9B4
+with **123/123 cottage EnvCells loaded** into `cellContainers3d` (exact
+match to memory `project_holtburger_envcell_vs_building` — 123 cells /
+12 buildings). 16 seconds of walking N/E/S/W around Holtburg town
+square: **zero of those 123 EnvCells ever flag `.visible = true`**.
+
+**Three concrete shortfalls from retail PView:**
+
+1. **`visible_cells[]` bytes parsed but never consumed at runtime.**
+   `env_cell.rs:88` reads the field; `apps/holtburger-web/src/lib.rs`
+   never uses it. Production `scene.cell_portal_graph` is built only
+   from `EnvCell.portals[].other_cell_id` (line 10101-10108) — the
+   direct-neighbor pairs, NOT the pre-baked PVS transitive closure.
+
+2. **Runtime BFS depth=1.** Per `cells.js:612` and `:694`,
+   `sessionHandle.getRenderSet(1)` is called every frame. So even
+   when in-cottage, the runtime visibility extends only one portal
+   hop from the player's current cell. Retail PView's
+   `AddViewToPortals` walks the portal-polygon frustum-clip chain
+   to whatever depth the screen-space allows — not a fixed depth.
+
+3. **No LandCell↔EnvCell edges.** Outdoor terrain cells (idx
+   < 0x0100) have no portal records, so they're never inserted into
+   `cell_portal_graph`. From any outdoor LandCell, BFS depth=1
+   returns `{current_cell}` only — zero EnvCells ever become
+   neighbors of an outdoor cell. Symptom: from outside a Holtburg
+   cottage, you see zero of its interior through the open doorway,
+   even at point-blank range. Retail PView's `ClipPortals` /
+   `OtherPortalClip` (acclient.c, see PView class symbols in
+   `external/chorizite/Chorizite/Chorizite.Core/acclient.map:8156-8170`)
+   handles this case via screen-space portal-polygon clipping
+   against the camera frustum — there is no equivalent code in
+   holtburger-web today.
+
+**User-visible symptom shape** (confirmed 2026-05-25 via direct user
+observation): walking into a Holtburg building visually "enters" the
+building (camera passes through), but the floor of the cottage is
+invisible (the cell never flips visible), so the player walks through
+the cottage geometry on flat terrain — and NPCs/static objects placed
+inside the cottage *are* visible (they spawn at their world coords
+regardless of cell visibility), creating the "objects floating in
+empty space inside an invisible building" tableau.
+
+**What WB does instead** (per
+`WorldBuilder/Editors/Landscape/GameScene.cs:1584-1614`): explicit
+retail-style render order — terrain first → depth-clear when camera
+is inside a building → EnvCells on top. Visibility computed via
+`EnvCellManager.ComputeVisibility(viewProjection, camera)` which is
+a real per-frame portal-frustum-aware walk. The user-facing
+`PView::DrawCells` comment is the smoking gun that WB's authors knew
+this was the pattern to mirror.
+
+**What's already in place to surface this falsifiably:**
+
+- `scene3d/diag/pvs.js` has `loadOracle(url)` + `diff(oracle)` —
+  fetches a `pvs-visibility-snapshot` JSON and reports
+  `missing` (oracle says visible, observer doesn't see) and
+  `extra` (observer shows, oracle doesn't). The `missing` set is
+  exactly what this gap produces: 123 cottage EnvCells across
+  Holtburg, oracle says visible, observer sees zero.
+
+- `pvs-visibility-snapshot <cellId> [bfsDepth=1]` is shipped per
+  §"The two diagnostic commands" above; can bake the oracle for
+  any retail cell ID.
+
+**What's missing to make the gap actionable as a falsifiable test:**
+
+- `__diag.pvs.observedVsBaked(oracleUrl)` — a one-call wrapper
+  composing `loadOracle` + `diff`. Added 2026-05-25 (see
+  `scene3d/diag/pvs.js`).
+
+- A baked oracle fixture for a known Holtburg cottage entrance
+  scenario, checked into the harness fixtures dir.
+
+- A wire-agent harness that boots, teleports to Holtburg,
+  walks toward the target cottage, fires `observedVsBaked`,
+  asserts the diff. Until PView is ported, this assertion fails
+  by design — and the failing diff vector tells us *which* of
+  the three shortfalls above is the proximate cause.
+
+**Out of scope (still):** porting the actual retail `PView` algorithm
+is a large piece of work tracked separately (estimate: at least
+post-Wave-8). This addendum only documents the gap and the
+falsifiability mechanism.
 
 ## Cross-references
 
