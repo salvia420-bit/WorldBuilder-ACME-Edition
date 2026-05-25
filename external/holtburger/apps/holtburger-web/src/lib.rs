@@ -5289,7 +5289,13 @@ pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
 pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
     use holtburger_dat::{ResourceKey, ResourceSource};
     use holtburger_dat::file_type::{LayoutDesc, MasterProperty};
-    let source = global_source::global_source();
+    // Use try_global_source so callers that fire before
+    // init_resource_source resolves get a graceful "null" instead of
+    // a wasm panic. mountBar-mounted plugins can race init; their
+    // 8 × 2s retry loop will re-call once the source is installed.
+    let Some(source) = global_source::try_global_source() else {
+        return Ok("null".to_string());
+    };
     const MASTER_PROPERTY_ID: u32 = 0x39000001;
     let initial = [
         ResourceKey::new("eor/local", layout_id),

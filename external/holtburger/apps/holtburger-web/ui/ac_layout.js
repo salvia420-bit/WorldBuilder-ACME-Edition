@@ -64,6 +64,17 @@ export async function loadLayout(layoutId) {
     try {
       const wasm = window.__hbWasm ?? window.__wasm ?? null;
       if (!wasm?.fetch_layout) return null;
+      // fetch_layout calls global_source() which panics if
+      // init_resource_source hasn't completed yet. Plugins that mount
+      // via mountBar() can fire their applyXxxLayout retry-tick into
+      // the window between `__hbWasm` being populated (right after
+      // `await init()`) and init_resource_source resolving (which can
+      // take several seconds through a tunneled manifest fetch).
+      // Skip if the resource source isn't installed yet — the retry
+      // loop will re-try in 2s.
+      if (typeof wasm.has_resource_source === "function" && !wasm.has_resource_source()) {
+        return null;
+      }
       const json = await wasm.fetch_layout(layoutId >>> 0);
       const raw = json === "null" ? null : JSON.parse(json);
       if (!raw) return null;
