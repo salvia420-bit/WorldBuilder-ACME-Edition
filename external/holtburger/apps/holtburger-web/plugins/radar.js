@@ -15,12 +15,37 @@
 // counter-rotate so they stay upright relative to the screen.
 
 import { setAcText } from "../ui/ac_font.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 
 const OVERLAY_ID = "hb-radar";
 const WIDTH = 120;
 const HEIGHT = 140;
 const DISK_SIZE = 120;
 const BUTTON_SIZE = 27;
+
+/** gmRadarUI — retail layout that drives the radar/compass panel.
+ *  Element-id map confirmed by radar_layout_dump 2026-05-24:
+ *    0x100006D3 — root (120×140)
+ *    0x1000003F — disk area (type=3, 120×120 at 0,0)
+ *    0x10000619 — lock button (27×27 at 6,6, 2 states for locked/unlocked)
+ *    0x100006A3 — move handle (type=2, 27×27 at 87,6)
+ *    0x10000040 — N cardinal (10×9 at 55,1)
+ *    0x10000041 — E cardinal (10×9 at 110,55)
+ *    0x10000042 — S cardinal (10×9 at 55,110)
+ *    0x10000043 — W cardinal (10×9 at 0,55)
+ *    0x1000003E — coords strip (120×18 at 0,120)
+ */
+const RADAR_LAYOUT_ID = 0x21000074;
+const RADAR_ELEMS = {
+  disk:    0x1000003F,
+  lock:    0x10000619,
+  move:    0x100006A3,
+  n:       0x10000040,
+  e:       0x10000041,
+  s:       0x10000042,
+  w:       0x10000043,
+  coords:  0x1000003E,
+};
 
 let stylesInjected = false;
 function ensureStyles() {
@@ -160,6 +185,73 @@ export const manifest = {
   description: "Top-right compass/radar disk (retail gmRadarUI 0x21000074)",
 };
 
+// Apply gmRadarUI 0x21000074 layout to the radar plugin's sub-elements.
+// Cardinals get their explicit left/top from the layout (replacing the
+// hand-tuned `left: 50%` + `transform: translateX(-50%)` centering),
+// so the rAF tick's per-cardinal rotation uses the cardinal's own
+// center as its origin (default `transform-origin: 50% 50%`) instead
+// of being chained onto the existing centering translate.
+function applyRadarLayout(refs, attempt = 0) {
+  const apply = (layout) => {
+    // Radar mounts during early boot; eor/local shards may not yet
+    // be available. Retry every 2s up to 8 times (~16s total) before
+    // giving up — by then boot has definitely reached in-world or
+    // hit a fatal asset error.
+    if (!layout) {
+      if (attempt < 8) {
+        setTimeout(() => applyRadarLayout(refs, attempt + 1), 2000);
+      }
+      return;
+    }
+    let applied = 0;
+    const pairs = [
+      [RADAR_ELEMS.disk,   refs.diskEl],
+      [RADAR_ELEMS.lock,   refs.lockEl],
+      [RADAR_ELEMS.move,   refs.moveEl],
+      [RADAR_ELEMS.n,      refs.cardinalEls?.n],
+      [RADAR_ELEMS.e,      refs.cardinalEls?.e],
+      [RADAR_ELEMS.s,      refs.cardinalEls?.s],
+      [RADAR_ELEMS.w,      refs.cardinalEls?.w],
+      [RADAR_ELEMS.coords, refs.coordsEl],
+    ];
+    for (const [id, el] of pairs) {
+      if (!el) continue;
+      const desc = findElementById(layout, id);
+      if (!desc) continue;
+      // Cardinals: clear the CSS centering anchors + reset the rAF
+      // tick's captured base transform so it picks up the new
+      // (empty) base after we wipe transform.
+      if (el.classList.contains("hb-radar-cardinal")) {
+        el.style.right = "";
+        el.style.bottom = "";
+        // Explicit "none" overrides the CSS centering translate
+        // (`translateX(-50%)` for N/S, `translateY(-50%)` for E/W).
+        // An empty string would let the CSS rule re-apply. The rAF
+        // tick captures dataset.baseTransform=="none" and special-
+        // cases it to "" before chaining rotate(heading).
+        el.style.transform = "none";
+        delete el.dataset.baseTransform;
+      }
+      // Lock + move buttons: CSS uses `right: 4px` for the move handle.
+      // Clear right so explicit left wins.
+      if (el === refs.lockEl || el === refs.moveEl) {
+        el.style.right = "";
+      }
+      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
+      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
+      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
+      applied += 1;
+    }
+    try {
+      window.__diag?.layout?.onRadarApplied?.({ applied });
+    } catch (_) {}
+  };
+  const cached = getCachedLayout(RADAR_LAYOUT_ID);
+  if (cached) { apply(cached); return; }
+  loadLayout(RADAR_LAYOUT_ID).then(apply).catch(() => {});
+}
+
 export function mount(_ctx) {
   ensureStyles();
   const existing = document.getElementById(OVERLAY_ID);
@@ -256,6 +348,18 @@ export function mount(_ctx) {
   overlay.appendChild(coords);
 
   document.body.appendChild(overlay);
+
+  // Apply retail layout positions for sub-elements. The hand-tuned
+  // CSS values are very close already (1-2px deltas), but layout-driven
+  // makes the DAT the source of truth so future radar tweaks come from
+  // the asset rather than the JS plugin.
+  applyRadarLayout({
+    diskEl: disk,
+    lockEl: lockBtn,
+    moveEl: moveBtn,
+    cardinalEls,
+    coordsEl: coords,
+  });
 
   // ──────────────────────────────────────────────────────────────────
   // rAF tick — rotate the rotor by -heading so the FOV wedge follows

@@ -712,3 +712,48 @@ Remaining un-wired in gmInventoryUI: background frame
 both cosmetic, already replaced by main-panel's brass-rim
 chrome. Title bar + close button are main-panel-owned and
 intentionally not driven by this layout.
+
+### Radar / compass — gmRadarUI port (2026-05-24, same day)
+
+Wire radar.js to LayoutDesc 0x21000074. The plugin's comment
+already named the layout but values were embedded as constants;
+runtime-driven by the DAT is now the source of truth.
+
+Element-id map (per radar_layout_dump):
+- 0x100006D3 — root (120×140)
+- 0x1000003F — disk area (type=3, 120×120)
+- 0x10000619 — lock button (27×27 at 6,6; 2 states)
+- 0x100006A3 — move handle (type=2, 27×27 at 87,6)
+- 0x10000040 — N cardinal (10×9 at 55,1)
+- 0x10000041 — E cardinal (10×9 at 110,55)
+- 0x10000042 — S cardinal (10×9 at 55,110)
+- 0x10000043 — W cardinal (10×9 at 0,55)
+- 0x1000003E — coords strip (120×18 at 0,120)
+
+Two load-bearing fixes to ac_layout.js / radar.js along the way:
+
+1. **`loadLayout` inflight-cache race-condition bug.** A sync
+   early-return inside the IIFE async function fired the `finally
+   { layoutInflight.delete }` BEFORE the caller's
+   `layoutInflight.set(layoutId, p)`. The set ran AFTER the delete,
+   leaving the entry permanently stuck and starving every retry.
+   Fixed by `await Promise.resolve()` at the top of the IIFE so the
+   body yields a microtask before running — the set lands first.
+2. **Radar mounts during early boot, before wasm/`__hbWasm` is
+   populated.** Added retry-with-backoff (8 retries × 2s = 16s)
+   in `applyRadarLayout`. Most plugins that mount after
+   `init_resource_source` don't need this, but radar runs through
+   `mountBar()` which fires before the wasm init `await`.
+
+Cardinals required a tweaked CSS-override path: the original CSS
+positions each cardinal with `left: 50%; transform: translateX(-50%)`
+(or top/translateY equivalents). Setting inline `transform = ""`
+let the CSS rule re-apply and centered them off the layout-driven
+left/top. Fix: explicit `transform = "none"`, special-cased in the
+rAF tick that captures `dataset.baseTransform` so the
+heading-counter-rotation still works.
+
+Verified e2e (Playwright + autoLogin + 18s wait covering retry
+loop): 8/8 region matches (disk, lock, move, N/E/S/W, coords).
+Inventory regression test re-run after the ac_layout.js fix:
+still 4/4. Screenshot at `docs/layout-radar-2026-05-24.png`.

@@ -33,34 +33,40 @@
  * `children` map.
  */
 
-const layoutCache = new Map(); // id → Promise<layout | null>
-const layoutResolved = new Map(); // id → layout (sync access once resolved)
+const layoutInflight = new Map(); // id → Promise<layout | null> (in-flight only)
+const layoutResolved = new Map(); // id → layout (cached on success only)
 
 /**
- * Load a LayoutDesc. Idempotent; caller can call repeatedly without
- * triggering extra wasm round-trips. Returns null on parse failure
- * or missing record (consumer should fall back to whatever it does
- * without retail layout data).
+ * Load a LayoutDesc. Idempotent on success; caller can call
+ * repeatedly without triggering extra wasm round-trips once the
+ * record is in cache.
+ *
+ * **Failures are NOT cached.** If `fetch_layout` returns null (e.g.
+ * because the `eor/local` shard hasn't been prefetched yet — common
+ * for plugins that mount during early boot), the next call retries.
+ * In-flight requests dedupe through `layoutInflight`. Consumers
+ * should be tolerant of a transient null and re-attempt or accept
+ * that the layout never loads.
  *
  * @param {number} layoutId — e.g. 0x21000024 for gmPaperDollUI.
  * @returns {Promise<null | {id, width, height, elements: Array}>}
  */
 export async function loadLayout(layoutId) {
   if (layoutResolved.has(layoutId)) return layoutResolved.get(layoutId);
-  if (layoutCache.has(layoutId)) return layoutCache.get(layoutId);
+  if (layoutInflight.has(layoutId)) return layoutInflight.get(layoutId);
   const p = (async () => {
-    const wasm = window.__hbWasm ?? window.__wasm ?? null;
-    if (!wasm?.fetch_layout) {
-      layoutResolved.set(layoutId, null);
-      return null;
-    }
+    // Yield a microtask so the caller's `layoutInflight.set(...)`
+    // below has run before the body starts. Without this, a synchronous
+    // early-return (e.g. wasm not yet ready) would fire the `finally`
+    // delete BEFORE the set, leaving the entry stuck forever and
+    // starving every subsequent retry.
+    await Promise.resolve();
     try {
+      const wasm = window.__hbWasm ?? window.__wasm ?? null;
+      if (!wasm?.fetch_layout) return null;
       const json = await wasm.fetch_layout(layoutId >>> 0);
       const raw = json === "null" ? null : JSON.parse(json);
-      if (!raw) {
-        layoutResolved.set(layoutId, null);
-        return null;
-      }
+      if (!raw) return null;
       layoutResolved.set(layoutId, raw);
       try {
         window.__diag?.layout?.onLoaded?.({
@@ -72,11 +78,15 @@ export async function loadLayout(layoutId) {
       return raw;
     } catch (err) {
       console.warn(`[ac-layout] layout 0x${layoutId.toString(16)} load failed:`, err);
-      layoutResolved.set(layoutId, null);
       return null;
+    } finally {
+      // Always clear inflight, including the wasm-not-ready early-out
+      // path — otherwise a single early call permanently caches the
+      // null promise and starves all retries.
+      layoutInflight.delete(layoutId);
     }
   })();
-  layoutCache.set(layoutId, p);
+  layoutInflight.set(layoutId, p);
   return p;
 }
 
