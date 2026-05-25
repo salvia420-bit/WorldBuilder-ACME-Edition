@@ -12307,6 +12307,23 @@ enum SessionCommand {
     /// `docs/phase-4-renderer.md` step 2a.6 for the SQL one-liner
     /// that promotes test accounts to `accessLevel = 4`.
     SendChat { message: String },
+    /// `SessionHandle.sendTell(target, message)` — sends a
+    /// `GameAction::Tell` with two strings: message + target name.
+    /// This is the wire opcode retail uses for `/tell <name> <msg>`;
+    /// ACE's `GameActionTell.Handle` looks up the target by name via
+    /// `PlayerManager.GetOnlinePlayer(target)` and routes a
+    /// `GameEventTell` back. If the target is offline ACE responds
+    /// with `WeenieError::CharacterNotAvailable` over the wire.
+    SendTell { target: String, message: String },
+    /// `SessionHandle.sendChannel(channel, message)` — sends a
+    /// `GameAction::ChatChannel(channel_enum, message)`. `channel`
+    /// is the raw `ChatChannel` enum u32: Fellow=0x800,
+    /// Vassals=0x1000, Patron=0x2000, Monarch=0x4000,
+    /// CoVassals=0x01000000, AllegianceBroadcast=0x02000000,
+    /// Help=0x400. ACE's `GameActionChatChannel.Handle` enforces
+    /// access-level gates and fellowship/allegiance membership
+    /// requirements; failed sends return `WeenieError` over the wire.
+    SendChannel { channel: u32, message: String },
     /// Phase 4 step 5 (interactive entities): the JS side clicked an
     /// entity sprite. Recv loop wraps in `GameAction::Use(Box<UseActionData>)`
     /// and dispatches via `session.send_action`. ACE handles the
@@ -15143,6 +15160,44 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::SendChat { message })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("send_chat: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Send a private tell to a named player. Wraps in
+    /// `GameAction::Tell(TellActionData { target, message })`. This
+    /// is the wire opcode for retail's `/tell <name> <msg>` — neither
+    /// of `target` or `message` may be empty.
+    #[wasm_bindgen(js_name = sendTell)]
+    pub fn send_tell(&self, target: String, message: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if target.is_empty() {
+            return Err(JsValue::from_str("send_tell: empty target"));
+        }
+        if message.is_empty() {
+            return Err(JsValue::from_str("send_tell: empty message"));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SendTell { target, message })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("send_tell: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Send a channel message (Fellowship / Vassals / Patron /
+    /// Monarch / CoVassals / AllegianceBroadcast / Help). `channel`
+    /// is the raw `ChatChannel` enum u32 — see SessionCommand
+    /// docs for the list. Wraps in
+    /// `GameAction::ChatChannel(ChatChannelActionData)`.
+    #[wasm_bindgen(js_name = sendChannel)]
+    pub fn send_channel(&self, channel: u32, message: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if message.is_empty() {
+            return Err(JsValue::from_str("send_channel: empty message"));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SendChannel { channel, message })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("send_channel: cmd channel closed ({e})"))
             })
     }
 
@@ -19896,17 +19951,56 @@ async fn recv_loop(
                         // (see `apps/holtburger-cli/src/.../commands.rs`
                         // ClientCommand::Talk arm). ACE's command
                         // parser treats any incoming Talk that starts
-                        // with `@` or `/` as a command — including
+                        // with `@` as a command — including
                         // `@telepoi Holtburg` for the Training-Academy
-                        // bypass. Access-level enforcement happens
-                        // server-side; non-Developer accounts silently
-                        // drop admin commands.
+                        // bypass. `/`-prefixed slash commands are
+                        // NOT parsed by GameActionTalk; the JS-side
+                        // chat panel routes them to sendTell /
+                        // sendChannel instead (see `plugins/chat-panel.js`
+                        // submitChat).
                         let action = GameAction::Talk(Box::new(TalkActionData { message }));
                         if let Err(e) = session.send_action(action).await {
                             log::warn!("recv_loop: send_action(Talk): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("send_chat: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::SendTell { target, message }) => {
+                        use holtburger_protocol::messages::chat::actions::TellActionData;
+                        let action = GameAction::Tell(Box::new(TellActionData {
+                            target,
+                            message,
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(Tell): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("send_tell: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::SendChannel { channel, message }) => {
+                        use holtburger_protocol::messages::chat::actions::ChatChannelActionData;
+                        use holtburger_protocol::messages::ChatChannelId;
+                        let action = GameAction::ChatChannel(Box::new(ChatChannelActionData {
+                            channel: ChatChannelId::from_raw(channel),
+                            message,
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(ChatChannel): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("send_channel: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
                                 f32_payload: None,

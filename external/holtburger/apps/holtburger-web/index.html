@@ -7238,11 +7238,139 @@ void main() {
           // doesn't always — ACE only echoes Talk back via
           // ChannelBroadcast for channels the player is subscribed
           // to).
+          // Track the last person who sent us a Tell so `/r <msg>`
+          // (reply-to-last-teller, retail UX) has a target. Updated
+          // by the incoming-Tell handler (chat panel populates this
+          // via window.__lastTellerName when an OutgoingTell or Tell
+          // event arrives).
+          window.__lastTellerName = null;
+
+          // Slash-command → wire-opcode router. Retail's client
+          // parses these locally and sends the matching GameAction;
+          // ACE's GameActionTalk does NOT parse `/`-prefixes (only
+          // `@admin` commands). So we have to dispatch the right
+          // wasm method ourselves. Returns:
+          //   { dispatched: true, ... } if we handled the message,
+          //   { dispatched: false }     if caller should fall through
+          //                              to sendChat (plain say / @admin)
+          function routeSlashCommand(handle, message) {
+            // @admin commands stay on the Talk path (ACE parses them
+            // server-side from GameActionTalk).
+            if (message.startsWith("@")) return { dispatched: false };
+            if (!message.startsWith("/")) return { dispatched: false };
+
+            // Parse "/cmd rest..." — cmd is lowercased.
+            const sp = message.indexOf(" ");
+            const cmd = (sp < 0 ? message.slice(1) : message.slice(1, sp)).toLowerCase();
+            const rest = sp < 0 ? "" : message.slice(sp + 1);
+
+            // Tells: `/tell <name> <msg>` or `/t <name> <msg>`.
+            if (cmd === "tell" || cmd === "t") {
+              const sp2 = rest.indexOf(" ");
+              if (sp2 < 0) {
+                return { dispatched: true, echo: null,
+                         error: `Usage: /${cmd} <name> <message>` };
+              }
+              const target = rest.slice(0, sp2);
+              const msg = rest.slice(sp2 + 1);
+              if (!target || !msg) {
+                return { dispatched: true, echo: null,
+                         error: `Usage: /${cmd} <name> <message>` };
+              }
+              handle.sendTell(target, msg);
+              window.__lastTellerName = target;  // for /r tracking
+              return { dispatched: true, echo: `You tell ${target}, "${msg}"` };
+            }
+
+            // Reply to last teller: `/r <msg>`.
+            if (cmd === "r") {
+              if (!window.__lastTellerName) {
+                return { dispatched: true, echo: null,
+                         error: "No one has sent you a tell to reply to." };
+              }
+              if (!rest) {
+                return { dispatched: true, echo: null,
+                         error: "Usage: /r <message>" };
+              }
+              handle.sendTell(window.__lastTellerName, rest);
+              return { dispatched: true, echo: `You tell ${window.__lastTellerName}, "${rest}"` };
+            }
+
+            // Allegiance channels — ChatChannel enum values from
+            // crates/holtburger-protocol/src/messages/chat/types.rs.
+            // /a /f /p /m /v /co /h
+            const CHANNEL_MAP = {
+              a:   0x02000000,   // AllegianceBroadcast
+              f:   0x00000800,   // Fellow
+              p:   0x00002000,   // Patron
+              m:   0x00004000,   // Monarch
+              v:   0x00001000,   // Vassals
+              co:  0x01000000,   // CoVassals
+              cv:  0x01000000,   // CoVassals (alt)
+              h:   0x00000400,   // Help
+            };
+            if (CHANNEL_MAP[cmd] != null) {
+              if (!rest) {
+                return { dispatched: true, echo: null,
+                         error: `Usage: /${cmd} <message>` };
+              }
+              handle.sendChannel(CHANNEL_MAP[cmd], rest);
+              const labels = { a: "Allegiance", f: "Fellowship", p: "Patron",
+                               m: "Monarch", v: "Vassals", co: "CoVassals",
+                               cv: "CoVassals", h: "Help" };
+              return { dispatched: true,
+                       echo: `[${labels[cmd]}] You say, "${rest}"` };
+            }
+
+            // Turbine channels (/cg /ct /clfg /crp) — wire path
+            // requires turbine_chat room_id + context_id state that
+            // lives in holtburger-core but isn't yet plumbed through
+            // the wasm bridge. Surface this clearly instead of
+            // falling through to Talk and shouting it locally.
+            const TURBINE_CMDS = { cg: "General", ct: "Trade",
+                                   clfg: "LFG", crp: "Roleplay" };
+            if (TURBINE_CMDS[cmd]) {
+              return { dispatched: true, echo: null,
+                       error: `${TURBINE_CMDS[cmd]} channel not yet wired (TurbineChat plumbing pending).` };
+            }
+
+            // /me <action> — emotes use a separate GameAction; not
+            // exposed via wasm yet either. Defer rather than shout
+            // locally with the literal "/me " prefix.
+            if (cmd === "me") {
+              return { dispatched: true, echo: null,
+                       error: "Emotes not yet wired (use a soul-emote pose for now)." };
+            }
+
+            // Unknown slash → don't route; let it fall through to
+            // sendChat so the user sees ACE's "Unknown command"
+            // response (or it just gets said locally if no @ prefix).
+            return { dispatched: false };
+          }
+          window.__routeSlashCommand = routeSlashCommand;
+
           chatForm.addEventListener("submit", (ev) => {
             ev.preventDefault();
             if (!activeHandle || !enteredWorld) return;
             const message = chatInput.value.trim();
             if (!message) return;
+
+            // Try to route via slash-command first.
+            const routed = routeSlashCommand(activeHandle, message);
+            if (routed.dispatched) {
+              if (routed.error) {
+                appendChatLine(`[Chat] ${routed.error}`, 10);
+              } else if (routed.echo) {
+                // OutgoingTell category (4) for tell echoes, neutral
+                // for channel messages.
+                appendChatLine(routed.echo, null);
+              }
+              chatInput.value = "";
+              chatInput.focus();
+              return;
+            }
+
+            // Fall-through: plain say or @admin command via Talk.
             try {
               activeHandle.sendChat(message);
             } catch (err) {
