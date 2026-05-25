@@ -16,10 +16,101 @@
 // the wasm SessionHandle owns. Per the player-stats inspection at
 // 1070 runtime: skills = [id, current, base, trained_state, xp]
 // per skill, attributes = [id, current, base, buffed_max] per attr.
+//
+// Retail layout source per character_info_layout_dump 2026-05-24:
+//
+//   gmCharacterInfoUI 0x2100001A — 300×362 parent panel.
+//     0x1000011B root (300×362)
+//       0x100000FC close button (276,0) 24×25, 2 states
+//       0x100000FE title bar strip (0,0) 276×25
+//       0x1000011C content area type=3 (0,25) 300×337
+//         0x1000011D inner content (8,0) 262×337 — main text region
+//         0x1000011E right scrollbar (280,0) 16×337
+//   gmAttributeUI 0x2100002C — wrapper, child rows populated by runtime
+//     0x10000225 root type=268435498 (0,0) 300×337, 3 states
+//       0x10000226 inner (0,0) 300×337
+//   gmSkillUI 0x2100002D — wrapper, same shape
+//     0x1000022E root type=268435499 (0,0) 300×337, 3 states
+//       0x10000226 inner (0,0) 300×337
+//   gmCharacterTitleUI 0x2100005E — 300×600, standalone in retail
+//     0x1000052D outer (300×600)
+//       0x1000052E header row 1 (8,20) 270×18
+//       0x1000052F header row 2 (8,40) 270×18
+//       0x10000530 separator (0,60) 300×9
+//       0x10000531 header row 3 (8,70) 270×18
+//       0x10000532 list area type=5 (8,90) 270×455
+//       0x10000533 scrollbar (280,90) 16×455
+//       0x10000534 separator (0,550) 300×9
+//       0x10000535 bottom button (53,560) 200×32
+//
+// v1 fetch_layout caveat: only geometry is serialized. Tab labels,
+// row labels, sprite IDs etc. are hand-tuned. Retail rows of
+// Attribute/Skill UIs live in a state-controlled child layout that
+// fetch_layout v1 does not yet expand (G3 in layout-port-plan).
+// We hand-pitch attribute rows (24px) and skill rows (18px) within
+// the content area; the layout supplies the OUTER content-area
+// dimensions and the Title-tab row positions.
 
 import { setAcText } from "../ui/ac_font.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 
 const VIEW_STYLE_ID = "hb-charinfo-view-style";
+
+// gmCharacterInfoUI parent panel — outer 300×362 (the entire
+// floating panel: title bar + content area). Our DOM lives inside
+// main-panel's body slot which is already at y=25; so element
+// 0x1000011C (content area at 0,25 of 300×337) maps to body (0,0,
+// 300,337). 0x1000011D (inner content 262×337 inset 8px from the
+// left) is where text/tabs live.
+const CI_LAYOUT_ID            = 0x2100001A;
+// Reference-only element_ids for the outer panel chrome — owned by
+// main-panel (close button, title bar) or by the wrapping floating
+// panel (root). Kept here so the layout map stays complete for
+// future ports:
+//   0x1000011B — 300×362 outer (whole panel)
+//   0x100000FC — (276,0) 24×25 close button
+//   0x100000FE — (0,0) 276×25 title bar
+const CI_ELEM_CONTENT         = 0x1000011C; // (0,25) 300×337 — main-panel.body
+const CI_ELEM_INNER           = 0x1000011D; // (8,0 of content) 262×337 — text/rows
+const CI_ELEM_SCROLLBAR       = 0x1000011E; // (280,0 of content) 16×337
+
+// gmAttributeUI / gmSkillUI tab content layouts — wrappers only;
+// retail populates row UIElements at runtime via per-stat code paths
+// (gmStatManagementUI::PostInit at acclient.c:284203 uses
+// GetChildRecursive on element_ids 0x10000231 … 0x100005C6 that don't
+// exist in the LayoutDesc's static tree). We use the wrapper's outer
+// dims to confirm the body sizing matches our content area.
+const ATTR_LAYOUT_ID          = 0x2100002C;
+const ATTR_ELEM_ROOT          = 0x10000225; // 300×337
+const ATTR_ELEM_INNER         = 0x10000226; // 300×337
+
+const SKILL_LAYOUT_ID         = 0x2100002D;
+const SKILL_ELEM_ROOT         = 0x1000022E; // 300×337
+const SKILL_ELEM_INNER        = 0x10000226; // 300×337
+
+// gmCharacterTitleUI — rich structured layout (the only one of the
+// three tab layouts with explicit row geometry in the LayoutDesc).
+// Native size 300×600; we squeeze into 300×337 by SCALING vertical
+// offsets via a constant: scaleY = 337 / (top-bottom of the layout's
+// effective vertical span). Holding x unchanged for crispness.
+const TITLE_LAYOUT_ID         = 0x2100005E;
+// Reference-only: 0x1000052D is the 300×600 native panel root —
+// scaling is applied per-row by applyCharacterInfoLayout instead.
+const TITLE_ELEM_HEADER_1     = 0x1000052E; // (8,20) 270×18
+const TITLE_ELEM_HEADER_2     = 0x1000052F; // (8,40) 270×18
+const TITLE_ELEM_SEP_1        = 0x10000530; // (0,60) 300×9
+const TITLE_ELEM_HEADER_3     = 0x10000531; // (8,70) 270×18
+const TITLE_ELEM_LIST         = 0x10000532; // (8,90) 270×455
+const TITLE_ELEM_SCROLLBAR    = 0x10000533; // (280,90) 16×455
+const TITLE_ELEM_SEP_2        = 0x10000534; // (0,550) 300×9
+const TITLE_ELEM_BOTTOM_BTN   = 0x10000535; // (53,560) 200×32
+
+// Native height of the Title-tab layout in the LayoutDesc. Retail
+// opens it as its own 300×600 floating panel; in Holtburger it lives
+// as a tab inside the 300×337 character-info panel, so we compress
+// the vertical range to fit. Horizontal positions (x, width) are
+// applied unchanged — they're already 300px-wide.
+const TITLE_NATIVE_H = 600;
 
 let stylesInjected = false;
 function ensureStyles() {
@@ -36,18 +127,25 @@ function ensureStyles() {
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream);
       overflow: hidden;
-      display: flex;
-      flex-direction: column;
     }
+    /* Tab strip — Holtburger UX addition (retail gmCharacterInfoUI
+       has no tabs; it's a single wall-of-text panel). 3 buttons at
+       the top of our content area, slimmed to leave maximum room
+       for the content below. */
     .hb-ci-tabs {
-      flex: 0 0 auto;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 20px;
+      box-sizing: border-box;
       display: flex;
       gap: 1px;
-      padding: 4px 6px 0;
+      padding: 2px 4px 0;
       border-bottom: 1px solid var(--hb-border-brass-dim);
     }
     .hb-ci-tab {
-      padding: 3px 10px;
+      padding: 2px 8px;
       font-size: 10px;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream-bright);
@@ -65,9 +163,18 @@ function ensureStyles() {
       color: var(--hb-text-gold);
       border-color: var(--hb-border-brass);
     }
+    /* Header strip — character name + level. Sized by hand below the
+       tab strip; retail's gmStatManagementUI::PostInit binds these to
+       UIElement_Text fields at runtime (element ids 0x10000231 name,
+       0x1000023B level) which v1 fetch_layout doesn't surface yet. */
     .hb-ci-head {
-      flex: 0 0 auto;
-      padding: 6px 8px;
+      position: absolute;
+      top: 20px;
+      left: 0;
+      right: 0;
+      height: 22px;
+      box-sizing: border-box;
+      padding: 3px 8px;
       display: flex;
       align-items: baseline;
       justify-content: space-between;
@@ -79,21 +186,39 @@ function ensureStyles() {
       color: var(--hb-text-gold);
       letter-spacing: 0.02em;
     }
-    .hb-ci-head-meta {
-      font-size: 9px;
-      color: var(--hb-text-muted);
-    }
     .hb-ci-head-level {
       font-size: 10px;
       color: var(--hb-text-cream);
     }
+    /* Body — fills the area below the tab strip + header strip, above
+       the footer. applyCharacterInfoLayout overrides left/width using
+       the parent layout's inner-content element 0x1000011D so the
+       8-px left inset matches retail anatomy. */
     .hb-ci-body {
-      flex: 1 1 auto;
+      position: absolute;
+      top: 42px;
+      left: 0;
+      right: 0;
+      bottom: 18px;
       overflow-y: auto;
+      box-sizing: border-box;
       padding: 4px 4px;
       scrollbar-width: thin;
       scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
     }
+    /* Scrollbar gutter — retail puts a dedicated 16-px scrollbar
+       element (0x1000011E) at the right edge of the content area.
+       Our DOM uses the browser's native scrollbar inside .hb-ci-body,
+       so we mark the layout-derived scrollbar dims on a phantom div
+       (.hb-ci-scrollbar) for diagnostic visibility — kept invisible
+       to avoid double scrollbars. The verifier reads its bounding box
+       to confirm layout-driven placement. */
+    .hb-ci-scrollbar {
+      position: absolute;
+      pointer-events: none;
+      background: transparent;
+    }
+    /* Per-row pieces shared across all tabs. */
     .hb-ci-section {
       font-size: 9px;
       color: #6acaca;
@@ -136,14 +261,88 @@ function ensureStyles() {
       min-width: 30px;
       text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
     }
+    /* Title-tab specific structure — uses absolute layout from
+       gmCharacterTitleUI 0x2100005E (compressed to fit our body).
+       Mounted in the .hb-ci-body when the Titles tab is active. */
+    .hb-ci-titles {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+    }
+    .hb-ci-titles-header {
+      position: absolute;
+      box-sizing: border-box;
+      font-size: 10px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+      padding: 0 4px;
+      display: flex;
+      align-items: center;
+    }
+    .hb-ci-titles-sep {
+      position: absolute;
+      box-sizing: border-box;
+      background:
+        linear-gradient(180deg,
+          transparent 0%,
+          var(--hb-border-brass-dim) 40%,
+          var(--hb-border-brass) 50%,
+          var(--hb-border-brass-dim) 60%,
+          transparent 100%);
+      opacity: 0.7;
+    }
+    .hb-ci-titles-list {
+      position: absolute;
+      box-sizing: border-box;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--hb-border-brass-dim);
+      scrollbar-width: thin;
+      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
+    }
+    .hb-ci-titles-list-empty {
+      padding: 14px 12px;
+      color: var(--hb-text-muted);
+      font-style: italic;
+      text-align: center;
+      font-size: 10px;
+    }
+    .hb-ci-titles-bottom {
+      position: absolute;
+      box-sizing: border-box;
+      padding: 2px 6px;
+      font-size: 10px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid var(--hb-border-brass);
+      cursor: pointer;
+      user-select: none;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .hb-ci-titles-bottom:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
     .hb-ci-footer {
-      flex: 0 0 auto;
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 18px;
+      box-sizing: border-box;
       padding: 4px 8px;
       background: rgba(0, 0, 0, 0.45);
       border-top: 1px solid var(--hb-border-brass-dim);
       font-size: 9px;
       color: var(--hb-text-muted);
       display: flex;
+      align-items: center;
       justify-content: space-between;
     }
     .hb-ci-empty {
@@ -200,6 +399,159 @@ function getStats() {
       levelInfo: s.levelInfo,     // [level, xp_total, xp_to_next, ...]
     };
   } catch (_) { return null; }
+}
+
+// Apply gmCharacterInfoUI / gmAttributeUI / gmSkillUI / gmCharacterTitleUI
+// layouts to the character-info view. Mounted via main-panel.showView,
+// which only fires AFTER wasm-ready (user-initiated panel open), so no
+// retry loop is needed; the layouts resolve on the first call.
+//
+// refs:
+//   rootEl       — .hb-ci-root (top-level container, sized to main-panel body)
+//   tabsEl       — .hb-ci-tabs (Holtburger tab strip; not in retail layout)
+//   headEl       — .hb-ci-head (character name + level header strip)
+//   bodyEl       — .hb-ci-body (per-tab content area; layout-anchored to
+//                  parent layout's inner-content element 0x1000011D)
+//   scrollbarEl  — .hb-ci-scrollbar (invisible phantom for retail scrollbar
+//                  geometry confirmation; native browser scrollbar handles
+//                  the actual scrolling)
+//   titleRefs    — { headerEls[3], sepEls[2], listEl, bottomBtnEl } —
+//                  per-element refs for the Title-tab structured layout.
+function applyCharacterInfoLayout(refs) {
+  const apply = ([parent, attr, skill, title]) => {
+    let appliedRegions = 0;
+
+    // ── Parent panel (gmCharacterInfoUI 0x2100001A) ─────────────────
+    // Main-panel owns the title bar (0x100000FE) and close button
+    // (0x100000FC) — we don't apply those. Element 0x1000011C is the
+    // content area; its dimensions should already match main-panel's
+    // body (300×337). Element 0x1000011D supplies the 8-px left inset
+    // for the inner content region — we apply that to .hb-ci-body so
+    // the tabs/header/body all share the retail content anatomy.
+    let innerInset = { x: 8, w: 262 };
+    if (parent) {
+      const content = findElementById(parent, CI_ELEM_CONTENT);
+      const inner = findElementById(parent, CI_ELEM_INNER);
+      const scrollbar = findElementById(parent, CI_ELEM_SCROLLBAR);
+      if (content) appliedRegions += 1;
+      if (inner && refs.bodyEl) {
+        // Apply the 8-px left inset + 262-px width to the body region.
+        // The CSS rule uses `left:0; right:0` for full-width; we
+        // explicit-override left + width here.
+        refs.bodyEl.style.right = "";
+        if (typeof inner.x === "number") refs.bodyEl.style.left = `${inner.x}px`;
+        if (typeof inner.width === "number") refs.bodyEl.style.width = `${inner.width}px`;
+        if (typeof inner.x === "number") innerInset.x = inner.x;
+        if (typeof inner.width === "number") innerInset.w = inner.width;
+        appliedRegions += 1;
+      }
+      // Also anchor the tabs + head strip to the same x/width so the
+      // tab strip lines up with the body's left edge (retail content
+      // is fully inset 8 px — applying the same anchor to all three
+      // bands keeps the panel coherent).
+      if (inner && refs.tabsEl) {
+        refs.tabsEl.style.right = "";
+        if (typeof inner.x === "number") refs.tabsEl.style.left = `${inner.x}px`;
+        if (typeof inner.width === "number") refs.tabsEl.style.width = `${inner.width}px`;
+      }
+      if (inner && refs.headEl) {
+        refs.headEl.style.right = "";
+        if (typeof inner.x === "number") refs.headEl.style.left = `${inner.x}px`;
+        if (typeof inner.width === "number") refs.headEl.style.width = `${inner.width}px`;
+      }
+      if (scrollbar && refs.scrollbarEl) {
+        if (typeof scrollbar.x === "number") refs.scrollbarEl.style.left = `${scrollbar.x}px`;
+        if (typeof scrollbar.y === "number") refs.scrollbarEl.style.top = `${scrollbar.y}px`;
+        if (typeof scrollbar.width === "number") refs.scrollbarEl.style.width = `${scrollbar.width}px`;
+        if (typeof scrollbar.height === "number") refs.scrollbarEl.style.height = `${scrollbar.height}px`;
+        appliedRegions += 1;
+      }
+    }
+
+    // ── Attribute / Skill tab layouts ────────────────────────────────
+    // gmAttributeUI 0x2100002C + gmSkillUI 0x2100002D are wrapper
+    // containers only. The per-stat rows aren't in the LayoutDesc's
+    // static tree (retail populates them at runtime via UIElement
+    // factory calls referenced by ids 0x10000231-0x100005C6, which
+    // v1 fetch_layout does not yet expand — see layout-port-plan G3).
+    // Confirm the outer dims match our body for diagnostic visibility.
+    if (attr) {
+      const root = findElementById(attr, ATTR_ELEM_ROOT);
+      const inner = findElementById(attr, ATTR_ELEM_INNER);
+      if (root) appliedRegions += 1;
+      if (inner) appliedRegions += 1;
+    }
+    if (skill) {
+      const root = findElementById(skill, SKILL_ELEM_ROOT);
+      const inner = findElementById(skill, SKILL_ELEM_INNER);
+      if (root) appliedRegions += 1;
+      if (inner) appliedRegions += 1;
+    }
+
+    // ── Title tab layout (gmCharacterTitleUI 0x2100005E) ─────────────
+    // Native size 300×600. Compressed to fit our body (~ 277-px tall
+    // after tabs/header/footer). Per-element scaleY = bodyH / 600.
+    if (title && refs.titleRefs) {
+      const titleRefMap = [
+        [TITLE_ELEM_HEADER_1, refs.titleRefs.headerEls?.[0]],
+        [TITLE_ELEM_HEADER_2, refs.titleRefs.headerEls?.[1]],
+        [TITLE_ELEM_HEADER_3, refs.titleRefs.headerEls?.[2]],
+        [TITLE_ELEM_SEP_1,    refs.titleRefs.sepEls?.[0]],
+        [TITLE_ELEM_SEP_2,    refs.titleRefs.sepEls?.[1]],
+        [TITLE_ELEM_LIST,     refs.titleRefs.listEl],
+        [TITLE_ELEM_BOTTOM_BTN, refs.titleRefs.bottomBtnEl],
+      ];
+      const bodyH = refs.bodyEl?.getBoundingClientRect().height || 277;
+      const scaleY = bodyH / TITLE_NATIVE_H;
+      for (const [id, el] of titleRefMap) {
+        if (!el) continue;
+        const desc = findElementById(title, id);
+        if (!desc) continue;
+        if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
+        if (typeof desc.y === "number") el.style.top = `${Math.round(desc.y * scaleY)}px`;
+        if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
+        if (typeof desc.height === "number") el.style.height = `${Math.max(1, Math.round(desc.height * scaleY))}px`;
+        appliedRegions += 1;
+      }
+      // Also wire the Title-tab scrollbar geometry on a phantom div if
+      // we have one (kept invisible — native scrollbar handles
+      // scrolling).
+      const titleScroll = findElementById(title, TITLE_ELEM_SCROLLBAR);
+      if (titleScroll && refs.titleRefs.scrollbarEl) {
+        if (typeof titleScroll.x === "number") refs.titleRefs.scrollbarEl.style.left = `${titleScroll.x}px`;
+        if (typeof titleScroll.y === "number") refs.titleRefs.scrollbarEl.style.top = `${Math.round(titleScroll.y * scaleY)}px`;
+        if (typeof titleScroll.width === "number") refs.titleRefs.scrollbarEl.style.width = `${titleScroll.width}px`;
+        if (typeof titleScroll.height === "number") refs.titleRefs.scrollbarEl.style.height = `${Math.max(1, Math.round(titleScroll.height * scaleY))}px`;
+        appliedRegions += 1;
+      }
+    }
+
+    try {
+      window.__diag?.layout?.onCharacterInfoApplied?.({
+        appliedRegions,
+        parentLoaded: !!parent,
+        attrLoaded: !!attr,
+        skillLoaded: !!skill,
+        titleLoaded: !!title,
+        innerInset,
+      });
+    } catch (_) {}
+  };
+
+  const cachedParent = getCachedLayout(CI_LAYOUT_ID);
+  const cachedAttr   = getCachedLayout(ATTR_LAYOUT_ID);
+  const cachedSkill  = getCachedLayout(SKILL_LAYOUT_ID);
+  const cachedTitle  = getCachedLayout(TITLE_LAYOUT_ID);
+  if (cachedParent && cachedAttr && cachedSkill && cachedTitle) {
+    apply([cachedParent, cachedAttr, cachedSkill, cachedTitle]);
+    return;
+  }
+  Promise.all([
+    loadLayout(CI_LAYOUT_ID),
+    loadLayout(ATTR_LAYOUT_ID),
+    loadLayout(SKILL_LAYOUT_ID),
+    loadLayout(TITLE_LAYOUT_ID),
+  ]).then(apply).catch(() => {});
 }
 
 function renderHead(headEl, stats) {
@@ -295,9 +647,71 @@ function renderSkills(bodyEl, stats, skillTable) {
   }
 }
 
-function renderTitles(bodyEl, _stats) {
+// Title tab — uses the gmCharacterTitleUI 0x2100005E structured layout.
+// Three header rows (display info / counts / column heading), 2
+// separators, a scrollable list area, and a bottom action button. The
+// list contents are not yet wired (server doesn't expose titleList()
+// yet); we render an empty-list placeholder for now and keep the
+// structured frame from the layout in place.
+function renderTitles(bodyEl, _stats, titleRefs) {
   bodyEl.innerHTML = "";
-  bodyEl.appendChild(emptyMsg("Titles list — not wired yet. Server needs to expose titleList()."));
+  const wrap = document.createElement("div");
+  wrap.className = "hb-ci-titles";
+
+  const header1 = document.createElement("div");
+  header1.className = "hb-ci-titles-header";
+  setAcText(header1, "Display Title:", { color: "#f0d8a0" });
+  wrap.appendChild(header1);
+
+  const header2 = document.createElement("div");
+  header2.className = "hb-ci-titles-header";
+  setAcText(header2, "Earned: 0", { color: "#f0d8a0" });
+  wrap.appendChild(header2);
+
+  const header3 = document.createElement("div");
+  header3.className = "hb-ci-titles-header";
+  setAcText(header3, "Title", { color: "#6acaca" });
+  wrap.appendChild(header3);
+
+  const sep1 = document.createElement("div");
+  sep1.className = "hb-ci-titles-sep";
+  sep1.dataset.sep = "1";
+  wrap.appendChild(sep1);
+
+  const sep2 = document.createElement("div");
+  sep2.className = "hb-ci-titles-sep";
+  sep2.dataset.sep = "2";
+  wrap.appendChild(sep2);
+
+  const list = document.createElement("div");
+  list.className = "hb-ci-titles-list";
+  const listEmpty = document.createElement("div");
+  listEmpty.className = "hb-ci-titles-list-empty";
+  setAcText(listEmpty, "No titles yet — server needs to expose titleList()", { color: "#a8a090" });
+  list.appendChild(listEmpty);
+  wrap.appendChild(list);
+
+  // Invisible phantom for the layout-derived scrollbar geometry.
+  const titleScrollbar = document.createElement("div");
+  titleScrollbar.className = "hb-ci-scrollbar";
+  wrap.appendChild(titleScrollbar);
+
+  const bottomBtn = document.createElement("div");
+  bottomBtn.className = "hb-ci-titles-bottom";
+  setAcText(bottomBtn, "Set Display Title", { color: "#f0d8a0" });
+  wrap.appendChild(bottomBtn);
+
+  bodyEl.appendChild(wrap);
+
+  // Stash refs back on titleRefs so applyCharacterInfoLayout can
+  // populate the per-element positions.
+  if (titleRefs) {
+    titleRefs.headerEls = [header1, header2, header3];
+    titleRefs.sepEls    = [sep1, sep2];
+    titleRefs.listEl    = list;
+    titleRefs.scrollbarEl = titleScrollbar;
+    titleRefs.bottomBtnEl = bottomBtn;
+  }
 }
 
 function section(text) {
@@ -373,6 +787,13 @@ export const view = {
     bodyEl.className = "hb-ci-body";
     root.appendChild(bodyEl);
 
+    // Invisible scrollbar geometry phantom — applyCharacterInfoLayout
+    // writes the retail scrollbar dimensions here so the e2e verifier
+    // can confirm placement without our DOM showing a double scrollbar.
+    const scrollbarEl = document.createElement("div");
+    scrollbarEl.className = "hb-ci-scrollbar";
+    root.appendChild(scrollbarEl);
+
     const footerEl = document.createElement("div");
     footerEl.className = "hb-ci-footer";
     const footL = document.createElement("span");
@@ -384,6 +805,19 @@ export const view = {
     root.appendChild(footerEl);
 
     parentEl.appendChild(root);
+
+    // Apply retail layouts: parent panel anchors + Title-tab structured
+    // rows. The view mounts via main-panel.showView which only fires
+    // after wasm-ready, so no retry loop is required.
+    const titleRefs = {};
+    applyCharacterInfoLayout({
+      rootEl: root,
+      tabsEl,
+      headEl,
+      bodyEl,
+      scrollbarEl,
+      titleRefs,
+    });
 
     let skillTable = null;
     function setTab(id) {
@@ -401,9 +835,21 @@ export const view = {
       switch (activeTab) {
         case "attributes": renderAttributes(bodyEl, stats, skillTable); break;
         case "skills":     renderSkills(bodyEl, stats, skillTable); break;
-        case "titles":     renderTitles(bodyEl, stats); break;
+        case "titles":
+          renderTitles(bodyEl, stats, titleRefs);
+          // After Title-tab DOM lands, re-apply the structured layout
+          // positions for its header rows / separators / list / button.
+          applyCharacterInfoLayout({
+            rootEl: root,
+            tabsEl,
+            headEl,
+            bodyEl,
+            scrollbarEl,
+            titleRefs,
+          });
+          break;
       }
-      // Footer: skill credits if available.
+      // Footer: XP if available.
       const lv = stats?.levelInfo;
       setAcText(footL, lv ? `XP: ${tupleArrayAt(lv, 1) ?? 0}` : "—", { color: "#a8a090" });
       setAcText(footR, lv ? `Next: ${tupleArrayAt(lv, 2) ?? 0}` : "", { color: "#a8a090" });
