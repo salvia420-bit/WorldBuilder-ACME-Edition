@@ -1431,10 +1431,15 @@
               // Eager-prefetch hot LayoutDescs (G1 in the layout-port
               // plan). Each loadLayout(id) populates ui/ac_layout.js's
               // resolved-cache; by the time plugins mount, their layouts
-              // are sync cache-hits via getCachedLayout(). Drops the
-              // first-render wasm round-trip + eor/local prefetch race
-              // for each panel. Fire-and-forget — individual failures
-              // silently fall back to the per-plugin retry loops.
+              // are sync cache-hits via getCachedLayout().
+              //
+              // IMPORTANT: load layouts ONE AT A TIME, not via
+              // Promise.all. The wasm-side prefetch uses thread-local
+              // RefCells (global_source + walk_dedup); 23 concurrent
+              // fetch_layout calls can re-enter and double-borrow them,
+              // panicking with "RefCell already borrowed" at
+              // global_source.rs:65. Sequential awaits keep each
+              // fetch_layout to itself.
               try {
                 const layoutMod = await import("./ui/ac_layout.js");
                 const hotLayouts = [
@@ -1464,10 +1469,13 @@
                   0x21000012, // gmVendorUI
                   0x2100006B, // gmFloatyExaminationUI
                 ];
-                const loaded = await Promise.all(
-                  hotLayouts.map((id) => layoutMod.loadLayout(id).catch(() => null))
-                );
-                const ok = loaded.filter(Boolean).length;
+                let ok = 0;
+                for (const id of hotLayouts) {
+                  try {
+                    const layout = await layoutMod.loadLayout(id);
+                    if (layout) ok += 1;
+                  } catch (_) { /* fall back to per-plugin retry */ }
+                }
                 console.log(`[ac-layout] eager prefetch: ${ok}/${hotLayouts.length} layouts cached`);
               } catch (_) {}
               // Cache retail LanguageString naming hints for the char-create
