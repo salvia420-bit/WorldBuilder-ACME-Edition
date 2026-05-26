@@ -8691,6 +8691,50 @@ void main() {
                 ) {
                   window.liveScene3d.entityManager.setVisibility(visGuid, visible);
                 }
+              } else if (evt.kind === 18) {
+                // Wave 1.8 — EntityAirborneChanged for REMOTE players.
+                //
+                // Restores the JS recv handler that Wave 1.2 deleted
+                // alongside the local-player overlay. Wasm
+                // `CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED` (lib.rs:23517,
+                // gated by `remote_guid != local_guid && remote_guid != 0`)
+                // fires on velocity-z threshold crossings for remote
+                // entities only.
+                //
+                // Wave 1.7 restored the arms-up airborne overlay for the
+                // local player via spacebar local-prediction + Fallen-
+                // touchdown clear in loop.js. For REMOTE players the wasm
+                // doesn't emit UpdateMotion(Falling/Fallen) — those edges
+                // were Wave 5 local-prediction-only — so the only signal
+                // we get for "remote went airborne" is this kind=18 event.
+                //
+                // Per Joe Trevis (original AC dev): retail had a combined
+                // jumping/falling animation (arms up), no discrete Jump
+                // motion-table clip. So we fire `setAirborne(guid, true)`
+                // on any remote airborne edge (jump OR walked-off-ledge,
+                // can't distinguish from wire) — both get the retail
+                // arms-up overlay.
+                //
+                // `u32Payload` = entity GUID; `u32Payload2` = 1 (airborne)
+                // or 0 (grounded). Defensive local-guid filter even though
+                // the wasm already excludes the local player at the emit
+                // site.
+                const airborneGuid = evt.u32Payload >>> 0;
+                const airborne = (evt.u32Payload2 >>> 0) === 1;
+                const localAirborneGuid = (
+                  typeof window.getLocalPlayerGuid === "function"
+                    ? window.getLocalPlayerGuid()
+                    : null
+                );
+                if (
+                  airborneGuid !== 0
+                  && airborneGuid !== (localAirborneGuid >>> 0)
+                  && window.liveScene3d
+                  && window.liveScene3d.entityManager
+                  && typeof window.liveScene3d.entityManager.setAirborne === "function"
+                ) {
+                  window.liveScene3d.entityManager.setAirborne(airborneGuid, airborne);
+                }
               } else if (evt.kind === 16) {
                 // Task F (ambient-sounds-chain 2026-05-12):
                 // SoundTriggered — ACE broadcast `GameMessageSound`
