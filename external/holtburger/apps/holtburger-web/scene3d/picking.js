@@ -6,6 +6,7 @@ import {
 } from "../ui/ac_attack_type_for_weapon.js";
 import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim_level_for_velocity.js";
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
+import { classifySpell } from "../ui/ac_spell_shape.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -376,6 +377,31 @@ export function setupClickPicking({
               });
             }
           } catch (_) { /* never block the cast on prediction faults */ }
+          // Wave 9 Phase 27 — spellCastInitiated event with shape classification.
+          // Future plugins (projectile spawners, sound triggers, telemetry) can
+          // subscribe via __pluginClient.events.on("spellCastInitiated", handler).
+          // Classifier is lazy-loaded; first call may return a Promise — handle
+          // both sync and async cases. Wire payload to castTargetedSpell is
+          // unchanged regardless of classifier outcome.
+          try {
+            const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+            const classification = classifySpell(spellId);
+            const fire = (c) => {
+              window.__pluginClient?.events?.emit?.("spellCastInitiated", {
+                spellId,
+                targetGuid: guid,
+                attackerGuid: localGuid,
+                school: c?.school ?? null,
+                shape: c?.shape ?? null,
+                level: c?.level ?? null,
+              });
+            };
+            if (classification && typeof classification.then === "function") {
+              classification.then(fire).catch(() => fire(null));
+            } else {
+              fire(classification);
+            }
+          } catch (_) { /* event emission never blocks the cast */ }
           sessionHandle.castTargetedSpell(guid, spellId);
         }
       } else if (isInMeleeStance?.() || isInRangedStance?.()) {
@@ -549,7 +575,12 @@ export function setupClickPicking({
       // `getEquippedWeapon` in entities.js. `BOW_DEFAULT_SPEED_MPS =
       // 20.0` remains the explicit fallback for pre-property arrivals
       // (matches ACE `Creature_Missile.cs:208 DefaultProjectileSpeed`).
-      const projectileSpeed = (weapon && Number.isFinite(weapon.maximumVelocity))
+      // Phase 26 (Wave 9, 2026-05-26): treat explicit 0 as unset. ACE
+      // non-missile weapons leave the property unset (None → 20.0 via
+      // Rust's `unwrap_or`), but the `> 0` guard is defensive against
+      // any weapon shipping a literal 0.0 — a 0 m/s projectile would
+      // collapse the gravity-arc solver.
+      const projectileSpeed = (weapon && Number.isFinite(weapon.maximumVelocity) && weapon.maximumVelocity > 0)
         ? weapon.maximumVelocity
         : BOW_DEFAULT_SPEED_MPS;
       const aimMotion = (targetAc && pose)

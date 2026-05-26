@@ -103,9 +103,24 @@ export function readTrainingLevel(skillType, sessionHandle = null) {
  * sneak-attack facing predicate fired (from picking.js's upstream
  * `sneakAttackPredicted` event).
  *
- * Returns a `{ base, sneak, reckless, total }` breakdown so consumers
- * can surface individual sources (e.g. the HUD plugin shows the sneak
- * component; the combat-bar already visualizes the reckless band).
+ * Returns a `{ base, sneak, reckless, total, currentPowerMod,
+ * accuracyMod }` breakdown so consumers can surface individual sources
+ * (e.g. the HUD plugin shows the sneak component; the combat-bar
+ * already visualizes the reckless band).
+ *
+ * **Wave 9 / Phase 28 (2026-05-26)** — `currentPowerMod` / `accuracyMod`
+ * carry the SERVER's resolved power/accuracy modifiers
+ * (`PropertyFloat::CurrentPowerMod = 23` and `AccuracyMod = 24` per
+ * `holtburger_common::properties::PropertyFloat`), which are **distinct
+ * from** the `powerLevel` argument (that's the local slider input
+ * position). These are observational additions for diag/UI consumers —
+ * the `total` math is unchanged (`base + sneak + reckless`); the
+ * resolved modifiers DO NOT contribute to `total`. When provided as
+ * explicit `currentPowerMod` / `accuracyMod` opts, those values flow
+ * through unchanged (NaN → null). When `sessionHandle` is given and
+ * exposes a `playerResolvedModifiers()` getter (the wasm-side
+ * `SessionHandle::playerResolvedModifiers` export), it is consulted as
+ * a fallback for any opt that wasn't passed.
  *
  * @param {object} opts
  * @param {number} opts.powerLevel  Combat-bar slider value, 0..1.
@@ -114,9 +129,21 @@ export function readTrainingLevel(skillType, sessionHandle = null) {
  *   facing predicate fired this swing.
  * @param {object|null} [opts.sessionHandle]  Optional session-handle
  *   override for testing.
- * @returns {{base: number, sneak: number, reckless: number, total: number}}
+ * @param {number|null|undefined} [opts.currentPowerMod]  Optional
+ *   server-resolved CurrentPowerMod. When omitted, falls back to
+ *   `sessionHandle.playerResolvedModifiers()[0]` if available.
+ * @param {number|null|undefined} [opts.accuracyMod]  Optional
+ *   server-resolved AccuracyMod. When omitted, falls back to
+ *   `sessionHandle.playerResolvedModifiers()[1]` if available.
+ * @returns {{base: number, sneak: number, reckless: number, total: number, currentPowerMod: number|null, accuracyMod: number|null}}
  */
-export function computeDamageRatingRollup({ powerLevel, hasSneak, sessionHandle = null } = {}) {
+export function computeDamageRatingRollup({
+  powerLevel,
+  hasSneak,
+  sessionHandle = null,
+  currentPowerMod,
+  accuracyMod,
+} = {}) {
   // base: placeholder for future per-weapon / per-armor DR plumbed
   // off the wire (PropertyInt Damage_Rating et al). Out of scope this
   // phase; documented TODO at the top of the module.
@@ -146,6 +173,47 @@ export function computeDamageRatingRollup({ powerLevel, hasSneak, sessionHandle 
     reckless = DR_BY_TRAINING[recklessTraining] ?? 0;
   }
 
+  // Phase 28: server-resolved CurrentPowerMod / AccuracyMod surface.
+  // Observational only — DO NOT fold into `total`. Resolution order:
+  //   1. Explicit `currentPowerMod`/`accuracyMod` opts (caller-side).
+  //   2. `sessionHandle.playerResolvedModifiers()` if the method exists.
+  //   3. `null` (no surface available).
+  // NaN normalized to null at every step (mirrors the diag layer's
+  // `_readServerResolvedModifiers` Phase 11 pattern).
+  let resolvedFromHandle = null;
+  if (
+    (currentPowerMod === undefined || accuracyMod === undefined)
+    && sessionHandle
+    && typeof sessionHandle.playerResolvedModifiers === "function"
+  ) {
+    try {
+      const arr = sessionHandle.playerResolvedModifiers();
+      if (arr && arr.length >= 2) {
+        resolvedFromHandle = [Number(arr[0]), Number(arr[1])];
+      }
+    } catch {
+      resolvedFromHandle = null;
+    }
+  }
+  const _normalizeMod = (v) => {
+    if (v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const cpmOut = _normalizeMod(
+    currentPowerMod !== undefined ? currentPowerMod : (resolvedFromHandle ? resolvedFromHandle[0] : null),
+  );
+  const amOut = _normalizeMod(
+    accuracyMod !== undefined ? accuracyMod : (resolvedFromHandle ? resolvedFromHandle[1] : null),
+  );
+
   const total = base + sneak + reckless;
-  return { base, sneak, reckless, total };
+  return {
+    base,
+    sneak,
+    reckless,
+    total,
+    currentPowerMod: cpmOut,
+    accuracyMod: amOut,
+  };
 }

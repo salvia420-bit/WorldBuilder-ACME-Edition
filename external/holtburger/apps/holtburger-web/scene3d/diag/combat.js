@@ -95,6 +95,33 @@ function _readServerPowerState() {
   }
 }
 
+// Wave 9 / Phase 28 (2026-05-26): mirror of `_readServerPowerState` for
+// the server's RESOLVED modifiers (`PropertyFloat::CurrentPowerMod = 23`,
+// `AccuracyMod = 24`) sourced from
+// `SessionHandle::playerResolvedModifiers()`. These are distinct from
+// `_readServerPowerState`'s PowerLevel/AccuracyLevel (which is the raw
+// slider input) — these are the server's post-resolution multiplier
+// values applied to the attack roll. Same NaN→null normalization. Both
+// pulls are cheap (read-on-demand, no shared cell) — the wasm side
+// publishes them alongside `playerStats()` on every `kind=8
+// PlayerStatsUpdated` drain.
+function _readServerResolvedModifiers() {
+  try {
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (!sh || typeof sh.playerResolvedModifiers !== "function") return { currentPowerMod: null, accuracyMod: null };
+    const arr = sh.playerResolvedModifiers();
+    if (!arr || arr.length < 2) return { currentPowerMod: null, accuracyMod: null };
+    const cpm = Number(arr[0]);
+    const am = Number(arr[1]);
+    return {
+      currentPowerMod: Number.isFinite(cpm) ? cpm : null,
+      accuracyMod: Number.isFinite(am) ? am : null,
+    };
+  } catch (_) {
+    return { currentPowerMod: null, accuracyMod: null };
+  }
+}
+
 export function attachCombat(diag) {
   // Kick the motion-name table fetch eagerly so snapshot() output is
   // humanized by the time the user inspects it. Failures don't break diag.
@@ -225,6 +252,7 @@ export function attachCombat(diag) {
     summary() {
       const cached = combat.cached();
       const power = _readServerPowerState();
+      const resolved = _readServerResolvedModifiers();
       return {
         tablesLoaded: combat.loaded.size,
         tablesCached: cached.tables.length,
@@ -239,11 +267,18 @@ export function attachCombat(diag) {
         // for client-vs-server desync visibility.
         serverPowerLevel: power.powerLevel,
         serverAccuracyLevel: power.accuracyLevel,
+        // Phase 28: server-RESOLVED power/accuracy modifiers
+        // (PropertyFloat::CurrentPowerMod / AccuracyMod) — distinct
+        // from the slider input above; this is the post-resolution
+        // value applied to the attack roll.
+        serverCurrentPowerMod: resolved.currentPowerMod,
+        serverAccuracyMod: resolved.accuracyMod,
       };
     },
 
     snapshot() {
       const power = _readServerPowerState();
+      const resolved = _readServerResolvedModifiers();
       return {
         ts: new Date().toISOString(),
         loaded: Array.from(combat.loaded.values()),
@@ -261,6 +296,12 @@ export function attachCombat(diag) {
         // for client-vs-server desync visibility.
         serverPowerLevel: power.powerLevel,
         serverAccuracyLevel: power.accuracyLevel,
+        // Phase 28: server-RESOLVED power/accuracy modifiers
+        // (PropertyFloat::CurrentPowerMod / AccuracyMod) — distinct
+        // from the slider input above; this is the post-resolution
+        // value applied to the attack roll.
+        serverCurrentPowerMod: resolved.currentPowerMod,
+        serverAccuracyMod: resolved.accuracyMod,
       };
     },
 

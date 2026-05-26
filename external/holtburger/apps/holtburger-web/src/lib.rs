@@ -16374,6 +16374,19 @@ struct LatestStats {
     // ships the value to ACE.
     power_level: Option<f32>,
     accuracy_level: Option<f32>,
+    // CMT Wave 9 / Phase 28 (2026-05-26): server-RESOLVED power /
+    // accuracy modifiers — distinct from `power_level`/`accuracy_level`
+    // above (which is the raw slider input position). These are
+    // `PropertyFloat::CurrentPowerMod` (FloatKey 23) and
+    // `PropertyFloat::AccuracyMod` (FloatKey 24) per
+    // `holtburger_common::properties::PropertyFloat` — the server's
+    // post-resolution modifier values applied to the attack roll. They
+    // arrive on the same `Private/PublicUpdatePropertyFloat` arm as the
+    // slider state, so the `publish_player_stats_snapshot` site reads
+    // all four floats off the player Entity at once. `None` pre-spawn
+    // or before either property has landed.
+    current_power_mod: Option<f32>,
+    accuracy_mod: Option<f32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -16482,6 +16495,35 @@ impl SessionHandle {
         vec![p.unwrap_or(f32::NAN), a.unwrap_or(f32::NAN)]
     }
 
+    /// **CMT Wave 9 / Phase 28 (2026-05-26).** Server-RESOLVED
+    /// `[CurrentPowerMod, AccuracyMod]` modifiers for the local player
+    /// as a 2-element `f32` array. These are **distinct from**
+    /// `playerPowerState()` — that getter returns the raw slider input
+    /// position (`PropertyFloat::PowerLevel = 92` / `AccuracyLevel = 93`),
+    /// whereas this returns the server's POST-RESOLUTION modifier values
+    /// applied to the attack roll (`PropertyFloat::CurrentPowerMod = 23`
+    /// / `AccuracyMod = 24` per
+    /// `holtburger_common::properties::PropertyFloat`). Either component
+    /// is `NaN` if the corresponding property hasn't been received yet
+    /// (pre-spawn, or the property hasn't been updated server-side).
+    /// JS uses this for diag observability of resolved-DR-vs-slider
+    /// drift and as the server-authoritative input to the
+    /// `computeDamageRatingRollup` helper's `currentPowerMod` /
+    /// `accuracyMod` fields. Refreshed alongside the rest of
+    /// `playerStats()` on every `kind=8 PlayerStatsUpdated` drain (the
+    /// `Private/PublicUpdatePropertyFloat` arm fires
+    /// `emit_player_derived_stats` for player-targeted updates, which
+    /// the recv loop folds into `stats_changed`).
+    #[wasm_bindgen(js_name = playerResolvedModifiers)]
+    pub fn player_resolved_modifiers(&self) -> Vec<f32> {
+        let s = self.latest_stats.borrow();
+        let (cpm, am) = match s.as_ref() {
+            Some(stats) => (stats.current_power_mod, stats.accuracy_mod),
+            None => (None, None),
+        };
+        vec![cpm.unwrap_or(f32::NAN), am.unwrap_or(f32::NAN)]
+    }
+
     /// Phase 4 step 4 follow-on: most recent inventory snapshot.
     /// Includes the player's main pack contents + every equipped
     /// item (see [`InventoryItem::equip_mask`] for the equipped/
@@ -16541,6 +16583,45 @@ impl SessionHandle {
             });
         }
         None
+    }
+
+    /// **CMT Wave 9 / Phase 26 (2026-05-26).** Full list of wielded items
+    /// for **non-local** entities. Returns every observed
+    /// `WieldedWeaponEntry` for the given wielder GUID — primary weapon,
+    /// offhand (shield-slot occupant), shield itself, anything the
+    /// wielder_index has captured via `apply_inventory_object_create`.
+    /// Empty `Vec` (JS `[]`) when the entity isn't a known wielder.
+    ///
+    /// Distinct from [`SessionHandle::entity_equipped_weapon`] which
+    /// truncates to the first primary-weapon hit. This accessor exists so
+    /// `scene3d/entities.js#isDualWield(guid)` can iterate ALL items and
+    /// mirror the local-player heuristic (primary + SHIELD-slot
+    /// non-shield = dual-wielder) for remote entities. See ACE
+    /// `Creature_Equipment.cs:133-136 GetDualWieldWeapon` for the
+    /// canonical encoding.
+    ///
+    /// Conversion mirrors the existing
+    /// `WieldedWeaponEntry → EquippedWeaponJs` projection in
+    /// `entity_equipped_weapon` so the JS-side shape is identical across
+    /// the two accessors.
+    #[wasm_bindgen(js_name = entityWieldedItems)]
+    pub fn entity_wielded_items(&self, guid: u32) -> Vec<EquippedWeaponJs> {
+        let idx = self.wielder_index.borrow();
+        match idx.get(&guid) {
+            Some(entries) => entries
+                .iter()
+                .map(|entry| EquippedWeaponJs {
+                    guid: entry.item_guid,
+                    wcid: entry.wcid,
+                    item_type: entry.item_type,
+                    equip_mask: entry.equip_mask,
+                    name: entry.name.clone(),
+                    attack_type: entry.attack_type,
+                    maximum_velocity: entry.maximum_velocity,
+                })
+                .collect(),
+            None => Vec::new(),
+        }
     }
 
     /// **Vendor UI (2026-05-19).** Pull the cached vendor state for a
@@ -20102,6 +20183,23 @@ fn publish_player_stats_snapshot(
             )
         })
         .unwrap_or((None, None));
+    // CMT Wave 9 / Phase 28 (2026-05-26): same path as PowerLevel/
+    // AccuracyLevel above but for the server's RESOLVED modifiers —
+    // `PropertyFloat::CurrentPowerMod` (23) / `AccuracyMod` (24). These
+    // arrive on the identical `Private/PublicUpdatePropertyFloat` arm
+    // (handlers/properties.rs:120-143), so reading them inline here
+    // keeps a single snapshot publish. `None` pre-spawn / before the
+    // property has landed.
+    let (current_power_mod, accuracy_mod) = world
+        .entities
+        .get(world.player.guid)
+        .map(|entity| {
+            (
+                entity.get_float_prop(PropertyFloat::CurrentPowerMod).map(|v| v as f32),
+                entity.get_float_prop(PropertyFloat::AccuracyMod).map(|v| v as f32),
+            )
+        })
+        .unwrap_or((None, None));
     // Wave-D4 (paperdoll): burden recompute piggy-backs on stats
     // hydration — same trigger conditions (UpdateAttribute, equip,
     // inventory delta). Reads via `WorldContextExt::player_burden`
@@ -20117,6 +20215,8 @@ fn publish_player_stats_snapshot(
         burden,
         power_level,
         accuracy_level,
+        current_power_mod,
+        accuracy_mod,
     });
 }
 

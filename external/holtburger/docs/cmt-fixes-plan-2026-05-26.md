@@ -34,6 +34,9 @@
 | 23 | Picking.js call-site upgrade for Phase 21 + isDualWield accessor | 8 | **shipped** 2026-05-26 |
 | 24 | AttackHeight mislabel fix + 2-test parity guard | 8 | **shipped** 2026-05-26 |
 | 25 | Per-weapon projectile speed from wire (PropertyFloat::MaximumVelocity=26) | 8 | **shipped** 2026-05-26 |
+| 26 | Wielder offhand surfacing — non-local isDualWield, MaximumVelocity unset-vs-zero fix | 9 | **shipped** 2026-05-26 |
+| 27 | spellCastInitiated event with shape classification (consumer-ready) | 9 | **shipped** 2026-05-26 |
+| 28 | CurrentPowerMod / AccuracyMod surface for resolved-DR observability | 9 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -1403,6 +1406,143 @@ Inline assertions 4/4 PASS: unarmed power=0.8 + no dual → Kick (0x08); same + 
 | `cargo test attack_height_parity` (new) | 2/2 PASS |
 | `cargo test shield_stance_backhand_audit` (regression) | 4/4 PASS in 1.0s |
 | `inferAttackTypeForWeapon` 6-case parity (Wave 6 + Wave 7 + Wave 8 scenarios) | 6/6 PASS |
+
+---
+
+## Wave 9 — closing TODO breadcrumbs (3 agents, parallel)
+
+### Pre-investigated facts
+
+- **`WieldedWeaponEntry`** at `src/lib.rs:14099`. **`EquippedWeaponJs`** at `:14126`. **`InventoryItem`** at `:13991`. Construction sites at `apply_inventory_object_create:15431`, `entity_equipped_weapon:16495`, `publish_player_inventory_snapshot:20062` (lines may have shifted +20-40 by now).
+- **`LatestStats`** struct at `src/lib.rs:16353-16377` already holds `power_level`/`accuracy_level: Option<f32>`. Phase 28 adds two siblings (`current_power_mod`, `accuracy_mod`) using the same pattern.
+- **`playerPowerState()`** wasm export at `src/lib.rs:16475-16483`. Phase 28 adds a sibling `playerResolvedModifiers()` next to it.
+- **`PropertyFloat::CurrentPowerMod = 23`**, **`AccuracyMod = 24`** per `crates/holtburger-common/src/properties/property_keys/floats.rs:35-36`. Verified against ACE `PropertyFloat.cs`.
+- **Wielder index** at `src/lib.rs:15533` already accumulates ALL items per wielder (offhand included). Only `entity_equipped_weapon` truncates to primary today.
+- **MaximumVelocity zero-vs-unset:** today `picking.js` uses `Number.isFinite(...)` which accepts 0.0. ACE non-missile weapons leave the property unset (returns None → unwrap_or(20.0) on the Rust side OK), but if any weapon ships explicit 0.0 it'd propagate. Phase 26 (X) folds in a JS-side correctness check.
+
+### Phase 26 — Wielder offhand surfacing + MaximumVelocity unset-vs-zero fix
+
+**Owner:** Agent X
+**Files:**
+- `external/holtburger/apps/holtburger-web/src/lib.rs` — extend the wielder-index getter path. Add a new wasm-exported method `entity_wielded_items(guid: u32) -> Vec<EquippedWeaponJs>` (or similar — match existing patterns) returning ALL wielded items for that GUID, not just the primary. Keep `entity_equipped_weapon` as the existing primary-only getter for backward compat.
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js` — extend `isDualWield(guid)` non-local branch. Today returns false with a TODO breadcrumb. New behavior: call the new wasm getter, iterate items, return `true` iff any item has `equipMask & SHIELD (0x00200000) && itemType !== 2 /* Armor */` (same heuristic as the local-player branch, per Phase 23's ACE-confirmed dual-wield encoding).
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` — missile branch's projectile-speed lookup. Today:
+  ```js
+  const projectileSpeed = (weapon && Number.isFinite(weapon.maximumVelocity)) ? weapon.maximumVelocity : BOW_DEFAULT_SPEED_MPS;
+  ```
+  Update to treat 0 as "unset":
+  ```js
+  const projectileSpeed = (weapon && Number.isFinite(weapon.maximumVelocity) && weapon.maximumVelocity > 0)
+    ? weapon.maximumVelocity : BOW_DEFAULT_SPEED_MPS;
+  ```
+
+**Acceptance:**
+- `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean (18 pre-existing warnings, 0 new).
+- `wasm-pack build` PASS; new getter visible in `pkg/holtburger_web.d.ts`.
+- `node --check` clean.
+- `em.isDualWield(remoteGuid)` returns `true` when a remote attacker wields primary+offhand (e.g., a drudge with two weapons via `@create`).
+- Picking.js missile branch unchanged behavior for normal bows (with `MaximumVelocity > 0`); falls back to 20.0 default if a weapon ships explicit 0.
+
+**Hard constraints:** Don't touch `ui/ac_attack_type_for_weapon.js` (Phase 22's docstring is final). Don't touch other Wave 9 agents' files: `picking.js` magic branch (Y), `src/lib.rs` LatestStats region (Z).
+
+### Phase 27 — `spellCastInitiated` event with shape classification
+
+**Owner:** Agent Y
+**Files:**
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` — magic branch ONLY (~line 320). Right BEFORE `sessionHandle.castTargetedSpell(guid, spellId)`, classify the spell via `classifySpell(spellId)` (lazy-loads on first call; cache after). Fire a new event on the plugin event bus:
+  ```js
+  const classification = classifySpell(spellId);  // async or sync depending on cache state
+  window.__pluginClient?.events?.emit?.("spellCastInitiated", {
+    spellId, targetGuid: guid, attackerGuid: localGuid,
+    school: classification?.school ?? null,
+    shape: classification?.shape ?? null,
+    level: classification?.level ?? null,
+  });
+  ```
+  The classifier may return a Promise on first call (lazy fetch). Wrap with try/catch so prediction faults never block the cast. Event fires whether or not the classifier hits — null school/shape on miss is fine.
+
+**Acceptance:**
+- `node --check` clean.
+- Event fires on every targeted spell cast. Spellbook entries hand-spot-checked (`Lightning Bolt I → school:War, shape:Bolt, level:1`) via the existing `classifySpell` cache.
+- Wire payload to `castTargetedSpell` unchanged.
+
+**Hard constraints:** Magic branch only. Don't touch melee/missile branches (Phase 16's existing wiring; don't duplicate). Don't touch `ui/ac_spell_shape.js` (Wave 5 Phase 12's helper is final). Don't touch other Wave 9 agents' files: `src/lib.rs` (X/Z), `entities.js` (X).
+
+### Phase 28 — CurrentPowerMod + AccuracyMod surface
+
+**Owner:** Agent Z
+**Goal:** Surface the SERVER's resolved power/accuracy modifiers (distinct from the slider input position). Diag observability + DR rollup component.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/src/lib.rs`:
+  - `LatestStats` struct (line ~16353): add `current_power_mod: Option<f32>` + `accuracy_mod: Option<f32>` siblings to the existing `power_level` / `accuracy_level` fields.
+  - Wherever `LatestStats` is populated (search for `power_level: ` to find the write site — likely in `emit_player_derived_stats` or a similar accessor that reads `world.entities.get(world.player.guid).get_float_prop(PropertyFloat::PowerLevel)`), add reads for `PropertyFloat::CurrentPowerMod (23)` + `PropertyFloat::AccuracyMod (24)`.
+  - New wasm export adjacent to `playerPowerState` at line ~16475:
+    ```rust
+    #[wasm_bindgen(js_name = playerResolvedModifiers)]
+    pub fn player_resolved_modifiers(&self) -> Vec<f32> {
+        let s = self.latest_stats.borrow();
+        let (cpm, am) = match s.as_ref() {
+            Some(stats) => (stats.current_power_mod, stats.accuracy_mod),
+            None => (None, None),
+        };
+        vec![cpm.unwrap_or(f32::NAN), am.unwrap_or(f32::NAN)]
+    }
+    ```
+- `external/holtburger/apps/holtburger-web/scene3d/diag/combat.js` — surface `serverCurrentPowerMod` + `serverAccuracyMod` in `summary()` + `snapshot()`. Read-on-demand from the new wasm getter (NaN → null pattern matches Phase 11's `serverPowerLevel`).
+- `external/holtburger/apps/holtburger-web/ui/ac_damage_rating.js` — extend `computeDamageRatingRollup` to accept an optional `{ currentPowerMod, accuracyMod }` and expose them as separate components in the returned object (alongside `base`, `sneak`, `reckless`, `total`). Don't change the existing total math; these are observational additions for diag/UI consumers. Update the unit-test file with 2+ new cases.
+
+**Acceptance:**
+- `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean.
+- `wasm-pack build` PASS; `playerResolvedModifiers` in `pkg/holtburger_web.d.ts`.
+- `node --check` clean.
+- `test_ac_damage_rating.mjs` still 19/19 PASS + new cases.
+- Diag snapshot shape gains the new fields without removing existing ones.
+
+**Hard constraints:** Don't touch other Wave 9 agents' files: `entities.js` / `picking.js` / wielder region of `src/lib.rs` (X), `picking.js` magic branch (Y). Phase 28's `src/lib.rs` edits target the `LatestStats` struct region (16353) + the `playerPowerState` neighborhood (16475) — far from X's wielder region (~15431+).
+
+### Wave 9 reporting & checkpoint
+
+Each agent reports: files changed (paths + line counts), validation outputs, any surprises. Under 350 words each. **Don't commit — parent agent handles commits after all 3 finish.**
+
+### Wave 9 results — shipped 2026-05-26
+
+#### Phase 26 (Agent X) — Wielder offhand + zero-vs-unset fix
+
+**Files (3, +101/-35):**
+- `src/lib.rs` (+40): new `#[wasm_bindgen(js_name = entityWieldedItems)] pub fn entity_wielded_items(&self, guid: u32) -> Vec<EquippedWeaponJs>`. Returns the full list per wielder (not just primary). `entity_equipped_weapon` unchanged for backward compat.
+- `scene3d/entities.js` (+55/-34): `isDualWield(guid)` non-local branch now consults `entityWieldedItems(g)`; iterates with the same primary + SHIELD-slot-non-shield heuristic as the local branch (per Phase 23's ACE-confirmed dual-wield encoding). Phase 23's TODO breadcrumb removed.
+- `scene3d/picking.js` (+6/-1): missile-branch projectile-speed lookup now guards against explicit `0.0` (`weapon.maximumVelocity > 0`); falls back to `BOW_DEFAULT_SPEED_MPS = 20.0`.
+
+#### Phase 27 (Agent Y) — spellCastInitiated event
+
+**Files (1, +26):** `scene3d/picking.js` magic branch only. New `spellCastInitiated` event fires right before `castTargetedSpell` with `{spellId, targetGuid, attackerGuid, school, shape, level}`. Both sync + Promise paths handled for `classifySpell`; try/catch wrap so faults never block the cast. Wire payload unchanged. Phase 16's `sneakAttackPredicted` magic-stance emission preserved.
+
+#### Phase 28 (Agent Z) — CurrentPowerMod/AccuracyMod surface
+
+**Files (4, +225):**
+- `src/lib.rs` (+43): `LatestStats` gains `current_power_mod: Option<f32>` + `accuracy_mod: Option<f32>`. Populate at `publish_player_stats_snapshot:20144-20157` reads `PropertyFloat::CurrentPowerMod (23)` + `AccuracyMod (24)`. New `playerResolvedModifiers() -> Vec<f32>` wasm export mirrors `playerPowerState`'s pattern (NaN for unset).
+- `scene3d/diag/combat.js` (+37): `serverCurrentPowerMod` + `serverAccuracyMod` fields in both `summary()` and `snapshot()` via new `_readServerResolvedModifiers` helper.
+- `ui/ac_damage_rating.js` (+63): `computeDamageRatingRollup` extended to accept optional `currentPowerMod`/`accuracyMod` opts OR auto-read from `sessionHandle.playerResolvedModifiers()`. Return shape gains these two fields. **`total` math unchanged** (observational additions only).
+- `test_ac_damage_rating.mjs` (+82): 5 new cases (no-handle null, `[1.2, 0.9]` flow-through, NaN normalization). 24/24 total PASS (19 pre-existing + 5 new).
+
+### Wave 9 validation summary
+
+| Check | Result |
+|---|---|
+| `node --check` on 4 modified JS files | PASS |
+| `cargo check -p holtburger-web --target wasm32-unknown-unknown` | PASS (18 pre-existing warnings, 0 new) |
+| `wasm-pack build` | PASS; `entityWieldedItems` + `playerResolvedModifiers` confirmed in `.d.ts` |
+| `test_ac_damage_rating.mjs` | 24/24 PASS (19 old + 5 new; no math drift) |
+| `test_ac_aim_level_for_velocity.mjs` regression | 28/28 PASS |
+| `test_ac_attack_type_for_weapon.mjs` regression | 16/16 PASS |
+| `test_ac_spell_shape.mjs` regression | 30/30 PASS |
+
+### Closed TODO breadcrumbs
+
+- **Phase 23 → Phase 26:** non-local `isDualWield` no longer returns false unconditionally; wielder-index offhand items are now surfaced.
+- **Phase 25 → Phase 26:** `MaximumVelocity = 0` explicit values now correctly fall back to default.
+- **Phase 11 → Phase 28:** server-resolved `CurrentPowerMod`/`AccuracyMod` now diagable alongside slider-input `PowerLevel`/`AccuracyLevel`.
 
 ## Coordination notes for agents
 

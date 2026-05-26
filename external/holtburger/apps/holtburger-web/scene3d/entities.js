@@ -1963,23 +1963,16 @@ export class EntityManager {
    *
    * Returns `true` iff BOTH are present.
    *
-   * ## Non-local entities — limitation
+   * ## Non-local entities
    *
-   * The wasm `wielder_index` (see `src/lib.rs:15533`) DOES accumulate
-   * every wielded item ObjectCreate per wielder (primary + offhand
-   * shield-slot occupant both land in the index), but the public
-   * accessor `entity_equipped_weapon` (line 16451) iterates and
-   * returns ONLY the first primary-weapon hit. Surfacing the offhand
-   * for non-local entities would require either (a) a new wasm getter
-   * that returns the full per-wielder list, or (b) extending
-   * `entity_equipped_weapon` to return primary + offhand as a tuple.
-   *
-   * Per Phase 23's hard constraint, we keep this scope-bounded: return
-   * `false` for non-local entities for now. TODO: extend
-   * `wielder_index` consumer at `src/lib.rs:15421` (apply_inventory_object_create
-   * dispatch comment) — wire a separate `entity_offhand_weapon(guid)`
-   * getter so this accessor can match the local-player behaviour for
-   * remote dual-wielders.
+   * The wasm `wielder_index` accumulates every wielded item
+   * ObjectCreate per wielder (primary + offhand shield-slot occupant
+   * both land in the index). Phase 26 (Wave 9, 2026-05-26) added the
+   * `entityWieldedItems(guid)` wasm getter which returns the FULL
+   * list as `Vec<EquippedWeaponJs>` (distinct from the primary-only
+   * `entityEquippedWeapon`). This accessor walks that list and applies
+   * the same primary+SHIELD-slot-non-shield heuristic as the local
+   * branch.
    *
    * ## Defensive contract
    *
@@ -2005,11 +1998,52 @@ export class EntityManager {
       }
     } catch (_) { /* never break callers */ }
 
-    // Non-local entities — limitation documented above. TODO once the
-    // wielder index gains an offhand-aware accessor at
-    // `src/lib.rs:15421` (apply_inventory_object_create / wielder_index
-    // population), mirror the local-player logic below.
-    if (g !== localGuid) return false;
+    // EquipMask bits — see ACE.Entity/Enum/EquipMask.cs +
+    // crates/holtburger-common/src/properties/inventory.rs:158.
+    // `MELEE_WEAPON | TWO_HANDED` mark the primary; `SHIELD` is the
+    // offhand slot. Two-handed is included for completeness even
+    // though dual-wielding a two-hander is invalid in retail — keeps
+    // the predicate honest if the wire ever shows a transient state.
+    const PRIMARY_BITS = 0x00100000 /* MELEE_WEAPON */ | 0x02000000 /* TWO_HANDED */;
+    const SHIELD_BIT   = 0x00200000;
+    // ItemType::Armor = 2 — shields are ItemType=Armor in AC. Anything
+    // else in the SHIELD slot is an offhand weapon per ACE's
+    // `Creature_Equipment.cs:135` `!e.IsShield` discriminator.
+    const ITEM_TYPE_ARMOR = 2;
+
+    // Non-local entities — Phase 26 (Wave 9, 2026-05-26). Pull the full
+    // wielded-item list from the wielder index via the new
+    // `entityWieldedItems(guid)` wasm getter (lib.rs). Iterate and apply
+    // the same primary + SHIELD-slot-non-shield heuristic the local
+    // branch uses below. Defensive: empty list / unavailable getter →
+    // false.
+    if (g !== localGuid) {
+      let items = null;
+      try {
+        if (typeof window !== "undefined" && window.__sessionHandle
+            && typeof window.__sessionHandle.entityWieldedItems === "function") {
+          items = window.__sessionHandle.entityWieldedItems(g);
+        }
+      } catch (_) { /* never break callers */ }
+      if (!Array.isArray(items) || items.length === 0) return false;
+
+      let remoteHasPrimary = false;
+      let remoteHasOffhandWeapon = false;
+      for (const item of items) {
+        const mask = (item?.equipMask ?? 0) >>> 0;
+        if ((mask & PRIMARY_BITS) !== 0) {
+          remoteHasPrimary = true;
+        }
+        if ((mask & SHIELD_BIT) !== 0) {
+          const itemType = (item?.itemType ?? 0) >>> 0;
+          if (itemType !== ITEM_TYPE_ARMOR) {
+            remoteHasOffhandWeapon = true;
+          }
+        }
+        if (remoteHasPrimary && remoteHasOffhandWeapon) return true;
+      }
+      return remoteHasPrimary && remoteHasOffhandWeapon;
+    }
 
     // Local player path. Pull the latest inventory snapshot from the
     // wasm-bound session handle. Returns `Vec<InventoryItem>` —
@@ -2023,19 +2057,6 @@ export class EntityManager {
       }
     } catch (_) { /* never break callers */ }
     if (!Array.isArray(inventory) || inventory.length === 0) return false;
-
-    // EquipMask bits — see ACE.Entity/Enum/EquipMask.cs +
-    // crates/holtburger-common/src/properties/inventory.rs:158.
-    // `MELEE_WEAPON | TWO_HANDED` mark the primary; `SHIELD` is the
-    // offhand slot. Two-handed is included for completeness even
-    // though dual-wielding a two-hander is invalid in retail — keeps
-    // the predicate honest if the wire ever shows a transient state.
-    const PRIMARY_BITS = 0x00100000 /* MELEE_WEAPON */ | 0x02000000 /* TWO_HANDED */;
-    const SHIELD_BIT   = 0x00200000;
-    // ItemType::Armor = 2 — shields are ItemType=Armor in AC. Anything
-    // else in the SHIELD slot is an offhand weapon per ACE's
-    // `Creature_Equipment.cs:135` `!e.IsShield` discriminator.
-    const ITEM_TYPE_ARMOR = 2;
 
     let hasPrimary = false;
     let hasOffhandWeapon = false;

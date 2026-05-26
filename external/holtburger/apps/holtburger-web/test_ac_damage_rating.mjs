@@ -273,6 +273,88 @@ eqRollup(
   { base: 0, sneak: 0, reckless: 0, total: 0 },
 );
 
+// --- Phase 28 additions: server-resolved CurrentPowerMod / AccuracyMod ---
+//
+// These verify the observational surface added in Wave 9 / Phase 28.
+// The `total` math is UNCHANGED — the resolved modifiers are reported
+// alongside `base/sneak/reckless/total` for diag/UI consumers and DO
+// NOT contribute to `total`. NaN normalizes to null (mirrors the diag
+// layer's `_readServerResolvedModifiers` Phase 11 pattern).
+
+// --- Case P28a: no sessionHandle, no explicit mods → both null ---
+
+{
+  const got = computeDamageRatingRollup({
+    powerLevel: 0.5,
+    hasSneak: false,
+    sessionHandle: null,
+  });
+  check(
+    "P28: no sessionHandle → currentPowerMod=null, accuracyMod=null",
+    got.currentPowerMod === null && got.accuracyMod === null,
+    `got={currentPowerMod:${got.currentPowerMod},accuracyMod:${got.accuracyMod}}`,
+  );
+  // total must still match the base+sneak+reckless math.
+  check(
+    "P28: total unchanged when resolved mods are null",
+    got.total === 0,
+    `total=${got.total}`,
+  );
+}
+
+// --- Case P28b: sessionHandle.playerResolvedModifiers() returns [1.2, 0.9] ---
+//   → those values flow through unchanged.
+
+{
+  // Build a stub that ALSO exposes playerResolvedModifiers (mirrors the
+  // wasm-side `SessionHandle::playerResolvedModifiers` Float32Array
+  // shape).
+  const stubWithMods = {
+    playerStats: () => ({ skills: [] }),
+    playerResolvedModifiers: () => [1.2, 0.9],
+  };
+  const got = computeDamageRatingRollup({
+    powerLevel: 0.5,
+    hasSneak: false,
+    sessionHandle: stubWithMods,
+  });
+  // Floating-point equality is exact here — neither value goes through
+  // any math; the stub literal flows straight to the output.
+  check(
+    "P28: handle.playerResolvedModifiers() [1.2, 0.9] → currentPowerMod=1.2, accuracyMod=0.9",
+    Math.abs(got.currentPowerMod - 1.2) < 1e-9 && Math.abs(got.accuracyMod - 0.9) < 1e-9,
+    `got={currentPowerMod:${got.currentPowerMod},accuracyMod:${got.accuracyMod}}`,
+  );
+  // total must still match the base+sneak+reckless math (slider 0.5 +
+  // no skills + no sneak → 0).
+  check(
+    "P28: total unchanged when resolved mods are populated",
+    got.total === 0,
+    `total=${got.total}`,
+  );
+}
+
+// --- Case P28c: NaN → null normalization ---
+//   Handle returns [NaN, NaN] (the wasm getter encodes "missing" as
+//   NaN). The rollup must normalize both to null.
+
+{
+  const stubNaNMods = {
+    playerStats: () => ({ skills: [] }),
+    playerResolvedModifiers: () => [Number.NaN, Number.NaN],
+  };
+  const got = computeDamageRatingRollup({
+    powerLevel: 0.5,
+    hasSneak: false,
+    sessionHandle: stubNaNMods,
+  });
+  check(
+    "P28: handle returns [NaN, NaN] → currentPowerMod=null, accuracyMod=null",
+    got.currentPowerMod === null && got.accuracyMod === null,
+    `got={currentPowerMod:${got.currentPowerMod},accuracyMod:${got.accuracyMod}}`,
+  );
+}
+
 // --- Summary ---
 console.log("");
 console.log(`Cases: ${passed} passed, ${failed} failed`);
