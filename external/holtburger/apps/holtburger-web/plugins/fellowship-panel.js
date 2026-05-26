@@ -453,6 +453,64 @@ function emit(msgText, cat = 0) {
   log.appendChild(li);
 }
 
+// Pull the currently selected entity GUID (set by scene3d/picking.js
+// when the user clicks an entity in the world). Returns null when no
+// target is selected.
+function currentSelectedGuid() {
+  try {
+    const em = window.liveScene3d?.entityManager;
+    const g = em?.getSelectedTarget?.();
+    return g ? (g >>> 0) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function withSession(label, fn) {
+  const handle = window.__sessionHandle;
+  if (typeof handle?.[label] !== "function") {
+    emit(`[fellowship] Wasm session not ready (${label}).`);
+    return;
+  }
+  try {
+    fn(handle);
+  } catch (err) {
+    emit(`[fellowship] ${label} failed: ${err?.message ?? err}`);
+  }
+}
+
+function invokeRecruit() {
+  const guid = currentSelectedGuid();
+  if (!guid) {
+    emit("[fellowship] Click an entity first (Recruit target).");
+    return;
+  }
+  withSession("fellowshipRecruit", (h) => {
+    h.fellowshipRecruit(guid);
+    emit(`[fellowship/recruit] target=0x${guid.toString(16).padStart(8, "0")}`);
+  });
+}
+
+function invokeAssignLeader() {
+  const guid = currentSelectedGuid();
+  if (!guid) {
+    emit("[fellowship] Click an entity first (Assign Leader target).");
+    return;
+  }
+  withSession("fellowshipAssignNewLeader", (h) => {
+    h.fellowshipAssignNewLeader(guid);
+    emit(`[fellowship/assign-leader] new_leader=0x${guid.toString(16).padStart(8, "0")}`);
+  });
+}
+
+function invokeQuit(disband, prompt) {
+  if (!window.confirm(prompt ?? "Leave fellowship?")) return;
+  withSession("fellowshipQuit", (h) => {
+    h.fellowshipQuit(!!disband);
+    emit(`[fellowship/quit] disband=${!!disband}`);
+  });
+}
+
 // Apply gmFellowshipUI 0x21000030 layout to the fellowship-panel
 // sub-elements. Native height is 600 px; we compress vertically by
 // scaleY = bodyH / FELLOWSHIP_NATIVE_H so the InFellowship action
@@ -707,12 +765,18 @@ function buildInState(root, members, inRefs) {
   root.appendChild(scrollbar);
 
   // 6 action buttons — retail's gmFellowshipUI puts these in 2 rows of
-  // 3 at the bottom. Labels mirror retail's typical fellowship actions
-  // (Recruit/Disband/Leave + Pass-Leader/Quit/Lock — these come from
-  // StateDesc text in v2 fetch_layout, hand-tuned for now).
-  const ACTION_LABELS = [
-    "Recruit", "Disband", "Leave",
-    "Pass Leader", "Quit", "Lock",
+  // 3 at the bottom. Labels mirror retail's typical fellowship actions;
+  // each button is wired to its matching wasm GameAction send. Recruit,
+  // Pass Leader → require a selected entity (uses scene3d entityManager
+  // selection state). Lock has no wasm method yet
+  // (FellowshipChangeOpenness commented out in opcodes).
+  const ACTIONS = [
+    { label: "Recruit",     fn: invokeRecruit },
+    { label: "Disband",     fn: () => invokeQuit(true,  "Disband fellowship?") },
+    { label: "Leave",       fn: () => invokeQuit(false, "Leave fellowship?") },
+    { label: "Pass Leader", fn: invokeAssignLeader },
+    { label: "Quit",        fn: () => invokeQuit(false, "Quit fellowship?") },
+    { label: "Lock",        fn: () => emit("[fellowship] Lock — FellowshipChangeOpenness opcode not implemented.") },
   ];
   // Each action button gets a per-instance fallback x/y; the layout
   // applier overrides with retail (18/108/198, 534/567) coords.
@@ -721,17 +785,15 @@ function buildInState(root, members, inRefs) {
     { left: 18,  top: 567 }, { left: 108, top: 567 }, { left: 198, top: 567 },
   ];
   const btnEls = [];
-  for (let i = 0; i < ACTION_LABELS.length; i++) {
+  for (let i = 0; i < ACTIONS.length; i++) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "hb-fellow-in-btn";
-    btn.dataset.action = ACTION_LABELS[i].toLowerCase().replace(/\s+/g, "-");
+    btn.dataset.action = ACTIONS[i].label.toLowerCase().replace(/\s+/g, "-");
     btn.style.left = `${FALLBACK_BTN_POS[i].left}px`;
     btn.style.top  = `${FALLBACK_BTN_POS[i].top}px`;
-    setAcText(btn, ACTION_LABELS[i]);
-    btn.addEventListener("click", () => {
-      emit(`[fellowship] ${ACTION_LABELS[i]} (game-action not wired yet)`);
-    });
+    setAcText(btn, ACTIONS[i].label);
+    btn.addEventListener("click", ACTIONS[i].fn);
     root.appendChild(btn);
     btnEls.push(btn);
   }
@@ -802,8 +864,17 @@ export const view = {
           emit("[fellowship] Cannot create — name required.");
           return;
         }
-        // GameAction Fellowship_Create isn't exposed yet — log + simulate.
-        emit(`[fellowship] Created "${name}" (game-action not wired yet)`);
+        const handle = window.__sessionHandle;
+        if (typeof handle?.fellowshipCreate !== "function") {
+          emit("[fellowship] Wasm session not ready.");
+          return;
+        }
+        try {
+          handle.fellowshipCreate(name, !!opts.shareXp);
+          emit(`[fellowship/create] name="${name}" share_xp=${!!opts.shareXp}`);
+        } catch (err) {
+          emit(`[fellowship] Create failed: ${err?.message ?? err}`);
+        }
       }, aloneRefs);
     }
 
@@ -835,3 +906,378 @@ export const manifest = {
   version: "0.1.0",
   description: "Fellowship view (gmFellowshipUI 0x21000030)",
 };
+
+// ─────────────────────────────────────────────────────────────────
+// Standalone floating action panel
+//
+// Lightweight overlay distinct from the main-panel `view` export
+// above. Exposes window.__openFellowshipPanel / __closeFellowshipPanel
+// for ad-hoc opening from devtools or hotkeys. 6 spec-aligned buttons:
+// Create, Quit, Recruit, Dismiss, Assign Leader, Toggle Updates.
+//
+// State (member list / leader stats) is Wave-D scope — placeholder
+// text below the action grid says so.
+// ─────────────────────────────────────────────────────────────────
+
+const STANDALONE_STYLE_ID = "hb-fellow-standalone-style";
+const STANDALONE_OVERLAY_ID = "hb-fellow-standalone";
+
+function ensureStandaloneStyles() {
+  if (document.getElementById(STANDALONE_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = STANDALONE_STYLE_ID;
+  style.textContent = `
+    #${STANDALONE_OVERLAY_ID} {
+      position: fixed;
+      top: 120px;
+      right: 24px;
+      width: 280px;
+      box-sizing: border-box;
+      z-index: 12000;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
+      border: 1px solid var(--hb-border-brass);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.65);
+      display: none;
+    }
+    #${STANDALONE_OVERLAY_ID}.open { display: block; }
+    .hb-fellow-sa-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      background: rgba(0, 0, 0, 0.45);
+      border-bottom: 1px solid var(--hb-border-brass-dim);
+      font-size: 12px;
+      color: var(--hb-text-gold);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      user-select: none;
+    }
+    .hb-fellow-sa-x {
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      background: transparent;
+      border: 1px solid var(--hb-border-brass-dim);
+      color: var(--hb-text-cream);
+      font-family: inherit;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .hb-fellow-sa-x:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    .hb-fellow-sa-body { padding: 8px 10px; }
+    .hb-fellow-sa-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .hb-fellow-sa-btn {
+      box-sizing: border-box;
+      padding: 6px 4px;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      color: var(--hb-text-cream);
+      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
+      border: 1px solid var(--hb-border-brass);
+      cursor: pointer;
+      text-transform: uppercase;
+      user-select: none;
+    }
+    .hb-fellow-sa-btn:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    .hb-fellow-sa-btn[aria-pressed="true"] {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    .hb-fellow-sa-create {
+      display: none;
+      margin: 0 0 10px 0;
+      padding: 6px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--hb-border-brass-dim);
+    }
+    .hb-fellow-sa-create.open { display: block; }
+    .hb-fellow-sa-create label {
+      display: block;
+      font-size: 10px;
+      color: var(--hb-text-cream-bright);
+      margin-bottom: 4px;
+      letter-spacing: 0.04em;
+    }
+    .hb-fellow-sa-create input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      color: var(--hb-text-cream);
+      font-family: var(--hb-font-serif);
+      font-size: 11px;
+      padding: 2px 4px;
+      margin-bottom: 6px;
+      outline: none;
+    }
+    .hb-fellow-sa-create input[type="text"]:focus { border-color: var(--hb-border-brass); }
+    .hb-fellow-sa-create .row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      margin-bottom: 6px;
+    }
+    .hb-fellow-sa-create button {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 4px;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      color: var(--hb-text-cream);
+      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
+      border: 1px solid var(--hb-border-brass);
+      cursor: pointer;
+      text-transform: uppercase;
+    }
+    .hb-fellow-sa-create button:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    .hb-fellow-sa-state {
+      padding: 8px 6px;
+      font-size: 10px;
+      color: rgba(220, 200, 160, 0.55);
+      font-style: italic;
+      border-top: 1px solid var(--hb-border-brass-dim);
+      text-align: center;
+    }
+    .hb-fellow-sa-toast {
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: 6px;
+      padding: 4px 6px;
+      font-size: 10px;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.75);
+      border: 1px solid var(--hb-border-brass);
+      color: var(--hb-text-gold);
+      pointer-events: none;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+let standaloneOverlay = null;
+let standaloneUpdatesOn = false;
+
+function standaloneToast(text) {
+  if (!standaloneOverlay) return;
+  const old = standaloneOverlay.querySelector(".hb-fellow-sa-toast");
+  if (old) old.remove();
+  const t = document.createElement("div");
+  t.className = "hb-fellow-sa-toast";
+  t.textContent = text;
+  standaloneOverlay.appendChild(t);
+  setTimeout(() => t.remove(), 1750);
+}
+
+function buildStandaloneOverlay() {
+  ensureStandaloneStyles();
+  const overlay = document.createElement("div");
+  overlay.id = STANDALONE_OVERLAY_ID;
+
+  const hdr = document.createElement("div");
+  hdr.className = "hb-fellow-sa-hdr";
+  const title = document.createElement("span");
+  setAcText(title, "Fellowship");
+  hdr.appendChild(title);
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "hb-fellow-sa-x";
+  closeBtn.title = "Close (Esc)";
+  closeBtn.textContent = "x";
+  closeBtn.addEventListener("click", closeStandalone);
+  hdr.appendChild(closeBtn);
+  overlay.appendChild(hdr);
+
+  const body = document.createElement("div");
+  body.className = "hb-fellow-sa-body";
+
+  // Inline Create form — toggled by the Create button below.
+  const createForm = document.createElement("div");
+  createForm.className = "hb-fellow-sa-create";
+  const nameLbl = document.createElement("label");
+  setAcText(nameLbl, "Fellowship Name");
+  createForm.appendChild(nameLbl);
+  const nameInp = document.createElement("input");
+  nameInp.type = "text";
+  nameInp.maxLength = 32;
+  nameInp.placeholder = "Enter a name…";
+  createForm.appendChild(nameInp);
+  const shareRow = document.createElement("div");
+  shareRow.className = "row";
+  const shareCb = document.createElement("input");
+  shareCb.type = "checkbox";
+  shareCb.id = "hb-fellow-sa-share";
+  shareCb.checked = true;
+  const shareLabel = document.createElement("label");
+  shareLabel.htmlFor = "hb-fellow-sa-share";
+  setAcText(shareLabel, "Share XP?");
+  shareRow.appendChild(shareCb);
+  shareRow.appendChild(shareLabel);
+  createForm.appendChild(shareRow);
+  const confirmBtn = document.createElement("button");
+  confirmBtn.type = "button";
+  setAcText(confirmBtn, "Confirm Create");
+  confirmBtn.addEventListener("click", () => {
+    const name = nameInp.value.trim();
+    if (!name) {
+      standaloneToast("Name required");
+      return;
+    }
+    withSession("fellowshipCreate", (h) => {
+      h.fellowshipCreate(name, shareCb.checked);
+      emit(`[fellowship/create] name="${name}" share_xp=${shareCb.checked}`);
+      standaloneToast(`Created "${name}"`);
+      createForm.classList.remove("open");
+      nameInp.value = "";
+    });
+  });
+  createForm.appendChild(confirmBtn);
+  body.appendChild(createForm);
+
+  // 2×3 action button grid — spec layout.
+  const grid = document.createElement("div");
+  grid.className = "hb-fellow-sa-grid";
+
+  const ACTIONS = [
+    {
+      label: "Create",
+      onClick: () => createForm.classList.toggle("open"),
+    },
+    {
+      label: "Quit",
+      onClick: () => {
+        if (!window.confirm("Quit fellowship?")) return;
+        withSession("fellowshipQuit", (h) => {
+          h.fellowshipQuit(false);
+          emit("[fellowship/quit] disband=false");
+          standaloneToast("Quit sent");
+        });
+      },
+    },
+    {
+      label: "Recruit",
+      onClick: () => {
+        const guid = currentSelectedGuid();
+        if (!guid) { standaloneToast("Click an entity first"); return; }
+        withSession("fellowshipRecruit", (h) => {
+          h.fellowshipRecruit(guid);
+          emit(`[fellowship/recruit] target=0x${guid.toString(16).padStart(8, "0")}`);
+          standaloneToast("Recruit sent");
+        });
+      },
+    },
+    {
+      label: "Dismiss",
+      onClick: () => {
+        const guid = currentSelectedGuid();
+        if (!guid) { standaloneToast("Click an entity first"); return; }
+        withSession("fellowshipDismiss", (h) => {
+          h.fellowshipDismiss(guid);
+          emit(`[fellowship/dismiss] member=0x${guid.toString(16).padStart(8, "0")}`);
+          standaloneToast("Dismiss sent");
+        });
+      },
+    },
+    {
+      label: "Assign Leader",
+      onClick: () => {
+        const guid = currentSelectedGuid();
+        if (!guid) { standaloneToast("Click an entity first"); return; }
+        withSession("fellowshipAssignNewLeader", (h) => {
+          h.fellowshipAssignNewLeader(guid);
+          emit(`[fellowship/assign-leader] new_leader=0x${guid.toString(16).padStart(8, "0")}`);
+          standaloneToast("Assign sent");
+        });
+      },
+    },
+    {
+      label: "Toggle Updates",
+      togglesUpdates: true,
+      onClick: (btn) => {
+        const next = !standaloneUpdatesOn;
+        withSession("fellowshipUpdateRequest", (h) => {
+          h.fellowshipUpdateRequest(next);
+          standaloneUpdatesOn = next;
+          btn.setAttribute("aria-pressed", String(next));
+          emit(`[fellowship/update-request] want_updates=${next}`);
+          standaloneToast(next ? "Updates: on" : "Updates: off");
+        });
+      },
+    },
+  ];
+
+  for (const a of ACTIONS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hb-fellow-sa-btn";
+    btn.dataset.action = a.label.toLowerCase().replace(/\s+/g, "-");
+    if (a.togglesUpdates) btn.setAttribute("aria-pressed", "false");
+    setAcText(btn, a.label);
+    btn.addEventListener("click", () => a.onClick(btn));
+    grid.appendChild(btn);
+  }
+  body.appendChild(grid);
+
+  // Wave-D placeholder.
+  const state = document.createElement("div");
+  state.className = "hb-fellow-sa-state";
+  setAcText(state, "Fellowship state — coming in Wave D");
+  body.appendChild(state);
+
+  overlay.appendChild(body);
+
+  // Esc dismisses the panel when it's open.
+  overlay.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeStandalone();
+  });
+
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function openStandalone() {
+  if (!standaloneOverlay) standaloneOverlay = buildStandaloneOverlay();
+  standaloneOverlay.classList.add("open");
+  standaloneOverlay.tabIndex = -1;
+  try { standaloneOverlay.focus({ preventScroll: true }); } catch (_) {}
+}
+
+function closeStandalone() {
+  if (!standaloneOverlay) return;
+  standaloneOverlay.classList.remove("open");
+}
+
+// Esc anywhere closes the standalone panel (mirrors vendor-ui's Esc
+// handling). Re-installs the listener idempotently so module reloads
+// in the same page don't pile up duplicates.
+if (typeof window !== "undefined") {
+  if (!window.__hbFellowshipPanelEscBound) {
+    window.__hbFellowshipPanelEscBound = true;
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      if (standaloneOverlay?.classList.contains("open")) closeStandalone();
+    });
+  }
+  window.__openFellowshipPanel = openStandalone;
+  window.__closeFellowshipPanel = closeStandalone;
+}

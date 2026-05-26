@@ -12,6 +12,38 @@
 
 ---
 
+## Status — Wave C executed 2026-05-25 (later same day)
+
+Three more items shipped after Wave B. Each agent owned disjoint file scope so the three ran in parallel without merge conflicts.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 10 (subset) | Container browse panel | **SHIPPED** | `plugins/container-panel.js` NEW (~400 LOC). Subscribes to existing `containerOpened` bus event (kind=21 from `index.html:8083`, wired PR-HH 2026-05-23). Resolves item GUIDs via `playerInventory()` then `entityMap.meta` fallback. 280×220 floating panel top-right, 6-col 36×36 icon grid via `fetch_surface_pixels`, click-to-Examine using Wave A3's `__showExamineFor`. Esc/close/click-outside dismiss. Debug hook: `window.__openContainerFor(guid, name?)`. Right-click slot reserved for future take-from-container wasm export (TODO comment). |
+| 5 (send-side) | Fellowship action panel + wasm methods | **SHIPPED (send-only MVP)** | Rust: 6 new `SessionHandle` wasm-bindgen methods (`fellowshipCreate/Quit/Dismiss/Recruit/UpdateRequest/AssignNewLeader`) — opcodes 0x00A2-0x00A6 + 0x0290. Message structs already lived in `crates/holtburger-protocol/src/messages/fellowship/actions.rs` (15/15 hex-fixture tests PASS). JS: `plugins/fellowship-panel.js` augmented in place — existing retail gmFellowshipUI 0x21000030 main-panel view buttons (Recruit/Disband/Leave/Pass-Leader/Quit) wired to the new methods; new standalone floating panel (`window.__openFellowshipPanel()`) with 6-action 2-col grid (Create + Share-XP form, Quit/Recruit/Dismiss/Assign-Leader, Toggle-Updates aria-pressed). "Fellowship state — coming in Wave D" placeholder below grid (snapshot infra + member-list display + per-event ClientEvent kind deferred to Wave D). |
+| 12 | Weather rain + lightning + thunder | **SHIPPED** | `scene3d/weather/rain.js` NEW — `RainSystem` using `THREE.InstancedMesh` of 6000 bluish-white quad streaks in a camera-locked cylinder (R=25m, H=30m), toroidal wrap, wind drift, ~12 m/s fall. `scene3d/weather/lightning.js` NEW — `LightningSystem` with standalone `THREE.DirectionalLight` (separate from atmosphere SunLight to not fight the bake), Poisson trigger `P(strike)=λ·dt`, 3-pulse triangular envelope [4,2,6] over 280ms, audio delay derived from random "fake distance" 200m-1.7km / speed-of-sound for retail-feel thunder timing. `scene3d/weather/manager.js` NEW — `WeatherEffectsManager` ties both systems to `getWeatherState().is_storm`. URL knobs: `?rain=on\|off`, `?lightning=on\|off`, `?thunderDid=0xXX`. `scene3d/index.js` integration: manager registered after audioManager (line ~2756) + ticked in rAF loop before ambientRuntime (line ~1435). Debug: `window.__weatherEffects.flashNow()`. |
+
+**Files touched this wave:**
+- `src/lib.rs` +297 LOC Rust (6 wasm methods + 6 SessionCommand variants + 6 recv-loop arms)
+- `plugins/fellowship-panel.js` +474, -14 LOC
+- `plugins/container-panel.js` NEW ~400 LOC
+- `scene3d/weather/rain.js` NEW 154 LOC
+- `scene3d/weather/lightning.js` NEW 157 LOC
+- `scene3d/weather/manager.js` NEW 87 LOC
+- `scene3d/index.js` +46 LOC (import + construct + tick)
+- `index.html` +1 LOC (container-panel import; fellowship-panel already imported)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `node --check` clean on all JS files. C1 + C2 cleanup: 3 dead-code variables removed (`openContainerGuid`, `invokeDismiss`, `updatesBtn`).
+
+**Discovery during recon:** the deficiency report's "Equipment paper-doll NOT YET IMPLEMENTED" claim was stale — `plugins/inventory.js:67-101` already has the full retail-correct `PAPERDOLL_SLOTS` table (23 slots, element IDs from gmPaperDollUI 0x21000024, equipMask-bit dispatch) with `placeEquippedInDoll()` rendering via `playerInventory()`. The real remaining inventory gap was container browse (kind=21 fires but no UI consumer) — repointed C1 to that.
+
+**Recommended Wave D** (next priorities):
+1. **Fellowship receive-side snapshot infra (#5 full)** — `latest_fellowship: Rc<RefCell<Option<FellowshipSnapshot>>>` + per-event publishers on FellowshipFullUpdate/UpdateFellow/UpdateDone/StatsDone + new `CLIENT_EVENT_KIND_FELLOWSHIP_UPDATED=22` + JS bus emit + panel member-list rendering. Replaces the "coming in Wave D" placeholder.
+2. **Equipment paper-doll polish (#10 finish)** — burden meter % computation (sum equipped weights / capacity), real sprite icons (today TYPE_COLOR squares), drag-drop FROM paperdoll → ground and TO paperdoll from pack (needs `DropItem` + `GetAndWieldItem` wasm exports).
+3. **Trade system multi-step UI (#3)** — opcodes live (`OpenTradeNegotiations` through `AcceptTrade`), wasm methods missing. Pattern: identical to fellowship send-side MVP we just shipped.
+4. **Allegiance panel (#4)** — `SwearAllegiance/BreakAllegiance` opcodes live; 18 more (officer/motd/bans/gag/hometown-recall) commented out. Same send-only MVP pattern.
+
+---
+
 ## Status — Wave B executed 2026-05-25 (later same day)
 
 Three more items shipped after Wave A:
@@ -104,15 +136,14 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Upstream:** ACE has 30+ handlers in `Source/ACE.Server/Network/GameAction/Actions/` matching the commented-out opcodes.
 **Remediation:** Uncomment opcode stubs as packs are tested; introduce `plugins/allegiance-panel.js` with Swear/Break/Officer/Motd/Chat-Gag controls; route AllegianceUpdate through bus.
 
-### 5. Fellowship system
+### 5. Fellowship system — SHIPPED 2026-05-25 (Wave C2, send-side MVP)
 **Severity:** load-bearing
 **Discord evidence:**
 > "VI fellows…clients respond to your commands…but still share vitals and targeting info" — #general line 2788
 > "crash to desktop…much more frequently in fellowship…within 10-20mins" — #general line 3979 (memory leak speculation around fellow vitals)
 
-**Holtburger status:** Create/Quit/Dismiss/Recruit/UpdateRequest/AssignNewLeader live (`FellowshipChangeOpenness` commented out, opcodes.rs:73). No `plugins/fellowship-panel.js`. Fellowship vitals broadcast not wired.
-**Upstream:** ACE has FullUpdate/Disband/UpdateFellow/UpdateDone/StatsDone events.
-**Remediation:** `plugins/fellowship-panel.js` with member list + per-member health/mana/stamina bars; performance-test for the line-3979 leak scenario.
+**Holtburger status:** Wave C2 shipped 6 `SessionHandle` wasm-bindgen methods (`fellowshipCreate/Quit/Dismiss/Recruit/UpdateRequest/AssignNewLeader`) wired through `SessionCommand` variants + recv-loop arms to opcodes 0x00A2-0x00A6 + 0x0290. Message structs in `crates/holtburger-protocol/src/messages/fellowship/actions.rs` (15/15 hex-fixture tests PASS). `plugins/fellowship-panel.js` augmented: existing retail gmFellowshipUI 0x21000030 main-panel view buttons (Recruit/Disband/Leave/Pass-Leader/Quit) now route to wasm; new standalone floating panel via `window.__openFellowshipPanel()` with Create/Quit/Recruit/Dismiss/Assign-Leader/Toggle-Updates + Share-XP form. Receive-side snapshot infra + member-list display + per-event ClientEvent kind deferred to Wave D ("Fellowship state — coming in Wave D" placeholder in source). `FellowshipChangeOpenness 0x0291` still commented (no current gameplay need).
+**Upstream:** ACE has FullUpdate/Disband/UpdateFellow/UpdateDone/StatsDone events — handled at protocol unpack, snapshot publish deferred.
 
 ### 6. Cross-cell portal collision (player walking *through* a doorway)
 **Severity:** load-bearing
@@ -149,12 +180,12 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Holtburger status:** Panel `plugins/examine-target.js` was already retail-correct (uses `gmFloatyExaminationUI 0x2100006B` layout, native creature pane 0x10000153 with header + 2 stat rows + scrollable body + footer + icons + section dividers, AC font/colors via `ui/ac_font.js`). Wasm auto-fires `GameAction::IdentifyObject` on every ObjectCreate; response populates `EntityMap`. **What was missing:** the trigger. Wave A3 added right-click drag-threshold disambiguation in `scene3d/camera.js:428-478` — right-click + small movement (5px²) on an entity routes to `window.__showExamineFor(guid)`; right-click + drag still orbits camera. Manual validation: right-click a creature → main-panel opens to Examine view.
 **Remediation:** Closed. Radial menu (Use/Drop/Wield/Trade) follow-on tracked at #23.
 
-### 10. Equipment paper-doll + container browse
+### 10. Equipment paper-doll + container browse — SHIPPED 2026-05-25 (recon-corrected + Wave C1 container)
 **Severity:** load-bearing
 **Discord evidence:** Suit builder workflows (#general lines 282, 462, 490); MagSuitBuilder discussion; the entire alt-client meta orbits item slot management.
-**Holtburger status:** Own inventory: "Equipment paper-doll: NOT YET IMPLEMENTED — Phase K follow-on." Container UI: "kind=21 ContainerOpened infrastructure exists, full container-browse UI TBD."
-**Upstream:** Chorizite `WorldObject.contents`; ACE `GetAndWieldItem`, `PutItemInContainer`, kind=21 already wired in vendor-ui pattern.
-**Remediation:** `plugins/equipment-paper-doll.js` + `plugins/container-browser.js`. Reuse vendor-ui drag-drop machinery.
+**Holtburger status:**
+- **Equipment paper-doll:** Already shipped — `plugins/inventory.js:67-101` has the full retail `PAPERDOLL_SLOTS` table (23 slots, element IDs from gmPaperDollUI 0x21000024, equipMask-bit dispatch) with `placeEquippedInDoll()` rendering via `playerInventory()`. Original "NOT YET IMPLEMENTED" claim was stale recon. Remaining polish (burden % computation, real sprite icons, drag-drop to/from paperdoll) tracked in Wave D.
+- **Container browse:** Wave C1 shipped `plugins/container-panel.js` (~400 LOC). Subscribes to `containerOpened` bus event (kind=21 from `index.html:8083`, PR-HH 2026-05-23). Resolves contents via `getContainerContents()` → `playerInventory()` lookup with `entityMap.meta` fallback. 280×220 floating panel, 6-col 36×36 icon grid via `fetch_surface_pixels`, click-to-Examine, Esc/close/click-outside dismiss. Debug: `window.__openContainerFor(guid, name?)`. Right-click reserved for future take-from-container wasm export.
 
 ---
 
@@ -165,10 +196,9 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Holtburger:** Standard `WebGLRenderer` z-buffer; no inversion. With our 13×13 ring (2.4 km × 2.4 km), distant terrain mesh will z-fight before LOD-out.
 **Remediation:** `THREE.WebGLRenderer({ logarithmicDepthBuffer: true })` — cheapest first; if insufficient, full reversed-Z requires post-pass adjustment.
 
-### 12. Weather: rain particles + lightning flashes
+### 12. Weather: rain particles + lightning flashes — SHIPPED 2026-05-25 (Wave C3)
 **Discord:** "Rain is in already…lightning flashes no, need to debug…sound yes, ambient from terrain" — #worldbuilder 2026-04-13
-**Holtburger:** `scene3d/weather_state.js` exists but **only feeds clouds** (cumulus base height, density, étage). No `?rain=on` particle system; no lightning flash; no thunder cue.
-**Remediation:** `scene3d/particles/weather_rain.js` instancedMesh streak particles + camera-relative dome; `scene3d/atmosphere_lights.js` flash hook on weather-state `is_storm=true` with Poisson timing; Wave (0x0A) thunder sample queued through audio_manager.
+**Holtburger:** Wave C3 shipped `scene3d/weather/{rain,lightning,manager}.js`. `RainSystem` uses `THREE.InstancedMesh` of 6000 bluish-white quad streaks in a camera-locked cylinder (R=25m, H=30m) with toroidal wrap and wind drift, ~12 m/s fall. `LightningSystem` uses a standalone `THREE.DirectionalLight` (separate from atmosphere SunLight to avoid fighting the Bruneton bake), Poisson trigger `P(strike)=λ·dt`, 3-pulse triangular envelope [4,2,6] over 280ms; thunder delay derived from random "fake distance" 200m-1.7km / speed-of-sound for retail-feel timing. `WeatherEffectsManager` ties both to `getWeatherState().is_storm`. URL knobs: `?rain=on\|off`, `?lightning=on\|off`, `?thunderDid=0xXX`. Debug: `window.__weatherEffects.flashNow()`. Integrated into `scene3d/index.js` rAF tick loop.
 
 ### 13. Cross-cell visibility bug parity decision (basement-from-overworld)
 **Discord:** "goal of wb to render things bug-free or matched with acclient bugs? — try and match client bugs so you know what's wonky" — #worldbuilder 2026-04-10; "cross-cell basement overworld still visible" — same channel
@@ -342,11 +372,17 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 5. ~~Sequence-manager validation (#1)~~ — observability MVP shipped in `src/lib.rs` recv_loop; log-only, gated by `?seqDebug=1`.
 6. ~~Right-click radial menu finish (#23)~~ — full menu with Examine/Use/Attack MVP shipped in `plugins/radial-menu.js`; Drop/Wield/Trade pending wasm exports.
 
-### Wave C — next priorities
+### Wave C — SHIPPED 2026-05-25 (later same day)
 
-7. **Equipment paper-doll + container browse (#10)** — Phase K follow-on; vendor-ui drag-drop is the template.
-8. **Allegiance/Fellowship/Friends panels (#4, #5, #20)** — chat now has Alleg/Fell tabs; panels are the natural next step. SwearAllegiance/BreakAllegiance + Fellowship opcodes already live.
-9. **Trade system multi-step UI (#3)** — opcodes live (`OpenTradeNegotiations` through `AcceptTrade`), no UI.
-10. **Weather rain + lightning (#12)** — `weather_state.js` infra exists; particle layer + Wave (0x0A) sound queue needed.
+7. ~~Equipment paper-doll + container browse (#10)~~ — paper-doll was already shipped in `plugins/inventory.js`; container browse shipped as `plugins/container-panel.js`.
+8. ~~Fellowship panel (#5)~~ — send-side wasm + action panel shipped; receive-side snapshot deferred to Wave D.
+9. ~~Weather rain + lightning (#12)~~ — full visual stack (rain particles + lightning flash + thunder cue) shipped under `scene3d/weather/`.
+
+### Wave D — next priorities
+
+10. **Fellowship receive-side snapshot infra (#5 full)** — `latest_fellowship` snapshot + per-event publishers + `CLIENT_EVENT_KIND_FELLOWSHIP_UPDATED=22` + member-list display. Replaces the placeholder.
+11. **Trade system multi-step UI (#3)** — opcodes live, wasm methods missing. Pattern: identical to Wave C2's fellowship send-side MVP.
+12. **Allegiance panel (#4)** — Swear/Break opcodes live; 18 more commented. Same send-only MVP pattern.
+13. **Equipment paper-doll polish (#10 finish)** — burden % computation, real sprite icons (today TYPE_COLOR squares), drag-drop FROM paperdoll → ground and TO paperdoll from pack (needs `DropItem` + `GetAndWieldItem` wasm exports).
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.

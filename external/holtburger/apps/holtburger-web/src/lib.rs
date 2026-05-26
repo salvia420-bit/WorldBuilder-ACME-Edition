@@ -12824,6 +12824,48 @@ enum SessionCommand {
         vendor_guid: u32,
         items: Vec<(u32, i32)>,
     },
+    /// Fellowship: create a new fellowship led by the local player.
+    /// Maps to `GameAction::FellowshipCreate` (sub-opcode 0x00A2).
+    /// ACE validates the player isn't already in a fellowship and the
+    /// name passes filter; failures broadcast via WeenieError.
+    FellowshipCreate {
+        name: String,
+        share_xp: bool,
+    },
+    /// Fellowship: leave the current fellowship. `disband=true` when the
+    /// leader is dissolving the whole group, `false` for an individual
+    /// member leaving. Maps to `GameAction::FellowshipQuit` (sub-opcode
+    /// 0x00A3).
+    FellowshipQuit {
+        disband: bool,
+    },
+    /// Fellowship: leader-only — kick `member_guid` from the fellowship.
+    /// Maps to `GameAction::FellowshipDismiss` (sub-opcode 0x00A4). ACE
+    /// silently drops the action if the local player isn't leader or
+    /// `member_guid` isn't a member.
+    FellowshipDismiss {
+        member_guid: u32,
+    },
+    /// Fellowship: invite `target_guid` into the fellowship. Maps to
+    /// `GameAction::FellowshipRecruit` (sub-opcode 0x00A5). The target
+    /// receives a join confirmation prompt server-side; ACE handles
+    /// open/closed gates + max-member checks.
+    FellowshipRecruit {
+        target_guid: u32,
+    },
+    /// Fellowship: tell ACE whether the panel is open so it streams
+    /// per-member vital updates. Maps to
+    /// `GameAction::FellowshipUpdateRequest` (sub-opcode 0x00A6).
+    FellowshipUpdateRequest {
+        want_updates: bool,
+    },
+    /// Fellowship: leader-only — pass leadership to `new_leader_guid`.
+    /// Maps to `GameAction::FellowshipAssignNewLeader` (sub-opcode
+    /// 0x0290). ACE validates the target is currently a fellowship
+    /// member.
+    FellowshipAssignNewLeader {
+        new_leader_guid: u32,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -16285,6 +16327,95 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::SellToVendor { vendor_guid, items })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("sellToVendor: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Fellowship — create a new fellowship with the local player as
+    /// leader. Sends `GameAction::FellowshipCreate` (sub-opcode 0x00A2).
+    /// ACE validates the name + that the player isn't already in a
+    /// fellowship; failures surface via WeenieError chat.
+    #[wasm_bindgen(js_name = fellowshipCreate)]
+    pub fn fellowship_create(&self, name: String, share_xp: bool) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::FellowshipCreate { name, share_xp })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("fellowshipCreate: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Fellowship — leave the current fellowship. Pass `disband=true`
+    /// when the leader is dissolving the whole group, `false` for an
+    /// individual leaving. Sends `GameAction::FellowshipQuit` (sub-opcode
+    /// 0x00A3).
+    #[wasm_bindgen(js_name = fellowshipQuit)]
+    pub fn fellowship_quit(&self, disband: bool) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::FellowshipQuit { disband })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("fellowshipQuit: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Fellowship — leader-only kick of `member_guid` from the
+    /// fellowship. Sends `GameAction::FellowshipDismiss` (sub-opcode
+    /// 0x00A4). ACE silently drops the action if the local player isn't
+    /// leader or `member_guid` isn't a current member.
+    #[wasm_bindgen(js_name = fellowshipDismiss)]
+    pub fn fellowship_dismiss(&self, member_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::FellowshipDismiss { member_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("fellowshipDismiss: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Fellowship — invite `target_guid` into the fellowship. Sends
+    /// `GameAction::FellowshipRecruit` (sub-opcode 0x00A5). ACE handles
+    /// the join-confirmation prompt + open/closed gate + max-member
+    /// limit server-side.
+    #[wasm_bindgen(js_name = fellowshipRecruit)]
+    pub fn fellowship_recruit(&self, target_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::FellowshipRecruit { target_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("fellowshipRecruit: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Fellowship — tell ACE whether the fellowship panel is open so it
+    /// streams per-member vital updates. Sends
+    /// `GameAction::FellowshipUpdateRequest` (sub-opcode 0x00A6).
+    #[wasm_bindgen(js_name = fellowshipUpdateRequest)]
+    pub fn fellowship_update_request(&self, want_updates: bool) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::FellowshipUpdateRequest { want_updates })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "fellowshipUpdateRequest: cmd channel closed ({e})"
+                ))
+            })
+    }
+
+    /// Fellowship — leader-only — pass leadership to `new_leader_guid`.
+    /// Sends `GameAction::FellowshipAssignNewLeader` (sub-opcode 0x0290).
+    /// ACE validates the target is currently a member.
+    #[wasm_bindgen(js_name = fellowshipAssignNewLeader)]
+    pub fn fellowship_assign_new_leader(
+        &self,
+        new_leader_guid: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::FellowshipAssignNewLeader { new_leader_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "fellowshipAssignNewLeader: cmd channel closed ({e})"
+                ))
             })
     }
 
@@ -21215,6 +21346,172 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[sell] vendor=0x{vendor_guid:08X} count={item_count} items=[{log_preview}]",
+                        ));
+                    }
+                    Some(SessionCommand::FellowshipCreate { name, share_xp }) => {
+                        use holtburger_protocol::messages::{
+                            FellowshipCreateActionData, GameAction,
+                        };
+                        let log_name = name.clone();
+                        let action = GameAction::FellowshipCreate(Box::new(
+                            FellowshipCreateActionData { name, share_xp },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(FellowshipCreate): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "fellowship_create: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[fellowship/create] name={log_name:?} share_xp={share_xp}",
+                        ));
+                    }
+                    Some(SessionCommand::FellowshipQuit { disband }) => {
+                        use holtburger_protocol::messages::{
+                            FellowshipQuitActionData, GameAction,
+                        };
+                        let action = GameAction::FellowshipQuit(Box::new(
+                            FellowshipQuitActionData { disband },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(FellowshipQuit): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("fellowship_quit: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[fellowship/quit] disband={disband}",
+                        ));
+                    }
+                    Some(SessionCommand::FellowshipDismiss { member_guid }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            FellowshipDismissActionData, GameAction,
+                        };
+                        let action = GameAction::FellowshipDismiss(Box::new(
+                            FellowshipDismissActionData {
+                                player_guid: Guid(member_guid),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(FellowshipDismiss): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "fellowship_dismiss: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[fellowship/dismiss] member=0x{member_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::FellowshipRecruit { target_guid }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            FellowshipRecruitActionData, GameAction,
+                        };
+                        let action = GameAction::FellowshipRecruit(Box::new(
+                            FellowshipRecruitActionData {
+                                player_guid: Guid(target_guid),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(FellowshipRecruit): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "fellowship_recruit: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[fellowship/recruit] target=0x{target_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::FellowshipUpdateRequest { want_updates }) => {
+                        use holtburger_protocol::messages::{
+                            FellowshipUpdateRequestActionData, GameAction,
+                        };
+                        let action = GameAction::FellowshipUpdateRequest(Box::new(
+                            FellowshipUpdateRequestActionData {
+                                panel_open: want_updates,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(FellowshipUpdateRequest): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "fellowship_update_request: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[fellowship/update-request] want_updates={want_updates}",
+                        ));
+                    }
+                    Some(SessionCommand::FellowshipAssignNewLeader {
+                        new_leader_guid,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            FellowshipAssignNewLeaderActionData, GameAction,
+                        };
+                        let action = GameAction::FellowshipAssignNewLeader(Box::new(
+                            FellowshipAssignNewLeaderActionData {
+                                new_leader_guid: Guid(new_leader_guid),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(FellowshipAssignNewLeader): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "fellowship_assign_new_leader: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[fellowship/assign-leader] new_leader=0x{new_leader_guid:08X}",
                         ));
                     }
                     Some(SessionCommand::TargetedMissileAttack {
