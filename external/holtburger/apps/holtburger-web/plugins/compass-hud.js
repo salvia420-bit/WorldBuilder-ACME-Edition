@@ -11,6 +11,7 @@
 
 const OVERLAY_ID = "hb-compass-hud";
 const RADAR_ID = "hb-compass-radar";
+const TOOLTIP_ID = "hb-compass-radar-tooltip";
 const WIDTH = 200;
 const HEIGHT = 16;
 // Pixels per degree on the tape. Spec says the strip is 200px wide and
@@ -160,8 +161,31 @@ function ensureStyles() {
       border-radius: 50%;
       transform: translate(-50%, -50%);
       will-change: left, top, opacity;
-      pointer-events: none;
+      pointer-events: auto;
+      cursor: pointer;
     }
+    #${RADAR_ID} .hb-radar-dot.hb-radar-dot-pulse {
+      transform: translate(-50%, -50%) scale(1.8);
+      transition: transform 200ms ease-out;
+    }
+    #${TOOLTIP_ID} {
+      position: fixed;
+      z-index: 51;
+      pointer-events: none;
+      padding: 3px 6px;
+      background: var(--hb-overlay-dark-deep, rgba(0,0,0,0.78));
+      border: 1px solid var(--hb-border-brass, #8a7544);
+      box-shadow: 0 1px 0 var(--hb-border-brass-deep, #5a4a28) inset,
+                  0 0 3px rgba(0,0,0,0.7);
+      font-family: var(--hb-font-serif, "Cinzel", "Trajan Pro", "Times New Roman", serif);
+      color: var(--hb-text-cream, #f0d8a0);
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+      transform: translateX(-50%);
+      text-shadow: 0 0 2px rgba(0,0,0,0.9), 0 1px 0 #000;
+    }
+    #${TOOLTIP_ID}[hidden] { display: none; }
   `;
   document.head.appendChild(style);
 }
@@ -196,6 +220,9 @@ let _overlayEl = null;
 let _tapeEl = null;
 let _radarEl = null;
 let _radarDotPool = [];
+let _dotEntityRefs = [];
+let _tooltipEl = null;
+let _hoveredDotIdx = -1;
 let _rafId = 0;
 let _disposed = false;
 
@@ -271,7 +298,7 @@ function updateRadarDots(playerPos, yawRad) {
     if (Math.abs(relBearing) > RADAR_FOV_RAD) continue;
     const kind = classifyEntityForRadar(g, inst);
     if (!kind) continue;
-    candidates.push({ relBearing, dist, kind });
+    candidates.push({ relBearing, dist, kind, guid: g, inst });
   }
 
   // Sort by distance ascending so closest entities take dot-pool priority.
@@ -293,9 +320,17 @@ function updateRadarDots(playerPos, yawRad) {
     d.style.background = DOT_COLORS[c.kind] || "#ffffff";
     d.style.opacity = String(alpha);
     d.style.boxShadow = `0 0 2px ${DOT_COLORS[c.kind] || "#ffffff"}`;
+    _dotEntityRefs[i] = { guid: c.guid, inst: c.inst, relBearing: c.relBearing, dist: c.dist };
   }
   for (let i = n; i < _radarDotPool.length; i++) {
     _radarDotPool[i].style.display = "none";
+    _dotEntityRefs[i] = null;
+  }
+  if (_hoveredDotIdx >= 0 && _hoveredDotIdx < n) {
+    positionAndFillTooltip(_hoveredDotIdx);
+  } else if (_hoveredDotIdx >= n) {
+    hideTooltip();
+    _hoveredDotIdx = -1;
   }
 }
 
@@ -330,6 +365,98 @@ function tickCompass() {
   if (_radarEl && !_radarEl.hidden) {
     const playerPos = getLocalPlayerAcPos();
     updateRadarDots(playerPos, yaw);
+  }
+}
+
+function ensureTooltip() {
+  if (_tooltipEl) return _tooltipEl;
+  const t = document.createElement("div");
+  t.id = TOOLTIP_ID;
+  t.hidden = true;
+  document.body.appendChild(t);
+  _tooltipEl = t;
+  return t;
+}
+
+function entityDisplayName(ref) {
+  const inst = ref?.inst;
+  const m = inst?.meta;
+  if (m && typeof m.name === "string" && m.name.length > 0) return m.name;
+  const rn = inst?.root?.name;
+  if (typeof rn === "string" && rn.length > 0) return rn;
+  return `0x${(ref?.guid >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function positionAndFillTooltip(idx) {
+  const ref = _dotEntityRefs[idx];
+  const dot = _radarDotPool[idx];
+  if (!ref || !dot || !_radarEl || _radarEl.hidden) {
+    hideTooltip();
+    return;
+  }
+  const t = ensureTooltip();
+  const name = entityDisplayName(ref);
+  const distM = ref.dist.toFixed(1);
+  const bearingDeg = Math.round((ref.relBearing * 180) / Math.PI);
+  const bearingStr = bearingDeg > 0 ? `+${bearingDeg}` : `${bearingDeg}`;
+  t.textContent = `${name} • ${distM}m • ${bearingStr}°`;
+  // Anchor to dot center, just above the radar strip.
+  const radarRect = _radarEl.getBoundingClientRect();
+  const dotLeftPx = parseFloat(dot.style.left) || 0;
+  t.hidden = false;
+  t.style.left = `${radarRect.left + dotLeftPx}px`;
+  t.style.top = `${radarRect.top - 4}px`;
+  t.style.transform = "translate(-50%, -100%)";
+}
+
+function hideTooltip() {
+  if (_tooltipEl) _tooltipEl.hidden = true;
+}
+
+function dotIndexFromEvent(ev) {
+  const el = ev.target;
+  if (!el || !el.classList || !el.classList.contains("hb-radar-dot")) return -1;
+  const idx = _radarDotPool.indexOf(el);
+  if (idx < 0) return -1;
+  if (!_dotEntityRefs[idx]) return -1;
+  return idx;
+}
+
+function onRadarMouseOver(ev) {
+  if (!_radarEl || _radarEl.hidden) return;
+  const idx = dotIndexFromEvent(ev);
+  if (idx < 0) return;
+  _hoveredDotIdx = idx;
+  positionAndFillTooltip(idx);
+}
+
+function onRadarMouseOut(ev) {
+  const idx = dotIndexFromEvent(ev);
+  if (idx < 0) return;
+  // Only hide if leaving for something that isn't another radar dot.
+  const related = ev.relatedTarget;
+  if (related && related.classList && related.classList.contains("hb-radar-dot")) return;
+  if (_hoveredDotIdx === idx) {
+    _hoveredDotIdx = -1;
+    hideTooltip();
+  }
+}
+
+function onRadarClick(ev) {
+  if (!_radarEl || _radarEl.hidden) return;
+  const idx = dotIndexFromEvent(ev);
+  if (idx < 0) return;
+  const ref = _dotEntityRefs[idx];
+  if (!ref) return;
+  try {
+    window.liveScene3d?.entityManager?.setSelectedTarget?.(ref.guid >>> 0);
+  } catch (_) {}
+  const dot = _radarDotPool[idx];
+  if (dot) {
+    dot.classList.add("hb-radar-dot-pulse");
+    window.setTimeout(() => {
+      try { dot.classList.remove("hb-radar-dot-pulse"); } catch (_) {}
+    }, 200);
   }
 }
 
@@ -381,8 +508,13 @@ function mountOverlay() {
   radarCursor.className = "hb-radar-cursor";
   _radarEl.appendChild(radarCursor);
   _radarDotPool = [];
+  _dotEntityRefs = [];
   document.body.appendChild(_radarEl);
   ensureDotPool();
+  ensureTooltip();
+  _radarEl.addEventListener("mouseover", onRadarMouseOver);
+  _radarEl.addEventListener("mouseout", onRadarMouseOut);
+  _radarEl.addEventListener("click", onRadarClick);
 
   _rafId = window.requestAnimationFrame(tickCompass);
 }
@@ -393,11 +525,13 @@ function setVisible(visible) {
     // Radar follows tape visibility, but respect the explicit URL opt-out.
     _radarEl.hidden = !visible || RADAR_HIDDEN_BY_URL;
   }
+  if (_radarEl?.hidden) { hideTooltip(); _hoveredDotIdx = -1; }
 }
 
 function setRadarVisible(visible) {
   if (!_radarEl) return;
   _radarEl.hidden = !visible;
+  if (_radarEl.hidden) { hideTooltip(); _hoveredDotIdx = -1; }
 }
 
 function unmount() {
@@ -406,16 +540,29 @@ function unmount() {
     try { window.cancelAnimationFrame(_rafId); } catch (_) {}
     _rafId = 0;
   }
+  if (_radarEl) {
+    try {
+      _radarEl.removeEventListener("mouseover", onRadarMouseOver);
+      _radarEl.removeEventListener("mouseout", onRadarMouseOut);
+      _radarEl.removeEventListener("click", onRadarClick);
+    } catch (_) {}
+  }
   if (_overlayEl && _overlayEl.parentNode) {
     _overlayEl.parentNode.removeChild(_overlayEl);
   }
   if (_radarEl && _radarEl.parentNode) {
     _radarEl.parentNode.removeChild(_radarEl);
   }
+  if (_tooltipEl && _tooltipEl.parentNode) {
+    _tooltipEl.parentNode.removeChild(_tooltipEl);
+  }
   _overlayEl = null;
   _tapeEl = null;
   _radarEl = null;
   _radarDotPool = [];
+  _dotEntityRefs = [];
+  _tooltipEl = null;
+  _hoveredDotIdx = -1;
 }
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {

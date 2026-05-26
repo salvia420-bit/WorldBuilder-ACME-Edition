@@ -5,6 +5,7 @@ pub use crate::messages::chat::turbine::*;
 pub use crate::messages::combat::events::*;
 pub use crate::messages::fellowship::events::*;
 pub use crate::messages::friends::events::*;
+pub use crate::messages::house::events::*;
 pub use crate::messages::inventory::events::*;
 pub use crate::messages::magic::events::*;
 pub use crate::messages::misc::events::*;
@@ -96,6 +97,7 @@ pub enum GameEvent {
     SetSquelchDb(Box<SetSquelchDbEventData>),
     CharacterTitle(Box<CharacterTitleEventData>),
     UpdateTitle(Box<UpdateTitleEventData>),
+    HouseStatus(Box<HouseStatusEventData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -337,6 +339,9 @@ impl ProtocolUnpack for GameEventMessage {
                 )),
                 GameEventOpcode::UpdateTitle => GameEvent::UpdateTitle(Box::new(
                     UpdateTitleEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::HouseStatus => GameEvent::HouseStatus(Box::new(
+                    HouseStatusEventData::unpack(data, offset)?,
                 )),
             },
             None => {
@@ -698,6 +703,11 @@ impl ProtocolPack for GameEventMessage {
             }
             GameEvent::UpdateTitle(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::UpdateTitle as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::HouseStatus(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::HouseStatus as u32)
                     .unwrap();
                 data.pack(buf);
             }

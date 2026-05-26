@@ -24,7 +24,18 @@ import { setAcText } from "../ui/ac_font.js";
 const OVERLAY_ID = "hb-house-panel";
 const STYLE_ID = "hb-house-panel-style";
 
+// ACE WeenieError codes for the HouseStatus event (0x0226) — see
+// `crates/holtburger-protocol/src/errors.rs` for the full enum.
+// HouseStatus only ever carries `BadParam` (no house owned) or
+// `HouseEvicted` (player was kicked) in retail-emulating ACE flows.
+const WEENIE_ERROR_NONE = 0x0000;
+const WEENIE_ERROR_BAD_PARAM = 0x0002;
+const WEENIE_ERROR_HOUSE_EVICTED = 0x045F;
+
 let overlayEl = null;
+let statusEl = null;
+let statusUnsubscribe = null;
+let statusPollTimer = null;
 
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
@@ -165,6 +176,15 @@ function ensureStyles() {
       border-top: 1px solid var(--hb-border-brass-dim);
       margin-top: 2px;
     }
+    #${OVERLAY_ID} .hbhp-status-line {
+      font-size: 11px;
+      color: var(--hb-text-cream-bright);
+      padding: 2px 0;
+      font-family: monospace;
+    }
+    #${OVERLAY_ID} .hbhp-status-line[data-owner="0"] {
+      color: var(--hb-text-dim, #7a6b50);
+    }
   `;
   document.head.appendChild(s);
 }
@@ -194,6 +214,40 @@ function parseGuidList(raw) {
 
 function getHandle() {
   return window.__sessionHandle ?? window.__pluginClient?.handle ?? null;
+}
+
+function renderStatus() {
+  if (!statusEl) return;
+  const handle = getHandle();
+  let snap = null;
+  if (handle?.playerHouseStatus) {
+    try {
+      snap = handle.playerHouseStatus();
+    } catch (e) {
+      console.warn("[house-panel] playerHouseStatus threw:", e);
+    }
+  }
+  if (!snap) {
+    setAcText(statusEl, "Status: not queried yet.");
+    statusEl.dataset.owner = "0";
+    return;
+  }
+  const code = snap.errorCode >>> 0;
+  let text;
+  if (code === WEENIE_ERROR_BAD_PARAM) {
+    text = "No house owned.";
+    statusEl.dataset.owner = "0";
+  } else if (code === WEENIE_ERROR_HOUSE_EVICTED) {
+    text = "Evicted from house.";
+    statusEl.dataset.owner = "0";
+  } else if (code === WEENIE_ERROR_NONE) {
+    text = "House: owner.";
+    statusEl.dataset.owner = "1";
+  } else {
+    text = `Status: WeenieError 0x${code.toString(16).padStart(4, "0")}`;
+    statusEl.dataset.owner = "0";
+  }
+  setAcText(statusEl, text);
 }
 
 function makeSection(titleText) {
@@ -247,6 +301,18 @@ function buildPanel() {
 
   const body = document.createElement("div");
   body.className = "hbhp-body";
+
+  // Status — Wave L2 receive-side snapshot of `GameEvent::HouseStatus`
+  // (opcode 0x0226). Sync getter on the session handle; refreshed on
+  // `playerStatsUpdated` events + a 1Hz fallback poll so the panel
+  // doesn't go stale if the player Query'd before opening it.
+  const statusSection = makeSection("Status");
+  statusEl = document.createElement("div");
+  statusEl.className = "hbhp-status-line";
+  setAcText(statusEl, "Status: not queried yet.");
+  statusEl.dataset.owner = "0";
+  statusSection.appendChild(statusEl);
+  body.appendChild(statusSection);
 
   // Buy House
   const buySection = makeSection("Buy House");
@@ -383,11 +449,35 @@ function openPanel() {
     document.body.appendChild(overlayEl);
   }
   overlayEl.dataset.open = "1";
+  // Wave L2: drive `renderStatus()` from the existing
+  // `playerStatsUpdated` bus event (house ownership state often
+  // coincides with stat refreshes) + a 1Hz fallback for the QueryHouse
+  // landing case. Both no-op when the wasm handle isn't ready.
+  renderStatus();
+  const client = window.__pluginClient;
+  if (client?.events?.on && !statusUnsubscribe) {
+    const handler = () => renderStatus();
+    client.events.on("playerStatsUpdated", handler);
+    statusUnsubscribe = () => {
+      try { client.events.off("playerStatsUpdated", handler); } catch {}
+    };
+  }
+  if (!statusPollTimer) {
+    statusPollTimer = setInterval(renderStatus, 1000);
+  }
 }
 
 function closePanel() {
   if (overlayEl) {
     overlayEl.dataset.open = "0";
+  }
+  if (statusUnsubscribe) {
+    statusUnsubscribe();
+    statusUnsubscribe = null;
+  }
+  if (statusPollTimer) {
+    clearInterval(statusPollTimer);
+    statusPollTimer = null;
   }
 }
 

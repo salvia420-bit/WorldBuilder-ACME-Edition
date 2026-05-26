@@ -142,6 +142,7 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::SetSquelchDb(_) => 0x01F4,
         GameEvent::CharacterTitle(_) => 0x0029,
         GameEvent::UpdateTitle(_) => 0x002B,
+        GameEvent::HouseStatus(_) => 0x0226,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -14809,6 +14810,38 @@ impl TitleSnapshotJs {
     pub fn count(&self) -> u32 { self.title_ids.len() as u32 }
 }
 
+/// Wave L2 (2026-05-26): JS-facing snapshot of the local player's
+/// house ownership status. ACE pushes `GameEvent::HouseStatus`
+/// (opcode 0x0226) carrying a single `WeenieError` code — per
+/// `GameEventHouseStatus.cs` the only wire data is `(uint)weenieError`.
+/// ACE sends this in two flows: `BadParam` ("no house owned", default)
+/// from `Player_House.HandleActionQueryHouse()` when the player owns
+/// nothing, and `HouseEvicted` when the player is kicked out. Owned-
+/// state replies route to `GameEventHouseData` (0x0225) instead.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct HouseStatus {
+    error_code: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct HouseStatusJs {
+    error_code: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl HouseStatusJs {
+    #[wasm_bindgen(getter, js_name = errorCode)]
+    pub fn error_code(&self) -> u32 { self.error_code }
+    #[wasm_bindgen(getter, js_name = isHouseOwner)]
+    pub fn is_house_owner(&self) -> bool {
+        self.error_code == 0
+    }
+}
+
 /// AC Trade (2026-05-25, Discord deficiency #3): JS-facing snapshot of
 /// the local player's active peer-to-peer trade. Sourced from
 /// `world.trade` (the world dispatcher's `handlers::trade::handle_event`
@@ -15369,6 +15402,15 @@ pub struct SessionHandle {
     /// pre-CharacterTitle. JS reads via [`SessionHandle::player_title`]
     /// from the kind=28 TitleUpdated drain.
     latest_title: std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
+    /// Wave L2 (2026-05-26): local player's house ownership status.
+    /// Refreshed by the recv loop on `GameEvent::HouseStatus` (opcode
+    /// 0x0226) — ACE pushes this when the player queries a non-owned
+    /// house (`BadParam`) or is evicted (`HouseEvicted`). Owned-state
+    /// replies route via `GameEventHouseData` (0x0225) instead. `None`
+    /// pre-event. JS reads via [`SessionHandle::player_house_status`]
+    /// — sync getter, no bus event (panel polls on
+    /// `playerStatsUpdated`).
+    latest_house_status: std::rc::Rc<std::cell::RefCell<Option<HouseStatus>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -18087,6 +18129,21 @@ impl SessionHandle {
         })
     }
 
+    /// Wave L2 (2026-05-26): house ownership status snapshot — `None`
+    /// pre-event. Refreshed by the recv-loop on every
+    /// `GameEvent::HouseStatus` (opcode 0x0226). Carries the
+    /// `WeenieError` code ACE sent: `0` (`None`) is treated as owner-
+    /// state; `0x0002` (`BadParam`) means no house owned;
+    /// `0x045F` (`HouseEvicted`) means the player was kicked out.
+    /// Sync getter — no bus event; UI plugins poll on
+    /// `playerStatsUpdated` or their own timer.
+    #[wasm_bindgen(js_name = playerHouseStatus)]
+    pub fn player_house_status(&self) -> Option<HouseStatusJs> {
+        self.latest_house_status.borrow().as_ref().map(|s| HouseStatusJs {
+            error_code: s.error_code,
+        })
+    }
+
     /// Wave-H3 (2026-05-26): character title catalog snapshot — `None`
     /// pre-CharacterTitle. Refreshed by the recv-loop on every
     /// `GameEvent::CharacterTitle` (opcode 0x0029, replace) or
@@ -18649,6 +18706,11 @@ pub async fn start_session(
     let latest_title: std::rc::Rc<
         std::cell::RefCell<Option<TitleSnapshot>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave L2 (2026-05-26): house ownership status snapshot, refreshed
+    // by the recv-loop on every `GameEvent::HouseStatus` (opcode 0x0226).
+    let latest_house_status: std::rc::Rc<
+        std::cell::RefCell<Option<HouseStatus>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -18713,6 +18775,7 @@ pub async fn start_session(
         let latest_friends_inner = latest_friends.clone();
         let latest_squelch_inner = latest_squelch.clone();
         let latest_title_inner = latest_title.clone();
+        let latest_house_status_inner = latest_house_status.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -18744,6 +18807,7 @@ pub async fn start_session(
                 latest_friends_inner,
                 latest_squelch_inner,
                 latest_title_inner,
+                latest_house_status_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -18831,6 +18895,7 @@ pub async fn start_session(
         latest_friends,
         latest_squelch,
         latest_title,
+        latest_house_status,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -19948,6 +20013,7 @@ async fn recv_loop(
     latest_friends: std::rc::Rc<std::cell::RefCell<Option<FriendsSnapshot>>>,
     latest_squelch: std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
     latest_title: std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
+    latest_house_status: std::rc::Rc<std::cell::RefCell<Option<HouseStatus>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -23026,6 +23092,19 @@ async fn recv_loop(
                                         u32_payload_2: None,
                                         f32_payload: None,
                                     });
+                                }
+                                holtburger_protocol::messages::GameEvent::HouseStatus(
+                                    data,
+                                ) => {
+                                    // Wave L2 (2026-05-26): ACE wire is
+                                    // `(uint)weenieError` only. Cache the
+                                    // code into `latest_house_status` for
+                                    // the sync getter; no bus event — the
+                                    // panel polls on `playerStatsUpdated`.
+                                    *latest_house_status.borrow_mut() =
+                                        Some(HouseStatus {
+                                            error_code: data.error as u32,
+                                        });
                                 }
                                 _ => {
                                     // Non-chat GameEvents drop through

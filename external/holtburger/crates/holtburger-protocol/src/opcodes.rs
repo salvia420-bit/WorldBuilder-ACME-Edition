@@ -780,8 +780,14 @@ pub enum GameEventOpcode {
     // HouseProfile = 0x021D,
     // /// S2C: Detailed data for a specific house.
     // HouseData = 0x0225,
-    // /// S2C: Updates the ownership and status of a house.
-    // HouseStatus = 0x0226,
+    /// S2C: Updates the ownership and status of a house. Carries a single
+    /// `WeenieError` code — per ACE `GameEventHouseStatus` the only data
+    /// is `Writer.Write((uint)weenieError)`. ACE sends this in two flows:
+    /// (1) `Player_House.HandleActionQueryHouse()` with the default
+    ///     `BadParam` when the player owns no house (i.e. "you have no
+    ///     house"), and (2) `Player_House` eviction paths with
+    ///     `WeenieError::HouseEvicted`.
+    HouseStatus = 0x0226,
     // /// S2C: Updates the remaining rent time for a property.
     // UpdateRentTime = 0x0227,
     // /// S2C: Confirms a rent payment was processed.
