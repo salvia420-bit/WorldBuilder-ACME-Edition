@@ -59,6 +59,7 @@
 | 48 | PhysicsScript bridge research — per-entity PScriptTable lookup mapped | 15 | **shipped** 2026-05-26 |
 | 49 | fetchPhysicsScriptTable wasm export — retail 0x34000004 has 139 PScriptType keys | 16 | **shipped** 2026-05-26 |
 | 50 | Per-entity physicsScriptTableDid caching + PhysicsDesc runtime swap listener | 16 | **shipped** 2026-05-26 |
+| 51 | play_effect_vfx.js resolver — 8/8 picker + 12/12 trace + 9-bucket miss diag | 17 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 

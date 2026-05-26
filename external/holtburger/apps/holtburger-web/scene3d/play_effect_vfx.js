@@ -8,6 +8,15 @@
 // Grey/White variants), Hide/UnHide/Hidden (3 IDs), PortalEntry/Exit/
 // Storm (3 IDs), Camping Mastery/Ineptitude (2 IDs), LayingofHands
 // (1 ID). 51 additional IDs → 101/174 shipped, ~73 still TODO.
+// CMT Wave 17 / Phase 51 (2026-05-26) — REAL retail VFX via the
+// PhysicsScriptTable resolver chain. Wired BEFORE the placeholder
+// fallthrough so any entity with a `physicsScriptTableDid` (0x34xxxx)
+// + a matching PScriptType row in the table gets the real Sky-J-style
+// particle emitter (`fetchPhysicsScript → CreateParticleHook →
+// fetchParticleEmitter → ParticleManager.addEmitter`). Placeholders
+// remain as the fallback path for entities without a table, scriptIds
+// not in the table, or any resolver-chain failure. Phase 53 plumbs
+// the `speed` field as the picker's mod-weight (was discarded prior).
 //
 // Self-registering Three.js module that subscribes to `playEffect`
 // events on `window.__pluginClient.events` and spawns minimal
@@ -75,6 +84,7 @@
 
 import * as THREE from "three";
 import { PLAY_SCRIPT, playScriptName } from "../ui/ac_play_script.js";
+import { fetchPhysicsScriptTable } from "../ui/ac_physics_script_table.js";
 
 // Default tween duration in ms (Launch/Explode). ~500ms keeps the
 // visual on-screen long enough to be perceptible but short enough
@@ -557,6 +567,488 @@ function _spawnCubeBurst(
   _ensureRafRunning();
 }
 
+// =====================================================================
+// Wave 17 / Phase 51 — REAL retail VFX resolver chain.
+// =====================================================================
+//
+// Per `external/holtburger/docs/physicsscript-bridge-research-2026-05-26.md`,
+// retail's `CPhysicsObj::play_script(scriptId, speed)`
+// (acclient.c:320335) walks:
+//
+//   entity.physics_script_table → script_table[scriptId] (array of
+//     {mod, scriptDid}) → first entry where speed <= entry.mod
+//     → PhysicsScript (0x33) → for each CreateParticleHook
+//       (hook_type 13 or 26) → ParticleEmitter (0x32) → addEmitter.
+//
+// `pickScriptEntry` ports the weighted-pick semantic; the resolver
+// below stitches together the existing wasm fetches + the world-side
+// `ParticleManager` that `entities.js::_attachParticleChainForEntity`
+// already maintains on every entityManager.
+
+/**
+ * Weighted-mod pick: from a list of `{mod, scriptDid}` entries in
+ * ascending `mod` order, return the FIRST entry where
+ * `speed <= entry.mod`. If no entry satisfies that condition (the
+ * incoming `speed` exceeds every mod threshold), clamp to the LAST
+ * entry (greatest mod) — this matches retail's overflow behavior at
+ * `acclient.c:336552 PhysicsScriptTableData::GetScript`, which returns
+ * the final entry when the linear walk runs off the end.
+ *
+ * @param {Array<{mod: number, scriptDid: number}>} entries — ascending
+ *   by `mod`; caller is responsible for sort invariant (the Rust-side
+ *   DAT parse preserves DAT byte order which IS ascending).
+ * @param {number} speed — the incoming mod weight from the PlayEffect
+ *   wire event (typically 0.0..=1.0 but uncapped on the wire side).
+ * @returns {{mod: number, scriptDid: number} | null}
+ */
+export function pickScriptEntry(entries, speed) {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  // Top-down walk per acclient.c:336552. The first row whose `mod`
+  // threshold is >= `speed` wins; this gives the "speed picks the
+  // smallest band that contains it" semantic.
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (!e || typeof e.mod !== "number") continue;
+    if (speed <= e.mod) return e;
+  }
+  // Overflow clamp — return the last (greatest-mod) entry. Mirrors the
+  // retail walk falling off the end and returning the saved tail.
+  return entries[entries.length - 1] ?? null;
+}
+
+/**
+ * Inline self-tests for `pickScriptEntry`. Run via:
+ *   node --input-type=module --eval "await import('./scene3d/play_effect_vfx.js').then(m => m.__test.runPickerSelfTests())"
+ *
+ * Cases mirror the retail walk shape: single-entry, two-entry below/
+ * above-threshold, three-entry clamp.
+ *
+ * @returns {{passed: number, failed: number, total: number}}
+ */
+function _runPickerSelfTests() {
+  const cases = [
+    [
+      "single-entry: speed 0.0 picks the only entry",
+      () => {
+        const r = pickScriptEntry([{ mod: 1.0, scriptDid: 0x33000100 }], 0.0);
+        if (r?.scriptDid !== 0x33000100) throw new Error(`got ${r?.scriptDid}`);
+      },
+    ],
+    [
+      "two-entry: speed below first mod picks first",
+      () => {
+        const r = pickScriptEntry(
+          [
+            { mod: 0.5, scriptDid: 0x33000001 },
+            { mod: 1.0, scriptDid: 0x33000002 },
+          ],
+          0.25,
+        );
+        if (r?.scriptDid !== 0x33000001) throw new Error(`got ${r?.scriptDid}`);
+      },
+    ],
+    [
+      "two-entry: speed exactly at first mod still picks first (<=)",
+      () => {
+        const r = pickScriptEntry(
+          [
+            { mod: 0.5, scriptDid: 0x33000001 },
+            { mod: 1.0, scriptDid: 0x33000002 },
+          ],
+          0.5,
+        );
+        if (r?.scriptDid !== 0x33000001) throw new Error(`got ${r?.scriptDid}`);
+      },
+    ],
+    [
+      "two-entry: speed above first mod picks second",
+      () => {
+        const r = pickScriptEntry(
+          [
+            { mod: 0.5, scriptDid: 0x33000001 },
+            { mod: 1.0, scriptDid: 0x33000002 },
+          ],
+          0.75,
+        );
+        if (r?.scriptDid !== 0x33000002) throw new Error(`got ${r?.scriptDid}`);
+      },
+    ],
+    [
+      "overflow: speed above ALL mods clamps to last (greatest-mod)",
+      () => {
+        const r = pickScriptEntry(
+          [
+            { mod: 0.5, scriptDid: 0x33000001 },
+            { mod: 1.0, scriptDid: 0x33000002 },
+          ],
+          5.0,
+        );
+        if (r?.scriptDid !== 0x33000002) throw new Error(`got ${r?.scriptDid}`);
+      },
+    ],
+    [
+      "empty entries returns null",
+      () => {
+        const r = pickScriptEntry([], 1.0);
+        if (r !== null) throw new Error(`expected null, got ${r}`);
+      },
+    ],
+    [
+      "null entries returns null",
+      () => {
+        const r = pickScriptEntry(null, 1.0);
+        if (r !== null) throw new Error(`expected null, got ${r}`);
+      },
+    ],
+    [
+      "three-entry: middle pick",
+      () => {
+        const r = pickScriptEntry(
+          [
+            { mod: 0.25, scriptDid: 0x33000A01 },
+            { mod: 0.75, scriptDid: 0x33000A02 },
+            { mod: 1.0, scriptDid: 0x33000A03 },
+          ],
+          0.5,
+        );
+        if (r?.scriptDid !== 0x33000A02) throw new Error(`got 0x${r?.scriptDid?.toString(16)}`);
+      },
+    ],
+  ];
+  let passed = 0;
+  let failed = 0;
+  for (const [name, fn] of cases) {
+    try {
+      fn();
+      passed += 1;
+      // eslint-disable-next-line no-console
+      console.log(`  PASS  ${name}`);
+    } catch (err) {
+      failed += 1;
+      // eslint-disable-next-line no-console
+      console.error(`  FAIL  ${name}: ${err?.message ?? err}`);
+    }
+  }
+  // eslint-disable-next-line no-console
+  console.log(`[play-effect-vfx picker self-tests] ${passed}/${cases.length} pass, ${failed} fail`);
+  return { passed, failed, total: cases.length };
+}
+
+// Wave 17 / Phase 51 diag counters. Read via `VFX_COVERAGE.realVfx*`
+// at the bottom of this file. `attempts` is incremented for every
+// PlayEffect that has a non-zero physicsScriptTableDid; `resolved`
+// only when the chain produced at least one spawned emitter.
+const _realVfxStats = {
+  attempts: 0,
+  resolved: 0,
+  // Per-failure breakdown — helps the diag dashboard surface the most-
+  // common miss mode. Bumped from `_tryResolveRealVfx`.
+  missNoTable: 0,
+  missNoScriptId: 0,
+  missTableFetch: 0,
+  missPhysicsScriptFetch: 0,
+  missNoCreateParticleHook: 0,
+  missEmitterFetch: 0,
+  missAddEmitter: 0,
+  missNoEntity: 0,
+  missNoParticleManager: 0,
+};
+
+/**
+ * Phase 51 resolver: walk the
+ * `entityPhysicsScriptTableDid → fetchPhysicsScriptTable → pickScriptEntry
+ *  → fetchPhysicsScript → CreateParticleHook → fetchParticleEmitter →
+ *  ParticleManager.addEmitter` chain for one PlayEffect event.
+ *
+ * Returns `true` if at least one real-VFX emitter was spawned (the
+ * placeholder path should NOT fire); `false` for any miss in the
+ * chain. Never throws — every internal failure resolves to `false`
+ * + a `_realVfxStats.miss*` bump.
+ *
+ * Emitter lifecycle: spawned emitters are scheduled for
+ * `ParticleManager.destroyParticleEmitter` after `ONE_SHOT_LIFETIME_MS`
+ * (2500ms, see below). Long-lived PhysicsScripts that should keep
+ * spawning particles (atmospheric scripts on entities) are out of
+ * scope — they belong on the H2 chain (entity spawn), not the
+ * PlayEffect one-shot chain.
+ *
+ * @param {number} targetGuid
+ * @param {number} scriptId — PScriptType enum value (0x00..0xAD)
+ * @param {number} speed — picker's mod-weight; per acclient.c:336552
+ * @returns {Promise<boolean>}
+ */
+async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
+  _realVfxStats.attempts += 1;
+  // 1. Resolve the entity instance — we need the rig (.root) to anchor
+  //    emitters to AND the EntityManager to access its
+  //    `_worldParticleManager` + `wasmExports`.
+  if (typeof window === "undefined" || !window.liveScene3d) {
+    _realVfxStats.missNoEntity += 1;
+    return false;
+  }
+  const ls = window.liveScene3d;
+  const em = ls.entityManager;
+  if (!em || typeof em.getPhysicsScriptTableDid !== "function") {
+    _realVfxStats.missNoEntity += 1;
+    return false;
+  }
+  const inst = em.entityMap?.get?.(targetGuid >>> 0);
+  if (!inst || !inst.root) {
+    _realVfxStats.missNoEntity += 1;
+    return false;
+  }
+
+  // 2. Look up the entity's PhysicsScriptTable DID via the Wave 16
+  //    JS facade. 0 = "no table" — entity has no PhysicsScript dispatch
+  //    so the wire event was placeholder-only by definition.
+  const tableDid = em.getPhysicsScriptTableDid(targetGuid >>> 0) >>> 0;
+  if (tableDid === 0) {
+    _realVfxStats.missNoTable += 1;
+    return false;
+  }
+
+  // 3. Fetch + cache the PhysicsScriptTable (Phase 49 facade — module-
+  //    scoped Promise cache; subsequent lookups on same DID hit the
+  //    cache without re-paying the wasm round-trip).
+  let table;
+  try {
+    table = await fetchPhysicsScriptTable(tableDid);
+  } catch (_) {
+    // Facade is "never throws" per Phase 49 contract; this catch is
+    // defensive belt-and-braces.
+    table = null;
+  }
+  if (!table || !table.scripts) {
+    _realVfxStats.missTableFetch += 1;
+    return false;
+  }
+
+  // 4. Index into scripts by stringified PScriptType (JSON object keys
+  //    are strings). `scripts[scriptIdStr]` is the entry list for THIS
+  //    PScript type, in ascending-mod order per the Phase 49 contract.
+  const entries = table.scripts[String(scriptId >>> 0)];
+  if (!Array.isArray(entries) || entries.length === 0) {
+    _realVfxStats.missNoScriptId += 1;
+    return false;
+  }
+
+  // 5. Weighted pick — acclient.c:336552. `speed` is the incoming
+  //    wire mod-weight (Phase 53; was discarded prior to this phase).
+  const picked = pickScriptEntry(entries, speed);
+  if (!picked || (picked.scriptDid >>> 0) === 0) {
+    _realVfxStats.missNoScriptId += 1;
+    return false;
+  }
+  const pesId = picked.scriptDid >>> 0;
+
+  // 6. Fetch the PhysicsScript (0x33) — Sky-J P3 infrastructure.
+  const wasmExports = em.wasmExports;
+  if (!wasmExports || typeof wasmExports.fetchPhysicsScript !== "function") {
+    _realVfxStats.missPhysicsScriptFetch += 1;
+    return false;
+  }
+  let ps;
+  try {
+    ps = await wasmExports.fetchPhysicsScript(pesId);
+  } catch (err) {
+    _realVfxStats.missPhysicsScriptFetch += 1;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[play-effect-vfx/real] fetchPhysicsScript(0x${pesId.toString(16)}) failed:`,
+      err,
+    );
+    return false;
+  }
+
+  // 7. Iterate hooks; only CreateParticle (hook_type 13) and
+  //    CreateBlockingParticle (hook_type 26) spawn particles. The other
+  //    hook types (Sound=1, SoundTweaked=21, etc.) are handled by the
+  //    H2 entity chain walker, not the PlayEffect one-shot path.
+  //
+  //    `PhysicsScriptJs.takeEntries()` drains the entry list across
+  //    the wasm boundary — call once and iterate the JS-side array.
+  const entriesJs = ps.takeEntries();
+  let particleHookCount = 0;
+  for (const e of entriesJs) {
+    if (e.hookType === 13 || e.hookType === 26) {
+      particleHookCount += 1;
+    }
+  }
+  if (particleHookCount === 0) {
+    _realVfxStats.missNoCreateParticleHook += 1;
+    return false;
+  }
+
+  // 8. We need access to the per-scene `ParticleManager`. The world-
+  //    side instance lives on `entityManager._worldParticleManager`,
+  //    lazily created on the first H2 chain walk
+  //    (`entities.js::_attachParticleChainForEntity` line ~3446). If
+  //    no entity has ever fired an H2 chain yet (early in the session,
+  //    or in a low-PhysicsScript region), the manager is still null
+  //    — we use the same lazy-create code path.
+  //
+  //    Reuse the existing manager when available; otherwise build one
+  //    by triggering the same dynamic import + factory wiring the H2
+  //    walker uses. We DON'T touch `scene3d/particles/` directly here
+  //    (mandate § "don't refactor scene3d/particles/").
+  let wm = em._worldParticleManager;
+  if (!wm) {
+    // Best-effort lazy create. Mirrors the wiring at entities.js:3446.
+    try {
+      const { ParticleManager } = await import("./particles/index.js");
+      const adapter = await import("./adapter.js");
+      const meshToGeometryGroups = adapter.meshToGeometryGroups;
+      const materialCache = em.materialCache;
+      const resolveGfxObj = async (hwGfxObjId) => {
+        if (!wasmExports || typeof wasmExports.fetchBuildingPlacement !== "function") {
+          return null;
+        }
+        let bundle;
+        try { bundle = await wasmExports.fetchBuildingPlacement(hwGfxObjId); }
+        catch (_) { return null; }
+        if ((bundle.partCount | 0) === 0) {
+          if (typeof bundle.free === "function") bundle.free();
+          return null;
+        }
+        const meshes = bundle.takePartMeshes();
+        if (typeof bundle.free === "function") bundle.free();
+        const wasmMesh = meshes[0];
+        if (!wasmMesh) return null;
+        const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
+        if (typeof wasmMesh.free === "function") wasmMesh.free();
+        if (!groups || groups.length === 0) return null;
+        return {
+          geometry: groups[0].geometry,
+          surfaceDid: groups[0].surfaceDid || surfaceDids[0] || 0,
+        };
+      };
+      wm = new ParticleManager({
+        scene: ls.entitiesGroup ?? inst.root.parent,
+        geometryFactory: async (hwGfxObjId) => {
+          const r = await resolveGfxObj(hwGfxObjId);
+          return r?.geometry ?? null;
+        },
+        materialFactory: async (hwGfxObjId) => {
+          if (!materialCache) return null;
+          const r = await resolveGfxObj(hwGfxObjId);
+          if (!r?.surfaceDid) return null;
+          try {
+            return await materialCache.get(r.surfaceDid, wasmExports.fetch_surfaces_pixels);
+          } catch (_) { return null; }
+        },
+      });
+      em._worldParticleManager = wm;
+    } catch (err) {
+      _realVfxStats.missNoParticleManager += 1;
+      // eslint-disable-next-line no-console
+      console.warn("[play-effect-vfx/real] lazy ParticleManager creation failed:", err);
+      return false;
+    }
+  }
+  if (!wm) {
+    _realVfxStats.missNoParticleManager += 1;
+    return false;
+  }
+
+  // 9. For each CreateParticle / CreateBlockingParticle hook, fetch the
+  //    ParticleEmitter (0x32) and add it to the ParticleManager parented
+  //    to the entity rig. Each spawned emitter is scheduled for
+  //    destruction after ONE_SHOT_LIFETIME_MS so PlayEffect bursts
+  //    don't accumulate forever (the mandate calls out 2-3 seconds for
+  //    Launch/Explode-class events).
+  const spawnedEmitterIds = [];
+  for (const e of entriesJs) {
+    if (e.hookType !== 13 && e.hookType !== 26) continue;
+    const emitterDid = (e.createParticleEmitterId >>> 0);
+    if (emitterDid === 0) continue;
+    let emitterInfo;
+    try {
+      emitterInfo = await wasmExports.fetchParticleEmitter(emitterDid);
+    } catch (err) {
+      _realVfxStats.missEmitterFetch += 1;
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[play-effect-vfx/real] fetchParticleEmitter(0x${emitterDid.toString(16)}) failed:`,
+        err,
+      );
+      continue;
+    }
+
+    // CreateParticleHook offset frame — same shape the H2 chain walker
+    // builds at entities.js:3611. Scratch Vec3/Quat is fine here because
+    // PlayEffect events are rare enough that overlapping calls are
+    // unlikely — we instantiate fresh THREE objects per call to dodge
+    // the shared-scratch race the H2 path documents.
+    const offset = {
+      position: new THREE.Vector3(
+        e.createParticleOffsetX,
+        e.createParticleOffsetY,
+        e.createParticleOffsetZ,
+      ),
+      quaternion: new THREE.Quaternion(
+        e.createParticleOffsetQX,
+        e.createParticleOffsetQY,
+        e.createParticleOffsetQZ,
+        e.createParticleOffsetQW,
+      ),
+    };
+    const partIndex = (e.createParticlePartIndex === 0xffffffff)
+      ? -1
+      : (e.createParticlePartIndex | 0);
+
+    let emitterId = 0;
+    try {
+      emitterId = await wm.addEmitter({
+        emitterInfo,
+        parent: inst.root,
+        partIndex,
+        parentOffset: offset,
+      });
+    } catch (err) {
+      _realVfxStats.missAddEmitter += 1;
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[play-effect-vfx/real] addEmitter(0x${emitterDid.toString(16)}) threw:`,
+        err,
+      );
+      continue;
+    }
+    if (emitterId !== 0) {
+      spawnedEmitterIds.push(emitterId);
+    } else {
+      _realVfxStats.missAddEmitter += 1;
+    }
+  }
+
+  if (spawnedEmitterIds.length === 0) {
+    return false;
+  }
+
+  // 10. Schedule one-shot cleanup. PlayEffect events are by definition
+  //     one-shot (the wire opcode broadcasts a single "play this script
+  //     once" cue); long-lived per-entity scripts go through the H2
+  //     spawn-time chain instead. 2500ms covers Launch (~500ms) +
+  //     Explode (~1.2s) + the long tail of misc scripts; emitters
+  //     whose own particles all expire earlier are no-op cleaned up
+  //     by `ParticleManager.tick()`'s auto-remove path.
+  const ONE_SHOT_LIFETIME_MS = 2500;
+  setTimeout(() => {
+    for (const eid of spawnedEmitterIds) {
+      try { wm.destroyParticleEmitter(eid); } catch (_) {}
+    }
+  }, ONE_SHOT_LIFETIME_MS);
+
+  _realVfxStats.resolved += 1;
+  // eslint-disable-next-line no-console
+  console.log(
+    `[play-effect-vfx/real] resolved scriptId=0x${scriptId.toString(16)} ` +
+      `target=0x${targetGuid.toString(16)} table=0x${tableDid.toString(16)} ` +
+      `pes=0x${pesId.toString(16)} speed=${speed.toFixed(3)} ` +
+      `emitters=${spawnedEmitterIds.length}`,
+  );
+  return true;
+}
+
 /**
  * Event handler for `playEffect` on the plugin event bus.
  *
@@ -566,12 +1058,10 @@ function _onPlayEffect(evt) {
   const detail = evt?.detail ?? {};
   const targetGuid = (detail.targetGuid >>> 0) || 0;
   const scriptId = (detail.scriptId >>> 0) || 0;
-  // speed is a wire field (typically 1.0); we don't use it for the
-  // placeholder visuals but accept it so we don't drop it on the
-  // floor — future PhysicsScript integration will respect playback
-  // rate.
+  // Wave 17 / Phase 53: `speed` is now load-bearing — it drives
+  // `pickScriptEntry`'s weighted mod selection per acclient.c:336552.
+  // Default to 1.0 on the wire (the most common ACE broadcast).
   const speed = Number.isFinite(detail.speed) ? detail.speed : 1.0;
-  void speed; // touched so eslint no-unused-vars stays happy
 
   if (targetGuid === 0) {
     // eslint-disable-next-line no-console
@@ -579,6 +1069,59 @@ function _onPlayEffect(evt) {
     return;
   }
 
+  // Wave 17 / Phase 51: try the REAL retail VFX chain FIRST. If the
+  // resolver completes (table → pick → physics-script → emitters),
+  // skip the placeholder fallthrough for this event. On any miss the
+  // promise resolves to `false` and the placeholder runs as before —
+  // strict superset of behavior; no regression for Phase 34/37/47
+  // cases when the entity has no table or the script isn't in it.
+  //
+  // The async work doesn't block the event listener; the placeholder
+  // path either runs in the .then() miss branch OR runs synchronously
+  // first if we know the entity has no table. We detect the "definitely
+  // no table" case via a synchronous `getPhysicsScriptTableDid` check
+  // so the common no-table case (most weenies) skips the async hop.
+  const ls = (typeof window !== "undefined") ? window.liveScene3d : null;
+  const tableDid = (() => {
+    try {
+      const em = ls?.entityManager;
+      if (!em || typeof em.getPhysicsScriptTableDid !== "function") return 0;
+      return (em.getPhysicsScriptTableDid(targetGuid >>> 0) >>> 0);
+    } catch (_) { return 0; }
+  })();
+
+  if (tableDid !== 0) {
+    // Entity has a PhysicsScriptTable; try the chain. Placeholder
+    // fallthrough deferred to the .then() miss branch.
+    _tryResolveRealVfx(targetGuid, scriptId, speed).then((spawned) => {
+      if (!spawned) {
+        // Real-VFX miss — run the placeholder. The resolver already
+        // bumped a `_realVfxStats.miss*` counter for diag.
+        _runPlaceholderDispatch(targetGuid, scriptId);
+      }
+    }).catch(() => {
+      // Defensive: resolver promised to never reject. Still, fall
+      // through to placeholder on any unforeseen throw.
+      _runPlaceholderDispatch(targetGuid, scriptId);
+    });
+    return;
+  }
+  // No table → synchronous placeholder path, identical to pre-Phase-51
+  // behavior. Most weenies hit this branch.
+  _realVfxStats.attempts += 1;
+  _realVfxStats.missNoTable += 1;
+  _runPlaceholderDispatch(targetGuid, scriptId);
+}
+
+/**
+ * Placeholder VFX dispatch — extracted from the pre-Phase-51 body of
+ * `_onPlayEffect` so the resolver can defer to it via .then().
+ * Behavior is identical to Phase 34/37/47; no semantic changes here.
+ *
+ * @param {number} targetGuid
+ * @param {number} scriptId
+ */
+function _runPlaceholderDispatch(targetGuid, scriptId) {
   const placement = _resolveTargetPlacement(targetGuid);
 
   switch (scriptId) {
@@ -1041,7 +1584,8 @@ function _tryBind() {
 
 // Re-exports for diag/testing — call these directly to verify the
 // burst pipeline works without needing a live server event. Useful
-// for the Wave 11/12/15 acceptance traces.
+// for the Wave 11/12/15 acceptance traces. Wave 17 / Phase 51 adds
+// the real-VFX resolver entrypoint + picker self-tests.
 export const __test = Object.freeze({
   spawnBurst: _spawnBurst,
   spawnRingBurst: _spawnRingBurst,
@@ -1049,6 +1593,14 @@ export const __test = Object.freeze({
   resolveTargetPlacement: _resolveTargetPlacement,
   onPlayEffect: _onPlayEffect,
   activeBurstCount: () => _activeBursts.size,
+  // Phase 51 — resolver entrypoint for end-to-end tests; bypasses the
+  // event listener path so callers can directly assert the chain walks.
+  tryResolveRealVfx: _tryResolveRealVfx,
+  // Phase 51 — picker self-tests. Returns {passed, failed, total}.
+  runPickerSelfTests: _runPickerSelfTests,
+  // Phase 51 — diag counters snapshot. Read-only view; production code
+  // should read via the `VFX_COVERAGE.realVfx*` getters.
+  realVfxStats: () => Object.freeze({ ..._realVfxStats }),
 });
 
 // =====================================================================
@@ -1109,4 +1661,26 @@ export const VFX_COVERAGE = Object.freeze({
   enumTotal: 174,
   shippedCount: _COVERAGE_SHIPPED_SET.size,
   todoCount: 174 - _COVERAGE_SHIPPED_SET.size,
+  // Wave 17 / Phase 51 — resolver hit-rate counters. `realVfxAttempts`
+  // is bumped once per `playEffect` event that we *consider* for the
+  // real chain (regardless of whether the entity has a table); a
+  // subset `realVfxResolved` is bumped only when the chain actually
+  // produced at least one spawned emitter. The breakdown is on the
+  // per-miss counters for diag dashboards. Exposed via getters so the
+  // numbers reflect live state at read time (not a frozen snapshot).
+  get realVfxAttempts() { return _realVfxStats.attempts; },
+  get realVfxResolved() { return _realVfxStats.resolved; },
+  get realVfxMissBreakdown() {
+    return Object.freeze({
+      noTable: _realVfxStats.missNoTable,
+      noScriptId: _realVfxStats.missNoScriptId,
+      tableFetch: _realVfxStats.missTableFetch,
+      physicsScriptFetch: _realVfxStats.missPhysicsScriptFetch,
+      noCreateParticleHook: _realVfxStats.missNoCreateParticleHook,
+      emitterFetch: _realVfxStats.missEmitterFetch,
+      addEmitter: _realVfxStats.missAddEmitter,
+      noEntity: _realVfxStats.missNoEntity,
+      noParticleManager: _realVfxStats.missNoParticleManager,
+    });
+  },
 });

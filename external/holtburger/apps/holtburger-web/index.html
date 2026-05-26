@@ -936,6 +936,12 @@
         fetchPhysicsScript,
         fetchParticleEmitter,
         fetchWave,
+        // Wave 16 / Phase 49 — PhysicsScriptTable (0x34) fetch. Wave 17
+        // resolver in `scene3d/play_effect_vfx.js` consumes via the
+        // `ui/ac_physics_script_table.js` facade, which reads
+        // `window.__hbWasm.fetchPhysicsScriptTable`. Listing here AND
+        // in the __hbWasm surface below.
+        fetchPhysicsScriptTable,
         // Task B (ambient-sounds-chain) — SoundTable (0x20) fetch.
         // Resolves Sound enum → Wave DID list for Region ambient STBs
         // (Task D) and entity-anchored Sound/SoundTable hooks (Task E).
@@ -1367,6 +1373,12 @@
           fetch_gfx_obj_degrade_info: (id) => fetch_gfx_obj_degrade_info(id >>> 0),
           fetch_entity_degrade_for_distance: (sid, dist) => fetch_entity_degrade_for_distance(sid >>> 0, +dist),
           fetch_clothing_table: (id) => fetch_clothing_table(id >>> 0),
+          // Wave 16 / Phase 49 — PhysicsScriptTable (0x34) fetch. The
+          // Wave 17 PlayEffect resolver in `scene3d/play_effect_vfx.js`
+          // consumes via the `ui/ac_physics_script_table.js` facade,
+          // which calls `window.__hbWasm.fetchPhysicsScriptTable(did)`
+          // and parses the JSON string. Wasm returns "null" on DAT miss.
+          fetchPhysicsScriptTable: (did) => fetchPhysicsScriptTable(did >>> 0),
           hash32,
           has_resource_source,
         };
