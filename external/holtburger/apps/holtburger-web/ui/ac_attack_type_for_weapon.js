@@ -277,6 +277,111 @@
  * list in `GetImbuedSkillType`. It is NOT what gates unarmed swings on
  * post-MoA servers.
  *
+ * ### Phase 22 (Two-handed-spear "visual jab" quirk) — 2026-05-26 (Wave 8)
+ *
+ * **User clarification (2026-05-26):** "the two hand spear (there are a
+ * variety of spear or spearlike two hand weapons) do use a jabbing-type
+ * animation." Phase 21's dismissal of "Jab" above is about the
+ * `AttackType` / `MotionCommand` enums — verified, no `Jab*` value
+ * exists. But the *visual* jab the user describes is real: it's the
+ * forward-thrust motion clip the CMT returns when a two-handed spear
+ * (Pike / Halberd / Naginata / Yari / Partizan / Glaive / Lance / etc.)
+ * is swung. The clip resolves via the bog-standard CMT lookup —
+ * `(stance = TwoHandedSwordCombat, height, AttackType = Thrust)` →
+ * `ThrustHigh/Med/Low` motion clips. No special enum, no special
+ * branch; just the correct AttackType bitmask flowing through the
+ * existing pipeline.
+ *
+ * **The stance two-handed spears use is `TwoHandedSwordCombat
+ * (0x80000044)`, NOT `TwoHandedStaffCombat (0x80000045)`.** Empirically
+ * confirmed by Wave 8 audit. Two evidence sources agree:
+ *
+ *   1. **ACE source — `Creature_Combat.GetWeaponStance`:**
+ *      ```csharp
+ *      // ~/ace-server/Source/ACE.Server/WorldObjects/Creature_Combat.cs:330-334
+ *      case CombatStyle.TwoHanded:
+ *          // MotionStance.TwoHandedStaffCombat doesn't appear to do anything
+ *          // Additionally, PropertyInt.WeaponType isn't always included, and
+ *          // the 2handed weapons that do appear to use WeaponType.TwoHanded
+ *          combatStance = MotionStance.TwoHandedSwordCombat;
+ *          break;
+ *      ```
+ *      ACE collapses ALL `CombatStyle.TwoHanded` weapons — pikes,
+ *      halberds, naginatas, tetsubo, nodachi, two-handed swords — into
+ *      one stance. The thrust-vs-slash distinction is carried entirely
+ *      by `W_AttackType` (PropertyInt 47).
+ *
+ *   2. **CMT 0x30000000 audit — `dump_two_handed_spear_motions.rs`:**
+ *      Direct dump against `~/ac_base_dats/client_portal.dat`
+ *      (2026-05-26) confirmed:
+ *      ```
+ *      TwoHandedSwordCombat   High     Thrust   0x2   ThrustHigh (0x1000005A)
+ *      TwoHandedSwordCombat   Medium   Thrust   0x2   ThrustMed  (0x10000058)
+ *      TwoHandedSwordCombat   Low      Thrust   0x2   ThrustLow  (0x10000059)
+ *      ── per-stance counts ──
+ *      0x80000044 TwoHandedSwordCombat -> 3 rows (Thrust-family)
+ *      0x80000045 TwoHandedStaffCombat -> 0 rows
+ *      ```
+ *      The `TwoHandedStaffCombat` stance literally has zero rows in the
+ *      retail CMT — empirical confirmation of ACE's "doesn't appear to
+ *      do anything" comment. Every two-handed weapon's CMT lookup
+ *      lands under `0x80000044`.
+ *
+ * **Resolved motion family (the "jab" clips):**
+ *
+ *   | AttackHeight | Motion u32   | Motion name |
+ *   |--------------|--------------|-------------|
+ *   | High (1)     | `0x1000005A` | `ThrustHigh` |
+ *   | Medium (2)   | `0x10000058` | `ThrustMed`  |
+ *   | Low (3)      | `0x10000059` | `ThrustLow`  |
+ *
+ * These three motion clips ARE the visual "jab" the wiki / community
+ * describes — forward-thrust animation, polearm/spear-shaped weapon
+ * thrust forward. Same clip set the two-handed sword community calls a
+ * "thrust"; the difference is purely the weapon mesh hanging off the
+ * skeleton.
+ *
+ * **LSD weenie corroboration** (Wave 8 sample, all
+ * `WeaponSkill (48) = 41 TwoHandedCombat`, all
+ * `DefaultCombatStyle (46) = 8 TwoHanded`):
+ *
+ *   | wcid  | name                       | WeaponType (353) | W_AttackType (47) |
+ *   |-------|----------------------------|------------------|-------------------|
+ *   | 41046 | Pike                       | 11 (TwoHanded)   | 0x02 (Thrust)     |
+ *   | 41041 | Magari Yari                | 11 (TwoHanded)   | 0x02 (Thrust)     |
+ *   | 41635 | Ravenous Two Handed Spear  | 11 (TwoHanded)   | 0x02 (Thrust)     |
+ *   | 41708 | Phantom Two Handed Spear   | 11 (TwoHanded)   | 0x02 (Thrust)     |
+ *   | 42664 | Spear of Lost Truths       | 11 (TwoHanded)   | 0x02 (Thrust)     |
+ *   | 29974 | Partizan (HeavyWeapons)    |  5 (Spear)       | 0x02 (Thrust)     |
+ *   | 29970 | Partizan (LightWeapons)    |  5 (Spear)       | 0x02 (Thrust)     |
+ *
+ * Note `WeaponType` straddles two values for two-handed spears:
+ * `Spear (5)` for pre-MoA-era weenies like Partizan, `TwoHanded (11)`
+ * for Pikes/Yari/etc. This doesn't matter for stance resolution —
+ * `GetWeaponStance` keys on `DefaultCombatStyle (8)` only and ignores
+ * `WeaponType` entirely. The thrust-vs-slash distinction comes from
+ * `W_AttackType` exclusively. (Some Halberd/Glaive variants carry
+ * `Thrust|Slash = 0x06`; some Tetsubo/Nodachi carry pure `Slash =
+ * 0x04`. All route through `TwoHandedSwordCombat` and have their
+ * thrust component resolved here when the picker collapses multi-bit
+ * `W_AttackType` via the `IsThrustSlash` branch.)
+ *
+ * **Pipeline tie-in:** Wave 6 / Phase 15 surfaced `W_AttackType` on the
+ * wire (`apply_inventory_object_create` → `EquippedWeaponJs.attackType`
+ * / `InventoryItem.attackType`); Wave 7 / Phase 21's
+ * `inferAttackTypeForWeapon` returns it verbatim. So a Pike with
+ * `W_AttackType = 0x02` arrives at `getCombatManeuver(stance =
+ * TwoHandedSwordCombat, height, attackType = 0x02)` and resolves to one
+ * of `ThrustHigh/Med/Low` — the visual jab — automatically. No code
+ * change needed; this docstring section just documents *why* the visual
+ * matches the wiki's terminology despite no `Jab*` enum value existing.
+ *
+ * **Audit script:**
+ *   `crates/holtburger-dat/examples/dump_two_handed_spear_motions.rs`
+ *   Run via
+ *   `HOLTBURGER_PORTAL_DAT=$HOME/ac_base_dats/client_portal.dat \
+ *    cargo run -p holtburger-dat --example dump_two_handed_spear_motions`
+ *
  * ### Phase 6 (ranged) audit finding — 2026-05-26 (Wave 2)
  *
  * **CMT 0x30000000 has ZERO rows for ranged stances.** The audit

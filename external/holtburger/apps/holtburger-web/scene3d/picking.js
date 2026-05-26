@@ -40,14 +40,16 @@ const MAX_CHARGE_DURATION_MS = 10_000; // safety net so we don't pursue forever
 //   public const float DefaultProjectileSpeed = 20.0f;`
 // (the fallback when the wielded missile launcher has no
 // `PropertyFloat.MaximumVelocity = 26` on the wire, i.e. starter bows).
-// @todo Surface per-weapon projectile speed from the wire. ACE reads
-// `missileLauncher.MaximumVelocity` (PropertyFloat::MaximumVelocity =
-// 26 — see `ACE.Entity/Enum/Properties/PropertyFloat.cs:38`) off the
-// equipped weapon's ObjDesc/weapon-stat block. Today neither the
-// `EntityInstance` nor the local-player session surfaces this property;
-// piping it through would let us pass the actual weapon-specific speed
-// to `getAimLevelForBallisticArc`. For now 20 m/s matches the dominant
-// retail starter-bow feel; a fast composite bow ranges up to ~35 m/s.
+// Per-weapon projectile speed is surfaced via PropertyFloat 26 —
+// Wave 8 / Phase 25 (2026-05-26): `getEquippedWeapon(localGuid)` now
+// returns `maximumVelocity` (sourced from `EquippedWeaponJs` /
+// `InventoryItem` in `src/lib.rs`). This constant remains as the
+// explicit fallback when the wire hasn't surfaced PropertyFloat 26
+// yet (most common: starter bows / pre-ObjectCreate property arrival).
+// KEEP ALIGNED with the Rust-side `unwrap_or(20.0)` in
+// `apply_inventory_object_create` / `publish_player_inventory_snapshot`
+// — drift between the two creates per-frame bucket-flip jitter.
+// A fast composite bow ranges up to ~35 m/s; crossbows ~45 m/s.
 const BOW_DEFAULT_SPEED_MPS = 20.0;
 
 // Entity world position in AC coords. Pre-2026-05-19 this routed
@@ -539,11 +541,22 @@ export function setupClickPicking({
       // charge-to-range distance — re-using them avoids a second
       // accessor walk. If either is null the helper's solver returns
       // null → direct-line fallback which guards to AimLevel.
+      // Wave 8 / Phase 25 (2026-05-26): `projectileSpeed` is now
+      // per-weapon — sourced from PropertyFloat::MaximumVelocity = 26
+      // off the wielded missile launcher. Surfaces via
+      // `EquippedWeaponJs.maximumVelocity` / `InventoryItem
+      // .maximumVelocity` (lib.rs), threaded through
+      // `getEquippedWeapon` in entities.js. `BOW_DEFAULT_SPEED_MPS =
+      // 20.0` remains the explicit fallback for pre-property arrivals
+      // (matches ACE `Creature_Missile.cs:208 DefaultProjectileSpeed`).
+      const projectileSpeed = (weapon && Number.isFinite(weapon.maximumVelocity))
+        ? weapon.maximumVelocity
+        : BOW_DEFAULT_SPEED_MPS;
       const aimMotion = (targetAc && pose)
         ? getAimLevelForBallisticArc({
             origin: pose,
             target: targetAc,
-            projectileSpeed: BOW_DEFAULT_SPEED_MPS,
+            projectileSpeed,
           })
         : getAimLevelForVelocity(null);
       // CMT first (always misses for ranged today, but the layer is
@@ -619,7 +632,17 @@ export function setupClickPicking({
       const stance = (window.__getCurrentStanceLow?.() ?? 0) >>> 0;
       const em = liveScene3d.entityManager;
       const weapon = em?.getEquippedWeapon?.(localGuid) ?? null;
-      const inferredType = inferAttackTypeForWeapon(weapon);
+      // CMT Wave 8 / Phase 23 (2026-05-26): pass `powerLevel` + `isDualWield`
+      // so `inferAttackTypeForWeapon` can return `Kick = 0x08` for
+      // unarmed at high power, matching ACE `Player_Melee.cs:462`:
+      //     AttackType = PowerLevel > KickThreshold && !IsDualWieldAttack
+      //         ? AttackType.Kick : AttackType.Punch;
+      // Phase 21 extended the helper signature; this is the wiring.
+      // Missile/magic branches stay one-arg per their phase ownership.
+      const inferredType = inferAttackTypeForWeapon(weapon, {
+        powerLevel: slider,
+        isDualWield: em?.isDualWield?.(localGuid) ?? false,
+      });
       const attackType = (inferredType === ATTACK_TYPE.Undef)
         ? ATTACK_TYPE_SLASH
         : inferredType;

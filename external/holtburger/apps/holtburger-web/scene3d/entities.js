@@ -1781,9 +1781,23 @@ export class EntityManager {
    * spears to Thrust, swords to Thrust|Slash, etc. (closing the
    * Phase 13 documented limitation).
    *
+   * ## Wave 8 / Phase 25 (2026-05-26): `MaximumVelocity` now on the wire
+   *
+   * `PropertyFloat::MaximumVelocity = 26` is surfaced on both the local
+   * (`InventoryItem.maximumVelocity`) and non-local
+   * (`EquippedWeaponJs.maximumVelocity`) wasm structs — see
+   * `apps/holtburger-web/src/lib.rs:apply_inventory_object_create` and
+   * `publish_player_inventory_snapshot`. The returned record now
+   * carries `maximumVelocity` so `scene3d/picking.js`'s missile
+   * branch can pass per-weapon projectile speed to
+   * `getAimLevelForBallisticArc` (replacing Phase 19's hardcoded
+   * 20 m/s default). Fallback `20.0` matches ACE
+   * `Creature_Missile.cs:208 DefaultProjectileSpeed`.
+   *
    * @param {number} guid — entity GUID to query
    * @returns {{ guid: number, wcid: number, itemType: number,
    *             equipMask: number, attackType: number,
+   *             maximumVelocity: number,
    *             name: string } | null}
    */
   getEquippedWeapon(guid) {
@@ -1819,12 +1833,18 @@ export class EntityManager {
           // CMT Wave 6 / Phase 15 (2026-05-26): `attackType` is
           // PropertyInt 47 (`W_AttackType`); `inferAttackTypeForWeapon`
           // prefers it over the EquipMask heuristic when non-zero.
+          // CMT Wave 8 / Phase 25 (2026-05-26): `maximumVelocity` is
+          // PropertyFloat 26 (m/s) — picking.js's missile branch passes
+          // it to `getAimLevelForBallisticArc` for per-weapon gravity
+          // arcs. `20.0` fallback mirrors ACE `Creature_Missile.cs:208
+          // DefaultProjectileSpeed` and Phase 19's `BOW_DEFAULT_SPEED_MPS`.
           const result = {
             guid:     (w.guid ?? 0) >>> 0,
             wcid:     (w.wcid ?? 0) >>> 0,
             itemType: (w.itemType ?? 0) >>> 0,
             equipMask: (w.equipMask ?? 0) >>> 0,
             attackType: (w.attackType ?? 0) >>> 0,
+            maximumVelocity: Number.isFinite(w.maximumVelocity) ? w.maximumVelocity : 20.0,
             name:     typeof w.name === "string" ? w.name : "",
           };
           // wasm-bindgen-constructed structs need explicit .free()
@@ -1871,18 +1891,168 @@ export class EntityManager {
       // InventoryItem alongside the non-local EquippedWeaponJs path.
       // Drives `inferAttackTypeForWeapon`'s new wire-prefers-heuristic
       // precedence (closes Phase 13's two-handed limitation).
+      // CMT Wave 8 / Phase 25 (2026-05-26): `maximumVelocity` is
+      // PropertyFloat 26 (m/s) — picking.js's missile branch reads it
+      // for the gravity-arc resolver. `20.0` fallback mirrors ACE
+      // `Creature_Missile.cs:208 DefaultProjectileSpeed` and Phase 19's
+      // `BOW_DEFAULT_SPEED_MPS`.
       return {
         guid:     (item.guid ?? 0) >>> 0,
         wcid:     (item.wcid ?? 0) >>> 0,
         itemType: (item.itemType ?? 0) >>> 0,
         equipMask: mask,
         attackType: (item.attackType ?? 0) >>> 0,
+        maximumVelocity: Number.isFinite(item.maximumVelocity) ? item.maximumVelocity : 20.0,
         name:     typeof item.name === "string" ? item.name : "",
       };
     }
     // No primary weapon slot occupied — unarmed. Caller will see
     // `null` and infer Punch.
     return null;
+  }
+
+  /**
+   * CMT Wave 8 / Phase 23 (2026-05-26): dual-wield detection for the
+   * Phase 21 `inferAttackTypeForWeapon(weapon, opts)` call site in
+   * `scene3d/picking.js` melee branch. Returns `true` iff the entity
+   * has BOTH a primary weapon (MELEE_WEAPON / TWO_HANDED — the kinds
+   * that the unarmed Kick logic in ACE's `Player_Melee.cs:462` cares
+   * about) AND a non-shield item in the offhand slot.
+   *
+   * ## ACE's offhand model
+   *
+   * AC has NO distinct "OffhandWeapon" EquipMask bit. Verified against
+   * `~/ace-server/Source/ACE.Entity/Enum/EquipMask.cs` and
+   * `crates/holtburger-common/src/properties/inventory.rs:158-191` —
+   * the EquipMask bitfield jumps from `MELEE_WEAPON = 0x00100000`
+   * straight to `SHIELD = 0x00200000` then `MISSILE_WEAPON =
+   * 0x00400000`, with no offhand-weapon slot in between.
+   *
+   * Instead, retail / ACE encodes dual-wielding by placing a non-shield
+   * weapon in the `Shield` equip slot — see
+   * `~/ace-server/Source/ACE.Server/WorldObjects/Creature_Equipment.cs:133
+   * GetDualWieldWeapon()`:
+   *
+   *     return EquippedObjects.Values.FirstOrDefault(
+   *         e => !e.IsShield && e.CurrentWieldedLocation == EquipMask.Shield);
+   *
+   * The `!e.IsShield` clause is the discriminator: an item equipped in
+   * the SHIELD slot that is itself not a shield = offhand weapon. We
+   * approximate `IsShield` here with `equipMask == SHIELD` exactly
+   * (shields carry only that bit; offhand weapons carry SHIELD plus
+   * other context the wire doesn't always surface). The closest proxy
+   * we have on the wire is `itemType` — `ItemType::MeleeWeapon = 1`
+   * vs `ItemType::Armor = 2` (shield is Armor). If itemType is a
+   * weapon-family type, treat the SHIELD-slot occupant as an offhand
+   * weapon. Otherwise treat it as a real shield.
+   *
+   * ## Local player
+   *
+   * Walks `window.__sessionHandle.playerInventory()` (the wasm-bound
+   * snapshot — see `src/lib.rs:16426 player_inventory`) looking for:
+   *
+   *   1. A primary weapon: `equipMask & (MELEE_WEAPON | TWO_HANDED)`
+   *      non-zero. Two-handed is included because retail technically
+   *      can't dual-wield with a two-hander, but the wire could carry
+   *      a transient state during a swap; the helper's `isDualWield`
+   *      clause only matters for unarmed Kick logic anyway and a
+   *      two-hander already short-circuits the unarmed branch upstream.
+   *   2. A SHIELD-slot non-shield item: `equipMask & SHIELD` non-zero
+   *      AND `itemType !== ITEM_TYPE_ARMOR (2)`. Mirrors
+   *      `Creature_Equipment.cs:135` `!e.IsShield`.
+   *
+   * Returns `true` iff BOTH are present.
+   *
+   * ## Non-local entities — limitation
+   *
+   * The wasm `wielder_index` (see `src/lib.rs:15533`) DOES accumulate
+   * every wielded item ObjectCreate per wielder (primary + offhand
+   * shield-slot occupant both land in the index), but the public
+   * accessor `entity_equipped_weapon` (line 16451) iterates and
+   * returns ONLY the first primary-weapon hit. Surfacing the offhand
+   * for non-local entities would require either (a) a new wasm getter
+   * that returns the full per-wielder list, or (b) extending
+   * `entity_equipped_weapon` to return primary + offhand as a tuple.
+   *
+   * Per Phase 23's hard constraint, we keep this scope-bounded: return
+   * `false` for non-local entities for now. TODO: extend
+   * `wielder_index` consumer at `src/lib.rs:15421` (apply_inventory_object_create
+   * dispatch comment) — wire a separate `entity_offhand_weapon(guid)`
+   * getter so this accessor can match the local-player behaviour for
+   * remote dual-wielders.
+   *
+   * ## Defensive contract
+   *
+   * Returns `false` whenever data isn't available (pre-login,
+   * `playerInventory()` throws, snapshot empty). Never throws —
+   * matches the `getEquippedWeapon` pattern.
+   *
+   * @param {number} guid — entity GUID to query
+   * @returns {boolean}
+   */
+  isDualWield(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return false;
+
+    // Resolve the local player guid via the same global pattern the
+    // sibling `getEquippedWeapon` accessor uses (`getLocalPlayerGuid`
+    // at ~line 837).
+    let localGuid = 0;
+    try {
+      if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+        const lpg = window.getLocalPlayerGuid();
+        if (lpg !== null && lpg !== undefined) localGuid = (lpg >>> 0);
+      }
+    } catch (_) { /* never break callers */ }
+
+    // Non-local entities — limitation documented above. TODO once the
+    // wielder index gains an offhand-aware accessor at
+    // `src/lib.rs:15421` (apply_inventory_object_create / wielder_index
+    // population), mirror the local-player logic below.
+    if (g !== localGuid) return false;
+
+    // Local player path. Pull the latest inventory snapshot from the
+    // wasm-bound session handle. Returns `Vec<InventoryItem>` —
+    // `src/lib.rs:16426 player_inventory`. Each item carries a u32
+    // `equipMask` from `holtburger_common::properties::EquipMask`.
+    let inventory = null;
+    try {
+      if (typeof window !== "undefined" && window.__sessionHandle
+          && typeof window.__sessionHandle.playerInventory === "function") {
+        inventory = window.__sessionHandle.playerInventory();
+      }
+    } catch (_) { /* never break callers */ }
+    if (!Array.isArray(inventory) || inventory.length === 0) return false;
+
+    // EquipMask bits — see ACE.Entity/Enum/EquipMask.cs +
+    // crates/holtburger-common/src/properties/inventory.rs:158.
+    // `MELEE_WEAPON | TWO_HANDED` mark the primary; `SHIELD` is the
+    // offhand slot. Two-handed is included for completeness even
+    // though dual-wielding a two-hander is invalid in retail — keeps
+    // the predicate honest if the wire ever shows a transient state.
+    const PRIMARY_BITS = 0x00100000 /* MELEE_WEAPON */ | 0x02000000 /* TWO_HANDED */;
+    const SHIELD_BIT   = 0x00200000;
+    // ItemType::Armor = 2 — shields are ItemType=Armor in AC. Anything
+    // else in the SHIELD slot is an offhand weapon per ACE's
+    // `Creature_Equipment.cs:135` `!e.IsShield` discriminator.
+    const ITEM_TYPE_ARMOR = 2;
+
+    let hasPrimary = false;
+    let hasOffhandWeapon = false;
+    for (const item of inventory) {
+      const mask = (item?.equipMask ?? 0) >>> 0;
+      if ((mask & PRIMARY_BITS) !== 0) {
+        hasPrimary = true;
+      }
+      if ((mask & SHIELD_BIT) !== 0) {
+        const itemType = (item?.itemType ?? 0) >>> 0;
+        if (itemType !== ITEM_TYPE_ARMOR) {
+          hasOffhandWeapon = true;
+        }
+      }
+      if (hasPrimary && hasOffhandWeapon) return true;
+    }
+    return hasPrimary && hasOffhandWeapon;
   }
 
   /**

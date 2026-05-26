@@ -8,18 +8,20 @@
 //!
 //! **Retail data disagrees with the wiki.** CMT 0x30000000 contains
 //! exactly **3** Backhand rows under SwordShieldCombat — one per
-//! AttackHeight (Low/Medium/High), all keyed `attack_type=0x0004`
-//! (Slash):
+//! AttackHeight (High/Medium/Low per
+//! `~/ace-server/Source/ACE.Entity/Enum/AttackHeight.cs:3-8`), all
+//! keyed `attack_type=0x0004` (Slash):
 //!
 //! | stance              | height  | type      | motion       |
 //! |---------------------|---------|-----------|--------------|
-//! | SwordShieldCombat   | Low     | Slash     | BackhandHigh |
+//! | SwordShieldCombat   | High    | Slash     | BackhandHigh |
 //! | SwordShieldCombat   | Medium  | Slash     | BackhandMed  |
-//! | SwordShieldCombat   | High    | Slash     | BackhandLow  |
+//! | SwordShieldCombat   | Low     | Slash     | BackhandLow  |
 //!
-//! (Note the inverted height→motion mapping — Low height swings the
-//! "BackhandHigh" motion, etc. That's a separate retail quirk worth
-//! recording, but not in scope for this test.)
+//! (The original audit prose claimed an "inverted" height→motion
+//! mapping; that was an artifact of an inverted `attack_height_name`
+//! label table — see Wave 8 / Phase 24, 2026-05-26. The retail data
+//! pairs height N with `Backhand{N}` as one would expect.)
 //!
 //! # Resolution (Wave 6 / Phase 18 — 2026-05-26)
 //!
@@ -140,11 +142,13 @@ fn motion_label(value: u32) -> String {
 }
 
 fn attack_height_name(h: u32) -> &'static str {
-    // ACE.Entity.Enum.AttackHeight: Low = 1, Medium = 2, High = 3
+    // ACE.Entity.Enum.AttackHeight (`~/ace-server/Source/ACE.Entity/Enum/AttackHeight.cs:3-8`):
+    //   High = 1, Medium = 2, Low = 3
+    // Locked in by `tests/attack_height_parity.rs` to catch future drift.
     match h {
-        1 => "Low",
+        1 => "High",
         2 => "Medium",
-        3 => "High",
+        3 => "Low",
         _ => "Unknown",
     }
 }

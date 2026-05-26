@@ -77,11 +77,14 @@ fn stance_name(s: u32) -> &'static str {
 }
 
 fn attack_height_name(h: u32) -> &'static str {
-    // ACE.Entity.Enum.AttackHeight: Low = 1, Medium = 2, High = 3
+    // ACE.Entity.Enum.AttackHeight (`~/ace-server/Source/ACE.Entity/Enum/AttackHeight.cs:3-8`):
+    //   High = 1, Medium = 2, Low = 3
+    // Cross-check against the `attack_height_parity.rs` test which locks
+    // these three values to the ACE source.
     match h {
-        1 => "Low",
+        1 => "High",
         2 => "Medium",
-        3 => "High",
+        3 => "Low",
         _ => "Unknown",
     }
 }

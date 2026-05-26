@@ -14006,6 +14006,16 @@ pub struct InventoryItem {
     /// identically on both paths. `0` when the weapon entity hasn't
     /// surfaced PropertyInt 47 yet, or for non-weapon items.
     attack_type: u32,
+    /// CMT Wave 8 / Phase 25 (2026-05-26): `PropertyFloat::MaximumVelocity
+    /// = 26` — projectile launch speed (m/s) for missile launchers. Feeds
+    /// the gravity-arc aim resolver in `scene3d/picking.js` so per-weapon
+    /// arcs replace Phase 19's hardcoded `BOW_DEFAULT_SPEED_MPS = 20.0`.
+    /// `20.0` when the wire hasn't surfaced PropertyFloat 26 (matches
+    /// ACE `Creature_Missile.cs:208 DefaultProjectileSpeed`). See
+    /// `crates/holtburger-common/src/properties/property_keys/floats.rs:38`
+    /// for the enum value and the `assessment.rs` `get_float_prop`
+    /// pattern this mirrors.
+    maximum_velocity: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -14088,6 +14098,19 @@ impl InventoryItem {
     pub fn attack_type(&self) -> u32 {
         self.attack_type
     }
+
+    /// CMT Wave 8 / Phase 25 (2026-05-26): `PropertyFloat::MaximumVelocity
+    /// = 26` — projectile launch speed (m/s). Mirrors
+    /// [`EquippedWeaponJs::maximum_velocity`] so `scene3d/picking.js`'s
+    /// missile branch can resolve a per-weapon `projectileSpeed` for
+    /// `getAimLevelForBallisticArc` regardless of whether the wielder
+    /// is the local player or a remote entity. `20.0` when the wire
+    /// hasn't surfaced PropertyFloat 26 yet (matches ACE
+    /// `Creature_Missile.cs:208 DefaultProjectileSpeed`).
+    #[wasm_bindgen(getter, js_name = maximumVelocity)]
+    pub fn maximum_velocity(&self) -> f32 {
+        self.maximum_velocity
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -14142,6 +14165,17 @@ struct WieldedWeaponEntry {
     /// and `ace-server/Source/ACE.Entity/Enum/Properties/PropertyInt.cs:78`
     /// for the enum value.
     attack_type: u32,
+    /// CMT Wave 8 / Phase 25 (2026-05-26): `PropertyFloat::MaximumVelocity
+    /// = 26` — projectile launch speed (m/s) for missile launchers. Read
+    /// off the weapon entity at ObjectCreate time and surfaced through
+    /// [`EquippedWeaponJs::maximum_velocity`] so `scene3d/picking.js`'s
+    /// gravity-arc resolver picks a per-weapon `projectileSpeed` instead
+    /// of Phase 19's hardcoded `BOW_DEFAULT_SPEED_MPS = 20.0`. `20.0`
+    /// when PropertyFloat 26 isn't on the entity (matches ACE
+    /// `Creature_Missile.cs:208 DefaultProjectileSpeed`). See
+    /// `crates/holtburger-common/src/properties/property_keys/floats.rs:38`
+    /// for the enum value.
+    maximum_velocity: f32,
 }
 
 /// CMT Wave 2 / Phase 5 (2026-05-26): JS-facing wielded-weapon record
@@ -14168,6 +14202,13 @@ pub struct EquippedWeaponJs {
     /// for non-weapon wielded items). See [`WieldedWeaponEntry`] for
     /// the source-side comment.
     attack_type: u32,
+    /// CMT Wave 8 / Phase 25: `PropertyFloat::MaximumVelocity = 26` —
+    /// projectile launch speed (m/s) for missile launchers. `20.0` when
+    /// the property isn't on the entity (matches ACE
+    /// `Creature_Missile.cs:208 DefaultProjectileSpeed`). See
+    /// [`WieldedWeaponEntry::maximum_velocity`] for the source-side
+    /// comment.
+    maximum_velocity: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -14206,6 +14247,16 @@ impl EquippedWeaponJs {
     /// pre-property-arrival ObjectCreate events.
     #[wasm_bindgen(getter, js_name = attackType)]
     pub fn attack_type(&self) -> u32 { self.attack_type }
+
+    /// CMT Wave 8 / Phase 25 (2026-05-26): `PropertyFloat::MaximumVelocity
+    /// = 26` projectile launch speed (m/s). Feeds
+    /// `scene3d/picking.js`'s gravity-arc resolver so missile shots
+    /// arc against the weapon's actual speed (a fast composite bow
+    /// arcs flatter than a starter bow). `20.0` when PropertyFloat 26
+    /// hasn't surfaced yet — matches Phase 19's `BOW_DEFAULT_SPEED_MPS`
+    /// and ACE `Creature_Missile.cs:208 DefaultProjectileSpeed`.
+    #[wasm_bindgen(getter, js_name = maximumVelocity)]
+    pub fn maximum_velocity(&self) -> f32 { self.maximum_velocity }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -15476,7 +15527,7 @@ fn apply_inventory_object_create(
     >,
 ) -> bool {
     use holtburger_common::properties::{
-        PropertyInt, WorldObjectExt as _, WorldObjectPropertyAccessors as _,
+        PropertyFloat, PropertyInt, WorldObjectExt as _, WorldObjectPropertyAccessors as _,
     };
     let guid = data.public_weenie_desc.guid;
     let entity_name = data
@@ -15505,6 +15556,19 @@ fn apply_inventory_object_create(
         .get_int_prop(PropertyInt::AttackType)
         .map(|bits| bits as u32)
         .unwrap_or(0);
+    // CMT Wave 8 / Phase 25 (2026-05-26): pull `MaximumVelocity`
+    // (`PropertyFloat::MaximumVelocity = 26`) off the weapon entity so
+    // the non-local `WieldedWeaponEntry` carries per-weapon projectile
+    // speed. The local-player path reads PropertyFloat 26 again from
+    // the inventory entity in `publish_player_inventory_snapshot` (same
+    // accessor on `Entity::get_float_prop`). Fallback `20.0` matches
+    // ACE `Creature_Missile.cs:208 DefaultProjectileSpeed` and Phase
+    // 19's `BOW_DEFAULT_SPEED_MPS = 20.0` JS constant — keep these
+    // aligned.
+    let maximum_velocity = entity
+        .get_float_prop(PropertyFloat::MaximumVelocity)
+        .map(|v| v as f32)
+        .unwrap_or(20.0);
 
     // CMT Wave 2 / Phase 5 (2026-05-26): non-local wielder index. When
     // ACE ships an ObjectCreate for a wielded item AND the wielder is
@@ -15529,6 +15593,7 @@ fn apply_inventory_object_create(
             item_type: entity.item_type_int().unwrap_or(0),
             equip_mask: equip_mask.bits(),
             attack_type,
+            maximum_velocity,
         };
         let mut idx = wielder_index.borrow_mut();
         let list = idx.entry(w_u32).or_default();
@@ -16472,6 +16537,7 @@ impl SessionHandle {
                 equip_mask: entry.equip_mask,
                 name: entry.name.clone(),
                 attack_type: entry.attack_type,
+                maximum_velocity: entry.maximum_velocity,
             });
         }
         None
@@ -20067,7 +20133,7 @@ fn publish_player_inventory_snapshot(
     latest_inventory: &std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
 ) {
     use holtburger_common::properties::{
-        PropertyInt, WorldObjectExt as _, WorldObjectPropertyAccessors as _,
+        PropertyFloat, PropertyInt, WorldObjectExt as _, WorldObjectPropertyAccessors as _,
     };
     let mut items: Vec<InventoryItem> =
         Vec::with_capacity(world.player.inventory.len());
@@ -20097,6 +20163,18 @@ fn publish_player_inventory_snapshot(
             .get_int_prop(PropertyInt::AttackType)
             .map(|bits| bits as u32)
             .unwrap_or(0);
+        // CMT Wave 8 / Phase 25 (2026-05-26): surface `MaximumVelocity`
+        // (PropertyFloat 26) so `scene3d/picking.js`'s missile branch
+        // can resolve per-weapon projectile speed for the gravity-arc
+        // aim resolver (replaces Phase 19's hardcoded 20.0 m/s default).
+        // Fallback `20.0` matches ACE `Creature_Missile.cs:208
+        // DefaultProjectileSpeed` and Phase 19's `BOW_DEFAULT_SPEED_MPS`.
+        // Same accessor pattern as the non-local path in
+        // `apply_inventory_object_create`.
+        let maximum_velocity = entity
+            .get_float_prop(PropertyFloat::MaximumVelocity)
+            .map(|v| v as f32)
+            .unwrap_or(20.0);
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -20108,6 +20186,7 @@ fn publish_player_inventory_snapshot(
             equip_mask,
             container_id,
             attack_type,
+            maximum_velocity,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS

@@ -30,6 +30,10 @@
 | 19 | Gravity-arc missile prediction quality | 7 | **shipped** 2026-05-26 |
 | 20 | Sneak Attack DR rollup helper + HUD display plugin | 7 | **shipped** 2026-05-26 |
 | 21 | Unarmed AttackType power-based audit (KickThreshold=0.75) | 7 | **shipped** 2026-05-26 |
+| 22 | Two-handed-spear stance audit (TwoHandedSwordCombat, not Staff) | 8 | **shipped** 2026-05-26 |
+| 23 | Picking.js call-site upgrade for Phase 21 + isDualWield accessor | 8 | **shipped** 2026-05-26 |
+| 24 | AttackHeight mislabel fix + 2-test parity guard | 8 | **shipped** 2026-05-26 |
+| 25 | Per-weapon projectile speed from wire (PropertyFloat::MaximumVelocity=26) | 8 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -1168,6 +1172,237 @@ with `KickThreshold = 0.75f` (line 432). Strict `>`, not `>=`. Plus the dual-wie
 | `node test_ac_spell_shape.mjs` regression | 30/30 PASS |
 | Wave 6 backward-compat (4 cases) | 4/4 PASS |
 | Phase 21 new branches (4 cases incl. dual-wield gate) | 4/4 PASS |
+
+---
+
+## Wave 8 — two-handed spears + call-site upgrades + cleanups (4 agents, parallel)
+
+User clarification (2026-05-26): "the two hand spear (there are a variety of spear or spearlike two hand weapons) do use a jabbing-type animation." Phase 21's dismissal of "Jab" was about the AttackType/MotionCommand ENUMS (verified: no Jab in either). The wiki's "jab" terminology refers to a visual MOTION CLIP that two-handed spear weapons produce via their CMT lookup — most likely under `TwoHandedStaffCombat (0x80000045)` stance with AttackType=Thrust, resolving to `ThrustHigh/Med/Low` motion clips that animate as forward thrusts ("jabs"). Wave 8 Phase 22 audits this concretely.
+
+### Pre-investigated facts
+
+- **No "Jab" enum.** Verified against `~/ace-server/Source/ACE.Entity/Enum/MotionCommand.cs` and our `data/motion-command-names.json` (409 entries) — zero "Jab*" hits. Only `Thrust*`, `DoubleThrust*`, `TripleThrust*`, plus `Offhand*` variants exist for thrust-family.
+- **TwoHanded stances in ACE:** only TWO defined at `MotionStance.cs:18-19` — `TwoHandedSwordCombat = 0x80000044` and `TwoHandedStaffCombat = 0x80000045`. Spears bucket under one of these (Phase 22 will determine which).
+- **Phase 13 audit found:** "Spear 88% Thrust" — when surveyed across all 646 retail TwoHandedCombat weapons, spears overwhelmingly carry `W_AttackType = Thrust`. Wave 6 Phase 15 already surfaces W_AttackType on the wire, so `inferAttackTypeForWeapon` returns the correct bitmask for spears.
+- **`PropertyFloat::MaximumVelocity`** is at key 26 per `ace-server/Source/ACE.Entity/Enum/Properties/PropertyFloat.cs` — confirmed by Phase 19's agent during the projectile-speed audit.
+- **`AttackHeight` enum** per `ace-server/Source/ACE.Entity/Enum/AttackHeight.cs`: `Low = 1, Medium = 2, High = 3`. `dump_cmt_ranged_rows.rs` mislabels these (uses `1=Low` when ACE has `1=High`) per Phase 21 agent's side finding. Phase 24 fixes.
+
+### Phase 22 — Two-handed-spear visual-jab motion audit
+
+**Owner:** Agent T
+**Goal:** Confirm what stance two-handed spears actually use, dump the resolved motions, and update Phase 21's docstring to acknowledge the visual-jab quirk (without retracting the correct enum claim).
+
+**Investigation steps:**
+
+1. **Find real two-handed spears in LSD weenie data.** `external/LSD-Partial-2025-02-23_16-15/weenies/` — grep for names like "Halberd", "Naginata", "Pike", "Greatspear" filtered to `WeaponSkill == TwoHandedCombat (41)` and `WeaponType == Spear (3 — verify against ACE's WeaponType enum)`. Note their wcids + `W_AttackType` values + `DefaultCombatStyle` if set.
+2. **Determine the stance.** ACE's `WorldObject_Weapon.cs` resolves stance from weapon. Look for the two-handed spear → stance mapping. Most likely `TwoHandedStaffCombat (0x80000045)` based on motion vocabulary, but verify against ACE.
+3. **Dump CMT rows for that stance + Thrust AttackType.** Write a one-shot Rust example or shell script (or reuse `crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs` as a template):
+   ```rust
+   // Filter CMT 0x30000000 to stance = TwoHandedStaffCombat AND attack_type & Thrust(0x02)
+   // Print each resulting motion u32 + its name via motion_command_name()
+   ```
+   Run against `HOLTBURGER_PORTAL_DAT=$HOME/ac_base_dats/client_portal.dat`. Capture the output.
+4. **Cross-check the visual.** Open an existing animation clip for one of those motions (e.g., `ThrustHigh = 0x1000005A`) and confirm it animates as a forward thrust. The animation lives in the DAT (Animation 0x03... files referenced via MotionTable). You don't need to fully render it — confirm the motion-name + the AnimPart sequence smells like "thrust forward".
+
+**Files:**
+
+- NEW `external/holtburger/crates/holtburger-dat/examples/dump_two_handed_spear_motions.rs` — short example following the `dump_cmt_ranged_rows.rs` pattern.
+- `external/holtburger/apps/holtburger-web/ui/ac_attack_type_for_weapon.js` — extend the mapping-table docstring with a "Visual quirk: two-handed spears" note. Cite: weapon `W_AttackType = Thrust (0x02)` → CMT lookup at `(TwoHandedStaffCombat, height, Thrust)` → resolves to `ThrustHigh/Med/Low` motion clips. Acknowledge the wiki's "jab" terminology refers to this visual but DOES NOT correspond to a distinct AttackType or MotionCommand enum value. Cite the audit script + its findings.
+
+**Acceptance:**
+
+- Audit example compiles + runs against portal.dat. Output paste in the report.
+- Docstring extension cites: (a) the two-handed-spear stance (you found it via investigation), (b) the resolved motion family, (c) the wiki's colloquialism, (d) the audit script path.
+- `node --check` clean.
+- Helper logic UNCHANGED — this is a docstring-only audit phase.
+
+**Hard constraints:**
+
+- Do NOT touch other Wave 8 agents' files: `scene3d/picking.js` (U/W), `scene3d/entities.js` (U/W), `dump_cmt_ranged_rows.rs` (V), `src/lib.rs` (W).
+- Do NOT change `inferAttackTypeForWeapon` logic — it correctly returns Thrust for two-handed spears via the W_AttackType bitmask (Wave 6 Phase 15 already surfaced this). The "jab" quirk is purely a visual-clip outcome of correct AttackType → CMT lookup.
+
+---
+
+### Phase 23 — Picking.js call-site upgrade for Phase 21
+
+**Owner:** Agent U
+**Goal:** Wave 7 Phase 21 extended `inferAttackTypeForWeapon(weapon, opts)` with `opts.powerLevel` + `opts.isDualWield`, but no call site passes them — so unarmed always returns Punch even at high power. Wire the upgrade.
+
+**Files:**
+
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` — melee branch only (around line 480 — the existing call to `inferAttackTypeForWeapon(weapon)`). Update to:
+  ```js
+  const inferredType = inferAttackTypeForWeapon(weapon, {
+    powerLevel: slider,
+    isDualWield: em?.isDualWield?.(localGuid) ?? false,
+  });
+  ```
+  Do NOT touch the missile branch (Phase 19/25 territory) — missile attacks don't use the unarmed kick-vs-punch logic.
+
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js` — add a new `isDualWield(guid)` accessor. Determines whether the entity has weapons in both primary AND offhand slots. Investigate how the existing `getEquippedWeapon` finds the primary; mirror that pattern for offhand. The offhand EquipMask bit should be `WIELD_DUAL_WIELD = ???` — search `crates/holtburger-common/src/properties/inventory.rs` (Phase 13 cited `EquipMask` bits at line 158) for the right value, or grep ACE's `EquipMask` enum for the offhand-slot bit. Returns boolean.
+  - For non-local entities: walks the wielder index returned by the wasm getter (Wave 2 Phase 5 infrastructure).
+  - For local player: walks `sessionHandle.playerInventory()` looking for two items with non-zero equip masks in distinct slot categories.
+
+**Acceptance:**
+
+- `node --check` clean on both files.
+- Unit-test the call site via a short Node-input-type=module snippet (in your report) that imports `inferAttackTypeForWeapon` and demonstrates: unarmed + power=0.8 + isDualWield=false → Kick (0x08); unarmed + power=0.8 + isDualWield=true → Punch (0x01).
+- The melee call site passes both opts; missile branch UNCHANGED.
+
+**Hard constraints:**
+
+- Do NOT touch missile or magic branches in picking.js (Phase 19/25 + Phase 16 territory).
+- Do NOT modify `ui/ac_attack_type_for_weapon.js` — Phase 21's helper is correct; only the call site is the gap.
+- Do NOT touch other Wave 8 agents' files: `ui/ac_attack_type_for_weapon.js` (T's docstring extension; you're separate), `dump_cmt_ranged_rows.rs` (V), `src/lib.rs` (W).
+- `isDualWield` should return `false` defensively when data isn't available (e.g., pre-login). Match the existing accessor patterns.
+
+---
+
+### Phase 24 — AttackHeight mislabel fix in dump_cmt_ranged_rows.rs
+
+**Owner:** Agent V
+**Goal:** Phase 21 agent flagged that `crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs` mislabels AttackHeight (uses `1=Low` when ACE's `AttackHeight.cs` has `1=High, 2=Medium, 3=Low`). Fix it. Add a parity assertion so this can't drift again.
+
+**Investigation step:**
+
+1. Confirm the ACE values. `~/ace-server/Source/ACE.Entity/Enum/AttackHeight.cs`:
+   ```
+   Undef = 0
+   High = 1
+   Medium = 2
+   Low = 3
+   ```
+2. Cross-check against `~/ace-server/Source/ACE.DatLoader/FileTypes/CombatManeuverTable.cs` to confirm the field maps the same way.
+
+**Files:**
+
+- `external/holtburger/crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs` — fix the `attack_height_name` function (or wherever the mislabel is). Cite the ACE source in a comment.
+- `external/holtburger/crates/holtburger-dat/tests/shield_stance_backhand_audit.rs` — Wave 5 Phase 10's test also has an `attack_height_name` function at line 142. Audit + fix if it has the same bug. (If the existing test passes after the fix, that's because the test only counts and asserts cardinality, not the printed names — but the printed log would now be correct.)
+- *(optional)* NEW small parity test asserting AttackHeight enum values match (1=High, 2=Medium, 3=Low). Or extend an existing test.
+
+**Acceptance:**
+
+- `dump_cmt_ranged_rows.rs` example compiles + runs.
+- `shield_stance_backhand_audit.rs` test still passes (`cargo test -p holtburger-dat shield_stance_backhand_audit` with portal.dat).
+- If you add a new parity test, it passes too.
+- The fixed labels match ACE's `AttackHeight.cs`.
+
+**Hard constraints:**
+
+- Don't touch test ASSERTION logic — only the label/print code.
+- Don't touch other Wave 8 agents' files: `ui/ac_attack_type_for_weapon.js` (T), `scene3d/picking.js` (U/W), `scene3d/entities.js` (U/W), `src/lib.rs` (W).
+
+---
+
+### Phase 25 — Per-weapon projectile speed from wire
+
+**Owner:** Agent W
+**Goal:** Phase 19 hardcoded `BOW_DEFAULT_SPEED_MPS = 20.0` for ALL ranged weapons. Surface the weapon's actual `MaximumVelocity` (PropertyFloat 26) so different bow types animate with different arcs.
+
+**Files:**
+
+1. **`external/holtburger/apps/holtburger-web/src/lib.rs`:**
+   - `WieldedWeaponEntry` (line ~14099): add `maximum_velocity: f32` field. Populate from `entity.get_float_prop(PropertyFloat::MaximumVelocity).map(|v| v as f32).unwrap_or(20.0)` in `apply_inventory_object_create` (line ~15431). Use the helper pattern Phase 15 used for `attack_type` reading.
+   - `EquippedWeaponJs` (line ~14126): add `maximum_velocity: f32` field + `#[wasm_bindgen(getter, js_name = maximumVelocity)] pub fn maximum_velocity(&self) -> f32`. Default 20.0 when unset.
+   - Same for `InventoryItem` (local-player twin, line ~13991). Add same field + getter.
+   - Propagate from `WieldedWeaponEntry` to `EquippedWeaponJs` in `entity_equipped_weapon` (line ~16386) and from local entity data to `InventoryItem` in `publish_player_inventory_snapshot` (line ~20062).
+2. **`external/holtburger/apps/holtburger-web/scene3d/entities.js`** — extend `getEquippedWeapon(guid)`. Today emits `{guid, wcid, itemType, equipMask, name, attackType}`. Add `maximumVelocity: (weapon.maximumVelocity ?? 20.0)` on both local + non-local branches.
+3. **`external/holtburger/apps/holtburger-web/scene3d/picking.js`** — missile branch only (around line 460). Today: `getAimLevelForBallisticArc({..., projectileSpeed: BOW_DEFAULT_SPEED_MPS})`. Update to:
+   ```js
+   const projectileSpeed = weapon?.maximumVelocity ?? BOW_DEFAULT_SPEED_MPS;
+   const aimMotion = getAimLevelForBallisticArc({origin: pose, target: targetAc, projectileSpeed});
+   ```
+   Keep `BOW_DEFAULT_SPEED_MPS = 20.0` as the explicit fallback constant.
+
+**Acceptance:**
+
+- `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean (allow 18 pre-existing warnings, 0 new).
+- `wasm-pack build` PASS; `pkg/holtburger_web.d.ts` shows `maximumVelocity` on `EquippedWeaponJs` + `InventoryItem`.
+- `node --check` clean on entities.js + picking.js.
+- A bow with `MaximumVelocity = 30.0` on the wire produces a flatter arc (higher AimLevel bucket) than the default-20 fallback. A crossbow with `MaximumVelocity = 45.0` would arc even flatter. The diag's motion histogram (Phase 1) should show measurable difference.
+
+**Hard constraints:**
+
+- Do NOT touch melee or magic branches in picking.js (U + Phase 16 territory).
+- Do NOT modify Phase 19's `getAimLevelForBallisticArc` helper signature — just change the value passed at the call site.
+- Do NOT touch other Wave 8 agents' files: `ui/ac_attack_type_for_weapon.js` (T), `dump_cmt_ranged_rows.rs` (V).
+- The `unwrap_or(20.0)` fallback in Rust matches the existing `BOW_DEFAULT_SPEED_MPS` JS-side. Don't drift these.
+
+### Wave 8 reporting & checkpoint
+
+Each agent reports: files changed (paths + line counts), audit findings (Phase 22 esp.), validation steps, key surprises. Under 350 words each. **Don't commit — parent agent handles commits after all 4 finish.**
+
+### Wave 8 results — shipped 2026-05-26
+
+#### Phase 22 (Agent T) — Two-handed spear stance audit
+
+**Load-bearing finding:** Two-handed spears use `TwoHandedSwordCombat (0x80000044)`, NOT `TwoHandedStaffCombat (0x80000045)`. Two sources confirm:
+1. `~/ace-server/Source/ACE.Server/WorldObjects/Creature_Combat.cs:330-334 GetWeaponStance` collapses ALL `CombatStyle.TwoHanded` weapons to `TwoHandedSwordCombat` with the explicit comment **"MotionStance.TwoHandedStaffCombat doesn't appear to do anything"**.
+2. Empirical CMT dump: stance `0x80000045` has ZERO rows in retail `client_portal.dat`.
+
+**Audit output for Thrust-family rows under two-handed stances:**
+```
+TwoHandedSwordCombat  High    Thrust(0x2)  ThrustHigh (0x1000005A)
+TwoHandedSwordCombat  Medium  Thrust(0x2)  ThrustMed  (0x10000058)
+TwoHandedSwordCombat  Low     Thrust(0x2)  ThrustLow  (0x10000059)
+TwoHandedStaffCombat  → 0 rows
+```
+
+The user's "two-hand spear jabbing animation" = `ThrustHigh/Med/Low` motion clips under `TwoHandedSwordCombat`. Visual is identical to two-handed sword Thrust; the weapon-mesh swap (long shaft + pointed tip) makes it look spear-specific. **The wiki's "jab" colloquialism describes this visual but has no separate enum value** — Phase 21's claim stands.
+
+**Surprise on Halberd:** Halberd (wcid 30049) carries `W_AttackType = 0x06 (Thrust|Slash)`, not pure Thrust. Picker's IsThrustSlash branch (Wave 4) handles the variety. Nodachi/Tetsubo (also `WeaponType=11 TwoHanded`) carry `0x04 (Slash)`. "Two-handed spear → Thrust" is the dominant case but not universal — `W_AttackType` is load-bearing per weenie.
+
+**Files:**
+- NEW `external/holtburger/crates/holtburger-dat/examples/dump_two_handed_spear_motions.rs` (314 lines): one-shot audit script, runs against `HOLTBURGER_PORTAL_DAT`. Correct AttackHeight labels.
+- `external/holtburger/apps/holtburger-web/ui/ac_attack_type_for_weapon.js` (+104 docstring lines, helper logic byte-identical): "Visual quirk: two-handed spears" section in the mapping table with full ACE citations.
+
+#### Phase 23 (Agent U) — Picking.js call-site upgrade + isDualWield accessor
+
+**Load-bearing finding:** **AC has NO separate offhand-weapon EquipMask bit.** Dual-wield is encoded by placing a non-shield item in the `SHIELD = 0x00200000` slot. Confirmed at `~/ace-server/Source/ACE.Server/WorldObjects/Creature_Equipment.cs:133-136 GetDualWieldWeapon()`:
+```csharp
+e => !e.IsShield && e.CurrentWieldedLocation == EquipMask.Shield
+```
+Our `isDualWield` accessor approximates `!IsShield` via `itemType !== ItemType::Armor (2)` since shields are ItemType=Armor in AC.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js` (+144): new `isDualWield(guid)` accessor between `getEquippedWeapon` and `getStance`. Local-player walks `sessionHandle.playerInventory()`. Non-local returns `false` with TODO breadcrumb at `src/lib.rs:15421` since `entity_equipped_weapon` only emits primary today (wielder_index accumulates offhand items but the getter doesn't surface them).
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` (+10): melee branch now passes `{ powerLevel: slider, isDualWield: em?.isDualWield?.(localGuid) ?? false }` to `inferAttackTypeForWeapon`. Missile branch untouched (Phase 19/25 territory).
+
+Inline assertions 4/4 PASS: unarmed power=0.8 + no dual → Kick (0x08); same + dual → Punch (0x01); legacy no-opts → Punch.
+
+#### Phase 24 (Agent V) — AttackHeight mislabel + parity guard
+
+**Plan correction:** ACE has only `High=1, Medium=2, Low=3` (no `Undef=0`). My Wave 8 plan was wrong on that minor point — agent corrected.
+
+**Discovered downstream artifact:** The "Note the inverted height→motion mapping" comment in `shield_stance_backhand_audit.rs:20-22` (from Wave 5 Phase 10) was a downstream artifact of the original mislabel. **The real mapping is correct:** `height=High → BackhandHigh`, `Medium → BackhandMed`, `Low → BackhandLow`. The "inversion" never existed; the labels were just flipped.
+
+**Files:**
+- `external/holtburger/crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs` (~8 lines): `attack_height_name` flipped to canonical `1=>"High"`, `2=>"Medium"`, `3=>"Low"` with ACE citation.
+- `external/holtburger/crates/holtburger-dat/tests/shield_stance_backhand_audit.rs` (~25 lines): same fix to local helper + doc-comment table corrected + Wave 5 "inversion" note replaced with Phase 24 explanation. Assertion logic untouched.
+- NEW `external/holtburger/crates/holtburger-dat/tests/attack_height_parity.rs` (~75 lines, 2 tests): asserts our enum mirror matches ACE; locks the label table so drift trips CI.
+
+#### Phase 25 (Agent W) — Per-weapon projectile speed from wire
+
+**Implementation pattern:** Mirrors Wave 6 Phase 15's `attack_type` threading verbatim. `PropertyFloat::MaximumVelocity = 26` (verified against ACE + our floats.rs:38).
+
+**Files (3, +83 net):**
+- `external/holtburger/apps/holtburger-web/src/lib.rs` (+47): `maximum_velocity: f32` field on `InventoryItem`, `WieldedWeaponEntry`, `EquippedWeaponJs`. `maximumVelocity` wasm-bindgen getters on the two JS-exposed structs. Populated via `entity.get_float_prop(PropertyFloat::MaximumVelocity).map(|v| v as f32).unwrap_or(20.0)`. Threading through 6 sites (struct decl + populate + getter + propagate) for both local and non-local paths.
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js` (+22): `getEquippedWeapon` extended on both branches with `maximumVelocity: Number.isFinite(...) ? ... : 20.0` fallback.
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` (+14): missile branch now reads `weapon?.maximumVelocity` per-call instead of using the constant. `BOW_DEFAULT_SPEED_MPS = 20.0` retained as explicit fallback. TODO breadcrumb updated.
+
+`pkg/holtburger_web.d.ts` exposes `readonly maximumVelocity: number` on both `EquippedWeaponJs` (line 1119) and `InventoryItem` (line 1371).
+
+### Wave 8 validation summary
+
+| Check | Result |
+|---|---|
+| `node --check` on 3 modified JS files | PASS |
+| `cargo check -p holtburger-web --target wasm32-unknown-unknown` | PASS (18 pre-existing warnings, 0 new) |
+| `wasm-pack build` | PASS; `maximumVelocity` confirmed on both structs |
+| `cargo build` on both DAT examples (ranged + two-handed-spear) | PASS |
+| `cargo test attack_height_parity` (new) | 2/2 PASS |
+| `cargo test shield_stance_backhand_audit` (regression) | 4/4 PASS in 1.0s |
+| `inferAttackTypeForWeapon` 6-case parity (Wave 6 + Wave 7 + Wave 8 scenarios) | 6/6 PASS |
 
 ## Coordination notes for agents
 
