@@ -580,9 +580,34 @@ export function setupClickPicking({
       // Rust's `unwrap_or`), but the `> 0` guard is defensive against
       // any weapon shipping a literal 0.0 — a 0 m/s projectile would
       // collapse the gravity-arc solver.
-      const projectileSpeed = (weapon && Number.isFinite(weapon.maximumVelocity) && weapon.maximumVelocity > 0)
+      // Wave 10 / Phase 32 (2026-05-26) — UseFastMissiles client-side
+      // prediction multiplier. ACE applies `fast_missile_modifier = 1.2`
+      // to the launcher's max velocity server-side
+      // (`Creature_Missile.cs:223-225`) when the player has
+      // `CharacterOption.UseFastMissiles` (0x2B) set in their
+      // CharacterOptions2 mask. Without this client mirror, our local
+      // gravity-arc predictor would pick an AimLevel for the un-boosted
+      // speed and the server's UpdateMotion (kind=5) would re-pose
+      // mid-swing once the boosted velocity took effect.
+      //
+      // This is CLIENT-side prediction only. The wire-side option
+      // change (sending `GameAction::SetSingleCharacterOption(
+      // UseFastMissiles, true)` via wasm) isn't yet exposed from
+      // `holtburger-web/src/lib.rs` — Wave 11+ TODO. Until that lands,
+      // toggling the UI checkbox only affects the local arc prediction;
+      // the server still uses 1.0× and the kind=5 correction will fire
+      // on first swing. Once the wire is wired, the prediction
+      // matches and no correction is needed.
+      //
+      // `cb` is already in scope from the outer fireAttackOnSelectedTarget
+      // closure (declared at the top of this function) — re-using it
+      // rather than re-reading window.__combatBarState here keeps the
+      // boost coherent with the height / power / charge flags read off
+      // the same snapshot.
+      const fastMissileMultiplier = (cb?.useFastMissiles === true) ? 1.2 : 1.0;
+      const projectileSpeed = ((weapon && Number.isFinite(weapon.maximumVelocity) && weapon.maximumVelocity > 0)
         ? weapon.maximumVelocity
-        : BOW_DEFAULT_SPEED_MPS;
+        : BOW_DEFAULT_SPEED_MPS) * fastMissileMultiplier;
       const aimMotion = (targetAc && pose)
         ? getAimLevelForBallisticArc({
             origin: pose,

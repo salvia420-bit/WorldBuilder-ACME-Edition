@@ -23,10 +23,26 @@
 // specialized yields +40 DR (`{ base: 0, sneak: 20, reckless: 20,
 // total: 40 }`).
 //
-// TODO (out of scope this phase): `base` is reserved for per-weapon /
-// per-armor DR plumbed off the wire (PropertyInt `Damage_Rating`,
-// `Damage_Resist_Rating`, etc). Surface from `WieldedWeaponEntry` once
-// available; today `base` is always 0.
+// **Wave 10 / Phase 29 (2026-05-26)** — per-weapon `base` contribution
+// is now wired off the equipped weapon's `PropertyFloat::DamageMod = 63`
+// (ACE `BaseDamageMod.cs:52`: `weapon.GetProperty(PropertyFloat.DamageMod)
+// ?? 1.0f`). The conversion to additive DR-percent is
+// `base = round((damageMod - 1.0) * 100)`, clamped at 0 for neutral or
+// sub-neutral weapons (DamageMod ≤ 1.0). So a Yumi (DamageMod 1.5)
+// contributes `+50`, Crystal Sword (1.0) contributes `0`, and a damaged
+// weapon (0.8) contributes `0` (we don't surface negative DR here
+// because acpedia frames DR as a flat *additive bonus*, and a weapon's
+// sub-1.0 multiplier composes into the final damage *multiplicatively*,
+// not via the +/- DR channel). Source the weapon either via the
+// `weapon` opt (caller-provided plain object with `damageMod`) or by
+// scanning `sessionHandle.playerInventory()` for the primary-weapon
+// equip-slot occupant.
+//
+// Out of scope for now: per-armor PropertyInt `Damage_Resist_Rating`
+// (defender side) and weapon-enchantment `EnchantmentManager.GetDamageMod`
+// stacking. Both are server-resolved and arrive via the existing
+// damage-event stream; this helper covers the predictable client-side
+// weapon base only.
 
 // SkillType enum values — see
 // `external/holtburger/crates/holtburger-common/src/stats.rs:156-158`
@@ -97,6 +113,69 @@ export function readTrainingLevel(skillType, sessionHandle = null) {
   }
 }
 
+// EquipMask bits that mark a "primary weapon". Mirrors
+// `scene3d/entities.js#getEquippedWeapon`'s local branch + the wasm-side
+// `SessionHandle::entity_equipped_weapon`'s `PRIMARY_WEAPON_BITS` so the
+// three call sites resolve the same item. See
+// `holtburger_common::properties::EquipMask` for the canonical bit
+// definitions.
+const _PRIMARY_WEAPON_BITS_DR =
+    0x00100000 /* MELEE_WEAPON */
+  | 0x00400000 /* MISSILE_WEAPON */
+  | 0x01000000 /* CASTER */
+  | 0x02000000 /* TWO_HANDED */;
+
+/**
+ * Resolve the equipped weapon's `damageMod` (PropertyFloat 63) for the
+ * DR-rollup `base` conversion. Resolution order:
+ *   1. Explicit `weapon.damageMod` (caller-provided).
+ *   2. `sessionHandle.playerInventory()` scan for the primary-weapon
+ *      equip-slot occupant — mirrors `scene3d/entities.js#
+ *      getEquippedWeapon` local branch precisely.
+ *   3. `1.0` fallback (neutral; matches ACE `BaseDamageMod.cs:52`'s
+ *      `weapon.GetProperty(PropertyFloat.DamageMod) ?? 1.0f`).
+ *
+ * Never throws; defensive against missing inventory accessor, NaN
+ * values, non-numeric `damageMod`, etc. — the caller treats `1.0` as
+ * the safe neutral fallback regardless of the failure mode.
+ *
+ * @param {{damageMod?: number}|null|undefined} weapon
+ * @param {object|null} sessionHandle
+ * @returns {number}  Resolved damageMod (defaults to 1.0).
+ */
+function _resolveEquippedWeaponDamageMod(weapon, sessionHandle) {
+  // 1. Caller-provided weapon record — fast path. Validate the
+  //    `damageMod` field is a real number; anything else falls
+  //    through.
+  if (weapon && typeof weapon === "object") {
+    const dm = Number(weapon.damageMod);
+    if (Number.isFinite(dm)) return dm;
+  }
+
+  // 2. Scan `sessionHandle.playerInventory()` for the local player's
+  //    primary weapon. The accessor is the same wasm export
+  //    `scene3d/entities.js#getEquippedWeapon` reads.
+  try {
+    const handle =
+      sessionHandle
+      ?? ((typeof window !== "undefined") ? window.__sessionHandle : null);
+    if (!handle || typeof handle.playerInventory !== "function") return 1.0;
+    const inventory = handle.playerInventory();
+    if (!Array.isArray(inventory) || inventory.length === 0) return 1.0;
+    for (const item of inventory) {
+      const mask = (item?.equipMask ?? 0) >>> 0;
+      if ((mask & _PRIMARY_WEAPON_BITS_DR) === 0) continue;
+      const dm = Number(item.damageMod);
+      return Number.isFinite(dm) ? dm : 1.0;
+    }
+  } catch {
+    // Defensive: any wasm-bridge surprise falls back to neutral.
+  }
+
+  // 3. No weapon, no session, no PropertyFloat 63 yet — neutral.
+  return 1.0;
+}
+
 /**
  * Computes the predicted outgoing Damage Rating rollup for the next
  * swing given the current power-bar slider value and whether the
@@ -135,6 +214,12 @@ export function readTrainingLevel(skillType, sessionHandle = null) {
  * @param {number|null|undefined} [opts.accuracyMod]  Optional
  *   server-resolved AccuracyMod. When omitted, falls back to
  *   `sessionHandle.playerResolvedModifiers()[1]` if available.
+ * @param {{damageMod?: number}|null|undefined} [opts.weapon]  Optional
+ *   pre-resolved equipped-weapon record (the shape
+ *   `scene3d/entities.js#getEquippedWeapon` returns). When provided,
+ *   `damageMod` flows straight into the `base` conversion. When
+ *   omitted, the helper falls back to `sessionHandle.playerInventory()`
+ *   and scans for the primary-weapon equip-slot occupant.
  * @returns {{base: number, sneak: number, reckless: number, total: number, currentPowerMod: number|null, accuracyMod: number|null}}
  */
 export function computeDamageRatingRollup({
@@ -143,11 +228,25 @@ export function computeDamageRatingRollup({
   sessionHandle = null,
   currentPowerMod,
   accuracyMod,
+  weapon,
 } = {}) {
-  // base: placeholder for future per-weapon / per-armor DR plumbed
-  // off the wire (PropertyInt Damage_Rating et al). Out of scope this
-  // phase; documented TODO at the top of the module.
-  const base = 0;
+  // base: per-weapon DR contribution (Wave 10 / Phase 29).
+  // Source order:
+  //   1. Explicit `weapon.damageMod` opt (caller-side; lets HUD plugins
+  //      pre-resolve via `scene3d/entities.js#getEquippedWeapon(localGuid)`
+  //      and avoid two inventory scans per frame).
+  //   2. `sessionHandle.playerInventory()` scan for the primary-weapon
+  //      equip-slot occupant — mirrors the entities.js local branch.
+  //   3. `1.0` (neutral; contributes 0 base DR).
+  // Conversion: `base = round((damageMod - 1.0) * 100)`. Clamped at 0
+  // for sub-1.0 (damaged/penalty) weapons since acpedia's DR channel is
+  // an additive *bonus*. ACE `BaseDamageMod.cs:13` documents
+  // `DamageMod = 1.0f` as the multiplier's neutral baseline.
+  const resolvedDamageMod = _resolveEquippedWeaponDamageMod(weapon, sessionHandle);
+  const base =
+    resolvedDamageMod > 1.0
+      ? Math.round((resolvedDamageMod - 1.0) * 100)
+      : 0;
 
   // sneak: gated on the upstream facing predicate. The training-level
   // lookup is short-circuited when `hasSneak` is false to avoid a

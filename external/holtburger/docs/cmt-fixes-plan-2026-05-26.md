@@ -37,6 +37,10 @@
 | 26 | Wielder offhand surfacing — non-local isDualWield, MaximumVelocity unset-vs-zero fix | 9 | **shipped** 2026-05-26 |
 | 27 | spellCastInitiated event with shape classification (consumer-ready) | 9 | **shipped** 2026-05-26 |
 | 28 | CurrentPowerMod / AccuracyMod surface for resolved-DR observability | 9 | **shipped** 2026-05-26 |
+| 29 | Per-weapon base DR (DamageMod=63, NOT 62 — plan typo caught) | 10 | **shipped** 2026-05-26 |
+| 30 | Projectile classification via PhysicsState::MISSILE (NOT WeenieType) | 10 | **shipped** 2026-05-26 |
+| 31 | PlayEffect (0xF755, NOT 0xF754) wire-route through WorldEvent | 10 | **shipped** 2026-05-26 |
+| 32 | UseFastMissiles toggle Path A (UI + client prediction; Rust ready) | 10 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -1543,6 +1547,171 @@ Each agent reports: files changed (paths + line counts), validation outputs, any
 - **Phase 23 → Phase 26:** non-local `isDualWield` no longer returns false unconditionally; wielder-index offhand items are now surfaced.
 - **Phase 25 → Phase 26:** `MaximumVelocity = 0` explicit values now correctly fall back to default.
 - **Phase 11 → Phase 28:** server-resolved `CurrentPowerMod`/`AccuracyMod` now diagable alongside slider-input `PowerLevel`/`AccuracyLevel`.
+
+---
+
+## Wave 10 — parked items + Wave 11 prep (4 agents, parallel)
+
+User context (2026-05-26): "we can temporarily modify ACE but not permanently, as we have to be ace compatible. do we actually have the magic combat (war magic, void magic) creating projectile weenies? projectiles are only controlled by the server. are we creating weenies with missile combat? is there both fast and regular missile projection."
+
+**Investigation answers (verified before dispatch):**
+- **We don't (and shouldn't) create projectile weenies.** Server creates `SpellProjectile` (`ace-server/Source/ACE.Server/WorldObjects/SpellProjectile.cs`) and missile projectiles via `LaunchProjectile` (`Creature_Missile.cs:80`). Both broadcast via `ObjectCreate` to clients.
+- **`GameMessageScript(PlayScript.Launch / Explode)`** is server-broadcast for visual cues (opcode `0xF754`). **Our `opcodes.rs:186` has it commented out** — we don't currently decode launch/explode scripts. Wave 11 will wire visual consumers.
+- **Fast missiles** = `CharacterOption.UseFastMissiles = 0x2B`, bit `0x00010000` of `CharacterOptions2`. ACE multiplies max velocity by `1.2` server-side via `fast_missile_modifier` (`Creature_Missile.cs:223-225`). Same `TargetedMissileAttack (0x000A)` opcode, no separate one.
+
+Wave 10 picks up parked items + lays projectile-rendering infrastructure for Wave 11.
+
+### Phase 29 — Per-weapon base DR rollup
+
+**Owner:** Agent AB
+**Goal:** Phase 20's `computeDamageRatingRollup` returns `base: 0` as a placeholder. Surface the weapon's intrinsic DamageMod and feed it into `base`. Diag observability + better DR previews.
+
+**Investigation step:** read `~/ace-server/Source/ACE.Server/WorldObjects/WorldObject_Weapon.cs` for how damage modifiers compose into the final DR. Look for `DamageMod`, `PropertyFloat::DamageMod = 62`, `WeaponOffense`, or whatever the "intrinsic per-weapon DR" rollup is. The `base` in our helper should be the weapon-level contribution that exists independent of sneak/reckless. Cite the file:line.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/src/lib.rs` — add `damage_mod: f32` (or whatever name maps to the chosen PropertyFloat) to `WieldedWeaponEntry` + `EquippedWeaponJs` + `InventoryItem` (mirror Wave 6 Phase 15's threading pattern for `attack_type`). Populate from `entity.get_float_prop(PropertyFloat::DamageMod)` or equivalent.
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js` — extend `getEquippedWeapon(guid)` with the new field on both branches.
+- `external/holtburger/apps/holtburger-web/ui/ac_damage_rating.js` — when `weapon?.damageMod` is non-null, set `base = (weapon.damageMod - 1.0) * 100` (or whatever the right conversion is — DR is additive integer percent per acpedia; investigate before coding). Update docstring.
+- `external/holtburger/apps/holtburger-web/test_ac_damage_rating.mjs` — add 2-3 cases (weapon with damageMod=1.2 → base=20, no weapon → base=0).
+
+**Acceptance:**
+- `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean.
+- `wasm-pack build` PASS; `damageMod` (or chosen field name) on the structs.
+- 24 existing DR tests still PASS + new cases.
+- DR rollup `total` now correctly includes weapon base.
+
+**Hard constraints:** Don't touch other Wave 10 agents' files. Don't change `sneak` / `reckless` math.
+
+### Phase 30 — Projectile entity classification
+
+**Owner:** Agent AC
+**Goal:** Today our renderer treats `SpellProjectile` and missile-arrow ObjectCreate events as generic entities. Add a classification that flags "this is a projectile" so Wave 11's projectile-VFX work has a clean hook.
+
+**Investigation steps:**
+1. ACE's `SpellProjectile` class extends `WorldObject`. What distinguishes it on the wire? Likely a `PropertyInt::ItemType = Caster (0x8000)` or a specific WCID range. Read `SpellProjectile.cs` for its WCID conventions + how it's constructed. Look at the `proj.EnqueueBroadcast(new GameMessageScript(proj.Guid, PlayScript.Launch, 0f))` site at `Creature_Missile.cs:131`.
+2. Missile-arrow projectiles: ACE creates them via `LaunchProjectile` (also in `Creature_Missile.cs`). Same wire pattern (ObjectCreate + GameMessageScript).
+3. Distinguishing client-side: the easiest heuristic is the `weenie_class_name` field on ObjectCreate, OR specific PropertyInt values (`SpellId` on a spell projectile, etc.). Find the canonical distinguisher.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/src/lib.rs` — add an `is_projectile: bool` field to whichever struct represents an entity post-`ObjectCreate` (search for `apply_object_create` or similar). OR add a new method `entity_is_projectile(guid) -> bool` wasm getter that consults the entity's metadata.
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js` — add `isProjectile(guid)` accessor returning `true` for SpellProjectile / missile projectile entities. Returns `false` for everything else.
+
+**Acceptance:**
+- `cargo check wasm32` clean.
+- `wasm-pack build` PASS.
+- `node --check` clean.
+- Documented detection rule with ACE source citation.
+- Spot-check: a `Lightning Bolt I` cast → server spawns a SpellProjectile → our wire decoder sees ObjectCreate → entities.js#isProjectile(newGuid) returns true. (Trace the code path; don't need to drive a real session.)
+
+**Hard constraints:** Read-only classification; don't change rendering yet (that's Wave 11). Don't touch other Wave 10 agents' files.
+
+### Phase 31 — PlayScript wire decode
+
+**Owner:** Agent AD
+**Goal:** Uncomment + implement the `GameMessageScript` (opcode `0xF754`) decoder. No JS consumer this wave — Wave 11 will wire visuals. Foundation phase only.
+
+**Investigation steps:**
+1. ACE's `GameMessageScript` payload structure (look at `ace-server/Source/ACE.Server/Network/GameMessages/Messages/GameMessageScript.cs` or wherever).
+2. `PlayScript` enum (`ace-server/Source/ACE.Entity/Enum/PlayScript.cs`) — list of script IDs (Launch=?, Explode=?, others).
+
+**Files:**
+- `external/holtburger/crates/holtburger-protocol/src/opcodes.rs` — uncomment `PlayScriptId = 0xF754` (currently at line 186; verify exact opcode value against ACE's GameMessageScript header).
+- `external/holtburger/crates/holtburger-protocol/src/messages/...` — new module (or extension to an existing one) for `PlayScriptData` struct + unpack. Payload structure: `target_guid: u32, play_script: u32, intensity: f32` (or whatever ACE writes).
+- `external/holtburger/crates/holtburger-protocol/src/messages/game_message/mod.rs` — new `PlayScript(Box<PlayScriptData>)` variant.
+- `external/holtburger/crates/holtburger-protocol/src/messages/game_message/unpack.rs` — dispatch.
+- `external/holtburger/crates/holtburger-protocol/src/messages/game_message/pack.rs` — symmetric pack for round-trip testing.
+- `external/holtburger/crates/holtburger-world/src/handlers/` — add a no-op handler that just logs the script ID (Wave 11 will consume). Or fold into an existing handler. Whichever fits the existing routing.
+
+**Acceptance:**
+- `cargo check` clean across the workspace.
+- New `PlayScriptData` struct + pack/unpack tests round-trip clean.
+- Decoded GameMessageScript wires don't crash recv loop; observable in diag log (PlayScript IDs print).
+
+**Hard constraints:** No JS-side rendering hook this wave. Wave 11 territory. Don't touch other Wave 10 agents' files (Phase 29/30/32). Carefully verify the opcode value against ACE since our existing comment says `// PlayScriptId = 0xF754`.
+
+### Phase 32 — UseFastMissiles toggle + UI
+
+**Owner:** Agent AE
+**Goal:** Surface ACE's `UseFastMissiles` CharacterOption to the player. Today we likely don't send/respect the flag; ACE applies 1.2× speed multiplier server-side when the option is set.
+
+**Investigation steps:**
+1. How CharacterOptions are sent. ACE accepts changes via `GameAction::ChangeCharacterOption` or similar (`grep "ChangeCharacterOption\|CharacterOption" /home/wbterminal/ace-server/Source/ACE.Server/Network/GameAction/Actions/`). Find the wire format.
+2. What's our existing CharacterOption surface? Search `external/holtburger/crates/holtburger-protocol/` for `CharacterOption` / `UseFastMissiles` — likely none today. We may need to add the GameAction opcode.
+
+**Files (scope-dependent on what exists):**
+- If GameAction opcode exists: just wire the JS toggle.
+- If not: add the GameAction opcode + handler.
+- `external/holtburger/apps/holtburger-web/plugins/combat-bar.js` (or a new mini settings plugin) — add a "Fast Missiles" checkbox/toggle in the missile-stance configuration. Persist via localStorage. Send the option change on toggle. Match the AC aesthetic.
+- Document in the helper why this matters: faster arrows + faster bow-draw cadence (the 1.2× multiplier).
+
+**Acceptance:**
+- `cargo check` clean.
+- UI shows the toggle in missile/ranged stance only.
+- Toggling sends the wire op (or queues for next attack).
+- Persistence: relogin preserves the user's choice.
+
+**Hard constraints:** This is opt-in UI; default off. Don't touch other Wave 10 agents' files. If the wire infrastructure is too sparse, scope it down: ship the UI toggle + send-on-next-attack flag without persistence, leaving persistence as a follow-on.
+
+### Wave 10 reporting & checkpoint
+
+Each agent reports: files changed (paths + line counts), validation outputs, any surprises. Under 350 words each. **Don't commit — parent agent handles commits after all 4 finish.**
+
+### Wave 10 results — shipped 2026-05-26
+
+#### Phase 29 (Agent AB) — Per-weapon base DR
+
+**Plan typo caught:** `DamageMod` is PropertyFloat **63**, not 62. PropertyFloat **62 is `WeaponOffense`** (to-hit modifier, orthogonal to DR). Agent verified against `BaseDamageMod.cs:52` + `WeaponProfile.cs:104` + LSD weenies (Crystal Sword=1.0 neutral, Yumi=1.5).
+
+**Conversion:** `base = round((damageMod - 1.0) * 100)` clamped at 0 (acpedia DR is additive bonus; sub-1.0 multipliers compose multiplicatively elsewhere — not via DR channel).
+
+**Files (4, +454/-16):** `src/lib.rs` adds `damage_mod` to InventoryItem/WieldedWeaponEntry/EquippedWeaponJs (Wave 6 Phase 15 threading pattern); `entities.js` `getEquippedWeapon` extended; `ac_damage_rating.js` new `_resolveEquippedWeaponDamageMod` helper + base conversion; 6 new tests → 30/30 PASS (24 existing + 6 new). `total = base + sneak + reckless` math preserved.
+
+#### Phase 30 (Agent AC) — Projectile classification via PhysicsState::MISSILE
+
+**Key finding:** ACE does NOT serialize `WeenieType` on the wire. The plan's WeenieType-based classifier wouldn't have worked. Agent pivoted to `PhysicsState::MISSILE = 0x40` bit which IS on the wire and is set by:
+- `SpellProjectile.cs:77 Setup()` for war/void/life magic projectiles (WeenieType::ProjectileSpell=33)
+- `Creature_Missile.cs:357 SetProjectilePhysicsState()` for bow/crossbow/atlatl/thrown (WeenieType::Missile=4)
+
+Single-bit check covers both projectile types. **86 ProjectileSpell + 59 Missile weenies verified in LSD-Partial.**
+
+**Files (2, +364/-6):** `src/lib.rs` adds `projectile_index: Rc<RefCell<HashSet<u32>>>` on SessionHandle, populated by `apply_inventory_object_create` (`PhysicsState::MISSILE` bit), pruned by delete; new `entity_is_projectile(guid) -> bool` wasm method. `entities.js` adds `isProjectile(guid)` accessor.
+
+#### Phase 31 (Agent AD) — PlayEffect wire-route (opcode correction)
+
+**Critical correction:** The `// PlayScriptId = 0xF754` comment in opcodes.rs is misleading. **ACE's `GameMessageScript` uses opcode `PlayEffect = 0xF755`, NOT `0xF754`.** `0xF754 PlayScriptId` is retail-only with a different payload (no float). Agent verified at `ace-server/.../GameMessageScript.cs:11-13` writes `[guid][script_id u32][speed f32]` matching our existing `PlayEffectData` at `messages/effects/types.rs:39`.
+
+**Even better:** PlayEffect (0xF755) was **already fully decoded** with round-trip tests. Phase 31 only needed to add routing + dispatch, not implement from scratch.
+
+**Files (5, +160/-3):** `opcodes.rs` clarifying comment block (kept `0xF754` commented, explained retail-vs-ACE distinction); `messages/effects/types.rs` +1 new launch/explode round-trip test; new `WorldEvent::PlayEffect{target, script_id, speed}` variant; `handlers/system.rs` dispatch arm + log; `lib.rs` route to world dispatcher. **Wave 11 enablement contract:** subscribe to `WorldEvent::PlayEffect`; no protocol changes needed.
+
+**Tests:** `cargo test -p holtburger-protocol` 286 PASS (baseline 285 + 1 new); `cargo test -p holtburger-world` 266 PASS (no regression).
+
+#### Phase 32 (Agent AE) — UseFastMissiles (Path A)
+
+**Discovery:** Rust backend ALREADY EXISTS. `CharacterOption::UseFastMissiles = 0x2B`, `SetSingleCharacterOptionActionData` (pack/unpack done), `ClientCommand::SetCharacterOption` already routes through `GameAction::SetSingleCharacterOption`. **Only the wasm-bindgen export + JS facade hook are missing.** Path B is a single-file Rust addition (Wave 11 follow-on).
+
+**Path A shipped:** localStorage-persisted UI toggle in combat-bar.js's missile-stance config. On toggle, `picking.js` multiplies `projectileSpeed` by 1.2 BEFORE feeding `getAimLevelForBallisticArc`. This makes our client-side gravity-arc prediction match what ACE will do IF the server-side bit is also set. Until Path B lands, server keeps using 1.0× → kind=5 UpdateMotion corrects the predicted arc mid-swing.
+
+**Files (2, +70):** `plugins/combat-bar.js` ranged-only checkbox using existing `.hb-cb-toggle` class + localStorage persistence via existing `STORAGE_KEY = "holtburger_combat_bar_v1"`; `scene3d/picking.js` re-uses outer-scope `cb` to read the flag, applies 1.2× multiplier conditionally.
+
+### Wave 10 validation summary
+
+| Check | Result |
+|---|---|
+| `node --check` on 4 modified JS files | PASS |
+| `cargo check -p holtburger-web --target wasm32-unknown-unknown` | PASS (18 pre-existing warnings, 0 new) |
+| `wasm-pack build` | PASS; `damageMod` + `entityIsProjectile` confirmed |
+| `cargo test -p holtburger-protocol` | 286/286 PASS (+1 new) |
+| `cargo test -p holtburger-world` | 266/266 PASS |
+| `test_ac_damage_rating.mjs` | 30/30 PASS (24 + 6 new) |
+| Regressions (aim-level 28, attack-type 16, spell-shape 30) | ALL PASS |
+
+### Wave 11 enablement (set up by Wave 10)
+
+- **`WorldEvent::PlayEffect { target, script_id, speed }`** dispatched on every server-broadcast `GameMessageScript` (Launch/Explode/etc.). Wave 11 subscribes JS-side and triggers particle/overlay VFX per `PlayScript` ID.
+- **`em.isProjectile(guid)`** classifies any entity as a server-spawned projectile (spell or missile). Wave 11 uses for projectile-specific rendering.
+- **`PropertyFloat::DamageMod`** surfaced; `computeDamageRatingRollup` returns correct base. Wave 11 can extend HUD with full DR preview.
+- **Fast-missile Path B** is a 1-file Rust addition: expose `set_single_character_option` via wasm-bindgen. Already-built `ClientCommand::SetCharacterOption` + `SetSingleCharacterOptionActionData` wait at `holtburger-core/src/client/commands.rs:603-614`.
 
 ## Coordination notes for agents
 

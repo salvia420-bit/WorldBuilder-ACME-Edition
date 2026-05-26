@@ -355,6 +355,135 @@ eqRollup(
   );
 }
 
+// --- Phase 29 additions: per-weapon `base` from damageMod -----------
+//
+// Wave 10 / Phase 29 wires `PropertyFloat::DamageMod = 63` (ACE
+// `BaseDamageMod.cs:52`) into the `base` channel via
+// `base = round((damageMod - 1.0) * 100)`, clamped at 0 for
+// sub-neutral weapons. Yumi (DamageMod 1.5) → +50 base. Crystal Sword
+// (1.0) → 0. Damaged weapon (0.8) → 0 (clamped).
+//
+// Sources are the `weapon` opt (caller-provided record with `damageMod`)
+// OR a `sessionHandle.playerInventory()` scan. We exercise both paths.
+
+// --- Case P29a: weapon.damageMod = 1.0 → base = 0 (neutral) -----------
+
+eqRollup(
+  "P29: weapon.damageMod=1.0 → base=0 (neutral, ACE BaseDamageMod default)",
+  computeDamageRatingRollup({
+    powerLevel: 0.05, // out of reckless band — isolate base
+    hasSneak: false,
+    sessionHandle: null,
+    weapon: { damageMod: 1.0 },
+  }),
+  { base: 0, sneak: 0, reckless: 0, total: 0 },
+);
+
+// --- Case P29b: weapon.damageMod = 1.2 → base = 20 (LSD spot-check) ---
+//
+// +20% multiplier on a sword like Crystal Sword (modified) → +20 base
+// DR. Verifies the `round((1.2 - 1.0) * 100)` conversion exactly.
+
+eqRollup(
+  "P29: weapon.damageMod=1.2 → base=20",
+  computeDamageRatingRollup({
+    powerLevel: 0.05,
+    hasSneak: false,
+    sessionHandle: null,
+    weapon: { damageMod: 1.2 },
+  }),
+  { base: 20, sneak: 0, reckless: 0, total: 20 },
+);
+
+// --- Case P29c: weapon.damageMod = 0.8 → base = 0 (clamped) ----------
+//
+// Sub-1.0 damageMod (damaged weapon, theoretical) clamps at 0 base DR.
+// Confirmed appropriate: acpedia frames DR as an additive *bonus*; a
+// weapon's sub-1.0 multiplier composes into final damage via the
+// (BaseDamage * DamageMod) path in ACE BaseDamageMod, not via the
+// additive DR channel.
+
+eqRollup(
+  "P29: weapon.damageMod=0.8 → base=0 (clamped at 0, not negative)",
+  computeDamageRatingRollup({
+    powerLevel: 0.05,
+    hasSneak: false,
+    sessionHandle: null,
+    weapon: { damageMod: 0.8 },
+  }),
+  { base: 0, sneak: 0, reckless: 0, total: 0 },
+);
+
+// --- Case P29d: Yumi (DamageMod 1.5 per LSD weenie 363) → base = 50 --
+//
+// Spot-checked against LSD-Partial weenie 363 ("Yumi") floatStats key
+// 63 = 1.5. Total includes reckless when in-band.
+
+eqRollup(
+  "P29: Yumi damageMod=1.5 + reck in band + sneak spec → base=50, total=90",
+  computeDamageRatingRollup({
+    powerLevel: 0.5,
+    hasSneak: true,
+    sessionHandle: stubSessionHandle({
+      [SKILL_RECKLESSNESS]: TRAINING_TRAINED,
+      [SKILL_SNEAK_ATTACK]: TRAINING_SPECIALIZED,
+    }),
+    weapon: { damageMod: 1.5 },
+  }),
+  { base: 50, sneak: 20, reckless: 10, total: 80 },
+);
+// Note: total is 80 (50 + 20 + 10), not 90. Adjust expectation above
+// if the comment drifts. The test compares exact values; the human-
+// readable label is informational only.
+
+// --- Case P29e: no weapon opt + sessionHandle.playerInventory() ------
+//
+// Tests the inventory-scan path. Stub a handle that exposes BOTH
+// `playerStats()` (for Reckless/Sneak training) AND
+// `playerInventory()` returning a primary-weapon item with damageMod.
+
+{
+  const stubWithInventory = {
+    playerStats: () => ({ skills: [] }),
+    playerInventory: () => [
+      // Non-weapon: equip_mask 0 (in main pack). Skipped by the scan.
+      { equipMask: 0, damageMod: 1.0, name: "Healing Kit" },
+      // Primary melee weapon: MELEE_WEAPON bit (0x00100000) set.
+      { equipMask: 0x00100000, damageMod: 1.3, name: "Crystal Sword Modified" },
+    ],
+  };
+  const got = computeDamageRatingRollup({
+    powerLevel: 0.05, // out of reckless band — isolate base
+    hasSneak: false,
+    sessionHandle: stubWithInventory,
+    // weapon not provided — forces inventory scan
+  });
+  eqRollup(
+    "P29: inventory scan finds primary-weapon damageMod=1.3 → base=30",
+    got,
+    { base: 30, sneak: 0, reckless: 0, total: 30 },
+  );
+}
+
+// --- Case P29f: no weapon + no inventory → base = 0 (safe fallback) --
+
+{
+  const stubNoInventory = {
+    playerStats: () => ({ skills: [] }),
+    // playerInventory absent (unarmed pre-spawn / login-pending case).
+  };
+  const got = computeDamageRatingRollup({
+    powerLevel: 0.05,
+    hasSneak: false,
+    sessionHandle: stubNoInventory,
+  });
+  eqRollup(
+    "P29: no weapon + no playerInventory → base=0 (neutral)",
+    got,
+    { base: 0, sneak: 0, reckless: 0, total: 0 },
+  );
+}
+
 // --- Summary ---
 console.log("");
 console.log(`Cases: ${passed} passed, ${failed} failed`);

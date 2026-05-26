@@ -54,6 +54,24 @@ const DEFAULTS = {
   powerLevel: 1.0,
   autoRepeat: true,
   chargeAttack: true, // Phase I.1 — auto-pursue to attack range on click
+  // Wave 10 / Phase 32 (2026-05-26) — UseFastMissiles toggle. Default
+  // OFF (opt-in only). ACE multiplies the missile launcher's max
+  // velocity by `fast_missile_modifier = 1.2` server-side when the
+  // CharacterOption is set (`Creature_Missile.cs:223-225`,
+  // `CharacterOption.UseFastMissiles = 0x2B`). This client flag is a
+  // PREDICTION AID — `scene3d/picking.js` boosts `projectileSpeed`
+  // by 1.2× before solving the gravity-arc so the local aim-level
+  // prediction matches what ACE will broadcast back on UpdateMotion
+  // (kind=5). The actual server-side speedup requires our wasm to
+  // send `GameAction::SetSingleCharacterOption(UseFastMissiles, true)`
+  // — see TODO below. For now the toggle only affects local
+  // ballistic-arc prediction; if ACE doesn't have our CharacterOptions2
+  // bit set, the server still uses 1.0× and UpdateMotion may correct
+  // mid-swing. TODO Wave 11+: expose `set_single_character_option`
+  // from `holtburger-web/src/lib.rs` (currently parked behind AB/AC's
+  // file ownership) and dispatch on toggle so persistence is
+  // round-tripped through ACE rather than only localStorage.
+  useFastMissiles: false,
   armedSpellId: 0, // 0 = no spell armed
   spellBarSlots: [], // populated by the Spellbook plugin (📖)
 };
@@ -83,6 +101,11 @@ function syncWindowState(state) {
     powerLevel: state.powerLevel,
     autoRepeat: state.autoRepeat,
     chargeAttack: state.chargeAttack !== false,
+    // Phase 32 — surfaced for picking.js's missile branch (boosts
+    // gravity-arc projectileSpeed by 1.2× when true). Coerced to a
+    // strict bool so a stale "useFastMissiles: 1"-style localStorage
+    // record (from a hand-edit or older schema) still gates correctly.
+    useFastMissiles: state.useFastMissiles === true,
     armedSpellId: state.armedSpellId,
     spellBarSlots: state.spellBarSlots || [],
   };
@@ -766,6 +789,38 @@ function renderAttackControls(bodyEl, state) {
   setAcText(chargeText, "Charge");
   chargeLabel.appendChild(chargeText);
   bodyEl.appendChild(chargeLabel);
+
+  // Wave 10 / Phase 32 (2026-05-26) — UseFastMissiles tickbox. Shown
+  // ONLY in a missile/ranged stance — irrelevant to melee (no
+  // projectile arc to boost) and to magic (renderSpellPicker, not this
+  // fn). Default OFF, opt-in only. See DEFAULTS docstring for the
+  // wire-side caveat: this is currently a CLIENT-side prediction aid
+  // only; the server-side 1.2× speedup requires ACE to have the
+  // player's CharacterOption.UseFastMissiles (0x2B) bit set, which our
+  // wasm doesn't yet send a `SetSingleCharacterOption` for (parked
+  // behind Wave 10 src/lib.rs ownership). Wave 11+ TODO.
+  if (currentStanceIsRanged()) {
+    const fastMissileLabel = document.createElement("label");
+    fastMissileLabel.className = "hb-cb-toggle";
+    fastMissileLabel.title =
+      "Fast Missiles (UseFastMissiles): boosts arrow / bolt / dart " +
+      "speed by 1.2× and shortens draw cadence. Currently a client-" +
+      "side prediction aid only — the server speedup requires the " +
+      "CharacterOption bit to be set on your ACE character (TODO).";
+    const fastMissileBox = document.createElement("input");
+    fastMissileBox.type = "checkbox";
+    fastMissileBox.checked = state.useFastMissiles === true;
+    fastMissileBox.addEventListener("change", () => {
+      state.useFastMissiles = fastMissileBox.checked;
+      saveState(state);
+      syncWindowState(state);
+    });
+    fastMissileLabel.appendChild(fastMissileBox);
+    const fastMissileText = document.createElement("span");
+    setAcText(fastMissileText, "Fast Missiles");
+    fastMissileLabel.appendChild(fastMissileText);
+    bodyEl.appendChild(fastMissileLabel);
+  }
 
   // Phase H.6 — power-bar meter. Subscribes to combatCommenceAttack +
   // attackDone events to animate the refill cycle. Refill duration is

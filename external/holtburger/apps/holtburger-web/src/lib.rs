@@ -14016,6 +14016,20 @@ pub struct InventoryItem {
     /// for the enum value and the `assessment.rs` `get_float_prop`
     /// pattern this mirrors.
     maximum_velocity: f32,
+    /// CMT Wave 10 / Phase 29 (2026-05-26): `PropertyFloat::DamageMod
+    /// = 63` — weapon's intrinsic damage multiplier (e.g. `1.5` for a
+    /// Yumi = +50% base damage; `1.0` = neutral). Feeds the per-weapon
+    /// `base` contribution of `ui/ac_damage_rating.js`'s
+    /// `computeDamageRatingRollup` via the conversion
+    /// `base = round((damageMod - 1.0) * 100)` so a Yumi shows `+50`
+    /// base DR. Local-player twin of [`EquippedWeaponJs::damage_mod`].
+    /// `1.0` when the wire hasn't surfaced PropertyFloat 63 (matches
+    /// ACE `BaseDamageMod.cs:13 DamageMod = 1.0f` default + the
+    /// `weapon.GetProperty(PropertyFloat.DamageMod) ?? 1.0f` pattern in
+    /// `BaseDamageMod.cs:52` and `WeaponProfile.cs:104`). See
+    /// `crates/holtburger-common/src/properties/property_keys/floats.rs:75`
+    /// for the enum value.
+    damage_mod: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -14111,6 +14125,22 @@ impl InventoryItem {
     pub fn maximum_velocity(&self) -> f32 {
         self.maximum_velocity
     }
+
+    /// CMT Wave 10 / Phase 29 (2026-05-26): `PropertyFloat::DamageMod
+    /// = 63` — weapon's intrinsic damage multiplier. Mirrors
+    /// [`EquippedWeaponJs::damage_mod`] so the JS-side
+    /// `getEquippedWeapon` local branch surfaces the same field as the
+    /// non-local branch and `computeDamageRatingRollup`'s
+    /// `base = round((damageMod - 1.0) * 100)` conversion resolves
+    /// identically on both paths. `1.0` (neutral) when the wire
+    /// hasn't surfaced PropertyFloat 63 yet — mirrors ACE
+    /// `BaseDamageMod.cs:13` (`DamageMod = 1.0f` initializer) and the
+    /// `weapon.GetProperty(PropertyFloat.DamageMod) ?? 1.0f` fallback
+    /// at `BaseDamageMod.cs:52`.
+    #[wasm_bindgen(getter, js_name = damageMod)]
+    pub fn damage_mod(&self) -> f32 {
+        self.damage_mod
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -14176,6 +14206,20 @@ struct WieldedWeaponEntry {
     /// `crates/holtburger-common/src/properties/property_keys/floats.rs:38`
     /// for the enum value.
     maximum_velocity: f32,
+    /// CMT Wave 10 / Phase 29 (2026-05-26): `PropertyFloat::DamageMod
+    /// = 63` — weapon's intrinsic damage multiplier. Snapshotted off
+    /// the weapon entity at ObjectCreate time and surfaced through
+    /// [`EquippedWeaponJs::damage_mod`] so the JS-side per-weapon DR
+    /// `base` rollup (`ui/ac_damage_rating.js`'s
+    /// `computeDamageRatingRollup`) can compute
+    /// `base = round((damageMod - 1.0) * 100)` for remote wielders too,
+    /// not only the local player. `1.0` (neutral, no DR contribution)
+    /// when PropertyFloat 63 isn't on the entity — matches ACE
+    /// `BaseDamageMod.cs:52`'s `weapon.GetProperty(PropertyFloat.DamageMod)
+    /// ?? 1.0f` fallback. See
+    /// `crates/holtburger-common/src/properties/property_keys/floats.rs:75`
+    /// for the enum value.
+    damage_mod: f32,
 }
 
 /// CMT Wave 2 / Phase 5 (2026-05-26): JS-facing wielded-weapon record
@@ -14209,6 +14253,12 @@ pub struct EquippedWeaponJs {
     /// [`WieldedWeaponEntry::maximum_velocity`] for the source-side
     /// comment.
     maximum_velocity: f32,
+    /// CMT Wave 10 / Phase 29: `PropertyFloat::DamageMod = 63` —
+    /// weapon's intrinsic damage multiplier. `1.0` (neutral, no DR
+    /// contribution) when the property isn't on the entity (matches
+    /// ACE `BaseDamageMod.cs:52`'s `?? 1.0f` fallback). See
+    /// [`WieldedWeaponEntry::damage_mod`] for the source-side comment.
+    damage_mod: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -14257,6 +14307,19 @@ impl EquippedWeaponJs {
     /// and ACE `Creature_Missile.cs:208 DefaultProjectileSpeed`.
     #[wasm_bindgen(getter, js_name = maximumVelocity)]
     pub fn maximum_velocity(&self) -> f32 { self.maximum_velocity }
+
+    /// CMT Wave 10 / Phase 29 (2026-05-26): `PropertyFloat::DamageMod
+    /// = 63` weapon's intrinsic damage multiplier. Feeds the per-weapon
+    /// `base` contribution of `ui/ac_damage_rating.js`'s
+    /// `computeDamageRatingRollup` via
+    /// `base = round((damageMod - 1.0) * 100)`. So a Yumi (DamageMod
+    /// 1.5) contributes `+50` base DR; a neutral weapon (1.0) or one
+    /// below 1.0 contributes `0` (the rollup clamps negatives to zero —
+    /// see helper). `1.0` when PropertyFloat 63 isn't on the entity —
+    /// matches ACE `BaseDamageMod.cs:52`'s
+    /// `weapon.GetProperty(PropertyFloat.DamageMod) ?? 1.0f`.
+    #[wasm_bindgen(getter, js_name = damageMod)]
+    pub fn damage_mod(&self) -> f32 { self.damage_mod }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -15505,6 +15568,14 @@ fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMe
             // loop's WorldEvent scan.
             | GameMessage::SetState(_)
             | GameMessage::GameEvent(_)
+            // CMT Wave 10 / Phase 31 (2026-05-26): route ACE's
+            // `GameMessageScript` (opcode `PlayEffect = 0xF755`) to the
+            // world dispatcher so `handlers::system` can log the diag
+            // line and emit `WorldEvent::PlayEffect` for Wave 11's
+            // JS-side VFX consumer. Wave 10 is wire-decode infra only —
+            // there's NO JS-side handler yet; the WorldEvent fall-through
+            // arm in the recv loop's WorldEvent scan absorbs the variant.
+            | GameMessage::PlayEffect(_)
     )
 }
 
@@ -15525,9 +15596,13 @@ fn apply_inventory_object_create(
     wielder_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
     >,
+    projectile_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashSet<u32>>,
+    >,
 ) -> bool {
     use holtburger_common::properties::{
-        PropertyFloat, PropertyInt, WorldObjectExt as _, WorldObjectPropertyAccessors as _,
+        PhysicsState, PropertyFloat, PropertyInt, WorldObjectExt as _,
+        WorldObjectPropertyAccessors as _,
     };
     let guid = data.public_weenie_desc.guid;
     let entity_name = data
@@ -15569,6 +15644,19 @@ fn apply_inventory_object_create(
         .get_float_prop(PropertyFloat::MaximumVelocity)
         .map(|v| v as f32)
         .unwrap_or(20.0);
+    // CMT Wave 10 / Phase 29 (2026-05-26): pull `DamageMod`
+    // (`PropertyFloat::DamageMod = 63`) off the weapon entity. Both
+    // downstream paths (non-local `WieldedWeaponEntry` below AND local
+    // `InventoryItem` via `publish_player_inventory_snapshot`) carry
+    // this so `ui/ac_damage_rating.js`'s `computeDamageRatingRollup`
+    // resolves `base = round((damageMod - 1.0) * 100)` identically on
+    // both paths. Fallback `1.0` (neutral; no DR contribution) matches
+    // ACE `BaseDamageMod.cs:52`'s
+    // `weapon.GetProperty(PropertyFloat.DamageMod) ?? 1.0f` fallback.
+    let damage_mod = entity
+        .get_float_prop(PropertyFloat::DamageMod)
+        .map(|v| v as f32)
+        .unwrap_or(1.0);
 
     // CMT Wave 2 / Phase 5 (2026-05-26): non-local wielder index. When
     // ACE ships an ObjectCreate for a wielded item AND the wielder is
@@ -15594,6 +15682,7 @@ fn apply_inventory_object_create(
             equip_mask: equip_mask.bits(),
             attack_type,
             maximum_velocity,
+            damage_mod,
         };
         let mut idx = wielder_index.borrow_mut();
         let list = idx.entry(w_u32).or_default();
@@ -15601,6 +15690,28 @@ fn apply_inventory_object_create(
         // re-equipping the same item) to keep the list de-duped.
         list.retain(|e| e.item_guid != entry.item_guid);
         list.push(entry);
+    }
+
+    // CMT Wave 10 / Phase 30 (2026-05-26): projectile-classification
+    // index. ACE sets `PhysicsState::MISSILE = 0x40` on every projectile
+    // in flight — see SpellProjectile.cs:77 (`Missile = true` in
+    // `Setup()`, the war/void/life-magic path) and
+    // Creature_Missile.cs:357 (`obj.Missile = true` in
+    // `SetProjectilePhysicsState`, called from `LaunchProjectile` at
+    // L104; the arrow/bolt/thrown-weapon path). Both routes funnel
+    // through the same `ObjectCreate` arm we're already in, so a
+    // single physics-state check classifies them both. Wave 11's
+    // projectile-VFX consumer will read `entity_is_projectile(guid)` on
+    // each spawn to decide whether to attach a launch / trail emitter
+    // instead of (or in addition to) a standard entity sprite. The
+    // index is GUID-scoped so it survives WCID lookup misses and
+    // doesn't require WCID→WeenieType plumbing — see the
+    // `SessionHandle.projectile_index` doc comment for the wire-path
+    // reasoning. We populate before `world.entities.insert(entity)` so
+    // observers reading the entity have the classification ready by
+    // the time the ObjectCreate side-effects propagate.
+    if entity.physics_state.contains(PhysicsState::MISSILE) {
+        projectile_index.borrow_mut().insert(u32::from(guid));
     }
 
     // Direct insert via the public EntityManager — skips the
@@ -15640,6 +15751,9 @@ fn apply_inventory_object_delete(
     wielder_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
     >,
+    projectile_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashSet<u32>>,
+    >,
 ) -> bool {
     let was_owned = world.player.inventory.contains(&guid);
     if was_owned {
@@ -15666,6 +15780,15 @@ fn apply_inventory_object_delete(
     // (c) Prune empty lists left over from (a) so the index doesn't
     // grow unbounded with dead-wielder buckets.
     idx.retain(|_, entries| !entries.is_empty());
+
+    // CMT Wave 10 / Phase 30 (2026-05-26): projectile-index cleanup.
+    // Both `SpellProjectile.ProjectileImpact` (SpellProjectile.cs:240-243)
+    // and missile-projectile impacts flow into Destroy()/ObjectDelete
+    // after the ~5 s self-destruct chain — see Wave 11 plan for the
+    // `PlayScript::Explode` visual that should fire just before this
+    // delete arm runs. Cheap O(1) removal; absent GUIDs are a no-op (the
+    // set just won't contain non-projectile deletes).
+    projectile_index.borrow_mut().remove(&g_u32);
 
     was_owned
 }
@@ -15926,6 +16049,59 @@ pub struct SessionHandle {
     /// state we already receive on the wire).
     wielder_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    >,
+    /// CMT Wave 10 / Phase 30 (2026-05-26): per-GUID set of entities
+    /// currently classified as "projectile in flight". Populated by
+    /// `apply_inventory_object_create` whenever an `ObjectCreate` arrives
+    /// with `PhysicsState::MISSILE` (`0x40`) set; pruned symmetrically in
+    /// `apply_inventory_object_delete` and on the ObjectDelete arm. JS
+    /// reads via [`SessionHandle::entity_is_projectile`] / scene3d's
+    /// `EntityManager.isProjectile(guid)` so Wave 11's projectile-VFX
+    /// work has a clean classification hook without inspecting raw
+    /// `physicsState` bits from JS.
+    ///
+    /// **Why PhysicsState::MISSILE, not WeenieType?** ACE's
+    /// `WeenieType ∈ {Missile = 4, ProjectileSpell = 33}` is the
+    /// conceptual category (see
+    /// `~/ace-server/Source/ACE.Entity/Enum/WeenieType.cs:9` /
+    /// `WorldObjectFactory.cs:103-104` — ProjectileSpell maps to
+    /// `SpellProjectile`, the war/void/life-magic in-flight projectile;
+    /// Missile is the arrow/bolt/thrown-weapon in-flight projectile).
+    /// But ACE does NOT serialise `WeenieType` on the
+    /// `ObjectCreate`/PublicWeenieDescription wire path
+    /// (`ACE.Server/WorldObjects/WorldObject_Networking.cs:80` writes
+    /// `(uint)ItemType`, NOT WeenieType — confirmed against our
+    /// `holtburger-protocol/.../description.rs:189` field list, which
+    /// carries `item_type` but no `weenie_type`). What ACE *does* set
+    /// at projectile-spawn time, on BOTH paths, is the physics-state
+    /// `Missile` bit:
+    ///   - `ACE.Server/WorldObjects/SpellProjectile.cs:77` —
+    ///     `Setup()` runs `Missile = true;` (the spell-projectile path)
+    ///   - `ACE.Server/WorldObjects/Creature_Missile.cs:357` —
+    ///     `SetProjectilePhysicsState()` runs `obj.Missile = true;` (the
+    ///     missile-arrow/bolt/thrown-weapon path, called from
+    ///     `LaunchProjectile` at L104)
+    /// Both flip the `PhysicsState::Missile` bit at
+    /// `~/ace-server/Source/ACE.Entity/Enum/PhysicsState.cs:14` (= `0x40`),
+    /// which is the canonical wire-level distinguisher PRECISELY because
+    /// ACE encodes "projectile in flight" identically for both
+    /// WeenieType-4 and WeenieType-33 entities. PhysicsState bits travel
+    /// on every `ObjectCreate` and are absorbed into `Entity.physics_state`
+    /// via `entity.rs:422 apply_description`.
+    ///
+    /// LSD spot-check (verified 2026-05-26):
+    ///   - WCID 2619 "Missile" → `weenieType: 33` (ProjectileSpell)
+    ///   - WCID 33527 "Lightning Bolt" → `weenieType: 33`
+    ///   - WCID 7264 "Force Bolt" → `weenieType: 33`
+    ///   - WCID 34585 "Stone Hatchet" / 27876 "Muck Ball" /
+    ///     29964 "Throwing Axe" / 23878 "Fire Spike" → `weenieType: 4`
+    ///     (Missile)
+    /// All 145 (= 86 + 59) projectile weenies in
+    /// `external/LSD-Partial-2025-02-23_16-15/weenies/` carry one of
+    /// these two WeenieType values; ACE sets `PhysicsState::MISSILE` on
+    /// any of them when they enter flight.
+    projectile_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashSet<u32>>,
     >,
     /// Phase 6 step D: latest cell-scene snapshot, refreshed by the
     /// recv loop on each `SessionCommand::TickMovement`. Carries the
@@ -16580,6 +16756,7 @@ impl SessionHandle {
                 name: entry.name.clone(),
                 attack_type: entry.attack_type,
                 maximum_velocity: entry.maximum_velocity,
+                damage_mod: entry.damage_mod,
             });
         }
         None
@@ -16618,10 +16795,86 @@ impl SessionHandle {
                     name: entry.name.clone(),
                     attack_type: entry.attack_type,
                     maximum_velocity: entry.maximum_velocity,
+                    damage_mod: entry.damage_mod,
                 })
                 .collect(),
             None => Vec::new(),
         }
+    }
+
+    /// **CMT Wave 10 / Phase 30 (2026-05-26).** Classification helper:
+    /// is this GUID currently a projectile in flight?
+    ///
+    /// Returns `true` when the entity arrived via `ObjectCreate` with the
+    /// `PhysicsState::MISSILE` (`0x40`) bit set. That bit is the
+    /// canonical wire-level distinguisher for "projectile in flight" —
+    /// ACE sets it on BOTH projectile spawn paths:
+    ///
+    /// 1. **Spell projectiles** (war / void / life magic): spawned by
+    ///    [`ACE.Server.WorldObjects.SpellProjectile`] —
+    ///    `ace-server/Source/ACE.Server/WorldObjects/SpellProjectile.cs:77`
+    ///    sets `Missile = true` in `Setup()`. Spawned for each cast via
+    ///    `WorldObjectFactory.cs:103-104` mapping
+    ///    `WeenieType.ProjectileSpell = 33` →
+    ///    `new SpellProjectile(weenie, guid)`.
+    /// 2. **Missile-arrow projectiles** (bow / crossbow / atlatl /
+    ///    thrown weapon): spawned by `Creature_Missile.LaunchProjectile`
+    ///    at `Creature_Missile.cs:104` (`SetProjectilePhysicsState`),
+    ///    which sets `obj.Missile = true` at
+    ///    `Creature_Missile.cs:357`. These carry the in-flight WCID
+    ///    inherited from the ammo's `WeenieClassId` (e.g. WCID 1437
+    ///    "Fire Arrow" — `weenieType: 5` Ammunition as a stack-item, but
+    ///    the in-flight projectile spawned from it carries
+    ///    `WeenieType.Missile = 4` per the
+    ///    `external/LSD-Partial-2025-02-23_16-15/weenies/` survey of
+    ///    WCIDs 34585 "Stone Hatchet" / 27876 "Muck Ball" / 23878
+    ///    "Fire Spike" et al — all `weenieType: 4`).
+    ///
+    /// **Why physics-state, not WeenieType?** ACE does not serialise
+    /// `WeenieType` on the `ObjectCreate` / `PublicWeenieDescription`
+    /// wire path —
+    /// `~/ace-server/Source/ACE.Server/WorldObjects/WorldObject_Networking.cs:80`
+    /// writes `(uint)ItemType`, not `WeenieType`. Our protocol
+    /// `description.rs:189` mirrors that: `item_type: u32` is present;
+    /// no `weenie_type` field. PhysicsState IS sent on every
+    /// ObjectCreate (carried in `PhysicsDescriptionFlag` block, absorbed
+    /// into `Entity.physics_state` at `entity.rs:422
+    /// apply_description`). Both `WeenieType` projectile values fold
+    /// onto the same wire signature `PhysicsState::MISSILE`, making
+    /// this a single-bit-check classifier with no WCID lookup table
+    /// shipped to the client.
+    ///
+    /// **Lifetime:** added on `ObjectCreate` if `MISSILE` is set; removed
+    /// on `ObjectDelete` / `InventoryRemoveObject` (the same arms that
+    /// already prune the wielder-index). Once the server-side projectile
+    /// impacts (`SpellProjectile.ProjectileImpact` clears
+    /// `ReportCollisions`, sets `NoDraw` + `Cloaked`, and chains a 5 s
+    /// `Destroy()` — see `SpellProjectile.cs:209-244`) the eventual
+    /// `ObjectDelete` arrives and prunes the GUID.
+    ///
+    /// **Returns:** `false` for any non-projectile GUID (the default
+    /// for everything else) and `false` for GUIDs we have never seen
+    /// (callers should treat absence as not-a-projectile). Wave 11's
+    /// projectile-VFX consumer will read this on each ObjectCreate to
+    /// gate launch-trail emitters.
+    ///
+    /// Spot-check (code-path trace, no live session needed):
+    /// player casts "Lightning Bolt I" → ACE
+    /// `Spell.MetaSpellType = WarProjectile` → `Creature_Magic`
+    /// `LaunchSpellProjectile` → `WorldObjectFactory.CreateNewWorldObject`
+    /// (WeenieType.ProjectileSpell branch → `new SpellProjectile(...)`) →
+    /// `SpellProjectile.Setup()` sets `Missile = true` → ACE broadcasts
+    /// `ObjectCreate` with PhysicsState.Missile bit set + the launch
+    /// `GameMessageScript(Guid, PlayScript.Launch, intensity)` (Phase 31
+    /// territory). Wire arrives in our recv loop's `ObjectCreate` arm →
+    /// `apply_inventory_object_create` runs → `entity.apply_description`
+    /// sets `physics_state` from the wire flags →
+    /// `entity.physics_state.contains(PhysicsState::MISSILE)` is true →
+    /// GUID inserted into `projectile_index`. `entity_is_projectile(guid)`
+    /// then returns `true`.
+    #[wasm_bindgen(js_name = entityIsProjectile)]
+    pub fn entity_is_projectile(&self, guid: u32) -> bool {
+        self.projectile_index.borrow().contains(&guid)
     }
 
     /// **Vendor UI (2026-05-19).** Pull the cached vendor state for a
@@ -19517,6 +19770,18 @@ pub async fn start_session(
     let wielder_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // CMT Wave 10 / Phase 30 (2026-05-26): per-GUID projectile
+    // classification set. Populated by the recv loop's
+    // `apply_inventory_object_create` for ObjectCreates carrying
+    // `PhysicsState::MISSILE` (which covers both ACE `WeenieType ∈
+    // {Missile = 4, ProjectileSpell = 33}` paths — see field doc on
+    // `SessionHandle.projectile_index`). Drained by JS via
+    // [`SessionHandle::entity_is_projectile`] so Wave 11's projectile-VFX
+    // layer can branch on classification without inspecting raw physics
+    // bits across the wasm boundary.
+    let projectile_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashSet<u32>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
     // Phase 6 step D: cell-scene snapshot, refreshed each TickMovement.
     let cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>> =
         std::rc::Rc::new(std::cell::RefCell::new(CellSceneSnapshot::default()));
@@ -19583,6 +19848,7 @@ pub async fn start_session(
         let latest_house_restrictions_inner = latest_house_restrictions.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let wielder_index_inner = wielder_index.clone();
+        let projectile_index_inner = projectile_index.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
@@ -19619,6 +19885,7 @@ pub async fn start_session(
                 latest_house_restrictions_inner,
                 latest_known_spells_inner,
                 wielder_index_inner,
+                projectile_index_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
@@ -19711,6 +19978,7 @@ pub async fn start_session(
         latest_house_restrictions,
         latest_known_spells,
         wielder_index,
+        projectile_index,
         cell_scene_snapshot,
         door_part_snapshot,
         local_player_pose,
@@ -20275,6 +20543,18 @@ fn publish_player_inventory_snapshot(
             .get_float_prop(PropertyFloat::MaximumVelocity)
             .map(|v| v as f32)
             .unwrap_or(20.0);
+        // CMT Wave 10 / Phase 29 (2026-05-26): surface `DamageMod`
+        // (PropertyFloat 63) so `ui/ac_damage_rating.js`'s
+        // `computeDamageRatingRollup` can compute the per-weapon `base`
+        // contribution as `round((damageMod - 1.0) * 100)`. Fallback
+        // `1.0` matches ACE `BaseDamageMod.cs:52`'s
+        // `weapon.GetProperty(PropertyFloat.DamageMod) ?? 1.0f` and
+        // contributes 0 base DR (neutral). Same accessor pattern as
+        // the non-local path in `apply_inventory_object_create`.
+        let damage_mod = entity
+            .get_float_prop(PropertyFloat::DamageMod)
+            .map(|v| v as f32)
+            .unwrap_or(1.0);
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -20287,6 +20567,7 @@ fn publish_player_inventory_snapshot(
             container_id,
             attack_type,
             maximum_velocity,
+            damage_mod,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS
@@ -20902,6 +21183,9 @@ async fn recv_loop(
     wielder_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
     >,
+    projectile_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashSet<u32>>,
+    >,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
@@ -21384,17 +21668,17 @@ async fn recv_loop(
                     if let Some(w) = world.as_mut() {
                         match &message {
                             GameMessage::ObjectCreate(data) => {
-                                if apply_inventory_object_create(w, data, &wielder_index) {
+                                if apply_inventory_object_create(w, data, &wielder_index, &projectile_index) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::ObjectDelete(data) => {
-                                if apply_inventory_object_delete(w, data.guid, &wielder_index) {
+                                if apply_inventory_object_delete(w, data.guid, &wielder_index, &projectile_index) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::InventoryRemoveObject(data) => {
-                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index) {
+                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index, &projectile_index) {
                                     inventory_changed = true;
                                 }
                             }

@@ -1794,10 +1794,24 @@ export class EntityManager {
    * 20 m/s default). Fallback `20.0` matches ACE
    * `Creature_Missile.cs:208 DefaultProjectileSpeed`.
    *
+   * ## Wave 10 / Phase 29 (2026-05-26): `DamageMod` now on the wire
+   *
+   * `PropertyFloat::DamageMod = 63` is surfaced on both the local
+   * (`InventoryItem.damageMod`) and non-local
+   * (`EquippedWeaponJs.damageMod`) wasm structs — see
+   * `apps/holtburger-web/src/lib.rs:apply_inventory_object_create` and
+   * `publish_player_inventory_snapshot`. The returned record now
+   * carries `damageMod` so `ui/ac_damage_rating.js`'s
+   * `computeDamageRatingRollup` can compute the per-weapon `base`
+   * contribution as `round((damageMod - 1.0) * 100)` (Yumi 1.5 →
+   * `+50`; neutral 1.0 → `0`). Fallback `1.0` (neutral, no DR
+   * contribution) matches ACE `BaseDamageMod.cs:52`'s
+   * `weapon.GetProperty(PropertyFloat.DamageMod) ?? 1.0f`.
+   *
    * @param {number} guid — entity GUID to query
    * @returns {{ guid: number, wcid: number, itemType: number,
    *             equipMask: number, attackType: number,
-   *             maximumVelocity: number,
+   *             maximumVelocity: number, damageMod: number,
    *             name: string } | null}
    */
   getEquippedWeapon(guid) {
@@ -1838,6 +1852,12 @@ export class EntityManager {
           // it to `getAimLevelForBallisticArc` for per-weapon gravity
           // arcs. `20.0` fallback mirrors ACE `Creature_Missile.cs:208
           // DefaultProjectileSpeed` and Phase 19's `BOW_DEFAULT_SPEED_MPS`.
+          // CMT Wave 10 / Phase 29 (2026-05-26): `damageMod` is
+          // PropertyFloat 63 — `ui/ac_damage_rating.js`'s
+          // `computeDamageRatingRollup` reads it for the per-weapon
+          // `base` contribution via `round((damageMod - 1.0) * 100)`.
+          // `1.0` fallback (neutral, no DR contribution) mirrors ACE
+          // `BaseDamageMod.cs:52` (`?? 1.0f`).
           const result = {
             guid:     (w.guid ?? 0) >>> 0,
             wcid:     (w.wcid ?? 0) >>> 0,
@@ -1845,6 +1865,7 @@ export class EntityManager {
             equipMask: (w.equipMask ?? 0) >>> 0,
             attackType: (w.attackType ?? 0) >>> 0,
             maximumVelocity: Number.isFinite(w.maximumVelocity) ? w.maximumVelocity : 20.0,
+            damageMod: Number.isFinite(w.damageMod) ? w.damageMod : 1.0,
             name:     typeof w.name === "string" ? w.name : "",
           };
           // wasm-bindgen-constructed structs need explicit .free()
@@ -1896,6 +1917,11 @@ export class EntityManager {
       // for the gravity-arc resolver. `20.0` fallback mirrors ACE
       // `Creature_Missile.cs:208 DefaultProjectileSpeed` and Phase 19's
       // `BOW_DEFAULT_SPEED_MPS`.
+      // CMT Wave 10 / Phase 29 (2026-05-26): `damageMod` is PropertyFloat
+      // 63 — `ui/ac_damage_rating.js`'s `computeDamageRatingRollup` reads
+      // it for the per-weapon `base` contribution via
+      // `round((damageMod - 1.0) * 100)`. `1.0` fallback (neutral, no
+      // DR contribution) mirrors ACE `BaseDamageMod.cs:52` (`?? 1.0f`).
       return {
         guid:     (item.guid ?? 0) >>> 0,
         wcid:     (item.wcid ?? 0) >>> 0,
@@ -1903,6 +1929,7 @@ export class EntityManager {
         equipMask: mask,
         attackType: (item.attackType ?? 0) >>> 0,
         maximumVelocity: Number.isFinite(item.maximumVelocity) ? item.maximumVelocity : 20.0,
+        damageMod: Number.isFinite(item.damageMod) ? item.damageMod : 1.0,
         name:     typeof item.name === "string" ? item.name : "",
       };
     }
@@ -2074,6 +2101,57 @@ export class EntityManager {
       if (hasPrimary && hasOffhandWeapon) return true;
     }
     return hasPrimary && hasOffhandWeapon;
+  }
+
+  /**
+   * CMT Wave 10 / Phase 30 (2026-05-26): is this entity a projectile in
+   * flight?
+   *
+   * Bridges to the wasm-side `entityIsProjectile(guid)` getter populated
+   * by the recv loop's `apply_inventory_object_create` arm whenever an
+   * `ObjectCreate` arrives with `PhysicsState::MISSILE` (`0x40`) set.
+   * That bit is the canonical wire-level distinguisher for "projectile in
+   * flight" because ACE sets it on BOTH projectile spawn paths:
+   *
+   *   1. War / void / life magic projectiles — `SpellProjectile.Setup()`
+   *      at `ace-server/Source/ACE.Server/WorldObjects/SpellProjectile.cs:77`
+   *      (`Missile = true`). These carry `WeenieType.ProjectileSpell = 33`
+   *      in the LSD weenie table (see WCIDs 2619 "Missile", 7264 "Force
+   *      Bolt", 33527 "Lightning Bolt"). Spawned by ACE per cast via
+   *      `WorldObjectFactory.cs:103-104`.
+   *   2. Bow / crossbow / atlatl / thrown-weapon projectiles —
+   *      `Creature_Missile.SetProjectilePhysicsState()` at
+   *      `ace-server/Source/ACE.Server/WorldObjects/Creature_Missile.cs:357`
+   *      (`obj.Missile = true`). These carry `WeenieType.Missile = 4` in
+   *      the LSD weenie table (see WCIDs 27876 "Muck Ball", 29964
+   *      "Throwing Axe", 34585 "Stone Hatchet"). Spawned by ACE per
+   *      missile attack via `LaunchProjectile` at
+   *      `Creature_Missile.cs:104`.
+   *
+   * Returns `false` when:
+   *   - `guid` is 0 / unparseable,
+   *   - the wasm getter is unavailable (pre-session, mid-rebuild),
+   *   - the entity has never been seen (no ObjectCreate arrived yet),
+   *   - the entity exists but is not a projectile (everything else).
+   *
+   * Wave 10 territory: classification only. Wave 11 will add the actual
+   * launch-trail / impact-explode VFX hooks that consume this — see
+   * `docs/cmt-fixes-plan-2026-05-26.md` §"Phase 30 — Projectile entity
+   * classification".
+   *
+   * @param {number} guid — entity GUID to query
+   * @returns {boolean}
+   */
+  isProjectile(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return false;
+    try {
+      if (typeof window !== "undefined" && window.__sessionHandle
+          && typeof window.__sessionHandle.entityIsProjectile === "function") {
+        return !!window.__sessionHandle.entityIsProjectile(g);
+      }
+    } catch (_) { /* never break callers */ }
+    return false;
   }
 
   /**

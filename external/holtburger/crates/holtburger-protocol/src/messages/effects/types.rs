@@ -210,4 +210,86 @@ mod tests {
         };
         assert_eq!(*msg, expected);
     }
+
+    /// CMT Wave 10 / Phase 31 (2026-05-26): explicit round-trip for the
+    /// `GameMessageScript` wire shape that drives projectile Launch /
+    /// Explode VFX. ACE constructs this packet from
+    /// `Source/ACE.Server/WorldObjects/Player_Combat.cs` and
+    /// `Source/ACE.Server/WorldObjects/Creature_Missile.cs:131`:
+    ///
+    ///   `proj.EnqueueBroadcast(new GameMessageScript(
+    ///       proj.Guid, PlayScript.Launch, 0f));`
+    ///
+    /// Wire layout per
+    /// `Source/ACE.Server/Network/GameMessages/Messages/GameMessageScript.cs:9`:
+    ///   `[u32 opcode = 0xF755][u32 guid][u32 play_script_enum][f32 speed]`
+    /// (16 bytes total — matches `base(..., messageSize: 16)`). The
+    /// opcode is `GameMessageOpcode.PlayEffect = 0xF755` (note: NOT
+    /// `0xF754 / PlayScriptId`, which is a retail-only opcode ACE
+    /// declares but never emits — see `opcodes.rs` comment on the
+    /// commented-out `PlayScriptId` line and `acclient.c:709942`).
+    ///
+    /// PlayScript enum values per `Source/ACE.Entity/Enum/PlayScript.cs`:
+    ///   `Launch = 0x04`, `Explode = 0x05`, `Fizzle = 0x51`, etc.
+    /// JS-side will look up names by ID in Wave 11; the Rust decode
+    /// keeps the raw `u32` (no Rust enum mirror needed yet).
+    ///
+    /// Two fixtures exercised here:
+    /// 1. The canonical "missile launch" case (`Launch / speed = 0.0`).
+    /// 2. An "explode" case with non-zero speed (`Explode / speed = 1.0`).
+    /// Both walk the full `GameMessage::unpack` → `PlayEffect(..)` arm
+    /// and round-trip cleanly via `pack`. This is the load-bearing
+    /// proof that the recv loop won't crash on PlayEffect (Wave 10's
+    /// acceptance gate) and that Wave 11 can rely on the decoded
+    /// `script_id` matching ACE's enum values bit-for-bit.
+    #[test]
+    fn test_play_effect_launch_explode_round_trip() {
+        // Missile launch — `Creature_Missile.cs:131` literal arguments.
+        // `PlayScript.Launch = 0x04` per ACE.Entity/Enum/PlayScript.cs.
+        let launch = PlayEffectData {
+            target: Guid(0x50000042),
+            script_id: 0x04,
+            speed: 0.0,
+        };
+        let mut bytes = Vec::with_capacity(12);
+        bytes.extend_from_slice(&0x50000042u32.to_le_bytes());
+        bytes.extend_from_slice(&0x04u32.to_le_bytes());
+        bytes.extend_from_slice(&0.0f32.to_le_bytes());
+        assert_pack_unpack_parity::<PlayEffectData>(&bytes, &launch);
+
+        // Explode on impact with non-default scale.
+        // `PlayScript.Explode = 0x05` per ACE.Entity/Enum/PlayScript.cs.
+        let explode = PlayEffectData {
+            target: Guid(0x50001234),
+            script_id: 0x05,
+            speed: 1.0,
+        };
+        let mut bytes = Vec::with_capacity(12);
+        bytes.extend_from_slice(&0x50001234u32.to_le_bytes());
+        bytes.extend_from_slice(&0x05u32.to_le_bytes());
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+        assert_pack_unpack_parity::<PlayEffectData>(&bytes, &explode);
+
+        // Full-packet (opcode + payload) dispatch — confirms the
+        // recv loop's `GameMessage::PlayEffect(data) => ...` arm sees
+        // the same bytes ACE writes.
+        let mut packet = Vec::with_capacity(16);
+        packet.extend_from_slice(&0xF755u32.to_le_bytes()); // PlayEffect opcode
+        packet.extend_from_slice(&0x50000042u32.to_le_bytes());
+        packet.extend_from_slice(&0x04u32.to_le_bytes()); // PlayScript.Launch
+        packet.extend_from_slice(&0.0f32.to_le_bytes());
+
+        let mut offset = 0;
+        let msg = GameMessage::unpack(&packet, &mut offset)
+            .expect("PlayEffect packet must unpack");
+        match msg {
+            GameMessage::PlayEffect(data) => {
+                assert_eq!(data.target, Guid(0x50000042));
+                assert_eq!(data.script_id, 0x04);
+                assert_eq!(data.speed, 0.0);
+            }
+            other => panic!("Expected PlayEffect dispatch, got {:?}", other),
+        }
+        assert_eq!(offset, 16, "Full packet must consume all 16 bytes");
+    }
 }

@@ -197,4 +197,24 @@ pub enum WorldEvent {
     FellowshipStateUpdated(Option<state::FellowshipState>),
     FellowshipActivity(FellowshipActivity),
     TradeStateUpdated(Option<state::TradeState>),
+    /// CMT Wave 10 / Phase 31 (2026-05-26): ACE broadcast a
+    /// `GameMessageScript` (`PlayEffect = 0xF755`, constructor at
+    /// `ACE.Server/Network/GameMessages/Messages/GameMessageScript.cs:9`)
+    /// — a server-authored visual script (PlayScript::Launch /
+    /// PlayScript::Explode / etc.) intended for the client's particle /
+    /// overlay pipeline. Payload mirrors `PlayEffectData` 1:1
+    /// (`target` GUID, `script_id` u32 = PlayScript enum, `speed` f32).
+    ///
+    /// **Wave 10 is wire-decode infrastructure only.** Wave 11 will wire
+    /// the JS-side visual launch / explode VFX consumer (the recv loop
+    /// will forward this `WorldEvent` to JS as a kind=? `ClientEvent`).
+    /// Today the only consumer is the diag log in
+    /// `handlers::system::handle_message` (`"PlayScript received: ..."`).
+    /// PlayScript enum lives at `ACE.Entity/Enum/PlayScript.cs` — no JS
+    /// mirror needed yet; JS will look up names by ID in Wave 11.
+    PlayEffect {
+        target: Guid,
+        script_id: u32,
+        speed: f32,
+    },
 }

@@ -182,10 +182,25 @@ pub enum GameOpcode {
     /// S2C: Set object state.
     /// Updates the visual/functional state of an object (e.g., door opening).
     SetState = 0xF74B,
-    // /// S2C: Play a script by ID.
+    // CMT Wave 10 / Phase 31 (2026-05-26): `PlayScriptId = 0xF754` is a
+    // retail-only opcode (`DispatchSB_PlayScriptID` at
+    // `ac-headers/acclient.c:709942`) with payload `[u32 guid][u32 data_id]`
+    // (NO speed/intensity float). ACE declares the opcode constant in
+    // `ACE.Server/Network/GameMessages/GameMessageOpcode.cs:63` but never
+    // emits it from any `GameMessage*` subclass — `GameMessageScript`
+    // (Launch / Explode / etc.) is the close cousin and uses opcode
+    // `0xF755 / PlayEffect` below (constructor at
+    // `ACE.Server/Network/GameMessages/Messages/GameMessageScript.cs:9`,
+    // payload `[u32 guid][u32 script_enum][f32 speed]`). Leave commented
+    // until a real `0xF754` packet is observed on the wire from some other
+    // server — see `PlayEffect` below for the GameMessageScript decoder.
     // PlayScriptId = 0xF754,
-    /// S2C: Play a visual effect.
-    /// Triggers a particle system, overlay, or other visual script.
+    /// S2C: Play a visual script — ACE's `GameMessageScript`.
+    /// Triggers a particle system, overlay, or other visual script
+    /// (PlayScript::Launch / Explode for projectile VFX, used by
+    /// `Creature_Missile.cs:131` + `SpellProjectile.cs` broadcast).
+    /// Payload `[u32 target_guid][u32 play_script_enum][f32 speed]`
+    /// — see `effects::PlayEffectData`. Wave 11 wires JS-side VFX.
     PlayEffect = 0xF755,
 
     // --- Game Logic & Flow ---
