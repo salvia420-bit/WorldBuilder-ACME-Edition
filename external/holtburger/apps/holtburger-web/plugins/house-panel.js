@@ -32,8 +32,18 @@ const WEENIE_ERROR_NONE = 0x0000;
 const WEENIE_ERROR_BAD_PARAM = 0x0002;
 const WEENIE_ERROR_HOUSE_EVICTED = 0x045F;
 
+// ACE HouseType enum (Source/ACE.Entity/Enum/HouseType.cs):
+// 0 = Undef, 1 = Cottage, 2 = Villa, 3 = Mansion, 4 = Apartment.
+const HOUSE_TYPE_NAMES = ["Undef", "Cottage", "Villa", "Mansion", "Apartment"];
+
+// AC rent is a weekly maintenance period — 7 * 24 * 60 * 60 = 604800 sec.
+// `RentTime` (Unix ts) marks when the current period began; the next due
+// time is RentTime + MAINTENANCE_PERIOD_SECONDS.
+const MAINTENANCE_PERIOD_SECONDS = 7 * 24 * 60 * 60;
+
 let overlayEl = null;
 let statusEl = null;
+let dataLinesEl = null;
 let statusUnsubscribe = null;
 let statusPollTimer = null;
 
@@ -185,6 +195,22 @@ function ensureStyles() {
     #${OVERLAY_ID} .hbhp-status-line[data-owner="0"] {
       color: var(--hb-text-dim, #7a6b50);
     }
+    #${OVERLAY_ID} .hbhp-data-lines {
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid var(--hb-border-brass-dim);
+    }
+    #${OVERLAY_ID} .hbhp-data-lines[data-visible="1"] {
+      display: flex;
+    }
+    #${OVERLAY_ID} .hbhp-data-line {
+      font-size: 10.5px;
+      color: var(--hb-text-cream);
+      font-family: monospace;
+    }
   `;
   document.head.appendChild(s);
 }
@@ -216,6 +242,19 @@ function getHandle() {
   return window.__sessionHandle ?? window.__pluginClient?.handle ?? null;
 }
 
+function formatHouseType(t) {
+  return HOUSE_TYPE_NAMES[t >>> 0] ?? `Type ${t}`;
+}
+
+function formatUnixTimestamp(ts) {
+  if (!ts) return "—";
+  try {
+    return new Date((ts >>> 0) * 1000).toUTCString().replace("GMT", "UTC");
+  } catch {
+    return String(ts);
+  }
+}
+
 function renderStatus() {
   if (!statusEl) return;
   const handle = getHandle();
@@ -227,27 +266,62 @@ function renderStatus() {
       console.warn("[house-panel] playerHouseStatus threw:", e);
     }
   }
+  let isOwner = false;
   if (!snap) {
     setAcText(statusEl, "Status: not queried yet.");
     statusEl.dataset.owner = "0";
+  } else {
+    const code = snap.errorCode >>> 0;
+    let text;
+    if (code === WEENIE_ERROR_BAD_PARAM) {
+      text = "No house owned.";
+      statusEl.dataset.owner = "0";
+    } else if (code === WEENIE_ERROR_HOUSE_EVICTED) {
+      text = "Evicted from house.";
+      statusEl.dataset.owner = "0";
+    } else if (code === WEENIE_ERROR_NONE) {
+      text = "House: owner.";
+      statusEl.dataset.owner = "1";
+      isOwner = true;
+    } else {
+      text = `Status: WeenieError 0x${code.toString(16).padStart(4, "0")}`;
+      statusEl.dataset.owner = "0";
+    }
+    setAcText(statusEl, text);
+  }
+
+  if (!dataLinesEl) return;
+  let dataSnap = null;
+  if (isOwner && handle?.playerHouseData) {
+    try {
+      dataSnap = handle.playerHouseData();
+    } catch (e) {
+      console.warn("[house-panel] playerHouseData threw:", e);
+    }
+  }
+  if (!dataSnap) {
+    dataLinesEl.dataset.visible = "0";
+    dataLinesEl.replaceChildren();
     return;
   }
-  const code = snap.errorCode >>> 0;
-  let text;
-  if (code === WEENIE_ERROR_BAD_PARAM) {
-    text = "No house owned.";
-    statusEl.dataset.owner = "0";
-  } else if (code === WEENIE_ERROR_HOUSE_EVICTED) {
-    text = "Evicted from house.";
-    statusEl.dataset.owner = "0";
-  } else if (code === WEENIE_ERROR_NONE) {
-    text = "House: owner.";
-    statusEl.dataset.owner = "1";
-  } else {
-    text = `Status: WeenieError 0x${code.toString(16).padStart(4, "0")}`;
-    statusEl.dataset.owner = "0";
+  const lines = [];
+  lines.push(`Dwelling: ${formatHouseType(dataSnap.houseType)}`);
+  const lb = (dataSnap.landblockId >>> 0).toString(16).padStart(8, "0").toUpperCase();
+  lines.push(`House ID: 0x${lb}`);
+  const rentDueTs = (dataSnap.rentTime >>> 0) + MAINTENANCE_PERIOD_SECONDS;
+  lines.push(`Rent due: ${formatUnixTimestamp(rentDueTs)}`);
+  lines.push(`Maintenance period: 7 days`);
+  if (dataSnap.maintenanceFree) {
+    lines.push(`Maintenance: FREE (admin)`);
   }
-  setAcText(statusEl, text);
+  const children = lines.map((text) => {
+    const div = document.createElement("div");
+    div.className = "hbhp-data-line";
+    setAcText(div, text);
+    return div;
+  });
+  dataLinesEl.replaceChildren(...children);
+  dataLinesEl.dataset.visible = "1";
 }
 
 function makeSection(titleText) {
@@ -306,12 +380,21 @@ function buildPanel() {
   // (opcode 0x0226). Sync getter on the session handle; refreshed on
   // `playerStatsUpdated` events + a 1Hz fallback poll so the panel
   // doesn't go stale if the player Query'd before opening it.
+  //
+  // Wave M2 (2026-05-26): when the player is the owner, additionally
+  // render `GameEvent::HouseData` (opcode 0x0225) fields below the
+  // status line — dwelling type, house id (landblock), next rent-due
+  // timestamp, maintenance period.
   const statusSection = makeSection("Status");
   statusEl = document.createElement("div");
   statusEl.className = "hbhp-status-line";
   setAcText(statusEl, "Status: not queried yet.");
   statusEl.dataset.owner = "0";
   statusSection.appendChild(statusEl);
+  dataLinesEl = document.createElement("div");
+  dataLinesEl.className = "hbhp-data-lines";
+  dataLinesEl.dataset.visible = "0";
+  statusSection.appendChild(dataLinesEl);
   body.appendChild(statusSection);
 
   // Buy House
@@ -478,6 +561,10 @@ function closePanel() {
   if (statusPollTimer) {
     clearInterval(statusPollTimer);
     statusPollTimer = null;
+  }
+  if (dataLinesEl) {
+    dataLinesEl.dataset.visible = "0";
+    dataLinesEl.replaceChildren();
   }
 }
 

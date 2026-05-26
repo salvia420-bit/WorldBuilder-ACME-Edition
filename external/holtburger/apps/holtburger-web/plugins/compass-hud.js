@@ -40,6 +40,15 @@ const CARDINALS = [
   { deg: 315, label: "NW" },
 ];
 
+// Cardinal bearings in AC world frame: +Y = north, +X = east.
+// atan2(worldDx, worldDy): N=0, E=π/2, S=π, W=-π/2.
+const RADAR_BEARING_AXES = [
+  { label: "N", worldBearing: 0 },
+  { label: "E", worldBearing: Math.PI / 2 },
+  { label: "S", worldBearing: Math.PI },
+  { label: "W", worldBearing: -Math.PI / 2 },
+];
+
 const HIDDEN_BY_URL = (() => {
   try {
     if (typeof window === "undefined") return false;
@@ -168,6 +177,27 @@ function ensureStyles() {
       transform: translate(-50%, -50%) scale(1.8);
       transition: transform 200ms ease-out;
     }
+    #${RADAR_ID} .hb-radar-bearing-label {
+      position: absolute;
+      top: 0;
+      transform: translateX(-50%);
+      font-family: var(--hb-font-serif, "Cinzel", "Trajan Pro", "Times New Roman", serif);
+      font-size: 9px;
+      color: var(--hb-text-gold, #ffd76a);
+      text-shadow: 0 1px 0 rgba(0,0,0,0.8);
+      pointer-events: none;
+      line-height: 1;
+    }
+    #${RADAR_ID} .hb-radar-bearing-tick {
+      position: absolute;
+      top: 50%;
+      width: 1px;
+      height: 4px;
+      background: var(--hb-border-brass, #8a7544);
+      opacity: 0.7;
+      transform: translateX(-0.5px);
+      pointer-events: none;
+    }
     #${TOOLTIP_ID} {
       position: fixed;
       z-index: 51;
@@ -221,6 +251,7 @@ let _tapeEl = null;
 let _radarEl = null;
 let _radarDotPool = [];
 let _dotEntityRefs = [];
+let _radarBearingPool = []; // [{ labelEl, tickEl, worldBearing }]
 let _tooltipEl = null;
 let _hoveredDotIdx = -1;
 let _rafId = 0;
@@ -334,6 +365,41 @@ function updateRadarDots(playerPos, yawRad) {
   }
 }
 
+function ensureBearingAxisPool() {
+  if (!_radarEl || _radarBearingPool.length > 0) return;
+  for (const axis of RADAR_BEARING_AXES) {
+    const labelEl = document.createElement("div");
+    labelEl.className = "hb-radar-bearing-label";
+    labelEl.textContent = axis.label;
+    labelEl.style.display = "none";
+    const tickEl = document.createElement("div");
+    tickEl.className = "hb-radar-bearing-tick";
+    tickEl.style.display = "none";
+    _radarEl.appendChild(tickEl);
+    _radarEl.appendChild(labelEl);
+    _radarBearingPool.push({ labelEl, tickEl, worldBearing: axis.worldBearing });
+  }
+}
+
+function updateBearingAxes(yawRad) {
+  if (!_radarEl || _radarEl.hidden || _radarBearingPool.length === 0) return;
+  for (const entry of _radarBearingPool) {
+    // Normalize rel-bearing into [-π, π] so wrap doesn't push labels off.
+    let rel = entry.worldBearing - yawRad;
+    rel = ((rel + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
+    if (Math.abs(rel) > RADAR_FOV_RAD) {
+      entry.labelEl.style.display = "none";
+      entry.tickEl.style.display = "none";
+      continue;
+    }
+    const x = RADAR_WIDTH / 2 + (rel / RADAR_FOV_RAD) * (RADAR_WIDTH / 2);
+    entry.labelEl.style.left = `${x}px`;
+    entry.labelEl.style.display = "block";
+    entry.tickEl.style.left = `${x}px`;
+    entry.tickEl.style.display = "block";
+  }
+}
+
 function getLocalPlayerAcPos() {
   try {
     const em = window.liveScene3d?.entityManager;
@@ -365,6 +431,7 @@ function tickCompass() {
   if (_radarEl && !_radarEl.hidden) {
     const playerPos = getLocalPlayerAcPos();
     updateRadarDots(playerPos, yaw);
+    updateBearingAxes(yaw);
   }
 }
 
@@ -509,8 +576,10 @@ function mountOverlay() {
   _radarEl.appendChild(radarCursor);
   _radarDotPool = [];
   _dotEntityRefs = [];
+  _radarBearingPool = [];
   document.body.appendChild(_radarEl);
   ensureDotPool();
+  ensureBearingAxisPool();
   ensureTooltip();
   _radarEl.addEventListener("mouseover", onRadarMouseOver);
   _radarEl.addEventListener("mouseout", onRadarMouseOut);
@@ -561,6 +630,7 @@ function unmount() {
   _radarEl = null;
   _radarDotPool = [];
   _dotEntityRefs = [];
+  _radarBearingPool = [];
   _tooltipEl = null;
   _hoveredDotIdx = -1;
 }

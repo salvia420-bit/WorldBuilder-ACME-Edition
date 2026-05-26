@@ -143,6 +143,7 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::CharacterTitle(_) => 0x0029,
         GameEvent::UpdateTitle(_) => 0x002B,
         GameEvent::HouseStatus(_) => 0x0226,
+        GameEvent::HouseData(_) => 0x0225,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -14842,6 +14843,62 @@ impl HouseStatusJs {
     }
 }
 
+/// Wave M2 (2026-05-26): owner-side house panel metadata. ACE pushes
+/// `GameEvent::HouseData` (opcode 0x0225) from `HandleActionQueryHouse`
+/// when the player owns a dwelling — its slumlord's `GetHouseData`
+/// populates buy/rent timestamps, dwelling type, maintenance-free
+/// flag, payment item lists, and the dwelling's world position. Per
+/// `HouseData.cs::Write`: u32 BuyTime, u32 RentTime, u32 HouseType,
+/// u32 MaintenanceFree (0/1), List<HousePayment> Buy, List<HousePayment>
+/// Rent, Position.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct HouseData {
+    buy_time: u32,
+    rent_time: u32,
+    house_type: u32,
+    maintenance_free: u32,
+    landblock_id: u32,
+    pos_x: f32,
+    pos_y: f32,
+    pos_z: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct HouseDataJs {
+    buy_time: u32,
+    rent_time: u32,
+    house_type: u32,
+    maintenance_free: u32,
+    landblock_id: u32,
+    pos_x: f32,
+    pos_y: f32,
+    pos_z: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl HouseDataJs {
+    #[wasm_bindgen(getter, js_name = buyTime)]
+    pub fn buy_time(&self) -> u32 { self.buy_time }
+    #[wasm_bindgen(getter, js_name = rentTime)]
+    pub fn rent_time(&self) -> u32 { self.rent_time }
+    #[wasm_bindgen(getter, js_name = houseType)]
+    pub fn house_type(&self) -> u32 { self.house_type }
+    #[wasm_bindgen(getter, js_name = maintenanceFree)]
+    pub fn maintenance_free(&self) -> bool { self.maintenance_free != 0 }
+    #[wasm_bindgen(getter, js_name = landblockId)]
+    pub fn landblock_id(&self) -> u32 { self.landblock_id }
+    #[wasm_bindgen(getter, js_name = posX)]
+    pub fn pos_x(&self) -> f32 { self.pos_x }
+    #[wasm_bindgen(getter, js_name = posY)]
+    pub fn pos_y(&self) -> f32 { self.pos_y }
+    #[wasm_bindgen(getter, js_name = posZ)]
+    pub fn pos_z(&self) -> f32 { self.pos_z }
+}
+
 /// AC Trade (2026-05-25, Discord deficiency #3): JS-facing snapshot of
 /// the local player's active peer-to-peer trade. Sourced from
 /// `world.trade` (the world dispatcher's `handlers::trade::handle_event`
@@ -15411,6 +15468,14 @@ pub struct SessionHandle {
     /// — sync getter, no bus event (panel polls on
     /// `playerStatsUpdated`).
     latest_house_status: std::rc::Rc<std::cell::RefCell<Option<HouseStatus>>>,
+    /// Wave M2 (2026-05-26): local player's house owner-metadata.
+    /// Refreshed by the recv loop on `GameEvent::HouseData` (opcode
+    /// 0x0225) — ACE pushes this from `HandleActionQueryHouse` when
+    /// the player owns a dwelling (buy/rent timestamps, dwelling type,
+    /// maintenance-free flag, dwelling world position). `None` pre-event.
+    /// JS reads via [`SessionHandle::player_house_data`] — sync getter,
+    /// no bus event (panel polls on `playerStatsUpdated`).
+    latest_house_data: std::rc::Rc<std::cell::RefCell<Option<HouseData>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -18144,6 +18209,26 @@ impl SessionHandle {
         })
     }
 
+    /// Wave M2 (2026-05-26): owner-side house metadata snapshot —
+    /// `None` until ACE pushes `GameEvent::HouseData` (opcode 0x0225)
+    /// from `HandleActionQueryHouse`. Carries buy/rent timestamps,
+    /// dwelling type, maintenance-free flag, and the dwelling's world
+    /// position. Sync getter — no bus event; UI plugins poll on
+    /// `playerStatsUpdated` or their own timer.
+    #[wasm_bindgen(js_name = playerHouseData)]
+    pub fn player_house_data(&self) -> Option<HouseDataJs> {
+        self.latest_house_data.borrow().as_ref().map(|s| HouseDataJs {
+            buy_time: s.buy_time,
+            rent_time: s.rent_time,
+            house_type: s.house_type,
+            maintenance_free: s.maintenance_free,
+            landblock_id: s.landblock_id,
+            pos_x: s.pos_x,
+            pos_y: s.pos_y,
+            pos_z: s.pos_z,
+        })
+    }
+
     /// Wave-H3 (2026-05-26): character title catalog snapshot — `None`
     /// pre-CharacterTitle. Refreshed by the recv-loop on every
     /// `GameEvent::CharacterTitle` (opcode 0x0029, replace) or
@@ -18711,6 +18796,12 @@ pub async fn start_session(
     let latest_house_status: std::rc::Rc<
         std::cell::RefCell<Option<HouseStatus>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave M2 (2026-05-26): owner-side house metadata snapshot,
+    // refreshed by the recv-loop on every `GameEvent::HouseData`
+    // (opcode 0x0225).
+    let latest_house_data: std::rc::Rc<
+        std::cell::RefCell<Option<HouseData>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -18776,6 +18867,7 @@ pub async fn start_session(
         let latest_squelch_inner = latest_squelch.clone();
         let latest_title_inner = latest_title.clone();
         let latest_house_status_inner = latest_house_status.clone();
+        let latest_house_data_inner = latest_house_data.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -18808,6 +18900,7 @@ pub async fn start_session(
                 latest_squelch_inner,
                 latest_title_inner,
                 latest_house_status_inner,
+                latest_house_data_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -18896,6 +18989,7 @@ pub async fn start_session(
         latest_squelch,
         latest_title,
         latest_house_status,
+        latest_house_data,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -20014,6 +20108,7 @@ async fn recv_loop(
     latest_squelch: std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
     latest_title: std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
     latest_house_status: std::rc::Rc<std::cell::RefCell<Option<HouseStatus>>>,
+    latest_house_data: std::rc::Rc<std::cell::RefCell<Option<HouseData>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -23104,6 +23199,29 @@ async fn recv_loop(
                                     *latest_house_status.borrow_mut() =
                                         Some(HouseStatus {
                                             error_code: data.error as u32,
+                                        });
+                                }
+                                holtburger_protocol::messages::GameEvent::HouseData(
+                                    data,
+                                ) => {
+                                    // Wave M2 (2026-05-26): cache owner-
+                                    // side house metadata. ACE wire per
+                                    // `HouseData.Write()`: u32 BuyTime,
+                                    // u32 RentTime, u32 HouseType, u32
+                                    // MaintenanceFree, List<Buy>, List<Rent>,
+                                    // Position. We pick up the scalar +
+                                    // position fields; payment-list display
+                                    // is not modeled in this snapshot.
+                                    *latest_house_data.borrow_mut() =
+                                        Some(HouseData {
+                                            buy_time: data.buy_time,
+                                            rent_time: data.rent_time,
+                                            house_type: data.house_type,
+                                            maintenance_free: data.maintenance_free,
+                                            landblock_id: u32::from(data.position.landblock_id),
+                                            pos_x: data.position.coords.x,
+                                            pos_y: data.position.coords.y,
+                                            pos_z: data.position.coords.z,
                                         });
                                 }
                                 _ => {

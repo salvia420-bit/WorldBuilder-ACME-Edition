@@ -477,7 +477,18 @@ function makeRow(id, meta) {
   row.className = "hb-sr-row";
   row.dataset.spellId = String(id);
   row.dataset.expanded = "0";
-  row.title = "Double-click to cast";
+  row.draggable = true;
+  row.title = "Double-click to cast · drag to bar slot";
+
+  row.addEventListener("dragstart", (ev) => {
+    ev.dataTransfer.effectAllowed = "copy";
+    ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
+    ev.dataTransfer.setData("text/plain", meta.name || `Spell ${id}`);
+    row.style.opacity = "0.5";
+  });
+  row.addEventListener("dragend", () => {
+    row.style.opacity = "";
+  });
 
   const main = document.createElement("div");
   main.className = "hb-sr-row-main";

@@ -12,6 +12,35 @@
 
 ---
 
+## Status — Wave N executed 2026-05-25 (3-agent parallelism)
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 22 (data receive) | HouseData full receive | **SHIPPED** | Wave N1. Uncommented `HouseData 0x0225` S2C. Extended `crates/holtburger-protocol/src/messages/house/events.rs` with full ACE-wire-conformant `HouseDataEventData`. ACE wire: `BuyTime(u32) + RentTime(u32) + HouseType(u32) + MaintenanceFree(u32 bool) + Buy: List<HousePayment> + Rent: List<HousePayment> + Position(u32 cell + Vec3 pos + Quat rot)`. `HousePayment { num:i32, paid:i32, weenie_id:u32, name:string16L, plural_name:string16L }` round-trip tested. **Wasm wrapper exposes scalar+position fields only** — payment-list UI deferred. `latest_house_data: Rc<RefCell<Option<HouseData>>>` + recv-arm + `player_house_data()` getter. `plugins/house-panel.js` Status section enriched: Dwelling (Cottage/Villa/Mansion/Apartment), House ID (landblock hex), Rent due (UTC date = RentTime + 7d), Maintenance period (7 days), Maintenance: FREE (admin) when applicable. |
+| 19 (drag-drop) | Spell research → spellbook drag-drop | **SHIPPED** | Wave N2 (pure JS). `plugins/spell-research-panel.js` makes each row draggable via existing `application/x-hb-spell-id` mime (same shape as Wave H phase combat-bar internal drags). `dragstart` sets opacity 0.5 + payload; `dragend` clears. **No changes to combat-bar.js** — verified its drop handlers (tab, empty placeholder, populated row) all read the mime without source filtering. Drag a research-panel row onto bar slot → populates. |
+| Discord follow-on | Radar bearing-axis labels | **SHIPPED** | Wave N3 (pure JS). `plugins/compass-hud.js` adds N/E/S/W cardinal labels on radar centerline that scroll smoothly with camera yaw. 4-element pool initialized at mount; each rAF tick computes `relBearing = normalize(worldBearing - yaw)` into [-π,π], clips outside FOV, positions both label (top:0 above centerline) + tick (top:50%, 4px below). Labels gold serif (9px) with text-shadow for readability over dots; ticks 1px brass with 0.7 alpha. `?compassRadar=off` hides via parent's `[hidden]` rule. |
+
+**Files touched this wave:**
+- `src/lib.rs` +118 LOC (N1: HouseData snapshot + getter + recv arm)
+- `crates/holtburger-protocol/src/opcodes.rs` +10 LOC (1 uncomment + tidy)
+- `crates/holtburger-protocol/src/messages/house/events.rs` +160 LOC (N1 HouseData + HousePayment + round-trip test)
+- `crates/holtburger-protocol/src/messages/game_event.rs` +9 LOC (N1 variant + arms)
+- `plugins/house-panel.js` +117 LOC (N1 enriched status display)
+- `plugins/spell-research-panel.js` +13 LOC (N2 draggable rows)
+- `plugins/compass-hud.js` +70 LOC (N3 bearing axes pool)
+
+`cargo check` clean (18 pre-existing warnings only). `cargo test -p holtburger-protocol --lib`: **282/282 PASS** (N1 added 1 round-trip). `node --check` clean.
+
+**Recommended Wave O** (next priorities):
+1. **HouseProfile + HouseUpdateRestrictions receive (#22 polish)** — `HouseProfile 0x021D`, `HouseUpdateRestrictions 0x0248` events for guest list display.
+2. **House guest perms + storage perms (#22 polish)** — 6+ remaining commented opcodes (AddPermanentGuest, ChangeStoragePermission, etc.).
+3. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
+4. **List-Available-Houses receive + house picker UX (#22 polish)** — pair receive-side with dropdown UI.
+5. **Spell research → combat-bar drag visual feedback** — show a "ghost" preview of the spell icon at the drop target during drag.
+6. **Distance indicator on radar dot tooltip** — extend N3 tooltip with "Hostile" / "Friendly" / "Neutral" tag from entity meta.
+
+---
+
 ## Status — Wave M executed 2026-05-25 (3-agent parallelism)
 
 | # | Item | Status | Notes |
@@ -560,7 +589,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Selection-as-data is foundational for plugins (Discord ISO VTank 2.0 thread, line 4400).
 **Holtburger:** Selection lives in `picking.js` local state, not on bus. No plugin can react to "you targeted X".
 
-### 19. Spell research / component table UI — SHIPPED 2026-05-25 (K3 panel + L3 cast/stance + M2 component catalog 163/163)
+### 19. Spell research / component table UI — SHIPPED 2026-05-25 (K3 panel + L3 cast/stance + M2 component catalog 163/163 + N2 drag-drop)
 **Discord:** "nothing special about spell research panel…add taper animations to queue" — #openai-gpt-3, Yonneh 2026-05-22
 **Holtburger:** Wave K3 shipped NEW `plugins/spell-research-panel.js` (~660 LOC). Subscribes to `playerStatsUpdated`, reads `handle.playerKnownSpells()`, cross-references bundled `data/spells-catalog.json` for name/school/level/untargeted/mana/icon/desc/duration/components per spell. Filter strip: School (All/War/Life/Item/Creature/Void) + Level (All/I-VIII) + name-substring search. Sorted school→level→name. Component-name lookup reuses `data/spell-components.json` via a ~20-LOC local-copy of `spellbook.js:127-151` helpers (Comp_1-8 scarabs verified; unknown IDs render as `Comp_N` literal — extending the JSON to cover all 60+ retail components is Wave L polish). Click row to expand description inline. Debug: `window.__openSpellResearchPanel()`.
 
@@ -572,7 +601,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Light coverage, but ACE has BookData/AddPage/ModifyPage/DeletePage/Inscribe handlers, Chorizite categorizes under Writing.
 **Holtburger:** Wave F2 shipped 8 opcodes uncommented (5 C2S: `BookData/BookAddPage/BookModifyPage/BookDeletePage/SetInscription`; 3 S2C: `BookModifyPageResponse/BookAddPageResponse/BookDeletePageResponse`). 5 new C2S action structs + 3 new S2C event structs in `crates/holtburger-protocol/src/messages/book/{actions,events}.rs`. **ACE wire deviation:** `BookModifyPage` does NOT carry `ignore_author` on the wire — ACE re-reads it server-side from the book entity. 5 wasm methods + receive-side `BookSnapshot` via existing `WorldEvent::EntityBookUpdated` + `CLIENT_EVENT_KIND_BOOK_UPDATED=24` + `player_book()` getter. NEW `plugins/book-panel.js` — 320×340 floating overlay; inscription strip + Set button (prompt); page navigator (◀ Page N of M ▶); read/edit textarea toggle; Add/Delete Page; AC parchment styling. Debug: `window.__openBookFor(guid)`. Read-only inscription display on examine still a polish item — Wave G or later.
 
-### 22. House system — SHIPPED 2026-05-25 (Wave L1 send-only + M1 status receive)
+### 22. House system — SHIPPED 2026-05-25 (L1 send + M1 status receive + N1 data receive)
 **Discord:** Not directly quoted but ACE has Buy/Rent/Abandon/Guest perms/Teleport/Hooks. Chorizite has full House category.
 **Holtburger:** Wave L1 shipped 4 opcodes uncommented (`BuyHouse 0x021C`, `HouseQuery 0x021E`, `AbandonHouse 0x021F`, `RentHouse 0x0221`). NEW `crates/holtburger-protocol/src/messages/house/{mod,actions}.rs` with 4 round-trip tests (Buy w/2 items, Rent empty, Query empty, Abandon empty). Wire authority: ACE `GameActionHouseBuyHouse.cs` + `HouseQuery.cs` + `HouseAbandon.cs` + `HouseRent.cs`. PackableList<u32> for item_guids (count + count×u32). 4 wasm methods + 4 SessionCommand + 4 recv arms. NEW `plugins/house-panel.js` (376 LOC) with 4 stacked sections (Buy/Rent/Query/Abandon) — manual slumlord-GUID + comma-list-of-item-GUIDs inputs; destructive paths gated by confirm. Debug: `window.__openHousePanel()`. **Still deferred:** receive-side (HouseData/HouseProfile/HouseStatus), guest perms, storage perms, BootGuest, ListAvailableHouses, SetOpenHouseStatus, allegiance-guest-permission (8+ commented opcodes).
 
@@ -768,13 +797,19 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 38. ~~Component table extraction (#19)~~ — 163-entry retail catalog extracted from DAT 0x0E00000F via DRW + bug fix on existing scarab labels.
 39. ~~Radar polish~~ — hover tooltip (name • dist • bearing) + click-to-set-target.
 
-### Wave N — next priorities
+### Wave N — SHIPPED 2026-05-25 (3-agent parallelism)
 
-40. **HouseData full receive (#22 polish)** — HouseData 0x0225 carries rent due ts + dwelling type + restrictions; M1 only handled the not-owned signal.
-41. **House guest perms + storage perms + boot (#22 polish)** — 8+ remaining commented opcodes.
-42. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
-43. **House picker UX (#22 polish)** — replace manual GUID inputs with List-Available-Houses dropdown.
-44. **Spell research → spellbook drag-and-drop (#19 polish)** — drag from research panel to spellbook bar slot.
-45. **Radar bearing-axis labels** — small N/E/S/W tick marks at radar centerline.
+40. ~~HouseData full receive (#22 data)~~ — full ACE wire (BuyTime/RentTime/HouseType/MaintenanceFree/payments/position) + Dwelling/Rent due/Maintenance panel display.
+41. ~~Spell research → spellbook drag-drop (#19 polish)~~ — research-panel rows now draggable into combat-bar slots via existing mime.
+42. ~~Radar bearing-axis labels~~ — N/E/S/W cardinal ticks scroll smoothly with camera yaw.
+
+### Wave O — next priorities
+
+43. **HouseProfile + HouseUpdateRestrictions receive (#22 polish)** — guest list + restriction-flag display.
+44. **House guest perms + storage perms (#22 polish)** — 6+ remaining commented opcodes.
+45. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
+46. **List-Available-Houses receive + house picker UX (#22 polish)** — pair receive-side with dropdown UI.
+47. **Drag visual feedback polish** — ghost preview of spell icon at drop target during drag.
+48. **Radar tooltip enrichment** — Hostile/Friendly/Neutral tag from entity meta.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.

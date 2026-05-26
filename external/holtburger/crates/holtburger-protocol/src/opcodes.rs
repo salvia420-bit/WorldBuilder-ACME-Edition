@@ -778,8 +778,14 @@ pub enum GameEventOpcode {
     // --- Housing ---
     // /// S2C: Returns detailed profile and description of a house.
     // HouseProfile = 0x021D,
-    // /// S2C: Detailed data for a specific house.
-    // HouseData = 0x0225,
+    /// S2C: Owner-side house panel metadata — buy/rent timestamps,
+    /// dwelling type, maintenance-free flag, buy/rent payment lists,
+    /// and the dwelling's world position. Per ACE
+    /// `GameEventHouseData` + `HouseData.Write()`: u32 BuyTime, u32
+    /// RentTime, u32 HouseType, u32 MaintenanceFree (0/1), List Buy,
+    /// List Rent, Position. Each `HousePayment` is i32 Num + i32
+    /// Paid + u32 WeenieID + string16L Name + string16L PluralName.
+    HouseData = 0x0225,
     /// S2C: Updates the ownership and status of a house. Carries a single
     /// `WeenieError` code — per ACE `GameEventHouseStatus` the only data
     /// is `Writer.Write((uint)weenieError)`. ACE sends this in two flows:

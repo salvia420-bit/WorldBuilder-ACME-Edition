@@ -98,6 +98,7 @@ pub enum GameEvent {
     CharacterTitle(Box<CharacterTitleEventData>),
     UpdateTitle(Box<UpdateTitleEventData>),
     HouseStatus(Box<HouseStatusEventData>),
+    HouseData(Box<HouseDataEventData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -342,6 +343,9 @@ impl ProtocolUnpack for GameEventMessage {
                 )),
                 GameEventOpcode::HouseStatus => GameEvent::HouseStatus(Box::new(
                     HouseStatusEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::HouseData => GameEvent::HouseData(Box::new(
+                    HouseDataEventData::unpack(data, offset)?,
                 )),
             },
             None => {
@@ -708,6 +712,11 @@ impl ProtocolPack for GameEventMessage {
             }
             GameEvent::HouseStatus(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::HouseStatus as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::HouseData(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::HouseData as u32)
                     .unwrap();
                 data.pack(buf);
             }
