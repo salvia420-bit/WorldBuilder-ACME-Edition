@@ -1,14 +1,23 @@
 import * as THREE from "three";
 import { getCombatManeuver, loadCombatManeuverTable } from "../ui/ac_combat_maneuver.js";
+import {
+  ATTACK_TYPE,
+  inferAttackTypeForWeapon,
+} from "../ui/ac_attack_type_for_weapon.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
 
-// Default AttackType for the CombatManeuverTable lookup MVP. ACE's
-// AttackType enum has Punch/Kick/Slash/Thrust/etc. — proper inference
-// from the equipped weapon (unarmed → Punch, sword → Slash, bow →
-// Shoot) is deferred. Slash is the most common retail melee swing.
-const ATTACK_TYPE_SLASH = 8;
+// Fallback AttackType for the CombatManeuverTable lookup when the
+// per-weapon inference (Wave 1 Phase 3, 2026-05-26) returns
+// `ATTACK_TYPE.Undef` — e.g. shield-only, ranged before Phase 6
+// audit, caster outside the magic branch. Set to `Slash = 0x04` per
+// ACE's `AttackType.cs` because the dominant retail melee row uses
+// Slash across all melee stances in CMT 0x30000000.
+//
+// Wave 1 Phase 2 fix 2026-05-26 — was `0x08 = Kick` previously, which
+// the diag histogram audit caught as load-bearing wrong.
+const ATTACK_TYPE_SLASH = ATTACK_TYPE.Slash;
 
 // Eagerly kick the CMT load at module-import time so the lookup is
 // already cached by the time the first attack fires. Idempotent +
@@ -431,18 +440,30 @@ export function setupClickPicking({
       console.log(`[fire-attack] melee height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m (range=${MELEE_RANGE_M}m)`);
       const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
       // CombatManeuverTable lookup — picks the retail MotionCommand for
-      // (stance, height, type=Slash, powerLevel). Used for diag
-      // observability today; full motion playback (entityManager.set
-      // SwingMotion) is deferred. setSwingPose remains the visual
-      // fallback so the local player still swings something. If the
-      // entity manager later exposes setSwingMotion(guid, motionCmd),
-      // gate on it preferentially.
+      // (stance, height, type, powerLevel). Used for diag observability
+      // today; full motion playback (entityManager.setSwingMotion) is
+      // deferred. setSwingPose remains the visual fallback so the local
+      // player still swings something. If the entity manager later
+      // exposes setSwingMotion(guid, motionCmd), gate on it
+      // preferentially.
+      //
+      // Wave 1 Phase 3 (2026-05-26): AttackType comes from the equipped
+      // weapon via `ui/ac_attack_type_for_weapon.js`. Unarmed →
+      // `Punch`, melee weapon / two-handed → `Slash`, ranged / caster
+      // / shield-only / unmapped → `Undef = 0` and we fall back to the
+      // `ATTACK_TYPE_SLASH` constant so combat still works while the
+      // inference is widened (Wave 2 Phases 4/5/6).
       const stance = (window.__getCurrentStanceLow?.() ?? 0) >>> 0;
-      const motionCmd = getCombatManeuver(stance, safeHeight, ATTACK_TYPE_SLASH, slider);
+      const em = liveScene3d.entityManager;
+      const weapon = em?.getEquippedWeapon?.(localGuid) ?? null;
+      const inferredType = inferAttackTypeForWeapon(weapon);
+      const attackType = (inferredType === ATTACK_TYPE.Undef)
+        ? ATTACK_TYPE_SLASH
+        : inferredType;
+      const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider);
       const fire = () => fireOnce(() => {
         sessionHandle.attack(targetGuid, safeHeight, slider);
         if (localGuid !== 0) {
-          const em = liveScene3d.entityManager;
           if (motionCmd && typeof em?.setSwingMotion === "function") {
             em.setSwingMotion(localGuid, motionCmd);
           } else {

@@ -132,7 +132,7 @@ export function getCombatManeuver(stance, attackHeight, attackType, powerLevel =
   const p = Math.max(0, Math.min(1, powerLevel));
   const idx = motions.length === 1 ? 0 : Math.min(motions.length - 1, Math.floor(p * motions.length));
   const motion = motions[idx];
-  try { window.__diag?.combat?.onLookupHit?.({ stance, attackHeight, attackType, motion, powerLevel: p, candidates: motions.length }); } catch (_) {}
+  try { window.__diag?.combat?.onLookupHit?.({ tableId: r.id, stance, attackHeight, attackType, motion, powerLevel: p, candidates: motions.length }); } catch (_) {}
   return motion;
 }
 

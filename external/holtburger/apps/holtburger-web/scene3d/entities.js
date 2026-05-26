@@ -1728,6 +1728,123 @@ export class EntityManager {
   }
 
   /**
+   * Wave 1 Phase 3 (CMT fixes plan 2026-05-26): expose the equipped
+   * primary weapon for an entity so the CombatManeuverTable lookup in
+   * `scene3d/picking.js:441` can infer the AttackType from the wielded
+   * item instead of hardcoding Slash.
+   *
+   * Returns a minimal weapon record consumed by
+   * `ui/ac_attack_type_for_weapon.js#inferAttackTypeForWeapon`:
+   * `{ guid, wcid, itemType, equipMask, name }` or `null` when the
+   * entity is unarmed / unknown.
+   *
+   * ## Current data source (local player only)
+   *
+   * Equipped weapons live in the wasm-side `latest_inventory` snapshot
+   * — see `apps/holtburger-web/src/lib.rs:13991 InventoryItem`. Each
+   * inventory entry carries an `equipMask` bitfield; items with
+   * `equipMask & (MELEE_WEAPON | MISSILE_WEAPON | TWO_HANDED | CASTER)`
+   * are wielded. We pick the first such entry — there's at most one
+   * primary weapon at a time per ACE's `wield_item` semantics
+   * (`crates/holtburger-world/src/player/types.rs:471`).
+   *
+   * The snapshot is read via `window.__sessionHandle.playerInventory()`
+   * (the global handle is exposed by `index.html` at the top of
+   * `start_session`). EntityManager doesn't get the handle injected
+   * at construction time, so the lookup goes through the global —
+   * matches the existing `window.getLocalPlayerGuid()` pattern used
+   * elsewhere in this file (see line ~837).
+   *
+   * ## Scope limitation — non-local entities
+   *
+   * For ANY guid other than the local player, this returns `null`.
+   * Non-local equipped-weapon data isn't currently surfaced on the
+   * wire — `ObjectDescriptionData` ships `model_changes` /
+   * `texture_changes` (per-part gfx swaps for the wearer's rendered
+   * appearance), but NOT the wielder's wielded-item entity IDs. That
+   * data would have to come from a separate
+   * `GameEvent::WieldObject`-tracking layer keyed by wielder GUID.
+   *
+   * Wave 2 Phase 5 (remote-player swings) is the planned follow-on.
+   * TODO breadcrumb: extend the wasm recv loop to track
+   * `wielder_id → wielded_weapon_guid → InventoryItem` for every
+   * non-local entity (see `apps/holtburger-web/src/lib.rs:15349
+   * apply_inventory_object_create` — the `wielder_id` is already
+   * extracted from `ObjectDescriptionData` but only consumed for
+   * the local player's `player.wield_item`).
+   *
+   * ## TODO (Wave 2/4 — AttackType refinement)
+   *
+   * Surface `W_AttackType` (`PropertyInt::AttackType = 45`) and
+   * `W_WeaponType` (`PropertyInt::WeaponType = 89`) on `InventoryItem`
+   * so the inference can port ACE's
+   * `WorldObject_Weapon.cs:1050 GetAttackType` verbatim. Today the
+   * inference fakes it with the equip-slot bit because that's the
+   * only weapon-shaped data we have.
+   *
+   * @param {number} guid — entity GUID to query
+   * @returns {{ guid: number, wcid: number, itemType: number,
+   *             equipMask: number, name: string } | null}
+   */
+  getEquippedWeapon(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return null;
+
+    // Resolve the local player guid via the same global pattern the
+    // rest of this file uses (`isLocalPlayer` at ~line 837).
+    let localGuid = 0;
+    try {
+      if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+        const lpg = window.getLocalPlayerGuid();
+        if (lpg !== null && lpg !== undefined) localGuid = (lpg >>> 0);
+      }
+    } catch (_) { /* never break callers */ }
+
+    // Non-local entity → no data available today. See §Scope
+    // limitation in the doc comment.
+    if (g !== localGuid) return null;
+
+    // Pull the latest inventory snapshot. `window.__sessionHandle` is
+    // the wasm-bound session handle; `playerInventory()` returns
+    // `Array<InventoryItem>` (see `src/lib.rs:16160`). Each item's
+    // `equipMask` is a u32 bitfield from
+    // `holtburger_common::properties::EquipMask`.
+    let inventory = null;
+    try {
+      if (typeof window !== "undefined" && window.__sessionHandle
+          && typeof window.__sessionHandle.playerInventory === "function") {
+        inventory = window.__sessionHandle.playerInventory();
+      }
+    } catch (_) { /* never break callers */ }
+    if (!Array.isArray(inventory) || inventory.length === 0) return null;
+
+    // EquipMask bits that mark a "primary weapon" — what `picking.js`'s
+    // melee branch cares about. Order of preference for multi-bit cases
+    // is irrelevant because no item carries more than one of these.
+    const PRIMARY_WEAPON_BITS =
+        0x00100000 /* MELEE_WEAPON */
+      | 0x00400000 /* MISSILE_WEAPON */
+      | 0x01000000 /* CASTER */
+      | 0x02000000 /* TWO_HANDED */;
+
+    for (const item of inventory) {
+      const mask = (item?.equipMask ?? 0) >>> 0;
+      if ((mask & PRIMARY_WEAPON_BITS) === 0) continue;
+      // First (and only) primary wielded weapon wins.
+      return {
+        guid:     (item.guid ?? 0) >>> 0,
+        wcid:     (item.wcid ?? 0) >>> 0,
+        itemType: (item.itemType ?? 0) >>> 0,
+        equipMask: mask,
+        name:     typeof item.name === "string" ? item.name : "",
+      };
+    }
+    // No primary weapon slot occupied — unarmed. Caller will see
+    // `null` and infer Punch.
+    return null;
+  }
+
+  /**
    * Phase D — persistent selection indicator on the currently targeted
    * entity. A flat ring is parented under the entity's root so it
    * follows position/rotation automatically and is GC'd when the
