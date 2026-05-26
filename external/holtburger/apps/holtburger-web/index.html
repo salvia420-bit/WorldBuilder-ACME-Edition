@@ -431,7 +431,7 @@
          because agents drive movement via the wire API, not keystrokes.
          ────────────────────────────────────────────────────────────── */
       html.agent-mode body { margin: 0; padding: 0; overflow: hidden; background: #000; }
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud):not(#hb-dye-preview-tooltip) { display: none !important; }
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud):not(#hb-sneak-hud):not(#hb-dye-preview-tooltip) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -973,6 +973,7 @@
       import * as buffsHudPlugin from "./plugins/buffs-hud.js";
       import * as targetBarPlugin from "./plugins/target-bar.js";
       import * as combatHudPlugin from "./plugins/combat-hud.js";
+      import * as sneakHudPlugin from "./plugins/sneak-hud.js";
       import * as vendorUiPlugin from "./plugins/vendor-ui.js";
       import * as radarPlugin from "./plugins/radar.js";
       import * as chatPanelPlugin from "./plugins/chat-panel.js";
@@ -1077,6 +1078,16 @@
           // slider + 3 height buttons. iconHidden — claims no bar slot.
           ...combatHudPlugin.manifest,
           mount: combatHudPlugin.mount,
+        },
+        {
+          // Wave 7 / Phase 20 (2026-05-26): transient "Sneak Attack +N
+          // DR" overlay that flashes when picking.js's facing predicate
+          // fires (`sneakAttackPredicted` event). Reads training level
+          // via `ui/ac_damage_rating.js` and shows the sneak DR only
+          // (Recklessness is already visualized via combat-bar's
+          // power-band). iconHidden — pure overlay, no bar slot.
+          ...sneakHudPlugin.manifest,
+          mount: sneakHudPlugin.mount,
         },
         {
           ...radarPlugin.manifest,

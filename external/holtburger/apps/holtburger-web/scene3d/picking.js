@@ -4,7 +4,7 @@ import {
   ATTACK_TYPE,
   inferAttackTypeForWeapon,
 } from "../ui/ac_attack_type_for_weapon.js";
-import { getAimLevelForVelocity } from "../ui/ac_aim_level_for_velocity.js";
+import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim_level_for_velocity.js";
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
@@ -33,6 +33,22 @@ try { loadCombatManeuverTable(); } catch (_) {}
 const MELEE_RANGE_M = 2.5;
 const MISSILE_RANGE_M = 25.0;
 const MAX_CHARGE_DURATION_MS = 10_000; // safety net so we don't pursue forever
+
+// Wave 7 / Phase 19 (2026-05-26) — default projectile speed for the
+// gravity-arc aim predictor. Per ACE's
+// `~/ace-server/Source/ACE.Server/WorldObjects/Creature_Missile.cs:208
+//   public const float DefaultProjectileSpeed = 20.0f;`
+// (the fallback when the wielded missile launcher has no
+// `PropertyFloat.MaximumVelocity = 26` on the wire, i.e. starter bows).
+// @todo Surface per-weapon projectile speed from the wire. ACE reads
+// `missileLauncher.MaximumVelocity` (PropertyFloat::MaximumVelocity =
+// 26 — see `ACE.Entity/Enum/Properties/PropertyFloat.cs:38`) off the
+// equipped weapon's ObjDesc/weapon-stat block. Today neither the
+// `EntityInstance` nor the local-player session surfaces this property;
+// piping it through would let us pass the actual weapon-specific speed
+// to `getAimLevelForBallisticArc`. For now 20 m/s matches the dominant
+// retail starter-bow feel; a fast composite bow ranges up to ~35 m/s.
+const BOW_DEFAULT_SPEED_MPS = 20.0;
 
 // Entity world position in AC coords. Pre-2026-05-19 this routed
 // through a `threeToAc` inverse, but that was load-bearing wrong:
@@ -489,13 +505,25 @@ export function setupClickPicking({
       // miss reason is visible in `motionByStance` per Phase 1).
       //
       // Wave 3 Phase 7 (2026-05-26) — aim-level dispatch lands. After
-      // the CMT miss we fall through to `getAimLevelForVelocity` (port
-      // of `Creature_Missile.cs:GetAimLevel:435`) on the target-relative
-      // direct-line direction. Server-authoritative `GetAimVelocity`
-      // factors gravity arc + eye-height; the client uses direct line
-      // for prediction and lets the wire's `UpdateMotion` (kind=5)
-      // overwrite if the server picks a different bucket. See the
-      // helper's docstring "Prediction-quality trade-off".
+      // the CMT miss we fall through to the aim-level resolver on a
+      // target-relative trajectory. Server-authoritative `GetAimVelocity`
+      // (Creature_Missile.cs:236-252) factors gravity arc + eye-height;
+      // wire's `UpdateMotion` (kind=5) corrects any client/server
+      // mismatch. See the helper's docstring "Prediction-quality
+      // trade-off".
+      //
+      // Wave 7 / Phase 19 (2026-05-26) — gravity-arc upgrade. Swap the
+      // direct-line `getAimLevelForVelocity(aimVelocity)` for
+      // `getAimLevelForBallisticArc({origin, target, projectileSpeed})`
+      // which factors projectile speed + gravity, matching the
+      // server-side arc that `Trajectory.solve_ballistic_arc` builds
+      // in `Creature_Missile.cs:306 GetProjectileVelocity`. Closes the
+      // visible bucket-flip jitter on long level shots (direct line
+      // picks AimLevel; the server-correct bucket for a 30 m / 20 m/s
+      // shot is AimHigh30 — UpdateMotion would re-pose mid-swing).
+      // Falls back to direct-line if the target is beyond ballistic
+      // range for the given speed (preserves the Wave 3 Phase 7
+      // behaviour as a safety net).
       const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
       const stance = (window.__getCurrentStanceLow?.() ?? 0) >>> 0;
       const em = liveScene3d.entityManager;
@@ -505,16 +533,19 @@ export function setupClickPicking({
         ? ATTACK_TYPE_SLASH
         : inferredType;
       const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider);
-      // Aim-level fallback: target-relative direct-line velocity in AC
-      // world coords. `pose` and `targetAc` are computed above for the
+      // Aim-level fallback: gravity-compensated ballistic arc from
+      // `pose` (shooter) to `targetAc` (target), both in AC world
+      // coords. `pose` and `targetAc` are computed above for the
       // charge-to-range distance — re-using them avoids a second
-      // accessor walk. Either being null falls back to a zero vector,
-      // which the helper guards to `AimLevel` (matches ACE's default-
-      // init when normalize fails).
-      const aimVelocity = (targetAc && pose)
-        ? { x: targetAc.x - pose.x, y: targetAc.y - pose.y, z: targetAc.z - pose.z }
-        : { x: 0, y: 0, z: 0 };
-      const aimMotion = getAimLevelForVelocity(aimVelocity);
+      // accessor walk. If either is null the helper's solver returns
+      // null → direct-line fallback which guards to AimLevel.
+      const aimMotion = (targetAc && pose)
+        ? getAimLevelForBallisticArc({
+            origin: pose,
+            target: targetAc,
+            projectileSpeed: BOW_DEFAULT_SPEED_MPS,
+          })
+        : getAimLevelForVelocity(null);
       // CMT first (always misses for ranged today, but the layer is
       // wired so a future retail-data dump that adds ranged rows would
       // light up automatically); aim-level fallback whenever CMT fails.

@@ -14,7 +14,12 @@ import { dirname, resolve as resolvePath } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const helperUrl =
     "file://" + resolvePath(__dirname, "ui/ac_aim_level_for_velocity.js");
-const { AIM_MOTIONS, getAimLevelForVelocity } = await import(helperUrl);
+const {
+    AIM_MOTIONS,
+    getAimLevelForVelocity,
+    solveBallisticArcZAngle,
+    getAimLevelForBallisticArc,
+} = await import(helperUrl);
 
 let failed = 0;
 let passed = 0;
@@ -168,11 +173,189 @@ check(
     getAimLevelForVelocity({ x: NaN, y: 0, z: 1 }) === AIM_MOTIONS.AimLevel,
 );
 
+// =============================================================
+// Wave 7 / Phase 19 — gravity-arc resolver tests
+// =============================================================
+//
+// `solveBallisticArcZAngle` returns sin(theta_low), which is what
+// `GetAimLevel` calls `normalize(velocity).Z`. Then bucketing into
+// `AIM_MOTIONS` via `getAimLevelForBallisticArc` runs the same branch
+// tree as the direct-line predictor.
+
+console.log("");
+console.log("--- Wave 7 / Phase 19 — gravity-arc resolver ---");
+
+check(
+    "solveBallisticArcZAngle is a function",
+    typeof solveBallisticArcZAngle === "function",
+);
+check(
+    "getAimLevelForBallisticArc is a function",
+    typeof getAimLevelForBallisticArc === "function",
+);
+
+// W7.1 — At-feet target (target directly below origin → straight down).
+// horizDist == 0, dz < 0 → solver returns -1 → -1 * 90 = -90 →
+// branch tree fall-through to AimLow90.
+{
+    const motion = getAimLevelForBallisticArc({
+        origin: { x: 0, y: 0, z: 5 },
+        target: { x: 0, y: 0, z: 0 },
+        projectileSpeed: 20.0,
+    });
+    check(
+        "at-feet target (target directly below origin) → AimLow90",
+        (motion >>> 0) === (AIM_MOTIONS.AimLow90 >>> 0),
+        `expected=${hex(AIM_MOTIONS.AimLow90)} got=${hex(motion)}`,
+    );
+}
+
+// W7.2 — Same-height target 1m horizontal away, v=20 m/s.
+// Δz=0, Δx=1, v²=400, disc = v⁴ - g·(g·1 + 2·0·v²) = 160000 - 9.81·9.81
+//   ≈ 159904 → √disc ≈ 399.88 → tan(θ_low) = (400 - 399.88) / (9.81·1)
+//   ≈ 0.0125 → θ_low ≈ 0.0125 rad ≈ 0.715° → sin(θ) * 90 ≈ 1.12 →
+// strictly between [-7.5, 7.5) → AimLevel. Very near-level shot.
+{
+    const motion = getAimLevelForBallisticArc({
+        origin: { x: 0, y: 0, z: 0 },
+        target: { x: 1, y: 0, z: 0 },
+        projectileSpeed: 20.0,
+    });
+    check(
+        "near level same-height target (1m horiz, v=20) → AimLevel",
+        (motion >>> 0) === (AIM_MOTIONS.AimLevel >>> 0),
+        `expected=${hex(AIM_MOTIONS.AimLevel)} got=${hex(motion)}`,
+    );
+}
+
+// W7.3 — Mid-range level shot: 10m horizontal, v=30 m/s, Δz=0.
+// v² = 900, v⁴ = 810000, g·Δx² = 981, 2·Δz·v² = 0
+// disc = 810000 - 9.81·981 = 810000 - 9623.61 ≈ 800376.4
+// √disc ≈ 894.638 → tan(θ_low) = (900 - 894.638) / (9.81·10)
+//   ≈ 5.362 / 98.1 ≈ 0.05466 → θ_low ≈ 3.13° → sin(θ)*90 ≈ 4.92°
+// Hmm — that buckets to AimLevel still (< 7.5). The plan said
+// "AimHighN (some upward arc)" — at v=30 / 10m the required arc is
+// actually small. Let me check the solver returns >0 (upward, not
+// down) — the bucket might be AimLevel but the z-angle is non-zero.
+// Adjusted to test the *sign* and that it's >0 (upward) — the bucket
+// flip happens at longer ranges, not 10m.
+{
+    const z = solveBallisticArcZAngle({
+        origin: { x: 0, y: 0, z: 0 },
+        target: { x: 10, y: 0, z: 0 },
+        projectileSpeed: 30.0,
+    });
+    check(
+        "mid-range level shot (10m horiz, v=30) → positive z (upward arc)",
+        z !== null && z > 0 && z < 0.2,
+        `z=${z}`,
+    );
+}
+
+// W7.4 — Long level shot: 30m horizontal, v=30 m/s, Δz=0.
+// v² = 900, v⁴ = 810000, g·Δx² = 9·g·100 = 9810·9 = wait
+// Δx² = 900, g·Δx² = 9.81·900 = 8829, 2·0·900 = 0
+// disc = 810000 - 9.81·8829 = 810000 - 86612.49 ≈ 723387.5
+// √disc ≈ 850.52 → tan(θ_low) = (900 - 850.52)/(9.81·30) ≈ 49.48 / 294.3
+//   ≈ 0.1681 → θ_low ≈ 9.55° → sin·90 ≈ 14.92° → bucket AimHigh15
+//   (≥7.5 and <22.5). Acceptance bar said "at least AimHigh15".
+{
+    const motion = getAimLevelForBallisticArc({
+        origin: { x: 0, y: 0, z: 0 },
+        target: { x: 30, y: 0, z: 0 },
+        projectileSpeed: 30.0,
+    });
+    // Acceptance: motion is one of AimHigh15..AimHigh90 (any upward arc
+    // bucket). The expected hand-calc lands AimHigh15.
+    const upwardArcMotions = new Set([
+        AIM_MOTIONS.AimHigh15, AIM_MOTIONS.AimHigh30, AIM_MOTIONS.AimHigh45,
+        AIM_MOTIONS.AimHigh60, AIM_MOTIONS.AimHigh75, AIM_MOTIONS.AimHigh90,
+    ].map(v => v >>> 0));
+    check(
+        "long level shot (30m horiz, v=30) → AimHigh* (upward arc bucket, ≥AimHigh15)",
+        upwardArcMotions.has(motion >>> 0),
+        `expected one of AimHigh15..AimHigh90, got=${hex(motion)}`,
+    );
+    // Also pin the exact bucket so we catch regressions in the formula.
+    check(
+        "long level shot (30m horiz, v=30) → AimHigh15 (specific bucket)",
+        (motion >>> 0) === (AIM_MOTIONS.AimHigh15 >>> 0),
+        `expected=${hex(AIM_MOTIONS.AimHigh15)} got=${hex(motion)}`,
+    );
+}
+
+// W7.5 — Out-of-range target: 1000m level shot at v=10 m/s.
+// v² = 100, v⁴ = 10000, g·Δx² = 9.81·1e6 = 9.81e6.
+// disc = 10000 - 9.81 * 9.81e6 ≈ -9.6e7 → negative → out of range.
+// solveBallisticArcZAngle returns null; getAimLevelForBallisticArc
+// falls back to direct-line on (target - origin). Direct line of a
+// level shot is `(1000, 0, 0)`, zAngle = 0 → AimLevel.
+{
+    const z = solveBallisticArcZAngle({
+        origin: { x: 0, y: 0, z: 0 },
+        target: { x: 1000, y: 0, z: 0 },
+        projectileSpeed: 10.0,
+    });
+    check(
+        "out-of-range solver → null (target beyond ballistic range)",
+        z === null,
+        `expected null, got=${z}`,
+    );
+    const motion = getAimLevelForBallisticArc({
+        origin: { x: 0, y: 0, z: 0 },
+        target: { x: 1000, y: 0, z: 0 },
+        projectileSpeed: 10.0,
+    });
+    // Direct-line fallback on a level shot → AimLevel.
+    check(
+        "out-of-range bucket → direct-line fallback returns AimLevel for level shot",
+        (motion >>> 0) === (AIM_MOTIONS.AimLevel >>> 0),
+        `expected=${hex(AIM_MOTIONS.AimLevel)} got=${hex(motion)}`,
+    );
+}
+
+// W7.6 — Edge cases: zero distance + zero speed.
+{
+    // Identically co-located target → solver returns null → direct-line
+    // fallback on zero vector → AimLevel.
+    const motionColocated = getAimLevelForBallisticArc({
+        origin: { x: 5, y: 5, z: 5 },
+        target: { x: 5, y: 5, z: 5 },
+        projectileSpeed: 20.0,
+    });
+    check(
+        "co-located origin/target → fallback to AimLevel",
+        (motionColocated >>> 0) === (AIM_MOTIONS.AimLevel >>> 0),
+        `expected=${hex(AIM_MOTIONS.AimLevel)} got=${hex(motionColocated)}`,
+    );
+    // Zero projectile speed → solver returns null → direct-line fallback.
+    const zeroSpeedZ = solveBallisticArcZAngle({
+        origin: { x: 0, y: 0, z: 0 },
+        target: { x: 10, y: 0, z: 0 },
+        projectileSpeed: 0,
+    });
+    check(
+        "zero projectile speed → solver returns null",
+        zeroSpeedZ === null,
+        `expected null, got=${zeroSpeedZ}`,
+    );
+    const zeroSpeedMotion = getAimLevelForBallisticArc({
+        origin: { x: 0, y: 0, z: 0 },
+        target: { x: 10, y: 0, z: 0 },
+        projectileSpeed: 0,
+    });
+    check(
+        "zero projectile speed → fallback returns AimLevel for level shot",
+        (zeroSpeedMotion >>> 0) === (AIM_MOTIONS.AimLevel >>> 0),
+        `expected=${hex(AIM_MOTIONS.AimLevel)} got=${hex(zeroSpeedMotion)}`,
+    );
+}
+
 // --- Summary ---
 console.log("");
 console.log(`Cases: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
     process.exitCode = 1;
 } else {
-    console.log("All Phase 7 aim-level tests PASS.");
+    console.log("All Phase 7 + Phase 19 aim-level tests PASS.");
 }

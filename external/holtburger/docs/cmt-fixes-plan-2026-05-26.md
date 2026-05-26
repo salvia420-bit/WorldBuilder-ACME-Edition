@@ -27,6 +27,9 @@
 | 16 | Magic-side Sneak Attack prediction (extend Phase 9 to spell-cast path) | 6 | **shipped** 2026-05-26 |
 | 17 | Magic-shape classifier UI surface in spell-picker | 6 | **shipped** 2026-05-26 |
 | 18 | Acclient.c shield-Backhand runtime gate investigation (wiki was wrong) | 6 | **shipped** 2026-05-26 |
+| 19 | Gravity-arc missile prediction quality | 7 | **shipped** 2026-05-26 |
+| 20 | Sneak Attack DR rollup helper + HUD display plugin | 7 | **shipped** 2026-05-26 |
+| 21 | Unarmed AttackType power-based audit (KickThreshold=0.75) | 7 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -989,6 +992,182 @@ DOM output example:
 | `wasm-pack build` | PASS; `attackType` on `EquippedWeaponJs` + `InventoryItem` confirmed |
 | `cargo test -p holtburger-dat shield_stance_backhand_audit` (with portal.dat) | PASS in 1.03s |
 | `inferAttackTypeForWeapon` 4-case precedence check | 4/4 PASS |
+
+---
+
+## Wave 7 — prediction quality + UI surface (3 agents, parallel)
+
+Three parked items move forward, all file-disjoint.
+
+### Phase 19 — Gravity-arc missile prediction quality
+
+**Owner:** Agent Q
+**Goal:** Improve client-side missile aim prediction by factoring projectile speed + gravity (matching ACE's `Creature_Missile.GetAimVelocity`). Today's helper uses direct-line direction which routinely under-aims long-range shots — server's authoritative arc lands a higher `AimHighN` bucket; UpdateMotion overwrites client prediction. Closer prediction = less visible re-aim jitter.
+
+**Reference:** `~/ace-server/Source/ACE.Server/WorldObjects/Creature_Missile.cs:236-252 GetAimVelocity` + `GetProjectileVelocity` (the gravity-compensated arc). Don't port the full physics; just match the *Z-angle*, which is all `GetAimLevel` uses.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/ui/ac_aim_level_for_velocity.js` — add a new export `solveBallisticArcZAngle({origin, target, projectileSpeed, gravity = 9.81})` that returns the z-component of the launch direction needed to hit `target` from `origin` at the given speed under gravity. Standard projectile-motion solution:
+  ```
+  Δx = horizontal distance, Δz = vertical offset
+  v² = projectileSpeed²
+  g = gravity (positive scalar)
+  discriminant = v⁴ - g·(g·Δx² + 2·Δz·v²)
+  if discriminant < 0: target is out of range; fall back to direct line
+  θ = atan((v² - sqrt(disc)) / (g·Δx))   // low arc
+  z_angle = sin(θ)  // for GetAimLevel's normalize(velocity).Z calculation
+  ```
+  Document the formula inline with a citation to a public reference (Wikipedia "Projectile motion" or similar; avoid private references).
+- Keep existing `getAimLevelForVelocity` UNCHANGED — it stays as the direct-line predictor.
+- Add a new export `getAimLevelForBallisticArc({origin, target, projectileSpeed})` that computes the gravity-arc trajectory's z-angle and feeds it to the existing bucket logic. Returns the MotionCommand u32. Falls back to `getAimLevelForVelocity(target - origin)` (direct-line) if the target is out of ballistic range.
+
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` — missile branch (around line 460 — the `inRanged` branch added in Wave 2 Phase 6 / Wave 3 Phase 7). Swap the `getAimLevelForVelocity(aimVelocity)` call with `getAimLevelForBallisticArc({origin: pose, target: targetAc, projectileSpeed: BOW_DEFAULT_SPEED_MPS})`. Use a constant for projectile speed for now (`const BOW_DEFAULT_SPEED_MPS = 30.0` per ACE's `Bow.GetProjectileSpeed` defaults — actually verify against `~/ace-server/Source/ACE.Server/WorldObjects/Player_Missile.cs:202 GetProjectileSpeed`). Surfacing per-weapon projectile speed from the wire is a future ticket; hardcode for now with a TODO breadcrumb.
+
+- Add inline unit tests covering: at-feet target (z-angle = -90°, aimLow90), level same-height target nearby (z-angle ≈ 0°, AimLevel), level same-height target at max range (z-angle ≈ +45°, AimHigh45), out-of-range target (fallback to direct line).
+
+**Acceptance:**
+- New `getAimLevelForBallisticArc` returns higher arc (AimHigh* not AimLevel) for level-distance shots beyond ~10m, matching real archery feel.
+- Unit tests pass (4-6 cases).
+- `node --check` clean on the helper + picking.js.
+- The diag layer (Phase 1 motionHistogram) now shows AimHighN motions for missile attacks at distance, where before they were dominantly AimLevel.
+
+**Hard constraints:**
+- Do NOT touch the melee branch (Phase 22's territory — though that's helper-only, no picking.js change there).
+- Do NOT touch `ui/ac_sneak_attack_predict.js` or anything else outside the aim-level vertical.
+- Keep `getAimLevelForVelocity` as a pure direct-line fallback — don't refactor it.
+
+---
+
+### Phase 20 — Sneak Attack DR rollup helper + HUD plugin
+
+**Owner:** Agent R
+**Goal:** Two artifacts: (a) a pure DR rollup helper computing the predicted Damage Rating from player skill state, and (b) a HUD plugin that flashes "Sneak Attack +N DR" when the predictor fires.
+
+**Reference:** acpedia Damage Rating page (`/mnt/wbterminal1/tmp/claude-scratch/acpedia-research/_ref_Damage Rating.txt` if it exists, otherwise the in-doc summary from `external/holtburger/docs/acpedia-combat-research-2026-05-26.md`). Sneak Attack: +10 trained / +20 specialized. Recklessness: same, applied when slider is inside the 10-90% active band. Both are flat additives.
+
+**Files (all NEW):**
+- NEW `external/holtburger/apps/holtburger-web/ui/ac_damage_rating.js`:
+  - Export `SKILL_RECKLESSNESS = 50`, `SKILL_SNEAK_ATTACK = 51` (cite the source `crates/holtburger-common/src/stats.rs:156-158`).
+  - Export `readTrainingLevel(skillType)` — helper to read a skill's training level from `window.__sessionHandle.playerStats()?.skills` (5-tuple flat array). Returns the training level (0=Unusable, 1=Untrained, 2=Trained, 3=Specialized) or `null` if unavailable. Same pattern as `combat-bar.js`'s `readRecklessnessTrainingLevel`.
+  - Export `computeDamageRatingRollup({ powerLevel, hasSneak })` returning `{ base: 0, sneak: <0|10|20>, reckless: <0|10|20>, total: <sum> }`:
+    - `sneak`: +10 if SneakAttack=Trained AND hasSneak, +20 if Specialized AND hasSneak, 0 otherwise.
+    - `reckless`: +10 if Recklessness=Trained AND powerLevel∈[0.10, 0.90], +20 if Specialized AND same band, 0 otherwise.
+    - `base`: 0 (placeholder for future per-weapon DR; out of scope this phase).
+    - `total`: sum of the above.
+  - 6+ inline unit tests covering the 2×2×2 matrix (trained/spec × in-band/out-of-band × has-sneak/no-sneak).
+
+- NEW `external/holtburger/apps/holtburger-web/plugins/sneak-hud.js`:
+  - Follow the `vitals-hud.js` plugin pattern: standalone overlay, `iconHidden: true`, mounted via the plugin lifecycle.
+  - Listen for `sneakAttackPredicted` events on the plugin client's event bus (Phase 9 + Phase 16 + maybe Phase 19 emit them).
+  - On event: compute DR rollup via `ac_damage_rating.js`, show a transient overlay "Sneak Attack +N DR" (where N = sneak component only, since reckless is shown elsewhere via the band).
+  - Position: somewhere visible but non-intrusive — top of screen, near the target nameplate, your call. Match existing AC red-accent aesthetic.
+  - Fade out after ~1.5s.
+  - Manage timers; clean up on plugin teardown.
+
+- `external/holtburger/apps/holtburger-web/index.html`:
+  - Add the import line near the other plugin imports (look for `import * as combatHudPlugin from "./plugins/combat-hud.js";` at line ~975 — add the sneak-hud import right after).
+  - Register the plugin in the same block where other HUD plugins are registered (look for how `vitalsHudPlugin` is registered).
+
+**Acceptance:**
+- DR rollup helper: 6/6 unit tests pass; `node --check` clean.
+- HUD plugin: registers cleanly; on `sneakAttackPredicted` event, shows the overlay; fades out.
+- Triggered by all three scopes (melee, missile, magic) from prior phases.
+- `node --check` clean on plugin + helper + index.html (extract the `<script type="module">` block).
+
+**Hard constraints:**
+- Do NOT modify `picking.js` — Phase 9 + Phase 16 + (this wave's) Phase 19 are the event emitters; you only consume.
+- Do NOT modify `combat-bar.js` (Wave 4 + Wave 6 owners). The Recklessness band already lives there; don't duplicate.
+- Do NOT modify `ui/ac_sneak_attack_predict.js` — the predictor is upstream of you.
+
+---
+
+### Phase 21 — Unarmed AttackType height/power audit (research + helper)
+
+**Owner:** Agent S
+**Goal:** Resolve the open question from Wave 5 Phase 14 — when the player is unarmed, does retail pick Punch / Kick / Jab based on attack-height, power-level, or something else? Update the helper accordingly OR document the limitation with citations.
+
+**Investigation steps:**
+
+1. Read ACE's `~/ace-server/Source/ACE.Server/WorldObjects/WorldObject_Weapon.cs:1050-1162 GetAttackType` for the `Skill.LightWeapons` / `Skill.UnarmedCombat` branch. What AttackType does it return when no weapon is wielded?
+2. Read `~/ace-server/Source/ACE.Server/WorldObjects/Player_Melee.cs:440-475 GetSwingAnimation` and trace how the unarmed AttackType resolves to a MotionCommand. If the server picks Kick instead of Punch at certain heights, find the predicate.
+3. Read `~/ace-server/Source/ACE.Server/Entity/Player_Body.cs` (if it exists) or wherever unarmed weapon-stat defaults live.
+4. Grep retail acclient.c for `Kick`, `Jab`, `Punch` references to see if the client makes any decision (unlikely — server is authoritative).
+5. Cross-check against the acpedia Combat omnibus page's claim: "Unarmed → Kick (Full PB) / Punch (Medium PB) / Jab (Low PB)". Is that a server-side decision keyed on POWER LEVEL (not attack height as the original Phase 14 note assumed)?
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/ui/ac_attack_type_for_weapon.js` — based on the audit:
+  - If retail resolves unarmed AttackType via power: extend `inferAttackTypeForWeapon(weapon, opts = {})` to take an optional `opts.powerLevel: number` (0..1) parameter, returning `Punch` (low/med) or `Kick` (high) for unarmed.
+  - If retail resolves via height: take `opts.attackHeight` instead.
+  - If retail is unclear or returns just Punch always: leave the helper logic unchanged, update the docstring with the audit finding citing the ACE source files read.
+  - **Do NOT update picking.js call sites** in this phase — that's a follow-on once the helper signature is finalized.
+
+**Acceptance:**
+- `node --check` clean.
+- Helper's docstring updated with audit citation (file:line in ACE).
+- If a logic change was made: 3+ inline unit tests covering the new branches (e.g., `inferAttackTypeForWeapon(null, {powerLevel: 0.2})` → Punch, `inferAttackTypeForWeapon(null, {powerLevel: 0.9})` → Kick).
+- If no logic change (audit finds Punch is correct): docstring update with explicit "audit found X" note + sources read.
+
+**Hard constraints:**
+- Do NOT modify other files. Pure helper + audit work.
+- Do NOT touch picking.js call sites. The signature change (adding `opts`) is backward-compatible — existing one-arg callers still work.
+
+---
+
+### Wave 7 reporting & checkpoint
+
+Each agent reports: files changed (paths + line counts), audit findings (Phase 21 esp.), validation steps, key surprises. Under 350 words each. **Don't commit — parent agent handles commits after all 3 finish.**
+
+### Wave 7 results — shipped 2026-05-26
+
+#### Phase 19 (Agent Q) — Gravity-arc missile prediction
+
+**Files (3, +375 / -15):**
+- `external/holtburger/apps/holtburger-web/ui/ac_aim_level_for_velocity.js` (+178): new exports `solveBallisticArcZAngle(...)` (closed-form low-arc projectile solver) and `getAimLevelForBallisticArc(...)` (composes with the existing bucket logic). `getAimLevelForVelocity` body untouched — kept as direct-line predictor and the new helper's fallback. Formula cited inline against Wikipedia "Projectile motion" §"Angle θ required to hit coordinate (x, y)", cross-referenced against ACE's `Creature_Missile.cs:306 GetProjectileVelocity` → `Trajectory.solve_ballistic_arc` (numerical solver of the same quadratic).
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` (+15 net): missile branch now calls `getAimLevelForBallisticArc({origin: pose, target: targetAc, projectileSpeed: BOW_DEFAULT_SPEED_MPS})`. New constant `BOW_DEFAULT_SPEED_MPS = 20.0` with TODO breadcrumb for per-weapon speed surfacing.
+- `external/holtburger/apps/holtburger-web/test_ac_aim_level_for_velocity.mjs` (+182): 12 new test cases.
+
+**Important correction.** The plan suggested `30.0 m/s` as the projectile speed default. ACE actually uses **20.0** at `Creature_Missile.cs:208` (`public const float DefaultProjectileSpeed = 20.0f`). Agent verified before using.
+
+**Tests:** 28/28 PASS (16 original Phase 7 + 12 new). Hand-calc spot-check: 30m level shot at v=30, g=9.81 → tan(θ_low) = 49.48/294.3 ≈ 0.168 → θ ≈ 9.55° → sin(θ)·90 ≈ 14.92° → bucket AimHigh15. Matches test output. Acceptance: level same-height target at distance now buckets AimHigh15+ where Phase 7 returned AimLevel.
+
+#### Phase 20 (Agent R) — Sneak HUD + DR rollup helper
+
+**Files (4, +577 / -1):**
+- NEW `external/holtburger/apps/holtburger-web/ui/ac_damage_rating.js` (146): pure helper. `SKILL_RECKLESSNESS = 50`, `SKILL_SNEAK_ATTACK = 51`, `RECKLESSNESS_BAND_MIN = 0.10`, `RECKLESSNESS_BAND_MAX = 0.90`. `readTrainingLevel(skillType, sessionHandle?)`, `computeDamageRatingRollup({powerLevel, hasSneak, sessionHandle?}) → {base, sneak, reckless, total}`. Cites `crates/holtburger-common/src/stats.rs:156-158`.
+- NEW `external/holtburger/apps/holtburger-web/test_ac_damage_rating.mjs` (240): 19/19 PASS. Covers all four named matrix cases verbatim, 0.10/0.90 inclusive edges, no-session no-throw, NaN/undefined guards, `readTrainingLevel` direct API.
+- NEW `external/holtburger/apps/holtburger-web/plugins/sneak-hud.js` (191): `iconHidden: true` overlay plugin following `vitals-hud.js` lifecycle. Body-mounted `#hb-sneak-hud` div. Subscribes to `sneakAttackPredicted` (fires from melee/missile/magic). On event: dynamic-imports the rollup helper, reads `window.__combatBarState?.powerLevel ?? 1.0`, computes `rollup.sneak`, **skips paint when `sneak === 0`** (Untrained-behind-target wouldn't see a misleading "+0 DR"), renders "Sneak Attack +N DR" with AC red-accent palette matching `.hb-cb-power-band` (rgba(220,80,40,*)). 900ms visible + 600ms CSS opacity fade = 1500ms total. Rapid-swing timer reset via `clearTimeout`.
+- `external/holtburger/apps/holtburger-web/index.html` (+11 / -2): import at L976, registration at L1087-1091 (right after combatHudPlugin), `#hb-sneak-hud` added to L434 agent-mode allowlist.
+
+**DOM output when active:** `<div id="hb-sneak-hud" class="hb-sneak-show">Sneak Attack +10 DR</div>` (or `+20` for Specialized).
+
+#### Phase 21 (Agent S) — Unarmed AttackType audit (POWER-driven, not height)
+
+**Audit conclusion: wiki was misleading.** The acpedia Combat omnibus page's "Kick (Full PB) / Punch (Medium PB) / Jab (Low PB)" describes MOTION COMMAND variations under HandCombat stance, not AttackType values. There is **no Jab AttackType, no Jab MotionCommand**. The CMT has multi-candidate Punch rows that supply the visual variety the wiki calls "Jab".
+
+**ACE source for the rule** (`Player_Melee.cs:462`):
+```csharp
+AttackType = PowerLevel > KickThreshold && !IsDualWieldAttack
+    ? AttackType.Kick : AttackType.Punch;
+```
+with `KickThreshold = 0.75f` (line 432). Strict `>`, not `>=`. Plus the dual-wield exclusion (`Player_Melee.cs:462 !IsDualWieldAttack`).
+
+**Files (2, +236 / -94):**
+- `external/holtburger/apps/holtburger-web/ui/ac_attack_type_for_weapon.js`: extended `inferAttackTypeForWeapon(weapon, opts = {})`. New `opts.powerLevel: number` + `opts.isDualWield: boolean`. For unarmed (weapon=null), returns `Kick (0x08)` when `powerLevel > 0.75 && !isDualWield`; `Punch (0x01)` otherwise. One-arg legacy callers (no `opts`) still return `Punch` for unarmed — backward-compat preserved. Docstring updated with all source citations.
+- NEW `external/holtburger/apps/holtburger-web/test_ac_attack_type_for_weapon.mjs`: 16/16 PASS. Includes Wave 6 4-case regression check + 6 new power-level points (0.10/0.50/0.75/0.7500001/0.90/1.0) + dual-wield clause + defensive defaults.
+
+**Side bug flagged** (not fixed this wave): `crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs` mislabels `AttackHeight` (uses 1=Low when ACE's `AttackHeight.cs` has 1=High). Doesn't affect the audit conclusion but is a real bug worth a cleanup pass.
+
+### Wave 7 validation summary
+
+| Check | Result |
+|---|---|
+| `node --check` on 5 modified/new JS files | PASS |
+| `node test_ac_aim_level_for_velocity.mjs` | 28/28 PASS |
+| `node test_ac_damage_rating.mjs` | 19/19 PASS |
+| `node test_ac_attack_type_for_weapon.mjs` | 16/16 PASS |
+| `node test_ac_spell_shape.mjs` regression | 30/30 PASS |
+| Wave 6 backward-compat (4 cases) | 4/4 PASS |
+| Phase 21 new branches (4 cases incl. dual-wield gate) | 4/4 PASS |
 
 ## Coordination notes for agents
 

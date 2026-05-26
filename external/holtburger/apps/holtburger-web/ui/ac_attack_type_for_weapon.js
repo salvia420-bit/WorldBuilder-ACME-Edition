@@ -176,28 +176,105 @@
  * a separate Unarmed skill. The acpedia Light Weapons page confirms
  * "Also helps you punch and kick" — the skill explicitly subsumes
  * pre-MoA UnarmedCombat. Skill-gating happens server-side; the
- * AttackType code we send to the CMT stays `Punch = 0x01`.
+ * AttackType code we send to the CMT stays `Punch = 0x01` (or `Kick`,
+ * see Phase 21 below).
  *
- * **Known limitation (deferred to a future wave):** ACE's CMT for the
- * HandCombat stance has BOTH `Punch*` and `Kick*` rows. Per
- * `acpedia-combat-research-2026-05-26.md` (Light Weapons section): the
- * wiki's Combat-page maneuver table maps "Unarmed stance → Kick (Full
- * PB) / Punch (Medium PB) / Jab (Low PB)" — so different power-bar
- * positions select Kick vs Punch motions on the same height. This
- * helper always returns `Punch (0x01)` regardless of power level; we
- * miss the Kick row on full-power unarmed swings. Fixing it requires
- * either (a) passing `powerLevel` + `attackHeight` into this helper and
- * branching to `Kick = 0x08` for the Kick-family rows, or (b) letting
- * the CMT picker (`getCombatManeuver`) handle the Kick vs Punch
- * choice at lookup time. The latter is cleaner — Kick and Punch live
- * under different `attackType` map keys in the CMT tree, so we'd need
- * to widen the lookup to try both keys and let the candidate-selection
- * algorithm pick. Either path is non-trivial; tracked in §TODO below
- * as "height-aware AttackType selection for unarmed". The legacy
- * `Skill.UnarmedCombat` (Skill enum value 14, `Skill.cs:26`) is
- * retained in ACE only for legacy/data-migration paths — see
- * `WorldObject_Weapon.cs:851` for the legacy-skill compat list in
- * `GetImbuedSkillType`. It is NOT what gates unarmed swings on
+ * ### Phase 21 (Unarmed AttackType height vs power audit) — 2026-05-26 (Wave 7)
+ *
+ * **Resolution: retail/ACE resolves unarmed AttackType via POWER LEVEL,
+ * not attack height, and there is NO separate "Jab" AttackType.**
+ *
+ * Five-source audit (in priority order):
+ *
+ *   1. **ACE swing dispatch — `Player_Melee.cs:462`:**
+ *      ```csharp
+ *      // ~/ace-server/Source/ACE.Server/WorldObjects/Player_Melee.cs:440-475
+ *      // GetSwingAnimation():
+ *      var weapon = GetEquippedMeleeWeapon();
+ *      if (weapon != null) {
+ *          AttackType = weapon.GetAttackType(stance, PowerLevel, offhand);
+ *      } else {
+ *          // ← THE UNARMED BRANCH (the one we cared about):
+ *          AttackType = PowerLevel > KickThreshold && !IsDualWieldAttack
+ *              ? AttackType.Kick
+ *              : AttackType.Punch;
+ *      }
+ *      ```
+ *      with `KickThreshold = 0.75f` declared at `Player_Melee.cs:432`.
+ *      Unarmed never reaches `WorldObject_Weapon.cs:1050 GetAttackType`
+ *      at all (no weapon entity to read `W_AttackType` from); the unarmed
+ *      AttackType decision lives entirely in `Player_Melee.GetSwingAnimation`.
+ *
+ *   2. **CMT 0x30000000 HandCombat (stance 0x8000003C) row inventory:**
+ *      Direct dump via `crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs`
+ *      against `~/ac_base_dats/client_portal.dat` (2026-05-26):
+ *      ```
+ *      h=High (1):  Punch motion=0x10000065, Kick motion=0x10000068,
+ *                   OffhandPunch motion=0x10000062
+ *      h=Med  (2):  Punch motion=0x10000063, Punch motion=0x10000066,
+ *                   Kick motion=0x10000069
+ *      h=Low  (3):  Punch motion=0x10000064, Punch motion=0x10000067,
+ *                   Kick motion=0x1000006A
+ *      ```
+ *      Both Kick AND Punch rows exist at all three heights, so the CMT
+ *      data itself rules out the "Kick is height-gated" hypothesis. The
+ *      AttackType column is what discriminates them.
+ *
+ *   3. **MotionCommand enum (`MotionCommand.cs:407-412` only has
+ *      `PunchFastHigh/Med/Low` and `PunchSlowHigh/Med/Low` for offhand
+ *      duals — `0x1000018f` through `0x10000194`). The base HandCombat
+ *      motion clips at `0x10000062`-`0x1000006A` are named
+ *      `AttackHigh1/2/3`, `AttackMed1/2/3`, `AttackLow1/2/3` per
+ *      `data/motion-command-names.json` — they're GENERIC motion slots
+ *      whose semantic identity (Punch vs Kick) is supplied by the CMT
+ *      row's `attackType` field. There is NO `Jab*` entry in the entire
+ *      `MotionCommand.cs` enum.
+ *
+ *   4. **Retail acclient.c (Hex-Rays decomp):** the only hits on "Kick"
+ *      / "Punch" outside of the motion-string label table (`OffhandKick`,
+ *      `PunchFastHigh`, etc. at `acclient.c:43841`-`43862`) are
+ *      `gmAllegianceUI::CloseKickConfirmationDialog` and friends — i.e.
+ *      the allegiance "kick vassal" UI dialog, totally unrelated to
+ *      combat. There is no client-side power-threshold-driven AttackType
+ *      selection in the retail client. The client sends the swing
+ *      request + power slider; the server picks the AttackType and the
+ *      resulting motion command. This matches ACE's architecture
+ *      (combat dispatch is server-authoritative).
+ *
+ *   5. **acpedia Combat omnibus (`_ref_Combat.txt:152-165`):** the
+ *      maneuver table verbatim:
+ *      ```
+ *      Kick   | Unarmed | Full   | 150%
+ *      Punch  | Unarmed | Medium | 100%
+ *      Jab    | Unarmed | Low    |  50%
+ *      ```
+ *      The "Full/Medium/Low" column is **Power Bar** (the table header
+ *      sequence "Maneuver / Weapon Class / Power Bar / Damage"). The
+ *      "Jab" entry is the wiki's marketing name for a low-power Punch
+ *      — there is no Jab AttackType enum value (`AttackType.cs:8-25`),
+ *      no Jab MotionCommand, and no server-side Jab branch. At low and
+ *      medium power, ACE emits `AttackType.Punch` and the CMT runtime's
+ *      multi-candidate Punch rows (two Punch motions per Med/Low height)
+ *      give the visual variety the wiki labels "Jab" vs "Punch".
+ *
+ * **Implementation:** extended `inferAttackTypeForWeapon(weapon, opts)`
+ * with optional `opts.powerLevel: number` (0..1) + `opts.isDualWield:
+ * boolean`. When `weapon == null` (unarmed):
+ *
+ *   - `powerLevel > 0.75 && !isDualWield` → `Kick = 0x08`
+ *   - otherwise → `Punch = 0x01`
+ *
+ * The `!isDualWield` clause exactly mirrors `Player_Melee.cs:462`
+ * (`!IsDualWieldAttack`). Backward-compat: callers passing only the
+ * weapon argument (one-arg form) get the legacy `Punch = 0x01` answer
+ * regardless of power. Wiring `opts.powerLevel` from `picking.js` and
+ * `index.html`'s `dispatchRemoteSwing` call sites is a follow-on (the
+ * power slider state is already in scope there per
+ * `picking.js:462 cb.powerLevel`); the signature extension here is
+ * non-breaking. The legacy `Skill.UnarmedCombat` (Skill enum value 14,
+ * `Skill.cs:26`) is retained in ACE only for legacy/data-migration
+ * paths — see `WorldObject_Weapon.cs:851` for the legacy-skill compat
+ * list in `GetImbuedSkillType`. It is NOT what gates unarmed swings on
  * post-MoA servers.
  *
  * ### Phase 6 (ranged) audit finding — 2026-05-26 (Wave 2)
@@ -258,15 +335,18 @@
  *   is still open but lower priority — `GetAttackType` ignores
  *   WeaponType anyway, so it's only needed for the future damage /
  *   classification follow-ons.
- * - **Height-aware AttackType selection for unarmed** (Phase 14
- *   limitation): widen this helper's signature to accept
- *   `(weapon, attackHeight, powerLevel)` and branch to `Kick = 0x08`
- *   on the full-PB Kick row, `Punch = 0x01` on medium, and we'd need
- *   a new attackType code for "Jab" (low) — the acpedia Combat-page
- *   maneuver table calls out three distinct unarmed motions per
- *   height. Alternative: extend `getCombatManeuver` to fall through
- *   adjacent attackType keys when the first miss. Either path is
- *   non-trivial; tracked here so a future agent doesn't re-discover.
+ * - ~~**Height-aware AttackType selection for unarmed**~~
+ *   **DONE — Wave 7 / Phase 21 (2026-05-26).** Audit established it's
+ *   POWER-level driven (not height) and there's no Jab AttackType — see
+ *   the "Phase 21 (Unarmed AttackType height vs power audit)" section
+ *   above for the five-source audit. The helper now accepts
+ *   `opts.powerLevel` (0..1) and `opts.isDualWield` and returns
+ *   `Kick = 0x08` when `powerLevel > 0.75 && !isDualWield` for unarmed,
+ *   matching `Player_Melee.cs:462` verbatim. Existing one-arg callers
+ *   still get the legacy `Punch = 0x01` answer (backward-compat).
+ *   Wiring `opts.powerLevel` through from the picking.js melee branch
+ *   and the index.html dispatchRemoteSwing call site is a thin follow-on
+ *   (the power slider value is already in scope at both sites).
  * - Wave 3 (ranged aim-level): port `Creature_Missile.cs::GetAimLevel`
  *   (z-angle → AimHigh{15,30,45,60,75,90} / AimLevel / AimLow{...})
  *   into a sibling helper at `ui/ac_aim_level_for_velocity.js` and
@@ -349,17 +429,44 @@ void EQUIP_MASK_SHIELD;
  */
 
 /**
+ * Optional inputs that refine the AttackType decision. Today only the
+ * unarmed (null-weapon) branch consults them; all weapon branches read
+ * directly from `weapon.attackType` / `weapon.equipMask` instead.
+ *
+ * @typedef {Object} InferAttackTypeOpts
+ * @property {number}  [powerLevel]  Combat-bar power, 0..1. Only used
+ *                                   for the unarmed branch (`weapon ==
+ *                                   null`). When `> 0.75 && !isDualWield`
+ *                                   the helper returns `Kick = 0x08`
+ *                                   instead of `Punch = 0x01`,
+ *                                   matching `Player_Melee.cs:462`.
+ *                                   Omitted/NaN/undefined → treated as
+ *                                   0 (Punch).
+ * @property {boolean} [isDualWield] Whether the swing is part of a
+ *                                   dual-wield combo. Mirrors ACE's
+ *                                   `IsDualWieldAttack` check at
+ *                                   `Player_Melee.cs:462` — dual-wield
+ *                                   unarmed swings can't kick (the
+ *                                   offhand fist takes the slot).
+ *                                   Default `false`.
+ */
+
+/**
  * Infer the primary AttackType bitmask for the given equipped weapon
  * record. See module docstring for the full mapping table + ACE
  * source citations.
  *
- * **Precedence (Wave 6 / Phase 15, 2026-05-26):**
- *   1. Wire `W_AttackType` (`weapon.attackType`) when non-zero — used
+ * **Precedence (Wave 6 / Phase 15, 2026-05-26 + Wave 7 / Phase 21):**
+ *   1. **Unarmed** (`weapon == null`): power-driven Kick/Punch per
+ *      `Player_Melee.cs:462`. `opts.powerLevel > 0.75 && !opts.isDualWield`
+ *      → `Kick = 0x08`; otherwise → `Punch = 0x01`. One-arg callers
+ *      (no opts) get the legacy `Punch = 0x01` answer (backward-compat).
+ *   2. Wire `W_AttackType` (`weapon.attackType`) when non-zero — used
  *      verbatim; may carry multi-bit values like `Thrust|Slash = 0x06`
  *      which the CMT picker resolves at lookup time.
- *   2. EquipMask heuristic — legacy fallback for pre-property-arrival
+ *   3. EquipMask heuristic — legacy fallback for pre-property-arrival
  *      ObjectCreate events.
- *   3. `Undef = 0` — caller's fallback constant kicks in.
+ *   4. `Undef = 0` — caller's fallback constant kicks in.
  *
  * Return value can be either a single-bit or multi-bit
  * `ATTACK_TYPE` value. Single bits are the common CMT-row key
@@ -370,33 +477,56 @@ void EQUIP_MASK_SHIELD;
  * branch.
  *
  * @param {EquippedWeapon | null | undefined} weapon
+ * @param {InferAttackTypeOpts} [opts]  optional refinement inputs;
+ *                                       currently only used by the
+ *                                       unarmed branch. Omit for
+ *                                       legacy (Wave 6) behaviour.
  * @returns {number} `ATTACK_TYPE.*` bitmask (single- or multi-bit when
- *   the wire path is used; single-bit Punch/Slash/Undef from the
+ *   the wire path is used; single-bit Punch/Kick/Slash/Undef from the
  *   legacy heuristic fallback).
  */
-export function inferAttackTypeForWeapon(weapon) {
-  // Unarmed — Punch is the dominant melee row under HandCombat stance
-  // in CMT 0x30000000 (verified against the parity dump). ACE's
-  // `Unarmed = Punch | Kick | OffhandPunch` composite is for damage
-  // calc, not for animation table lookup.
+export function inferAttackTypeForWeapon(weapon, opts) {
+  // Unarmed — Wave 7 / Phase 21 (2026-05-26): power-driven Kick/Punch.
+  // ACE's `Unarmed = Punch | Kick | OffhandPunch` composite is for
+  // damage calc, not for animation table lookup; the *animation* AttackType
+  // is one of {Punch, Kick, OffhandPunch} resolved per-swing.
+  //
+  // **Decision (`Player_Melee.cs:462`):**
+  //   ```csharp
+  //   AttackType = PowerLevel > KickThreshold && !IsDualWieldAttack
+  //       ? AttackType.Kick   // 0x08, full PB
+  //       : AttackType.Punch; // 0x01, medium-or-lower PB
+  //   ```
+  //   where `KickThreshold = 0.75f` at `Player_Melee.cs:432`.
   //
   // **Skill gating (post-Master-of-Arms, Feb 2012):** Unarmed strikes
   // are gated by `Skill.LightWeapons` (Skill enum value 47, per
   // `~/ace-server/Source/ACE.Entity/Enum/Skill.cs:58`), NOT by a
   // separate Unarmed skill. The legacy `Skill.UnarmedCombat` (value
-  // 14) exists in ACE only for pre-MoA data-migration paths (see
-  // `WorldObject_Weapon.cs:851` legacy-skill compat list); on a
-  // modern ACE server, LightWeapons is the gating skill. The
-  // AttackType we send to the CMT is `Punch` regardless of the
-  // server-side skill check.
+  // 14) exists in ACE only for pre-MoA data-migration paths.
   //
-  // **Known limitation (Phase 14 audit):** The CMT has both `Punch*`
-  // and `Kick*` rows under HandCombat; per the acpedia Combat-page
-  // maneuver table, Unarmed stance maps Kick to Full power, Punch to
-  // Medium, and Jab to Low. We always return `Punch (0x01)` which
-  // makes the helper play Punch motions across all power levels. The
-  // Kick-row fix is tracked in the §TODO list above.
-  if (weapon == null) return ATTACK_TYPE.Punch;
+  // **No "Jab" AttackType:** the acpedia Combat omnibus lists
+  // "Jab (Low PB / 50%)" as a third unarmed maneuver, but
+  // (a) `AttackType.cs:8-25` has no Jab value, (b)
+  // `MotionCommand.cs` has no Jab* entry, and (c) the CMT actually
+  // carries TWO Punch motions per non-High height (`0x10000063` +
+  // `0x10000066` at h=Med; `0x10000064` + `0x10000067` at h=Low) —
+  // the picker's alternation or power-subdivision logic in
+  // `getCombatManeuver` is what gives the wiki's "Jab" vs "Punch"
+  // visual variety at low power. The wire-level AttackType is
+  // `Punch` in both cases.
+  //
+  // Backward-compat: callers passing only the weapon argument
+  // (no opts) get the legacy `Punch = 0x01` answer regardless of
+  // power. Verified against Wave 6's 4-case precedence check
+  // (`inferAttackTypeForWeapon(null) → 0x01`) — see plan line 948.
+  if (weapon == null) {
+    const powerLevel = Number.isFinite(opts?.powerLevel) ? opts.powerLevel : 0;
+    const isDualWield = opts?.isDualWield === true;
+    // `>` not `>=` to match ACE's `PowerLevel > KickThreshold` exactly.
+    if (powerLevel > 0.75 && !isDualWield) return ATTACK_TYPE.Kick;
+    return ATTACK_TYPE.Punch;
+  }
 
   // ── Wave 6 / Phase 15 (2026-05-26): wire `W_AttackType` ──
   // `PropertyInt::AttackType = 47` is now surfaced on both the local
