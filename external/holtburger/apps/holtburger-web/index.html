@@ -996,6 +996,7 @@
       import * as optionsPanelPlugin from "./plugins/options-panel.js";
       import * as spellResearchPlugin from "./plugins/spell-research-panel.js";
       import * as housePanelPlugin from "./plugins/house-panel.js";
+      import * as debugOverlayPlugin from "./plugins/debug-overlay.js";
       import "./plugins/compass-hud.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
@@ -1240,6 +1241,10 @@
       //   F1 Character    F2 Spellbook   F3 Map        F4 Inventory
       //   F5 Spellbook    F6 Journal     F7 Contracts  F8 Allegiance
       //   F9 Fellowship   F10 Options (PR-II 2026-05-23)
+      // Shift+F4 toggles the Spell Research panel; Shift+F6 toggles the
+      // House panel. These overlays live outside main-panel's view set
+      // (each is its own document-body overlay), so they need their own
+      // hotkey rather than a FKEY_VIEWS entry.
       // Examine is no longer auto-fired on selection (regression fix
       // 2026-05-22): clicking a vendor / NPC now passes through to the
       // interact path. Open examine via main-panel toggle if needed.
@@ -1255,10 +1260,22 @@
         F9: "fellowship",
         F10: "options",
       };
+      const FKEY_SHIFT_TOGGLES = {
+        F4: () => window.__toggleSpellResearchPanel?.(),
+        F6: () => window.__toggleHousePanel?.(),
+      };
       window.addEventListener("keydown", (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const tag = ev.target?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (ev.shiftKey) {
+          const fn = FKEY_SHIFT_TOGGLES[ev.key];
+          if (fn) {
+            ev.preventDefault();
+            fn();
+          }
+          return;
+        }
         const view = FKEY_VIEWS[ev.key];
         if (view) {
           ev.preventDefault();
@@ -8183,6 +8200,20 @@ void main() {
                 // pre-CharacterTitle).
                 if (window.__pluginClient?.events) {
                   window.__pluginClient.events.emit("titleUpdated", {});
+                }
+              } else if (evt.kind === 29) {
+                // Q1a (2026-05-26): Death. ACE pushed
+                // `GameMessage::PlayerKilled` — canonical death
+                // broadcast with victim + killer GUIDs and the
+                // pre-formatted message. Closes Chorizite EventArgs
+                // row 15 (Character.OnDeath). The combat-hud plugin
+                // subscribes for the "You died." self-death overlay.
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("death", {
+                    victimGuid: (evt.u32Payload >>> 0) || 0,
+                    killerGuid: (evt.u32Payload2 >>> 0) || 0,
+                    message: evt.stringPayload || "",
+                  });
                 }
               } else if (evt.kind === 13) {
                 // Phase 4 step 5: UseFailed (WeenieError /

@@ -19,7 +19,7 @@
 // | 2 | World.OnWeenieReleased              | WorldObject Object                             | EntityUpdate kind=2 REMOVE| PARTIAL     | no bus event "objectReleased" (TODO)                                 |
 // | 3 | World.OnContainerOpened             | Container Container                            | kind=12 vendorOpened + kind=21 containerOpened | IMPLEMENTED | PR-HH 2026-05-23: ViewContents (opcode 0x0196) routed to kind=21 for chests/corpses; vendor stays on kind=12 |
 // | 4 | World.OnContainerClosed             | Container Container                            | —                         | MISSING     | StopViewingObjectContents not surfaced as ClientEvent (TODO)         |
-// | 5 | World.OnSelectionChanged            | WorldObject? Object                            | —                         | MISSING     | selection is local picking.js state, not bus-broadcast (TODO)        |
+// | 5 | World.OnSelectionChanged            | WorldObject? Object                            | "selectionChanged" bus    | IMPLEMENTED | Q1b (2026-05-26): scene3d/picking.js emits {guid, prevGuid} on every change |
 // | 6 | Game.OnStateChanged                 | ClientState NewState, OldState                 | kinds {1,4,5,6,7} partial | PARTIAL     | no single "stateChanged" with old→new; spread across kinds (TODO)    |
 // | 7 | Game.OnCharactersChanged            | EventArgs.Empty (re-fire roster)               | kind=0 CharacterListRecv  | IMPLEMENTED | renderCharacterList drains kind=0 each fire                          |
 // | 8 | Game.OnWorldInfo                    | EventArgs.Empty (ServerName/Max/Cur)           | —                         | MISSING     | Login_WorldInfo parsed but not surfaced as ClientEvent (TODO)        |
@@ -29,7 +29,7 @@
 // |12 | Character.OnSharedCooldownChanged   | AddRemove Type, SharedCooldown                 | —                         | MISSING     | shared-cooldown bus not wired (TODO)                                 |
 // |13 | Character.OnPortalSpaceEntered      | EventArgs.Empty                                | —                         | MISSING     | portal-space (loading screen) entered/exited not exposed (TODO)      |
 // |14 | Character.OnPortalSpaceExited       | EventArgs.Empty                                | kind=7 ENTERED_WORLD (~)  | PARTIAL     | EnteredWorld covers the post-portal arrival; entry edge missing (TODO)|
-// |15 | Character.OnDeath                   | string Text, uint KillerId                     | —                         | MISSING     | death text routes to chat (kind=2) only; no structured event (TODO)  |
+// |15 | Character.OnDeath                   | string Text, uint KillerId                     | kind=29 "death"           | IMPLEMENTED | Q1a (2026-05-26): emits {victimGuid, killerGuid, message} on PlayerKilled; combat-hud overlays self-deaths |
 // |16 | PatchProgress.OnProgressChanged     | EventArgs.Empty (aggregated)                   | —                         | N/A         | retail-client patch flow; browser ships pre-built DATs               |
 // |17 | PatchProgress.OnConnectProgress     | EventArgs.Empty                                | —                         | N/A         | retail-client connect handshake; browser uses WebSocket/UDP-relay    |
 // |18 | PatchProgress.OnPatchProgress       | EventArgs.Empty                                | —                         | N/A         | retail-client DAT patcher; browser bake pipeline owns content        |
@@ -44,6 +44,7 @@
 // kind=17 EntityVisibilityChanged— PhysicsState draw-gate; would be WorldObject.OnVisibilityChanged
 // kind=18 EntityAirborneChanged  — jump arc visual; would be Character.OnAirborneChanged (not in Chorizite)
 // kind=19 CombatEvent            — emits "damageDealt"/"damageTaken"/"evadedTarget"/"evadedAttacker"/"attackDone" on bus; ACE-side semantic event family
+// kind=29 Death                  — emits "death" {victimGuid, killerGuid, message}; combat-hud subscribes for self-death overlay
 //
 // ---- Bus-emitted events (canonical list — subscribe via client.events.on) ----
 //   "playerStatsUpdated"   (kind=8)         — vitals/skills/attrs refreshed
@@ -54,10 +55,12 @@
 //   "evadedTarget"         (kind=19 JSON)   — {defenderName} (you missed)
 //   "evadedAttacker"       (kind=19 JSON)   — {attackerName} (they missed)
 //   "attackDone"           (kind=19 JSON)   — {error}        ("None" on success)
+//   "death"                (kind=29)        — {victimGuid, killerGuid, message} (Q1a)
+//   "selectionChanged"     (client-only)    — {guid, prevGuid} emitted from scene3d/picking.js on every target change (Q1b)
 //
-// Counts: 1 IMPLEMENTED, 6 PARTIAL, 8 MISSING, 3 N/A — total 18 Chorizite events.
-// Backlog gap-fill order (highest plugin-leverage first): #11 Enchantment, #15 Death,
-// #4 ContainerClosed, #5 SelectionChanged, #6 StateChanged (unified), #8 WorldInfo,
+// Counts: 3 IMPLEMENTED, 6 PARTIAL, 6 MISSING, 3 N/A — total 18 Chorizite events.
+// Backlog gap-fill order (highest plugin-leverage first): #11 Enchantment,
+// #4 ContainerClosed, #6 StateChanged (unified), #8 WorldInfo,
 // then #12 SharedCooldown / #13 PortalSpaceEntered. See CHORIZITE_PORTING_PLAN.md §3.4.
 // =============================================================================
 
@@ -85,7 +88,7 @@ export function createClient(sessionHandle) {
   // row 3: DONE (PR-HH 2026-05-23) — kind=21 containerOpened fires for
   // non-vendor containers (chest/corpse/salvage bag); vendor still on kind=12.
   // TODO(coverage-table row 4):  add "containerClosed" (StopViewingObjectContents → new ClientEvent kind)
-  // TODO(coverage-table row 5):  add "selectionChanged" bus event (picking.js owns local state today)
+  // row 5: DONE (Q1b 2026-05-26) — scene3d/picking.js emits "selectionChanged" {guid, prevGuid} on every change.
   // TODO(coverage-table row 6):  add unified "stateChanged" {oldState,newState} bus event
   // TODO(coverage-table row 8):  add "worldInfo" bus event (ServerName/MaxConnections/CurrentConnections)
   // TODO(coverage-table row 9):  split kind=8 into per-vital "vitaeChanged" with old/new
@@ -94,7 +97,7 @@ export function createClient(sessionHandle) {
   // TODO(coverage-table row 12): add "sharedCooldownChanged" {type,cooldown} bus event
   // TODO(coverage-table row 13): add "portalSpaceEntered" bus event
   // TODO(coverage-table row 14): add "portalSpaceExited" bus event (kind=7 covers exit-equivalent only)
-  // TODO(coverage-table row 15): add structured "death" {text,killerId} bus event
+  // row 15: DONE (Q1a 2026-05-26) — kind=29 "death" {victimGuid,killerGuid,message}; combat-hud overlays self-deaths.
 
   const player = Object.freeze({
     jump(power) {

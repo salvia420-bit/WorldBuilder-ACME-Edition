@@ -687,6 +687,10 @@ function closePanel() {
 if (typeof window !== "undefined") {
   window.__openHousePanel = openPanel;
   window.__closeHousePanel = closePanel;
+  window.__toggleHousePanel = () => {
+    if (overlayEl?.dataset.open === "1") closePanel();
+    else openPanel();
+  };
 }
 
 export const manifest = {

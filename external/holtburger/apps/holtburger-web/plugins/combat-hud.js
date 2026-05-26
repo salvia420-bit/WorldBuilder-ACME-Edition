@@ -77,6 +77,8 @@ const COMBAT_HUD_ELEMS = {
 
 const OVERLAY_ID = "hb-combat-hud";
 const STYLE_ID   = "hb-combat-hud-style";
+const DEATH_OVERLAY_ID = "hb-combat-hud-death";
+const DEATH_STYLE_ID   = "hb-combat-hud-death-style";
 const SP = "./data/ui-sprites";
 
 function ensureStyles() {
@@ -479,6 +481,76 @@ function hide() {
   state.visible = false;
 }
 
+// Q1a (2026-05-26): "You died." overlay — fires off the kind=29
+// Death bus event when victim matches local player. Cream serif on
+// black-tinted backdrop, brass border, 3s auto-fade. No respawn
+// button here (deferred to Wave R).
+function ensureDeathStyles() {
+  if (document.getElementById(DEATH_STYLE_ID)) return;
+  const s = document.createElement("style");
+  s.id = DEATH_STYLE_ID;
+  s.textContent = `
+    #${DEATH_OVERLAY_ID} {
+      position: fixed;
+      top: 38%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      min-width: 320px;
+      padding: 28px 48px;
+      background: rgba(0, 0, 0, 0.78);
+      border: 2px solid var(--hb-border-brass);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.75);
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      font-size: 28px;
+      letter-spacing: 0.08em;
+      text-align: center;
+      text-shadow: 0 2px 0 rgba(0, 0, 0, 0.9);
+      pointer-events: none;
+      z-index: 90;
+      opacity: 0;
+      transition: opacity 280ms ease-out;
+    }
+    #${DEATH_OVERLAY_ID}[data-open="1"] { opacity: 1; }
+  `;
+  document.head.appendChild(s);
+}
+
+let deathOverlayTimer = null;
+
+function showDeathOverlay(message) {
+  ensureDeathStyles();
+  let ov = document.getElementById(DEATH_OVERLAY_ID);
+  if (!ov) {
+    ov = document.createElement("div");
+    ov.id = DEATH_OVERLAY_ID;
+    document.body.appendChild(ov);
+  }
+  setAcText(ov, message || "You died.");
+  // Force reflow so the opacity transition retriggers if the overlay
+  // is already mounted (rapid back-to-back deaths in PK).
+  ov.dataset.open = "0";
+  void ov.offsetWidth;
+  ov.dataset.open = "1";
+  if (deathOverlayTimer) clearTimeout(deathOverlayTimer);
+  deathOverlayTimer = setTimeout(() => {
+    ov.dataset.open = "0";
+    deathOverlayTimer = setTimeout(() => {
+      ov.remove();
+      deathOverlayTimer = null;
+    }, 320);
+  }, 3000);
+}
+
+function onDeath(ev) {
+  const detail = ev?.detail || {};
+  const victim = (detail.victimGuid >>> 0) || 0;
+  let localGuid = 0;
+  try { localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0; } catch { localGuid = 0; }
+  if (localGuid === 0 || victim !== localGuid) return;
+  showDeathOverlay("You died.");
+}
+
 export const manifest = {
   id: "combat-hud",
   name: "Combat HUD",
@@ -502,12 +574,27 @@ export function mount(_ctx) {
     else if (!inCombat && state.visible) hide();
   }, 250);
 
+  // Q1a: subscribe to the Death bus event for the self-death overlay.
+  const pc = window.__pluginClient;
+  if (pc?.events?.on) {
+    pc.events.on("death", onDeath);
+  }
+
   return () => {
     clearInterval(t);
     if (state.overlayEl) {
       state.overlayEl.remove();
       state.overlayEl = null;
     }
+    if (pc?.events?.off) {
+      pc.events.off("death", onDeath);
+    }
+    if (deathOverlayTimer) {
+      clearTimeout(deathOverlayTimer);
+      deathOverlayTimer = null;
+    }
+    const dov = document.getElementById(DEATH_OVERLAY_ID);
+    if (dov) dov.remove();
   };
 }
 

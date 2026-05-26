@@ -277,7 +277,19 @@ export function setupClickPicking({
     // Phase D — mark the clicked entity as the current target so
     // subsequent clicks (or the future combat-bar HUD) can read it.
     // Selection persists until another entity is picked.
+    // Q1b (2026-05-26): emit `selectionChanged` on the plugin bus
+    // so subscribers (combat-bar, radial-menu, examine-target) can
+    // react without polling getSelectedTarget. Skip redundant sets.
+    const prevGuid =
+      (liveScene3d.entityManager?.getSelectedTarget?.() ?? 0) >>> 0;
+    const newGuid = (guid >>> 0) || 0;
     liveScene3d.entityManager?.setSelectedTarget?.(guid);
+    if (newGuid !== prevGuid && window.__pluginClient?.events) {
+      window.__pluginClient.events.emit("selectionChanged", {
+        guid: newGuid,
+        prevGuid,
+      });
+    }
     try {
       const cb = window.__combatBarState;
 

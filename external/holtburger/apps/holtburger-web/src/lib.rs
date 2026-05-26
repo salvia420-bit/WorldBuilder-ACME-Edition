@@ -12625,6 +12625,19 @@ const CLIENT_EVENT_KIND_SQUELCH_UPDATED: u32 = 27;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_TITLE_UPDATED: u32 = 28;
 
+/// `kind = 29` — Death. ACE sent `GameMessage::PlayerKilled` (opcode
+/// 0xF755) — the authoritative death broadcast carrying both
+/// `victim_id` and `killer_id` GUIDs plus the pre-formatted
+/// "X has been slain by Y!" line. Fires for every death broadcast
+/// (player or NPC); JS filters by checking `u32Payload === localGuid`
+/// for self-death overlays. Closes Chorizite EventArgs coverage row 15
+/// (Character.OnDeath) — see CHORIZITE_PORTING_PLAN.md §3.4.
+/// `stringPayload` = `death_message`; `u32Payload` = victim GUID;
+/// `u32Payload2` = killer GUID. Fires alongside (not instead of) the
+/// existing kind=2 chat line for back-compat with chat-tab routing.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_DEATH: u32 = 29;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -13272,6 +13285,15 @@ enum SessionCommand {
 ///   `soundTableCache.resolveSound(stbDid, soundEnum)` and plays the
 ///   resulting Wave via `audioManager.play(...)` at the entity's
 ///   world position with `gain = entry.volume * scale`.
+/// - `kind = 29` — Death (Q1a 2026-05-26). Fired when ACE broadcasts
+///   `GameMessage::PlayerKilled` — the canonical death packet
+///   carrying both victim + killer GUIDs and the pre-formatted death
+///   message. Fires alongside (not instead of) the kind=2 chat line
+///   so the chat-tab routing keeps working. `stringPayload` =
+///   death_message; `u32Payload` = victim GUID; `u32Payload2` =
+///   killer GUID. JS-side filters by `u32Payload === localGuid` for
+///   self-death overlays; the combat-hud plugin subscribes via
+///   `client.events.on("death", ...)` for the "You died." overlay.
 ///
 /// Entity spawn / position / remove events do NOT flow through
 /// this stream — they live on the parallel high-frequency channel
@@ -22471,6 +22493,18 @@ async fn recv_loop(
                                 string_payload: Some(data.death_message.clone()),
                                 u32_payload: Some(u32::from(data.killer_id)),
                                 u32_payload_2: Some(CHAT_CATEGORY_DEATH),
+                                f32_payload: None,
+                            });
+                            // Q1a (2026-05-26): structured Death event.
+                            // Chorizite Character.OnDeath analogue —
+                            // JS-side filters by victim==local for the
+                            // "You died." overlay; lets plugins
+                            // subscribe without polling chat text.
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DEATH,
+                                string_payload: Some(data.death_message.clone()),
+                                u32_payload: Some(u32::from(data.victim_id)),
+                                u32_payload_2: Some(u32::from(data.killer_id)),
                                 f32_payload: None,
                             });
                         }

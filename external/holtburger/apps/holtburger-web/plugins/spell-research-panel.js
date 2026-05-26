@@ -943,4 +943,8 @@ export function closePanel() {
 if (typeof window !== "undefined") {
   window.__openSpellResearchPanel = openPanel;
   window.__closeSpellResearchPanel = closePanel;
+  window.__toggleSpellResearchPanel = () => {
+    if (state.overlayEl?.dataset.open === "1") closePanel();
+    else openPanel();
+  };
 }
