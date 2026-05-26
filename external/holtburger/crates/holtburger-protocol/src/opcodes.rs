@@ -502,14 +502,14 @@ pub enum GameActionOpcode {
     // FellowshipChangeOpenness = 0x0291,
 
     // --- Housing ---
-    // /// C2S: Purchase a selected house.
-    // BuyHouse = 0x021C,
-    // /// C2S: Query detailed information about a house.
-    // HouseQuery = 0x021E,
-    // /// C2S: Evict oneself from currently owned house.
-    // AbandonHouse = 0x021F,
-    // /// C2S: Pay the weekly rent for the house.
-    // RentHouse = 0x0221,
+    /// C2S: Purchase a selected house.
+    BuyHouse = 0x021C,
+    /// C2S: Query detailed information about a house.
+    HouseQuery = 0x021E,
+    /// C2S: Evict oneself from currently owned house.
+    AbandonHouse = 0x021F,
+    /// C2S: Pay the weekly rent for the house.
+    RentHouse = 0x0221,
     // /// C2S: Add a player to the house's permanent guest list.
     // AddPermanentGuest = 0x0245,
     // /// C2S: Remove a player from the permanent guest list.

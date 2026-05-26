@@ -9,6 +9,7 @@ pub mod friends;
 pub mod game_action;
 pub mod game_event;
 pub mod game_message;
+pub mod house;
 pub mod inventory;
 pub mod magic;
 pub mod misc;

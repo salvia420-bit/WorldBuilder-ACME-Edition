@@ -12945,6 +12945,30 @@ enum SessionCommand {
     FellowshipAssignNewLeader {
         new_leader_guid: u32,
     },
+    /// House: purchase a house. Maps to `GameAction::BuyHouse`
+    /// (sub-opcode 0x021C). Wire payload is the slumlord NPC guid plus
+    /// a PackableList<uint> of item guids (pyreals / trade notes etc.)
+    /// being tendered as payment.
+    BuyHouse {
+        slumlord_guid: u32,
+        item_guids: Vec<u32>,
+    },
+    /// House: query the local player's currently-owned house. Maps to
+    /// `GameAction::HouseQuery` (sub-opcode 0x021E). Empty payload —
+    /// ACE looks up the owned house from server-side state.
+    HouseQuery,
+    /// House: abandon (evict self from) the currently-owned house.
+    /// Maps to `GameAction::AbandonHouse` (sub-opcode 0x021F). Empty
+    /// payload; destructive — ACE flags the house as un-owned.
+    AbandonHouse,
+    /// House: pay weekly rent. Maps to `GameAction::RentHouse`
+    /// (sub-opcode 0x0221). Same wire shape as BuyHouse — slumlord
+    /// guid + PackableList<uint> of item guids being used to cover
+    /// the rent owed.
+    RentHouse {
+        slumlord_guid: u32,
+        item_guids: Vec<u32>,
+    },
     /// Trade: initiate a peer-to-peer trade negotiation with another
     /// player. Maps to `GameAction::OpenTradeNegotiations` (sub-opcode
     /// 0x01F6). ACE validates the partner is a Player (not NPC),
@@ -18221,6 +18245,74 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = getObjectInscription)]
     pub fn get_object_inscription(&self, guid: u32) -> Option<String> {
         self.latest_inscriptions.borrow().get(&guid).cloned()
+    }
+
+    /// Housing — purchase a house from the given slumlord NPC. Sends
+    /// `GameAction::BuyHouse` (sub-opcode 0x021C). `item_guids` are the
+    /// player-owned items being tendered as payment (pyreals, trade
+    /// notes). ACE validates ownership, slumlord proximity, and the
+    /// payment total server-side.
+    #[wasm_bindgen(js_name = buyHouse)]
+    pub fn buy_house(
+        &self,
+        slumlord_guid: u32,
+        item_guids: Vec<u32>,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BuyHouse {
+                slumlord_guid,
+                item_guids,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("buyHouse: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Housing — query the local player's currently-owned house. Sends
+    /// `GameAction::HouseQuery` (sub-opcode 0x021E). Empty wire payload;
+    /// ACE responds with the player's house profile.
+    #[wasm_bindgen(js_name = houseQuery)]
+    pub fn house_query(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::HouseQuery)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("houseQuery: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Housing — abandon (evict self from) the currently-owned house.
+    /// Sends `GameAction::AbandonHouse` (sub-opcode 0x021F). Empty wire
+    /// payload; destructive — ACE clears the player's house ownership.
+    #[wasm_bindgen(js_name = abandonHouse)]
+    pub fn abandon_house(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AbandonHouse)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("abandonHouse: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Housing — pay weekly rent on the currently-owned house. Sends
+    /// `GameAction::RentHouse` (sub-opcode 0x0221). Same wire shape as
+    /// `BuyHouse` — `item_guids` are the items covering the rent.
+    #[wasm_bindgen(js_name = rentHouse)]
+    pub fn rent_house(
+        &self,
+        slumlord_guid: u32,
+        item_guids: Vec<u32>,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RentHouse {
+                slumlord_guid,
+                item_guids,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("rentHouse: cmd channel closed ({e})"))
+            })
     }
 }
 
@@ -23923,6 +24015,114 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[fellowship/assign-leader] new_leader=0x{new_leader_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::BuyHouse {
+                        slumlord_guid,
+                        item_guids,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            BuyHouseActionData, GameAction,
+                        };
+                        let item_count = item_guids.len();
+                        let log_preview: String = item_guids
+                            .iter()
+                            .take(4)
+                            .map(|g| format!("0x{g:08X}"))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let action = GameAction::BuyHouse(Box::new(BuyHouseActionData {
+                            slumlord_guid: Guid(slumlord_guid),
+                            item_guids: item_guids.into_iter().map(Guid).collect(),
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(BuyHouse): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("buy_house: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[house/buy] slumlord=0x{slumlord_guid:08X} count={item_count} items=[{log_preview}]",
+                        ));
+                    }
+                    Some(SessionCommand::HouseQuery) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, HouseQueryActionData,
+                        };
+                        let action = GameAction::HouseQuery(Box::new(
+                            HouseQueryActionData {},
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(HouseQuery): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("house_query: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str("[house/query]");
+                    }
+                    Some(SessionCommand::AbandonHouse) => {
+                        use holtburger_protocol::messages::{
+                            AbandonHouseActionData, GameAction,
+                        };
+                        let action = GameAction::AbandonHouse(Box::new(
+                            AbandonHouseActionData {},
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(AbandonHouse): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("abandon_house: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str("[house/abandon]");
+                    }
+                    Some(SessionCommand::RentHouse {
+                        slumlord_guid,
+                        item_guids,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, RentHouseActionData,
+                        };
+                        let item_count = item_guids.len();
+                        let log_preview: String = item_guids
+                            .iter()
+                            .take(4)
+                            .map(|g| format!("0x{g:08X}"))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let action = GameAction::RentHouse(Box::new(RentHouseActionData {
+                            slumlord_guid: Guid(slumlord_guid),
+                            item_guids: item_guids.into_iter().map(Guid).collect(),
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(RentHouse): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("rent_house: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[house/rent] slumlord=0x{slumlord_guid:08X} count={item_count} items=[{log_preview}]",
                         ));
                     }
                     Some(SessionCommand::OpenTrade { partner_guid }) => {

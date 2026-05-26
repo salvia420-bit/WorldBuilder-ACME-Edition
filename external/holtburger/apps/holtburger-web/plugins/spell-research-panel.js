@@ -317,6 +317,38 @@ function ensureStyles() {
       background: var(--hb-border-brass-deep);
       border: 1px solid var(--hb-border-brass-dim);
     }
+    #${OVERLAY_ID} .hb-sr-stance-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      background: #6a6a6a;
+      box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+      flex: 0 0 8px;
+    }
+    #${OVERLAY_ID} .hb-sr-stance-dot[data-ready="1"] {
+      background: #ffd76a;
+      box-shadow: 0 0 4px #ffd76a, 0 0 1px #fff;
+    }
+    #${OVERLAY_ID} .hb-sr-title-row {
+      display: flex;
+      align-items: center;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    #${OVERLAY_ID} .hb-sr-toast {
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: 6px;
+      padding: 4px 6px;
+      font-size: 11px;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.78);
+      border: 1px solid var(--hb-border-brass);
+      color: var(--hb-text-gold);
+      pointer-events: none;
+    }
   `;
   document.head.appendChild(s);
 }
@@ -329,6 +361,7 @@ const state = {
   schoolSel: null,
   levelSel: null,
   searchInput: null,
+  stanceDotEl: null,
   knownIds: [],
   unsubscribe: null,
   pollTimer: null,
@@ -362,6 +395,76 @@ function passesFilter(meta, filters) {
   return true;
 }
 
+function getCurrentStanceLow() {
+  try {
+    const fn = window.__getCurrentStanceLow;
+    return typeof fn === "function" ? (fn() >>> 0) : 0;
+  } catch (_) { return 0; }
+}
+
+function getSelectedTargetGuid() {
+  try {
+    const em = window.liveScene3d?.entityManager;
+    return (em?.getSelectedTarget?.() ?? 0) >>> 0;
+  } catch (_) { return 0; }
+}
+
+function toast(text) {
+  const ov = state.overlayEl;
+  if (!ov) return;
+  const old = ov.querySelector(".hb-sr-toast");
+  if (old) old.remove();
+  const t = document.createElement("div");
+  t.className = "hb-sr-toast";
+  t.textContent = text;
+  ov.appendChild(t);
+  setTimeout(() => { try { t.remove(); } catch (_) {} }, 1750);
+}
+
+function refreshStanceDot() {
+  if (!state.stanceDotEl) return;
+  const ready = getCurrentStanceLow() !== 0;
+  state.stanceDotEl.dataset.ready = ready ? "1" : "0";
+  state.stanceDotEl.title = ready
+    ? "Combat stance active — double-click to cast"
+    : "Enter a combat stance to cast";
+}
+
+function castFromRow(id, meta) {
+  if (getCurrentStanceLow() === 0) {
+    toast("Enter a magic combat stance first.");
+    return;
+  }
+  const untargeted = meta?.untargeted === true;
+  const client = window.__pluginClient ?? null;
+  const handle = window.__sessionHandle ?? null;
+  let targetGuid = 0;
+  if (!untargeted) {
+    targetGuid = getSelectedTargetGuid();
+    if (!targetGuid) {
+      toast("Click an entity first.");
+      return;
+    }
+  }
+  try {
+    if (client?.player?.castSpell) {
+      client.player.castSpell(id, untargeted ? null : targetGuid);
+    } else if (untargeted && handle?.castUntargetedSpell) {
+      handle.castUntargetedSpell(id);
+    } else if (!untargeted && handle?.castTargetedSpell) {
+      handle.castTargetedSpell(targetGuid, id);
+    } else {
+      toast("Cast unavailable — no session.");
+      return;
+    }
+    const targetStr = untargeted ? "0" : `0x${targetGuid.toString(16).toUpperCase()}`;
+    console.log(`[research/cast] spellId=${id} untargeted=${untargeted} target=${targetStr}`);
+  } catch (e) {
+    console.warn(`[research/cast] spellId=${id} failed:`, e);
+    toast(`Cast failed: ${e?.message ?? e}`);
+  }
+}
+
 function makeRow(id, meta) {
   const compNames = Array.isArray(meta.components)
     ? meta.components.map((c) => resolveComponentName(c))
@@ -374,6 +477,7 @@ function makeRow(id, meta) {
   row.className = "hb-sr-row";
   row.dataset.spellId = String(id);
   row.dataset.expanded = "0";
+  row.title = "Double-click to cast";
 
   const main = document.createElement("div");
   main.className = "hb-sr-row-main";
@@ -440,6 +544,12 @@ function makeRow(id, meta) {
     row.dataset.expanded = open ? "0" : "1";
   });
 
+  row.addEventListener("dblclick", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    castFromRow(id, meta);
+  });
+
   return row;
 }
 
@@ -454,6 +564,7 @@ function escapeHtml(s) {
 
 function render() {
   if (!state.listEl) return;
+  refreshStanceDot();
   const filters = getFilters();
   const ids = state.knownIds;
   state.listEl.innerHTML = "";
@@ -544,18 +655,27 @@ function ensurePanel() {
 
   const header = document.createElement("div");
   header.className = "hb-sr-header";
+  const titleRow = document.createElement("div");
+  titleRow.className = "hb-sr-title-row";
+  const stanceDot = document.createElement("div");
+  stanceDot.className = "hb-sr-stance-dot";
+  stanceDot.dataset.ready = "0";
+  stanceDot.title = "Enter a combat stance to cast";
   const title = document.createElement("div");
   title.className = "hb-sr-title";
   title.textContent = "Spell Research";
+  titleRow.appendChild(stanceDot);
+  titleRow.appendChild(title);
   const closeBtn = document.createElement("button");
   closeBtn.className = "hb-sr-close";
   closeBtn.type = "button";
   closeBtn.textContent = "×";
   closeBtn.title = "Close";
   closeBtn.addEventListener("click", () => closePanel());
-  header.appendChild(title);
+  header.appendChild(titleRow);
   header.appendChild(closeBtn);
   overlay.appendChild(header);
+  state.stanceDotEl = stanceDot;
 
   const filters = document.createElement("div");
   filters.className = "hb-sr-filters";

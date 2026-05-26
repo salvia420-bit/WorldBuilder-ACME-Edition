@@ -1,4 +1,4 @@
-// Social panel — Wave E2 + Wave H1 + Wave H2 + Wave H3.
+// Social panel — Wave E2 + Wave H1 + Wave H2 + Wave H3 + Wave I2.
 //
 // Standalone floating overlay (mirrors allegiance-panel.js's IIFE
 // pattern). Exposes window.__openSocialPanel / __closeSocialPanel for
@@ -8,7 +8,9 @@
 //   - Squelch Character (E2): squelch / unsquelch selected character
 //   - Squelch Account (H2): squelch / unsquelch by account name
 //   - Squelch Global (H2): squelch / unsquelch every global channel
-//   - Squelched list (H3): live snapshot from handle.playerSquelch()
+//   - Squelched list (H3 + I2): server snapshot folded into a
+//       speculative mirror that mutates on every C2S Modify*Squelch
+//       and reconciles to the authoritative view on squelchUpdated.
 //   - Title (H2/H3): pick from earned titles via handle.playerTitle()
 //
 // Wire format:
@@ -361,6 +363,119 @@ function toast(text) {
 // SquelchManager keyed by guid.
 const SQUELCH_ALL_MASK = 0xFFFFFFFF;
 
+// Wave-I2 (2026-05-26): speculative client-side mirror of the squelch
+// DB. ACE does NOT re-push SetSquelchDb after a C2S Modify*Squelch
+// round-trip — the authoritative list only refreshes on next login —
+// so the panel folds mutations into this mirror for instant UX, then
+// reconciles wholesale when the server actually pushes (today: at
+// login; tomorrow: if ACE grows deltas). Server-wins on reconcile.
+let squelchMirror = null;
+// Render hooks registered by buildOverlay so mutations made outside
+// the overlay (or future deltas) repaint every visible squelch list.
+const squelchRenderers = [];
+// Map of (mirror-key, deadline_ms) — drives the brief 0.7-opacity
+// pulse on rows that just mutated speculatively.
+const speculativePending = new Map();
+const SPECULATIVE_FADE_MS = 1500;
+
+function serverSnapshotToMirror(snap) {
+  if (!snap) return null;
+  const chars = Array.isArray(snap.characters) ? snap.characters : [];
+  return {
+    characters: chars.map((e) => ({
+      targetGuid: (e.targetGuid >>> 0),
+      name: typeof e.name === "string" ? e.name : "",
+      mask: (e.mask >>> 0),
+      isAccount: !!e.isAccount,
+    })),
+    globalsMask: (snap.globals_mask ?? snap.globalsMask ?? 0) >>> 0,
+    globalsName: snap.globals_name ?? snap.globalsName ?? "",
+  };
+}
+
+function emptyMirror() {
+  return { characters: [], globalsMask: 0, globalsName: "" };
+}
+
+function readMirror() {
+  if (squelchMirror) return squelchMirror;
+  const snap = window.__sessionHandle?.playerSquelch?.();
+  if (snap) squelchMirror = serverSnapshotToMirror(snap);
+  return squelchMirror;
+}
+
+function renderAllSquelchLists() {
+  for (const fn of squelchRenderers) {
+    try { fn(); } catch (_) {}
+  }
+}
+
+function markPending(key) {
+  const deadline = Date.now() + SPECULATIVE_FADE_MS;
+  speculativePending.set(key, deadline);
+  setTimeout(() => {
+    if (speculativePending.get(key) === deadline) {
+      speculativePending.delete(key);
+      renderAllSquelchLists();
+    }
+  }, SPECULATIVE_FADE_MS + 32);
+}
+
+// Speculative character squelch. Calls wasm AND folds the result into
+// the mirror so the row appears/disappears before the next login.
+function squelchCharacter(guid, name, add, mask) {
+  withSession("modifyCharacterSquelch", (h) => {
+    h.modifyCharacterSquelch(guid, name, add, mask);
+    emit(`[squelch/character] target=0x${guid.toString(16).padStart(8, "0")} add=${add} mask=0x${mask.toString(16).toUpperCase()}`);
+    if (!squelchMirror) squelchMirror = emptyMirror();
+    const key = `char:${guid >>> 0}`;
+    if (add) {
+      const existing = squelchMirror.characters.find((c) => c.targetGuid === (guid >>> 0) && !c.isAccount);
+      if (existing) {
+        existing.mask = mask >>> 0;
+        if (name) existing.name = name;
+      } else {
+        squelchMirror.characters.push({ targetGuid: guid >>> 0, name: name || "", mask: mask >>> 0, isAccount: false });
+      }
+    } else {
+      squelchMirror.characters = squelchMirror.characters.filter((c) => !(c.targetGuid === (guid >>> 0) && !c.isAccount));
+    }
+    markPending(key);
+    renderAllSquelchLists();
+  });
+}
+
+function squelchAccount(accountName, add, mask) {
+  withSession("modifyAccountSquelch", (h) => {
+    h.modifyAccountSquelch(accountName, add, mask);
+    emit(`[squelch/account] name=${accountName} add=${add} mask=0x${mask.toString(16).toUpperCase()}`);
+    if (!squelchMirror) squelchMirror = emptyMirror();
+    const key = `acct:${accountName.toLowerCase()}`;
+    if (add) {
+      const existing = squelchMirror.characters.find((c) => c.isAccount && c.name.toLowerCase() === accountName.toLowerCase());
+      if (existing) existing.mask = mask >>> 0;
+      else squelchMirror.characters.push({ targetGuid: 0, name: accountName, mask: mask >>> 0, isAccount: true });
+    } else {
+      squelchMirror.characters = squelchMirror.characters.filter(
+        (c) => !(c.isAccount && c.name.toLowerCase() === accountName.toLowerCase()),
+      );
+    }
+    markPending(key);
+    renderAllSquelchLists();
+  });
+}
+
+function squelchGlobal(add, mask) {
+  withSession("modifyGlobalSquelch", (h) => {
+    h.modifyGlobalSquelch(add, mask);
+    emit(`[squelch/global] add=${add} mask=0x${mask.toString(16).toUpperCase()}`);
+    if (!squelchMirror) squelchMirror = emptyMirror();
+    squelchMirror.globalsMask = add ? (mask >>> 0) : 0;
+    markPending("global");
+    renderAllSquelchLists();
+  });
+}
+
 function buildOverlay() {
   ensureStyles();
   const el = document.createElement("div");
@@ -555,11 +670,8 @@ function buildOverlay() {
       const nm = currentSelectedName();
       const who = nm ? `"${nm}" (0x${guid.toString(16).padStart(8, "0")})` : `0x${guid.toString(16).padStart(8, "0")}`;
       if (!window.confirm(a.confirm(who))) return;
-      withSession("modifyCharacterSquelch", (h) => {
-        h.modifyCharacterSquelch(guid, nm, a.add, SQUELCH_ALL_MASK);
-        emit(`[squelch/character] target=0x${guid.toString(16).padStart(8, "0")} add=${a.add} mask=0x${SQUELCH_ALL_MASK.toString(16).toUpperCase()}`);
-        toast(a.toastMsg);
-      });
+      squelchCharacter(guid, nm, a.add, SQUELCH_ALL_MASK);
+      toast(a.toastMsg);
     });
     squelchSec.appendChild(btn);
   }
@@ -600,12 +712,9 @@ function buildOverlay() {
       const acct = acctInput.value.trim();
       if (!acct) { toast("Enter an account"); return; }
       if (!window.confirm(a.confirm(acct))) return;
-      withSession("modifyAccountSquelch", (h) => {
-        h.modifyAccountSquelch(acct, a.add, SQUELCH_ALL_MASK);
-        emit(`[squelch/account] name=${acct} add=${a.add} mask=0x${SQUELCH_ALL_MASK.toString(16).toUpperCase()}`);
-        toast(a.toastMsg);
-        if (!a.add) acctInput.value = "";
-      });
+      squelchAccount(acct, a.add, SQUELCH_ALL_MASK);
+      toast(a.toastMsg);
+      if (!a.add) acctInput.value = "";
     });
     acctSec.appendChild(btn);
   }
@@ -634,11 +743,8 @@ function buildOverlay() {
     setAcText(btn, a.label);
     btn.addEventListener("click", () => {
       if (!window.confirm(a.confirm())) return;
-      withSession("modifyGlobalSquelch", (h) => {
-        h.modifyGlobalSquelch(a.add, SQUELCH_ALL_MASK);
-        emit(`[squelch/global] add=${a.add} mask=0x${SQUELCH_ALL_MASK.toString(16).toUpperCase()}`);
-        toast(a.toastMsg);
-      });
+      squelchGlobal(a.add, SQUELCH_ALL_MASK);
+      toast(a.toastMsg);
     });
     globalSec.appendChild(btn);
   }
@@ -652,9 +758,13 @@ function buildOverlay() {
   // [A] badge marks account-wide squelches (SquelchInfo.account=true);
   // unbadged rows are per-character squelches. Removal sends
   // ModifyCharacterSquelch with add=false + 0xFFFFFFFF mask (retail
-  // UX: unsquelch all chat types). ACE does NOT re-push the DB on
-  // mod, so the visible list updates on the NEXT login until/unless
-  // we extend ACE to push deltas.
+  // UX: unsquelch all chat types).
+  //
+  // Wave-I2 (2026-05-26): ACE does NOT re-push SetSquelchDb after a
+  // C2S Modify*Squelch, so the visible list would only refresh on
+  // next login. Mutations now fold into the module-level
+  // `squelchMirror` for instant UX; the server-pushed snapshot still
+  // wins on `squelchUpdated` reconcile.
   const squelchListSec = document.createElement("div");
   squelchListSec.className = "hb-social-section";
   const squelchListHeader = document.createElement("div");
@@ -667,9 +777,8 @@ function buildOverlay() {
   squelchListSec.appendChild(squelchListEl);
 
   function renderSquelchList() {
-    const handle = window.__sessionHandle;
-    const snap = typeof handle?.playerSquelch === "function" ? handle.playerSquelch() : null;
-    const entries = snap?.characters ?? [];
+    const mirror = readMirror();
+    const entries = mirror?.characters ?? [];
 
     setAcText(squelchListHeader, `Squelched (${entries.length})`);
 
@@ -685,6 +794,8 @@ function buildOverlay() {
     for (const e of entries) {
       const row = document.createElement("div");
       row.className = "hb-social-squelch-row";
+      const key = e.isAccount ? `acct:${(e.name || "").toLowerCase()}` : `char:${e.targetGuid >>> 0}`;
+      if (speculativePending.has(key)) row.style.opacity = "0.7";
 
       const badge = document.createElement("span");
       badge.className = `hb-social-squelch-badge${e.isAccount ? "" : " placeholder"}`;
@@ -703,23 +814,35 @@ function buildOverlay() {
       xBtn.textContent = "x";
       const guid = e.targetGuid >>> 0;
       const nm = e.name || `0x${guid.toString(16).padStart(8, "0")}`;
+      const isAccount = !!e.isAccount;
       xBtn.title = `Unsquelch ${nm}`;
       xBtn.addEventListener("click", () => {
         if (!window.confirm(`Unsquelch ${nm}?`)) return;
-        withSession("modifyCharacterSquelch", (h) => {
-          h.modifyCharacterSquelch(guid, nm, false, SQUELCH_ALL_MASK);
-          emit(`[squelch/remove] target=0x${guid.toString(16).padStart(8, "0")} mask=0x${SQUELCH_ALL_MASK.toString(16).toUpperCase()}`);
-          toast("Unsquelch sent");
-        });
+        if (isAccount) {
+          squelchAccount(nm, false, SQUELCH_ALL_MASK);
+        } else {
+          squelchCharacter(guid, nm, false, SQUELCH_ALL_MASK);
+        }
+        toast("Unsquelch sent");
       });
       row.appendChild(xBtn);
 
       squelchListEl.appendChild(row);
     }
   }
+  squelchRenderers.push(renderSquelchList);
 
   if (bus && typeof bus.on === "function") {
-    const listener = () => { try { renderSquelchList(); } catch (_) {} };
+    // Server-wins reconcile: ACE's authoritative snapshot replaces
+    // the speculative mirror wholesale.
+    const listener = () => {
+      try {
+        const snap = window.__sessionHandle?.playerSquelch?.();
+        squelchMirror = snap ? serverSnapshotToMirror(snap) : null;
+        speculativePending.clear();
+        renderSquelchList();
+      } catch (_) {}
+    };
     bus.on("squelchUpdated", listener);
     overlay_unsubscribe_handlers.push(() => {
       if (typeof bus.off === "function") bus.off("squelchUpdated", listener);
@@ -855,6 +978,6 @@ export const manifest = {
   name: "Social",
   icon: "🤝",
   iconHidden: true,
-  version: "0.1.0",
-  description: "Friends + squelch + title — send + receive (Waves E2 / H1 / H2 / H3)",
+  version: "0.2.0",
+  description: "Friends + squelch + title — send + receive (Waves E2 / H1 / H2 / H3 / I2)",
 };

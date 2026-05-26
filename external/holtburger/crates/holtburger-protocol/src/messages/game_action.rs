@@ -2,6 +2,7 @@ pub use crate::messages::book::actions::*;
 pub use crate::messages::chat::actions::*;
 pub use crate::messages::combat::actions::*;
 pub use crate::messages::fellowship::actions::*;
+pub use crate::messages::house::actions::*;
 pub use crate::messages::inventory::actions::*;
 pub use crate::messages::magic::actions::*;
 pub use crate::messages::misc::actions::*;
@@ -62,6 +63,10 @@ pub enum GameAction {
     FellowshipRecruit(Box<FellowshipRecruitActionData>),
     FellowshipAssignNewLeader(Box<FellowshipAssignNewLeaderActionData>),
     FellowshipUpdateRequest(Box<FellowshipUpdateRequestActionData>),
+    BuyHouse(Box<BuyHouseActionData>),
+    HouseQuery(Box<HouseQueryActionData>),
+    AbandonHouse(Box<AbandonHouseActionData>),
+    RentHouse(Box<RentHouseActionData>),
     PingRequest(Box<PingRequestActionData>),
     DropItem(Box<DropItemActionData>),
     PutItemInContainer(Box<PutItemInContainerActionData>),
@@ -245,6 +250,18 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::FellowshipUpdateRequest => GameAction::FellowshipUpdateRequest(
                     Box::new(FellowshipUpdateRequestActionData::unpack(data, offset)?),
                 ),
+                GameActionOpcode::BuyHouse => {
+                    GameAction::BuyHouse(Box::new(BuyHouseActionData::unpack(data, offset)?))
+                }
+                GameActionOpcode::HouseQuery => GameAction::HouseQuery(Box::new(
+                    HouseQueryActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::AbandonHouse => GameAction::AbandonHouse(Box::new(
+                    AbandonHouseActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::RentHouse => {
+                    GameAction::RentHouse(Box::new(RentHouseActionData::unpack(data, offset)?))
+                }
                 GameActionOpcode::PingRequest => {
                     GameAction::PingRequest(Box::new(PingRequestActionData::unpack(data, offset)?))
                 }
@@ -591,6 +608,26 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::FellowshipUpdateRequest(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::FellowshipUpdateRequest as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::BuyHouse(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::BuyHouse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::HouseQuery(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::HouseQuery as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AbandonHouse(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AbandonHouse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::RentHouse(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::RentHouse as u32)
                     .unwrap();
                 data.pack(buf);
             }

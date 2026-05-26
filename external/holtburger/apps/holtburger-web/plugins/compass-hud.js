@@ -10,6 +10,7 @@
 // Window hook: `window.__compassHud = { setVisible(bool) }`.
 
 const OVERLAY_ID = "hb-compass-hud";
+const RADAR_ID = "hb-compass-radar";
 const WIDTH = 200;
 const HEIGHT = 16;
 // Pixels per degree on the tape. Spec says the strip is 200px wide and
@@ -18,6 +19,14 @@ const HEIGHT = 16;
 const PX_PER_DEG = 200 / 60;
 const TAPE_TOTAL_DEG = 360;
 const TAPE_INNER_WIDTH_PX = TAPE_TOTAL_DEG * PX_PER_DEG;
+
+const RADAR_HEIGHT = 40;
+const RADAR_WIDTH = WIDTH;
+const RADAR_FOV_RAD = Math.PI / 2; // ±90° forward arc maps to full strip width
+const MAX_RADAR_RANGE = 50;        // metres
+const MAX_DOTS = 30;
+const ODF_PLAYER = 0x00000008;
+const ODF_VENDOR = 0x00000010;
 
 const CARDINALS = [
   { deg: 0,   label: "N" },
@@ -34,6 +43,14 @@ const HIDDEN_BY_URL = (() => {
   try {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("compass") === "off";
+  } catch (_) { return false; }
+})();
+
+const RADAR_HIDDEN_BY_URL = (() => {
+  try {
+    if (typeof window === "undefined") return true;
+    if (HIDDEN_BY_URL) return true;
+    return new URLSearchParams(window.location.search).get("compassRadar") === "off";
   } catch (_) { return false; }
 })();
 
@@ -103,6 +120,48 @@ function ensureStyles() {
       transform: translateX(-0.5px);
       opacity: 0.95;
     }
+    #${RADAR_ID} {
+      position: fixed;
+      top: ${4 + HEIGHT + 1}px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: ${RADAR_WIDTH}px;
+      height: ${RADAR_HEIGHT}px;
+      z-index: 49;
+      pointer-events: none;
+      background: var(--hb-overlay-dark-deep, rgba(0,0,0,0.34));
+      border: 1px solid var(--hb-border-brass, #8a7544);
+      box-shadow: 0 1px 0 var(--hb-border-brass-deep, #5a4a28) inset,
+                  0 0 2px rgba(0,0,0,0.6);
+      overflow: hidden;
+    }
+    #${RADAR_ID}[hidden] { display: none; }
+    #${RADAR_ID} .hb-radar-centerline {
+      position: absolute;
+      left: 0; right: 0;
+      top: 50%;
+      height: 1px;
+      background: var(--hb-border-brass-deep, #5a4a28);
+      opacity: 0.45;
+      transform: translateY(-0.5px);
+    }
+    #${RADAR_ID} .hb-radar-cursor {
+      position: absolute;
+      top: 0; bottom: 0;
+      left: 50%;
+      width: 1px;
+      background: rgba(255, 215, 106, 0.35);
+      transform: translateX(-0.5px);
+    }
+    #${RADAR_ID} .hb-radar-dot {
+      position: absolute;
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      will-change: left, top, opacity;
+      pointer-events: none;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -135,8 +194,122 @@ function buildTape(tapeEl) {
 
 let _overlayEl = null;
 let _tapeEl = null;
+let _radarEl = null;
+let _radarDotPool = [];
 let _rafId = 0;
 let _disposed = false;
+
+// Category → dot color. Players white, creatures (incl. monsters) red,
+// NPCs/Vendors green. Items/containers/statics are filtered out before
+// reaching this map.
+const DOT_COLORS = Object.freeze({
+  player:   "#ffffff",
+  creature: "#ff4040",
+  npc:      "#40d060",
+  vendor:   "#40d060",
+});
+
+function classifyEntityForRadar(guid, inst) {
+  try {
+    const wo = window.__wom?.get?.(guid >>> 0);
+    const cls = wo?.canonicalObjectClass || wo?.className;
+    if (cls === "Player") return "player";
+    if (cls === "Vendor") return "vendor";
+    if (cls === "Npc") return "npc";
+    if (cls === "Creature" || cls === "Monster") return "creature";
+  } catch (_) {}
+  const meta = inst?.meta || {};
+  const odf = (meta.objDescFlags >>> 0) || 0;
+  if (odf & ODF_PLAYER) return "player";
+  if (odf & ODF_VENDOR) return "vendor";
+  if (meta.category === "creature") return "creature";
+  return null;
+}
+
+function ensureDotPool() {
+  if (!_radarEl) return;
+  while (_radarDotPool.length < MAX_DOTS) {
+    const d = document.createElement("div");
+    d.className = "hb-radar-dot";
+    d.style.display = "none";
+    _radarEl.appendChild(d);
+    _radarDotPool.push(d);
+  }
+}
+
+function updateRadarDots(playerPos, yawRad) {
+  if (!_radarEl || _radarEl.hidden) return;
+  const em = window.liveScene3d?.entityManager;
+  const map = em?.entityMap;
+  if (!map || !playerPos) {
+    for (const d of _radarDotPool) d.style.display = "none";
+    return;
+  }
+  const localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+
+  // Collect candidates within range + in front (|relBearing| ≤ FOV).
+  // AC frame: x=east, y=north. Bearing 0 = +y, +π/2 = +x.
+  const candidates = [];
+  const cosYaw = Math.cos(yawRad);
+  const sinYaw = Math.sin(yawRad);
+  for (const [guid, inst] of map) {
+    const g = (guid >>> 0);
+    if (g === localGuid) continue;
+    const pos = inst?.root?.position;
+    if (!pos) continue;
+    const dx = pos.x - playerPos.x;
+    const dy = pos.y - playerPos.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > MAX_RADAR_RANGE || dist < 0.01) continue;
+    // Rotate world delta into player-relative frame (yaw rotates the
+    // forward axis clockwise from +y). Forward distance fy along
+    // player-heading axis; lateral fx orthogonal-right.
+    const fx = cosYaw * dx - sinYaw * dy;
+    const fy = sinYaw * dx + cosYaw * dy;
+    if (fy <= 0) continue; // behind camera — clip
+    const relBearing = Math.atan2(fx, fy); // -π..π, sign: + = right
+    if (Math.abs(relBearing) > RADAR_FOV_RAD) continue;
+    const kind = classifyEntityForRadar(g, inst);
+    if (!kind) continue;
+    candidates.push({ relBearing, dist, kind });
+  }
+
+  // Sort by distance ascending so closest entities take dot-pool priority.
+  candidates.sort((a, b) => a.dist - b.dist);
+
+  ensureDotPool();
+  const n = Math.min(candidates.length, _radarDotPool.length);
+  for (let i = 0; i < n; i++) {
+    const c = candidates[i];
+    const d = _radarDotPool[i];
+    const x = RADAR_WIDTH / 2 + (c.relBearing / RADAR_FOV_RAD) * (RADAR_WIDTH / 2);
+    // Map distance to vertical: near → bottom (closer to player marker),
+    // far → top. Player sits at the centerline horizontally.
+    const y = RADAR_HEIGHT - 2 - (1 - c.dist / MAX_RADAR_RANGE) * (RADAR_HEIGHT - 6);
+    const alpha = Math.max(0.15, 1 - c.dist / MAX_RADAR_RANGE);
+    d.style.display = "block";
+    d.style.left = `${x}px`;
+    d.style.top = `${y}px`;
+    d.style.background = DOT_COLORS[c.kind] || "#ffffff";
+    d.style.opacity = String(alpha);
+    d.style.boxShadow = `0 0 2px ${DOT_COLORS[c.kind] || "#ffffff"}`;
+  }
+  for (let i = n; i < _radarDotPool.length; i++) {
+    _radarDotPool[i].style.display = "none";
+  }
+}
+
+function getLocalPlayerAcPos() {
+  try {
+    const em = window.liveScene3d?.entityManager;
+    const lpg = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+    if (!lpg) return null;
+    const inst = em?.entityMap?.get?.(lpg);
+    const p = inst?.root?.position;
+    if (!p) return null;
+    return { x: p.x, y: p.y, z: p.z };
+  } catch (_) { return null; }
+}
 
 function tickCompass() {
   if (_disposed) return;
@@ -153,6 +326,11 @@ function tickCompass() {
   deg = ((deg % 360) + 360) % 360;
   const offset = WIDTH / 2 - deg * PX_PER_DEG;
   _tapeEl.style.transform = `translateX(${offset}px)`;
+
+  if (_radarEl && !_radarEl.hidden) {
+    const playerPos = getLocalPlayerAcPos();
+    updateRadarDots(playerPos, yaw);
+  }
 }
 
 function mountOverlay() {
@@ -189,12 +367,37 @@ function mountOverlay() {
 
   document.body.appendChild(_overlayEl);
 
+  // Radar strip — sibling overlay anchored directly below the tape so
+  // the tape's overflow-clipping stays intact.
+  const existingRadar = document.getElementById(RADAR_ID);
+  if (existingRadar) existingRadar.remove();
+  _radarEl = document.createElement("div");
+  _radarEl.id = RADAR_ID;
+  if (RADAR_HIDDEN_BY_URL || HIDDEN_BY_URL) _radarEl.hidden = true;
+  const centerline = document.createElement("div");
+  centerline.className = "hb-radar-centerline";
+  _radarEl.appendChild(centerline);
+  const radarCursor = document.createElement("div");
+  radarCursor.className = "hb-radar-cursor";
+  _radarEl.appendChild(radarCursor);
+  _radarDotPool = [];
+  document.body.appendChild(_radarEl);
+  ensureDotPool();
+
   _rafId = window.requestAnimationFrame(tickCompass);
 }
 
 function setVisible(visible) {
-  if (!_overlayEl) return;
-  _overlayEl.hidden = !visible;
+  if (_overlayEl) _overlayEl.hidden = !visible;
+  if (_radarEl) {
+    // Radar follows tape visibility, but respect the explicit URL opt-out.
+    _radarEl.hidden = !visible || RADAR_HIDDEN_BY_URL;
+  }
+}
+
+function setRadarVisible(visible) {
+  if (!_radarEl) return;
+  _radarEl.hidden = !visible;
 }
 
 function unmount() {
@@ -206,8 +409,13 @@ function unmount() {
   if (_overlayEl && _overlayEl.parentNode) {
     _overlayEl.parentNode.removeChild(_overlayEl);
   }
+  if (_radarEl && _radarEl.parentNode) {
+    _radarEl.parentNode.removeChild(_radarEl);
+  }
   _overlayEl = null;
   _tapeEl = null;
+  _radarEl = null;
+  _radarDotPool = [];
 }
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {
@@ -219,7 +427,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   } else {
     boot();
   }
-  window.__compassHud = { setVisible, unmount };
+  window.__compassHud = { setVisible, setRadarVisible, unmount };
 }
 
-export { setVisible, unmount };
+export { setVisible, setRadarVisible, unmount };

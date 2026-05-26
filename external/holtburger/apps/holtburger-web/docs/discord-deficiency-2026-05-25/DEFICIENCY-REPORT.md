@@ -12,6 +12,39 @@
 
 ---
 
+## Status — Wave L executed 2026-05-25 (3-agent parallelism)
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 22 | House system MVP | **SHIPPED (send-only)** | Wave L1. 4 opcodes uncommented (`BuyHouse 0x021C`, `HouseQuery 0x021E`, `AbandonHouse 0x021F`, `RentHouse 0x0221`). NEW `crates/holtburger-protocol/src/messages/house/{mod,actions}.rs` with 4 round-trip tests (Buy w/2 items, Rent empty, Query empty, Abandon empty). Wire authority: ACE `GameActionHouseBuyHouse.cs` + `GameActionHouseQuery.cs` + `GameActionHouseAbandon.cs` + `GameActionHouseRent.cs` (or equivalent). Struct shapes: `BuyHouseActionData { slumlord_guid: Guid, item_guids: Vec<Guid> }` (PackableList<u32> on wire = count + count×u32), `HouseQueryActionData {}`, `AbandonHouseActionData {}`, `RentHouseActionData { slumlord_guid: Guid, item_guids: Vec<Guid> }`. 4 GameAction variants + arms. 4 wasm methods (`buyHouse/houseQuery/abandonHouse/rentHouse`) + 4 SessionCommand + 4 recv arms with `[house/buy|query|abandon|rent]` logs. NEW `plugins/house-panel.js` (376 LOC) — 4 stacked sections (Buy/Rent/Query/Abandon) with manual slumlord-GUID + comma-list-of-item-GUIDs inputs (proper picker UX is Wave M); destructive paths gated by `window.confirm`. Debug: `window.__openHousePanel()`. Guest perms / storage perms / boot / list-available all deferred. |
+| 20 (speculative) | Squelch list speculative refresh | **SHIPPED** | Wave L2 (pure JS). `plugins/social-panel.js` adds module-level `squelchMirror` state with `serverSnapshotToMirror()` + `readMirror()` lazy-init + 3 speculative helpers (`squelchCharacter/squelchAccount/squelchGlobal`) that send wire packet AND mutate mirror locally before re-render. Subtle 0.7-opacity pulse via `markPending()` map (cleared on server reconcile). `squelchUpdated` event listener rebuilds mirror from fresh server snapshot — server wins on next login. **Bug fix during wiring:** account-row × button previously misrouted via `modifyCharacterSquelch`; now correctly calls `modifyAccountSquelch(..., false, ...)`. Wave I1 limitation comment retired. |
+| 19 (polish) | Cast-from-research-panel + stance indicator | **SHIPPED** | Wave L3 part 1 (pure JS). `plugins/spell-research-panel.js` adds double-click handler on each spell row → `client.player.castSpell(spellId, untargeted ? null : targetGuid)` (canonical api.js facade with direct wasm fallback). Stance gate: returns toast "Enter a magic combat stance first." when `__getCurrentStanceLow() === 0`. Untargeted-flag from catalog row drives selection between targeted/untargeted variant. Toast helper (1750ms auto-remove, modeled on social-panel.js). New header stance indicator dot (gold = ready, gray = need stance) refreshed on every render. Each row gets `title="Double-click to cast"`. Console log `[research/cast] spellId=N untargeted=bool target=0xNNNN`. |
+| Discord follow-on | Compass mini-radar | **SHIPPED** | Wave L3 part 2 (pure JS). `plugins/compass-hud.js` adds 200×40 mini-radar strip below the compass tape. DOM-based 30-dot pool (recycled per rAF tick). Reads `entityMap` per frame, projects each entity's AC-frame `(x=east, y=north)` delta into screen-X via forward axis `(sin(yaw), cos(yaw))` + right vector `(cos(yaw), -sin(yaw))`. Distance maps to Y (closer = lower); alpha attenuates by `(1 - dist/MAX_RADAR_RANGE)` with 0.15 floor. Behind-camera entities clipped. Per-category colors: creature/monster red `#ff4040`, npc/vendor green `#40d060`, player white `#ffffff`. Items/containers/statics skipped. `?compassRadar=off` URL knob; `?compass=off` disables both tape + radar. New `window.__compassHud.setRadarVisible(bool)` runtime toggle. |
+
+**Files touched this wave:**
+- `src/lib.rs` +200 LOC (L1: 4 wasm methods + 4 SessionCommand + 4 recv arms)
+- `crates/holtburger-protocol/src/opcodes.rs` +16 LOC (4 uncomments)
+- `crates/holtburger-protocol/src/messages/mod.rs` +1 LOC (register house/)
+- `crates/holtburger-protocol/src/messages/house/{mod,actions}.rs` NEW + 4 round-trip tests
+- `crates/holtburger-protocol/src/messages/game_action.rs` +37 LOC (4 variants + arms)
+- `plugins/house-panel.js` NEW 376 LOC (L1)
+- `plugins/social-panel.js` +187 -29 (L2 speculative mirror)
+- `plugins/spell-research-panel.js` +122 LOC (L3 cast + stance dot + toast)
+- `plugins/compass-hud.js` +216 LOC (L3 radar strip + dot pool)
+- `index.html` +1 LOC (L1 house-panel import)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `cargo test -p holtburger-protocol --lib`: **280/280 PASS** (L1 added 4 round-trips). `node --check` clean on all JS.
+
+**Recommended Wave M** (next priorities):
+1. **House receive-side snapshot (#22 finish)** — `HouseData 0x0225`, `HouseProfile 0x021D`, `HouseStatus 0x0226` events + JS state display.
+2. **House guest perms + storage perms + boot (#22 polish)** — 8+ remaining commented opcodes (AddPermanentGuest, BootSpecificHouseGuest, storage permissions, etc.).
+3. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
+4. **Component table extraction (#19 polish)** — extend `data/spell-components.json` beyond scarabs to cover all 60+ retail components.
+5. **House picker UX (#22 polish)** — replace L1's manual GUID/item-list inputs with a List-Available-Houses dropdown + inventory item-picker.
+6. **Radar polish (Discord follow-on)** — add bearing labels (compass-relative angle) on hover for radar dots.
+
+---
+
 ## Status — Wave K executed 2026-05-25 (3-agent parallelism)
 
 | # | Item | Status | Notes |
@@ -497,11 +530,11 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Selection-as-data is foundational for plugins (Discord ISO VTank 2.0 thread, line 4400).
 **Holtburger:** Selection lives in `picking.js` local state, not on bus. No plugin can react to "you targeted X".
 
-### 19. Spell research / component table UI — SHIPPED 2026-05-25 (Wave K3)
+### 19. Spell research / component table UI — SHIPPED 2026-05-25 (Wave K3 panel + L3 cast/stance)
 **Discord:** "nothing special about spell research panel…add taper animations to queue" — #openai-gpt-3, Yonneh 2026-05-22
 **Holtburger:** Wave K3 shipped NEW `plugins/spell-research-panel.js` (~660 LOC). Subscribes to `playerStatsUpdated`, reads `handle.playerKnownSpells()`, cross-references bundled `data/spells-catalog.json` for name/school/level/untargeted/mana/icon/desc/duration/components per spell. Filter strip: School (All/War/Life/Item/Creature/Void) + Level (All/I-VIII) + name-substring search. Sorted school→level→name. Component-name lookup reuses `data/spell-components.json` via a ~20-LOC local-copy of `spellbook.js:127-151` helpers (Comp_1-8 scarabs verified; unknown IDs render as `Comp_N` literal — extending the JSON to cover all 60+ retail components is Wave L polish). Click row to expand description inline. Debug: `window.__openSpellResearchPanel()`.
 
-### 20. Squelch / Friends / Titles — SHIPPED 2026-05-25 (E2 Friends+CharSquelch + H1 Friends receive + H2 Account/Global/Title send + I1 Squelch+Title receive)
+### 20. Squelch / Friends / Titles — SHIPPED 2026-05-25 (E2/H1/H2/I1 send+receive + L2 speculative refresh)
 **Discord:** Chat channel filtering and friend lists implicit across #general.
 **Holtburger:** Wave E2 uncommented AddFriend 0x0018, RemoveFriend 0x0017, ModifyCharacterSquelch 0x0058 + created 3 message structs in `crates/holtburger-protocol/src/messages/player/actions.rs` (AddFriend by-name, RemoveFriend by-guid, ModifyCharacterSquelch with 4 fields: add/playerGuid/playerName/messageType per `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/GameActionModifyCharacterSquelch.cs`). 3 wasm methods (`addFriend(name)`, `removeFriend(guid)`, `modifyCharacterSquelch(guid, name, add, mask)`). New `plugins/social-panel.js` (~340 LOC) — Friends section (text input + Add, Remove-by-Selected) + Squelch section (Squelch/Unsquelch Selected, all-chat mask `0xFFFFFFFF`). ModifyAccountSquelch 0x0059, ModifyGlobalSquelch 0x005B, TitleSet 0x002C deferred to Wave F. Receive-side FriendsUpdate/CharacterTitleTable snapshot also Wave F.
 
@@ -509,9 +542,9 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Light coverage, but ACE has BookData/AddPage/ModifyPage/DeletePage/Inscribe handlers, Chorizite categorizes under Writing.
 **Holtburger:** Wave F2 shipped 8 opcodes uncommented (5 C2S: `BookData/BookAddPage/BookModifyPage/BookDeletePage/SetInscription`; 3 S2C: `BookModifyPageResponse/BookAddPageResponse/BookDeletePageResponse`). 5 new C2S action structs + 3 new S2C event structs in `crates/holtburger-protocol/src/messages/book/{actions,events}.rs`. **ACE wire deviation:** `BookModifyPage` does NOT carry `ignore_author` on the wire — ACE re-reads it server-side from the book entity. 5 wasm methods + receive-side `BookSnapshot` via existing `WorldEvent::EntityBookUpdated` + `CLIENT_EVENT_KIND_BOOK_UPDATED=24` + `player_book()` getter. NEW `plugins/book-panel.js` — 320×340 floating overlay; inscription strip + Set button (prompt); page navigator (◀ Page N of M ▶); read/edit textarea toggle; Add/Delete Page; AC parchment styling. Debug: `window.__openBookFor(guid)`. Read-only inscription display on examine still a polish item — Wave G or later.
 
-### 22. House system
+### 22. House system — SHIPPED 2026-05-25 (Wave L1 MVP send-only)
 **Discord:** Not directly quoted but ACE has Buy/Rent/Abandon/Guest perms/Teleport/Hooks. Chorizite has full House category.
-**Holtburger:** All house opcodes commented out (opcodes.rs lines for `BuyHouse, HouseQuery, AbandonHouse, RentHouse, SetOpenHouseStatus, BootSpecificHouseGuest, ModifyAllegianceGuestPermission`).
+**Holtburger:** Wave L1 shipped 4 opcodes uncommented (`BuyHouse 0x021C`, `HouseQuery 0x021E`, `AbandonHouse 0x021F`, `RentHouse 0x0221`). NEW `crates/holtburger-protocol/src/messages/house/{mod,actions}.rs` with 4 round-trip tests (Buy w/2 items, Rent empty, Query empty, Abandon empty). Wire authority: ACE `GameActionHouseBuyHouse.cs` + `HouseQuery.cs` + `HouseAbandon.cs` + `HouseRent.cs`. PackableList<u32> for item_guids (count + count×u32). 4 wasm methods + 4 SessionCommand + 4 recv arms. NEW `plugins/house-panel.js` (376 LOC) with 4 stacked sections (Buy/Rent/Query/Abandon) — manual slumlord-GUID + comma-list-of-item-GUIDs inputs; destructive paths gated by confirm. Debug: `window.__openHousePanel()`. **Still deferred:** receive-side (HouseData/HouseProfile/HouseStatus), guest perms, storage perms, BootGuest, ListAvailableHouses, SetOpenHouseStatus, allegiance-guest-permission (8+ commented opcodes).
 
 ### 23. Right-click radial menus (Examine/Drop/Use/Trade/Identify) — SHIPPED 2026-05-25 (B3 Examine+Use+Attack + I2 Drop+Wield + J2 Trade)
 **Discord:** Implicit in plugin discussions; the only fast-path for in-3D interaction.
@@ -693,13 +726,19 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 32. ~~Lock-action cycle UX (#4 polish)~~ — 6-value AllegianceLockAction dropdown replaces hardcoded LOCK_ON=2.
 33. ~~Spell Research panel (#19)~~ — full filterable known-spells display with components / mana / duration / desc.
 
-### Wave L — next priorities
+### Wave L — SHIPPED 2026-05-25 (3-agent parallelism)
 
-34. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
-35. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
-36. **Speculative squelch list refresh (#20 polish)** — client-side fold of Modify*Squelch acks.
-37. **Component table extraction (#19 polish)** — extend `data/spell-components.json` beyond scarabs to cover all 60+ retail components.
-38. **Cast-from-research-panel (#19 polish)** — wire double-click on a spell row to invoke `handle.castSpell(id, targetGuid)`.
-39. **Compass mini-radar (Discord follow-on)** — extend Wave E3 compass HUD with nearby-entity blips.
+34. ~~House system MVP (#22)~~ — 4 opcodes + structs + wasm + new house-panel.js shipped.
+35. ~~Speculative squelch refresh (#20 polish)~~ — module-level mirror + 3 helpers + server-wins reconcile.
+36. ~~Cast-from-research-panel + Compass mini-radar~~ — double-click cast with stance gate + 200×40 radar strip with category-color dots.
+
+### Wave M — next priorities
+
+37. **House receive-side snapshot (#22 finish)** — HouseData/HouseProfile/HouseStatus events + JS state display.
+38. **House guest perms + storage perms + boot (#22 polish)** — 8+ remaining commented opcodes.
+39. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
+40. **Component table extraction (#19 polish)** — extend `data/spell-components.json` beyond scarabs.
+41. **House picker UX (#22 polish)** — replace L1's manual GUID inputs with List-Available-Houses dropdown + inventory item-picker.
+42. **Radar polish** — hover labels showing bearing/distance for radar dots.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.
