@@ -510,16 +510,16 @@ pub enum GameActionOpcode {
     AbandonHouse = 0x021F,
     /// C2S: Pay the weekly rent for the house.
     RentHouse = 0x0221,
-    // /// C2S: Add a player to the house's permanent guest list.
-    // AddPermanentGuest = 0x0245,
+    /// C2S: Add a player to the house's permanent guest list.
+    AddPermanentGuest = 0x0245,
     // /// C2S: Remove a player from the permanent guest list.
     // RemovePermanentGuest = 0x0246,
     // /// C2S: Toggle "Open House" mode (allows anyone to enter).
     // SetOpenHouseStatus = 0x0247,
     // /// C2S: Update entry/storage permissions for house items.
     // ChangeStoragePermission = 0x0249,
-    // /// C2S: Forcibly remove a specific guest from the house.
-    // BootSpecificHouseGuest = 0x024A,
+    /// C2S: Forcibly remove a specific guest from the house.
+    BootSpecificHouseGuest = 0x024A,
     // /// C2S: Revoke storage permissions from all players.
     // RemoveAllStoragePermission = 0x024C,
     // /// C2S: Request the full list of guests currently in the house.
@@ -528,8 +528,8 @@ pub enum GameActionOpcode {
     // QueryLord = 0x0258,
     // /// C2S: Grant storage permissions to every guest.
     // AddAllStoragePermission = 0x025C,
-    // /// C2S: Clear the entire permanent guest list.
-    // RemoveAllPermanentGuests = 0x025E,
+    /// C2S: Clear the entire permanent guest list.
+    RemoveAllPermanentGuests = 0x025E,
     // /// C2S: Forcibly remove all guests from the house.
     // BootEveryone = 0x025F,
     // /// C2S: Toggle the visibility of housing decor hooks.

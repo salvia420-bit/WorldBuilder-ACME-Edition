@@ -64,6 +64,13 @@ const RADAR_HIDDEN_BY_URL = (() => {
   } catch (_) { return false; }
 })();
 
+const RADAR_HOSTILE_ONLY_BY_URL = (() => {
+  try {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("radarHostileOnly") === "1";
+  } catch (_) { return false; }
+})();
+
 let stylesInjected = false;
 function ensureStyles() {
   if (stylesInjected) return;
@@ -198,6 +205,20 @@ function ensureStyles() {
       transform: translateX(-0.5px);
       pointer-events: none;
     }
+    #${RADAR_ID} .hb-radar-hostile-indicator {
+      position: absolute;
+      top: 50%;
+      right: 3px;
+      transform: translateY(-50%);
+      font-family: var(--hb-font-serif, "Cinzel", "Trajan Pro", "Times New Roman", serif);
+      font-size: 10px;
+      color: var(--hb-text-gold, #ffd76a);
+      text-shadow: 0 1px 0 rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.8);
+      pointer-events: none;
+      line-height: 1;
+      letter-spacing: 0.5px;
+    }
+    #${RADAR_ID} .hb-radar-hostile-indicator[hidden] { display: none; }
     #${TOOLTIP_ID} {
       position: fixed;
       z-index: 51;
@@ -256,9 +277,11 @@ let _radarDotPool = [];
 let _dotEntityRefs = [];
 let _radarBearingPool = []; // [{ labelEl, tickEl, worldBearing }]
 let _tooltipEl = null;
+let _hostileIndicatorEl = null;
 let _hoveredDotIdx = -1;
 let _rafId = 0;
 let _disposed = false;
+let _radarHostileOnly = RADAR_HOSTILE_ONLY_BY_URL;
 
 // Category → dot color. Players white, creatures (incl. monsters) red,
 // NPCs/Vendors green. Items/containers/statics are filtered out before
@@ -332,6 +355,7 @@ function updateRadarDots(playerPos, yawRad) {
     if (Math.abs(relBearing) > RADAR_FOV_RAD) continue;
     const kind = classifyEntityForRadar(g, inst);
     if (!kind) continue;
+    if (_radarHostileOnly && kind !== "creature") continue;
     candidates.push({ relBearing, dist, kind, guid: g, inst });
   }
 
@@ -600,6 +624,11 @@ function mountOverlay() {
   _radarDotPool = [];
   _dotEntityRefs = [];
   _radarBearingPool = [];
+  _hostileIndicatorEl = document.createElement("div");
+  _hostileIndicatorEl.className = "hb-radar-hostile-indicator";
+  _hostileIndicatorEl.textContent = "[HOSTILE]";
+  _hostileIndicatorEl.hidden = !_radarHostileOnly;
+  _radarEl.appendChild(_hostileIndicatorEl);
   document.body.appendChild(_radarEl);
   ensureDotPool();
   ensureBearingAxisPool();
@@ -624,6 +653,19 @@ function setRadarVisible(visible) {
   if (!_radarEl) return;
   _radarEl.hidden = !visible;
   if (_radarEl.hidden) { hideTooltip(); _hoveredDotIdx = -1; }
+}
+
+function setRadarHostileOnly(enabled) {
+  _radarHostileOnly = !!enabled;
+  if (_hostileIndicatorEl) _hostileIndicatorEl.hidden = !_radarHostileOnly;
+  if (_hoveredDotIdx >= 0) { hideTooltip(); _hoveredDotIdx = -1; }
+  try {
+    let yaw = 0;
+    const live = window.liveScene3d;
+    yaw = live?.cameraSwitcher?.followYaw ?? 0;
+    const playerPos = getLocalPlayerAcPos();
+    updateRadarDots(playerPos, yaw);
+  } catch (_) {}
 }
 
 function unmount() {
@@ -655,6 +697,7 @@ function unmount() {
   _dotEntityRefs = [];
   _radarBearingPool = [];
   _tooltipEl = null;
+  _hostileIndicatorEl = null;
   _hoveredDotIdx = -1;
 }
 
@@ -667,7 +710,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   } else {
     boot();
   }
-  window.__compassHud = { setVisible, setRadarVisible, unmount };
+  window.__compassHud = { setVisible, setRadarVisible, setRadarHostileOnly, unmount };
 }
 
-export { setVisible, setRadarVisible, unmount };
+export { setVisible, setRadarVisible, setRadarHostileOnly, unmount };

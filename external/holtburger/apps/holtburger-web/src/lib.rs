@@ -12973,6 +12973,23 @@ enum SessionCommand {
         slumlord_guid: u32,
         item_guids: Vec<u32>,
     },
+    /// House: add `target_name` to the permanent guest list. Maps to
+    /// `GameAction::AddPermanentGuest` (sub-opcode 0x0245). Wire is a
+    /// single string16L; ACE looks up the target by name server-side.
+    AddPermanentGuest {
+        target_name: String,
+    },
+    /// House: forcibly remove `target_name` from the house right now.
+    /// Maps to `GameAction::BootSpecificHouseGuest` (sub-opcode 0x024A).
+    /// Wire is a single string16L; ACE resolves the player by name and
+    /// teleports them out.
+    BootSpecificHouseGuest {
+        target_name: String,
+    },
+    /// House: clear the entire permanent guest list. Maps to
+    /// `GameAction::RemoveAllPermanentGuests` (sub-opcode 0x025E).
+    /// Empty payload; destructive on the server-side guest list.
+    RemoveAllPermanentGuests,
     /// Trade: initiate a peer-to-peer trade negotiation with another
     /// player. Maps to `GameAction::OpenTradeNegotiations` (sub-opcode
     /// 0x01F6). ACE validates the partner is a Player (not NPC),
@@ -18602,6 +18619,49 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("rentHouse: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Housing — add `target_name` to the permanent guest list. Sends
+    /// `GameAction::AddPermanentGuest` (sub-opcode 0x0245). Wire is a
+    /// single string16L; ACE resolves the player by name server-side.
+    #[wasm_bindgen(js_name = addPermanentGuest)]
+    pub fn add_permanent_guest(&self, target_name: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AddPermanentGuest { target_name })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("addPermanentGuest: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Housing — forcibly remove `target_name` from the house right
+    /// now. Sends `GameAction::BootSpecificHouseGuest` (sub-opcode
+    /// 0x024A). Wire is a single string16L.
+    #[wasm_bindgen(js_name = bootSpecificHouseGuest)]
+    pub fn boot_specific_house_guest(&self, target_name: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BootSpecificHouseGuest { target_name })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "bootSpecificHouseGuest: cmd channel closed ({e})"
+                ))
+            })
+    }
+
+    /// Housing — clear the entire permanent guest list. Sends
+    /// `GameAction::RemoveAllPermanentGuests` (sub-opcode 0x025E).
+    /// Empty wire payload; destructive.
+    #[wasm_bindgen(js_name = removeAllPermanentGuests)]
+    pub fn remove_all_permanent_guests(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RemoveAllPermanentGuests)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "removeAllPermanentGuests: cmd channel closed ({e})"
+                ))
             })
     }
 }
@@ -24532,6 +24592,68 @@ async fn recv_loop(
                         console_log_str(&format!(
                             "[house/rent] slumlord=0x{slumlord_guid:08X} count={item_count} items=[{log_preview}]",
                         ));
+                    }
+                    Some(SessionCommand::AddPermanentGuest { target_name }) => {
+                        use holtburger_protocol::messages::{
+                            AddPermanentGuestActionData, GameAction,
+                        };
+                        let log_name = target_name.clone();
+                        let action = GameAction::AddPermanentGuest(Box::new(
+                            AddPermanentGuestActionData { target_name },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(AddPermanentGuest): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("add_permanent_guest: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!("[house/add-guest] target={log_name}"));
+                    }
+                    Some(SessionCommand::BootSpecificHouseGuest { target_name }) => {
+                        use holtburger_protocol::messages::{
+                            BootSpecificHouseGuestActionData, GameAction,
+                        };
+                        let log_name = target_name.clone();
+                        let action = GameAction::BootSpecificHouseGuest(Box::new(
+                            BootSpecificHouseGuestActionData { target_name },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(BootSpecificHouseGuest): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("boot_specific_house_guest: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!("[house/boot] target={log_name}"));
+                    }
+                    Some(SessionCommand::RemoveAllPermanentGuests) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, RemoveAllPermanentGuestsActionData,
+                        };
+                        let action = GameAction::RemoveAllPermanentGuests(Box::new(
+                            RemoveAllPermanentGuestsActionData {},
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(RemoveAllPermanentGuests): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("remove_all_permanent_guests: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str("[house/remove-all]");
                     }
                     Some(SessionCommand::OpenTrade { partner_guid }) => {
                         use holtburger_common::Guid;

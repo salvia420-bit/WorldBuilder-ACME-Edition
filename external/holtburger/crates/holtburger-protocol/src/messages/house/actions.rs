@@ -1,3 +1,4 @@
+use crate::messages::utils::{read_string16, write_string16};
 use crate::traits::{ProtocolPack, ProtocolUnpack};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use holtburger_common::Guid;
@@ -105,6 +106,55 @@ impl ProtocolPack for RentHouseActionData {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddPermanentGuestActionData {
+    pub target_name: String,
+}
+
+impl ProtocolUnpack for AddPermanentGuestActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let target_name = read_string16(data, offset)?;
+        Some(Self { target_name })
+    }
+}
+
+impl ProtocolPack for AddPermanentGuestActionData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        write_string16(buf, &self.target_name);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BootSpecificHouseGuestActionData {
+    pub target_name: String,
+}
+
+impl ProtocolUnpack for BootSpecificHouseGuestActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let target_name = read_string16(data, offset)?;
+        Some(Self { target_name })
+    }
+}
+
+impl ProtocolPack for BootSpecificHouseGuestActionData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        write_string16(buf, &self.target_name);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveAllPermanentGuestsActionData {}
+
+impl ProtocolUnpack for RemoveAllPermanentGuestsActionData {
+    fn unpack(_data: &[u8], _offset: &mut usize) -> Option<Self> {
+        Some(Self {})
+    }
+}
+
+impl ProtocolPack for RemoveAllPermanentGuestsActionData {
+    fn pack(&self, _buf: &mut Vec<u8>) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +197,24 @@ mod tests {
         let fixture: [u8; 0] = [];
         let data = AbandonHouseActionData {};
         assert_pack_unpack_parity(&fixture, &data);
+    }
+
+    #[test]
+    fn test_house_guest_actions_roundtrip() {
+        let add_fixture = hex::decode("0300426f62000000").unwrap();
+        let add = AddPermanentGuestActionData {
+            target_name: "Bob".to_string(),
+        };
+        assert_pack_unpack_parity(&add_fixture, &add);
+
+        let boot_fixture = hex::decode("0300457665000000").unwrap();
+        let boot = BootSpecificHouseGuestActionData {
+            target_name: "Eve".to_string(),
+        };
+        assert_pack_unpack_parity(&boot_fixture, &boot);
+
+        let remove_fixture: [u8; 0] = [];
+        let remove = RemoveAllPermanentGuestsActionData {};
+        assert_pack_unpack_parity(&remove_fixture, &remove);
     }
 }

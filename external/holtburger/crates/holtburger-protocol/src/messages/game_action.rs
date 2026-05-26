@@ -67,6 +67,9 @@ pub enum GameAction {
     HouseQuery(Box<HouseQueryActionData>),
     AbandonHouse(Box<AbandonHouseActionData>),
     RentHouse(Box<RentHouseActionData>),
+    AddPermanentGuest(Box<AddPermanentGuestActionData>),
+    BootSpecificHouseGuest(Box<BootSpecificHouseGuestActionData>),
+    RemoveAllPermanentGuests(Box<RemoveAllPermanentGuestsActionData>),
     PingRequest(Box<PingRequestActionData>),
     DropItem(Box<DropItemActionData>),
     PutItemInContainer(Box<PutItemInContainerActionData>),
@@ -262,6 +265,15 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::RentHouse => {
                     GameAction::RentHouse(Box::new(RentHouseActionData::unpack(data, offset)?))
                 }
+                GameActionOpcode::AddPermanentGuest => GameAction::AddPermanentGuest(Box::new(
+                    AddPermanentGuestActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::BootSpecificHouseGuest => GameAction::BootSpecificHouseGuest(
+                    Box::new(BootSpecificHouseGuestActionData::unpack(data, offset)?),
+                ),
+                GameActionOpcode::RemoveAllPermanentGuests => GameAction::RemoveAllPermanentGuests(
+                    Box::new(RemoveAllPermanentGuestsActionData::unpack(data, offset)?),
+                ),
                 GameActionOpcode::PingRequest => {
                     GameAction::PingRequest(Box::new(PingRequestActionData::unpack(data, offset)?))
                 }
@@ -628,6 +640,21 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::RentHouse(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::RentHouse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AddPermanentGuest(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AddPermanentGuest as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::BootSpecificHouseGuest(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::BootSpecificHouseGuest as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::RemoveAllPermanentGuests(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::RemoveAllPermanentGuests as u32)
                     .unwrap();
                 data.pack(buf);
             }

@@ -253,6 +253,10 @@ function ensureStyles() {
       background: rgba(60, 45, 22, 0.35);
       border-color: var(--hb-border-brass-dim);
     }
+    #${OVERLAY_ID} .hb-sr-row[data-focused="1"] {
+      border-left: 3px solid var(--hb-text-gold);
+      background: rgba(100, 75, 30, 0.32);
+    }
     #${OVERLAY_ID} .hb-sr-row-main {
       display: flex;
       align-items: center;
@@ -394,6 +398,9 @@ const state = {
   unsubscribe: null,
   pollTimer: null,
   hookedHandle: null,
+  rows: [],
+  focusIdx: -1,
+  keydownHandler: null,
 };
 
 function formatDuration(secs) {
@@ -624,6 +631,8 @@ function render() {
   state.listEl.innerHTML = "";
 
   if (ids.length === 0) {
+    state.rows = [];
+    state.focusIdx = -1;
     state.emptyEl.style.display = "";
     setAcText(state.emptyEl, "No spells learned. Learn a spell tome to research.");
     if (state.countEl) state.countEl.textContent = "0 known";
@@ -646,13 +655,21 @@ function render() {
     return (a.meta.name ?? "").localeCompare(b.meta.name ?? "");
   });
 
+  state.rows = rows;
+  if (state.focusIdx >= rows.length) state.focusIdx = rows.length - 1;
+  if (state.focusIdx < 0 && rows.length > 0) state.focusIdx = 0;
+
   if (rows.length === 0) {
+    state.focusIdx = -1;
     state.emptyEl.style.display = "";
     setAcText(state.emptyEl, "No spells match the current filter.");
   } else {
     state.emptyEl.style.display = "none";
-    for (const { id, meta } of rows) {
-      state.listEl.appendChild(makeRow(id, meta));
+    for (let i = 0; i < rows.length; i++) {
+      const { id, meta } = rows[i];
+      const el = makeRow(id, meta);
+      if (i === state.focusIdx) el.dataset.focused = "1";
+      state.listEl.appendChild(el);
     }
   }
 
@@ -706,6 +723,7 @@ function ensurePanel() {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
   overlay.dataset.open = "0";
+  overlay.tabIndex = -1;
 
   const header = document.createElement("div");
   header.className = "hb-sr-header";
@@ -802,16 +820,104 @@ function ensurePanel() {
   state.levelSel = levelSel;
   state.searchInput = searchInput;
 
-  schoolSel.addEventListener("change", () => render());
-  levelSel.addEventListener("change", () => render());
-  searchInput.addEventListener("input", () => render());
+  const onFilterChange = () => {
+    state.focusIdx = 0;
+    render();
+  };
+  schoolSel.addEventListener("change", onFilterChange);
+  levelSel.addEventListener("change", onFilterChange);
+  searchInput.addEventListener("input", onFilterChange);
 
   return overlay;
+}
+
+function scrollFocusedIntoView() {
+  if (!state.listEl || state.focusIdx < 0) return;
+  const el = state.listEl.children[state.focusIdx];
+  if (el && typeof el.scrollIntoView === "function") {
+    el.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function moveFocus(delta) {
+  const n = state.rows.length;
+  if (n === 0) return;
+  // Wrap-around: ArrowDown past last → first; ArrowUp before first → last.
+  let next = state.focusIdx + delta;
+  if (next < 0) next = ((next % n) + n) % n;
+  else if (next >= n) next = next % n;
+  state.focusIdx = next;
+  render();
+  scrollFocusedIntoView();
+}
+
+function setFocus(idx) {
+  const n = state.rows.length;
+  if (n === 0) return;
+  state.focusIdx = Math.max(0, Math.min(n - 1, idx));
+  render();
+  scrollFocusedIntoView();
+}
+
+function onPanelKeydown(ev) {
+  if (state.overlayEl?.dataset.open !== "1") return;
+  if (ev.target === state.searchInput) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closePanel();
+    }
+    return;
+  }
+  switch (ev.key) {
+    case "ArrowDown":
+      ev.preventDefault();
+      moveFocus(1);
+      break;
+    case "ArrowUp":
+      ev.preventDefault();
+      moveFocus(-1);
+      break;
+    case "PageDown":
+      ev.preventDefault();
+      moveFocus(10);
+      break;
+    case "PageUp":
+      ev.preventDefault();
+      moveFocus(-10);
+      break;
+    case "Home":
+      ev.preventDefault();
+      setFocus(0);
+      break;
+    case "End":
+      ev.preventDefault();
+      setFocus(state.rows.length - 1);
+      break;
+    case "Enter": {
+      if (state.focusIdx < 0 || state.focusIdx >= state.rows.length) return;
+      ev.preventDefault();
+      const r = state.rows[state.focusIdx];
+      castFromRow(r.id, r.meta);
+      break;
+    }
+    case "Escape":
+      ev.preventDefault();
+      closePanel();
+      break;
+    default:
+      break;
+  }
 }
 
 export function openPanel() {
   const overlay = ensurePanel();
   overlay.dataset.open = "1";
+  state.focusIdx = 0;
+  if (!state.keydownHandler) {
+    state.keydownHandler = onPanelKeydown;
+    overlay.addEventListener("keydown", state.keydownHandler);
+  }
+  try { overlay.focus({ preventScroll: true }); } catch (_) {}
   Promise.all([loadSpellCatalog(), loadComponentNames()]).then(() => {
     if (!tryHook() && !state.pollTimer) {
       state.pollTimer = setInterval(() => {
@@ -828,6 +934,10 @@ export function openPanel() {
 export function closePanel() {
   if (!state.overlayEl) return;
   state.overlayEl.dataset.open = "0";
+  if (state.keydownHandler) {
+    state.overlayEl.removeEventListener("keydown", state.keydownHandler);
+    state.keydownHandler = null;
+  }
 }
 
 if (typeof window !== "undefined") {

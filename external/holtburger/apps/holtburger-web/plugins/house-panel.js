@@ -5,11 +5,17 @@
 // Empty payload for Query/Abandon; Buy/Rent take slumlord guid +
 // PackableList<uint> of payment-item guids.
 //
-// Guest perms / storage perms / boot / list-available are deferred
-// to a future wave. So is the receive-side HouseProfile (0x021D) /
-// HouseData (0x0225) snapshot — `Query My House` fires the request;
-// the response surfaces in chat / kind=… events but isn't rendered
-// here yet.
+// Wave M-3 (2026-05-26): 3 guest send-side opcodes —
+// AddPermanentGuest (0x0245), BootSpecificHouseGuest (0x024A),
+// RemoveAllPermanentGuests (0x025E). Each guest action carries the
+// target player name on the wire (string16L); RemoveAll has an
+// empty payload. ACE resolves players by name server-side.
+//
+// Storage perms / allegiance guest perms / list-available are
+// deferred to a future wave. So is the receive-side HouseProfile
+// (0x021D) / HouseData (0x0225) snapshot — `Query My House` fires
+// the request; the response surfaces in chat / kind=… events but
+// isn't rendered here yet.
 //
 // UX MVP (per PR scope): user manually types the slumlord GUID + a
 // comma-separated list of item GUIDs. A proper slumlord-NPC picker +
@@ -546,10 +552,90 @@ function buildPanel() {
   abandonSection.appendChild(abandonBtn);
   body.appendChild(abandonSection);
 
+  // Guests — Wave M-3 (2026-05-26): 3 send-side opcodes —
+  // AddPermanentGuest (0x0245), BootSpecificHouseGuest (0x024A),
+  // RemoveAllPermanentGuests (0x025E). Each takes the target player
+  // name (string16L on the wire); RemoveAll has an empty payload.
+  // ACE resolves players by name server-side.
+  const guestSection = makeSection("Guests");
+  const addGuest = makeInputRow("Guest name", "Bob");
+  guestSection.appendChild(addGuest.row);
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "hbhp-btn";
+  setAcText(addBtn, "Add Guest");
+  addBtn.addEventListener("click", () => {
+    const name = String(addGuest.input.value ?? "").trim();
+    if (!name) {
+      console.warn("[house-panel] add-guest: empty name");
+      return;
+    }
+    const handle = getHandle();
+    if (!handle?.addPermanentGuest) {
+      console.warn("[house-panel] no session handle");
+      return;
+    }
+    try {
+      handle.addPermanentGuest(name);
+      console.log(`[house-panel] addPermanentGuest(${JSON.stringify(name)})`);
+    } catch (e) {
+      console.warn("[house-panel] addPermanentGuest failed:", e);
+    }
+  });
+  guestSection.appendChild(addBtn);
+
+  const bootGuest = makeInputRow("Boot name", "Eve");
+  guestSection.appendChild(bootGuest.row);
+  const bootBtn = document.createElement("button");
+  bootBtn.type = "button";
+  bootBtn.className = "hbhp-btn hbhp-btn-danger";
+  setAcText(bootBtn, "Boot Guest");
+  bootBtn.addEventListener("click", () => {
+    const name = String(bootGuest.input.value ?? "").trim();
+    if (!name) {
+      console.warn("[house-panel] boot: empty name");
+      return;
+    }
+    if (!window.confirm(`Boot ${name} from your house?`)) return;
+    const handle = getHandle();
+    if (!handle?.bootSpecificHouseGuest) {
+      console.warn("[house-panel] no session handle");
+      return;
+    }
+    try {
+      handle.bootSpecificHouseGuest(name);
+      console.log(`[house-panel] bootSpecificHouseGuest(${JSON.stringify(name)})`);
+    } catch (e) {
+      console.warn("[house-panel] bootSpecificHouseGuest failed:", e);
+    }
+  });
+  guestSection.appendChild(bootBtn);
+
+  const removeAllBtn = document.createElement("button");
+  removeAllBtn.type = "button";
+  removeAllBtn.className = "hbhp-btn hbhp-btn-danger";
+  setAcText(removeAllBtn, "Remove All Guests");
+  removeAllBtn.addEventListener("click", () => {
+    if (!window.confirm("Clear the entire permanent guest list? This cannot be undone.")) return;
+    const handle = getHandle();
+    if (!handle?.removeAllPermanentGuests) {
+      console.warn("[house-panel] no session handle");
+      return;
+    }
+    try {
+      handle.removeAllPermanentGuests();
+      console.log("[house-panel] removeAllPermanentGuests()");
+    } catch (e) {
+      console.warn("[house-panel] removeAllPermanentGuests failed:", e);
+    }
+  });
+  guestSection.appendChild(removeAllBtn);
+  body.appendChild(guestSection);
+
   // Placeholder for the future receive-side fold-out.
   const placeholder = document.createElement("div");
   placeholder.className = "hbhp-placeholder";
-  placeholder.textContent = "House profile + guest perms + storage perms — coming in a future wave";
+  placeholder.textContent = "House profile + storage perms — coming in a future wave";
   body.appendChild(placeholder);
 
   overlay.appendChild(body);
