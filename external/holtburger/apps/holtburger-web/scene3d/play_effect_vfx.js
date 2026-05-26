@@ -2,6 +2,12 @@
 // CMT Wave 12 / Phase 37 (2026-05-26) — extended coverage for the
 // highest-impact remaining PlayScript IDs (Splatter, Spark, Health*,
 // Shield*, Death/Destroy, Fizzle).
+// CMT Wave 15 / Phase 47 (2026-05-26) — another batch of family
+// coverage: Attrib* up/down (12 IDs), Skill* up/down (14 IDs incl
+// SkillDownBlack + SkillDownVoid), Enchant* up/down (16 IDs incl
+// Grey/White variants), Hide/UnHide/Hidden (3 IDs), PortalEntry/Exit/
+// Storm (3 IDs), Camping Mastery/Ineptitude (2 IDs), LayingofHands
+// (1 ID). 51 additional IDs → 101/174 shipped, ~73 still TODO.
 //
 // Self-registering Three.js module that subscribes to `playEffect`
 // events on `window.__pluginClient.events` and spawns minimal
@@ -151,6 +157,105 @@ const _SHIELD_IDS = new Set([
 // remote entity drops.
 const _DEATH_IDS = new Set([
   PLAY_SCRIPT.Destroy, PLAY_SCRIPT.DisappearDestroy,
+]);
+
+// =====================================================================
+// Phase 47 — additional family ID sets (Wave 15).
+// =====================================================================
+// Same Set-membership pattern as Phase 37. Each cluster maps a color/
+// up-down semantic to a single visual treatment; per-color (Red/Orange/
+// Yellow/...) directional fidelity is a PhysicsScript port concern and
+// stays out of scope here.
+
+// AttribUp family (0x06-0x10 every-other-even) — buff applied to a
+// primary attribute (Strength/Endurance/Coordination/Quickness/Focus/
+// Self). Six color variants in ACE but all read as "stat buff" — green-
+// yellow `0xc8ff44` is the positive-change cue (matches HUD level-up
+// flash convention; green = beneficial in nearly every RPG).
+const _ATTRIB_UP_IDS = new Set([
+  PLAY_SCRIPT.AttribUpRed, PLAY_SCRIPT.AttribUpOrange,
+  PLAY_SCRIPT.AttribUpYellow, PLAY_SCRIPT.AttribUpGreen,
+  PLAY_SCRIPT.AttribUpBlue, PLAY_SCRIPT.AttribUpPurple,
+]);
+
+// AttribDown family (0x07-0x11 every-other-odd) — debuff applied to a
+// primary attribute. Six color variants collapse to red-orange
+// `0xff6633` (negative-change cue; distinct from Splatter's brighter
+// pure-red and HealthDown's dim red so the player can tell "your stat
+// was reduced" from "you took a hit").
+const _ATTRIB_DOWN_IDS = new Set([
+  PLAY_SCRIPT.AttribDownRed, PLAY_SCRIPT.AttribDownOrange,
+  PLAY_SCRIPT.AttribDownYellow, PLAY_SCRIPT.AttribDownGreen,
+  PLAY_SCRIPT.AttribDownBlue, PLAY_SCRIPT.AttribDownPurple,
+]);
+
+// SkillUp family (0x12-0x1C every-other-even) — buff applied to a
+// skill. Same green-yellow palette as Attrib so the player learns one
+// "stat went up" color, but uses a small cube (via _spawnCubeBurst) so
+// they get geometric distinction between attribute vs skill changes —
+// attributes are "core" (sphere), skills are "trained" (cube).
+const _SKILL_UP_IDS = new Set([
+  PLAY_SCRIPT.SkillUpRed, PLAY_SCRIPT.SkillUpOrange,
+  PLAY_SCRIPT.SkillUpYellow, PLAY_SCRIPT.SkillUpGreen,
+  PLAY_SCRIPT.SkillUpBlue, PLAY_SCRIPT.SkillUpPurple,
+]);
+
+// SkillDown family — debuff applied to a skill. Includes the two extra
+// late-additions in the enum: `SkillDownBlack (0x1E)` (the seventh
+// "color" — only present in Down direction, no SkillUpBlack exists)
+// and `SkillDownVoid (0xA9)` from the Void cluster (gameplay-equivalent
+// to the regular skill debuff per ACE source). All collapse to the red-
+// orange Attrib-down color.
+const _SKILL_DOWN_IDS = new Set([
+  PLAY_SCRIPT.SkillDownRed, PLAY_SCRIPT.SkillDownOrange,
+  PLAY_SCRIPT.SkillDownYellow, PLAY_SCRIPT.SkillDownGreen,
+  PLAY_SCRIPT.SkillDownBlue, PLAY_SCRIPT.SkillDownPurple,
+  PLAY_SCRIPT.SkillDownBlack, PLAY_SCRIPT.SkillDownVoid,
+]);
+
+// EnchantUp family — enchantment applied (spell buff). 0x39-0x43
+// covers the 6 color cycle; 0x8B (EnchantUpGrey) and 0x8E
+// (EnchantUpWhite) are late-additions for two additional palette
+// slots ACE added for late-Throne-of-Destiny enchantments. All collapse
+// to a gold `0xffd966` brief flash (gold = magical-aura convention).
+const _ENCHANT_UP_IDS = new Set([
+  PLAY_SCRIPT.EnchantUpRed, PLAY_SCRIPT.EnchantUpOrange,
+  PLAY_SCRIPT.EnchantUpYellow, PLAY_SCRIPT.EnchantUpGreen,
+  PLAY_SCRIPT.EnchantUpBlue, PLAY_SCRIPT.EnchantUpPurple,
+  PLAY_SCRIPT.EnchantUpGrey, PLAY_SCRIPT.EnchantUpWhite,
+]);
+
+// EnchantDown family — enchantment expired / dispelled. Same 8-color
+// layout as EnchantUp. Muted purple `0x9966dd` (de-magic / fade-out
+// convention; distinct from EnchantUp's gold so dispel reads
+// differently from apply at a glance).
+const _ENCHANT_DOWN_IDS = new Set([
+  PLAY_SCRIPT.EnchantDownRed, PLAY_SCRIPT.EnchantDownOrange,
+  PLAY_SCRIPT.EnchantDownYellow, PLAY_SCRIPT.EnchantDownGreen,
+  PLAY_SCRIPT.EnchantDownBlue, PLAY_SCRIPT.EnchantDownPurple,
+  PLAY_SCRIPT.EnchantDownGrey, PLAY_SCRIPT.EnchantDownWhite,
+]);
+
+// Camping family — `CampingMastery (0x90)` + `CampingIneptitude (0x91)`.
+// "Camping" in AC = the temporary "resting" buff/debuff when standing
+// still long enough (skill-grade affects which side fires). Gentle
+// cyan slow pulse (`_CALM_COLOR` 0x88ddff) — peaceful / restful cue.
+const _CAMPING_IDS = new Set([
+  PLAY_SCRIPT.CampingMastery, PLAY_SCRIPT.CampingIneptitude,
+]);
+
+// Portal family — PortalEntry (0x52) / PortalExit (0x53) / PortalStorm
+// (0x73). PortalStorm is the "you got recalled" atmospheric flash; the
+// other two are per-traversal cues. All three get the bright purple
+// expanding-sphere treatment, with per-script scale/duration tuning in
+// the dispatch (Entry: expanding 0.3→2.0/600ms, Exit: contracting
+// 2.0→0.3/600ms, Storm: bright white burst 0.5→1.5/500ms).
+//
+// Storm is grouped here because it's portal-related semantically, but
+// we don't bundle it into a single arm — see the dispatch for per-ID
+// branching.
+const _PORTAL_FAMILY_IDS = new Set([
+  PLAY_SCRIPT.PortalEntry, PLAY_SCRIPT.PortalExit, PLAY_SCRIPT.PortalStorm,
 ]);
 
 // Active burst registry — drives both per-frame tween updates and
@@ -390,6 +495,69 @@ function _spawnRingBurst(
 }
 
 /**
+ * Spawn a placeholder additive-blend cube burst at `position` (Phase
+ * 47). Geometric distinction from `_spawnBurst` (sphere) so the player
+ * can differentiate attribute changes (sphere = core stat) vs skill
+ * changes (cube = trained ability) at a glance even with identical
+ * color palettes.
+ *
+ * Cube is `BoxGeometry(1,1,1)` driven by `mesh.scale`. Rotates 90°
+ * over the burst lifetime for visual life — feels like a "trained
+ * skill ticked up" vs a static pulse.
+ *
+ * @param {import("three").Object3D} parent
+ * @param {import("three").Vector3} position
+ * @param {number} scaleFrom
+ * @param {number} scaleTo
+ * @param {number} color
+ * @param {number} durationMs
+ */
+function _spawnCubeBurst(
+  parent,
+  position,
+  scaleFrom,
+  scaleTo,
+  color,
+  durationMs,
+) {
+  if (!parent) return;
+  // Box(1,1,1) — 12 tris, cheaper than the sphere. Scale-driven sizing
+  // matches the other burst helpers' invariants.
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 1.0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.FrontSide,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = "playEffectCube";
+  mesh.position.copy(position);
+  mesh.scale.setScalar(scaleFrom);
+  mesh.renderOrder = 950;
+  parent.add(mesh);
+
+  const handle = _nextHandle++;
+  _activeBursts.set(handle, {
+    mesh,
+    geometry,
+    material,
+    parent,
+    startMs: performance.now(),
+    scaleFrom,
+    scaleTo,
+    opacityFrom: 1.0,
+    durationMs: durationMs || 0,
+    // Quarter-turn over the burst lifetime — drives the same Z-rotation
+    // path the ring uses (rAF tick reads `rotateRadians` if present).
+    rotateRadians: Math.PI * 0.5,
+  });
+  _ensureRafRunning();
+}
+
+/**
  * Event handler for `playEffect` on the plugin event bus.
  *
  * @param {CustomEvent<{ targetGuid: number, scriptId: number, speed: number }>} evt
@@ -573,12 +741,245 @@ function _onPlayEffect(evt) {
       }
 
       // ---------------------------------------------------------------
-      // Remaining ~122 PlayScript values — TODO for future verticals
-      // (Attrib/Skill up/down, Enchant family, Regen family, Vitae,
-      // Vision, SwapHealth, BreatheFlame/Frost/Acid/Lightning, Portal*,
-      // SpecialState1-9/0/colour, LevelUp, Wedding, Dispel*, Aetheria*,
-      // DirtyFighting*, etc.). Log so we can see what ACE is actually
-      // broadcasting in real gameplay.
+      // Phase 47 (Wave 15) — extended family coverage continued.
+      // ---------------------------------------------------------------
+
+      // AttribUp (0x06,0x08,0x0A,0x0C,0x0E,0x10) — attribute buff. Green-
+      // yellow `0xc8ff44` sphere; positive stat-change cue. 400ms reads
+      // as "your stat went up" — long enough to register but doesn't
+      // linger when multiple buffs land in rapid succession.
+      if (_ATTRIB_UP_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] AttribUp target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.15, 0.5, 0xc8ff44, 400);
+        return;
+      }
+
+      // AttribDown (0x07,0x09,0x0B,0x0D,0x0F,0x11) — attribute debuff.
+      // Red-orange `0xff6633` sphere (distinct from Splatter/HealthDown
+      // so the player learns three distinct red cues: bright = hit,
+      // dim = HP loss, orange = stat debuff).
+      if (_ATTRIB_DOWN_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] AttribDown target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.15, 0.5, 0xff6633, 400);
+        return;
+      }
+
+      // SkillUp (0x12,0x14,0x16,0x18,0x1A,0x1C) — skill buff. Same
+      // green-yellow palette as AttribUp but via the cube helper for
+      // geometric distinction (attribute = sphere, skill = cube).
+      if (_SKILL_UP_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] SkillUp target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnCubeBurst(placement.parent, placement.position, 0.1, 0.4, 0xc8ff44, 400);
+        return;
+      }
+
+      // SkillDown (0x13,0x15,0x17,0x19,0x1B,0x1D,0x1E,0xA9) — skill
+      // debuff. Red-orange cube. 0x1E = SkillDownBlack (the 7th color
+      // unique to Down direction); 0xA9 = SkillDownVoid (Void-cluster
+      // late-addition; gameplay-equivalent to a normal skill debuff).
+      if (_SKILL_DOWN_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] SkillDown target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnCubeBurst(placement.parent, placement.position, 0.1, 0.4, 0xff6633, 400);
+        return;
+      }
+
+      // EnchantUp (0x39-0x43 cycle + 0x8B Grey + 0x8E White) — enchant
+      // applied. Gold `0xffd966` brief flash (300ms; magical-aura
+      // convention — gold pulses around an entity gaining a spell
+      // effect). Smaller scale than Attrib/Skill since enchants land
+      // frequently in combat (every spell cast on you).
+      if (_ENCHANT_UP_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] EnchantUp target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.1, 0.4, 0xffd966, 300);
+        return;
+      }
+
+      // EnchantDown (0x3A-0x44 cycle + 0x8C Grey + 0x8F White) — enchant
+      // expired/dispelled. Muted purple `0x9966dd` — visually contrasts
+      // with EnchantUp's gold so the two read as opposite events at a
+      // glance.
+      if (_ENCHANT_DOWN_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] EnchantDown target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.1, 0.4, 0x9966dd, 300);
+        return;
+      }
+
+      // Hide (0x74) — stealth engaged. Gray `0x666666` sphere fades-IN
+      // (scaleFrom > scaleTo so the visual shrinks/dissolves as the
+      // caster "vanishes"). Long-ish 500ms to telegraph the state
+      // change.
+      if (scriptId === PLAY_SCRIPT.Hide) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Hide target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        // scaleFrom=0.8 → scaleTo=0.2 (contracting) reads as "fading
+        // into stealth". Opacity tween in the rAF loop also fades to
+        // zero so the net effect is "shrinks and disappears".
+        _spawnBurst(placement.parent, placement.position, 0.8, 0.2, 0x666666, 500);
+        return;
+      }
+
+      // UnHide (0x75) — stealth dropped. Reverse: gray sphere expands
+      // outward (scaleFrom < scaleTo) as the caster reappears.
+      if (scriptId === PLAY_SCRIPT.UnHide) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] UnHide target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.2, 0.8, 0x666666, 500);
+        return;
+      }
+
+      // Hidden (0x76) — passive "still in stealth" cue. Very brief
+      // (150ms), tiny (0.05→0.1), barely visible — just enough to mark
+      // the state without polluting the visual field. Used when ACE
+      // broadcasts a periodic stealth confirmation.
+      if (scriptId === PLAY_SCRIPT.Hidden) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Hidden target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.05, 0.1, 0x666666, 150);
+        return;
+      }
+
+      // PortalEntry (0x52) — entering a portal. Bright purple
+      // `0xcc44ff` expanding sphere 0.3→2.0 over 600ms — large
+      // signature for an important traversal event.
+      if (scriptId === PLAY_SCRIPT.PortalEntry) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] PortalEntry target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.3, 2.0, 0xcc44ff, 600);
+        return;
+      }
+
+      // PortalExit (0x53) — exiting a portal at the destination.
+      // Reverse-shape vs Entry: contracting sphere 2.0→0.3 — reads as
+      // "materializing at destination". Same purple palette so the
+      // entry/exit pair feel connected.
+      if (scriptId === PLAY_SCRIPT.PortalExit) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] PortalExit target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 2.0, 0.3, 0xcc44ff, 600);
+        return;
+      }
+
+      // PortalStorm (0x73) — atmospheric "you got recalled" or
+      // "portal storm hit" flash. The closest semantic to a
+      // "PortalSending" cue in the enum (no literal PortalSending
+      // exists). White `0xffffff` burst 0.5→1.5/500ms — bright,
+      // unambiguous "something portal-y just happened to you".
+      if (scriptId === PLAY_SCRIPT.PortalStorm) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] PortalStorm target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.5, 1.5, 0xffffff, 500);
+        return;
+      }
+
+      // Camping (0x90 Mastery / 0x91 Ineptitude) — resting buff/debuff
+      // tick. Soft cyan `0x88ddff` slow pulse 0.4→0.9/800ms — gentle
+      // peaceful vibe matches the "resting at a campsite" semantic.
+      // No up/down color distinction here since both variants share
+      // the same gameplay context (you're resting; mastery vs
+      // ineptitude is about skill grade, not stat polarity).
+      if (_CAMPING_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Camping target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.4, 0.9, 0x88ddff, 800);
+        return;
+      }
+
+      // LayingofHands (0x9B) — Paladin self-heal-or-touch-heal special.
+      // Same calm cyan palette as Camping (peaceful / restorative) but
+      // a touch brighter & faster (0.3→1.0/700ms) since it's a
+      // discrete event vs Camping's ambient tick.
+      if (scriptId === PLAY_SCRIPT.LayingofHands) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] LayingofHands target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.3, 1.0, 0x88ddff, 700);
+        return;
+      }
+
+      // ---------------------------------------------------------------
+      // Remaining ~73 PlayScript values — TODO for future verticals
+      // (Regen family, Vitae*, Vision*, SwapHealth*, Trans*,
+      // BreatheFlame/Frost/Acid/Lightning, Create, ProjectileCollision,
+      // SpecialState1-9/0/colour, LevelUp, Wedding* (Bliss/Steele),
+      // Dispel*, Bunny/BaelZharon, Restriction*, Augmentation*,
+      // BlackMadness, Aetheria*, RegenDownVoid, DirtyFighting*).
+      // Log so we can see what ACE is actually broadcasting in real
+      // gameplay.
       // ---------------------------------------------------------------
       // eslint-disable-next-line no-console
       console.debug(
@@ -640,10 +1041,11 @@ function _tryBind() {
 
 // Re-exports for diag/testing — call these directly to verify the
 // burst pipeline works without needing a live server event. Useful
-// for the Wave 11/12 acceptance traces.
+// for the Wave 11/12/15 acceptance traces.
 export const __test = Object.freeze({
   spawnBurst: _spawnBurst,
   spawnRingBurst: _spawnRingBurst,
+  spawnCubeBurst: _spawnCubeBurst,
   resolveTargetPlacement: _resolveTargetPlacement,
   onPlayEffect: _onPlayEffect,
   activeBurstCount: () => _activeBursts.size,
@@ -663,10 +1065,11 @@ export const __test = Object.freeze({
 // `families` maps the human-readable family label to the IDs in it.
 // Iteration order matches the dispatch order in `_onPlayEffect`.
 //
-// Counts (as of Phase 37): shipped=50 (Launch + Explode + 48 from
-// Phase 37). Total PLAY_SCRIPT enum size = 174 (0x00-0xAD). Remaining
-// TODO ≈ 124 — the still-uncovered families list is documented in
-// the comment above the catch-all `console.debug` in `_onPlayEffect`.
+// Counts (as of Phase 47): shipped=101 (Launch + Explode + 48 from
+// Phase 37 + 51 from Phase 47). Total PLAY_SCRIPT enum size = 174
+// (0x00-0xAD). Remaining TODO ≈ 73 — the still-uncovered families
+// list is documented in the comment above the catch-all
+// `console.debug` in `_onPlayEffect`.
 const _COVERAGE_FAMILIES = Object.freeze({
   Launch: [PLAY_SCRIPT.Launch],
   Explode: [PLAY_SCRIPT.Explode],
@@ -677,6 +1080,19 @@ const _COVERAGE_FAMILIES = Object.freeze({
   Shield: Array.from(_SHIELD_IDS),
   Death: Array.from(_DEATH_IDS),
   Fizzle: [PLAY_SCRIPT.Fizzle],
+  // Phase 47 additions (Wave 15).
+  AttribUp: Array.from(_ATTRIB_UP_IDS),
+  AttribDown: Array.from(_ATTRIB_DOWN_IDS),
+  SkillUp: Array.from(_SKILL_UP_IDS),
+  SkillDown: Array.from(_SKILL_DOWN_IDS),
+  EnchantUp: Array.from(_ENCHANT_UP_IDS),
+  EnchantDown: Array.from(_ENCHANT_DOWN_IDS),
+  Hide: [PLAY_SCRIPT.Hide],
+  UnHide: [PLAY_SCRIPT.UnHide],
+  Hidden: [PLAY_SCRIPT.Hidden],
+  Portal: Array.from(_PORTAL_FAMILY_IDS),
+  Camping: Array.from(_CAMPING_IDS),
+  LayingofHands: [PLAY_SCRIPT.LayingofHands],
 });
 
 const _COVERAGE_SHIPPED_SET = new Set();

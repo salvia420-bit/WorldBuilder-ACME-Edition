@@ -54,6 +54,9 @@
 | 43 | SpellComponentsTable parser (DAT 0x0E00000F) + 4/4 parity | 14 | **shipped** 2026-05-26 |
 | 44 | spell-components.json (30 KB) + spell-cast-sequence.json (1.74 MB / 6266 seqs) | 14 | **shipped** 2026-05-26 |
 | 45 | Real scarab-windup chain playback (27/27 tests; setCastPose fallback) | 14 | **shipped** 2026-05-26 |
+| 46 | Server-resolved damage HUD line (5-entry ring + idle fade + sneak tag) | 15 | **shipped** 2026-05-26 |
+| 47 | Extended PlayScript VFX — 51 IDs (101/174 = 58% coverage) | 15 | **shipped** 2026-05-26 |
+| 48 | PhysicsScript bridge research — per-entity PScriptTable lookup mapped | 15 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 

@@ -98,6 +98,29 @@ const STANCE_MAGIC = 0x0049;
 // overlay's exit transition.
 const SNEAK_HOLD_MS = 1500;
 
+// Wave 15 / Phase 46 — server-resolved damage readout.
+//
+// Ring-buffer depth for the running average. Sized to match the user-
+// facing copy ("Avg (last 5)") so the displayed window === computed
+// window. We keep the buffer trimmed to this size on push so summary()
+// math is a one-pass sum / length without re-slicing.
+const LAST_HIT_RING_CAPACITY = 5;
+// How long the readout stays visible after the most recent damageDealt
+// event before fading out (idle / out of combat). 30s window covers the
+// long inter-attack gaps when chasing a fleeing target or repositioning
+// without making the readout feel stale. On expiry we clear the buffer
+// AND blank the DOM — re-entering combat starts fresh.
+const LAST_HIT_IDLE_MS = 30_000;
+// CSS fade duration (matches the .hch-last-hit `transition: opacity ...`
+// declaration in ensureStyles()). Tracked here so the fade-out timer
+// and the CSS stay in sync if either is tuned later.
+const LAST_HIT_FADE_MS = 320;
+// Bit 0x4 of AttackConditions = SneakAttack (set by ACE when
+// DamageEvent.SneakAttackMod > 1.0f, see ACE.Server/Entity/DamageEvent.cs:693).
+// Diag/combat.js documents the same constant — kept local here so the
+// plugin doesn't import diag-only state.
+const ATTACK_CONDITIONS_BIT_SNEAK_ATTACK = 0x4;
+
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
   const s = document.createElement("style");
@@ -269,6 +292,80 @@ function ensureStyles() {
     #${OVERLAY_ID} .hch-dr-row[data-sneak="1"] .hch-dr-flag {
       display: inline;
     }
+    /* Wave 15 / Phase 46 — "Last hit" readout row.
+     *
+     * Sits immediately below the DR row (which lives at y=29, height
+     * 14, so bottom edge is 43). We anchor the last-hit row at y=48
+     * (5px breathing-room gap so the two readouts don't visually
+     * collide) and give it the same 14px height + tabular-nums treatment
+     * the DR row uses. Width stops at x=710 to clear the right button
+     * column container (which lives at x=722,top=4,height=57 → bottom 61).
+     *
+     * Idle-fade: opacity transitions over LAST_HIT_FADE_MS so the line
+     * dims smoothly when no damageDealt arrives inside LAST_HIT_IDLE_MS
+     * (30s) instead of popping out. Pointer-events:none so the slider
+     * drag-rect underneath remains clickable (defensive — the DR row
+     * does the same). */
+    #${OVERLAY_ID} .hch-last-hit {
+      position: absolute;
+      left: 5px; top: 48px;
+      width: 705px; height: 14px;
+      color: var(--hb-text-gold-dim);
+      font-size: 10px;
+      line-height: 14px;
+      letter-spacing: 0.03em;
+      pointer-events: none;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      overflow: hidden;
+      opacity: 1;
+      transition: opacity ${LAST_HIT_FADE_MS}ms ease-out;
+    }
+    /* Idle / out-of-combat fade-out state. data-idle is flipped by
+     * the JS idle timer; the CSS transition handles the visual fade. */
+    #${OVERLAY_ID} .hch-last-hit[data-idle="1"] {
+      opacity: 0;
+    }
+    /* The "Last hit:" label — dim gold, uppercase, matches the row-2
+     * trailing label aesthetic so the two readouts read as a stack. */
+    #${OVERLAY_ID} .hch-lh-label {
+      color: var(--hb-text-gold-dim);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-right: 6px;
+    }
+    /* Damage value — slightly brighter gold + bold to anchor the line. */
+    #${OVERLAY_ID} .hch-lh-dmg {
+      color: var(--hb-text-gold);
+      font-weight: 600;
+    }
+    /* [SneakAttack] tag. Uses the same red-accent family as the DR
+     * row's sneak slice + sneak-hud floating overlay
+     * (rgba(220, 80, 40, *)) so all three signals read as one beat
+     * when the server confirms a sneak hit. Display:none until JS
+     * flips data-sneak=1 on the parent. */
+    #${OVERLAY_ID} .hch-lh-sneak {
+      display: none;
+      margin-left: 8px;
+      color: rgb(255, 180, 140);
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-shadow: 0 0 4px rgba(220, 80, 40, 0.55);
+    }
+    #${OVERLAY_ID} .hch-last-hit[data-sneak="1"] .hch-lh-sneak {
+      display: inline;
+    }
+    /* Running-average tail — pushed to the right of the [SneakAttack]
+     * tag so the visual rhythm is: label, damage, [tag], avg. Same
+     * tabular-nums treatment so the digits don't jitter across hits. */
+    #${OVERLAY_ID} .hch-lh-avg {
+      margin-left: 18px;
+      color: var(--hb-text-gold-dim);
+    }
+    #${OVERLAY_ID} .hch-lh-avg-val {
+      color: var(--hb-text-gold);
+      font-weight: 600;
+    }
     /* Right button column (0x10000056 72×57 @ 722,4). */
     #${OVERLAY_ID} .hch-buttons {
       position: absolute;
@@ -325,6 +422,20 @@ let state = {
   drLastPower: -1,
   drLastSneakFlag: -1,
   drLastStance: -1,
+  // Wave 15 / Phase 46 — "Last hit" readout state.
+  //  - lhRowEl / lhDmgEl / lhAvgEl: cached DOM refs so the update path
+  //    is allocation-free.
+  //  - lhRing: ring buffer of recent damageDealt events (capped at
+  //    LAST_HIT_RING_CAPACITY); newest at the tail. Each entry is
+  //    `{ damage, attackConditions, ts }` per the task spec.
+  //  - lhIdleTimer: setTimeout id that fires LAST_HIT_IDLE_MS after the
+  //    most recent event to flip the row into the faded-out state.
+  lhRowEl: null,
+  lhDmgEl: null,
+  lhSneakEl: null,
+  lhAvgValEl: null,
+  lhRing: [],
+  lhIdleTimer: null,
 };
 
 function stanceIsCombat() {
@@ -463,6 +574,89 @@ function onPlayerStatsUpdated(_payload) {
   updateDamageRating();
 }
 
+// Wave 15 / Phase 46 — repaint the "Last hit" row from the current ring
+// buffer. Pure DOM — caller (idle-timer expiry, onDamageDealt) decides
+// WHEN to call. Empty buffer leaves the placeholder dashes in place
+// (the row's opacity is what controls visibility; we don't blank text
+// on idle because that would re-trigger CSS transitions if a fresh
+// event lands during the fade).
+function updateLastHitRow() {
+  const row = state.lhRowEl;
+  if (!row) return;
+  const ring = state.lhRing;
+  if (!ring || ring.length === 0) {
+    if (state.lhDmgEl) setAcText(state.lhDmgEl, "—");
+    if (state.lhAvgValEl) setAcText(state.lhAvgValEl, "—");
+    row.dataset.sneak = "0";
+    return;
+  }
+  const latest = ring[ring.length - 1];
+  const dmg = Math.max(0, latest.damage | 0);
+  // Bit 0x4 set on the MOST RECENT hit drives the [SneakAttack] tag —
+  // per the task spec. Averaging is over the whole ring; the tag
+  // tracks the latest event only.
+  const hasSneakBit =
+    (Number(latest.attackConditions) & ATTACK_CONDITIONS_BIT_SNEAK_ATTACK) !== 0;
+  // Running average over the buffer (1..LAST_HIT_RING_CAPACITY hits).
+  let sum = 0;
+  for (let i = 0; i < ring.length; i += 1) sum += (ring[i].damage | 0);
+  const avg = Math.round(sum / ring.length);
+  if (state.lhDmgEl) setAcText(state.lhDmgEl, `${dmg} dmg`);
+  if (state.lhAvgValEl) setAcText(state.lhAvgValEl, `${avg}`);
+  row.dataset.sneak = hasSneakBit ? "1" : "0";
+}
+
+// Wave 15 / Phase 46 — `damageDealt` handler. Pure consumer of the
+// existing event surface: src/lib.rs:23601 emits
+// `{ defenderName, damage, damageType, healthPercent, criticalHit,
+//    attackConditions }` against `kind=19` CombatEvent; the plugin
+// client republishes as a CustomEvent-shaped object so `.detail`
+// carries the payload (see combat-bar.js:1467 for the same pattern).
+//
+// Stance-gate: hide while in magic stance OR peace. Magic damage flows
+// through a different ACE event family (per the task notes), so showing
+// a melee/missile-only readout there would mislead. Peace is already
+// covered by overlay visibility — but if the bus delivers a stale hit
+// after `hide()` we still don't want to bump the idle timer.
+function onDamageDealt(ev) {
+  const d = ev?.detail ?? {};
+  // Defensive: ignore well-formed-but-zero-damage events (evades come
+  // through a separate `evadedTarget` channel; a `damageDealt` with
+  // damage=0 is rare but cleaner to drop than to log "0 dmg" as the
+  // "last hit").
+  const damage = (d.damage | 0);
+  if (damage <= 0) return;
+  if (!stanceIsMeleeOrMissile()) return;
+
+  // Push to ring + trim to capacity (oldest drops off the head).
+  const conditionsRaw = d.attackConditions ?? 0;
+  const conditions = typeof conditionsRaw === "bigint"
+    ? Number(conditionsRaw)
+    : Number(conditionsRaw);
+  state.lhRing.push({
+    damage,
+    attackConditions: Number.isFinite(conditions) ? conditions : 0,
+    ts: performance.now(),
+  });
+  while (state.lhRing.length > LAST_HIT_RING_CAPACITY) state.lhRing.shift();
+
+  // Wake the row out of any in-progress fade-out and re-arm the idle
+  // timer. data-idle=0 flips opacity back to 1 via the CSS transition;
+  // if the row was already fully faded, this same transition fades it
+  // back in.
+  if (state.lhRowEl) state.lhRowEl.dataset.idle = "0";
+  if (state.lhIdleTimer) {
+    clearTimeout(state.lhIdleTimer);
+    state.lhIdleTimer = null;
+  }
+  state.lhIdleTimer = setTimeout(() => {
+    if (state.lhRowEl) state.lhRowEl.dataset.idle = "1";
+    state.lhIdleTimer = null;
+  }, LAST_HIT_IDLE_MS);
+
+  updateLastHitRow();
+}
+
 // Returns { overlay, refs } where refs is the element map applyCombatHudLayout
 // walks. DOM mirrors the 0x21000007 element tree:
 //   overlay (root 0x1000004B)
@@ -574,6 +768,55 @@ function build() {
   state.drRowEl = drRow;
   state.drTotalEl = drTotal;
   state.drBreakEl = drBreak;
+
+  // Wave 15 / Phase 46 — "Last hit" readout row. Sibling to drRow,
+  // anchored one line below it (y=48). DOM mirror of the DR row's
+  // sub-span pattern so the CSS sneak-accent selector + average-tail
+  // styling can target individual slices without rebuilds:
+  //   .hch-lh-label   — "LAST HIT:"      (dim gold, uppercase)
+  //   .hch-lh-dmg     — "47 dmg"         (brighter gold, bold)
+  //   .hch-lh-sneak   — "[SneakAttack]"  (display:none unless data-sneak)
+  //   .hch-lh-avg     — "Avg (last 5):"  (dim gold)
+  //     └─ .hch-lh-avg-val "38"          (brighter gold inside the same span)
+  // The row starts faded-out (data-idle="1") until the first
+  // damageDealt arrives — no point flashing empty placeholders into
+  // view on each combat-stance entry.
+  const lhRow = document.createElement("div");
+  lhRow.className = "hch-last-hit";
+  lhRow.dataset.sneak = "0";
+  lhRow.dataset.idle = "1";
+
+  const lhLabel = document.createElement("span");
+  lhLabel.className = "hch-lh-label";
+  setAcText(lhLabel, "Last hit:");
+  lhRow.appendChild(lhLabel);
+
+  const lhDmg = document.createElement("span");
+  lhDmg.className = "hch-lh-dmg";
+  setAcText(lhDmg, "—");
+  lhRow.appendChild(lhDmg);
+
+  const lhSneak = document.createElement("span");
+  lhSneak.className = "hch-lh-sneak";
+  setAcText(lhSneak, "[SneakAttack]");
+  lhRow.appendChild(lhSneak);
+
+  const lhAvg = document.createElement("span");
+  lhAvg.className = "hch-lh-avg";
+  // Build the "Avg (last N):" label + value as two adjacent text nodes
+  // so updates only repaint the numeric child via setAcText.
+  lhAvg.appendChild(document.createTextNode(`Avg (last ${LAST_HIT_RING_CAPACITY}): `));
+  const lhAvgVal = document.createElement("span");
+  lhAvgVal.className = "hch-lh-avg-val";
+  setAcText(lhAvgVal, "—");
+  lhAvg.appendChild(lhAvgVal);
+  lhRow.appendChild(lhAvg);
+
+  ov.appendChild(lhRow);
+  state.lhRowEl = lhRow;
+  state.lhDmgEl = lhDmg;
+  state.lhSneakEl = lhSneak;
+  state.lhAvgValEl = lhAvgVal;
 
   // Right button column (0x10000056).
   const buttons = document.createElement("div");
@@ -843,19 +1086,28 @@ export function mount(_ctx) {
   // Subscribe to the plugin event bus for reactive updates. The
   // pluginClient is created post-login, so mountBar may call us before
   // it exists. Poll until available, matching sneak-hud.js's pattern.
+  //
+  // Wave 15 / Phase 46 added `damageDealt` to the same hook block so
+  // the three subscriptions share the post-login readiness gate — no
+  // separate retry loop for the last-hit row.
   let drPluginPoll = null;
   let drUnsubStats = null;
   let drUnsubSneak = null;
+  let lhUnsubDamage = null;
   function drTryHookEvents() {
     const client = window.__pluginClient;
     if (!client?.events?.on) return false;
     client.events.on("playerStatsUpdated", onPlayerStatsUpdated);
     client.events.on("sneakAttackPredicted", onSneakAttackPredicted);
+    client.events.on("damageDealt", onDamageDealt);
     drUnsubStats = () => {
       try { client.events.off("playerStatsUpdated", onPlayerStatsUpdated); } catch (_) {}
     };
     drUnsubSneak = () => {
       try { client.events.off("sneakAttackPredicted", onSneakAttackPredicted); } catch (_) {}
+    };
+    lhUnsubDamage = () => {
+      try { client.events.off("damageDealt", onDamageDealt); } catch (_) {}
     };
     // Recompute now that we can read fresh stats.
     updateDamageRating();
@@ -887,10 +1139,25 @@ export function mount(_ctx) {
       state.drSneakTimer = null;
     }
     state.drHasSneak = false;
+    // Phase 46: tear down the last-hit subscription + idle timer.
+    // Clear the ring + DOM refs so a remount starts fresh (the new
+    // `build()` call replaces them; the explicit nulling here keeps
+    // the state object honest for tests / debug snapshots).
+    if (state.lhIdleTimer) {
+      clearTimeout(state.lhIdleTimer);
+      state.lhIdleTimer = null;
+    }
+    state.lhRing.length = 0;
+    state.lhRowEl = null;
+    state.lhDmgEl = null;
+    state.lhSneakEl = null;
+    state.lhAvgValEl = null;
     if (drUnsubStats) drUnsubStats();
     if (drUnsubSneak) drUnsubSneak();
+    if (lhUnsubDamage) lhUnsubDamage();
     drUnsubStats = null;
     drUnsubSneak = null;
+    lhUnsubDamage = null;
     if (state.overlayEl) {
       state.overlayEl.remove();
       state.overlayEl = null;
