@@ -1647,6 +1647,17 @@
                   import("./scene3d/atmosphere_lights.js"),
                   import("./scene3d/atmosphere_sky.js"),
                   import("./scene3d/aurora.js"),
+                  // CMT Wave 11 / Phase 34 (2026-05-26): import the
+                  // PlayEffect VFX module so its `playEffect` listener
+                  // self-registers on `window.__pluginClient.events`
+                  // before the first server PlayEffect can arrive.
+                  // Side-effect import — the module does its own
+                  // binding on evaluation; no exported entry point to
+                  // call. See `scene3d/play_effect_vfx.js` for the
+                  // self-bind contract (idempotent; waits for
+                  // `window.__pluginClient` via short poll if not yet
+                  // available at module-load time).
+                  import("./scene3d/play_effect_vfx.js"),
                 ])
                   .then(async ([
                     sceneIndex,
@@ -1656,6 +1667,7 @@
                     atmosphereLightsMod,
                     atmosphereSkyMod,
                     _aurora,
+                    _playEffectVfx,
                   ]) => {
                     console.log("[boot] scene3d module graph eagerly imported");
                     // 2026-05-21 cold-boot win: stash the eager-imported
@@ -8234,6 +8246,32 @@ void main() {
                     message: evt.stringPayload || "",
                   });
                 }
+              } else if (evt.kind === 30 /* PlayEffect */) {
+                // CMT Wave 11 / Phase 34 (2026-05-26): bridge ACE's
+                // `GameMessage::PlayEffect` (opcode `0xF755` =
+                // GameMessageScript) into the plugin event bus so
+                // the placeholder VFX module
+                // (`scene3d/play_effect_vfx.js`) can spawn particle
+                // bursts at the target entity's position. Wave 10
+                // Phase 31 set up the WorldEvent emission; this is
+                // the JS-side surface bridge.
+                //
+                // `u32Payload` = target entity GUID,
+                // `u32Payload2` = PlayScript ID (see
+                // `ui/ac_play_script.js` for the enum mirror),
+                // `f32Payload` = visual-script playback speed
+                // (typically 1.0; retained for future PhysicsScript
+                // integration that respects playback rate).
+                const targetGuid = (evt.u32Payload ?? 0) >>> 0;
+                const scriptId = (evt.u32Payload2 ?? 0) >>> 0;
+                const speed = evt.f32Payload ?? 0;
+                try {
+                  window.__pluginClient?.events?.emit?.("playEffect", {
+                    targetGuid,
+                    scriptId,
+                    speed,
+                  });
+                } catch (_) {}
               } else if (evt.kind === 13) {
                 // Phase 4 step 5: UseFailed (WeenieError /
                 // WeenieErrorWithString). Already mirrored as a

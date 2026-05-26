@@ -41,6 +41,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { computeDamageRatingRollup } from "../ui/ac_damage_rating.js";
 
 /** gmCombatUI — retail layout that drives the combat HUD horizontal bar.
  *  Element-id map confirmed by combat_hud_layout_dump 2026-05-24:
@@ -80,6 +81,22 @@ const STYLE_ID   = "hb-combat-hud-style";
 const DEATH_OVERLAY_ID = "hb-combat-hud-death";
 const DEATH_STYLE_ID   = "hb-combat-hud-death-style";
 const SP = "./data/ui-sprites";
+
+// MotionStance enum values (low 16 bits). Peace = 0x3D (61), Magic
+// combat = 0x49 (73). Magic stance is excluded from the DR readout
+// because the rollup helper's `base`/`reckless` math is melee/missile-
+// specific (Recklessness power-band + per-weapon DamageMod don't apply
+// to spellcasting). See `plugins/combat-bar.js:464` and
+// `ui/ac_damage_rating.js` header for canonical sources.
+const STANCE_PEACE = 0x3D;
+const STANCE_MAGIC = 0x0049;
+
+// How long the transient sneak component stays in the rollup after a
+// `sneakAttackPredicted` event before we drop it back to the baseline
+// (`hasSneak: false`). Matches `plugins/sneak-hud.js`'s TOTAL_MS so the
+// inline readout fades the [SNEAK!] marker in sync with the floating
+// overlay's exit transition.
+const SNEAK_HOLD_MS = 1500;
 
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
@@ -198,6 +215,60 @@ function ensureStyles() {
       line-height: 14px;
       pointer-events: none;
     }
+    /* Damage Rating readout (Phase 35) — shares the row-2 y-baseline
+     * with the Accuracy labels. The dead space between the trailing
+     * "Accuracy" label (x=195 + width=100 = 295) and the right button
+     * column (x=722) is ~427px, more than enough for the breakdown
+     * text. Tabular nums so the digits don't jitter as the rollup
+     * components flip between single-digit (sneak +0) and double-digit
+     * (reckless +20) values. */
+    #${OVERLAY_ID} .hch-dr-row {
+      position: absolute;
+      left: 305px; top: 29px;
+      width: 405px; height: 14px;
+      color: var(--hb-text-gold-dim);
+      font-size: 10px;
+      line-height: 14px;
+      letter-spacing: 0.03em;
+      pointer-events: none;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    /* The "DR: +N" total — slightly brighter gold so the headline
+     * value reads cleanly against the dim breakdown. */
+    #${OVERLAY_ID} .hch-dr-total {
+      color: var(--hb-text-gold);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    /* Breakdown text (base/sneak/reckless components). Dim by default;
+     * the sneak slice picks up the red accent when armed. */
+    #${OVERLAY_ID} .hch-dr-break {
+      color: var(--hb-text-gold-dim);
+      margin-left: 6px;
+    }
+    /* Sneak component when the predictor has fired — matches the
+     * sneak-hud overlay's rgba(220, 80, 40, *) accent so the inline
+     * readout and the floating overlay read as the same beat. */
+    #${OVERLAY_ID} .hch-dr-row[data-sneak="1"] .hch-dr-sneak {
+      color: rgb(255, 180, 140);
+      text-shadow: 0 0 4px rgba(220, 80, 40, 0.55);
+    }
+    /* The transient [SNEAK!] tail tag. Inline so it pushes the trailing
+     * accuracy whitespace inward instead of overlapping the buttons. */
+    #${OVERLAY_ID} .hch-dr-flag {
+      display: none;
+      margin-left: 8px;
+      color: rgb(255, 200, 160);
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-shadow: 0 0 4px rgba(220, 80, 40, 0.6);
+    }
+    #${OVERLAY_ID} .hch-dr-row[data-sneak="1"] .hch-dr-flag {
+      display: inline;
+    }
     /* Right button column (0x10000056 72×57 @ 722,4). */
     #${OVERLAY_ID} .hch-buttons {
       position: absolute;
@@ -242,6 +313,18 @@ let state = {
   overlayEl: null,
   visible: false,
   power: 1.0,         // 0..1, drives __combatBarState.powerLevel
+  // DR readout state (Phase 35). drHasSneak flips to true when
+  // `sneakAttackPredicted` fires and back to false ~SNEAK_HOLD_MS later
+  // via drSneakTimer. drLastPower remembers the last polled power value
+  // so the rAF poll skips repaints when nothing changed.
+  drRowEl: null,
+  drTotalEl: null,
+  drBreakEl: null,
+  drHasSneak: false,
+  drSneakTimer: null,
+  drLastPower: -1,
+  drLastSneakFlag: -1,
+  drLastStance: -1,
 };
 
 function stanceIsCombat() {
@@ -249,7 +332,21 @@ function stanceIsCombat() {
     const fn = window.__getCurrentStanceLow;
     if (typeof fn !== "function") return false;
     const low = fn() || 0;
-    return low !== 0 && low !== 0x3D; // 0x3D = Peace
+    return low !== 0 && low !== STANCE_PEACE;
+  } catch { return false; }
+}
+
+// True when the player is in a melee OR missile combat stance — i.e.
+// in combat but NOT in the magic-combat stance (0x49). The DR rollup's
+// reckless component is gated on a melee/missile power band; magic
+// stance uses a different damage path entirely, so we hide the readout
+// to avoid showing misleading numbers.
+function stanceIsMeleeOrMissile() {
+  try {
+    const fn = window.__getCurrentStanceLow;
+    if (typeof fn !== "function") return false;
+    const low = fn() || 0;
+    return low !== 0 && low !== STANCE_PEACE && low !== STANCE_MAGIC;
   } catch { return false; }
 }
 
@@ -265,6 +362,105 @@ function syncPowerFill() {
   if (window.__combatBarState) {
     window.__combatBarState.powerLevel = state.power;
   }
+}
+
+// Format a signed integer with an explicit `+` for non-negative values
+// (matches the acpedia DR display convention: "+0" / "+10" / "+20").
+function _fmtSigned(n) {
+  return n >= 0 ? `+${n}` : `${n}`;
+}
+
+// Recompute the Damage Rating rollup and paint the row-2 readout. Pure
+// rendering — caller (rAF poll, event handlers) decides WHEN to call.
+// Reads the current power-bar slider value from window.__combatBarState
+// (combat-bar.js and our own slider both write that global); falls back
+// to 1.0 (full power) when the bar hasn't initialized yet. Same default
+// sneak-hud.js uses on line 161, so both consumers agree.
+function updateDamageRating() {
+  const row = state.drRowEl;
+  if (!row) return;
+  // Stance gate. When magic / peace, blank the row so the user doesn't
+  // see stale melee numbers while reading a fireball. The overlay's
+  // own visibility (data-open) is driven by stanceIsCombat; this guard
+  // covers the magic-stance case (in-combat but DR math doesn't apply).
+  if (!stanceIsMeleeOrMissile()) {
+    if (state.drTotalEl) setAcText(state.drTotalEl, "");
+    if (state.drBreakEl) setAcText(state.drBreakEl, "");
+    row.dataset.sneak = "0";
+    state.drLastPower = -1;
+    state.drLastSneakFlag = -1;
+    return;
+  }
+  const power =
+    (typeof window !== "undefined")
+      ? (Number(window.__combatBarState?.powerLevel ?? 1.0) || 0)
+      : 1.0;
+  const hasSneak = !!state.drHasSneak;
+  let rollup;
+  try {
+    rollup = computeDamageRatingRollup({
+      powerLevel: power,
+      hasSneak,
+      sessionHandle:
+        (typeof window !== "undefined") ? window.__sessionHandle : null,
+    });
+  } catch (_) {
+    // Defensive — never let a transient session-handle hiccup wipe the
+    // bar. Leave the existing text in place.
+    return;
+  }
+  if (!rollup) return;
+  const { base = 0, sneak = 0, reckless = 0, total = 0 } = rollup;
+  if (state.drTotalEl) {
+    setAcText(state.drTotalEl, `DR: ${_fmtSigned(total)}`);
+  }
+  if (state.drBreakEl) {
+    // Span the sneak component in its own <span> so the CSS [data-sneak]
+    // selector can color it red on arm without rebuilding the parent.
+    // setAcText only handles text content, so use innerHTML with safe
+    // numeric interpolation (all three values come from the rollup
+    // helper as integers).
+    const baseStr = `${_fmtSigned(base)}`;
+    const sneakStr = `${_fmtSigned(sneak)}`;
+    const recklessStr = `${_fmtSigned(reckless)}`;
+    state.drBreakEl.innerHTML =
+      `(base ${baseStr}, ` +
+      `<span class="hch-dr-sneak">sneak ${sneakStr}</span>, ` +
+      `reckless ${recklessStr})`;
+  }
+  row.dataset.sneak = hasSneak ? "1" : "0";
+  state.drLastPower = power;
+  state.drLastSneakFlag = hasSneak ? 1 : 0;
+}
+
+// Handler for the `sneakAttackPredicted` event from picking.js. Arms
+// the transient sneak component for ~SNEAK_HOLD_MS, mirroring
+// `plugins/sneak-hud.js`'s 1500ms TOTAL_MS so the inline readout fades
+// in sync with the floating overlay. Re-arming (rapid back-to-back
+// swings in the rear cone) resets the timer so the marker keeps
+// reading "on".
+function onSneakAttackPredicted(_payload) {
+  state.drHasSneak = true;
+  if (state.drSneakTimer) {
+    clearTimeout(state.drSneakTimer);
+    state.drSneakTimer = null;
+  }
+  state.drSneakTimer = setTimeout(() => {
+    state.drHasSneak = false;
+    state.drSneakTimer = null;
+    updateDamageRating();
+  }, SNEAK_HOLD_MS);
+  updateDamageRating();
+}
+
+// Handler for `playerStatsUpdated` — re-runs the rollup so a mid-
+// session training-level change (Recklessness / Sneak Attack rank-up)
+// flows into the readout immediately. Vitals churn (HP/mana fluctuation)
+// fires this event too, but `computeDamageRatingRollup` is pure +
+// cheap — one stats-snapshot read per event — so we don't bother
+// gating on a diff.
+function onPlayerStatsUpdated(_payload) {
+  updateDamageRating();
 }
 
 // Returns { overlay, refs } where refs is the element map applyCombatHudLayout
@@ -351,6 +547,33 @@ function build() {
   accLabel.className = "hch-acc-trailing";
   setAcText(accLabel, "Accuracy");
   ov.appendChild(accLabel);
+
+  // Damage Rating readout (Phase 35). Lives in the row-2 dead space
+  // between the trailing accuracy label and the height-button column.
+  // Three child spans:
+  //   - .hch-dr-total   "DR: +N"        (headline; brighter gold)
+  //   - .hch-dr-break   "(base ..., sneak ..., reckless ...)"
+  //   - .hch-dr-flag    "[SNEAK!]"      (display:none unless data-sneak)
+  // updateDamageRating() rebuilds the contents on a poll + on
+  // playerStatsUpdated/sneakAttackPredicted. data-sneak=1 toggles the
+  // sneak-arm accent + [SNEAK!] tail tag.
+  const drRow = document.createElement("div");
+  drRow.className = "hch-dr-row";
+  drRow.dataset.sneak = "0";
+  const drTotal = document.createElement("span");
+  drTotal.className = "hch-dr-total";
+  drRow.appendChild(drTotal);
+  const drBreak = document.createElement("span");
+  drBreak.className = "hch-dr-break";
+  drRow.appendChild(drBreak);
+  const drFlag = document.createElement("span");
+  drFlag.className = "hch-dr-flag";
+  setAcText(drFlag, "[SNEAK!]");
+  drRow.appendChild(drFlag);
+  ov.appendChild(drRow);
+  state.drRowEl = drRow;
+  state.drTotalEl = drTotal;
+  state.drBreakEl = drBreak;
 
   // Right button column (0x10000056).
   const buttons = document.createElement("div");
@@ -473,6 +696,11 @@ function show() {
   state.overlayEl.dataset.open = "1";
   state.visible = true;
   syncPowerFill();
+  // Phase 35: paint the DR readout immediately on open. The rAF poll
+  // covers slider drags during the visible window; show() handles the
+  // initial frame so the readout isn't blank for one rAF tick.
+  state.drLastPower = -1;  // force a repaint regardless of prior value
+  updateDamageRating();
 }
 
 function hide() {
@@ -566,6 +794,7 @@ export function mount(_ctx) {
   if (existing) existing.remove();
   state.overlayEl = build();
   syncPowerFill();
+  updateDamageRating();
 
   // 4Hz poll of the authoritative stance source. Cheap; ~0.0001ms.
   const t = setInterval(() => {
@@ -573,6 +802,73 @@ export function mount(_ctx) {
     if (inCombat && !state.visible) show();
     else if (!inCombat && state.visible) hide();
   }, 250);
+
+  // Phase 35: rAF-poll the powerLevel / stance pair so a combat-bar
+  // slider drag (which DOES NOT emit an event — see combat-bar.js:733
+  // input handler that only writes the window state, no broadcast)
+  // flows into the DR readout in real time. We diff against the last
+  // observed power + stance and skip the rebuild when nothing changed,
+  // so the per-frame cost is one global read + two integer compares.
+  //
+  // Why rAF instead of hooking into combat-bar.js's slider listener?
+  // Two reasons: (a) avoids cross-plugin coupling (combat-bar's slider
+  // DOM element isn't exposed); (b) covers BOTH sliders — our own
+  // .hch-slider (build() lines 297-323) and combat-bar's — without
+  // double-wiring. Cost is ~1 µs/frame; well under the rAF budget.
+  let drRafId = 0;
+  function drPollFrame() {
+    drRafId = 0;
+    if (!state.overlayEl) return;
+    // Only repaint when visible — the overlay is display:none in
+    // peace stance, so there's no point recomputing.
+    if (state.visible) {
+      const power = Number(window.__combatBarState?.powerLevel ?? 1.0) || 0;
+      const stance = (typeof window.__getCurrentStanceLow === "function")
+        ? (window.__getCurrentStanceLow() | 0)
+        : 0;
+      const sneakFlag = state.drHasSneak ? 1 : 0;
+      if (
+        power !== state.drLastPower
+        || stance !== state.drLastStance
+        || sneakFlag !== state.drLastSneakFlag
+      ) {
+        state.drLastStance = stance;
+        updateDamageRating();
+      }
+    }
+    drRafId = requestAnimationFrame(drPollFrame);
+  }
+  drRafId = requestAnimationFrame(drPollFrame);
+
+  // Subscribe to the plugin event bus for reactive updates. The
+  // pluginClient is created post-login, so mountBar may call us before
+  // it exists. Poll until available, matching sneak-hud.js's pattern.
+  let drPluginPoll = null;
+  let drUnsubStats = null;
+  let drUnsubSneak = null;
+  function drTryHookEvents() {
+    const client = window.__pluginClient;
+    if (!client?.events?.on) return false;
+    client.events.on("playerStatsUpdated", onPlayerStatsUpdated);
+    client.events.on("sneakAttackPredicted", onSneakAttackPredicted);
+    drUnsubStats = () => {
+      try { client.events.off("playerStatsUpdated", onPlayerStatsUpdated); } catch (_) {}
+    };
+    drUnsubSneak = () => {
+      try { client.events.off("sneakAttackPredicted", onSneakAttackPredicted); } catch (_) {}
+    };
+    // Recompute now that we can read fresh stats.
+    updateDamageRating();
+    return true;
+  }
+  if (!drTryHookEvents()) {
+    drPluginPoll = setInterval(() => {
+      if (drTryHookEvents()) {
+        clearInterval(drPluginPoll);
+        drPluginPoll = null;
+      }
+    }, 500);
+  }
 
   // Q1a: subscribe to the Death bus event for the self-death overlay.
   const pc = window.__pluginClient;
@@ -582,6 +878,19 @@ export function mount(_ctx) {
 
   return () => {
     clearInterval(t);
+    if (drRafId) cancelAnimationFrame(drRafId);
+    drRafId = 0;
+    if (drPluginPoll) clearInterval(drPluginPoll);
+    drPluginPoll = null;
+    if (state.drSneakTimer) {
+      clearTimeout(state.drSneakTimer);
+      state.drSneakTimer = null;
+    }
+    state.drHasSneak = false;
+    if (drUnsubStats) drUnsubStats();
+    if (drUnsubSneak) drUnsubSneak();
+    drUnsubStats = null;
+    drUnsubSneak = null;
     if (state.overlayEl) {
       state.overlayEl.remove();
       state.overlayEl = null;

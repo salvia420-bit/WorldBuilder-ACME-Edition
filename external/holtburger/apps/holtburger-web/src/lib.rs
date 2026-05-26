@@ -12638,6 +12638,28 @@ const CLIENT_EVENT_KIND_TITLE_UPDATED: u32 = 28;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_DEATH: u32 = 29;
 
+/// `kind = 30` — PlayEffect. ACE sent `GameMessage::PlayEffect`
+/// (opcode `0xF755 = GameMessageScript`) — a server-authored visual
+/// script broadcast (PlayScript::Launch, PlayScript::Explode, etc.)
+/// intended for the client's particle / overlay pipeline. Bridges
+/// Wave 10 Phase 31's `WorldEvent::PlayEffect { target, script_id,
+/// speed }` (emitted from `crates/holtburger-world/src/handlers/system.rs`)
+/// to the JS layer.
+///
+/// CMT Wave 11 / Phase 34 (2026-05-26): JS-side subscribers translate
+/// `script_id` (a `PlayScript` enum value — see
+/// `ACE.Entity/Enum/PlayScript.cs` and the mirror at
+/// `apps/holtburger-web/ui/ac_play_script.js`) into a particle /
+/// overlay VFX at the target entity's position. `target` is the
+/// entity GUID the effect plays on; for Launch (0x04) that's the
+/// projectile entity, for Explode (0x05) it's the impact target.
+/// `speed` is the visual-script playback rate (typically 1.0).
+///
+/// `u32Payload` = target entity GUID; `u32Payload2` = PlayScript ID
+/// (u32); `f32Payload` = speed.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_PLAY_EFFECT: u32 = 30;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -12879,6 +12901,20 @@ enum SessionCommand {
     /// spellbook UI can refresh.
     RemoveSpellFromBook {
         spell_id: u32,
+    },
+    /// Wave 11 Phase 33 (2026-05-26): JS-side toggled a CharacterOption
+    /// (e.g. combat-bar's `UseFastMissiles` checkbox at 0x2B). Sends
+    /// `GameAction::SetSingleCharacterOption(option, value)` (sub-opcode
+    /// `0x0167`). Mirrors `holtburger-core` `ClientCommand::SetCharacterOption`
+    /// at `crates/holtburger-core/src/client/commands.rs:603-614`; the
+    /// world-state mirror (`set_character_option_enabled` +
+    /// `emit_player_options_updated`) only lives on the cli-side client —
+    /// the wasm SessionHandle just ships the wire op, and ACE's
+    /// `Private/PublicUpdatePropertyInt(CharacterOptions{1,2})` echo
+    /// flows back through the existing player-stats pipeline.
+    SetCharacterOption {
+        option: holtburger_common::CharacterOption,
+        value: bool,
     },
     /// PR-LL 2026-05-23: drag-and-drop give from inventory onto an
     /// NPC / player target. Maps 1:1 to `GameAction::GiveObjectRequest`
@@ -18325,6 +18361,45 @@ impl SessionHandle {
             })
     }
 
+    /// Wave 11 Phase 33 (2026-05-26): set a CharacterOption to
+    /// enabled/disabled. Routes through `SessionCommand::SetCharacterOption`
+    /// → `GameAction::SetSingleCharacterOption` (sub-opcode `0x0167`,
+    /// see `commands.rs:603-614` + `player/actions.rs:128`).
+    ///
+    /// `option` is the `CharacterOption` enum value as `u32` (e.g.
+    /// `0x2B` for `UseFastMissiles` per ACE `CharacterOption.cs:144-145`,
+    /// also `holtburger_common::CharacterOption::UseFastMissiles`).
+    /// `value` is the new boolean state. Unknown `option` values reject
+    /// early with a JS-side error (mirrors `set_combat_mode`'s
+    /// `from_repr` validation pattern); ACE applies the bit server-side
+    /// and echoes back via `Private/PublicUpdatePropertyInt
+    /// (CharacterOptions{1,2})` which the existing player-stats pipeline
+    /// already consumes.
+    ///
+    /// Used today by the combat-bar's `Fast Missiles` toggle so Path B
+    /// (the server-side 1.2× damage / launcher-velocity multiplier)
+    /// actually fires — Path A's client-side prediction multiplier in
+    /// `picking.js` stays in place so the local aim arc matches what
+    /// ACE will broadcast back.
+    #[wasm_bindgen(js_name = setCharacterOption)]
+    pub fn set_character_option(&self, option: u32, value: bool) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        use holtburger_common::CharacterOption;
+        let option = CharacterOption::from_repr(option).ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "setCharacterOption: unknown CharacterOption value {option:#x} \
+                 (see holtburger_common::CharacterOption — UseFastMissiles=0x2B etc.)"
+            ))
+        })?;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SetCharacterOption { option, value })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "setCharacterOption: cmd channel closed ({e})"
+                ))
+            })
+    }
+
     /// PR-LL 2026-05-23: give `amount` × player-owned item
     /// (`item_guid`) to NPC / player (`target_guid`). Sends
     /// `GameAction::GiveObjectRequest` (sub-opcode 0x00CD,
@@ -21643,6 +21718,28 @@ async fn recv_loop(
                                         u32_payload: Some(u32::from(*guid)),
                                         u32_payload_2: Some(if *visible { 1 } else { 0 }),
                                         f32_payload: None,
+                                    });
+                                }
+                                // CMT Wave 11 / Phase 34 (2026-05-26):
+                                // bridge `WorldEvent::PlayEffect`
+                                // (emitted from `handlers::system::handle_message`'s
+                                // `GameMessage::PlayEffect` arm — Wave 10
+                                // Phase 31's contribution) to a kind=30
+                                // `ClientEvent` so JS-side VFX
+                                // consumers (`scene3d/play_effect_vfx.js`)
+                                // can spawn particle bursts at the
+                                // target entity's position. The
+                                // PlayScript ID lives in
+                                // `u32_payload_2`; see
+                                // `apps/holtburger-web/ui/ac_play_script.js`
+                                // for the enum mirror.
+                                WorldEvent::PlayEffect { target, script_id, speed } => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_PLAY_EFFECT,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(*target)),
+                                        u32_payload_2: Some(*script_id),
+                                        f32_payload: Some(*speed),
                                     });
                                 }
                                 _ => {}
@@ -25071,6 +25168,45 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[remove_spell] spell_id={spell_id}",
+                        ));
+                    }
+                    Some(SessionCommand::SetCharacterOption { option, value }) => {
+                        // Wave 11 Phase 33 (2026-05-26): mirror
+                        // ClientCommand::SetCharacterOption from
+                        // holtburger-core/src/client/commands.rs:603-614 —
+                        // build and send a GameAction::SetSingleCharacterOption.
+                        // ACE updates the player's CharacterOptions1/2
+                        // bitfield server-side and echoes back via
+                        // Private/PublicUpdatePropertyInt; we let the
+                        // existing player-stats pipeline pick up the echo
+                        // rather than mirror world.player state here
+                        // (the cli's set_character_option_enabled +
+                        // emit_player_options_updated calls live on the
+                        // full holtburger-core::Client, not on this slim
+                        // wasm-session SessionHandle).
+                        use holtburger_protocol::messages::{
+                            GameAction, SetSingleCharacterOptionActionData,
+                        };
+                        let action = GameAction::SetSingleCharacterOption(Box::new(
+                            SetSingleCharacterOptionActionData { option, value },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(SetSingleCharacterOption {option:?} = {value}): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "set_character_option: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[character-option] set: {option:?} = {value}",
                         ));
                     }
                     Some(SessionCommand::GiveObject {

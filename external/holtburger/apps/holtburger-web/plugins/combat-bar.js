@@ -12,6 +12,7 @@ import {
   isShapeTableLoaded,
   SPELL_SHAPE,
 } from "../ui/ac_spell_shape.js";
+import { setUseFastMissiles } from "../ui/ac_character_options.js";
 
 // Wave 6 / Phase 17 — spell-shape badge mapping.
 //
@@ -794,11 +795,13 @@ function renderAttackControls(bodyEl, state) {
   // ONLY in a missile/ranged stance — irrelevant to melee (no
   // projectile arc to boost) and to magic (renderSpellPicker, not this
   // fn). Default OFF, opt-in only. See DEFAULTS docstring for the
-  // wire-side caveat: this is currently a CLIENT-side prediction aid
-  // only; the server-side 1.2× speedup requires ACE to have the
-  // player's CharacterOption.UseFastMissiles (0x2B) bit set, which our
-  // wasm doesn't yet send a `SetSingleCharacterOption` for (parked
-  // behind Wave 10 src/lib.rs ownership). Wave 11+ TODO.
+  // full picture. Wave 11 / Phase 33 (2026-05-26) closed the wire-side
+  // TODO: the change handler now also calls `setUseFastMissiles(...)`
+  // from `ui/ac_character_options.js`, which routes through
+  // `SessionHandle.setCharacterOption` → `GameAction::
+  // SetSingleCharacterOption` so ACE applies its 1.2× modifier
+  // server-side. Path A (the client-side prediction multiplier in
+  // `picking.js`) stays in place — both run together.
   if (currentStanceIsRanged()) {
     const fastMissileLabel = document.createElement("label");
     fastMissileLabel.className = "hb-cb-toggle";
@@ -814,6 +817,16 @@ function renderAttackControls(bodyEl, state) {
       state.useFastMissiles = fastMissileBox.checked;
       saveState(state);
       syncWindowState(state);
+      // Wave 11 Phase 33 (2026-05-26) — Path B: ALSO tell ACE to flip
+      // the CharacterOption bit so the server-side 1.2× multiplier
+      // fires on the next missile engagement. Path A's client-side
+      // prediction multiplier in picking.js stays in place (the two
+      // are complementary — Path A keeps the local arc in sync, Path
+      // B makes ACE actually apply the launcher-velocity boost). Fire-
+      // and-forget — the wasm facade fail-softs if there's no session
+      // yet (pre-login), and ACE echoes the bit back through the
+      // existing CharacterOptions1/2 stats pipeline on success.
+      setUseFastMissiles(fastMissileBox.checked);
     });
     fastMissileLabel.appendChild(fastMissileBox);
     const fastMissileText = document.createElement("span");

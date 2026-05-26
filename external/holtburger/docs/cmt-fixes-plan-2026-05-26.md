@@ -41,6 +41,10 @@
 | 30 | Projectile classification via PhysicsState::MISSILE (NOT WeenieType) | 10 | **shipped** 2026-05-26 |
 | 31 | PlayEffect (0xF755, NOT 0xF754) wire-route through WorldEvent | 10 | **shipped** 2026-05-26 |
 | 32 | UseFastMissiles toggle Path A (UI + client prediction; Rust ready) | 10 | **shipped** 2026-05-26 |
+| 33 | UseFastMissiles Path B (wasm-bindgen export) | 11 | **shipped** 2026-05-26 |
+| 34 | PlayEffect JS surface + Launch/Explode particle VFX | 11 | **shipped** 2026-05-26 |
+| 35 | DR preview HUD on combat-hud (full rollup display) | 11 | **shipped** 2026-05-26 |
+| 36 | Sneak-attack predictor accuracy diag (event counter) | 11 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -1712,6 +1716,219 @@ Single-bit check covers both projectile types. **86 ProjectileSpell + 59 Missile
 - **`em.isProjectile(guid)`** classifies any entity as a server-spawned projectile (spell or missile). Wave 11 uses for projectile-specific rendering.
 - **`PropertyFloat::DamageMod`** surfaced; `computeDamageRatingRollup` returns correct base. Wave 11 can extend HUD with full DR preview.
 - **Fast-missile Path B** is a 1-file Rust addition: expose `set_single_character_option` via wasm-bindgen. Already-built `ClientCommand::SetCharacterOption` + `SetSingleCharacterOptionActionData` wait at `holtburger-core/src/client/commands.rs:603-614`.
+
+---
+
+## Wave 11 — consume the Wave 10 infrastructure (4 agents, parallel)
+
+User-authorized constraint: we **can** temporarily modify ACE for investigation/debugging, but **not permanently** (must remain ACE-compatible). Wave 11 uses only the no-ACE-mod paths today; ACE-mod experiments park for later waves if needed.
+
+### Pre-investigated facts
+
+- Highest existing `CLIENT_EVENT_KIND_*` is **29** (`Death`, at `src/lib.rs:12639`). Phase 34 adds kind **30** for `PlayEffect`.
+- `ClientCommand::SetCharacterOption { option, value }` already routes via `GameAction::SetSingleCharacterOption` (`holtburger-core/src/client/commands.rs:603-614`). Phase 33 just exposes the entry point via wasm-bindgen.
+- `WorldEvent::PlayEffect { target, script_id, speed }` was added in Wave 10 Phase 31 — currently dispatched + logged in `handlers/system.rs` but NOT surfaced to JS. Phase 34 connects the dots.
+- `ACE PlayScript` enum lives at `~/ace-server/Source/ACE.Entity/Enum/PlayScript.cs`. `Launch = 0x04`, `Explode = 0x05` were verified in Phase 31's tests. Other notable scripts: `Health` family (heals), `Death` (entity dies), `Splatter` (damage). Phase 34 maps these to particle effects.
+- `combat-hud.js` already exists at `plugins/combat-hud.js` (~608 lines) with the retail `gmCombatUI` layout. Phase 35 either extends it or ships a sibling overlay.
+- The combat predictor (`sneakAttackPredicted` event from Phases 9, 16) fires from `picking.js` melee + missile + magic branches. Phase 36 counts emissions without ACE-side validation.
+
+### Phase 33 — UseFastMissiles Path B (wasm-bindgen export)
+
+**Owner:** Agent AF
+**Files:**
+- `src/lib.rs` — add a new `SessionHandle` wasm-exported method:
+  ```rust
+  #[wasm_bindgen(js_name = setCharacterOption)]
+  pub fn set_character_option(&self, option: u32, value: bool) -> Result<(), JsValue> {
+      // Route through ClientCommand::SetCharacterOption — already wired
+      // at holtburger-core/src/client/commands.rs:603-614 to send
+      // GameAction::SetSingleCharacterOption.
+      // option is CharacterOption enum (u32) — UseFastMissiles = 0x2B.
+      // value is the new boolean state.
+  }
+  ```
+  Find the right command-dispatch pattern (search `ClientCommand::` for how other commands wire through). Match the existing infrastructure.
+- `apps/holtburger-web/scene3d/entities.js` (or a new file `ui/ac_character_options.js`) — small JS facade:
+  ```js
+  export function setUseFastMissiles(enabled) {
+    window.__sessionHandle?.setCharacterOption?.(0x2B, enabled);
+  }
+  ```
+- `plugins/combat-bar.js` — when the existing Path-A toggle (Wave 10 Phase 32) changes, ALSO call `setUseFastMissiles(value)` so the wire-side bit gets sent. Path A's client-side 1.2× multiplier stays in place — they're complementary.
+
+**Acceptance:**
+- `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean.
+- `wasm-pack build` PASS; new method in `.d.ts`.
+- Toggling the combat-bar checkbox sends the wire op (verify by tracing call chain — you don't need a live server).
+- Path A's client-prediction multiplier still works when the option is on.
+
+**Hard constraints:** Don't touch other Wave 11 agents' files (Phase 34: ClientEvent kind + dispatch; Phase 35: combat-hud.js; Phase 36: diag/combat.js).
+
+### Phase 34 — PlayEffect JS surface + Launch/Explode VFX
+
+**Owner:** Agent AG
+**Files:**
+
+1. **`src/lib.rs`** — add `const CLIENT_EVENT_KIND_PLAY_EFFECT: u32 = 30;` after Death (line ~12639). In the recv-loop's WorldEvent drain, dispatch `WorldEvent::PlayEffect { target, script_id, speed }` into a `ClientEvent` with:
+   - `kind: CLIENT_EVENT_KIND_PLAY_EFFECT`
+   - `u32_payload: Some(target)` (the entity guid)
+   - `u32_payload_2: Some(script_id)`
+   - `f32_payload: Some(speed)`
+   - Find the `WorldEvent::DerivedStatsUpdated` dispatch (~line 21456 per Phase 31's report) as the pattern to follow.
+
+2. **`index.html`** — extend the existing `<script type="module">` ClientEvent dispatch loop (look for `evt.kind === 8` PlayerStatsUpdated or `evt.kind === 19` CombatEvent for the pattern). Add a handler:
+   ```js
+   } else if (evt.kind === 30 /* PlayEffect */) {
+     const targetGuid = evt.u32Payload >>> 0;
+     const scriptId = evt.u32Payload2 >>> 0;
+     const speed = evt.f32Payload ?? 0;
+     window.__pluginClient?.events?.emit?.("playEffect", { targetGuid, scriptId, speed });
+   }
+   ```
+
+3. **NEW `external/holtburger/apps/holtburger-web/ui/ac_play_script.js`** — export `PLAY_SCRIPT` const enum with at least the script IDs from `~/ace-server/Source/ACE.Entity/Enum/PlayScript.cs` (verify the file; pull the values). Plus a `PLAY_SCRIPT_NAMES` lookup table (hex → name) for diag.
+
+4. **NEW `external/holtburger/apps/holtburger-web/scene3d/play_effect_vfx.js`** — listens to `playEffect` events on `__pluginClient.events`. On Launch (0x04): spawn a small Three.js particle burst at the projectile entity's position (lookup via `entityManager.entityMap.get(targetGuid)`). On Explode (0x05): spawn a larger burst. Other PlayScript IDs: TODO-log them for now. Keep visuals minimal (simple sphere geometry, additive blend material, scale+fade over ~500ms). Match AC red/blue/yellow accent palette.
+
+5. **`index.html`** — import the new VFX module so it self-registers its event listener.
+
+**Acceptance:**
+- `cargo check wasm32` clean.
+- `wasm-pack build` PASS; new ClientEvent dispatch flows.
+- `node --check` clean on JS files.
+- Documented PlayScript ID coverage (which scripts have VFX vs which are TODO).
+- Spot-check: trace the path from `WorldEvent::PlayEffect` (handler emit) → ClientEvent kind=30 → JS event bus → particle spawn. You don't need a live server; verify the call chain compiles + connects.
+
+**Hard constraints:** Visual scope is MINIMAL — simple particle bursts, NOT full PhysicsScript port. Real AC VFX is `0x33 PhysicsScript`-driven; that's a separate vertical. This phase wires the event surface + ships placeholder visuals so future agents can swap in real PhysicsScript playback.
+
+### Phase 35 — DR preview HUD
+
+**Owner:** Agent AH
+**Files:**
+
+1. **`plugins/combat-hud.js`** — extend with a "Damage Rating" readout line. Sources:
+   - `computeDamageRatingRollup({powerLevel: cb.powerLevel, hasSneak: false, sessionHandle: window.__sessionHandle})` for the current player state (no sneak active by default; the sneak component only applies when the predictor fires).
+   - Read combat-bar's current `powerLevel` via `window.__combatBarState?.powerLevel`.
+   - Update reactively on `playerStatsUpdated` event.
+   - Format: `DR: +N (base +X, sneak +Y, reckless +Z)` — show all four components.
+   - Position: somewhere in the existing combat-hud layout; doesn't have to match retail's gmCombatUI exactly.
+
+2. **Listen for `sneakAttackPredicted` events** — temporarily show `+sneak` in the rollup when fired (re-compute with `hasSneak: true`). Auto-clear after ~1.5s (similar to sneak-hud.js's fade pattern from Phase 20).
+
+**Acceptance:**
+- `node --check` clean on combat-hud.js.
+- HUD displays the DR breakdown when in combat stance.
+- Reactive updates on slider changes, training-level changes, sneak predictions.
+- Doesn't conflict with sneak-hud.js (Phase 20) — that's a transient overlay; this is a persistent readout.
+
+**Hard constraints:** Don't modify `ui/ac_damage_rating.js` — Phase 20/29's helper is complete. Pure consumer here. Don't touch other Wave 11 agents' files.
+
+### Phase 36 — Sneak predictor accuracy diag
+
+**Owner:** Agent AI
+**Goal:** Count `sneakAttackPredicted` event emissions per scope (melee/missile/magic) + by training level. Surface in diag. **No ACE-side mod this wave** — we just instrument our own predictions for future correlation with damage events.
+
+**Files:**
+- `scene3d/diag/combat.js` — extend the `combat` object with:
+  - `sneakPredictions: { local: 0, "local-missile": 0, "local-magic": 0 }` counters
+  - `onSneakAttackPredicted(meta)` method incrementing per `scope`
+  - Surface in `summary()` (counts only) and `snapshot()` (full detail)
+  - `reset()` clears them
+- **Subscribe in diag init** — hook into `__pluginClient.events.on("sneakAttackPredicted", ...)`. Find how other diag layers subscribe to events (the existing diag/combat.js has the framework). If no event subscription exists in diag/combat.js yet, hook through the diag-attach pattern.
+
+**Acceptance:**
+- `node --check` clean.
+- Per-scope sneak prediction counts visible in `snapshot()`.
+- After 5 melee + 3 missile + 2 magic predicted sneaks, counters show `{local: 5, "local-missile": 3, "local-magic": 2}`.
+
+**Hard constraints:**
+- Counter only; no ACE-side hooks this wave.
+- Don't touch picking.js — the event emitters there are stable.
+- Don't touch other Wave 11 agents' files.
+
+### Wave 11 reporting & checkpoint
+
+Each agent reports: files changed (paths + line counts), validation outputs, any surprises. Under 350 words each. **Don't commit — parent agent handles commits after all 4 finish.**
+
+### Wave 11 results — shipped 2026-05-26
+
+#### Phase 33 (Agent AF) — UseFastMissiles Path B
+
+**Files (3, +208/-5):**
+- `src/lib.rs` (+136): new `SessionCommand::SetCharacterOption { option: CharacterOption, value: bool }` variant + `set_character_option` wasm-bindgen method + recv-loop arm dispatching `GameAction::SetSingleCharacterOption`. Pattern mirrors `setCombatMode` (lib.rs:18159) with `CharacterOption::from_repr` validation.
+- NEW `ui/ac_character_options.js` (54): `CHARACTER_OPTION` enum + `setCharacterOption()` + `setUseFastMissiles()` facade.
+- `plugins/combat-bar.js` (+18/-5): Path A `change` handler now also calls `setUseFastMissiles(checked)` so the wire-side bit syncs with the client-side multiplier.
+
+**Surprise:** wasm `SessionHandle` uses a *local* `SessionCommand` enum (lib.rs:12646) distinct from `holtburger-core::ClientCommand`. The wasm recv-loop doesn't run `world.player.set_character_option_enabled` follow-on (that's the heavier CLI client's path); ACE echoes the bit back via `Private/PublicUpdatePropertyInt(CharacterOptions{1,2})` which our existing stats pipeline already handles.
+
+#### Phase 34 (Agent AG) — PlayEffect VFX (end-to-end)
+
+**Files (4 — 2 modified, 2 NEW, +768/-1):**
+- `src/lib.rs` (+136): `CLIENT_EVENT_KIND_PLAY_EFFECT: u32 = 30` const at line 12661 + `WorldEvent::PlayEffect { target, script_id, speed }` dispatch arm at line 21736.
+- `index.html` (+38): `evt.kind === 30` handler emits `playEffect` on `__pluginClient.events`; eager-imports the VFX module under `?renderer=3d` guard.
+- NEW `ui/ac_play_script.js` (254): full **174-entry** `PLAY_SCRIPT` frozen enum mirror of ACE's `PlayScript.cs` (Invalid=0x00 .. DirtyFightingDamageOverTime=0xAD) + `PLAY_SCRIPT_NAMES` reverse lookup + `playScriptName(scriptId)` helper.
+- NEW `scene3d/play_effect_vfx.js` (340): self-registering module. Launch (0x04) → blue-cyan `0x4abcff` additive sphere, scale 0.1→0.45. Explode (0x05) → yellow-orange `0xffa733`, 0.2→1.2. Both: 500ms cubic-ease-out scale + linear opacity fade. Shared rAF loop drives all active bursts; auto-disposal on fade. 172 other PlayScript IDs `console.debug`-logged as TODO.
+
+**Call chain (end-to-end traced):** ACE `GameMessageScript(0xF755)` → `PlayEffectData` → `WorldEvent::PlayEffect` → `ClientEvent kind=30` → JS event bus `playEffect` → Three.js particle burst at entity position.
+
+#### Phase 35 (Agent AH) — DR preview HUD
+
+**Files (1, +310/-1):** `plugins/combat-hud.js`. **Placement decision:** retail `gmCombatUI` layout has 427px of dead space in row 2 between x=295 (Accuracy trailing label) and x=722 (height button column). DR readout drops in at `left: 305px; top: 29px; width: 405px`, sharing row-2 baseline with Accuracy labels, dim-gold color matching `.hch-acc-trailing`.
+
+**Visual output:**
+```
+DR: +20  (base +0, sneak +0, reckless +20)              [baseline melee]
+DR: +30  (base +0, sneak +10, reckless +20)  [SNEAK!]   [predictor armed]
+```
+
+**Reactivity strategy:** Hybrid rAF poll (diffs `__combatBarState.powerLevel` + stance) + event bus (`playerStatsUpdated`, `sneakAttackPredicted`). Sneak component flips to `rgb(255,180,140)` + red text-shadow when armed; auto-clears after 1500ms matching `sneak-hud.js`'s TOTAL_MS. Stance-gated to melee/missile (magic blanks since DR math doesn't apply to spells).
+
+#### Phase 36 (Agent AI) — Sneak predictor diag counter
+
+**Files (1, +91/-2):** `scene3d/diag/combat.js`. **Subscription pattern: Option A (event bus)** — mirrors `sneak-hud.js`'s poll-until-client-ready loop. Module-scope `_sneakSubInstalled` flag enforces idempotency; handler dispatches through `_activeCombat?.onSneakAttackPredicted?.()` so subscriptions survive `reset()` and re-`attachCombat`.
+
+**Snapshot shape:**
+```js
+sneakPredictions: { local, "local-missile", "local-magic", total }
+sneakSamples: [{ scope, attackerGuid, defenderGuid, attackType, spellId, ts }, …≤50]
+```
+
+**Smoke test:** 5 melee + 3 missile + 2 magic emissions → `{local: 5, "local-missile": 3, "local-magic": 2, total: 10}`. After `reset()`: counters clear, subscription persists.
+
+### Wave 11 validation summary
+
+| Check | Result |
+|---|---|
+| `node --check` on 6 modified/new JS files | PASS |
+| `cargo check -p holtburger-web --target wasm32-unknown-unknown` | PASS (18 pre-existing warnings, 0 new) |
+| `test_ac_damage_rating.mjs` | 30/30 PASS |
+| `test_ac_aim_level_for_velocity.mjs` regression | 28/28 PASS |
+| `test_ac_attack_type_for_weapon.mjs` regression | 16/16 PASS |
+| `test_ac_spell_shape.mjs` regression | 30/30 PASS |
+| Phase 33 wasm export visible in `.d.ts` | `setCharacterOption(option: number, value: boolean): void` confirmed |
+
+### End-to-end pipeline status (after Wave 11)
+
+The combat-rendering system is now wired through 11 waves / 36 phases. End-to-end pipeline:
+
+- **Local + remote** swings (melee/missile/magic) all route through CMT → motion picker → animation playback
+- **Per-weapon AttackType** including W_AttackType bitmask + IsThrustSlash subdivision + height/power unarmed Punch↔Kick
+- **Gravity-arc missile** prediction with per-weapon `MaximumVelocity` + fast-missile 1.2× client/wire combo
+- **Spell-shape classification** (6266 spells) with `spellCastInitiated` event consumer-ready
+- **Sneak prediction** across melee/missile/magic with ACE-port 90° rear hemisphere + per-scope diag counter + transient HUD overlay
+- **Recklessness UI band** with training-aware tooltip + DR rollup
+- **Server-resolved modifiers** (CurrentPowerMod, AccuracyMod) surfaced for diag
+- **Projectile entities** classified via `PhysicsState::MISSILE` + Launch/Explode VFX placeholder
+- **DR preview HUD** persistent in combat stance with sneak-arm flash
+- **Wielder offhand surfacing** for non-local dual-wield detection
+- **CharacterOption** wire-side updates via wasm-bindgen export
+
+### Parked for potential Wave 12+
+
+- **Full PhysicsScript (0x33) port** — real AC VFX (vs Phase 34's placeholder spheres). 172 PlayScript IDs are TODO-logged. Renderer-side vertical.
+- **Spell-shape projectile spawn patterns** — Volley fan, Streak rapid-fire visualization (renderer prediction)
+- **Sneak predictor false-positive measurement** via temporary ACE diagnostic broadcast (user-authorized; not done this wave)
+- **Damage rating from server** — full DR rollup including server's actual computed value (vs our prediction)
 
 ## Coordination notes for agents
 

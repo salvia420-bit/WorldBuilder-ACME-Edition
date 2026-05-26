@@ -146,6 +146,20 @@ export function attachCombat(diag) {
     // for these (the CMT path didn't resolve them); this counter is
     // the only observability for aim-level usage frequency.
     aimLevelInvocations: { local: 0, remote: 0 },
+    // Wave 11 / Phase 36 (2026-05-26): count `sneakAttackPredicted`
+    // event emissions per scope. Driven by an idempotent subscription
+    // installed in `attachCombat` against `__pluginClient.events` —
+    // see `_installSneakSubscription` below. This is a pure-JS
+    // observability hook: no ACE-side correlation yet (future waves
+    // can compare against actual damage events for accuracy stats).
+    sneakPredictions: {
+      local: 0,
+      "local-missile": 0,
+      "local-magic": 0,
+      total: 0,
+    },
+    sneakSamples: [],
+    maxSneakSamples: 50,
     maxFailures: DEFAULT_MAX_FAILURES,
     maxMisses: DEFAULT_MAX_MISSES,
     maxHitsSample: DEFAULT_MAX_HITS_SAMPLE,
@@ -243,6 +257,41 @@ export function attachCombat(diag) {
       } catch (_) {}
     },
 
+    /**
+     * Wave 11 / Phase 36 — record a `sneakAttackPredicted` event.
+     * Subscribed against `__pluginClient.events` in `attachCombat`.
+     * Emission sites live in `scene3d/picking.js` (melee + missile
+     * branches, scope="local" / "local-missile") and the magic branch
+     * (scope="local-magic"). Payload shape per Phase 9/16 spec:
+     *   { attackerGuid, defenderGuid, attackType, scope, spellId? }
+     *
+     * Counter only — no ACE-side correlation this wave. Future waves
+     * can compare prediction count vs actual sneak-damage events to
+     * derive accuracy stats.
+     *
+     * @param {{ attackerGuid?: number, defenderGuid?: number,
+     *           attackType?: number|null, spellId?: number|null,
+     *           scope: "local"|"local-missile"|"local-magic"|string
+     *         }} meta
+     */
+    onSneakAttackPredicted(meta) {
+      try {
+        const scope = meta?.scope || "unknown";
+        if (scope in combat.sneakPredictions) {
+          combat.sneakPredictions[scope] += 1;
+        }
+        combat.sneakPredictions.total += 1;
+        pushCapped(combat.sneakSamples, {
+          scope,
+          attackerGuid: (meta?.attackerGuid ?? 0) >>> 0,
+          defenderGuid: (meta?.defenderGuid ?? 0) >>> 0,
+          attackType: meta?.attackType ?? null,
+          spellId: meta?.spellId ?? null,
+          ts: performance.now(),
+        }, combat.maxSneakSamples);
+      } catch (_) {}
+    },
+
     /** Read-through to the runtime's cache. */
     cached() {
       try { return getCombatDiagSnapshot(); }
@@ -263,6 +312,8 @@ export function attachCombat(diag) {
         motionsDistinct: combat.motionHistogram.size,
         stancesWithHits: combat.motionByStance.size,
         aimLevelInvocations: { ...combat.aimLevelInvocations },
+        // Phase 36: sneak-prediction emission counts per scope.
+        sneakPredictions: { ...combat.sneakPredictions },
         // Phase 11: server-authoritative power/accuracy slider state
         // for client-vs-server desync visibility.
         serverPowerLevel: power.powerLevel,
@@ -292,6 +343,10 @@ export function attachCombat(diag) {
         motionByStance: _motionByStanceToObj(combat.motionByStance),
         motionNamesLoaded: _motionNames != null,
         aimLevelInvocations: { ...combat.aimLevelInvocations },
+        // Phase 36: sneak-prediction emission counts per scope +
+        // recent samples ring buffer for diag-time inspection.
+        sneakPredictions: { ...combat.sneakPredictions },
+        sneakSamples: [...combat.sneakSamples],
         // Phase 11: server-authoritative power/accuracy slider state
         // for client-vs-server desync visibility.
         serverPowerLevel: power.powerLevel,
@@ -314,8 +369,64 @@ export function attachCombat(diag) {
       combat.motionHistogram.clear();
       combat.motionByStance.clear();
       combat.aimLevelInvocations = { local: 0, remote: 0 };
+      combat.sneakPredictions = {
+        local: 0,
+        "local-missile": 0,
+        "local-magic": 0,
+        total: 0,
+      };
+      combat.sneakSamples.length = 0;
     },
   };
 
   diag.combat = combat;
+
+  // Wave 11 / Phase 36 (2026-05-26): subscribe to
+  // `__pluginClient.events` for `sneakAttackPredicted` emissions.
+  // The plugin client is created post-login (set inside the
+  // loginForm submit handler in index.html → `window.__pluginClient
+  // = createClient(handle)`), but `attachCombat` runs at diag-init
+  // time which can be either before or after login depending on
+  // when the bootstrap finishes. Mirror sneak-hud.js's poll pattern:
+  // try once eagerly, then poll on a low-rate interval until the
+  // client is up. Subscription is idempotent (a guard flag prevents
+  // double-binding) and survives `reset()` (reset clears counters,
+  // not the hookup).
+  _activeCombat = combat;
+  _installSneakSubscription();
+}
+
+// Subscription state lives at module scope so the guard survives
+// `reset()` calls and (defensively) any re-`attachCombat` call. The
+// handler dispatches into `_activeCombat` so re-attach swaps target
+// without rebinding the bus (idempotent contract).
+let _activeCombat = null;
+let _sneakSubInstalled = false;
+let _sneakSubPollTimer = null;
+const _sneakSubHandler = (meta) => {
+  try { _activeCombat?.onSneakAttackPredicted?.(meta); } catch (_) {}
+};
+function _installSneakSubscription() {
+  if (_sneakSubInstalled) return;
+
+  const tryHook = () => {
+    try {
+      const client = (typeof window !== "undefined") ? window.__pluginClient : null;
+      if (!client?.events?.on) return false;
+      client.events.on("sneakAttackPredicted", _sneakSubHandler);
+      _sneakSubInstalled = true;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  if (!tryHook()) {
+    _sneakSubPollTimer = setInterval(() => {
+      if (tryHook()) {
+        try { clearInterval(_sneakSubPollTimer); } catch (_) {}
+        _sneakSubPollTimer = null;
+      }
+    }, 500);
+  }
 }
