@@ -116,6 +116,7 @@ import {
 import { AnimationCache } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import { materialCanCastShadow } from "./materials.js";
+import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 
 // AC InterpretedMotionCommand low-16 constants — used for
 // category-agnostic classification. The wasm export returns the full
@@ -2321,6 +2322,134 @@ export class EntityManager {
       durationMs: 600,
       arms: armEntries,
     };
+  }
+
+  /**
+   * Wave 14 / Phase 45 (2026-05-26) — per-spell scarab-windup chain
+   * playback. Replaces Phase 42's `setCastPose` vibe-pose with the
+   * real ACE-derived sequence: for each scarab in the spell's
+   * `SpellFormula.Components[]`, play the corresponding windup gesture
+   * (`MagicPowerUp0X`); then play the talisman cast gesture
+   * (`MagicBlast` / `MagicSelf` / etc.).
+   *
+   * Algorithm (mirrors `Player_Magic.cs::CreatePlayerSpell` and
+   * `SpellFormula.cs::GetGestureMotionsList` in ACE):
+   *
+   * ```
+   * for each entry in seq.windupGestures:
+   *   await setSwingMotion(guid, entry.motion) for entry.durationS seconds
+   * await setSwingMotion(guid, seq.castGesture.motion) for castGesture.durationS seconds
+   * ```
+   *
+   * Edge cases the Phase 44 generator bakes into the JSON:
+   *   - **FastCast** spells (`fastCast: true`) emit empty windup, only
+   *     the final cast gesture plays.
+   *   - **Lead-scarab exempt** spells (Lightning Bolt I, etc.) emit
+   *     empty windup despite `fastCast: false` (ACE's `SpellFormula`
+   *     short-circuits when the only scarab is Lead).
+   *
+   * Cancellation: every chain start writes a monotonic token to
+   * `inst._castSequenceToken`. Each await checks `inst._castSequenceToken`
+   * still matches the token captured at chain start; if not, the chain
+   * aborts cleanly. New cast → new token → prior chain bails out at
+   * its next `await`. Rapid-fire cast clicks therefore overwrite the
+   * sequence in place rather than queueing N stuck poses.
+   *
+   * Fallback paths (any of which triggers `setCastPose` vibe-pose):
+   *   - `spellId` is 0 / falsy.
+   *   - `data/spell-cast-sequence.json` not yet loaded (first-frame
+   *     race — `getCastSequence` returns null, async fetch kicks).
+   *   - `spellId` not in the sequence map (homebrew / out-of-LSD spells).
+   *   - `setSwingMotion` is not callable on the manager (defensive —
+   *     shouldn't happen, but the missile/melee path has the same
+   *     guard).
+   *
+   * @param {number} guid — entity GUID to animate (typically local
+   *   player; remote casters fall back to `setCastPose` because
+   *   `damageTaken` doesn't carry a SpellId — see `index.html`
+   *   dispatchRemoteSwing magic branch).
+   * @param {number | string} spellId — u32 SpellId being cast.
+   * @returns {Promise<void>} resolves when the full chain completes
+   *   or aborts (cancelled / fell through to fallback).
+   */
+  async playCastSequence(guid, spellId) {
+    const g = guid >>> 0;
+    const inst = this.entityMap.get(g);
+    if (!inst) return;
+    // Fallback path A: missing spellId → vibe-pose.
+    if (!spellId) {
+      this.setCastPose(g);
+      return;
+    }
+    // Fallback path B: table not loaded yet (first-frame race) OR
+    // SpellId not in the map. `getCastSequence` returns null in both
+    // cases and (on first call) kicks the async fetch so the *next*
+    // cast hits a populated table.
+    const seq = getCastSequence(spellId);
+    if (!seq) {
+      this.setCastPose(g);
+      return;
+    }
+    // Fallback path C: setSwingMotion not available (defensive — the
+    // melee/missile path has the same guard around `setSwingMotion`).
+    if (typeof this.setSwingMotion !== "function") {
+      this.setCastPose(g);
+      return;
+    }
+    // Cancellation token. Bump on every chain start; subsequent
+    // awaits compare against this snapshot to detect "a newer cast
+    // started, bail out".
+    const token = ((inst._castSequenceToken | 0) + 1) | 0;
+    inst._castSequenceToken = token;
+    // Kill any vibe-pose tween that may have been started by a prior
+    // fallback path on the same entity — the real chain supersedes it.
+    inst._castTween = null;
+    // Helper: play one gesture (windup or cast) and sleep for its
+    // duration. Returns false if cancelled mid-flight (caller breaks
+    // out of the chain).
+    const playGesture = async (gesture) => {
+      if (inst._castSequenceToken !== token) return false;
+      if (!this.entityMap.has(g)) return false;
+      // The JSON stores motion as a `0x...` hex string (Phase 44
+      // contract); setSwingMotion takes a u32. Accept both numeric
+      // and string inputs defensively — a future generator change
+      // that emits decimal numbers shouldn't break the chain.
+      let motionU32;
+      if (typeof gesture.motion === "number") {
+        motionU32 = gesture.motion >>> 0;
+      } else if (typeof gesture.motion === "string") {
+        const s = gesture.motion;
+        const parsed = (s.startsWith("0x") || s.startsWith("0X"))
+          ? parseInt(s, 16)
+          : parseInt(s, 10);
+        if (!Number.isFinite(parsed) || parsed < 0) return true; // skip
+        motionU32 = parsed >>> 0;
+      } else {
+        return true; // skip malformed entry rather than aborting chain
+      }
+      try {
+        // setSwingMotion is async (animation cache fetch) but we don't
+        // `await` it — the per-gesture sleep below is what paces the
+        // chain. Awaiting setSwingMotion would compound its internal
+        // latency on top of the spell's wall-clock duration.
+        this.setSwingMotion(g, motionU32);
+      } catch (_) { /* never block the chain on a single gesture fail */ }
+      const ms = Math.max(50, Math.round((+gesture.durationS || 0.6) * 1000));
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      // Recheck cancellation after the sleep — a newer cast may have
+      // started while we slept.
+      if (inst._castSequenceToken !== token) return false;
+      if (!this.entityMap.has(g)) return false;
+      return true;
+    };
+    // Chain: windup gestures in order, then the cast gesture.
+    for (const gesture of (seq.windupGestures || [])) {
+      const ok = await playGesture(gesture);
+      if (!ok) return; // cancelled or entity vanished
+    }
+    if (seq.castGesture) {
+      await playGesture(seq.castGesture);
+    }
   }
 
   async setSwingMotion(guid, motionCmd) {

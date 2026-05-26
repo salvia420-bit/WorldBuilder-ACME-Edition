@@ -403,19 +403,29 @@ export function setupClickPicking({
             }
           } catch (_) { /* event emission never blocks the cast */ }
           sessionHandle.castTargetedSpell(guid, spellId);
-          // Wave 13 / Phase 42 (2026-05-26) — placeholder cast pose on
-          // the local caster's rig while the server's authoritative
-          // UpdateMotion (kind=5) and the motion-table classifier race
-          // to deliver the real cast clip. Mirrors the melee/missile
-          // `setSwingPose` fallback in their fire blocks (~lines 660,
-          // 744). Defensively-guarded: setCastPose no-ops on non-human
-          // rigs and when the entity isn't found. Real cast clip wins
-          // by clearing `_castTween` in setMotion's `cls === "cast"`
-          // branch.
+          // Wave 14 / Phase 45 (2026-05-26) — per-spell scarab-windup
+          // chain replaces Phase 42's `setCastPose` vibe-pose. The
+          // chain runner lives in
+          // `EntityManager.playCastSequence(guid, spellId)` (entities.js
+          // ~line 2330) and loads `data/spell-cast-sequence.json` lazily
+          // — first call kicks the fetch and falls back to vibe-pose;
+          // subsequent calls hit the cached table and chain the real
+          // gestures (windup × N → final cast). Cancellation is
+          // built-in (rapid-fire clicks → newer cast preempts the
+          // prior chain). Defensively-guarded: missing
+          // `playCastSequence` (older bundle / partial reload) → fall
+          // back to the Phase 42 vibe-pose so the local player still
+          // gets *some* cast feedback. setCastPose itself no-ops on
+          // non-human rigs and on missing entities.
           try {
             const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
             if (localGuid !== 0) {
-              liveScene3d?.entityManager?.setCastPose?.(localGuid);
+              const em = liveScene3d?.entityManager;
+              if (em?.playCastSequence) {
+                em.playCastSequence(localGuid, spellId);
+              } else {
+                em?.setCastPose?.(localGuid);
+              }
             }
           } catch (_) { /* never block the cast on pose-fallback faults */ }
         }

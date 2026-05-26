@@ -51,6 +51,9 @@
 | 40 | Magic casting audit — uniform cast motion; scarab→Gesture chain is load-bearing | 13 | **shipped** 2026-05-26 |
 | 41 | Spell data inventory — SpellComponentsTable parser MISSING | 13 | **shipped** 2026-05-26 |
 | 42 | Vibe-cast-pose placeholder — both-arms-up 600ms incantation | 13 | **shipped** 2026-05-26 |
+| 43 | SpellComponentsTable parser (DAT 0x0E00000F) + 4/4 parity | 14 | **shipped** 2026-05-26 |
+| 44 | spell-components.json (30 KB) + spell-cast-sequence.json (1.74 MB / 6266 seqs) | 14 | **shipped** 2026-05-26 |
+| 45 | Real scarab-windup chain playback (27/27 tests; setCastPose fallback) | 14 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -2188,6 +2191,83 @@ unless SpellFlags.FastCast (0x4000) is set, in which case skip windup entirely
 **Wave 14.B — Cast animation playback:**
 - Phase 45: Replace vibe-cast-pose with real scarab-windup chain — per-spell motion sequence playback on the local caster (latency hide before server's UpdateMotion lands)
 - Phase 46: dispatchRemoteSwing magic-stance refinement — consult spell-cast-sequence.json for known incoming spells (would need server-broadcast SpellId on damage events — likely needs ACE wire surface investigation)
+
+---
+
+## Wave 14 results — shipped 2026-05-26 (magic cast animation chain — end-to-end)
+
+### Phase 43 (Agent AP) — SpellComponentsTable parser
+
+**Files (4 new, 1 modified):**
+- NEW `crates/holtburger-dat/src/file_type/spell_components_table.rs` (185 LOC) — `SpellComponent` struct (Name StringId + CDM + Gesture MotionCommand + Time f32 + Icon DataId + Type) + `SpellComponentsTable` HashMap<u32, SpellComponent>. Parses DAT `0x0E00000F`.
+- NEW `crates/holtburger-dat/tests/spell_components_table_parity.rs` (192) — 4/4 PASS against retail portal.dat.
+- `crates/holtburger-dat/src/file_type/mod.rs` (+2) — module registration.
+
+**Critical schema corrections** (DRW dats.xml had errors — documented inline in the parser):
+1. DRW labels `Icon` as `<vector type="QualifiedDataId">` (implies pair). **Wrong** — actual bytes are a single u32 (confirmed via ACE.DatLoader's `reader.ReadUInt32()` + DRW's own test `Components[1].Icon == 0x060013E7u`).
+2. **Lead Scarab's Gesture is `MotionCommand.Invalid (0x80000000)`**, NOT `MagicPowerUp01`. This IS the retail encoding of `HasWindupGestures` Lead-exemption — Lead spells skip windup because the cast pipeline silently filters Invalid motions. The Wave 13 audit's "Lead exempt per HasWindupGestures:265" finding is reflected here.
+3. **Late-era scarabs (Platinum, etc.) use Purple PowerUp variants** at `0x1000012B..0x10000134` rather than the original `0x1000006F..0x10000078` set.
+4. **Two cast gestures NOT in audit's listed enum range:** `MagicRecoilMissile (0x40000033, Birch Talisman)` and `MagicPenalty (0x40000034, Blackthorn Talisman)`.
+
+### Phase 44 (Agent AP, bundled) — Data regeneration
+
+**Files (1 new + 2 regenerated):**
+- NEW `crates/holtburger-dat/examples/dump_spell_components.rs` (272 LOC)
+- NEW `apps/holtburger-web/scripts/gen-spell-cast-sequence.cjs` (320 LOC) — joins `spells-catalog.json` × `spell-components.json` → `spell-cast-sequence.json`
+- REGENERATED `data/spell-components.json` — **5 KB ID→Name only → 30 KB / 163 components** with full Gesture+Type+Time+Icon+CDM
+- REGENERATED `data/spell-cast-sequence.json` — **NEW, 1.74 MB / 6266 sequences**, per-spell `{school, shape, level, fastCast, leadOnly, windupGestures[], castGesture, totalDurationS}`
+
+**Spell category breakdown:**
+- **Lead-only spells: 979** (no windup; Lead Scarab exempt)
+- **FastCast spells: 686** (no windup; SpellFlags & 0x4000)
+- **Multi-scarab spells:** produce N-windup chains (Portal Sending: 2 windups; some rituals: 8+ windups)
+- **Edge case:** 10/6266 spells reference encrypted formula slots (LSD pre-DecryptFormula artifacts) — non-blocking; skipped gracefully
+
+**Sample sequences:**
+- `Lightning Bolt I (75)`: leadOnly=true → windupGestures=[], cast=MagicRecoilMissile
+- `Nether Streak V (5345)`: fastCast=true → windupGestures=[], cast=MagicRecoilMissile
+- `Magic Bolt (57)`: normal → windupGestures=[MagicPowerUp10], cast=MagicRecoilMissile, totalDurationS≈6.5
+
+### Phase 45 (Agent AQ) — Chain playback
+
+**Files (2 new, 3 modified, 1 typescript fix post-ship):**
+- NEW `ui/ac_spell_cast_sequence.js` (254) — lazy-loaded `getCastSequence(spellId)` mirroring Wave 5 Phase 12's `ac_spell_shape.js` pattern.
+- NEW `test_ac_spell_cast_sequence.mjs` (262) — **27/27 PASS** synthetic fixture (no dep on Phase 43/44 output).
+- `scene3d/entities.js` (+125) — new `async playCastSequence(guid, spellId)`. Per-gesture sleep via `await new Promise(setTimeout)`; `setSwingMotion(guid, motion)` dispatches each. Min 50ms floor.
+- `scene3d/picking.js` — magic branch now calls `em.playCastSequence(localGuid, spellId)` with `setCastPose` fallback.
+- `index.html` — comment-only update on `dispatchRemoteSwing` magic branch (kept `setCastPose` because `damageTaken` lacks spellId).
+- **Post-ship typescript fix:** removed unused `isCastSequenceLoaded` import from entities.js (imported "for completeness" but unused).
+
+**Cancellation strategy:** per-entity monotonic counter `inst._castSequenceToken`. Each chain start bumps; helper `playGesture` snapshots + re-checks before/after each sleep. Token mismatch aborts. Rapid-fire clicks preempt cleanly without stuck poses.
+
+**Fallback paths (all funnel to setCastPose vibe-pose):** missing spellId, entity vanished, getCastSequence returns null, setSwingMotion not callable, playCastSequence not on manager.
+
+### Wave 14 validation summary
+
+| Check | Result |
+|---|---|
+| `cargo check -p holtburger-dat` | PASS |
+| `cargo test -p holtburger-dat --test spell_components_table_parity` | 4/4 PASS in 0.21s (portal.dat) |
+| `cargo test -p holtburger-dat --lib` | 196/196 PASS (no regression) |
+| `node --check` on 3 modified JS + 1 new module | PASS |
+| `test_ac_spell_cast_sequence.mjs` | 27/27 PASS |
+| `test_ac_damage_rating.mjs` regression | 30/30 PASS |
+| `test_ac_aim_level_for_velocity.mjs` regression | 28/28 PASS |
+| Typescript: unused-import diagnostic | RESOLVED post-ship |
+
+### End-of-Wave-14 status — combat trifecta complete
+
+The combat trifecta (melee + missile + magic) now has equivalent infrastructure:
+
+| Vertical | Local play | Remote dispatch | Wire data | Visual |
+|---|---|---|---|---|
+| Melee | setSwingMotion + CMT lookup | dispatchRemoteSwing CMT | W_AttackType bitmask | Vibe-pose fallback + real motion clip |
+| Missile | setSwingMotion + AimLevel | dispatchRemoteSwing AimLevel | MaximumVelocity + UseFastMissiles | Aim* motion clip + gravity-arc prediction |
+| Magic | **playCastSequence + scarab-windup chain** | dispatchRemoteSwing setCastPose (deferred) | SpellComponentsTable Gesture | **Per-spell motion sequence + spell-shape preview overlay + PlayEffect VFX** |
+
+### Wave 14.B follow-on (Phase 46) — parked
+
+The original plan included Phase 46 (dispatchRemoteSwing magic refinement to consult spell-cast-sequence.json for known incoming spells). **Parked as not strictly needed:** ACE's `damageTaken` doesn't carry SpellId in the existing wire payload, and real cast motions for REMOTE casters arrive via `UpdateMotion (kind=5)` events that our existing motion-table classifier already handles. The `setCastPose` vibe-pose covers the brief window between damageTaken and the next motion update. Wire-side SpellId surfacing would be a separate ticket if needed for richer remote prediction.
 
 ## Coordination notes for agents
 

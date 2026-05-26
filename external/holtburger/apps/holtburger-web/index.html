@@ -8729,6 +8729,21 @@ void main() {
                       // because there's no `setSwingMotion` fallback for
                       // magic — the real cast clip wins via setMotion's
                       // `cls === "cast"` branch.
+                      //
+                      // Wave 14 / Phase 45 (2026-05-26) — the LOCAL cast
+                      // path (`picking.js` magic branch) was upgraded to
+                      // `playCastSequence(guid, spellId)` so each spell
+                      // plays its real scarab-windup chain. We keep
+                      // `setCastPose` here on the REMOTE-caster path
+                      // because the `damageTaken` / `evadedAttacker`
+                      // event payload doesn't carry a SpellId — the
+                      // chain runner can't look up the sequence without
+                      // it. Real remote-cast gestures arrive via
+                      // `UpdateMotion` (kind=5) events anyway (handled
+                      // by the motion-table classifier in `setMotion`'s
+                      // `cls === "cast"` branch), so this vibe-pose is
+                      // the right placeholder until the wire-side spell
+                      // identification lands.
                       if (MAGIC_STANCES.has(stance)) {
                         if (typeof em.setCastPose === "function") {
                           em.setCastPose(g);
