@@ -12723,6 +12723,43 @@ enum SessionCommand {
     /// advertised, chat_type unknown, turbine chat disabled at
     /// CharacterList) surface as an error string back to JS.
     SendTurbineChannel { chat_type: u32, message: String },
+    /// Wave 9 Phase 9.2 (movement-animation overhaul, 2026-05-26).
+    /// `SessionHandle.sendEmote(message)` — sends a
+    /// `GameAction::Emote(EmoteActionData { message })` (sub-opcode
+    /// 0x01DF). Retail uses this for `/me <action>` style text-only
+    /// emotes; ACE's `GameActionEmote.Handle` rebroadcasts the text
+    /// to nearby players via `GameMessageEmoteText (0x01E0)`. The
+    /// emote does NOT play an animation — for pose emotes (`/bow`,
+    /// `/wave`, etc.) use `sendSoulEmote` instead, which both
+    /// broadcasts the chat text AND triggers the matching motion.
+    ///
+    /// Citations: `external/chorizite/Chorizite.ACProtocol/Chorizite.
+    /// ACProtocol/Messages/C2S/Actions/Communication_Emote.generated.cs`
+    /// (wire shape: just a `String16L`); `~/ace-server/Source/ACE.
+    /// Server/Network/GameAction/Actions/GameActionEmote.cs:7-13`
+    /// (server handler: rebroadcast text only, no motion).
+    SendEmote { message: String },
+    /// Wave 9 Phase 9.2 (movement-animation overhaul, 2026-05-26).
+    /// `SessionHandle.sendSoulEmote(message)` — sends a
+    /// `GameAction::SoulEmote(SoulEmoteActionData { message })`
+    /// (sub-opcode 0x01E1). Retail uses this for pose emotes
+    /// (`*bow*`, `*wave*`, `*cheer*`, etc.); the wire payload is the
+    /// rendered 3rd-person text (e.g. `"bows."`) that ACE broadcasts
+    /// to nearby players via `GameMessageSoulEmote (0x01E2)`. The
+    /// MOTION itself is sent separately via a `Movement_MoveToState`
+    /// packet with the pose's MotionCommand in `Commands[]` — that
+    /// path is wired in the JS layer's `routeSlashCommand` which
+    /// also calls `em.setSwingMotion` for local prediction (mirrors
+    /// retail's `cmdinterp` local play documented at
+    /// `~/ac-headers/acclient.c:425567`).
+    ///
+    /// Citations: `external/chorizite/Chorizite.ACProtocol/Chorizite.
+    /// ACProtocol/Messages/C2S/Actions/Communication_SoulEmote.
+    /// generated.cs` (wire shape); `~/ace-server/Source/ACE.Server/
+    /// Network/GameAction/Actions/GameActionSoulEmote.cs:7-13`
+    /// (server handler); `~/ace-server/Source/ACE.Server/Entity/
+    /// SoulEmote.cs:8-84` (full pose → MotionCommand mapping).
+    SendSoulEmote { message: String },
     /// Phase 4 step 5 (interactive entities): the JS side clicked an
     /// entity sprite. Recv loop wraps in `GameAction::Use(Box<UseActionData>)`
     /// and dispatches via `session.send_action`. ACE handles the
@@ -14008,6 +14045,96 @@ impl PlayerStatsSnapshot {
     #[wasm_bindgen(getter, js_name = levelInfo)]
     pub fn level_info(&self) -> Vec<u32> {
         self.level_info.clone()
+    }
+}
+
+/// Wave 9 Phase 9.3 (movement-animation overhaul, 2026-05-26). Result
+/// of looking up a soul-emote slash command (`/bow`, `/wave`, …) in
+/// the DAT-derived `SoulEmoteCatalog`. The JS slash-command router
+/// uses the returned fields to:
+///   1. Send `GameAction::SoulEmote` with `otherEmote` as the wire
+///      message (the rendered 3rd-person text, e.g. `"bows."`).
+///   2. Play the matching motion locally via `em.setSwingMotion`
+///      (one-shot) or `em.setMotion` (held `*State` poses).
+///
+/// `motionFull` is the canonical 32-bit MotionCommand value (high
+/// bits set per `MotionCommand.cs` — class 0x13 for one-shots,
+/// class 0x43 for held `State` variants). `myEmote` and `otherEmote`
+/// already have `%p` (possessive) substituted with `"their"`,
+/// matching the CLI's `render_soul_emote_text` and ACE's
+/// `OnTalk`-broadcast convention.
+///
+/// Returns `motionFull == 0` if the catalog token exists but the
+/// pose has no mapping in `motion_command_for_soul_emote_pose`
+/// (rare; flagged so the JS path can fall through to chat-only).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct SoulEmoteResolution {
+    pose: String,
+    motion_full: u32,
+    motion_low: u32,
+    my_emote: String,
+    other_emote: String,
+    held: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SoulEmoteResolution {
+    /// Pose name (`"Wave"`, `"BowDeepState"`, …) as stored in the
+    /// DAT's ChatPoseTable. JS uses this only for logging /
+    /// diagnostics; the motion lookup happens via `motionFull`.
+    #[wasm_bindgen(getter)]
+    pub fn pose(&self) -> String {
+        self.pose.clone()
+    }
+
+    /// Full 32-bit MotionCommand for `em.setSwingMotion` /
+    /// `em.setMotion`. High bits encode the motion class (0x13 for
+    /// one-shots like Wave / Cheer, 0x43 for held `State` variants
+    /// like BowDeepState / WaveState). Returns `0` if the pose has
+    /// no mapping (catalog is data-driven; not every DAT pose name
+    /// is in our static table).
+    #[wasm_bindgen(getter, js_name = motionFull)]
+    pub fn motion_full(&self) -> u32 {
+        self.motion_full
+    }
+
+    /// Low-16 bits of `motionFull` — the substate that
+    /// `classifyMotionCommand` keys off in `entities.js`. Exposed
+    /// for debug / diag use; JS production path uses `motionFull`.
+    #[wasm_bindgen(getter, js_name = motionLow)]
+    pub fn motion_low(&self) -> u32 {
+        self.motion_low
+    }
+
+    /// 1st-person rendered text (`"wave."`, `"bow deeply."`, …).
+    /// Echoed back into the local chat log so the player sees what
+    /// they just did. Empty string if the catalog entry has no
+    /// matching ChatEmoteData (rare; defensive fallback).
+    #[wasm_bindgen(getter, js_name = myEmote)]
+    pub fn my_emote(&self) -> String {
+        self.my_emote.clone()
+    }
+
+    /// 3rd-person rendered text (`"waves."`, `"bows deeply."`, …)
+    /// with `%p` substituted to `"their"`. This is the wire payload
+    /// for `sendSoulEmote(message)` — ACE broadcasts it to nearby
+    /// players via `GameMessageSoulEmote`.
+    #[wasm_bindgen(getter, js_name = otherEmote)]
+    pub fn other_emote(&self) -> String {
+        self.other_emote.clone()
+    }
+
+    /// True if the pose name ends in `State` — the motion is a
+    /// held / looping animation (e.g. BowDeepState, WaveState) that
+    /// should be played via `em.setMotion` so it loops until the
+    /// next motion broadcast. False = one-shot (Wave, Cheer, …)
+    /// played via `em.setSwingMotion`.
+    #[wasm_bindgen(getter)]
+    pub fn held(&self) -> bool {
+        self.held
     }
 }
 
@@ -17195,6 +17322,73 @@ impl SessionHandle {
         self.latest_known_spells.borrow().clone()
     }
 
+    /// Wave 9 Phase 9.3 (movement-animation overhaul, 2026-05-26).
+    /// Resolve a soul-emote slash command token (`"bow"`, `"wave"`,
+    /// `"cheer"`, …) against the cached `SoulEmoteCatalog` (loaded
+    /// from the DAT's `ChatPoseTable` at boot via
+    /// `repo.read_soul_emote_catalog`). Returns the structured
+    /// resolution (pose name, MotionCommand u32, rendered chat text)
+    /// or `None` if the token is unknown.
+    ///
+    /// The 303-token retail catalog (`~/ace-server/Source/ACE.Server/
+    /// Entity/SoulEmote.cs:8-84` lists all canonical aliases) is too
+    /// large to hard-code in JS; this export keeps the lookup
+    /// DAT-driven. JS uses the result to:
+    ///   1. `sendSoulEmote(otherEmote)` — broadcast the chat text.
+    ///   2. `em.setMotion(localGuid, motionFull, stance)` (held) or
+    ///      `em.setSwingMotion(localGuid, motionFull)` (one-shot) —
+    ///      play the local-prediction motion.
+    ///
+    /// `None` is returned if (a) WorldBootstrap hasn't loaded yet
+    /// (pre-EnteredWorld), or (b) the token doesn't appear in the
+    /// catalog (e.g. typo, non-emote slash command). Callers should
+    /// fall through to the catch-all `sendChat` path on None.
+    #[wasm_bindgen(js_name = resolveSoulEmote)]
+    pub fn resolve_soul_emote(&self, token: String) -> Option<SoulEmoteResolution> {
+        use crate::world_bootstrap_cache;
+        use holtburger_core::motion_command_for_soul_emote_pose;
+
+        let bootstrap = world_bootstrap_cache::try_get_cached()?;
+        // Tokens are stored lowercase per `SoulEmoteCatalog::from_asset`
+        // (the DAT's ChatPoseTable keys are already lowercase). Defensive
+        // lowercase here so `/Bow` and `/BOW` both resolve.
+        let token = token.to_ascii_lowercase();
+        let resolved = bootstrap.soul_emote_catalog.resolve(&token)?;
+
+        let pose = resolved.pose.to_string();
+        let held = pose.ends_with("State");
+        // Reconstruct the full MotionCommand: motion_command_for_soul_
+        // emote_pose returns the low 16 bits only (e.g. 0x0087 for
+        // Wave); the class half-byte at bits 24-31 is 0x13 for one-
+        // shots (class `Emote`) and 0x43 for held `State` variants
+        // (class `Substate`). Citations: `~/ac-headers/acclient.c:
+        // 41743+` motion-command class table; `MotionCommand.cs:8-80`
+        // value-to-name mapping.
+        let (motion_full, motion_low) = match motion_command_for_soul_emote_pose(&pose) {
+            Some(cmd) => {
+                let low = cmd.0 as u32;
+                let class_high = if held { 0x4300_0000u32 } else { 0x1300_0000u32 };
+                (class_high | low, low)
+            }
+            None => (0u32, 0u32),
+        };
+
+        // Substitute `%p` -> "their" matching CLI's
+        // render_soul_emote_text (commands.rs:53-55).
+        let render_text = |text: &str| -> String { text.replace("%p", "their") };
+        let my_emote = resolved.my_emote.map(render_text).unwrap_or_default();
+        let other_emote = resolved.other_emote.map(render_text).unwrap_or_default();
+
+        Some(SoulEmoteResolution {
+            pose,
+            motion_full,
+            motion_low,
+            my_emote,
+            other_emote,
+            held,
+        })
+    }
+
     /// Phase 6 step D: cell id the local player is currently inside.
     /// Outdoor: `landblock_high | (cellX * 8 + cellY + 1)` per the AC
     /// 8x8 grid. Indoor: the EnvCell whose world-space AABB contains
@@ -18191,6 +18385,47 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::SendTurbineChannel { chat_type, message })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("send_turbine_channel: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Wave 9 Phase 9.2 (2026-05-26). Send a free-form text emote
+    /// (`GameAction::Emote`, sub-opcode 0x01DF). This is the wire
+    /// path for retail's `/me <action>` — ACE rebroadcasts the text
+    /// only via `GameMessageEmoteText` (0x01E0). No motion plays.
+    /// For pose emotes (`/bow`, `/wave`, etc.) use `sendSoulEmote`.
+    /// Empty message is rejected client-side.
+    #[wasm_bindgen(js_name = sendEmote)]
+    pub fn send_emote(&self, message: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if message.is_empty() {
+            return Err(JsValue::from_str("send_emote: empty message"));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SendEmote { message })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("send_emote: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Wave 9 Phase 9.2 (2026-05-26). Send a pose / soul emote
+    /// (`GameAction::SoulEmote`, sub-opcode 0x01E1). The wire
+    /// payload is the rendered 3rd-person text (e.g. `"bows."`)
+    /// that ACE broadcasts to nearby players via
+    /// `GameMessageSoulEmote` (0x01E2). The JS layer composes the
+    /// pose text from the `SoulEmoteCatalog` (already loaded from
+    /// the DAT's ChatPoseTable, 0x0E000007) and also drives local
+    /// motion prediction via `em.setSwingMotion`. Empty message is
+    /// rejected client-side.
+    #[wasm_bindgen(js_name = sendSoulEmote)]
+    pub fn send_soul_emote(&self, message: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if message.is_empty() {
+            return Err(JsValue::from_str("send_soul_emote: empty message"));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SendSoulEmote { message })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("send_soul_emote: cmd channel closed ({e})"))
             })
     }
 
@@ -25020,6 +25255,53 @@ async fn recv_loop(
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("send_chat: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::SendEmote { message }) => {
+                        // Wave 9 Phase 9.2 (2026-05-26). Free-form text
+                        // emote (`/me <action>`) → `GameAction::Emote`
+                        // sub-opcode 0x01DF. ACE rebroadcasts as
+                        // `GameMessageEmoteText` (0x01E0) for nearby
+                        // players to see; no motion is played.
+                        use holtburger_protocol::messages::chat::actions::EmoteActionData;
+                        let action = GameAction::Emote(Box::new(EmoteActionData { message }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(Emote): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("send_emote: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::SendSoulEmote { message }) => {
+                        // Wave 9 Phase 9.2 (2026-05-26). Pose / soul
+                        // emote (`/bow`, `/wave`, etc.) →
+                        // `GameAction::SoulEmote` sub-opcode 0x01E1.
+                        // ACE rebroadcasts the chat text via
+                        // `GameMessageSoulEmote` (0x01E2). The
+                        // matching motion is sent separately via
+                        // `Movement_MoveToState` from the JS layer's
+                        // local-prediction path (mirrors retail's
+                        // `cmdinterp` local play at
+                        // `~/ac-headers/acclient.c:425567`).
+                        use holtburger_protocol::messages::chat::actions::SoulEmoteActionData;
+                        let action = GameAction::SoulEmote(Box::new(SoulEmoteActionData {
+                            message,
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(SoulEmote): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("send_soul_emote: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
                                 f32_payload: None,

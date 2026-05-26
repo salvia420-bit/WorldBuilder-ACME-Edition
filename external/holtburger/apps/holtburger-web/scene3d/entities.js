@@ -233,6 +233,234 @@ const CAST_COMMANDS = new Set([
   0x006F, 0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077, 0x0078,
   // CastSpell
   0x00D3,
+  // Wave 8 / Phase 8.2 (2026-05-26) — additional cast-class commands.
+  // ACE classifies these in the `0x40` modifier-class half-byte (cast-
+  // gesture modifiers) per `MotionCommand.cs:59-64,231-232`. They live
+  // in MT `links[(stance, Ready)][cmd]` per swing-classification spec §1.
+  // - MagicPenalty (0x0034) / MagicTransfer (0x0035) — spell-failure /
+  //   spell-transfer one-shot gestures.
+  // - MagicVision (0x0036) / MagicEnchantItem (0x0037) / MagicPortal
+  //   (0x0038) / MagicPray (0x0039) — utility spell cast gestures.
+  // - UseMagicStaff (0x00E0) / UseMagicWand (0x00E1) — focus-channel
+  //   one-shots when the casting focus item is bound.
+  0x0034, 0x0035, 0x0036, 0x0037, 0x0038, 0x0039,
+  0x00E0, 0x00E1,
+  // MagicPowerUp01Purple..10Purple (0x012B..0x0134) — nether/void variants
+  // of the standard PowerUp scarab windups. ACE `MotionCommand.cs:307-316`.
+  // Same one-shot semantics as the green PowerUps; route through
+  // `_tryPlayLink` exactly the same way.
+  0x012B, 0x012C, 0x012D, 0x012E, 0x012F,
+  0x0130, 0x0131, 0x0132, 0x0133, 0x0134,
+]);
+
+// Wave 8 / Phase 8.2 (2026-05-26) — one-shot emote commands. Server
+// broadcasts these on player /emote slash commands and NPC-scripted
+// gestures. All live in `MotionTable.links[(stance, Ready)][cmd]` per
+// swing-classification spec §1; route via `_tryPlayLink` (LoopOnce
+// overlay on top of the active locomotion cycle).
+//
+// Citations to `external/ACE/Source/ACE.Entity/Enum/MotionCommand.cs`:
+// - Cheer (0x004C, L83), ChestBeat (0x004D, L84), TippedLeft/Right
+//   (0x004E-0x004F, L85-86), Sanctuary (0x0057, L94).
+// - HeadThrow/FistSlam/BreatheFlame/SpinAttack (0x006B-0x006E,
+//   L114-117) — creature specials, kept in EMOTE since classifier
+//   class is identical.
+// - ShakeFist..Winded (0x0079-0x009A, L128-161) — 35 standard emotes.
+// - YMCA (0x009B, L162) — class 0x12.
+// - Pray/Mock/Teapot (0x00CA-0x00CC, L209-211).
+// - Flatulence/Demonet (0x00D4, 0x00DF, L219, 230).
+// - WarmHands (0x0119, L289).
+// - ATOYOT (0x00F9, L256) — modifier-class one-shot.
+// - Helper (0x0135, L317).
+// - NudgeLeft..HaveASeat (0x014A-0x0152, L338-346).
+const EMOTE_COMMANDS = new Set([
+  // Creature emotes / one-shots (class 0x10/0x13)
+  0x004C, 0x004D, 0x004E, 0x004F, 0x0057,
+  0x006B, 0x006C, 0x006D, 0x006E,
+  // /emote slash-command set (class 0x13)
+  0x0079, 0x007A, 0x007B, 0x007C, 0x007D, 0x007E, 0x007F,
+  0x0080, 0x0081, 0x0082, 0x0083, 0x0084, 0x0085, 0x0086,
+  0x0087, 0x0088, 0x0089, 0x008A, 0x008B, 0x008C, 0x008D,
+  0x008E, 0x008F, 0x0090, 0x0091, 0x0092, 0x0093, 0x0094,
+  0x0095, 0x0096, 0x0097, 0x0098, 0x0099, 0x009A,
+  // YMCA (0x009B), Pray (0x00CA), Mock (0x00CB), Teapot (0x00CC)
+  0x009B, 0x00CA, 0x00CB, 0x00CC,
+  // Flatulence (0x00D4), Demonet (0x00DF), WarmHands (0x0119),
+  // ATOYOT (0x00F9), Helper (0x0135)
+  0x00D4, 0x00DF, 0x0119, 0x00F9, 0x0135,
+  // NudgeLeft..HaveASeat (0x014A-0x0152)
+  0x014A, 0x014B, 0x014C, 0x014D, 0x014E, 0x014F,
+  0x0150, 0x0151, 0x0152,
+]);
+
+// Wave 8 / Phase 8.2 (2026-05-26) — server-broadcast reaction one-shots.
+// Triggered by damage events / impact. Same LoopOnce overlay semantics
+// as emotes.
+//
+// Citations to `MotionCommand.cs`:
+// - Twitch1..Twitch4 (0x0051-0x0054, L88-91) — take-damage twitches.
+// - StaggerBackward/StaggerForward (0x0055-0x0056, L92-93) — impact
+//   stagger reactions.
+// - TwitchSubstate1..3 (0x00E4-0x00E6, L235-237) — class 0x40 variants
+//   ("substate" half-byte; treated as one-shots per data shape).
+const REACTION_COMMANDS = new Set([
+  0x0051, 0x0052, 0x0053, 0x0054, 0x0055, 0x0056,
+  0x00E4, 0x00E5, 0x00E6,
+]);
+
+// Wave 8 / Phase 8.2 (2026-05-26) — server-set held / persistent poses.
+// Class 0x41 (`Ready`-family persistent) + class 0x43 (`State` emote-held
+// variants). NPCs sit / sleep / read at desks. The pose loops until ACE
+// broadcasts a new motion. Route via cycle path (LoopRepeat).
+//
+// Citations to `MotionCommand.cs`:
+// - Crouch (0x0012, L25), Sitting (0x0013, L26), Sleeping (0x0014, L27).
+// - Dead (0x0011, L24) — held post-death pose; also routes via cycle path
+//   so the corpse maintains its slumped pose until despawn.
+// - ShakeFistState..AtEaseState — held emote variants for the full
+//   /emote set (`MotionCommand.cs:241-260, 288-292, 325-337`).
+const STATIONARY_COMMANDS = new Set([
+  // Held base poses (class 0x40 / 0x41)
+  0x0011, 0x0012, 0x0013, 0x0014,
+  // /emote held variants (class 0x43) — ShakeFistState..AtEaseState
+  0x00EA, 0x00EB, 0x00EC, 0x00ED, 0x00EE, 0x00EF,
+  0x00F0, 0x00F1, 0x00F2, 0x00F3, 0x00F4, 0x00F5,
+  0x00F6, 0x00F7, 0x00F8,
+  // SlouchState..WindedState
+  0x00FA, 0x00FB, 0x00FC, 0x00FD,
+  // SnowAngelState (0x0118), CurtseyState (0x011A), AFKState (0x011B),
+  // MeditateState (0x011C)
+  0x0118, 0x011A, 0x011B, 0x011C,
+  // SitState..AtEaseState (0x013D-0x0149)
+  0x013D, 0x013E, 0x013F, 0x0140, 0x0141, 0x0142,
+  0x0143, 0x0144, 0x0145, 0x0146, 0x0147, 0x0148,
+  0x0149,
+]);
+
+// Wave 8 / Phase 8.2 (2026-05-26) — one-shot object-interaction motions.
+// Server broadcasts when the player acts on items / containers / portals.
+// Route via `_tryPlayLink` (LoopOnce overlay).
+//
+// Citations to `MotionCommand.cs`:
+// - Reload (0x0016, L29), Unload (0x0017, L30) — bow/crossbow reload.
+// - Pickup (0x0018, L31), StoreInBackpack (0x0019, L32) — item pickup.
+//   `acclient.c:343297` references `substate > 0x40000018` as the
+//   "ranged action" branch threshold.
+// - Eat (0x001A, L33), Drink (0x001B, L34), Reading (0x001C, L35).
+// - EnterPortal (0x00A0, L167), ExitPortal (0x00A1, L168) — portal
+//   transition flashes.
+// - BowNoAmmo (0x00E8, L239), CrossBowNoAmmo (0x00E9, L240) — misfire
+//   recovery animations. Class 0x80 in ACE but the low-16 is a one-shot.
+// - Pickup5/10/15/20 (0x0136-0x0139, L318-321) — tall-target pickup
+//   variants.
+const INTERACTION_COMMANDS = new Set([
+  0x0016, 0x0017, 0x0018, 0x0019, 0x001A, 0x001B, 0x001C,
+  0x00A0, 0x00A1,
+  0x00E8, 0x00E9,
+  0x0136, 0x0137, 0x0138, 0x0139,
+]);
+
+// Wave 8 / Phase 8.2 (2026-05-26) — periodic idle / lifecycle ambients.
+// Class 0x10 one-shots played at spawn-in / despawn / random idle gaps.
+// Route via `_tryPlayLink` (LoopOnce overlay; non-blocking on locomotion).
+//
+// Citations to `MotionCommand.cs`:
+// - EnterGame (0x009C, L163), ExitGame (0x009D, L164) — login/logout
+//   transition flashes.
+// - OnCreation (0x009E, L165), OnDestruction (0x009F, L166) — object
+//   spawn/despawn flashes.
+// - Blink (0x00E2, L233), Bite (0x00E3, L234) — random ambient creature
+//   animations.
+// - LogOut (0x011E, L294) — logout one-shot.
+const IDLE_AMBIENT_COMMANDS = new Set([
+  0x009C, 0x009D, 0x009E, 0x009F,
+  0x00E2, 0x00E3,
+  0x011E,
+]);
+
+// Wave 8 / Phase 8.2 (2026-05-26) — specialized & multi-strike attack
+// commands not in the original ATTACK_COMMANDS list. These all share
+// LoopOnce semantics (one-shot overlay via `_tryPlayLink`).
+//
+// Citations to `MotionCommand.cs`:
+// - Hop (0x004A, L81), Jumpup (0x004B, L82) — small one-shot jumps.
+// - SpecialAttack1..3 (0x00CD-0x00CF, L212-214) — creature specials.
+// - SkillHealSelf (0x010E, L277), SkillHealOther (0x010F, L279) — skill
+//   heal animations.
+// - DoubleSlashLow..TripleThrustHigh (0x011F-0x012A, L295-306) —
+//   multi-strike attack chains. `MotionCommandHelper.IsMultiStrike`
+//   (L432-435) enumerates this range exactly.
+// - HouseRecall (0x013A, L322), LifestoneRecall (0x0153, L347),
+//   MarketplaceRecall (0x0166, L366), AllegianceHometownRecall (0x0171,
+//   L377), PKArenaRecall (0x0172, L378) — recall one-shots.
+// - Fishing (0x0165, L365) — fishing-rod cast.
+// - EnterPKLite (0x0167, L367) — PK Lite toggle animation.
+// - OffhandSlashHigh..OffhandTripleThrustHigh (0x0173-0x0184, L379-396)
+//   — dual-wield offhand multi-strike variants (matches
+//   `IsMultiStrike` upper range L434-435).
+// - OffhandKick (0x0185, L397).
+// - AttackHigh4..AttackLow6 (0x0186-0x018E, L398-406) — additional
+//   attack subsequents (per `IsSubsequent` L498-501).
+// - OffhandPunchFastHigh..OffhandPunchSlowLow (0x0195-0x019A, L413-418).
+// - WoahDuplicate2 (0x019B, L419) — class 0x10 variant of Woah.
+const EXTENDED_ATTACK_COMMANDS = new Set([
+  // Hop, Jumpup
+  0x004A, 0x004B,
+  // SpecialAttack1..3
+  0x00CD, 0x00CE, 0x00CF,
+  // SkillHealSelf, SkillHealOther
+  0x010E, 0x010F,
+  // DoubleSlash + TripleSlash + DoubleThrust + TripleThrust (low/mid/high)
+  0x011F, 0x0120, 0x0121, 0x0122, 0x0123, 0x0124,
+  0x0125, 0x0126, 0x0127, 0x0128, 0x0129, 0x012A,
+  // HouseRecall, LifestoneRecall
+  0x013A, 0x0153,
+  // Fishing, MarketplaceRecall, EnterPKLite, AllegianceHometownRecall,
+  // PKArenaRecall
+  0x0165, 0x0166, 0x0167, 0x0171, 0x0172,
+  // OffhandSlashHigh/Med/Low, OffhandThrustHigh/Med/Low
+  0x0173, 0x0174, 0x0175, 0x0176, 0x0177, 0x0178,
+  // OffhandDoubleSlashLow/Med/High, OffhandTripleSlashLow/Med/High
+  0x0179, 0x017A, 0x017B, 0x017C, 0x017D, 0x017E,
+  // OffhandDoubleThrustLow/Med/High, OffhandTripleThrustLow/Med/High
+  0x017F, 0x0180, 0x0181, 0x0182, 0x0183, 0x0184,
+  // OffhandKick
+  0x0185,
+  // AttackHigh4..AttackLow6
+  0x0186, 0x0187, 0x0188, 0x0189, 0x018A, 0x018B,
+  0x018C, 0x018D, 0x018E,
+  // OffhandPunchFastHigh..OffhandPunchSlowLow
+  0x0195, 0x0196, 0x0197, 0x0198, 0x0199, 0x019A,
+  // WoahDuplicate2
+  0x019B,
+]);
+
+// Wave 8 / Phase 8.2 (2026-05-26) — specialized held / cycle commands
+// not covered by STATIONARY_COMMANDS or the explicit Ready/Walk path.
+// These all share LoopRepeat semantics (cycle path).
+//
+// Citations to `MotionCommand.cs`:
+// - HoldRun (0x0001, L8), HoldSidestep (0x0002, L9) — held movement
+//   modifiers. Route via cycle path for consistency with other Ready-
+//   family classifications.
+// - Interpolating (0x0009, L16) — physics-blend marker (held).
+// - Hover (0x000A, L17) — levitate cycle (held loop).
+// - On (0x000B, L18), Off (0x000C, L19) — object-state cycles
+//   (e.g. torch lit / unlit).
+// - AimLevel (0x001E, L37) — held aim pose, no elevation.
+// - AimHigh15..AimHigh90 (0x001F-0x0024, L38-43) — held aim-up poses.
+// - AimLow15..AimLow90 (0x0025-0x002A, L44-49) — held aim-down poses.
+// - StopTurning (0x003A, L65) — turn-stop marker; setMotion's STOP-sub
+//   already substitutes 0x0004 → Ready, but 0x003A doesn't fall into
+//   that branch. Classify as "walk" so the cycle path's null-fallback
+//   resolves to a graceful no-op.
+const CYCLE_HELD_COMMANDS = new Set([
+  0x0001, 0x0002, 0x0009, 0x000A, 0x000B, 0x000C,
+  0x001E,
+  // Aim elevation pose set (AimHigh15..AimHigh90, AimLow15..AimLow90)
+  0x001F, 0x0020, 0x0021, 0x0022, 0x0023, 0x0024,
+  0x0025, 0x0026, 0x0027, 0x0028, 0x0029, 0x002A,
+  0x003A,
 ]);
 
 // Per swing-classification spec (`docs/swing-classification-spec-
@@ -402,6 +630,32 @@ function classifyMotionCommand(cmd) {
     return "walk";
   if (ATTACK_COMMANDS.has(low)) return "attack";
   if (CAST_COMMANDS.has(low)) return "cast";
+  // Wave 8 / Phase 8.2 (2026-05-26) — full MotionCommand classifier
+  // coverage. Per the inventory at `docs/wave-8-motion-command-inventory-
+  // 2026-05-26.md`, the remaining ACE enum entries split into emote
+  // (one-shot expressive), reaction (server-broadcast damage response),
+  // interaction (object pickup/use), idle ambient (lifecycle), extended
+  // attack (multi-strike + recalls + offhand), stationary held (NPC
+  // sitting/sleeping/state-emotes), and held-cycle (aim modifiers).
+  //
+  // Emotes, reactions, interactions, idle ambients, and extended attacks
+  // all route through `_tryPlayLink` as LoopOnce overlays — same path as
+  // ATTACK_COMMANDS. If the entity's MT has no entry for the command,
+  // `_tryPlayLink` resolves to a null clip and the overlay quietly
+  // no-ops (preserves the active locomotion cycle). Graceful for any
+  // MT.
+  //
+  // Stationary poses and held cycles route through the cycle path as
+  // LoopRepeat — same as Ready / WalkForward / RunForward. Cache-miss
+  // path lands in `fadeOutCurrent` (entities.js:3245), so missing MT
+  // entries also fail gracefully (rig holds rest pose).
+  if (EMOTE_COMMANDS.has(low)) return "attack";
+  if (REACTION_COMMANDS.has(low)) return "attack";
+  if (INTERACTION_COMMANDS.has(low)) return "attack";
+  if (IDLE_AMBIENT_COMMANDS.has(low)) return "attack";
+  if (EXTENDED_ATTACK_COMMANDS.has(low)) return "attack";
+  if (STATIONARY_COMMANDS.has(low)) return "walk";
+  if (CYCLE_HELD_COMMANDS.has(low)) return "walk";
   // Ready: stance-aware base pose. Caller (setMotion) treats this
   // exactly like "walk"/"run" — fetch the cycle and play LoopRepeat.
   // It's the cycle ACE broadcasts on combat-mode toggle so the rig

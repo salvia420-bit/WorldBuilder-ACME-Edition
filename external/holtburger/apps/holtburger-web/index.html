@@ -7564,12 +7564,132 @@ void main() {
                        echo: `[${entry.label}] ${rest}` };
             }
 
-            // /me <action> — emotes use a separate GameAction; not
-            // exposed via wasm yet either. Defer rather than shout
-            // locally with the literal "/me " prefix.
+            // Wave 9 Phase 9.3 (movement-animation overhaul,
+            // 2026-05-26) — /me <action> wired through GameAction::
+            // Emote (sub-opcode 0x01DF). ACE rebroadcasts the text
+            // via GameMessageEmoteText (0x01E0); no motion plays —
+            // for pose emotes (`/bow`, `/wave`, …) use sendSoulEmote
+            // instead (handled below). Retail citation: retail
+            // client routes `/me` through CGameAction::SendEmote
+            // (acclient.c: ClientCommunicationSystem family).
             if (cmd === "me") {
-              return { dispatched: true, echo: null,
-                       error: "Emotes not yet wired (use a soul-emote pose for now)." };
+              const action = rest.trim();
+              if (!action) {
+                return { dispatched: true, echo: null,
+                         error: "Usage: /me <action>" };
+              }
+              try { handle.sendEmote(action); }
+              catch (e) {
+                return { dispatched: true, echo: null,
+                         error: `/me: ${e?.message || e}` };
+              }
+              return { dispatched: true, echo: `> ${action}` };
+            }
+
+            // Wave 9 Phase 9.3 (2026-05-26) — soul emote slash
+            // commands (`/bow`, `/wave`, `/cheer`, `/salute`, etc.).
+            // The catalog is DAT-derived (`ChatPoseTable` 0x0E000007,
+            // ~303 tokens including aliases per
+            // `ace-server/Source/ACE.Server/Entity/SoulEmote.cs`),
+            // so we delegate the lookup to `handle.resolveSoulEmote`
+            // rather than hard-coding the table here. The wasm
+            // resolver returns:
+            //   - `pose`: pose name (e.g. "Wave", "BowDeepState")
+            //   - `motionFull`: 32-bit MotionCommand for setMotion
+            //   - `myEmote` / `otherEmote`: rendered chat text
+            //   - `held`: true for State / persistent poses, false
+            //     for one-shots
+            //
+            // Wire path mirrors retail (`~/ac-headers/acclient.c:
+            // 425567+`) — client locally invokes the motion via
+            // cmdinterp + sends `Communication_SoulEmote` (0x01E1)
+            // with the formatted text. ACE rebroadcasts the chat
+            // via GameMessageSoulEmote (0x01E2) and lets the
+            // client's later `MoveToState` carry the actual motion
+            // for remote players. Local prediction here calls
+            // setMotion / setSwingMotion directly so the local
+            // player sees the animation immediately, mirroring the
+            // Wave 1.5 jump-prediction pattern (index.html:7861+).
+            //
+            // Falls through on unknown token so a typo doesn't get
+            // swallowed — the user sees ACE's "Unknown command"
+            // when sendChat fires.
+            if (typeof handle.resolveSoulEmote === "function") {
+              const resolved = handle.resolveSoulEmote(cmd);
+              if (resolved) {
+                const otherText = resolved.otherEmote;
+                const myText = resolved.myEmote;
+                const motionFull = resolved.motionFull >>> 0;
+                // 1. Wire: send the formatted text via SoulEmote so
+                //    nearby players see the chat line.
+                try {
+                  if (otherText) {
+                    handle.sendSoulEmote(otherText);
+                  } else {
+                    // Some catalog entries (very rare) have no
+                    // ChatEmoteData. Fall back to a bare token-as-
+                    // message so the wire packet still fires.
+                    handle.sendSoulEmote(cmd);
+                  }
+                } catch (e) {
+                  return { dispatched: true, echo: null,
+                           error: `/${cmd}: ${e?.message || e}` };
+                }
+                // 2. Local prediction: play the motion immediately
+                //    on the local player so the user sees their
+                //    emote without waiting for a UpdateMotion echo
+                //    (which ACE's GameActionSoulEmote does NOT emit
+                //    today — motion broadcast comes via a separate
+                //    MoveToState path; until that's wired the local
+                //    prediction is the only client-visible motion).
+                if (motionFull !== 0) {
+                  try {
+                    const em = window.liveScene3d?.entityManager;
+                    const localGuid = (typeof window.getLocalPlayerGuid === "function")
+                      ? window.getLocalPlayerGuid()
+                      : null;
+                    if (em && localGuid != null) {
+                      const g = localGuid >>> 0;
+                      if (resolved.held) {
+                        // Persistent `*State` pose — looping cycle.
+                        // setMotion routes through cycle path which
+                        // calls AnimationCache.get with LoopRepeat
+                        // semantics; matches Wave 8 STATIONARY_
+                        // COMMANDS classification (entities.js:322-
+                        // 338).
+                        const NONCOMBAT_STANCE = 0x8000003D;
+                        const stance = (typeof em.getStance === "function"
+                          ? em.getStance(g) >>> 0
+                          : 0) || NONCOMBAT_STANCE;
+                        if (typeof em.setMotion === "function") {
+                          em.setMotion(g, motionFull, stance);
+                        }
+                      } else {
+                        // One-shot emote (Wave / Cheer / Laugh …).
+                        // setSwingMotion plays the clip once via
+                        // LoopOnce; matches Wave 8 EMOTE_COMMANDS
+                        // classification (entities.js:276-294, all
+                        // routed as "attack" → setSwingMotion).
+                        if (typeof em.setSwingMotion === "function") {
+                          em.setSwingMotion(g, motionFull);
+                        }
+                      }
+                    }
+                  } catch (_) {
+                    // Local prediction is best-effort; the wire
+                    // packet already fired so the chat side will
+                    // surface regardless.
+                  }
+                }
+                // Echo into local chat. Emote text uses category 4
+                // (italic grey) to match retail's gmCCommunication-
+                // System's emote rendering class. Empty myText
+                // falls back to a generic acknowledgement.
+                const echoText = myText
+                  ? `You ${myText}`
+                  : `You ${otherText || resolved.pose}`;
+                return { dispatched: true, echo: echoText };
+              }
             }
 
             // Unknown slash → don't route; let it fall through to

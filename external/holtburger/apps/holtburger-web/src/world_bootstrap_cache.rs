@@ -186,3 +186,23 @@ pub fn is_cached() -> bool {
         matches!(&*state, LoadState::Loaded(_))
     })
 }
+
+/// Wave 9 Phase 9.3 (2026-05-26): synchronous accessor for the cached
+/// `WorldBootstrap` arc. Returns `None` if the cache is still `Idle` /
+/// `Loading`. Used by the slash-command path's emote resolver to look
+/// up `SoulEmoteCatalog` entries without going through the async
+/// `get_or_load` (which would force a load if uncached, breaking the
+/// synchronous wasm-export contract). The cache is always `Loaded` by
+/// the time the user enters world and starts typing emotes, since
+/// `start_session` resolves the bootstrap before transitioning to
+/// `InWorld`.
+pub fn try_get_cached() -> Option<std::sync::Arc<holtburger_world::WorldBootstrap>> {
+    CACHE.with(|outer| {
+        let state_rc = outer.borrow().clone();
+        let state = state_rc.borrow();
+        match &*state {
+            LoadState::Loaded(bootstrap) => Some(bootstrap.clone()),
+            _ => None,
+        }
+    })
+}
