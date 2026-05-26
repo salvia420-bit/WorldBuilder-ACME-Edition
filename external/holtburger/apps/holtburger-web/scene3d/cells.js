@@ -45,6 +45,16 @@ import {
 } from "./adapter.js";
 import { materialCanCastShadow } from "./materials.js";
 
+// ?cellBugParity=retail keeps indoor cells visible from outdoors — matches a known retail rendering quirk for nostalgia research.
+const CELL_BUG_PARITY = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      return new URLSearchParams(globalThis.location.search).get("cellBugParity") === "retail";
+    }
+  } catch (_) {}
+  return false;
+})();
+
 // Phase 4 PView port (2026-05-25): module-scope scratch for the
 // per-frame MVP matrix passed to `getRenderSetWithFrustum`. Allocated
 // lazily on first call so capture-time setups without a Three.js
@@ -746,7 +756,10 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   const registry = scene3d.cellContainers3d;
   if (!(registry instanceof Map)) return;
   for (const [thisCellId, container] of registry) {
-    const want = visibleSet.has(thisCellId >>> 0);
+    // ?cellBugParity=retail keeps indoor EnvCells visible regardless of BFS gate.
+    const want = CELL_BUG_PARITY && container?.userData?.isEnvCell
+      ? true
+      : visibleSet.has(thisCellId >>> 0);
     if (container.visible !== want) {
       container.visible = want;
     }

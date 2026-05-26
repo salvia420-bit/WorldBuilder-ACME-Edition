@@ -793,6 +793,24 @@ function ensureStandaloneStyles() {
       border-top: 1px solid var(--hb-border-brass-dim);
       text-align: center;
     }
+    .hb-alleg-sa-row {
+      display: flex;
+      gap: 4px;
+      align-items: stretch;
+    }
+    .hb-alleg-sa-row .hb-alleg-sa-btn { flex: 0 0 auto; padding: 6px 8px; }
+    .hb-alleg-sa-input {
+      flex: 1 1 auto;
+      box-sizing: border-box;
+      padding: 4px 6px;
+      font-family: var(--hb-font-serif);
+      font-size: 11px;
+      color: var(--hb-text-cream);
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      outline: none;
+    }
+    .hb-alleg-sa-input:focus { border-color: var(--hb-border-brass); }
     .hb-alleg-sa-toast {
       position: absolute;
       left: 10px;
@@ -819,6 +837,25 @@ function saCurrentSelectedGuid() {
     return g ? (g >>> 0) : null;
   } catch (_) {
     return null;
+  }
+}
+
+function saCurrentSelectedName() {
+  try {
+    const em = window.liveScene3d?.entityManager;
+    const g = em?.getSelectedTarget?.();
+    if (!g) return "";
+    let name = em?.getEntityName?.(g);
+    if (typeof name === "string" && name.length) return name;
+    // Fallback path used by social-panel when getEntityName isn't wired:
+    // pull from the live entity meta.
+    try {
+      const inst = em?.entityMap?.get?.(g);
+      if (inst?.meta?.name) return String(inst.meta.name);
+    } catch (_) {}
+    return "";
+  } catch (_) {
+    return "";
   }
 }
 
@@ -904,11 +941,99 @@ function buildStandaloneOverlay() {
     });
     stack.appendChild(btn);
   }
+
+  // Wave F1: MOTD set row (inline text input + Confirm button).
+  const motdRow = document.createElement("div");
+  motdRow.className = "hb-alleg-sa-row";
+  motdRow.dataset.action = "set-motd";
+  const motdInput = document.createElement("input");
+  motdInput.type = "text";
+  motdInput.className = "hb-alleg-sa-input";
+  motdInput.placeholder = "Allegiance MOTD";
+  motdInput.maxLength = 255;
+  motdRow.appendChild(motdInput);
+  const motdBtn = document.createElement("button");
+  motdBtn.type = "button";
+  motdBtn.className = "hb-alleg-sa-btn";
+  setAcText(motdBtn, "Set MOTD");
+  motdBtn.title = "Set the allegiance MOTD / name";
+  const submitMotd = () => {
+    const text = (motdInput.value ?? "").trim();
+    if (!text) { saToast("Enter a MOTD first"); return; }
+    saWithSession("setAllegianceName", (h) => {
+      h.setAllegianceName(text);
+      emit(`[allegiance/set-name] name="${text}"`);
+      saToast("MOTD sent");
+      motdInput.value = "";
+    });
+  };
+  motdBtn.addEventListener("click", submitMotd);
+  motdInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); submitMotd(); }
+  });
+  motdRow.appendChild(motdBtn);
+  stack.appendChild(motdRow);
+
+  // Wave F1: Promote selected target to officer (officer_level = 1).
+  const promoteBtn = document.createElement("button");
+  promoteBtn.type = "button";
+  promoteBtn.className = "hb-alleg-sa-btn";
+  promoteBtn.dataset.action = "promote-officer";
+  setAcText(promoteBtn, "Promote Selected to Officer");
+  promoteBtn.addEventListener("click", () => {
+    const name = saCurrentSelectedName();
+    if (!name) { saToast("Click a player first"); return; }
+    if (!window.confirm(`Promote ${name} to allegiance officer (level 1)?`)) return;
+    saWithSession("setAllegianceOfficer", (h) => {
+      h.setAllegianceOfficer(name, 1);
+      emit(`[allegiance/officer] target="${name}" level=1`);
+      saToast("Promote sent");
+    });
+  });
+  stack.appendChild(promoteBtn);
+
+  // Wave F1: Toggle chat-gag for selected target. Local bool flips on each click.
+  let nextGagOn = true;
+  const gagBtn = document.createElement("button");
+  gagBtn.type = "button";
+  gagBtn.className = "hb-alleg-sa-btn";
+  gagBtn.dataset.action = "chat-gag";
+  setAcText(gagBtn, "Toggle Chat Gag for Selected");
+  gagBtn.addEventListener("click", () => {
+    const name = saCurrentSelectedName();
+    if (!name) { saToast("Click a player first"); return; }
+    const turning = nextGagOn ? "gag" : "ungag";
+    if (!window.confirm(`${turning === "gag" ? "Gag" : "Ungag"} ${name} from allegiance chat?`)) return;
+    saWithSession("allegianceChatGag", (h) => {
+      h.allegianceChatGag(name, nextGagOn);
+      emit(`[allegiance/chat-gag] target="${name}" gag=${nextGagOn}`);
+      saToast(`${nextGagOn ? "Gag" : "Ungag"} sent`);
+      nextGagOn = !nextGagOn;
+    });
+  });
+  stack.appendChild(gagBtn);
+
+  // Wave F1: Recall to allegiance hometown (no args).
+  const recallBtn = document.createElement("button");
+  recallBtn.type = "button";
+  recallBtn.className = "hb-alleg-sa-btn";
+  recallBtn.dataset.action = "recall-hometown";
+  setAcText(recallBtn, "Recall to Hometown");
+  recallBtn.addEventListener("click", () => {
+    if (!window.confirm("Recall to allegiance hometown?")) return;
+    saWithSession("recallAllegianceHometown", (h) => {
+      h.recallAllegianceHometown();
+      emit("[allegiance/recall]");
+      saToast("Recall sent");
+    });
+  });
+  stack.appendChild(recallBtn);
+
   body.appendChild(stack);
 
   const placeholder = document.createElement("div");
   placeholder.className = "hb-alleg-sa-placeholder";
-  setAcText(placeholder, "Allegiance state + officer/motd/bans — coming in a future wave");
+  setAcText(placeholder, "Allegiance bans + receive-side snapshot — coming in a future wave");
   body.appendChild(placeholder);
 
   overlay.appendChild(body);

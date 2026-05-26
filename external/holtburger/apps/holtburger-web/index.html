@@ -990,6 +990,7 @@
       import * as socialPanelPlugin from "./plugins/social-panel.js";
       import * as fellowshipPanelPlugin from "./plugins/fellowship-panel.js";
       import * as tradePanelPlugin from "./plugins/trade-panel.js";
+      import * as bookPanelPlugin from "./plugins/book-panel.js";
       import * as journalPanelPlugin from "./plugins/journal-panel.js";
       import * as contractsPanelPlugin from "./plugins/contracts-panel.js";
       import * as optionsPanelPlugin from "./plugins/options-panel.js";
@@ -8127,6 +8128,15 @@ void main() {
                 // floating window from the snapshot.
                 if (window.__pluginClient?.events) {
                   window.__pluginClient.events.emit("tradeUpdated", {});
+                }
+              } else if (evt.kind === 24) {
+                // AC Books (2026-05-25): BookUpdated. ACE pushed one of
+                // BookDataResponse / BookModifyPageResponse /
+                // BookAddPageResponse / BookDeletePageResponse.
+                // Consumer reads via `handle.playerBook()` (null pre-
+                // open). The book-panel plugin subscribes and renders.
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("bookUpdated", {});
                 }
               } else if (evt.kind === 13) {
                 // Phase 4 step 5: UseFailed (WeenieError /

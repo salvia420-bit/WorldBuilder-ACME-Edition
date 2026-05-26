@@ -312,6 +312,98 @@ impl ProtocolPack for ModifyCharacterSquelchActionData {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetAllegianceNameActionData {
+    pub new_name: String,
+}
+
+impl ProtocolUnpack for SetAllegianceNameActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let new_name = read_string16(data, offset)?;
+        Some(Self { new_name })
+    }
+}
+
+impl ProtocolPack for SetAllegianceNameActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        write_string16(writer, &self.new_name);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetAllegianceOfficerActionData {
+    pub target_name: String,
+    pub officer_level: u32,
+}
+
+impl ProtocolUnpack for SetAllegianceOfficerActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let target_name = read_string16(data, offset)?;
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let officer_level = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(Self {
+            target_name,
+            officer_level,
+        })
+    }
+}
+
+impl ProtocolPack for SetAllegianceOfficerActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        write_string16(writer, &self.target_name);
+        writer
+            .write_u32::<LittleEndian>(self.officer_level)
+            .unwrap();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AllegianceChatGagActionData {
+    pub target_name: String,
+    /// ACE reads `Convert.ToBoolean(ReadUInt32())` — wire is a u32, 0 = unmute, nonzero = mute.
+    pub gag_on: bool,
+}
+
+impl ProtocolUnpack for AllegianceChatGagActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let target_name = read_string16(data, offset)?;
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let gag_on = LittleEndian::read_u32(&data[*offset..*offset + 4]) != 0;
+        *offset += 4;
+        Some(Self {
+            target_name,
+            gag_on,
+        })
+    }
+}
+
+impl ProtocolPack for AllegianceChatGagActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        write_string16(writer, &self.target_name);
+        writer
+            .write_u32::<LittleEndian>(u32::from(self.gag_on))
+            .unwrap();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecallAllegianceHometownActionData {}
+
+impl ProtocolUnpack for RecallAllegianceHometownActionData {
+    fn unpack(_data: &[u8], _offset: &mut usize) -> Option<Self> {
+        Some(Self {})
+    }
+}
+
+impl ProtocolPack for RecallAllegianceHometownActionData {
+    fn pack(&self, _writer: &mut Vec<u8>) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

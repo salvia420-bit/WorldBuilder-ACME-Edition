@@ -339,19 +339,18 @@ pub enum GameActionOpcode {
     DeclineTrade = 0x01FB,
 
     // --- Books & Inscriptions ---
-    // /// C2S: Request book metadata and currently loaded page data.
-    // /// Defunct: inventory books are opened via `Use`, not this opcode.
-    // BookData = 0x00AA,
-    // /// C2S: Update the text of a book page.
-    // BookModifyPage = 0x00AB,
-    // /// C2S: Add a new page to a book.
-    // BookAddPage = 0x00AC,
-    // /// C2S: Remove a page from a book.
-    // BookDeletePage = 0x00AD,
+    /// C2S: Request book metadata and currently loaded page data.
+    BookData = 0x00AA,
+    /// C2S: Update the text of a book page.
+    BookModifyPage = 0x00AB,
+    /// C2S: Add a new page to a book.
+    BookAddPage = 0x00AC,
+    /// C2S: Remove a page from a book.
+    BookDeletePage = 0x00AD,
     /// C2S: Request the text content of a specific book page.
     BookPageData = 0x00AE,
-    // /// C2S: Add an inscription to an item (Notes, Crafted items).
-    // SetInscription = 0x00BF,
+    /// C2S: Add an inscription to an item (Notes, Crafted items).
+    SetInscription = 0x00BF,
 
     // --- Interaction & Login ---
     // /// C2S: Toggles boolean character options (Appear Offline, Show Cloak, etc).
@@ -445,10 +444,10 @@ pub enum GameActionOpcode {
     // QueryAllegianceName = 0x0030,
     // /// C2S: Clear a custom name for an allegiance member.
     // ClearAllegianceName = 0x0031,
-    // /// C2S: Set a custom name for an allegiance member.
-    // SetAllegianceName = 0x0033,
-    // /// C2S: Designate a vassal as an allegiance officer.
-    // SetAllegianceOfficer = 0x003B,
+    /// C2S: Set the allegiance MOTD / name (single string16 payload).
+    SetAllegianceName = 0x0033,
+    /// C2S: Designate a vassal as an allegiance officer (target name + officer level).
+    SetAllegianceOfficer = 0x003B,
     // /// C2S: Assign a custom title to an allegiance officer.
     // SetAllegianceOfficerTitle = 0x003C,
     // /// C2S: List all officer titles in the allegiance.
@@ -459,8 +458,8 @@ pub enum GameActionOpcode {
     // DoAllegianceLockAction = 0x003F,
     // /// C2S: Add a player to the approved vassal list.
     // SetAllegianceApprovedVassal = 0x0040,
-    // /// C2S: Mute/gag a player in allegiance chat.
-    // AllegianceChatGag = 0x0041,
+    /// C2S: Mute/gag a player in allegiance chat (target name + u32 bool).
+    AllegianceChatGag = 0x0041,
     // /// C2S: Perform housing actions via allegiance (e.g. mansion recall).
     // DoAllegianceHouseAction = 0x0042,
     // /// C2S: Forcibly break allegiance with a vassal (boot).
@@ -479,8 +478,8 @@ pub enum GameActionOpcode {
     // ListAllegianceOfficers = 0x02A6,
     // /// C2S: Remove all officers from their positions.
     // ClearAllegianceOfficers = 0x02A7,
-    // /// C2S: Recall the character to their allegiance hometown.
-    // RecallAllegianceHometown = 0x02AB,
+    /// C2S: Recall the character to their allegiance hometown (no payload).
+    RecallAllegianceHometown = 0x02AB,
     // /// C2S: Select an active character title.
     // TitleSet = 0x002C,
     /// C2S: Query the current health of a selected creature or player.
@@ -731,12 +730,12 @@ pub enum GameEventOpcode {
     // --- Books & Inscriptions ---
     /// S2C: Response containing book metadata plus any inline page payloads.
     BookDataResponse = 0x00B4,
-    // /// S2C: Result of a book page modification.
-    // BookModifyPageResponse = 0x00B5,
-    // /// S2C: Result of adding a new page to a book.
-    // BookAddPageResponse = 0x00B6,
-    // /// S2C: Result of deleting a page from a book.
-    // BookDeletePageResponse = 0x00B7,
+    /// S2C: Result of a book page modification.
+    BookModifyPageResponse = 0x00B5,
+    /// S2C: Result of adding a new page to a book.
+    BookAddPageResponse = 0x00B6,
+    /// S2C: Result of deleting a page from a book.
+    BookDeletePageResponse = 0x00B7,
     /// S2C: Returns specific page data for a book.
     BookPageDataResponse = 0x00B8,
     // /// S2C: Result of a salvaging operation.

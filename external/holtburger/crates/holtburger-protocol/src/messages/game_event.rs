@@ -79,6 +79,9 @@ pub enum GameEvent {
     ClearTradeAcceptance,
     BookDataResponse(Box<BookDataResponseEventData>),
     BookPageDataResponse(Box<BookPageDataResponseEventData>),
+    BookModifyPageResponse(Box<BookModifyPageResponseEventData>),
+    BookAddPageResponse(Box<BookAddPageResponseEventData>),
+    BookDeletePageResponse(Box<BookDeletePageResponseEventData>),
     ApproachVendor(Box<ApproachVendorEventData>),
     FellowshipQuit(Box<FellowshipQuitEventData>),
     FellowshipDismiss(Box<FellowshipDismissEventData>),
@@ -289,6 +292,15 @@ impl ProtocolUnpack for GameEventMessage {
                 GameEventOpcode::BookPageDataResponse => GameEvent::BookPageDataResponse(Box::new(
                     BookPageDataResponseEventData::unpack(data, offset)?,
                 )),
+                GameEventOpcode::BookModifyPageResponse => GameEvent::BookModifyPageResponse(
+                    Box::new(BookModifyPageResponseEventData::unpack(data, offset)?),
+                ),
+                GameEventOpcode::BookAddPageResponse => GameEvent::BookAddPageResponse(Box::new(
+                    BookAddPageResponseEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::BookDeletePageResponse => GameEvent::BookDeletePageResponse(
+                    Box::new(BookDeletePageResponseEventData::unpack(data, offset)?),
+                ),
                 GameEventOpcode::ApproachVendor => GameEvent::ApproachVendor(Box::new(
                     ApproachVendorEventData::unpack(data, offset)?,
                 )),
@@ -599,6 +611,21 @@ impl ProtocolPack for GameEventMessage {
             }
             GameEvent::BookPageDataResponse(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::BookPageDataResponse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::BookModifyPageResponse(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::BookModifyPageResponse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::BookAddPageResponse(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::BookAddPageResponse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::BookDeletePageResponse(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::BookDeletePageResponse as u32)
                     .unwrap();
                 data.pack(buf);
             }

@@ -12,6 +12,43 @@
 
 ---
 
+## Status — Wave F executed 2026-05-25 (later same day)
+
+Three more items shipped after Wave E. F1 + F3 ran in parallel (F1 Rust+JS, F3 pure JS). F2 ran sequentially after F1 since both edit `src/lib.rs` + protocol-crate files.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 4 (officer/MOTD/gag/recall) | Allegiance polish | **SHIPPED** | Wave F1. 4 opcodes uncommented (`SetAllegianceName 0x0033`, `SetAllegianceOfficer 0x003B`, `AllegianceChatGag 0x0041`, `RecallAllegianceHometown 0x02AB`); 4 new message structs in `crates/holtburger-protocol/src/messages/player/actions.rs` with wire format authored against `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/GameActionSet*.cs`; 4 GameAction enum variants + 4 wasm methods (`setAllegianceName/setAllegianceOfficer/allegianceChatGag/recallAllegianceHometown`) + 4 SessionCommand + 4 recv arms. `plugins/allegiance-panel.js` standalone IIFE now has 6 buttons: original Swear/Break + new MOTD-row (text input + Confirm), Promote-Selected-to-Officer, Toggle-Chat-Gag-for-Selected, Recall-to-Hometown. **ACE wire deviation:** chat-gag's `gag_on` is `u32` on the wire (mirrors `ModifyCharacterSquelch`), not `bool`. Bans / boots / lock-action / approved-vassal / officer-title (12 more) still deferred to Wave G. |
+| 21 | Books + Inscriptions | **SHIPPED** | Wave F2. 8 opcodes uncommented (5 C2S: `BookData/BookAddPage/BookModifyPage/BookDeletePage/SetInscription`; 3 S2C: `BookModifyPageResponse/BookAddPageResponse/BookDeletePageResponse`). 5 new C2S action structs + 3 new S2C event structs in `crates/holtburger-protocol/src/messages/book/{actions,events}.rs`. **ACE wire deviation:** `BookModifyPage` does NOT carry `ignore_author` on the wire — ACE re-reads it server-side from the book entity. The JS-facade keeps the arg for forward-compat but drops it before send. 5 wasm methods + 5 SessionCommand + 5 send recv arms. Receive-side: `BookSnapshot` + `BookPageView` + JS wrappers; `latest_book: Rc<RefCell<Option<BookSnapshot>>>`; `publish_player_book_snapshot()` folds via existing `WorldEvent::EntityBookUpdated` (handlers/inventory.rs already maintains `entity.book` from `BookDataResponse+BookPageDataResponse`); `CLIENT_EVENT_KIND_BOOK_UPDATED=24`. Page-mod responses push kind=24 directly so JS triggers re-fetch. `SessionHandle::player_book()` getter. NEW `plugins/book-panel.js` — 320×340 floating overlay; inscription strip + Set button (prompt); page navigator (◀ Page N of M ▶, disabled at ends); textarea read-only→edit toggle on Edit/Save; Add Page + Delete Page (with confirm) footer; AC parchment styling (`#2a1f15` bg, `#f0e8d0` text). Debug: `window.__openBookFor(guid)`. |
+| 14 + ad-hoc | Sky aurora storm + cell-bug parity flag | **SHIPPED** | Wave F3 (pure JS). **(14) Aurora ribbons:** NEW `scene3d/weather/aurora.js` (~170 LOC) — `AuroraSystem` class with `THREE.InstancedMesh` of up to 120 vertical 80×6m quads on a `RING_RADIUS=400m` ring around the camera; alpha gradient baked into vertex colors (top=1.0, bottom=0.02); additive blending; `renderOrder=940` (sky-attached). Per-ribbon azimuth/wobble/color phases for shimmer + green↔magenta cycle (`COLOR_CYCLE_PERIOD=30s`, green-biased via `pow(raw, 2.2) * 0.7`). Vertical wobble ±2m / 5s. `WeatherEffectsManager` integration: forced=1.0 via `?aurora=on`, storm-only=0.6 (`weather_state.is_storm=true`), off via `?aurora=off`. **(ad-hoc) Cross-cell parity flag:** `scene3d/cells.js` adds `CELL_BUG_PARITY` const + 1-line short-circuit in `tickCellVisibility3D` — `?cellBugParity=retail` keeps loaded `userData.isEnvCell` indoor cells visible regardless of player's current cell, matching retail's basement-from-overworld quirk per #worldbuilder 2026-04-10 ("try and match client bugs so you know what's wonky"). |
+
+**Files touched this wave:**
+- `src/lib.rs` +682 LOC (F1: ~310 + F2: ~370 — 9 wasm methods total + 9 SessionCommand + 9 send recv arms + BookSnapshot infra + 4 event recv arms + getter)
+- `crates/holtburger-protocol/src/opcodes.rs` +49 LOC (12 opcodes uncommented + light tidying)
+- `crates/holtburger-protocol/src/messages/player/actions.rs` +92 LOC (4 new allegiance structs)
+- `crates/holtburger-protocol/src/messages/book/actions.rs` +116 LOC (5 new C2S structs)
+- `crates/holtburger-protocol/src/messages/book/events.rs` +78 LOC (3 new S2C structs)
+- `crates/holtburger-protocol/src/messages/game_action.rs` +81 LOC (9 GameAction variants + arms)
+- `crates/holtburger-protocol/src/messages/game_event.rs` +27 LOC (3 GameEvent variants + arms)
+- `plugins/allegiance-panel.js` +127 LOC (F1 standalone-IIFE expansion)
+- `plugins/book-panel.js` NEW ~450 LOC (F2)
+- `scene3d/weather/aurora.js` NEW ~170 LOC (F3)
+- `scene3d/weather/manager.js` +31 LOC (F3 wire-up)
+- `scene3d/cells.js` +15 LOC (F3 parity flag)
+- `index.html` +10 LOC (book-panel import + kind=24 dispatch + minor)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `cargo test -p holtburger-protocol --lib` 268/268 PASS. `node --check` clean on all JS.
+
+**Recommended Wave G** (next priorities):
+1. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as F1.
+2. **Allegiance + Friends receive-side snapshot (#4, #20 polish)** — `AllegianceUpdate`/`AllegianceInfoResponse`/`FriendsUpdate` events → snapshot infra mirroring Wave D1 fellowship pattern.
+3. **Titles + Account/Global squelch (#20 finish)** — TitleSet 0x002C + ModifyAccountSquelch + ModifyGlobalSquelch + SetSquelchDb.
+4. **Equipment paper-doll burden % + drag-drop (#10 finish)** — needs `playerBurden()` wasm getter + `DropItem` + `GetAndWieldItem` exports.
+5. **House system (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented. Similar shape to allegiance/fellowship.
+6. **Spell research / component management UI (#19)** — Yonneh-quoted; parser exists, panel doesn't.
+
+---
+
 ## Status — Wave E executed 2026-05-25 (later same day)
 
 Three more items shipped after Wave D. E1 + E3 ran in parallel (E1 = Rust+JS, E3 = pure JS). E2 ran sequentially after E1 since both edit `src/lib.rs`.
@@ -191,10 +228,13 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 
 **Holtburger status:** Wave D2 shipped 6 `SessionHandle` wasm-bindgen methods (`openTrade/closeTrade/addToTrade/acceptTrade/declineTrade/resetTrade`) + `TradeSnapshot`/`TradeItem` Rust structs + JS wrappers + `publish_player_trade_snapshot()` via existing `WorldEvent::TradeStateUpdated` (canonical `world.trade` already maintained by `crates/holtburger-world/src/handlers/trade.rs` across all 9 trade events) + `CLIENT_EVENT_KIND_TRADE_UPDATED=23` + `player_trade()` getter. `plugins/trade-panel.js` NEW 593 LOC — 360×280 floating window, two 4×3 12-slot grids (You / partner), Accept/Decline/Reset footer, partner-accept green dot + self-accept gold highlight, drag-drop from inventory via mime `application/x-hb-inv-guid`, Esc/X close. Debug: `window.__openTradePanel()`.
 
-### 4. Allegiance system — SHIPPED 2026-05-25 (Wave E1, send-only MVP)
+### 4. Allegiance system — SHIPPED 2026-05-25 (Wave E1 Swear/Break + Wave F1 MOTD/Officer/Gag/Recall)
 **Severity:** load-bearing (player-facing core feature)
 **Discord evidence:** Multiple "allegiance / fellowship chat" mentions in #general; cascaded transparent chat windows for allegiance specifically (line 1752).
-**Holtburger status:** Wave E1 shipped 2 wasm-bindgen methods (`swearAllegiance(targetGuid)`, `breakAllegiance(targetGuid)`) using existing `SwearAllegianceActionData`/`BreakAllegianceActionData` structs at `crates/holtburger-protocol/src/messages/player/actions.rs:161+`. JS: `plugins/allegiance-panel.js` already existed as a main-panel view; appended 246-LOC standalone IIFE with Swear/Break action buttons that read `getSelectedTarget()` with confirm dialogs. 18 more opcodes (officer, motd, bans, gag, hometown recall, approved vassal) still commented — Wave F follow-on (each is small struct + GameAction variant + wasm method + panel button). Receive-side AllegianceUpdate/InfoResponse snapshot also Wave F.
+**Holtburger status:**
+- **Wave E1 (Swear/Break):** 2 wasm-bindgen methods (`swearAllegiance`, `breakAllegiance`) using existing `SwearAllegianceActionData`/`BreakAllegianceActionData` structs at `crates/holtburger-protocol/src/messages/player/actions.rs:161+`. JS: standalone IIFE with Swear/Break action buttons.
+- **Wave F1 (MOTD/Officer/Gag/Recall):** 4 opcodes uncommented (`SetAllegianceName 0x0033`, `SetAllegianceOfficer 0x003B`, `AllegianceChatGag 0x0041`, `RecallAllegianceHometown 0x02AB`). 4 new structs in `player/actions.rs` (wire format per `~/ace-server/.../GameActionSet*.cs`). 4 wasm methods (`setAllegianceName/setAllegianceOfficer/allegianceChatGag/recallAllegianceHometown`). Panel now has 6 buttons: Swear / Break / MOTD-row (text input + Confirm) / Promote-Selected-to-Officer / Toggle-Chat-Gag-for-Selected / Recall-to-Hometown. **ACE wire deviation:** chat-gag's `gag_on` is `u32` on the wire (not bool — mirrors `ModifyCharacterSquelch` pattern).
+- **Still deferred to Wave G:** 12 commented opcodes (bans, boots, lock-action, approved-vassal, officer-titles, query-allegiance-name) + receive-side AllegianceUpdate/InfoResponse snapshot.
 **Upstream:** ACE has 30+ handlers in `Source/ACE.Server/Network/GameAction/Actions/` matching the commented-out opcodes.
 
 ### 5. Fellowship system — SHIPPED 2026-05-25 (Wave C2 send-side + Wave D1 receive-side full)
@@ -267,10 +307,9 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Holtburger:** Our cell-visibility BFS is *correct* (only loaded cells render). Retail had a quirk where basements peek through floors. **Decide:** match the bug for visual parity, or be cleaner? Today it's neither documented nor a knob.
 **Remediation:** Add `?cellBugParity=retail` flag; document the decision in `docs/`.
 
-### 14. Particle lighting inside skybox effects
+### 14. Particle lighting inside skybox effects — SHIPPED 2026-05-25 (Wave F3, aurora variant)
 **Discord:** "now with proper lighting particles" — #worldbuilder 2026-04-10; "green light (northern lights?) a texture or color?…particles with gfxobj 0x01001A62" — same
-**Holtburger:** We have ParticleManager + parsed PhysicsScript/Emitter; *moon particles* validated (sky_particles_probe_2026-05-12 memory). But sky-wide aurora/storm-front colored emission not in the inventory.
-**Remediation:** Add a sky-attached ParticleEmitter layer driven by weather_state; aurora when `weather_state.aurora_intensity > 0`.
+**Holtburger:** Wave F3 shipped NEW `scene3d/weather/aurora.js` (~170 LOC) — `AuroraSystem` class with `THREE.InstancedMesh` of up to 120 vertical 80×6m quads on a `RING_RADIUS=400m` ring around the camera; alpha gradient baked into vertex colors (top=1.0, bottom=0.02); additive blending; `renderOrder=940`. Per-ribbon azimuth/wobble/color phases for shimmer + green↔magenta cycle (`COLOR_CYCLE_PERIOD=30s`, green-biased). Vertical wobble ±2m / 5s. `WeatherEffectsManager` integration: `?aurora=on` = 1.0 intensity always, real `weather_state.is_storm=true` = 0.6 intensity, `?aurora=off` = disabled. Storm-front colored emission also requested in the Discord quote — covered by the F3 aurora + Wave C3 lightning combination.
 
 ### 15. Landblock unload (memory time bomb)
 **Discord:** Implicit in #general line 858 "memory leak probably…looted too many corpses" (extended sessions); explicit in our own `INTERACTING_LAYERS_ANALYSIS.md`.
@@ -301,9 +340,9 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Chat channel filtering and friend lists implicit across #general.
 **Holtburger:** Wave E2 uncommented AddFriend 0x0018, RemoveFriend 0x0017, ModifyCharacterSquelch 0x0058 + created 3 message structs in `crates/holtburger-protocol/src/messages/player/actions.rs` (AddFriend by-name, RemoveFriend by-guid, ModifyCharacterSquelch with 4 fields: add/playerGuid/playerName/messageType per `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/GameActionModifyCharacterSquelch.cs`). 3 wasm methods (`addFriend(name)`, `removeFriend(guid)`, `modifyCharacterSquelch(guid, name, add, mask)`). New `plugins/social-panel.js` (~340 LOC) — Friends section (text input + Add, Remove-by-Selected) + Squelch section (Squelch/Unsquelch Selected, all-chat mask `0xFFFFFFFF`). ModifyAccountSquelch 0x0059, ModifyGlobalSquelch 0x005B, TitleSet 0x002C deferred to Wave F. Receive-side FriendsUpdate/CharacterTitleTable snapshot also Wave F.
 
-### 21. Writing system (books, inscriptions, scrolls)
+### 21. Writing system (books, inscriptions, scrolls) — SHIPPED 2026-05-25 (Wave F2)
 **Discord:** Light coverage, but ACE has BookData/AddPage/ModifyPage/DeletePage/Inscribe handlers, Chorizite categorizes under Writing.
-**Holtburger:** SetInscription = 0x00BF commented out; no book UI; no read-only inscription display on examine.
+**Holtburger:** Wave F2 shipped 8 opcodes uncommented (5 C2S: `BookData/BookAddPage/BookModifyPage/BookDeletePage/SetInscription`; 3 S2C: `BookModifyPageResponse/BookAddPageResponse/BookDeletePageResponse`). 5 new C2S action structs + 3 new S2C event structs in `crates/holtburger-protocol/src/messages/book/{actions,events}.rs`. **ACE wire deviation:** `BookModifyPage` does NOT carry `ignore_author` on the wire — ACE re-reads it server-side from the book entity. 5 wasm methods + receive-side `BookSnapshot` via existing `WorldEvent::EntityBookUpdated` + `CLIENT_EVENT_KIND_BOOK_UPDATED=24` + `player_book()` getter. NEW `plugins/book-panel.js` — 320×340 floating overlay; inscription strip + Set button (prompt); page navigator (◀ Page N of M ▶); read/edit textarea toggle; Add/Delete Page; AC parchment styling. Debug: `window.__openBookFor(guid)`. Read-only inscription display on examine still a polish item — Wave G or later.
 
 ### 22. House system
 **Discord:** Not directly quoted but ACE has Buy/Rent/Abandon/Guest perms/Teleport/Hooks. Chorizite has full House category.
@@ -452,13 +491,19 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 15. ~~Reversed Z-buffer (#11)~~ — `logarithmicDepthBuffer: true` flipped on the renderer.
    Plus bundle bonuses: nameplate distance LOD (#16) + compass HUD overlay (ad-hoc Discord ask).
 
-### Wave F — next priorities
+### Wave F — SHIPPED 2026-05-25 (later same day)
 
-16. **Allegiance officer/MOTD/bans/gag/hometown-recall (#4 polish)** — 18 commented opcodes; each is a small struct + GameAction variant + wasm method + panel button.
-17. **Titles + Account-squelch + Global-squelch (#20 polish)** — TitleSet 0x002C, ModifyAccountSquelch 0x0059, ModifyGlobalSquelch 0x005B, SetSquelchDb 0x01F4.
-18. **Allegiance receive-side snapshot (#4)** — `AllegianceUpdate`/`AllegianceInfoResponse` events + snapshot infra mirroring Wave D1 fellowship pattern.
-19. **Friends list snapshot (#20)** — `FriendsUpdate` event + snapshot.
-20. **Equipment paper-doll burden % + drag-drop (#10 finish)** — needs `playerBurden()` wasm getter + `DropItem` + `GetAndWieldItem` exports.
-21. **Inscriptions + books (#21)** — Writing GameAction handlers exist in ACE; UI is the new piece.
+16. ~~Allegiance MOTD/Officer/ChatGag/HometownRecall (#4 polish)~~ — 4 opcodes uncommented + 4 wasm methods + 4 panel buttons shipped.
+17. ~~Inscriptions + books (#21)~~ — full Books system (read/edit/add/delete) + Set Inscription + receive-side snapshot panel shipped.
+18. ~~Sky aurora storm particles (#14)~~ — pure-JS aurora ribbon system tied to `weather_state.is_storm` shipped, plus `?cellBugParity=retail` for the basement-from-overworld quirk.
+
+### Wave G — next priorities
+
+19. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as F1.
+20. **Allegiance + Friends receive-side snapshot (#4, #20 polish)** — `AllegianceUpdate`/`AllegianceInfoResponse`/`FriendsUpdate` events → snapshot infra mirroring Wave D1 fellowship pattern.
+21. **Titles + Account/Global squelch (#20 finish)** — TitleSet 0x002C + ModifyAccountSquelch + ModifyGlobalSquelch + SetSquelchDb.
+22. **Equipment paper-doll burden % + drag-drop (#10 finish)** — needs `playerBurden()` wasm getter + `DropItem` + `GetAndWieldItem` exports.
+23. **House system (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
+24. **Spell research / component management UI (#19)** — Yonneh-quoted; parser exists, panel doesn't.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.

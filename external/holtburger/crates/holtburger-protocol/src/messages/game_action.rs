@@ -37,6 +37,10 @@ pub enum GameAction {
     Tell(Box<TellActionData>),
     SwearAllegiance(Box<SwearAllegianceActionData>),
     BreakAllegiance(Box<BreakAllegianceActionData>),
+    SetAllegianceName(Box<SetAllegianceNameActionData>),
+    SetAllegianceOfficer(Box<SetAllegianceOfficerActionData>),
+    AllegianceChatGag(Box<AllegianceChatGagActionData>),
+    RecallAllegianceHometown(Box<RecallAllegianceHometownActionData>),
     AddFriend(Box<AddFriendActionData>),
     RemoveFriend(Box<RemoveFriendActionData>),
     ModifyCharacterSquelch(Box<ModifyCharacterSquelchActionData>),
@@ -82,6 +86,11 @@ pub enum GameAction {
     Buy(Box<BuyActionData>),
     Sell(Box<SellActionData>),
     BookPageData(Box<BookPageDataActionData>),
+    BookData(Box<BookDataActionData>),
+    BookAddPage(Box<BookAddPageActionData>),
+    BookModifyPage(Box<BookModifyPageActionData>),
+    BookDeletePage(Box<BookDeletePageActionData>),
+    SetInscription(Box<SetInscriptionActionData>),
     ConfirmationResponse(Box<ConfirmationResponseActionData>),
     OpenTradeNegotiations(Box<OpenTradeNegotiationsActionData>),
     CloseTradeNegotiations(Box<CloseTradeNegotiationsActionData>),
@@ -152,6 +161,18 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::BreakAllegiance => GameAction::BreakAllegiance(Box::new(
                     BreakAllegianceActionData::unpack(data, offset)?,
                 )),
+                GameActionOpcode::SetAllegianceName => GameAction::SetAllegianceName(Box::new(
+                    SetAllegianceNameActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::SetAllegianceOfficer => GameAction::SetAllegianceOfficer(
+                    Box::new(SetAllegianceOfficerActionData::unpack(data, offset)?),
+                ),
+                GameActionOpcode::AllegianceChatGag => GameAction::AllegianceChatGag(Box::new(
+                    AllegianceChatGagActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::RecallAllegianceHometown => GameAction::RecallAllegianceHometown(
+                    Box::new(RecallAllegianceHometownActionData::unpack(data, offset)?),
+                ),
                 GameActionOpcode::AddFriend => {
                     GameAction::AddFriend(Box::new(AddFriendActionData::unpack(data, offset)?))
                 }
@@ -289,6 +310,21 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::BookPageData => GameAction::BookPageData(Box::new(
                     BookPageDataActionData::unpack(data, offset)?,
                 )),
+                GameActionOpcode::BookData => {
+                    GameAction::BookData(Box::new(BookDataActionData::unpack(data, offset)?))
+                }
+                GameActionOpcode::BookAddPage => GameAction::BookAddPage(Box::new(
+                    BookAddPageActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::BookModifyPage => GameAction::BookModifyPage(Box::new(
+                    BookModifyPageActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::BookDeletePage => GameAction::BookDeletePage(Box::new(
+                    BookDeletePageActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::SetInscription => GameAction::SetInscription(Box::new(
+                    SetInscriptionActionData::unpack(data, offset)?,
+                )),
                 GameActionOpcode::ConfirmationResponse => GameAction::ConfirmationResponse(
                     Box::new(ConfirmationResponseActionData::unpack(data, offset)?),
                 ),
@@ -402,6 +438,26 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::BreakAllegiance(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::BreakAllegiance as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::SetAllegianceName(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::SetAllegianceName as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::SetAllegianceOfficer(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::SetAllegianceOfficer as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AllegianceChatGag(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AllegianceChatGag as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::RecallAllegianceHometown(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::RecallAllegianceHometown as u32)
                     .unwrap();
                 data.pack(buf);
             }
@@ -627,6 +683,31 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::BookPageData(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::BookPageData as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::BookData(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::BookData as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::BookAddPage(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::BookAddPage as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::BookModifyPage(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::BookModifyPage as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::BookDeletePage(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::BookDeletePage as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::SetInscription(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::SetInscription as u32)
                     .unwrap();
                 data.pack(buf);
             }

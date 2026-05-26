@@ -108,6 +108,84 @@ impl ProtocolPack for BookDataResponseEventData {
     }
 }
 
+// Wire shape per `GameEventBookModifyPageResponse` / AddPage / DeletePage —
+// all three responses share the same payload: `{bookGuid, page, success}`
+// where `success` is `Convert.ToUInt32(bool)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookModifyPageResponseEventData {
+    pub object_guid: Guid,
+    pub page_num: i32,
+    pub success: bool,
+}
+
+impl ProtocolUnpack for BookModifyPageResponseEventData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        Some(Self {
+            object_guid: Guid::unpack(data, offset)?,
+            page_num: i32::unpack(data, offset)?,
+            success: u32::unpack(data, offset)? != 0,
+        })
+    }
+}
+
+impl ProtocolPack for BookModifyPageResponseEventData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        self.object_guid.pack(buf);
+        self.page_num.pack(buf);
+        (self.success as u32).pack(buf);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookAddPageResponseEventData {
+    pub object_guid: Guid,
+    pub page_num: i32,
+    pub success: bool,
+}
+
+impl ProtocolUnpack for BookAddPageResponseEventData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        Some(Self {
+            object_guid: Guid::unpack(data, offset)?,
+            page_num: i32::unpack(data, offset)?,
+            success: u32::unpack(data, offset)? != 0,
+        })
+    }
+}
+
+impl ProtocolPack for BookAddPageResponseEventData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        self.object_guid.pack(buf);
+        self.page_num.pack(buf);
+        (self.success as u32).pack(buf);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookDeletePageResponseEventData {
+    pub object_guid: Guid,
+    pub page_num: i32,
+    pub success: bool,
+}
+
+impl ProtocolUnpack for BookDeletePageResponseEventData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        Some(Self {
+            object_guid: Guid::unpack(data, offset)?,
+            page_num: i32::unpack(data, offset)?,
+            success: u32::unpack(data, offset)? != 0,
+        })
+    }
+}
+
+impl ProtocolPack for BookDeletePageResponseEventData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        self.object_guid.pack(buf);
+        self.page_num.pack(buf);
+        (self.success as u32).pack(buf);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BookPageDataResponseEventData {
     pub object_guid: Guid,

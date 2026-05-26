@@ -128,6 +128,9 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::TradeFailure(_) => 0x0207,
         GameEvent::ClearTradeAcceptance => 0x0208,
         GameEvent::BookDataResponse(_) => 0x00B4,
+        GameEvent::BookModifyPageResponse(_) => 0x00B5,
+        GameEvent::BookAddPageResponse(_) => 0x00B6,
+        GameEvent::BookDeletePageResponse(_) => 0x00B7,
         GameEvent::BookPageDataResponse(_) => 0x00B8,
         GameEvent::ApproachVendor(_) => 0x0062,
         GameEvent::FellowshipQuit(_) => 0x00A3,
@@ -12562,6 +12565,17 @@ const CLIENT_EVENT_KIND_FELLOWSHIP_UPDATED: u32 = 22;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_TRADE_UPDATED: u32 = 23;
 
+/// `kind = 24` — BookUpdated. ACE sent one of the book GameEvents
+/// (BookDataResponse on initial open / re-fetch, or one of the page-
+/// mutation responses BookModifyPageResponse / BookAddPageResponse /
+/// BookDeletePageResponse). The recv loop has refreshed `latest_book`
+/// from the fold (BookDataResponse replaces the snapshot wholesale;
+/// page-response arms just re-signal so JS can decide to re-fetch).
+/// JS reads via [`SessionHandle::player_book`] which returns the
+/// current open book (or `None` pre-open). Payload fields unused.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_BOOK_UPDATED: u32 = 24;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -12961,6 +12975,69 @@ enum SessionCommand {
         target_name: String,
         add: bool,
         message_type: u32,
+    },
+    /// Allegiance: set the allegiance MOTD / name. Maps to
+    /// `GameAction::SetAllegianceName` (sub-opcode 0x0033). Single
+    /// string16 payload; ACE owns monarch/officer permission checks.
+    SetAllegianceName {
+        new_name: String,
+    },
+    /// Allegiance: promote `target_name` to officer at `officer_level`.
+    /// Maps to `GameAction::SetAllegianceOfficer` (sub-opcode 0x003B).
+    /// ACE owns rank/permission validation.
+    SetAllegianceOfficer {
+        target_name: String,
+        officer_level: u32,
+    },
+    /// Allegiance: mute (`gag_on=true`) / unmute (`gag_on=false`) a
+    /// member in allegiance chat. Maps to `GameAction::AllegianceChatGag`
+    /// (sub-opcode 0x0041). Wire encodes `gag_on` as `u32`
+    /// (`Convert.ToBoolean` server-side).
+    AllegianceChatGag {
+        target_name: String,
+        gag_on: bool,
+    },
+    /// Allegiance: recall the local character to their allegiance
+    /// hometown / monarch's mansion. Maps to
+    /// `GameAction::RecallAllegianceHometown` (sub-opcode 0x02AB). No
+    /// payload; ACE owns cooldown / interrupt logic.
+    RecallAllegianceHometown,
+    /// Book: request full book metadata + page payloads for `object_guid`.
+    /// Maps to `GameAction::BookData` (sub-opcode 0x00AA). ACE replies
+    /// with `GameEvent::BookDataResponse` (already wired through the
+    /// world dispatcher → emits `WorldEvent::EntityBookUpdated`).
+    BookData {
+        object_guid: u32,
+    },
+    /// Book: append a new (blank) page to the book identified by
+    /// `object_guid`. Maps to `GameAction::BookAddPage` (sub-opcode
+    /// 0x00AC). ACE responds with `GameEvent::BookAddPageResponse`
+    /// containing the new page index + success flag.
+    BookAddPage {
+        object_guid: u32,
+    },
+    /// Book: rewrite page `page_num` of the book identified by
+    /// `object_guid`. Maps to `GameAction::BookModifyPage` (sub-opcode
+    /// 0x00AB). ACE responds with `GameEvent::BookModifyPageResponse`.
+    BookModifyPage {
+        object_guid: u32,
+        page_num: i32,
+        text: String,
+    },
+    /// Book: drop page `page_num` from the book identified by
+    /// `object_guid`. Maps to `GameAction::BookDeletePage` (sub-opcode
+    /// 0x00AD). ACE responds with `GameEvent::BookDeletePageResponse`.
+    BookDeletePage {
+        object_guid: u32,
+        page_num: i32,
+    },
+    /// Inscription: set the inscription text on the item identified by
+    /// `object_guid` (Notes, crafted items). Maps to
+    /// `GameAction::SetInscription` (sub-opcode 0x00BF). Empty string
+    /// clears the inscription.
+    SetInscription {
+        object_guid: u32,
+        inscription: String,
     },
 }
 
@@ -14358,6 +14435,87 @@ impl TradeSnapshotJs {
     pub fn is_open(&self) -> bool { self.is_open }
 }
 
+// AC Books (2026-05-25): JS-facing snapshot of the local player's
+// currently-open book. Sourced from the world-handler-populated
+// `entity.book` via the recv loop's `EntityBookUpdated` arm — the
+// world dispatcher's inventory handler already folds
+// `GameEvent::BookDataResponse` into `entity.book` and emits the
+// `EntityBookUpdated` WorldEvent (see
+// `crates/holtburger-world/src/handlers/inventory.rs:184`). `None`
+// pre-open; populated on the first BookDataResponse and stays Some
+// until the panel issues a fresh `bookData(guid)` for a different book.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct BookSnapshot {
+    object_guid: u32,
+    max_num_pages: u32,
+    max_chars_per_page: u32,
+    inscription: String,
+    author_name: String,
+    pages: Vec<BookPageView>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct BookPageView {
+    author_name: String,
+    text: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct BookPageViewJs {
+    author_name: String,
+    text: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl BookPageViewJs {
+    #[wasm_bindgen(getter, js_name = authorName)]
+    pub fn author_name(&self) -> String { self.author_name.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn text(&self) -> String { self.text.clone() }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct BookSnapshotJs {
+    object_guid: u32,
+    max_num_pages: u32,
+    max_chars_per_page: u32,
+    inscription: String,
+    author_name: String,
+    pages: Vec<BookPageView>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl BookSnapshotJs {
+    #[wasm_bindgen(getter, js_name = objectGuid)]
+    pub fn object_guid(&self) -> u32 { self.object_guid }
+    #[wasm_bindgen(getter, js_name = maxNumPages)]
+    pub fn max_num_pages(&self) -> u32 { self.max_num_pages }
+    #[wasm_bindgen(getter, js_name = maxCharsPerPage)]
+    pub fn max_chars_per_page(&self) -> u32 { self.max_chars_per_page }
+    #[wasm_bindgen(getter)]
+    pub fn inscription(&self) -> String { self.inscription.clone() }
+    #[wasm_bindgen(getter, js_name = authorName)]
+    pub fn author_name(&self) -> String { self.author_name.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn pages(&self) -> Vec<BookPageViewJs> {
+        self.pages
+            .iter()
+            .map(|p| BookPageViewJs {
+                author_name: p.author_name.clone(),
+                text: p.text.clone(),
+            })
+            .collect()
+    }
+}
+
 /// Phase 4 step 4 follow-on: human-readable label for a `SkillType`
 /// numeric id. Mirrors the `Display` impl on
 /// `holtburger_common::stats::SkillType` (which uses strum's
@@ -14683,6 +14841,13 @@ pub struct SessionHandle {
     /// [`SessionHandle::player_trade`] from the kind=23 TradeUpdated
     /// drain.
     latest_trade: std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
+    /// AC Books (2026-05-25): local player's currently-open book.
+    /// Refreshed by the recv loop on every `WorldEvent::EntityBookUpdated`
+    /// (the world dispatcher already folds `BookDataResponse` +
+    /// `BookPageDataResponse` into `entity.book`). `None` pre-open
+    /// and after a different book is opened (the snapshot is whichever
+    /// book most-recently received a `BookDataResponse`).
+    latest_book: std::rc::Rc<std::cell::RefCell<Option<BookSnapshot>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -17046,6 +17211,158 @@ impl SessionHandle {
             })
     }
 
+    /// Allegiance — set the allegiance MOTD / name. Sends
+    /// `GameAction::SetAllegianceName` (sub-opcode 0x0033). ACE
+    /// validates monarch / officer permission.
+    #[wasm_bindgen(js_name = setAllegianceName)]
+    pub fn set_allegiance_name(&self, new_name: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SetAllegianceName { new_name })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("setAllegianceName: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Allegiance — promote `target_name` to officer at
+    /// `officer_level`. Sends `GameAction::SetAllegianceOfficer`
+    /// (sub-opcode 0x003B).
+    #[wasm_bindgen(js_name = setAllegianceOfficer)]
+    pub fn set_allegiance_officer(
+        &self,
+        target_name: String,
+        officer_level: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SetAllegianceOfficer {
+                target_name,
+                officer_level,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("setAllegianceOfficer: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Allegiance — gag (`gag_on=true`) / ungag (`gag_on=false`) a
+    /// member from allegiance chat. Sends
+    /// `GameAction::AllegianceChatGag` (sub-opcode 0x0041).
+    #[wasm_bindgen(js_name = allegianceChatGag)]
+    pub fn allegiance_chat_gag(
+        &self,
+        target_name: String,
+        gag_on: bool,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AllegianceChatGag {
+                target_name,
+                gag_on,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("allegianceChatGag: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Allegiance — recall to allegiance hometown / monarch's mansion.
+    /// Sends `GameAction::RecallAllegianceHometown` (sub-opcode 0x02AB).
+    /// No arguments; ACE owns cooldown / interrupt logic.
+    #[wasm_bindgen(js_name = recallAllegianceHometown)]
+    pub fn recall_allegiance_hometown(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RecallAllegianceHometown)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("recallAllegianceHometown: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Book — request full book metadata + page payloads. Sends
+    /// `GameAction::BookData` (sub-opcode 0x00AA). ACE responds with
+    /// `GameEvent::BookDataResponse`, which the world dispatcher folds
+    /// into `entity.book`; the recv loop then publishes the snapshot
+    /// and queues a `kind=24 bookUpdated`.
+    #[wasm_bindgen(js_name = bookData)]
+    pub fn book_data(&self, object_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BookData { object_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("bookData: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Book — append a new blank page. Sends `GameAction::BookAddPage`
+    /// (sub-opcode 0x00AC). ACE allocates the page server-side and
+    /// returns the new index via `GameEvent::BookAddPageResponse`.
+    #[wasm_bindgen(js_name = bookAddPage)]
+    pub fn book_add_page(&self, object_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BookAddPage { object_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("bookAddPage: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Book — rewrite the text of page `page_num` (0-based). Sends
+    /// `GameAction::BookModifyPage` (sub-opcode 0x00AB). ACE responds
+    /// with `GameEvent::BookModifyPageResponse` carrying success.
+    #[wasm_bindgen(js_name = bookModifyPage)]
+    pub fn book_modify_page(
+        &self,
+        object_guid: u32,
+        page_num: u32,
+        _ignore_author: bool,
+        text: String,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        // ACE handler reads {bookGuid, page (i32), text}; `ignore_author`
+        // accepted on the JS signature for forward-compat but unused at
+        // the wire (ACE re-reads it from the book entity server-side).
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BookModifyPage {
+                object_guid,
+                page_num: page_num as i32,
+                text,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("bookModifyPage: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Book — drop page `page_num` (0-based). Sends
+    /// `GameAction::BookDeletePage` (sub-opcode 0x00AD). ACE responds
+    /// with `GameEvent::BookDeletePageResponse` carrying success.
+    #[wasm_bindgen(js_name = bookDeletePage)]
+    pub fn book_delete_page(&self, object_guid: u32, page_num: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BookDeletePage {
+                object_guid,
+                page_num: page_num as i32,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("bookDeletePage: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Inscription — set inscription text on an item (notes, crafted
+    /// items). Sends `GameAction::SetInscription` (sub-opcode 0x00BF).
+    /// Empty string clears the inscription.
+    #[wasm_bindgen(js_name = setInscription)]
+    pub fn set_inscription(&self, object_guid: u32, inscription: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SetInscription {
+                object_guid,
+                inscription,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("setInscription: cmd channel closed ({e})"))
+            })
+    }
+
     /// AC Trade (2026-05-25): the local player's active peer-to-peer
     /// trade — snapshot refreshed by the recv loop on every trade
     /// `WorldEvent::TradeStateUpdated` (the world dispatcher emits
@@ -17064,6 +17381,22 @@ impl SessionHandle {
             my_accepted: t.my_accepted,
             partner_accepted: t.partner_accepted,
             is_open: t.is_open,
+        })
+    }
+
+    /// AC Books — the currently-open book snapshot. `None` pre-open
+    /// (no BookDataResponse has landed yet). Refreshed by the recv loop
+    /// on each `WorldEvent::EntityBookUpdated`. UI plugins re-pull on
+    /// each `kind=24 bookUpdated` drain.
+    #[wasm_bindgen(js_name = playerBook)]
+    pub fn player_book(&self) -> Option<BookSnapshotJs> {
+        self.latest_book.borrow().as_ref().map(|b| BookSnapshotJs {
+            object_guid: b.object_guid,
+            max_num_pages: b.max_num_pages,
+            max_chars_per_page: b.max_chars_per_page,
+            inscription: b.inscription.clone(),
+            author_name: b.author_name.clone(),
+            pages: b.pages.clone(),
         })
     }
 
@@ -17445,6 +17778,10 @@ pub async fn start_session(
     let latest_trade: std::rc::Rc<
         std::cell::RefCell<Option<TradeSnapshot>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // AC Books (2026-05-25): local player's currently-open book.
+    let latest_book: std::rc::Rc<
+        std::cell::RefCell<Option<BookSnapshot>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -17503,6 +17840,7 @@ pub async fn start_session(
         let latest_enchantments_inner = latest_enchantments.clone();
         let latest_fellowship_inner = latest_fellowship.clone();
         let latest_trade_inner = latest_trade.clone();
+        let latest_book_inner = latest_book.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -17528,6 +17866,7 @@ pub async fn start_session(
                 latest_enchantments_inner,
                 latest_fellowship_inner,
                 latest_trade_inner,
+                latest_book_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -17609,6 +17948,7 @@ pub async fn start_session(
         latest_enchantments,
         latest_fellowship,
         latest_trade,
+        latest_book,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -18310,6 +18650,39 @@ fn publish_player_fellowship_snapshot(
     *latest_fellowship.borrow_mut() = next;
 }
 
+// AC Books (2026-05-25): publish a JS-facing snapshot of the open book.
+// The world dispatcher's inventory handler already folds
+// `BookDataResponse` + `BookPageDataResponse` into `entity.book`; we
+// just project the most-recently-touched book out of `world.entities`.
+// JS reads via `handle.playerBook()` from the kind=24 BookUpdated drain.
+#[cfg(target_arch = "wasm32")]
+fn publish_player_book_snapshot(
+    world: &holtburger_world::WorldState,
+    book_guid: holtburger_common::Guid,
+    latest_book: &std::rc::Rc<std::cell::RefCell<Option<BookSnapshot>>>,
+) {
+    let next = world.entities.get(book_guid).and_then(|entity| {
+        let bd = entity.book.as_ref()?;
+        let pages: Vec<BookPageView> = bd
+            .pages
+            .iter()
+            .map(|p| BookPageView {
+                author_name: p.author_name.clone(),
+                text: p.page_text.clone().unwrap_or_default(),
+            })
+            .collect();
+        Some(BookSnapshot {
+            object_guid: u32::from(book_guid),
+            max_num_pages: bd.max_num_pages.unwrap_or(0),
+            max_chars_per_page: bd.max_num_chars_per_page.unwrap_or(0),
+            inscription: bd.inscription.clone().unwrap_or_default(),
+            author_name: bd.author_name.clone().unwrap_or_default(),
+            pages,
+        })
+    });
+    *latest_book.borrow_mut() = next;
+}
+
 /// Phase 6 step D: refresh the cell-scene snapshot the rAF tick reads
 /// each frame. Computes `current_cell` from the local player's pose +
 /// the BFS render set at depth=1, parks them in a shared cell. JS
@@ -18458,6 +18831,7 @@ async fn recv_loop(
     latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>>,
     latest_fellowship: std::rc::Rc<std::cell::RefCell<Option<FellowshipSnapshot>>>,
     latest_trade: std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
+    latest_book: std::rc::Rc<std::cell::RefCell<Option<BookSnapshot>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -18604,6 +18978,7 @@ async fn recv_loop(
                     let mut inventory_changed = false;
                     let mut fellowship_changed = false;
                     let mut trade_changed = false;
+                    let mut book_changed: Option<holtburger_common::Guid> = None;
                     if should_route_message_to_world(&message)
                         && let Some(w) = world.as_mut()
                     {
@@ -18629,6 +19004,9 @@ async fn recv_loop(
                                 }
                                 WorldEvent::TradeStateUpdated(_) => {
                                     trade_changed = true;
+                                }
+                                WorldEvent::EntityBookUpdated { guid, .. } => {
+                                    book_changed = Some(*guid);
                                 }
                                 WorldEvent::EntitySpawned(_)
                                 | WorldEvent::EntityReplaced(_)
@@ -19010,6 +19388,23 @@ async fn recv_loop(
                             kind: CLIENT_EVENT_KIND_TRADE_UPDATED,
                             string_payload: None,
                             u32_payload: None,
+                            u32_payload_2: None,
+                            f32_payload: None,
+                        });
+                    }
+                    if let (Some(book_guid), Some(w)) = (book_changed, world.as_ref()) {
+                        // AC Books (2026-05-25): world dispatcher's
+                        // inventory handler folded BookDataResponse /
+                        // BookPageDataResponse into entity.book and
+                        // emitted EntityBookUpdated. Republish the
+                        // most-recently-touched book — only one book is
+                        // open at a time on the panel — and signal JS
+                        // with kind=24.
+                        publish_player_book_snapshot(w, book_guid, &latest_book);
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_BOOK_UPDATED,
+                            string_payload: None,
+                            u32_payload: Some(u32::from(book_guid)),
                             u32_payload_2: None,
                             f32_payload: None,
                         });
@@ -21357,6 +21752,43 @@ async fn recv_loop(
                                         *last_ping_rtt_ms.borrow_mut() = Some(rtt);
                                     }
                                 }
+                                holtburger_protocol::messages::GameEvent::BookModifyPageResponse(
+                                    data,
+                                ) => {
+                                    // ACE acked the modify. Signal JS so
+                                    // it can re-fetch fresh page content
+                                    // via bookData(); the page-mod
+                                    // responses don't carry the new text.
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_BOOK_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(data.object_guid)),
+                                        u32_payload_2: Some(u32::from(data.success)),
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::BookAddPageResponse(
+                                    data,
+                                ) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_BOOK_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(data.object_guid)),
+                                        u32_payload_2: Some(u32::from(data.success)),
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::BookDeletePageResponse(
+                                    data,
+                                ) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_BOOK_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(data.object_guid)),
+                                        u32_payload_2: Some(u32::from(data.success)),
+                                        f32_payload: None,
+                                    });
+                                }
                                 _ => {
                                     // Non-chat GameEvents drop through
                                     // to the no-op outer catch-all.
@@ -22650,6 +23082,256 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[squelch/character] target=0x{target_guid:08X} add={add} mask=0x{message_type:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::SetAllegianceName { new_name }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, SetAllegianceNameActionData,
+                        };
+                        let name_for_log = new_name.clone();
+                        let action = GameAction::SetAllegianceName(Box::new(
+                            SetAllegianceNameActionData { new_name },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(SetAllegianceName): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "set_allegiance_name: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[allegiance/set-name] name=\"{name_for_log}\"",
+                        ));
+                    }
+                    Some(SessionCommand::SetAllegianceOfficer {
+                        target_name,
+                        officer_level,
+                    }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, SetAllegianceOfficerActionData,
+                        };
+                        let name_for_log = target_name.clone();
+                        let action = GameAction::SetAllegianceOfficer(Box::new(
+                            SetAllegianceOfficerActionData {
+                                target_name,
+                                officer_level,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(SetAllegianceOfficer): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "set_allegiance_officer: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[allegiance/officer] target=\"{name_for_log}\" level={officer_level}",
+                        ));
+                    }
+                    Some(SessionCommand::AllegianceChatGag {
+                        target_name,
+                        gag_on,
+                    }) => {
+                        use holtburger_protocol::messages::{
+                            AllegianceChatGagActionData, GameAction,
+                        };
+                        let name_for_log = target_name.clone();
+                        let action = GameAction::AllegianceChatGag(Box::new(
+                            AllegianceChatGagActionData {
+                                target_name,
+                                gag_on,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(AllegianceChatGag): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "allegiance_chat_gag: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[allegiance/chat-gag] target=\"{name_for_log}\" gag={gag_on}",
+                        ));
+                    }
+                    Some(SessionCommand::RecallAllegianceHometown) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, RecallAllegianceHometownActionData,
+                        };
+                        let action = GameAction::RecallAllegianceHometown(Box::new(
+                            RecallAllegianceHometownActionData {},
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(RecallAllegianceHometown): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "recall_allegiance_hometown: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str("[allegiance/recall]");
+                    }
+                    Some(SessionCommand::BookData { object_guid }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{BookDataActionData, GameAction};
+                        let action = GameAction::BookData(Box::new(BookDataActionData {
+                            object_guid: Guid(object_guid),
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(BookData): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("book_data: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[book/data] guid=0x{object_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::BookAddPage { object_guid }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{BookAddPageActionData, GameAction};
+                        let action = GameAction::BookAddPage(Box::new(BookAddPageActionData {
+                            object_guid: Guid(object_guid),
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(BookAddPage): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("book_add_page: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[book/add-page] guid=0x{object_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::BookModifyPage {
+                        object_guid,
+                        page_num,
+                        text,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            BookModifyPageActionData, GameAction,
+                        };
+                        let text_len = text.len();
+                        let action = GameAction::BookModifyPage(Box::new(
+                            BookModifyPageActionData {
+                                object_guid: Guid(object_guid),
+                                page_num,
+                                text,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(BookModifyPage): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("book_modify_page: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[book/modify-page] guid=0x{object_guid:08X} page={page_num} len={text_len}",
+                        ));
+                    }
+                    Some(SessionCommand::BookDeletePage {
+                        object_guid,
+                        page_num,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            BookDeletePageActionData, GameAction,
+                        };
+                        let action = GameAction::BookDeletePage(Box::new(
+                            BookDeletePageActionData {
+                                object_guid: Guid(object_guid),
+                                page_num,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(BookDeletePage): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("book_delete_page: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[book/delete-page] guid=0x{object_guid:08X} page={page_num}",
+                        ));
+                    }
+                    Some(SessionCommand::SetInscription {
+                        object_guid,
+                        inscription,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, SetInscriptionActionData,
+                        };
+                        let insc_len = inscription.len();
+                        let action = GameAction::SetInscription(Box::new(
+                            SetInscriptionActionData {
+                                object_guid: Guid(object_guid),
+                                inscription,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(SetInscription): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("set_inscription: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[inscription/set] guid=0x{object_guid:08X} len={insc_len}",
                         ));
                     }
                     Some(SessionCommand::TargetedMissileAttack {
