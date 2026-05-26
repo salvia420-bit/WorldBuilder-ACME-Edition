@@ -97,10 +97,55 @@ export function getCmt(tableId = DEFAULT_CMT_ID) {
 
 /**
  * Resolve a (stance, attackHeight, attackType) tuple to one motion
- * command. `powerLevel ∈ [0, 1]` picks among multiple candidate
- * motions (ACE comment example: SwordCombat+Medium+Slash returns
- * `[SlashMed, BackhandMed]`; powerLevel=0.0 → SlashMed,
- * powerLevel=1.0 → BackhandMed).
+ * command. ACE example: SwordCombat+Medium+Slash returns
+ * `[SlashMed, BackhandMed]` — `motions[0]` is the higher-powered swing
+ * and `motions[1]` is the lower-powered backhand. The picker below
+ * mirrors ACE's `Player_Melee.GetSwingAnimation`.
+ *
+ * ## Algorithm (ground-truth: ACE)
+ *
+ * Cited from
+ * `~/ace-server/Source/ACE.Server/WorldObjects/Player_Melee.cs:440-475`
+ * (in-repo copy at
+ * `external/ACE/Source/ACE.Server/WorldObjects/Player_Melee.cs:440`,
+ * verified identical 2026-05-26):
+ *
+ * ```csharp
+ * var subdivision = 0.33f;
+ * if (weapon != null) {
+ *   AttackType = weapon.GetAttackType(...);
+ *   if (weapon.IsThrustSlash) subdivision = 0.66f;
+ * }
+ * var motions = CombatTable.GetMotion(stance, height, attackType, prevMotion);
+ * // higher-powered animation always in first slot
+ * var motion = motions.Count > 1 && PowerLevel < subdivision ? motions[1] : motions[0];
+ * PrevMotionCommand = motion;
+ * ```
+ *
+ * `IsThrustSlash` is defined at
+ * `~/ace-server/Source/ACE.Server/WorldObjects/WorldObject_Weapon.cs:1039-1048`
+ * as "weapon's `W_AttackType` contains `Slash|Thrust` (or the
+ * `DoubleSlash|DoubleThrust` / `TripleSlash|TripleThrust` combos)".
+ * That bitmask is `PropertyInt::AttackType = 45` — NOT surfaced on
+ * the inventory wire today (see TODO at
+ * `ui/ac_attack_type_for_weapon.js`), so the JS picker defaults
+ * `subdivision = 0.33` and accepts an optional `isThrustSlash` arg
+ * for callers that have weapon-level bitmask info.
+ *
+ * Retail `acclient.c` (`CombatManeuverTable::Get` at line 407721 +
+ * call site 408537) loads the table for `PlayerInReadyPosition()`
+ * but does NOT pick a motion from it client-side — selection is
+ * server-authoritative. ACE's server picks; the client just plays
+ * the animation the server sends back via `kind=19 swing` events.
+ * Our local-player swing path is purely cosmetic prediction.
+ *
+ * Retail's `prevMotion`-alternation comment in
+ * `~/ace-server/Source/ACE.DatLoader/FileTypes/CombatManeuverTable.cs:88-101`
+ * is commented out; the active code path returns the whole list at
+ * line 106 (`return maneuvers;`) and lets the caller pick. The
+ * `prevMotion` parameter is preserved on the signature here for
+ * forward-compat with a future port of that retail alternation
+ * heuristic if servers ever flip it back on.
  *
  * Returns the motion u32 enum code, or `null` if the lookup misses.
  *
@@ -108,10 +153,12 @@ export function getCmt(tableId = DEFAULT_CMT_ID) {
  * @param {number} attackHeight  — AttackHeight enum
  * @param {number} attackType    — AttackType enum
  * @param {number} powerLevel    — 0..1
+ * @param {number | null} [prevMotion] — last swing motion u32 (forward-compat; unused in current picker)
  * @param {number} [tableId]     — defaults to DEFAULT_CMT_ID
+ * @param {Object} [opts]        — { isThrustSlash?: boolean } — when true, subdivision = 0.66
  * @returns {number | null}
  */
-export function getCombatManeuver(stance, attackHeight, attackType, powerLevel = 1.0, tableId = DEFAULT_CMT_ID) {
+export function getCombatManeuver(stance, attackHeight, attackType, powerLevel = 1.0, prevMotion = null, tableId = DEFAULT_CMT_ID, opts = null) {
   const r = getCmt(tableId);
   if (!r?.tree) return null;
   const heightMap = r.tree.get(stance >>> 0);
@@ -129,10 +176,32 @@ export function getCombatManeuver(stance, attackHeight, attackType, powerLevel =
     try { window.__diag?.combat?.onLookupMiss?.({ stance, attackHeight, attackType, reason: "type" }); } catch (_) {}
     return null;
   }
+  // Phase 4 (Wave 2, 2026-05-26): port ACE Player_Melee.cs:452-468 picker.
+  // `motions[0]` is the higher-powered swing (e.g. SlashMed), `motions[1]`
+  // the lower-powered backhand (e.g. BackhandMed). At low power
+  // (powerLevel < subdivision) we play the backhand; at high power we
+  // play the main swing. Single-candidate rows pass through.
   const p = Math.max(0, Math.min(1, powerLevel));
-  const idx = motions.length === 1 ? 0 : Math.min(motions.length - 1, Math.floor(p * motions.length));
+  const subdivision = opts?.isThrustSlash ? 0.66 : 0.33;
+  let idx = 0;
+  if (motions.length > 1 && p < subdivision) {
+    idx = 1;
+  }
   const motion = motions[idx];
-  try { window.__diag?.combat?.onLookupHit?.({ tableId: r.id, stance, attackHeight, attackType, motion, powerLevel: p, candidates: motions.length }); } catch (_) {}
+  try {
+    window.__diag?.combat?.onLookupHit?.({
+      tableId: r.id,
+      stance,
+      attackHeight,
+      attackType,
+      motion,
+      powerLevel: p,
+      candidates: motions.length,
+      candidateIdx: idx,
+      subdivision,
+      prevMotion: (prevMotion ?? 0) >>> 0,
+    });
+  } catch (_) {}
   return motion;
 }
 

@@ -12,9 +12,9 @@
 | 1 | #6 Diag has no motion-u32 histogram | 1 | **shipped** 2026-05-26 |
 | 2 | #1 `ATTACK_TYPE_SLASH = 8` is Kick's value | 1 | **shipped** 2026-05-26 |
 | 3 | #3 AttackType not inferred from weapon | 1 | **shipped** 2026-05-26 |
-| 4 | #5 Power-slider candidate selection is a guess | 2 | pending |
-| 5 | #2 Remote-player swings skip CMT | 2 | pending |
-| 6 | #4 Missile branch never queries CMT | 2 | pending |
+| 4 | #5 Power-slider candidate selection is a guess | 2 | **shipped** 2026-05-26 |
+| 5 | #2 Remote-player swings skip CMT | 2 | **shipped** 2026-05-26 |
+| 6 | #4 Missile branch never queries CMT | 2 | **shipped** 2026-05-26 (audit re-scoped — see Wave 2 finding) |
 
 ## Background (for any agent picking this up cold)
 
@@ -294,11 +294,60 @@ TODO breadcrumbs are already baked into the helper at `ui/ac_attack_type_for_wea
 - Browser smoke: deferred to Wave 2 dispatch — the diag snapshot can be captured via Playwright (`apps/holtburger-web/capture_*.cjs` pattern) but is OUT of agent scope per the dispatch instructions. Save outputs to `apps/holtburger-web/docs/cmt-diag-baseline-pre-fix.json` + `cmt-diag-post-slash-fix.json` when running.
 - Pre-existing TypeScript diagnostics in `index.js`, `cells.js`, `statics.js`, `buildings.js` are unrelated to this work (untouched by either agent).
 
-## After Wave 2 — completion
+## Wave 2 results — shipped 2026-05-26
 
-Same checkpoint flow: update status, append "Wave 2 results," commit `feat(holtburger-web): CMT fixes wave 2 — power slider + remote swings + missile`, push.
+### Phase 4 — Power-slider candidate selection (ACE-ported)
 
-**Wave 2 dispatch note (added after Wave 1 ship):** Phase 5 now has a pre-requisite — surface equipped-weapon state for non-local entities through the wire→wasm→JS path (see "Wave 1 finding" above). Either fold this into Phase 5's scope or split it out as Phase 5a (wire/wasm plumbing) and Phase 5b (JS dispatch).
+**Agent:** C
+**Files (+102 / -8 over 3 files):**
+- `external/holtburger/apps/holtburger-web/ui/ac_combat_maneuver.js` (+76 / -8): replaced `floor(p * len)` with the ACE-ported picker. Added `prevMotion` and `opts.isThrustSlash` to `getCombatManeuver`'s signature (backward-compat defaults).
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` (+18 / -2): module-scoped `prevMeleeMotion` inside the `setupClickPicking` closure (intentionally NOT a field on `EntityInstance`); melee call site passes it through and stamps after each successful lookup.
+- `external/holtburger/apps/holtburger-web/scene3d/diag/combat.js` (+8): `hitsSample` entries now record `candidateIdx`, `subdivision`, `prevMotion`.
+
+**Algorithm ground-truth.** Ported verbatim from `~/ace-server/Source/ACE.Server/WorldObjects/Player_Melee.cs:440-475` (identical in-repo copy at `external/ACE/Source/ACE.Server/WorldObjects/Player_Melee.cs:440`):
+
+```csharp
+var subdivision = 0.33f;
+if (weapon != null && weapon.IsThrustSlash) subdivision = 0.66f;
+var motion = motions.Count > 1 && PowerLevel < subdivision
+    ? motions[1]   // lower-powered backhand
+    : motions[0];  // higher-powered swing (always slot 0)
+```
+
+`IsThrustSlash` per `WorldObject_Weapon.cs:1039-1048` reads `W_AttackType & (Slash|Thrust)` — that PropertyInt isn't yet on the inventory wire, so the JS picker defaults `subdivision = 0.33` and accepts `opts.isThrustSlash` for callers that have it. `prevMotion` plumbed through but unused by the active picker (the retail alternation path in `CombatManeuverTable.cs:88-101` is commented out; kept forward-compat).
+
+**Acceptance.** Synthetic 10-power sweep over SwordCombat+Medium+Slash `[SlashMed, BackhandMed]` produces `{SlashMed:5, BackhandMed:5}` (both candidates fire); IsThrustSlash branch flips threshold to 0.66 as expected.
+
+### Phase 5 — Remote-player CMT swings (with wire plumbing)
+
+**Agent:** D (took the full end-to-end including the Wave 1 finding's prerequisite)
+**Files (+405 / -34 over 3 files):**
+- `external/holtburger/apps/holtburger-web/src/lib.rs` (+230 / -8): new `SessionHandle.wielder_index: Rc<RefCell<HashMap<u32 wielder_guid, Vec<WieldedWeaponEntry>>>>` populated in `apply_inventory_object_create` (line 15421) when `wielder_id != world.player.guid`, cleaned in `apply_inventory_object_delete` on three paths (item un-equip, wielder despawn, empty bucket prune). New wasm export `entityEquippedWeapon(guid) → EquippedWeaponJs?` returning `{ guid, wcid, itemType, equipMask, name }`. Matches the local-player shape.
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js` (+119 / -16): `getEquippedWeapon(guid)` now consults the new wasm getter for non-local GUIDs; new `getStance(guid)` accessor; `inst.currentStance` mirrored in `setMotion` so it stays in sync with the `UpdateMotion` (kind=5) entity events. **Critical fix:** removed the `isHuman` gate at `entities.js:2005` that was silently dropping drudge/monster swings — the link-table classification path is rig-agnostic per `swing-classification-spec-2026-05-19.md §8.2`.
+- `external/holtburger/apps/holtburger-web/index.html` (+56 / -10): 2 ES-module imports added at the existing `<script type="module">` header; `damageTaken` / `evadedAttacker` handlers now call `dispatchRemoteSwing` which runs `getStance → getEquippedWeapon → inferAttackTypeForWeapon → getCombatManeuver → setSwingMotion` with `setSwingPose` fallback only on lookup miss.
+
+**Acceptance.** `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean (18 pre-existing warnings, 0 new). `wasm-pack build` succeeded; generated `pkg/holtburger_web.d.ts` exposes `entityEquippedWeapon` + `EquippedWeaponJs`. Drudge swing call-chain confirmed end-to-end via trace: `dispatchRemoteSwing` → CMT lookup → `classifyMotionCommandTyped` (rig-agnostic) → `animationCache.get` → mixer playback.
+
+### Phase 6 — Missile branch (audit re-scoped via discovery)
+
+**Agent:** E
+**Critical finding.** The Phase 6 audit at `crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs` revealed that **CMT 0x30000000 contains ZERO rows for ranged stances.** All 102 retail maneuvers cover only `HandCombat (0x8000003C)`, `SwordCombat (0x8000003E)`, `SwordShieldCombat (0x80000040)`, `TwoHandedSwordCombat (0x80000044)`, and `DualWieldCombat (0x80000046)`. The plan doc's "AttackType code to discover for ranged stances" had no answer — because the missile dispatch in ACE / retail goes through `Creature_Missile.cs::GetAimLevel` (called from `Player_Missile.cs:207`) which picks an `AimHighN` / `AimLevel` / `AimLowN` motion directly from projectile z-angle, bypassing the CMT entirely.
+
+**Files (+422 / -13 over 3 files):**
+- NEW `external/holtburger/crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs` (326 lines): opens portal.dat, dumps CMT 0x30000000 ranged-stance rows + per-stance AttackType summary + all-rows diag. Reproducible audit.
+- `external/holtburger/apps/holtburger-web/ui/ac_attack_type_for_weapon.js` (+57 / -11): docstring updated with the audit finding; `MISSILE_WEAPON` / `MISSILE_AMMO` branches stay `Undef = 0` with explicit comment that this is the correct CMT-query answer (the helper isn't broken; the table just doesn't carry ranged data).
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` (+39 / -2): missile branch now mirrors the melee structure — `inferAttackTypeForWeapon → getCombatManeuver → setSwingMotion` with `setSwingPose` fallback. The CMT lookup will always miss for ranged stances (by design), so the visible behavior is the existing `setSwingPose` fallback — but the diag layer now records the misses, giving Wave 3's `ui/ac_aim_level_for_velocity.js` a clean slot to plug into.
+
+**Acceptance.** Audit script compiles + runs clean against `~/ac_base_dats/client_portal.dat`. `cargo test -p holtburger-dat --test combat_maneuver_table_parity` PASS (4/4). `node --check` clean on the two JS files.
+
+### Wave 2 follow-on for Wave 3
+
+The audit reframed Phase 6 from "missile CMT integration" to "missile aim-level dispatch" (since the CMT doesn't carry the data). Wave 3 scope:
+
+- Port `Creature_Missile.cs::GetAimLevel:435` to a new `ui/ac_aim_level_for_velocity.js`.
+- Surface projectile z-angle (or velocity vector) on the client side so the helper has its input.
+- Replace `picking.js`'s missile-branch `setSwingPose` fallback with `setSwingMotion(localGuid, aimLevelMotion)`.
+- Same dispatch for remote ranged attackers via `dispatchRemoteSwing` in `index.html` — the helper-chain plumbing is already in place; only the data source for the motion u32 changes.
 
 ## Coordination notes for agents
 

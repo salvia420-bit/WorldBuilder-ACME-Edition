@@ -1755,23 +1755,19 @@ export class EntityManager {
    * matches the existing `window.getLocalPlayerGuid()` pattern used
    * elsewhere in this file (see line ~837).
    *
-   * ## Scope limitation — non-local entities
+   * ## Non-local entities (Wave 2 / Phase 5, 2026-05-26)
    *
-   * For ANY guid other than the local player, this returns `null`.
-   * Non-local equipped-weapon data isn't currently surfaced on the
-   * wire — `ObjectDescriptionData` ships `model_changes` /
-   * `texture_changes` (per-part gfx swaps for the wearer's rendered
-   * appearance), but NOT the wielder's wielded-item entity IDs. That
-   * data would have to come from a separate
-   * `GameEvent::WieldObject`-tracking layer keyed by wielder GUID.
-   *
-   * Wave 2 Phase 5 (remote-player swings) is the planned follow-on.
-   * TODO breadcrumb: extend the wasm recv loop to track
-   * `wielder_id → wielded_weapon_guid → InventoryItem` for every
-   * non-local entity (see `apps/holtburger-web/src/lib.rs:15349
-   * apply_inventory_object_create` — the `wielder_id` is already
-   * extracted from `ObjectDescriptionData` but only consumed for
-   * the local player's `player.wield_item`).
+   * For non-local GUIDs we consult the wasm `entityEquippedWeapon`
+   * getter, which is populated by the recv loop's
+   * `apply_inventory_object_create` whenever an `ObjectCreate` arrives
+   * carrying a `WielderId` that is NOT the local player (see
+   * `apps/holtburger-web/src/lib.rs:apply_inventory_object_create`).
+   * The wasm side maintains a `wielder_index: HashMap<u32, Vec<...>>`
+   * keyed by wielder GUID; this accessor just unions the local +
+   * remote channels into the same `{guid, wcid, itemType, equipMask,
+   * name}` shape. Returns `null` when the wielder isn't in the index
+   * (the entity hasn't been observed yet) OR when the entity is
+   * currently unarmed.
    *
    * ## TODO (Wave 2/4 — AttackType refinement)
    *
@@ -1800,9 +1796,40 @@ export class EntityManager {
       }
     } catch (_) { /* never break callers */ }
 
-    // Non-local entity → no data available today. See §Scope
-    // limitation in the doc comment.
-    if (g !== localGuid) return null;
+    // CMT Wave 2 / Phase 5 (2026-05-26): non-local entities consult
+    // the wasm-side wielder index via `entityEquippedWeapon(guid)`.
+    // Returns `EquippedWeaponJs` (with the same shape this accessor
+    // emits) or `undefined` when the entity isn't a wielder we've
+    // observed. We map `undefined` → `null` to keep the contract
+    // stable with the local path.
+    if (g !== localGuid) {
+      try {
+        if (typeof window !== "undefined" && window.__sessionHandle
+            && typeof window.__sessionHandle.entityEquippedWeapon === "function") {
+          const w = window.__sessionHandle.entityEquippedWeapon(g);
+          if (!w) return null;
+          // wasm-bindgen returns a struct with getters; mirror it into
+          // a plain object so the caller doesn't have to worry about
+          // wasm-bindgen handle lifetimes (the struct here is cheap —
+          // 5 fields, no per-call .free() responsibility).
+          const result = {
+            guid:     (w.guid ?? 0) >>> 0,
+            wcid:     (w.wcid ?? 0) >>> 0,
+            itemType: (w.itemType ?? 0) >>> 0,
+            equipMask: (w.equipMask ?? 0) >>> 0,
+            name:     typeof w.name === "string" ? w.name : "",
+          };
+          // wasm-bindgen-constructed structs need explicit .free()
+          // unless we relinquish the borrow. We've copied the fields
+          // above, so we can release the handle here.
+          if (typeof w.free === "function") {
+            try { w.free(); } catch (_) {}
+          }
+          return result;
+        }
+      } catch (_) { /* never break callers */ }
+      return null;
+    }
 
     // Pull the latest inventory snapshot. `window.__sessionHandle` is
     // the wasm-bound session handle; `playerInventory()` returns
@@ -1842,6 +1869,36 @@ export class EntityManager {
     // No primary weapon slot occupied — unarmed. Caller will see
     // `null` and infer Punch.
     return null;
+  }
+
+  /**
+   * CMT Wave 2 / Phase 5 (2026-05-26): per-entity MotionStance accessor.
+   *
+   * Returns the entity's last-observed `MotionStance` (one of
+   * `holtburger_common::motion::MotionStance` — HandCombat,
+   * SwordCombat, BowCombat, MagicCombat, NonCombat, etc.). The value
+   * is stamped on every kind=5 `UpdateMotion` from ACE — see
+   * `setMotion(...)` at the top of this file where both
+   * `inst.lastStance` and `inst.currentStance` are written. Returns
+   * `0` for entities that have never received an UpdateMotion (the
+   * spawn meta's `motionStance` is also checked as a fallback).
+   *
+   * Used by the `damageTaken` / `evadedAttacker` handlers in
+   * `index.html` (~line 8612) to drive the CMT lookup for remote-
+   * player swings.
+   *
+   * @param {number} guid — entity GUID to query
+   * @returns {number} u32 MotionStance, or 0 if unknown
+   */
+  getStance(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return 0;
+    const inst = this.entityMap.get(g);
+    if (!inst) return 0;
+    // Prefer currentStance (resolved with stance=0 fallback inside
+    // setMotion); fall back to lastStance and then the spawn meta.
+    const s = (inst.currentStance ?? inst.lastStance ?? inst.meta?.motionStance ?? 0) >>> 0;
+    return s;
   }
 
   /**
@@ -1942,10 +1999,23 @@ export class EntityManager {
       ((inst.currentStance ?? inst.lastStance ?? (typeof window !== "undefined" ? window.__getCurrentStanceLow?.() : 0)) ?? 0) >>> 0;
     const setupId = (inst.meta?.modelId ?? inst.meta?.setupId ?? 0) >>> 0;
     const mtableId = (inst.meta?.mtableId ?? 0) >>> 0;
-    const isHuman = inst.parts && inst.parts.length >= 16;
     const result = classifyMotionCommandTyped(mtableId, stance, motionCmd >>> 0);
+    // CMT Wave 2 / Phase 5 (2026-05-26): removed the `isHuman` gate
+    // that previously short-circuited non-human rigs to the
+    // setSwingPose tween (which itself early-returns on non-humans →
+    // drudges silently played nothing). The motion-table classifier
+    // (`classifyMotionCommandTyped`) works for any rig — monster
+    // motion tables expose swings under NonCombat stance and the
+    // wasm-side `lookupMotionLinkForSwing` returns the same
+    // typed-anim envelope regardless of rig topology. The downstream
+    // `animationCache.get` path also accepts any setupId, so once a
+    // valid `swing/cast` clip resolves we play it on whatever rig
+    // the entity has. setSwingPose is still the fallback for the
+    // (rare) case where the motion table has no link entry for the
+    // requested (stance, cmd) — humanoids get the legacy tween,
+    // non-humans silently no-op which preserves prior behaviour.
+    // See `docs/swing-classification-spec-2026-05-19.md` §8.2.
     const canPlayReal =
-      isHuman &&
       result &&
       (result.kind === "swing" || result.kind === "cast") &&
       (result.resolvedCommand >>> 0) !== 0 &&
@@ -2165,6 +2235,13 @@ export class EntityManager {
     } else if (stance !== 0) {
       inst.lastStance = stance;
     }
+    // CMT Wave 2 / Phase 5 (2026-05-26): mirror the resolved stance
+    // onto `inst.currentStance` so `getStance(guid)` (and downstream
+    // CMT-driven swing dispatch for remote players) can read it
+    // without re-deriving stance=0 fallback semantics. Mirrors the
+    // existing read pattern in `setSwingMotion` at line ~1942 which
+    // already checks `inst.currentStance ?? inst.lastStance ?? …`.
+    inst.currentStance = stance;
     const cls = classifyMotionCommand(cmd);
     if (cls === "stop" || cls === null) {
       inst.fadeOutCurrent(CROSSFADE_S);

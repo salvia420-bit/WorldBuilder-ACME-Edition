@@ -123,6 +123,18 @@ export function setupClickPicking({
   // a time; clicking a different target replaces the current charge.
   let charge = null; // { guid, range, fireAttack, startMs, rafId }
 
+  // Wave 2 Phase 4 (2026-05-26): track the last-fired melee motion u32
+  // so the CMT picker can carry `prevMotion` forward. Module-scoped to
+  // this closure (one local player per session); intentionally NOT
+  // stamped on `EntityInstance` per dispatch guidance — the alternation
+  // heuristic is purely picker-side and shouldn't leak into the entity
+  // manager's shared state. The current picker doesn't actually
+  // consume `prevMotion` (ACE's port at `Player_Melee.cs:465-468` uses
+  // a power-bar threshold, not alternation), but the value is wired
+  // through for forward-compat with the commented-out retail
+  // alternation path at `CombatManeuverTable.cs:90-102`.
+  let prevMeleeMotion = 0;
+
   function cancelCharge() {
     if (!charge) return;
     if (charge.rafId) cancelAnimationFrame(charge.rafId);
@@ -427,8 +439,43 @@ export function setupClickPicking({
     const targetAc = entityAcPosition(liveScene3d.entityManager, targetGuid);
     const dist = (pose && targetAc) ? horizontalDistance(pose, targetAc) : -1;
     if (inRanged && typeof sessionHandle.missileAttack === "function") {
-      console.log(`[fire-attack] missile height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m (range=${MISSILE_RANGE_M}m)`);
-      const fire = () => fireOnce(() => sessionHandle.missileAttack(targetGuid, safeHeight, slider));
+      // Wave 2 Phase 6 (2026-05-26) — mirror the melee branch below
+      // through the CombatManeuverTable + `setSwingMotion` path so
+      // diag observability is identical across melee/missile. The
+      // Phase 6 audit at
+      // `crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs`
+      // confirmed retail CMT 0x30000000 has ZERO rows for ranged
+      // stances (BowCombat / CrossbowCombat / SlingCombat /
+      // ThrownWeaponCombat / AtlatlCombat) — the missile motion
+      // dispatch in ACE / retail uses aim-angle via
+      // `Creature_Missile.cs::GetAimLevel` (Player_Missile.cs:207)
+      // and skips the CMT entirely. The lookup here will always miss
+      // → `motionCmd === null` → `setSwingPose` fallback, until the
+      // Wave 3 aim-level dispatch lands at
+      // `ui/ac_aim_level_for_velocity.js`. We still route through
+      // `inferAttackTypeForWeapon` + `getCombatManeuver` so the diag
+      // layer logs ranged-stance lookup attempts (visible in
+      // `motionByStance` as misses for the ranged stance keys).
+      const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+      const stance = (window.__getCurrentStanceLow?.() ?? 0) >>> 0;
+      const em = liveScene3d.entityManager;
+      const weapon = em?.getEquippedWeapon?.(localGuid) ?? null;
+      const inferredType = inferAttackTypeForWeapon(weapon);
+      const attackType = (inferredType === ATTACK_TYPE.Undef)
+        ? ATTACK_TYPE_SLASH
+        : inferredType;
+      const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider);
+      console.log(`[fire-attack] missile height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m attackType=0x${attackType.toString(16)} motionCmd=${motionCmd ? "0x" + motionCmd.toString(16) : "none"} (range=${MISSILE_RANGE_M}m)`);
+      const fire = () => fireOnce(() => {
+        sessionHandle.missileAttack(targetGuid, safeHeight, slider);
+        if (localGuid !== 0) {
+          if (motionCmd && typeof em?.setSwingMotion === "function") {
+            em.setSwingMotion(localGuid, motionCmd);
+          } else {
+            em?.setSwingPose?.(localGuid);
+          }
+        }
+      });
       if (chargeEnabled && dist > MISSILE_RANGE_M) {
         startCharge(targetGuid, MISSILE_RANGE_M, fire);
       } else {
@@ -460,7 +507,12 @@ export function setupClickPicking({
       const attackType = (inferredType === ATTACK_TYPE.Undef)
         ? ATTACK_TYPE_SLASH
         : inferredType;
-      const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider);
+      // Wave 2 Phase 4: feed `prevMeleeMotion` to the CMT picker so the
+      // signature matches the ACE port in ac_combat_maneuver.js (the
+      // arg is forward-compat for the retail alternation path; the
+      // active picker uses power-bar threshold per ACE Player_Melee.cs).
+      const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider, prevMeleeMotion);
+      if (motionCmd) prevMeleeMotion = (motionCmd >>> 0);
       const fire = () => fireOnce(() => {
         sessionHandle.attack(targetGuid, safeHeight, slider);
         if (localGuid !== 0) {

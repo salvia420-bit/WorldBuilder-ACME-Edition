@@ -14071,6 +14071,94 @@ impl InventoryItem {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+//  CMT Wave 2 / Phase 5 (2026-05-26): remote-entity wielded-weapon index
+// ─────────────────────────────────────────────────────────────────────
+
+/// One row in the per-entity wielder index used by the CombatManeuverTable
+/// driver for remote-player / NPC / monster swings (Wave 2 / Phase 5 of
+/// the CMT fixes plan — see `docs/cmt-fixes-plan-2026-05-26.md`).
+///
+/// The local-player case is covered by [`InventoryItem`] +
+/// `player_inventory()` already. This is the symmetric channel for
+/// non-local entities: when ACE sends a `GameMessage::ObjectCreate` for
+/// a wielded item, the entity's `WielderId` property points at the
+/// wielding character/creature. We index by wielder GUID so the
+/// renderer's CMT call site (`scene3d/entities.js#getEquippedWeapon`)
+/// can look up "what is this drudge holding?" without scanning all
+/// entities. The data lives only on the `world.entities` map otherwise
+/// (full property bag), so we snapshot the four fields the CMT
+/// classifier needs into this small struct.
+///
+/// Wave 1 finding (cmt-fixes-plan §"Wave 1 finding"): equipped-weapon
+/// data IS on the wire (via `ObjectDescriptionData.public_weenie_desc`
+/// for the *weapon's* ObjectCreate, with `WielderId` pointing back at
+/// the wielding entity) — Wave 1 just didn't propagate it past the
+/// local-player branch. This struct closes that gap.
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone)]
+struct WieldedWeaponEntry {
+    /// Item GUID — the weapon's own GUID (NOT the wielder's). Stable
+    /// across the item's lifetime; the removal path uses this to find
+    /// the right entry to drop.
+    item_guid: u32,
+    wcid: u32,
+    name: String,
+    item_type: u32,
+    /// `CurrentWieldedLocation` (`PropertyInt::CurrentWieldedLocation =
+    /// 9007`) bits from the weapon. Carries the equip-slot the item is
+    /// occupying on the wielder (MELEE_WEAPON / MISSILE_WEAPON / etc.).
+    /// This is what `inferAttackTypeForWeapon` keys on.
+    equip_mask: u32,
+}
+
+/// CMT Wave 2 / Phase 5 (2026-05-26): JS-facing wielded-weapon record
+/// for **non-local** entities. Mirrors the shape of the object returned
+/// by `entities.js#getEquippedWeapon` for the local player so the
+/// JS-side accessor can union the two cases without re-shaping.
+///
+/// Constructed on demand by [`SessionHandle::entity_equipped_weapon`]
+/// from the cached [`WieldedWeaponEntry`] for the queried entity. The
+/// `guid` field carries the **weapon item's** GUID (NOT the wielder's),
+/// matching what the local-player path returns.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct EquippedWeaponJs {
+    guid: u32,
+    wcid: u32,
+    item_type: u32,
+    equip_mask: u32,
+    name: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl EquippedWeaponJs {
+    /// Weapon item's GUID (NOT the wielder's). Symmetric with the
+    /// local-player `getEquippedWeapon` shape.
+    #[wasm_bindgen(getter)]
+    pub fn guid(&self) -> u32 { self.guid }
+
+    /// Weenie class id (`PublicWeenieDescription.wcid`).
+    #[wasm_bindgen(getter)]
+    pub fn wcid(&self) -> u32 { self.wcid }
+
+    /// `ItemType` bitmask (`PublicWeenieDescription.item_type`).
+    #[wasm_bindgen(getter, js_name = itemType)]
+    pub fn item_type(&self) -> u32 { self.item_type }
+
+    /// Equip-slot bitmask from `CurrentWieldedLocation`. Drives
+    /// `inferAttackTypeForWeapon` (MELEE_WEAPON / MISSILE_WEAPON /
+    /// CASTER / TWO_HANDED branches).
+    #[wasm_bindgen(getter, js_name = equipMask)]
+    pub fn equip_mask(&self) -> u32 { self.equip_mask }
+
+    /// Display name (debug / tooltip).
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 //  Vendor UI (2026-05-19): per-vendor cached state + JS-facing struct
 // ─────────────────────────────────────────────────────────────────────
 
@@ -15333,6 +15421,9 @@ fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMe
 fn apply_inventory_object_create(
     world: &mut holtburger_world::WorldState,
     data: &holtburger_protocol::messages::ObjectDescriptionData,
+    wielder_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    >,
 ) -> bool {
     use holtburger_common::properties::WorldObjectExt as _;
     let guid = data.public_weenie_desc.guid;
@@ -15349,6 +15440,37 @@ fn apply_inventory_object_create(
     let container_id = entity.container_id();
     let wielder_id = entity.wielder_id();
     let equip_mask = entity.wield_location();
+
+    // CMT Wave 2 / Phase 5 (2026-05-26): non-local wielder index. When
+    // ACE ships an ObjectCreate for a wielded item AND the wielder is
+    // NOT the local player, snapshot the four CMT-classifier-relevant
+    // fields into the per-wielder list. The local-player path falls
+    // through to the existing `world.player.wield_item` + inventory
+    // snapshot machinery. Index is keyed by wielder GUID so the
+    // renderer can look up "what is this drudge holding?" without
+    // scanning entities. Only items carrying an actual equip-slot bit
+    // make it in; pack/container items have `equip_mask == 0` and are
+    // skipped (this is the wielded-weapon channel, not the inventory
+    // channel — non-local entities' pack contents aren't surfaced).
+    if let Some(w_guid) = wielder_id
+        && w_guid != world.player.guid
+        && !equip_mask.is_empty()
+    {
+        let w_u32 = u32::from(w_guid);
+        let entry = WieldedWeaponEntry {
+            item_guid: u32::from(guid),
+            wcid: entity.wcid.unwrap_or(0),
+            name: entity.name().to_string(),
+            item_type: entity.item_type_int().unwrap_or(0),
+            equip_mask: equip_mask.bits(),
+        };
+        let mut idx = wielder_index.borrow_mut();
+        let list = idx.entry(w_u32).or_default();
+        // Replace any prior entry with the same item_guid (the wielder
+        // re-equipping the same item) to keep the list de-duped.
+        list.retain(|e| e.item_guid != entry.item_guid);
+        list.push(entry);
+    }
 
     // Direct insert via the public EntityManager — skips the
     // `add_entity` path that calls `scene.update_entity` +
@@ -15384,6 +15506,9 @@ fn apply_inventory_object_create(
 fn apply_inventory_object_delete(
     world: &mut holtburger_world::WorldState,
     guid: holtburger_common::Guid,
+    wielder_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    >,
 ) -> bool {
     let was_owned = world.player.inventory.contains(&guid);
     if was_owned {
@@ -15391,6 +15516,26 @@ fn apply_inventory_object_delete(
         world.player.unwield_item(guid);
     }
     world.entities.remove(guid);
+
+    // CMT Wave 2 / Phase 5 (2026-05-26): wielder-index cleanup. The
+    // deleted GUID can be either (a) a weapon item that was wielded by
+    // some entity — drop the entry from that entity's list, or (b) the
+    // wielder itself (an NPC/monster despawning) — drop the entire
+    // list. Both cases happen via the same ObjectDelete arm; we handle
+    // both unconditionally because the cost is small (HashMap with at
+    // most a few hundred wielders).
+    let g_u32 = u32::from(guid);
+    let mut idx = wielder_index.borrow_mut();
+    // (a) Strip any wielded-weapon entry whose item_guid matches.
+    for entries in idx.values_mut() {
+        entries.retain(|e| e.item_guid != g_u32);
+    }
+    // (b) The deleted entity itself was a wielder. Drop its bucket.
+    idx.remove(&g_u32);
+    // (c) Prune empty lists left over from (a) so the index doesn't
+    // grow unbounded with dead-wielder buckets.
+    idx.retain(|_, entries| !entries.is_empty());
+
     was_owned
 }
 
@@ -15635,6 +15780,22 @@ pub struct SessionHandle {
     /// bar's spell picker filters its catalogue to entries in this
     /// list, so a player only sees spells they actually know.
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
+    /// CMT Wave 2 / Phase 5 (2026-05-26): per-entity wielded-weapon
+    /// index keyed by wielder GUID. Populated by the recv loop's
+    /// `apply_inventory_object_create` whenever an `ObjectCreate`
+    /// arrives carrying a `WielderId` that is NOT the local player.
+    /// Cleaned up symmetrically in `apply_inventory_object_delete`
+    /// (drops by item_guid AND by wielder_guid). JS reads via
+    /// [`SessionHandle::entity_equipped_weapon`] to drive the CMT
+    /// lookup for remote-player / NPC / monster swings (the local
+    /// player goes through `player_inventory()` instead).
+    ///
+    /// See `docs/cmt-fixes-plan-2026-05-26.md` §"Wave 1 finding" for
+    /// the surface-area decision (Option 1 — propagate the wielder
+    /// state we already receive on the wire).
+    wielder_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    >,
     /// Phase 6 step D: latest cell-scene snapshot, refreshed by the
     /// recv loop on each `SessionCommand::TickMovement`. Carries the
     /// local player's current cell id (per `SpatialScene::current_cell`)
@@ -16159,6 +16320,55 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = playerInventory)]
     pub fn player_inventory(&self) -> Vec<InventoryItem> {
         self.latest_inventory.borrow().clone()
+    }
+
+    /// **CMT Wave 2 / Phase 5 (2026-05-26).** Equipped primary weapon
+    /// for **non-local** entities. Returns the first wielded item on
+    /// the given wielder GUID that carries a primary-weapon equip-slot
+    /// bit (MELEE_WEAPON / MISSILE_WEAPON / CASTER / TWO_HANDED) —
+    /// matches the local-player accessor's selection rule in
+    /// `scene3d/entities.js#getEquippedWeapon`.
+    ///
+    /// `None` (JS `null`) when:
+    ///   - `guid` is the local player (use `player_inventory()` instead),
+    ///   - the entity isn't a wielder we've observed via `ObjectCreate`,
+    ///   - the wielder is currently unarmed (all entries are non-weapon
+    ///     accessories — clothing-only, etc.).
+    ///
+    /// The wielder index is rebuilt from `ObjectCreate` and pruned on
+    /// `ObjectDelete` / `InventoryRemoveObject` — see
+    /// `apply_inventory_object_{create,delete}` for the bookkeeping.
+    ///
+    /// Wave 1 finding (cmt-fixes-plan §"Wave 1 finding") closed: the
+    /// data was on the wire all along (every weapon ObjectCreate
+    /// carries a `WielderId` pointing at its wielder), Wave 1 just
+    /// didn't surface it past the local-player branch.
+    #[wasm_bindgen(js_name = entityEquippedWeapon)]
+    pub fn entity_equipped_weapon(&self, guid: u32) -> Option<EquippedWeaponJs> {
+        // EquipMask bits that mark a "primary weapon" — same set as
+        // `entities.js#getEquippedWeapon` so the local + remote paths
+        // resolve identically. See
+        // `holtburger_common::properties::EquipMask` for the canonical
+        // bit definitions.
+        const PRIMARY_WEAPON_BITS: u32 = 0x00100000  // MELEE_WEAPON
+            | 0x00400000  // MISSILE_WEAPON
+            | 0x01000000  // CASTER
+            | 0x02000000; // TWO_HANDED
+        let idx = self.wielder_index.borrow();
+        let entries = idx.get(&guid)?;
+        for entry in entries.iter() {
+            if (entry.equip_mask & PRIMARY_WEAPON_BITS) == 0 {
+                continue;
+            }
+            return Some(EquippedWeaponJs {
+                guid: entry.item_guid,
+                wcid: entry.wcid,
+                item_type: entry.item_type,
+                equip_mask: entry.equip_mask,
+                name: entry.name.clone(),
+            });
+        }
+        None
     }
 
     /// **Vendor UI (2026-05-19).** Pull the cached vendor state for a
@@ -19046,6 +19256,14 @@ pub async fn start_session(
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // CMT Wave 2 / Phase 5 (2026-05-26): per-entity wielded-weapon
+    // index. Populated by the recv loop's `apply_inventory_object_create`
+    // for non-local wielders; drained by JS via
+    // `SessionHandle::entity_equipped_weapon` to drive remote-player
+    // CMT swings.
+    let wielder_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
     // Phase 6 step D: cell-scene snapshot, refreshed each TickMovement.
     let cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>> =
         std::rc::Rc::new(std::cell::RefCell::new(CellSceneSnapshot::default()));
@@ -19111,6 +19329,7 @@ pub async fn start_session(
         let latest_house_profile_inner = latest_house_profile.clone();
         let latest_house_restrictions_inner = latest_house_restrictions.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
+        let wielder_index_inner = wielder_index.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
@@ -19146,6 +19365,7 @@ pub async fn start_session(
                 latest_house_profile_inner,
                 latest_house_restrictions_inner,
                 latest_known_spells_inner,
+                wielder_index_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
@@ -19237,6 +19457,7 @@ pub async fn start_session(
         latest_house_profile,
         latest_house_restrictions,
         latest_known_spells,
+        wielder_index,
         cell_scene_snapshot,
         door_part_snapshot,
         local_player_pose,
@@ -20359,6 +20580,9 @@ async fn recv_loop(
     latest_house_restrictions:
         std::rc::Rc<std::cell::RefCell<Option<HouseRestrictions>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
+    wielder_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    >,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
@@ -20841,17 +21065,17 @@ async fn recv_loop(
                     if let Some(w) = world.as_mut() {
                         match &message {
                             GameMessage::ObjectCreate(data) => {
-                                if apply_inventory_object_create(w, data) {
+                                if apply_inventory_object_create(w, data, &wielder_index) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::ObjectDelete(data) => {
-                                if apply_inventory_object_delete(w, data.guid) {
+                                if apply_inventory_object_delete(w, data.guid, &wielder_index) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::InventoryRemoveObject(data) => {
-                                if apply_inventory_object_delete(w, data.object_guid) {
+                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index) {
                                     inventory_changed = true;
                                 }
                             }

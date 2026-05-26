@@ -135,6 +135,14 @@ export function attachCombat(diag) {
           motionName: motionName(motion),
           powerLevel: Number(m.powerLevel ?? 0),
           candidates: (m.candidates ?? 1) | 0,
+          // Wave 2 Phase 4 (2026-05-26): record which candidate the
+          // ACE-port picker chose + the subdivision threshold it used so
+          // the histogram audit can confirm both `motions[0]` (high
+          // power) and `motions[1]` (low power, backhand) fire across
+          // a varying powerLevel sweep instead of pinning to one slot.
+          candidateIdx: (m.candidateIdx ?? 0) | 0,
+          subdivision: Number(m.subdivision ?? 0.33),
+          prevMotion: (m.prevMotion ?? 0) >>> 0,
           ts: performance.now(),
         }, combat.maxHitsSample);
       } catch (_) {}

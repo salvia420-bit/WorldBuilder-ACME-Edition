@@ -999,6 +999,13 @@
       import * as debugOverlayPlugin from "./plugins/debug-overlay.js";
       import "./plugins/compass-hud.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
+      // CMT Wave 2 / Phase 5 (2026-05-26): remote-player swing dispatch.
+      // The damageTaken / evadedAttacker handlers consult the
+      // CombatManeuverTable runtime + the equipped-weapon inference
+      // helper to play the correct stance×height×attack-type clip on
+      // the attacker's rig. See `docs/cmt-fixes-plan-2026-05-26.md`.
+      import { getCombatManeuver } from "./ui/ac_combat_maneuver.js";
+      import { inferAttackTypeForWeapon, ATTACK_TYPE } from "./ui/ac_attack_type_for_weapon.js";
 
       let pluginClient = null;
       let barInstance = null;
@@ -8603,20 +8610,63 @@ void main() {
                     window.__pluginClient.events.emit(eventName, payload);
                   }
                   // Phase D — visual response: when an attacker hits
-                  // us (damageTaken) play their swing pose if we can
-                  // resolve the attacker's GUID from their name. Names
-                  // are unique per-cell at any given time so the
-                  // case-sensitive linear lookup is reliable enough.
+                  // us (damageTaken) play their swing on the attacker's
+                  // rig. Names are unique per-cell at any given time so
+                  // the case-sensitive linear lookup is reliable enough.
+                  //
+                  // CMT Wave 2 / Phase 5 (2026-05-26): previously this
+                  // path called `setSwingPose(g)`, a vibe-coded triangle-
+                  // wave tween that early-returned on non-human rigs
+                  // (entities.js:1917 `if (!isHuman) return`) — drudges
+                  // and other non-human creatures silently played
+                  // nothing. We now resolve the correct MotionCommand
+                  // through the CombatManeuverTable runtime using the
+                  // attacker's stance + inferred AttackType from their
+                  // equipped weapon, and call `setSwingMotion` which
+                  // routes through the motion-table link path and can
+                  // drive ANY rig (humanoid or creature). On CMT miss
+                  // (unknown stance / attackType combo / `getStance`
+                  // unset pre-UpdateMotion / `getEquippedWeapon`
+                  // returning Undef-only) we fall back to the original
+                  // `setSwingPose` so humanoids still get the legacy
+                  // wind-up.
                   const em = window.liveScene3d?.entityManager;
                   if (em && typeof em.findGuidByName === "function") {
+                    const dispatchRemoteSwing = (attackerName) => {
+                      const g = em.findGuidByName(attackerName);
+                      if (g === 0) return;
+                      const stance = em.getStance?.(g) ?? 0;
+                      const weapon = em.getEquippedWeapon?.(g) ?? null;
+                      const inferred = inferAttackTypeForWeapon(weapon);
+                      // Wave 1's mapping returns Undef for ranged / caster /
+                      // shield-only — those are out of scope for this CMT
+                      // dispatch (Phase 6 handles ranged via picking.js,
+                      // magic uses CastTargeted/CastUntargeted not CMT).
+                      // For melee, default to Slash when the inference
+                      // can't make a positive call so the remote attacker
+                      // still gets a swing clip rather than nothing.
+                      const attackType = (inferred === ATTACK_TYPE.Undef)
+                        ? ATTACK_TYPE.Slash
+                        : inferred;
+                      const ATTACK_HEIGHT_MEDIUM = 2;
+                      const motionCmd = getCombatManeuver(
+                        stance,
+                        ATTACK_HEIGHT_MEDIUM,
+                        attackType,
+                        0.5,
+                      );
+                      if (motionCmd && typeof em.setSwingMotion === "function") {
+                        em.setSwingMotion(g, motionCmd);
+                      } else if (typeof em.setSwingPose === "function") {
+                        em.setSwingPose(g);
+                      }
+                    };
                     if (eventName === "damageTaken" && payload.attackerName) {
-                      const g = em.findGuidByName(payload.attackerName);
-                      if (g !== 0) em.setSwingPose(g);
+                      dispatchRemoteSwing(payload.attackerName);
                     } else if (eventName === "evadedAttacker" && payload.attackerName) {
                       // Their swing missed — still show the wind-up so
                       // the player sees something happened on their end.
-                      const g = em.findGuidByName(payload.attackerName);
-                      if (g !== 0) em.setSwingPose(g);
+                      dispatchRemoteSwing(payload.attackerName);
                     }
                   }
                 } catch (e) {

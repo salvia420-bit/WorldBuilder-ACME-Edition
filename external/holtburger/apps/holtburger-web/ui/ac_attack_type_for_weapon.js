@@ -47,15 +47,15 @@
  *   `MELEE_WEAPON=0x00100000, SHIELD=0x00200000, MISSILE_WEAPON=0x00400000,
  *   MISSILE_AMMO=0x00800000, CASTER=0x01000000, TWO_HANDED=0x02000000`.
  *
- * ## Mapping table (Wave 1, equip-slot-based heuristic)
+ * ## Mapping table (Waves 1+2, equip-slot-based heuristic)
  *
  *   | Input                                  | AttackType returned          |
  *   |----------------------------------------|------------------------------|
  *   | `weapon === null`  (unarmed)           | `Punch  = 0x01`              |
  *   | `equipMask & TWO_HANDED`               | `Slash  = 0x04`              |
  *   | `equipMask & MELEE_WEAPON`             | `Slash  = 0x04`              |
- *   | `equipMask & MISSILE_WEAPON`           | `Undef  = 0x00`  (Phase 6)   |
- *   | `equipMask & MISSILE_AMMO`             | `Undef  = 0x00`  (Phase 6)   |
+ *   | `equipMask & MISSILE_WEAPON`           | `Undef  = 0x00`  (see Phase 6 audit) |
+ *   | `equipMask & MISSILE_AMMO`             | `Undef  = 0x00`  (see Phase 6 audit) |
  *   | `equipMask & CASTER`                   | `Undef  = 0x00`  (magic path) |
  *   | anything else (e.g. SHIELD-only)       | `Undef  = 0x00`              |
  *
@@ -76,6 +76,52 @@
  *     the caller falls back to the existing `ATTACK_TYPE_SLASH`
  *     constant — keeps combat working while we extend coverage.
  *
+ * ### Phase 6 (ranged) audit finding — 2026-05-26 (Wave 2)
+ *
+ * **CMT 0x30000000 has ZERO rows for ranged stances.** The audit
+ * script at `crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs`
+ * confirms: of the 102 maneuvers in the live retail table, every row
+ * is one of `HandCombat (0x8000003C)`, `SwordCombat (0x8000003E)`,
+ * `SwordShieldCombat (0x80000040)`, `TwoHandedSwordCombat
+ * (0x80000044)`, or `DualWieldCombat (0x80000046)`. There is no row
+ * with stance `BowCombat (0x8000003F)`, `CrossbowCombat (0x80000041)`,
+ * `SlingCombat (0x80000043)`, `ThrownWeaponCombat (0x80000047)`, or
+ * `AtlatlCombat (0x8000013B)`.
+ *
+ * This matches ACE's server-side behaviour: `Player_Missile.cs:207`
+ * picks `aimLevel` (a `MotionCommand.AimHighN` / `AimLowN` /
+ * `AimLevel` value) directly from the projectile's z-angle in
+ * `Creature_Missile.cs::GetAimLevel`, then plays that motion via
+ * `EnqueueMotionPersist(actionChain, aimLevel)` at line 227. It never
+ * calls `CombatTable.GetMotion(...)` for missile attacks.
+ *
+ * Implication for Phase 6:
+ *   1. The ranged AttackType code we'd extend this helper with does
+ *      not exist. There IS no CMT-table answer for the ranged path.
+ *   2. Returning `Undef` for `MISSILE_WEAPON` / `MISSILE_AMMO` is the
+ *      *correct* CMT answer — `getCombatManeuver(BowCombat, ...,
+ *      Slash, ...)` will miss for any AttackType (the row isn't
+ *      there), so the caller (`picking.js` missile branch) drops to
+ *      `setSwingPose` after `getCombatManeuver` returns `null`. The
+ *      Wave 1 fallback constant in `picking.js` would also miss for
+ *      ranged stances, so the behaviour is the same either way.
+ *   3. The real Phase 6 follow-on is a separate aim-level dispatch:
+ *      port `Creature_Missile.cs:GetAimLevel` (z-angle → AimHigh*N* /
+ *      AimLow*N* enum), then call `setSwingMotion(localGuid,
+ *      aimLevel)` directly. That's NOT a CMT lookup — it's a parallel
+ *      motion-dispatch path. Tracked as Wave 3 work; out of scope for
+ *      Phase 6 as defined.
+ *
+ * Net Wave 2 change for this file: ranged branch stays `Undef`, but
+ * the rationale shifts from "Phase 6 pending audit" → "audit
+ * complete; ranged motions are not in the CMT, full stop." The
+ * picking.js wiring (`scene3d/picking.js` missile branch) still
+ * benefits from going through the helper + `getCombatManeuver` + the
+ * `setSwingMotion`/`setSwingPose` fallback chain so the diag layer
+ * sees the same shape for ranged attempts (miss reason = ranged
+ * stance, will be visible in `motionByStance` once Phase 1's diag
+ * captures missile swings).
+ *
  * ## TODO (Wave 2/4/6 follow-ons)
  *
  * - Surface `W_AttackType` (PropertyInt 45) and `W_WeaponType`
@@ -86,10 +132,13 @@
  *   surfaced, port `WorldObject_Weapon.cs:1050 GetAttackType` here
  *   verbatim — it's a pure stance/powerLevel branch tree, no server
  *   state needed client-side.
- * - Phase 6 (ranged): extend the `MISSILE_WEAPON` branch with the
- *   actual ranged AttackType the retail CMT uses for `BowCombat` /
- *   `CrossbowCombat` / `ThrownWeaponCombat` rows (likely `Slash=0x04`
- *   per the cmt-fixes-plan-2026-05-26.md §Phase 6 audit).
+ * - Wave 3 (ranged aim-level): port `Creature_Missile.cs::GetAimLevel`
+ *   (z-angle → AimHigh{15,30,45,60,75,90} / AimLevel / AimLow{...})
+ *   into a sibling helper at `ui/ac_aim_level_for_velocity.js` and
+ *   call it from the picking.js missile branch alongside (or instead
+ *   of) `getCombatManeuver`. The CMT lookup will always miss for
+ *   ranged stances per the audit above; the aim-level dispatch is a
+ *   separate motion path.
  */
 
 /**
@@ -190,12 +239,21 @@ export function inferAttackTypeForWeapon(weapon) {
   // so this is defensive only.
   if (mask & EQUIP_MASK_CASTER) return ATTACK_TYPE.Undef;
 
-  // Ranged (bow / crossbow / thrown) + ammo: defer to Wave 2 Phase 6.
-  // CMT rows exist under BowCombat / CrossbowCombat / ThrownCombat
-  // stances but their AttackType key isn't audited yet. Returning
-  // Undef lets the caller's `ATTACK_TYPE_SLASH` fallback fire — which
-  // happens to be what the ranged rows use at retail per the plan
-  // doc, so combat still works; Phase 6 will audit + replace.
+  // Ranged (bow / crossbow / thrown) + ammo: stays Undef post-Phase-6
+  // audit (2026-05-26). The audit
+  // (`crates/holtburger-dat/examples/dump_cmt_ranged_rows.rs`) found
+  // ZERO ranged-stance rows in retail CMT 0x30000000 — every row uses
+  // HandCombat / SwordCombat / SwordShieldCombat /
+  // TwoHandedSwordCombat / DualWieldCombat. There IS no AttackType
+  // code under which the AimHighN/AimLowN motions live, because the
+  // ranged motion dispatch in retail goes through aim-angle
+  // (`Creature_Missile.cs::GetAimLevel`) instead of through the CMT
+  // at all. See module docstring §"Phase 6 (ranged) audit finding"
+  // for the full reasoning. Returning Undef means the caller will
+  // hit `getCombatManeuver(...) === null` and fall back to
+  // `setSwingPose` — which is also what happens server-side: ACE's
+  // missile path doesn't use CMT, it calls `EnqueueMotionPersist`
+  // directly with an aim-level motion.
   if (mask & (EQUIP_MASK_MISSILE_WEAPON | EQUIP_MASK_MISSILE_AMMO)) {
     return ATTACK_TYPE.Undef;
   }
