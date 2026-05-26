@@ -27249,6 +27249,41 @@ async fn recv_loop(
                             // ACE doesn't permit double-jumps.
                             continue;
                         }
+                        // Wave 10 Phase 10.2 (2026-05-26) — PhatSDK
+                        // `CMotionInterp::motion_allows_jump`
+                        // (`external/GDL/PhatSDK/MovementManager.cpp:
+                        // 427-438`) blocks jumps from interactive /
+                        // held-pose / cast-windup substates. Without
+                        // this gate, the wasm fires
+                        // `GameAction::Jump` and ACE rejects it with
+                        // `WeenieError::YouCantJumpFromThisPosition
+                        // = 0x0048`, but the JS spacebar handler has
+                        // already called `em.setAirborne(true)` for
+                        // the local-prediction arms-up overlay
+                        // (Wave 1.7). The result is a visible desync
+                        // until the next server reconciliation
+                        // (typically 200-500 ms).
+                        //
+                        // Gating the wire send here keeps wasm in
+                        // lockstep with retail and lets us suppress
+                        // the JS-side overlay via a wasm getter
+                        // (deferred follow-on — for now the JS
+                        // optimistically fires the overlay and the
+                        // next `kind=18` touchdown signal would
+                        // clear it; the substate check at least
+                        // stops the wire-packet/server-response
+                        // mismatch).
+                        if !holtburger_world::player::motion_allows_jump(
+                            w.player.current_substate,
+                        ) {
+                            if DIAG_VERBOSE {
+                                console_log_str(&format!(
+                                    "[jump] blocked by motion_allows_jump (substate=0x{:08X}) — mirrors retail \"You can't jump from this position.\"",
+                                    w.player.current_substate,
+                                ));
+                            }
+                            continue;
+                        }
                         // Burden, skill, and stamina are pulled live.
                         // Burden flows from ACE's
                         // `EncumbranceSystem.GetBurden(encumbrance,
@@ -27721,33 +27756,71 @@ async fn recv_loop(
                         match movement.tick(now, w, &mut session).await {
                             Ok(_events) => {
                                 if was_airborne_pre_tick && !w.player.is_airborne {
-                                    // Wave 5 Phase 5.2 (2026-05-26):
-                                    // emit a `Fallen` motion event so the
-                                    // renderer transitions out of the
-                                    // Falling cycle on touchdown. Per the
-                                    // MT 0x09000001 audit (Phase 5.1
-                                    // investigation, see `crates/
-                                    // holtburger-dat/examples/
-                                    // dump_player_mt_fall_variants.rs`),
-                                    // `Fallen (0x40000008)` is present as
-                                    // a cycle in every player stance
-                                    // except Sling / TwoHandedStaff /
-                                    // Graze (those return null from the
-                                    // AnimationCache lookup; the
-                                    // renderer's null-clip branch then
-                                    // routes us back to Ready). The
-                                    // proposed `Land (0x4100002B)`
-                                    // command in the original plan does
-                                    // not exist in the MotionCommand
-                                    // enum (chorizite + ACE define
-                                    // `MagicBlast = 0x4000002B` at that
-                                    // low-16, and the only 0x002B cycle
-                                    // is Magic-stance MagicBlast — not a
-                                    // touchdown clip). Using Fallen
-                                    // exclusively keeps the data and the
-                                    // command consistent.
-                                    const FALLEN_CMD: u32 = 0x4000_0008;
-                                    let landing_cmd = FALLEN_CMD;
+                                    // Wave 10 Phase 10.1 (2026-05-26):
+                                    // Touchdown signalling. The Wave 5
+                                    // implementation emitted the
+                                    // `Fallen (0x40000008)` motion-command
+                                    // as the touchdown clip, but per ACE
+                                    // `MotionCommand.cs:15` Fallen is a
+                                    // distinct enum entry from `Falling`
+                                    // — its semantics are "post-fall
+                                    // stagger / damage pose", not "I just
+                                    // landed cleanly." Wave 5's
+                                    // re-purposing was an improvisation
+                                    // (the original Wave 5 plan had asked
+                                    // for `Land (0x4100002B)` which
+                                    // doesn't exist) and pollutes the
+                                    // substate enum the renderer reads
+                                    // — entities.js routes Fallen through
+                                    // its STATIONARY classifier, which is
+                                    // not what touchdown wants.
+                                    //
+                                    // Phase 10.1 splits the touchdown
+                                    // signal into two clean events:
+                                    //
+                                    // (1) `ClientEvent { kind: 18,
+                                    //     u32_payload: local_guid,
+                                    //     u32_payload_2: 0 }` —
+                                    // mirrors the EntityAirborneChanged
+                                    // path that Wave 1.8 added for
+                                    // remote players (Wave 1.8 wired
+                                    // `setAirborne(guid, true)` on
+                                    // remote velocity-z threshold
+                                    // crossings; this fires the matching
+                                    // `setAirborne(localGuid, false)`
+                                    // on local touchdown so the arms-up
+                                    // overlay clears).
+                                    //
+                                    // (2) `ENTITY_UPDATE_KIND_MOTION`
+                                    // with `motion_command =
+                                    // Ready (0x41000003)` — replaces
+                                    // the Falling cycle clip with the
+                                    // Ready idle. If the player is
+                                    // holding locomotion keys at
+                                    // touchdown, the next manual-drive
+                                    // tick will fire WalkForward/etc to
+                                    // override Ready. The pre-tick
+                                    // stance is preserved so the player
+                                    // resumes Ready in their current
+                                    // combat stance, not NonCombat.
+                                    //
+                                    // The renderer's `Fallen` classifier
+                                    // entry in `entities.js` is LEFT
+                                    // ALONE: any creature/server that
+                                    // broadcasts `Fallen` as a genuine
+                                    // damage pose still routes correctly
+                                    // through STATIONARY. We just stop
+                                    // mis-emitting it from this site.
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(
+                                            player_guid_for_airborne,
+                                        )),
+                                        u32_payload_2: Some(0),
+                                        f32_payload: None,
+                                    });
+                                    const READY_CMD: u32 = 0x4100_0003;
                                     entity_updates.borrow_mut().push(EntityUpdate {
                                         kind: ENTITY_UPDATE_KIND_MOTION,
                                         guid: u32::from(player_guid_for_airborne),
@@ -27775,7 +27848,7 @@ async fn recv_loop(
                                         vy: 0.0,
                                         vz: 0.0,
                                         omega_z: 0.0,
-                                        motion_command: landing_cmd,
+                                        motion_command: READY_CMD,
                                         motion_stance: pre_tick_stance,
                                         physics_script_did: 0,
                                         sound_table_did: 0,

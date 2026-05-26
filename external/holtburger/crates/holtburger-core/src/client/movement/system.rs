@@ -1,6 +1,7 @@
 use super::common::{
-    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, build_autonomous_position,
-    build_motion_state_raw_motion_state, encode_contact_long_jump,
+    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, PLAYER_GROUND_FRICTION_PER_SEC,
+    PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC,
+    build_autonomous_position, build_motion_state_raw_motion_state, encode_contact_long_jump,
     has_autonomous_position_sync_target, local_omega_for_state, local_velocity_for_state,
     normalize_heading, raw_motion_state_with_motion_style, signed_heading_delta,
 };
@@ -612,7 +613,7 @@ impl MovementSystem {
             Ok(c) => c,
             Err(_) => return,
         };
-        let velocity = local_velocity_for_state(heading, state, &capabilities);
+        let target_velocity = local_velocity_for_state(heading, state, &capabilities);
         // Phase 2 (Cohere-D, 2026-05-12): also compute angular velocity
         // from the manual drive state so we can apply local rotation
         // prediction below. Prior to this, the manual integrator only
@@ -623,7 +624,101 @@ impl MovementSystem {
         // integrates heading at `index.html:6388-6395`.
         let omega = local_omega_for_state(state, &capabilities);
         let dt_s = dt.as_secs_f32();
-        let raw_delta = Vector3::new(velocity.x * dt_s, velocity.y * dt_s, velocity.z * dt_s);
+
+        // Wave 10 Phase 10.3 (2026-05-26): friction-decay + accel-cap
+        // velocity smoothing.
+        //
+        // Prior waves used `target_velocity` directly for the per-tick
+        // delta — input changes flipped the velocity vector instantly.
+        // The smell-test scenario (jump backwards, hold W on touchdown)
+        // teleported the player's lateral velocity from -backward to
+        // +forward in a single tick, which read as a visual snap.
+        //
+        // The retail behaviour, per `CPhysicsObj::calc_friction` at
+        // `external/GDL/PhatSDK/PhysicsObj.cpp:521-561`, is a per-tick
+        // multiplicative decay on `m_velocityVector` gated by
+        // `transient_state & ON_WALKABLE_TS` (`PhysicsObj.cpp:523`).
+        // Acceleration is applied separately via `m_Acceleration` in
+        // `UpdatePhysicsInternal` (`PhysicsObj.cpp:594-598`). We don't
+        // port the full retail pipeline (the `apply_raw_movement` chain
+        // sets `m_velocityVector` to the input target directly, then
+        // friction-decays it); instead we approximate the
+        // smoothing-toward-target with a per-axis accel cap and a
+        // gentler friction coefficient
+        // (`PLAYER_GROUND_FRICTION_PER_SEC = 0.5` in
+        // `movement/common.rs`, vs retail's 0.95) so the accel cap can
+        // hold the smoothed velocity within a small percent of the
+        // input target at steady state.
+        //
+        // The Z axis is NOT touched here — `vertical_velocity` is
+        // managed separately by the jump/fall arcs (see lines
+        // 841-848). We only smooth X/Y.
+        //
+        // When airborne, friction is skipped (matches retail's
+        // ON_WALKABLE_TS gate) and the input-derived `target_velocity`
+        // is applied directly. This lets a player who jumps mid-stride
+        // keep their forward momentum in the air, and lets a jump-
+        // backwards player flip direction in flight by holding W (with
+        // no friction to lag against — instant input response is fine
+        // mid-air since the rig is already in the airborne pose).
+        let smoothed_planar = if world.player.is_airborne {
+            // Airborne — pass the target through. The lateral velocity
+            // store stays in sync so a touchdown lands with the right
+            // initial velocity for friction-decay to act on.
+            let v = Vector3::new(target_velocity.x, target_velocity.y, 0.0);
+            world.player.current_planar_velocity = v;
+            v
+        } else {
+            // Grounded: apply friction decay + accel cap, then snap to
+            // zero below the small-velocity threshold.
+            let mut v = world.player.current_planar_velocity;
+            // Per-tick friction scale = `(1 - F)^dt`. Matches PhatSDK
+            // `pow(1.0 - the_friction, quantum)` exactly.
+            let scale = (1.0 - PLAYER_GROUND_FRICTION_PER_SEC).powf(dt_s);
+            v.x *= scale;
+            v.y *= scale;
+            // Move toward target with per-axis accel cap. Retail has no
+            // explicit cap (uses friction-only smoothing); this is a
+            // game-feel addition to make direction changes ramp through
+            // zero. The user flagged this constant as "tune-later".
+            let accel_step = PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ * dt_s;
+            for (cur, tgt) in [
+                (&mut v.x, target_velocity.x),
+                (&mut v.y, target_velocity.y),
+            ] {
+                let delta = tgt - *cur;
+                let clamped = delta.clamp(-accel_step, accel_step);
+                *cur += clamped;
+            }
+            // small-velocity snap (PhysicsObj.cpp:589-592).
+            let mag_sq = v.x * v.x + v.y * v.y;
+            let threshold_sq = PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
+                * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
+            // The snap fires only when both the target and the current
+            // velocity are below the threshold — otherwise the player
+            // is actively accelerating from rest, and snapping would
+            // kill the ramp-up. This matches the spirit of retail's
+            // gate (`velocity_mag2 < small_velocity^2`): the player
+            // has stopped requesting movement, so kill residual drift.
+            let target_mag_sq =
+                target_velocity.x * target_velocity.x + target_velocity.y * target_velocity.y;
+            if mag_sq < threshold_sq && target_mag_sq < threshold_sq {
+                v.x = 0.0;
+                v.y = 0.0;
+            }
+            world.player.current_planar_velocity = v;
+            v
+        };
+
+        // Build the world-space delta. X/Y come from the smoothed
+        // velocity; Z still flows from `target_velocity.z` so the
+        // existing airborne integrator below can override with the
+        // gravity arc when `is_airborne`.
+        let raw_delta = Vector3::new(
+            smoothed_planar.x * dt_s,
+            smoothed_planar.y * dt_s,
+            target_velocity.z * dt_s,
+        );
         // Lateral (X/Y) clamp. Two paths:
         //   - Outdoor: Phase 6 step B sweep-sphere against the
         //     per-cell `building_aabb_index`. Z stays raw so the

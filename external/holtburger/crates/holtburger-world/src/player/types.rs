@@ -1,10 +1,218 @@
 use crate::stats;
-use holtburger_common::{CharacterOption, CharacterOptions1, CharacterOptions2, Guid};
+use holtburger_common::{CharacterOption, CharacterOptions1, CharacterOptions2, Guid, Vector3};
 use holtburger_protocol::messages::EquipMask;
 use holtburger_protocol::messages::magic::Enchantment;
 use holtburger_protocol::messages::movement::{MotionStance, PositionType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
+
+/// Wave 10 Phase 10.2 (2026-05-26) — full 32-bit
+/// [`MotionCommand`](https://github.com/ACEmulator/ACE/blob/master/Source/ACE.Entity/Enum/MotionCommand.cs)
+/// constants used by [`PlayerState::current_substate`] and
+/// [`motion_allows_jump`].
+///
+/// Only the substates the jump gate cares about are listed here. The
+/// full 409-entry table lives in
+/// `crates/holtburger-dat/tests/common/motion_command_names.rs` (test
+/// scaffolding) and `apps/holtburger-web/data/motion-command-names.json`
+/// (runtime renderer).
+#[allow(dead_code, non_snake_case)]
+pub mod MotionCommandCode {
+    /// `Ready` — at-rest pose, the universal "you can jump from here"
+    /// substate. Default for [`PlayerState::current_substate`].
+    pub const READY: u32 = 0x4100_0003;
+    /// `Fallen` — post-fall stagger pose. Blocked by
+    /// [`motion_allows_jump`] (PhatSDK `MovementManager.cpp:434`).
+    /// **NOT** the same as `Falling`: Falling is the in-air looping
+    /// cycle, gated by `PlayerState::is_airborne`.
+    pub const FALLEN: u32 = 0x4000_0008;
+    /// `Falling` — in-air looping cycle. NOT in the PhatSDK blocked
+    /// set; double-jump prevention runs through `is_airborne`.
+    pub const FALLING: u32 = 0x4000_0015;
+    /// `Jump` — set on [`PlayerState::begin_jump`]. Not in PhatSDK's
+    /// blocked set (`is_airborne` gates instead).
+    pub const JUMP: u32 = 0x2500_003B;
+}
+
+/// Wave 10 Phase 10.2 (2026-05-26) — port of PhatSDK
+/// `CMotionInterp::motion_allows_jump` at
+/// `external/GDL/PhatSDK/MovementManager.cpp:427-438`. Returns `true`
+/// when the substate is one the retail client would permit jumping
+/// from, `false` when retail would emit "You can't jump from this
+/// position." (`WeenieError::YouCantJumpFromThisPosition = 0x0048`).
+///
+/// The ranges mirror PhatSDK exactly:
+///
+/// - `0x40000016..=0x40000018` — `Reload`, `Unload`, `Pickup`
+///   (interactions in progress)
+/// - `0x10000128..=0x10000131` — `TripleThrustLow..MagicPowerUp07Purple`
+///   (multi-strike attack windups + colored magic powerups)
+/// - `0x1000006F..=0x10000078` — `MagicPowerUp01..MagicPowerUp10`
+///   (war-magic cast windups)
+/// - `0x41000012..=0x41000014` — `Crouch`, `Sitting`, `Sleeping`
+///   (stationary held poses)
+/// - `0x4000001E..=0x40000039` — `AimLevel..MagicPray`
+///   (aim states + magic spell substates)
+/// - `0x40000008` — `Fallen` (post-fall stagger)
+///
+/// Note: `Falling (0x40000015)` is NOT in this set per retail — the
+/// PhatSDK source does not block on it. Double-jump prevention runs
+/// via the `is_airborne` flag (the recv-loop `Jump` arm at
+/// `apps/holtburger-web/src/lib.rs` short-circuits when
+/// `world.player.is_airborne`).
+#[inline]
+pub fn motion_allows_jump(substate: u32) -> bool {
+    !(matches!(substate, 0x4000_0016..=0x4000_0018)
+        || matches!(substate, 0x1000_0128..=0x1000_0131)
+        || matches!(substate, 0x1000_006F..=0x1000_0078)
+        || matches!(substate, 0x4100_0012..=0x4100_0014)
+        || matches!(substate, 0x4000_001E..=0x4000_0039)
+        || substate == 0x4000_0008)
+}
+
+/// Wave 10 Phase 10.2 (2026-05-26) — expand a low-16
+/// `InterpretedMotionCommand` to its full 32-bit `MotionCommand`
+/// value. ACE / the wire format only carries the low-16 substate
+/// (see `external/holtburger/crates/holtburger-protocol/src/messages/
+/// movement/types.rs:230` — `InterpretedMotionState::forward_command:
+/// Option<InterpretedMotionCommand>` where `InterpretedMotionCommand`
+/// is a `pub u16` newtype), but PhatSDK's
+/// [`motion_allows_jump`] operates on the full 32-bit value.
+///
+/// This is a partial table that ONLY covers the substates needed for
+/// jump-gating (the ranges enumerated in [`motion_allows_jump`] plus a
+/// few well-known idle states). Misses return `None`; the caller
+/// should preserve the previous substate when this happens (a
+/// permissive default keeps jump from breaking on unknown server
+/// motion commands).
+///
+/// Sourced from ACE `Source/ACE.Entity/Enum/MotionCommand.cs` (lines
+/// 7-127 + the substate ranges starting at 304).
+pub fn expand_motion_command_low16(low16: u16) -> Option<u32> {
+    match low16 {
+        // Idle / locomotion (not in blocked set, but tracked so the
+        // substate field stays correctly populated when the player
+        // walks/runs around).
+        0x0003 => Some(0x4100_0003), // Ready
+        0x0004 => Some(0x4000_0004), // Stop
+        0x0005 => Some(0x4500_0005), // WalkForward
+        0x0006 => Some(0x4500_0006), // WalkBackwards
+        0x0007 => Some(0x4400_0007), // RunForward
+        // Fallen — blocked (post-fall stagger).
+        0x0008 => Some(0x4000_0008), // Fallen
+        // Falling — NOT blocked here; is_airborne covers it.
+        0x0015 => Some(0x4000_0015), // Falling
+        // Reload..Pickup — blocked.
+        0x0016 => Some(0x4000_0016), // Reload
+        0x0017 => Some(0x4000_0017), // Unload
+        0x0018 => Some(0x4000_0018), // Pickup
+        // Crouch..Sleeping — blocked.
+        0x0012 => Some(0x4100_0012), // Crouch
+        0x0013 => Some(0x4100_0013), // Sitting
+        0x0014 => Some(0x4100_0014), // Sleeping
+        // AimLevel..MagicPray — blocked.
+        0x001E..=0x0039 => Some(0x4000_0000 | u32::from(low16)),
+        // MagicPowerUp01..MagicPowerUp10 — blocked.
+        0x006F..=0x0078 => Some(0x1000_0000 | u32::from(low16)),
+        // TripleThrustLow..MagicPowerUp07Purple — blocked.
+        0x0128..=0x0131 => Some(0x1000_0000 | u32::from(low16)),
+        // Jump — set explicitly by begin_jump; not normally
+        // round-tripped via UpdateMotion.
+        0x003B => Some(0x2500_003B), // Jump
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod motion_allows_jump_tests {
+    use super::*;
+
+    /// PhatSDK `MovementManager.cpp:434` — Fallen is the lone single
+    /// value in the blocked set.
+    #[test]
+    fn fallen_is_blocked() {
+        assert!(!motion_allows_jump(0x4000_0008), "Fallen must block jump");
+    }
+
+    /// PhatSDK `MovementManager.cpp:429` — `0x40000016..0x40000018` =
+    /// Reload, Unload, Pickup.
+    #[test]
+    fn reload_unload_pickup_blocked() {
+        assert!(!motion_allows_jump(0x4000_0016), "Reload must block");
+        assert!(!motion_allows_jump(0x4000_0017), "Unload must block");
+        assert!(!motion_allows_jump(0x4000_0018), "Pickup must block");
+    }
+
+    /// PhatSDK `MovementManager.cpp:432` — `0x41000012..0x41000014` =
+    /// Crouch, Sitting, Sleeping.
+    #[test]
+    fn crouch_sitting_sleeping_blocked() {
+        assert!(!motion_allows_jump(0x4100_0012), "Crouch must block");
+        assert!(!motion_allows_jump(0x4100_0013), "Sitting must block");
+        assert!(!motion_allows_jump(0x4100_0014), "Sleeping must block");
+    }
+
+    /// PhatSDK `MovementManager.cpp:433` — `0x4000001E..0x40000039` =
+    /// AimLevel through MagicPray (spell windups).
+    #[test]
+    fn aim_states_and_magic_substates_blocked() {
+        assert!(!motion_allows_jump(0x4000_001E), "AimLevel must block");
+        assert!(!motion_allows_jump(0x4000_002B), "MagicBlast must block");
+        assert!(!motion_allows_jump(0x4000_0031), "MagicHeal must block");
+        assert!(!motion_allows_jump(0x4000_0039), "MagicPray must block");
+    }
+
+    /// PhatSDK `MovementManager.cpp:431` — `0x1000006F..0x10000078` =
+    /// MagicPowerUp01..MagicPowerUp10 (cast windups).
+    #[test]
+    fn magic_powerup_windups_blocked() {
+        assert!(!motion_allows_jump(0x1000_006F), "MagicPowerUp01 must block");
+        assert!(!motion_allows_jump(0x1000_0074), "MagicPowerUp06 must block");
+        assert!(!motion_allows_jump(0x1000_0078), "MagicPowerUp10 must block");
+    }
+
+    /// PhatSDK `MovementManager.cpp:430` — `0x10000128..0x10000131` =
+    /// TripleThrustLow..MagicPowerUp07Purple.
+    #[test]
+    fn triple_thrust_and_purple_powerups_blocked() {
+        assert!(!motion_allows_jump(0x1000_0128), "TripleThrustLow must block");
+        assert!(!motion_allows_jump(0x1000_012B), "MagicPowerUp01Purple must block");
+        assert!(!motion_allows_jump(0x1000_0131), "MagicPowerUp07Purple must block");
+    }
+
+    /// Allowed substates outside the PhatSDK ranges.
+    #[test]
+    fn ready_and_walk_allow_jump() {
+        assert!(motion_allows_jump(0x4100_0003), "Ready must allow jump");
+        assert!(motion_allows_jump(0x4500_0005), "WalkForward must allow jump");
+        assert!(motion_allows_jump(0x4400_0007), "RunForward must allow jump");
+    }
+
+    /// Falling (0x40000015) is NOT in the PhatSDK blocked set — the
+    /// `is_airborne` flag gates double-jumps separately.
+    #[test]
+    fn falling_substate_alone_does_not_block() {
+        assert!(motion_allows_jump(0x4000_0015), "Falling itself is not blocked by motion_allows_jump");
+    }
+
+    /// Boundary values around the blocked ranges — verify the ranges
+    /// are inclusive on the low end, exclusive past the high end.
+    #[test]
+    fn range_boundaries_match_phatsdk() {
+        // Just below Reload range
+        assert!(motion_allows_jump(0x4000_0015), "Falling sits below the Reload range and is allowed");
+        // Just past Pickup
+        assert!(motion_allows_jump(0x4000_0019), "0x40000019 = StoreInBackpack is allowed");
+        // Just below MagicPowerUp01
+        assert!(motion_allows_jump(0x1000_006E), "SpinAttack is allowed");
+        // Just past MagicPowerUp10
+        assert!(motion_allows_jump(0x1300_0079), "ShakeFist is allowed");
+        // Just past MagicPray
+        assert!(motion_allows_jump(0x2000_003A), "StopTurning is allowed");
+        // Just past TripleThrust range
+        assert!(motion_allows_jump(0x1000_0132), "MagicPowerUp08Purple is allowed");
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 pub struct SkillBase {
@@ -292,6 +500,77 @@ pub struct PlayerState {
     /// kinematic — `v = sqrt(h * 19.6)` → `g = 9.8 m/s²`). Reset to
     /// 0.0 on landing or teleport.
     pub vertical_velocity: f32,
+    /// Wave 10 Phase 10.2 (movement-animation overhaul, 2026-05-26):
+    /// the player's last-known full 32-bit `MotionCommand` substate.
+    /// Mirrors PhatSDK's `CMotionInterp::interpreted_state.forward_command`
+    /// (`external/GDL/PhatSDK/MovementManager.cpp:724`), which is the
+    /// argument to `motion_allows_jump()` for the jump-charge gate
+    /// (`MovementManager.cpp:471, 589, 1019, 1041`).
+    ///
+    /// Updated from three sources:
+    ///
+    /// 1. Server `GameMessage::UpdateMotion` for the local guid —
+    ///    `data.data.state.forward_command` arrives as a low-16
+    ///    [`InterpretedMotionCommand`]; the wasm-side recv handler
+    ///    expands it via [`expand_motion_command_low16`] to a full
+    ///    32-bit `MotionCommand` and assigns here. This covers
+    ///    `/sit` (Crouch/Sitting/Sleeping), pickup, reload, item
+    ///    use, spell windups (AimLevel..MagicPray + MagicPowerUp*),
+    ///    and other server-driven pose changes.
+    ///
+    /// 2. Local jump dispatch ([`begin_jump`]) — assigns
+    ///    `Jump (0x2500003B)`. The Jump substate itself is NOT in
+    ///    PhatSDK's blocked set, but [`is_airborne`] already gates
+    ///    double-jumps separately.
+    ///
+    /// 3. Local touchdown (recv-loop diff `was_airborne && !is_airborne`)
+    ///    — assigns `Ready (0x41000003)` via the post-tick
+    ///    [`Self::land_to_ready`] helper. Mirrors PhatSDK
+    ///    `apply_interpreted_movement` falling back to Ready on
+    ///    no-movement (`MovementManager.cpp:776-779`).
+    ///
+    /// Default: `Ready (0x41000003)` — the at-rest substate after
+    /// character spawn before any UpdateMotion arrives.
+    pub current_substate: u32,
+    /// Wave 10 Phase 10.3 (movement-animation overhaul, 2026-05-26):
+    /// smoothed lateral (X/Y) velocity in world meters per second.
+    /// Mirrors `CPhysicsObj::m_velocityVector` from PhatSDK
+    /// (`external/GDL/PhatSDK/PhysicsObj.h:333` — `Vector m_velocityVector`)
+    /// in the X/Y plane only (Z is tracked separately in
+    /// [`vertical_velocity`] for jump/fall arcs).
+    ///
+    /// Each tick the local-prediction integrator at
+    /// `crates/holtburger-core/src/client/movement/system.rs`
+    /// `advance_local_pose_for_manual_drive`:
+    ///
+    /// 1. Computes a `target_velocity` from
+    ///    [`local_velocity_for_state`] (the input-derived velocity
+    ///    based on which WASD keys the player is holding + their
+    ///    current heading).
+    /// 2. Applies friction decay to this stored
+    ///    `current_planar_velocity` via
+    ///    `v *= (1 - PLAYER_GROUND_FRICTION_PER_SEC).powf(dt)`
+    ///    — mirrors `CPhysicsObj::calc_friction` formula at
+    ///    `external/GDL/PhatSDK/PhysicsObj.cpp:558-559`. Skipped when
+    ///    [`is_airborne`] (matches `transient_state & ON_WALKABLE_TS`
+    ///    gate at `PhysicsObj.cpp:523`).
+    /// 3. Snaps to zero when `|v| < PLAYER_VELOCITY_SNAP_THRESHOLD`
+    ///    — mirrors the `small_velocity` short-circuit at
+    ///    `PhysicsObj.cpp:589-592`.
+    /// 4. Moves toward `target_velocity` capped at
+    ///    `PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ * dt` per
+    ///    axis. PhatSDK has no explicit accel cap (retail uses
+    ///    friction-only smoothing) — this is a wasm-side game-feel
+    ///    addition to make direction changes ramp smoothly through
+    ///    zero on the ground. The user explicitly called out
+    ///    "jumping backwards and immediately holding W" as the
+    ///    smell-test scenario.
+    /// 5. The resulting `current_planar_velocity` is what drives
+    ///    `pose.coords` deltas — NOT the raw input target. This is
+    ///    the difference between Wave 10.3 and prior waves.
+    ///
+    /// Default: zero (player starts stationary).
+    pub current_planar_velocity: Vector3,
 }
 
 impl Default for PlayerState {
@@ -332,6 +611,13 @@ impl PlayerState {
             is_airborne: false,
             is_jumping: false,
             vertical_velocity: 0.0,
+            // Wave 10 Phase 10.2 (2026-05-26) — default to Ready
+            // (the at-rest pose) so a fresh character can jump
+            // before any UpdateMotion has arrived from the server.
+            current_substate: MotionCommandCode::READY,
+            // Wave 10 Phase 10.3 (2026-05-26) — player spawns
+            // stationary; the integrator ramps from zero.
+            current_planar_velocity: Vector3::zero(),
         }
     }
 
@@ -445,6 +731,11 @@ impl PlayerState {
         // the parallel Falling emission from clobbering it.
         self.is_jumping = true;
         self.vertical_velocity = velocity_z;
+        // Wave 10 Phase 10.2 (2026-05-26) — stamp the substate so the
+        // motion_allows_jump gate sees `Jump` after dispatch (Jump
+        // itself is not in PhatSDK's blocked set; the is_airborne
+        // flag is what stops the second-jump press).
+        self.current_substate = MotionCommandCode::JUMP;
     }
 
     /// Begin an unjumped airborne fall — i.e., the player walked off a
@@ -464,6 +755,10 @@ impl PlayerState {
         self.is_airborne = true;
         self.is_jumping = false;
         self.vertical_velocity = 0.0;
+        // Wave 10 Phase 10.2 (2026-05-26) — stamp the in-air substate.
+        // Falling itself isn't in PhatSDK's blocked set; is_airborne
+        // is what gates a mid-air re-jump.
+        self.current_substate = MotionCommandCode::FALLING;
     }
 
     /// Clear the airborne state on landing or teleport.
@@ -471,6 +766,28 @@ impl PlayerState {
         self.is_airborne = false;
         self.is_jumping = false;
         self.vertical_velocity = 0.0;
+        // Wave 10 Phase 10.2 (2026-05-26) — fall back to Ready on
+        // touchdown. Mirrors PhatSDK `apply_interpreted_movement` →
+        // `DoInterpretedMotion(0x41000003)` when no forward command
+        // is queued (`MovementManager.cpp:776-779`). If the player
+        // is holding W/A/S/D, the next manual-drive tick will
+        // overwrite this with WalkForward/etc via the wire-side
+        // UpdateMotion round-trip (`update_current_substate_from_low16`).
+        self.current_substate = MotionCommandCode::READY;
+    }
+
+    /// Wave 10 Phase 10.2 (2026-05-26) — assign a new substate from a
+    /// low-16 [`InterpretedMotionCommand`] value. Used by the recv-loop
+    /// `UpdateMotion` handler when ACE broadcasts a self-motion edge
+    /// (e.g. `/sit` → Sitting, `/use` → Reload, spell cast → AimLevel
+    /// or MagicPowerUp*). When the low-16 doesn't map to a known
+    /// 32-bit `MotionCommand`, the previous substate is preserved
+    /// (permissive default — never silently block jumps on an unknown
+    /// command).
+    pub fn update_current_substate_from_low16(&mut self, low16: u16) {
+        if let Some(full) = expand_motion_command_low16(low16) {
+            self.current_substate = full;
+        }
     }
 
     pub fn vitae(&self) -> f32 {

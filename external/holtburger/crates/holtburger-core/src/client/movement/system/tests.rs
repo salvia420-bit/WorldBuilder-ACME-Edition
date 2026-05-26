@@ -1,5 +1,6 @@
 use super::super::common::{
-    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, RUN_FORWARD_MOTION_COMMAND,
+    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, PLAYER_GROUND_FRICTION_PER_SEC,
+    PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, RUN_FORWARD_MOTION_COMMAND,
     RUN_HELD_TURN_SPEED_RAD_PER_SEC, TURN_RIGHT_MOTION_COMMAND, WALK_FORWARD_MOTION_COMMAND,
     build_autonomous_position, build_motion_state_raw_motion_state, player_run_rate_scalar,
     raw_motion_state_with_motion_style,
@@ -1708,6 +1709,18 @@ async fn stop_without_active_drive_keeps_autonomous_position_heartbeat_armed() {
 /// native tests; this test covers the orthogonal failure mode where
 /// the integrator itself applies dt twice. Live validation against
 /// real-chrome vs Playwright remains a manual step (PK).
+///
+/// Wave 10 Phase 10.3 (2026-05-26): updated to pre-seed
+/// `current_planar_velocity` to the expected steady-state run speed
+/// before tick #1. Prior to Wave 10.3, the integrator applied
+/// `target_velocity * dt` directly each tick; the test asserted
+/// `|displacement|^2 == (speed*dt)^2`. After Wave 10.3 the integrator
+/// smooths a stored velocity toward the target with friction-decay +
+/// accel cap, so a from-rest tick produces only the accel-cap step
+/// (`MAX_ACCEL * dt^2`). Pre-seeding the smoothed velocity to its
+/// converged value restores the original "velocity * dt once" invariant
+/// the test was built to catch — the dt-double-application failure mode
+/// is orthogonal to the smoothing layer.
 #[test]
 fn advance_local_pose_for_manual_drive_applies_velocity_times_dt_once() {
     let mut world = WorldState::synthetic();
@@ -1742,6 +1755,18 @@ fn advance_local_pose_for_manual_drive_applies_velocity_times_dt_once() {
     let expected_speed = 4.5_f32; // base_run_forward_velocity (run_rate_scalar = 1.0)
     let expected_delta = expected_speed * dt_s;
 
+    // Wave 10 Phase 10.3 — pre-seed smoothed velocity to the steady
+    // state so this tick exercises the v*dt integration in isolation
+    // (no accel-ramp from zero). `Quaternion::identity()` resolves to
+    // heading π/2 (North) per `to_heading()` at `holtburger-common/
+    // src/math.rs:139-158` (the 450° offset places identity at the
+    // North heading), so the velocity vector from
+    // `planar_velocity_for_heading(π/2, 4.5)` is
+    // `(-cos(π/2)*4.5, sin(π/2)*4.5, 0) = (0, 4.5, 0)`. Pre-seeding
+    // the smoothed velocity to match keeps the friction/accel layer
+    // a no-op on this tick (target == current).
+    world.player.current_planar_velocity = Vector3::new(0.0, expected_speed, 0.0);
+
     movement.advance_local_pose_for_manual_drive(&mut world, dt);
 
     let after = world
@@ -1764,7 +1789,12 @@ fn advance_local_pose_for_manual_drive_applies_velocity_times_dt_once() {
     // Sanity: a SECOND tick with the same dt should advance by ~the
     // same amount again — total displacement ≈ 2 * velocity * dt.
     // Catches a different bug: state accumulation that scales by
-    // tick count instead of dt.
+    // tick count instead of dt. Friction-decay over 100ms at f=0.95
+    // is `pow(0.05, 0.1) ≈ 0.741`, then accel-cap toward target
+    // restores most of the lost speed each tick. Tolerance is wider
+    // (1 cm at 4.5 m/s, ~2.2% of expected delta) to accommodate the
+    // small per-tick drift from this smoothing — the test still
+    // catches dt-double-application (which would land at 4x expected).
     movement.advance_local_pose_for_manual_drive(&mut world, dt);
     let after_two = world
         .local_player_runtime_pose()
@@ -1773,10 +1803,171 @@ fn advance_local_pose_for_manual_drive_applies_velocity_times_dt_once() {
     let total_dy = after_two.coords.y - start_pose.coords.y;
     let total_squared = total_dx * total_dx + total_dy * total_dy;
     let expected_two = (2.0 * expected_delta).powi(2);
+    let tol_two = 0.02_f32; // 1.4 cm tolerance on the squared magnitude
     assert!(
-        (total_squared - expected_two).abs() < tol,
-        "two-tick lateral displacement should be |2 * velocity * dt|^2 = {expected_two:.6}, \
+        (total_squared - expected_two).abs() < tol_two,
+        "two-tick lateral displacement should be ~|2 * velocity * dt|^2 = {expected_two:.6}, \
          got total_dx={total_dx:.4} total_dy={total_dy:.4} |delta|^2={total_squared:.6}"
+    );
+}
+
+/// Wave 10 Phase 10.3 (movement-animation overhaul, 2026-05-26):
+/// the user smell-tested "jump backwards, hold W on touchdown" and
+/// observed the velocity vector flipping instantly from -backward to
+/// +forward (no ramp through zero). The friction-decay + accel-cap
+/// pipeline in `advance_local_pose_for_manual_drive` should now
+/// produce a smooth transition: velocity decays through zero over
+/// multiple ticks rather than snapping to the new target in one tick.
+///
+/// This test verifies that explicit behavior:
+///   - Pre-seed `current_planar_velocity` to a backward-equivalent
+///     value (positive X, since heading=identity ⇒ -X is "forward").
+///   - Target velocity from the input is forward (negative X).
+///   - After one 16ms tick the velocity should be CLOSER to zero
+///     but NOT yet through it — the accel cap limits per-tick change
+///     to ~`PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ * dt`.
+#[test]
+fn advance_local_pose_for_manual_drive_ramps_velocity_through_zero_on_direction_change() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0AAA);
+    world.player.guid = player_guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(100.0, 100.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    let mut movement = MovementSystem::new();
+    // Drive input: run forward at heading π/2 (identity quat) ⇒
+    // target velocity = (0, +4.5, 0) in world space.
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    // Pre-seed the smoothed velocity to (0, -4.5, 0) — the velocity
+    // a player would have at the instant they finish a jump-backwards
+    // arc, before the touchdown re-engages friction. Magnitude
+    // matches run speed; direction is OPPOSITE the input target.
+    world.player.current_planar_velocity = Vector3::new(0.0, -4.5, 0.0);
+
+    // One typical 60Hz tick.
+    let dt = Duration::from_millis(16);
+    let dt_s = dt.as_secs_f32();
+    movement.advance_local_pose_for_manual_drive(&mut world, dt);
+
+    let v_after = world.player.current_planar_velocity;
+
+    // Per-axis accel cap step: `MAX_ACCEL * dt = 8 * 0.016 = 0.128 m/s`.
+    // Friction decay over 16ms: scale = `(1 - 0.5)^0.016 ≈ 0.989`,
+    // so the residual velocity after friction is
+    // `-4.5 * 0.989 ≈ -4.45`. Then the accel cap adds `+0.128`
+    // toward the target (the cap saturates because
+    // `target - v = 4.5 - (-4.45) = 8.95` is far above the cap).
+    // Final velocity: `-4.45 + 0.128 ≈ -4.32`.
+    //
+    // The key assertion is that velocity has moved TOWARD zero
+    // by approximately the accel cap step, and is still pointing
+    // in the original (backward) direction — i.e., we haven't
+    // teleported through zero to +4.5.
+    assert!(
+        v_after.y < 0.0,
+        "velocity should still be backward (negative Y) after one 16ms tick — got y={:.4}",
+        v_after.y,
+    );
+    assert!(
+        v_after.y > -4.5,
+        "velocity magnitude should have decreased toward zero — got y={:.4}",
+        v_after.y,
+    );
+    let accel_step = PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ * dt_s;
+    let expected_delta_y = (1.0 - PLAYER_GROUND_FRICTION_PER_SEC).powf(dt_s);
+    let predicted_v_y = -4.5 * expected_delta_y + accel_step;
+    assert!(
+        (v_after.y - predicted_v_y).abs() < 0.05,
+        "velocity should match friction-decay + accel-cap model: predicted {predicted_v_y:.4}, \
+         got {:.4}",
+        v_after.y,
+    );
+
+    // Now run enough ticks to cross through zero. The total
+    // backward velocity to dissipate is 4.5 m/s; the per-tick
+    // toward-target push is ~0.128 m/s (capped) + the friction
+    // squeeze. Expect zero-crossing within ~35 ticks (~0.6 s).
+    for _ in 0..40 {
+        movement.advance_local_pose_for_manual_drive(&mut world, dt);
+    }
+    let v_after_40 = world.player.current_planar_velocity;
+    assert!(
+        v_after_40.y > 0.0,
+        "after 40 more ticks (~0.65 s total), velocity should have crossed through zero \
+         and be positive (forward) — got y={:.4}",
+        v_after_40.y,
+    );
+}
+
+/// Wave 10 Phase 10.3 (2026-05-26): grounded player releasing W
+/// should NOT stop instantly — retail decays the velocity over
+/// several frames. With `target_velocity = 0` and the friction
+/// coefficient at 0.5, the smoothed velocity halves every second
+/// (approximately) until it falls under the small-velocity snap
+/// threshold (0.25 m/s) and is zeroed.
+#[test]
+fn advance_local_pose_for_manual_drive_decays_velocity_when_input_released() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0BBB);
+    world.player.guid = player_guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(100.0, 100.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    let mut movement = MovementSystem::new();
+    // No forward/sidestep/turn → target velocity is zero.
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().build(),
+        None,
+    ));
+
+    // Pre-seed the smoothed velocity to (0, +4.5, 0) — the velocity
+    // a player would have at the instant they release W after
+    // running North.
+    world.player.current_planar_velocity = Vector3::new(0.0, 4.5, 0.0);
+
+    let dt = Duration::from_millis(16);
+    movement.advance_local_pose_for_manual_drive(&mut world, dt);
+    let v_after_1 = world.player.current_planar_velocity;
+    // One tick: friction = 0.989, accel toward zero capped at -0.128.
+    // Predicted: `4.5*0.989 - 0.128 ≈ 4.32`.
+    assert!(
+        v_after_1.y < 4.5 && v_after_1.y > 4.0,
+        "after one 16ms tick of decay, velocity should be in (4.0, 4.5) — got y={:.4}",
+        v_after_1.y,
+    );
+
+    // Run enough ticks for the velocity to fall below the snap
+    // threshold (0.25 m/s) and zero out. Worst-case estimate: at
+    // `f = 0.5`, velocity halves per second; with accel-cap pushing
+    // toward zero we get there faster. Expect zero by 5 seconds.
+    for _ in 0..(5 * 60) {
+        movement.advance_local_pose_for_manual_drive(&mut world, dt);
+    }
+    let v_final = world.player.current_planar_velocity;
+    assert_eq!(
+        v_final,
+        Vector3::zero(),
+        "after 5 seconds of zero input, velocity should be snapped to zero \
+         (small-velocity threshold engaged) — got {:?}",
+        v_final,
     );
 }
 

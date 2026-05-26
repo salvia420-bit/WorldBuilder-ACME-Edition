@@ -8024,11 +8024,13 @@ void main() {
                   // sits frozen. Joe Trevis's quote confirms retail's
                   // "combined jumping/falling animation" had arms up —
                   // setAirborne IS the visual. Touchdown clear lands
-                  // via Wave 5's existing Fallen (kind=5) emission
-                  // from the wasm post-tick diff at lib.rs:27337,
-                  // routed through scene3d/loop.js#KIND_MOTION
-                  // dispatch (which calls setAirborne(false) when the
-                  // motion-cmd is Fallen and the guid is local).
+                  // via Wave 10 Phase 10.1's `kind=18
+                  // EntityAirborneChanged{local_guid, 0}` emission
+                  // from the wasm post-tick diff (lib.rs Wave 10.1
+                  // block in the TickMovement arm), routed through
+                  // the index.html `kind=18` recv handler which calls
+                  // `setAirborne(false)` for both local + remote
+                  // guids.
                   em.setAirborne?.(localGuid >>> 0, true);
                 }
               } catch (e) {
@@ -8838,42 +8840,39 @@ void main() {
                 }
               } else if (evt.kind === 18) {
                 // Wave 1.8 — EntityAirborneChanged for REMOTE players.
+                // Wave 10 Phase 10.1 (2026-05-26) — extended to also
+                // accept the local-player touchdown signal.
                 //
                 // Restores the JS recv handler that Wave 1.2 deleted
                 // alongside the local-player overlay. Wasm
-                // `CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED` (lib.rs:23517,
-                // gated by `remote_guid != local_guid && remote_guid != 0`)
-                // fires on velocity-z threshold crossings for remote
-                // entities only.
-                //
-                // Wave 1.7 restored the arms-up airborne overlay for the
-                // local player via spacebar local-prediction + Fallen-
-                // touchdown clear in loop.js. For REMOTE players the wasm
-                // doesn't emit UpdateMotion(Falling/Fallen) — those edges
-                // were Wave 5 local-prediction-only — so the only signal
-                // we get for "remote went airborne" is this kind=18 event.
+                // `CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED` (lib.rs:23517)
+                // fires from TWO sites:
+                //   - REMOTE (Wave 1.8): VectorUpdate velocity-z threshold
+                //     crossings for non-local entities (jump + landing).
+                //   - LOCAL  (Wave 10.1): the post-tick `was_airborne_pre_tick
+                //     && !w.player.is_airborne` branch in the recv loop
+                //     fires `(local_guid, 0)` exclusively on touchdown —
+                //     the wasm never emits airborne=1 for the local
+                //     player (the spacebar handler's `setAirborne(true)`
+                //     local-prediction owns that direction).
                 //
                 // Per Joe Trevis (original AC dev): retail had a combined
                 // jumping/falling animation (arms up), no discrete Jump
                 // motion-table clip. So we fire `setAirborne(guid, true)`
                 // on any remote airborne edge (jump OR walked-off-ledge,
                 // can't distinguish from wire) — both get the retail
-                // arms-up overlay.
+                // arms-up overlay. `setAirborne(guid, false)` on the
+                // falling edge clears that overlay for both remote AND
+                // local players.
                 //
                 // `u32Payload` = entity GUID; `u32Payload2` = 1 (airborne)
-                // or 0 (grounded). Defensive local-guid filter even though
-                // the wasm already excludes the local player at the emit
-                // site.
+                // or 0 (grounded). The local guid is no longer filtered
+                // out — the wasm-side gates already ensure local fires
+                // only on the grounded edge.
                 const airborneGuid = evt.u32Payload >>> 0;
                 const airborne = (evt.u32Payload2 >>> 0) === 1;
-                const localAirborneGuid = (
-                  typeof window.getLocalPlayerGuid === "function"
-                    ? window.getLocalPlayerGuid()
-                    : null
-                );
                 if (
                   airborneGuid !== 0
-                  && airborneGuid !== (localAirborneGuid >>> 0)
                   && window.liveScene3d
                   && window.liveScene3d.entityManager
                   && typeof window.liveScene3d.entityManager.setAirborne === "function"

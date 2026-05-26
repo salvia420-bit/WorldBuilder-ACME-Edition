@@ -344,6 +344,66 @@ pub(super) fn build_motion_state_raw_motion_state(
     raw_motion_state_with_motion_style(world, raw_motion_state, motion_style)
 }
 
+/// Wave 10 Phase 10.3 (movement-animation overhaul, 2026-05-26):
+/// per-second velocity decay coefficient applied to the player's
+/// lateral (X/Y) velocity each tick when grounded.
+///
+/// The PhatSDK reference value (`CPhysicsObj::DEFAULT_FRICTION = 0.95f`
+/// at `external/GDL/PhatSDK/PhysicsObj.cpp:33`) is the *object-level*
+/// friction used in retail's `calc_friction` formula
+/// `v *= pow(1.0 - friction, quantum)` (`PhysicsObj.cpp:558-559`).
+/// Retail's pipeline applies this friction AFTER an explicit
+/// `m_Acceleration * quantum` step that sets the new velocity target
+/// (`PhysicsObj.cpp:594-598`), so the steady-state speed under
+/// continuous run input matches the motion-table's base run velocity.
+///
+/// The wasm-side integrator skips the explicit-acceleration step (we
+/// only consume the input-derived `target_velocity` from
+/// `local_velocity_for_state`), so applying `f = 0.95` directly here
+/// would create a 25-35% steady-state speed deficit vs the wire
+/// (`v_steady = accel*dt/(1-scale)` math diverges with no a-step).
+///
+/// `0.5` is the wasm-side game-feel value the Phase 10.3 spec called
+/// out as a starting point ("50% velocity loss per second on ground
+/// when no input"). At 60 Hz the per-tick scale is
+/// `pow(0.5, 1/60) ≈ 0.989` — gentle enough that the accel-cap can
+/// keep the smoothed velocity within ~3% of the input target at
+/// steady state, but firm enough that a release of W decelerates
+/// visibly over ~0.5 s instead of snapping. **User-tunable** — bump
+/// up for more friction lag, down for crisper response.
+pub(super) const PLAYER_GROUND_FRICTION_PER_SEC: f32 = 0.5;
+
+/// Wave 10 Phase 10.3 (2026-05-26): velocity magnitude below which
+/// the integrator snaps lateral velocity to zero. Mirrors
+/// `small_velocity = 0.25f` in
+/// `external/GDL/PhatSDK/PhysicsObj.cpp:41,589` where the retail
+/// physics step short-circuits `m_velocityVector = Vector(0,0,0)`
+/// when `velocity_mag2 - small_velocity*small_velocity < F_EPSILON`.
+pub(super) const PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC: f32 = 0.25;
+
+/// Wave 10 Phase 10.3 (2026-05-26): maximum lateral acceleration in
+/// m/s^2 used to cap how fast the player's velocity can transition
+/// toward the input-derived target. Retail's
+/// `CPhysicsObj::calc_acceleration`
+/// (`external/GDL/PhatSDK/PhysicsObj.cpp:1105-1120`) computes
+/// acceleration as either `(0,0,gravity)` (airborne with
+/// `GRAVITY_PS`) or `(0,0,0)` (grounded); the lateral-axis
+/// acceleration comes implicitly from `apply_raw_movement` setting
+/// `m_velocityVector` to the input target. There is no explicit
+/// retail constant — retail uses friction-only smoothing — but
+/// adding an accel cap on top makes the wasm-side prediction feel
+/// closer to retail than instant-snap velocity changes. Without
+/// the cap, jumping backwards and immediately holding W (the
+/// scenario the user smell-tested) would flip the velocity vector
+/// instantly on touchdown; with the cap, it ramps through zero.
+///
+/// Value tuned by feel; the user explicitly flagged this as
+/// "documented as a game-feel value to tune later" in the Phase
+/// 10.3 spec. 8 m/s^2 lets a stationary player reach a full
+/// run-speed (~4.5 m/s) in roughly 0.56 s — slow enough to be
+/// visible, fast enough to not feel sluggish.
+pub(super) const PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ: f32 = 8.0;
+
 /// Cap for run-scaled sidestep speed in m/s, per retail
 /// `CMotionInterp::apply_run_to_command` case `SideStepRight`
 /// (`~/ac-headers/acclient.c:343471-343481`) and ACE's

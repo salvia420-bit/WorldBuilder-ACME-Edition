@@ -264,6 +264,21 @@ impl PlayerState {
             data.movement_sequence,
         );
         self.update_last_server_motion_style(data.current_style);
+        // Wave 10 Phase 10.2 (2026-05-26) — track the server-confirmed
+        // substate for the motion_allows_jump gate. Pulled from
+        // `data.data.state.forward_command` when the message carries
+        // a raw/interpreted command (the `MovementType::Invalid`
+        // envelope used for player-issued moves and ACE-broadcast
+        // pose changes like /sit). Skipped on `StopCompletely` /
+        // `MoveToObject` etc. — those don't change the held pose, so
+        // leaving the previous substate is correct.
+        if let holtburger_protocol::messages::movement::MovementTypeData::Invalid(invalid) =
+            &data.data
+        {
+            if let Some(forward) = invalid.state.forward_command {
+                self.update_current_substate_from_low16(forward.raw());
+            }
+        }
         true
     }
 

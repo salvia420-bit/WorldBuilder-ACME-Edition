@@ -5,7 +5,10 @@ pub mod skill_formula;
 pub mod stats_calc;
 pub mod types;
 
-pub use types::{PlayerState, SkillBase, VitalBase};
+pub use types::{
+    MotionCommandCode, PlayerState, SkillBase, VitalBase, expand_motion_command_low16,
+    motion_allows_jump,
+};
 
 #[cfg(test)]
 pub(crate) use crate::stats;
