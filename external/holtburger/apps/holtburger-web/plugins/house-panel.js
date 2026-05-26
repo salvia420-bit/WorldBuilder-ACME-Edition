@@ -299,20 +299,50 @@ function renderStatus() {
       console.warn("[house-panel] playerHouseData threw:", e);
     }
   }
-  if (!dataSnap) {
+  let profileSnap = null;
+  if (handle?.playerHouseProfile) {
+    try {
+      profileSnap = handle.playerHouseProfile();
+    } catch (e) {
+      console.warn("[house-panel] playerHouseProfile threw:", e);
+    }
+  }
+  let restrictionsSnap = null;
+  if (handle?.playerHouseRestrictions) {
+    try {
+      restrictionsSnap = handle.playerHouseRestrictions();
+    } catch (e) {
+      console.warn("[house-panel] playerHouseRestrictions threw:", e);
+    }
+  }
+  const lines = [];
+  if (dataSnap) {
+    lines.push(`Dwelling: ${formatHouseType(dataSnap.houseType)}`);
+    const lb = (dataSnap.landblockId >>> 0).toString(16).padStart(8, "0").toUpperCase();
+    lines.push(`House ID: 0x${lb}`);
+    const rentDueTs = (dataSnap.rentTime >>> 0) + MAINTENANCE_PERIOD_SECONDS;
+    lines.push(`Rent due: ${formatUnixTimestamp(rentDueTs)}`);
+    lines.push(`Maintenance period: 7 days`);
+    if (dataSnap.maintenanceFree) {
+      lines.push(`Maintenance: FREE (admin)`);
+    }
+  }
+  if (profileSnap) {
+    if (profileSnap.ownerName) {
+      lines.push(`Owner: ${profileSnap.ownerName}`);
+    }
+    if (!dataSnap) {
+      lines.push(`Dwelling: ${formatHouseType(profileSnap.houseType)}`);
+    }
+  }
+  if (restrictionsSnap) {
+    lines.push(`Access: ${restrictionsSnap.isOpen ? "Open to public" : "Private"}`);
+    lines.push(`Guests: ${restrictionsSnap.guestCount} (${restrictionsSnap.storageCount} w/ storage)`);
+  }
+  if (lines.length === 0) {
     dataLinesEl.dataset.visible = "0";
     dataLinesEl.replaceChildren();
     return;
-  }
-  const lines = [];
-  lines.push(`Dwelling: ${formatHouseType(dataSnap.houseType)}`);
-  const lb = (dataSnap.landblockId >>> 0).toString(16).padStart(8, "0").toUpperCase();
-  lines.push(`House ID: 0x${lb}`);
-  const rentDueTs = (dataSnap.rentTime >>> 0) + MAINTENANCE_PERIOD_SECONDS;
-  lines.push(`Rent due: ${formatUnixTimestamp(rentDueTs)}`);
-  lines.push(`Maintenance period: 7 days`);
-  if (dataSnap.maintenanceFree) {
-    lines.push(`Maintenance: FREE (admin)`);
   }
   const children = lines.map((text) => {
     const div = document.createElement("div");

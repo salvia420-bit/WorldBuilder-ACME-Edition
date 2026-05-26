@@ -29,6 +29,17 @@ const SCHOOL_NAMES = {
 
 const LEVEL_ROMAN = ["—", "I", "II", "III", "IV", "V", "VI", "VII", "VIII"];
 
+const SCHOOL_GHOST_COLOR = {
+  1: "#b85a3a",
+  2: "#5ab85a",
+  3: "#d8c060",
+  4: "#9a7ad0",
+  5: "#8a3a8a",
+};
+function schoolGhostColor(school) {
+  return SCHOOL_GHOST_COLOR[school] ?? "var(--hb-text-gold)";
+}
+
 // Module-level caches — shared across open/close cycles.
 let spellCatalog = null;
 let spellCatalogPromise = null;
@@ -349,6 +360,23 @@ function ensureStyles() {
       color: var(--hb-text-gold);
       pointer-events: none;
     }
+    .hb-sr-drag-ghost {
+      position: absolute;
+      top: -1000px;
+      left: -1000px;
+      width: 32px;
+      height: 32px;
+      box-sizing: border-box;
+      border: 1px solid var(--hb-text-cream);
+      border-radius: 4px;
+      background-color: rgba(0, 0, 0, 0.7);
+      background-position: center;
+      background-size: contain;
+      background-repeat: no-repeat;
+      filter: drop-shadow(0 0 4px var(--hb-text-gold));
+      image-rendering: pixelated;
+      pointer-events: none;
+    }
   `;
   document.head.appendChild(s);
 }
@@ -485,6 +513,21 @@ function makeRow(id, meta) {
     ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
     ev.dataTransfer.setData("text/plain", meta.name || `Spell ${id}`);
     row.style.opacity = "0.5";
+
+    const ghost = document.createElement("div");
+    ghost.className = "hb-sr-drag-ghost";
+    const cached = meta.icon ? iconCache.get(meta.icon) : undefined;
+    if (typeof cached === "string" && cached) {
+      ghost.style.backgroundImage = `url(${cached})`;
+    } else {
+      ghost.style.backgroundColor = schoolGhostColor(meta.school);
+    }
+    document.body.appendChild(ghost);
+    try {
+      ev.dataTransfer.setDragImage(ghost, 16, 16);
+    } catch (_) {}
+    // setTimeout(0) lets the browser snapshot the ghost before we remove it.
+    setTimeout(() => { try { ghost.remove(); } catch (_) {} }, 0);
   });
   row.addEventListener("dragend", () => {
     row.style.opacity = "";

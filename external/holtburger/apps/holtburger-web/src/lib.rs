@@ -144,6 +144,8 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::UpdateTitle(_) => 0x002B,
         GameEvent::HouseStatus(_) => 0x0226,
         GameEvent::HouseData(_) => 0x0225,
+        GameEvent::HouseProfile(_) => 0x021D,
+        GameEvent::HouseUpdateRestrictions(_) => 0x0248,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -14899,6 +14901,105 @@ impl HouseDataJs {
     pub fn pos_z(&self) -> f32 { self.pos_z }
 }
 
+/// Wave M3 (2026-05-26): owner-side house profile data — the deeper
+/// dwelling description ACE pushes via `GameEvent::HouseProfile`
+/// (opcode 0x021D) from the house-crystal interaction. Per
+/// `GameEventHouseProfile.cs` + `HouseProfile.Write()`: `u32 crystal_guid`
+/// then the profile: u32 DwellingID, u32 OwnerID, u32 Bitmask, i32×4
+/// level/rank requirements, u32 MaintenanceFree, u32 HouseType,
+/// string16L OwnerName, List<HousePayment> Buy, List<HousePayment> Rent.
+/// We surface the scalar header fields + OwnerName for the panel; the
+/// payment lists are unused in this snapshot.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct HouseProfile {
+    crystal_guid: u32,
+    dwelling_id: u32,
+    owner_id: u32,
+    bitmask: u32,
+    house_type: u32,
+    maintenance_free: u32,
+    owner_name: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct HouseProfileJs {
+    crystal_guid: u32,
+    dwelling_id: u32,
+    owner_id: u32,
+    bitmask: u32,
+    house_type: u32,
+    maintenance_free: u32,
+    owner_name: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl HouseProfileJs {
+    #[wasm_bindgen(getter, js_name = crystalGuid)]
+    pub fn crystal_guid(&self) -> u32 { self.crystal_guid }
+    #[wasm_bindgen(getter, js_name = dwellingId)]
+    pub fn dwelling_id(&self) -> u32 { self.dwelling_id }
+    #[wasm_bindgen(getter, js_name = ownerId)]
+    pub fn owner_id(&self) -> u32 { self.owner_id }
+    #[wasm_bindgen(getter)]
+    pub fn bitmask(&self) -> u32 { self.bitmask }
+    #[wasm_bindgen(getter, js_name = houseType)]
+    pub fn house_type(&self) -> u32 { self.house_type }
+    #[wasm_bindgen(getter, js_name = maintenanceFree)]
+    pub fn maintenance_free(&self) -> bool { self.maintenance_free != 0 }
+    #[wasm_bindgen(getter, js_name = ownerName)]
+    pub fn owner_name(&self) -> String { self.owner_name.clone() }
+}
+
+/// Wave M3 (2026-05-26): house guest-list + open-status snapshot. ACE
+/// pushes `GameEvent::HouseUpdateRestrictions` (opcode 0x0248) from
+/// `GameEventHouseUpdateRestrictions.cs` with a `RestrictionDB` payload:
+/// u32 Version, u32 OpenStatus (0/1), u32 MonarchID, PackableHashTable
+/// of (u32 guest_guid → u32 storage_flag). We retain the open flag,
+/// monarch GUID, and guest count for the panel surface.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct HouseRestrictions {
+    object_guid: u32,
+    version: u32,
+    open_status: u32,
+    monarch_id: u32,
+    guest_count: u32,
+    storage_count: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct HouseRestrictionsJs {
+    object_guid: u32,
+    version: u32,
+    open_status: u32,
+    monarch_id: u32,
+    guest_count: u32,
+    storage_count: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl HouseRestrictionsJs {
+    #[wasm_bindgen(getter, js_name = objectGuid)]
+    pub fn object_guid(&self) -> u32 { self.object_guid }
+    #[wasm_bindgen(getter)]
+    pub fn version(&self) -> u32 { self.version }
+    #[wasm_bindgen(getter, js_name = isOpen)]
+    pub fn is_open(&self) -> bool { self.open_status != 0 }
+    #[wasm_bindgen(getter, js_name = monarchId)]
+    pub fn monarch_id(&self) -> u32 { self.monarch_id }
+    #[wasm_bindgen(getter, js_name = guestCount)]
+    pub fn guest_count(&self) -> u32 { self.guest_count }
+    #[wasm_bindgen(getter, js_name = storageCount)]
+    pub fn storage_count(&self) -> u32 { self.storage_count }
+}
+
 /// AC Trade (2026-05-25, Discord deficiency #3): JS-facing snapshot of
 /// the local player's active peer-to-peer trade. Sourced from
 /// `world.trade` (the world dispatcher's `handlers::trade::handle_event`
@@ -15476,6 +15577,18 @@ pub struct SessionHandle {
     /// JS reads via [`SessionHandle::player_house_data`] — sync getter,
     /// no bus event (panel polls on `playerStatsUpdated`).
     latest_house_data: std::rc::Rc<std::cell::RefCell<Option<HouseData>>>,
+    /// Wave M3 (2026-05-26): house-profile snapshot from
+    /// `GameEvent::HouseProfile` (opcode 0x021D) — owner name + dwelling
+    /// header fields surfaced by the crystal-interaction profile dump.
+    /// `None` pre-event. Read via [`SessionHandle::player_house_profile`].
+    latest_house_profile:
+        std::rc::Rc<std::cell::RefCell<Option<HouseProfile>>>,
+    /// Wave M3 (2026-05-26): house guest list + open status from
+    /// `GameEvent::HouseUpdateRestrictions` (opcode 0x0248). `None`
+    /// pre-event. Read via
+    /// [`SessionHandle::player_house_restrictions`].
+    latest_house_restrictions:
+        std::rc::Rc<std::cell::RefCell<Option<HouseRestrictions>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -18229,6 +18342,41 @@ impl SessionHandle {
         })
     }
 
+    /// Wave M3 (2026-05-26): house-profile snapshot — `None` until ACE
+    /// pushes `GameEvent::HouseProfile` (opcode 0x021D). Sync getter;
+    /// the panel polls on `playerStatsUpdated` and its own 1Hz timer.
+    #[wasm_bindgen(js_name = playerHouseProfile)]
+    pub fn player_house_profile(&self) -> Option<HouseProfileJs> {
+        self.latest_house_profile.borrow().as_ref().map(|s| HouseProfileJs {
+            crystal_guid: s.crystal_guid,
+            dwelling_id: s.dwelling_id,
+            owner_id: s.owner_id,
+            bitmask: s.bitmask,
+            house_type: s.house_type,
+            maintenance_free: s.maintenance_free,
+            owner_name: s.owner_name.clone(),
+        })
+    }
+
+    /// Wave M3 (2026-05-26): house guest-list snapshot — `None` until
+    /// ACE pushes `GameEvent::HouseUpdateRestrictions` (opcode 0x0248).
+    /// Carries the open flag, monarch GUID, and guest/storage counts.
+    /// Sync getter; the panel polls on `playerStatsUpdated`.
+    #[wasm_bindgen(js_name = playerHouseRestrictions)]
+    pub fn player_house_restrictions(&self) -> Option<HouseRestrictionsJs> {
+        self.latest_house_restrictions
+            .borrow()
+            .as_ref()
+            .map(|s| HouseRestrictionsJs {
+                object_guid: s.object_guid,
+                version: s.version,
+                open_status: s.open_status,
+                monarch_id: s.monarch_id,
+                guest_count: s.guest_count,
+                storage_count: s.storage_count,
+            })
+    }
+
     /// Wave-H3 (2026-05-26): character title catalog snapshot — `None`
     /// pre-CharacterTitle. Refreshed by the recv-loop on every
     /// `GameEvent::CharacterTitle` (opcode 0x0029, replace) or
@@ -18802,6 +18950,16 @@ pub async fn start_session(
     let latest_house_data: std::rc::Rc<
         std::cell::RefCell<Option<HouseData>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave M3 (2026-05-26): house-profile snapshot, refreshed by the
+    // recv-loop on every `GameEvent::HouseProfile` (opcode 0x021D).
+    let latest_house_profile: std::rc::Rc<
+        std::cell::RefCell<Option<HouseProfile>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave M3 (2026-05-26): house guest-list snapshot, refreshed on
+    // every `GameEvent::HouseUpdateRestrictions` (opcode 0x0248).
+    let latest_house_restrictions: std::rc::Rc<
+        std::cell::RefCell<Option<HouseRestrictions>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -18868,6 +19026,8 @@ pub async fn start_session(
         let latest_title_inner = latest_title.clone();
         let latest_house_status_inner = latest_house_status.clone();
         let latest_house_data_inner = latest_house_data.clone();
+        let latest_house_profile_inner = latest_house_profile.clone();
+        let latest_house_restrictions_inner = latest_house_restrictions.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -18901,6 +19061,8 @@ pub async fn start_session(
                 latest_title_inner,
                 latest_house_status_inner,
                 latest_house_data_inner,
+                latest_house_profile_inner,
+                latest_house_restrictions_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -18990,6 +19152,8 @@ pub async fn start_session(
         latest_title,
         latest_house_status,
         latest_house_data,
+        latest_house_profile,
+        latest_house_restrictions,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -20109,6 +20273,9 @@ async fn recv_loop(
     latest_title: std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
     latest_house_status: std::rc::Rc<std::cell::RefCell<Option<HouseStatus>>>,
     latest_house_data: std::rc::Rc<std::cell::RefCell<Option<HouseData>>>,
+    latest_house_profile: std::rc::Rc<std::cell::RefCell<Option<HouseProfile>>>,
+    latest_house_restrictions:
+        std::rc::Rc<std::cell::RefCell<Option<HouseRestrictions>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -23222,6 +23389,50 @@ async fn recv_loop(
                                             pos_x: data.position.coords.x,
                                             pos_y: data.position.coords.y,
                                             pos_z: data.position.coords.z,
+                                        });
+                                }
+                                holtburger_protocol::messages::GameEvent::HouseProfile(
+                                    data,
+                                ) => {
+                                    // Wave M3 (2026-05-26): ACE wire is
+                                    // `u32 crystal_guid` + `HouseProfile.Write()`
+                                    // (dwelling header + owner-name string +
+                                    // buy/rent payment lists). We retain the
+                                    // header scalars + OwnerName.
+                                    *latest_house_profile.borrow_mut() =
+                                        Some(HouseProfile {
+                                            crystal_guid: u32::from(data.crystal_guid),
+                                            dwelling_id: data.dwelling_id,
+                                            owner_id: u32::from(data.owner_id),
+                                            bitmask: data.bitmask,
+                                            house_type: data.house_type,
+                                            maintenance_free: data.maintenance_free,
+                                            owner_name: data.owner_name.clone(),
+                                        });
+                                }
+                                holtburger_protocol::messages::GameEvent::HouseUpdateRestrictions(
+                                    data,
+                                ) => {
+                                    // Wave M3 (2026-05-26): ACE wire per
+                                    // `RestrictionDB.Write()`: u32 Version,
+                                    // u32 OpenStatus, u32 MonarchID,
+                                    // PackableHashTable<guid, storage_flag>.
+                                    // Surface count + storage-count for the
+                                    // panel; the full guest map is not in
+                                    // this snapshot.
+                                    let storage_count = data
+                                        .guests
+                                        .values()
+                                        .filter(|v| **v != 0)
+                                        .count() as u32;
+                                    *latest_house_restrictions.borrow_mut() =
+                                        Some(HouseRestrictions {
+                                            object_guid: u32::from(data.object_guid),
+                                            version: data.version,
+                                            open_status: data.open_status,
+                                            monarch_id: u32::from(data.monarch_id),
+                                            guest_count: data.guests.len() as u32,
+                                            storage_count,
                                         });
                                 }
                                 _ => {

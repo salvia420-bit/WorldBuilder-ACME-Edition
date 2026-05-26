@@ -776,8 +776,13 @@ pub enum GameEventOpcode {
     // MiscPortalstormSubsided = 0x02CC,
 
     // --- Housing ---
-    // /// S2C: Returns detailed profile and description of a house.
-    // HouseProfile = 0x021D,
+    /// S2C: Returns detailed profile and description of a house. Per ACE
+    /// `GameEventHouseProfile.cs` the wire is `u32 crystal_guid` followed
+    /// by `HouseProfile.Write()`: u32 DwellingID, u32 OwnerID, u32
+    /// Bitmask, i32 MinLevel, i32 MaxLevel, i32 MinAllegRank, i32
+    /// MaxAllegRank, u32 MaintenanceFree (0/1), u32 HouseType, string16L
+    /// OwnerName, List<HousePayment> Buy, List<HousePayment> Rent.
+    HouseProfile = 0x021D,
     /// S2C: Owner-side house panel metadata — buy/rent timestamps,
     /// dwelling type, maintenance-free flag, buy/rent payment lists,
     /// and the dwelling's world position. Per ACE
@@ -798,8 +803,12 @@ pub enum GameEventOpcode {
     // UpdateRentTime = 0x0227,
     // /// S2C: Confirms a rent payment was processed.
     // UpdateRentPayment = 0x0228,
-    // /// S2C: Updates the guest and banning restrictions for a house.
-    // HouseUpdateRestrictions = 0x0248,
+    /// S2C: Updates the guest and banning restrictions for a house. Per
+    /// ACE `GameEventHouseUpdateRestrictions.cs` the wire is `u32
+    /// sequence` + `u32 object_guid` + `RestrictionDB.Write()`: u32
+    /// Version, u32 OpenStatus (0/1), u32 MonarchID, PackableHashTable
+    /// (u16 count, u16 buckets) of (u32 guest_guid, u32 storage_flag).
+    HouseUpdateRestrictions = 0x0248,
     // /// S2C: Updates House Accessibility Rules (HAR) such as guest lists.
     // UpdateHar = 0x0257,
     // /// S2C: Response containing extended data for a house.

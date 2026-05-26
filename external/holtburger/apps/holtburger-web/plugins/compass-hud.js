@@ -216,6 +216,9 @@ function ensureStyles() {
       text-shadow: 0 0 2px rgba(0,0,0,0.9), 0 1px 0 #000;
     }
     #${TOOLTIP_ID}[hidden] { display: none; }
+    #${TOOLTIP_ID} .hb-radar-tooltip-tag-hostile { color: #ff5050; font-weight: 600; }
+    #${TOOLTIP_ID} .hb-radar-tooltip-tag-friendly { color: #ffffff; }
+    #${TOOLTIP_ID} .hb-radar-tooltip-tag-neutral { color: #f0c87c; }
   `;
   document.head.appendChild(style);
 }
@@ -351,7 +354,7 @@ function updateRadarDots(playerPos, yawRad) {
     d.style.background = DOT_COLORS[c.kind] || "#ffffff";
     d.style.opacity = String(alpha);
     d.style.boxShadow = `0 0 2px ${DOT_COLORS[c.kind] || "#ffffff"}`;
-    _dotEntityRefs[i] = { guid: c.guid, inst: c.inst, relBearing: c.relBearing, dist: c.dist };
+    _dotEntityRefs[i] = { guid: c.guid, inst: c.inst, relBearing: c.relBearing, dist: c.dist, kind: c.kind };
   }
   for (let i = n; i < _radarDotPool.length; i++) {
     _radarDotPool[i].style.display = "none";
@@ -454,6 +457,21 @@ function entityDisplayName(ref) {
   return `0x${(ref?.guid >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+function entityDisposition(ref) {
+  const kind = ref?.kind;
+  if (kind === "player") return "friendly";
+  if (kind === "npc" || kind === "vendor") return "neutral";
+  if (kind === "creature") return "hostile";
+  try {
+    const wo = window.__wom?.get?.((ref?.guid >>> 0));
+    const cls = wo?.canonicalObjectClass || wo?.className;
+    if (cls === "Player") return "friendly";
+    if (cls === "Npc" || cls === "Vendor") return "neutral";
+    if (cls === "Creature" || cls === "Monster") return "hostile";
+  } catch (_) {}
+  return "neutral";
+}
+
 function positionAndFillTooltip(idx) {
   const ref = _dotEntityRefs[idx];
   const dot = _radarDotPool[idx];
@@ -466,7 +484,12 @@ function positionAndFillTooltip(idx) {
   const distM = ref.dist.toFixed(1);
   const bearingDeg = Math.round((ref.relBearing * 180) / Math.PI);
   const bearingStr = bearingDeg > 0 ? `+${bearingDeg}` : `${bearingDeg}`;
-  t.textContent = `${name} • ${distM}m • ${bearingStr}°`;
+  const disposition = entityDisposition(ref);
+  t.textContent = `${name} • ${distM}m • ${bearingStr}° • `;
+  const tagEl = document.createElement("span");
+  tagEl.className = `hb-radar-tooltip-tag-${disposition}`;
+  tagEl.textContent = disposition.toUpperCase();
+  t.appendChild(tagEl);
   // Anchor to dot center, just above the radar strip.
   const radarRect = _radarEl.getBoundingClientRect();
   const dotLeftPx = parseFloat(dot.style.left) || 0;
