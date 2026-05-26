@@ -7635,13 +7635,38 @@ void main() {
                   return { dispatched: true, echo: null,
                            error: `/${cmd}: ${e?.message || e}` };
                 }
+                // 1.5. Wave 9.5 (2026-05-26): broadcast the motion
+                //      itself so remote players see the bow / wave /
+                //      etc., not just the chat text. Companion to
+                //      sendSoulEmote — queues a transient MoveToState
+                //      pulse via the cli's MovementSystem. ACE's
+                //      RawMotionState.cs ApplyMotion accepts the
+                //      embedded MotionCommand via its Action mask
+                //      branch and Player_Networking.cs
+                //      BroadcastMovement rebroadcasts as
+                //      GameMessageUpdateMotion to PVS-visible peers.
+                //      Skip when motionFull is 0 (catalog has a
+                //      ChatPoseTable entry but no MotionCommand
+                //      mapping — rare; fall through to chat-only).
+                if (motionFull !== 0
+                    && typeof handle.broadcastEmoteMotion === "function") {
+                  try {
+                    handle.broadcastEmoteMotion(motionFull);
+                  } catch (_) {
+                    // Best-effort — the chat text already fired so
+                    // observers will see the line even if the
+                    // motion broadcast is rejected (e.g. pre-
+                    // EnteredWorld which the recv arm drops with a
+                    // console_log_str).
+                  }
+                }
                 // 2. Local prediction: play the motion immediately
                 //    on the local player so the user sees their
                 //    emote without waiting for a UpdateMotion echo
-                //    (which ACE's GameActionSoulEmote does NOT emit
-                //    today — motion broadcast comes via a separate
-                //    MoveToState path; until that's wired the local
-                //    prediction is the only client-visible motion).
+                //    (the LOCAL player's own MoveToState round-trip
+                //    is async; predicting here matches retail's
+                //    `cmdinterp` immediate local play at
+                //    `~/ac-headers/acclient.c:425567`).
                 if (motionFull !== 0) {
                   try {
                     const em = window.liveScene3d?.entityManager;

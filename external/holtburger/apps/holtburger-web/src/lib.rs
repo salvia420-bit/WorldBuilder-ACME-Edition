@@ -12760,6 +12760,37 @@ enum SessionCommand {
     /// (server handler); `~/ace-server/Source/ACE.Server/Entity/
     /// SoulEmote.cs:8-84` (full pose → MotionCommand mapping).
     SendSoulEmote { message: String },
+    /// Wave 9.5 (movement-animation overhaul, 2026-05-26) —
+    /// remote-visibility companion to `SendSoulEmote`. Queues a
+    /// transient `MoveToState` motion pulse via the cli's
+    /// `MovementSystemHandle::enqueue_transient_motion` so the
+    /// pose's MotionCommand rides on the next `TickMovement` arm's
+    /// outbound packet in `RawMotionState.commands[]`. ACE accepts
+    /// the embedded command via `RawMotionState.cs::ApplyMotion`
+    /// (the `(motion & CommandMask.Action) != 0` branch at
+    /// `RawMotionState.cs:92-95`) and rebroadcasts to PVS-visible
+    /// players via `Player_Networking.cs::BroadcastMovement`'s
+    /// `EnqueueBroadcast(GameMessageUpdateMotion)` at
+    /// `Player_Networking.cs:364-365`. This is the missing 3rd-
+    /// person observer path Wave 9 documented as a 9.5 follow-on.
+    ///
+    /// Payload is the FULL 32-bit MotionCommand (`motion_full` from
+    /// `SoulEmoteResolution::motion_full`). The recv arm extracts
+    /// the low 16 bits to feed `InterpretedMotionCommand`; the cli
+    /// re-applies the class high-bits when packing the wire
+    /// `MotionItem` per retail's `RawMotionState::Pack` (acclient.c
+    /// pack offset `0x0051F820`). MotionStyle is `PreserveServer`
+    /// so the player's current stance rides on the broadcast — no
+    /// stance edge, only the action layer.
+    ///
+    /// Side-effect-free vs. active locomotion: `execute_transient_
+    /// motion_at` packs only the emote into `Commands[]` and clears
+    /// no forward/sidestep/turn fields. The held WASD `MotionState`
+    /// continues to drive `send_motion_state_pulse` on its own
+    /// edges. Equivalent to retail's cmdinterp pushing a one-shot
+    /// action through the same `Movement_MoveToState` channel that
+    /// WASD locomotion uses.
+    BroadcastEmoteMotion { motion_full: u32 },
     /// Phase 4 step 5 (interactive entities): the JS side clicked an
     /// entity sprite. Recv loop wraps in `GameAction::Use(Box<UseActionData>)`
     /// and dispatches via `session.send_action`. ACE handles the
@@ -18426,6 +18457,49 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::SendSoulEmote { message })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("send_soul_emote: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Wave 9.5 (2026-05-26). Broadcast an emote MotionCommand to
+    /// PVS-visible players by queuing a transient `MoveToState`
+    /// pulse via the cli's `MovementSystemHandle::enqueue_transient_
+    /// motion`. JS calls this AFTER `sendSoulEmote(text)` so the
+    /// chat line + animation both reach nearby clients (the chat
+    /// text via 0x01E2 GameMessageSoulEmote rebroadcast and the
+    /// motion via 0xF61C UpdateMotion rebroadcast that ACE's
+    /// `BroadcastMovement` emits at `Player_Networking.cs:364`).
+    ///
+    /// `motion_full` is the canonical 32-bit MotionCommand from
+    /// `SoulEmoteResolution::motion_full` — e.g. `0x430000EC` for
+    /// `BowDeepState`, `0x13000087` for `Wave`. The recv arm
+    /// converts to `InterpretedMotionCommand` (low 16 bits) before
+    /// handing off to the cli; the class high-bits are re-applied
+    /// by the wire packer per acclient.c's `RawMotionState::Pack`.
+    /// MotionStyle = PreserveServer so the player's current stance
+    /// is preserved on the broadcast — no stance toggle.
+    ///
+    /// Returns `Err` only if `motion_full == 0` (the JS resolver
+    /// returns this when the pose has no entry in
+    /// `motion_command_for_soul_emote_pose`; defensive — JS
+    /// already gates on this before calling but mirror retail's
+    /// `cmdinterp` no-op behaviour). The actual MoveToState packet
+    /// fires from the next `TickMovement` arm in the recv loop, so
+    /// pre-EnteredWorld / pre-entity-seeded calls are no-ops
+    /// (matches the SetMovementInput pattern at lib.rs:27251-27262).
+    #[wasm_bindgen(js_name = broadcastEmoteMotion)]
+    pub fn broadcast_emote_motion(&self, motion_full: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if motion_full == 0 {
+            return Err(JsValue::from_str(
+                "broadcast_emote_motion: motion_full is 0 (no mapping)",
+            ));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BroadcastEmoteMotion { motion_full })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "broadcast_emote_motion: cmd channel closed ({e})"
+                ))
             })
     }
 
@@ -25308,6 +25382,64 @@ async fn recv_loop(
                             });
                             return;
                         }
+                    }
+                    Some(SessionCommand::BroadcastEmoteMotion { motion_full }) => {
+                        // Wave 9.5 (2026-05-26). Queue a transient
+                        // MoveToState pulse so PVS-visible players
+                        // see the emote animation, not just the
+                        // chat text. The cli's MovementSystem
+                        // serializes this on the next TickMovement
+                        // arm via `send_transient_motion_pulse` →
+                        // `RawMotionState.commands = [MotionItem]`
+                        // → ACE `ApplyMotion` Action branch →
+                        // `BroadcastMovement` to all observers.
+                        //
+                        // Mirrors the canonical cli path at
+                        // `crates/holtburger-core/src/client/
+                        // commands.rs:376-385` (soul-emote slash
+                        // command in the CLI client).
+                        //
+                        // Pre-EnteredWorld / pre-entity-seeded calls
+                        // drop silently — same defense as
+                        // SetMovementInput (lib.rs:~27250). The JS
+                        // side gates `routeSlashCommand` on
+                        // `enteredWorld` already so this is just
+                        // belt-and-suspenders.
+                        let Some(w) = world.as_ref() else {
+                            console_log_str(
+                                "[wave9.5] BroadcastEmoteMotion before WorldState ready — dropping",
+                            );
+                            continue;
+                        };
+                        if !entity_seeded {
+                            console_log_str(
+                                "[wave9.5] BroadcastEmoteMotion before player entity seeded — dropping",
+                            );
+                            continue;
+                        }
+                        // Extract low-16 substate for InterpretedMotionCommand.
+                        // The wire `MotionItem` carries the substate u16; the
+                        // class high-bits (0x13 for one-shots, 0x43 for held
+                        // States) are reapplied during packing per retail's
+                        // `RawMotionState::Pack` (acclient.c offset 0x0051F820)
+                        // and the cli's `MotionItem::pack` at
+                        // `crates/holtburger-protocol/src/messages/movement/
+                        // types.rs:431-441`.
+                        let cmd_u16 = (motion_full & 0xFFFF) as u16;
+                        let interpreted = holtburger_protocol::messages::movement::
+                            InterpretedMotionCommand::from(cmd_u16);
+                        // PreserveServer keeps the player's last server-
+                        // echoed stance (last_server_motion_style). The
+                        // emote shouldn't toggle stance — bow while in
+                        // sword combat stays in sword stance.
+                        let motion_style =
+                            holtburger_core::client::movement_types::MotionStyle::PreserveServer;
+                        movement.enqueue_transient_motion(interpreted, motion_style);
+                        let _ = w;
+                        console_log_str(&format!(
+                            "[wave9.5] queued transient emote motion full=0x{motion_full:08X} \
+                             low=0x{cmd_u16:04X} style=PreserveServer",
+                        ));
                     }
                     Some(SessionCommand::SendTell { target, message }) => {
                         use holtburger_protocol::messages::chat::actions::TellActionData;

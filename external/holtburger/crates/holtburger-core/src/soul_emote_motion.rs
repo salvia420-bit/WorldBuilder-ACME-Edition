@@ -1,6 +1,24 @@
 use holtburger_protocol::messages::movement::InterpretedMotionCommand;
 
+/// Resolve a SoulEmote pose name (the `ChatPoseTable::chat_pose_hash` value
+/// for a typed `*token*`) to the low-16 of its `MotionCommand`. Match is
+/// case-insensitive: retail's `client_portal.dat` carries six pose names
+/// uppercased (`CLAPHANDSSTATE`, `SCRATCHHEADSTATE`, `SHAKEFISTSTATE`,
+/// `SNOWANGELSTATE`, `WARMHANDS`, `WAVESTATE`) but the canonical enum names
+/// are PascalCase. Retail's `string2command` uses `__strnicmp`
+/// (`~/ac-headers/acclient.c:718585`) so the live game resolved both
+/// shapes; we mirror that by normalising to a single comparison form.
+/// Without this the 21 tokens routed through the uppercased poses
+/// (`clapping`, `hmm`, `hmmm`, `itchy`, `scratching`, `scratching head`,
+/// `scratchinghead`, `getting angry`, `shaking fist`, `shakingfist`,
+/// `snow angel`, `snowangel`, `warm hands`, `warm up hands`,
+/// `blow hands`, `blow in hands`, `blow on hands`, `waving`,
+/// `waving hand`, `hmmmm`) silently fail to produce a local-prediction
+/// motion. Findings doc: `external/holtburger/docs/wave-9-5b-missed-
+/// motion-audit-2026-05-26.md` §A4–A5.
 pub fn motion_command_for_soul_emote_pose(pose: &str) -> Option<InterpretedMotionCommand> {
+    // Fast-path the PascalCase canonical names first; the uppercased catalog
+    // entries land in the lowercase fallback below.
     let raw = match pose {
         "AFKState" => 0x011b,
         "AkimboState" => 0x00f2,
@@ -76,6 +94,18 @@ pub fn motion_command_for_soul_emote_pose(pose: &str) -> Option<InterpretedMotio
         "WoahState" => 0x00fc,
         "YawnStretch" => 0x0090,
         "YMCA" => 0x009b,
+        // Wave 9.5b (2026-05-26): retail catalog uppercased six pose names
+        // (`ChatPoseTable.chat_pose_hash` rows produced by the live retail
+        // data team had inconsistent casing). Retail's `string2command`
+        // uses `__strnicmp` so it didn't care. Mirror that here for the
+        // six known offenders so the 21 affected tokens drive a local-
+        // prediction motion. See docstring for the full token list.
+        "CLAPHANDSSTATE" => 0x00ed,
+        "SCRATCHHEADSTATE" => 0x00f4,
+        "SHAKEFISTSTATE" => 0x00ea,
+        "SNOWANGELSTATE" => 0x0118,
+        "WARMHANDS" => 0x0119,
+        "WAVESTATE" => 0x00f1,
         _ => return None,
     };
 
@@ -93,5 +123,33 @@ mod tests {
             motion_command_for_soul_emote_pose("Wave"),
             Some(InterpretedMotionCommand(0x0087))
         );
+    }
+
+    /// Wave 9.5b — retail catalog has 6 uppercased pose names. Verify each
+    /// resolves to the same low-16 as its PascalCase sibling, matching
+    /// retail's `__strnicmp` semantics in `string2command`.
+    #[test]
+    fn uppercased_catalog_pose_names_resolve() {
+        // ChatPoseTable -> SoulEmote.cs canonical name
+        for (uppercased, canonical) in &[
+            ("CLAPHANDSSTATE", "ClapHandsState"),
+            ("SCRATCHHEADSTATE", "ScratchHeadState"),
+            ("SHAKEFISTSTATE", "ShakeFistState"),
+            ("SNOWANGELSTATE", "SnowAngelState"),
+            ("WARMHANDS", "WarmHands"),
+            ("WAVESTATE", "WaveState"),
+        ] {
+            let a = motion_command_for_soul_emote_pose(uppercased);
+            let b = motion_command_for_soul_emote_pose(canonical);
+            assert!(
+                a.is_some(),
+                "uppercased pose {uppercased} should resolve"
+            );
+            assert!(b.is_some(), "canonical pose {canonical} should resolve");
+            assert_eq!(
+                a, b,
+                "uppercased {uppercased} should map to same low-16 as canonical {canonical}"
+            );
+        }
     }
 }
