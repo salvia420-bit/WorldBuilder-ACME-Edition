@@ -11,6 +11,8 @@ pub use crate::messages::misc::events::*;
 pub use crate::messages::network::events::*;
 pub use crate::messages::object::events::*;
 pub use crate::messages::player::events::*;
+pub use crate::messages::squelch::events::*;
+pub use crate::messages::title::events::*;
 pub use crate::messages::trade::events::*;
 
 use crate::opcodes::GameEventOpcode;
@@ -91,6 +93,9 @@ pub enum GameEvent {
     FellowshipFellowStatsDone,
     AllegianceUpdate(Box<AllegianceUpdateEventData>),
     FriendsListUpdate(Box<FriendsListUpdateEventData>),
+    SetSquelchDb(Box<SetSquelchDbEventData>),
+    CharacterTitle(Box<CharacterTitleEventData>),
+    UpdateTitle(Box<UpdateTitleEventData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -323,6 +328,15 @@ impl ProtocolUnpack for GameEventMessage {
                 )),
                 GameEventOpcode::FriendsListUpdate => GameEvent::FriendsListUpdate(Box::new(
                     FriendsListUpdateEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::SetSquelchDb => GameEvent::SetSquelchDb(Box::new(
+                    SetSquelchDbEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::CharacterTitle => GameEvent::CharacterTitle(Box::new(
+                    CharacterTitleEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::UpdateTitle => GameEvent::UpdateTitle(Box::new(
+                    UpdateTitleEventData::unpack(data, offset)?,
                 )),
             },
             None => {
@@ -669,6 +683,21 @@ impl ProtocolPack for GameEventMessage {
             }
             GameEvent::FriendsListUpdate(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::FriendsListUpdate as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::SetSquelchDb(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::SetSquelchDb as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::CharacterTitle(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::CharacterTitle as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::UpdateTitle(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::UpdateTitle as u32)
                     .unwrap();
                 data.pack(buf);
             }

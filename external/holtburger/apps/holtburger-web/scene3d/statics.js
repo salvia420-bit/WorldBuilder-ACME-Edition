@@ -790,6 +790,9 @@ function makeEmptySummary() {
     // `objectCount` (sceneryObjectCount + landblockInfoObjectCount).
     sceneryObjectCount: 0,
     landblockInfoObjectCount: 0,
+    // LRU wave H4 — per-LB disposables; empty for early-return / failure
+    // paths so the LRU `track()` call gets a uniform shape.
+    disposables: { geometries: [], materials: [], textures: [] },
   };
 }
 
@@ -983,6 +986,19 @@ export async function bakeStaticsForLandblock(
     else landblockInfoObjectCount += 1;
   }
 
+  // LRU wave H4 — per-LB owned BufferGeometries. The per-LB baker doesn't
+  // share a cross-LB `bakeCache` (unlike buildings.js), so every entry in
+  // `geomByModel` / `degradedGeomByModel` is owned by THIS bake call even
+  // when a later LB happens to bake the same modelId. Materials are
+  // cache-shared via `materialCache.getCached` → empty here.
+  const lbDisposableGeometries = [];
+  for (const geom of primary.geomByModel.values()) {
+    if (geom) lbDisposableGeometries.push(geom);
+  }
+  for (const geom of degradedGeomByModel.values()) {
+    if (geom) lbDisposableGeometries.push(geom);
+  }
+
   // Draw-call savings for the per-LB path: every placement becomes
   // its own draw call (plain Mesh, no instancing). So the count is
   // identical to `objectCount`; the "savings" relative to per-Mesh
@@ -1000,6 +1016,11 @@ export async function bakeStaticsForLandblock(
     drawCallReductionEstimate: 0,
     sceneryObjectCount,
     landblockInfoObjectCount,
+    disposables: {
+      geometries: lbDisposableGeometries,
+      materials: [],
+      textures: [],
+    },
   };
 }
 

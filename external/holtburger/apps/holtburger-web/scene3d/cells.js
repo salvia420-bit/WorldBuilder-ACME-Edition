@@ -146,6 +146,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       skippedZeroTri: 0,
       skippedNoMesh: 0,
       idempotent: true,
+      disposables: { geometries: [], materials: [], textures: [] },
     };
   }
   scene3d.envCellLoadedLbs.add(lbKey);
@@ -159,6 +160,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       staticObjectCount: 0,
       skippedZeroTri: 0,
       skippedNoMesh: 0,
+      disposables: { geometries: [], materials: [], textures: [] },
     };
   }
 
@@ -228,6 +230,14 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
 
     if (typeof pl.free === "function") pl.free();
   }
+
+  // LRU wave H4 — per-LB owned BufferGeometries get accumulated through
+  // Step C (cell-static fused geoms) + Step D (cell surface meshes + any
+  // fused opaque/transparent meshes) so `loadEnvCellsForLandblock` can hand
+  // them to `landblockLru.track()` for eviction-time dispose(). Materials
+  // and textures stay empty: every material (cell surfaces + cell-static
+  // surfaces) is `materialCache.getCached`-shared cross-LB.
+  const lbDisposableGeometries = [];
 
   // ---- Step B: preload all referenced cell-mesh surface DIDs --------
   if (allCellSurfaceDids.size > 0) {
@@ -303,13 +313,17 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           );
         }
       }
-      for (const [id] of staticGeomByDid) {
+      for (const [id, geom] of staticGeomByDid) {
         const dom = dominantByDid.get(id);
         if (typeof dom === "number" && dom !== 0) {
           staticMatByDid.set(id, scene3d.materialCache.getCached(dom));
         } else {
           staticMatByDid.set(id, scene3d.materialCache.fallbackMaterial);
         }
+        // Per-LB owned: staticGeomByDid is fresh for each bake call (no
+        // cross-LB cache), so each cell-static fused geometry is owned by
+        // this LB even when multiple cells share the same DID within it.
+        lbDisposableGeometries.push(geom);
       }
     }
   }
@@ -456,6 +470,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         fused.setAttribute("uv", new THREE.BufferAttribute(mergedUv, 2, false));
         fused.setAttribute("normal", new THREE.BufferAttribute(mergedNormal, 3, false));
         fused.computeBoundingSphere();
+        lbDisposableGeometries.push(fused);
 
         const m = new THREE.Mesh(fused, materials);
         m.name = `surfaces-fused-${kind}-${snap.cellId.toString(16).padStart(8, "0")}`;
@@ -505,6 +520,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           m.receiveShadow = true;
         }
         meshGroup.add(m);
+        lbDisposableGeometries.push(g.geometry);
       }
     }
     cellContainer.add(meshGroup);
@@ -598,6 +614,14 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     fusedEnabled: envcellFusion,
     fusedCellsWithTransparent: envcellFusion ? fusedCellsWithTransparent : 0,
     fusedCellsOpaqueOnly: envcellFusion ? fusedCellsOpaqueOnly : 0,
+    // LRU wave H4 — per-LB owned BufferGeometries (cell surface meshes +
+    // optional fused meshes + cell-static fused meshes). All materials and
+    // textures stay shared via materialCache, so those arrays are empty.
+    disposables: {
+      geometries: lbDisposableGeometries,
+      materials: [],
+      textures: [],
+    },
   };
 }
 

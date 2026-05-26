@@ -695,8 +695,8 @@ pub enum GameEventOpcode {
     CommunicationTransientString = 0x02EB,
     // /// S2C: Triggers a character emote action.
     // Emote = 0x01E2,
-    // /// S2C: Synchronizes the client's squelch (ignore) list.
-    // SetSquelchDb = 0x01F4,
+    /// S2C: Synchronizes the client's squelch (ignore) list.
+    SetSquelchDb = 0x01F4,
     /// S2C: Configures the Turbine-specific chat channels.
     SetTurbineChatChannels = 0x0295,
 
@@ -707,10 +707,10 @@ pub enum GameEventOpcode {
     AllegianceUpdate = 0x0020,
     /// S2C: Full update of the player's friends list.
     FriendsListUpdate = 0x0021,
-    // /// S2C: Detailed information about a character title.
-    // CharacterTitle = 0x0029,
-    // /// S2C: Update to the current active title.
-    // UpdateTitle = 0x002B,
+    /// S2C: Detailed information about a character title.
+    CharacterTitle = 0x0029,
+    /// S2C: Update to the current active title.
+    UpdateTitle = 0x002B,
     // /// S2C: Confirms that an allegiance data update is finished.
     // AllegianceAllegianceUpdateDone = 0x01C8,
     // /// S2C: Notifies the player that an allegiance member has logged in.

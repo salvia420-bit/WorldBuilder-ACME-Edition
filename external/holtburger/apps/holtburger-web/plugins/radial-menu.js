@@ -124,9 +124,27 @@ function isCreature(ent) {
   return ent?.meta?.category === "creature";
 }
 
+// Cross-reference the 3D-entity guid against the wasm-side inventory
+// snapshot — the entity's own meta doesn't carry inventory state
+// (equipMask, container), so playerInventory() is the canonical signal
+// for "is this thing in my pack/equipped".
+function getInventoryItem(guid) {
+  try {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    if (typeof handle?.playerInventory !== "function") return null;
+    const g = guid >>> 0;
+    const items = handle.playerInventory();
+    return items.find((it) => (it.guid >>> 0) === g) || null;
+  } catch (_) { return null; }
+}
+
 function buildItems(guid) {
   const items = [];
   const ent = getEntity(guid);
+  const invItem = getInventoryItem(guid);
+  const invEquipMask = (invItem?.equipMask >>> 0) || 0;
+  const isEquipped = invItem !== null && invEquipMask !== 0;
+  const isInPack = invItem !== null && invEquipMask === 0;
 
   items.push({
     label: "Examine",
@@ -135,12 +153,35 @@ function buildItems(guid) {
     },
   });
 
+  if (isInPack && typeof window.__sessionHandle?.wieldFromPack === "function") {
+    // Slot hint: prefer the entity meta's equipMask (future PublicWeenieDescription
+    // surfaces ValidLocations); fall back to 0 so ACE picks the default slot.
+    const slotMask = (ent?.meta?.equipMask >>> 0) || 0;
+    items.push({
+      label: "Wield",
+      action: () => {
+        try { window.__sessionHandle.wieldFromPack(guid >>> 0, slotMask); }
+        catch (e) { console.warn("[radial-menu] wieldFromPack failed:", e); }
+      },
+    });
+  }
+
   if (typeof window.__sessionHandle?.useObject === "function") {
     items.push({
       label: "Use",
       action: () => {
         try { window.__sessionHandle.useObject(guid >>> 0); }
         catch (e) { console.warn("[radial-menu] useObject failed:", e); }
+      },
+    });
+  }
+
+  if ((isInPack || isEquipped) && typeof window.__sessionHandle?.dropItem === "function") {
+    items.push({
+      label: "Drop",
+      action: () => {
+        try { window.__sessionHandle.dropItem(guid >>> 0); }
+        catch (e) { console.warn("[radial-menu] dropItem failed:", e); }
       },
     });
   }
@@ -160,7 +201,7 @@ function buildItems(guid) {
     });
   }
 
-  // follow-on: Drop/Wield/Trade once wasm exports land
+  // Drop/Wield wired via Wave G1 wasm methods; Trade still pending
   return { items, ent };
 }
 
@@ -249,5 +290,5 @@ export const manifest = {
   icon: "◎",
   iconHidden: true,
   version: "0.1.0",
-  description: "Right-click context menu for entity actions (Examine/Use/Attack).",
+  description: "Right-click context menu for entity actions (Examine/Wield/Use/Drop/Attack).",
 };

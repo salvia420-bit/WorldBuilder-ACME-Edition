@@ -1,4 +1,4 @@
-// Social panel — Wave E2 + Wave H1 + Wave H2 send-side.
+// Social panel — Wave E2 + Wave H1 + Wave H2 + Wave H3.
 //
 // Standalone floating overlay (mirrors allegiance-panel.js's IIFE
 // pattern). Exposes window.__openSocialPanel / __closeSocialPanel for
@@ -8,7 +8,8 @@
 //   - Squelch Character (E2): squelch / unsquelch selected character
 //   - Squelch Account (H2): squelch / unsquelch by account name
 //   - Squelch Global (H2): squelch / unsquelch every global channel
-//   - Title (H2): set the active character title by id
+//   - Squelched list (H3): live snapshot from handle.playerSquelch()
+//   - Title (H2/H3): pick from earned titles via handle.playerTitle()
 //
 // Wire format:
 //   - AddFriend (0x0018)              — by-name (ACE GameActionAddFriend.cs)
@@ -18,6 +19,9 @@
 //   - ModifyGlobalSquelch (0x005B)    — bool/u32 (ChatMessageType mask)
 //   - TitleSet (0x002C)               — u32 (CharacterTitle ordinal)
 //   - FriendsListUpdate (0x0021)      — S2C, snapshot via playerFriends()
+//   - SetSquelchDb (0x01F4)           — S2C, snapshot via playerSquelch()
+//   - CharacterTitle (0x0029)         — S2C, snapshot via playerTitle()
+//   - UpdateTitle (0x002B)            — S2C, single-title delta
 //     0xFFFFFFFF mask = retail UX shortcut for "squelch every chat type".
 
 import { setAcText } from "../ui/ac_font.js";
@@ -200,6 +204,90 @@ function ensureStyles() {
       color: rgba(220, 200, 160, 0.55);
       font-style: italic;
       text-align: center;
+    }
+    .hb-social-squelch-list {
+      max-height: 160px;
+      overflow-y: auto;
+      border: 1px solid var(--hb-border-brass-dim);
+      background: rgba(0, 0, 0, 0.35);
+      margin-top: 4px;
+    }
+    .hb-social-squelch-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 6px;
+      font-size: 11px;
+      color: var(--hb-text-cream);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.35);
+    }
+    .hb-social-squelch-row:last-child { border-bottom: none; }
+    .hb-social-squelch-badge {
+      flex: 0 0 auto;
+      display: inline-block;
+      min-width: 14px;
+      padding: 1px 3px;
+      font-size: 9px;
+      text-align: center;
+      letter-spacing: 0.04em;
+      color: var(--hb-text-gold);
+      border: 1px solid var(--hb-border-brass-dim);
+      background: rgba(0, 0, 0, 0.45);
+    }
+    .hb-social-squelch-badge.placeholder {
+      visibility: hidden;
+    }
+    .hb-social-squelch-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .hb-social-squelch-x {
+      flex: 0 0 auto;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      font-family: inherit;
+      font-size: 12px;
+      line-height: 1;
+      color: var(--hb-text-cream);
+      background: transparent;
+      border: 1px solid var(--hb-border-brass-dim);
+      cursor: pointer;
+    }
+    .hb-social-squelch-x:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    .hb-social-squelch-empty {
+      padding: 8px 6px;
+      font-size: 10px;
+      color: rgba(220, 200, 160, 0.55);
+      font-style: italic;
+      text-align: center;
+    }
+    .hb-social-select {
+      flex: 1 1 auto;
+      box-sizing: border-box;
+      padding: 4px 6px;
+      font-family: var(--hb-font-serif);
+      font-size: 11px;
+      color: var(--hb-text-cream);
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      outline: none;
+      min-width: 0;
+    }
+    .hb-social-select:focus {
+      border-color: var(--hb-border-brass);
+    }
+    .hb-social-title-empty {
+      padding: 4px 6px;
+      font-size: 10px;
+      color: rgba(220, 200, 160, 0.55);
+      font-style: italic;
     }
   `;
   document.head.appendChild(style);
@@ -556,7 +644,97 @@ function buildOverlay() {
   }
   body.appendChild(globalSec);
 
+  // ── Squelched list ─────────────────────────────────────────────────
+  // Wave-H3 (2026-05-26): receive-side squelch DB. ACE pushes
+  // `GameEvent::SetSquelchDb` (opcode 0x01F4) at login; the wasm side
+  // folds the wire payload into `latest_squelch` and emits a kind=27
+  // ClientEvent which index.html re-emits as `squelchUpdated`. The
+  // [A] badge marks account-wide squelches (SquelchInfo.account=true);
+  // unbadged rows are per-character squelches. Removal sends
+  // ModifyCharacterSquelch with add=false + 0xFFFFFFFF mask (retail
+  // UX: unsquelch all chat types). ACE does NOT re-push the DB on
+  // mod, so the visible list updates on the NEXT login until/unless
+  // we extend ACE to push deltas.
+  const squelchListSec = document.createElement("div");
+  squelchListSec.className = "hb-social-section";
+  const squelchListHeader = document.createElement("div");
+  squelchListHeader.className = "hb-social-section-title";
+  setAcText(squelchListHeader, "Squelched (0)");
+  squelchListSec.appendChild(squelchListHeader);
+
+  const squelchListEl = document.createElement("div");
+  squelchListEl.className = "hb-social-squelch-list";
+  squelchListSec.appendChild(squelchListEl);
+
+  function renderSquelchList() {
+    const handle = window.__sessionHandle;
+    const snap = typeof handle?.playerSquelch === "function" ? handle.playerSquelch() : null;
+    const entries = snap?.characters ?? [];
+
+    setAcText(squelchListHeader, `Squelched (${entries.length})`);
+
+    squelchListEl.innerHTML = "";
+    if (entries.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "hb-social-squelch-empty";
+      setAcText(empty, "No squelches active.");
+      squelchListEl.appendChild(empty);
+      return;
+    }
+
+    for (const e of entries) {
+      const row = document.createElement("div");
+      row.className = "hb-social-squelch-row";
+
+      const badge = document.createElement("span");
+      badge.className = `hb-social-squelch-badge${e.isAccount ? "" : " placeholder"}`;
+      badge.title = e.isAccount ? "Account-wide squelch" : "Character squelch";
+      badge.textContent = "A";
+      row.appendChild(badge);
+
+      const nameEl = document.createElement("span");
+      nameEl.className = "hb-social-squelch-name";
+      setAcText(nameEl, e.name || `0x${e.targetGuid.toString(16).padStart(8, "0")}`);
+      row.appendChild(nameEl);
+
+      const xBtn = document.createElement("button");
+      xBtn.type = "button";
+      xBtn.className = "hb-social-squelch-x";
+      xBtn.textContent = "x";
+      const guid = e.targetGuid >>> 0;
+      const nm = e.name || `0x${guid.toString(16).padStart(8, "0")}`;
+      xBtn.title = `Unsquelch ${nm}`;
+      xBtn.addEventListener("click", () => {
+        if (!window.confirm(`Unsquelch ${nm}?`)) return;
+        withSession("modifyCharacterSquelch", (h) => {
+          h.modifyCharacterSquelch(guid, nm, false, SQUELCH_ALL_MASK);
+          emit(`[squelch/remove] target=0x${guid.toString(16).padStart(8, "0")} mask=0x${SQUELCH_ALL_MASK.toString(16).toUpperCase()}`);
+          toast("Unsquelch sent");
+        });
+      });
+      row.appendChild(xBtn);
+
+      squelchListEl.appendChild(row);
+    }
+  }
+
+  if (bus && typeof bus.on === "function") {
+    const listener = () => { try { renderSquelchList(); } catch (_) {} };
+    bus.on("squelchUpdated", listener);
+    overlay_unsubscribe_handlers.push(() => {
+      if (typeof bus.off === "function") bus.off("squelchUpdated", listener);
+    });
+  }
+  renderSquelchList();
+  body.appendChild(squelchListSec);
+
   // ── Title section ──────────────────────────────────────────────────
+  // Wave-H3 (2026-05-26): receive-side title catalog. ACE pushes
+  // `GameEvent::CharacterTitle` (opcode 0x0029) at login with every
+  // title the character has earned + the currently active id; later
+  // `GameEvent::UpdateTitle` (opcode 0x002B) deltas append. Replaces
+  // the H2 placeholder input — players pick from titles they actually
+  // have, not arbitrary IDs.
   const titleSec = document.createElement("div");
   titleSec.className = "hb-social-section";
   const titleHeader = document.createElement("div");
@@ -566,41 +744,77 @@ function buildOverlay() {
 
   const titleRow = document.createElement("div");
   titleRow.className = "hb-social-row";
-  const titleInput = document.createElement("input");
-  titleInput.type = "number";
-  titleInput.className = "hb-social-input";
-  titleInput.placeholder = "Title ID";
-  titleInput.min = "0";
-  titleInput.step = "1";
-  titleRow.appendChild(titleInput);
+  const titleSelect = document.createElement("select");
+  titleSelect.className = "hb-social-select";
+  titleRow.appendChild(titleSelect);
   const titleBtn = document.createElement("button");
   titleBtn.type = "button";
   titleBtn.className = "hb-social-btn";
   setAcText(titleBtn, "Set");
+  titleRow.appendChild(titleBtn);
+  titleSec.appendChild(titleRow);
+
+  const titleEmpty = document.createElement("div");
+  titleEmpty.className = "hb-social-title-empty";
+  setAcText(titleEmpty, "(no titles earned yet)");
+  titleSec.appendChild(titleEmpty);
+
+  function renderTitleSelect() {
+    const handle = window.__sessionHandle;
+    const snap = typeof handle?.playerTitle === "function" ? handle.playerTitle() : null;
+    const ids = snap?.titleIds ?? [];
+    const current = (snap?.currentTitleId ?? 0) >>> 0;
+
+    // Save the user's current selection so a refresh during a delta
+    // doesn't blow it away.
+    const prevSelected = titleSelect.value ? parseInt(titleSelect.value, 10) >>> 0 : 0;
+    titleSelect.innerHTML = "";
+
+    if (ids.length === 0) {
+      titleSelect.disabled = true;
+      titleBtn.disabled = true;
+      titleEmpty.style.display = "block";
+      return;
+    }
+    titleSelect.disabled = false;
+    titleBtn.disabled = false;
+    titleEmpty.style.display = "none";
+
+    for (const id of ids) {
+      const opt = document.createElement("option");
+      opt.value = String(id);
+      opt.textContent = id === current ? `${id} (current)` : `${id}`;
+      titleSelect.appendChild(opt);
+    }
+
+    const want = prevSelected && ids.includes(prevSelected) ? prevSelected : current;
+    if (want && ids.includes(want)) {
+      titleSelect.value = String(want);
+    }
+  }
+
   const doSetTitle = () => {
-    const raw = titleInput.value.trim();
-    if (!raw) { toast("Enter a title ID"); return; }
-    const id = parseInt(raw, 10);
-    if (!Number.isFinite(id) || id < 0) { toast("Invalid title ID"); return; }
+    const raw = titleSelect.value;
+    if (!raw) { toast("No title selected"); return; }
+    const id = parseInt(raw, 10) >>> 0;
+    if (!Number.isFinite(id)) { toast("Invalid title ID"); return; }
     withSession("setTitle", (h) => {
-      h.setTitle(id >>> 0);
+      h.setTitle(id);
       emit(`[title/set] id=${id}`);
       toast("Set Title sent");
     });
   };
   titleBtn.addEventListener("click", doSetTitle);
-  titleInput.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") { ev.preventDefault(); doSetTitle(); }
-  });
-  titleRow.appendChild(titleBtn);
-  titleSec.appendChild(titleRow);
-  body.appendChild(titleSec);
 
-  // ── Placeholder ────────────────────────────────────────────────────
-  const placeholder = document.createElement("div");
-  placeholder.className = "hb-social-placeholder";
-  setAcText(placeholder, "Account/Global squelch + Title list — receive-side coming in a future wave");
-  body.appendChild(placeholder);
+  if (bus && typeof bus.on === "function") {
+    const listener = () => { try { renderTitleSelect(); } catch (_) {} };
+    bus.on("titleUpdated", listener);
+    overlay_unsubscribe_handlers.push(() => {
+      if (typeof bus.off === "function") bus.off("titleUpdated", listener);
+    });
+  }
+  renderTitleSelect();
+  body.appendChild(titleSec);
 
   el.appendChild(body);
 
@@ -642,5 +856,5 @@ export const manifest = {
   icon: "🤝",
   iconHidden: true,
   version: "0.1.0",
-  description: "Friends + character-squelch standalone panel (Wave E2 — send-only MVP)",
+  description: "Friends + squelch + title — send + receive (Waves E2 / H1 / H2 / H3)",
 };

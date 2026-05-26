@@ -12,6 +12,43 @@
 
 ---
 
+## Status — Wave I executed 2026-05-25 (later same day, true 3-agent parallelism)
+
+First wave where all 3 agents truly ran in parallel (single message, disjoint file scopes). Total wall-clock ~700s instead of the sequential ~1300s.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 20 (finish-finish) | Squelch DB + Title catalog receive snapshots | **SHIPPED** | Wave I1. Uncommented 3 S2C opcodes (`SetSquelchDb 0x01F4`, `CharacterTitle 0x0029`, `UpdateTitle 0x002B`). NEW `crates/holtburger-protocol/src/messages/squelch/{mod,events}.rs` + `title/{mod,events}.rs` with 3 new round-trip tests. **ACE wire authority:** `SquelchDB.cs:158-197` + `SquelchInfo.cs:52-64` (PackableHashTable<u32, SquelchInfo> with 32-bucket sort, 4× repeated SquelchMask filters, account-bool flag); `GameEventCharacterTitle.cs:10-18` (`const=1, current_title_id, num_titles, title_id[]`); `GameEventUpdateTitle.cs:10-11` (`title_id, set_as_display`). Snapshot infras mirror Wave H1 friends pattern: `SquelchSnapshot` + `TitleSnapshot` Rc fields + 2 publish helpers + 3 recv-loop arms + 2 ClientEvent kinds (`SQUELCH_UPDATED=27`, `TITLE_UPDATED=28`) + `player_squelch/player_title` getters. JS: 2 index.html dispatch arms; social-panel.js gains "Squelched (N)" list section with [A]-badge for account-squelches + × remove, and Title section's text input replaced with `<select>` populated from snapshot.title_ids (active title marked "(current)"). UpdateTitle folds in-place (appends if absent, promotes to current_title_id if set_as_display=true). 276/276 protocol tests pass. |
+| 23 (Drop/Wield) | Radial menu Drop/Wield entries | **SHIPPED** | Wave I2 (pure JS). `plugins/radial-menu.js` adds 2 new contextual entries using G1's wasm methods. **Display order:** Examine → Wield → Use → Drop → Attack. **Gating:** Wield shown only when item is in pack (`isInPack` via `playerInventory()` cross-ref — 3D entity meta lacks `equipMask` reliably); Drop shown whenever item is owned (allows drop from equipped slot — ACE handles unequip+drop sequence per retail UX). Slot mask sourced from `ent.meta.equipMask` if present, else 0 server-default. The B3-era comment `// follow-on: Drop/Wield/Trade once wasm exports land` updated to "Drop/Wield wired via Wave G1 wasm methods; Trade still pending". Trade entry deferred to Wave J (target capability check is more involved — Player vs NPC discrimination). |
+| 15 (deep dispose) | LRU deep dispose at bake sites | **SHIPPED** | Wave I3 (pure JS). Tags per-LB disposables at 3 remaining bake sites so `landblock_lru.js` releases GPU VBOs instead of only JS-heap. **Per-file findings:** `buildings.js` — confirmed **zero per-LB disposables** (all geometries via `opts.bakeCache` cross-LB, materials via `materialCache.getCached`). `statics.js` — per-LB owned: `geomByModel` + `degradedGeomByModel` fused BufferGeometries (no cross-LB cache in the lazy baker path); ring-driver InstancedMesh path explicitly skipped (intentional cross-LB batching per existing comments). `cells.js` — **biggest GPU-VBO release win**: every cell's per-surface `g.geometry` from `meshToGeometryGroups` + optional `?envcellFusion=1` fused per-cell geometry + per-DID `staticGeomByDid` cell-static fused geometries. At Academy with 568 cells/LB averaging a few surface meshes each, ~1500-3000+ BufferGeometries per LB now releasable. `scene3d/index.js` threads new return-shape through 3 lazy-load wrappers; terrain hook untouched per spec (already correct from H3). |
+
+**Files touched this wave:**
+- `src/lib.rs` +317 LOC (I1: squelch + title snapshot infras + 3 recv arms + 2 ClientEvent kinds + 2 getters)
+- `crates/holtburger-protocol/src/opcodes.rs` +12 LOC (3 uncomments)
+- `crates/holtburger-protocol/src/messages/mod.rs` +2 LOC (register squelch + title modules)
+- `crates/holtburger-protocol/src/messages/squelch/{mod,events}.rs` NEW + 1 round-trip test
+- `crates/holtburger-protocol/src/messages/title/{mod,events}.rs` NEW + 2 round-trip tests
+- `crates/holtburger-protocol/src/messages/game_event.rs` +29 LOC (3 variants + arms)
+- `plugins/radial-menu.js` +45 LOC (Drop/Wield entries + reorder)
+- `plugins/social-panel.js` +266 LOC (squelch list + title dropdown)
+- `scene3d/buildings.js` +8 LOC (empty-array tagging documents audit)
+- `scene3d/cells.js` +26 LOC (per-cell geometry tagging)
+- `scene3d/statics.js` +21 LOC (per-LB fused geometry tagging)
+- `scene3d/index.js` +98 LOC -69 (3 lazy-load wrapper rewrites for disposable threading)
+- `index.html` +19 LOC (kind=27/28 dispatch arms + minor)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `cargo test -p holtburger-protocol --lib`: **276/276 PASS** (I1 added 3 round-trip tests). `node --check` clean on all JS.
+
+**Recommended Wave J** (next priorities):
+1. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as Wave F1.
+2. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented. Mirror Wave C2 fellowship send-side MVP shape.
+3. **Spell research / component management UI (#19)** — needs new wasm `playerSpellComponents()` getter + JS panel.
+4. **Trade radial-menu entry (#23 final polish)** — extends Wave I2 with player-vs-NPC capability gating + `handle.openTrade(targetGuid)`.
+5. **Read-only inscription display on examine (#21 polish)** — extends Wave A3 examine panel with the `inscription` field from `BookSnapshot` (or just `Identify` response for non-book items).
+6. **Squelch list refresh after Modify (#20 polish)** — `social-panel.js` flagged that ACE doesn't re-push SetSquelchDb after the C2S round-trip; client could speculatively fold the delta locally for instant feedback.
+
+---
+
 ## Status — Wave H executed 2026-05-25 (later same day)
 
 Three items shipped after Wave G. H1 ran solo (then H2 + H3 ran together — H2 Rust+JS on social-panel, H3 pure JS on scene3d).
@@ -406,7 +443,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** "nothing special about spell research panel…add taper animations to queue" — #openai-gpt-3, Yonneh 2026-05-22
 **Holtburger:** Spell component parser exists; UI for summoning / discarding components not shipped. `playerSpellComponents()` wasm export — does it exist? Check.
 
-### 20. Squelch / Friends / Titles — SHIPPED 2026-05-25 (E2 Friends+CharSquelch + H1 Friends receive + H2 Account/Global/Title send)
+### 20. Squelch / Friends / Titles — SHIPPED 2026-05-25 (E2 Friends+CharSquelch + H1 Friends receive + H2 Account/Global/Title send + I1 Squelch+Title receive)
 **Discord:** Chat channel filtering and friend lists implicit across #general.
 **Holtburger:** Wave E2 uncommented AddFriend 0x0018, RemoveFriend 0x0017, ModifyCharacterSquelch 0x0058 + created 3 message structs in `crates/holtburger-protocol/src/messages/player/actions.rs` (AddFriend by-name, RemoveFriend by-guid, ModifyCharacterSquelch with 4 fields: add/playerGuid/playerName/messageType per `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/GameActionModifyCharacterSquelch.cs`). 3 wasm methods (`addFriend(name)`, `removeFriend(guid)`, `modifyCharacterSquelch(guid, name, add, mask)`). New `plugins/social-panel.js` (~340 LOC) — Friends section (text input + Add, Remove-by-Selected) + Squelch section (Squelch/Unsquelch Selected, all-chat mask `0xFFFFFFFF`). ModifyAccountSquelch 0x0059, ModifyGlobalSquelch 0x005B, TitleSet 0x002C deferred to Wave F. Receive-side FriendsUpdate/CharacterTitleTable snapshot also Wave F.
 
@@ -418,7 +455,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Not directly quoted but ACE has Buy/Rent/Abandon/Guest perms/Teleport/Hooks. Chorizite has full House category.
 **Holtburger:** All house opcodes commented out (opcodes.rs lines for `BuyHouse, HouseQuery, AbandonHouse, RentHouse, SetOpenHouseStatus, BootSpecificHouseGuest, ModifyAllegianceGuestPermission`).
 
-### 23. Right-click radial menus (Examine/Drop/Use/Trade/Identify) — SHIPPED 2026-05-25 (Wave B3, Examine+Use+Attack MVP)
+### 23. Right-click radial menus (Examine/Drop/Use/Trade/Identify) — SHIPPED 2026-05-25 (Wave B3 Examine+Use+Attack + Wave I2 Drop+Wield)
 **Discord:** Implicit in plugin discussions; the only fast-path for in-3D interaction.
 **Holtburger:** Wave A3 added drag-threshold direct-invoke Examine; Wave B3 promoted that into a full retail-styled vertical context menu via `plugins/radial-menu.js`. Contextual entries: Examine (always) / Use (if wasm export exists) / Attack (creature + combat-stance). Keyboard nav (arrows + Enter), Esc/outside-click/right-click cancel, viewport-edge auto-flip. Drop/Wield/Trade entries gated on future wasm exports (commented in source for the next-wave author).
 
@@ -580,13 +617,19 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 24. ~~Landblock LRU unload (#15)~~ — `LandblockLRU` class with safety filters + `?lbCap=N` knob + initial-ring bulk-track shipped.
    Recon discovery: BloomEffect was already shipped (quality presets + URL knob + runtime tweaks), so the Wave G recommendation rolled into discovered-not-needed.
 
-### Wave I — next priorities
+### Wave I — SHIPPED 2026-05-25 (true 3-agent parallelism, ~700s wall-clock)
 
-25. **Squelch DB receive-side snapshot (#20 finish-finish)** — `SetSquelchDb 0x01F4` S2C event; server pushes full squelch DB on login. Snapshot + JS display.
-26. **Title catalog snapshot (#20 polish)** — `CharacterTitleTable` / `AddOrSetCharacterTitle` events + JS title-picker dropdown to replace the manual title-id input.
-27. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as Wave F1.
-28. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
-29. **Spell research / component management UI (#19)** — needs new wasm exports for spell components + JS panel.
-30. **Landblock LRU deep dispose (#15 polish)** — `__disposable` tagging at 4 bake sites for full GPU resource release.
+25. ~~Squelch DB + Title catalog receive snapshots (#20 finish-finish)~~ — 3 S2C opcodes + 2 snapshot infras + social-panel sections shipped.
+26. ~~Radial menu Drop/Wield entries (#23 polish)~~ — 5-entry contextual menu shipped (Examine/Wield/Use/Drop/Attack).
+27. ~~LRU deep dispose at bake sites (#15 polish)~~ — per-cell + per-LB statics geometries now released on evict; buildings confirmed all-shared (audit complete).
+
+### Wave J — next priorities
+
+28. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as Wave F1.
+29. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented. Mirror Wave C2 fellowship send-side MVP shape.
+30. **Spell research / component management UI (#19)** — needs new wasm `playerSpellComponents()` getter + JS panel.
+31. **Trade radial-menu entry (#23 polish)** — extends Wave I2 with player-vs-NPC capability gating + `handle.openTrade(targetGuid)`.
+32. **Read-only inscription display on examine (#21 polish)** — extends Wave A3 examine panel with inscription field.
+33. **Speculative squelch list refresh (#20 polish)** — client-side fold of Modify*Squelch acks since ACE doesn't re-push SetSquelchDb.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.

@@ -8163,6 +8163,25 @@ void main() {
                 if (window.__pluginClient?.events) {
                   window.__pluginClient.events.emit("friendsUpdated", {});
                 }
+              } else if (evt.kind === 27) {
+                // Wave-H3 (2026-05-26): SquelchUpdated. ACE pushed
+                // `GameEvent::SetSquelchDb` (opcode 0x01F4) and the
+                // wasm side has folded the wire payload (characters
+                // + globals) into `latest_squelch`. Consumer reads
+                // via `handle.playerSquelch()` (null pre-event).
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("squelchUpdated", {});
+                }
+              } else if (evt.kind === 28) {
+                // Wave-H3 (2026-05-26): TitleUpdated. ACE pushed
+                // either `GameEvent::CharacterTitle` (opcode 0x0029,
+                // full replace) or `GameEvent::UpdateTitle`
+                // (opcode 0x002B, single-title delta). Consumer
+                // reads via `handle.playerTitle()` (null
+                // pre-CharacterTitle).
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("titleUpdated", {});
+                }
               } else if (evt.kind === 13) {
                 // Phase 4 step 5: UseFailed (WeenieError /
                 // WeenieErrorWithString). Already mirrored as a

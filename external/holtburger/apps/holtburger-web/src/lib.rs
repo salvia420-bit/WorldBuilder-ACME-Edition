@@ -139,6 +139,9 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::FellowshipFellowStatsDone => 0x01CA,
         GameEvent::AllegianceUpdate(_) => 0x0020,
         GameEvent::FriendsListUpdate(_) => 0x0021,
+        GameEvent::SetSquelchDb(_) => 0x01F4,
+        GameEvent::CharacterTitle(_) => 0x0029,
+        GameEvent::UpdateTitle(_) => 0x002B,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -12599,6 +12602,25 @@ const CLIENT_EVENT_KIND_ALLEGIANCE_UPDATED: u32 = 25;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_FRIENDS_UPDATED: u32 = 26;
 
+/// `kind = 27` — SquelchUpdated. ACE sent
+/// `GameEvent::SetSquelchDb` (opcode 0x01F4) carrying the full DB
+/// (account+character merged list + global filter). The recv-loop
+/// folds the wire payload directly into `latest_squelch`. JS reads
+/// via [`SessionHandle::player_squelch`] which returns the rebuilt
+/// list (or `None` pre-event). Payload fields unused.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_SQUELCH_UPDATED: u32 = 27;
+
+/// `kind = 28` — TitleUpdated. ACE sent either
+/// `GameEvent::CharacterTitle` (opcode 0x0029, full catalog replace) or
+/// `GameEvent::UpdateTitle` (opcode 0x002B, single-title delta — earn
+/// + optional set-as-display). The recv-loop folds into
+/// `latest_title`. JS reads via [`SessionHandle::player_title`] which
+/// returns the rebuilt list (or `None` pre-CharacterTitle). Payload
+/// fields unused.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_TITLE_UPDATED: u32 = 28;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -14624,6 +14646,119 @@ impl FriendsSnapshotJs {
     pub fn count(&self) -> u32 { self.friends.len() as u32 }
 }
 
+/// Wave-H3 (2026-05-26): JS-facing snapshot of the local player's
+/// squelch DB. ACE pushes `GameEvent::SetSquelchDb` (opcode 0x01F4) at
+/// login carrying the full DB (`accounts` always empty in retail;
+/// `characters` is the merged char+account list with `SquelchInfo.account`
+/// disambiguating; `globals` is the per-channel global filter). JS layer
+/// drops the per-entry 4-filter array — the social panel only needs the
+/// primary `filter[0]` mask plus name + account flag for the row UX.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct SquelchSnapshot {
+    characters: Vec<SquelchEntry>,
+    globals_mask: u32,
+    globals_name: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct SquelchEntry {
+    target_guid: u32,
+    name: String,
+    mask: u32,
+    is_account: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct SquelchEntryJs {
+    target_guid: u32,
+    name: String,
+    mask: u32,
+    is_account: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SquelchEntryJs {
+    #[wasm_bindgen(getter, js_name = targetGuid)]
+    pub fn target_guid(&self) -> u32 { self.target_guid }
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn mask(&self) -> u32 { self.mask }
+    #[wasm_bindgen(getter, js_name = isAccount)]
+    pub fn is_account(&self) -> bool { self.is_account }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct SquelchSnapshotJs {
+    characters: Vec<SquelchEntry>,
+    globals_mask: u32,
+    globals_name: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn squelch_entry_to_js(e: &SquelchEntry) -> SquelchEntryJs {
+    SquelchEntryJs {
+        target_guid: e.target_guid,
+        name: e.name.clone(),
+        mask: e.mask,
+        is_account: e.is_account,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SquelchSnapshotJs {
+    #[wasm_bindgen(getter)]
+    pub fn characters(&self) -> Vec<SquelchEntryJs> {
+        self.characters.iter().map(squelch_entry_to_js).collect()
+    }
+    #[wasm_bindgen(getter, js_name = count)]
+    pub fn count(&self) -> u32 { self.characters.len() as u32 }
+    #[wasm_bindgen(getter, js_name = globalsMask)]
+    pub fn globals_mask(&self) -> u32 { self.globals_mask }
+    #[wasm_bindgen(getter, js_name = globalsName)]
+    pub fn globals_name(&self) -> String { self.globals_name.clone() }
+}
+
+/// Wave-H3 (2026-05-26): JS-facing snapshot of the local player's
+/// character title catalog. ACE pushes `GameEvent::CharacterTitle`
+/// (opcode 0x0029) at login carrying every title the character has
+/// earned + the currently active id; `GameEvent::UpdateTitle` (0x002B)
+/// is the single-title delta (one new earn, optionally promoting it to
+/// the active display title).
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct TitleSnapshot {
+    current_title_id: u32,
+    title_ids: Vec<u32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct TitleSnapshotJs {
+    current_title_id: u32,
+    title_ids: Vec<u32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl TitleSnapshotJs {
+    #[wasm_bindgen(getter, js_name = currentTitleId)]
+    pub fn current_title_id(&self) -> u32 { self.current_title_id }
+    #[wasm_bindgen(getter, js_name = titleIds)]
+    pub fn title_ids(&self) -> Vec<u32> { self.title_ids.clone() }
+    #[wasm_bindgen(getter, js_name = count)]
+    pub fn count(&self) -> u32 { self.title_ids.len() as u32 }
+}
+
 /// AC Trade (2026-05-25, Discord deficiency #3): JS-facing snapshot of
 /// the local player's active peer-to-peer trade. Sourced from
 /// `world.trade` (the world dispatcher's `handlers::trade::handle_event`
@@ -15161,6 +15296,19 @@ pub struct SessionHandle {
     /// [`SessionHandle::player_friends`] from the kind=26
     /// FriendsUpdated drain.
     latest_friends: std::rc::Rc<std::cell::RefCell<Option<FriendsSnapshot>>>,
+    /// Wave-H3 (2026-05-26): local player's squelch DB snapshot.
+    /// Refreshed by the recv loop on `GameEvent::SetSquelchDb` (opcode
+    /// 0x01F4) — ACE pushes the full DB once at login. `None`
+    /// pre-event. JS reads via [`SessionHandle::player_squelch`] from
+    /// the kind=27 SquelchUpdated drain.
+    latest_squelch: std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
+    /// Wave-H3 (2026-05-26): local player's character title catalog.
+    /// Refreshed by the recv loop on `GameEvent::CharacterTitle`
+    /// (opcode 0x0029, full replace) or `GameEvent::UpdateTitle`
+    /// (opcode 0x002B, single-title delta). `None`
+    /// pre-CharacterTitle. JS reads via [`SessionHandle::player_title`]
+    /// from the kind=28 TitleUpdated drain.
+    latest_title: std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -17808,6 +17956,33 @@ impl SessionHandle {
         })
     }
 
+    /// Wave-H3 (2026-05-26): squelch DB snapshot — `None` pre-
+    /// SetSquelchDb. Refreshed by the recv-loop on every
+    /// `GameEvent::SetSquelchDb` (opcode 0x01F4). UI plugins re-pull
+    /// on each `kind=27 squelchUpdated` drain.
+    #[wasm_bindgen(js_name = playerSquelch)]
+    pub fn player_squelch(&self) -> Option<SquelchSnapshotJs> {
+        self.latest_squelch.borrow().as_ref().map(|s| SquelchSnapshotJs {
+            characters: s.characters.clone(),
+            globals_mask: s.globals_mask,
+            globals_name: s.globals_name.clone(),
+        })
+    }
+
+    /// Wave-H3 (2026-05-26): character title catalog snapshot — `None`
+    /// pre-CharacterTitle. Refreshed by the recv-loop on every
+    /// `GameEvent::CharacterTitle` (opcode 0x0029, replace) or
+    /// `GameEvent::UpdateTitle` (opcode 0x002B, append + optional
+    /// promote-to-active). UI plugins re-pull on each `kind=28
+    /// titleUpdated` drain.
+    #[wasm_bindgen(js_name = playerTitle)]
+    pub fn player_title(&self) -> Option<TitleSnapshotJs> {
+        self.latest_title.borrow().as_ref().map(|t| TitleSnapshotJs {
+            current_title_id: t.current_title_id,
+            title_ids: t.title_ids.clone(),
+        })
+    }
+
     /// Social — squelch/unsquelch every character on an account by
     /// `account_name`. Sends `GameAction::ModifyAccountSquelch`
     /// (sub-opcode 0x0059). ACE wire is `(bool_u32, account_name_str16)`
@@ -18256,6 +18431,17 @@ pub async fn start_session(
     let latest_friends: std::rc::Rc<
         std::cell::RefCell<Option<FriendsSnapshot>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave-H3 (2026-05-26): squelch DB snapshot, refreshed on
+    // `GameEvent::SetSquelchDb`.
+    let latest_squelch: std::rc::Rc<
+        std::cell::RefCell<Option<SquelchSnapshot>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave-H3 (2026-05-26): title catalog snapshot, refreshed on
+    // `GameEvent::CharacterTitle` (replace) or `GameEvent::UpdateTitle`
+    // (append).
+    let latest_title: std::rc::Rc<
+        std::cell::RefCell<Option<TitleSnapshot>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -18317,6 +18503,8 @@ pub async fn start_session(
         let latest_book_inner = latest_book.clone();
         let latest_allegiance_inner = latest_allegiance.clone();
         let latest_friends_inner = latest_friends.clone();
+        let latest_squelch_inner = latest_squelch.clone();
+        let latest_title_inner = latest_title.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -18345,6 +18533,8 @@ pub async fn start_session(
                 latest_book_inner,
                 latest_allegiance_inner,
                 latest_friends_inner,
+                latest_squelch_inner,
+                latest_title_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -18429,6 +18619,8 @@ pub async fn start_session(
         latest_book,
         latest_allegiance,
         latest_friends,
+        latest_squelch,
+        latest_title,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -19291,6 +19483,72 @@ fn publish_player_friends_snapshot(
     }
 }
 
+// Wave-H3 (2026-05-26): replace the squelch DB snapshot from
+// `SetSquelchDb` (opcode 0x01F4). ACE sends a single full-DB push at
+// login — no per-row deltas — so we always wholesale-replace the cell.
+#[cfg(target_arch = "wasm32")]
+fn publish_player_squelch_snapshot(
+    payload: &holtburger_protocol::messages::SetSquelchDbEventData,
+    latest_squelch: &std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
+) {
+    let mut characters: Vec<SquelchEntry> = payload
+        .characters
+        .iter()
+        .map(|(guid, info)| SquelchEntry {
+            target_guid: *guid,
+            name: info.player_name.clone(),
+            mask: info.filters[0],
+            is_account: info.account,
+        })
+        .collect();
+    characters.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.target_guid.cmp(&b.target_guid))
+    });
+    *latest_squelch.borrow_mut() = Some(SquelchSnapshot {
+        characters,
+        globals_mask: payload.globals.filters[0],
+        globals_name: payload.globals.player_name.clone(),
+    });
+}
+
+// Wave-H3 (2026-05-26): replace the title catalog from
+// `CharacterTitle` (opcode 0x0029). Full catalog push — wholesale
+// replace.
+#[cfg(target_arch = "wasm32")]
+fn publish_player_title_snapshot(
+    payload: &holtburger_protocol::messages::CharacterTitleEventData,
+    latest_title: &std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
+) {
+    *latest_title.borrow_mut() = Some(TitleSnapshot {
+        current_title_id: payload.current_title_id,
+        title_ids: payload.title_ids.clone(),
+    });
+}
+
+// Wave-H3 (2026-05-26): apply `UpdateTitle` (opcode 0x002B) delta —
+// append the new title to the catalog if not already present, and if
+// `set_as_display` is true promote it to the active title.
+#[cfg(target_arch = "wasm32")]
+fn apply_player_title_update(
+    payload: &holtburger_protocol::messages::UpdateTitleEventData,
+    latest_title: &std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
+) {
+    let mut cell = latest_title.borrow_mut();
+    let snap = cell.get_or_insert_with(|| TitleSnapshot {
+        current_title_id: 0,
+        title_ids: Vec::new(),
+    });
+    if !snap.title_ids.contains(&payload.title_id) {
+        snap.title_ids.push(payload.title_id);
+    }
+    if payload.set_as_display {
+        snap.current_title_id = payload.title_id;
+    }
+}
+
 // AC Books (2026-05-25): publish a JS-facing snapshot of the open book.
 // The world dispatcher's inventory handler already folds
 // `BookDataResponse` + `BookPageDataResponse` into `entity.book`; we
@@ -19475,6 +19733,8 @@ async fn recv_loop(
     latest_book: std::rc::Rc<std::cell::RefCell<Option<BookSnapshot>>>,
     latest_allegiance: std::rc::Rc<std::cell::RefCell<Option<AllegianceSnapshot>>>,
     latest_friends: std::rc::Rc<std::cell::RefCell<Option<FriendsSnapshot>>>,
+    latest_squelch: std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
+    latest_title: std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -22471,6 +22731,63 @@ async fn recv_loop(
                                     );
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_FRIENDS_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::SetSquelchDb(
+                                    data,
+                                ) => {
+                                    // Wave-H3 (2026-05-26): full DB
+                                    // replace — ACE pushes once at
+                                    // login; no deltas (per-row mods
+                                    // round-trip via the modify*Squelch
+                                    // GameActions but ACE doesn't
+                                    // re-push the DB).
+                                    publish_player_squelch_snapshot(
+                                        data.as_ref(),
+                                        &latest_squelch,
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_SQUELCH_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::CharacterTitle(
+                                    data,
+                                ) => {
+                                    // Wave-H3 (2026-05-26): full catalog
+                                    // replace — ACE pushes once at login.
+                                    publish_player_title_snapshot(
+                                        data.as_ref(),
+                                        &latest_title,
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_TITLE_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::UpdateTitle(
+                                    data,
+                                ) => {
+                                    // Wave-H3 (2026-05-26): single-title
+                                    // delta — earn the title (append to
+                                    // catalog if not present) and
+                                    // optionally promote to active.
+                                    apply_player_title_update(
+                                        data.as_ref(),
+                                        &latest_title,
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_TITLE_UPDATED,
                                         string_payload: None,
                                         u32_payload: None,
                                         u32_payload_2: None,

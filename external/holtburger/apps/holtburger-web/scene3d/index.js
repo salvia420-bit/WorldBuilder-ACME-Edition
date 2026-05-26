@@ -1968,28 +1968,35 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     loadEnvCellsForLandblock(landblockId) {
       const p = buildEnvCellsForLandblock(this, landblockId, this.wasmExports);
       const lbKeyForLru = (landblockId & 0xffff_0000) >>> 0;
-      try { this.landblockLru?.track(lbKeyForLru); } catch (_) {}
+      const self = this;
       // 2026-05-22 — wire-agent: walk the cellsGroup after the bake to
       // pick up the newly-attached EnvCell meshes and add their fill
       // companions. addFillCompanions is idempotent (per-mesh
       // `__wireFillCompanion` tag), so existing companions aren't
       // double-added.
-      if (this.wireframeMode && this.materialCache) {
-        const self = this;
-        return Promise.resolve(p).then((r) => {
-          if (self.cellsGroup) {
-            self.materialCache.addFillCompanions(self.cellsGroup);
-            // Phase 5 PView render-order fix (2026-05-25): re-stamp layer 1
-            // across cellsGroup after fill companions land. addFillCompanions
-            // creates new Mesh siblings that default to layer 0; without this
-            // sweep they'd ghost-render in the indoor world pass (layer 0) and
-            // miss the post-clearDepth cells pass.
-            self.cellsGroup.traverse((o) => o.layers.set(1));
+      return Promise.resolve(p).then((r) => {
+        // LRU wave H4 — pull per-LB disposables off the bake summary so
+        // eviction can dispose() per-cell + cell-static BufferGeometries
+        // (the biggest GPU-VBO release win at Academy: 568 cells per LB).
+        try {
+          const dispos = r?.disposables;
+          if (dispos && (dispos.geometries?.length || dispos.materials?.length || dispos.textures?.length)) {
+            self.landblockLru?.track(lbKeyForLru, dispos);
+          } else {
+            self.landblockLru?.track(lbKeyForLru);
           }
-          return r;
-        });
-      }
-      return p;
+        } catch (_) {}
+        if (self.wireframeMode && self.materialCache && self.cellsGroup) {
+          self.materialCache.addFillCompanions(self.cellsGroup);
+          // Phase 5 PView render-order fix (2026-05-25): re-stamp layer 1
+          // across cellsGroup after fill companions land. addFillCompanions
+          // creates new Mesh siblings that default to layer 0; without this
+          // sweep they'd ghost-render in the indoor world pass (layer 0) and
+          // miss the post-clearDepth cells pass.
+          self.cellsGroup.traverse((o) => o.layers.set(1));
+        }
+        return r;
+      });
     },
     // === World-expand step 1 — Objective 5 — per-LB lazy 3D loaders ===
     // Sibling hooks to `loadEnvCellsForLandblock` for the three other
@@ -2063,15 +2070,27 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         this.buildingsOpts,
         this.wasmExports
       );
-      try { this.landblockLru?.track(lbKeyFromXY(lbX, lbY)); } catch (_) {}
-      if (this.wireframeMode && this.materialCache) {
-        const self = this;
-        return Promise.resolve(p).then((r) => {
-          if (self.buildingsGroup) self.materialCache.addFillCompanions(self.buildingsGroup);
-          return r;
-        });
-      }
-      return p;
+      const lbKeyForLru = lbKeyFromXY(lbX, lbY);
+      const self = this;
+      return Promise.resolve(p).then((r) => {
+        // LRU wave H4 — buildings have zero per-LB disposables (every
+        // geometry+material is cache-shared cross-LB); track() with empty
+        // disposables registers the lbKey so eviction can still remove
+        // the per-placement Groups from `buildingsGroup` + drop their
+        // `buildingMap3d` entries.
+        try {
+          const dispos = r?.disposables;
+          if (dispos && (dispos.geometries?.length || dispos.materials?.length || dispos.textures?.length)) {
+            self.landblockLru?.track(lbKeyForLru, dispos);
+          } else {
+            self.landblockLru?.track(lbKeyForLru);
+          }
+        } catch (_) {}
+        if (self.wireframeMode && self.materialCache && self.buildingsGroup) {
+          self.materialCache.addFillCompanions(self.buildingsGroup);
+        }
+        return r;
+      });
     },
     loadStaticsForLandblock(lbX, lbY) {
       const p = bakeStaticsForLandblock(
@@ -2081,15 +2100,26 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         this.staticsOpts,
         this.wasmExports
       );
-      try { this.landblockLru?.track(lbKeyFromXY(lbX, lbY)); } catch (_) {}
-      if (this.wireframeMode && this.materialCache) {
-        const self = this;
-        return Promise.resolve(p).then((r) => {
-          if (self.staticsGroup) self.materialCache.addFillCompanions(self.staticsGroup);
-          return r;
-        });
-      }
-      return p;
+      const lbKeyForLru = lbKeyFromXY(lbX, lbY);
+      const self = this;
+      return Promise.resolve(p).then((r) => {
+        // LRU wave H4 — per-LB owned BufferGeometries (one per unique
+        // modelId, plus per-modelId degraded LOD geom). Materials are
+        // cache-shared. `r` is null on idempotent re-call — track without
+        // disposables in that case to refresh lastTouchMs.
+        try {
+          const dispos = r?.disposables;
+          if (dispos && (dispos.geometries?.length || dispos.materials?.length || dispos.textures?.length)) {
+            self.landblockLru?.track(lbKeyForLru, dispos);
+          } else {
+            self.landblockLru?.track(lbKeyForLru);
+          }
+        } catch (_) {}
+        if (self.wireframeMode && self.materialCache && self.staticsGroup) {
+          self.materialCache.addFillCompanions(self.staticsGroup);
+        }
+        return r;
+      });
     },
     // === Phase D.1 — per-LB lazy ACE spawn injector ===
     // Third placement stream (per `docs/hypotheticalmethod.md`'s

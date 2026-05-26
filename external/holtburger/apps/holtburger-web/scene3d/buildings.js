@@ -554,6 +554,7 @@ export async function bakeBuildingsForLandblock(
       surfaceCount: 0,
       partCount: 0,
       surfaceMeshCount: 0,
+      disposables: { geometries: [], materials: [], textures: [] },
     };
   }
   scene3d.buildingsBakedLbs.add(lbKey);
@@ -595,6 +596,7 @@ export async function bakeBuildingsForLandblock(
       surfaceCount: 0,
       partCount: 0,
       surfaceMeshCount: 0,
+      disposables: { geometries: [], materials: [], textures: [] },
     };
   }
 
@@ -704,6 +706,12 @@ export async function bakeBuildingsForLandblock(
     surfaceCount: lbSurfaceDids.size,
     partCount,
     surfaceMeshCount,
+    // LRU wave H4 — confirmed zero per-LB disposables: every building
+    // BufferGeometry is shared via `opts.bakeCache` (per-modelId,
+    // cross-LB) and every material is `materialCache.getCached`-shared
+    // (per-DID). Container-remove in the LRU evict path is sufficient.
+    // Empty arrays kept for shape uniformity with cells/statics tags.
+    disposables: { geometries: [], materials: [], textures: [] },
   };
 }
 
