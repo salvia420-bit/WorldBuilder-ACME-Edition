@@ -21,25 +21,102 @@
 //! "BackhandHigh" motion, etc. That's a separate retail quirk worth
 //! recording, but not in scope for this test.)
 //!
-//! Either the wiki is wrong (the maneuver table image was hand-built
-//! and missed three rows) OR retail leaves the data in but blocks the
-//! motion at runtime via a different gate (`acclient.c` swing-path
-//! check, or ACE's `Player_Melee.GetSwingAnimation` filtering them
-//! out). This test does NOT resolve that question — it locks in the
-//! current retail-data shape so future CMT changes are caught.
+//! # Resolution (Wave 6 / Phase 18 — 2026-05-26)
+//!
+//! **The wiki is wrong; there is no runtime gate.** A read-only
+//! investigation across the retail acclient.c decompile and the full
+//! ACE server source found ZERO code paths that filter Backhand out
+//! of the CMT result list for shield-equipped attackers. The swing
+//! is whatever `CombatManeuverTable.GetMotion(stance, height, type, …)`
+//! returns; both retail and ACE will gladly play `Backhand*` when
+//! `stance == SwordShieldCombat` resolves to a row whose `type` matches
+//! the active weapon's bitmask after the `GetAttackType` collapse.
+//!
+//! Sources read (line ranges in parentheses):
+//!
+//! - `~/ac-headers/acclient.c` (407409–410069): the only retail caller
+//!   of `CombatManeuverTable::Get` (at 408537, inside
+//!   `ClientCombatSystem::PlayerInReadyPosition`) treats the returned
+//!   table as a boolean "do we have a combat-maneuver table at all?"
+//!   gate; it never iterates the rows and never inspects shield equip.
+//!   The other Backhand-related hits at lines 254022–254030, 407471,
+//!   410027–410055 are **input-event keystroke IDs** (UI dispatch in
+//!   `HandleMagicAction` / `HandleCombatAction` that happen to reuse
+//!   the values `0x1000005E/5F/60` for AttackHeight key bindings) —
+//!   they are NOT MotionCommand filters and have nothing to do with
+//!   the swing path. `acclient.c:43549–43551` is just the string table
+//!   for the names. No `IsBackhand && IsWieldingShield` predicate
+//!   exists anywhere.
+//!
+//! - `ace-server/Source/ACE.Server/WorldObjects/Player_Melee.cs` (full
+//!   read, 1–476): `GetSwingAnimation` at lines 440–475 looks up
+//!   `CombatTable.GetMotion(stance, height, type, prevMotion)` and
+//!   picks `motions[1]` for high-power / `motions[0]` for low-power
+//!   when `motions.Count > 1`. **No shield branch.** The wrapping
+//!   `DoSwingMotion` at 398–430 broadcasts whatever `GetSwingAnimation`
+//!   returned.
+//!
+//! - `ace-server/Source/ACE.Server/WorldObjects/Monster_Melee.cs:164–230`
+//!   (`GetCombatManeuver`): symmetric path for monsters. Also no
+//!   shield-aware Backhand filter.
+//!
+//! - `ace-server/Source/ACE.Server/WorldObjects/Creature_Combat.cs`:
+//!   all "shield" mentions are either (a) the **upstream stance picker**
+//!   at lines 274–356 that sets `combatStance = SwordShieldCombat` when
+//!   a shield is equipped, or (b) the **damage-mitigation math** in
+//!   `GetShieldMod` at 641–718. None filter motions.
+//!
+//! - `ace-server/Source/ACE.Server/WorldObjects/WorldObject_Weapon.cs:1050–1162`
+//!   (`GetAttackType`): collapses a weapon's `W_AttackType` bitmask to a
+//!   single AttackType under each stance. For `SwordShieldCombat` it
+//!   forces multi-strike weapons toward Thrust/DoubleThrust (lines
+//!   1108–1130), which CAN steer the CMT key away from Slash on those
+//!   weapons. But a single-bit-Slash sword (the vast majority) will
+//!   still hit the `attack_type=0x04` row family, and that family
+//!   contains both `Slash*` and `Backhand*` motions in retail CMT
+//!   0x30000000. The 50/50 power-bar pick at `Player_Melee.cs:468` then
+//!   decides which one plays.
+//!
+//! - `ace-server/Source/ACE.DatLoader/FileTypes/CombatManeuverTable.cs`
+//!   (full read, 1–130): `GetMotion` is a pure dictionary lookup
+//!   `(stance → height → type → List<MotionCommand>)`. Returns the
+//!   whole list; no knowledge of shield, weapon, or attacker state.
+//!
+//! - Repo-wide `grep -rn Backhand ace-server/Source/`: 5 hits, all in
+//!   either the `MotionCommand` enum file or comments. No filter.
+//!
+//! ## Implication for our renderer
+//!
+//! Nothing to mirror. Our `Player_Melee.GetSwingAnimation` port in
+//! `apps/holtburger-web/src/lib.rs` (and the `ui/ac_combat_maneuver.js`
+//! picker) does **not** need a shield-aware Backhand drop because
+//! neither retail nor ACE has one. When the server resolves a Backhand
+//! swing for a shielded attacker it broadcasts the resulting
+//! MotionCommand verbatim via `UpdateMotion` (kind=5) and our pose
+//! pipeline plays it as-is.
+//!
+//! The Wave 5 Phase 10 audit can be closed: this test (3 retail rows
+//! found, Low/Med/High, all Slash) accurately captures the
+//! source-of-truth, and the wiki's omission is a hand-built-table
+//! oversight rather than a missing runtime check.
+//!
+//! See also: `external/holtburger/docs/shield-backhand-runtime-gate-2026-05-26.md`.
 //!
 //! Source-of-truth: `client_portal.dat`. Skipped when
 //! `HOLTBURGER_PORTAL_DAT` is unset (mirrors
 //! `combat_maneuver_table_parity.rs`).
 //!
 //! References:
-//!   - acpedia Combat omnibus page (the claim under audit; now confirmed wrong)
+//!   - acpedia Combat omnibus page (the claim under audit; confirmed wrong)
 //!   - `ace-server/Source/ACE.Entity/Enum/MotionStance.cs`
 //!     SwordShieldCombat = 0x80000040
 //!   - `Chorizite/Chorizite.Common/Enums/MotionCommand.cs`
 //!     BackhandHigh = 0x1000005E, BackhandMed = 0x1000005F,
 //!     BackhandLow  = 0x10000060
-//!   - retail behavioral check (open question): `~/ac-headers/acclient.c` swing path
+//!   - `~/ac-headers/acclient.c:407409–410069` — full
+//!     `ClientCombatSystem::PlayerInReadyPosition` /
+//!     `HandleCombatAction` / `HandleMagicAction` block (the only
+//!     CombatManeuverTable consumer in the client; no Backhand filter).
 
 use binrw::BinRead;
 use binrw::io::Cursor;

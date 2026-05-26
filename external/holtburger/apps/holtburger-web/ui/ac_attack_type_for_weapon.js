@@ -53,17 +53,41 @@
  *   `MELEE_WEAPON=0x00100000, SHIELD=0x00200000, MISSILE_WEAPON=0x00400000,
  *   MISSILE_AMMO=0x00800000, CASTER=0x01000000, TWO_HANDED=0x02000000`.
  *
- * ## Mapping table (Waves 1+2+5, equip-slot-based heuristic)
+ * ## Precedence (Wave 6 / Phase 15, 2026-05-26)
  *
- *   | Input                                  | AttackType returned          |
- *   |----------------------------------------|------------------------------|
- *   | `weapon === null`  (unarmed)           | `Punch  = 0x01`              |
- *   | `equipMask & TWO_HANDED`               | `Slash  = 0x04`  (limitation — see Phase 13 audit) |
- *   | `equipMask & MELEE_WEAPON`             | `Slash  = 0x04`              |
- *   | `equipMask & MISSILE_WEAPON`           | `Undef  = 0x00`  (see Phase 6 audit) |
- *   | `equipMask & MISSILE_AMMO`             | `Undef  = 0x00`  (see Phase 6 audit) |
- *   | `equipMask & CASTER`                   | `Undef  = 0x00`  (magic path) |
- *   | anything else (e.g. SHIELD-only)       | `Undef  = 0x00`              |
+ * Effective precedence after Phase 15 wired `W_AttackType` through to
+ * the renderer:
+ *
+ *   1. **Wire `W_AttackType`** — if `weapon.attackType` is non-zero,
+ *      return that bitmask verbatim. Multi-bit values
+ *      (e.g. `Thrust|Slash = 0x06` for many swords,
+ *      `DoubleSlash|DoubleThrust = 0xA0` for daggers) are passed
+ *      through as-is; `getCombatManeuver` handles the multi-bit
+ *      branch via the picker's `IsThrustSlash` family. Source:
+ *      `PropertyInt::AttackType = 47` on the weapon entity, surfaced
+ *      via `apps/holtburger-web/src/lib.rs:apply_inventory_object_create`
+ *      onto `EquippedWeaponJs.attackType` and `InventoryItem.attackType`.
+ *   2. **EquipMask heuristic** — when `attackType` is `0` or missing
+ *      (pre-property-arrival ObjectCreate, or non-weapon items that
+ *      somehow reach this helper) the legacy equip-slot mapping
+ *      kicks in. Still useful because PropertyInt 47 sometimes lags
+ *      the equip-slot bit by a packet or two during fast equip
+ *      cycles.
+ *   3. **Undef fallback** — caller's `ATTACK_TYPE_SLASH` constant in
+ *      `picking.js` fills in when this helper returns `0`.
+ *
+ * ## Mapping table (Wave 6 wire-first, with Waves 1+2+5 fallback)
+ *
+ *   | Input                                                | AttackType returned                   |
+ *   |------------------------------------------------------|---------------------------------------|
+ *   | `weapon === null`  (unarmed)                         | `Punch  = 0x01`                       |
+ *   | `weapon.attackType > 0` (wire path)                  | `weapon.attackType` verbatim          |
+ *   | `equipMask & TWO_HANDED`   (wire 0, fallback)        | `Slash  = 0x04`  (legacy heuristic)   |
+ *   | `equipMask & MELEE_WEAPON` (wire 0, fallback)        | `Slash  = 0x04`                       |
+ *   | `equipMask & MISSILE_WEAPON` (wire 0, fallback)      | `Undef  = 0x00`  (see Phase 6 audit)  |
+ *   | `equipMask & MISSILE_AMMO`   (wire 0, fallback)      | `Undef  = 0x00`  (see Phase 6 audit)  |
+ *   | `equipMask & CASTER`         (wire 0, fallback)      | `Undef  = 0x00`  (magic path)         |
+ *   | anything else (e.g. SHIELD-only)                     | `Undef  = 0x00`                       |
  *
  * Why `Slash` for all melee weapons in this iteration:
  *   - Dominant retail AttackType for sword / axe / mace / two-handed
@@ -110,37 +134,38 @@
  * at 0% power where retail would emit Thrust)**. Roughly 35-40% of
  * two-handed weapons play the wrong CMT row under the current logic.
  *
- * **Decision (option c — document the limitation):** Keep TWO_HANDED
- * branch returning `Slash` because:
- *   1. The data we'd need to discriminate (`W_AttackType` PropertyInt 47
- *      and/or `WeaponType` PropertyInt 353) is NOT on the inventory wire
- *      today. Phase 5's `entity_equipped_weapon` wasm getter surfaces
- *      `{guid, wcid, itemType, equipMask, name}` only — no per-weapon
- *      property bag.
- *   2. A wcid-keyed lookup table (option a) would need ~646 entries for
+ * **Resolution (Wave 6 / Phase 15, 2026-05-26):** wire surfacing
+ * shipped — `WieldedWeaponEntry`/`EquippedWeaponJs`/`InventoryItem` in
+ * `apps/holtburger-web/src/lib.rs` now all carry `attack_type: u32`
+ * populated via `entity.get_int_prop(PropertyInt::AttackType)` at the
+ * `apply_inventory_object_create` and `publish_player_inventory_snapshot`
+ * sites. `inferAttackTypeForWeapon` prefers the wire value verbatim
+ * when non-zero (single- or multi-bit) and only falls back to the
+ * EquipMask heuristic for pre-property-arrival ObjectCreate events.
+ * Two-handed spears now play the Thrust family, swords play
+ * Thrust|Slash (handled at lookup time by the picker's
+ * `IsThrustSlash` branch in `getCombatManeuver`).
+ *
+ * The historical decision rationale (kept here because the underlying
+ * tradeoffs are still relevant for any future "we can't ship wire X"
+ * call) was:
+ *   1. A wcid-keyed lookup table (option a) would need ~646 entries for
  *      TwoHandedCombat alone, ~3,000+ for full melee coverage. It would
  *      diverge from retail every time a server adds custom weapons (any
  *      ACE shard with houserules). Brittle.
- *   3. A name-substring lookup (option b) is even worse — names are
+ *   2. A name-substring lookup (option b) is even worse — names are
  *      localized and decorative (Frost Partizan = Spear; Burnja's Board
  *      with Nails = Mace; Ultimate Singularity Spear vs Phantom Spear =
  *      both Spears with different W_AttackType because of mutator runs).
- *   4. The real fix is wire surfacing: extend the InventoryItem
- *      wasm-side struct in `apps/holtburger-web/src/lib.rs` (around the
- *      `WieldedWeaponEntry` at line 15421 added in Phase 5) to carry
- *      `attackType: Option<u32>` + `weaponType: Option<u32>` from the
- *      weapon entity's property bag. ACE already populates these on the
- *      server side for any wielded weapon. Once on the wire, port
- *      `WorldObject_Weapon.cs:1050 GetAttackType` verbatim into this
- *      helper — it's a pure stance/powerLevel branch tree, no server
- *      state needed client-side.
- *
- * Tracked in the §TODO list below as "Surface W_AttackType (PropertyInt
- * 47) and W_WeaponType (PropertyInt 353) on InventoryItem". Cosmetic-
- * impact-only: damage / hit-chance / Recklessness/Sneak Attack windows
- * are server-authoritative and unaffected; the visible bug is that
- * two-handed spears play SlashHigh/Med/Low animations instead of
- * ThrustHigh/Med/Low when retail would play the thrust family.
+ *   3. The real fix was wire surfacing — done in Phase 15. ACE already
+ *      populates `PropertyInt::AttackType` on the server side for any
+ *      wielded weapon; we just needed to thread it through the wasm
+ *      bridge. Porting `WorldObject_Weapon.cs:1050 GetAttackType`
+ *      verbatim (stance/powerLevel branch tree, including the
+ *      ThrustThreshold collapse) is still a follow-on if Wave 2 Phase 4
+ *      ever needs more nuance — today the multi-bit `Thrust|Slash`
+ *      values pass through to the CMT picker which handles them via
+ *      `IsThrustSlash`.
  *
  * ### Phase 14 (Light Weapons / Unarmed) audit finding — 2026-05-26 (Wave 5)
  *
@@ -223,18 +248,16 @@
  *
  * ## TODO (follow-ons surfaced by Wave 5 audits)
  *
- * - **Surface `W_AttackType` (PropertyInt 47) and `W_WeaponType`
- *   (PropertyInt 353) on `InventoryItem`** (wasm-side struct at
- *   `apps/holtburger-web/src/lib.rs:13991` + `WieldedWeaponEntry`
- *   added in Phase 5 around `src/lib.rs:15421`). The data lives on the
- *   weapon entity's `holtburger_common::properties::PropertyInt` map
- *   already (server populates these for any wielded weapon). Once
- *   surfaced, port `WorldObject_Weapon.cs:1050 GetAttackType` here
- *   verbatim — it's a pure stance/powerLevel branch tree, no server
- *   state needed client-side. **This is the single fix that unblocks
- *   both the Phase 13 two-handed limitation AND the dagger
- *   Thrust|Slash → power-threshold collapse currently lumped under
- *   `Slash`.**
+ * - ~~**Surface `W_AttackType` (PropertyInt 47) on `InventoryItem`**~~
+ *   **DONE — Wave 6 / Phase 15 (2026-05-26).** Both
+ *   `EquippedWeaponJs` and `InventoryItem` now carry `attack_type: u32`
+ *   populated from `PropertyInt::AttackType`; `inferAttackTypeForWeapon`
+ *   prefers it over the EquipMask heuristic. Two-handed spears now
+ *   play Thrust*, swords pass through Thrust|Slash to the CMT picker's
+ *   `IsThrustSlash` branch. `W_WeaponType` (PropertyInt 353) surfacing
+ *   is still open but lower priority — `GetAttackType` ignores
+ *   WeaponType anyway, so it's only needed for the future damage /
+ *   classification follow-ons.
  * - **Height-aware AttackType selection for unarmed** (Phase 14
  *   limitation): widen this helper's signature to accept
  *   `(weapon, attackHeight, powerLevel)` and branch to `Kick = 0x08`
@@ -311,12 +334,18 @@ void EQUIP_MASK_SHIELD;
  * of `InventoryItem` fields `entities.js#getEquippedWeapon` returns.
  *
  * @typedef {Object} EquippedWeapon
- * @property {number} guid       — weapon item GUID
- * @property {number} wcid       — weenie class id
- * @property {number} itemType   — `ItemType` bitmask (MeleeWeapon=0x1,
- *                                 MissileWeapon=0x100, Caster=0x8000)
- * @property {number} equipMask  — equip-slot bitmask
- * @property {string} [name]     — display name, debug only
+ * @property {number} guid         — weapon item GUID
+ * @property {number} wcid         — weenie class id
+ * @property {number} itemType     — `ItemType` bitmask (MeleeWeapon=0x1,
+ *                                   MissileWeapon=0x100, Caster=0x8000)
+ * @property {number} equipMask    — equip-slot bitmask
+ * @property {number} [attackType] — `W_AttackType` bitmask
+ *                                   (`PropertyInt::AttackType = 47`)
+ *                                   from the weapon entity. `0` /
+ *                                   missing = pre-property-arrival;
+ *                                   fall back to EquipMask heuristic.
+ *                                   Wave 6 / Phase 15 (2026-05-26).
+ * @property {string} [name]       — display name, debug only
  */
 
 /**
@@ -324,16 +353,26 @@ void EQUIP_MASK_SHIELD;
  * record. See module docstring for the full mapping table + ACE
  * source citations.
  *
- * Returns a single-bit value from `ATTACK_TYPE` (or `Undef = 0`).
- * Single bits matter because the CombatManeuverTable lookup uses the
- * type as a Map key (`r.tree.get(stance).get(height).get(attackType)`)
- * and rows are stored with single-bit codes per
- * `ACE.DatLoader/FileTypes/CombatManeuverTable.cs::Unpack`.
+ * **Precedence (Wave 6 / Phase 15, 2026-05-26):**
+ *   1. Wire `W_AttackType` (`weapon.attackType`) when non-zero — used
+ *      verbatim; may carry multi-bit values like `Thrust|Slash = 0x06`
+ *      which the CMT picker resolves at lookup time.
+ *   2. EquipMask heuristic — legacy fallback for pre-property-arrival
+ *      ObjectCreate events.
+ *   3. `Undef = 0` — caller's fallback constant kicks in.
+ *
+ * Return value can be either a single-bit or multi-bit
+ * `ATTACK_TYPE` value. Single bits are the common CMT-row key
+ * (`r.tree.get(stance).get(height).get(attackType)` per
+ * `ACE.DatLoader/FileTypes/CombatManeuverTable.cs::Unpack`); multi-bit
+ * values (Thrust|Slash, DoubleSlash|DoubleThrust) are handled by the
+ * downstream `getCombatManeuver` lookup via the `IsThrustSlash`
+ * branch.
  *
  * @param {EquippedWeapon | null | undefined} weapon
- * @returns {number} one of `ATTACK_TYPE.{Punch, Slash, Undef}` in
- *   this iteration; Wave 2/4/6 will widen the range as
- *   `W_AttackType`/`W_WeaponType` reach the client.
+ * @returns {number} `ATTACK_TYPE.*` bitmask (single- or multi-bit when
+ *   the wire path is used; single-bit Punch/Slash/Undef from the
+ *   legacy heuristic fallback).
  */
 export function inferAttackTypeForWeapon(weapon) {
   // Unarmed — Punch is the dominant melee row under HandCombat stance
@@ -358,6 +397,24 @@ export function inferAttackTypeForWeapon(weapon) {
   // makes the helper play Punch motions across all power levels. The
   // Kick-row fix is tracked in the §TODO list above.
   if (weapon == null) return ATTACK_TYPE.Punch;
+
+  // ── Wave 6 / Phase 15 (2026-05-26): wire `W_AttackType` ──
+  // `PropertyInt::AttackType = 47` is now surfaced on both the local
+  // (`InventoryItem.attackType`) and non-local
+  // (`EquippedWeaponJs.attackType`) paths via the wasm bridge — see
+  // `apps/holtburger-web/src/lib.rs:apply_inventory_object_create`
+  // and `publish_player_inventory_snapshot`. When the property is on
+  // the entity (non-zero bitmask), return it verbatim. Don't mask,
+  // don't AND — multi-bit values like `Thrust|Slash = 0x06` (most
+  // swords) and `DoubleSlash|DoubleThrust = 0xA0` (daggers) need to
+  // reach `getCombatManeuver` intact so its `IsThrustSlash` branch
+  // can resolve them at lookup time. Closes the Phase 13 two-handed
+  // limitation: spears now resolve to `Thrust = 0x02` instead of
+  // `Slash = 0x04`. Falls through to the EquipMask heuristic when
+  // `attackType` is 0 (pre-property-arrival ObjectCreate, or
+  // non-weapon items that somehow reach this code).
+  const wireAttackType = (weapon.attackType ?? 0) >>> 0;
+  if (wireAttackType !== 0) return wireAttackType;
 
   const mask = (weapon.equipMask ?? 0) >>> 0;
 
@@ -387,24 +444,21 @@ export function inferAttackTypeForWeapon(weapon) {
     return ATTACK_TYPE.Undef;
   }
 
-  // Melee or two-handed weapon — primary CMT row is Slash. Dagger
-  // families are `Thrust | Slash` in `W_AttackType` but the CMT
-  // dispatch is mediated by power level (Wave 2 Phase 4); without
-  // that, Slash is the safer single choice because it has rows in
-  // all melee stances. See module docstring §Mapping table.
+  // Melee or two-handed weapon — primary CMT row is Slash. Reached
+  // only when `weapon.attackType === 0`, which happens during the
+  // brief window between the equip-slot bit arriving and PropertyInt
+  // 47 landing on the entity (or for items where the server didn't
+  // populate W_AttackType). Wave 6 / Phase 15 (2026-05-26) wired the
+  // wire path above; this branch is the legacy heuristic that keeps
+  // pre-property-arrival ObjectCreate events working.
   //
-  // **TWO_HANDED limitation (Phase 13 audit, Wave 5):** The LSD
-  // weenie survey (646 retail TwoHandedCombat weapons) shows
-  // ~35-40% of two-handed weapons have a NON-Slash dominant
-  // W_AttackType: Spears are 88% pure Thrust, Swords are 84%
-  // Thrust|Slash (power-threshold split), Daggers are
-  // DoubleSlash|DoubleThrust. We default to `Slash` because
-  // PropertyInt 47 (W_AttackType) is not surfaced on the wire today
-  // — extending the InventoryItem wasm struct to carry it is the
-  // unblock (see §TODO above). Visible bug: two-handed spears
-  // (Trident / Partizan / Nabut) play `Slash*` motions instead of
-  // `Thrust*`. Damage / hit-chance / Recklessness windows are
-  // server-authoritative and unaffected.
+  // **Historical Phase 13 limitation (Wave 5):** the LSD weenie
+  // survey (646 retail TwoHandedCombat weapons) showed ~35-40% of
+  // two-handed weapons have a non-Slash dominant W_AttackType
+  // (Spears 88% Thrust, Swords 84% Thrust|Slash, Daggers
+  // DoubleSlash|DoubleThrust). The wire path above resolves this in
+  // steady state — only the property-not-arrived-yet window still
+  // sees the legacy `Slash` answer.
   if (mask & (EQUIP_MASK_MELEE_WEAPON | EQUIP_MASK_TWO_HANDED)) {
     return ATTACK_TYPE.Slash;
   }

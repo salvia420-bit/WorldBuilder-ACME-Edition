@@ -23,6 +23,10 @@
 | 12 | Spell-shape classifier (War 6 shapes + Void 5 shapes from SpellId) | 5 | **shipped** 2026-05-26 |
 | 13 | Two-Handed Combat AttackType audit (limitation documented) | 5 | **shipped** 2026-05-26 |
 | 14 | Light Weapons / Unarmed audit (post-MoA mapping confirmed) | 5 | **shipped** 2026-05-26 |
+| 15 | W_AttackType (PropertyInt 47) wire surfacing | 6 | **shipped** 2026-05-26 |
+| 16 | Magic-side Sneak Attack prediction (extend Phase 9 to spell-cast path) | 6 | **shipped** 2026-05-26 |
+| 17 | Magic-shape classifier UI surface in spell-picker | 6 | **shipped** 2026-05-26 |
+| 18 | Acclient.c shield-Backhand runtime gate investigation (wiki was wrong) | 6 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -781,11 +785,210 @@ Added a documented limitation: helper always returns `Punch (0x01)` regardless o
 
 ### What's still parked after Wave 5
 
-Wave 5 closes the wiki-derived follow-ons. Outstanding items would be:
-- **Magic-side Sneak Attack prediction** (Phase 9 is melee/missile only).
-- **Defender-yaw on the wire at swing-impact-tick** (currently we sample from entity manager; if the server checks at a different tick boundary, our prediction can desync).
-- **Wave 3 missile prediction quality.** Direct-line direction works most of the time; gravity-compensated arc would match server choices more often. Tracked in the helper's TODO.
-- **Sneak Attack damage-rating display.** Showing the predicted DR value (combining base attack + sneak + recklessness) on the combat HUD; depends on Phase 11 and a new Damage Rating rollup.
+See Wave 6 below.
+
+---
+
+## Wave 6 — wire surfacing + magic-side completeness (4 agents, parallel)
+
+Four phases, four agents — all file-disjoint, dispatch in parallel.
+
+### Pre-investigated facts
+
+- **PropertyInt::AttackType = 47** exists in `crates/holtburger-common/src/properties/property_keys/ints.rs:55`. Already used at `crates/holtburger-world/src/assessment.rs:823-826` via `object.get_int_prop(PropertyInt::AttackType).map(|bits| AttackType::from_bits_truncate(bits as u32))`. Just needs to flow into `WieldedWeaponEntry`.
+- **`WieldedWeaponEntry`** is defined at `src/lib.rs:14099-14112` with five fields (`item_guid, wcid, name, item_type, equip_mask`). Populated at `src/lib.rs:15460-15466` from `apply_inventory_object_create`.
+- **`EquippedWeaponJs`** is the wasm-exported struct at `src/lib.rs:14126-14132`, returned by `SessionHandle::entity_equipped_weapon`. Phase 15 extends both structs.
+- **Magic-cast dispatch lives at `scene3d/picking.js:319-329`** — `castTargetedSpell(guid, spellId)` inside the `isInMagicStance` branch of `onPointerDown`. Phase 16 wires the sneak-attack predictor here.
+- **Spell picker lives at `plugins/combat-bar.js:908 renderSpellPicker`**. Phase 17 surfaces shape icons here.
+- **`classifySpell(spellId)`** from Wave 5 Phase 12 returns `{ school, shape, level }` — Phase 17 consumes this directly. Lazy-loads `data/spell-shapes.json` on first call.
+
+### Phase 15 — W_AttackType (PropertyInt 47) wire surfacing
+
+**Owner:** Agent M
+**Goal:** Surface the weapon's `W_AttackType` bitmask on `EquippedWeaponJs` and through `inferAttackTypeForWeapon` so two-handed weapons get the correct AttackType (closes Phase 13's documented limitation). Spear → Thrust, Sword → Thrust|Slash, etc.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/src/lib.rs`:
+  - `WieldedWeaponEntry` (struct at line 14099): add `attack_type: u32`. Populate at line 15460ish from `entity.get_int_prop(PropertyInt::AttackType).map(|bits| bits as u32).unwrap_or(0)`.
+  - `EquippedWeaponJs` (struct at line 14126): add `attack_type: u32`. Add a `#[wasm_bindgen(getter)] pub fn attack_type(&self) -> u32` method.
+  - Wherever `EquippedWeaponJs` is constructed from `WieldedWeaponEntry` (search for the construction site — likely in `SessionHandle::entity_equipped_weapon`), populate the new field.
+- Local-player path: `playerInventory()` returns `InventoryItem` structs. Find where those are constructed (`apply_inventory_object_create` probably has the local branch too) and add the same `attack_type` field. Expose to JS.
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js`:
+  - `getEquippedWeapon(guid)` (Agent B's Wave 1 work) — extend the returned object to include `attackType: weapon.attackType ?? 0` for both local + non-local branches.
+- `external/holtburger/apps/holtburger-web/ui/ac_attack_type_for_weapon.js`:
+  - Update `inferAttackTypeForWeapon(weapon)` to **prefer `weapon.attackType` when non-zero**, falling back to the existing EquipMask heuristics. If the bitmask has multiple bits set (e.g., `Thrust|Slash = 0x06`), return the bitmask as-is — `getCombatManeuver` already handles multi-bit lookup via the picker's IsThrustSlash branch.
+  - Update the mapping-table comment to document the new precedence: wire `W_AttackType` > EquipMask heuristic > Undef fallback.
+  - Remove or update the TODO breadcrumb at the bottom that says PropertyInt 47 isn't surfaced; now it is.
+
+**Acceptance:**
+- `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean.
+- `wasm-pack build` succeeds and `pkg/holtburger_web.d.ts` shows `attack_type` on `EquippedWeaponJs`.
+- `node --check` clean on entities.js + ac_attack_type_for_weapon.js.
+- `inferAttackTypeForWeapon({attackType: 0x02, equipMask: 0x02000000})` (a two-handed spear) returns `0x02` (Thrust), not `0x04` (Slash from old TWO_HANDED branch).
+- `inferAttackTypeForWeapon({attackType: 0x06, equipMask: 0x00100000})` (sword with both Thrust+Slash) returns `0x06`.
+- `inferAttackTypeForWeapon({attackType: 0, equipMask: 0x00100000})` (no wire AttackType — fallback) returns `0x04` (Slash) per existing heuristic.
+
+**Hard constraints:**
+- Do NOT touch `picking.js` call sites or the CMT lookup itself — the helper's return value already feeds correctly into `getCombatManeuver`.
+- Do NOT remove the EquipMask fallback — pre-PropertyInt-arrival ObjectCreate events still need the existing classification.
+
+### Phase 16 — Magic-side Sneak Attack prediction
+
+**Owner:** Agent N
+**Goal:** Extend Phase 9's `sneakAttackPredicted` event to fire on magic spell casts, since the acpedia wiki confirms Sneak Attack works for War + Void Magic (facing-gated like melee/missile).
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` — the magic branch at lines 319-329 (`isInMagicStance && castTargetedSpell`). After the `sessionHandle.castTargetedSpell(guid, spellId)` call, sample defender pose + heading and fire the predictor:
+  ```js
+  if (spellId !== 0) {
+    const targetPos = entityAcPosition(em, guid);
+    const targetHeadingRad = em.getHeading?.(guid) ?? null;
+    if (targetPos && targetHeadingRad != null && pose) {
+      if (isAttackerBehindDefender({
+        attackerPose: pose,
+        defenderPose: targetPos,
+        defenderHeadingRad: targetHeadingRad,
+      })) {
+        window.__pluginClient?.events?.emit?.("sneakAttackPredicted", {
+          attackerGuid: localGuid,
+          defenderGuid: guid,
+          attackType: null,  // magic — no melee AttackType bitmask applies
+          spellId,
+          scope: "local-magic",
+        });
+      }
+    }
+    sessionHandle.castTargetedSpell(guid, spellId);
+  }
+  ```
+  Confirm `pose`, `em`, `localGuid` are in scope at line 319 (they might not be — read the surrounding code carefully and add the needed lookups).
+
+**Acceptance:**
+- `node --check` clean on picking.js.
+- Event fires only when in magic stance AND a spell is armed AND the target is in the rear cone.
+- `scope: "local-magic"` lets plugins distinguish magic Sneak Attack from melee/missile.
+
+**Hard constraints:**
+- Do NOT touch the melee/missile branches (Phase 9 already wired them).
+- Do NOT modify `ui/ac_sneak_attack_predict.js` — the predictor is already correctly generic.
+- Do NOT touch `combat-bar.js`'s spell picker (Phase 17 territory).
+- The `attackType: null` in the event payload is intentional — magic doesn't have a CMT AttackType bitmask. Plugins consuming the event should handle `null`.
+
+### Phase 17 — Magic-shape classifier UI surface in spell-picker
+
+**Owner:** Agent O
+**Goal:** Surface Wave 5 Phase 12's spell-shape classifier in the spell-picker UI so the user sees what projectile pattern each spell will produce (Bolt / Arc / Streak / Volley / Wall / Ring / Blast / Self).
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/plugins/combat-bar.js` — `renderSpellPicker` function around line 908. For each spell button, after fetching the spell name, also call `classifySpell(spellId)` and surface the shape:
+  - Either as a small icon (single-letter badge: "B" for Bolt, "S" for Streak, "A" for Arc, "V" for Volley, "W" for Wall, "R" for Ring, "X" for Blast, no icon for Self/non-projectile)
+  - Or as a tooltip suffix: "Lightning Bolt I (Bolt)"
+  - Or both — pick what fits the existing combat-bar aesthetic.
+- Import `classifySpell` from `../ui/ac_spell_shape.js`. The classifier is async on first call (lazy-loads JSON); cache the result or pre-warm at picker open.
+
+**Hard constraints:**
+- Do NOT wire spell-shape into projectile spawning — that's renderer work for a separate ticket. This phase is UI-surface only.
+- Do NOT touch `ui/ac_spell_shape.js` — Wave 5 just shipped it; use as-is.
+- Do NOT touch `picking.js` (Phase 16 territory).
+- Magic stance only; don't add shape badges to melee/missile combat-bar configurations (they don't have spell IDs).
+
+**Acceptance:**
+- `node --check` clean on combat-bar.js.
+- Open spell-picker in magic stance → each spell button shows its shape badge or tooltip.
+- Non-projectile spells (Self) either show no badge or a "Self" badge — your call.
+- Empty / unclassified spells fall back gracefully.
+
+### Phase 18 — Acclient.c shield-Backhand runtime gate investigation
+
+**Owner:** Agent P
+**Goal:** Resolve the wiki-vs-data divergence from Wave 5 Phase 10. Retail CMT 0x30000000 contains 3 Backhand rows under SwordShieldCombat (Low/Med/High, all Slash), but the acpedia Combat omnibus page omits them. Either the wiki is wrong, OR retail blocks the motions at runtime via a separate gate. Find which.
+
+**Investigation steps:**
+1. Grep `/home/wbterminal/ac-headers/acclient.c` for the `CombatManeuverTable::Get` call site (around line 408537). Read 100-200 lines of surrounding context.
+2. Look for any code that filters MotionCommand results before playing them — e.g., shield-equipped check, weapon-type check, backhand-specific block.
+3. Cross-check ACE's `Player_Melee.GetSwingAnimation` (`~/ace-server/Source/ACE.Server/WorldObjects/Player_Melee.cs:440-475`) — does the server-side picker filter out Backhand for shield wearers? Look at the full method, not just the picker we ported.
+4. Check `~/ace-server/Source/ACE.Server/WorldObjects/Creature_Combat.cs` for any "if shield equipped, drop backhand" logic.
+
+**Deliverables:**
+- Update `external/holtburger/crates/holtburger-dat/tests/shield_stance_backhand_audit.rs`'s doc-comment with the **resolution**: either (a) "retail gates Backhand at acclient.c:XXX via Y check" with the citation, OR (b) "no runtime gate found — the wiki is just wrong; retail will swing Backhand for shield-wearers when the CMT row is hit".
+- If you find a runtime gate, also note the implication for OUR renderer: do we need to mirror the gate client-side, or does the server already filter and only send us non-Backhand motions on UpdateMotion (kind=5)?
+
+**Files:**
+- `external/holtburger/crates/holtburger-dat/tests/shield_stance_backhand_audit.rs` — doc-comment update only. NO test logic changes.
+- *(optional)* a small standalone doc at `external/holtburger/docs/shield-backhand-runtime-gate-2026-05-26.md` if your findings warrant ~200+ words.
+
+**Hard constraints:**
+- Read-only investigation across acclient.c + ACE. No production code changes.
+- Do NOT modify the test's assertion logic — the 3-rows-found assertion is correct; only the doc-comment narrative is in scope.
+
+**Acceptance:**
+- Concrete finding in the doc comment with file:line citation OR explicit "no gate found" statement after due-diligence search.
+- If a doc was written, it cites all sources read.
+
+**Reporting (for all 4 agents):**
+
+Files changed (paths + line counts), key findings, validation steps, any surprises. Under 350 words each. **Don't commit — parent agent handles commits after all 4 finish.**
+
+### Wave 6 results — shipped 2026-05-26
+
+#### Phase 15 (Agent M) — W_AttackType wire surfacing
+
+**Files (3, +239 / -91):**
+- `external/holtburger/apps/holtburger-web/src/lib.rs` (+84 / -2): added `attack_type: u32` to `WieldedWeaponEntry` (line 14099), `EquippedWeaponJs` (line 14126), AND `InventoryItem` (line 13991, the local-player twin). New `#[wasm_bindgen(getter, js_name = attackType)]` on both Js structs. Populated in `apply_inventory_object_create` (line 15431) via `entity.get_int_prop(PropertyInt::AttackType).map(|bits| bits as u32).unwrap_or(0)`, in `entity_equipped_weapon` (line 16386), and in `publish_player_inventory_snapshot` (line 20062).
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js` (+25 / -7): `getEquippedWeapon(guid)` emits `attackType: (… ?? 0) >>> 0` on BOTH local-player (playerInventory loop) and non-local (entityEquippedWeapon wasm call) branches.
+- `external/holtburger/apps/holtburger-web/ui/ac_attack_type_for_weapon.js` (+130 / -82): wire-first precedence — `inferAttackTypeForWeapon(weapon)` returns `weapon.attackType` verbatim when non-zero (preserves multi-bit values for the picker's `IsThrustSlash` branch); falls through to existing EquipMask heuristic otherwise. Mapping table + module docstring updated. Phase 13 "limitation" section now reads "Resolution"; old TODO replaced with strikethrough + done note.
+
+**Verified acceptance (parent reran):**
+- `inferAttackTypeForWeapon({attackType: 0x02, equipMask: 0x02000000})` → `0x02` (two-handed spear: Thrust). ✓
+- `inferAttackTypeForWeapon({attackType: 0x06, equipMask: 0x00100000})` → `0x06` (sword: Thrust|Slash). ✓
+- `inferAttackTypeForWeapon({attackType: 0, equipMask: 0x00100000})` → `0x04` (fallback: Slash). ✓
+- `inferAttackTypeForWeapon(null)` → `0x01` (unarmed: Punch). ✓
+
+`cargo check wasm32` clean (18 pre-existing warnings, 0 new). `wasm-pack build` PASS; `pkg/holtburger_web.d.ts` shows `readonly attackType: number` on both `EquippedWeaponJs` and `InventoryItem`.
+
+#### Phase 16 (Agent N) — Magic-side Sneak Attack prediction
+
+**Files (1, +33 / -0):**
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` — magic-cast branch at line 327 inside `onPointerDown`. Wraps `castTargetedSpell` with the predictor call, fires `sneakAttackPredicted` event with `scope: "local-magic"` + `attackType: null` (magic has no CMT AttackType bitmask). Pure observational; cast fires regardless of predictor match. `try/catch` wrap so prediction faults never block the cast. Reuses Phase 9's `isAttackerBehindDefender` import; all helper poses (`playerWorldPose`, `entityAcPosition`, `em.getHeading`, `getLocalPlayerGuid`) were already in scope.
+
+#### Phase 17 (Agent O) — Spell-shape UI in spell-picker
+
+**Files (1, +122 / -2):**
+- `external/holtburger/apps/holtburger-web/plugins/combat-bar.js` — `renderSpellPicker` now annotates each spell button with a **single-letter color-coded badge** (`B`/`A`/`S`/`V`/`W`/`R`/`X`/`·`) AND a tooltip suffix (`"Lightning Bolt I (Bolt)"`). 14px fixed-width badge column prevents layout jitter. Render-with-placeholder + 50ms poll-on-load strategy: initial render shows empty badges (table lazy-loads), `setInterval(50ms)` polls `isShapeTableLoaded()` and re-renders once on load (cleanup hooked into existing `bodyEl.__spellPickerDispose` chain, 3s safety stop). Mirrors the `loadCatalog().then(renderRows())` pattern next door.
+
+Per-shape badge colors: Bolt=blue, Arc=purple, Streak=amber, Volley=pink, Wall=mint, Ring=yellow, Blast=orange, Self=dim-gray-transparent. Recklessness band code (Wave 4) untouched.
+
+DOM output example:
+```html
+<button class="hb-cb-spell" data-spell-id="75" title="Lightning Bolt I (Bolt)">
+  <span class="hb-cb-spell-action">ARM</span>
+  <span class="hb-cb-spell-shape" data-shape="Bolt">B</span>
+  <span class="hb-cb-spell-name">Lightning Bolt I</span>
+  <span class="hb-cb-spell-tag">War</span>
+</button>
+```
+
+#### Phase 18 (Agent P) — Shield-Backhand runtime gate investigation
+
+**Conclusion: THE WIKI IS WRONG. No runtime gate exists.** Read-only investigation across retail acclient.c (lines 407409–410069) and the entire ACE.Server tree found ZERO code paths filtering `Backhand*` MotionCommands from CMT results for shield-equipped attackers. The only retail `CombatManeuverTable::Get` call site (`acclient.c:408537`) treats the table as a boolean "do we have CMT data?" readiness gate; rows are never iterated. ACE's `Player_Melee.GetSwingAnimation`, `Monster_Melee.GetCombatManeuver`, `Creature_Combat`, `WorldObject_Weapon.GetAttackType`, and `CombatManeuverTable.GetMotion` all play whatever the dictionary lookup returns.
+
+**Red herring caught:** The Backhand* enum values (`0x1000005E/5F/60`) are reused as **input-event keystroke IDs** in retail's `HandleCombatAction` / `HandleMagicAction` UI dispatch (acclient.c lines 254022–254030, 407471, 410027–410055). A naive grep for those hex values looks like motion filtering at first glance — it's not.
+
+**Files (2, +93 / new 190):**
+- `external/holtburger/crates/holtburger-dat/tests/shield_stance_backhand_audit.rs` — doc-comment header extended with full "Resolution" section, cited sources (file:line ranges), implication for our renderer. **Test logic untouched.**
+- NEW `external/holtburger/docs/shield-backhand-runtime-gate-2026-05-26.md` (190 lines) — standalone deep-dive doc.
+
+**Implication for our renderer:** Nothing to mirror. Our `Player_Melee` port + `ui/ac_combat_maneuver.js` picker already match ACE+retail (trust the table). Server-authoritative `UpdateMotion` (kind=5) broadcasts the resolved MotionCommand verbatim and our pose pipeline plays it as-is. The Wave 5 Phase 10 open question is closed.
+
+### Wave 6 validation summary
+
+| Check | Result |
+|---|---|
+| `node --check` on 4 modified JS files | PASS |
+| `cargo check -p holtburger-web --target wasm32-unknown-unknown` | PASS (18 pre-existing warnings, 0 new) |
+| `wasm-pack build` | PASS; `attackType` on `EquippedWeaponJs` + `InventoryItem` confirmed |
+| `cargo test -p holtburger-dat shield_stance_backhand_audit` (with portal.dat) | PASS in 1.03s |
+| `inferAttackTypeForWeapon` 4-case precedence check | 4/4 PASS |
 
 ## Coordination notes for agents
 

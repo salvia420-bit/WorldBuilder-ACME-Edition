@@ -1769,18 +1769,22 @@ export class EntityManager {
    * (the entity hasn't been observed yet) OR when the entity is
    * currently unarmed.
    *
-   * ## TODO (Wave 2/4 — AttackType refinement)
+   * ## Wave 6 / Phase 15 (2026-05-26): `W_AttackType` now on the wire
    *
-   * Surface `W_AttackType` (`PropertyInt::AttackType = 45`) and
-   * `W_WeaponType` (`PropertyInt::WeaponType = 89`) on `InventoryItem`
-   * so the inference can port ACE's
-   * `WorldObject_Weapon.cs:1050 GetAttackType` verbatim. Today the
-   * inference fakes it with the equip-slot bit because that's the
-   * only weapon-shaped data we have.
+   * `PropertyInt::AttackType = 47` is surfaced on both the local
+   * (`InventoryItem.attackType`) and non-local (`EquippedWeaponJs
+   * .attackType`) wasm structs — see
+   * `apps/holtburger-web/src/lib.rs:apply_inventory_object_create`
+   * and `publish_player_inventory_snapshot`. The returned record
+   * now carries `attackType` so `inferAttackTypeForWeapon` can
+   * prefer it over the equip-slot heuristic and resolve two-handed
+   * spears to Thrust, swords to Thrust|Slash, etc. (closing the
+   * Phase 13 documented limitation).
    *
    * @param {number} guid — entity GUID to query
    * @returns {{ guid: number, wcid: number, itemType: number,
-   *             equipMask: number, name: string } | null}
+   *             equipMask: number, attackType: number,
+   *             name: string } | null}
    */
   getEquippedWeapon(guid) {
     const g = (guid >>> 0) || 0;
@@ -1811,12 +1815,16 @@ export class EntityManager {
           // wasm-bindgen returns a struct with getters; mirror it into
           // a plain object so the caller doesn't have to worry about
           // wasm-bindgen handle lifetimes (the struct here is cheap —
-          // 5 fields, no per-call .free() responsibility).
+          // 6 fields, no per-call .free() responsibility).
+          // CMT Wave 6 / Phase 15 (2026-05-26): `attackType` is
+          // PropertyInt 47 (`W_AttackType`); `inferAttackTypeForWeapon`
+          // prefers it over the EquipMask heuristic when non-zero.
           const result = {
             guid:     (w.guid ?? 0) >>> 0,
             wcid:     (w.wcid ?? 0) >>> 0,
             itemType: (w.itemType ?? 0) >>> 0,
             equipMask: (w.equipMask ?? 0) >>> 0,
+            attackType: (w.attackType ?? 0) >>> 0,
             name:     typeof w.name === "string" ? w.name : "",
           };
           // wasm-bindgen-constructed structs need explicit .free()
@@ -1858,11 +1866,17 @@ export class EntityManager {
       const mask = (item?.equipMask ?? 0) >>> 0;
       if ((mask & PRIMARY_WEAPON_BITS) === 0) continue;
       // First (and only) primary wielded weapon wins.
+      // CMT Wave 6 / Phase 15 (2026-05-26): `attackType` is
+      // PropertyInt 47 (`W_AttackType`), surfaced on the local-player
+      // InventoryItem alongside the non-local EquippedWeaponJs path.
+      // Drives `inferAttackTypeForWeapon`'s new wire-prefers-heuristic
+      // precedence (closes Phase 13's two-handed limitation).
       return {
         guid:     (item.guid ?? 0) >>> 0,
         wcid:     (item.wcid ?? 0) >>> 0,
         itemType: (item.itemType ?? 0) >>> 0,
         equipMask: mask,
+        attackType: (item.attackType ?? 0) >>> 0,
         name:     typeof item.name === "string" ? item.name : "",
       };
     }

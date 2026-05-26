@@ -13998,6 +13998,14 @@ pub struct InventoryItem {
     stack_size: u32,
     equip_mask: u32,
     container_id: u32,
+    /// CMT Wave 6 / Phase 15 (2026-05-26): `W_AttackType` bitmask from
+    /// `PropertyInt::AttackType = 47`. Local-player twin of the
+    /// `attack_type` field on [`EquippedWeaponJs`] — needed so the JS
+    /// `getEquippedWeapon` local branch can surface the same field as
+    /// the non-local branch, and `inferAttackTypeForWeapon` resolves
+    /// identically on both paths. `0` when the weapon entity hasn't
+    /// surfaced PropertyInt 47 yet, or for non-weapon items.
+    attack_type: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -14068,6 +14076,18 @@ impl InventoryItem {
     pub fn container_id(&self) -> u32 {
         self.container_id
     }
+
+    /// CMT Wave 6 / Phase 15 (2026-05-26): `W_AttackType` bitmask from
+    /// `PropertyInt::AttackType = 47`. Mirrors
+    /// [`EquippedWeaponJs::attack_type`] so the JS-side
+    /// `inferAttackTypeForWeapon` resolves identically on both the
+    /// local-player path (this struct via `playerInventory()`) and
+    /// the non-local path (`entityEquippedWeapon`). `0` when the
+    /// property isn't on the entity (most non-weapon items).
+    #[wasm_bindgen(getter, js_name = attackType)]
+    pub fn attack_type(&self) -> u32 {
+        self.attack_type
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -14109,6 +14129,19 @@ struct WieldedWeaponEntry {
     /// occupying on the wielder (MELEE_WEAPON / MISSILE_WEAPON / etc.).
     /// This is what `inferAttackTypeForWeapon` keys on.
     equip_mask: u32,
+    /// CMT Wave 6 / Phase 15 (2026-05-26): `W_AttackType` bitmask from
+    /// `PropertyInt::AttackType = 47`. Carries the weapon's intrinsic
+    /// AttackType bits (e.g. `Thrust = 0x02` for a spear,
+    /// `Thrust|Slash = 0x06` for a sword, `DoubleSlash|DoubleThrust =
+    /// 0xA0` for a dagger). Closes Phase 13's two-handed limitation:
+    /// `inferAttackTypeForWeapon` now prefers this over the equip-slot
+    /// heuristic when non-zero. `0` when the weapon entity hasn't
+    /// surfaced PropertyInt 47 yet (pre-ObjectCreate arrival, or for
+    /// items that don't carry the property — e.g. shields).
+    /// See `assessment.rs:823-826` for the canonical accessor pattern
+    /// and `ace-server/Source/ACE.Entity/Enum/Properties/PropertyInt.cs:78`
+    /// for the enum value.
+    attack_type: u32,
 }
 
 /// CMT Wave 2 / Phase 5 (2026-05-26): JS-facing wielded-weapon record
@@ -14129,6 +14162,12 @@ pub struct EquippedWeaponJs {
     item_type: u32,
     equip_mask: u32,
     name: String,
+    /// CMT Wave 6 / Phase 15: `W_AttackType` (`PropertyInt::AttackType
+    /// = 47`) bitmask from the weapon entity. `0` when the property
+    /// isn't on the entity yet (pre-ObjectCreate property arrival or
+    /// for non-weapon wielded items). See [`WieldedWeaponEntry`] for
+    /// the source-side comment.
+    attack_type: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -14156,6 +14195,17 @@ impl EquippedWeaponJs {
     /// Display name (debug / tooltip).
     #[wasm_bindgen(getter)]
     pub fn name(&self) -> String { self.name.clone() }
+
+    /// CMT Wave 6 / Phase 15 (2026-05-26): `W_AttackType` bitmask from
+    /// `PropertyInt::AttackType = 47`. When non-zero, the JS-side
+    /// `inferAttackTypeForWeapon` returns this verbatim (skipping the
+    /// equip-slot heuristic) so two-handed spears get
+    /// `Thrust = 0x02`, swords get `Thrust|Slash = 0x06`, etc. `0`
+    /// means "wire property not surfaced yet — fall back to EquipMask
+    /// heuristic" — preserving the Wave 1/5 behaviour for
+    /// pre-property-arrival ObjectCreate events.
+    #[wasm_bindgen(getter, js_name = attackType)]
+    pub fn attack_type(&self) -> u32 { self.attack_type }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -15425,7 +15475,9 @@ fn apply_inventory_object_create(
         std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
     >,
 ) -> bool {
-    use holtburger_common::properties::WorldObjectExt as _;
+    use holtburger_common::properties::{
+        PropertyInt, WorldObjectExt as _, WorldObjectPropertyAccessors as _,
+    };
     let guid = data.public_weenie_desc.guid;
     let entity_name = data
         .public_weenie_desc
@@ -15440,6 +15492,19 @@ fn apply_inventory_object_create(
     let container_id = entity.container_id();
     let wielder_id = entity.wielder_id();
     let equip_mask = entity.wield_location();
+    // CMT Wave 6 / Phase 15 (2026-05-26): pull `W_AttackType`
+    // (`PropertyInt::AttackType = 47`) off the weapon entity here so
+    // both downstream paths (non-local `WieldedWeaponEntry` below AND
+    // local `InventoryItem` via `publish_player_inventory_snapshot`)
+    // can surface it without re-borrowing the world. `0` when the
+    // property isn't on the entity yet — matches the
+    // `assessment.rs:823-826` pattern. Accessor flows through the
+    // blanket `WorldObjectPropertyAccessors` impl on any
+    // `HasProperties` type.
+    let attack_type = entity
+        .get_int_prop(PropertyInt::AttackType)
+        .map(|bits| bits as u32)
+        .unwrap_or(0);
 
     // CMT Wave 2 / Phase 5 (2026-05-26): non-local wielder index. When
     // ACE ships an ObjectCreate for a wielded item AND the wielder is
@@ -15463,6 +15528,7 @@ fn apply_inventory_object_create(
             name: entity.name().to_string(),
             item_type: entity.item_type_int().unwrap_or(0),
             equip_mask: equip_mask.bits(),
+            attack_type,
         };
         let mut idx = wielder_index.borrow_mut();
         let list = idx.entry(w_u32).or_default();
@@ -16405,6 +16471,7 @@ impl SessionHandle {
                 item_type: entry.item_type,
                 equip_mask: entry.equip_mask,
                 name: entry.name.clone(),
+                attack_type: entry.attack_type,
             });
         }
         None
@@ -19999,7 +20066,9 @@ fn publish_player_inventory_snapshot(
     world: &holtburger_world::WorldState,
     latest_inventory: &std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
 ) {
-    use holtburger_common::properties::WorldObjectExt as _;
+    use holtburger_common::properties::{
+        PropertyInt, WorldObjectExt as _, WorldObjectPropertyAccessors as _,
+    };
     let mut items: Vec<InventoryItem> =
         Vec::with_capacity(world.player.inventory.len());
     for guid in world.player.inventory.iter().copied() {
@@ -20018,6 +20087,16 @@ fn publish_player_inventory_snapshot(
             .map(u32::from)
             .filter(|c| *c != u32::from(world.player.guid))
             .unwrap_or(0);
+        // CMT Wave 6 / Phase 15 (2026-05-26): surface `W_AttackType`
+        // (PropertyInt 47) so the JS-side `inferAttackTypeForWeapon`
+        // can prefer it over the equip-slot heuristic. `0` for items
+        // that don't carry the property (most non-weapon inventory).
+        // Same accessor pattern as the non-local path in
+        // `apply_inventory_object_create`.
+        let attack_type = entity
+            .get_int_prop(PropertyInt::AttackType)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -20028,6 +20107,7 @@ fn publish_player_inventory_snapshot(
             stack_size: entity.stack_size(),
             equip_mask,
             container_id,
+            attack_type,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS

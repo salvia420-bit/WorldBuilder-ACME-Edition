@@ -7,6 +7,45 @@ import {
   loadCatalog,
 } from "./spellbook.js";
 import { setAcText } from "../ui/ac_font.js";
+import {
+  classifySpell,
+  isShapeTableLoaded,
+  SPELL_SHAPE,
+} from "../ui/ac_spell_shape.js";
+
+// Wave 6 / Phase 17 — spell-shape badge mapping.
+//
+// `classifySpell(spellId)` lazy-loads `data/spell-shapes.json` on the
+// first call (returns `null` synchronously while the fetch is in
+// flight). The spell picker mirrors the existing `loadCatalog` pattern:
+// render once on open (badges absent if the table isn't loaded yet),
+// then poll `isShapeTableLoaded()` with a short setInterval and
+// re-render once the table is in. This keeps the picker snappy on
+// open — no awaited gate — and the badges fade in within ~one frame
+// of the JSON arriving (typical cold fetch is 30-80ms).
+//
+// Single-letter badges per `ui/ac_spell_shape.js` SPELL_SHAPE strings:
+//   Bolt → B   single straight-line projectile
+//   Arc  → A   parabolic single projectile
+//   Streak → S rapid-fire same projectile
+//   Volley → V fan of multi-projectiles converging on target
+//   Wall → W   slow-advancing wall of projectiles
+//   Ring → R   caster-centered ring AoE
+//   Blast → X explosion at target point
+//   Self → ·  no projectile (non-projectile / DoT / debuff / heal /
+//             enchant). Distinct middle-dot keeps the column visually
+//             aligned with projectile spells so the badge slot doesn't
+//             jitter.
+const SPELL_SHAPE_BADGE = Object.freeze({
+  [SPELL_SHAPE.Bolt]:   "B",
+  [SPELL_SHAPE.Arc]:    "A",
+  [SPELL_SHAPE.Streak]: "S",
+  [SPELL_SHAPE.Volley]: "V",
+  [SPELL_SHAPE.Wall]:   "W",
+  [SPELL_SHAPE.Ring]:   "R",
+  [SPELL_SHAPE.Blast]:  "X",
+  [SPELL_SHAPE.Self]:   "·", // middle dot
+});
 
 const STORAGE_KEY = "holtburger_combat_bar_v1";
 
@@ -266,6 +305,28 @@ function ensureStyles() {
       border-radius: 3px;
       color: rgba(255, 255, 255, 0.45);
     }
+    /* Wave 6 / Phase 17 — spell-shape badge. Sits between the action
+       column and the spell name so the column-width stays fixed even
+       when the table hasn't loaded yet (badge becomes a blank span). */
+    .hb-cb-spell-shape {
+      flex: 0 0 14px;
+      font-family: var(--ac-mono, ui-monospace, monospace);
+      font-size: 10px;
+      font-weight: 700;
+      text-align: center;
+      line-height: 14px;
+      border-radius: 3px;
+      background: rgba(0, 0, 0, 0.35);
+      color: rgba(255, 255, 255, 0.65);
+    }
+    .hb-cb-spell-shape[data-shape="Bolt"]   { color: rgba(170, 200, 255, 0.95); }
+    .hb-cb-spell-shape[data-shape="Arc"]    { color: rgba(200, 170, 255, 0.95); }
+    .hb-cb-spell-shape[data-shape="Streak"] { color: rgba(255, 200, 130, 0.95); }
+    .hb-cb-spell-shape[data-shape="Volley"] { color: rgba(255, 170, 200, 0.95); }
+    .hb-cb-spell-shape[data-shape="Wall"]   { color: rgba(170, 230, 200, 0.95); }
+    .hb-cb-spell-shape[data-shape="Ring"]   { color: rgba(230, 230, 130, 0.95); }
+    .hb-cb-spell-shape[data-shape="Blast"]  { color: rgba(255, 140, 100, 0.95); }
+    .hb-cb-spell-shape[data-shape="Self"]   { color: rgba(255, 255, 255, 0.35); background: transparent; }
     .hb-cb-magic-hint {
       margin-bottom: 8px;
       font-size: 11px;
@@ -1079,15 +1140,44 @@ function renderSpellPicker(bodyEl, state, client) {
       action.textContent = isUntargeted ? "Cast" : "Arm";
       row.appendChild(action);
 
+      // Wave 6 / Phase 17 — spell-shape badge. classifySpell returns
+      // `null` until the shape-table JSON is loaded (lazy fetch kicked
+      // by the first call); the schedulePickerReload() poll below
+      // re-renders the picker as soon as the table is in. Until then
+      // the badge slot is an empty fixed-width column so the layout
+      // doesn't jitter when shapes arrive.
+      const shape = document.createElement("span");
+      shape.className = "hb-cb-spell-shape";
+      const classification = classifySpell(spellId);
+      if (classification && classification.shape) {
+        const letter = SPELL_SHAPE_BADGE[classification.shape] ?? "";
+        shape.textContent = letter;
+        shape.dataset.shape = classification.shape;
+      } else {
+        shape.textContent = "";
+      }
+      row.appendChild(shape);
+
       const name = document.createElement("span");
       name.className = "hb-cb-spell-name";
-      name.textContent = meta?.name ?? `Spell 0x${spellId.toString(16)}`;
+      const baseName = meta?.name ?? `Spell 0x${spellId.toString(16)}`;
+      name.textContent = baseName;
       row.appendChild(name);
 
       const tag = document.createElement("span");
       tag.className = "hb-cb-spell-tag";
       tag.textContent = isUntargeted ? "self" : (meta?.school ? schoolName(meta.school) : "target");
       row.appendChild(tag);
+
+      // Tooltip mirrors the badge so screen-readers + hover both
+      // surface the projectile pattern. `(Bolt)` etc. appended only
+      // when we have a classification; unclassified spells get just
+      // the name as before.
+      if (classification && classification.shape) {
+        row.title = `${baseName} (${classification.shape})`;
+      } else {
+        row.title = baseName;
+      }
 
       row.addEventListener("click", () => {
         if (isUntargeted) {
@@ -1109,11 +1199,39 @@ function renderSpellPicker(bodyEl, state, client) {
   }
 
   // Initial draw + load catalog → second draw with names.
+  // The first renderRows() call also triggers classifySpell()'s lazy
+  // fetch of `data/spell-shapes.json`; schedulePickerReload() polls
+  // and re-renders once it's in (Wave 6 / Phase 17).
   renderRows();
   loadCatalog().then((c) => {
     catalog = c;
     renderRows();
   });
+
+  // Wave 6 / Phase 17 — poll for the spell-shape table to land, then
+  // re-render once so the badges + tooltip suffixes appear. The first
+  // classifySpell() call in renderRows() kicks the async fetch. Poll
+  // every 50ms for up to ~3s; on production cold-load the fetch lands
+  // in 30-80ms so the user typically sees badges on the next frame.
+  let shapePollId = 0;
+  if (!isShapeTableLoaded()) {
+    shapePollId = setInterval(() => {
+      if (isShapeTableLoaded()) {
+        clearInterval(shapePollId);
+        shapePollId = 0;
+        renderRows();
+      }
+    }, 50);
+    // Safety stop after 3s — if the fetch ultimately fails, give up
+    // quietly so we don't poll forever. The picker stays usable
+    // without badges in that case.
+    setTimeout(() => {
+      if (shapePollId) {
+        clearInterval(shapePollId);
+        shapePollId = 0;
+      }
+    }, 3000);
+  }
 
   // Re-render when the spellbook plugin updates the slots or
   // when the user switches the active tab.
@@ -1129,6 +1247,10 @@ function renderSpellPicker(bodyEl, state, client) {
   // We store this so the outer activate() can include it in dispose.
   bodyEl.__spellPickerDispose = () => {
     window.removeEventListener("hb-spellbar-changed", onSpellbarChanged);
+    if (shapePollId) {
+      clearInterval(shapePollId);
+      shapePollId = 0;
+    }
   };
 }
 

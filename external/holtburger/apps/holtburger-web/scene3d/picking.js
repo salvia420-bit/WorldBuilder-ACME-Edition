@@ -325,6 +325,39 @@ export function setupClickPicking({
             ? cb.armedSpellId
             : 0;
         if (spellId !== 0) {
+          // Wave 6 Phase 16 (2026-05-26) — Sneak Attack prediction for
+          // magic casts. acpedia wiki confirms Sneak Attack works for
+          // War + Void Magic with the same 90°-rear-hemisphere facing
+          // gate as melee/missile (Phase 9 in `ac_sneak_attack_predict.js`).
+          // Pure UI signal — observational, not gating. The spell still
+          // fires via `castTargetedSpell` regardless of whether the
+          // predictor matched. `attackType: null` is intentional: magic
+          // has no CMT AttackType bitmask, and event consumers must
+          // handle that. `scope: "local-magic"` distinguishes from the
+          // melee/missile branches' `local` / `local-missile` scopes.
+          try {
+            const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+            const em = liveScene3d.entityManager;
+            const pose = playerWorldPose(sessionHandle);
+            const targetPos = entityAcPosition(em, guid);
+            const targetHeadingRad = em?.getHeading?.(guid) ?? null;
+            if (
+              pose && targetPos && targetHeadingRad != null &&
+              isAttackerBehindDefender({
+                attackerPose: pose,
+                defenderPose: targetPos,
+                defenderHeadingRad: targetHeadingRad,
+              })
+            ) {
+              window.__pluginClient?.events?.emit?.("sneakAttackPredicted", {
+                attackerGuid: localGuid,
+                defenderGuid: (guid >>> 0),
+                attackType: null,   // magic has no CMT AttackType bitmask
+                spellId,
+                scope: "local-magic",
+              });
+            }
+          } catch (_) { /* never block the cast on prediction faults */ }
           sessionHandle.castTargetedSpell(guid, spellId);
         }
       } else if (isInMeleeStance?.() || isInRangedStance?.()) {
