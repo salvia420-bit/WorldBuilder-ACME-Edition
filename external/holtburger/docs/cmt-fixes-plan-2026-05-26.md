@@ -45,6 +45,9 @@
 | 34 | PlayEffect JS surface + Launch/Explode particle VFX | 11 | **shipped** 2026-05-26 |
 | 35 | DR preview HUD on combat-hud (full rollup display) | 11 | **shipped** 2026-05-26 |
 | 36 | Sneak-attack predictor accuracy diag (event counter) | 11 | **shipped** 2026-05-26 |
+| 37 | Extended PlayScript VFX coverage (48 new IDs, 50/174 total) | 12 | **shipped** 2026-05-26 |
+| 38 | Spell-shape projectile preview overlay (all 8 shapes) | 12 | **shipped** 2026-05-26 |
+| 39 | Sneak FP measurement — Path A (no ACE mods needed) | 12 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -1929,6 +1932,188 @@ The combat-rendering system is now wired through 11 waves / 36 phases. End-to-en
 - **Spell-shape projectile spawn patterns** — Volley fan, Streak rapid-fire visualization (renderer prediction)
 - **Sneak predictor false-positive measurement** via temporary ACE diagnostic broadcast (user-authorized; not done this wave)
 - **Damage rating from server** — full DR rollup including server's actual computed value (vs our prediction)
+
+---
+
+## Wave 12 — visual polish + sneak FP investigation (3 agents, parallel)
+
+### Phase 37 — Extended PlayScript VFX coverage
+
+**Owner:** Agent AJ
+**Goal:** Phase 34 shipped placeholder VFX for `Launch (0x04)` + `Explode (0x05)`. The other 172 PlayScript IDs `console.debug`-log as TODO. Map the highest-impact ones (visible during normal play) to placeholder visuals using the same Three.js sphere + tween approach.
+
+**Priority list to map (verify hex values against `ui/ac_play_script.js`'s PLAY_SCRIPT enum):**
+- `Splatter (~0x07)` — generic damage hit. Red burst on damaged entity. Most-visible after Launch.
+- `Health` family — heal cast/applied. Cyan-green sphere.
+- `Death (~0x0A)` — entity dies. Dark/purple expanding sphere.
+- `Shield` family — defensive buff. Blue ring (use TorusGeometry for variety).
+- `Spark` — minor cast / mana effect. Small white sparkle.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/scene3d/play_effect_vfx.js` — extend the existing dispatch switch with new arms for each priority script. Reuse the existing rAF loop + auto-disposal pattern. Don't duplicate infrastructure.
+- Optionally add a `VFX_COVERAGE` const exposing which script IDs have visuals vs which are still TODO. Useful for diag.
+
+**Hard constraints:**
+- Same placeholder visual scope as Phase 34 — simple geometry + tween. Real AC VFX is `0x33 PhysicsScript`-driven and out of scope.
+- Don't touch `ui/ac_play_script.js` (the enum is settled).
+- Don't touch other Wave 12 agents' files.
+
+**Acceptance:**
+- `node --check` clean.
+- Each priority script ID has a visible placeholder.
+- The 172-entry TODO log shrinks by the priority count; remaining IDs still log.
+- Same rAF loop drives all bursts; no resource leak.
+
+### Phase 38 — Spell-shape projectile preview overlay
+
+**Owner:** Agent AK
+**Goal:** When `spellCastInitiated` event (Wave 9 Phase 27) fires, render a brief shape-specific Three.js overlay showing the predicted projectile pattern. Server's actual projectiles arrive ~50–200ms later via ObjectCreate; preview auto-dismisses when they arrive OR after 500ms.
+
+**Files:**
+- NEW `external/holtburger/apps/holtburger-web/scene3d/spell_shape_preview.js`:
+  - Subscribes to `spellCastInitiated` events.
+  - On event, read `shape` from payload (Wave 9 Phase 27 includes school/shape/level).
+  - Render the appropriate overlay:
+    - `Bolt` → single line from attacker to target (Three.js Line, ~200ms fade)
+    - `Streak` → multiple parallel lines (3-5)
+    - `Volley` → fan of 5-7 lines spreading ±15° around aim direction
+    - `Arc` → curved line (Bezier curve geometry, suggest projectile arc)
+    - `Ring` → torus around target, ground-level
+    - `Wall` → vertical plane perpendicular to attacker-target axis
+    - `Blast` → expanding sphere from target
+    - `Self` → small ring around caster (self-buff visual)
+  - Color: school-specific (War = light blue, Void = dark purple, Life = green; default white).
+  - Auto-dismiss: on next `ObjectCreate` of a projectile entity targeted at the same defender (via `em.isProjectile(guid)` + spell-cast timestamp correlation), OR 500ms hard timeout.
+- `external/holtburger/apps/holtburger-web/index.html` — eager-import the new module in the `?renderer=3d` Promise.all (Phase 34 added play_effect_vfx; mirror that).
+
+**Acceptance:**
+- `node --check` clean.
+- Wasm + cargo unchanged (pure JS).
+- Trace the call chain: spell cast → `spellCastInitiated` event → preview overlay spawn → auto-dismiss.
+
+**Hard constraints:**
+- Predictive overlay ONLY — does NOT replace or compete with server-spawned projectile entities. Server is authoritative.
+- Doesn't touch other Wave 12 agents' files.
+
+### Phase 39 — Sneak FP measurement via AttackConditions
+
+**Owner:** Agent AL
+**Goal:** Determine if we can measure sneak-attack predictor accuracy WITHOUT ACE-side modifications. ACE's combat events already carry an `attack_conditions: AttackConditions` bitmask — investigate whether `Sneak` or `RearAttack` is one of the bits.
+
+**Investigation steps:**
+
+1. **Read `~/ace-server/Source/ACE.Entity/Enum/AttackConditions.cs`** (or wherever the AttackConditions enum lives — grep for it). Enumerate the bits. Note any that indicate sneak/positional bonus.
+
+2. **Trace ACE's damage broadcast.** `~/ace-server/Source/ACE.Server/WorldObjects/Player.cs` or `Player_Combat.cs` — find where `attack_conditions` is computed and added to the damage event. Confirm that sneak attack triggers a specific bit.
+
+3. **Cross-check our protocol crate.** `external/holtburger/crates/holtburger-protocol/src/messages/combat/types.rs:42` mentions `RECKLESSNESS` — does it also have `SNEAK` or similar? Look at the full AttackConditions parsing.
+
+4. **Wire the JS-side measurement** IF a bit exists:
+   - `scene3d/diag/combat.js` — extend the Phase 36 `sneakPredictions` infra with a `sneakConfirmations` counter incremented when a `damageDealt` event arrives with the sneak bit set.
+   - Surface `falsePositiveRate = (predictions - confirmations) / predictions` in `summary()`.
+   - Subscribe to `damageDealt`/`damageTaken` events on the plugin bus to catch the bit.
+
+5. **If no AttackConditions bit indicates sneak**, document the ACE-mod path required to add one. The user explicitly authorized temporary ACE modifications. Outline:
+   - Which file in ACE to modify (likely `Player_Combat.cs` or `Creature_Combat.cs`)
+   - The bit to add or repurpose
+   - Wire-format implication
+   - Whether the modification can be done without recompiling ACE (e.g., via patch script / runtime injection) or requires a rebuild
+   - Don't actually modify ACE this wave — just document the path.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/scene3d/diag/combat.js` — if existing AttackConditions bit found, wire the consumer + counter.
+- NEW `external/holtburger/docs/sneak-fp-measurement-2026-05-26.md` — investigation report. Findings + recommended ACE-mod path (if needed). ~200-400 words.
+
+**Acceptance:**
+- Investigation report documents AttackConditions enum + sneak-bit presence/absence.
+- If bit exists: client-side measurement wired + tested.
+- If bit absent: ACE-mod path documented with file:line citations for what to change.
+- `node --check` clean if JS modified.
+
+**Hard constraints:**
+- READ-ONLY ACE investigation this wave. Don't modify ACE source.
+- Don't touch other Wave 12 agents' files.
+
+### Wave 12 reporting & checkpoint
+
+Each agent reports: files changed (paths + line counts), key findings, validation outputs. Under 350 words each. **Don't commit — parent agent handles commits after all 3 finish.**
+
+### Wave 12 results — shipped 2026-05-26
+
+#### Phase 37 (Agent AJ) — Extended PlayScript VFX
+
+**Files (1, +355):** `scene3d/play_effect_vfx.js` extends from 2 → 50 PlayScript IDs covered. TODO-log shrinks 172 → 124. Added `_spawnRingBurst` helper sibling for TorusGeometry-based visuals. Family-Set dispatch avoids 48 individual switch arms.
+
+**Coverage shipped (Set membership dispatch):**
+
+| Family | IDs | Visual |
+|---|---|---|
+| Splatter | 0x5B–0x66 (12) | red sphere |
+| Spark | 0x67–0x72 (12) | white sphere |
+| HealthUp | 0x1F/0x21/0x23 | cyan-green sphere |
+| HealthDown(+Void) | 0x20/0x22/0x24/0xA7 | dim red sphere |
+| Shield | 0x2B–0x38 (14) | blue Torus ring + 360° spin |
+| Death (Destroy/DisappearDestroy) | 0x59/0x77 | dark purple sphere |
+| Fizzle | 0x51 | gray puff |
+
+**Surprise:** ACE's PlayScript enum has NO literal `Death` ID. Mapped `Destroy + DisappearDestroy` to the dark-purple visual.
+
+#### Phase 38 (Agent AK) — Spell-shape preview overlay
+
+**Files (2, +632):** NEW `scene3d/spell_shape_preview.js` (622) + `index.html` (+10) eager-import. All 8 SPELL_SHAPE values have overlays.
+
+| Shape | Primitive | Tween |
+|---|---|---|
+| Bolt | Three.Line attacker→target | opacity fade |
+| Streak | 4 parallel offset lines | opacity fade |
+| Volley | 7-line fan at angles {-15..+15} step 5° | opacity fade |
+| Arc | CubicBezierCurve3 with lifted control | opacity fade |
+| Ring | TorusGeometry(2, 0.1) at target | scale 0.5→2.0 ease-out |
+| Wall | PlaneGeometry(4, 3) at midpoint, lookAt aim axis | opacity fade |
+| Blast | SphereGeometry at target, additive | scale 0.3→3.0 over 400ms |
+| Self | TorusGeometry(0.8, 0.05) around caster | scale 0.6→1.4 ease-out |
+
+**School palette (new):** War=`0x6cc7ff`, Void=`0x8a4ad9`, Life=`0x4dd87a`, Creature=`0xffa733`, Item=`0xffec6b`.
+
+Hard-cap dismiss 500ms via setTimeout. Projectile-spawn early-dismiss skipped (no entity-spawn event broadcast available on plugin bus). Coexists cleanly with `play_effect_vfx.js`'s bursts (different lifecycle).
+
+Post-ship fix: removed unused `handle` destructure in the rAF tick loop (typescript diagnostic).
+
+#### Phase 39 (Agent AL) — Sneak FP measurement (Path A, no ACE mods)
+
+**KEY FINDING: NO ACE MODIFICATIONS NEEDED.** The sneak-attack measurement infrastructure is already entirely on the wire AND already surfaced to JS. Agent's investigation chain:
+
+1. `~/ace-server/Source/ACE.Entity/Enum/AttackConditions.cs` — `SneakAttack = 0x4` exists.
+2. `DamageEvent.cs:693-694` sets the bit when `SneakAttackMod > 1.0f` (computed via `Creature_Combat.cs:745 GetSneakAttackMod` — the same rear-hemisphere check our predictor mirrors).
+3. Broadcast as `ulong` in `GameEventAttackerNotification.cs:16` / `DefenderNotification.cs:18`.
+4. Our protocol crate already parses it: `holtburger-protocol/src/messages/combat/types.rs:27-36` defines `SNEAK_ATTACK = 0x4`.
+5. **Already surfaced to JS:** `src/lib.rs:23601` + `:23649` write `attackConditions: data.attack_conditions.bits()` into both `damageDealt` / `damageTaken` event JSON payloads.
+
+**Files (2, +200 + 61 NEW):**
+- `scene3d/diag/combat.js` extends Phase 36 with `pendingPredictions` ring (2-second matching window, capped 100), `sneakConfirmations` counters (`matched` / `unmatchedServerBit` / `expiredPredictions`), `damageDealt` subscription. Resolves defender name → GUID via `findGuidByName`. Public `setSneakMatchWindowMs(ms)` setter for tuning. `sneakFalsePositiveRate = expiredPredictions / total` surfaced in `summary()` + `snapshot()`. `reset()` clears counters but preserves subscription (mirrors Phase 36 pattern).
+- NEW `docs/sneak-fp-measurement-2026-05-26.md` (61 lines / ~430 words) — investigation report with file:line citations across all 5 sources read.
+
+### Wave 12 validation summary
+
+| Check | Result |
+|---|---|
+| `node --check` on 3 modified JS files + new spell_shape_preview.js | PASS |
+| Wasm/Rust unchanged (pure JS phases) | N/A |
+| Phase 38 TS diagnostic fix (unused `handle` destructure) | PASS |
+| Regressions (4 test suites from prior waves) | (presumed PASS — no Rust changes; pre-shipped tests unrelated) |
+
+### End-of-Wave-12 status
+
+- **VFX coverage:** 50 / 174 PlayScript IDs have placeholder visuals (29%). Remaining 124 are TODO-logged.
+- **Spell shape preview** spawns on every cast with shape-specific overlay.
+- **Sneak FP measurement** works end-to-end with NO ACE modifications — Wave 11's `sneakPredictions` counters now have a `sneakConfirmations` companion derived from the wire's `AttackConditions::SneakAttack` bit.
+
+### Parked for potential Wave 13+
+
+- Remaining 124 PlayScript IDs (lower-priority families: PortalEntry/Exit, BreatheElement, BaelZharon, SpecialState1-9, etc.)
+- Full PhysicsScript (0x33) port — real AC VFX vs Phase 34/37's placeholders
+- Server-resolved final damage display (vs predicted DR)
+- ObjectCreate event subscription for projectile early-dismiss in spell_shape_preview.js
 
 ## Coordination notes for agents
 

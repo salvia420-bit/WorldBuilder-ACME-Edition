@@ -1658,6 +1658,13 @@
                   // `window.__pluginClient` via short poll if not yet
                   // available at module-load time).
                   import("./scene3d/play_effect_vfx.js"),
+                  // CMT Wave 12 / Phase 38 (2026-05-26): import the
+                  // spell-shape projectile preview overlay so its
+                  // `spellCastInitiated` listener self-registers
+                  // before the first magic-stance click can arrive.
+                  // Same self-bind contract as play_effect_vfx.js —
+                  // idempotent; polls for `window.__pluginClient`.
+                  import("./scene3d/spell_shape_preview.js"),
                 ])
                   .then(async ([
                     sceneIndex,
@@ -1668,6 +1675,7 @@
                     atmosphereSkyMod,
                     _aurora,
                     _playEffectVfx,
+                    _spellShapePreview,
                   ]) => {
                     console.log("[boot] scene3d module graph eagerly imported");
                     // 2026-05-21 cold-boot win: stash the eager-imported
