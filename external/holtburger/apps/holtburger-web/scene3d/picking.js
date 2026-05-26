@@ -156,12 +156,30 @@ export function setupClickPicking({
   // alternation path at `CombatManeuverTable.cs:90-102`.
   let prevMeleeMotion = 0;
 
+  // Wave 4 / Phase 4.2 (2026-05-26) — release any in-flight windup
+  // hold on the local player. Called from cancelCharge and on
+  // successful arrival-then-fire so the held swing clip can play out
+  // to its release frames (peak → strike → recovery).
+  function _releaseLocalWindupHold() {
+    try {
+      const em = liveScene3d?.entityManager;
+      const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+      if (em && localGuid !== 0 && typeof em.releaseSwingHold === "function") {
+        em.releaseSwingHold(localGuid);
+      }
+    } catch (_) {}
+  }
+
   function cancelCharge() {
     if (!charge) return;
     if (charge.rafId) cancelAnimationFrame(charge.rafId);
     try {
       sessionHandle.setMovementInput?.(0, 0, 0, false);
     } catch {}
+    // Wave 4 / Phase 4.2 — release the windup if the charge is being
+    // cancelled (target died mid-pursuit, stance flip, key abort).
+    // Otherwise the held arm pose lingers until the next swing fires.
+    _releaseLocalWindupHold();
     charge = null;
   }
 
@@ -198,6 +216,14 @@ export function setupClickPicking({
     if (dist <= charge.range) {
       // In range — stop, fire attack, clear state.
       try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
+      // Wave 4 / Phase 4.2 — release the windup hold BEFORE the real
+      // swing fires. The fire path will call `setSwingMotion(...)`
+      // without `holdAtPeak`, which arms a fresh restore timer; the
+      // release flips action.paused=false so the held windup clip's
+      // remaining frames complete naturally as the new fire-time
+      // swing starts. Net result: smooth wind-up → strike →
+      // recovery instead of a snap at the moment of arrival.
+      _releaseLocalWindupHold();
       try { charge.fireAttack(); } catch (e) {
         console.warn(`[picking] charge attack fire failed: ${e?.message ?? e}`);
       }
@@ -241,7 +267,27 @@ export function setupClickPicking({
     charge.rafId = requestAnimationFrame(chargeTick);
   }
 
-  function startCharge(guid, range, fireAttack) {
+  /**
+   * Wave 4 / Phase 4.2 (2026-05-26) — startCharge with optional
+   * windup motion. Callers pass `motionForWindup` (the same swing
+   * MotionCommand they intend to fire on arrival) to drive a held
+   * pose during pursuit. Backwards-compat: omit the param and the
+   * pursuit runs without a windup pose (pre-Wave-4 behaviour).
+   *
+   * Hold-at-peak is the windup feel: from charge-start, the swing
+   * clip plays through its first half (~50% of `durationSec`), then
+   * pauses at the peak frame until arrival. The arrival path in
+   * `chargeTick` releases the hold and fires the real swing — the
+   * remaining clip frames (strike + recovery) play out via the
+   * release-armed restore timer in `releaseSwingHold`.
+   *
+   * If `motionForWindup` is 0 / unresolvable, or the local
+   * entity manager isn't ready, the hold is silently skipped and
+   * the pursuit runs without a windup pose. Telemetry: a
+   * `[entities/swingMotion] HOLD ...` log line on the hold-armed
+   * path.
+   */
+  function startCharge(guid, range, fireAttack, motionForWindup) {
     cancelCharge();
     charge = {
       guid: guid >>> 0,
@@ -250,6 +296,17 @@ export function setupClickPicking({
       startMs: performance.now(),
       rafId: 0,
     };
+    try {
+      const em = liveScene3d?.entityManager;
+      const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+      const cmd = (motionForWindup >>> 0) || 0;
+      if (em && localGuid !== 0 && cmd !== 0 && typeof em.setSwingMotion === "function") {
+        em.setSwingMotion(localGuid, cmd, { holdAtPeak: true });
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[picking] charge windup setSwingMotion failed:", e);
+    }
     chargeTick();
   }
 
@@ -687,7 +744,11 @@ export function setupClickPicking({
         }
       });
       if (chargeEnabled && dist > MISSILE_RANGE_M) {
-        startCharge(targetGuid, MISSILE_RANGE_M, fire);
+        // Wave 4 / Phase 4.2 — pass `finalMotion` (the aim-level /
+        // CMT-picked missile motion) as the windup so the local
+        // player holds at peak windup during the pursuit. Released
+        // at arrival just before the real swing fires.
+        startCharge(targetGuid, MISSILE_RANGE_M, fire, finalMotion);
       } else {
         fire();
       }
@@ -771,7 +832,11 @@ export function setupClickPicking({
         }
       });
       if (chargeEnabled && dist > MELEE_RANGE_M) {
-        startCharge(targetGuid, MELEE_RANGE_M, fire);
+        // Wave 4 / Phase 4.2 — pass the CMT-picked melee motion as
+        // the windup so the local player holds at peak windup during
+        // the pursuit. Released at arrival just before the real
+        // swing fires.
+        startCharge(targetGuid, MELEE_RANGE_M, fire, motionCmd);
       } else {
         fire();
       }

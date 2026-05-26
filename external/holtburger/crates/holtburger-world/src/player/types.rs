@@ -274,6 +274,17 @@ pub struct PlayerState {
     /// `Player_Move.cs` (the integrator's gravity loop while no
     /// floor contact is reported).
     pub is_airborne: bool,
+    /// Wave 5 Phase 5.1 (movement-animation overhaul, 2026-05-26):
+    /// distinguishes a `begin_jump()`-initiated airborne phase from a
+    /// "walked off a ledge" airborne phase. Set to `true` only by
+    /// [`begin_jump`]; cleared by [`land`]. The recv-loop animation
+    /// emission uses this flag to route the right `MotionCommand` to
+    /// the renderer:
+    /// - `is_airborne && is_jumping` → Jump clip (already broadcast
+    ///   from JS keyup handler at `index.html:7755`)
+    /// - `is_airborne && !is_jumping` → `Falling` cycle so the rig
+    ///   doesn't T-pose during a ledge walk-off.
+    pub is_jumping: bool,
     /// Player's local Z velocity in m/s while [`is_airborne`].
     /// Initialized to the result of [`compute_jump_velocity_z`]
     /// on `Jump` and decremented by `9.8 * dt` per tick (ACE
@@ -319,6 +330,7 @@ impl PlayerState {
             equipment: HashMap::new(),
             last_emitted_derived_stats: None,
             is_airborne: false,
+            is_jumping: false,
             vertical_velocity: 0.0,
         }
     }
@@ -426,12 +438,38 @@ impl PlayerState {
             return;
         }
         self.is_airborne = true;
+        // Wave 5 Phase 5.1 (2026-05-26) — flag this airborne phase as
+        // jump-initiated so the recv-loop animation emission can choose
+        // Jump clip vs Falling cycle. The Jump clip is broadcast from
+        // the JS keyup handler at `index.html:7755`; this flag prevents
+        // the parallel Falling emission from clobbering it.
+        self.is_jumping = true;
         self.vertical_velocity = velocity_z;
+    }
+
+    /// Begin an unjumped airborne fall — i.e., the player walked off a
+    /// ledge or stepped off a cliff. Wave 5 Phase 5.1 (movement-
+    /// animation overhaul, 2026-05-26). Sets [`is_airborne`] without
+    /// the [`is_jumping`] marker so the recv-loop emission routes
+    /// `Falling (0x40000015)` to the renderer instead of leaving the
+    /// rig T-posed (the prior bug — the `setAirborne` overlay deleted
+    /// in Wave 1 Phase 1.2 was the only visual cue for falling).
+    /// `vertical_velocity` starts at 0 because the fall is acceleration-
+    /// driven; the integrator decrements it by `9.8 * dt` per tick.
+    /// No-op when already airborne.
+    pub fn begin_fall(&mut self) {
+        if self.is_airborne {
+            return;
+        }
+        self.is_airborne = true;
+        self.is_jumping = false;
+        self.vertical_velocity = 0.0;
     }
 
     /// Clear the airborne state on landing or teleport.
     pub fn land(&mut self) {
         self.is_airborne = false;
+        self.is_jumping = false;
         self.vertical_velocity = 0.0;
     }
 
@@ -580,6 +618,46 @@ mod jump_tests {
         p.land();
         assert!(!p.is_airborne);
         assert_eq!(p.vertical_velocity, 0.0);
+    }
+
+    /// Wave 5 Phase 5.1 (2026-05-26).
+    #[test]
+    fn begin_jump_marks_is_jumping() {
+        let mut p = PlayerState::new();
+        assert!(!p.is_jumping);
+        p.begin_jump(5.0);
+        assert!(p.is_airborne);
+        assert!(p.is_jumping, "begin_jump must set is_jumping");
+    }
+
+    /// Wave 5 Phase 5.1 (2026-05-26).
+    #[test]
+    fn begin_fall_marks_airborne_without_jumping() {
+        let mut p = PlayerState::new();
+        p.begin_fall();
+        assert!(p.is_airborne, "begin_fall must set is_airborne");
+        assert!(!p.is_jumping, "begin_fall must NOT set is_jumping");
+        assert_eq!(p.vertical_velocity, 0.0, "ledge walk-off starts with zero vz");
+    }
+
+    /// Wave 5 Phase 5.1 (2026-05-26).
+    #[test]
+    fn begin_fall_is_noop_when_already_airborne() {
+        let mut p = PlayerState::new();
+        p.begin_jump(5.0);
+        p.begin_fall();
+        assert!(p.is_jumping, "begin_fall must not overwrite an active jump");
+        assert_eq!(p.vertical_velocity, 5.0);
+    }
+
+    /// Wave 5 Phase 5.1 (2026-05-26).
+    #[test]
+    fn land_clears_is_jumping() {
+        let mut p = PlayerState::new();
+        p.begin_jump(5.0);
+        assert!(p.is_jumping);
+        p.land();
+        assert!(!p.is_jumping, "land must clear is_jumping");
     }
 
     #[test]

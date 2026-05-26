@@ -12744,11 +12744,11 @@ enum SessionCommand {
     /// - `forward`: +1 = walk/run forward (W), -1 = backstep (S),
     ///   0 = no forward locomotion
     /// - `strafe`: +1 = sidestep right (D), -1 = sidestep left (A),
-    ///   0 = no strafe (forward takes priority over strafe — the
-    ///   wire format only carries one of {forward, strafe} per
-    ///   `RawMotionState`, so the recv loop picks forward when both
-    ///   are set, mirroring the cli's `Locomotion` enum which is
-    ///   single-axis)
+    ///   0 = no strafe — Wave 2 Phase 2.2 (2026-05-26): strafe and
+    ///   forward axes are INDEPENDENT on the wire (`RawMotionState`
+    ///   carries forward / sidestep / turn as three separate fields
+    ///   per retail / ACE). W+D emits both `forward_command=WalkForward`
+    ///   and `sidestep_command=StrafeRight` simultaneously.
     /// - `turn`: +1 = turn right (E), -1 = turn left (Q), 0 = no
     ///   turn — turning is independent of locomotion and rides on
     ///   its own `RawMotionFlags::TURN_*` bits
@@ -20474,10 +20474,13 @@ const NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.0;
 /// bundle's lighter-weight packet path doesn't have to go through
 /// `ClientRuntime` + `WorldState`.
 ///
-/// Forward axis takes priority over strafe — the wire format
-/// carries one of {forward, sidestep} per packet (the cli's
-/// `Locomotion` enum is single-axis for the same reason). If both
-/// are non-zero, forward wins.
+/// Note: this `build_raw_motion_state_for_input` is the legacy
+/// dead-code path retained for diff comparison; the live wasm bundle
+/// uses [`motion_state_for_input`] which routes through the cli's
+/// `MotionState` + `build_motion_state_raw_motion_state`. The live
+/// path treats forward + sidestep as INDEPENDENT slots per Wave 2
+/// Phase 2.2 (`docs/wave-2-diagonal-composition-2026-05-26.md`).
+/// This dead-code stub still emits a single-axis approximation.
 ///
 /// The motion-style field (`current_style`) is intentionally
 /// omitted: the cli reads the last server-echoed stance from
@@ -20489,8 +20492,16 @@ const NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.0;
 /// wire `RawMotionState` via the cli's `build_motion_state_raw_motion_state`
 /// (`crates/holtburger-core/src/client/movement/common.rs`).
 ///
-/// Mirrors the same axis priorities as `build_raw_motion_state_for_input`:
-/// forward wins over strafe (single-axis Locomotion); turn is independent.
+/// Wave 2 Phase 2.2 (2026-05-26): forward + strafe populate independent
+/// axes on `MotionState`. Pre-2.2 we used a single `Locomotion` enum and
+/// the `else if strafe …` priority chain silently dropped sidestep when
+/// forward was active. Retail's `RawMotionState`
+/// (`~/ac-headers/acclient.c:332759-332786`) and ACE's authoritative shape
+/// (`external/ACE/Source/ACE.Server/Physics/Animation/RawMotionState.cs:7-115`)
+/// both carry forward / sidestep / turn as three independent slots; the
+/// wire layer at `crates/holtburger-protocol/src/messages/movement/types.rs:445-505`
+/// already supported that. See
+/// `external/holtburger/docs/wave-2-diagonal-composition-2026-05-26.md`.
 #[cfg(target_arch = "wasm32")]
 fn motion_state_for_input(
     forward: i8,
@@ -20505,19 +20516,42 @@ fn motion_state_for_input(
     } else {
         builder = builder.walk();
     }
+    // Forward axis (W/S) — Wave 2.2: independent of sidestep.
     if forward > 0 {
         builder = builder.forward();
     } else if forward < 0 {
         builder = builder.backstep();
-    } else if strafe > 0 {
+    }
+    // Sidestep axis (A/D) — Wave 2.2: coexists with forward axis. W+D
+    // now emits both `forward_command=WalkForward` AND
+    // `sidestep_command=StrafeRight` on the wire.
+    if strafe > 0 {
         builder = builder.strafe_right();
     } else if strafe < 0 {
         builder = builder.strafe_left();
     }
+    // Wave 1 Phase 1.1 (2026-05-26) — Q/E sign fix. `camera.js:1207`
+    // computes `qeTurn = (e?1:0) - (q?1:0)` so E → turn=+1, Q → turn=-1.
+    // Pre-fix dispatched `turn>0 → turn_right()` / `turn<0 → turn_left()`,
+    // producing a visual rotation opposite to retail (Q rotated right /
+    // E rotated left). Branches swapped per the 5-agent audit's root-cause
+    // table in `docs/movement-animation-overhaul-plan-2026-05-26.md:11-19`;
+    // `MotionStateBuilder::turn_left/right` map directly onto the
+    // canonical wire opcodes TURN_LEFT_MOTION_COMMAND (0x6500000e) /
+    // TURN_RIGHT_MOTION_COMMAND (0x6500000d) in
+    // `crates/holtburger-core/src/client/movement/common.rs:136-141`.
+    //
+    // Note: we always populate `state.turning` here regardless of
+    // forward/strafe state — `local_omega_for_state` reads this for
+    // local yaw prediction (`movement/system.rs:953-955`), and the
+    // player must rotate locally on W+Q. The wire-side suppression of
+    // the Turn motion command when locomotion is active (per Phase 2.4
+    // retail-parity) lives in `build_motion_state_raw_motion_state`,
+    // not here.
     if turn > 0 {
-        builder = builder.turn_right();
-    } else if turn < 0 {
         builder = builder.turn_left();
+    } else if turn < 0 {
+        builder = builder.turn_right();
     }
     builder.build()
 }
@@ -26850,22 +26884,24 @@ async fn recv_loop(
                         let vz = holtburger_world::player::PlayerState::compute_jump_velocity_z(
                             power, burden, effective_skill,
                         );
-                        let was_airborne = w.player.is_airborne;
                         w.player.begin_jump(vz);
-                        // Fire kind=18 EntityAirborneChanged when the
-                        // grounded→airborne transition actually fired
-                        // (begin_jump is a no-op when already airborne).
-                        // JS-side handler tilts + stretches the local
-                        // rig so the player can see they're jumping.
-                        if !was_airborne && w.player.is_airborne {
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED,
-                                string_payload: None,
-                                u32_payload: Some(u32::from(w.player.guid)),
-                                u32_payload_2: Some(1),
-                                f32_payload: None,
-                            });
-                        }
+                        // Wave 1 Phase 1.2 (2026-05-26) deleted the
+                        // JS-side `kind=18 EntityAirborneChanged`
+                        // handler at `index.html:8469-8485` — it was
+                        // the visual airborne tween (paused mixer +
+                        // arms-spread overlay) that froze the real
+                        // Jump clip at frame 0. The Jump clip is now
+                        // dispatched locally from the JS keyup handler
+                        // at `index.html:7755` via
+                        // `em.setMotion(localGuid, JUMP_MOTION_CMD,
+                        // stance)`, so the kind=18 emit here is no
+                        // longer load-bearing for any visual effect.
+                        // Wave 5 Phase 5.1 (2026-05-26) replaces the
+                        // remaining kind=18 emissions with EntityUpdate
+                        // motion-commands (Falling / Fallen) in the
+                        // TickMovement diff arm below. The Jump arm
+                        // does NOT need a wasm-side motion emit — JS
+                        // already handles it for the local player.
                         // Deduct stamina locally (server is canonical;
                         // ACE will broadcast a vital update soon after).
                         // `vital_id = 3` is VitalType::Stamina per
@@ -27243,19 +27279,158 @@ async fn recv_loop(
                         // clears is_airborne when the player descends
                         // past the floor while falling). Pair to the
                         // grounded→airborne emit in the Jump arm above.
+                        //
+                        // Wave 5 Phase 5.1 (movement-animation overhaul,
+                        // 2026-05-26): also snapshot `is_jumping` so we
+                        // can route the right motion-command (Falling
+                        // for ledge walk-offs, suppressed for jumps) on
+                        // the rising edge, and emit a Land/Fallen
+                        // motion-command on touchdown so the renderer
+                        // plays the landing clip instead of just clearing
+                        // the airborne tween (the prior mechanism that
+                        // Wave 1 Phase 1.2 deleted).
                         let was_airborne_pre_tick = w.player.is_airborne;
+                        let was_jumping_pre_tick = w.player.is_jumping;
                         let player_guid_for_airborne = w.player.guid;
+                        // Capture stance up-front so the post-tick branch
+                        // doesn't have to re-borrow `w.player` while the
+                        // `&mut session` is held below.
+                        let pre_tick_stance: u32 = w
+                            .player
+                            .last_server_motion_style
+                            .map(|s| s as u32)
+                            // ACE MotionStance::NonCombat = 0x8000003D —
+                            // same default the renderer's setMotion
+                            // fallback uses at `entities.js:2603-2607`
+                            // when stance=0 arrives on the wire.
+                            .unwrap_or(0x8000_003D);
                         match movement.tick(now, w, &mut session).await {
                             Ok(_events) => {
                                 if was_airborne_pre_tick && !w.player.is_airborne {
-                                    queued_events.borrow_mut().push(ClientEvent {
-                                        kind: CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED,
-                                        string_payload: None,
-                                        u32_payload: Some(u32::from(
-                                            player_guid_for_airborne,
-                                        )),
-                                        u32_payload_2: Some(0),
-                                        f32_payload: None,
+                                    // Wave 5 Phase 5.2 (2026-05-26):
+                                    // emit a `Fallen` motion event so the
+                                    // renderer transitions out of the
+                                    // Falling cycle on touchdown. Per the
+                                    // MT 0x09000001 audit (Phase 5.1
+                                    // investigation, see `crates/
+                                    // holtburger-dat/examples/
+                                    // dump_player_mt_fall_variants.rs`),
+                                    // `Fallen (0x40000008)` is present as
+                                    // a cycle in every player stance
+                                    // except Sling / TwoHandedStaff /
+                                    // Graze (those return null from the
+                                    // AnimationCache lookup; the
+                                    // renderer's null-clip branch then
+                                    // routes us back to Ready). The
+                                    // proposed `Land (0x4100002B)`
+                                    // command in the original plan does
+                                    // not exist in the MotionCommand
+                                    // enum (chorizite + ACE define
+                                    // `MagicBlast = 0x4000002B` at that
+                                    // low-16, and the only 0x002B cycle
+                                    // is Magic-stance MagicBlast — not a
+                                    // touchdown clip). Using Fallen
+                                    // exclusively keeps the data and the
+                                    // command consistent.
+                                    const FALLEN_CMD: u32 = 0x4000_0008;
+                                    let landing_cmd = FALLEN_CMD;
+                                    entity_updates.borrow_mut().push(EntityUpdate {
+                                        kind: ENTITY_UPDATE_KIND_MOTION,
+                                        guid: u32::from(player_guid_for_airborne),
+                                        model_id: 0,
+                                        landblock_id: 0,
+                                        x: 0.0,
+                                        y: 0.0,
+                                        z: 0.0,
+                                        qw: 1.0,
+                                        qx: 0.0,
+                                        qy: 0.0,
+                                        qz: 0.0,
+                                        wcid: 0,
+                                        item_type: 0,
+                                        name: String::new(),
+                                        obj_scale: 0.0,
+                                        icon_id: 0,
+                                        palette_id: 0,
+                                        mtable_id: 0,
+                                        model_changes: Vec::new(),
+                                        texture_changes: Vec::new(),
+                                        sub_palettes: Vec::new(),
+                                        portal_destination: String::new(),
+                                        vx: 0.0,
+                                        vy: 0.0,
+                                        vz: 0.0,
+                                        omega_z: 0.0,
+                                        motion_command: landing_cmd,
+                                        motion_stance: pre_tick_stance,
+                                        physics_script_did: 0,
+                                        sound_table_did: 0,
+                                        obj_desc_flags: 0,
+                                        weenie_flags: 0,
+                                    });
+                                } else if !was_airborne_pre_tick
+                                    && w.player.is_airborne
+                                    && !was_jumping_pre_tick
+                                {
+                                    // Wave 5 Phase 5.1 (2026-05-26):
+                                    // walked off a ledge. The integrator
+                                    // detected the step-down threshold
+                                    // (system.rs ~line 887) and called
+                                    // `begin_fall()`, which sets
+                                    // `is_airborne=true` but leaves
+                                    // `is_jumping=false`. Emit
+                                    // `Falling = 0x40000015` so the
+                                    // renderer loops the Falling cycle
+                                    // (data present in MT 0x09000001 for
+                                    // every player stance except Sling/
+                                    // TwoHandedStaff/Graze — see
+                                    // dump_player_mt_fall_variants
+                                    // output) instead of T-posing on the
+                                    // way down.
+                                    //
+                                    // A grounded→airborne transition
+                                    // with `is_jumping=true` is the Jump
+                                    // arm above; its Jump clip is
+                                    // already broadcast from the JS
+                                    // keyup handler at
+                                    // `index.html:7755`, so wasm
+                                    // suppresses any Falling emission to
+                                    // avoid stomping the in-flight Jump
+                                    // animation.
+                                    const FALLING_CMD: u32 = 0x4000_0015;
+                                    entity_updates.borrow_mut().push(EntityUpdate {
+                                        kind: ENTITY_UPDATE_KIND_MOTION,
+                                        guid: u32::from(player_guid_for_airborne),
+                                        model_id: 0,
+                                        landblock_id: 0,
+                                        x: 0.0,
+                                        y: 0.0,
+                                        z: 0.0,
+                                        qw: 1.0,
+                                        qx: 0.0,
+                                        qy: 0.0,
+                                        qz: 0.0,
+                                        wcid: 0,
+                                        item_type: 0,
+                                        name: String::new(),
+                                        obj_scale: 0.0,
+                                        icon_id: 0,
+                                        palette_id: 0,
+                                        mtable_id: 0,
+                                        model_changes: Vec::new(),
+                                        texture_changes: Vec::new(),
+                                        sub_palettes: Vec::new(),
+                                        portal_destination: String::new(),
+                                        vx: 0.0,
+                                        vy: 0.0,
+                                        vz: 0.0,
+                                        omega_z: 0.0,
+                                        motion_command: FALLING_CMD,
+                                        motion_stance: pre_tick_stance,
+                                        physics_script_did: 0,
+                                        sound_table_did: 0,
+                                        obj_desc_flags: 0,
+                                        weenie_flags: 0,
                                     });
                                 }
                                 // Phase 4 step 3.6 diagnostic — log pose

@@ -7698,6 +7698,68 @@ void main() {
               } catch (e) {
                 console.warn("[jump] handle.jump(power) failed:", e);
               }
+              // Wave 1 Phase 1.2 follow-up (2026-05-26): client-side
+              // motion-prediction for the local Jump clip.
+              //
+              // ACE does NOT broadcast `UpdateMotion(Jump)` back to the
+              // jumper for self-jumps — the server response is a
+              // sequence of position updates + airborne state, NOT a
+              // motion-command echo. Without a local trigger the
+              // motion-table Jump clip (0x2500003B) never reaches
+              // EntityManager.setMotion → _tryPlayLink, so the rig sits
+              // frozen at idle while the ballistic z-arc plays.
+              //
+              // Retail does the same thing locally: per acclient.c
+              // `CMotionInterp::DoInterpretedMotion` + `add_to_queue` +
+              // `InterpretedMotionState::ApplyMotion` (acclient.c:
+              // 343975-344031), the client queues the motion locally
+              // the instant the input fires — it does not wait for a
+              // server echo. The wire packet (GameAction::Jump 0xF61B,
+              // already sent by `handle.jump(power)` above) is the
+              // server's validation channel, separate from the visual
+              // prediction.
+              //
+              // setMotion routes 0x2500003B through ATTACK_COMMANDS
+              // (entities.js:182-187) → classifyMotionCommand returns
+              // "attack" → _tryPlayLink fetches the Jump link clip
+              // from `MotionTable.links[(stance, Ready)][Jump]` and
+              // plays it as LoopOnce overlaying the locomotion cycle.
+              //
+              // Idempotency: if a server UpdateMotion(Jump) does land
+              // (unlikely for self-jump, but possible for remote
+              // players via the same setMotion path), the second call
+              // is a no-op — setMotion's nextActionKey guard at
+              // entities.js:541 short-circuits identical (cmd, stance)
+              // pairs.
+              //
+              // Double-jump gate: `handle.jump` is a no-op in wasm
+              // when `is_airborne` (lib.rs:26810). The local clip
+              // trigger is unconditional here; the worst case is a
+              // single ~5ms cancelled clip if the player mashes space
+              // mid-air. Mirroring the wasm guard from JS would
+              // require a wasm getter we don't have yet (cheap
+              // follow-on if telemetry shows it).
+              try {
+                const em = window.liveScene3d?.entityManager;
+                const localGuid =
+                  typeof window.getLocalPlayerGuid === "function"
+                    ? window.getLocalPlayerGuid()
+                    : null;
+                if (em && localGuid != null) {
+                  const JUMP_MOTION_CMD = 0x2500003B;
+                  const NONCOMBAT_STANCE = 0x8000003D;
+                  const stance =
+                    (typeof em.getStance === "function"
+                      ? em.getStance(localGuid >>> 0) >>> 0
+                      : 0) || NONCOMBAT_STANCE;
+                  em.setMotion(localGuid >>> 0, JUMP_MOTION_CMD, stance);
+                }
+              } catch (e) {
+                console.warn(
+                  "[jump] local setMotion(Jump) failed (clip will not play but wire packet is in flight):",
+                  e
+                );
+              }
             }
           });
           // Clear keystate if the page loses focus mid-press — Chrome
@@ -8466,23 +8528,6 @@ void main() {
                   `[phase6.E] door 0x${doorGuid.toString(16).toUpperCase().padStart(8, "0")} → ${doorState}`
                   + (matchedPart ? ` (building part rotated)` : ` (no building part match)`),
                 );
-              } else if (evt.kind === 18) {
-                // EntityAirborneChanged — local player on Jump cmd /
-                // landing diff, remote players via Z-velocity
-                // heuristic. JS-side tilts + stretches the rig so the
-                // jump arc reads visually. Vibe-coded pose
-                // (~12° backward tilt + 8% Z stretch) — see
-                // `EntityManager.setAirborne` for the rationale and
-                // upgrade path to a real arms-out pose.
-                const aGuid = evt.u32Payload >>> 0;
-                const airborne = (evt.u32Payload2 >>> 0) === 1;
-                if (
-                  window.liveScene3d
-                  && window.liveScene3d.entityManager
-                  && typeof window.liveScene3d.entityManager.setAirborne === "function"
-                ) {
-                  window.liveScene3d.entityManager.setAirborne(aGuid, airborne);
-                }
               } else if (evt.kind === 17) {
                 // EntityVisibilityChanged — wasm detected that
                 // `Entity::should_draw()` flipped on a SetState
@@ -8716,6 +8761,51 @@ void main() {
                     const dispatchRemoteSwing = (attackerName) => {
                       const g = em.findGuidByName(attackerName);
                       if (g === 0) return;
+                      // Wave 4 / Phase 4.1 (2026-05-26) — strategy (a):
+                      // prefer the UpdateMotion-cached swing clip when one
+                      // is already in flight for this attacker. ACE
+                      // broadcasts `UpdateMotion(swing, stance)` to all
+                      // observers BEFORE the damage event resolves and
+                      // emits `damageTaken`/`evadedAttacker`. By the time
+                      // we get here, `em.setMotion` (loop.js KIND_MOTION
+                      // dispatch) has already routed the swing through
+                      // `_tryPlayLink` and the clip is playing —
+                      // `inst.currentActionKey` is `swing:<cmd>:<stance>`.
+                      // If we re-fire CMT here we either (a) replay the
+                      // same clip from frame 0 (visible stutter) or (b)
+                      // override with a CMT-picked default that doesn't
+                      // match the broadcast (e.g. Slash mid when the
+                      // server actually picked SlashHigh). Skip the work
+                      // when the cached path already won.
+                      //
+                      // Acceptable race window: if UpdateMotion hasn't
+                      // landed yet (server out-of-order, or the swing
+                      // arrived in the same poll batch as damageTaken
+                      // and KIND_MOTION dispatch ran AFTER the
+                      // damageTaken kind=19 below), `currentActionKey`
+                      // is null or a locomotion key — fall through to
+                      // the CMT path. Stale swing (>2s old) also falls
+                      // through so a long-idle attacker still gets a
+                      // visible swing on subsequent damage events.
+                      const STALE_SWING_MS = 2000;
+                      const inst = em.entityMap?.get((g >>> 0));
+                      const currentKey = inst?.currentActionKey ?? "";
+                      const swingLastUsedMs = (typeof currentKey === "string" && currentKey.startsWith("swing:"))
+                        ? (inst?.actionLastUsedMs?.get?.(currentKey) ?? 0)
+                        : 0;
+                      const swingFresh = swingLastUsedMs > 0 && (performance.now() - swingLastUsedMs) < STALE_SWING_MS;
+                      if (swingFresh) {
+                        try {
+                          window.__diag?.combat?.onAimLevel?.({
+                            scope: "remote-cached",
+                            motion: (() => {
+                              const parts = currentKey.split(":");
+                              return parts.length >= 2 ? parseInt(parts[1], 16) : 0;
+                            })(),
+                          });
+                        } catch (_) {}
+                        return; // UpdateMotion-cached swing already playing — strategy (a) hit.
+                      }
                       const stance = em.getStance?.(g) ?? 0;
                       // Wave 3 Phase 7 (2026-05-26) — ranged-stance remote
                       // attackers (drudge with bow, archer NPCs) pick an
@@ -9154,6 +9244,74 @@ void main() {
                 } catch (err) {
                   // eslint-disable-next-line no-console
                   console.warn(`[step 3] setMovementInput rejected: ${String(err?.message ?? err)}`);
+                }
+
+                // Wave 2 Phase 2.2 (2026-05-26): drive the local rig's
+                // sidestep-overlay layer from the JS input keystate.
+                // Mirrors the Phase 1.5 Jump local-trigger pattern at
+                // line ~7755: send the wire packet AND locally fire the
+                // renderer so the rig animates immediately, without
+                // waiting for the ACE UpdateMotion roundtrip.
+                //
+                // Why this is here (not in wasm's KIND_MOTION emit
+                // path): `setMotion` plays ONE clip via `crossFadeTo`,
+                // replacing the active action. Pre-2.2 the wasm only
+                // emitted one motion command per UpdateMotion event,
+                // so KIND_MOTION = one-shot dispatch was fine. With
+                // diagonal composition the rig needs BOTH the forward
+                // cycle (legs+arms walk-forward swing) AND the sidestep
+                // cycle (sideways arm motion) blending concurrently;
+                // `setSidestepLayer` calls into entities.js's
+                // overlay-mixer pattern (see entities.js line ~2843 +
+                // method JSDoc) to install a second AnimationAction at
+                // weight 0.5 alongside the forward one.
+                //
+                // The forward command itself doesn't fire from here —
+                // ACE's UpdateMotion broadcast (KIND_MOTION event in
+                // the entity drain) already drives `em.setMotion` for
+                // the forward axis. Layered design: forward = server-
+                // authoritative; sidestep overlay = client-predicted.
+                try {
+                  const em = window.liveScene3d?.entityManager;
+                  const localGuid =
+                    typeof window.getLocalPlayerGuid === "function"
+                      ? window.getLocalPlayerGuid()
+                      : null;
+                  if (em && localGuid != null && typeof em.setSidestepLayer === "function") {
+                    const NONCOMBAT_STANCE = 0x8000003D;
+                    const stance =
+                      (typeof em.getStance === "function"
+                        ? em.getStance(localGuid >>> 0) >>> 0
+                        : 0) || NONCOMBAT_STANCE;
+                    // Wave 2 Phase 2.5 (2026-05-26): always pass
+                    // `SideStepRight (0x6500000F)` regardless of A vs D.
+                    // Retail collapses Left into Right with negated speed
+                    // (`~/ac-headers/acclient.c:332766-332770`,
+                    // `external/ACE/Source/ACE.Server/Physics/Animation/
+                    // MotionInterp.cs:414-417`), and player MT 0x09000001
+                    // has no `cycles[(stance, SideStepLeft)]` entry — the
+                    // renderer's cache lookup for `0x65000010` returns
+                    // null and the rig silently no-ops. The wasm wire-emit
+                    // (`crates/holtburger-core/src/client/movement/common.rs::
+                    // sidestep_command_for_state`) now matches: always
+                    // Right code, sign of `sidestep_speed` communicates
+                    // direction.
+                    //
+                    // Direction is still visible to the player at the
+                    // position level: the local-prediction velocity
+                    // integrator (`local_velocity_for_state` in the same
+                    // file) reads `state.sidestep` (StrafeLeft vs
+                    // StrafeRight) directly and composes the velocity
+                    // vector with the appropriate sign. The rig visually
+                    // plays the Right strafe clip in both directions
+                    // (retail-accurate asymmetry; same clip is what the
+                    // retail client played on a SideStepLeft input).
+                    const sidestepCmd =
+                      strafe !== 0 ? 0x6500000F /* SideStepRight */ : 0;
+                    em.setSidestepLayer(localGuid >>> 0, sidestepCmd, stance);
+                  }
+                } catch (e) {
+                  console.warn("[wave2.2] local setSidestepLayer failed:", e);
                 }
               }
             }

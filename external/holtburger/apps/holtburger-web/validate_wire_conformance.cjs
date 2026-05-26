@@ -442,6 +442,141 @@ const FIXTURES_LIST = [
     headerMode: "payload",
     notes: "Synth pack→unpack of an autonomous-position update.",
   },
+
+  // ───── Wave 6 / Phase 6.4 (2026-05-26) — movement-animation overhaul MotionCommands ─────
+  //
+  // Locks in the wire-shape of the NEW MotionCommands wired this
+  // session. Each fixture exercises Movement_DoMovementCommand
+  // (C2S action 0xF7B1 / ActionType 0x0044) which carries:
+  //   - Motion u32   — the canonical MotionCommand (acclient.c +
+  //                    `ACE.Entity.Enum.MotionCommand` + `chorizite-common-enums.json`)
+  //   - Speed f32    — signed magnitude (Wave 2.5 carries direction
+  //                    via sign for SideStepRight + TurnRight)
+  //   - HoldKey u32  — Run/None hold-state for forward+shift
+  //
+  // The choice of Movement_DoMovementCommand over the richer
+  // RawMotionState (which lives INSIDE Movement_PositionAndMovementEvent
+  // / Movement_SetObjectMovement) is deliberate: it's the simplest
+  // wrapper that exercises a single MotionCommand round-trip, and
+  // matches the C2S surface the local prediction layer emits. The
+  // multi-axis RawMotionState round-trip is already covered by the
+  // Movement_PositionAndMovementEvent + Movement_SetObjectMovement
+  // fixtures above (Wave 2-close-out).
+  //
+  // Per Wave 2.5 (memory project_wave1_wire_conformance_done_2026-05-19):
+  // SideStepLeft and TurnLeft are NEVER on the wire — they collapse
+  // into the Right code with negated speed. The "SideStepRight /
+  // negated speed" + "TurnRight / negated speed" fixtures below cover
+  // both the canonical right case AND the collapsed-left case via
+  // sign on the Speed field.
+  {
+    case: "Wave 6 — Movement_DoMovementCommand / RunForward (Shift+W)",
+    typeName: "Movement_DoMovementCommand",
+    source: "synthesized",
+    fields: {
+      Motion: 0x44000007,    // RunForward
+      Speed: 1.5,            // example run_rate_scalar (Wave 2.3 retail apply_run_to_command)
+      HoldKey: "Run",        // HoldKey enum: Run = 1
+    },
+    headerMode: "payload",
+    notes: "Wave 2.3 (2026-05-26): Walk→Run swap. The motion code itself " +
+           "changes when Shift+W; ACE re-applies run_factor scaling server-side " +
+           "(MotionInterp.cs:401-402). Wire-shape lock-in.",
+  },
+  {
+    case: "Wave 6 — Movement_DoMovementCommand / SideStepRight (D)",
+    typeName: "Movement_DoMovementCommand",
+    source: "synthesized",
+    fields: {
+      Motion: 0x6500000F,    // SideStepRight
+      Speed: 1.0,            // positive sign = strafe right
+      HoldKey: "None",
+    },
+    headerMode: "payload",
+    notes: "Wave 2.5 (2026-05-26): canonical right-strafe. Sign on Speed " +
+           "= direction (acclient.c:332766-332770, MotionInterp.cs:414-417). " +
+           "Wire shape carries the unit magnitude; ACE re-applies run scaling.",
+  },
+  {
+    case: "Wave 6 — Movement_DoMovementCommand / SideStepRight + negated speed (A)",
+    typeName: "Movement_DoMovementCommand",
+    source: "synthesized",
+    fields: {
+      Motion: 0x6500000F,    // SideStepRight (NOT SideStepLeft — retail collapses)
+      Speed: -1.0,           // negated sign = strafe LEFT
+      HoldKey: "None",
+    },
+    headerMode: "payload",
+    notes: "Wave 2.5 (2026-05-26): retail-style left strafe encoded as " +
+           "SideStepRight + negated Speed. The motion code stays at 0x6500000F " +
+           "(MT 0x09000001 has no SideStepLeft cycle for any stance); ACE's " +
+           "adjust_motion re-derives direction from sign. Catches a regression " +
+           "that would re-introduce the discrete 0x65000010 SideStepLeft code.",
+  },
+  {
+    case: "Wave 6 — Movement_DoMovementCommand / TurnRight + negated speed (Q)",
+    typeName: "Movement_DoMovementCommand",
+    source: "synthesized",
+    fields: {
+      Motion: 0x6500000D,    // TurnRight (NOT TurnLeft — retail collapses)
+      Speed: -1.0,           // negated sign = turn LEFT
+      HoldKey: "None",
+    },
+    headerMode: "payload",
+    notes: "Wave 2.5 (2026-05-26): retail-style left turn encoded as " +
+           "TurnRight + negated Speed. acclient.c:332761-332765 + " +
+           "MotionInterp.cs:409-412 both collapse Left → Right with sign.",
+  },
+  {
+    case: "Wave 6 — Movement_DoMovementCommand / Falling (walked-off-ledge)",
+    typeName: "Movement_DoMovementCommand",
+    source: "synthesized",
+    fields: {
+      Motion: 0x40000015,    // Falling
+      Speed: 1.0,
+      HoldKey: "None",
+    },
+    headerMode: "payload",
+    notes: "Wave 5 Phase 5.1 (2026-05-26): wasm-side emission on the " +
+           "walked-off-ledge rising edge (system.rs:899). Replaces the " +
+           "deleted kind=18 airborne-tween. Looping cycle in MT 0x09000001 " +
+           "for nearly every stance (HandCombat / NonCombat / SwordCombat / " +
+           "BowCombat / SwordShieldCombat / Magic + others).",
+  },
+  {
+    case: "Wave 6 — Movement_DoMovementCommand / Fallen (touchdown)",
+    typeName: "Movement_DoMovementCommand",
+    source: "synthesized",
+    fields: {
+      Motion: 0x40000008,    // Fallen
+      Speed: 1.0,
+      HoldKey: "None",
+    },
+    headerMode: "payload",
+    notes: "Wave 5 Phase 5.2 (2026-05-26): wasm-side emission on the " +
+           "airborne→grounded transition. Settled-on-ground cycle with " +
+           "HAS_VELOCITY flag in MT 0x09000001. (Note: NOT Land = 0x4100002B — " +
+           "the data audit (Wave 5) showed 0x4100002B doesn't exist in the " +
+           "player MT; the runtime emits Fallen as the touchdown frame.)",
+  },
+  {
+    case: "Wave 6 — Movement_DoMovementCommand / Jump (spacebar local trigger)",
+    typeName: "Movement_DoMovementCommand",
+    source: "synthesized",
+    fields: {
+      Motion: 0x2500003B,    // Jump
+      Speed: 1.0,
+      HoldKey: "None",
+    },
+    headerMode: "payload",
+    notes: "Wave 1 Phase 1.5 (2026-05-26): JS-side local-prediction trigger " +
+           "at `apps/holtburger-web/index.html:7755` (em.setMotion(Jump, " +
+           "stance)). The actual ACE Jump wire packet is GameAction::Jump " +
+           "(0xF61B / JumpPack) — see the existing Movement_Jump fixture row " +
+           "above. This fixture locks the local-prediction MotionCommand " +
+           "value in case a future refactor accidentally emits a sibling " +
+           "MotionCommand from JS-side setMotion.",
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────

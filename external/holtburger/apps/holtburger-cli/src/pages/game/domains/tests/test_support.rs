@@ -33,11 +33,11 @@ pub(super) fn is_run_movement_command(command: &ClientCommand) -> bool {
     matches!(
         command,
         ClientCommand::DriveSelf(PlayerDriveIntent::ManualHeld(MotionState {
-            locomotion: Some(Locomotion::Forward),
+            forward: Some(ForwardLocomotion::Forward),
             ..
         })) | ClientCommand::DriveSelf(PlayerDriveIntent::ManualPulse {
             state: MotionState {
-                locomotion: Some(Locomotion::Forward),
+                forward: Some(ForwardLocomotion::Forward),
                 ..
             },
             ..
@@ -49,7 +49,8 @@ pub(super) fn is_turn_movement_command(command: &ClientCommand) -> bool {
     matches!(
         command,
         ClientCommand::DriveSelf(PlayerDriveIntent::ManualHeld(MotionState {
-            locomotion: None,
+            forward: None,
+            sidestep: None,
             turning: Some(Turn::Left | Turn::Right),
             ..
         }))

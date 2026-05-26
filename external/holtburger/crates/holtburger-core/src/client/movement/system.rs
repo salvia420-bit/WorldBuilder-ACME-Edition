@@ -5,7 +5,7 @@ use super::common::{
     normalize_heading, raw_motion_state_with_motion_style, signed_heading_delta,
 };
 use crate::client::movement_types::{
-    AutonomousDriveIntent, Locomotion, MotionState, MotionStyle, MovementPacketMetadata,
+    AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
     PlayerDriveIntent, Turn,
 };
 use anyhow::Result;
@@ -354,12 +354,20 @@ impl MovementSystem {
             intent.desired_world_delta.y,
             0.0,
         );
-        let locomotion = (planar_delta.length_squared() > 1e-6).then_some(Locomotion::Forward);
+        // Wave 2 Phase 2.2 (2026-05-26): autonomous drives still emit pure
+        // forward locomotion — the autonomous pathfinder consumes
+        // `desired_world_delta` as a single vector and only needs to
+        // signal "moving forward" vs "turning in place" to observers.
+        // The diagonal-composition gain applies to manual input only; if
+        // an autonomous routine later needs strafe semantics it can
+        // populate `state.sidestep` directly.
+        let forward =
+            (planar_delta.length_squared() > 1e-6).then_some(ForwardLocomotion::Forward);
         let desired_heading = intent.desired_heading.map(normalize_heading).or_else(|| {
             (planar_delta.length_squared() > 1e-6)
                 .then(|| Vector3::zero().heading_to(&planar_delta))
         });
-        let turning = if locomotion.is_some() {
+        let turning = if forward.is_some() {
             None
         } else {
             desired_heading.and_then(|desired_heading| {
@@ -374,7 +382,7 @@ impl MovementSystem {
             })
         };
 
-        if locomotion.is_none() && turning.is_none() {
+        if forward.is_none() && turning.is_none() {
             return None;
         }
 
@@ -382,7 +390,8 @@ impl MovementSystem {
         // MoveToState edge so observers receive motion-state broadcasts.
         Some(MotionState {
             gait: intent.gait,
-            locomotion,
+            forward,
+            sidestep: None,
             turning,
             turn_speed: None,
         })
@@ -873,7 +882,46 @@ impl MovementSystem {
                         world.player.land();
                     }
                 } else {
-                    pose.coords.z = z;
+                    // Wave 5 Phase 5.1 (movement-animation overhaul,
+                    // 2026-05-26): walked-off-ledge detection. When the
+                    // grounded player's lateral step takes them onto a
+                    // terrain cell whose height is significantly below
+                    // their current Z, the prior unconditional snap
+                    // (`pose.coords.z = z`) teleported them down to the
+                    // new terrain — no fall, no animation, no Z arc.
+                    // This is the bug the Wave 1 audit called out: the
+                    // deleted airborne tween was the only visual cue
+                    // for falling, so a walk-off now produces a
+                    // T-pose-into-teleport-down.
+                    //
+                    // Fix: if the step down exceeds `LEDGE_FALL_THRESHOLD_M`
+                    // (treats a normal slope walk as not a fall),
+                    // transition the player to airborne via
+                    // [`PlayerState::begin_fall`] and DON'T snap Z this
+                    // tick — let the gravity integrator on the next
+                    // tick handle the drop. The recv loop's
+                    // `was_airborne_pre_tick && !is_airborne` landing
+                    // diff above + the new walk-off→airborne diff
+                    // below produce the right wire-side motion
+                    // emissions (`Falling` → `Land`/`Fallen`).
+                    //
+                    // Threshold tuned for AC terrain: heightmap
+                    // resolution is 24 m sample spacing with bilinear
+                    // interp; the largest legitimate single-step
+                    // descent is ≈0.5 m for the steepest 26° slope
+                    // walking forward at 4 m/s @ 60 Hz (≈0.067 m
+                    // horizontal delta × tan(26°) ≈ 0.032 m). A 0.5 m
+                    // floor still flags any genuine ledge while
+                    // accommodating slope walks. Outdoor cliff edges
+                    // in Holtburg surrounds typically drop 2-10 m.
+                    const LEDGE_FALL_THRESHOLD_M: f32 = 0.5;
+                    if pose.coords.z - z > LEDGE_FALL_THRESHOLD_M {
+                        world.player.begin_fall();
+                        // Leave Z alone — let the gravity integrator
+                        // drop us next tick.
+                    } else {
+                        pose.coords.z = z;
+                    }
                 }
             }
         } else if indoor_unbaked {

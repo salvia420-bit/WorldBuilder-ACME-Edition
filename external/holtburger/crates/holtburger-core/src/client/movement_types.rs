@@ -53,10 +53,29 @@ pub struct AutonomousDriveIntent {
     pub force_grounded: bool,
 }
 
+/// Forward-axis locomotion slot — `RawMotionState::ForwardCommand`.
+///
+/// Wave 2 Phase 2.2 (2026-05-26): split out of the original single-valued
+/// `Locomotion` so the forward axis (W/S) can coexist on the wire with an
+/// independent sidestep axis (A/D). Retail's `InterpretedMotionState`
+/// (`~/ac-headers/acclient.c:332759-332786`) and ACE's `RawMotionState`
+/// (`external/ACE/Source/ACE.Server/Physics/Animation/RawMotionState.cs:32-98`)
+/// both treat forward / sidestep / turn as three independent fields; pre-2.2
+/// we silently dropped sidestep when forward was non-zero. See
+/// `docs/wave-2-diagonal-composition-2026-05-26.md` for the analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Locomotion {
+pub enum ForwardLocomotion {
     Forward,
     Backstep,
+}
+
+/// Sidestep-axis locomotion slot — `RawMotionState::SidestepCommand`.
+///
+/// Independent of `ForwardLocomotion`; both can be populated simultaneously
+/// to describe a diagonal walk (W+D = forward + StrafeRight). See
+/// `ForwardLocomotion` for context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidestepLocomotion {
     StrafeLeft,
     StrafeRight,
 }
@@ -70,16 +89,29 @@ pub enum Turn {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionState {
     pub gait: Gait,
-    pub locomotion: Option<Locomotion>,
+    /// Wave 2 Phase 2.2 — forward axis (W/S). Independent of `sidestep`;
+    /// both can be `Some(_)` simultaneously per retail / ACE wire shape.
+    pub forward: Option<ForwardLocomotion>,
+    /// Wave 2 Phase 2.2 — sidestep axis (A/D). Independent of `forward`.
+    pub sidestep: Option<SidestepLocomotion>,
     pub turning: Option<Turn>,
     pub turn_speed: Option<f32>,
+}
+
+impl MotionState {
+    /// True when neither forward nor sidestep is populated. Convenience for
+    /// callers that previously checked `state.locomotion.is_some()`.
+    pub fn is_locomotion_idle(&self) -> bool {
+        self.forward.is_none() && self.sidestep.is_none()
+    }
 }
 
 impl Default for MotionState {
     fn default() -> Self {
         Self {
             gait: Gait::Walk,
-            locomotion: None,
+            forward: None,
+            sidestep: None,
             turning: None,
             turn_speed: None,
         }
@@ -109,22 +141,22 @@ impl MotionStateBuilder {
     }
 
     pub fn forward(mut self) -> Self {
-        self.state.locomotion = Some(Locomotion::Forward);
+        self.state.forward = Some(ForwardLocomotion::Forward);
         self
     }
 
     pub fn backstep(mut self) -> Self {
-        self.state.locomotion = Some(Locomotion::Backstep);
+        self.state.forward = Some(ForwardLocomotion::Backstep);
         self
     }
 
     pub fn strafe_left(mut self) -> Self {
-        self.state.locomotion = Some(Locomotion::StrafeLeft);
+        self.state.sidestep = Some(SidestepLocomotion::StrafeLeft);
         self
     }
 
     pub fn strafe_right(mut self) -> Self {
-        self.state.locomotion = Some(Locomotion::StrafeRight);
+        self.state.sidestep = Some(SidestepLocomotion::StrafeRight);
         self
     }
 
@@ -211,7 +243,8 @@ mod tests {
             .build();
 
         assert_eq!(state.gait, Gait::Run);
-        assert_eq!(state.locomotion, Some(Locomotion::Forward));
+        assert_eq!(state.forward, Some(ForwardLocomotion::Forward));
+        assert_eq!(state.sidestep, None);
         assert_eq!(state.turning, Some(Turn::Left));
         assert_eq!(state.turn_speed, Some(1.25));
     }
@@ -221,9 +254,43 @@ mod tests {
         let state = MotionState::default();
 
         assert_eq!(state.gait, Gait::Walk);
-        assert_eq!(state.locomotion, None);
+        assert_eq!(state.forward, None);
+        assert_eq!(state.sidestep, None);
         assert_eq!(state.turning, None);
         assert_eq!(state.turn_speed, None);
+        assert!(state.is_locomotion_idle());
+    }
+
+    /// Wave 2 Phase 2.2 (2026-05-26) — W+D / W+A populates BOTH the forward
+    /// and sidestep slots on a single `MotionState`. Pre-2.2 the builder
+    /// silently overwrote one with the other; this guards that the new
+    /// independent slots coexist.
+    #[test]
+    fn motion_state_builder_can_combine_forward_and_sidestep() {
+        let state = MotionState::builder()
+            .run()
+            .forward()
+            .strafe_right()
+            .build();
+
+        assert_eq!(state.gait, Gait::Run);
+        assert_eq!(state.forward, Some(ForwardLocomotion::Forward));
+        assert_eq!(state.sidestep, Some(SidestepLocomotion::StrafeRight));
+        assert!(!state.is_locomotion_idle());
+    }
+
+    /// Wave 2 Phase 2.2 (2026-05-26) — S+A composes backstep + strafe-left.
+    #[test]
+    fn motion_state_builder_can_combine_backstep_and_strafe_left() {
+        let state = MotionState::builder()
+            .walk()
+            .backstep()
+            .strafe_left()
+            .build();
+
+        assert_eq!(state.gait, Gait::Walk);
+        assert_eq!(state.forward, Some(ForwardLocomotion::Backstep));
+        assert_eq!(state.sidestep, Some(SidestepLocomotion::StrafeLeft));
     }
 
     #[test]
@@ -236,7 +303,8 @@ mod tests {
             intent,
             PlayerDriveIntent::ManualHeld(MotionState {
                 gait: Gait::Run,
-                locomotion: Some(Locomotion::Forward),
+                forward: Some(ForwardLocomotion::Forward),
+                sidestep: None,
                 turning: Some(Turn::Right),
                 turn_speed: None,
             })
@@ -255,7 +323,8 @@ mod tests {
             PlayerDriveIntent::ManualPulse {
                 state: MotionState {
                     gait: Gait::Walk,
-                    locomotion: Some(Locomotion::Forward),
+                    forward: Some(ForwardLocomotion::Forward),
+                    sidestep: None,
                     turning: None,
                     turn_speed: None,
                 },

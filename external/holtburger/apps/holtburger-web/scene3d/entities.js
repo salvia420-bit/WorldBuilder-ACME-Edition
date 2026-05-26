@@ -140,6 +140,52 @@ const CMD_LOW_RUN_FORWARD = 0x0007;
 // it as STOP → fadeOutCurrent, and the stance change was tracked
 // statefully (UI label updated) but never visualized on the rig.
 const CMD_LOW_READY = 0x0003;
+// Sidestep / turn-in-place locomotion. Values from
+// `external/ACE/Source/ACE.Entity/Enum/MotionCommand.cs:20-23`:
+// TurnRight=0x6500000D, TurnLeft=0x6500000E, SideStepRight=0x6500000F,
+// SideStepLeft=0x65000010 — low 16 bits are the substate. Wave 1
+// Phase 1.3 (2026-05-26): wired into `classifyMotionCommand` as
+// "walk" so they dispatch through the cyclic-locomotion path with a
+// stance-aware AnimationCache lookup, matching how the motion table
+// stores them in `MotionTable.cycles[(stance, cmd)]`.
+const CMD_LOW_TURN_RIGHT = 0x000D;
+const CMD_LOW_TURN_LEFT = 0x000E;
+const CMD_LOW_SIDESTEP_RIGHT = 0x000F;
+const CMD_LOW_SIDESTEP_LEFT = 0x0010;
+
+// Wave 5 Phase 5.1 (movement-animation overhaul, 2026-05-26):
+// fall-related MotionCommand low-16 substates.
+//
+// - `Falling (0x40000015)` — looping in-air state. Present as a CYCLE
+//   in MT 0x09000001 for every player stance except Sling /
+//   TwoHandedStaff / Graze. Classified as "walk" so the renderer
+//   fetches it via `MotionTable.cycles[(stance, cmd)]` and plays it
+//   LoopRepeat. The wasm recv loop emits this on the `!is_jumping &&
+//   walked-off-ledge` rising edge from `system.rs:863-897`'s
+//   integrator-side ledge detection.
+//
+// - `FallDown (0x10000050)` — one-shot lead-in clip. **Not present
+//   anywhere** in MT 0x09000001 per the Phase 5.1 investigation
+//   (`crates/holtburger-dat/examples/dump_player_mt_fall_variants.rs`),
+//   so we don't emit it. The classifier entry is wired anyway for
+//   future creature MTs that may carry it.
+//
+// - `Fallen (0x40000008)` — touchdown / post-fall pose. Present as a
+//   CYCLE in nearly every player stance with `HAS_VELOCITY` flag set
+//   (it's a settled-on-ground loop). Wave 5 Phase 5.2 emits this on
+//   the landing transition to give the renderer a frame of touchdown
+//   pose before subsequent locomotion broadcasts return the rig to
+//   Ready. Classified as "walk" so the cycle path resolves it.
+//
+// The original Wave 5 plan ("walk" for Falling/FallDown, "attack" for
+// Fallen/Land) was based on the **assumption** that Land = 0x4100002B
+// existed as a one-shot. The data audit refuted that — chorizite +
+// ACE define `MagicBlast = 0x4000002B` at low-16 0x002B; the only
+// matching cycle is Magic-stance MagicBlast. So Land is not wired and
+// Fallen routes through the cycle path (matching its data shape).
+const CMD_LOW_FALLING = 0x0015;
+const CMD_LOW_FALLDOWN = 0x0050;
+const CMD_LOW_FALLEN = 0x0008;
 
 // One-shot motion commands — attacks (melee/missile), magic casts,
 // and the punch variants. ACE broadcasts these via UpdateMotion when
@@ -167,11 +213,11 @@ const ATTACK_COMMANDS = new Set([
   // Punch fast/slow high/mid/low
   0x018F, 0x0190, 0x0191,
   0x0192, 0x0193, 0x0194,
-  // Jump + JumpCharging — same one-shot semantics as attacks.
-  // Pre-2026-05-17 these were dropped at classifyMotionCommand and
-  // `setAirbornePose` handled jump with a vibe-coded slerp; the real
-  // MotionTable clip (now resolvable through `setMotion`) wins if
-  // the entity's motion table has the entry.
+  // Jump + JumpCharging — same one-shot semantics as attacks. The
+  // motion-table Jump clip (0x2500003B) is fetched via _tryPlayLink
+  // and plays end-to-end (crouch → launch → apex → land); the prior
+  // `setAirborne` per-part slerp overlay was deleted 2026-05-26 (Wave 1
+  // Phase 1.2) so the clip is no longer frozen by a paused mixer.
   0x003B, 0x001D,
 ]);
 const CAST_COMMANDS = new Set([
@@ -231,16 +277,6 @@ const MAX_TICK_DIST_SQ = MAX_TICK_DIST * MAX_TICK_DIST; // 14400 m²
 // `tick(dt)` reuses it.
 const _tickGateScratch = new THREE.Vector3();
 
-// Perf B2 (2026-05-18) — module-private scratches for the jump-pose
-// tween (`_tickJumpPoseTween`) and the particle-attach hook
-// (`_attachParticleChainForEntity`). Same convention as
-// `_tickGateScratch`: callers must NOT retain a reference.
-//
-// READ-ONLY: never mutate `_IDENTITY_QUAT`. It's the canonical (0,0,0,1)
-// reference used as the right-hand side of `.equals()` in the
-// generic-jump tilt-vs-identity test. Mutating it would silently break
-// every comparison downstream.
-const _IDENTITY_QUAT = new THREE.Quaternion();
 // Scratch Vector3 + Quaternion for the particle-attach offset frame
 // passed to `ParticleManager.addEmitter({ parentOffset })`. The manager
 // `.copy()`s these into its own `parentOffset` (see
@@ -321,6 +357,24 @@ function classifyMotionCommand(cmd) {
   if (low === CMD_LOW_WALK_FORWARD || low === CMD_LOW_WALK_BACKWARDS)
     return "walk";
   if (low === CMD_LOW_RUN_FORWARD) return "run";
+  // Wave 1 Phase 1.3 (2026-05-26): sidestep + turn-in-place dispatch as
+  // cyclic locomotion. MT 0x09000001 has these clips in
+  // `cycles[(stance, cmd)]` for all 13 player stances (audit
+  // table at docs/movement-animation-overhaul-plan-2026-05-26.md:33-39).
+  // Returning "walk" routes through AnimationCache with stance-aware
+  // key, exactly like WalkForward / WalkBackwards.
+  if (low === CMD_LOW_SIDESTEP_LEFT || low === CMD_LOW_SIDESTEP_RIGHT)
+    return "walk";
+  if (low === CMD_LOW_TURN_LEFT || low === CMD_LOW_TURN_RIGHT)
+    return "walk";
+  // Wave 5 Phase 5.1 (2026-05-26): fall states. Falling + Fallen are
+  // CYCLE entries in MT 0x09000001 (data dump confirms `flags=0x01
+  // HAS_VELOCITY` on Fallen entries) so they route through the cycle
+  // lookup path. FallDown is wired here for forward compatibility with
+  // creature MTs that may carry a one-shot lead-in even though MT
+  // 0x09000001 doesn't (Phase 5.1 investigation).
+  if (low === CMD_LOW_FALLING || low === CMD_LOW_FALLDOWN || low === CMD_LOW_FALLEN)
+    return "walk";
   if (ATTACK_COMMANDS.has(low)) return "attack";
   if (CAST_COMMANDS.has(low)) return "cast";
   // Ready: stance-aware base pose. Caller (setMotion) treats this
@@ -502,10 +556,6 @@ class EntityInstance {
     // this entity's spawn — should be exactly 1 for entities with a
     // non-zero SoundTable. Capture-script reads via inst._prewarmCount.
     this._prewarmCount = 0;
-    // Airborne pose offset. Null when grounded; THREE.Quaternion when
-    // airborne. Multiplied onto root.quaternion in setPose so the
-    // jump tilt survives across position updates.
-    this.airborneTilt = null;
   }
 
   registerGeometry(geom) {
@@ -523,13 +573,6 @@ class EntityInstance {
   setPose(x, y, z, qw, qx, qy, qz) {
     this.root.position.set(x, y, z);
     this.root.quaternion.copy(acQuatToThree(qw, qx, qy, qz));
-    // Re-apply airborne tilt offset if active. setAirborne(true)
-    // stashes the tilt quaternion on the instance; this ensures
-    // every position update preserves it instead of snapping the
-    // entity back to upright mid-jump.
-    if (this.airborneTilt) {
-      this.root.quaternion.multiply(this.airborneTilt);
-    }
   }
 
   /**
@@ -1530,179 +1573,6 @@ export class EntityManager {
   }
 
   /**
-   * Apply or clear an "airborne" jump pose on the entity's rig.
-   * Called from the kind=18 EntityAirborneChanged ClientEvent drain
-   * in index.html. Local player fires on Jump cmd (true) and on
-   * landing-detected via the integrator's airborne→grounded
-   * transition (false); remote players fire from the recv loop's
-   * Z-velocity heuristic.
-   *
-   * **Retail-ish per-part pose** for entities with the human
-   * SetupModel layout (>= 16 parts). Part-index map from community
-   * tools (parts[10/13] = upper arms, parts[1/5] = upper legs):
-   *
-   *     0 ABDOMEN          17-20 TAIL_SEG1..4
-   *     1 LEFT_UPPER_LEG   21 HEAD_HAIR
-   *     2 LEFT_LOWER_LEG   22 HEAD_HELMET
-   *     3 LEFT_FOOT        23/24 SHOULDER_L/R
-   *     4 LEFT_TOE         25/26 KNEE_L/R
-   *     5 RIGHT_UPPER_LEG  27/28 ELBOW_L/R
-   *     6 RIGHT_LOWER_LEG  29-33 CLOAK_SEG1..5
-   *     7 RIGHT_FOOT
-   *     8 RIGHT_TOE
-   *     9 CHEST
-   *    10 LEFT_UPPER_ARM
-   *    11 LEFT_LOWER_ARM
-   *    12 LEFT_HAND
-   *    13 RIGHT_UPPER_ARM
-   *    14 RIGHT_LOWER_ARM
-   *    15 RIGHT_HAND
-   *    16 HEAD
-   *
-   * Pose recipe:
-   *   - Upper arms (10, 13) rotated ±90° outward → arms horizontal
-   *   - Upper legs (1, 5) rotated ±15° outward → legs slightly spread
-   *   - Animation mixer paused so the walk-cycle doesn't fight our
-   *     rotations; resumed on landing
-   *
-   * Rotation axis is the part's local X — this is the best-guess
-   * forward-axis convention for AC's Z-up frame. If the in-game
-   * pose looks wrong (arms point forward/back instead of sideways),
-   * swap to Y or Z in the calls below and re-test. Easy to tune.
-   *
-   * Equipped gear is rendered via SetupModel part substitution
-   * (`fetch_entity_model_render`'s `model_changes` pairs), so a
-   * sword bound to parts[15] rotates with the right-hand rotation.
-   *
-   * Non-human entities (rats, golems, anything with < 16 parts)
-   * fall back to body-level tilt + stretch — same effect as before.
-   */
-  setAirborne(guid, airborne) {
-    const inst = this.entityMap.get(guid >>> 0);
-    if (!inst || !inst.root) return;
-    const wantAirborne = !!airborne;
-    const currentlyAirborne = !!inst._isAirborne;
-    if (wantAirborne === currentlyAirborne) return; // idempotent
-    inst._isAirborne = wantAirborne;
-
-    const isHumanShape = inst.parts && inst.parts.length >= 16;
-
-    if (wantAirborne) {
-      if (isHumanShape) {
-        this._applyHumanJumpPose(inst);
-      } else {
-        this._applyGenericJumpPose(inst);
-      }
-    } else {
-      if (inst._jumpPoseStash) {
-        this._clearHumanJumpPose(inst);
-      } else if (inst.airborneTilt) {
-        this._clearGenericJumpPose(inst);
-      }
-    }
-  }
-
-  /**
-   * Per-part jump pose for humanoid SetupModels. Sets up a 200ms
-   * slerp tween from current pose → outstretched pose; the per-frame
-   * `_tickJumpPoseTween` in `tick(dt)` advances it. The animation
-   * mixer is paused at tween-complete (not at tween-start) so the
-   * limbs ease into the airborne pose smoothly instead of snapping.
-   */
-  _applyHumanJumpPose(inst) {
-    const X = new THREE.Vector3(1, 0, 0);
-    const HUMAN_AIRBORNE_OFFSETS = [
-      // [partIndex, axis, angle]
-      [10, X, -Math.PI / 2],  // LEFT_UPPER_ARM   — horizontal
-      [13, X, Math.PI / 2],   // RIGHT_UPPER_ARM  — horizontal
-      [1,  X, -Math.PI / 12], // LEFT_UPPER_LEG   — slight out
-      [5,  X, Math.PI / 12],  // RIGHT_UPPER_LEG  — slight out
-    ];
-    const from = new Map();
-    const to = new Map();
-    for (const [partIdx, axis, angle] of HUMAN_AIRBORNE_OFFSETS) {
-      const p = inst.parts && inst.parts[partIdx];
-      if (!p) continue;
-      const orig = p.quaternion.clone();
-      from.set(partIdx, orig);
-      const offset = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-      to.set(partIdx, orig.clone().multiply(offset));
-    }
-    // Stash the pre-airborne quaternions so landing can tween back
-    // to them (and so a paranoid mixer-unpause restores to a known
-    // frame instead of whatever clip-time happens to be).
-    inst._jumpPoseStash = from;
-    inst._jumpPoseTween = {
-      startMs: performance.now(),
-      durationMs: 200,
-      from,
-      to,
-      isLanding: false,
-      kind: "human",
-    };
-  }
-
-  _clearHumanJumpPose(inst) {
-    if (!inst._jumpPoseStash) return;
-    // Reverse tween: from current (possibly mid-arc-pose) → stashed
-    // pre-airborne quaternions. `_jumpPoseStash` doubles as the
-    // landing target.
-    const from = new Map();
-    for (const [partIdx, _origQ] of inst._jumpPoseStash) {
-      const p = inst.parts && inst.parts[partIdx];
-      if (p) from.set(partIdx, p.quaternion.clone());
-    }
-    inst._jumpPoseTween = {
-      startMs: performance.now(),
-      durationMs: 200,
-      from,
-      to: inst._jumpPoseStash,
-      isLanding: true,
-      kind: "human",
-    };
-    // `_jumpPoseStash` cleared and mixer resumed at tween-complete
-    // in `_tickJumpPoseTween`, not here.
-  }
-
-  /**
-   * Body-level fallback for non-human entities. Same shape as the
-   * human tween (slerps root.quaternion offset + lerps root.scale.z)
-   * so the per-frame tick can handle both paths uniformly.
-   */
-  _applyGenericJumpPose(inst) {
-    const tilt = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(1, 0, 0),
-      -Math.PI / 15, // ~12°
-    );
-    inst._jumpPoseTween = {
-      startMs: performance.now(),
-      durationMs: 200,
-      fromTilt: new THREE.Quaternion(), // identity
-      toTilt: tilt,
-      fromScale: 1.0,
-      toScale: 1.08,
-      isLanding: false,
-      kind: "generic",
-    };
-  }
-
-  _clearGenericJumpPose(inst) {
-    // Reverse: tween back to identity tilt + scale 1.0.
-    inst._jumpPoseTween = {
-      startMs: performance.now(),
-      durationMs: 200,
-      fromTilt: inst.airborneTilt
-        ? inst.airborneTilt.clone()
-        : new THREE.Quaternion(),
-      toTilt: new THREE.Quaternion(), // identity
-      fromScale: inst.root.scale.z,
-      toScale: 1.0,
-      isLanding: true,
-      kind: "generic",
-    };
-  }
-
-  /**
    * Phase D — lookup the entity GUID for a given display name. Case-
    * sensitive. Returns 0 (a never-used GUID since ACE GUIDs are 32-bit
    * and skip 0) when no match. Used by the recv-loop damageTaken /
@@ -2577,10 +2447,83 @@ export class EntityManager {
     }
   }
 
-  async setSwingMotion(guid, motionCmd) {
+  /**
+   * Wave 4 / Phase 4.2 (2026-05-26) — release a held swing windup.
+   * Pairs with `setSwingMotion(guid, motionCmd, { holdAtPeak: true })`
+   * below. While held, the clip's mixer time is paused at the peak
+   * frame (`durationSec * 0.5`). Calling this resumes playback from
+   * that frame to clip end, then the usual `_swingRestoreTimer`
+   * fires `setMotion(Ready)`.
+   *
+   * No-op if no hold is in flight for `guid` — safe to call
+   * unconditionally on charge fire / hold release.
+   */
+  releaseSwingHold(guid) {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
+    const hold = inst._swingHold;
+    if (!hold) return;
+    // Cancel the pending pause-at-peak setTimeout if it hasn't fired yet.
+    if (hold.peakTimerId) {
+      clearTimeout(hold.peakTimerId);
+      hold.peakTimerId = 0;
+    }
+    const action = hold.action;
+    if (action) {
+      // Resume playback. Two cases:
+      //   1) Pause-at-peak already fired → action.paused = true. Flipping
+      //      false lets the mixer advance again.
+      //   2) Pause-at-peak hasn't fired yet (early release before peak):
+      //      action is still playing normally. paused=false is a no-op.
+      try { action.paused = false; } catch (_) {}
+    }
+    // Re-arm the Ready-restore for the REMAINING duration of the
+    // swing (from current mixer.time to clip end). Pre-fix the restore
+    // timer fired at `dur ms` after setSwingMotion started, so a
+    // long-held charge would prematurely revert to Ready while the
+    // swing was still paused at peak. Now we re-arm with the actual
+    // post-release runtime.
+    if (inst._swingRestoreTimer) {
+      clearTimeout(inst._swingRestoreTimer);
+      inst._swingRestoreTimer = null;
+    }
+    const swingKey = hold.swingKey;
+    const stance = hold.stance;
+    const clipDuration = (action?.getClip?.()?.duration ?? 0);
+    const currentTime = (action?.time ?? 0);
+    const remainingSec = Math.max(0.08, (clipDuration - currentTime) || 0.4);
+    const remainingMs = Math.round(remainingSec * 1000);
+    inst._swingRestoreTimer = setTimeout(() => {
+      inst._swingRestoreTimer = null;
+      if (!this.entityMap.has(g)) return;
+      if (inst.currentActionKey !== swingKey) return;
+      this.setMotion(g, CMD_LOW_READY, stance);
+    }, remainingMs);
+    inst._swingHold = null;
+    // eslint-disable-next-line no-console
+    console.log(
+      "[entities/swingHold] release guid=0x" + g.toString(16) +
+      " key=" + swingKey + " remaining=" + remainingSec.toFixed(2) + "s",
+    );
+  }
+
+  /**
+   * @param {number} guid
+   * @param {number} motionCmd
+   * @param {{ holdAtPeak?: boolean }} [opts]
+   *   When `holdAtPeak` is true (Wave 4 / Phase 4.2), the clip plays
+   *   from frame 0 to its peak frame (`durationSec * 0.5`), then
+   *   pauses. Call `releaseSwingHold(guid)` to resume from peak to
+   *   end. If `durationSec` isn't available (cache miss / coarse
+   *   classification), the hold is silently downgraded to a normal
+   *   one-shot swing — the visual still plays, just without the hold.
+   */
+  async setSwingMotion(guid, motionCmd, opts) {
+    const g = guid >>> 0;
+    const inst = this.entityMap.get(g);
+    if (!inst) return;
+    const holdAtPeak = !!(opts && opts.holdAtPeak);
     const stance =
       ((inst.currentStance ?? inst.lastStance ?? (typeof window !== "undefined" ? window.__getCurrentStanceLow?.() : 0)) ?? 0) >>> 0;
     const setupId = (inst.meta?.modelId ?? inst.meta?.setupId ?? 0) >>> 0;
@@ -2673,22 +2616,69 @@ export class EntityManager {
     inst.currentAction = action;
     inst.currentActionKey = swingKey;
     if (inst._swingRestoreTimer) clearTimeout(inst._swingRestoreTimer);
-    const restoreDelayMs = Math.max(
-      80,
-      Math.round(((Number.isFinite(dur) && dur > 0) ? dur : (clip.duration || 0.4)) * 1000),
-    );
-    inst._swingRestoreTimer = setTimeout(() => {
-      inst._swingRestoreTimer = null;
-      if (!this.entityMap.has(g)) return;
-      if (inst.currentActionKey !== swingKey) return;
-      this.setMotion(g, CMD_LOW_READY, stance);
-    }, restoreDelayMs);
-    console.log(
-      "[entities/swingMotion] guid=0x" + g.toString(16) +
-      " cmd=0x" + (motionCmd >>> 0).toString(16) +
-      " anim=" + result.animId +
-      " dur=" + (Number.isFinite(dur) ? dur.toFixed(2) : "0.00") + "s",
-    );
+    // Wave 4 / Phase 4.2 (2026-05-26) — hold-at-peak windup. Schedule a
+    // pause at `dur * 0.5` after play() so the rig holds at the peak
+    // frame until `releaseSwingHold(guid)` fires. The Ready-restore
+    // timer is skipped here (the release path arms it for the remaining
+    // post-peak duration). If `dur` isn't a valid number (coarse
+    // classify, no MotionData), the hold downgrades to a normal swing.
+    // Drop any previous hold (rapid re-fire on same guid).
+    if (inst._swingHold) {
+      if (inst._swingHold.peakTimerId) {
+        clearTimeout(inst._swingHold.peakTimerId);
+      }
+      inst._swingHold = null;
+    }
+    const peakUsable = holdAtPeak && Number.isFinite(dur) && dur > 0;
+    if (peakUsable) {
+      const peakMs = Math.max(20, Math.round(dur * 500)); // dur*1000 / 2.
+      const peakTimerId = setTimeout(() => {
+        if (!this.entityMap.has(g)) return;
+        if (inst.currentActionKey !== swingKey) return;
+        // Action may have been replaced by a newer swing — guard via
+        // the hold-record back-reference, not just currentAction.
+        if (!inst._swingHold || inst._swingHold.swingKey !== swingKey) return;
+        try { action.paused = true; } catch (_) {}
+        // eslint-disable-next-line no-console
+        console.log(
+          "[entities/swingHold] peak-paused guid=0x" + g.toString(16) +
+          " key=" + swingKey + " t=" + (action.time ?? 0).toFixed(2) + "s",
+        );
+      }, peakMs);
+      inst._swingHold = {
+        swingKey,
+        stance,
+        action,
+        peakTimerId,
+        startedMs: performance.now(),
+      };
+      // Don't arm the auto-restore timer — `releaseSwingHold` arms it
+      // for the post-peak remaining duration when the hold ends.
+      // eslint-disable-next-line no-console
+      console.log(
+        "[entities/swingMotion] HOLD guid=0x" + g.toString(16) +
+        " cmd=0x" + (motionCmd >>> 0).toString(16) +
+        " anim=" + result.animId +
+        " dur=" + dur.toFixed(2) + "s (pause at " + (peakMs / 1000).toFixed(2) + "s)",
+      );
+    } else {
+      const restoreDelayMs = Math.max(
+        80,
+        Math.round(((Number.isFinite(dur) && dur > 0) ? dur : (clip.duration || 0.4)) * 1000),
+      );
+      inst._swingRestoreTimer = setTimeout(() => {
+        inst._swingRestoreTimer = null;
+        if (!this.entityMap.has(g)) return;
+        if (inst.currentActionKey !== swingKey) return;
+        this.setMotion(g, CMD_LOW_READY, stance);
+      }, restoreDelayMs);
+      console.log(
+        "[entities/swingMotion] guid=0x" + g.toString(16) +
+        " cmd=0x" + (motionCmd >>> 0).toString(16) +
+        " anim=" + result.animId +
+        " dur=" + (Number.isFinite(dur) ? dur.toFixed(2) : "0.00") + "s",
+      );
+    }
   }
 
   _tickSwingTween(inst, nowMs) {
@@ -2739,80 +2729,6 @@ export class EntityManager {
   }
 
   /**
-   * Per-frame advance of the jump-pose tween. Called from `tick`
-   * after `mixer.update` so our slerp wins for the locked parts.
-   * Ease-out cubic on the human path (snaps quickly out of walking
-   * pose, settles into airborne); same easing on generic for
-   * consistency.
-   */
-  _tickJumpPoseTween(inst, nowMs) {
-    const tween = inst._jumpPoseTween;
-    if (!tween) return;
-    const t = (nowMs - tween.startMs) / tween.durationMs;
-    const clampedT = Math.max(0, Math.min(1, t));
-    // Ease-out cubic: 1 - (1-t)^3. Snappier than linear, gentler
-    // than ease-out quintic.
-    const eased = 1 - (1 - clampedT) * (1 - clampedT) * (1 - clampedT);
-
-    if (tween.kind === "human") {
-      for (const [partIdx, fromQ] of tween.from) {
-        const toQ = tween.to.get(partIdx);
-        if (!toQ) continue;
-        const p = inst.parts && inst.parts[partIdx];
-        if (p) p.quaternion.slerpQuaternions(fromQ, toQ, eased);
-      }
-    } else if (tween.kind === "generic") {
-      // Tilt: slerp identity quat ↔ tilt quat, multiply into root.
-      // We re-derive root.quaternion from the position-frame quat
-      // every setPose call, so apply the tween every tick.
-      //
-      // Perf B2 (2026-05-18): `tweenQ` is NOT pooled — it's assigned
-      // directly to `inst.airborneTilt` and read by `setPose` on every
-      // subsequent position update until the tween ends or the entity
-      // lands. Pooling the slerp result would corrupt the stored tilt
-      // the moment any other entity's tween advanced. The identity
-      // sentinel on the next line IS pooled (`_IDENTITY_QUAT`,
-      // read-only) since `.equals(...)` only reads it.
-      const tweenQ = new THREE.Quaternion().slerpQuaternions(
-        tween.fromTilt,
-        tween.toTilt,
-        eased,
-      );
-      // Store as airborneTilt so setPose can re-apply on position
-      // updates (read by `EntityInstance.setPose`).
-      inst.airborneTilt = tweenQ.equals(_IDENTITY_QUAT)
-        ? null
-        : tweenQ;
-      if (inst.airborneTilt) {
-        inst.root.quaternion.multiply(tweenQ);
-      }
-      // Scale: simple lerp.
-      const scaleZ = tween.fromScale + (tween.toScale - tween.fromScale) * eased;
-      inst.root.scale.set(1.0, 1.0, scaleZ);
-    }
-
-    if (clampedT >= 1) {
-      if (tween.isLanding) {
-        if (tween.kind === "human") {
-          inst._jumpPoseStash = null;
-          if (inst.currentAction) inst.currentAction.paused = false;
-        } else {
-          inst.airborneTilt = null;
-        }
-      } else {
-        // Tween-in complete. Lock the mixer for human path so the
-        // walk-cycle doesn't drift the parts while airborne.
-        if (tween.kind === "human") {
-          if (inst.currentAction) inst.currentAction.paused = true;
-        } else {
-          inst.airborneTilt = tween.toTilt.clone();
-        }
-      }
-      inst._jumpPoseTween = null;
-    }
-  }
-
-  /**
    * Update motion command/stance. Triggers async fetch + crossFade
    * to a new action when needed. Idempotent: already-playing
    * (cmd, stance) is a no-op.
@@ -2833,11 +2749,40 @@ export class EntityManager {
     // etc. Preserve the high bits of the wire u32 so MotionTable's
     // cycle_key masking is unchanged.
     let cmd = (motionCommand >>> 0);
-    const cmdLow = cmd & 0xFFFF;
+    let cmdLow = cmd & 0xFFFF;
     if (cmdLow === CMD_LOW_STOP || cmdLow === 0x0000) {
       cmd = (cmd & 0xFFFF0000) | CMD_LOW_READY;
+      cmdLow = CMD_LOW_READY;
+    }
+    // Wave 2 Phase 2.5 (2026-05-26): defensive Left → Right substitution
+    // for the sidestep + turn-in-place commands. Mirrors retail's
+    // `InterpretedMotionState::ApplyMotion` (`~/ac-headers/acclient.c:
+    // 332761-332770`) — only `TurnRight` / `SideStepRight` are carried;
+    // ACE's `MotionInterp.adjust_motion` (`external/ACE/Source/ACE.Server/
+    // Physics/Animation/MotionInterp.cs:409-417`) rewrites the Left codes
+    // with negated speed. Our outbound wasm path
+    // (`crates/holtburger-core/src/client/movement/common.rs::
+    // sidestep_command_for_state` / `turn_motion_command_for_state`)
+    // matches, but UpdateMotion broadcasts from a remote player on an
+    // older client (or a custom plugin emitting the raw enum) could
+    // still carry `0x6500000E` / `0x65000010`. Mapping to Right hits
+    // the same `MotionTable.cycles[(stance, ...Right)]` clip retail
+    // played for both directions.
+    if (cmdLow === CMD_LOW_TURN_LEFT) {
+      cmd = (cmd & 0xFFFF0000) | CMD_LOW_TURN_RIGHT;
+      cmdLow = CMD_LOW_TURN_RIGHT;
+    } else if (cmdLow === CMD_LOW_SIDESTEP_LEFT) {
+      cmd = (cmd & 0xFFFF0000) | CMD_LOW_SIDESTEP_RIGHT;
+      cmdLow = CMD_LOW_SIDESTEP_RIGHT;
     }
     let stance = (motionStance >>> 0);
+    // Wave 3 / Phase 3.3 (2026-05-26): capture the PREVIOUS stance
+    // before `inst.lastStance` is mutated below so the Ready-substitution
+    // branch can detect a stance change (current vs. previous) and apply
+    // a 150ms crossfade on the Ready cycle swap. Zero means "no prior
+    // stance recorded yet" (initial spawn) — we suppress the crossfade
+    // in that case to avoid blending from a null pose.
+    const prevStance = (inst.lastStance ?? 0) >>> 0;
     // ACE emits UpdateMotion with stance=0 for "motion-only" broadcasts
     // (the wire shorthand for "keep current stance"). Without
     // substitution our cycle_key resolves to `MotionTable.default_style`
@@ -3015,8 +2960,217 @@ export class EntityManager {
         inst.actionLastHookTime.set(cacheKey, 0);
       }
     }
-    inst.crossFadeTo(action, cacheKey, CROSSFADE_S);
+    // Wave 3 / Phase 3.3 (2026-05-26): per-retail "modifier-stacking
+    // blend feel" on stance transitions. AC retail had no discrete
+    // DrawSword/SheathSword clip — the visual transition was done by
+    // swapping `current_style` atomically and letting the modifier
+    // stack blend it (per `~/ac-headers/acclient.c:332771-332786` /
+    // memory project_holtburger_combat_phase_g_done_2026-05-17). We
+    // approximate that feel with a 150 ms crossfade on the specific
+    // case of Ready-with-stance-change. All other locomotion swaps
+    // remain hard cuts (`CROSSFADE_S = 0` — see comment at L211)
+    // because retail's PhatSDK `advance_to_next_animation()` was an
+    // unconditional pointer swap with no blend state. Edge case:
+    // rapid stance toggles within <150 ms — three.js's
+    // `crossFadeTo` replaces the previous fade in flight so it
+    // self-heals; we don't need a guard.
+    const isStanceReadyChange =
+      (cmd & 0xFFFF) === CMD_LOW_READY
+      && prevStance !== 0
+      && stance !== prevStance;
+    const crossfadeDuration = isStanceReadyChange ? 0.15 : CROSSFADE_S;
+    inst.crossFadeTo(action, cacheKey, crossfadeDuration);
     try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
+  }
+
+  /**
+   * Wave 2 Phase 2.2 (2026-05-26) — layer a sidestep cycle on top of
+   * the active forward locomotion clip.
+   *
+   * **Why this exists.** Retail's `RawMotionState` carries forward,
+   * sidestep, and turn as three INDEPENDENT command slots
+   * (`~/ac-headers/acclient.c:332759-332786`,
+   * `external/ACE/Source/ACE.Server/Physics/Animation/RawMotionState.cs:7-115`).
+   * The wasm side now packs both slots when the player holds W+D
+   * (`crates/holtburger-core/src/client/movement/common.rs::build_motion_state_raw_motion_state`).
+   * `setMotion()` plays ONE clip via crossFadeTo, replacing whatever
+   * was active — fine for the forward axis, but it would clobber the
+   * forward clip on a follow-up sidestep dispatch.
+   *
+   * **Mechanism.** Mirrors `_tryPlayLink`'s overlay pattern: fetch the
+   * sidestep cycle through the AnimationCache, install it as a separate
+   * keyed action (`sidestep:0x{cmd}:0x{stance}`), set LoopRepeat, and
+   * just `.play()` it. The mixer blends it with the active locomotion
+   * action by their respective weights — three.js's
+   * `AnimationMixer.update(dt)` handles concurrent actions natively.
+   *
+   * Pass `sidestepCmd = 0` (or any non-sidestep command low-16) to
+   * fade out and remove the sidestep layer; this is the path
+   * `setLocomotionPair` takes when strafe key releases while forward
+   * is still held.
+   *
+   * No-op for entities without a rig (silently returns) or when the
+   * cmd doesn't map to a known sidestep low (`0x0F`/`0x10`).
+   *
+   * @param {number} guid
+   * @param {number} sidestepCmd Full u32 motion command. Use 0 to clear.
+   * @param {number} motionStance Stance (current_style); 0 inherits.
+   */
+  async setSidestepLayer(guid, sidestepCmd, motionStance) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst) return;
+    // Wave 2 Phase 2.5 (2026-05-26): defensive Left → Right substitution.
+    // Our wasm wire-emit (`crates/holtburger-core/src/client/movement/
+    // common.rs::sidestep_command_for_state`) and the local-prediction
+    // dispatch at `index.html:9290` both already pass
+    // `SideStepRight (0x6500000F)` regardless of direction. But ACE's
+    // UpdateMotion broadcast from a remote player on an older client (or
+    // a custom plugin emitting the raw enum value) could still carry the
+    // Left code (`0x65000010`). Map it to Right so the cache lookup hits
+    // the same `MotionTable.cycles[(stance, SideStepRight)]` clip
+    // retail used for both directions. The direction sign rides
+    // `sidestep_speed`, but the rig only needs ONE clip either way.
+    let normalizedCmd = sidestepCmd >>> 0;
+    if ((normalizedCmd & 0xFFFF) === CMD_LOW_SIDESTEP_LEFT) {
+      normalizedCmd = (normalizedCmd & 0xFFFF0000) | CMD_LOW_SIDESTEP_RIGHT;
+    }
+    const cmd = normalizedCmd;
+    const cmdLow = cmd & 0xFFFF;
+
+    // Clear path — fade out any existing sidestep layer, then return.
+    const SIDESTEP_LAYER_KEY_PREFIX = "sidestep:";
+    const clearLayer = (reason) => {
+      if (!inst.actions) return;
+      for (const [key, action] of inst.actions.entries()) {
+        if (typeof key === "string" && key.startsWith(SIDESTEP_LAYER_KEY_PREFIX)) {
+          try {
+            action.fadeOut(CROSSFADE_S);
+            // Disable after a few frames; three.js will GC the binding.
+            setTimeout(() => {
+              try { action.enabled = false; } catch (_) {}
+            }, Math.max(50, CROSSFADE_S * 1000 + 16));
+          } catch (_) {}
+        }
+      }
+      if (window?.__diag?.motion?.onSidestepLayerCleared) {
+        try {
+          window.__diag.motion.onSidestepLayerCleared({ guid: guid >>> 0, reason });
+        } catch (_) {}
+      }
+    };
+
+    if (cmd === 0 || (cmdLow !== 0x000F && cmdLow !== 0x0010)) {
+      clearLayer(cmd === 0 ? "cleared" : `unsupported-cmd=0x${cmdLow.toString(16)}`);
+      return;
+    }
+
+    let stance = (motionStance >>> 0);
+    if (stance === 0 && inst.lastStance) {
+      stance = inst.lastStance;
+    }
+    if (stance === 0) {
+      // No prior stance recorded; defer to a future setMotion call.
+      return;
+    }
+
+    const setupId =
+      (inst.meta.modelId ?? inst.meta.setupId ?? 0) >>> 0;
+    const mtableId = (inst.meta.mtableId ?? 0) >>> 0;
+    const layerKey = `${SIDESTEP_LAYER_KEY_PREFIX}0x${cmd.toString(16)}:0x${stance.toString(16)}`;
+
+    let action = inst.actions?.get(layerKey);
+    if (!action) {
+      const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+      if (typeof fetchKeyframes !== "function") return;
+      let entry;
+      try {
+        entry = await this.animationCache.get(
+          setupId,
+          mtableId,
+          cmd,
+          stance,
+          fetchKeyframes,
+          {
+            modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
+            textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
+            paletteId: (inst.meta.paletteId ?? 0) >>> 0,
+            paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
+          },
+        );
+      } catch (e) {
+        console.warn(
+          `[wave2.2] setSidestepLayer fetch failed for entity 0x${(guid >>> 0).toString(16)}:`,
+          e,
+        );
+        return;
+      }
+      if (!this.entityMap.has(guid >>> 0)) return;
+      const clip = entry?.clip;
+      if (!clip) {
+        // No sidestep cycle for this (stance, cmd) — silent no-op; the
+        // forward clip alone still drives the visible animation.
+        return;
+      }
+      inst.evictOldestUnused?.();
+      action = inst.mixer.clipAction(clip);
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.clampWhenFinished = false;
+      // Weight 0.5 = additive 50/50 blend with the forward clip.
+      // Three.js mixers sum weighted poses across all `enabled+play()`-ed
+      // actions; equal weights yield a midpoint pose which reads as a
+      // diagonal walk. Tunable later if user feedback says the rig looks
+      // too sideways or too straight.
+      action.setEffectiveWeight(0.5);
+      action.enabled = true;
+      inst.actions?.set(layerKey, action);
+    } else {
+      // Re-arm an existing layer (fadeOut may have started during a
+      // brief release+re-press of A/D).
+      action.enabled = true;
+      action.setEffectiveWeight(0.5);
+    }
+    try {
+      action.play();
+      if (window?.__diag?.motion?.onSidestepLayerPlayed) {
+        try {
+          window.__diag.motion.onSidestepLayerPlayed({
+            guid: guid >>> 0,
+            cmd: cmd >>> 0,
+            stance: stance >>> 0,
+            layerKey,
+          });
+        } catch (_) {}
+      }
+    } catch (e) {
+      console.warn(`[wave2.2] setSidestepLayer play failed: ${e?.message ?? e}`);
+    }
+  }
+
+  /**
+   * Wave 2 Phase 2.2 (2026-05-26) — drive both forward + sidestep
+   * animation slots in one call.
+   *
+   * Used by the local-prediction path in `index.html` (mirrors the
+   * Phase 1.5 Jump local trigger) to keep the rig's diagonal walk
+   * visible while the wire packet is still in flight. ACE's
+   * UpdateMotion broadcast does eventually arrive carrying the same
+   * forward / sidestep pair; that path can call `setLocomotionPair`
+   * too (or rely on `setMotion` for the forward axis alone — both work).
+   *
+   * @param {number} guid
+   * @param {number} forwardCmd  Full u32; 0 = leave forward path
+   *                             alone (caller will call setMotion or
+   *                             clear separately).
+   * @param {number} sidestepCmd Full u32; 0 = clear sidestep layer.
+   * @param {number} motionStance
+   */
+  setLocomotionPair(guid, forwardCmd, sidestepCmd, motionStance) {
+    if (forwardCmd !== 0) {
+      // Fire-and-forget; setMotion handles its own async fetch.
+      this.setMotion(guid, forwardCmd, motionStance);
+    }
+    // Always run sidestep layer dispatch (handles both arm and clear).
+    this.setSidestepLayer(guid, sidestepCmd, motionStance);
   }
 
   /**
@@ -4081,10 +4235,6 @@ export class EntityManager {
    *      (pre-spawn frames, unit-test path with no window) gracefully
    *      by treating it as "not the local player" and falling through
    *      to the distance check.
-   *   2. Active jump-pose tween — `inst._jumpPoseTween` truthy. The
-   *      tween needs every tick to complete its triangle-wave slerp;
-   *      pausing mid-air would leave the rig locked in the airborne
-   *      pose after landing.
    *   3. Active swing-pose tween — `inst._swingTween` truthy. Same
    *      reason: the 300 ms slerp needs every tick or the arm sticks
    *      out after the visible swing window has passed.
@@ -4121,8 +4271,6 @@ export class EntityManager {
     if (localPlayerGuid !== null && (inst.guid >>> 0) === localPlayerGuid) {
       return true;
     }
-    // (2) Active jump-pose tween — always tick to finish the slerp.
-    if (inst._jumpPoseTween) return true;
     // (3) Active swing-pose tween — always tick to finish the slerp.
     if (inst._swingTween) return true;
     // (3b) Active cast-pose tween (Wave 13 Phase 42) — same reason: the
@@ -4203,24 +4351,6 @@ export class EntityManager {
             `[entities/task-E] hook tick failed for entity 0x${inst.guid.toString(16)}:`,
             e
           );
-        }
-      }
-      // Jump-pose tween advance. Runs AFTER mixer.update so our
-      // per-part slerp wins on the locked-out arm/leg quaternions
-      // for the duration of the airborne tween. No-op when no
-      // tween is active.
-      if (inst._jumpPoseTween) {
-        try {
-          this._tickJumpPoseTween(inst, performance.now());
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          if (!this._jumpTweenWarned) {
-            this._jumpTweenWarned = true;
-            console.warn(
-              `[entities/jump-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
-              e
-            );
-          }
         }
       }
       // Phase C — swing-pose tween. Same post-mixer ordering as the

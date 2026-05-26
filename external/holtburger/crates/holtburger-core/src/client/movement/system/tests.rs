@@ -1,6 +1,6 @@
 use super::super::common::{
-    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, RUN_HELD_TURN_SPEED_RAD_PER_SEC,
-    TURN_LEFT_MOTION_COMMAND, TURN_RIGHT_MOTION_COMMAND, WALK_FORWARD_MOTION_COMMAND,
+    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, RUN_FORWARD_MOTION_COMMAND,
+    RUN_HELD_TURN_SPEED_RAD_PER_SEC, TURN_RIGHT_MOTION_COMMAND, WALK_FORWARD_MOTION_COMMAND,
     build_autonomous_position, build_motion_state_raw_motion_state, player_run_rate_scalar,
     raw_motion_state_with_motion_style,
 };
@@ -104,7 +104,8 @@ fn autonomous_wire_motion_state_uses_forward_without_turn_when_moving() {
     .expect("moving autonomous drive should emit a wire motion state");
 
     assert_eq!(state.gait, Gait::Run);
-    assert_eq!(state.locomotion, Some(Locomotion::Forward));
+    assert_eq!(state.forward, Some(ForwardLocomotion::Forward));
+    assert_eq!(state.sidestep, None);
     assert_eq!(state.turning, None);
 }
 
@@ -134,7 +135,8 @@ fn autonomous_wire_motion_state_can_turn_in_place() {
     .expect("heading-only autonomous drive should still emit a turn edge");
 
     assert_eq!(state.gait, Gait::Walk);
-    assert_eq!(state.locomotion, None);
+    assert_eq!(state.forward, None);
+    assert_eq!(state.sidestep, None);
     assert_eq!(state.turning, Some(Turn::Right));
 }
 
@@ -278,7 +280,7 @@ async fn later_manual_drive_wins_over_queued_autonomous_drive() {
         Some(ActiveDriveState {
             intent: ActiveDriveIntent::Manual(MotionState {
                 gait: Gait::Run,
-                locomotion: Some(Locomotion::Forward),
+                forward: Some(ForwardLocomotion::Forward),
                 ..
             }),
             ..
@@ -373,14 +375,21 @@ fn test_raw_motion_state_can_omit_cached_server_style() {
 fn motion_state_raw_motion_state_adds_right_turn_when_requested() {
     let world = WorldState::synthetic();
 
+    // Wave 2 Phase 2.4 (2026-05-26) — Turn motion commands only
+    // populate the wire when the player is stationary (no forward /
+    // sidestep). Retail emits ONLY the locomotion clip when moving +
+    // turning, and lets the yaw integrator handle heading change. So
+    // this test now uses a turn-only state. The "forward + turn"
+    // wire-suppression case is covered by
+    // `motion_state_raw_motion_state_suppresses_turn_when_moving`.
     let raw_motion_state = build_motion_state_raw_motion_state(
         &world,
-        MotionState::builder().run().forward().turn_right().build(),
+        MotionState::builder().run().turn_right().build(),
         MotionStyle::PreserveServer,
     );
 
     assert!(
-        raw_motion_state
+        !raw_motion_state
             .flags
             .contains(RawMotionFlags::FORWARD_COMMAND)
     );
@@ -411,9 +420,14 @@ fn motion_state_raw_motion_state_uses_player_run_rate_scalar_for_forward_speed()
         MotionStyle::PreserveServer,
     );
 
+    // Wave 2 Phase 2.3 (2026-05-26): forward + Run now emits
+    // `RunForward (0x44000007)` on the wire, not `WalkForward` with
+    // a scaled speed. Matches retail `apply_run_to_command`
+    // (`acclient.c:343463-343467`) which swaps the motion code itself
+    // when Walk → Run kicks in.
     assert_eq!(
         raw_motion_state.forward_command,
-        Some(WALK_FORWARD_MOTION_COMMAND)
+        Some(RUN_FORWARD_MOTION_COMMAND)
     );
     assert_eq!(raw_motion_state.forward_hold_key, Some(HoldKey::Run as u32));
     assert_eq!(
@@ -431,9 +445,22 @@ fn motion_state_raw_motion_state_uses_player_run_rate_scalar_for_forward_speed()
 fn motion_state_raw_motion_state_adds_left_turn_when_requested() {
     let world = WorldState::synthetic();
 
+    // Wave 2 Phase 2.4 (2026-05-26) — Turn motion commands only
+    // populate the wire when the player is stationary. See sibling
+    // `motion_state_raw_motion_state_adds_right_turn_when_requested`
+    // for the symmetric reasoning.
+    //
+    // Wave 2 Phase 2.5 (2026-05-26) — `Turn::Left` now emits the
+    // `TurnRight (0x6500000D)` motion code with a NEGATED speed.
+    // Retail's `InterpretedMotionState::ApplyMotion` only carries
+    // `TurnRight` (`~/ac-headers/acclient.c:332761-332765`); ACE's
+    // `MotionInterp.adjust_motion` (`MotionInterp.cs:409-412`) does
+    // the same Left → Right rewrite with `speed *= -1`. Player MT
+    // 0x09000001 has no `cycles[(stance, TurnLeft)]` entry, so the
+    // renderer cache lookup needs the Right code to land a clip.
     let raw_motion_state = build_motion_state_raw_motion_state(
         &world,
-        MotionState::builder().run().forward().turn_left().build(),
+        MotionState::builder().run().turn_left().build(),
         MotionStyle::PreserveServer,
     );
 
@@ -444,11 +471,13 @@ fn motion_state_raw_motion_state_adds_left_turn_when_requested() {
     );
     assert_eq!(
         raw_motion_state.turn_command,
-        Some(TURN_LEFT_MOTION_COMMAND)
+        Some(TURN_RIGHT_MOTION_COMMAND),
+        "Phase 2.5 collapse: Turn::Left emits TurnRight code with signed speed",
     );
     assert_eq!(
         raw_motion_state.turn_speed,
-        Some(RUN_HELD_TURN_SPEED_RAD_PER_SEC)
+        Some(-RUN_HELD_TURN_SPEED_RAD_PER_SEC),
+        "Phase 2.5 collapse: negated speed signals left direction to ACE / observers",
     );
     assert_eq!(raw_motion_state.turn_hold_key, Some(HoldKey::Run as u32));
     assert!(
@@ -456,6 +485,47 @@ fn motion_state_raw_motion_state_adds_left_turn_when_requested() {
             .flags
             .contains(RawMotionFlags::TURN_HOLD_KEY)
     );
+}
+
+#[test]
+fn motion_state_raw_motion_state_suppresses_turn_when_moving() {
+    // Wave 2 Phase 2.4 (2026-05-26) — verify the new Phase 2.4
+    // contract: when the player is moving (forward or sidestep
+    // populated) AND turning, the wire-side `turn_command` is
+    // suppressed. Retail has no `TurnLeftWhileWalking` clip; the
+    // walk clip plays alone and the yaw integrator handles heading.
+    // The `state.turning` field stays populated on the MotionState
+    // so `local_omega_for_state` can still drive the predicted
+    // rotation locally (`movement/system.rs:953-955`).
+    let world = WorldState::synthetic();
+
+    let raw_motion_state = build_motion_state_raw_motion_state(
+        &world,
+        MotionState::builder().run().forward().turn_right().build(),
+        MotionStyle::PreserveServer,
+    );
+
+    assert!(
+        raw_motion_state
+            .flags
+            .contains(RawMotionFlags::FORWARD_COMMAND),
+        "forward command must still be emitted when moving + turning",
+    );
+    assert!(
+        !raw_motion_state
+            .flags
+            .contains(RawMotionFlags::TURN_COMMAND),
+        "turn command suppressed when locomotion is active",
+    );
+    assert!(
+        !raw_motion_state
+            .flags
+            .contains(RawMotionFlags::TURN_SPEED),
+        "turn speed flag also suppressed",
+    );
+    assert_eq!(raw_motion_state.turn_command, None);
+    assert_eq!(raw_motion_state.turn_speed, None);
+    assert_eq!(raw_motion_state.turn_hold_key, None);
 }
 
 #[test]

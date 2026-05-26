@@ -32,7 +32,21 @@
 //                  cross-referenced against `__diag.wire.tail` for the same
 //                  guid in the same window (recentWireEventsForGuid > 0 ⇒
 //                  potential stuck bug; == 0 ⇒ idle entity, expected)
-//   reset()      — zero all state
+//   coverageMatrix() — Wave 6 / Phase 6.1 (2026-05-26): cumulative
+//                  stance×cmd play counts across ALL guids. Returns
+//                  `{ [stance_hex]: { [cmd_hex]: count } }`. Hooked
+//                  alongside the per-guid history; counter increments
+//                  whenever `onMotionApplied` fires with a CHANGED
+//                  actionKey (same gate as globalHistory). Designed for
+//                  the input-matrix drill — see exit gate at
+//                  `external/holtburger/docs/movement-animation-overhaul-plan-2026-05-26.md`
+//                  §"Wave 6 → Phase 6.1".
+//   coverageSummary() — quick `{ totalPlays, stancesSeen, motionsSeen }`
+//                  rollup of the matrix, for one-line operator queries.
+//   coverageReset()  — clears the matrix without touching byGuid/history.
+//                  Useful when scoping a capture window to a specific
+//                  input drill (e.g. "now press W+D, then dump").
+//   reset()      — zero all state (matrix, byGuid, history, link plays)
 
 const MAX_GLOBAL_HISTORY = 200;
 const MAX_PER_GUID_HISTORY = 20;
@@ -108,6 +122,19 @@ export function attachMotion(diag) {
     // wire-event combat stream via __diag.wire.tail to detect "wire
     // said attacker swung but no link clip played" type bugs.
     linkPlays: [],
+    // Wave 6 / Phase 6.1 (2026-05-26) — per-(stance, cmd) cumulative play
+    // counter across all guids. Two-level Map for O(1) increment without
+    // string concat on the hot path; materialized to a plain object on
+    // `coverageMatrix()`. Counts every CHANGED-actionKey hit, mirroring
+    // the gate that pushes to globalHistory — no double-counting of
+    // re-entrant `setMotion(sameKey)` no-ops.
+    //
+    // Shape: Map<stance_u32, Map<cmd_u32, count_int>>. Stance 0 lands
+    // here when an EntityInstance hadn't resolved stance yet at the
+    // crossFadeTo, which is rare but legitimate during initial spawn
+    // bursts. The matrix surface labels it "0x00000000" — operators
+    // should expect a small count there for fresh worlds.
+    coverage: new Map(),
     maxGlobalHistory: MAX_GLOBAL_HISTORY,
     maxPerGuidHistory: MAX_PER_GUID_HISTORY,
     maxLinkPlays: MAX_LINK_PLAYS,
@@ -168,6 +195,22 @@ export function attachMotion(diag) {
           cmd: next.cmd ?? 0,
           stance: next.stance ?? 0,
         });
+        // Wave 6 / Phase 6.1 (2026-05-26) — increment the coverage cell
+        // on the SAME gate as the history push. We use the parsed
+        // numeric values from `next`; both are nullable when the cache
+        // key was unparseable, which is rare but real (recovery from a
+        // half-bake mid-load) — bucket those under `0` for both axes so
+        // the counter still ticks without dropping signal. Use bitwise
+        // `>>> 0` to normalize negative-mode parses (parseInt accepts
+        // 32-bit signed ints via 0x80000000+).
+        const stanceKey = (next.stance ?? 0) >>> 0;
+        const cmdKey = (next.cmd ?? 0) >>> 0;
+        let row = motion.coverage.get(stanceKey);
+        if (!row) {
+          row = new Map();
+          motion.coverage.set(stanceKey, row);
+        }
+        row.set(cmdKey, (row.get(cmdKey) ?? 0) + 1);
       }
 
       entry.current = next;
@@ -252,10 +295,73 @@ export function attachMotion(diag) {
       return stuck;
     },
 
+    /**
+     * Wave 6 / Phase 6.1 (2026-05-26) — materialize the (stance, cmd)
+     * play-count matrix as a plain devtools-friendly object. Keys are
+     * 0x-padded 32-bit hex; values are integer counts. Cumulative since
+     * either page load or the last `coverageReset()` call.
+     *
+     * Designed for the input-matrix drill from the plan: drive W, S, A,
+     * D, Q, E, Shift+each, Space, combos; then call this and assert
+     * every cell with a clip in MT 0x09000001 has count > 0. Useful for
+     * surfacing missing classifier wirings (cell stays 0 when an input
+     * combo is broadcast but the renderer never landed the cycle).
+     */
+    coverageMatrix() {
+      const out = {};
+      for (const [stance, row] of motion.coverage) {
+        const stanceKey = "0x" + (stance >>> 0).toString(16).padStart(8, "0");
+        const cells = {};
+        for (const [cmd, count] of row) {
+          const cmdKey = "0x" + (cmd >>> 0).toString(16).padStart(8, "0");
+          cells[cmdKey] = count;
+        }
+        out[stanceKey] = cells;
+      }
+      return out;
+    },
+
+    /**
+     * Wave 6 / Phase 6.1 (2026-05-26) — one-line rollup of the coverage
+     * matrix. Cheaper than `coverageMatrix()` when the operator just
+     * wants "did we cover the matrix at all?" without scanning every
+     * cell.
+     *
+     *   totalPlays   — sum of all cell counts (changed-actionKey hits)
+     *   stancesSeen  — distinct stance values that have ≥1 play
+     *   motionsSeen  — distinct (stance, cmd) pairs with ≥1 play
+     */
+    coverageSummary() {
+      let totalPlays = 0;
+      let motionsSeen = 0;
+      for (const [, row] of motion.coverage) {
+        motionsSeen += row.size;
+        for (const [, count] of row) totalPlays += count;
+      }
+      return {
+        totalPlays,
+        stancesSeen: motion.coverage.size,
+        motionsSeen,
+      };
+    },
+
+    /**
+     * Wave 6 / Phase 6.1 (2026-05-26) — zero the matrix WITHOUT clearing
+     * byGuid / globalHistory / linkPlays. Lets the operator scope a
+     * capture window to one drill: call coverageReset(), press a
+     * specific combo, then dump coverageMatrix() to see what FRESH
+     * plays the input generated. The history rings remain intact for
+     * stuck-entity cross-referencing.
+     */
+    coverageReset() {
+      motion.coverage.clear();
+    },
+
     reset() {
       motion.byGuid.clear();
       motion.globalHistory.length = 0;
       motion.linkPlays.length = 0;
+      motion.coverage.clear();
     },
   };
 
