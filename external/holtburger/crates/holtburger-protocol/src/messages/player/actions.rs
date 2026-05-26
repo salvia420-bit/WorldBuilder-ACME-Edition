@@ -392,6 +392,87 @@ impl ProtocolPack for AllegianceChatGagActionData {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ModifyAccountSquelchActionData {
+    pub add: bool,
+    pub account_name: String,
+}
+
+impl ProtocolUnpack for ModifyAccountSquelchActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let add = LittleEndian::read_u32(&data[*offset..*offset + 4]) != 0;
+        *offset += 4;
+        let account_name = read_string16(data, offset)?;
+        Some(Self { add, account_name })
+    }
+}
+
+impl ProtocolPack for ModifyAccountSquelchActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        writer
+            .write_u32::<LittleEndian>(u32::from(self.add))
+            .unwrap();
+        write_string16(writer, &self.account_name);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModifyGlobalSquelchActionData {
+    pub add: bool,
+    /// `ChatMessageType` bitmask. 0xFFFFFFFF squelches every category
+    /// (retail UX shortcut). ACE persists account-wide via SquelchManager.
+    pub message_type: u32,
+}
+
+impl ProtocolUnpack for ModifyGlobalSquelchActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 8 > data.len() {
+            return None;
+        }
+        let add = LittleEndian::read_u32(&data[*offset..*offset + 4]) != 0;
+        *offset += 4;
+        let message_type = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(Self { add, message_type })
+    }
+}
+
+impl ProtocolPack for ModifyGlobalSquelchActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        writer
+            .write_u32::<LittleEndian>(u32::from(self.add))
+            .unwrap();
+        writer
+            .write_u32::<LittleEndian>(self.message_type)
+            .unwrap();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TitleSetActionData {
+    pub title_id: u32,
+}
+
+impl ProtocolUnpack for TitleSetActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let title_id = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(Self { title_id })
+    }
+}
+
+impl ProtocolPack for TitleSetActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        writer.write_u32::<LittleEndian>(self.title_id).unwrap();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct RecallAllegianceHometownActionData {}
 
 impl ProtocolUnpack for RecallAllegianceHometownActionData {

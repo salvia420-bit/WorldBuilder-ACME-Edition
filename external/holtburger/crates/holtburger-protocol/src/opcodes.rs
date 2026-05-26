@@ -278,10 +278,10 @@ pub enum GameActionOpcode {
     // ClearMotd = 0x0256,
     /// C2S: Mute/squelch a specific character.
     ModifyCharacterSquelch = 0x0058,
-    // /// C2S: Mute/squelch an entire account.
-    // ModifyAccountSquelch = 0x0059,
-    // /// C2S: Mute/squelch a global chat channel.
-    // ModifyGlobalSquelch = 0x005B,
+    /// C2S: Mute/squelch every character on an account by name.
+    ModifyAccountSquelch = 0x0059,
+    /// C2S: Mute/squelch a global chat channel (account-wide filter).
+    ModifyGlobalSquelch = 0x005B,
     /// C2S: Perform a character emote.
     Emote = 0x01DF,
     /// C2S: Perform a visual "soul emote".
@@ -480,8 +480,8 @@ pub enum GameActionOpcode {
     // ClearAllegianceOfficers = 0x02A7,
     /// C2S: Recall the character to their allegiance hometown (no payload).
     RecallAllegianceHometown = 0x02AB,
-    // /// C2S: Select an active character title.
-    // TitleSet = 0x002C,
+    /// C2S: Select an active character title from the player's earned set.
+    TitleSet = 0x002C,
     /// C2S: Query the current health of a selected creature or player.
     /// Also updates the server-side selected target used for follow-up health heartbeats.
     QueryHealth = 0x01BF,
@@ -705,8 +705,8 @@ pub enum GameEventOpcode {
     // AllegianceUpdateAborted = 0x0003,
     /// S2C: Update to allegiance data (vassals, patrons).
     AllegianceUpdate = 0x0020,
-    // /// S2C: Full update of the player's friends list.
-    // FriendsListUpdate = 0x0021,
+    /// S2C: Full update of the player's friends list.
+    FriendsListUpdate = 0x0021,
     // /// S2C: Detailed information about a character title.
     // CharacterTitle = 0x0029,
     // /// S2C: Update to the current active title.

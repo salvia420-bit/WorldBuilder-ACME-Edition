@@ -44,6 +44,9 @@ pub enum GameAction {
     AddFriend(Box<AddFriendActionData>),
     RemoveFriend(Box<RemoveFriendActionData>),
     ModifyCharacterSquelch(Box<ModifyCharacterSquelchActionData>),
+    ModifyAccountSquelch(Box<ModifyAccountSquelchActionData>),
+    ModifyGlobalSquelch(Box<ModifyGlobalSquelchActionData>),
+    TitleSet(Box<TitleSetActionData>),
     AddPlayerPermission(Box<AddPlayerPermissionActionData>),
     RemovePlayerPermission(Box<RemovePlayerPermissionActionData>),
     Emote(Box<EmoteActionData>),
@@ -182,6 +185,15 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::ModifyCharacterSquelch => GameAction::ModifyCharacterSquelch(
                     Box::new(ModifyCharacterSquelchActionData::unpack(data, offset)?),
                 ),
+                GameActionOpcode::ModifyAccountSquelch => GameAction::ModifyAccountSquelch(
+                    Box::new(ModifyAccountSquelchActionData::unpack(data, offset)?),
+                ),
+                GameActionOpcode::ModifyGlobalSquelch => GameAction::ModifyGlobalSquelch(Box::new(
+                    ModifyGlobalSquelchActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::TitleSet => {
+                    GameAction::TitleSet(Box::new(TitleSetActionData::unpack(data, offset)?))
+                }
                 GameActionOpcode::AddPlayerPermission => GameAction::AddPlayerPermission(Box::new(
                     AddPlayerPermissionActionData::unpack(data, offset)?,
                 )),
@@ -473,6 +485,21 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::ModifyCharacterSquelch(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::ModifyCharacterSquelch as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::ModifyAccountSquelch(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::ModifyAccountSquelch as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::ModifyGlobalSquelch(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::ModifyGlobalSquelch as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::TitleSet(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::TitleSet as u32)
                     .unwrap();
                 data.pack(buf);
             }

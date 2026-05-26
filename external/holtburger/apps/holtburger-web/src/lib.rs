@@ -138,6 +138,7 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::FellowshipFellowUpdateDone => 0x01C9,
         GameEvent::FellowshipFellowStatsDone => 0x01CA,
         GameEvent::AllegianceUpdate(_) => 0x0020,
+        GameEvent::FriendsListUpdate(_) => 0x0021,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -12587,6 +12588,17 @@ const CLIENT_EVENT_KIND_BOOK_UPDATED: u32 = 24;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_ALLEGIANCE_UPDATED: u32 = 25;
 
+/// `kind = 26` — FriendsUpdated. ACE sent
+/// `GameEvent::FriendsListUpdate` (opcode 0x0021) carrying either the
+/// full friends list (update_type=FullList) or a single-entry delta
+/// (FriendAdded / FriendRemoved / FriendStatusChanged). The recv-loop
+/// folds the wire payload directly into `latest_friends` per the
+/// update_type semantics (no world-state intermediate). JS reads via
+/// [`SessionHandle::player_friends`] which returns the rebuilt list
+/// (or `None` pre-FullList). Payload fields unused.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_FRIENDS_UPDATED: u32 = 26;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -12986,6 +12998,35 @@ enum SessionCommand {
         target_name: String,
         add: bool,
         message_type: u32,
+    },
+    /// Social: squelch (`add=true`) or unsquelch (`add=false`) every
+    /// character on an account by name. Maps to
+    /// `GameAction::ModifyAccountSquelch` (sub-opcode 0x0059). ACE wire
+    /// is `(bool_u32, account_name_string16)` — no per-channel mask;
+    /// scope is account-wide.
+    ModifyAccountSquelch {
+        account_name: String,
+        add: bool,
+        /// `ChatMessageType` bitmask carried in the SessionCommand for
+        /// future parity; ACE's wire for this opcode has no mask field
+        /// (only `bool + name`), so this value is currently unused on
+        /// the send path. Kept so the wasm API can grow without a
+        /// breaking signature change.
+        message_type: u32,
+    },
+    /// Social: squelch (`add=true`) or unsquelch (`add=false`) a global
+    /// chat channel by `ChatMessageType` bitmask. Maps to
+    /// `GameAction::ModifyGlobalSquelch` (sub-opcode 0x005B). Scope is
+    /// account-wide; `0xFFFFFFFF` mirrors retail "squelch everything".
+    ModifyGlobalSquelch {
+        add: bool,
+        message_type: u32,
+    },
+    /// Social: set the active character title from the player's earned
+    /// title list. Maps to `GameAction::TitleSet` (sub-opcode 0x002C).
+    /// `title_id` is a `CharacterTitle` ordinal validated server-side.
+    TitleSet {
+        title_id: u32,
     },
     /// Allegiance: set the allegiance MOTD / name. Maps to
     /// `GameAction::SetAllegianceName` (sub-opcode 0x0033). Single
@@ -14512,6 +14553,77 @@ impl AllegianceSnapshotJs {
     }
 }
 
+/// Wave-H1 (2026-05-26): JS-facing snapshot of the local player's
+/// friends list. ACE pushes `GameEvent::FriendsListUpdate` (opcode
+/// 0x0021) with `update_type` either `FullList=0` (replace whole
+/// snapshot) or one of the per-friend deltas (`FriendAdded=1`,
+/// `FriendRemoved=2`, `FriendStatusChanged=4` — fold the single
+/// entry into the existing list). `holtburger-world` has no friends
+/// handler today; the recv-loop applies the fold semantics directly.
+/// JS layer drops `appear_offline` (always 0 in ACE) + the
+/// friend-of-friend lists (always empty in ACE) — only the
+/// online/offline + name pair matters for the panel.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct FriendsSnapshot {
+    friends: Vec<FriendEntryView>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct FriendEntryView {
+    friend_id: u32,
+    is_online: bool,
+    name: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct FriendEntryViewJs {
+    friend_id: u32,
+    is_online: bool,
+    name: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl FriendEntryViewJs {
+    #[wasm_bindgen(getter, js_name = friendId)]
+    pub fn friend_id(&self) -> u32 { self.friend_id }
+    #[wasm_bindgen(getter, js_name = isOnline)]
+    pub fn is_online(&self) -> bool { self.is_online }
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct FriendsSnapshotJs {
+    friends: Vec<FriendEntryView>,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn friend_entry_to_js(e: &FriendEntryView) -> FriendEntryViewJs {
+    FriendEntryViewJs {
+        friend_id: e.friend_id,
+        is_online: e.is_online,
+        name: e.name.clone(),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl FriendsSnapshotJs {
+    #[wasm_bindgen(getter)]
+    pub fn friends(&self) -> Vec<FriendEntryViewJs> {
+        self.friends.iter().map(friend_entry_to_js).collect()
+    }
+    #[wasm_bindgen(getter, js_name = count)]
+    pub fn count(&self) -> u32 { self.friends.len() as u32 }
+}
+
 /// AC Trade (2026-05-25, Discord deficiency #3): JS-facing snapshot of
 /// the local player's active peer-to-peer trade. Sourced from
 /// `world.trade` (the world dispatcher's `handlers::trade::handle_event`
@@ -15039,6 +15151,16 @@ pub struct SessionHandle {
     /// [`SessionHandle::player_allegiance`] from the kind=25
     /// AllegianceUpdated drain.
     latest_allegiance: std::rc::Rc<std::cell::RefCell<Option<AllegianceSnapshot>>>,
+    /// Wave-H1 (2026-05-26): local player's friends list snapshot.
+    /// Refreshed by the recv loop on every
+    /// `GameEvent::FriendsListUpdate` (opcode 0x0021) — ACE pushes
+    /// FullList post-login and per-friend deltas on add/remove/
+    /// status-change. `None` pre-FullList. No world-state
+    /// intermediate: the recv arm folds the wire payload directly per
+    /// the FriendsUpdateTypeFlags semantics. JS reads via
+    /// [`SessionHandle::player_friends`] from the kind=26
+    /// FriendsUpdated drain.
+    latest_friends: std::rc::Rc<std::cell::RefCell<Option<FriendsSnapshot>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -17671,6 +17793,77 @@ impl SessionHandle {
         })
     }
 
+    /// Wave-H1 (2026-05-26): friends list snapshot — `None` pre-
+    /// FullList. Refreshed by the recv-loop on every
+    /// `GameEvent::FriendsListUpdate` (opcode 0x0021). Per
+    /// FriendsUpdateTypeFlags, the loop applies one of:
+    /// FullList=replace; FriendAdded=upsert by friend_id;
+    /// FriendRemoved=remove by friend_id; FriendStatusChanged=update
+    /// `is_online` for existing entry. UI plugins re-pull on each
+    /// `kind=26 friendsUpdated` drain.
+    #[wasm_bindgen(js_name = playerFriends)]
+    pub fn player_friends(&self) -> Option<FriendsSnapshotJs> {
+        self.latest_friends.borrow().as_ref().map(|f| FriendsSnapshotJs {
+            friends: f.friends.clone(),
+        })
+    }
+
+    /// Social — squelch/unsquelch every character on an account by
+    /// `account_name`. Sends `GameAction::ModifyAccountSquelch`
+    /// (sub-opcode 0x0059). ACE wire is `(bool_u32, account_name_str16)`
+    /// with no per-channel mask — scope is account-wide. `message_type`
+    /// is accepted for forward-compat with the other squelch siblings
+    /// but is not packed on the wire today.
+    #[wasm_bindgen(js_name = modifyAccountSquelch)]
+    pub fn modify_account_squelch(
+        &self,
+        account_name: String,
+        add: bool,
+        message_type: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::ModifyAccountSquelch {
+                account_name,
+                add,
+                message_type,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("modifyAccountSquelch: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Social — squelch/unsquelch a global chat channel by
+    /// `ChatMessageType` bitmask. Sends `GameAction::ModifyGlobalSquelch`
+    /// (sub-opcode 0x005B). `0xFFFFFFFF` mirrors retail "squelch every
+    /// chat type".
+    #[wasm_bindgen(js_name = modifyGlobalSquelch)]
+    pub fn modify_global_squelch(
+        &self,
+        add: bool,
+        message_type: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::ModifyGlobalSquelch { add, message_type })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("modifyGlobalSquelch: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Social — set the player's active character title to `title_id`.
+    /// Sends `GameAction::TitleSet` (sub-opcode 0x002C). ACE validates
+    /// the id against the player's earned `CharacterTitleTable`.
+    #[wasm_bindgen(js_name = setTitle)]
+    pub fn set_title(&self, title_id: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::TitleSet { title_id })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("setTitle: cmd channel closed ({e})"))
+            })
+    }
+
     /// Phase 4 step 3.6 — JS-driven physics tick.
     ///
     /// Called from `index.html`'s `requestAnimationFrame(drainEvents)`
@@ -18058,6 +18251,11 @@ pub async fn start_session(
     let latest_allegiance: std::rc::Rc<
         std::cell::RefCell<Option<AllegianceSnapshot>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave-H1 (2026-05-26): friends list snapshot, refreshed by the
+    // recv-loop on every `GameEvent::FriendsListUpdate`.
+    let latest_friends: std::rc::Rc<
+        std::cell::RefCell<Option<FriendsSnapshot>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -18118,6 +18316,7 @@ pub async fn start_session(
         let latest_trade_inner = latest_trade.clone();
         let latest_book_inner = latest_book.clone();
         let latest_allegiance_inner = latest_allegiance.clone();
+        let latest_friends_inner = latest_friends.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -18145,6 +18344,7 @@ pub async fn start_session(
                 latest_trade_inner,
                 latest_book_inner,
                 latest_allegiance_inner,
+                latest_friends_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -18228,6 +18428,7 @@ pub async fn start_session(
         latest_trade,
         latest_book,
         latest_allegiance,
+        latest_friends,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -19020,6 +19221,76 @@ fn publish_player_allegiance_snapshot(
     });
 }
 
+// Wave-H1 (2026-05-26): fold `FriendsListUpdate` per the wire's
+// `update_type` (FriendsUpdateTypeFlags). FullList=0 replaces the
+// snapshot wholesale; the three delta flavours mutate the existing
+// list. ACE sends single-entry payloads for deltas. Pre-FullList
+// the snapshot is `None`; deltas arriving before a FullList create
+// the snapshot on first add (treated like a one-entry FullList).
+#[cfg(target_arch = "wasm32")]
+fn publish_player_friends_snapshot(
+    payload: &holtburger_protocol::messages::FriendsListUpdateEventData,
+    latest_friends: &std::rc::Rc<std::cell::RefCell<Option<FriendsSnapshot>>>,
+) {
+    use holtburger_protocol::messages::FriendsUpdateTypeFlags as F;
+
+    fn to_view(e: &holtburger_protocol::messages::FriendEntry) -> FriendEntryView {
+        FriendEntryView {
+            friend_id: e.friend_id.0,
+            is_online: e.is_online,
+            name: e.name.clone(),
+        }
+    }
+
+    match payload.update_type {
+        F::FULL_LIST => {
+            *latest_friends.borrow_mut() = Some(FriendsSnapshot {
+                friends: payload.friends.iter().map(to_view).collect(),
+            });
+        }
+        F::FRIEND_ADDED => {
+            let mut cell = latest_friends.borrow_mut();
+            let snap = cell.get_or_insert_with(|| FriendsSnapshot { friends: Vec::new() });
+            for entry in &payload.friends {
+                let v = to_view(entry);
+                if let Some(slot) = snap.friends.iter_mut().find(|f| f.friend_id == v.friend_id) {
+                    *slot = v;
+                } else {
+                    snap.friends.push(v);
+                }
+            }
+        }
+        F::FRIEND_REMOVED => {
+            if let Some(snap) = latest_friends.borrow_mut().as_mut() {
+                for entry in &payload.friends {
+                    snap.friends.retain(|f| f.friend_id != entry.friend_id.0);
+                }
+            }
+        }
+        F::FRIEND_STATUS_CHANGED => {
+            if let Some(snap) = latest_friends.borrow_mut().as_mut() {
+                for entry in &payload.friends {
+                    if let Some(slot) =
+                        snap.friends.iter_mut().find(|f| f.friend_id == entry.friend_id.0)
+                    {
+                        slot.is_online = entry.is_online;
+                        // ACE re-sends the name on every delta; keep
+                        // in sync in case of rename / casing diffs.
+                        slot.name = entry.name.clone();
+                    }
+                }
+            }
+        }
+        _ => {
+            // Unknown update_type — log and ignore.
+            log::warn!(
+                "publish_player_friends_snapshot: unknown update_type=0x{:04x}",
+                payload.update_type
+            );
+        }
+    }
+}
+
 // AC Books (2026-05-25): publish a JS-facing snapshot of the open book.
 // The world dispatcher's inventory handler already folds
 // `BookDataResponse` + `BookPageDataResponse` into `entity.book`; we
@@ -19203,6 +19474,7 @@ async fn recv_loop(
     latest_trade: std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
     latest_book: std::rc::Rc<std::cell::RefCell<Option<BookSnapshot>>>,
     latest_allegiance: std::rc::Rc<std::cell::RefCell<Option<AllegianceSnapshot>>>,
+    latest_friends: std::rc::Rc<std::cell::RefCell<Option<FriendsSnapshot>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -22187,6 +22459,24 @@ async fn recv_loop(
                                         f32_payload: None,
                                     });
                                 }
+                                holtburger_protocol::messages::GameEvent::FriendsListUpdate(
+                                    data,
+                                ) => {
+                                    // Wave-H1 (2026-05-26): fold the wire
+                                    // payload per update_type semantics
+                                    // (FullList replaces, deltas mutate).
+                                    publish_player_friends_snapshot(
+                                        data.as_ref(),
+                                        &latest_friends,
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_FRIENDS_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
                                 _ => {
                                     // Non-chat GameEvents drop through
                                     // to the no-op outer catch-all.
@@ -23481,6 +23771,82 @@ async fn recv_loop(
                         console_log_str(&format!(
                             "[squelch/character] target=0x{target_guid:08X} add={add} mask=0x{message_type:08X}",
                         ));
+                    }
+                    Some(SessionCommand::ModifyAccountSquelch {
+                        account_name,
+                        add,
+                        message_type,
+                    }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, ModifyAccountSquelchActionData,
+                        };
+                        let name_for_log = account_name.clone();
+                        let action = GameAction::ModifyAccountSquelch(Box::new(
+                            ModifyAccountSquelchActionData { add, account_name },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(ModifyAccountSquelch): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "modify_account_squelch: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        // `message_type` is logged but not on the wire; ACE
+                        // wire is (bool, name) only for this opcode.
+                        console_log_str(&format!(
+                            "[squelch/account] name={name_for_log} add={add} mask=0x{message_type:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::ModifyGlobalSquelch { add, message_type }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, ModifyGlobalSquelchActionData,
+                        };
+                        let action = GameAction::ModifyGlobalSquelch(Box::new(
+                            ModifyGlobalSquelchActionData { add, message_type },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(ModifyGlobalSquelch): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "modify_global_squelch: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[squelch/global] add={add} mask=0x{message_type:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::TitleSet { title_id }) => {
+                        use holtburger_protocol::messages::{GameAction, TitleSetActionData};
+                        let action =
+                            GameAction::TitleSet(Box::new(TitleSetActionData { title_id }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(TitleSet): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("title_set: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!("[title/set] id={title_id}"));
                     }
                     Some(SessionCommand::SetAllegianceName { new_name }) => {
                         use holtburger_protocol::messages::{

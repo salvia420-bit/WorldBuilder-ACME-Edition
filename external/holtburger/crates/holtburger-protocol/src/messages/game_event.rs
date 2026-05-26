@@ -4,6 +4,7 @@ pub use crate::messages::chat::events::*;
 pub use crate::messages::chat::turbine::*;
 pub use crate::messages::combat::events::*;
 pub use crate::messages::fellowship::events::*;
+pub use crate::messages::friends::events::*;
 pub use crate::messages::inventory::events::*;
 pub use crate::messages::magic::events::*;
 pub use crate::messages::misc::events::*;
@@ -89,6 +90,7 @@ pub enum GameEvent {
     FellowshipFellowUpdateDone,
     FellowshipFellowStatsDone,
     AllegianceUpdate(Box<AllegianceUpdateEventData>),
+    FriendsListUpdate(Box<FriendsListUpdateEventData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -318,6 +320,9 @@ impl ProtocolUnpack for GameEventMessage {
                 GameEventOpcode::FellowshipFellowStatsDone => GameEvent::FellowshipFellowStatsDone,
                 GameEventOpcode::AllegianceUpdate => GameEvent::AllegianceUpdate(Box::new(
                     AllegianceUpdateEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::FriendsListUpdate => GameEvent::FriendsListUpdate(Box::new(
+                    FriendsListUpdateEventData::unpack(data, offset)?,
                 )),
             },
             None => {
@@ -659,6 +664,11 @@ impl ProtocolPack for GameEventMessage {
             }
             GameEvent::AllegianceUpdate(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::AllegianceUpdate as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::FriendsListUpdate(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::FriendsListUpdate as u32)
                     .unwrap();
                 data.pack(buf);
             }

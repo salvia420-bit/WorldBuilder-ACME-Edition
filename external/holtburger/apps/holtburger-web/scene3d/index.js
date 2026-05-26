@@ -69,6 +69,7 @@ import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
 import { WeatherEffectsManager } from "./weather/manager.js";
+import { LandblockLRU, lbKeyFromXY } from "./landblock_lru.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
 import { ACMoons } from "./ac_moons.js";
 import { installDiag } from "./diag.js";
@@ -1450,6 +1451,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
       }
     }
+    // Landblock LRU eviction tick. Per-frame so the always-resident
+    // 3×3 ring around the player gets its lastTouchMs refreshed and
+    // eviction candidates (LBs beyond `maxResident`) are released
+    // promptly. No-op when `?lbCap=N` is at or above the resident
+    // count (default 169 = today's 13×13 ring).
+    if (liveScene3dRef?.landblockLru) {
+      try {
+        const lru = liveScene3dRef.landblockLru;
+        lru.tickEviction(lru.getCurrentLbId());
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        if (!liveScene3dRef._lbLruTickWarned) {
+          liveScene3dRef._lbLruTickWarned = true;
+          console.warn("[lbLru] tickEviction threw:", e);
+        }
+      }
+    }
     // Task D (ambient-sounds-chain, 2026-05-12): per-tick ambient
     // roller. Drives the Region.SoundDesc-keyed ambient chain
     // (terrain code → SceneType → AmbientSTB → SoundTable → Wave).
@@ -1949,6 +1967,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     stop() { running = false; },
     loadEnvCellsForLandblock(landblockId) {
       const p = buildEnvCellsForLandblock(this, landblockId, this.wasmExports);
+      const lbKeyForLru = (landblockId & 0xffff_0000) >>> 0;
+      try { this.landblockLru?.track(lbKeyForLru); } catch (_) {}
       // 2026-05-22 — wire-agent: walk the cellsGroup after the bake to
       // pick up the newly-attached EnvCell meshes and add their fill
       // companions. addFillCompanions is idempotent (per-mesh
@@ -1998,13 +2018,42 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // per LB sharing geometry, added directly to terrainGroup by
       // `bakeTerrainForLandblock` — see scene3d/terrain.js:1335ish).
       // No post-bake walk needed.
-      return bakeTerrainForLandblock(
+      const p = bakeTerrainForLandblock(
         this,
         lbX,
         lbY,
         this.terrainOpts,
         this.wasmExports
       );
+      const lbKeyForLru = lbKeyFromXY(lbX, lbY);
+      const lru = this.landblockLru;
+      if (lru) {
+        return Promise.resolve(p).then((lbMesh) => {
+          // `lbMesh` is null on idempotent re-call (already baked) or
+          // when the bake threw. Track unconditionally so re-entries
+          // refresh lastTouchMs; only stash disposables when the bake
+          // produced a fresh per-LB Mesh.
+          try {
+            if (lbMesh?.geometry && lbMesh?.material) {
+              const disposables = {
+                geometries: [lbMesh.geometry],
+                // Skip the shared `_wireTerrainMaterial` / `_wireTerrainFillMaterial`
+                // (wire mode uses two cache-owned MeshBasicMaterials); the per-LB
+                // ShaderMaterial is the textured-mode case.
+                materials: lbMesh.material?.userData?.__cacheOwned ? [] : [lbMesh.material],
+                textures: lbMesh.userData?.vertexTypesTexture
+                  ? [lbMesh.userData.vertexTypesTexture]
+                  : [],
+              };
+              lru.track(lbKeyForLru, disposables);
+            } else {
+              lru.track(lbKeyForLru);
+            }
+          } catch (_) {}
+          return lbMesh;
+        });
+      }
+      return p;
     },
     loadBuildingsForLandblock(lbX, lbY) {
       const p = bakeBuildingsForLandblock(
@@ -2014,6 +2063,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         this.buildingsOpts,
         this.wasmExports
       );
+      try { this.landblockLru?.track(lbKeyFromXY(lbX, lbY)); } catch (_) {}
       if (this.wireframeMode && this.materialCache) {
         const self = this;
         return Promise.resolve(p).then((r) => {
@@ -2031,6 +2081,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         this.staticsOpts,
         this.wasmExports
       );
+      try { this.landblockLru?.track(lbKeyFromXY(lbX, lbY)); } catch (_) {}
       if (this.wireframeMode && this.materialCache) {
         const self = this;
         return Promise.resolve(p).then((r) => {
@@ -2836,6 +2887,120 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[weather/fx] WeatherEffectsManager init failed:", e);
+  }
+
+  // Landblock LRU — bounds the resident set so long-play tours across
+  // continents don't leak the 13×13 ring (169 LBs of geometry +
+  // materials + textures) accumulated per zone change. Default cap is
+  // 169 (today's ring size, so no eviction happens by default). Lower
+  // via `?lbCap=N` for soak testing. `?lbLruDebug=1` logs each
+  // eviction. Never evicts the player's current LB or its 3×3 ring
+  // (the always-resident floor) — even at `?lbCap=1` the LRU keeps
+  // those 9 LBs.
+  try {
+    let lbCap = 169;
+    let lbLruDebug = false;
+    if (typeof window !== "undefined" && window.location?.search) {
+      const ps = new URLSearchParams(window.location.search);
+      const v = parseInt(ps.get("lbCap") ?? "", 10);
+      if (Number.isFinite(v) && v > 0) lbCap = v;
+      lbLruDebug = ps.get("lbLruDebug") === "1";
+    }
+    const landblockLru = new LandblockLRU({
+      scene3d: liveScene3d,
+      maxResident: lbCap,
+      // Resolve the player's current LB from the integrator-driven rig
+      // position. `applyLocalPlayerPoseFromIntegrator` writes the rig
+      // position each rAF tick; reading it here is one frame stale at
+      // worst (acceptable for an eviction cadence). Falls back to the
+      // initial centre LB pre-spawn.
+      getCurrentLbId: () => {
+        try {
+          const fn = typeof window !== "undefined"
+            ? window.getLocalPlayerGuid
+            : null;
+          if (typeof fn === "function") {
+            const guid = fn();
+            if (guid != null) {
+              const inst = liveScene3d?.entityManager?.entityMap?.get(guid >>> 0);
+              const p = inst?.root?.position;
+              if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+                // worldRoot uses three.js coords (x east, y up, z south);
+                // AC coords used in lb-key are (x east, y north). The
+                // existing `acToThree` flips y→-z, so the inverse here is
+                // ac_x = three_x, ac_y = -three_z. See scene3d/adapter.js
+                // for the canonical transform.
+                const acX = p.x;
+                const acY = -p.z;
+                const lbX = Math.floor(acX / 192) & 0xff;
+                const lbY = Math.floor(acY / 192) & 0xff;
+                return lbKeyFromXY(lbX, lbY);
+              }
+            }
+          }
+        } catch (_) {}
+        return liveScene3d.playerLbKey ?? liveScene3d.initialCentreLbKey ?? null;
+      },
+      debug: lbLruDebug,
+    });
+    liveScene3d.landblockLru = landblockLru;
+    scene3dForBuilders.landblockLru = landblockLru;
+    if (typeof window !== "undefined") {
+      window.__landblockLru = landblockLru;
+    }
+    // Bulk-track the initial ring (terrain ring 13×13 + buildings/statics
+    // ring 5×5 already baked above). Walk terrainGroup.children once to
+    // collect per-LB disposables (ShaderMaterial + BufferGeometry +
+    // vertexTypesTexture). Buildings/statics LBs ride along — their
+    // children's userData.landblockId is what the eviction walker reads;
+    // a track() with no disposables registers the lbKey so LRU sizing
+    // accounts for them.
+    try {
+      const seen = new Set();
+      if (liveScene3d.terrainGroup?.children) {
+        for (const c of liveScene3d.terrainGroup.children) {
+          const ud = c.userData;
+          if (ud?.lbX == null || ud?.lbY == null) continue;
+          const key = lbKeyFromXY(ud.lbX, ud.lbY);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const disposables = {
+            geometries: c.geometry ? [c.geometry] : [],
+            materials: (c.material && !c.material.userData?.__cacheOwned)
+              ? [c.material]
+              : [],
+            textures: ud.vertexTypesTexture ? [ud.vertexTypesTexture] : [],
+          };
+          landblockLru.track(key, disposables);
+        }
+      }
+      // Pick up buildings/statics LBs not already covered by terrain.
+      const trackByLandblockUd = (children) => {
+        if (!children) return;
+        for (const c of children) {
+          const lb = c.userData?.landblockId;
+          if (lb == null) continue;
+          const key = (lb & 0xffff_0000) >>> 0;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          landblockLru.track(key);
+        }
+      };
+      trackByLandblockUd(liveScene3d.buildingsGroup?.children);
+      trackByLandblockUd(liveScene3d.staticsGroup?.children);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[lbLru] initial-ring bulk-track failed:", e);
+    }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[lbLru] LandblockLRU attached: maxResident=${lbCap}` +
+      ` initialResident=${landblockLru.getStats().resident}` +
+      (lbLruDebug ? " debug=on" : "")
+    );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[lbLru] LandblockLRU init failed:", e);
   }
 
   // Task C (ambient-sounds-chain, 2026-05-12) — SoundTableCache.

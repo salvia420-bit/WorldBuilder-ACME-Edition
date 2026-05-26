@@ -1,16 +1,23 @@
-// Social panel — Wave E2 send-only MVP for Friends + Character-Squelch.
+// Social panel — Wave E2 + Wave H1 + Wave H2 send-side.
 //
 // Standalone floating overlay (mirrors allegiance-panel.js's IIFE
 // pattern). Exposes window.__openSocialPanel / __closeSocialPanel for
-// ad-hoc opening from devtools or hotkeys. 3 action groups:
-//   - Friends: add-by-name (free text), remove-by-selected-guid
-//   - Squelch: squelch / unsquelch selected character
-//   - Placeholder: Titles + account/global squelch — future wave
+// ad-hoc opening from devtools or hotkeys. Sections:
+//   - Friends Add/Remove (E2): add-by-name, remove-by-selected
+//   - Friends list (H1): live snapshot from handle.playerFriends()
+//   - Squelch Character (E2): squelch / unsquelch selected character
+//   - Squelch Account (H2): squelch / unsquelch by account name
+//   - Squelch Global (H2): squelch / unsquelch every global channel
+//   - Title (H2): set the active character title by id
 //
 // Wire format:
-//   - AddFriend (0x0018)            — by-name (ACE GameActionAddFriend.cs)
-//   - RemoveFriend (0x0017)         — by-guid (ACE GameActionRemoveFriend.cs)
+//   - AddFriend (0x0018)              — by-name (ACE GameActionAddFriend.cs)
+//   - RemoveFriend (0x0017)           — by-guid (ACE GameActionRemoveFriend.cs)
 //   - ModifyCharacterSquelch (0x0058) — bool/guid/name/u32
+//   - ModifyAccountSquelch (0x0059)   — bool/name (no per-channel mask)
+//   - ModifyGlobalSquelch (0x005B)    — bool/u32 (ChatMessageType mask)
+//   - TitleSet (0x002C)               — u32 (CharacterTitle ordinal)
+//   - FriendsListUpdate (0x0021)      — S2C, snapshot via playerFriends()
 //     0xFFFFFFFF mask = retail UX shortcut for "squelch every chat type".
 
 import { setAcText } from "../ui/ac_font.js";
@@ -143,11 +150,67 @@ function ensureStyles() {
       color: var(--hb-text-gold);
       pointer-events: none;
     }
+    .hb-social-friends-list {
+      max-height: 180px;
+      overflow-y: auto;
+      border: 1px solid var(--hb-border-brass-dim);
+      background: rgba(0, 0, 0, 0.35);
+      margin-top: 4px;
+    }
+    .hb-social-friend-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 6px;
+      font-size: 11px;
+      color: var(--hb-text-cream);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.35);
+    }
+    .hb-social-friend-row:last-child { border-bottom: none; }
+    .hb-social-friend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex: 0 0 auto;
+      box-shadow: 0 0 4px currentColor;
+    }
+    .hb-social-friend-dot.online { background: #6f6; color: #6f6; }
+    .hb-social-friend-dot.offline { background: #666; color: #444; box-shadow: none; }
+    .hb-social-friend-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hb-social-friend-x {
+      flex: 0 0 auto;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      font-family: inherit;
+      font-size: 12px;
+      line-height: 1;
+      color: var(--hb-text-cream);
+      background: transparent;
+      border: 1px solid var(--hb-border-brass-dim);
+      cursor: pointer;
+    }
+    .hb-social-friend-x:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    .hb-social-friends-empty {
+      padding: 8px 6px;
+      font-size: 10px;
+      color: rgba(220, 200, 160, 0.55);
+      font-style: italic;
+      text-align: center;
+    }
   `;
   document.head.appendChild(style);
 }
 
 let overlay = null;
+// Wave-H1 (2026-05-26): subscription cleanups installed by buildOverlay
+// for friendsUpdated. Currently unused (overlay lives for the page
+// lifetime — no per-mount teardown), but kept so a future refactor
+// that destroys/rebuilds the overlay can call them.
+const overlay_unsubscribe_handlers = [];
 
 function emit(msgText, cat = 0) {
   const log = document.getElementById("chat-log");
@@ -287,6 +350,84 @@ function buildOverlay() {
     });
   });
   friendsSec.appendChild(removeBtn);
+
+  // Wave-H1 (2026-05-26): receive-side Friends list. ACE pushes
+  // `GameEvent::FriendsListUpdate` (opcode 0x0021); the wasm side
+  // folds the wire payload per FriendsUpdateTypeFlags and emits a
+  // kind=26 ClientEvent which index.html re-emits as
+  // `friendsUpdated`. We re-pull on each event.
+  const friendsListHeader = document.createElement("div");
+  friendsListHeader.className = "hb-social-section-title";
+  friendsListHeader.style.marginTop = "6px";
+  setAcText(friendsListHeader, "Friends (0)");
+  friendsSec.appendChild(friendsListHeader);
+
+  const friendsListEl = document.createElement("div");
+  friendsListEl.className = "hb-social-friends-list";
+  friendsSec.appendChild(friendsListEl);
+
+  function renderFriendsList() {
+    const handle = window.__sessionHandle;
+    const snap = typeof handle?.playerFriends === "function" ? handle.playerFriends() : null;
+    const friends = snap?.friends ?? [];
+
+    setAcText(friendsListHeader, `Friends (${friends.length})`);
+
+    friendsListEl.innerHTML = "";
+    if (friends.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "hb-social-friends-empty";
+      setAcText(empty, "No friends yet — Add one above.");
+      friendsListEl.appendChild(empty);
+      return;
+    }
+
+    for (const f of friends) {
+      const row = document.createElement("div");
+      row.className = "hb-social-friend-row";
+
+      const dot = document.createElement("span");
+      dot.className = `hb-social-friend-dot ${f.isOnline ? "online" : "offline"}`;
+      dot.title = f.isOnline ? "Online" : "Offline";
+      row.appendChild(dot);
+
+      const nameEl = document.createElement("span");
+      nameEl.className = "hb-social-friend-name";
+      setAcText(nameEl, f.name || `0x${f.friendId.toString(16).padStart(8, "0")}`);
+      row.appendChild(nameEl);
+
+      const xBtn = document.createElement("button");
+      xBtn.type = "button";
+      xBtn.className = "hb-social-friend-x";
+      xBtn.textContent = "x";
+      const fid = f.friendId >>> 0;
+      const fname = f.name || `0x${fid.toString(16).padStart(8, "0")}`;
+      xBtn.title = `Remove ${fname}`;
+      xBtn.addEventListener("click", () => {
+        if (!window.confirm(`Remove ${fname} from your friends list?`)) return;
+        withSession("removeFriend", (h) => {
+          h.removeFriend(fid);
+          emit(`[friends/remove] target=0x${fid.toString(16).padStart(8, "0")}`);
+          toast("Remove Friend sent");
+        });
+      });
+      row.appendChild(xBtn);
+
+      friendsListEl.appendChild(row);
+    }
+  }
+
+  const bus = window.__pluginClient?.events;
+  if (bus && typeof bus.on === "function") {
+    const listener = () => { try { renderFriendsList(); } catch (_) {} };
+    bus.on("friendsUpdated", listener);
+    overlay_unsubscribe_handlers.push(() => {
+      if (typeof bus.off === "function") bus.off("friendsUpdated", listener);
+    });
+  }
+  // Initial render: pre-FullList playerFriends() returns null → "No friends yet".
+  renderFriendsList();
+
   body.appendChild(friendsSec);
 
   // ── Squelch section ────────────────────────────────────────────────
@@ -336,10 +477,129 @@ function buildOverlay() {
   }
   body.appendChild(squelchSec);
 
+  // ── Account Squelch section ────────────────────────────────────────
+  const acctSec = document.createElement("div");
+  acctSec.className = "hb-social-section";
+  const acctTitle = document.createElement("div");
+  acctTitle.className = "hb-social-section-title";
+  setAcText(acctTitle, "Squelch (Account)");
+  acctSec.appendChild(acctTitle);
+
+  const acctRow = document.createElement("div");
+  acctRow.className = "hb-social-row";
+  const acctInput = document.createElement("input");
+  acctInput.type = "text";
+  acctInput.className = "hb-social-input";
+  acctInput.placeholder = "Account name";
+  acctInput.maxLength = 64;
+  acctRow.appendChild(acctInput);
+  acctSec.appendChild(acctRow);
+
+  const ACCOUNT_ACTIONS = [
+    { label: "Squelch Account", add: true, verb: "squelch", toastMsg: "Account Squelch sent",
+      confirm: (acct) => `Squelch account "${acct}"? (all characters, all chat types)` },
+    { label: "Unsquelch Account", add: false, verb: "unsquelch", toastMsg: "Account Unsquelch sent",
+      confirm: (acct) => `Unsquelch account "${acct}"?` },
+  ];
+
+  for (const a of ACCOUNT_ACTIONS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hb-social-btn full";
+    btn.dataset.action = `acct-${a.verb}`;
+    setAcText(btn, a.label);
+    btn.addEventListener("click", () => {
+      const acct = acctInput.value.trim();
+      if (!acct) { toast("Enter an account"); return; }
+      if (!window.confirm(a.confirm(acct))) return;
+      withSession("modifyAccountSquelch", (h) => {
+        h.modifyAccountSquelch(acct, a.add, SQUELCH_ALL_MASK);
+        emit(`[squelch/account] name=${acct} add=${a.add} mask=0x${SQUELCH_ALL_MASK.toString(16).toUpperCase()}`);
+        toast(a.toastMsg);
+        if (!a.add) acctInput.value = "";
+      });
+    });
+    acctSec.appendChild(btn);
+  }
+  body.appendChild(acctSec);
+
+  // ── Global Squelch section ─────────────────────────────────────────
+  const globalSec = document.createElement("div");
+  globalSec.className = "hb-social-section";
+  const globalTitle = document.createElement("div");
+  globalTitle.className = "hb-social-section-title";
+  setAcText(globalTitle, "Squelch (Global)");
+  globalSec.appendChild(globalTitle);
+
+  const GLOBAL_ACTIONS = [
+    { label: "Squelch All Channels", add: true, verb: "squelch", toastMsg: "Global Squelch sent",
+      confirm: () => "Squelch every global chat channel?" },
+    { label: "Unsquelch All Channels", add: false, verb: "unsquelch", toastMsg: "Global Unsquelch sent",
+      confirm: () => "Unsquelch every global chat channel?" },
+  ];
+
+  for (const a of GLOBAL_ACTIONS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hb-social-btn full";
+    btn.dataset.action = `global-${a.verb}`;
+    setAcText(btn, a.label);
+    btn.addEventListener("click", () => {
+      if (!window.confirm(a.confirm())) return;
+      withSession("modifyGlobalSquelch", (h) => {
+        h.modifyGlobalSquelch(a.add, SQUELCH_ALL_MASK);
+        emit(`[squelch/global] add=${a.add} mask=0x${SQUELCH_ALL_MASK.toString(16).toUpperCase()}`);
+        toast(a.toastMsg);
+      });
+    });
+    globalSec.appendChild(btn);
+  }
+  body.appendChild(globalSec);
+
+  // ── Title section ──────────────────────────────────────────────────
+  const titleSec = document.createElement("div");
+  titleSec.className = "hb-social-section";
+  const titleHeader = document.createElement("div");
+  titleHeader.className = "hb-social-section-title";
+  setAcText(titleHeader, "Title");
+  titleSec.appendChild(titleHeader);
+
+  const titleRow = document.createElement("div");
+  titleRow.className = "hb-social-row";
+  const titleInput = document.createElement("input");
+  titleInput.type = "number";
+  titleInput.className = "hb-social-input";
+  titleInput.placeholder = "Title ID";
+  titleInput.min = "0";
+  titleInput.step = "1";
+  titleRow.appendChild(titleInput);
+  const titleBtn = document.createElement("button");
+  titleBtn.type = "button";
+  titleBtn.className = "hb-social-btn";
+  setAcText(titleBtn, "Set");
+  const doSetTitle = () => {
+    const raw = titleInput.value.trim();
+    if (!raw) { toast("Enter a title ID"); return; }
+    const id = parseInt(raw, 10);
+    if (!Number.isFinite(id) || id < 0) { toast("Invalid title ID"); return; }
+    withSession("setTitle", (h) => {
+      h.setTitle(id >>> 0);
+      emit(`[title/set] id=${id}`);
+      toast("Set Title sent");
+    });
+  };
+  titleBtn.addEventListener("click", doSetTitle);
+  titleInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); doSetTitle(); }
+  });
+  titleRow.appendChild(titleBtn);
+  titleSec.appendChild(titleRow);
+  body.appendChild(titleSec);
+
   // ── Placeholder ────────────────────────────────────────────────────
   const placeholder = document.createElement("div");
   placeholder.className = "hb-social-placeholder";
-  setAcText(placeholder, "Titles + account/global squelch — coming in a future wave");
+  setAcText(placeholder, "Account/Global squelch + Title list — receive-side coming in a future wave");
   body.appendChild(placeholder);
 
   el.appendChild(body);

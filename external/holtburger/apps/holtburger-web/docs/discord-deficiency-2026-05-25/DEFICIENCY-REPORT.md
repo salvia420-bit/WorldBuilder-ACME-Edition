@@ -12,6 +12,41 @@
 
 ---
 
+## Status — Wave H executed 2026-05-25 (later same day)
+
+Three items shipped after Wave G. H1 ran solo (then H2 + H3 ran together — H2 Rust+JS on social-panel, H3 pure JS on scene3d).
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 20 (receive) | Friends list receive-side snapshot | **SHIPPED** | Wave H1. Uncommented `FriendsListUpdate 0x0021` event opcode. NEW `crates/holtburger-protocol/src/messages/friends/{mod.rs, events.rs}` (~225 LOC + 3 round-trip tests) with full ACE-wire-conformant `FriendsListUpdateEventData { friends: Vec<FriendEntry>, update_type: u32 }` and `FriendEntry { friend_id, is_online (u32 on wire), appear_offline (u32 on wire), name (string16L), their_friends: Vec<Guid>, inverse_friends: Vec<Guid> }`. Wire authority: `~/ace-server/Source/ACE.Server/Network/GameEvent/Events/GameEventFriendsListUpdate.cs:60-100`. Their-friends + inverse loops parsed and round-tripped even though ACE writes them as 0 today (future-proof against server change). Rust: `FriendsSnapshot/View` + JS wrappers + `latest_friends` Rc + `publish_player_friends_snapshot` folds by update_type semantics (FullList=replace, Added=upsert, Removed=filter, StatusChanged=in-place mutate) + `CLIENT_EVENT_KIND_FRIENDS_UPDATED=26` + `player_friends()` getter. JS: kind=26 dispatch in index.html; `plugins/social-panel.js` Friends List section with header "Friends (N)" + scrollable rows (online green dot / offline gray + name + × Remove). |
+| 20 (finish) | Titles + Account/Global squelch send-side | **SHIPPED** | Wave H2. Uncommented 3 opcodes (`ModifyAccountSquelch 0x0059`, `ModifyGlobalSquelch 0x005B`, `TitleSet 0x002C`). 3 new structs in `player/actions.rs`. **ACE wire deviation:** brief speculated `ModifyAccountSquelchActionData` had `message_type` — ACE wire actually only has `(bool_u32, string16L)`. Agent caught + corrected the struct shape; the JS facade accepts a messageType param for API uniformity but drops it before packing. `ModifyGlobalSquelchActionData { add: bool, message_type: u32 }`. `TitleSetActionData { title_id: u32 }`. 3 GameAction variants + arms. 3 wasm methods (`modifyAccountSquelch/modifyGlobalSquelch/setTitle`) + 3 SessionCommand + 3 recv arms. social-panel.js gains 3 new sections (Account Squelch input + Squelch/Unsquelch buttons, Global Squelch 2-button row, Title input + Set Title). Title catalog list-display deferred to Wave I. |
+| 15 | Landblock LRU unload (memory time bomb) | **SHIPPED** | Wave H3 (pure JS). NEW `scene3d/landblock_lru.js` (~290 LOC) — `LandblockLRU` class with `Map<lbId, { container, lastTouchMs, geometries[], materials[], textures[] }>`, `track/touch/tickEviction/evict/dispose/getStats` methods. Default `?lbCap=169` matches today's behavior (no eviction). `?lbCap=N` enables LRU; `?lbLruDebug=1` logs evictions. **Safety:** Current LB + 3×3 ring NEVER evicted (Chebyshev > 1 filter); `__cacheOwned`-tagged shared resources never disposed (wire-mode materials, MaterialCache surfaces, atlas textures, statics InstancedMesh nodes, building bake-cache geometries). Disposed per-LB: terrain ShaderMaterial + BufferGeometry + vertexTypesTexture. Initial 13×13 ring bulk-tracked at LRU init. Idempotency sets (`terrainBakedLbs/buildingsBakedLbs/staticsBakedLbs/envCellLoadedLbs`) cleared on evict so re-entry rebakes. `terrainMaterials` registry pruned so loop.js doesn't push uniforms onto disposed materials. **Partial:** Building placement Groups, statics singleton Mesh/LOD nodes, EnvCell containers are container-remove-only (JS-heap GCs but GPU VBOs persist until Three.js's own LRU evicts them) — documented in source header. Deeper disposal would require `__disposable` tagging at the 4 bake sites (Wave I or later). |
+
+**Files touched this wave:**
+- `src/lib.rs` +366 LOC (H1: FriendsSnapshot infra + H2: 3 wasm methods + 3 SessionCommand + 3 recv arms)
+- `crates/holtburger-protocol/src/opcodes.rs` +16 LOC (4 uncomments: FriendsListUpdate + ModifyAccount/Global Squelch + TitleSet)
+- `crates/holtburger-protocol/src/messages/mod.rs` +1 LOC (register friends/)
+- `crates/holtburger-protocol/src/messages/friends/{mod,events}.rs` NEW ~225 LOC + 3 round-trip tests
+- `crates/holtburger-protocol/src/messages/game_event.rs` +10 LOC (FriendsListUpdate variant + arms)
+- `crates/holtburger-protocol/src/messages/game_action.rs` +27 LOC (3 H2 variants + arms)
+- `crates/holtburger-protocol/src/messages/player/actions.rs` +81 LOC (3 H2 structs)
+- `plugins/social-panel.js` +276 LOC (H1 Friends List + H2 3 sections)
+- `scene3d/landblock_lru.js` NEW ~290 LOC
+- `scene3d/index.js` +167 LOC (LRU construction + bake-site track() wrappers + per-frame tick)
+- `index.html` +13 LOC (H1 kind=26 dispatch arm)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `cargo test -p holtburger-protocol --lib`: **273/273 PASS** (H1 added 3 round-trip tests).  `node --check` clean on all JS.
+
+**Recommended Wave I** (next priorities):
+1. **Squelch DB receive-side snapshot (#20 finish)** — `SetSquelchDb 0x01F4` S2C event; server pushes full squelch DB on login. Snapshot + JS display.
+2. **Title catalog snapshot (#20 polish)** — `CharacterTitleTable` / `AddOrSetCharacterTitle` events + JS title-picker dropdown.
+3. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as Wave F1.
+4. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
+5. **Spell research / component management UI (#19)** — needs new wasm exports + JS panel.
+6. **Landblock LRU deep dispose (#15 polish)** — `__disposable` tagging at 4 bake sites for full GPU resource release.
+
+---
+
 ## Status — Wave G executed 2026-05-25 (later same day)
 
 Three items shipped after Wave F. G1 + G3 ran in parallel (G1 Rust+JS, G3 pure JS — turned out to be URL-knob work since the cloud-shadow shader was already wired). G2 ran sequentially after G1.
@@ -347,10 +382,9 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** "now with proper lighting particles" — #worldbuilder 2026-04-10; "green light (northern lights?) a texture or color?…particles with gfxobj 0x01001A62" — same
 **Holtburger:** Wave F3 shipped NEW `scene3d/weather/aurora.js` (~170 LOC) — `AuroraSystem` class with `THREE.InstancedMesh` of up to 120 vertical 80×6m quads on a `RING_RADIUS=400m` ring around the camera; alpha gradient baked into vertex colors (top=1.0, bottom=0.02); additive blending; `renderOrder=940`. Per-ribbon azimuth/wobble/color phases for shimmer + green↔magenta cycle (`COLOR_CYCLE_PERIOD=30s`, green-biased). Vertical wobble ±2m / 5s. `WeatherEffectsManager` integration: `?aurora=on` = 1.0 intensity always, real `weather_state.is_storm=true` = 0.6 intensity, `?aurora=off` = disabled. Storm-front colored emission also requested in the Discord quote — covered by the F3 aurora + Wave C3 lightning combination.
 
-### 15. Landblock unload (memory time bomb)
+### 15. Landblock unload (memory time bomb) — SHIPPED 2026-05-25 (Wave H3)
 **Discord:** Implicit in #general line 858 "memory leak probably…looted too many corpses" (extended sessions); explicit in our own `INTERACTING_LAYERS_ANALYSIS.md`.
-**Holtburger:** 13×13 ring stays resident; no `unloadLandblock(id)` API. A player traversing the continent will OOM.
-**Remediation:** LRU eviction in `scene3d/index.js:bakeTerrainRing()`; release Geometry/Material/Texture refs explicitly; track via `renderer.info.memory`.
+**Holtburger:** Wave H3 shipped NEW `scene3d/landblock_lru.js` (~290 LOC) — `LandblockLRU` class with per-LB disposable tracking. Default `?lbCap=169` matches today's behavior (no eviction); `?lbCap=N` enables LRU + `?lbLruDebug=1` logs evictions. **Safety:** Current LB + 3×3 ring NEVER evicted (Chebyshev > 1 filter); `__cacheOwned`-tagged shared resources (wire-mode materials, MaterialCache surfaces, atlas textures, statics InstancedMesh nodes, building bake-cache geometries) never disposed. Per-LB disposed: terrain ShaderMaterial + BufferGeometry + vertexTypesTexture. Initial 13×13 ring bulk-tracked at LRU init. Idempotency sets cleared on evict so re-entry rebakes. Partial: building Groups + statics + EnvCell containers are container-remove-only — JS-heap GCs but GPU VBOs persist until Three.js's own LRU evicts. Deeper disposal needs `__disposable` tagging at 4 bake sites (Wave I or later).
 
 ### 16. Nameplate render budget under crowds — SHIPPED 2026-05-25 (Wave E3)
 **Discord:** "NPCS with Nametags…game client freezes" — #general line 285; "UB Nametags.cs L23" — line 7508
@@ -372,7 +406,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** "nothing special about spell research panel…add taper animations to queue" — #openai-gpt-3, Yonneh 2026-05-22
 **Holtburger:** Spell component parser exists; UI for summoning / discarding components not shipped. `playerSpellComponents()` wasm export — does it exist? Check.
 
-### 20. Squelch / Friends / Titles — SHIPPED 2026-05-25 (Wave E2, Friends + Character-Squelch send-only MVP)
+### 20. Squelch / Friends / Titles — SHIPPED 2026-05-25 (E2 Friends+CharSquelch + H1 Friends receive + H2 Account/Global/Title send)
 **Discord:** Chat channel filtering and friend lists implicit across #general.
 **Holtburger:** Wave E2 uncommented AddFriend 0x0018, RemoveFriend 0x0017, ModifyCharacterSquelch 0x0058 + created 3 message structs in `crates/holtburger-protocol/src/messages/player/actions.rs` (AddFriend by-name, RemoveFriend by-guid, ModifyCharacterSquelch with 4 fields: add/playerGuid/playerName/messageType per `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/GameActionModifyCharacterSquelch.cs`). 3 wasm methods (`addFriend(name)`, `removeFriend(guid)`, `modifyCharacterSquelch(guid, name, add, mask)`). New `plugins/social-panel.js` (~340 LOC) — Friends section (text input + Add, Remove-by-Selected) + Squelch section (Squelch/Unsquelch Selected, all-chat mask `0xFFFFFFFF`). ModifyAccountSquelch 0x0059, ModifyGlobalSquelch 0x005B, TitleSet 0x002C deferred to Wave F. Receive-side FriendsUpdate/CharacterTitleTable snapshot also Wave F.
 
@@ -539,13 +573,20 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 20. ~~Allegiance receive-side snapshot (#4 receive MVP)~~ — AllegianceUpdate 0x0020 event + 420-LOC full-ACE-wire-conformant struct + snapshot infra + panel state render shipped.
 21. ~~Cloud shadow on terrain — URL knobs (#14 follow-on)~~ — discovered shipped via Clouds-L; G3 added the 3 missing URL knobs (?cloudShadow=on|off, ?cloudShadowStrength, ?cloudShadowRes).
 
-### Wave H — next priorities
+### Wave H — SHIPPED 2026-05-25 (later same day)
 
-22. **Friends receive-side snapshot (#20 polish)** — `FriendsUpdate` event + snapshot; mirrors Wave G2 allegiance receive pattern.
-23. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as Wave F1.
-24. **Titles + Account/Global squelch (#20 finish)** — `TitleSet 0x002C` + `ModifyAccountSquelch` + `ModifyGlobalSquelch` + `SetSquelchDb`.
-25. **House system (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
-26. **Spell research / component management UI (#19)** — Yonneh-quoted; spellbook + components parser exists.
-27. **BloomEffect (★★★★★ in OPTICAL_EFFECTS_HANDOFF)** — soft HDR halo, ~1-2ms @ 1080p; wire to EffectPass pre-ToneMapping.
+22. ~~Friends receive-side snapshot (#20 polish)~~ — `FriendsListUpdate 0x0021` + snapshot infra + JS panel shipped.
+23. ~~Titles + Account/Global squelch (#20 finish)~~ — 3 opcodes uncommented + send-side wasm + 3 new panel sections shipped.
+24. ~~Landblock LRU unload (#15)~~ — `LandblockLRU` class with safety filters + `?lbCap=N` knob + initial-ring bulk-track shipped.
+   Recon discovery: BloomEffect was already shipped (quality presets + URL knob + runtime tweaks), so the Wave G recommendation rolled into discovered-not-needed.
+
+### Wave I — next priorities
+
+25. **Squelch DB receive-side snapshot (#20 finish-finish)** — `SetSquelchDb 0x01F4` S2C event; server pushes full squelch DB on login. Snapshot + JS display.
+26. **Title catalog snapshot (#20 polish)** — `CharacterTitleTable` / `AddOrSetCharacterTitle` events + JS title-picker dropdown to replace the manual title-id input.
+27. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as Wave F1.
+28. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
+29. **Spell research / component management UI (#19)** — needs new wasm exports for spell components + JS panel.
+30. **Landblock LRU deep dispose (#15 polish)** — `__disposable` tagging at 4 bake sites for full GPU resource release.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.
