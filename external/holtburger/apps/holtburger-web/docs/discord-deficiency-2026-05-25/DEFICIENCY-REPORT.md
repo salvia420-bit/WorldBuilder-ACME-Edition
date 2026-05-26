@@ -12,6 +12,33 @@
 
 ---
 
+## Status — Wave K executed 2026-05-25 (3-agent parallelism)
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 21 (finish) | Object inscription on Examine (non-book) | **SHIPPED** | Wave K1. Adds `#[wasm_bindgen(js_name = getObjectInscription)] pub fn get_object_inscription(&self, guid: u32) -> Option<String>` to `SessionHandle`. **Architectural discovery:** SessionHandle has NO `world` field — `WorldState` lives entirely inside the recv-loop's `tokio::select!` body. Every world-derived getter on the handle reads from a snapshot cell that the recv-loop populates. Agent added `latest_inscriptions: Rc<RefCell<HashMap<u32, String>>>` mirroring `latest_container_contents` exactly: alloc in `start_session`, threaded into `recv_loop`, populated inline in the existing `WorldEvent::EntityIdentified` arm (same site that already extracts `AppraisalPortalDestination`). No new helper fn, no kind=N event, no ClientEvent — synchronous on-demand getter mirroring `playerBurden()`. `plugins/examine-target.js` cascade step 2 (previously "reserved") now calls `handle.getObjectInscription(g)` + wraps with `ownedByPlayer` from `getItemByGuid`. The J3-era cascade is now fully wired for items/weapons/scrolls. |
+| 4 (polish) | Lock-action cycle UX dropdown | **SHIPPED** | Wave K2 (pure JS). `plugins/allegiance-panel.js` replaces J1's hardcoded `LOCK_ON=2` button with a `<select>` dropdown + "Confirm Lock Action" button. 6 options pulled from `~/ace-server/Source/ACE.Entity/Enum/AllegianceLockAction.cs`: Off=1 / On=2 (default) / Toggle=3 / Check=4 / CheckApproved=5 / ClearApproved=6. New `ALLEGIANCE_LOCK_ACTIONS` constant block. No confirm-dialog (selecting the action IS the confirmation). Dropdown styling matches Wave I1 title `<select>` from social-panel.js. |
+| 19 | Spell Research panel | **SHIPPED** | Wave K3 (pure JS). NEW `plugins/spell-research-panel.js` (~660 LOC = ~200 JS + ~195 CSS + scaffolding). Floating panel ~440×500 top-center. Subscribes to `playerStatsUpdated`, reads `handle.playerKnownSpells()`, cross-references `data/spells-catalog.json` for name/school/level/untargeted/mana/icon/desc/duration/components per spell. Filter strip: School dropdown (All/War/Life/Item/Creature/Void) + Level dropdown (All/I-VIII) + name-substring search. Sorted school→level→name. Component-name lookup reuses `data/spell-components.json` via a ~20-LOC local-copy of `spellbook.js:127-151` `loadComponentNames`/`resolveComponentName` helpers (avoids spellbook mount-side-effects). Click row to expand description in-place. Empty states: "No spells learned. Learn a spell tome to research." (zero known) + "No spells match the current filter." (filtered). Debug hooks: `window.__openSpellResearchPanel()` + `window.__closeSpellResearchPanel()`. Yonneh-quoted research-style view from #openai-gpt-3 finally has a home. |
+
+**Files touched this wave:**
+- `src/lib.rs` +57 LOC (K1: latest_inscriptions Rc + 1 wasm getter + recv-loop populate in existing EntityIdentified arm)
+- `plugins/allegiance-panel.js` +78 -18 (K2 dropdown + enum constant + CSS rule)
+- `plugins/examine-target.js` +12 (K1 cascade step 2 + comment update)
+- `plugins/spell-research-panel.js` NEW ~660 LOC (K3)
+- `index.html` +1 LOC (K3 import line)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `cargo test -p holtburger-protocol --lib`: **276/276 PASS**. `node --check` clean on all JS.
+
+**Recommended Wave L** (next priorities):
+1. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
+2. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
+3. **Speculative squelch list refresh (#20 polish)** — client-side fold of Modify*Squelch acks (flagged in I1).
+4. **Component table extraction (#19 polish)** — extend `data/spell-components.json` beyond scarabs to cover all 60+ retail components for full Spell Research panel display.
+5. **Cast-from-research-panel (#19 polish)** — wire double-click on a spell row to invoke `handle.castSpell(id, targetGuid)` if armed.
+6. **Compass mini-map (Discord follow-on)** — extend Wave E3 compass HUD with a small radar of nearby entities.
+
+---
+
 ## Status — Wave J executed 2026-05-25 (3-agent parallelism)
 
 Three more items shipped. All 3 agents fired in a single message with disjoint file scopes.
@@ -366,7 +393,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 
 **Holtburger status:** Wave D2 shipped 6 `SessionHandle` wasm-bindgen methods (`openTrade/closeTrade/addToTrade/acceptTrade/declineTrade/resetTrade`) + `TradeSnapshot`/`TradeItem` Rust structs + JS wrappers + `publish_player_trade_snapshot()` via existing `WorldEvent::TradeStateUpdated` (canonical `world.trade` already maintained by `crates/holtburger-world/src/handlers/trade.rs` across all 9 trade events) + `CLIENT_EVENT_KIND_TRADE_UPDATED=23` + `player_trade()` getter. `plugins/trade-panel.js` NEW 593 LOC — 360×280 floating window, two 4×3 12-slot grids (You / partner), Accept/Decline/Reset footer, partner-accept green dot + self-accept gold highlight, drag-drop from inventory via mime `application/x-hb-inv-guid`, Esc/X close. Debug: `window.__openTradePanel()`.
 
-### 4. Allegiance system — SHIPPED 2026-05-25 (E1 Swear/Break + F1 MOTD/Officer/Gag/Recall + G2 receive snapshot + J1 Bans/Boot/Lock)
+### 4. Allegiance system — SHIPPED 2026-05-25 (E1 Swear/Break + F1 MOTD/Officer/Gag/Recall + G2 receive snapshot + J1 Bans/Boot/Lock + K2 Lock dropdown)
 **Severity:** load-bearing (player-facing core feature)
 **Discord evidence:** Multiple "allegiance / fellowship chat" mentions in #general; cascaded transparent chat windows for allegiance specifically (line 1752).
 **Holtburger status:**
@@ -470,15 +497,15 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Selection-as-data is foundational for plugins (Discord ISO VTank 2.0 thread, line 4400).
 **Holtburger:** Selection lives in `picking.js` local state, not on bus. No plugin can react to "you targeted X".
 
-### 19. Spell research / component table UI
+### 19. Spell research / component table UI — SHIPPED 2026-05-25 (Wave K3)
 **Discord:** "nothing special about spell research panel…add taper animations to queue" — #openai-gpt-3, Yonneh 2026-05-22
-**Holtburger:** Spell component parser exists; UI for summoning / discarding components not shipped. `playerSpellComponents()` wasm export — does it exist? Check.
+**Holtburger:** Wave K3 shipped NEW `plugins/spell-research-panel.js` (~660 LOC). Subscribes to `playerStatsUpdated`, reads `handle.playerKnownSpells()`, cross-references bundled `data/spells-catalog.json` for name/school/level/untargeted/mana/icon/desc/duration/components per spell. Filter strip: School (All/War/Life/Item/Creature/Void) + Level (All/I-VIII) + name-substring search. Sorted school→level→name. Component-name lookup reuses `data/spell-components.json` via a ~20-LOC local-copy of `spellbook.js:127-151` helpers (Comp_1-8 scarabs verified; unknown IDs render as `Comp_N` literal — extending the JSON to cover all 60+ retail components is Wave L polish). Click row to expand description inline. Debug: `window.__openSpellResearchPanel()`.
 
 ### 20. Squelch / Friends / Titles — SHIPPED 2026-05-25 (E2 Friends+CharSquelch + H1 Friends receive + H2 Account/Global/Title send + I1 Squelch+Title receive)
 **Discord:** Chat channel filtering and friend lists implicit across #general.
 **Holtburger:** Wave E2 uncommented AddFriend 0x0018, RemoveFriend 0x0017, ModifyCharacterSquelch 0x0058 + created 3 message structs in `crates/holtburger-protocol/src/messages/player/actions.rs` (AddFriend by-name, RemoveFriend by-guid, ModifyCharacterSquelch with 4 fields: add/playerGuid/playerName/messageType per `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/GameActionModifyCharacterSquelch.cs`). 3 wasm methods (`addFriend(name)`, `removeFriend(guid)`, `modifyCharacterSquelch(guid, name, add, mask)`). New `plugins/social-panel.js` (~340 LOC) — Friends section (text input + Add, Remove-by-Selected) + Squelch section (Squelch/Unsquelch Selected, all-chat mask `0xFFFFFFFF`). ModifyAccountSquelch 0x0059, ModifyGlobalSquelch 0x005B, TitleSet 0x002C deferred to Wave F. Receive-side FriendsUpdate/CharacterTitleTable snapshot also Wave F.
 
-### 21. Writing system (books, inscriptions, scrolls) — SHIPPED 2026-05-25 (Wave F2 + J3 examine inscription)
+### 21. Writing system (books, inscriptions, scrolls) — SHIPPED 2026-05-25 (Wave F2 + J3 book cascade + K1 non-book cascade)
 **Discord:** Light coverage, but ACE has BookData/AddPage/ModifyPage/DeletePage/Inscribe handlers, Chorizite categorizes under Writing.
 **Holtburger:** Wave F2 shipped 8 opcodes uncommented (5 C2S: `BookData/BookAddPage/BookModifyPage/BookDeletePage/SetInscription`; 3 S2C: `BookModifyPageResponse/BookAddPageResponse/BookDeletePageResponse`). 5 new C2S action structs + 3 new S2C event structs in `crates/holtburger-protocol/src/messages/book/{actions,events}.rs`. **ACE wire deviation:** `BookModifyPage` does NOT carry `ignore_author` on the wire — ACE re-reads it server-side from the book entity. 5 wasm methods + receive-side `BookSnapshot` via existing `WorldEvent::EntityBookUpdated` + `CLIENT_EVENT_KIND_BOOK_UPDATED=24` + `player_book()` getter. NEW `plugins/book-panel.js` — 320×340 floating overlay; inscription strip + Set button (prompt); page navigator (◀ Page N of M ▶); read/edit textarea toggle; Add/Delete Page; AC parchment styling. Debug: `window.__openBookFor(guid)`. Read-only inscription display on examine still a polish item — Wave G or later.
 
@@ -660,13 +687,19 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 29. ~~Trade radial-menu entry (#23 polish)~~ — Player capability gating via WorldObjectManager + Trade entry between Drop and Attack.
 30. ~~Inscription display on examine (#21 polish)~~ — book-side cross-ref shipped; non-book path reserved until InventoryItem.inscription wasm getter lands.
 
-### Wave K — next priorities
+### Wave K — SHIPPED 2026-05-25 (3-agent parallelism)
 
-31. **InventoryItem.inscription wasm getter (#21 finish)** — adds the field to `InventoryItem` struct + getter so J3's reserved cascade lights up for non-book items.
-32. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
-33. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
-34. **Spell research / component management UI (#19)** — needs new wasm `playerSpellComponents()` getter + JS panel.
-35. **Speculative squelch list refresh (#20 polish)** — client-side fold of Modify*Squelch acks.
-36. **Lock-action cycle UX (#4 polish)** — dropdown for the full AllegianceLockAction enum.
+31. ~~Object inscription getter + non-book examine cascade (#21 finish)~~ — getObjectInscription wasm method + cascade step-2 wired; latest_inscriptions Rc populated from EntityIdentified arm.
+32. ~~Lock-action cycle UX (#4 polish)~~ — 6-value AllegianceLockAction dropdown replaces hardcoded LOCK_ON=2.
+33. ~~Spell Research panel (#19)~~ — full filterable known-spells display with components / mana / duration / desc.
+
+### Wave L — next priorities
+
+34. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
+35. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
+36. **Speculative squelch list refresh (#20 polish)** — client-side fold of Modify*Squelch acks.
+37. **Component table extraction (#19 polish)** — extend `data/spell-components.json` beyond scarabs to cover all 60+ retail components.
+38. **Cast-from-research-panel (#19 polish)** — wire double-click on a spell row to invoke `handle.castSpell(id, targetGuid)`.
+39. **Compass mini-radar (Discord follow-on)** — extend Wave E3 compass HUD with nearby-entity blips.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.

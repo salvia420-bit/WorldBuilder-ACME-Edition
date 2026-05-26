@@ -355,8 +355,9 @@ function getItemByGuid(guid) {
 // Data-source cascade for inscription on guid:
 //   1. handle.playerBook() if its objectGuid matches — freshest data
 //      pushed by ACE on BookDataResponse (kind=24 bookUpdated).
-//   2. InventoryItem fields (none today — Rust struct lacks the field;
-//      wasm getter follow-up needed before this branch can hit).
+//   2. handle.getObjectInscription(guid) — covers items/weapons/scrolls
+//      via the holtburger-world assessment cache populated on
+//      EntityIdentified (Assess/Identify response).
 // Returns { text: string, ownedByPlayer: boolean } or null.
 function getInscriptionForGuid(guid) {
   if (guid == null) return null;
@@ -368,6 +369,13 @@ function getInscriptionForGuid(guid) {
       if (book && (book.objectGuid >>> 0) === g && typeof book.inscription === "string") {
         const ownedByPlayer = !!getItemByGuid(g);
         return { text: book.inscription, ownedByPlayer };
+      }
+    }
+    if (handle?.getObjectInscription) {
+      const text = handle.getObjectInscription(g);
+      if (typeof text === "string") {
+        const ownedByPlayer = !!getItemByGuid(g);
+        return { text, ownedByPlayer };
       }
     }
   } catch (_) {}

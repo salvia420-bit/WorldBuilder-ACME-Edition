@@ -887,8 +887,11 @@ export const manifest = {
 // Lightweight overlay distinct from the main-panel `view` export
 // above. Exposes window.__openAllegiancePanel /
 // __closeAllegiancePanel for ad-hoc opening from devtools or hotkeys.
-// 10 wired send-side buttons: Swear / Break / MOTD / Officer / Gag /
-// Recall / Add Ban / Remove Ban / Boot Selected / Lock Allegiance.
+// 10 wired send-side controls: Swear / Break / MOTD / Officer / Gag /
+// Recall / Add Ban / Remove Ban / Boot Selected / Lock Action dropdown.
+// The Lock Action dropdown surfaces the full AllegianceLockAction enum
+// (Off / On / Toggle / Check / CheckApproved / ClearApproved); the
+// previous Wave-J1 hardcoded `LOCK_ON = 2` button is replaced.
 //
 // Receive-side AllegianceUpdate snapshot is live (Wave F2). Deferred:
 // approved-vassal + officer-titles + ListBans receive — coming in a
@@ -897,6 +900,12 @@ export const manifest = {
 
 const SA_STYLE_ID = "hb-alleg-standalone-style";
 const SA_OVERLAY_ID = "hb-alleg-standalone";
+
+// ACE.Entity.Enum.AllegianceLockAction (skipping Undef=0).
+const ALLEGIANCE_LOCK_ACTIONS = {
+  Off: 1, On: 2, Toggle: 3,
+  Check: 4, CheckApproved: 5, ClearApproved: 6,
+};
 
 function ensureStandaloneStyles() {
   if (document.getElementById(SA_STYLE_ID)) return;
@@ -996,6 +1005,19 @@ function ensureStandaloneStyles() {
       outline: none;
     }
     .hb-alleg-sa-input:focus { border-color: var(--hb-border-brass); }
+    .hb-alleg-sa-select {
+      flex: 1 1 auto;
+      box-sizing: border-box;
+      padding: 4px 6px;
+      font-family: var(--hb-font-serif);
+      font-size: 11px;
+      color: var(--hb-text-cream);
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      outline: none;
+      min-width: 0;
+    }
+    .hb-alleg-sa-select:focus { border-color: var(--hb-border-brass); }
     .hb-alleg-sa-toast {
       position: absolute;
       left: 10px;
@@ -1323,28 +1345,52 @@ function buildStandaloneOverlay() {
   bootRow.appendChild(bootAccLabel);
   stack.appendChild(bootRow);
 
-  // Wave F3 (2026-05-26): Lock allegiance — MVP sends On (lock_action=1).
-  // Full cycle through AllegianceLockAction (Off=1/On=2/Toggle=3 etc.)
-  // is Wave K polish. Sends GameAction::DoAllegianceLockAction
-  // (sub-opcode 0x003F).
+  // Wave F3 (2026-05-26): Lock allegiance — dropdown covers the full
+  // ACE.Entity.Enum.AllegianceLockAction (Off=1 / On=2 / Toggle=3 /
+  // Check=4 / CheckApproved=5 / ClearApproved=6). Sends
+  // GameAction::DoAllegianceLockAction (sub-opcode 0x003F).
+  const lockRow = document.createElement("div");
+  lockRow.className = "hb-alleg-sa-row";
+  const lockSelect = document.createElement("select");
+  lockSelect.className = "hb-alleg-sa-select";
+  lockSelect.dataset.role = "lock-action";
+  lockSelect.title = "Pick the AllegianceLockAction to send";
+  const LOCK_OPTIONS = [
+    { value: ALLEGIANCE_LOCK_ACTIONS.Off,            label: "Off — Unlock" },
+    { value: ALLEGIANCE_LOCK_ACTIONS.On,             label: "On — Lock", selected: true },
+    { value: ALLEGIANCE_LOCK_ACTIONS.Toggle,         label: "Toggle" },
+    { value: ALLEGIANCE_LOCK_ACTIONS.Check,          label: "Check — Query lock state" },
+    { value: ALLEGIANCE_LOCK_ACTIONS.CheckApproved,  label: "Check Approved — Query approved-vassal status" },
+    { value: ALLEGIANCE_LOCK_ACTIONS.ClearApproved,  label: "Clear Approved — Reset approved-vassal list" },
+  ];
+  for (const opt of LOCK_OPTIONS) {
+    const o = document.createElement("option");
+    o.value = String(opt.value);
+    o.textContent = opt.label;
+    if (opt.selected) o.selected = true;
+    lockSelect.appendChild(o);
+  }
+  lockRow.appendChild(lockSelect);
   const lockBtn = document.createElement("button");
   lockBtn.type = "button";
   lockBtn.className = "hb-alleg-sa-btn";
   lockBtn.dataset.action = "lock-allegiance";
-  setAcText(lockBtn, "Lock Allegiance");
-  lockBtn.title = "Prevent new vassals from joining (AllegianceLockAction.On)";
+  setAcText(lockBtn, "Confirm Lock Action");
+  lockBtn.title = "Send the selected AllegianceLockAction";
   lockBtn.addEventListener("click", () => {
-    if (!window.confirm("Lock the allegiance? New vassals will be blocked from joining.")) return;
+    const action = (parseInt(lockSelect.value, 10) >>> 0);
+    if (!Number.isFinite(action) || action < 1 || action > 6) {
+      saToast("Invalid lock action");
+      return;
+    }
     saWithSession("doAllegianceLockAction", (h) => {
-      // AllegianceLockAction.On = 2 (per ACE.Entity.Enum.AllegianceLockAction).
-      // ACE.Entity.Enum: Undef=0, Off=1, On=2, Toggle=3, Check=4, etc.
-      const LOCK_ON = 2;
-      h.doAllegianceLockAction(LOCK_ON);
-      emit(`[allegiance/lock] action=${LOCK_ON}`);
-      saToast("Lock sent");
+      h.doAllegianceLockAction(action);
+      emit(`[allegiance/lock] action=${action}`);
+      saToast("Lock action sent");
     });
   });
-  stack.appendChild(lockBtn);
+  lockRow.appendChild(lockBtn);
+  stack.appendChild(lockRow);
 
   body.appendChild(stack);
 

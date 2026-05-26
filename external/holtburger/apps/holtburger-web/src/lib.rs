@@ -15265,6 +15265,16 @@ pub struct SessionHandle {
     /// existing entity store; this cache only retains the GUID list
     /// so JS can enumerate via [`SessionHandle::get_container_contents`].
     latest_container_contents: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>>,
+    /// Wave J3 (2026-05-26): per-object inscription text, keyed by
+    /// object GUID. Populated by the recv loop on
+    /// `WorldEvent::EntityIdentified` (Assess/Identify response) when
+    /// the entity carries `PropertyString::Inscription`. Used by the
+    /// `⌕ Examine` cascade in `plugins/examine-target.js` to light up
+    /// the inscription section for non-book items (signed weapons,
+    /// scrolls, inscribed items, etc.). JS reads via
+    /// [`SessionHandle::get_object_inscription`] on demand at render
+    /// time; no event drain needed.
+    latest_inscriptions: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, String>>>,
     /// PR-JJ 2026-05-23: the local player's active enchantments —
     /// snapshot of `world.player.enchantments` refreshed by the recv
     /// loop on every `WorldEvent::PlayerEnchantmentsUpdated` (the
@@ -18198,6 +18208,20 @@ impl SessionHandle {
         classify_motion_link_for_swing(&mtable, stance, command)
             .map(inner_to_motion_link_anim_js)
     }
+
+    /// Wave J3 (2026-05-26): inscription text for `guid` — server-
+    /// provided via the Assess/Identify response. Returns `None` if the
+    /// object hasn't been assessed yet OR has no inscription. Mirrors
+    /// `assessment::InscriptionInfo::from_object` which reads the same
+    /// `PropertyString::Inscription` off the entity; cached here on
+    /// every `WorldEvent::EntityIdentified` so this getter is sync.
+    /// JS reads via the `⌕ Examine` cascade in
+    /// `plugins/examine-target.js` to light up the inscription section
+    /// for items, signed weapons, scrolls, etc.
+    #[wasm_bindgen(js_name = getObjectInscription)]
+    pub fn get_object_inscription(&self, guid: u32) -> Option<String> {
+        self.latest_inscriptions.borrow().get(&guid).cloned()
+    }
 }
 
 /// Phase 4 step 2a.5: construct an Aluvian / Male / Adventurer /
@@ -18467,6 +18491,13 @@ pub async fn start_session(
     let latest_container_contents: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // Wave J3 (2026-05-26): per-object inscription text, populated by
+    // the recv loop's EntityIdentified arm when the identified entity
+    // carries PropertyString::Inscription. Read on-demand by the
+    // `⌕ Examine` cascade in `plugins/examine-target.js`.
+    let latest_inscriptions: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, String>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
     // TurbineChat state (2026-05-25): tracks whether ACE has the
     // Turbine-style chat infrastructure enabled (from CharacterList
     // packet's `use_turbine_chat` flag) + the per-channel-type room
@@ -18581,6 +18612,7 @@ pub async fn start_session(
         let latest_inventory = latest_inventory.clone();
         let latest_vendor_state_inner = latest_vendor_state.clone();
         let latest_container_contents_inner = latest_container_contents.clone();
+        let latest_inscriptions_inner = latest_inscriptions.clone();
         let latest_enchantments_inner = latest_enchantments.clone();
         let latest_fellowship_inner = latest_fellowship.clone();
         let latest_trade_inner = latest_trade.clone();
@@ -18611,6 +18643,7 @@ pub async fn start_session(
                 latest_inventory,
                 latest_vendor_state_inner,
                 latest_container_contents_inner,
+                latest_inscriptions_inner,
                 latest_enchantments_inner,
                 latest_fellowship_inner,
                 latest_trade_inner,
@@ -18697,6 +18730,7 @@ pub async fn start_session(
         latest_inventory,
         latest_vendor_state,
         latest_container_contents,
+        latest_inscriptions,
         latest_enchantments,
         latest_fellowship,
         latest_trade,
@@ -19811,6 +19845,9 @@ async fn recv_loop(
     latest_container_contents: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
     >,
+    latest_inscriptions: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, String>>,
+    >,
     latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>>,
     latest_fellowship: std::rc::Rc<std::cell::RefCell<Option<FellowshipSnapshot>>>,
     latest_trade: std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
@@ -20030,6 +20067,26 @@ async fn recv_loop(
                                         HasProperties, PropertyInt, PropertyString,
                                     };
                                     let entity_guid = entity.guid;
+                                    // Wave J3 (2026-05-26): stash the inscription
+                                    // text for the `⌕ Examine` cascade. Mirrors
+                                    // `assessment::InscriptionInfo::from_object`
+                                    // (which reads the same property off the same
+                                    // entity); we cache here so the wasm getter
+                                    // can read it sync without re-borrowing world.
+                                    if let Some(text) = entity
+                                        .properties()
+                                        .strings
+                                        .get(&PropertyString::Inscription)
+                                        .cloned()
+                                    {
+                                        latest_inscriptions
+                                            .borrow_mut()
+                                            .insert(u32::from(entity_guid), text);
+                                    } else {
+                                        latest_inscriptions
+                                            .borrow_mut()
+                                            .remove(&u32::from(entity_guid));
+                                    }
                                     let item_type_int = entity
                                         .properties()
                                         .ints
