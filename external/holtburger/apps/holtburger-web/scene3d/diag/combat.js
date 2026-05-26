@@ -85,6 +85,16 @@ export function attachCombat(diag) {
     missCountByReason: { stance: 0, height: 0, type: 0 },
     motionHistogram: new Map(),    // motion_u32 → count (resolved motions across all stances)
     motionByStance: new Map(),     // stance_u32 → Map<motion_u32, count>
+    // Wave 3 Phase 7 (2026-05-26): count aim-level motion dispatches
+    // for missile attacks. Incremented from `scene3d/picking.js`'s
+    // missile branch (scope="local") and `index.html`'s
+    // `dispatchRemoteSwing` (scope="remote") when a ranged attacker
+    // resolves through `getAimLevelForVelocity` instead of CMT. The
+    // motion u32s themselves show up in `motionHistogram` once they
+    // route through `setSwingMotion` → `onLookupHit` is NOT called
+    // for these (the CMT path didn't resolve them); this counter is
+    // the only observability for aim-level usage frequency.
+    aimLevelInvocations: { local: 0, remote: 0 },
     maxFailures: DEFAULT_MAX_FAILURES,
     maxMisses: DEFAULT_MAX_MISSES,
     maxHitsSample: DEFAULT_MAX_HITS_SAMPLE,
@@ -165,6 +175,23 @@ export function attachCombat(diag) {
       } catch (_) {}
     },
 
+    /**
+     * Wave 3 Phase 7 — record an aim-level motion dispatch. Called
+     * from `scene3d/picking.js`'s missile branch (scope="local") and
+     * `index.html`'s `dispatchRemoteSwing` for ranged-stance remote
+     * attackers (scope="remote"). The aim-level path bypasses the
+     * CombatManeuverTable per ACE `Creature_Missile.cs::GetAimLevel`.
+     *
+     * @param {{ scope: "local" | "remote", motion?: number }} meta
+     */
+    onAimLevel(meta) {
+      try {
+        const m = meta || {};
+        const scope = m.scope === "remote" ? "remote" : "local";
+        combat.aimLevelInvocations[scope] += 1;
+      } catch (_) {}
+    },
+
     /** Read-through to the runtime's cache. */
     cached() {
       try { return getCombatDiagSnapshot(); }
@@ -182,6 +209,7 @@ export function attachCombat(diag) {
         missByReason: { ...combat.missCountByReason },
         motionsDistinct: combat.motionHistogram.size,
         stancesWithHits: combat.motionByStance.size,
+        aimLevelInvocations: { ...combat.aimLevelInvocations },
       };
     },
 
@@ -198,6 +226,7 @@ export function attachCombat(diag) {
         motionHistogram: _motionMapToObj(combat.motionHistogram),
         motionByStance: _motionByStanceToObj(combat.motionByStance),
         motionNamesLoaded: _motionNames != null,
+        aimLevelInvocations: { ...combat.aimLevelInvocations },
       };
     },
 
@@ -209,6 +238,7 @@ export function attachCombat(diag) {
       combat.missCountByReason = { stance: 0, height: 0, type: 0 };
       combat.motionHistogram.clear();
       combat.motionByStance.clear();
+      combat.aimLevelInvocations = { local: 0, remote: 0 };
     },
   };
 

@@ -4,6 +4,7 @@ import {
   ATTACK_TYPE,
   inferAttackTypeForWeapon,
 } from "../ui/ac_attack_type_for_weapon.js";
+import { getAimLevelForVelocity } from "../ui/ac_aim_level_for_velocity.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -449,13 +450,18 @@ export function setupClickPicking({
       // ThrownWeaponCombat / AtlatlCombat) — the missile motion
       // dispatch in ACE / retail uses aim-angle via
       // `Creature_Missile.cs::GetAimLevel` (Player_Missile.cs:207)
-      // and skips the CMT entirely. The lookup here will always miss
-      // → `motionCmd === null` → `setSwingPose` fallback, until the
-      // Wave 3 aim-level dispatch lands at
-      // `ui/ac_aim_level_for_velocity.js`. We still route through
-      // `inferAttackTypeForWeapon` + `getCombatManeuver` so the diag
-      // layer logs ranged-stance lookup attempts (visible in
-      // `motionByStance` as misses for the ranged stance keys).
+      // and skips the CMT entirely. The CMT lookup is kept for diag
+      // observability (it always misses for ranged stances; the
+      // miss reason is visible in `motionByStance` per Phase 1).
+      //
+      // Wave 3 Phase 7 (2026-05-26) — aim-level dispatch lands. After
+      // the CMT miss we fall through to `getAimLevelForVelocity` (port
+      // of `Creature_Missile.cs:GetAimLevel:435`) on the target-relative
+      // direct-line direction. Server-authoritative `GetAimVelocity`
+      // factors gravity arc + eye-height; the client uses direct line
+      // for prediction and lets the wire's `UpdateMotion` (kind=5)
+      // overwrite if the server picks a different bucket. See the
+      // helper's docstring "Prediction-quality trade-off".
       const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
       const stance = (window.__getCurrentStanceLow?.() ?? 0) >>> 0;
       const em = liveScene3d.entityManager;
@@ -465,12 +471,30 @@ export function setupClickPicking({
         ? ATTACK_TYPE_SLASH
         : inferredType;
       const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider);
-      console.log(`[fire-attack] missile height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m attackType=0x${attackType.toString(16)} motionCmd=${motionCmd ? "0x" + motionCmd.toString(16) : "none"} (range=${MISSILE_RANGE_M}m)`);
+      // Aim-level fallback: target-relative direct-line velocity in AC
+      // world coords. `pose` and `targetAc` are computed above for the
+      // charge-to-range distance — re-using them avoids a second
+      // accessor walk. Either being null falls back to a zero vector,
+      // which the helper guards to `AimLevel` (matches ACE's default-
+      // init when normalize fails).
+      const aimVelocity = (targetAc && pose)
+        ? { x: targetAc.x - pose.x, y: targetAc.y - pose.y, z: targetAc.z - pose.z }
+        : { x: 0, y: 0, z: 0 };
+      const aimMotion = getAimLevelForVelocity(aimVelocity);
+      // CMT first (always misses for ranged today, but the layer is
+      // wired so a future retail-data dump that adds ranged rows would
+      // light up automatically); aim-level fallback whenever CMT fails.
+      // `setSwingPose` only fires for the impossible case where both
+      // lookups return 0 — the helper guarantees never (returns one of
+      // the 13 AimMotions for any finite input).
+      const finalMotion = motionCmd || aimMotion;
+      try { window.__diag?.combat?.onAimLevel?.({ scope: "local", motion: aimMotion }); } catch (_) {}
+      console.log(`[fire-attack] missile height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m attackType=0x${attackType.toString(16)} motionCmd=${motionCmd ? "0x" + motionCmd.toString(16) : "none"} aimMotion=0x${aimMotion.toString(16)} (range=${MISSILE_RANGE_M}m)`);
       const fire = () => fireOnce(() => {
         sessionHandle.missileAttack(targetGuid, safeHeight, slider);
         if (localGuid !== 0) {
-          if (motionCmd && typeof em?.setSwingMotion === "function") {
-            em.setSwingMotion(localGuid, motionCmd);
+          if (finalMotion && typeof em?.setSwingMotion === "function") {
+            em.setSwingMotion(localGuid, finalMotion);
           } else {
             em?.setSwingPose?.(localGuid);
           }
