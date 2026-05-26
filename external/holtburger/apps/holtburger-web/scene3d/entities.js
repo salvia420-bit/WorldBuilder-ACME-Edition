@@ -2274,6 +2274,55 @@ export class EntityManager {
     };
   }
 
+  /**
+   * Wave 13 / Phase 42 (2026-05-26) — one-shot magic cast pose. Mirrors
+   * `setSwingPose`'s placeholder-vibe-pose role: plays an immediate
+   * incantation gesture on the caster's rig while the server's
+   * authoritative UpdateMotion (kind=5) and the motion-table classifier
+   * race to deliver the real cast clip. The real clip wins via
+   * `setMotion`'s `cls === "cast"` branch (which clears `_castTween`,
+   * see ~line 2569 above for the swing analog).
+   *
+   * Pose choice: BOTH upper arms (parts[10] LEFT_UPPER_ARM and parts[13]
+   * RIGHT_UPPER_ARM) rotated upward around local X by -π/2 — outstretched
+   * arms-raised incantation. Visually distinct from `setSwingPose`'s
+   * forward-down right-arm swing (single arm, opposite-sign rotation).
+   * Duration 600ms — casts feel longer than melee swings, gives time for
+   * the spell-shape preview overlay (Wave 12 Phase 38) to register
+   * before the gesture concludes.
+   *
+   * Triangle-wave amplitude (0→1→0 over the duration) same as the swing
+   * tween; restarting mid-tween replaces the cast. Non-humans (rigs with
+   * <16 parts) no-op, mirroring `setSwingPose`. Per-frame advance lives
+   * in `_tickCastTween` below.
+   */
+  setCastPose(guid) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst || !inst.root) return;
+    const isHuman = inst.parts && inst.parts.length >= 16;
+    if (!isHuman) return;
+    const X = new THREE.Vector3(1, 0, 0);
+    // BOTH upper arms outstretched upward (negative rotation around
+    // local X lifts the arms — same axis the jump pose uses for
+    // arms-horizontal, just a different magnitude/sign coupling).
+    const armEntries = [];
+    for (const armIdx of [10, 13]) { // LEFT_UPPER_ARM, RIGHT_UPPER_ARM
+      const arm = inst.parts[armIdx];
+      if (!arm) continue;
+      const baseQ = arm.quaternion.clone();
+      const castQ = baseQ.clone().multiply(
+        new THREE.Quaternion().setFromAxisAngle(X, -Math.PI / 2),
+      );
+      armEntries.push({ armIdx, baseQ, castQ });
+    }
+    if (armEntries.length === 0) return;
+    inst._castTween = {
+      startMs: performance.now(),
+      durationMs: 600,
+      arms: armEntries,
+    };
+  }
+
   async setSwingMotion(guid, motionCmd) {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
@@ -2364,6 +2413,9 @@ export class EntityManager {
       try { action.crossFadeFrom(prior, 0.1, false); } catch (_) {}
     }
     inst._swingTween = null;
+    // Wave 13 / Phase 42 — if a real swing clip plays, kill any cast-
+    // pose tween still in flight (e.g. caster swapped to melee mid-cast).
+    inst._castTween = null;
     inst.currentAction = action;
     inst.currentActionKey = swingKey;
     if (inst._swingRestoreTimer) clearTimeout(inst._swingRestoreTimer);
@@ -2403,6 +2455,33 @@ export class EntityManager {
     // Triangle wave: 0→1 over t=[0,0.5], then 1→0 over t=[0.5,1].
     const triangle = clampedT < 0.5 ? clampedT * 2 : (1 - clampedT) * 2;
     p.quaternion.slerpQuaternions(tw.baseQ, tw.swingQ, triangle);
+  }
+
+  /**
+   * Wave 13 / Phase 42 (2026-05-26) — per-frame advance of the cast-pose
+   * tween. Mirrors `_tickSwingTween` but iterates over the multi-arm
+   * `arms` array (left + right upper arms slerp in unison). Same
+   * triangle-wave 0→1→0 amplitude as the swing tween; final tick
+   * restores all participating arms to their base quaternion.
+   */
+  _tickCastTween(inst, nowMs) {
+    const tw = inst._castTween;
+    if (!tw) return;
+    const t = (nowMs - tw.startMs) / tw.durationMs;
+    if (t >= 1) {
+      for (const { armIdx, baseQ } of tw.arms) {
+        const p = inst.parts && inst.parts[armIdx];
+        if (p) p.quaternion.copy(baseQ);
+      }
+      inst._castTween = null;
+      return;
+    }
+    const clampedT = Math.max(0, t);
+    const triangle = clampedT < 0.5 ? clampedT * 2 : (1 - clampedT) * 2;
+    for (const { armIdx, baseQ, castQ } of tw.arms) {
+      const p = inst.parts && inst.parts[armIdx];
+      if (p) p.quaternion.slerpQuaternions(baseQ, castQ, triangle);
+    }
   }
 
   /**
@@ -2567,6 +2646,10 @@ export class EntityManager {
       // `mixer.update`, so it would otherwise overwrite the real
       // motion-table clip's arm pose for the ~300ms tween duration.
       inst._swingTween = null;
+      // Wave 13 / Phase 42 — same treatment for the cast-pose tween.
+      // The arms-up incantation gesture must yield to the real cast
+      // clip; otherwise both arms stick out through the spell animation.
+      inst._castTween = null;
       this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, cmd, stance);
       // Don't update `lastMotionCommand` — the next locomotion
       // broadcast should resolve its link transition from the
@@ -2658,6 +2741,10 @@ export class EntityManager {
         action.setLoop(THREE.LoopOnce, 1);
         action.clampWhenFinished = false;
         inst._swingTween = null;
+        // Wave 13 / Phase 42 — clear the cast-pose vibe-tween here too
+        // so the real motion-table cast clip wins (matches the
+        // `_swingTween = null` guard a few lines up).
+        inst._castTween = null;
       } else {
         action.setLoop(THREE.LoopRepeat, Infinity);
         action.clampWhenFinished = false;
@@ -3784,6 +3871,10 @@ export class EntityManager {
     if (inst._jumpPoseTween) return true;
     // (3) Active swing-pose tween — always tick to finish the slerp.
     if (inst._swingTween) return true;
+    // (3b) Active cast-pose tween (Wave 13 Phase 42) — same reason: the
+    // 600ms slerp needs every tick or the arms stick out after the
+    // visible cast window has passed.
+    if (inst._castTween) return true;
     // (4) Distance gate — same camera-resolution convention as
     // `capActiveLightsByDistance` in lighting.js (Phase 7.5 switcher
     // first, fall back to `.camera`). Bail open (return `true` —
@@ -3889,6 +3980,24 @@ export class EntityManager {
             this._swingTweenWarned = true;
             console.warn(
               `[entities/swing-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+        }
+      }
+      // Wave 13 / Phase 42 — cast-pose tween. Same post-mixer ordering
+      // as the swing/jump poses; arms-up incantation slerp wins for
+      // the cast duration (600ms) or until a real motion-table cast
+      // clip clears `_castTween` in setMotion's `cls === "cast"` branch.
+      if (inst._castTween) {
+        try {
+          this._tickCastTween(inst, performance.now());
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._castTweenWarned) {
+            this._castTweenWarned = true;
+            console.warn(
+              `[entities/cast-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
               e
             );
           }

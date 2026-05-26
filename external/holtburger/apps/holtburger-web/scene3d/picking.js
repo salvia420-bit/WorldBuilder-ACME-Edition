@@ -403,6 +403,21 @@ export function setupClickPicking({
             }
           } catch (_) { /* event emission never blocks the cast */ }
           sessionHandle.castTargetedSpell(guid, spellId);
+          // Wave 13 / Phase 42 (2026-05-26) — placeholder cast pose on
+          // the local caster's rig while the server's authoritative
+          // UpdateMotion (kind=5) and the motion-table classifier race
+          // to deliver the real cast clip. Mirrors the melee/missile
+          // `setSwingPose` fallback in their fire blocks (~lines 660,
+          // 744). Defensively-guarded: setCastPose no-ops on non-human
+          // rigs and when the entity isn't found. Real cast clip wins
+          // by clearing `_castTween` in setMotion's `cls === "cast"`
+          // branch.
+          try {
+            const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+            if (localGuid !== 0) {
+              liveScene3d?.entityManager?.setCastPose?.(localGuid);
+            }
+          } catch (_) { /* never block the cast on pose-fallback faults */ }
         }
       } else if (isInMeleeStance?.() || isInRangedStance?.()) {
         // Retail UX — click on the monster only TARGETS it. Firing

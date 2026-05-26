@@ -1988,6 +1988,17 @@
         0x013b, // Atlatl
         0x013c, // ThrownShield
       ]);
+      // Wave 13 / Phase 42 (2026-05-26) — magic stance set, mirroring
+      // RANGED_STANCES + MELEE_STANCES. Per ACE's `MotionStance.cs`,
+      // `Magic = 0x80000049` (high-16 = 0x8000, low-16 = 0x0049). The
+      // `Magic` low-16 is the only magic stance value retail uses
+      // (no per-weapon-type variants like melee/ranged). Sized as a
+      // Set for symmetry with the other stance buckets and so
+      // `dispatchRemoteSwing` (~line 8693) can branch via the same
+      // `.has(stance)` shape used for RANGED_STANCES.
+      const MAGIC_STANCES = new Set([
+        0x0049, // Magic
+      ]);
       function isInMeleeStance() {
         return MELEE_STANCES.has(currentStanceLow);
       }
@@ -1995,7 +2006,7 @@
         return RANGED_STANCES.has(currentStanceLow);
       }
       function isInMagicStance() {
-        return currentStanceLow === 0x0049; // Magic
+        return MAGIC_STANCES.has(currentStanceLow);
       }
       function getCurrentStanceLow() {
         return currentStanceLow;
@@ -8704,6 +8715,26 @@ void main() {
                       // CMT lookup. RANGED_STANCES set defined above at
                       // line ~1949 (shared with `isInRangedStance`).
                       let resolvedMotion = null;
+                      // Wave 13 / Phase 42 (2026-05-26) — magic-stance
+                      // remote attackers (wizards casting at the local
+                      // player) get the `setCastPose` arms-up vibe pose
+                      // instead of CMT/aim-level lookup. Magic doesn't
+                      // have CMT rows (no AttackType, no AttackHeight),
+                      // and the cast clip arrives via UpdateMotion just
+                      // like melee/missile. The local `sneakAttackPredicted`
+                      // emit lives in `picking.js`'s magic branch
+                      // (Phase 16) — we deliberately don't emit it here
+                      // because dispatchRemoteSwing handles the OTHER
+                      // side (someone casting AT us). Returns early
+                      // because there's no `setSwingMotion` fallback for
+                      // magic — the real cast clip wins via setMotion's
+                      // `cls === "cast"` branch.
+                      if (MAGIC_STANCES.has(stance)) {
+                        if (typeof em.setCastPose === "function") {
+                          em.setCastPose(g);
+                        }
+                        return;
+                      }
                       if (RANGED_STANCES.has(stance)) {
                         // Attacker world position from EntityInstance
                         // root (already in AC world frame per
