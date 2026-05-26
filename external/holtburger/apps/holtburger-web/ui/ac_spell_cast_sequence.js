@@ -85,6 +85,10 @@
  *   - Node tests: call `_loadSequenceSync(table)` before any
  *     `getCastSequence` to avoid the async dance.
  *
+ * Wave 18 / Phase 52 added three per-spell fields (`casterEffect`,
+ * `targetEffect`, `formulaScale`) sourced from `SpellBase.cs:36-37`
+ * + `SpellFormula.cs:313 Scale`. See module docs above for semantics.
+ *
  * @type {Record<string, {
  *   school: string,
  *   shape: string,
@@ -92,7 +96,10 @@
  *   fastCast: boolean,
  *   windupGestures: Array<{motion: string, name: string, durationS: number}>,
  *   castGesture: {motion: string, name: string, durationS: number},
- *   totalDurationS: number
+ *   totalDurationS: number,
+ *   casterEffect: number,
+ *   targetEffect: number,
+ *   formulaScale: number,
  * }> | null}
  */
 let _sequenceTable = null;
@@ -183,6 +190,21 @@ export function isCastSequenceLoaded() {
  *     pre-computed by the generator so callers don't have to reduce
  *     the list every frame.
  *
+ * Wave 18 / Phase 52 contract additions:
+ *   - `casterEffect` (u32, default 0) — `SpellBase.CasterEffect`
+ *     (`ACE.DatLoader/Entity/SpellBase.cs:36`). PlayScript enum ID
+ *     (NOT a 0x33xxxxxx PhysicsScript DID) — resolves to a real
+ *     particle script via the CASTER entity's PhysicsScriptTable
+ *     lookup (Wave 17 path). 0 = no caster effect.
+ *   - `targetEffect` (u32, default 0) — `SpellBase.TargetEffect`
+ *     (`SpellBase.cs:37`). Fires on the TARGET on hit. Out-of-scope
+ *     wiring for Wave 18 (see `playCastSequence` TODO breadcrumb).
+ *   - `formulaScale` (f32, 0.05..=1.0) — `Spell.Formula.Scale`
+ *     (`ACE.Server/Entity/SpellFormula.cs:313`). Used as the picker
+ *     `mod` weight when looking up the caster/target effect in the
+ *     entity's PhysicsScriptTable (`acclient.c:336552
+ *     PhysicsScriptTableData::GetScript`).
+ *
  * Browser-side first-call note: like `classifySpell`, the helper
  * lazy-fetches the table on first use. Callers MUST handle a `null`
  * return — the convention (mirrored by `EntityManager.playCastSequence`)
@@ -197,7 +219,10 @@ export function isCastSequenceLoaded() {
  *   fastCast: boolean,
  *   windupGestures: Array<{motion: string, name: string, durationS: number}>,
  *   castGesture: {motion: string, name: string, durationS: number},
- *   totalDurationS: number
+ *   totalDurationS: number,
+ *   casterEffect: number,
+ *   targetEffect: number,
+ *   formulaScale: number,
  * } | null}
  */
 export function getCastSequence(spellId) {
@@ -237,6 +262,16 @@ export function getCastSequence(spellId) {
     castGesture: entry.castGesture,
     totalDurationS: Number.isFinite(entry.totalDurationS)
       ? entry.totalDurationS
+      : 1.0,
+    // Wave 18 / Phase 52 — defensive default-0 for older fixtures /
+    // staler JSON missing the field (back-compat with pre-Wave-18
+    // synthetic test tables); the resolver chain in
+    // `entities.js::playCastSequence` treats 0 as "no effect, skip
+    // the resolver spawn" so this is the safe no-op default.
+    casterEffect: (entry.casterEffect >>> 0) || 0,
+    targetEffect: (entry.targetEffect >>> 0) || 0,
+    formulaScale: Number.isFinite(entry.formulaScale)
+      ? entry.formulaScale
       : 1.0,
   };
 }

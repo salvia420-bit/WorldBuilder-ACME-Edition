@@ -2378,6 +2378,15 @@ export class EntityManager {
    * (`MagicPowerUp0X`); then play the talisman cast gesture
    * (`MagicBlast` / `MagicSelf` / etc.).
    *
+   * Wave 18 / Phase 52 (2026-05-26) — after the gesture chain
+   * completes, fire `SpellBase.CasterEffect` (PlayScript enum) on the
+   * caster via the same wire-side `playEffect` event the server would
+   * emit. Lets the Wave 17 resolver (`play_effect_vfx.js
+   * _tryResolveRealVfx`) handle PhysicsScriptTable lookup +
+   * `formulaScale`-weighted pick + ParticleEmitter spawn. TargetEffect
+   * is OUT-of-scope for this wave (requires damageDealt→SpellId
+   * attribution; see TODO breadcrumb at the end of the chain body).
+   *
    * Algorithm (mirrors `Player_Magic.cs::CreatePlayerSpell` and
    * `SpellFormula.cs::GetGestureMotionsList` in ACE):
    *
@@ -2495,6 +2504,76 @@ export class EntityManager {
     }
     if (seq.castGesture) {
       await playGesture(seq.castGesture);
+    }
+
+    // -----------------------------------------------------------------
+    // Wave 18 / Phase 52 — CasterEffect VFX spawn.
+    //
+    // After the gesture chain completes, fire the spell's per-spell
+    // CasterEffect PlayScript on the CASTER entity. Mirrors ACE's
+    // `WorldObject_Magic.cs:358-359 DoSpellEffects`:
+    //
+    //   caster.EnqueueBroadcast(new GameMessageScript(
+    //       caster.Guid, spell.CasterEffect, spell.Formula.Scale));
+    //
+    // CasterEffect is a PlayScript enum value (small u32, NOT a 0x33
+    // PhysicsScript DID), so we route through the Wave 17 resolver
+    // chain identically to how a wire-driven `PlayEffect (0xF755)`
+    // event would be handled: the caster's PhysicsScriptTable maps
+    // the PScriptType ID → real PhysicsScript DID using `formulaScale`
+    // as the picker `mod` (per acclient.c:336552
+    // PhysicsScriptTableData::GetScript).
+    //
+    // We emit the synthetic `playEffect` event rather than calling
+    // play_effect_vfx.js's internal `_tryResolveRealVfx` directly so:
+    //   1. The placeholder fallback path runs automatically if the
+    //      caster has no PhysicsScriptTable / scriptId not in table.
+    //   2. We don't touch play_effect_vfx.js (Phase 51's file —
+    //      reserved for other Wave 18 agents per mandate).
+    //   3. Diag counters (`_realVfxStats.attempts/resolved/miss*`)
+    //      stay coherent across both wire-driven + spell-driven paths.
+    //
+    // Cancellation: if the chain was cancelled mid-flight we already
+    // returned via the `ok === false` path above; this code only runs
+    // when the chain succeeded end-to-end. No further token check
+    // needed.
+    //
+    // TargetEffect deferred: ACE fires TargetEffect on the TARGET via
+    // a separate `GameMessageScript(target.Guid, spell.TargetEffect,
+    // spell.Formula.Scale)` broadcast at `WorldObject_Magic.cs:361-365`,
+    // gated on `projectileHit` for projectile spells. Wiring this in
+    // the client requires attributing `damageDealt` events back to
+    // the SpellId that produced them; per the Wave 13/14 audit ACE's
+    // `damageDealt` payload does NOT carry SpellId. TODO follow-on:
+    // either (a) thread SpellId through the missile entity's
+    // `prj_spell_id` field (acclient.h cites this exists on retail
+    // ProjectileObject), or (b) consume `GameMessageScript` events
+    // landing on remote-entity targets and correlate by time-window.
+    // See entities.js:2421 (`playCastSequence`) for where this hookup
+    // would land.
+    if ((seq.casterEffect | 0) !== 0) {
+      try {
+        if (
+          typeof window !== "undefined" &&
+          window.__pluginClient &&
+          window.__pluginClient.events &&
+          typeof window.__pluginClient.events.emit === "function"
+        ) {
+          window.__pluginClient.events.emit("playEffect", {
+            targetGuid: g >>> 0,
+            scriptId: (seq.casterEffect | 0) >>> 0,
+            speed: Number.isFinite(seq.formulaScale) ? +seq.formulaScale : 1.0,
+          });
+        }
+      } catch (err) {
+        // Never let a CasterEffect spawn failure unwind the cast
+        // chain — the gesture sequence already completed visually.
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[playCastSequence] casterEffect emit failed for spell ${spellId}:`,
+          err,
+        );
+      }
     }
   }
 

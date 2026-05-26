@@ -8,6 +8,18 @@
 // Grey/White variants), Hide/UnHide/Hidden (3 IDs), PortalEntry/Exit/
 // Storm (3 IDs), Camping Mastery/Ineptitude (2 IDs), LayingofHands
 // (1 ID). 51 additional IDs → 101/174 shipped, ~73 still TODO.
+// CMT Wave 18 / Phase 54 (2026-05-26) — final batch covering the
+// remaining gameplay-broadcast IDs: Breathe (4), SpecialState numeric
+// (10) + colors (8), Regen up/down (7 incl RegenDownVoid),
+// Vitae/Vision/Trans (6), SwapHealth (6), Dispel (3), Restriction (3),
+// Augmentation (4), Aetheria (6), Wedding (2), DirtyFighting (4),
+// plus 6 standalones (Create 0x58, ProjectileCollision 0x5A,
+// LevelUp 0x8A, BunnySmite 0x95, BaelZharonSmite 0x96, BlackMadness
+// 0xA0). 69 additional IDs → 170/174 shipped, 4 sentinels remain
+// (Invalid + Test1-3, never broadcast in gameplay). Mandate priority-3
+// IDs that DON'T exist in ACE's enum (HoldUpAttack/HoldDownAttack/
+// AttackHook/HealthRing/HealthBlob/CleavePhys/CleaveSpark) are
+// intentionally omitted — no wire event = no dispatch needed.
 // CMT Wave 17 / Phase 51 (2026-05-26) — REAL retail VFX via the
 // PhysicsScriptTable resolver chain. Wired BEFORE the placeholder
 // fallthrough so any entity with a `physicsScriptTableDid` (0x34xxxx)
@@ -266,6 +278,159 @@ const _CAMPING_IDS = new Set([
 // branching.
 const _PORTAL_FAMILY_IDS = new Set([
   PLAY_SCRIPT.PortalEntry, PLAY_SCRIPT.PortalExit, PLAY_SCRIPT.PortalStorm,
+]);
+
+// =====================================================================
+// Phase 54 — additional family ID sets (Wave 18).
+// =====================================================================
+// Same Set-membership pattern as Phase 37/47. Each family collapses one
+// gameplay-domain cluster to a single visual treatment. Hard constraint:
+// only IDs that EXIST in `PLAY_SCRIPT` (verified against the 0x00–0xAD
+// enum). Priority-3 candidates from the mandate that DON'T exist in ACE
+// (HoldUpAttack, HoldDownAttack, AttackHook, HealthRing, HealthBlob,
+// CleavePhys, CleaveSpark) are intentionally OMITTED — no enum entry =
+// no wire event = no dispatch needed.
+
+// Breathe family — 0x54-0x57 contiguous. Drudge/Tusker/dragon-class
+// breath weapons. Four IDs, four colors per the mandate (orange flame,
+// cyan frost, green acid, blue-white lightning). Each gets its own
+// dispatch arm with a unique color (NOT collapsed to one Set arm) so
+// the player can tell at a glance which element just hit them. Set is
+// only used for the membership test; per-ID color selection happens
+// in the dispatch.
+const _BREATHE_IDS = new Set([
+  PLAY_SCRIPT.BreatheFlame, PLAY_SCRIPT.BreatheFrost,
+  PLAY_SCRIPT.BreatheAcid, PLAY_SCRIPT.BreatheLightning,
+]);
+
+// SpecialState1-9 + SpecialState0 — 0x78-0x81 (10 IDs). Generic game-
+// mechanic state cues with no fixed semantic in ACE (used for varied
+// "this entity is in special state N" broadcasts). 9-color palette
+// cycle (pale red → orange → yellow → green → cyan → blue → indigo →
+// violet → white; state0 = white shared with state9 as a tail). Brief
+// 250ms quick flash matches the mandate's "state cue" duration call.
+const _SPECIAL_STATE_NUMERIC_IDS = new Set([
+  PLAY_SCRIPT.SpecialState1, PLAY_SCRIPT.SpecialState2, PLAY_SCRIPT.SpecialState3,
+  PLAY_SCRIPT.SpecialState4, PLAY_SCRIPT.SpecialState5, PLAY_SCRIPT.SpecialState6,
+  PLAY_SCRIPT.SpecialState7, PLAY_SCRIPT.SpecialState8, PLAY_SCRIPT.SpecialState9,
+  PLAY_SCRIPT.SpecialState0,
+]);
+
+// SpecialState color variants — 0x82-0x89 (8 IDs). Named-color state
+// cues that complement the numeric ones. Each gets a sphere matching
+// its named color so the visual treatment is faithful to the name.
+// Same 250ms duration as the numeric variants.
+const _SPECIAL_STATE_COLOR_IDS = new Set([
+  PLAY_SCRIPT.SpecialStateRed, PLAY_SCRIPT.SpecialStateOrange,
+  PLAY_SCRIPT.SpecialStateYellow, PLAY_SCRIPT.SpecialStateGreen,
+  PLAY_SCRIPT.SpecialStateBlue, PLAY_SCRIPT.SpecialStatePurple,
+  PLAY_SCRIPT.SpecialStateWhite, PLAY_SCRIPT.SpecialStateBlack,
+]);
+
+// Regen family — 0x25-0x2A (6 IDs) + RegenDownVoid 0xA8. Periodic
+// HP/Stam/Mana regen ticks. Up variants = positive green flash, Down
+// variants = dim-red drain (matches Health up/down convention but
+// with smaller scale + faster duration since regen fires per-tick on
+// every regen-enchanted entity). RegenDownVoid (Void-cluster late-
+// addition) is gameplay-equivalent to a normal regen debuff.
+const _REGEN_UP_IDS = new Set([
+  PLAY_SCRIPT.RegenUpRed, PLAY_SCRIPT.RegenUpBlue, PLAY_SCRIPT.RegenUpYellow,
+]);
+const _REGEN_DOWN_IDS = new Set([
+  // Note: `RegenDownREd` (the 0x26 entry) preserves the ACE typo from
+  // the C# source — kept exactly as in the enum so the lookup matches.
+  PLAY_SCRIPT.RegenDownREd, PLAY_SCRIPT.RegenDownBlue,
+  PLAY_SCRIPT.RegenDownYellow, PLAY_SCRIPT.RegenDownVoid,
+]);
+
+// Vitae/Vision/Trans Up/Down — 0x45-0x48 + 0x4F/0x50. White/Black
+// cosmic-cluster cues (Vitae = death penalty, Vision = enchanted
+// sight, Trans = transcendence/Asheron's-Gift-class buffs). Up =
+// bright white (positive cosmic), Down = deep black (negative cosmic).
+// Death-camp purple palette would conflict with Destroy, so we go
+// pure white-vs-near-black to keep these visually distinct.
+const _VITAE_VISION_TRANS_UP_IDS = new Set([
+  PLAY_SCRIPT.VitaeUpWhite, PLAY_SCRIPT.VisionUpWhite, PLAY_SCRIPT.TransUpWhite,
+]);
+const _VITAE_VISION_TRANS_DOWN_IDS = new Set([
+  PLAY_SCRIPT.VitaeDownBlack, PLAY_SCRIPT.VisionDownBlack, PLAY_SCRIPT.TransDownBlack,
+]);
+
+// SwapHealth family — 0x49-0x4E (6 IDs). The bizarre "swap one vital
+// stat for another" cues (Red ↔ Yellow, Red ↔ Blue, Yellow ↔ Blue —
+// HP/Stam/Mana). All collapse to a single magenta `0xff44dd` swirl
+// since the visual semantic is just "vital pool transfer happened"
+// — directional fidelity isn't useful at the placeholder layer.
+const _SWAP_HEALTH_IDS = new Set([
+  PLAY_SCRIPT.SwapHealth_Red_To_Yellow, PLAY_SCRIPT.SwapHealth_Red_To_Blue,
+  PLAY_SCRIPT.SwapHealth_Yellow_To_Red, PLAY_SCRIPT.SwapHealth_Yellow_To_Blue,
+  PLAY_SCRIPT.SwapHealth_Blue_To_Red, PLAY_SCRIPT.SwapHealth_Blue_To_Yellow,
+]);
+
+// Dispel family — 0x92-0x94 (3 IDs). DispelLife/Creature/All. All
+// three collapse to a muted gray-violet `0xaa99cc` ring (TorusGeometry
+// like Shield, since "ward removal" is conceptually a defensive cue
+// running in reverse). Faster 350ms — dispels are common; long bursts
+// would clutter the screen during high-magic combat.
+const _DISPEL_IDS = new Set([
+  PLAY_SCRIPT.DispelLife, PLAY_SCRIPT.DispelCreature, PLAY_SCRIPT.DispelAll,
+]);
+
+// Restriction family — 0x98-0x9A (3 IDs). RestrictionEffectBlue/Green/
+// Gold. Per-color sphere matching the named color so the player can
+// tell which restriction zone they're in (blue=PvP, green=Olthoi, gold
+// = arena-style typical mappings). 500ms.
+const _RESTRICTION_IDS = new Set([
+  PLAY_SCRIPT.RestrictionEffectBlue, PLAY_SCRIPT.RestrictionEffectGreen,
+  PLAY_SCRIPT.RestrictionEffectGold,
+]);
+
+// Augmentation family — 0x9C-0x9F (4 IDs). AugmentationUseAttribute/
+// Skill/Resistances/Other — the throne-of-destiny "augmentation gem
+// used" cues. All collapse to a brilliant gold `0xffcc33` celebratory
+// burst — augmentations are major character-progression events;
+// permanent stat boosts; gold = "you just got something significant".
+// Long 800ms + large 0.4→1.5 scale, similar to Death's footprint but
+// in gold instead of purple.
+const _AUGMENTATION_IDS = new Set([
+  PLAY_SCRIPT.AugmentationUseAttribute, PLAY_SCRIPT.AugmentationUseSkill,
+  PLAY_SCRIPT.AugmentationUseResistances, PLAY_SCRIPT.AugmentationUseOther,
+]);
+
+// Aetheria family — 0xA1-0xA6 (6 IDs). AetheriaLevelUp + 5x Surge
+// variants (Destruction/Protection/Regeneration/Affliction/Festering).
+// Aetheria = the colored-gem socketable items added late in retail.
+// Surges are random procs from socketed Aetheria. Each Surge gets a
+// distinct color matching its gameplay role:
+//   - SurgeDestruction = orange (damage)
+//   - SurgeProtection  = blue (defense)
+//   - SurgeRegeneration = green (heal)
+//   - SurgeAffliction  = sickly green-yellow (DoT)
+//   - SurgeFestering   = bruised purple (DoT decay)
+// AetheriaLevelUp = pure white celebratory burst (rarer than Surges).
+const _AETHERIA_IDS = new Set([
+  PLAY_SCRIPT.AetheriaLevelUp,
+  PLAY_SCRIPT.AetheriaSurgeDestruction, PLAY_SCRIPT.AetheriaSurgeProtection,
+  PLAY_SCRIPT.AetheriaSurgeRegeneration, PLAY_SCRIPT.AetheriaSurgeAffliction,
+  PLAY_SCRIPT.AetheriaSurgeFestering,
+]);
+
+// Wedding family — 0x8D WeddingBliss + 0x97 WeddingSteele. AC's
+// player-marriage event cues (Bliss = the marriage spell;
+// Steele = the wedding-band item). Pink heart palette `0xff66cc`.
+// Long-ish 700ms — weddings are rare; players appreciate the visual.
+const _WEDDING_IDS = new Set([
+  PLAY_SCRIPT.WeddingBliss, PLAY_SCRIPT.WeddingSteele,
+]);
+
+// DirtyFighting family — 0xAA-0xAD (4 IDs). Late-additions cluster
+// for the Dirty Fighting skill's debuff cues (Heal/Attack/Defense/
+// DamageOverTime debuffs). All four are gameplay-debuffs; muted
+// brown-red `0x884444` cube (cube to distinguish from generic Splatter
+// red — Dirty Fighting hits are special-skill, not raw damage). 400ms.
+const _DIRTY_FIGHTING_IDS = new Set([
+  PLAY_SCRIPT.DirtyFightingHealDebuff, PLAY_SCRIPT.DirtyFightingAttackDebuff,
+  PLAY_SCRIPT.DirtyFightingDefenseDebuff, PLAY_SCRIPT.DirtyFightingDamageOverTime,
 ]);
 
 // Active burst registry — drives both per-frame tween updates and
@@ -1515,14 +1680,374 @@ function _runPlaceholderDispatch(targetGuid, scriptId) {
       }
 
       // ---------------------------------------------------------------
-      // Remaining ~73 PlayScript values — TODO for future verticals
-      // (Regen family, Vitae*, Vision*, SwapHealth*, Trans*,
-      // BreatheFlame/Frost/Acid/Lightning, Create, ProjectileCollision,
-      // SpecialState1-9/0/colour, LevelUp, Wedding* (Bliss/Steele),
-      // Dispel*, Bunny/BaelZharon, Restriction*, Augmentation*,
-      // BlackMadness, Aetheria*, RegenDownVoid, DirtyFighting*).
-      // Log so we can see what ACE is actually broadcasting in real
-      // gameplay.
+      // Phase 54 (Wave 18) — extended family coverage continued.
+      // ---------------------------------------------------------------
+      // Adds: Breathe (4), SpecialState numeric (10), SpecialState
+      // colors (8), Regen up/down (7), Vitae/Vision/Trans (6),
+      // SwapHealth (6), Dispel (3), Restriction (3), Augmentation (4),
+      // Aetheria (6), Wedding (2), DirtyFighting (4) + 6 standalone
+      // (Create, ProjectileCollision, LevelUp, BunnySmite,
+      // BaelZharonSmite, BlackMadness). 69 new IDs → 170/174 shipped.
+      // Remaining 4 = the enum sentinels (Invalid 0x00 + Test1-3
+      // 0x01-0x03) which ACE never broadcasts in gameplay.
+
+      // Breathe family — per-ID color dispatch so flame vs frost vs
+      // acid vs lightning are visually distinct. Larger scale + slightly
+      // longer duration than Splatter since breath weapons are major,
+      // visually impressive AoE-class hits. 500ms.
+      if (_BREATHE_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Breathe target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        // Per-ID color: flame=orange, frost=cyan, acid=green, lightning=
+        // bright blue-white. Lightning gets a shorter duration (300ms)
+        // for the crackle feel; flame/frost/acid get full 500ms.
+        let color = 0xffffff;
+        let durationMs = 500;
+        if (scriptId === PLAY_SCRIPT.BreatheFlame) { color = 0xff7733; }
+        else if (scriptId === PLAY_SCRIPT.BreatheFrost) { color = 0x66ddff; }
+        else if (scriptId === PLAY_SCRIPT.BreatheAcid) { color = 0x77ff44; }
+        else if (scriptId === PLAY_SCRIPT.BreatheLightning) { color = 0xddeeff; durationMs = 300; }
+        _spawnBurst(placement.parent, placement.position, 0.25, 1.1, color, durationMs);
+        return;
+      }
+
+      // SpecialState1-9 + SpecialState0 — generic numeric state cues.
+      // Cycle through a 9-color palette indexed by (id - SpecialState1);
+      // SpecialState0 (0x81) folds onto the SpecialState9 tail (white).
+      // 250ms brief flash per the mandate.
+      if (_SPECIAL_STATE_NUMERIC_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] SpecialStateN target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        // Pale red, orange, yellow, green, cyan, blue, indigo, violet, white.
+        const palette = [
+          0xff8888, 0xffaa44, 0xffee44, 0x88ee88,
+          0x66dddd, 0x6688ff, 0xaa66ff, 0xdd66ff, 0xeeeeee,
+        ];
+        // SpecialState1 = 0x78 → index 0; SpecialState9 = 0x80 → 8.
+        // SpecialState0 = 0x81 → wraps to index 8 (white) to match a
+        // "zero state = neutral / fallback" gestalt.
+        let idx;
+        if (scriptId === PLAY_SCRIPT.SpecialState0) idx = 8;
+        else idx = (scriptId - PLAY_SCRIPT.SpecialState1) & 0xff;
+        if (idx < 0 || idx > 8) idx = 8;
+        _spawnBurst(placement.parent, placement.position, 0.1, 0.4, palette[idx], 250);
+        return;
+      }
+
+      // SpecialState color variants — 0x82-0x89. Per-ID color matching
+      // the named color so the visual stays faithful to the enum name.
+      // 250ms brief flash, same envelope as the numeric variants.
+      if (_SPECIAL_STATE_COLOR_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] SpecialStateColor target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        let color = 0xffffff;
+        if (scriptId === PLAY_SCRIPT.SpecialStateRed) color = 0xff4444;
+        else if (scriptId === PLAY_SCRIPT.SpecialStateOrange) color = 0xff9933;
+        else if (scriptId === PLAY_SCRIPT.SpecialStateYellow) color = 0xffee44;
+        else if (scriptId === PLAY_SCRIPT.SpecialStateGreen) color = 0x66ee66;
+        else if (scriptId === PLAY_SCRIPT.SpecialStateBlue) color = 0x6688ff;
+        else if (scriptId === PLAY_SCRIPT.SpecialStatePurple) color = 0xbb66ff;
+        else if (scriptId === PLAY_SCRIPT.SpecialStateWhite) color = 0xeeeeee;
+        else if (scriptId === PLAY_SCRIPT.SpecialStateBlack) color = 0x222222;
+        _spawnBurst(placement.parent, placement.position, 0.1, 0.4, color, 250);
+        return;
+      }
+
+      // RegenUp family — periodic regen tick (positive). Green flash
+      // smaller than HealthUp since regen fires every few seconds on
+      // every regen-enchanted entity (don't dominate the visual field).
+      // 0.08→0.25 / 250ms — barely-perceptible "+pip" pulse.
+      if (_REGEN_UP_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] RegenUp target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.08, 0.25, 0x66ee99, 250);
+        return;
+      }
+
+      // RegenDown family (incl. RegenDownVoid 0xA8) — periodic drain
+      // tick (negative). Dim red, same envelope as RegenUp.
+      if (_REGEN_DOWN_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] RegenDown target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.08, 0.25, 0x884444, 250);
+        return;
+      }
+
+      // VitaeUp / VisionUp / TransUp — cosmic-cluster positive cue.
+      // Pure white `0xffffff` celebratory burst, large + medium-duration
+      // (0.25→1.0 / 600ms) so cosmic restoration reads as significant.
+      if (_VITAE_VISION_TRANS_UP_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] CosmicUp target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.25, 1.0, 0xffffff, 600);
+        return;
+      }
+
+      // VitaeDown / VisionDown / TransDown — cosmic-cluster negative
+      // cue. Deep blue-black `0x111133` (near-black with a hint of
+      // depth so it doesn't disappear against dark scenes), same
+      // envelope as the Up variant.
+      if (_VITAE_VISION_TRANS_DOWN_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] CosmicDown target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.25, 1.0, 0x111133, 600);
+        return;
+      }
+
+      // SwapHealth family — vital-pool transfer cue. Magenta `0xff44dd`
+      // ring (TorusGeometry) for distinct "swap happened" silhouette.
+      // No rotation since the swap is instantaneous (just expand+fade).
+      if (_SWAP_HEALTH_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] SwapHealth target 0x${targetGuid.toString(16)} not in entityMap — skipping ring`,
+          );
+          return;
+        }
+        _spawnRingBurst(
+          placement.parent, placement.position,
+          0.8, 1.3, 0xff44dd, 400, 0,
+        );
+        return;
+      }
+
+      // Create (0x58) — entity spawn-in flash. Bright white expanding
+      // burst (0.1→1.2/400ms) — counterpart to Destroy's contracting
+      // purple. Reads as "something just appeared".
+      if (scriptId === PLAY_SCRIPT.Create) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Create target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.1, 1.2, 0xeeffff, 400);
+        return;
+      }
+
+      // ProjectileCollision (0x5A) — projectile impact. Smaller cousin
+      // to Explode (which is the "spell projectile hit a target" splash);
+      // this one fires for non-explosion projectile impacts (arrows,
+      // bolts). Yellow-orange smaller burst (0.1→0.6/300ms).
+      if (scriptId === PLAY_SCRIPT.ProjectileCollision) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] ProjectileCollision target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.1, 0.6, 0xffbb44, 300);
+        return;
+      }
+
+      // LevelUp (0x8A) — major character-progression event. Brilliant
+      // gold expanding sphere, long-duration (0.4→2.0/1000ms) — gets
+      // to dominate visually since level-ups are rare + celebratory.
+      if (scriptId === PLAY_SCRIPT.LevelUp) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] LevelUp target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.4, 2.0, 0xffcc33, 1000);
+        return;
+      }
+
+      // Dispel family — ward removal cue. Muted gray-violet ring
+      // (`0xaa99cc`), fast 350ms since dispels can fire frequently.
+      // No rotation — the dispel is a moment, not a sweep.
+      if (_DISPEL_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Dispel target 0x${targetGuid.toString(16)} not in entityMap — skipping ring`,
+          );
+          return;
+        }
+        _spawnRingBurst(
+          placement.parent, placement.position,
+          1.2, 0.6, 0xaa99cc, 350, 0,
+        );
+        return;
+      }
+
+      // BunnySmite (0x95) — AC's iconic comedic event (bunny-killer
+      // achievement / Wedding-Land event). Pink `0xff99cc` brief sphere
+      // — playful color matches the absurdist semantic. 400ms.
+      if (scriptId === PLAY_SCRIPT.BunnySmite) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] BunnySmite target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.2, 0.8, 0xff99cc, 400);
+        return;
+      }
+
+      // BaelZharonSmite (0x96) — Bael'Zharon (the dark Avatar) signature
+      // smite. Dark purple-red `0x661133` per the mandate's "dark Avatar's
+      // signature color". Large + long-duration (0.4→1.8/900ms) — this
+      // is a major boss-encounter cue.
+      if (scriptId === PLAY_SCRIPT.BaelZharonSmite) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] BaelZharonSmite target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.4, 1.8, 0x661133, 900);
+        return;
+      }
+
+      // Restriction family — per-ID color matching the enum name
+      // (RestrictionEffectBlue/Green/Gold). Sphere + 500ms. These cues
+      // signal entering a restricted-action zone (PvP/no-PK/etc).
+      if (_RESTRICTION_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Restriction target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        let color = 0xffffff;
+        if (scriptId === PLAY_SCRIPT.RestrictionEffectBlue) color = 0x4488ff;
+        else if (scriptId === PLAY_SCRIPT.RestrictionEffectGreen) color = 0x66dd66;
+        else if (scriptId === PLAY_SCRIPT.RestrictionEffectGold) color = 0xffcc44;
+        _spawnBurst(placement.parent, placement.position, 0.2, 0.8, color, 500);
+        return;
+      }
+
+      // Augmentation family — major character-progression cue. Brilliant
+      // gold burst, similar footprint to LevelUp (large + long-duration)
+      // since augmentations are permanent character upgrades. 0.3→1.4/800ms.
+      if (_AUGMENTATION_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Augmentation target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.3, 1.4, 0xffcc33, 800);
+        return;
+      }
+
+      // BlackMadness (0xA0) — special debuff cue. Deep purple-black
+      // `0x331144` sphere — distinct from BaelZharonSmite's red-purple
+      // by being more purple-saturated. 500ms.
+      if (scriptId === PLAY_SCRIPT.BlackMadness) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] BlackMadness target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.2, 0.9, 0x331144, 500);
+        return;
+      }
+
+      // Aetheria family — per-ID color matching gameplay role.
+      // AetheriaLevelUp = celebratory white; Surge variants get distinct
+      // colors. 500ms (procs fire often; longer would clutter combat).
+      if (_AETHERIA_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Aetheria target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        let color = 0xffffff;
+        if (scriptId === PLAY_SCRIPT.AetheriaLevelUp) color = 0xffffff;
+        else if (scriptId === PLAY_SCRIPT.AetheriaSurgeDestruction) color = 0xff7733;
+        else if (scriptId === PLAY_SCRIPT.AetheriaSurgeProtection) color = 0x4488ff;
+        else if (scriptId === PLAY_SCRIPT.AetheriaSurgeRegeneration) color = 0x66ee99;
+        else if (scriptId === PLAY_SCRIPT.AetheriaSurgeAffliction) color = 0xaadd44;
+        else if (scriptId === PLAY_SCRIPT.AetheriaSurgeFestering) color = 0x884488;
+        _spawnBurst(placement.parent, placement.position, 0.2, 0.9, color, 500);
+        return;
+      }
+
+      // Wedding family — WeddingBliss + WeddingSteele. Pink heart cue.
+      // 700ms long enough to register; players notice marriage events.
+      if (_WEDDING_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] Wedding target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnBurst(placement.parent, placement.position, 0.3, 1.2, 0xff66cc, 700);
+        return;
+      }
+
+      // DirtyFighting family — debuff cube (matches Skill* shape so
+      // skill-based debuffs read as a coherent visual category). Muted
+      // brown-red `0x884444` per the mandate. 400ms.
+      if (_DIRTY_FIGHTING_IDS.has(scriptId)) {
+        if (!placement) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[play-effect-vfx] DirtyFighting target 0x${targetGuid.toString(16)} not in entityMap — skipping burst`,
+          );
+          return;
+        }
+        _spawnCubeBurst(placement.parent, placement.position, 0.1, 0.4, 0x884444, 400);
+        return;
+      }
+
+      // ---------------------------------------------------------------
+      // Remaining ~4 PlayScript values — sentinels (Invalid 0x00 +
+      // Test1-3 0x01-0x03) which ACE never broadcasts in gameplay.
+      // Real-world wire frequency of these is zero; TODO-log if they
+      // appear so we can surface the anomaly. (Pre-Phase-54: ~73
+      // entries remained TODO. Phase 54 ships 69 → 4 sentinel-only.)
       // ---------------------------------------------------------------
       // eslint-disable-next-line no-console
       console.debug(
@@ -1617,11 +2142,13 @@ export const __test = Object.freeze({
 // `families` maps the human-readable family label to the IDs in it.
 // Iteration order matches the dispatch order in `_onPlayEffect`.
 //
-// Counts (as of Phase 47): shipped=101 (Launch + Explode + 48 from
-// Phase 37 + 51 from Phase 47). Total PLAY_SCRIPT enum size = 174
-// (0x00-0xAD). Remaining TODO ≈ 73 — the still-uncovered families
-// list is documented in the comment above the catch-all
-// `console.debug` in `_onPlayEffect`.
+// Counts (as of Phase 54): shipped=170 (Launch + Explode + 48 from
+// Phase 37 + 51 from Phase 47 + 69 from Phase 54). Total PLAY_SCRIPT
+// enum size = 174 (0x00-0xAD). Remaining TODO = 4 (Invalid 0x00 +
+// Test1/2/3 0x01-0x03 — sentinels never broadcast in gameplay).
+// `shippedCount` and `todoCount` below are computed from the live
+// `_COVERAGE_SHIPPED_SET.size` so any future additions flow through
+// automatically.
 const _COVERAGE_FAMILIES = Object.freeze({
   Launch: [PLAY_SCRIPT.Launch],
   Explode: [PLAY_SCRIPT.Explode],
@@ -1645,6 +2172,27 @@ const _COVERAGE_FAMILIES = Object.freeze({
   Portal: Array.from(_PORTAL_FAMILY_IDS),
   Camping: Array.from(_CAMPING_IDS),
   LayingofHands: [PLAY_SCRIPT.LayingofHands],
+  // Phase 54 additions (Wave 18).
+  Breathe: Array.from(_BREATHE_IDS),
+  SpecialStateNumeric: Array.from(_SPECIAL_STATE_NUMERIC_IDS),
+  SpecialStateColor: Array.from(_SPECIAL_STATE_COLOR_IDS),
+  RegenUp: Array.from(_REGEN_UP_IDS),
+  RegenDown: Array.from(_REGEN_DOWN_IDS),
+  VitaeVisionTransUp: Array.from(_VITAE_VISION_TRANS_UP_IDS),
+  VitaeVisionTransDown: Array.from(_VITAE_VISION_TRANS_DOWN_IDS),
+  SwapHealth: Array.from(_SWAP_HEALTH_IDS),
+  Dispel: Array.from(_DISPEL_IDS),
+  Restriction: Array.from(_RESTRICTION_IDS),
+  Augmentation: Array.from(_AUGMENTATION_IDS),
+  Aetheria: Array.from(_AETHERIA_IDS),
+  Wedding: Array.from(_WEDDING_IDS),
+  DirtyFighting: Array.from(_DIRTY_FIGHTING_IDS),
+  Create: [PLAY_SCRIPT.Create],
+  ProjectileCollision: [PLAY_SCRIPT.ProjectileCollision],
+  LevelUp: [PLAY_SCRIPT.LevelUp],
+  BunnySmite: [PLAY_SCRIPT.BunnySmite],
+  BaelZharonSmite: [PLAY_SCRIPT.BaelZharonSmite],
+  BlackMadness: [PLAY_SCRIPT.BlackMadness],
 });
 
 const _COVERAGE_SHIPPED_SET = new Set();

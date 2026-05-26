@@ -60,6 +60,9 @@
 | 49 | fetchPhysicsScriptTable wasm export — retail 0x34000004 has 139 PScriptType keys | 16 | **shipped** 2026-05-26 |
 | 50 | Per-entity physicsScriptTableDid caching + PhysicsDesc runtime swap listener | 16 | **shipped** 2026-05-26 |
 | 51 | play_effect_vfx.js resolver — 8/8 picker + 12/12 trace + 9-bucket miss diag | 17 | **shipped** 2026-05-26 |
+| 52 | SpellBase.CasterEffect/TargetEffect wired; 74 spells have casterEffect, 5442 have targetEffect | 18 | **shipped** 2026-05-26 |
+| 53 | Resolver regression — 54/54 synthetic assertions (no live session needed) | 18 | **shipped** 2026-05-26 |
+| 54 | VFX coverage 101→170/174 (97.7%); 4 remaining are unused enum sentinels | 18 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 

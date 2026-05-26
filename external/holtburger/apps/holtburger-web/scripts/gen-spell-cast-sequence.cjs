@@ -61,7 +61,10 @@
 //       "fastCast": false, "leadOnly": true,
 //       "windupGestures": [],
 //       "castGesture": { "motion": "0x40000031", "name": "MagicHeal", "durationS": 0.0 },
-//       "totalDurationS": 0.0
+//       "totalDurationS": 0.0,
+//       "casterEffect": 0,
+//       "targetEffect": 31,
+//       "formulaScale": 0.05
 //     }
 //   }
 // }
@@ -71,6 +74,26 @@
 // `castGesture` is null only when the spell's last component isn't in
 // the spell-components table (which shouldn't happen for retail data
 // but we guard for it).
+//
+// ## Wave 18 / Phase 52 fields
+//
+// - `casterEffect` (u32, default 0) — `SpellBase.CasterEffect` from
+//   `ACE.DatLoader/Entity/SpellBase.cs:36`. PlayScript enum value
+//   (NOT a 0x33xxxxxx PhysicsScript DID) that the cast pipeline
+//   resolves to a real script via the CASTER entity's
+//   PhysicsScriptTable lookup (Wave 17 path).
+// - `targetEffect` (u32, default 0) — `SpellBase.TargetEffect`
+//   (`SpellBase.cs:37`). Plays on the TARGET on hit (out-of-scope
+//   wiring for Wave 18 — needs damageDealt→spellId attribution).
+// - `formulaScale` (f32, 0.05..=1.0) — `Spell.Formula.Scale` from
+//   `ACE.Server/Entity/SpellFormula.cs:313` — derived from the FIRST
+//   scarab in the formula via the `ScarabScale` map at
+//   `SpellFormula.cs:293-305`: Lead=0.05, Iron=0.2, Copper=0.4,
+//   Silver=0.5, Gold=0.6, Pyreal/Diamond/Platinum/Dark/Mana=1.0.
+//   Used as the `mod` value when picking from a PhysicsScriptTable
+//   (`acclient.c:336552 PhysicsScriptTableData::GetScript`).
+//   Defaults to 1.0 if the formula has no scarab (shouldn't happen
+//   on retail data; defensive guard).
 
 const fs = require("fs");
 const path = require("path");
@@ -105,6 +128,30 @@ const MOTION_INVALID = "0x80000000";
 const TYPE_SCARAB = 1;
 const TYPE_TALISMAN = 5;
 
+// ACE `SpellFormula.cs:293-305 ScarabScale` — scarab component ID to
+// the f32 "scale" used as the picker `mod` weight when resolving a
+// CasterEffect / TargetEffect through a PhysicsScriptTable.
+//
+// Keys are SpellComponentsTable IDs (== `Scarab` enum value), values
+// are the f32 scale from the ACE table verbatim. Lead = 0.05 (lowest
+// power, finest visual); Pyreal+ = 1.0 (full scale).
+const SCARAB_SCALE = {
+  1: 0.05,   // Lead
+  2: 0.2,    // Iron
+  3: 0.4,    // Copper
+  4: 0.5,    // Silver
+  5: 0.6,    // Gold
+  6: 1.0,    // Pyreal
+  110: 1.0,  // Diamond
+  112: 1.0,  // Platinum
+  192: 1.0,  // Dark
+  193: 1.0,  // Mana
+};
+// Default scale when the formula has no scarab in our table — 1.0
+// matches the GameMessageScript constructor default at
+// `ACE.Server/Network/GameMessages/Messages/GameMessageScript.cs:8`.
+const DEFAULT_FORMULA_SCALE = 1.0;
+
 function loadJson(p) {
   if (!fs.existsSync(p)) {
     console.error(`missing source: ${p}`);
@@ -121,11 +168,11 @@ function parseComponentIdRef(ref) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function loadLsdBitfields() {
+function loadLsdSpellExtras() {
   if (!fs.existsSync(LSD_PATH)) {
     console.error(
       `missing LSD source: ${LSD_PATH}\n` +
-      `(needed for SpellFlags.FastCast detection — bitfield isn't in the catalog)`,
+      `(needed for SpellFlags.FastCast detection + Wave 18 caster/target effect + formula)`,
     );
     process.exit(1);
   }
@@ -140,7 +187,20 @@ function loadLsdBitfields() {
     const sid = ent && ent.key;
     const v = ent && ent.value;
     if (typeof sid !== "number" || !v) continue;
-    map.set(sid, v.bitfield || 0);
+    // formula is u32[8]; zero entries are unused slots — preserve the
+    // raw array here, the caller filters by component-table lookup.
+    const formula = Array.isArray(v.formula)
+      ? v.formula.map((n) => (n | 0))
+      : [];
+    map.set(sid, {
+      bitfield: (v.bitfield | 0) || 0,
+      // Wave 18 / Phase 52 — SpellBase fields per ACE.DatLoader
+      // `Entity/SpellBase.cs:36-37`. PlayScript enum values
+      // (uint), 0 = no effect.
+      casterEffect: (v.caster_effect | 0) || 0,
+      targetEffect: (v.target_effect | 0) || 0,
+      formula,
+    });
   }
   return map;
 }
@@ -149,7 +209,7 @@ function main() {
   const catalog = loadJson(CATALOG_PATH);
   const comps = loadJson(COMPONENTS_PATH);
   const shapes = loadJson(SHAPES_PATH);
-  const lsdBitfields = loadLsdBitfields();
+  const lsdSpellExtras = loadLsdSpellExtras();
 
   if (!catalog.spells || typeof catalog.spells !== "object") {
     console.error("catalog has no spells map");
@@ -182,8 +242,34 @@ function main() {
       .map(parseComponentIdRef)
       .filter((n) => n !== null);
 
-    const bitfield = lsdBitfields.get(sid) || 0;
+    const lsdExtras = lsdSpellExtras.get(sid) || null;
+    const bitfield = lsdExtras ? lsdExtras.bitfield : 0;
     const fastCast = (bitfield & SPELL_FLAGS_FAST_CAST) !== 0;
+    // Wave 18 — caster/target effect (PlayScript enum values). 0 = no
+    // effect, do not fire the resolver chain on the caster/target.
+    const casterEffect = lsdExtras ? (lsdExtras.casterEffect >>> 0) : 0;
+    const targetEffect = lsdExtras ? (lsdExtras.targetEffect >>> 0) : 0;
+    // formulaScale — derived from the FIRST scarab in the spell's
+    // formula via ACE's ScarabScale map (`SpellFormula.cs:293-313`).
+    // The formula u32[8] is encrypted in the DAT but LSD ships the
+    // decrypted values; we walk the array looking for the first
+    // SpellComponentsTable entry whose Type == Scarab (1) and grab the
+    // matching ScarabScale value.
+    let formulaScale = DEFAULT_FORMULA_SCALE;
+    if (lsdExtras && Array.isArray(lsdExtras.formula)) {
+      for (const compId of lsdExtras.formula) {
+        if ((compId | 0) === 0) continue;
+        const c = compById[compId | 0];
+        if (c && c.type === TYPE_SCARAB) {
+          const scale = SCARAB_SCALE[compId | 0];
+          if (typeof scale === "number") {
+            formulaScale = scale;
+          }
+          // First scarab wins per ACE `FirstScarab => Scarabs.First()`.
+          break;
+        }
+      }
+    }
 
     // Find scarabs + talisman in formula order.
     const scarabs = [];
@@ -253,21 +339,38 @@ function main() {
       windupGestures,
       castGesture,
       totalDurationS: Number(totalDurationS.toFixed(4)),
+      // Wave 18 / Phase 52 — caster/target effect + formula scale.
+      casterEffect,
+      targetEffect,
+      formulaScale: Number(formulaScale.toFixed(4)),
     };
+  }
+
+  // Wave 18 stats — non-zero caster/target effect counts for diag.
+  let casterEffectCount = 0;
+  let targetEffectCount = 0;
+  for (const sidStr of Object.keys(out)) {
+    const e = out[sidStr];
+    if ((e.casterEffect | 0) !== 0) casterEffectCount += 1;
+    if ((e.targetEffect | 0) !== 0) targetEffectCount += 1;
   }
 
   const doc = {
     _comment:
       "Generated by `node apps/holtburger-web/scripts/gen-spell-cast-sequence.cjs`. " +
       "Sources: spells-catalog.json + spell-components.json + spell-shapes.json + " +
-      "../LSD-Partial-2025-02-23_16-15/spells.json (for SpellFlags bitfield). " +
+      "../LSD-Partial-2025-02-23_16-15/spells.json (for SpellFlags bitfield + " +
+      "Wave 18 caster_effect / target_effect / formula). " +
       "Algorithm per ACE.Server SpellFormula.cs:245-287 + Player_Magic.cs:605-689: " +
       "for each scarab in formula, play scarab.gesture (Magic stance); then play " +
       "talisman.gesture (Magic stance). Edge cases: " +
       "(a) SpellFlags.FastCast (0x4000) → empty windupGestures; " +
       "(b) Lead-only scarab formulas (HasWindupGestures Lead exemption) → empty windupGestures. " +
       "Both encoded by the retail DAT giving Lead Scarab MotionCommand.Invalid (0x80000000); " +
-      "we additionally short-circuit on leadOnly so the consumer can branch on fastCast vs leadOnly.",
+      "we additionally short-circuit on leadOnly so the consumer can branch on fastCast vs leadOnly. " +
+      "Wave 18 fields: casterEffect/targetEffect (PlayScript enum from ACE.DatLoader/Entity/SpellBase.cs:36-37), " +
+      "formulaScale (Spell.Formula.Scale from ACE.Server/Entity/SpellFormula.cs:313 — first scarab's " +
+      "ScarabScale value, used as picker mod for the PhysicsScriptTable lookup).",
     _source_files: [
       "data/spells-catalog.json",
       "data/spell-components.json",
@@ -279,6 +382,8 @@ function main() {
     _lead_only_count: leadOnlyCount,
     _missing_component_lookups: missingCompCount,
     _missing_shape_lookups: missingShapeCount,
+    _caster_effect_count: casterEffectCount,
+    _target_effect_count: targetEffectCount,
     sequences: out,
   };
 
@@ -294,6 +399,8 @@ function main() {
   console.log(`  leadOnly spells: ${leadOnlyCount}`);
   console.log(`  missing-component lookups: ${missingCompCount}`);
   console.log(`  missing-shape lookups: ${missingShapeCount}`);
+  console.log(`  spells with non-zero casterEffect: ${casterEffectCount}`);
+  console.log(`  spells with non-zero targetEffect: ${targetEffectCount}`);
 
   // Spot-check the audit-doc edge cases.
   const samples = [
@@ -312,7 +419,9 @@ function main() {
     const wu = e.windupGestures.map((g) => g.name).join(",") || "(none)";
     const cg = e.castGesture ? e.castGesture.name : "(none)";
     console.log(
-      `    ${sid} (${label}): fastCast=${e.fastCast} leadOnly=${e.leadOnly} windup=[${wu}] cast=${cg}`,
+      `    ${sid} (${label}): fastCast=${e.fastCast} leadOnly=${e.leadOnly} windup=[${wu}] cast=${cg} ` +
+      `casterEffect=0x${e.casterEffect.toString(16)} targetEffect=0x${e.targetEffect.toString(16)} ` +
+      `formulaScale=${e.formulaScale}`,
     );
   }
 }

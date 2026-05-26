@@ -39,6 +39,15 @@ const {
 //      per ACE's SpellFormula.GetGestureMotionsList short-circuit)
 //   4) Single-windup spell (1 windup + 1 cast — sanity check the
 //      chain runner doesn't special-case "exactly one")
+//
+// Wave 18 / Phase 52: every entry now also carries `casterEffect`,
+// `targetEffect`, `formulaScale`. Mixed values across entries lock
+// the schema contract for the cast-resolver hookup in
+// `entities.js::playCastSequence`. We mix:
+//   - 9999: both effects non-zero, Pyreal-class scale (1.0)
+//   - 8888: caster-only effect (target=0), Iron-class scale (0.2)
+//   - 75:   target-only effect (caster=0), Lead-class scale (0.05)
+//   - 7777: both effects zero (no resolver spawn), Silver-class (0.5)
 const FIXTURE = {
     // Spell 9999 — synthetic 3-windup War Bolt (Mana + Pyreal + Iron)
     "9999": {
@@ -53,6 +62,11 @@ const FIXTURE = {
         ],
         castGesture: { motion: "0x40000010", name: "MagicBlast", durationS: 1.2 },
         totalDurationS: 3.6,
+        // PlayScript 0x10 (AttribUpPurple) on caster, 0x1F (HealthUpRed)
+        // on target. Pyreal-class scale (1.0).
+        casterEffect: 0x10,
+        targetEffect: 0x1F,
+        formulaScale: 1.0,
     },
     // Spell 8888 — synthetic FastCast spell (Cleric's Blessing analog,
     // FastCast bit set → no windup, only cast)
@@ -64,6 +78,11 @@ const FIXTURE = {
         windupGestures: [],
         castGesture: { motion: "0x40000011", name: "MagicSelf", durationS: 0.6 },
         totalDurationS: 0.6,
+        // Caster-only effect (a self-buff). PlayScript 0x0E
+        // (AttribUpBlue). Iron-class scale (0.2).
+        casterEffect: 0x0E,
+        targetEffect: 0,
+        formulaScale: 0.2,
     },
     // Spell 75 — Lightning Bolt I (Lead-only scarab — exempt). Real
     // SpellId from LSD; the generator emits this with empty windup
@@ -76,6 +95,11 @@ const FIXTURE = {
         windupGestures: [],
         castGesture: { motion: "0x40000010", name: "MagicBlast", durationS: 1.2 },
         totalDurationS: 1.2,
+        // Target-only effect (a projectile hit), no caster effect.
+        // PlayScript 0x20 (HealthDownRed). Lead-class scale (0.05).
+        casterEffect: 0,
+        targetEffect: 0x20,
+        formulaScale: 0.05,
     },
     // Spell 7777 — synthetic single-windup spell (Mana scarab only)
     "7777": {
@@ -88,6 +112,25 @@ const FIXTURE = {
         ],
         castGesture: { motion: "0x40000011", name: "MagicSelf", durationS: 0.6 },
         totalDurationS: 1.4,
+        // No effects (rare retail shape but the resolver path MUST
+        // be a no-op for 0 caster/target effects). Silver-class scale.
+        casterEffect: 0,
+        targetEffect: 0,
+        formulaScale: 0.5,
+    },
+    // Spell 6666 — synthetic legacy entry missing the Wave 18 fields
+    // entirely. Tests the back-compat default-0 path in
+    // `getCastSequence` so a stale `spell-cast-sequence.json` (pre-
+    // Wave-18) doesn't break the cast pipeline.
+    "6666": {
+        school: "Life",
+        shape: "Self",
+        level: 1,
+        fastCast: false,
+        windupGestures: [],
+        castGesture: { motion: "0x40000011", name: "MagicSelf", durationS: 0.6 },
+        totalDurationS: 0.6,
+        // casterEffect / targetEffect / formulaScale intentionally omitted.
     },
 };
 
@@ -251,6 +294,94 @@ check(
 // Reload for cleanup so future tests added to this file get a populated
 // table.
 _loadSequenceSync(FIXTURE);
+
+// --- Wave 18 / Phase 52: casterEffect / targetEffect / formulaScale ---
+//
+// New schema fields surface ACE's `SpellBase.CasterEffect` /
+// `SpellBase.TargetEffect` PlayScript enum values + the Formula.Scale
+// f32 the cast resolver uses as picker `mod`. Tests cover:
+//   - Spell with both effects + formula scale = 1.0 (Pyreal class)
+//   - Spell with caster-only effect + scale = 0.2 (Iron)
+//   - Spell with target-only effect + scale = 0.05 (Lead)
+//   - Spell with both effects zero (no resolver spawn)
+//   - Legacy fixture missing the fields (back-compat default-0)
+
+{
+    const got = getCastSequence(9999);
+    check(
+        "(W18) 9999 casterEffect = 0x10 (AttribUpPurple)",
+        got?.casterEffect === 0x10,
+        `got 0x${got?.casterEffect?.toString(16)}`,
+    );
+    check(
+        "(W18) 9999 targetEffect = 0x1F (HealthUpRed)",
+        got?.targetEffect === 0x1F,
+        `got 0x${got?.targetEffect?.toString(16)}`,
+    );
+    check(
+        "(W18) 9999 formulaScale = 1.0 (Pyreal-class)",
+        got?.formulaScale === 1.0,
+        `got ${got?.formulaScale}`,
+    );
+}
+
+{
+    const got = getCastSequence(8888);
+    check(
+        "(W18) 8888 casterEffect set, targetEffect = 0",
+        got?.casterEffect === 0x0E && got?.targetEffect === 0,
+        `got CE=0x${got?.casterEffect?.toString(16)} TE=0x${got?.targetEffect?.toString(16)}`,
+    );
+    check(
+        "(W18) 8888 formulaScale = 0.2 (Iron-class)",
+        got?.formulaScale === 0.2,
+    );
+}
+
+{
+    const got = getCastSequence(75);
+    check(
+        "(W18) 75 casterEffect = 0, targetEffect = 0x20 (HealthDownRed)",
+        got?.casterEffect === 0 && got?.targetEffect === 0x20,
+        `got CE=0x${got?.casterEffect?.toString(16)} TE=0x${got?.targetEffect?.toString(16)}`,
+    );
+    check(
+        "(W18) 75 formulaScale = 0.05 (Lead-class — matches Lightning Bolt I retail)",
+        got?.formulaScale === 0.05,
+    );
+}
+
+{
+    const got = getCastSequence(7777);
+    check(
+        "(W18) 7777 both effects zero (no resolver spawn)",
+        got?.casterEffect === 0 && got?.targetEffect === 0,
+    );
+    check(
+        "(W18) 7777 formulaScale = 0.5 (Silver-class)",
+        got?.formulaScale === 0.5,
+    );
+}
+
+{
+    // Legacy entry missing all three Wave 18 fields. `getCastSequence`
+    // MUST default them to 0/0/1.0 so an older cached / pre-Wave-18
+    // JSON doesn't break the playCastSequence resolver hookup.
+    const got = getCastSequence(6666);
+    check(
+        "(W18) 6666 (legacy entry) casterEffect defaults to 0",
+        got?.casterEffect === 0,
+        `got 0x${got?.casterEffect?.toString(16)}`,
+    );
+    check(
+        "(W18) 6666 (legacy entry) targetEffect defaults to 0",
+        got?.targetEffect === 0,
+    );
+    check(
+        "(W18) 6666 (legacy entry) formulaScale defaults to 1.0",
+        got?.formulaScale === 1.0,
+    );
+}
 
 // --- Summary ---
 console.log("");
