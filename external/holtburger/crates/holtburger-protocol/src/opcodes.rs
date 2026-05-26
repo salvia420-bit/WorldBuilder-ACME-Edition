@@ -703,8 +703,8 @@ pub enum GameEventOpcode {
     // --- Allegiance & Social ---
     // /// S2C: Allegiance update operation was aborted.
     // AllegianceUpdateAborted = 0x0003,
-    // /// S2C: Update to allegiance data (vassals, patrons).
-    // AllegianceUpdate = 0x0020,
+    /// S2C: Update to allegiance data (vassals, patrons).
+    AllegianceUpdate = 0x0020,
     // /// S2C: Full update of the player's friends list.
     // FriendsListUpdate = 0x0021,
     // /// S2C: Detailed information about a character title.

@@ -2244,6 +2244,39 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // already runs; the only cost is the extra shadowLength buffer.
         effect.lightShafts = !!quality.flags.lightShafts;
 
+        // Clouds-L URL knobs (cloud shadows on terrain):
+        //  ?cloudShadow=off       — disable terrain cloud shadowing
+        //  ?cloudShadowStrength=N — extinction multiplier (default 2.0)
+        //  ?cloudShadowRes=N      — cascade map size 128/256/512/1024
+        // takram's cascaded shadow buffer + matrices are pushed to each
+        // terrain ShaderMaterial by cloud_volume._pushCloudShadowsToTerrain
+        // per frame; the disabled flag and strength override land on
+        // liveScene3d for that pusher to read.
+        const cloudShadowFlag = params.get("cloudShadow");
+        const cloudShadowDisabled = cloudShadowFlag === "off";
+        liveScene3d.__cloudShadowDisabled = cloudShadowDisabled;
+        const cloudShadowStrengthRaw = parseFloat(
+          params.get("cloudShadowStrength") ?? ""
+        );
+        if (Number.isFinite(cloudShadowStrengthRaw)) {
+          liveScene3d.__cloudShadowStrength = Math.max(
+            0,
+            Math.min(10, cloudShadowStrengthRaw)
+          );
+        }
+        const cloudShadowResRaw = parseInt(
+          params.get("cloudShadowRes") ?? "",
+          10
+        );
+        if (Number.isFinite(cloudShadowResRaw) && cloudShadowResRaw > 0) {
+          const res = Math.max(64, Math.min(2048, cloudShadowResRaw));
+          try {
+            effect.shadow.mapSize.set(res, res);
+          } catch (_) {
+            // Older takram builds may not expose `shadow.mapSize` directly.
+          }
+        }
+
         skyDome.setCloudOverlay(cloudOverlay);
         liveScene3d.cloudOverlay = cloudOverlay;
 
@@ -2282,8 +2315,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         console.log(
           "[clouds-d] CloudOverlay wired into SkyDome (?clouds=on). " +
             `coverage=${effect.clouds.coverage} qualityPreset=${effect.qualityPreset ?? "default"}. ` +
+            `cloudShadow=${cloudShadowDisabled ? "off" : "on"} ` +
+            `strength=${liveScene3d.__cloudShadowStrength ?? "default"} ` +
+            `shadowMapSize=${effect.shadow?.mapSize?.x ?? "?"}. ` +
             "Visible clouds require a real GPU — swiftshader output is uniform. " +
-            "Live tweak: __setCloudCoverage(0..1), __setCloudQuality('low'|'medium'|'high'|'ultra')."
+            "Live tweak: __setCloudCoverage, __setCloudQuality, __setCloudShadowStrength, __setCloudShadowEnabled."
         );
       }
     } catch (e) {

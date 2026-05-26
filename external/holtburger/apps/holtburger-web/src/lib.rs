@@ -137,6 +137,7 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::FellowshipDismiss(_) => 0x00A4,
         GameEvent::FellowshipFellowUpdateDone => 0x01C9,
         GameEvent::FellowshipFellowStatsDone => 0x01CA,
+        GameEvent::AllegianceUpdate(_) => 0x0020,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -12576,6 +12577,16 @@ const CLIENT_EVENT_KIND_TRADE_UPDATED: u32 = 23;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_BOOK_UPDATED: u32 = 24;
 
+/// `kind = 25` — AllegianceUpdated. ACE sent
+/// `GameEvent::AllegianceUpdate` (opcode 0x0020) carrying the full
+/// hierarchy snapshot. The recv-loop folds the wire payload directly
+/// into `latest_allegiance` (no world-state intermediate). JS reads via
+/// [`SessionHandle::player_allegiance`] which returns the rebuilt
+/// monarch / patron / vassals view (or `None` pre-join / post-break).
+/// Payload fields unused.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ALLEGIANCE_UPDATED: u32 = 25;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -13038,6 +13049,22 @@ enum SessionCommand {
     SetInscription {
         object_guid: u32,
         inscription: String,
+    },
+    /// Wave-D4 (paperdoll): take `item_guid` out of the player's pack
+    /// and wield it in the slot matching `equip_mask`. Maps to
+    /// `GameAction::GetAndWieldItem` (sub-opcode 0x001A). ACE owns all
+    /// validation (item ownership, slot match, wield reqs) — failures
+    /// surface as WeenieError chat.
+    WieldFromPack {
+        item_guid: u32,
+        equip_mask: u32,
+    },
+    /// Wave-D4 (paperdoll): drop `item_guid` from the player's
+    /// possession (paperdoll or pack) onto the ground at the player's
+    /// feet. Maps to `GameAction::DropItem` (sub-opcode 0x001B). ACE
+    /// owns the unequip-first-if-needed sequencing.
+    DropItem {
+        item_guid: u32,
     },
 }
 
@@ -14330,6 +14357,161 @@ impl FellowshipSnapshotJs {
     }
 }
 
+/// Wave-F2 (2026-05-26): JS-facing snapshot of the local player's
+/// allegiance hierarchy. ACE pushes `GameEvent::AllegianceUpdate`
+/// (opcode 0x0020) whenever the allegiance tree changes — sworn,
+/// broken, MOTD set, vassal joined, etc. Unlike fellowship/trade,
+/// `holtburger-world` has no allegiance handler yet, so the recv-loop
+/// folds the wire payload directly into this snapshot (records are
+/// already ordered patron → self → vassals by ACE, but we split into
+/// monarch/patron/self/vassals up here for the panel).
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct AllegianceSnapshot {
+    name: String,
+    rank: u32,
+    is_locked: bool,
+    motd: String,
+    motd_set_by: String,
+    total_members: u32,
+    total_vassals: u32,
+    monarch: Option<AllegianceMember>,
+    patron: Option<AllegianceMember>,
+    /// Local player's own row (their AllegianceData). `None` when the
+    /// player IS the monarch — `monarch` carries the row in that case.
+    myself: Option<AllegianceMember>,
+    vassals: Vec<AllegianceMember>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct AllegianceMember {
+    guid: u32,
+    name: String,
+    rank: u32,
+    gender: u32,
+    heritage_group: u32,
+    level: u32,
+    loyalty: u32,
+    leadership: u32,
+    cp_cached: u32,
+    cp_tithed: u32,
+    logged_in: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct AllegianceMemberJs {
+    guid: u32,
+    name: String,
+    rank: u32,
+    gender: u32,
+    heritage_group: u32,
+    level: u32,
+    loyalty: u32,
+    leadership: u32,
+    cp_cached: u32,
+    cp_tithed: u32,
+    logged_in: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl AllegianceMemberJs {
+    #[wasm_bindgen(getter)]
+    pub fn guid(&self) -> u32 { self.guid }
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn rank(&self) -> u32 { self.rank }
+    #[wasm_bindgen(getter)]
+    pub fn gender(&self) -> u32 { self.gender }
+    #[wasm_bindgen(getter, js_name = heritageGroup)]
+    pub fn heritage_group(&self) -> u32 { self.heritage_group }
+    #[wasm_bindgen(getter)]
+    pub fn level(&self) -> u32 { self.level }
+    #[wasm_bindgen(getter)]
+    pub fn loyalty(&self) -> u32 { self.loyalty }
+    #[wasm_bindgen(getter)]
+    pub fn leadership(&self) -> u32 { self.leadership }
+    #[wasm_bindgen(getter, js_name = cpCached)]
+    pub fn cp_cached(&self) -> u32 { self.cp_cached }
+    #[wasm_bindgen(getter, js_name = cpTithed)]
+    pub fn cp_tithed(&self) -> u32 { self.cp_tithed }
+    #[wasm_bindgen(getter, js_name = loggedIn)]
+    pub fn logged_in(&self) -> bool { self.logged_in }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct AllegianceSnapshotJs {
+    name: String,
+    rank: u32,
+    is_locked: bool,
+    motd: String,
+    motd_set_by: String,
+    total_members: u32,
+    total_vassals: u32,
+    monarch: Option<AllegianceMember>,
+    patron: Option<AllegianceMember>,
+    myself: Option<AllegianceMember>,
+    vassals: Vec<AllegianceMember>,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn allegiance_member_to_js(m: &AllegianceMember) -> AllegianceMemberJs {
+    AllegianceMemberJs {
+        guid: m.guid,
+        name: m.name.clone(),
+        rank: m.rank,
+        gender: m.gender,
+        heritage_group: m.heritage_group,
+        level: m.level,
+        loyalty: m.loyalty,
+        leadership: m.leadership,
+        cp_cached: m.cp_cached,
+        cp_tithed: m.cp_tithed,
+        logged_in: m.logged_in,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl AllegianceSnapshotJs {
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn rank(&self) -> u32 { self.rank }
+    #[wasm_bindgen(getter, js_name = isLocked)]
+    pub fn is_locked(&self) -> bool { self.is_locked }
+    #[wasm_bindgen(getter)]
+    pub fn motd(&self) -> String { self.motd.clone() }
+    #[wasm_bindgen(getter, js_name = motdSetBy)]
+    pub fn motd_set_by(&self) -> String { self.motd_set_by.clone() }
+    #[wasm_bindgen(getter, js_name = totalMembers)]
+    pub fn total_members(&self) -> u32 { self.total_members }
+    #[wasm_bindgen(getter, js_name = totalVassals)]
+    pub fn total_vassals(&self) -> u32 { self.total_vassals }
+    #[wasm_bindgen(getter)]
+    pub fn monarch(&self) -> Option<AllegianceMemberJs> {
+        self.monarch.as_ref().map(allegiance_member_to_js)
+    }
+    #[wasm_bindgen(getter)]
+    pub fn patron(&self) -> Option<AllegianceMemberJs> {
+        self.patron.as_ref().map(allegiance_member_to_js)
+    }
+    #[wasm_bindgen(getter, js_name = myself)]
+    pub fn myself(&self) -> Option<AllegianceMemberJs> {
+        self.myself.as_ref().map(allegiance_member_to_js)
+    }
+    #[wasm_bindgen(getter)]
+    pub fn vassals(&self) -> Vec<AllegianceMemberJs> {
+        self.vassals.iter().map(allegiance_member_to_js).collect()
+    }
+}
+
 /// AC Trade (2026-05-25, Discord deficiency #3): JS-facing snapshot of
 /// the local player's active peer-to-peer trade. Sourced from
 /// `world.trade` (the world dispatcher's `handlers::trade::handle_event`
@@ -14848,6 +15030,15 @@ pub struct SessionHandle {
     /// and after a different book is opened (the snapshot is whichever
     /// book most-recently received a `BookDataResponse`).
     latest_book: std::rc::Rc<std::cell::RefCell<Option<BookSnapshot>>>,
+    /// Wave-F2 (2026-05-26): local player's allegiance hierarchy
+    /// snapshot. Refreshed by the recv loop on every
+    /// `GameEvent::AllegianceUpdate` (opcode 0x0020) — ACE sends this
+    /// after swear / break / MOTD-set / vassal-join, etc. `None`
+    /// pre-join. No world-state intermediate: the recv arm folds the
+    /// wire payload directly. JS reads via
+    /// [`SessionHandle::player_allegiance`] from the kind=25
+    /// AllegianceUpdated drain.
+    latest_allegiance: std::rc::Rc<std::cell::RefCell<Option<AllegianceSnapshot>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -15284,6 +15475,11 @@ struct LatestStats {
     attributes: Vec<u32>,
     skills: Vec<u32>,
     level_info: Vec<u32>,
+    // Wave-D4 (paperdoll): Cached `WorldContextExt::player_burden()`
+    // result (encumbrance / capacity). 0.0 pre-spawn / before any
+    // stat hydration; can exceed 1.0 when over-encumbered (retail
+    // allowed this with movement penalties).
+    burden: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -15346,6 +15542,24 @@ impl SessionHandle {
             skills: stats.skills,
             level_info: stats.level_info,
         }
+    }
+
+    /// Wave-D4 (paperdoll): current player burden as a 0.0..N float
+    /// where 0.0..1.0 means under capacity and >1.0 means over-encumbered.
+    /// Refreshed by the recv loop on each `publish_player_stats_snapshot`
+    /// call (same trigger as `player_stats()` — UpdateAttribute, equip,
+    /// inventory delta). Returns `0.0` pre-spawn / before any stat
+    /// hydration. Mirrors `WorldContextExt::player_burden()` which is
+    /// `encumbrance / capacity` from PropertyInt + Strength per ACE's
+    /// `EncumbranceSystem.GetBurden`. JS reads via `playerBurden` on
+    /// each `kind=8 playerStatsUpdated` drain to refresh the burden bar.
+    #[wasm_bindgen(getter, js_name = playerBurden)]
+    pub fn player_burden(&self) -> f32 {
+        self.latest_stats
+            .borrow()
+            .as_ref()
+            .map(|s| s.burden)
+            .unwrap_or(0.0)
     }
 
     /// Phase 4 step 4 follow-on: most recent inventory snapshot.
@@ -17363,6 +17577,40 @@ impl SessionHandle {
             })
     }
 
+    /// Wave-D4 (paperdoll) — wield `item_guid` from the player's pack
+    /// into the slot matching `equip_mask`. Sends
+    /// `GameAction::GetAndWieldItem` (sub-opcode 0x001A). Wire format
+    /// per ACE's `GameActionGetAndWieldItem.Handle` is
+    /// `{ u32 itemGuid, u32 equipMask }`. ACE owns slot-match + wield
+    /// reqs; failures surface as WeenieError chat.
+    #[wasm_bindgen(js_name = wieldFromPack)]
+    pub fn wield_from_pack(&self, item_guid: u32, equip_mask: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::WieldFromPack {
+                item_guid,
+                equip_mask,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("wieldFromPack: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Wave-D4 (paperdoll) — drop `item_guid` from possession onto the
+    /// ground at the player's feet. Sends `GameAction::DropItem`
+    /// (sub-opcode 0x001B). Wire format per ACE's
+    /// `GameActionDropItem.Handle` is `{ u32 itemGuid }`. ACE owns the
+    /// unequip-first-if-needed sequencing + drop-position calculation.
+    #[wasm_bindgen(js_name = dropItem)]
+    pub fn drop_item(&self, item_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::DropItem { item_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("dropItem: cmd channel closed ({e})"))
+            })
+    }
+
     /// AC Trade (2026-05-25): the local player's active peer-to-peer
     /// trade — snapshot refreshed by the recv loop on every trade
     /// `WorldEvent::TradeStateUpdated` (the world dispatcher emits
@@ -17397,6 +17645,29 @@ impl SessionHandle {
             inscription: b.inscription.clone(),
             author_name: b.author_name.clone(),
             pages: b.pages.clone(),
+        })
+    }
+
+    /// Wave-F2 (2026-05-26): allegiance hierarchy snapshot — `None`
+    /// pre-join / post-break. Refreshed by the recv-loop on every
+    /// `GameEvent::AllegianceUpdate` (the only S2C opcode in scope for
+    /// this MVP; AllegianceUpdateAborted / AllegianceAllegianceUpdateDone
+    /// / AllegianceInfoResponse are deferred). UI plugins re-pull on
+    /// each `kind=25 allegianceUpdated` drain.
+    #[wasm_bindgen(js_name = playerAllegiance)]
+    pub fn player_allegiance(&self) -> Option<AllegianceSnapshotJs> {
+        self.latest_allegiance.borrow().as_ref().map(|a| AllegianceSnapshotJs {
+            name: a.name.clone(),
+            rank: a.rank,
+            is_locked: a.is_locked,
+            motd: a.motd.clone(),
+            motd_set_by: a.motd_set_by.clone(),
+            total_members: a.total_members,
+            total_vassals: a.total_vassals,
+            monarch: a.monarch.clone(),
+            patron: a.patron.clone(),
+            myself: a.myself.clone(),
+            vassals: a.vassals.clone(),
         })
     }
 
@@ -17782,6 +18053,11 @@ pub async fn start_session(
     let latest_book: std::rc::Rc<
         std::cell::RefCell<Option<BookSnapshot>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave-F2 (2026-05-26): allegiance hierarchy snapshot, refreshed by
+    // the recv-loop on every `GameEvent::AllegianceUpdate`.
+    let latest_allegiance: std::rc::Rc<
+        std::cell::RefCell<Option<AllegianceSnapshot>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -17841,6 +18117,7 @@ pub async fn start_session(
         let latest_fellowship_inner = latest_fellowship.clone();
         let latest_trade_inner = latest_trade.clone();
         let latest_book_inner = latest_book.clone();
+        let latest_allegiance_inner = latest_allegiance.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -17867,6 +18144,7 @@ pub async fn start_session(
                 latest_fellowship_inner,
                 latest_trade_inner,
                 latest_book_inner,
+                latest_allegiance_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -17949,6 +18227,7 @@ pub async fn start_session(
         latest_fellowship,
         latest_trade,
         latest_book,
+        latest_allegiance,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -18403,12 +18682,19 @@ fn publish_player_stats_snapshot(
         .get(world.player.guid)
         .map(|entity| entity.name().to_string())
         .unwrap_or_default();
+    // Wave-D4 (paperdoll): burden recompute piggy-backs on stats
+    // hydration — same trigger conditions (UpdateAttribute, equip,
+    // inventory delta). Reads via `WorldContextExt::player_burden`
+    // (encumbrance / capacity from PropertyInt + Strength).
+    use holtburger_world::context::WorldContextExt;
+    let burden = world.player_burden().unwrap_or(0.0);
     *latest_stats.borrow_mut() = Some(LatestStats {
         name,
         vitals,
         attributes,
         skills,
         level_info,
+        burden,
     });
 }
 
@@ -18650,6 +18936,90 @@ fn publish_player_fellowship_snapshot(
     *latest_fellowship.borrow_mut() = next;
 }
 
+// Wave-F2 (2026-05-26): publish a JS-facing allegiance snapshot folded
+// directly from the wire payload. `holtburger-world` has no allegiance
+// handler today, so unlike fellowship/trade/book we don't bounce through
+// `world.allegiance` — the recv-loop arm just hands us the
+// `AllegianceUpdateEventData`. ACE orders the `records` list patron →
+// self → vassals, but only the patron's `tree_parent_guid` actually
+// equals the monarch's guid — self's parent is the patron, vassals'
+// parent is self. We split using the tree-parent topology + own guid.
+//
+// `own_guid`: the local player's GUID. Pulled from
+// `LocalPlayerSnapshot::guid` at the recv-arm. `None` pre-PlayerCreate
+// (won't happen in practice — AllegianceUpdate only fires post-spawn).
+#[cfg(target_arch = "wasm32")]
+fn publish_player_allegiance_snapshot(
+    payload: &holtburger_protocol::messages::AllegianceUpdateEventData,
+    own_guid: u32,
+    latest_allegiance: &std::rc::Rc<std::cell::RefCell<Option<AllegianceSnapshot>>>,
+) {
+    use holtburger_protocol::messages::{
+        AllegianceDataEntry, AllegianceIndexFlags as PIdx,
+    };
+
+    fn to_member(e: &AllegianceDataEntry) -> AllegianceMember {
+        let logged_in = e.bitfield.0 & PIdx::LOGGED_IN != 0;
+        AllegianceMember {
+            guid: e.character_id.0,
+            name: e.name.clone(),
+            rank: e.rank as u32,
+            gender: e.gender as u32,
+            heritage_group: e.heritage_group as u32,
+            level: e.level,
+            loyalty: e.loyalty as u32,
+            leadership: e.leadership as u32,
+            cp_cached: e.cp_cached,
+            cp_tithed: e.cp_tithed,
+            logged_in,
+        }
+    }
+
+    // Empty payload (no monarch, no records) → no allegiance.
+    if payload.monarch.is_none() && payload.records.is_empty() {
+        *latest_allegiance.borrow_mut() = None;
+        return;
+    }
+
+    let monarch = payload.monarch.as_ref().map(to_member);
+    let monarch_guid = monarch.as_ref().map(|m| m.guid).unwrap_or(0);
+
+    let mut patron: Option<AllegianceMember> = None;
+    let mut myself: Option<AllegianceMember> = None;
+    let mut vassals: Vec<AllegianceMember> = Vec::new();
+
+    // ACE writes records in this order: (parent=monarch) patron,
+    // (parent=patron) self, (parent=self) vassals. Use the topology to
+    // bucket. If `own_guid == monarch_guid`, the local player IS the
+    // monarch — `myself` stays None (use `monarch` for the self row).
+    let player_is_monarch = own_guid != 0 && own_guid == monarch_guid;
+    for (tree_parent, entry) in &payload.records {
+        let member = to_member(entry);
+        if entry.character_id.0 == own_guid {
+            myself = Some(member);
+        } else if tree_parent.0 == monarch_guid && patron.is_none() && !player_is_monarch {
+            // Direct child of monarch + first such record => patron.
+            patron = Some(member);
+        } else {
+            vassals.push(member);
+        }
+    }
+
+    *latest_allegiance.borrow_mut() = Some(AllegianceSnapshot {
+        name: payload.allegiance_name.clone(),
+        rank: payload.rank,
+        is_locked: payload.is_locked,
+        motd: payload.motd.clone(),
+        motd_set_by: payload.motd_set_by.clone(),
+        total_members: payload.total_members,
+        total_vassals: payload.total_vassals,
+        monarch,
+        patron,
+        myself,
+        vassals,
+    });
+}
+
 // AC Books (2026-05-25): publish a JS-facing snapshot of the open book.
 // The world dispatcher's inventory handler already folds
 // `BookDataResponse` + `BookPageDataResponse` into `entity.book`; we
@@ -18832,6 +19202,7 @@ async fn recv_loop(
     latest_fellowship: std::rc::Rc<std::cell::RefCell<Option<FellowshipSnapshot>>>,
     latest_trade: std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
     latest_book: std::rc::Rc<std::cell::RefCell<Option<BookSnapshot>>>,
+    latest_allegiance: std::rc::Rc<std::cell::RefCell<Option<AllegianceSnapshot>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -21789,6 +22160,33 @@ async fn recv_loop(
                                         f32_payload: None,
                                     });
                                 }
+                                holtburger_protocol::messages::GameEvent::AllegianceUpdate(
+                                    data,
+                                ) => {
+                                    // Wave-F2 (2026-05-26): fold the wire
+                                    // payload directly (no world-state
+                                    // intermediate). `own_guid` resolves
+                                    // from `world.player.guid` when the
+                                    // WorldState is up — AllegianceUpdate
+                                    // only fires post-EnteredWorld, so
+                                    // pre-world is unreachable in practice.
+                                    let own_guid = world
+                                        .as_ref()
+                                        .map(|w| u32::from(w.player.guid))
+                                        .unwrap_or(0);
+                                    publish_player_allegiance_snapshot(
+                                        data.as_ref(),
+                                        own_guid,
+                                        &latest_allegiance,
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ALLEGIANCE_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
                                 _ => {
                                     // Non-chat GameEvents drop through
                                     // to the no-op outer catch-all.
@@ -23332,6 +23730,69 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[inscription/set] guid=0x{object_guid:08X} len={insc_len}",
+                        ));
+                    }
+                    Some(SessionCommand::WieldFromPack {
+                        item_guid,
+                        equip_mask,
+                    }) => {
+                        // Wave-D4 (paperdoll): GetAndWieldItem (0x001A).
+                        // ACE: `{ u32 itemGuid, u32 equipMask }`. The
+                        // server pulls the item out of the player's pack
+                        // and wields it in the matching slot.
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::inventory::types::EquipMask;
+                        use holtburger_protocol::messages::{
+                            GameAction, GetAndWieldItemActionData,
+                        };
+                        let action = GameAction::GetAndWieldItem(Box::new(
+                            GetAndWieldItemActionData {
+                                item_guid: Guid(item_guid),
+                                equip_mask: EquipMask::from_bits_truncate(equip_mask),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(GetAndWieldItem): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("wield_from_pack: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[paperdoll/wield] item=0x{item_guid:08X} slot=0x{equip_mask:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::DropItem { item_guid }) => {
+                        // Wave-D4 (paperdoll): DropItem (0x001B).
+                        // ACE: `{ u32 itemGuid }`. Server moves the item
+                        // from the player's possession to the world at
+                        // the player's feet, auto-unequipping if needed.
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            DropItemActionData, GameAction,
+                        };
+                        let action = GameAction::DropItem(Box::new(
+                            DropItemActionData {
+                                item_guid: Guid(item_guid),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(DropItem): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("drop_item: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[paperdoll/drop] item=0x{item_guid:08X}",
                         ));
                     }
                     Some(SessionCommand::TargetedMissileAttack {

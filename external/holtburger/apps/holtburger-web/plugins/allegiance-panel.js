@@ -303,6 +303,29 @@ function emit(msgText, cat = 0) {
   log.appendChild(li);
 }
 
+// Wave-F2 (2026-05-26): pull the live allegiance snapshot off the wasm
+// handle. Returns the wasm wrapper (or null pre-join / post-break).
+function fetchAllegianceSnapshot() {
+  const handle = window.__sessionHandle;
+  if (typeof handle?.playerAllegiance !== "function") return null;
+  try {
+    return handle.playerAllegiance() ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function memberDisplay(m) {
+  if (!m) return null;
+  return {
+    guid: m.guid >>> 0,
+    name: m.name || `0x${(m.guid >>> 0).toString(16).padStart(8, "0").toUpperCase()}`,
+    rank: m.rank >>> 0,
+    level: m.level >>> 0,
+    loggedIn: !!m.loggedIn,
+  };
+}
+
 // Apply gmAllegianceUI 0x2100002F layout to the allegiance plugin's
 // sub-regions. Native layout is 300×600; we squeeze into the main-
 // panel body's 300×337 by SCALING vertical offsets/heights by
@@ -450,6 +473,152 @@ function applyAllegianceLayout(refs) {
   const cached = getCachedLayout(ALLEGIANCE_LAYOUT_ID);
   if (cached) { apply(cached); return; }
   loadLayout(ALLEGIANCE_LAYOUT_ID).then(apply).catch(() => {});
+}
+
+// Wave-F2 (2026-05-26): render the live monarch/patron/vassal state
+// into the layout-anchored regions built by `view.mount`. Idempotent —
+// clears each region before re-populating. `refs` carries the same DOM
+// handles `applyAllegianceLayout` was given. `snapshot` is the
+// wasm-bindgen `AllegianceSnapshotJs` from `handle.playerAllegiance()`
+// (or null pre-join).
+function renderAllegianceState(refs, snapshot) {
+  if (!refs) return;
+
+  if (!snapshot) {
+    if (refs.patronLabelEl)
+      refs.patronLabelEl.innerHTML =
+        `<span class="label">Followers:</span><span class="value">0</span>`;
+    if (refs.patronValueEl)
+      refs.patronValueEl.innerHTML =
+        `<span class="label">Rank:</span><span class="value">[0]</span>`;
+    if (refs.patronHeaderRowEl)
+      refs.patronHeaderRowEl.innerHTML =
+        `<span class="label">Allegiance Information</span>`;
+    if (refs.monarchPatronRowEl)
+      refs.monarchPatronRowEl.innerHTML =
+        `<span class="label">Patron:</span><span class="value">—</span>`;
+    if (refs.monarchMonarchRowEl)
+      refs.monarchMonarchRowEl.innerHTML =
+        `<span class="label">Monarch:</span><span class="value">—</span>`;
+    if (refs.monarchAllegRowEl)
+      refs.monarchAllegRowEl.innerHTML =
+        `<span class="label">Allegiance:</span><span class="value">—</span>`;
+    if (refs.statusLeftEl)
+      refs.statusLeftEl.innerHTML =
+        `<span class="label">Status:</span><span class="value">—</span>`;
+    if (refs.statusRightEl)
+      refs.statusRightEl.innerHTML =
+        `<span class="label">Title:</span><span class="value">—</span>`;
+    if (refs.vassalListEl) {
+      while (refs.vassalListEl.firstChild)
+        refs.vassalListEl.removeChild(refs.vassalListEl.firstChild);
+      const empty = document.createElement("div");
+      empty.className = "hb-alleg-empty";
+      setAcText(empty, "Not in an allegiance. Use Swear above to join one.");
+      refs.vassalListEl.appendChild(empty);
+    }
+    return;
+  }
+
+  const name = snapshot.name || "(unnamed)";
+  const locked = !!snapshot.isLocked;
+  const rank = (snapshot.rank >>> 0);
+  const monarch = memberDisplay(snapshot.monarch);
+  const patron = memberDisplay(snapshot.patron);
+  const myself = memberDisplay(snapshot.myself);
+  const vassals = Array.isArray(snapshot.vassals) ? snapshot.vassals : [];
+  const totalMembers = (snapshot.totalMembers >>> 0);
+  const totalVassals = (snapshot.totalVassals >>> 0);
+  const motd = snapshot.motd || "";
+
+  // `myself` is None when the local player IS the monarch — derive
+  // player-is-monarch from that shape, mirroring publish_player_allegiance_snapshot.
+  const playerIsMonarch = monarch && !myself;
+
+  if (refs.patronHeaderRowEl) {
+    const lockBadge = locked
+      ? ` <span class="value" style="color: var(--hb-text-gold)">[LOCKED]</span>`
+      : "";
+    refs.patronHeaderRowEl.innerHTML =
+      `<span class="label">${name}</span>${lockBadge}`;
+  }
+  if (refs.patronLabelEl) {
+    refs.patronLabelEl.innerHTML =
+      `<span class="label">Followers:</span><span class="value">${totalVassals}</span>`;
+  }
+  if (refs.patronValueEl) {
+    refs.patronValueEl.innerHTML =
+      `<span class="label">Rank:</span><span class="value">[${rank}]</span>`;
+  }
+  if (refs.monarchPatronRowEl) {
+    const text = playerIsMonarch
+      ? "You are Monarch"
+      : patron
+        ? `Patron: ${patron.name}`
+        : "No patron";
+    refs.monarchPatronRowEl.innerHTML =
+      `<span class="label">${text}</span>`;
+  }
+  if (refs.monarchMonarchRowEl) {
+    const text = monarch
+      ? (playerIsMonarch ? `Monarch: ${monarch.name} (you)` : `Monarch: ${monarch.name}`)
+      : "Monarch: —";
+    refs.monarchMonarchRowEl.innerHTML =
+      `<span class="label">${text}</span>`;
+  }
+  if (refs.monarchAllegRowEl) {
+    refs.monarchAllegRowEl.innerHTML =
+      `<span class="label">Allegiance:</span><span class="value">${name}</span>`;
+  }
+  if (refs.statusLeftEl) {
+    refs.statusLeftEl.innerHTML =
+      `<span class="label">Members:</span><span class="value">${totalMembers}</span>`;
+  }
+  if (refs.statusRightEl) {
+    const motdShort = motd
+      ? (motd.length > 22 ? motd.slice(0, 21) + "…" : motd)
+      : "—";
+    refs.statusRightEl.title = motd || "";
+    refs.statusRightEl.innerHTML =
+      `<span class="label">MOTD:</span><span class="value">${motdShort.replace(/[<>&]/g, "")}</span>`;
+  }
+  if (refs.vassalListEl) {
+    while (refs.vassalListEl.firstChild)
+      refs.vassalListEl.removeChild(refs.vassalListEl.firstChild);
+    if (vassals.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "hb-alleg-empty";
+      setAcText(empty, "No vassals.");
+      refs.vassalListEl.appendChild(empty);
+    } else {
+      for (const v of vassals) {
+        const display = memberDisplay(v);
+        const row = document.createElement("div");
+        row.className = "hb-alleg-vassal-row";
+        row.dataset.guid = String(display.guid);
+        const nameEl = document.createElement("span");
+        nameEl.className = "name";
+        setAcText(nameEl, display.name + (display.loggedIn ? "" : " (offline)"));
+        row.appendChild(nameEl);
+        const meta = document.createElement("span");
+        meta.className = "xp";
+        setAcText(meta, `L${display.level || "?"} R${display.rank || 1}`);
+        row.appendChild(meta);
+        refs.vassalListEl.appendChild(row);
+      }
+    }
+  }
+}
+
+// Subscribe `rerender` to allegianceUpdated events on the plugin bus.
+function subscribeAllegiance(rerender) {
+  const bus = window.__pluginClient?.events;
+  if (!bus || typeof bus.on !== "function") return () => {};
+  const listener = () => { try { rerender(); } catch (_) {} };
+  bus.on("allegianceUpdated", listener);
+  return () => {
+    if (typeof bus.off === "function") bus.off("allegianceUpdated", listener);
+  };
 }
 
 export const view = {
@@ -685,7 +854,21 @@ export const view = {
       kickBtnEl,
     });
 
-    return () => { root.remove(); };
+    // Wave-F2 (2026-05-26): subscribe to allegianceUpdated + render the
+    // initial snapshot (covers re-mount when state already exists).
+    const renderRefs = {
+      patronHeaderRowEl, patronLabelEl, patronValueEl,
+      monarchPatronRowEl, monarchMonarchRowEl, monarchAllegRowEl,
+      statusLeftEl, statusRightEl, vassalListEl,
+    };
+    const rerender = () => renderAllegianceState(renderRefs, fetchAllegianceSnapshot());
+    rerender();
+    const unsub = subscribeAllegiance(rerender);
+
+    return () => {
+      try { unsub(); } catch (_) {}
+      root.remove();
+    };
   },
 };
 
@@ -1031,10 +1214,62 @@ function buildStandaloneOverlay() {
 
   body.appendChild(stack);
 
-  const placeholder = document.createElement("div");
-  placeholder.className = "hb-alleg-sa-placeholder";
-  setAcText(placeholder, "Allegiance bans + receive-side snapshot — coming in a future wave");
-  body.appendChild(placeholder);
+  // Wave-F2 (2026-05-26): live state mini-view. Subscribes to
+  // allegianceUpdated and re-fetches `playerAllegiance()` on each event.
+  const stateBox = document.createElement("div");
+  stateBox.className = "hb-alleg-sa-placeholder";
+  stateBox.dataset.role = "alleg-state";
+  body.appendChild(stateBox);
+
+  const renderStateBox = () => {
+    const snap = fetchAllegianceSnapshot();
+    while (stateBox.firstChild) stateBox.removeChild(stateBox.firstChild);
+    if (!snap) {
+      setAcText(stateBox, "Not in an allegiance. Use Swear above to join one.");
+      return;
+    }
+    const headerLine = document.createElement("div");
+    const lockSuffix = snap.isLocked ? " [LOCKED]" : "";
+    setAcText(headerLine, `${snap.name || "(unnamed)"}${lockSuffix} — rank ${(snap.rank >>> 0)}`);
+    headerLine.style.color = "var(--hb-text-gold)";
+    headerLine.style.fontStyle = "normal";
+    headerLine.style.marginBottom = "4px";
+    stateBox.appendChild(headerLine);
+
+    const monarch = memberDisplay(snap.monarch);
+    const patron = memberDisplay(snap.patron);
+    const myself = memberDisplay(snap.myself);
+    const vassals = Array.isArray(snap.vassals) ? snap.vassals : [];
+    const playerIsMonarch = monarch && !myself;
+
+    const monarchLine = document.createElement("div");
+    setAcText(
+      monarchLine,
+      monarch
+        ? (playerIsMonarch ? `Monarch: ${monarch.name} (you)` : `Monarch: ${monarch.name}`)
+        : "Monarch: —"
+    );
+    monarchLine.style.fontStyle = "normal";
+    stateBox.appendChild(monarchLine);
+
+    const patronLine = document.createElement("div");
+    setAcText(
+      patronLine,
+      playerIsMonarch ? "Patron: (you are monarch)" : patron ? `Patron: ${patron.name}` : "No patron"
+    );
+    patronLine.style.fontStyle = "normal";
+    stateBox.appendChild(patronLine);
+
+    const vassalLine = document.createElement("div");
+    setAcText(vassalLine, `Vassals: ${vassals.length}`);
+    vassalLine.style.fontStyle = "normal";
+    stateBox.appendChild(vassalLine);
+  };
+  renderStateBox();
+  // Track the unsub so we can drop it if the overlay is closed; for the
+  // standalone we keep the bus subscription alive for the page lifetime
+  // (overlay is hidden, not destroyed, on close).
+  subscribeAllegiance(renderStateBox);
 
   overlay.appendChild(body);
 

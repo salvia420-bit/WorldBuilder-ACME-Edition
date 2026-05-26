@@ -223,16 +223,39 @@ export class CloudVolume {
     const ls = typeof window !== 'undefined' ? window.liveScene3d : null;
     const terrainMats = ls?.terrainMaterials;
     if (!Array.isArray(terrainMats) || terrainMats.length === 0) return;
+    // Clouds-L URL knob — `?cloudShadow=off` (or runtime
+    // `window.__setCloudShadowEnabled(false)`) flips uCloudShadowEnabled
+    // to 0 once and skips the per-frame texture/matrix copy. Cheaper
+    // than nulling out the texture each frame.
+    const disabled = ls?.__cloudShadowDisabled === true;
+    if (disabled) {
+      for (const m of terrainMats) {
+        const u = m?.uniforms;
+        if (u?.uCloudShadowEnabled && u.uCloudShadowEnabled.value !== 0.0) {
+          u.uCloudShadowEnabled.value = 0.0;
+        }
+      }
+      return;
+    }
     const cp = this.effect?.cloudsPass;
     const shadowTex = cp?.shadowBuffer;
     const mats = this.material?.uniforms?.shadowMatrices?.value;
     if (!shadowTex || !mats || !mats[0]) return;
+    // Optional per-frame strength override (drives `?cloudShadowStrength=N`
+    // + runtime `__setCloudShadowStrength`). Applied here so newly-baked
+    // LBs pick up the value as their materials register, without the
+    // caller having to chase the terrainMaterials array.
+    const strengthOverride = ls?.__cloudShadowStrength;
     for (const m of terrainMats) {
       const u = m?.uniforms;
       if (!u?.uCloudShadowEnabled) continue;
       if (u.uCloudShadowEnabled.value !== 1.0) u.uCloudShadowEnabled.value = 1.0;
       if (u.uCloudShadowMap.value !== shadowTex) u.uCloudShadowMap.value = shadowTex;
       u.uCloudShadowMatrix0.value.copy(mats[0]);
+      if (Number.isFinite(strengthOverride) && u.uCloudShadowStrength &&
+          u.uCloudShadowStrength.value !== strengthOverride) {
+        u.uCloudShadowStrength.value = strengthOverride;
+      }
     }
   }
 
@@ -393,13 +416,24 @@ if (typeof window !== 'undefined') {
   // Default 2.0 from terrain.js. Pass 0 to effectively disable.
   // eslint-disable-next-line no-undef
   window.__setCloudShadowStrength = (s) => {
+    const v = +s;
+    if (!Number.isFinite(v)) return null;
+    if (window.liveScene3d) window.liveScene3d.__cloudShadowStrength = v;
     const mats = window.liveScene3d?.terrainMaterials || [];
     for (const m of mats) {
       if (m?.uniforms?.uCloudShadowStrength) {
-        m.uniforms.uCloudShadowStrength.value = s;
+        m.uniforms.uCloudShadowStrength.value = v;
       }
     }
-    return s;
+    return v;
+  };
+  // Clouds-L knob: gate cloud shadows on/off without reloading.
+  // window.__setCloudShadowEnabled(false) — mirrors ?cloudShadow=off.
+  // eslint-disable-next-line no-undef
+  window.__setCloudShadowEnabled = (on) => {
+    if (!window.liveScene3d) return null;
+    window.liveScene3d.__cloudShadowDisabled = !on;
+    return !!on;
   };
 }
 

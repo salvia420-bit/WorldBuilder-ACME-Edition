@@ -642,6 +642,55 @@ function doMount(parentEl, _ctx) {
     tip.className = "hb-inv-doll-tip";
     setAcText(tip, s.name, { color: "#f0d8a0" });
     el.appendChild(tip);
+    // Wave-D4: drag-source for equipped items (set when occupied via
+    // placeEquippedInDoll). The dragstart hands off the inventory mime
+    // shared with pack rows + trade-panel + vendor-ui so any drop
+    // target that accepts inventory items works uniformly.
+    el.addEventListener("dragstart", (ev) => {
+      const guid = el.dataset.itemGuid;
+      if (!guid) { ev.preventDefault(); return; }
+      ev.dataTransfer.setData("application/x-hb-inv-guid", guid);
+      ev.dataTransfer.setData("text/x-hb-item-guid", guid);
+      ev.dataTransfer.effectAllowed = "move";
+      // Stash on overlay so the dragover dispatcher can publish it
+      // (HTML5 forbids reading dataTransfer.getData outside drop).
+      overlay.dataset.draggingGuid = guid;
+    });
+    // Wave-D4: drop-target for pack→paperdoll wield. Allow drop only
+    // when the mime is present. On enter/over highlight in brass; on
+    // leave/drop clear. Wire WieldFromPack with this slot's equip_mask.
+    el.addEventListener("dragenter", (ev) => {
+      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
+        ev.preventDefault();
+        el.classList.add("drag-target");
+      }
+    });
+    el.addEventListener("dragover", (ev) => {
+      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+      }
+    });
+    el.addEventListener("dragleave", () => {
+      el.classList.remove("drag-target");
+    });
+    el.addEventListener("drop", (ev) => {
+      el.classList.remove("drag-target");
+      const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid");
+      if (!guidStr) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const guid = (parseInt(guidStr, 10) >>> 0);
+      if (!guid) return;
+      // Don't fire if the source slot already has this item (no-op
+      // self-drop on a re-arrange).
+      if (el.dataset.itemGuid && String(el.dataset.itemGuid) === String(guid)) return;
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (handle?.wieldFromPack) {
+        try { handle.wieldFromPack(guid, s.equipMask >>> 0); }
+        catch (e) { console.warn("[paperdoll] wieldFromPack failed:", e); }
+      }
+    });
     paperdoll.appendChild(el);
     dollSlotEls[s.equipMask] = { el, icon, tip, slot: s };
   }
@@ -799,7 +848,10 @@ function doMount(parentEl, _ctx) {
     for (const k of Object.keys(dollSlotEls)) {
       const e = dollSlotEls[k];
       e.el.classList.remove("equipped");
+      e.el.classList.remove("drag-target");
       delete e.el.dataset.itemGuid;
+      delete e.el.dataset.itemName;
+      e.el.draggable = false;
       e.icon.style.display = "none";
       e.icon.style.background = "";
       setAcText(e.tip, e.slot.name, { color: "#f0d8a0" });
@@ -825,6 +877,10 @@ function doMount(parentEl, _ctx) {
     const tb = srcLi.dataset?.typeBit ?? "0x0";
     const guid = String(item?.guid ?? srcLi.dataset?.guid ?? "");
     matched.el.dataset.itemGuid = guid;
+    matched.el.dataset.itemName = item?.name || matched.slot.name;
+    // Wave-D4: equipped items are drag-sources so the user can drag
+    // them off the paperdoll onto the 3D canvas to drop them.
+    matched.el.draggable = true;
     matched.icon.style.display = "block";
     matched.icon.style.background = TYPE_COLOR[tb] || "#777";
     setAcText(matched.tip, `${item.name || matched.slot.name} — ${matched.slot.name}`, { color: "#f0d8a0" });
@@ -861,9 +917,38 @@ function doMount(parentEl, _ctx) {
         itemsGrid.appendChild(makeSlot(li));
       }
     }
-    // Burden meter: sum equipped item weights / capacity. The source
-    // panel doesn't expose burden directly; once we have an event for
-    // it we wire here. Static 0% for now.
+    // Wave-D4: burden meter — playerBurden is a getter (no parens) per
+    // the wasm-bindgen #[wasm_bindgen(getter)] attribute. Value is
+    // encumbrance/capacity (0..1+ where >1.0 = over-encumbered, which
+    // retail allowed with movement penalties).
+    updateBurden();
+  }
+
+  function updateBurden() {
+    try {
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (!handle) return;
+      const burden = Number(handle.playerBurden ?? 0);
+      const pctRaw = Math.max(0, Math.round(burden * 100));
+      const pctClamped = Math.min(100, pctRaw);
+      burdenFill.style.width = `${pctClamped}%`;
+      // Over-encumbered (>90%) tints red regardless of gradient;
+      // 50-90% gold; <=50% cream (matches retail's encumbrance bar
+      // colour ramp). The CSS-defined gradient handles the smooth
+      // transition; the inline override only applies above thresholds
+      // so the gradient still shows in normal range.
+      if (pctRaw > 100) {
+        burdenFill.style.background = "var(--hb-text-red, #c83838)";
+      } else {
+        burdenFill.style.background = ""; // restore CSS gradient
+      }
+      let labelColor = "var(--hb-text-cream)";
+      if (pctRaw > 90) labelColor = "#c83838";
+      else if (pctRaw > 50) labelColor = "var(--hb-text-gold)";
+      setAcText(burdenPct, `${pctRaw}%`, { color: labelColor });
+    } catch (e) {
+      // Pre-spawn / playerBurden missing — leave the bar at 0%.
+    }
   }
 
   let observers = [];
@@ -947,10 +1032,72 @@ function doMount(parentEl, _ctx) {
   paperdoll.addEventListener("dragover", (ev) => dispatchInventoryDragOver(ev, "paperdoll"));
   itemsGrid.addEventListener("dragover", (ev) => dispatchInventoryDragOver(ev, "items"));
 
+  // Wave-D4: 3D canvas drop target — drag any inventory item onto the
+  // viewport (NOT onto another inventory/paperdoll slot) to drop it on
+  // the ground at the player's feet. ACE handles drop-position +
+  // unequip-if-needed sequencing.
+  const canvasEl = document.getElementById("canvas");
+  function onCanvasDragOver(ev) {
+    if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "move";
+    }
+  }
+  function onCanvasDrop(ev) {
+    const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid");
+    if (!guidStr) return;
+    ev.preventDefault();
+    const guid = (parseInt(guidStr, 10) >>> 0);
+    if (!guid) return;
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    if (handle?.dropItem) {
+      try { handle.dropItem(guid); }
+      catch (e) { console.warn("[paperdoll] dropItem failed:", e); }
+    }
+  }
+  if (canvasEl) {
+    canvasEl.addEventListener("dragover", onCanvasDragOver);
+    canvasEl.addEventListener("drop", onCanvasDrop);
+  }
+
+  // Wave-D4: burden refreshes on every stats bump (UpdateAttribute,
+  // equip/unequip, inventory delta — all bucketed into kind=8 by the
+  // recv loop's dispatcher). Best-effort: the plugin client may not be
+  // ready yet when the view mounts on first login, so a poll-loop
+  // fallback fires updateBurden() until it lands.
+  let unsubStats = null;
+  function tryHookStats() {
+    const pc = window.__pluginClient;
+    if (!pc?.events?.on) return false;
+    const onStats = () => updateBurden();
+    pc.events.on("playerStatsUpdated", onStats);
+    pc.events.on("playerInventoryChanged", onStats);
+    unsubStats = () => {
+      try { pc.events.off("playerStatsUpdated", onStats); } catch (_) {}
+      try { pc.events.off("playerInventoryChanged", onStats); } catch (_) {}
+    };
+    return true;
+  }
+  let statsPollTimer = null;
+  if (!tryHookStats()) {
+    statsPollTimer = setInterval(() => {
+      if (tryHookStats()) { clearInterval(statsPollTimer); statsPollTimer = null; }
+    }, 500);
+  }
+  // Initial pass — playerBurden is 0.0 pre-spawn, the kind=8 event
+  // refreshes once the biota lands.
+  updateBurden();
+
   return () => {
     window.removeEventListener("keydown", onKey);
     delete window.__isInventoryItem;
     if (pollTimer) clearInterval(pollTimer);
+    if (statsPollTimer) clearInterval(statsPollTimer);
+    if (unsubStats) unsubStats();
+    if (canvasEl) {
+      canvasEl.removeEventListener("dragover", onCanvasDragOver);
+      canvasEl.removeEventListener("drop", onCanvasDrop);
+    }
     for (const o of observers) o.disconnect();
     overlay.remove();
   };

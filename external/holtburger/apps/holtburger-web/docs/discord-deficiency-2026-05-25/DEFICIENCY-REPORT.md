@@ -12,6 +12,41 @@
 
 ---
 
+## Status — Wave G executed 2026-05-25 (later same day)
+
+Three items shipped after Wave F. G1 + G3 ran in parallel (G1 Rust+JS, G3 pure JS — turned out to be URL-knob work since the cloud-shadow shader was already wired). G2 ran sequentially after G1.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 10 (finish) | Equipment paper-doll burden + drag-drop | **SHIPPED** | Wave G1. Rust: `LatestStats.burden: f32` field + `publish_player_stats_snapshot` computes burden via `WorldContextExt::player_burden()` + `#[wasm_bindgen(getter, js_name = playerBurden)]` returning f32 (0.0 pre-spawn, 0..1 typical, >1 over-encumbered). 2 send-side wasm methods (`wieldFromPack(item_guid, equip_mask)` + `dropItem(item_guid)`) + 2 SessionCommand variants + 2 recv arms. Opcodes `GetAndWieldItem 0x001A` + `DropItem 0x001B` + their structs/GameAction variants/pack/unpack arms were already in place from a prior wave — no protocol-crate work needed (4 hex-fixture tests already cover them). JS: `plugins/inventory.js` burden bar live-fills from `playerBurden` getter on `playerStatsUpdated` event with cream≤50% / gold 50-90% / red >90% / solid red >100% gradient. Paperdoll drag-drop bidirectional — equipped slots become drag sources via `application/x-hb-inv-guid` mime (compatible with Wave D2 trade-panel + vendor-ui); drop on `#canvas` calls `dropItem(guid)`; drop on paperdoll slot calls `wieldFromPack(guid, slotEquipMask)` with brass highlight on `dragenter`. **ACE wire conformance:** `GetAndWieldItem.cs` { itemGuid, equipMask } + `DropItem.cs` { itemGuid } — exact match, no deviations. |
+| 4 (receive-side MVP) | Allegiance receive-side snapshot | **SHIPPED** | Wave G2. Uncommented `AllegianceUpdate 0x0020` event opcode. **NEW** `crates/holtburger-protocol/src/messages/allegiance/{mod.rs, events.rs}` (~420 LOC + 2 round-trip tests) with full ACE-wire-conformant `AllegianceUpdateEventData` capturing `rank/total_members/total_vassals + AllegianceProfile + AllegianceHierarchy` (officers PackableHashTable, titles list, motd, motd_set_by, chat_room_id, bindPoint Position, allegiance_name, name_last_set_time, is_locked, approved_vassal, monarch_data, tree_parent-keyed records list — full `AllegianceData` per record: character_id, cp_cached, cp_tithed, bitfield, gender, heritage_group, rank, packed level, loyalty, leadership, time_online, allegiance_age, name). Wire authority: `~/ace-server/Source/ACE.Server/Network/GameEvent/Events/GameEventAllegianceUpdate.cs` + `AllegianceProfile.cs` + `AllegianceHierarchy.cs` + `AllegianceData.cs`. Bit-for-bit pack/unpack symmetry verified via 2 round-trip tests (4-member tree + empty). Rust: `AllegianceSnapshot/Member` Rust + `AllegianceSnapshotJs/MemberJs` wrappers; `latest_allegiance: Rc<RefCell<Option<AllegianceSnapshot>>>`; **publish-source:** folds directly from GameEvent payload since `WorldEvent::AllegianceUpdated` doesn't exist in `holtburger-world` (own_guid from `world.player.guid`, tree-parent topology splits records into patron/self/vassals); `CLIENT_EVENT_KIND_ALLEGIANCE_UPDATED=25`; `SessionHandle::player_allegiance()` getter. JS: `index.html` kind=25 dispatch arm emits `allegianceUpdated`; `plugins/allegiance-panel.js` standalone IIFE replaces "coming in a future wave" placeholder with live 4-line state mini-view; main-panel view renders into existing layout-anchored regions (header + monarch/patron/status/vassal-list rows). Empty state: "Not in an allegiance. Use Swear above to join one." Bans/officer-titles/AllegianceInfoResponse still deferred. |
+| 14 (cloud-shadow knobs) | Cloud shadow on terrain — knob exposure | **SHIPPED** | Wave G3. **Recon discovery:** Cloud shadows on terrain were ALREADY SHIPPED as "Clouds-L" — takram-three-clouds' built-in cascaded shadow buffers are routed into `terrain.js:706-718` via `uCloudShadowMap` / `uCloudShadowMatrix0..3` / `uCloudShadowStrength` uniforms with Beer-Lambert sampling `max(0.3, exp(-density * strength))`. Per-frame push from `cloud_overlay.js:511` → `cloud_volume._pushCloudShadowsToTerrain()`. A duplicate top-down projection module would have caused conflicting writes. **What G3 shipped instead:** the 3 URL knobs the task required, which were genuinely missing — `?cloudShadow=on\|off` (gates the per-frame pusher), `?cloudShadowStrength=N` (0..10), `?cloudShadowRes=N` (64..2048, takram reallocates cascade buffers). Runtime durable setters `window.__setCloudShadowStrength(n)` + new `window.__setCloudShadowEnabled(bool)`. +73 / -3 across `scene3d/cloud_volume.js` + `scene3d/index.js`. Zero touch of terrain.js (shader already correct) — saves per-frame texture-ref+matrix-copy across all LBs when `?cloudShadow=off`. |
+
+**Files touched this wave:**
+- `src/lib.rs` +461 LOC (G1: ~143 + G2: ~280 — burden field + 3 wasm methods + AllegianceSnapshot infra + getter)
+- `crates/holtburger-protocol/src/opcodes.rs` +4 LOC (1 uncomment + light tidy)
+- `crates/holtburger-protocol/src/messages/mod.rs` +1 LOC (register allegiance module)
+- `crates/holtburger-protocol/src/messages/game_event.rs` +10 LOC (AllegianceUpdate variant + arms)
+- `crates/holtburger-protocol/src/messages/allegiance/mod.rs` NEW
+- `crates/holtburger-protocol/src/messages/allegiance/events.rs` NEW ~420 LOC + 2 tests
+- `plugins/inventory.js` +153 LOC (G1 burden + drag-drop)
+- `plugins/allegiance-panel.js` +245 LOC (G2 state render + subscribe)
+- `scene3d/cloud_volume.js` +35 LOC (G3 push gate + strength override + setters)
+- `scene3d/index.js` +37 LOC (G3 URL-knob parsing)
+- `index.html` +12 LOC (G2 kind=25 dispatch arm + minor)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `cargo test -p holtburger-protocol --lib`: **270/270 PASS** (G2 added 2 new round-trip tests). `node --check` clean on all JS.
+
+**Recommended Wave H** (next priorities):
+1. **Friends receive-side snapshot (#20 polish)** — `FriendsUpdate` event + snapshot; mirrors Wave G2 allegiance receive pattern.
+2. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as Wave F1.
+3. **Titles + Account/Global squelch (#20 finish)** — `TitleSet 0x002C` + `ModifyAccountSquelch` + `ModifyGlobalSquelch` + `SetSquelchDb`.
+4. **House system (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
+5. **Spell research / component management UI (#19)** — Yonneh-quoted; spellbook + components parser exists.
+6. **BloomEffect (★★★★★ in OPTICAL_EFFECTS_HANDOFF)** — soft HDR halo, ~1-2ms @ 1080p; wire to EffectPass pre-ToneMapping.
+
+---
+
 ## Status — Wave F executed 2026-05-25 (later same day)
 
 Three more items shipped after Wave E. F1 + F3 ran in parallel (F1 Rust+JS, F3 pure JS). F2 ran sequentially after F1 since both edit `src/lib.rs` + protocol-crate files.
@@ -228,13 +263,14 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 
 **Holtburger status:** Wave D2 shipped 6 `SessionHandle` wasm-bindgen methods (`openTrade/closeTrade/addToTrade/acceptTrade/declineTrade/resetTrade`) + `TradeSnapshot`/`TradeItem` Rust structs + JS wrappers + `publish_player_trade_snapshot()` via existing `WorldEvent::TradeStateUpdated` (canonical `world.trade` already maintained by `crates/holtburger-world/src/handlers/trade.rs` across all 9 trade events) + `CLIENT_EVENT_KIND_TRADE_UPDATED=23` + `player_trade()` getter. `plugins/trade-panel.js` NEW 593 LOC — 360×280 floating window, two 4×3 12-slot grids (You / partner), Accept/Decline/Reset footer, partner-accept green dot + self-accept gold highlight, drag-drop from inventory via mime `application/x-hb-inv-guid`, Esc/X close. Debug: `window.__openTradePanel()`.
 
-### 4. Allegiance system — SHIPPED 2026-05-25 (Wave E1 Swear/Break + Wave F1 MOTD/Officer/Gag/Recall)
+### 4. Allegiance system — SHIPPED 2026-05-25 (Wave E1 Swear/Break + Wave F1 MOTD/Officer/Gag/Recall + Wave G2 receive-side snapshot)
 **Severity:** load-bearing (player-facing core feature)
 **Discord evidence:** Multiple "allegiance / fellowship chat" mentions in #general; cascaded transparent chat windows for allegiance specifically (line 1752).
 **Holtburger status:**
 - **Wave E1 (Swear/Break):** 2 wasm-bindgen methods (`swearAllegiance`, `breakAllegiance`) using existing `SwearAllegianceActionData`/`BreakAllegianceActionData` structs at `crates/holtburger-protocol/src/messages/player/actions.rs:161+`. JS: standalone IIFE with Swear/Break action buttons.
 - **Wave F1 (MOTD/Officer/Gag/Recall):** 4 opcodes uncommented (`SetAllegianceName 0x0033`, `SetAllegianceOfficer 0x003B`, `AllegianceChatGag 0x0041`, `RecallAllegianceHometown 0x02AB`). 4 new structs in `player/actions.rs` (wire format per `~/ace-server/.../GameActionSet*.cs`). 4 wasm methods (`setAllegianceName/setAllegianceOfficer/allegianceChatGag/recallAllegianceHometown`). Panel now has 6 buttons: Swear / Break / MOTD-row (text input + Confirm) / Promote-Selected-to-Officer / Toggle-Chat-Gag-for-Selected / Recall-to-Hometown. **ACE wire deviation:** chat-gag's `gag_on` is `u32` on the wire (not bool — mirrors `ModifyCharacterSquelch` pattern).
-- **Still deferred to Wave G:** 12 commented opcodes (bans, boots, lock-action, approved-vassal, officer-titles, query-allegiance-name) + receive-side AllegianceUpdate/InfoResponse snapshot.
+- **Wave G2 (receive-side snapshot):** Uncommented `AllegianceUpdate 0x0020` event opcode. NEW `crates/holtburger-protocol/src/messages/allegiance/{mod,events}.rs` (~420 LOC + 2 round-trip tests) with full ACE-wire-conformant `AllegianceUpdateEventData` (rank/profile/hierarchy + tree-parent records of full `AllegianceData`). Wire authority: `~/ace-server/.../GameEventAllegianceUpdate.cs` + AllegianceProfile.cs + Hierarchy.cs + Data.cs. `AllegianceSnapshot` + `AllegianceSnapshotJs` wrapper; `latest_allegiance` Rc; `publish_player_allegiance_snapshot` folds directly from GameEvent payload (no `WorldEvent::AllegianceUpdated` exists yet); `CLIENT_EVENT_KIND_ALLEGIANCE_UPDATED=25`; `player_allegiance()` getter. JS subscribes to `allegianceUpdated` bus event and renders monarch/patron/vassal-list (both standalone panel + main-panel view). Empty state: "Not in an allegiance. Use Swear above to join one."
+- **Still deferred to Wave H:** 12 commented action opcodes (bans, boots, lock-action, approved-vassal, officer-titles, query-allegiance-name) + secondary receive events (`AllegianceUpdateAborted 0x0003`, `AllegianceAllegianceUpdateDone 0x01C8`, `AllegianceInfoResponse 0x027C`).
 **Upstream:** ACE has 30+ handlers in `Source/ACE.Server/Network/GameAction/Actions/` matching the commented-out opcodes.
 
 ### 5. Fellowship system — SHIPPED 2026-05-25 (Wave C2 send-side + Wave D1 receive-side full)
@@ -283,11 +319,11 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Holtburger status:** Panel `plugins/examine-target.js` was already retail-correct (uses `gmFloatyExaminationUI 0x2100006B` layout, native creature pane 0x10000153 with header + 2 stat rows + scrollable body + footer + icons + section dividers, AC font/colors via `ui/ac_font.js`). Wasm auto-fires `GameAction::IdentifyObject` on every ObjectCreate; response populates `EntityMap`. **What was missing:** the trigger. Wave A3 added right-click drag-threshold disambiguation in `scene3d/camera.js:428-478` — right-click + small movement (5px²) on an entity routes to `window.__showExamineFor(guid)`; right-click + drag still orbits camera. Manual validation: right-click a creature → main-panel opens to Examine view.
 **Remediation:** Closed. Radial menu (Use/Drop/Wield/Trade) follow-on tracked at #23.
 
-### 10. Equipment paper-doll + container browse — SHIPPED 2026-05-25 (recon-corrected + Wave C1 container + Wave D3 real icons)
+### 10. Equipment paper-doll + container browse — SHIPPED 2026-05-25 (recon-corrected + Wave C1 container + Wave D3 real icons + Wave G1 burden/drag-drop finish)
 **Severity:** load-bearing
 **Discord evidence:** Suit builder workflows (#general lines 282, 462, 490); MagSuitBuilder discussion; the entire alt-client meta orbits item slot management.
 **Holtburger status:**
-- **Equipment paper-doll (Wave D3 polish):** `plugins/inventory.js:67-101` has the full retail `PAPERDOLL_SLOTS` table (23 slots, element IDs from gmPaperDollUI 0x21000024, equipMask-bit dispatch). Wave D3 added module-level `iconCache: Map` + `fetchPaperdollIconDataUrl(iconId)` helper mirroring `buffs-hud.js:73-105`. `placeEquippedInDoll` now tags slot with `dataset.itemGuid`, paints TYPE_COLOR fallback instantly, then async-fetches the real DAT icon via `item.iconId` → canvas → dataURL; re-verifies guid hasn't changed before assignment (race-safe against rapid equip swaps). Each equipped slot now shows the real DAT sprite. Remaining polish (burden % computation, drag-drop FROM paperdoll → ground, TO paperdoll from pack) tracked in Wave E — needs `playerBurden()` + `DropItem`/`GetAndWieldItem` wasm exports.
+- **Equipment paper-doll (Wave D3 icons + G1 burden/drag-drop):** `plugins/inventory.js:67-101` has the full retail `PAPERDOLL_SLOTS` table (23 slots, element IDs from gmPaperDollUI 0x21000024, equipMask-bit dispatch). Wave D3 added `iconCache` + `fetchPaperdollIconDataUrl` async DAT icon fetch with race-safe `dataset.itemGuid` re-verify. **Wave G1 finish:** `#[wasm_bindgen(getter, js_name = playerBurden)]` returning f32 (0..1 typical, >1 over-encumbered) via `WorldContextExt::player_burden()`; live burden bar fills on `playerStatsUpdated` event (cream≤50% / gold 50-90% / red >90% / solid red >100%). Bidirectional drag-drop: equipped slots become drag sources via `application/x-hb-inv-guid` mime (compatible with Wave D2 trade-panel + vendor-ui); drop on `#canvas` → `dropItem(guid)`; drop on paperdoll slot → `wieldFromPack(guid, slotEquipMask)` with brass highlight on `dragenter`. ACE wire conformance: `GetAndWieldItem.cs` { itemGuid, equipMask } + `DropItem.cs` { itemGuid } — exact match.
 - **Container browse (Wave C1):** `plugins/container-panel.js` (~400 LOC). Subscribes to `containerOpened` bus event (kind=21 from `index.html:8083`, PR-HH 2026-05-23). Resolves contents via `getContainerContents()` → `playerInventory()` lookup with `entityMap.meta` fallback. 280×220 floating panel, 6-col 36×36 icon grid via `fetch_surface_pixels`, click-to-Examine, Esc/close/click-outside dismiss. Debug: `window.__openContainerFor(guid, name?)`. Right-click reserved for future take-from-container wasm export.
 
 ---
@@ -497,13 +533,19 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 17. ~~Inscriptions + books (#21)~~ — full Books system (read/edit/add/delete) + Set Inscription + receive-side snapshot panel shipped.
 18. ~~Sky aurora storm particles (#14)~~ — pure-JS aurora ribbon system tied to `weather_state.is_storm` shipped, plus `?cellBugParity=retail` for the basement-from-overworld quirk.
 
-### Wave G — next priorities
+### Wave G — SHIPPED 2026-05-25 (later same day)
 
-19. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as F1.
-20. **Allegiance + Friends receive-side snapshot (#4, #20 polish)** — `AllegianceUpdate`/`AllegianceInfoResponse`/`FriendsUpdate` events → snapshot infra mirroring Wave D1 fellowship pattern.
-21. **Titles + Account/Global squelch (#20 finish)** — TitleSet 0x002C + ModifyAccountSquelch + ModifyGlobalSquelch + SetSquelchDb.
-22. **Equipment paper-doll burden % + drag-drop (#10 finish)** — needs `playerBurden()` wasm getter + `DropItem` + `GetAndWieldItem` exports.
-23. **House system (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
-24. **Spell research / component management UI (#19)** — Yonneh-quoted; parser exists, panel doesn't.
+19. ~~Equipment paper-doll burden + drag-drop (#10 finish)~~ — playerBurden getter + wieldFromPack + dropItem wasm methods + JS burden bar + bidirectional drag-drop shipped.
+20. ~~Allegiance receive-side snapshot (#4 receive MVP)~~ — AllegianceUpdate 0x0020 event + 420-LOC full-ACE-wire-conformant struct + snapshot infra + panel state render shipped.
+21. ~~Cloud shadow on terrain — URL knobs (#14 follow-on)~~ — discovered shipped via Clouds-L; G3 added the 3 missing URL knobs (?cloudShadow=on|off, ?cloudShadowStrength, ?cloudShadowRes).
+
+### Wave H — next priorities
+
+22. **Friends receive-side snapshot (#20 polish)** — `FriendsUpdate` event + snapshot; mirrors Wave G2 allegiance receive pattern.
+23. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as Wave F1.
+24. **Titles + Account/Global squelch (#20 finish)** — `TitleSet 0x002C` + `ModifyAccountSquelch` + `ModifyGlobalSquelch` + `SetSquelchDb`.
+25. **House system (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
+26. **Spell research / component management UI (#19)** — Yonneh-quoted; spellbook + components parser exists.
+27. **BloomEffect (★★★★★ in OPTICAL_EFFECTS_HANDOFF)** — soft HDR halo, ~1-2ms @ 1080p; wire to EffectPass pre-ToneMapping.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.

@@ -8138,6 +8138,18 @@ void main() {
                 if (window.__pluginClient?.events) {
                   window.__pluginClient.events.emit("bookUpdated", {});
                 }
+              } else if (evt.kind === 25) {
+                // Wave-F2 (2026-05-26): AllegianceUpdated. ACE pushed
+                // `GameEvent::AllegianceUpdate` (opcode 0x0020) and the
+                // wasm side has refreshed `latest_allegiance` by folding
+                // the wire payload (monarch / patron / self / vassals).
+                // Consumer reads fresh state via
+                // `handle.playerAllegiance()` (null pre-join /
+                // post-break). The allegiance-panel plugin subscribes
+                // and renders the hierarchy.
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("allegianceUpdated", {});
+                }
               } else if (evt.kind === 13) {
                 // Phase 4 step 5: UseFailed (WeenieError /
                 // WeenieErrorWithString). Already mirrored as a
