@@ -882,15 +882,17 @@ export const manifest = {
 };
 
 // ─────────────────────────────────────────────────────────────────
-// Standalone floating action panel (Wave E1 — send-only MVP)
+// Standalone floating action panel (Wave E1 + F1 + F3 send-only)
 //
 // Lightweight overlay distinct from the main-panel `view` export
 // above. Exposes window.__openAllegiancePanel /
 // __closeAllegiancePanel for ad-hoc opening from devtools or hotkeys.
-// 2 spec-aligned buttons: Swear / Break.
+// 10 wired send-side buttons: Swear / Break / MOTD / Officer / Gag /
+// Recall / Add Ban / Remove Ban / Boot Selected / Lock Allegiance.
 //
-// Receive-side (AllegianceUpdate, officer / motd / bans) is Wave F
-// scope — placeholder text below the action grid says so.
+// Receive-side AllegianceUpdate snapshot is live (Wave F2). Deferred:
+// approved-vassal + officer-titles + ListBans receive — coming in a
+// future wave.
 // ─────────────────────────────────────────────────────────────────
 
 const SA_STYLE_ID = "hb-alleg-standalone-style";
@@ -1211,6 +1213,138 @@ function buildStandaloneOverlay() {
     });
   });
   stack.appendChild(recallBtn);
+
+  // Wave F3 (2026-05-26): Add ban — inline text input + Confirm. Sends
+  // GameAction::AddAllegianceBan (sub-opcode 0x02A1).
+  const addBanRow = document.createElement("div");
+  addBanRow.className = "hb-alleg-sa-row";
+  addBanRow.dataset.action = "add-ban";
+  const addBanInput = document.createElement("input");
+  addBanInput.type = "text";
+  addBanInput.className = "hb-alleg-sa-input";
+  addBanInput.placeholder = "Player to ban";
+  addBanInput.maxLength = 64;
+  addBanRow.appendChild(addBanInput);
+  const addBanBtn = document.createElement("button");
+  addBanBtn.type = "button";
+  addBanBtn.className = "hb-alleg-sa-btn";
+  setAcText(addBanBtn, "Add Ban");
+  addBanBtn.title = "Add player to allegiance ban list";
+  const submitAddBan = () => {
+    const name = (addBanInput.value ?? "").trim();
+    if (!name) { saToast("Enter a player name first"); return; }
+    if (!window.confirm(`Ban ${name} from the allegiance?`)) return;
+    saWithSession("addAllegianceBan", (h) => {
+      h.addAllegianceBan(name);
+      emit(`[allegiance/add-ban] target="${name}"`);
+      saToast("Ban sent");
+      addBanInput.value = "";
+    });
+  };
+  addBanBtn.addEventListener("click", submitAddBan);
+  addBanInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); submitAddBan(); }
+  });
+  addBanRow.appendChild(addBanBtn);
+  stack.appendChild(addBanRow);
+
+  // Wave F3 (2026-05-26): Remove ban — inline text input + Confirm.
+  // Sends GameAction::RemoveAllegianceBan (sub-opcode 0x02A2).
+  const removeBanRow = document.createElement("div");
+  removeBanRow.className = "hb-alleg-sa-row";
+  removeBanRow.dataset.action = "remove-ban";
+  const removeBanInput = document.createElement("input");
+  removeBanInput.type = "text";
+  removeBanInput.className = "hb-alleg-sa-input";
+  removeBanInput.placeholder = "Player to unban";
+  removeBanInput.maxLength = 64;
+  removeBanRow.appendChild(removeBanInput);
+  const removeBanBtn = document.createElement("button");
+  removeBanBtn.type = "button";
+  removeBanBtn.className = "hb-alleg-sa-btn";
+  setAcText(removeBanBtn, "Remove Ban");
+  removeBanBtn.title = "Lift the ban on a player";
+  const submitRemoveBan = () => {
+    const name = (removeBanInput.value ?? "").trim();
+    if (!name) { saToast("Enter a player name first"); return; }
+    if (!window.confirm(`Lift the ban on ${name}?`)) return;
+    saWithSession("removeAllegianceBan", (h) => {
+      h.removeAllegianceBan(name);
+      emit(`[allegiance/remove-ban] target="${name}"`);
+      saToast("Unban sent");
+      removeBanInput.value = "";
+    });
+  };
+  removeBanBtn.addEventListener("click", submitRemoveBan);
+  removeBanInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); submitRemoveBan(); }
+  });
+  removeBanRow.appendChild(removeBanBtn);
+  stack.appendChild(removeBanRow);
+
+  // Wave F3 (2026-05-26): Boot selected — picks target name from the
+  // current 3D selection. Optional checkbox flips the account_boot flag
+  // so ACE bans every character on the booted account. Sends
+  // GameAction::BreakAllegianceBoot (sub-opcode 0x0277).
+  const bootRow = document.createElement("div");
+  bootRow.className = "hb-alleg-sa-row";
+  bootRow.dataset.action = "boot-selected";
+  const bootBtn = document.createElement("button");
+  bootBtn.type = "button";
+  bootBtn.className = "hb-alleg-sa-btn";
+  setAcText(bootBtn, "Boot Selected");
+  bootBtn.title = "Forcibly boot the selected player from the allegiance";
+  const bootAccLabel = document.createElement("label");
+  bootAccLabel.style.display = "flex";
+  bootAccLabel.style.alignItems = "center";
+  bootAccLabel.style.gap = "4px";
+  bootAccLabel.style.fontSize = "10px";
+  bootAccLabel.style.color = "var(--hb-text-cream)";
+  bootAccLabel.style.padding = "0 6px";
+  const bootAccCb = document.createElement("input");
+  bootAccCb.type = "checkbox";
+  bootAccLabel.appendChild(bootAccCb);
+  const bootAccText = document.createElement("span");
+  setAcText(bootAccText, "Account-wide");
+  bootAccLabel.appendChild(bootAccText);
+  bootBtn.addEventListener("click", () => {
+    const name = saCurrentSelectedName();
+    if (!name) { saToast("Click a player first"); return; }
+    const accountBoot = !!bootAccCb.checked;
+    const scopeWord = accountBoot ? " (entire account)" : "";
+    if (!window.confirm(`Boot ${name} from the allegiance${scopeWord}?`)) return;
+    saWithSession("breakAllegianceBoot", (h) => {
+      h.breakAllegianceBoot(name, accountBoot);
+      emit(`[allegiance/boot] target="${name}" account_boot=${accountBoot}`);
+      saToast("Boot sent");
+    });
+  });
+  bootRow.appendChild(bootBtn);
+  bootRow.appendChild(bootAccLabel);
+  stack.appendChild(bootRow);
+
+  // Wave F3 (2026-05-26): Lock allegiance — MVP sends On (lock_action=1).
+  // Full cycle through AllegianceLockAction (Off=1/On=2/Toggle=3 etc.)
+  // is Wave K polish. Sends GameAction::DoAllegianceLockAction
+  // (sub-opcode 0x003F).
+  const lockBtn = document.createElement("button");
+  lockBtn.type = "button";
+  lockBtn.className = "hb-alleg-sa-btn";
+  lockBtn.dataset.action = "lock-allegiance";
+  setAcText(lockBtn, "Lock Allegiance");
+  lockBtn.title = "Prevent new vassals from joining (AllegianceLockAction.On)";
+  lockBtn.addEventListener("click", () => {
+    if (!window.confirm("Lock the allegiance? New vassals will be blocked from joining.")) return;
+    saWithSession("doAllegianceLockAction", (h) => {
+      // AllegianceLockAction.On = 2 (per ACE.Entity.Enum.AllegianceLockAction).
+      // ACE.Entity.Enum: Undef=0, Off=1, On=2, Toggle=3, Check=4, etc.
+      const LOCK_ON = 2;
+      h.doAllegianceLockAction(LOCK_ON);
+      emit(`[allegiance/lock] action=${LOCK_ON}`);
+      saToast("Lock sent");
+    });
+  });
+  stack.appendChild(lockBtn);
 
   body.appendChild(stack);
 

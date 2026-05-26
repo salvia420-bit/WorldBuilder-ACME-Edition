@@ -12,6 +12,7 @@ const OVERLAY_ID = "hb-radial-menu";
 const STYLE_ID = "hb-radial-menu-style";
 
 const ITEM_TYPE_CREATURE = 0x00000010;
+const ODF_PLAYER = 0x00000008;
 
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
@@ -124,6 +125,19 @@ function isCreature(ent) {
   return ent?.meta?.category === "creature";
 }
 
+// Canonical Player marker is the Chorizite-port classifier: WorldObjectManager
+// runs canonicalClassify(itemType, objDescFlags, weenieFlags) on kind=1 spawn
+// and stores the result on the typed WorldObject. We consult __wom first;
+// fall back to ODF_PLAYER bit on meta.objDescFlags if WOM isn't populated.
+function isPlayer(guid, ent) {
+  try {
+    const wo = window.__wom?.get?.(guid >>> 0);
+    if (wo && (wo.canonicalObjectClass === "Player" || wo.className === "Player")) return true;
+  } catch (_) { /* fall through */ }
+  const odf = (ent?.meta?.objDescFlags >>> 0) || 0;
+  return (odf & ODF_PLAYER) !== 0;
+}
+
 // Cross-reference the 3D-entity guid against the wasm-side inventory
 // snapshot — the entity's own meta doesn't carry inventory state
 // (equipMask, container), so playerInventory() is the canonical signal
@@ -186,6 +200,21 @@ function buildItems(guid) {
     });
   }
 
+  const localPlayerGuid = (typeof window.getLocalPlayerGuid === "function")
+    ? (window.getLocalPlayerGuid() >>> 0)
+    : 0;
+  if (isPlayer(guid, ent)
+      && guid !== localPlayerGuid
+      && typeof window.__sessionHandle?.openTrade === "function") {
+    items.push({
+      label: "Trade",
+      action: () => {
+        try { window.__sessionHandle.openTrade(guid >>> 0); }
+        catch (e) { console.warn("[radial-menu] openTrade failed:", e); }
+      },
+    });
+  }
+
   const stanceLow = (typeof window.__getCurrentStanceLow === "function")
     ? (window.__getCurrentStanceLow() >>> 0)
     : 0;
@@ -201,7 +230,7 @@ function buildItems(guid) {
     });
   }
 
-  // Drop/Wield wired via Wave G1 wasm methods; Trade still pending
+  // Drop/Wield wired via Wave G1, Trade wired via Wave D2 + J2.
   return { items, ent };
 }
 
@@ -290,5 +319,5 @@ export const manifest = {
   icon: "◎",
   iconHidden: true,
   version: "0.1.0",
-  description: "Right-click context menu for entity actions (Examine/Wield/Use/Drop/Attack).",
+  description: "Right-click context menu for entity actions (Examine/Wield/Use/Drop/Trade/Attack).",
 };

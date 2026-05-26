@@ -454,22 +454,22 @@ pub enum GameActionOpcode {
     // ListAllegianceOfficerTitles = 0x003D,
     // /// C2S: Clear all custom officer titles.
     // ClearAllegianceOfficerTitles = 0x003E,
-    // /// C2S: Toggle the allegiance lock (allowing/preventing new vassals).
-    // DoAllegianceLockAction = 0x003F,
+    /// C2S: Toggle the allegiance lock (allowing/preventing new vassals).
+    DoAllegianceLockAction = 0x003F,
     // /// C2S: Add a player to the approved vassal list.
     // SetAllegianceApprovedVassal = 0x0040,
     /// C2S: Mute/gag a player in allegiance chat (target name + u32 bool).
     AllegianceChatGag = 0x0041,
     // /// C2S: Perform housing actions via allegiance (e.g. mansion recall).
     // DoAllegianceHouseAction = 0x0042,
-    // /// C2S: Forcibly break allegiance with a vassal (boot).
-    // BreakAllegianceBoot = 0x0277,
+    /// C2S: Forcibly break allegiance with a vassal (boot).
+    BreakAllegianceBoot = 0x0277,
     // /// C2S: Remove a player from allegiance chat.
     // AllegianceChatBoot = 0x02A0,
-    // /// C2S: Add a permanent ban for a player from the allegiance.
-    // AddAllegianceBan = 0x02A1,
-    // /// C2S: Remove a ban from the allegiance list.
-    // RemoveAllegianceBan = 0x02A2,
+    /// C2S: Add a permanent ban for a player from the allegiance.
+    AddAllegianceBan = 0x02A1,
+    /// C2S: Remove a ban from the allegiance list.
+    RemoveAllegianceBan = 0x02A2,
     // /// C2S: List all banned players for the allegiance.
     // ListAllegianceBans = 0x02A3,
     // /// C2S: Remove the officer status from a vassal.

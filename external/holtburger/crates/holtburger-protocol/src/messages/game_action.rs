@@ -40,6 +40,10 @@ pub enum GameAction {
     SetAllegianceName(Box<SetAllegianceNameActionData>),
     SetAllegianceOfficer(Box<SetAllegianceOfficerActionData>),
     AllegianceChatGag(Box<AllegianceChatGagActionData>),
+    AddAllegianceBan(Box<AddAllegianceBanActionData>),
+    RemoveAllegianceBan(Box<RemoveAllegianceBanActionData>),
+    BreakAllegianceBoot(Box<BreakAllegianceBootActionData>),
+    DoAllegianceLockAction(Box<DoAllegianceLockActionActionData>),
     RecallAllegianceHometown(Box<RecallAllegianceHometownActionData>),
     AddFriend(Box<AddFriendActionData>),
     RemoveFriend(Box<RemoveFriendActionData>),
@@ -173,6 +177,18 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::AllegianceChatGag => GameAction::AllegianceChatGag(Box::new(
                     AllegianceChatGagActionData::unpack(data, offset)?,
                 )),
+                GameActionOpcode::AddAllegianceBan => GameAction::AddAllegianceBan(Box::new(
+                    AddAllegianceBanActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::RemoveAllegianceBan => GameAction::RemoveAllegianceBan(Box::new(
+                    RemoveAllegianceBanActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::BreakAllegianceBoot => GameAction::BreakAllegianceBoot(Box::new(
+                    BreakAllegianceBootActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::DoAllegianceLockAction => GameAction::DoAllegianceLockAction(
+                    Box::new(DoAllegianceLockActionActionData::unpack(data, offset)?),
+                ),
                 GameActionOpcode::RecallAllegianceHometown => GameAction::RecallAllegianceHometown(
                     Box::new(RecallAllegianceHometownActionData::unpack(data, offset)?),
                 ),
@@ -465,6 +481,26 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::AllegianceChatGag(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::AllegianceChatGag as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AddAllegianceBan(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AddAllegianceBan as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::RemoveAllegianceBan(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::RemoveAllegianceBan as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::BreakAllegianceBoot(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::BreakAllegianceBoot as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::DoAllegianceLockAction(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::DoAllegianceLockAction as u32)
                     .unwrap();
                 data.pack(buf);
             }

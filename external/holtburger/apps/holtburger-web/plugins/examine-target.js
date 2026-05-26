@@ -193,6 +193,44 @@ function ensureStyles() {
       margin-top: 4px;
       border-bottom: 1px solid var(--hb-border-brass-dim);
     }
+    .hb-exa-insc-wrap { margin-top: 6px; }
+    .hb-exa-insc-head {
+      font-size: 9px;
+      color: var(--hb-text-gold);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 2px 0;
+    }
+    .hb-exa-insc-body {
+      background: #2a1f15;
+      color: #f0e8d0;
+      border: 1px solid var(--hb-border-brass-dim);
+      font-family: var(--hb-font-serif);
+      font-style: italic;
+      font-size: 11px;
+      line-height: 1.4;
+      padding: 5px 7px;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      white-space: pre-wrap;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+    .hb-exa-insc-btn {
+      margin-top: 4px;
+      background: transparent;
+      border: 1px solid var(--hb-border-brass-dim);
+      color: var(--hb-text-cream);
+      font-family: inherit;
+      font-size: 10px;
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+    .hb-exa-insc-btn:hover {
+      background: var(--hb-overlay-hover);
+      border-color: var(--hb-border-brass);
+      color: var(--hb-text-cream-bright);
+    }
   `;
   document.head.appendChild(style);
 }
@@ -312,6 +350,69 @@ function getItemByGuid(guid) {
     const items = handle.playerInventory();
     return items.find((it) => String(it.guid) === String(guid)) || null;
   } catch (_) { return null; }
+}
+
+// Data-source cascade for inscription on guid:
+//   1. handle.playerBook() if its objectGuid matches — freshest data
+//      pushed by ACE on BookDataResponse (kind=24 bookUpdated).
+//   2. InventoryItem fields (none today — Rust struct lacks the field;
+//      wasm getter follow-up needed before this branch can hit).
+// Returns { text: string, ownedByPlayer: boolean } or null.
+function getInscriptionForGuid(guid) {
+  if (guid == null) return null;
+  const g = (Number(guid) >>> 0);
+  try {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    if (handle?.playerBook) {
+      const book = handle.playerBook();
+      if (book && (book.objectGuid >>> 0) === g && typeof book.inscription === "string") {
+        const ownedByPlayer = !!getItemByGuid(g);
+        return { text: book.inscription, ownedByPlayer };
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+function renderInscription(wrapEl, guid) {
+  if (!wrapEl) return;
+  wrapEl.innerHTML = "";
+  const info = getInscriptionForGuid(guid);
+  if (!info) { wrapEl.style.display = "none"; return; }
+  wrapEl.style.display = "";
+  const head = document.createElement("div");
+  head.className = "hb-exa-insc-head";
+  setAcText(head, "Inscription");
+  wrapEl.appendChild(head);
+  const body = document.createElement("div");
+  body.className = "hb-exa-insc-body";
+  // Retail clamp at ~280 chars; ACE rejects longer payloads anyway.
+  const trimmed = info.text.length > 280 ? info.text.slice(0, 280) : info.text;
+  setAcText(body, trimmed.length > 0 ? trimmed : "(blank)");
+  if (trimmed.length === 0) body.style.opacity = "0.6";
+  wrapEl.appendChild(body);
+  if (info.ownedByPlayer) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hb-exa-insc-btn";
+    setAcText(btn, "Set Inscription");
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (!handle?.setInscription) {
+        console.warn("[examine] setInscription not available");
+        return;
+      }
+      const next = window.prompt("New inscription:", info.text);
+      if (next === null) return;
+      try {
+        handle.setInscription((guid >>> 0), next);
+      } catch (e) {
+        console.warn("[examine] setInscription failed:", e);
+      }
+    });
+    wrapEl.appendChild(btn);
+  }
 }
 
 function populateFromInventory(body, ctx, nameEl, guidEl) {
@@ -453,6 +554,13 @@ export const view = {
     body.className = "hb-exa-body";
     root.appendChild(body);
 
+    // Inscription section — appended at the tail of the scrollable
+    // body. Hidden when no inscription is present for the examined guid.
+    const inscWrap = document.createElement("div");
+    inscWrap.className = "hb-exa-insc-wrap";
+    inscWrap.style.display = "none";
+    body.appendChild(inscWrap);
+
     // Footer status line — retail 0x10000165 (278x19 at popup 11,276).
     // We use it as an out-of-band "loading"/"action" line when present.
     // Hidden via visibility (not display) to preserve the layout rectangle.
@@ -490,13 +598,36 @@ export const view = {
       footerEl,
     });
 
+    const examineGuid = (ctx?.guid != null)
+      ? (Number(ctx.guid) >>> 0)
+      : ((ctx?.srcLi?.dataset?.guid != null)
+          ? (Number(ctx.srcLi.dataset.guid) >>> 0)
+          : null);
+
     if (ctx?.fromInventory) {
       populateFromInventory(body, ctx, nameEl, guidEl);
     } else {
       populateFromEntity(body, ctx ?? {}, nameEl, guidEl);
     }
+    renderInscription(inscWrap, examineGuid);
 
-    return () => { root.remove(); };
+    // Refresh inscription on bookUpdated (book panel pushes fresh
+    // BookSnapshot here) and on playerInventoryChanged (ownership
+    // gates the Set Inscription button).
+    const pc = window.__pluginClient ?? null;
+    const onRefresh = () => renderInscription(inscWrap, examineGuid);
+    if (pc?.events?.on) {
+      pc.events.on("bookUpdated", onRefresh);
+      pc.events.on("playerInventoryChanged", onRefresh);
+    }
+
+    return () => {
+      if (pc?.events?.off) {
+        try { pc.events.off("bookUpdated", onRefresh); } catch (_) {}
+        try { pc.events.off("playerInventoryChanged", onRefresh); } catch (_) {}
+      }
+      root.remove();
+    };
   },
 };
 

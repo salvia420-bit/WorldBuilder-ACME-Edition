@@ -12,6 +12,37 @@
 
 ---
 
+## Status — Wave J executed 2026-05-25 (3-agent parallelism)
+
+Three more items shipped. All 3 agents fired in a single message with disjoint file scopes.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 4 (bans/boot/lock) | Allegiance moderation suite | **SHIPPED (send-only)** | Wave J1. 4 opcodes uncommented (`AddAllegianceBan 0x02A1`, `RemoveAllegianceBan 0x02A2`, `BreakAllegianceBoot 0x0277`, `DoAllegianceLockAction 0x003F`). 4 new structs in `player/actions.rs` (all by-name + bool flags). **ACE wire deviations caught:** BreakAllegianceBoot's `account_boot` is u32 on wire (not bool — mirrors AllegianceChatGag pattern); DoAllegianceLockAction takes the full `AllegianceLockAction` enum (Off=1/On=2/Toggle=3/Check=4/CheckApproved=5/ClearApproved=6 per `~/ace-server/.../Enum/AllegianceLockAction.cs`) — agent chose `LOCK_ON=2` over the spec's "just pass 1". 4 GameAction variants + arms. 4 wasm methods (`addAllegianceBan/removeAllegianceBan/breakAllegianceBoot/doAllegianceLockAction`) + 4 SessionCommand + 4 recv arms with `[allegiance/add-ban|remove-ban|boot|lock]` logs. Panel now has **10 standalone buttons** (Swear/Break + F1's MOTD/Officer/Gag/Recall + J1's AddBan/RemoveBan/Boot/Lock). Still deferred: approved-vassal, officer-titles, ListBans (receive). |
+| 23 (Trade) | Radial menu Trade entry | **SHIPPED** | Wave J2 (pure JS). `plugins/radial-menu.js` adds Trade entry between Drop and Attack. **Player capability detection:** primary path is `window.__wom.get(guid)?.canonicalObjectClass === "Player"` via the Chorizite-port WorldObjectManager (runs `canonicalClassify(itemType, objDescFlags, weenieFlags)` on every kind=1 spawn — same algorithm retail `acclient.exe` uses with ODF_PLAYER at PASS 2). Defensive fallback to `ent.meta.objDescFlags & 0x08` (added `ODF_PLAYER = 0x00000008` const). Self-guard via `guid !== window.getLocalPlayerGuid?.() >>> 0`. `openTrade` wasm-method existence check. Final menu has 6 contextual entries: Examine → Wield → Use → Drop → Trade → Attack. Wave I2's "Trade still pending" comment retired. |
+| 21 (polish) | Inscription display on Examine | **SHIPPED (book-side cross-ref)** | Wave J3 (pure JS). `plugins/examine-target.js` adds an italic-gold-on-parchment "Inscription" section appended to the scrollable body (`.hb-exa-body`). **Data source priority:** (1) `handle.playerBook()` if `objectGuid` matches examined guid (book inscriptions); (2) reserved `InventoryItem.inscription` — NOT IMPLEMENTED. **Important agent finding:** `InventoryItem` in `src/lib.rs:13924-13934` does NOT expose an `inscription` field today (only guid/wcid/name/iconId/itemType/value/stackSize/equipMask/containerId). The cascade is wired to extend cleanly when a future Rust wave adds the wasm getter. "Set Inscription" button renders only when `getItemByGuid(g)` returns truthy (item in `playerInventory()`); click → `window.prompt("New inscription:", current)` → `handle.setInscription(guid, next)` (Wave F2 wasm method). Subscribes to `bookUpdated` + `playerInventoryChanged` for live refresh. |
+
+**Files touched this wave:**
+- `src/lib.rs` +195 LOC (J1: 4 wasm methods + 4 SessionCommand + 4 recv arms)
+- `crates/holtburger-protocol/src/opcodes.rs` +16 LOC (4 uncomments)
+- `crates/holtburger-protocol/src/messages/player/actions.rs` +91 LOC (4 new structs)
+- `crates/holtburger-protocol/src/messages/game_action.rs` +36 LOC (4 enum variants + arms)
+- `plugins/allegiance-panel.js` +142 LOC (J1 4 standalone-IIFE buttons + AllegianceLockAction enum comment)
+- `plugins/radial-menu.js` +33 LOC (J2 Trade entry + ODF_PLAYER const + isPlayer helper)
+- `plugins/examine-target.js` +133 LOC (J3 inscription section + Set button + event subscribe)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `cargo test -p holtburger-protocol --lib`: **276/276 PASS**. `node --check` clean on all JS.
+
+**Recommended Wave K** (next priorities):
+1. **InventoryItem.inscription wasm getter (#21 finish)** — adds the field to `InventoryItem` struct + getter so J3's reserved cascade lights up for non-book items.
+2. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — closes the remaining 8 commented allegiance opcodes (AllegianceChatBoot 0x02A0, SetAllegianceApprovedVassal 0x0040, SetAllegianceOfficerTitle 0x003C, ListAllegianceOfficerTitles 0x003D, ClearAllegianceOfficerTitles 0x003E, ListAllegianceBans 0x02A3, RemoveAllegianceOfficer 0x02A5, ClearAllegianceOfficers 0x02A7).
+3. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
+4. **Spell research / component management UI (#19)** — needs new wasm `playerSpellComponents()` getter + JS panel.
+5. **Speculative squelch list refresh (#20 polish)** — client-side fold of Modify*Squelch acks (flagged in I1).
+6. **Lock-action cycle UX (#4 polish)** — replace J1's hardcoded `LOCK_ON=2` with a dropdown picking from the full AllegianceLockAction enum (Off/On/Toggle/Check/CheckApproved/ClearApproved).
+
+---
+
 ## Status — Wave I executed 2026-05-25 (later same day, true 3-agent parallelism)
 
 First wave where all 3 agents truly ran in parallel (single message, disjoint file scopes). Total wall-clock ~700s instead of the sequential ~1300s.
@@ -335,7 +366,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 
 **Holtburger status:** Wave D2 shipped 6 `SessionHandle` wasm-bindgen methods (`openTrade/closeTrade/addToTrade/acceptTrade/declineTrade/resetTrade`) + `TradeSnapshot`/`TradeItem` Rust structs + JS wrappers + `publish_player_trade_snapshot()` via existing `WorldEvent::TradeStateUpdated` (canonical `world.trade` already maintained by `crates/holtburger-world/src/handlers/trade.rs` across all 9 trade events) + `CLIENT_EVENT_KIND_TRADE_UPDATED=23` + `player_trade()` getter. `plugins/trade-panel.js` NEW 593 LOC — 360×280 floating window, two 4×3 12-slot grids (You / partner), Accept/Decline/Reset footer, partner-accept green dot + self-accept gold highlight, drag-drop from inventory via mime `application/x-hb-inv-guid`, Esc/X close. Debug: `window.__openTradePanel()`.
 
-### 4. Allegiance system — SHIPPED 2026-05-25 (Wave E1 Swear/Break + Wave F1 MOTD/Officer/Gag/Recall + Wave G2 receive-side snapshot)
+### 4. Allegiance system — SHIPPED 2026-05-25 (E1 Swear/Break + F1 MOTD/Officer/Gag/Recall + G2 receive snapshot + J1 Bans/Boot/Lock)
 **Severity:** load-bearing (player-facing core feature)
 **Discord evidence:** Multiple "allegiance / fellowship chat" mentions in #general; cascaded transparent chat windows for allegiance specifically (line 1752).
 **Holtburger status:**
@@ -447,7 +478,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Chat channel filtering and friend lists implicit across #general.
 **Holtburger:** Wave E2 uncommented AddFriend 0x0018, RemoveFriend 0x0017, ModifyCharacterSquelch 0x0058 + created 3 message structs in `crates/holtburger-protocol/src/messages/player/actions.rs` (AddFriend by-name, RemoveFriend by-guid, ModifyCharacterSquelch with 4 fields: add/playerGuid/playerName/messageType per `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/GameActionModifyCharacterSquelch.cs`). 3 wasm methods (`addFriend(name)`, `removeFriend(guid)`, `modifyCharacterSquelch(guid, name, add, mask)`). New `plugins/social-panel.js` (~340 LOC) — Friends section (text input + Add, Remove-by-Selected) + Squelch section (Squelch/Unsquelch Selected, all-chat mask `0xFFFFFFFF`). ModifyAccountSquelch 0x0059, ModifyGlobalSquelch 0x005B, TitleSet 0x002C deferred to Wave F. Receive-side FriendsUpdate/CharacterTitleTable snapshot also Wave F.
 
-### 21. Writing system (books, inscriptions, scrolls) — SHIPPED 2026-05-25 (Wave F2)
+### 21. Writing system (books, inscriptions, scrolls) — SHIPPED 2026-05-25 (Wave F2 + J3 examine inscription)
 **Discord:** Light coverage, but ACE has BookData/AddPage/ModifyPage/DeletePage/Inscribe handlers, Chorizite categorizes under Writing.
 **Holtburger:** Wave F2 shipped 8 opcodes uncommented (5 C2S: `BookData/BookAddPage/BookModifyPage/BookDeletePage/SetInscription`; 3 S2C: `BookModifyPageResponse/BookAddPageResponse/BookDeletePageResponse`). 5 new C2S action structs + 3 new S2C event structs in `crates/holtburger-protocol/src/messages/book/{actions,events}.rs`. **ACE wire deviation:** `BookModifyPage` does NOT carry `ignore_author` on the wire — ACE re-reads it server-side from the book entity. 5 wasm methods + receive-side `BookSnapshot` via existing `WorldEvent::EntityBookUpdated` + `CLIENT_EVENT_KIND_BOOK_UPDATED=24` + `player_book()` getter. NEW `plugins/book-panel.js` — 320×340 floating overlay; inscription strip + Set button (prompt); page navigator (◀ Page N of M ▶); read/edit textarea toggle; Add/Delete Page; AC parchment styling. Debug: `window.__openBookFor(guid)`. Read-only inscription display on examine still a polish item — Wave G or later.
 
@@ -455,7 +486,7 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** Not directly quoted but ACE has Buy/Rent/Abandon/Guest perms/Teleport/Hooks. Chorizite has full House category.
 **Holtburger:** All house opcodes commented out (opcodes.rs lines for `BuyHouse, HouseQuery, AbandonHouse, RentHouse, SetOpenHouseStatus, BootSpecificHouseGuest, ModifyAllegianceGuestPermission`).
 
-### 23. Right-click radial menus (Examine/Drop/Use/Trade/Identify) — SHIPPED 2026-05-25 (Wave B3 Examine+Use+Attack + Wave I2 Drop+Wield)
+### 23. Right-click radial menus (Examine/Drop/Use/Trade/Identify) — SHIPPED 2026-05-25 (B3 Examine+Use+Attack + I2 Drop+Wield + J2 Trade)
 **Discord:** Implicit in plugin discussions; the only fast-path for in-3D interaction.
 **Holtburger:** Wave A3 added drag-threshold direct-invoke Examine; Wave B3 promoted that into a full retail-styled vertical context menu via `plugins/radial-menu.js`. Contextual entries: Examine (always) / Use (if wasm export exists) / Attack (creature + combat-stance). Keyboard nav (arrows + Enter), Esc/outside-click/right-click cancel, viewport-edge auto-flip. Drop/Wield/Trade entries gated on future wasm exports (commented in source for the next-wave author).
 
@@ -623,13 +654,19 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 26. ~~Radial menu Drop/Wield entries (#23 polish)~~ — 5-entry contextual menu shipped (Examine/Wield/Use/Drop/Attack).
 27. ~~LRU deep dispose at bake sites (#15 polish)~~ — per-cell + per-LB statics geometries now released on evict; buildings confirmed all-shared (audit complete).
 
-### Wave J — next priorities
+### Wave J — SHIPPED 2026-05-25 (3-agent parallelism)
 
-28. **Allegiance bans/boots/lock-action/approved-vassal/officer-titles (#4 finish)** — 12 commented opcodes; same per-opcode shape as Wave F1.
-29. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented. Mirror Wave C2 fellowship send-side MVP shape.
-30. **Spell research / component management UI (#19)** — needs new wasm `playerSpellComponents()` getter + JS panel.
-31. **Trade radial-menu entry (#23 polish)** — extends Wave I2 with player-vs-NPC capability gating + `handle.openTrade(targetGuid)`.
-32. **Read-only inscription display on examine (#21 polish)** — extends Wave A3 examine panel with inscription field.
-33. **Speculative squelch list refresh (#20 polish)** — client-side fold of Modify*Squelch acks since ACE doesn't re-push SetSquelchDb.
+28. ~~Allegiance bans/boot/lock (#4 polish)~~ — 4 opcodes + structs + wasm + panel buttons shipped (8 more opcodes still in the long-tail backlog).
+29. ~~Trade radial-menu entry (#23 polish)~~ — Player capability gating via WorldObjectManager + Trade entry between Drop and Attack.
+30. ~~Inscription display on examine (#21 polish)~~ — book-side cross-ref shipped; non-book path reserved until InventoryItem.inscription wasm getter lands.
+
+### Wave K — next priorities
+
+31. **InventoryItem.inscription wasm getter (#21 finish)** — adds the field to `InventoryItem` struct + getter so J3's reserved cascade lights up for non-book items.
+32. **Allegiance approved-vassal + officer-titles + ListBans receive (#4 final)** — 8 remaining commented opcodes.
+33. **House system MVP (#22)** — Buy/Rent/Abandon/Guest perms/Teleport/Hooks; all opcodes commented.
+34. **Spell research / component management UI (#19)** — needs new wasm `playerSpellComponents()` getter + JS panel.
+35. **Speculative squelch list refresh (#20 polish)** — client-side fold of Modify*Squelch acks.
+36. **Lock-action cycle UX (#4 polish)** — dropdown for the full AllegianceLockAction enum.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.

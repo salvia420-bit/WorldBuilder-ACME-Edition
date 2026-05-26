@@ -13076,6 +13076,32 @@ enum SessionCommand {
     /// `GameAction::RecallAllegianceHometown` (sub-opcode 0x02AB). No
     /// payload; ACE owns cooldown / interrupt logic.
     RecallAllegianceHometown,
+    /// Allegiance: add `target_name` to the allegiance ban list. Maps
+    /// to `GameAction::AddAllegianceBan` (sub-opcode 0x02A1). Single
+    /// string16 payload; ACE owns monarch/officer permission checks.
+    AddAllegianceBan {
+        target_name: String,
+    },
+    /// Allegiance: lift the ban on `target_name`. Maps to
+    /// `GameAction::RemoveAllegianceBan` (sub-opcode 0x02A2). Single
+    /// string16 payload; ACE owns monarch/officer permission checks.
+    RemoveAllegianceBan {
+        target_name: String,
+    },
+    /// Allegiance: forcibly boot `target_name` from the allegiance. If
+    /// `account_boot` is true, ACE bans every character on the booted
+    /// account from rejoining. Maps to `GameAction::BreakAllegianceBoot`
+    /// (sub-opcode 0x0277).
+    BreakAllegianceBoot {
+        target_name: String,
+        account_boot: bool,
+    },
+    /// Allegiance: drive the lock state. `lock_action` is the
+    /// `AllegianceLockAction` enum value (1=Off, 2=On, 3=Toggle, etc.).
+    /// Maps to `GameAction::DoAllegianceLockAction` (sub-opcode 0x003F).
+    DoAllegianceLockAction {
+        lock_action: u32,
+    },
     /// Book: request full book metadata + page payloads for `object_guid`.
     /// Maps to `GameAction::BookData` (sub-opcode 0x00AA). ACE replies
     /// with `GameEvent::BookDataResponse` (already wired through the
@@ -17758,6 +17784,64 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::RecallAllegianceHometown)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("recallAllegianceHometown: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Allegiance — ban `target_name` from the allegiance. Sends
+    /// `GameAction::AddAllegianceBan` (sub-opcode 0x02A1).
+    #[wasm_bindgen(js_name = addAllegianceBan)]
+    pub fn add_allegiance_ban(&self, target_name: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AddAllegianceBan { target_name })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("addAllegianceBan: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Allegiance — lift the ban on `target_name`. Sends
+    /// `GameAction::RemoveAllegianceBan` (sub-opcode 0x02A2).
+    #[wasm_bindgen(js_name = removeAllegianceBan)]
+    pub fn remove_allegiance_ban(&self, target_name: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RemoveAllegianceBan { target_name })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("removeAllegianceBan: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Allegiance — forcibly boot `target_name` from the allegiance. If
+    /// `account_boot` is true, every character on the booted account
+    /// is banned from rejoining. Sends `GameAction::BreakAllegianceBoot`
+    /// (sub-opcode 0x0277).
+    #[wasm_bindgen(js_name = breakAllegianceBoot)]
+    pub fn break_allegiance_boot(
+        &self,
+        target_name: String,
+        account_boot: bool,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BreakAllegianceBoot {
+                target_name,
+                account_boot,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("breakAllegianceBoot: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Allegiance — drive the lock state. `lock_action` is the
+    /// `AllegianceLockAction` enum (1=Off, 2=On, 3=Toggle, etc.). Sends
+    /// `GameAction::DoAllegianceLockAction` (sub-opcode 0x003F).
+    #[wasm_bindgen(js_name = doAllegianceLockAction)]
+    pub fn do_allegiance_lock_action(&self, lock_action: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::DoAllegianceLockAction { lock_action })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("doAllegianceLockAction: cmd channel closed ({e})"))
             })
     }
 
@@ -24281,6 +24365,117 @@ async fn recv_loop(
                             return;
                         }
                         console_log_str("[allegiance/recall]");
+                    }
+                    Some(SessionCommand::AddAllegianceBan { target_name }) => {
+                        use holtburger_protocol::messages::{
+                            AddAllegianceBanActionData, GameAction,
+                        };
+                        let name_for_log = target_name.clone();
+                        let action = GameAction::AddAllegianceBan(Box::new(
+                            AddAllegianceBanActionData { target_name },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(AddAllegianceBan): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "add_allegiance_ban: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[allegiance/add-ban] target=\"{name_for_log}\"",
+                        ));
+                    }
+                    Some(SessionCommand::RemoveAllegianceBan { target_name }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, RemoveAllegianceBanActionData,
+                        };
+                        let name_for_log = target_name.clone();
+                        let action = GameAction::RemoveAllegianceBan(Box::new(
+                            RemoveAllegianceBanActionData { target_name },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(RemoveAllegianceBan): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "remove_allegiance_ban: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[allegiance/remove-ban] target=\"{name_for_log}\"",
+                        ));
+                    }
+                    Some(SessionCommand::BreakAllegianceBoot {
+                        target_name,
+                        account_boot,
+                    }) => {
+                        use holtburger_protocol::messages::{
+                            BreakAllegianceBootActionData, GameAction,
+                        };
+                        let name_for_log = target_name.clone();
+                        let action = GameAction::BreakAllegianceBoot(Box::new(
+                            BreakAllegianceBootActionData {
+                                target_name,
+                                account_boot,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(BreakAllegianceBoot): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "break_allegiance_boot: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[allegiance/boot] target=\"{name_for_log}\" account_boot={account_boot}",
+                        ));
+                    }
+                    Some(SessionCommand::DoAllegianceLockAction { lock_action }) => {
+                        use holtburger_protocol::messages::{
+                            DoAllegianceLockActionActionData, GameAction,
+                        };
+                        let action = GameAction::DoAllegianceLockAction(Box::new(
+                            DoAllegianceLockActionActionData { lock_action },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(DoAllegianceLockAction): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "do_allegiance_lock_action: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!("[allegiance/lock] action={lock_action}"));
                     }
                     Some(SessionCommand::BookData { object_guid }) => {
                         use holtburger_common::Guid;

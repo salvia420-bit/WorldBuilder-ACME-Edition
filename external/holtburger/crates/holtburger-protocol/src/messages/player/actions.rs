@@ -485,6 +485,97 @@ impl ProtocolPack for RecallAllegianceHometownActionData {
     fn pack(&self, _writer: &mut Vec<u8>) {}
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddAllegianceBanActionData {
+    pub target_name: String,
+}
+
+impl ProtocolUnpack for AddAllegianceBanActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let target_name = read_string16(data, offset)?;
+        Some(Self { target_name })
+    }
+}
+
+impl ProtocolPack for AddAllegianceBanActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        write_string16(writer, &self.target_name);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveAllegianceBanActionData {
+    pub target_name: String,
+}
+
+impl ProtocolUnpack for RemoveAllegianceBanActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let target_name = read_string16(data, offset)?;
+        Some(Self { target_name })
+    }
+}
+
+impl ProtocolPack for RemoveAllegianceBanActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        write_string16(writer, &self.target_name);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BreakAllegianceBootActionData {
+    pub target_name: String,
+    /// ACE reads `Convert.ToBoolean(ReadUInt32())` — wire is a u32, 0 = leave on, nonzero = boot the entire account.
+    pub account_boot: bool,
+}
+
+impl ProtocolUnpack for BreakAllegianceBootActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let target_name = read_string16(data, offset)?;
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let account_boot = LittleEndian::read_u32(&data[*offset..*offset + 4]) != 0;
+        *offset += 4;
+        Some(Self {
+            target_name,
+            account_boot,
+        })
+    }
+}
+
+impl ProtocolPack for BreakAllegianceBootActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        write_string16(writer, &self.target_name);
+        writer
+            .write_u32::<LittleEndian>(u32::from(self.account_boot))
+            .unwrap();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DoAllegianceLockActionActionData {
+    /// `AllegianceLockAction` enum value (ACE): 0=Undef, 1=Off, 2=On, 3=Toggle,
+    /// 4=Check, 5=CheckApproved, 6=ClearApproved. ACE casts the raw u32 to the enum.
+    pub lock_action: u32,
+}
+
+impl ProtocolUnpack for DoAllegianceLockActionActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let lock_action = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(Self { lock_action })
+    }
+}
+
+impl ProtocolPack for DoAllegianceLockActionActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        writer.write_u32::<LittleEndian>(self.lock_action).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
