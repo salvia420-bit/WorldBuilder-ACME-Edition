@@ -17,6 +17,12 @@
 | 6 | #4 Missile branch never queries CMT | 2 | **shipped** 2026-05-26 (audit re-scoped — see Wave 2 finding) |
 | 7 | Missile aim-level dispatch (Wave 2 follow-on) | 3 | **shipped** 2026-05-26 |
 | 8 | Recklessness band overlay on combat-bar | 4 | **shipped** 2026-05-26 |
+| 9 | Defender-facing Sneak Attack prediction (JS-only) | 5 | **shipped** 2026-05-26 |
+| 10 | Shield CMT-row audit (wiki-vs-data divergence found) | 5 | **shipped** 2026-05-26 |
+| 11 | PowerLevel/AccuracyLevel STypeFloat surface (FloatKey 92/93) | 5 | **shipped** 2026-05-26 |
+| 12 | Spell-shape classifier (War 6 shapes + Void 5 shapes from SpellId) | 5 | **shipped** 2026-05-26 |
+| 13 | Two-Handed Combat AttackType audit (limitation documented) | 5 | **shipped** 2026-05-26 |
+| 14 | Light Weapons / Unarmed audit (post-MoA mapping confirmed) | 5 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -579,15 +585,207 @@ Files changed (paths + line counts), the skill-state lookup approach used, scree
 - Magic stance → no band (combat-bar transforms to spell picker anyway; redundant guard for safety).
 - Mid-session redistribution (e.g. respec gem) → `playerStatsUpdated` event re-runs the band check; UI updates without reload.
 
-### Wave 4 follow-on candidates (not in scope for Phase 8)
+### Wave 4 follow-on candidates (deferred to Wave 5)
 
-Captured here for visibility — these are NOT being shipped in Wave 4 unless the user requests them:
+See "Wave 5" section below.
 
-- **Defender facing on the wire for Sneak Attack prediction.** Currently we have local + remote heading from MotionUpdate, but not necessarily *defender* yaw at swing-impact tick. The wiki confirms Sneak Attack works for melee/missile/magic and gates on attacker-behind-defender. Wire-surface change; estimate ~80–120 LOC across protocol parser + wasm getter + JS dispatch.
-- **Shield CMT validation.** Confirm "One-Handed (Shield)" CMT rows omit Backhand entries (per the Combat omnibus page). Quick parity-test addition; probably ~20 LOC.
-- **PowerLevel / AccuracyLevel STypeFloat surface.** Read PropertyDouble keys 86 (PowerLevel) + 87 (AccuracyLevel) for diag observability of server-vs-client power state. ~30 LOC.
-- **Spell-shape classifier.** Six War Magic shapes (arc/ring/wall/bolt/volley/blast) + five Void shapes (no wall/volley, adds DoT/debuff). Needed for projectile spawning, not animation. Map `SpellId` → `(school, shape, level)`. ~100 LOC + a data table generated from `external/LSD-Partial-2025-02-23_16-15/spells/`.
-- **Two-Handed Combat skill audit.** Not in the wiki research set — flag as follow-on.
+---
+
+## Wave 5 — wiki-research follow-ons (5 agents, parallel)
+
+Six phases, five agents — Phases 13 + 14 are bundled into one agent because both audit `ui/ac_attack_type_for_weapon.js`. All other file paths are disjoint, so the 5 agents dispatch in parallel with no merge risk.
+
+### Pre-investigated facts (verified before dispatch)
+
+- **PowerLevel and AccuracyLevel are FloatKey 92 and 93, NOT 86/87.** RynthSuite's `AcStubs.cs:56-57` claims `PowerLevel = 86 / AccuracyLevel = 87`; that disagrees with both our enum at `crates/holtburger-common/src/properties/property_keys/floats.rs:104-105` AND ACE's authoritative enum at `ace-server/Source/ACE.Entity/Enum/Properties/PropertyFloat.cs:108-109`, which both have **92/93**. Use our canonical values; RynthSuite likely has a stale/divergent enum.
+- **PropertyFloat is already plumbed through.** `crates/holtburger-world/src/handlers/properties.rs:120-143` already routes `PrivateUpdatePropertyFloat` / `PublicUpdatePropertyFloat` into `WorldState.player.float_properties`. Phase 11 just needs a wasm getter; no protocol-parser change required.
+- **Skills are already surfaced.** `sessionHandle.player.skills()` returns `Vec<u32>` flat-packed as `[type, current, base, ranks, training, …]` per `src/lib.rs:13963`. `TwoHandedCombat = 41` (`crates/holtburger-common/src/stats.rs:140`).
+- **AttackType.cs.** Heavy/Light/Finesse/TwoHandedCombat all use `Slash`, `Thrust`, etc — the bitmask values from `ace-server/Source/ACE.Entity/Enum/AttackType.cs`.
+- **The acpedia "Light Weapons covers unarmed" finding does NOT invalidate `inferAttackTypeForWeapon(null) → Punch (0x01)`.** Our helper is correct for the WIRE TYPE; the skill that GATES the swing is LightWeapons (45), but the AttackType code passed to the CMT stays `Punch`. Phase 14 is an audit + comment update, not a logic change.
+
+### Phase 9 — Defender-facing Sneak Attack prediction (JS-only)
+
+**Owner:** Agent H
+**Scope:** Per the acpedia wiki, Sneak Attack gates on attacker-position-vs-defender-facing. To predict the bonus client-side (and let the UI show "Sneak attack ready" when the player is behind their target), we sample the defender's last-known heading from the entity manager at swing-fire and compute `dot(attackerForward, defenderForward) < threshold`.
+
+**Files:**
+- NEW `external/holtburger/apps/holtburger-web/ui/ac_sneak_attack_predict.js` — exports `isAttackerBehindDefender({attackerPose, defenderPose, defenderHeadingRad})` plus a `SNEAK_ATTACK_CONE_RAD` constant.
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` — melee + missile branches. After resolving `motionCmd` / `aimMotion`, call the predictor; if true, fire `__pluginClient.events.emit("sneakAttackPredicted", {targetGuid, attackType, ...})` so plugins can light up an indicator.
+- *(Do NOT add a magic branch in this phase — wiki notes Sneak Attack applies to spells too, but spell-cast paths fan out into the magic stance picker, which is a different code path; deferred to a separate phase.)*
+
+**Acceptance:**
+- Pure helper: given AC-coord poses + defender yaw, returns boolean.
+- Wired into picking.js's melee + missile fire paths.
+- New event `sneakAttackPredicted` fires when the predicate is true.
+- `node --check` clean. No wire-side changes.
+
+### Phase 10 — Shield "One-Handed (Shield)" CMT-row Backhand-absence audit
+
+**Owner:** Agent I
+**Scope:** The acpedia Combat omnibus page (line 181) states shields "only protect the front" and the per-stance maneuver table omits Backhand under the "One-Handed (Shield)" column. Verify this against retail CMT 0x30000000 data: are there zero `Backhand*` MotionCommand rows for the `SwordShieldCombat (0x80000040)` stance?
+
+**Files:**
+- NEW `external/holtburger/crates/holtburger-dat/tests/shield_stance_no_backhand_audit.rs` — parity-test pattern matching `combat_maneuver_table_parity.rs`. Walks CMT 0x30000000, filters to stance `0x80000040`, asserts no motion u32 in the rows maps to a `Backhand*` name (cross-check against `apps/holtburger-web/data/motion-command-names.json`'s name table).
+
+**Acceptance:**
+- `cargo test -p holtburger-dat shield_stance_no_backhand_audit` PASSes when run with `HOLTBURGER_PORTAL_DAT` set; gracefully skips otherwise (mirroring `combat_maneuver_table_parity.rs:16`).
+- Test report (paste of cargo output) shows the per-stance motion counts and confirms the absence.
+- If the audit *finds* Backhand* rows for the shield stance, REPORT IT — that's a wiki-contradicts-data finding worth surfacing rather than silently failing.
+
+### Phase 11 — PowerLevel/AccuracyLevel surface for diag
+
+**Owner:** Agent J
+**Scope:** Add wasm getters for the player's current `PowerLevel` (FloatKey 92) and `AccuracyLevel` (FloatKey 93). Surface in the diag layer so we can see the SERVER's authoritative power state vs the local slider value — useful for catching desync.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/src/lib.rs` — new wasm-exported method on `SessionHandle` returning `{ powerLevel: f32, accuracyLevel: f32 }` (or two getters). Reads from `state.player.float_properties.get(&FloatKey::PowerLevel)` etc.
+- `external/holtburger/apps/holtburger-web/scene3d/diag/combat.js` — surface in `summary()` and `snapshot()` as `serverPowerLevel` / `serverAccuracyLevel`. Compare against slider state if accessible.
+
+**Acceptance:**
+- New wasm method present and callable from JS.
+- Diag snapshot includes the values (or `null` if not yet received from server).
+- `cargo check -p holtburger-web --target wasm32-unknown-unknown` clean.
+- `node --check` clean on diag/combat.js.
+
+### Phase 12 — Spell-shape classifier (six War + five Void shapes)
+
+**Owner:** Agent K
+**Scope:** Build a SpellId → `(school, shape, level)` lookup so the renderer knows whether a spell-cast event should spawn a single bolt, an arc, a streak, a volley, a wall, a ring, or a blast. The wind-up animation stays uniform; the *projectile pattern* is what differs. Magic stance's spell-picker can already fire spells; this phase just classifies the resulting `Cast*` events for the projectile spawner.
+
+**Files:**
+- NEW `external/holtburger/apps/holtburger-web/ui/ac_spell_shape.js` — exports `SPELL_SHAPE` const enum (`Bolt`, `Arc`, `Streak`, `Volley`, `Wall`, `Ring`, `Blast`) + `SPELL_SCHOOL` const enum (`War`, `Void`, `Creature`, `Item`, `Life`) + `classifySpell(spellId) → { school, shape, level } | null`.
+- NEW `external/holtburger/apps/holtburger-web/data/spell-shapes.json` — generated lookup table. Source the mapping from the LSD spell data at `external/LSD-Partial-2025-02-23_16-15/spells/` (or wherever spell weenies live in this repo). Write a one-shot Node script under `apps/holtburger-web/scripts/` that parses the LSD spell JSON, classifies each spell by name-pattern (e.g., `Bolt` in name → `Bolt` shape, `Streak` → `Streak`, etc.), and emits the JSON.
+
+**Acceptance:**
+- Helper exports the two enums + classifier.
+- `classifySpell` returns expected values for a few hand-picked test cases (`Lightning Bolt 1` → `{school: War, shape: Bolt, level: 1}`, `Nether Streak VII` → `{school: Void, shape: Streak, level: 7}`, etc.). Ship a few inline unit tests.
+- The script is idempotent and committed alongside the JSON it generates.
+- War Magic produces 6 distinct shapes (arc / ring / wall / bolt / volley / blast). Void Magic produces 5 (no wall, no volley; adds DoT/debuff into a separate shape bucket or leave as `null` shape).
+- No wiring into picking.js or index.html in this phase — that's the renderer side, separate ticket.
+
+### Phase 13 + 14 (bundled) — Two-Handed Combat audit + Light Weapons unarmed audit
+
+**Owner:** Agent L (bundled because both touch `ui/ac_attack_type_for_weapon.js`)
+
+**Phase 13 — Two-Handed Combat:**
+- Investigate `ace-server/Source/ACE.Server/WorldObjects/WorldObject_Weapon.cs:1050` (`GetAttackType`) and ACE's `WeaponType` enum: what AttackType bitmask is returned for two-handed weapons (`Slash`, `Thrust`, both)?
+- Today our `inferAttackTypeForWeapon` returns `Slash = 0x04` for the `TWO_HANDED (0x02000000)` equipMask. Verify this matches retail: are two-handed swords slash-only? Are polearms thrust? Some weapons multi-class?
+- If retail differentiates (e.g., polearm should be Thrust, two-handed sword Slash), split the TWO_HANDED branch by `WeaponType` if the data is available, OR leave as Slash with a comment explaining the limitation.
+
+**Phase 14 — Light Weapons unarmed:**
+- The wiki research surfaced that **Light Weapons (skill 45) covers unarmed (punch and kick)**. There's no separate Unarmed skill post-MoA.
+- Our `inferAttackTypeForWeapon(null) → Punch (0x01)` is **correct** for the wire type. The skill-gating happens server-side.
+- Audit the helper's docstring: ensure the "unarmed" branch comment cites LightWeapons (45), not a phantom Unarmed skill. Also note that "kick" is `AttackType.Kick = 0x08` in ACE's enum — our helper currently always returns `Punch` for unarmed; whether to return `Kick` for some condition (e.g., low height?) is server-side per CMT row.
+- This is an audit + comment update, not a logic change.
+
+**Files:**
+- `external/holtburger/apps/holtburger-web/ui/ac_attack_type_for_weapon.js` — extend or comment-update; both phases land in this file.
+
+**Acceptance:**
+- Phase 13 either adds a TWO_HANDED sub-branch with `WeaponType` discrimination (Slash for swords, Thrust for spears/polearms) OR leaves as-is with a documented limitation citing the ACE source.
+- Phase 14's audit confirms the helper's docstring accurately reflects post-MoA skill mapping. No phantom Unarmed references.
+- `node --check` clean.
+- Mapping table at the top of the helper updated to reflect the audit findings.
+
+### Wave 5 results — shipped 2026-05-26
+
+#### Phase 9 (Agent H) — Sneak-attack predictor
+
+**Files (3, +368 / -0):**
+- NEW `external/holtburger/apps/holtburger-web/ui/ac_sneak_attack_predict.js` (270 lines): `isAttackerBehindDefender({attackerPose, defenderPose, defenderHeadingRad})` + `SNEAK_ATTACK_CONE_RAD`. 8/8 inline unit tests PASS.
+- `external/holtburger/apps/holtburger-web/scene3d/entities.js` (+43): new `getHeading(guid)` accessor using the same `atan2` extraction as `getLocalPlayerHeading`.
+- `external/holtburger/apps/holtburger-web/scene3d/picking.js` (+55): both melee and missile fire closures (inside `fireOnce`) re-sample pose + target heading, call the predictor, fire `sneakAttackPredicted` event when behind.
+
+**Cone angle.** Ported VERBATIM from `~/ace-server/Source/ACE.Server/WorldObjects/Creature_Combat.cs:762-763`:
+```csharp
+var angle = creatureTarget.GetAngle(this);  // signed angle defender→attacker in defender's local frame
+var behind = Math.Abs(angle) > 90.0f;       // 180° rear hemisphere
+```
+So `SNEAK_ATTACK_CONE_RAD = Math.PI / 2`. AC forward-vector convention `(-sin h, cos h, 0)` cross-verified against `Position.cs:80-83` (`Vector3.Transform(Vector3.UnitY, Rotation)`) and existing `getLocalPlayerHeading`. Wire payload unchanged. Magic-cast prediction deferred (different spell-picker dispatch path).
+
+#### Phase 10 (Agent I) — Shield CMT audit (WIKI WAS WRONG)
+
+**Files (1 NEW, 165 lines):**
+- NEW `external/holtburger/crates/holtburger-dat/tests/shield_stance_backhand_audit.rs`. Final polarity: positive assertion locking in the retail-data shape (3 Backhand rows under SwordShieldCombat, one per AttackHeight).
+
+**Finding.** acpedia's Combat omnibus page claims "shields only protect the front" and visually omits Backhand under the "One-Handed (Shield)" column. Retail CMT 0x30000000 actually contains **3 Backhand rows under SwordShieldCombat**, one per AttackHeight (Low/Medium/High), all keyed `attack_type=0x0004` (Slash). The motion-name→height mapping is *inverted* (Low height swings BackhandHigh, etc — a separate retail quirk).
+
+Interpretation open question: either the wiki is wrong, or retail leaves the data in but gates the motions at runtime via a different check (`acclient.c` swing path, or ACE's `Player_Melee.GetSwingAnimation` filter). The test does NOT resolve this — it locks in current retail data and acts as a regression guard.
+
+**Test result.** PASS against `~/ac_base_dats/client_portal.dat`: `Shield stance has 15 maneuvers; 15 unique motions; Backhand* motions found: 3` in 1.03s. Skipped cleanly when `HOLTBURGER_PORTAL_DAT` is unset.
+
+#### Phase 11 (Agent J) — PowerLevel/AccuracyLevel wasm getter
+
+**Files (2, +94 / -0):**
+- `external/holtburger/apps/holtburger-web/src/lib.rs` (+60): new `#[wasm_bindgen(js_name = playerPowerState)] pub fn player_power_state(&self) -> Vec<f32>` reading `world.entities.get(world.player.guid).get_float_prop(PropertyFloat::{PowerLevel,AccuracyLevel})` via the existing `LatestStats` shared cell. Returns 2-element `[PowerLevel, AccuracyLevel]` with NaN for un-received values.
+- `external/holtburger/apps/holtburger-web/scene3d/diag/combat.js` (+34): `summary()` + `snapshot()` now carry `serverPowerLevel` / `serverAccuracyLevel` (read-on-demand from the wasm getter, NaN normalized to `null` for clean JSON).
+
+**Important correction.** RynthSuite's `AcStubs.cs:56-57` claims `PowerLevel = 86 / AccuracyLevel = 87`. That's wrong — verified against `crates/holtburger-common/src/properties/property_keys/floats.rs:104-105` AND `ace-server/Source/ACE.Entity/Enum/Properties/PropertyFloat.cs:108-109` which both have **92 / 93**. The original RynthSuite follow-on note in this doc has been corrected.
+
+#### Phase 12 (Agent K) — Spell-shape classifier
+
+**Files (4, +847 / -0):**
+- NEW `external/holtburger/apps/holtburger-web/ui/ac_spell_shape.js` (290): `SPELL_SHAPE` (7-shape projectile superset + Self), `SPELL_SCHOOL` (6-school ACE-canonical), `classifySpell(spellId) → { school, shape, level } | null`. Lazy-fetch in browser; sync-preload for Node tests.
+- NEW `external/holtburger/apps/holtburger-web/data/spell-shapes.json` (274.6 KB, 6,266 entries, sorted by SpellId).
+- NEW `external/holtburger/apps/holtburger-web/scripts/gen-spell-shapes.cjs` (295): one-shot generator joining `data/spells-catalog.json` (the existing committed catalog from LSD) with name/description pattern-matching for shape classification.
+- NEW `external/holtburger/apps/holtburger-web/test_ac_spell_shape.mjs` (262): 30/30 unit tests PASS.
+
+**Per-(school, shape) buckets:**
+| School | Counts |
+|---|---|
+| War | Arc=62 · Blast=51 · Bolt=121 · Ring=93 · Streak=53 · Volley=76 · Wall=32 · Self=203 (691 total) |
+| Void | Arc=8 · Blast=8 · Bolt=8 · Ring=3 · Streak=9 · Self=40 (76 total) |
+| Life | Self=1501 |
+| Item | Self=1079 |
+| Creature | Self=2919 |
+
+War uses all 7 projectile shapes (including Streak from Slumbering Giant — wiki research had said 6 but Streak is correct per data). Void uses exactly the 5 from the wiki (no Wall, no Volley). Spot-check examples: `Lightning Bolt I → War/Bolt`, `Nether Streak VII → Void/Streak`, `Os' Wall → War/Wall`, `Firestorm → War/Volley`, `Festering Curse III → Void/Self`.
+
+Helper not yet wired into picking.js / index.html / spell-picker — that's renderer-side work (separate ticket).
+
+#### Phase 13 + 14 (Agent L) — TwoHanded + LightWeapons audits
+
+**Files (1, +141 / -0 comments-only):**
+- `external/holtburger/apps/holtburger-web/ui/ac_attack_type_for_weapon.js` — audit + comment update; helper logic unchanged.
+
+**Phase 13 finding.** ACE's `WorldObject_Weapon.cs:1050 GetAttackType` reads `W_AttackType` (PropertyInt 47) and never branches on WeaponType; every dispatch is driven off the raw bitmask. Survey of all 646 retail TwoHandedCombat weapons in `external/LSD-Partial-2025-02-23_16-15/weenies/` shows:
+- Axe 100% Slash, Mace 98% Slash
+- Spear 88% Thrust
+- Sword 84% Thrust|Slash
+- Staff 93% Thrust|Slash
+- Dagger 37% DoubleSlash|DoubleThrust
+
+So the hardcoded `Slash` for the TWO_HANDED equipMask is **wrong for ~35–40%** of two-handed weapons. Chose option (c): keep as `Slash` with a documented limitation citing the wire-side fix needed (surface PropertyInt 47 + PropertyInt 353 on the `WieldedWeaponEntry` wasm struct, see breadcrumb pointing at `src/lib.rs:15421`).
+
+**Critical citation fix.** The pre-existing docstring had **wrong PropertyInt key numbers** (AttackType=45, WeaponType=89). Real values are 47 and 353 per `PropertyInt.cs:78` and `:556`. Fixed.
+
+**Phase 14 finding.** Helper's docstring did NOT reference a phantom "Unarmed skill" — it correctly cited the AttackType composite. Updated comment now explicitly cites `Skill.LightWeapons` (Skill enum value 47, `Skill.cs:58`) as the post-MoA gating skill, with a note that legacy `Skill.UnarmedCombat` (value 14, `Skill.cs:26`) survives in ACE only for pre-MoA data-migration paths.
+
+Added a documented limitation: helper always returns `Punch (0x01)` regardless of power, while acpedia maps unarmed Full PB → Kick, Medium → Punch, Low → Jab. Height-aware AttackType selection tracked as a TODO with two implementation paths.
+
+### Wave 5 validation summary
+
+| Check | Result |
+|---|---|
+| `node --check` on all 7 modified/new JS files | PASS |
+| `cargo check -p holtburger-web --target wasm32-unknown-unknown` | PASS (18 pre-existing warnings, 0 new) |
+| `wasm-pack build --target web --dev` | PASS, `playerPowerState` in `pkg/holtburger_web.d.ts:2920` |
+| `cargo test -p holtburger-dat --test shield_stance_backhand_audit` (with portal.dat) | PASS in 1.03s |
+| `node test_ac_aim_level_for_velocity.mjs` (Phase 7 regression check) | 16/16 PASS |
+| `node test_ac_spell_shape.mjs` | 30/30 PASS |
+| Sneak-attack predictor smoke (parent agent verified) | PASS |
+
+### Single commit + push
+
+`feat(holtburger-web): CMT fixes wave 5 — sneak-attack predict + shield audit + power-level surface + spell shapes + weapon-type audits`.
+
+### What's still parked after Wave 5
+
+Wave 5 closes the wiki-derived follow-ons. Outstanding items would be:
+- **Magic-side Sneak Attack prediction** (Phase 9 is melee/missile only).
+- **Defender-yaw on the wire at swing-impact-tick** (currently we sample from entity manager; if the server checks at a different tick boundary, our prediction can desync).
+- **Wave 3 missile prediction quality.** Direct-line direction works most of the time; gravity-compensated arc would match server choices more often. Tracked in the helper's TODO.
+- **Sneak Attack damage-rating display.** Showing the predicted DR value (combining base attack + sneak + recklessness) on the combat HUD; depends on Phase 11 and a new Damage Rating rollup.
 
 ## Coordination notes for agents
 

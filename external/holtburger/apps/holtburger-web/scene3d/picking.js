@@ -5,6 +5,7 @@ import {
   inferAttackTypeForWeapon,
 } from "../ui/ac_attack_type_for_weapon.js";
 import { getAimLevelForVelocity } from "../ui/ac_aim_level_for_velocity.js";
+import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -491,6 +492,33 @@ export function setupClickPicking({
       try { window.__diag?.combat?.onAimLevel?.({ scope: "local", motion: aimMotion }); } catch (_) {}
       console.log(`[fire-attack] missile height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m attackType=0x${attackType.toString(16)} motionCmd=${motionCmd ? "0x" + motionCmd.toString(16) : "none"} aimMotion=0x${aimMotion.toString(16)} (range=${MISSILE_RANGE_M}m)`);
       const fire = () => fireOnce(() => {
+        // Wave 5 / Phase 9 (2026-05-26) — Sneak Attack prediction. Re-
+        // sample target position + defender heading at the actual fire
+        // tick (the outer-scope `pose` / `targetAc` are stale after a
+        // charge-pursuit). Emit `sneakAttackPredicted` exactly once
+        // per swing when the attacker is in the defender's 90° rear
+        // hemisphere — matches ACE `Creature_Combat.cs:763`. Pure UI
+        // signal; the wire payload to `missileAttack` is unchanged.
+        try {
+          const firePose = playerWorldPose(sessionHandle);
+          const fireTargetPos = entityAcPosition(em, targetGuid);
+          const targetHeadingRad = em?.getHeading?.(targetGuid) ?? null;
+          if (
+            firePose && fireTargetPos && targetHeadingRad != null &&
+            isAttackerBehindDefender({
+              attackerPose: firePose,
+              defenderPose: fireTargetPos,
+              defenderHeadingRad: targetHeadingRad,
+            })
+          ) {
+            window.__pluginClient?.events?.emit?.("sneakAttackPredicted", {
+              attackerGuid: localGuid,
+              defenderGuid: targetGuid,
+              attackType,
+              scope: "local-missile",
+            });
+          }
+        } catch (_) { /* never block the swing on prediction faults */ }
         sessionHandle.missileAttack(targetGuid, safeHeight, slider);
         if (localGuid !== 0) {
           if (finalMotion && typeof em?.setSwingMotion === "function") {
@@ -538,6 +566,33 @@ export function setupClickPicking({
       const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider, prevMeleeMotion);
       if (motionCmd) prevMeleeMotion = (motionCmd >>> 0);
       const fire = () => fireOnce(() => {
+        // Wave 5 / Phase 9 (2026-05-26) — Sneak Attack prediction. Re-
+        // sample target position + defender heading at the actual fire
+        // tick (the outer-scope `pose` / `targetAc` are stale after a
+        // charge-pursuit). Emit `sneakAttackPredicted` exactly once
+        // per swing when the attacker is in the defender's 90° rear
+        // hemisphere — matches ACE `Creature_Combat.cs:763`. Pure UI
+        // signal; the wire payload to `attack` is unchanged.
+        try {
+          const firePose = playerWorldPose(sessionHandle);
+          const fireTargetPos = entityAcPosition(em, targetGuid);
+          const targetHeadingRad = em?.getHeading?.(targetGuid) ?? null;
+          if (
+            firePose && fireTargetPos && targetHeadingRad != null &&
+            isAttackerBehindDefender({
+              attackerPose: firePose,
+              defenderPose: fireTargetPos,
+              defenderHeadingRad: targetHeadingRad,
+            })
+          ) {
+            window.__pluginClient?.events?.emit?.("sneakAttackPredicted", {
+              attackerGuid: localGuid,
+              defenderGuid: targetGuid,
+              attackType,
+              scope: "local",
+            });
+          }
+        } catch (_) { /* never block the swing on prediction faults */ }
         sessionHandle.attack(targetGuid, safeHeight, slider);
         if (localGuid !== 0) {
           if (motionCmd && typeof em?.setSwingMotion === "function") {

@@ -16230,6 +16230,19 @@ struct LatestStats {
     // stat hydration; can exceed 1.0 when over-encumbered (retail
     // allowed this with movement penalties).
     burden: f32,
+    // CMT Wave 5 / Phase 11 (2026-05-26): server-authoritative power /
+    // accuracy slider state read from the local-player entity's
+    // PropertyFloat::PowerLevel (FloatKey 92) /
+    // PropertyFloat::AccuracyLevel (FloatKey 93). Both arrive via
+    // PrivateUpdatePropertyFloat / PublicUpdatePropertyFloat which
+    // already routes through `emit_player_derived_stats` (so the
+    // stats_changed publish block refreshes them on every wire delta).
+    // `None` pre-spawn / before the slider has ever moved server-side.
+    // Useful for diag observability of client-vs-server desync — the
+    // combat-bar slider is purely local until the next attack action
+    // ships the value to ACE.
+    power_level: Option<f32>,
+    accuracy_level: Option<f32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -16310,6 +16323,32 @@ impl SessionHandle {
             .as_ref()
             .map(|s| s.burden)
             .unwrap_or(0.0)
+    }
+
+    /// **CMT Wave 5 / Phase 11 (2026-05-26).** Server-authoritative
+    /// `[PowerLevel, AccuracyLevel]` for the local player as a 2-element
+    /// `f32` array. Both values are PropertyFloats (FloatKey 92 / 93 per
+    /// `holtburger_common::properties::PropertyFloat`) mirroring the
+    /// combat-bar slider — ACE writes them when the player issues an
+    /// attack action. Either component is `NaN` if the corresponding
+    /// property hasn't been received yet (pre-spawn, or the slider has
+    /// never been touched server-side). JS uses this for diag
+    /// observability of client-vs-server slider desync — the combat-bar
+    /// slider is purely local until the next attack ships the value to
+    /// ACE, so a drift between the JS-side slider and the server's
+    /// view shows up here. Refreshed alongside the rest of
+    /// `playerStats()` on every `kind=8 PlayerStatsUpdated` drain (the
+    /// `Private/PublicUpdatePropertyFloat` arm fires
+    /// `emit_player_derived_stats` for player-targeted updates, which
+    /// the recv loop folds into `stats_changed`).
+    #[wasm_bindgen(js_name = playerPowerState)]
+    pub fn player_power_state(&self) -> Vec<f32> {
+        let s = self.latest_stats.borrow();
+        let (p, a) = match s.as_ref() {
+            Some(stats) => (stats.power_level, stats.accuracy_level),
+            None => (None, None),
+        };
+        vec![p.unwrap_or(f32::NAN), a.unwrap_or(f32::NAN)]
     }
 
     /// Phase 4 step 4 follow-on: most recent inventory snapshot.
@@ -19911,6 +19950,25 @@ fn publish_player_stats_snapshot(
         .get(world.player.guid)
         .map(|entity| entity.name().to_string())
         .unwrap_or_default();
+    // CMT Wave 5 / Phase 11 (2026-05-26): pull PowerLevel / AccuracyLevel
+    // straight off the player Entity. Both are PropertyFloat values
+    // (FloatKey 92 / 93 per `holtburger_common::properties::PropertyFloat`)
+    // routed in by `Private/PublicUpdatePropertyFloat` (handlers/properties.rs:120-143)
+    // — which already triggers `emit_player_derived_stats` for player
+    // targets, so this snapshot path runs whenever either value
+    // changes. `None` pre-spawn or before either slider has been
+    // touched server-side.
+    use holtburger_common::properties::{PropertyFloat, WorldObjectPropertyAccessors};
+    let (power_level, accuracy_level) = world
+        .entities
+        .get(world.player.guid)
+        .map(|entity| {
+            (
+                entity.get_float_prop(PropertyFloat::PowerLevel).map(|v| v as f32),
+                entity.get_float_prop(PropertyFloat::AccuracyLevel).map(|v| v as f32),
+            )
+        })
+        .unwrap_or((None, None));
     // Wave-D4 (paperdoll): burden recompute piggy-backs on stats
     // hydration — same trigger conditions (UpdateAttribute, equip,
     // inventory delta). Reads via `WorldContextExt::player_burden`
@@ -19924,6 +19982,8 @@ fn publish_player_stats_snapshot(
         skills,
         level_info,
         burden,
+        power_level,
+        accuracy_level,
     });
 }
 

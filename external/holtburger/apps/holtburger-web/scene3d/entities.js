@@ -3401,6 +3401,49 @@ export class EntityManager {
   }
 
   /**
+   * Wave 5 / Phase 9 (2026-05-26) — defender heading accessor for
+   * Sneak Attack prediction. Returns the entity's raw yaw in radians
+   * (CCW-around-+Z math convention, same shape as
+   * `LocalPlayerPose::heading` from `src/lib.rs:20535-20537` and the
+   * wire-side quaternion's `atan2(2(qw·qz + qx·qy), 1 - 2(qy² + qz²))`
+   * extraction). NOT negated — unlike `getLocalPlayerHeading()` which
+   * converts to the followYaw camera convention, this getter returns
+   * the raw yaw so it can be passed directly into
+   * `ui/ac_sneak_attack_predict.js::isAttackerBehindDefender` whose
+   * AC-forward derivation is `(-sin h, cos h, 0)`.
+   *
+   * Returns `null` when the entity is unknown OR its rig has not yet
+   * been built (no `inst.root.quaternion` available). Callers MUST
+   * gate the predictor call on a non-null return — the helper is
+   * conservative on `null` headings but skipping the call avoids the
+   * cost of building the `pose` object only to throw it away.
+   *
+   * @param {number} guid — entity GUID to query
+   * @returns {number | null} raw yaw in radians, or null if unknown
+   */
+  getHeading(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return null;
+    const inst = this.entityMap.get(g);
+    if (!inst || !inst.root || !inst.root.quaternion) return null;
+    const q = inst.root.quaternion;
+    // Same `atan2(siny_cosp, cosy_cosp)` extraction as
+    // `getLocalPlayerHeading()` above + `publish_local_player_pose`
+    // in `src/lib.rs`. Note three's `Quaternion` stores `(x, y, z, w)`
+    // and `acQuatToThree` re-orders the AC `(qw, qx, qy, qz)` wire
+    // tuple into that slot, so `.w` and `.z` here are the AC w / z
+    // components directly.
+    const qw = q.w;
+    const qx = q.x;
+    const qy = q.y;
+    const qz = q.z;
+    return Math.atan2(
+      2 * (qw * qz + qx * qy),
+      1 - 2 * (qy * qy + qz * qz),
+    );
+  }
+
+  /**
    * Perf B1 (2026-05-18) — gate predicate for `tick(dt)`. Returns
    * `true` when the entity should run its full per-frame update
    * (mixer.update + hook fire + jump/swing tween advance), `false`

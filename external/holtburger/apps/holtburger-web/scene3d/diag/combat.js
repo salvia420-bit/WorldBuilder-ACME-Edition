@@ -71,6 +71,30 @@ function _motionByStanceToObj(m) {
   return out;
 }
 
+// Phase 11 (2026-05-26): pull server-authoritative PowerLevel /
+// AccuracyLevel from the wasm `SessionHandle::playerPowerState()`
+// getter. Read on-demand from summary() / snapshot() — no shared cell
+// here; the wasm side already publishes both fields alongside the rest
+// of `playerStats()` on every `kind=8 PlayerStatsUpdated` drain.
+// Returns `{ powerLevel, accuracyLevel }` with `null` for missing
+// components (the wasm getter encodes "missing" as `NaN`).
+function _readServerPowerState() {
+  try {
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (!sh || typeof sh.playerPowerState !== "function") return { powerLevel: null, accuracyLevel: null };
+    const arr = sh.playerPowerState();
+    if (!arr || arr.length < 2) return { powerLevel: null, accuracyLevel: null };
+    const p = Number(arr[0]);
+    const a = Number(arr[1]);
+    return {
+      powerLevel: Number.isFinite(p) ? p : null,
+      accuracyLevel: Number.isFinite(a) ? a : null,
+    };
+  } catch (_) {
+    return { powerLevel: null, accuracyLevel: null };
+  }
+}
+
 export function attachCombat(diag) {
   // Kick the motion-name table fetch eagerly so snapshot() output is
   // humanized by the time the user inspects it. Failures don't break diag.
@@ -200,6 +224,7 @@ export function attachCombat(diag) {
 
     summary() {
       const cached = combat.cached();
+      const power = _readServerPowerState();
       return {
         tablesLoaded: combat.loaded.size,
         tablesCached: cached.tables.length,
@@ -210,10 +235,15 @@ export function attachCombat(diag) {
         motionsDistinct: combat.motionHistogram.size,
         stancesWithHits: combat.motionByStance.size,
         aimLevelInvocations: { ...combat.aimLevelInvocations },
+        // Phase 11: server-authoritative power/accuracy slider state
+        // for client-vs-server desync visibility.
+        serverPowerLevel: power.powerLevel,
+        serverAccuracyLevel: power.accuracyLevel,
       };
     },
 
     snapshot() {
+      const power = _readServerPowerState();
       return {
         ts: new Date().toISOString(),
         loaded: Array.from(combat.loaded.values()),
@@ -227,6 +257,10 @@ export function attachCombat(diag) {
         motionByStance: _motionByStanceToObj(combat.motionByStance),
         motionNamesLoaded: _motionNames != null,
         aimLevelInvocations: { ...combat.aimLevelInvocations },
+        // Phase 11: server-authoritative power/accuracy slider state
+        // for client-vs-server desync visibility.
+        serverPowerLevel: power.powerLevel,
+        serverAccuracyLevel: power.accuracyLevel,
       };
     },
 
