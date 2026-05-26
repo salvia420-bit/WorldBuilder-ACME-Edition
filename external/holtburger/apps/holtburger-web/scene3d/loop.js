@@ -720,11 +720,29 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         _velScratch.omegaZ = upd.omegaZ ?? 0;
         em.setVelocity(_velScratch);
       } else if (kind === KIND_MOTION) {
+        const motionGuid = upd.guid >>> 0;
+        const motionCmd = (upd.motionCommand ?? 0) >>> 0;
         em.setMotion(
-          upd.guid >>> 0,
-          (upd.motionCommand ?? 0) >>> 0,
+          motionGuid,
+          motionCmd,
           (upd.motionStance ?? 0) >>> 0
         );
+        // Wave 1.7 (2026-05-26): touchdown clear for the arms-up
+        // airborne overlay. Wave 5's post-tick diff at lib.rs:27337
+        // emits `Fallen = 0x40000008` as ENTITY_UPDATE_KIND_MOTION
+        // when the integrator clears `is_airborne`. The Fallen cycle
+        // itself plays via the setMotion call above (renderer resolves
+        // the Fallen cycle from MotionTable.cycles — present in every
+        // player stance except Sling/TwoHandedStaff/Graze); this extra
+        // setAirborne(false) call reverses the per-part arms-up tween
+        // that was applied locally from the spacebar handler at
+        // index.html:7755-7785. Gated on local guid because remote
+        // players never had the arms-up overlay applied — they use
+        // kind=18 EntityAirborneChanged (lib.rs:23517), which the JS
+        // recv handler currently no-ops (deferred restoration).
+        if (motionCmd === 0x4000_0008 && isLocalPlayerGuid(motionGuid)) {
+          em.setAirborne?.(motionGuid, false);
+        }
       } else if (kind === KIND_APPEARANCE) {
         // Wave 7.3 — mid-game equip change. The wasm UpdateObject arm
         // packs only the four substitution-relevant fields; everything
@@ -858,11 +876,19 @@ export function installSharedDrainHook(scene3d) {
           _velScratch.omegaZ = upd.omegaZ ?? 0;
           em.setVelocity(_velScratch);
         } else if (kind === KIND_MOTION) {
+          const motionGuid = upd.guid >>> 0;
+          const motionCmd = (upd.motionCommand ?? 0) >>> 0;
           em.setMotion(
-            upd.guid >>> 0,
-            (upd.motionCommand ?? 0) >>> 0,
+            motionGuid,
+            motionCmd,
             (upd.motionStance ?? 0) >>> 0
           );
+          // Wave 1.7 (2026-05-26): touchdown clear for the local
+          // arms-up airborne overlay. Mirror of the direct-drain
+          // path's Fallen handler above; see that block for rationale.
+          if (motionCmd === 0x4000_0008 && isLocalPlayerGuid(motionGuid)) {
+            em.setAirborne?.(motionGuid, false);
+          }
         }
       } catch (e) {
         // eslint-disable-next-line no-console

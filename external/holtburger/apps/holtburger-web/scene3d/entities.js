@@ -214,10 +214,16 @@ const ATTACK_COMMANDS = new Set([
   0x018F, 0x0190, 0x0191,
   0x0192, 0x0193, 0x0194,
   // Jump + JumpCharging — same one-shot semantics as attacks. The
-  // motion-table Jump clip (0x2500003B) is fetched via _tryPlayLink
-  // and plays end-to-end (crouch → launch → apex → land); the prior
-  // `setAirborne` per-part slerp overlay was deleted 2026-05-26 (Wave 1
-  // Phase 1.2) so the clip is no longer frozen by a paused mixer.
+  // motion-table Jump clip (0x2500003B) IS fetched via _tryPlayLink
+  // for completeness, but cmd_low 0x003B is universally ABSENT from
+  // all 436 retail motion tables (Wave 6 data audit, 2026-05-26), so
+  // the fetch resolves to a null clip. The arms-up airborne pose
+  // overlay below (`setAirborne`/`_tickJumpPoseTween`) carries the
+  // visual — restored Wave 1.7 (2026-05-26) after Joe Trevis's quote
+  // confirmed retail's "combined jumping/falling animation" had arms
+  // raised (the X-Play gag). Wave 1.2's deletion of the overlay was
+  // directionally wrong; this comment block was updated as part of
+  // the restoration.
   0x003B, 0x001D,
 ]);
 const CAST_COMMANDS = new Set([
@@ -285,6 +291,25 @@ const _tickGateScratch = new THREE.Vector3();
 // `setParenting` across overlapping fire-and-forget chain walks.
 const _particleAttachScratchVec3 = new THREE.Vector3();
 const _particleAttachScratchQuat = new THREE.Quaternion();
+
+// Wave 1.7 (2026-05-26, post-Joe-Trevis-quote restoration) — arms-up jump
+// pose overlay. Restored after Wave 1.2's deletion was determined to be
+// directionally wrong: retail AC's "combined jumping/falling animation"
+// had your arms up (the gag X-Play mocked), and since cmd_low 0x003B
+// (Jump) is universally ABSENT from all 436 retail motion tables in the
+// audited DAT, the per-part quaternion-tween overlay IS the only visual
+// for the airborne window. Wired to LOCAL prediction (spacebar handler
+// in index.html) instead of the server kind=18 recv handler (which fires
+// only for REMOTES — see lib.rs:23502 local-skip and 26887 jump-arm
+// kind=18 strip). Touchdown clear piggy-backs on Wave 5's existing
+// Fallen (kind=5 ENTITY_UPDATE_KIND_MOTION) emission via the loop.js
+// shared-drain hook KIND_MOTION dispatch — no new wasm event type needed.
+//
+// READ-ONLY: never mutate `_IDENTITY_QUAT`. It's the canonical (0,0,0,1)
+// reference used as the right-hand side of `.equals()` in the
+// generic-jump tilt-vs-identity test. Mutating it would silently break
+// every comparison downstream.
+const _IDENTITY_QUAT = new THREE.Quaternion();
 
 // Perf B3 (2026-05-18) — dispose helpers for `Entity.dispose()` to walk
 // the rig's mesh children and free Geometry/Material that aren't
@@ -556,6 +581,27 @@ class EntityInstance {
     // this entity's spawn — should be exactly 1 for entities with a
     // non-zero SoundTable. Capture-script reads via inst._prewarmCount.
     this._prewarmCount = 0;
+    // Wave 1.7 (2026-05-26): Airborne pose offset. Null when grounded;
+    // THREE.Quaternion when airborne. Multiplied onto root.quaternion in
+    // setPose so the jump tilt survives across position updates. Cleared
+    // by `_tickJumpPoseTween` on the final landing tick.
+    this.airborneTilt = null;
+    // Wave 7 Phase 7.1 (2026-05-26): Walk-cycle phase preservation.
+    // When `crossFadeTo` swaps off a locomotion clip, we stash the
+    // departing action's `mixer.time` so a re-press within ~200ms can
+    // resume the same cycle from mid-stride instead of restarting at
+    // frame 0 (which makes the feet "pop").
+    //
+    // Key: cacheKey (the same string used by `actions` / `actionLastUsedMs`).
+    // Value: { time: number /* clip.time at swap-out, seconds */,
+    //          leftAt: number /* performance.now() ms */ }.
+    //
+    // Pruned in `tick(dt)` (entries older than 5s are dropped) and on
+    // dispose(). Gate at the read site to `classifyMotionCommand ===
+    // "walk"|"run"` — restart-from-mid-clip is wrong for swings/casts
+    // (LoopOnce one-shots) and for the stance-Ready pose swap.
+    /** @type {Map<string, { time: number, leftAt: number }>} */
+    this._recentLocomotionTime = new Map();
   }
 
   registerGeometry(geom) {
@@ -573,6 +619,15 @@ class EntityInstance {
   setPose(x, y, z, qw, qx, qy, qz) {
     this.root.position.set(x, y, z);
     this.root.quaternion.copy(acQuatToThree(qw, qx, qy, qz));
+    // Wave 1.7 (2026-05-26): Re-apply airborne tilt offset if active.
+    // setAirborne(true) stashes the tilt quaternion on the instance;
+    // this ensures every position update preserves it instead of
+    // snapping the entity back to upright mid-jump. Generic-path only —
+    // the human-path locks the mixer and tweens part quaternions
+    // directly, so airborneTilt stays null for the humanoid case.
+    if (this.airborneTilt) {
+      this.root.quaternion.multiply(this.airborneTilt);
+    }
   }
 
   /**
@@ -582,6 +637,20 @@ class EntityInstance {
    */
   crossFadeTo(nextAction, nextActionKey, durationS) {
     if (this.currentAction === nextAction) return;
+    // Wave 7 Phase 7.1 (2026-05-26): stash the departing action's mixer
+    // time so a same-key re-fetch within 200 ms can resume mid-stride.
+    // We record ALL outgoing transitions (locomotion or otherwise) and
+    // gate at the read site in `setMotion` to locomotion-only. Doing
+    // both ends would scatter the gating logic; record cheap + filter
+    // cheap-read is the simplest contract.
+    if (this.currentAction && this.currentActionKey) {
+      try {
+        this._recentLocomotionTime.set(this.currentActionKey, {
+          time: this.currentAction.time,
+          leftAt: performance.now(),
+        });
+      } catch (_) {}
+    }
     if (durationS <= 0) {
       // Cohere-B (2026-05-12): hard-cut path — retail had no blend
       // between motions. Stop the current action (drops it to weight 0
@@ -652,6 +721,17 @@ class EntityInstance {
    */
   fadeOutCurrent(durationS) {
     if (!this.currentAction) return;
+    // Wave 7 Phase 7.1 (2026-05-26): same swap-out stash as `crossFadeTo`
+    // — STOP → re-press should also resume the previous walk cycle from
+    // where it left off (e.g. tap W → release → re-press within 200 ms).
+    if (this.currentActionKey) {
+      try {
+        this._recentLocomotionTime.set(this.currentActionKey, {
+          time: this.currentAction.time,
+          leftAt: performance.now(),
+        });
+      } catch (_) {}
+    }
     if (durationS <= 0) {
       // Cohere-B (2026-05-12): hard-cut stop. Retail STOP commands
       // ended the current motion's cycle and held the rig at the
@@ -754,6 +834,8 @@ class EntityInstance {
     // mixer + actions.
     this.hookTimelines.clear();
     this.actionLastHookTime.clear();
+    // Wave 7 Phase 7.1 (2026-05-26): drop locomotion-phase cache too.
+    this._recentLocomotionTime.clear();
     this.currentAction = null;
     this.currentActionKey = null;
   }
@@ -836,6 +918,13 @@ export class EntityManager {
     // _spawnImpl() which naturally re-indexes).
     /** @type {Map<string, Set<number>>} */
     this._nameToGuid = new Map();
+    // Wave 7 Phase 7.1 (2026-05-26): rate-limit the per-entity
+    // `_recentLocomotionTime` prune to once per second. Each entry is
+    // single-shot (deleted on consume), but if a player walks then
+    // stops permanently, the cycle's last swap-out entry would sit
+    // forever — the prune drops anything older than 5s. ms timestamp,
+    // checked at end of `tick(dt)`.
+    this._lastRecentLocomotionPruneMs = 0;
   }
 
   /**
@@ -2160,6 +2249,164 @@ export class EntityManager {
   }
 
   /**
+   * Wave 1.7 (2026-05-26) — toggle arms-up airborne pose overlay.
+   *
+   * Restored after Wave 1.2's deletion was determined to be directionally
+   * wrong: cmd_low 0x003B (Jump) is universally ABSENT from all 436
+   * retail motion tables (Wave 6 data audit), so the JS-side per-part
+   * quaternion tween IS the visual for the airborne window. Joe Trevis
+   * confirmed retail's "combined jumping/falling animation" had arms
+   * raised — the X-Play gag. This restores that pose.
+   *
+   * Two rig shapes:
+   * - Humanoid (>=16 parts): slerp parts[10]/[13] upper arms ±π/2
+   *   around local X (arms horizontal), slight leg-out tilt on
+   *   parts[1]/[5]. Mixer is paused at tween-complete so the walk-
+   *   cycle clip doesn't drift the parts mid-air. Stash + restore
+   *   per-part quaternions on landing.
+   * - Generic (<16 parts, e.g. drudges, rats): tilt root ~12° around
+   *   local X plus 8% Z stretch. No part-locking required.
+   *
+   * Idempotent: re-entering the same state is a no-op. Per-frame
+   * advance lives in `_tickJumpPoseTween`. Wired only on the LOCAL
+   * player's jump path (index.html spacebar handler) — remote players
+   * use kind=18 EntityAirborneChanged (lib.rs:23517) which would land
+   * here too once the JS recv handler is restored (deferred; remote
+   * jumps currently fall back to the MotionTable Falling cycle path).
+   */
+  setAirborne(guid, airborne) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst || !inst.root) return;
+    const wantAirborne = !!airborne;
+    const currentlyAirborne = !!inst._isAirborne;
+    if (wantAirborne === currentlyAirborne) return; // idempotent
+    inst._isAirborne = wantAirborne;
+
+    const isHumanShape = inst.parts && inst.parts.length >= 16;
+
+    if (wantAirborne) {
+      if (isHumanShape) {
+        this._applyHumanJumpPose(inst);
+      } else {
+        this._applyGenericJumpPose(inst);
+      }
+    } else {
+      if (inst._jumpPoseStash) {
+        this._clearHumanJumpPose(inst);
+      } else if (inst.airborneTilt) {
+        this._clearGenericJumpPose(inst);
+      }
+    }
+  }
+
+  /**
+   * Per-part jump pose for humanoid SetupModels. Sets up a 200ms
+   * slerp tween from current pose → outstretched pose; the per-frame
+   * `_tickJumpPoseTween` in `tick(dt)` advances it. The animation
+   * mixer is paused at tween-complete (not at tween-start) so the
+   * limbs ease into the airborne pose smoothly instead of snapping.
+   *
+   * Part indices match the human SetupModel skeleton:
+   *   parts[10] LEFT_UPPER_ARM   (rotated -π/2 around X = up + out)
+   *   parts[13] RIGHT_UPPER_ARM  (rotated +π/2 around X = up + out)
+   *   parts[1]  LEFT_UPPER_LEG   (-π/12 = slight outward splay)
+   *   parts[5]  RIGHT_UPPER_LEG  (+π/12)
+   * Weapons bound to parts[15] inherit the right-hand rotation.
+   */
+  _applyHumanJumpPose(inst) {
+    const X = new THREE.Vector3(1, 0, 0);
+    const HUMAN_AIRBORNE_OFFSETS = [
+      // [partIndex, axis, angle]
+      [10, X, -Math.PI / 2],  // LEFT_UPPER_ARM   — horizontal
+      [13, X, Math.PI / 2],   // RIGHT_UPPER_ARM  — horizontal
+      [1,  X, -Math.PI / 12], // LEFT_UPPER_LEG   — slight out
+      [5,  X, Math.PI / 12],  // RIGHT_UPPER_LEG  — slight out
+    ];
+    const from = new Map();
+    const to = new Map();
+    for (const [partIdx, axis, angle] of HUMAN_AIRBORNE_OFFSETS) {
+      const p = inst.parts && inst.parts[partIdx];
+      if (!p) continue;
+      const orig = p.quaternion.clone();
+      from.set(partIdx, orig);
+      const offset = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+      to.set(partIdx, orig.clone().multiply(offset));
+    }
+    // Stash the pre-airborne quaternions so landing can tween back
+    // to them (and so a paranoid mixer-unpause restores to a known
+    // frame instead of whatever clip-time happens to be).
+    inst._jumpPoseStash = from;
+    inst._jumpPoseTween = {
+      startMs: performance.now(),
+      durationMs: 200,
+      from,
+      to,
+      isLanding: false,
+      kind: "human",
+    };
+  }
+
+  _clearHumanJumpPose(inst) {
+    if (!inst._jumpPoseStash) return;
+    // Reverse tween: from current (possibly mid-arc-pose) → stashed
+    // pre-airborne quaternions. `_jumpPoseStash` doubles as the
+    // landing target.
+    const from = new Map();
+    for (const [partIdx, _origQ] of inst._jumpPoseStash) {
+      const p = inst.parts && inst.parts[partIdx];
+      if (p) from.set(partIdx, p.quaternion.clone());
+    }
+    inst._jumpPoseTween = {
+      startMs: performance.now(),
+      durationMs: 200,
+      from,
+      to: inst._jumpPoseStash,
+      isLanding: true,
+      kind: "human",
+    };
+    // `_jumpPoseStash` cleared and mixer resumed at tween-complete
+    // in `_tickJumpPoseTween`, not here.
+  }
+
+  /**
+   * Body-level fallback for non-human entities. Same shape as the
+   * human tween (slerps root.quaternion offset + lerps root.scale.z)
+   * so the per-frame tick can handle both paths uniformly.
+   */
+  _applyGenericJumpPose(inst) {
+    const tilt = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(1, 0, 0),
+      -Math.PI / 15, // ~12°
+    );
+    inst._jumpPoseTween = {
+      startMs: performance.now(),
+      durationMs: 200,
+      fromTilt: new THREE.Quaternion(), // identity
+      toTilt: tilt,
+      fromScale: 1.0,
+      toScale: 1.08,
+      isLanding: false,
+      kind: "generic",
+    };
+  }
+
+  _clearGenericJumpPose(inst) {
+    // Reverse: tween back to identity tilt + scale 1.0.
+    inst._jumpPoseTween = {
+      startMs: performance.now(),
+      durationMs: 200,
+      fromTilt: inst.airborneTilt
+        ? inst.airborneTilt.clone()
+        : new THREE.Quaternion(),
+      toTilt: new THREE.Quaternion(), // identity
+      fromScale: inst.root.scale.z,
+      toScale: 1.0,
+      isLanding: true,
+      kind: "generic",
+    };
+  }
+
+  /**
    * Phase C — one-shot melee swing pose. Right upper arm sweeps
    * forward and back over ~300ms (triangle wave: 0→1→0 in part
    * rotation amplitude). Restarting before completion replaces the
@@ -2681,6 +2928,80 @@ export class EntityManager {
     }
   }
 
+  /**
+   * Wave 1.7 (2026-05-26) — per-frame advance of the jump-pose tween.
+   * Called from `tick` after `mixer.update` so our slerp wins for the
+   * locked parts. Ease-out cubic on the human path (snaps quickly out
+   * of walking pose, settles into airborne); same easing on generic
+   * for consistency.
+   */
+  _tickJumpPoseTween(inst, nowMs) {
+    const tween = inst._jumpPoseTween;
+    if (!tween) return;
+    const t = (nowMs - tween.startMs) / tween.durationMs;
+    const clampedT = Math.max(0, Math.min(1, t));
+    // Ease-out cubic: 1 - (1-t)^3. Snappier than linear, gentler
+    // than ease-out quintic.
+    const eased = 1 - (1 - clampedT) * (1 - clampedT) * (1 - clampedT);
+
+    if (tween.kind === "human") {
+      for (const [partIdx, fromQ] of tween.from) {
+        const toQ = tween.to.get(partIdx);
+        if (!toQ) continue;
+        const p = inst.parts && inst.parts[partIdx];
+        if (p) p.quaternion.slerpQuaternions(fromQ, toQ, eased);
+      }
+    } else if (tween.kind === "generic") {
+      // Tilt: slerp identity quat ↔ tilt quat, multiply into root.
+      // We re-derive root.quaternion from the position-frame quat
+      // every setPose call, so apply the tween every tick.
+      //
+      // `tweenQ` is NOT pooled — it's assigned directly to
+      // `inst.airborneTilt` and read by `setPose` on every subsequent
+      // position update until the tween ends or the entity lands.
+      // Pooling the slerp result would corrupt the stored tilt the
+      // moment any other entity's tween advanced. The identity
+      // sentinel on the next line IS pooled (`_IDENTITY_QUAT`,
+      // read-only) since `.equals(...)` only reads it.
+      const tweenQ = new THREE.Quaternion().slerpQuaternions(
+        tween.fromTilt,
+        tween.toTilt,
+        eased,
+      );
+      // Store as airborneTilt so setPose can re-apply on position
+      // updates (read by `EntityInstance.setPose`).
+      inst.airborneTilt = tweenQ.equals(_IDENTITY_QUAT)
+        ? null
+        : tweenQ;
+      if (inst.airborneTilt) {
+        inst.root.quaternion.multiply(tweenQ);
+      }
+      // Scale: simple lerp.
+      const scaleZ = tween.fromScale + (tween.toScale - tween.fromScale) * eased;
+      inst.root.scale.set(1.0, 1.0, scaleZ);
+    }
+
+    if (clampedT >= 1) {
+      if (tween.isLanding) {
+        if (tween.kind === "human") {
+          inst._jumpPoseStash = null;
+          if (inst.currentAction) inst.currentAction.paused = false;
+        } else {
+          inst.airborneTilt = null;
+        }
+      } else {
+        // Tween-in complete. Lock the mixer for human path so the
+        // walk-cycle doesn't drift the parts while airborne.
+        if (tween.kind === "human") {
+          if (inst.currentAction) inst.currentAction.paused = true;
+        } else {
+          inst.airborneTilt = tween.toTilt.clone();
+        }
+      }
+      inst._jumpPoseTween = null;
+    }
+  }
+
   _tickSwingTween(inst, nowMs) {
     const tw = inst._swingTween;
     if (!tw) return;
@@ -2958,6 +3279,53 @@ export class EntityManager {
       if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
         inst.hookTimelines.set(cacheKey, entry.hooks);
         inst.actionLastHookTime.set(cacheKey, 0);
+      }
+    }
+    // Wave 7 Phase 7.1 (2026-05-26): walk-cycle phase preservation.
+    //
+    // When the player rapidly taps W (release-then-re-press within
+    // ~200 ms), `setMotion` previously fetched the same `cacheKey`,
+    // saw `currentActionKey == null` (because `fadeOutCurrent` cleared
+    // it on the release), and the resulting `crossFadeTo(action, …)`
+    // played the cycle from `action.time` — which for a freshly-
+    // created clipAction is 0, and for a re-played existing action is
+    // wherever .stop() left it. The latter usually works (Cohere-B's
+    // "cycle-rewind" comment at L631–643 deliberately skipped
+    // `.reset()` to preserve `.time` across the integrator's motion
+    // oscillation), but it falls down when the LRU evicts the action
+    // mid-pause: cache-miss path creates a brand-new clipAction at
+    // .time = 0 and the foot "pops".
+    //
+    // Fix: after the action is resolved (cache hit OR miss), look up
+    // a recent same-key swap-out. If one exists within RESUME_WINDOW_MS,
+    // pin `action.time` to the saved phase. Locomotion-only — swings,
+    // casts, and stance-Ready get the existing hard-cut behaviour
+    // (their LoopOnce semantics + the 150 ms Ready crossfade rely on
+    // .time starting at 0).
+    if (cls === "walk" || cls === "run") {
+      const recent = inst._recentLocomotionTime.get(cacheKey);
+      if (recent) {
+        const RESUME_WINDOW_MS = 200;
+        const elapsed = performance.now() - recent.leftAt;
+        if (elapsed >= 0 && elapsed < RESUME_WINDOW_MS) {
+          // Defensive modulo: if the cached clip's duration differs
+          // from when the time was stashed (e.g. AnimationCache served
+          // a different setup/stance variant), wrap to clip duration.
+          // three.js's mixer already wraps internally on LoopRepeat,
+          // but a >duration starting offset would visibly snap.
+          let restored = recent.time;
+          try {
+            const clipDur = action.getClip()?.duration ?? 0;
+            if (clipDur > 0) {
+              restored = ((restored % clipDur) + clipDur) % clipDur;
+            }
+          } catch (_) {}
+          action.time = restored;
+        }
+        // Whether we used it or not, drop the entry — same-key swap-
+        // out + restore is single-shot per cycle. Subsequent rapid
+        // taps will get re-stashed by `crossFadeTo` on the next out.
+        inst._recentLocomotionTime.delete(cacheKey);
       }
     }
     // Wave 3 / Phase 3.3 (2026-05-26): per-retail "modifier-stacking
@@ -4271,6 +4639,10 @@ export class EntityManager {
     if (localPlayerGuid !== null && (inst.guid >>> 0) === localPlayerGuid) {
       return true;
     }
+    // (2) Active jump-pose tween (Wave 1.7 2026-05-26) — always tick
+    // to finish the slerp. Without this, an entity that left the tick
+    // radius mid-air would freeze in the arms-up pose after re-entry.
+    if (inst._jumpPoseTween) return true;
     // (3) Active swing-pose tween — always tick to finish the slerp.
     if (inst._swingTween) return true;
     // (3b) Active cast-pose tween (Wave 13 Phase 42) — same reason: the
@@ -4353,6 +4725,24 @@ export class EntityManager {
           );
         }
       }
+      // Wave 1.7 (2026-05-26) — Jump-pose tween advance. Runs AFTER
+      // mixer.update so our per-part slerp wins on the locked-out
+      // arm/leg quaternions for the duration of the airborne tween.
+      // No-op when no tween is active.
+      if (inst._jumpPoseTween) {
+        try {
+          this._tickJumpPoseTween(inst, performance.now());
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._jumpTweenWarned) {
+            this._jumpTweenWarned = true;
+            console.warn(
+              `[entities/jump-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+        }
+      }
       // Phase C — swing-pose tween. Same post-mixer ordering as the
       // jump pose so the arm rotation wins for the swing duration.
       if (inst._swingTween) {
@@ -4384,6 +4774,25 @@ export class EntityManager {
               `[entities/cast-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
               e
             );
+          }
+        }
+      }
+    }
+    // Wave 7 Phase 7.1 (2026-05-26): periodic prune of stale entries in
+    // each entity's `_recentLocomotionTime` cache. The restore-window is
+    // 200 ms, so anything older than 5 s is dead weight. Rate-limited to
+    // once/second so the per-entity Map walk doesn't run every frame.
+    const nowMs = performance.now();
+    if (nowMs - this._lastRecentLocomotionPruneMs > 1000) {
+      this._lastRecentLocomotionPruneMs = nowMs;
+      const STALE_THRESHOLD_MS = 5000;
+      for (const inst of this.entityMap.values()) {
+        if (!inst._recentLocomotionTime || inst._recentLocomotionTime.size === 0) {
+          continue;
+        }
+        for (const [key, entry] of inst._recentLocomotionTime) {
+          if (nowMs - entry.leftAt > STALE_THRESHOLD_MS) {
+            inst._recentLocomotionTime.delete(key);
           }
         }
       }

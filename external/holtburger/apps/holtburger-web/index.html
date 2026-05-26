@@ -478,6 +478,66 @@
       html.no-hud body #nameplate-layer-3d,
       html.no-hud body .nameplate-3d,
       html.no-hud body .floating-panel { display: none !important; }
+
+      /* Wave 7.2 (2026-05-26) — jump-charge power bar. Visible only
+         while spacebar is held; fills 0→100% over 500ms to mirror the
+         hold-to-power curve in the spacebar handler (search
+         __jumpKeydownTs). Anchored bottom-center of viewport above
+         the bar.js icon row (~80px clearance) so it doesn't collide
+         with the plugin bar or the virtual keypad. `.hb-` prefix +
+         direct body child = caught by the `html.no-hud body > *:not(#stage)`
+         rule above; no extra agent-mode allowlist entry needed since
+         the bar is `display:none` until keydown anyway. Palette
+         mirrors `.hb-cb-power-meter-fill` (combat-bar.js:406-411) so
+         the swing meter and jump meter read as the same UI language. */
+      #hb-jump-charge {
+        position: fixed;
+        bottom: 96px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 60;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        padding: 4px 8px;
+        background: rgba(0, 0, 0, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 4px;
+        pointer-events: none;
+        font-family: var(--hb-font-serif, system-ui, sans-serif);
+      }
+      #hb-jump-charge.hb-jc-active { display: flex; }
+      #hb-jump-charge .hb-jc-label {
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.65);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        line-height: 1;
+      }
+      #hb-jump-charge .hb-jc-bar {
+        position: relative;
+        width: 200px;
+        height: 8px;
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      #hb-jump-charge .hb-jc-fill {
+        position: absolute;
+        top: 0; left: 0; bottom: 0;
+        width: 0%;
+        background: linear-gradient(180deg, #ffaa44, #cc6622);
+      }
+      /* Full-charge flourish — fill flips to the green-ready palette
+         used by the combat-bar meter when it tops out. Triggered from
+         the rAF loop once `power >= 1`. Pure visual; the jump itself
+         is still gated on the keyup handler computing power from the
+         actual hold duration. */
+      #hb-jump-charge.hb-jc-full .hb-jc-fill {
+        background: linear-gradient(180deg, #88ff88, #44cc44);
+      }
     </style>
   </head>
   <body>
@@ -7620,6 +7680,62 @@ void main() {
             const tag = el.tagName;
             return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
           };
+
+          // Wave 7.2 (2026-05-26) — jump-charge power meter. Pairs
+          // with the variable-power spacebar handler below: keydown
+          // calls show(); a rAF loop reads `__jumpKeydownTs` each frame
+          // and updates fill width using the same `hold_ms / 500`
+          // curve as the keyup handler. keyup + blur call hide().
+          //
+          // Lazy DOM init so the element doesn't exist until the
+          // player presses Space for the first time — keeps the
+          // post-spawn DOM tree slim (matters for the agent-mode +
+          // wire-agent fleets where the bar is never shown). CSS lives
+          // in the main <style> block (search `#hb-jump-charge`).
+          const jumpChargeUi = (() => {
+            let bar = null;
+            let fill = null;
+            let rafId = 0;
+            function ensureEl() {
+              if (bar) return;
+              bar = document.createElement("div");
+              bar.id = "hb-jump-charge";
+              bar.innerHTML =
+                '<div class="hb-jc-label">JUMP</div>' +
+                '<div class="hb-jc-bar"><div class="hb-jc-fill"></div></div>';
+              document.body.appendChild(bar);
+              fill = bar.querySelector(".hb-jc-fill");
+            }
+            function frame() {
+              if (!bar || window.__jumpKeydownTs == null) {
+                rafId = 0;
+                return;
+              }
+              const holdMs = performance.now() - window.__jumpKeydownTs;
+              const pct = Math.max(0, Math.min(100, (holdMs / 500) * 100));
+              fill.style.width = pct + "%";
+              if (pct >= 100) bar.classList.add("hb-jc-full");
+              else bar.classList.remove("hb-jc-full");
+              rafId = requestAnimationFrame(frame);
+            }
+            return {
+              show() {
+                ensureEl();
+                fill.style.width = "0%";
+                bar.classList.remove("hb-jc-full");
+                bar.classList.add("hb-jc-active");
+                if (!rafId) rafId = requestAnimationFrame(frame);
+              },
+              hide() {
+                if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+                if (bar) {
+                  bar.classList.remove("hb-jc-active", "hb-jc-full");
+                  if (fill) fill.style.width = "0%";
+                }
+              },
+            };
+          })();
+
           document.addEventListener("keydown", (ev) => {
             if (!enteredWorld || isTypingInForm()) return;
             const k = ev.key.toLowerCase();
@@ -7672,6 +7788,7 @@ void main() {
             // curve; this is a play-feel guess that can be retuned.
             if (ev.key === " " && handle && !ev.repeat) {
               window.__jumpKeydownTs = performance.now();
+              jumpChargeUi.show();
               ev.preventDefault();
             }
           });
@@ -7692,6 +7809,7 @@ void main() {
               // not leave dangling state for the next press).
               const holdMs = performance.now() - window.__jumpKeydownTs;
               window.__jumpKeydownTs = null;
+              jumpChargeUi.hide();
               const power = Math.max(0, Math.min(1, holdMs / 500));
               try {
                 handle.jump(power);
@@ -7753,6 +7871,20 @@ void main() {
                       ? em.getStance(localGuid >>> 0) >>> 0
                       : 0) || NONCOMBAT_STANCE;
                   em.setMotion(localGuid >>> 0, JUMP_MOTION_CMD, stance);
+                  // Wave 1.7 (2026-05-26) — fire the arms-up airborne
+                  // overlay locally. The Jump motion-command (0x003B)
+                  // is universally ABSENT from all 436 retail motion
+                  // tables (Wave 6 data audit), so setMotion's
+                  // _tryPlayLink resolves to a null clip and the rig
+                  // sits frozen. Joe Trevis's quote confirms retail's
+                  // "combined jumping/falling animation" had arms up —
+                  // setAirborne IS the visual. Touchdown clear lands
+                  // via Wave 5's existing Fallen (kind=5) emission
+                  // from the wasm post-tick diff at lib.rs:27337,
+                  // routed through scene3d/loop.js#KIND_MOTION
+                  // dispatch (which calls setAirborne(false) when the
+                  // motion-cmd is Fallen and the guid is local).
+                  em.setAirborne?.(localGuid >>> 0, true);
                 }
               } catch (e) {
                 console.warn(
@@ -7771,6 +7903,12 @@ void main() {
             // space at blur shouldn't fire a stale jump when the
             // window regains focus.
             window.__jumpKeydownTs = null;
+            // Also tear down the jump-charge bar — its rAF reads
+            // __jumpKeydownTs which we just nulled, so the next frame
+            // would early-return anyway, but explicit hide() also
+            // cancels the pending rAF and clears the `.hb-jc-active`
+            // class so the bar isn't stuck mid-fill on refocus.
+            jumpChargeUi.hide();
           });
 
           // ----- Virtual keypad wiring -----------------------------
