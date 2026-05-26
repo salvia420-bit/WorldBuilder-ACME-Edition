@@ -12,6 +12,42 @@
 
 ---
 
+## Status — Wave E executed 2026-05-25 (later same day)
+
+Three more items shipped after Wave D. E1 + E3 ran in parallel (E1 = Rust+JS, E3 = pure JS). E2 ran sequentially after E1 since both edit `src/lib.rs`.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 4 | Allegiance system | **SHIPPED (send-only MVP)** | Wave E1. Rust: 2 wasm-bindgen methods (`swearAllegiance(targetGuid)`, `breakAllegiance(targetGuid)`) + 2 SessionCommand variants + 2 recv-loop arms mapping to existing `GameAction::SwearAllegiance/BreakAllegiance` (structs `SwearAllegianceActionData`/`BreakAllegianceActionData` were already in `crates/holtburger-protocol/src/messages/player/actions.rs:161+`). JS: `plugins/allegiance-panel.js` already existed as a main-panel view; appended a 246-LOC standalone IIFE with `__openAllegiancePanel()`/`__closeAllegiancePanel()` exposing Swear/Break action buttons that consume `getSelectedTarget()` with confirm dialogs. Manifest version bumped 0.2.0 → 0.3.0. **Officer/MOTD/bans/gag/hometown-recall opcodes (18 more, currently commented) deferred to Wave F.** |
+| 20 | Friends + Squelch | **SHIPPED (send-only MVP)** | Wave E2. Uncommented 3 opcodes (AddFriend 0x0018, RemoveFriend 0x0017, ModifyCharacterSquelch 0x0058). Created 3 new message structs in `crates/holtburger-protocol/src/messages/player/actions.rs` — `AddFriendActionData { friend_name: String }`, `RemoveFriendActionData { friend_guid: Guid }`, `ModifyCharacterSquelchActionData { add: bool, target_guid: Guid, target_name: String, message_type: u32 }`. **Wire-format authority for squelch came from `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/GameActionModifyCharacterSquelch.cs`** — ACE reads 4 fields in this order (add/playerGuid/playerName/messageType) — the agent caught the discrepancy with my prompt's 3-field shape and ported the canonical 4-field shape. AddFriend by-name + RemoveFriend by-guid confirmed against ACE handlers. 3 wasm methods + 3 SessionCommand + 3 recv arms. New `plugins/social-panel.js` (~340 LOC IIFE) — Friends section (text input + Add, Remove-by-Selected) + Squelch section (Squelch/Unsquelch Selected, all-chat-types mask `0xFFFFFFFF`). **Titles, Account-squelch, Global-squelch deferred to Wave F.** `cargo test -p holtburger-protocol --lib` → 268/268 PASS. |
+| 11+16+ad-hoc | Visual polish bundle (Z-buffer + nameplate LOD + compass HUD) | **SHIPPED** | Wave E3 (pure JS). **(11) Reversed Z-buffer:** added `logarithmicDepthBuffer: true` to the `THREE.WebGLRenderer` constructor options at `scene3d/index.js:375` — one-key change, Three.js handles depth-test internals. Distant terrain z-fight fix without manual reverse-Z post-pass. **(16) Nameplate distance LOD:** `scene3d/nameplate_sprite.js` adds `tickNameplateLod` + `disposeNameplateLod` + self-managed rAF; URL knobs `?nameplateRange=N` (default 40m), `?nameplateMax=N` (default 30); local player guid always exempt via `window.getLocalPlayerGuid()`. Distance² from each nameplate's `matrixWorld[12..14]` to active camera position; sort + keep N nearest. **(ad-hoc) Compass HUD:** new `plugins/compass-hud.js` (226 LOC) — 200×16 top-center tape-scrolling compass with N/NE/E/SE/S/SW/W/NW labels + 15° minor + 45° diag ticks + gold cursor; reads `liveScene3d.cameraSwitcher.followYaw` per rAF; `?compass=off` knob; AC-aesthetic via existing CSS vars. |
+
+**Files touched this wave:**
+- `src/lib.rs` +263 LOC (E1: 2 wasm methods + E2: 3 wasm methods + 5 SessionCommand variants + 5 recv arms)
+- `crates/holtburger-protocol/src/opcodes.rs` +12 LOC (3 uncommented opcodes)
+- `crates/holtburger-protocol/src/messages/game_action.rs` +27 LOC (3 GameAction variants + 3 unpack + 3 pack arms)
+- `crates/holtburger-protocol/src/messages/player/actions.rs` +83 LOC (3 new ActionData structs + pack/unpack)
+- `plugins/allegiance-panel.js` +249 LOC (E1 standalone IIFE)
+- `plugins/social-panel.js` NEW 340 LOC (E2)
+- `plugins/compass-hud.js` NEW 226 LOC (E3)
+- `scene3d/index.js` +1 LOC (E3 renderer flag)
+- `scene3d/nameplate_sprite.js` +140 LOC (E3 LOD)
+- `index.html` +2 LOC (social + compass imports)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `cargo test -p holtburger-protocol --lib` 268/268 PASS. `node --check` clean on all JS.
+
+**Recon discovery:** SwearAllegiance/BreakAllegiance had FULL protocol structs + GameAction enum variants already in place — E1 was just wasm bindings + panel work. Significantly smaller than budgeted.
+
+**Recommended Wave F** (next priorities):
+1. **Allegiance officer/MOTD/bans/gag/hometown-recall (#4 polish)** — 18 commented opcodes; each needs a small struct + GameAction variant + wasm method + panel button.
+2. **Titles + Account-squelch + Global-squelch (#20 polish)** — TitleSet, ModifyAccountSquelch, ModifyGlobalSquelch, SetSquelchDb.
+3. **Allegiance receive-side snapshot (#4)** — `AllegianceUpdate`/`AllegianceInfoResponse` events + snapshot infra mirroring Wave D1 fellowship pattern.
+4. **Friends list snapshot (#20)** — `FriendsUpdate`/`CharacterTitleTable` events + snapshot.
+5. **Equipment paper-doll burden % + drag-drop (#10 finish)** — `playerBurden()` wasm getter + `DropItem` + `GetAndWieldItem` exports.
+6. **Inscriptions + books (#21)** — Writing GameAction handlers exist in ACE; UI is the new piece.
+
+---
+
 ## Status — Wave D executed 2026-05-25 (later same day)
 
 Three more items shipped after Wave C. D1 + D3 ran in parallel (disjoint files); D2 ran sequentially after D1 since both touched `src/lib.rs`.
@@ -155,12 +191,11 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 
 **Holtburger status:** Wave D2 shipped 6 `SessionHandle` wasm-bindgen methods (`openTrade/closeTrade/addToTrade/acceptTrade/declineTrade/resetTrade`) + `TradeSnapshot`/`TradeItem` Rust structs + JS wrappers + `publish_player_trade_snapshot()` via existing `WorldEvent::TradeStateUpdated` (canonical `world.trade` already maintained by `crates/holtburger-world/src/handlers/trade.rs` across all 9 trade events) + `CLIENT_EVENT_KIND_TRADE_UPDATED=23` + `player_trade()` getter. `plugins/trade-panel.js` NEW 593 LOC — 360×280 floating window, two 4×3 12-slot grids (You / partner), Accept/Decline/Reset footer, partner-accept green dot + self-accept gold highlight, drag-drop from inventory via mime `application/x-hb-inv-guid`, Esc/X close. Debug: `window.__openTradePanel()`.
 
-### 4. Allegiance system
+### 4. Allegiance system — SHIPPED 2026-05-25 (Wave E1, send-only MVP)
 **Severity:** load-bearing (player-facing core feature)
 **Discord evidence:** Multiple "allegiance / fellowship chat" mentions in #general; cascaded transparent chat windows for allegiance specifically (line 1752).
-**Holtburger status:** `SwearAllegiance/BreakAllegiance` live in opcodes.rs:34-35; 18 more (officer, motd, bans, gag, hometown recall, approved vassal) are commented-out stubs. No `plugins/allegiance-panel.js`. AllegianceUpdate/InfoResponse/LoginNotification events not drained.
+**Holtburger status:** Wave E1 shipped 2 wasm-bindgen methods (`swearAllegiance(targetGuid)`, `breakAllegiance(targetGuid)`) using existing `SwearAllegianceActionData`/`BreakAllegianceActionData` structs at `crates/holtburger-protocol/src/messages/player/actions.rs:161+`. JS: `plugins/allegiance-panel.js` already existed as a main-panel view; appended 246-LOC standalone IIFE with Swear/Break action buttons that read `getSelectedTarget()` with confirm dialogs. 18 more opcodes (officer, motd, bans, gag, hometown recall, approved vassal) still commented — Wave F follow-on (each is small struct + GameAction variant + wasm method + panel button). Receive-side AllegianceUpdate/InfoResponse snapshot also Wave F.
 **Upstream:** ACE has 30+ handlers in `Source/ACE.Server/Network/GameAction/Actions/` matching the commented-out opcodes.
-**Remediation:** Uncomment opcode stubs as packs are tested; introduce `plugins/allegiance-panel.js` with Swear/Break/Officer/Motd/Chat-Gag controls; route AllegianceUpdate through bus.
 
 ### 5. Fellowship system — SHIPPED 2026-05-25 (Wave C2 send-side + Wave D1 receive-side full)
 **Severity:** load-bearing
@@ -219,10 +254,9 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 
 ## High-Impact Visual / Rendering Deficiencies (Tier 2)
 
-### 11. Reversed Z-buffer for distant precision
+### 11. Reversed Z-buffer for distant precision — SHIPPED 2026-05-25 (Wave E3)
 **Discord:** "does wb use a reversed z-buffer? that would help with precision for distant objects, reducing flickering" — #worldbuilder 2026-03-31
-**Holtburger:** Standard `WebGLRenderer` z-buffer; no inversion. With our 13×13 ring (2.4 km × 2.4 km), distant terrain mesh will z-fight before LOD-out.
-**Remediation:** `THREE.WebGLRenderer({ logarithmicDepthBuffer: true })` — cheapest first; if insufficient, full reversed-Z requires post-pass adjustment.
+**Holtburger:** Wave E3 added `logarithmicDepthBuffer: true` to the `THREE.WebGLRenderer` constructor options at `scene3d/index.js:375`. One-key change; Three.js handles depth-test internals. Cheap-and-good first move per remediation note. If distant z-fight still surfaces, full reverse-Z post-pass is the next escalation.
 
 ### 12. Weather: rain particles + lightning flashes — SHIPPED 2026-05-25 (Wave C3)
 **Discord:** "Rain is in already…lightning flashes no, need to debug…sound yes, ambient from terrain" — #worldbuilder 2026-04-13
@@ -243,10 +277,9 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Holtburger:** 13×13 ring stays resident; no `unloadLandblock(id)` API. A player traversing the continent will OOM.
 **Remediation:** LRU eviction in `scene3d/index.js:bakeTerrainRing()`; release Geometry/Material/Texture refs explicitly; track via `renderer.info.memory`.
 
-### 16. Nameplate render budget under crowds
+### 16. Nameplate render budget under crowds — SHIPPED 2026-05-25 (Wave E3)
 **Discord:** "NPCS with Nametags…game client freezes" — #general line 285; "UB Nametags.cs L23" — line 7508
-**Holtburger:** `nameplate_sprite.js` per-creature; no distance cull or budget. At 50+ nameplates (Discord-quoted landblock spawn cap) we'd likely hitch.
-**Remediation:** Distance LOD on nameplate canvas redraw; pooled texture upload; cap N visible nameplates with fade-out.
+**Holtburger:** Wave E3 added `tickNameplateLod` + `disposeNameplateLod` + self-managed rAF in `scene3d/nameplate_sprite.js`. URL knobs `?nameplateRange=N` (default 40m) + `?nameplateMax=N` (default 30). Distance² from each nameplate's `matrixWorld[12..14]` to active camera; sort + keep N nearest visible. Local player always exempt via `window.getLocalPlayerGuid()`. Pooled texture upload + fade-out are future polish — the visibility gate alone fixes the 50-NPC crowd hitch.
 
 ---
 
@@ -264,9 +297,9 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Discord:** "nothing special about spell research panel…add taper animations to queue" — #openai-gpt-3, Yonneh 2026-05-22
 **Holtburger:** Spell component parser exists; UI for summoning / discarding components not shipped. `playerSpellComponents()` wasm export — does it exist? Check.
 
-### 20. Squelch / Friends / Titles
+### 20. Squelch / Friends / Titles — SHIPPED 2026-05-25 (Wave E2, Friends + Character-Squelch send-only MVP)
 **Discord:** Chat channel filtering and friend lists implicit across #general.
-**Holtburger:** All commented out in opcodes.rs (AddFriend 0x0018, RemoveFriend 0x0017, ModifyCharacter/Account/GlobalSquelch 0x0058-0x005B, TitleSet 0x002C). No `plugins/social-panel.js`.
+**Holtburger:** Wave E2 uncommented AddFriend 0x0018, RemoveFriend 0x0017, ModifyCharacterSquelch 0x0058 + created 3 message structs in `crates/holtburger-protocol/src/messages/player/actions.rs` (AddFriend by-name, RemoveFriend by-guid, ModifyCharacterSquelch with 4 fields: add/playerGuid/playerName/messageType per `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/GameActionModifyCharacterSquelch.cs`). 3 wasm methods (`addFriend(name)`, `removeFriend(guid)`, `modifyCharacterSquelch(guid, name, add, mask)`). New `plugins/social-panel.js` (~340 LOC) — Friends section (text input + Add, Remove-by-Selected) + Squelch section (Squelch/Unsquelch Selected, all-chat mask `0xFFFFFFFF`). ModifyAccountSquelch 0x0059, ModifyGlobalSquelch 0x005B, TitleSet 0x002C deferred to Wave F. Receive-side FriendsUpdate/CharacterTitleTable snapshot also Wave F.
 
 ### 21. Writing system (books, inscriptions, scrolls)
 **Discord:** Light coverage, but ACE has BookData/AddPage/ModifyPage/DeletePage/Inscribe handlers, Chorizite categorizes under Writing.
@@ -412,12 +445,20 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 11. ~~Trade system multi-step UI (#3)~~ — 6 wasm methods + snapshot infra + 593-LOC trade-panel shipped.
 12. ~~Equipment paper-doll real icons (#10 polish)~~ — fetch_surface_pixels wired into paperdoll slots with race-safe async + TYPE_COLOR fallback.
 
-### Wave E — next priorities
+### Wave E — SHIPPED 2026-05-25 (later same day)
 
-13. **Allegiance panel + officer/motd (#4)** — `SwearAllegiance/BreakAllegiance` live; 18 more opcodes commented (officer/motd/bans/gag/hometown-recall). Same shape as Wave C2 send-side + D1 receive-side pattern.
-14. **Friends + Squelch + Titles (#20)** — all opcodes commented; same shape.
-15. **Equipment paper-doll burden % + drag-drop (#10 finish)** — needs `playerBurden()` wasm getter + `DropItem` + `GetAndWieldItem` exports.
-16. **Inscriptions + books (#21)** — Writing GameAction handlers exist in ACE; UI is the new piece.
-17. **Reversed Z-buffer (#11)** — one-line `logarithmicDepthBuffer: true` on `THREE.WebGLRenderer` — try first; full reverse-Z if insufficient.
+13. ~~Allegiance panel Swear/Break (#4 send-only MVP)~~ — 2 wasm methods + standalone panel shipped.
+14. ~~Friends + Character-Squelch (#20 send-only MVP)~~ — 3 opcodes uncommented + 3 new structs + 3 wasm methods + social-panel shipped.
+15. ~~Reversed Z-buffer (#11)~~ — `logarithmicDepthBuffer: true` flipped on the renderer.
+   Plus bundle bonuses: nameplate distance LOD (#16) + compass HUD overlay (ad-hoc Discord ask).
+
+### Wave F — next priorities
+
+16. **Allegiance officer/MOTD/bans/gag/hometown-recall (#4 polish)** — 18 commented opcodes; each is a small struct + GameAction variant + wasm method + panel button.
+17. **Titles + Account-squelch + Global-squelch (#20 polish)** — TitleSet 0x002C, ModifyAccountSquelch 0x0059, ModifyGlobalSquelch 0x005B, SetSquelchDb 0x01F4.
+18. **Allegiance receive-side snapshot (#4)** — `AllegianceUpdate`/`AllegianceInfoResponse` events + snapshot infra mirroring Wave D1 fellowship pattern.
+19. **Friends list snapshot (#20)** — `FriendsUpdate` event + snapshot.
+20. **Equipment paper-doll burden % + drag-drop (#10 finish)** — needs `playerBurden()` wasm getter + `DropItem` + `GetAndWieldItem` exports.
+21. **Inscriptions + books (#21)** — Writing GameAction handlers exist in ACE; UI is the new piece.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.

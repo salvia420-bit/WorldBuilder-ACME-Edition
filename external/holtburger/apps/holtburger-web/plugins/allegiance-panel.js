@@ -694,6 +694,253 @@ export const manifest = {
   name: "Allegiance",
   icon: "🛡",
   iconHidden: true,
-  version: "0.2.0",
+  version: "0.3.0",
   description: "Allegiance + companion-tab view (gmAllegianceUI 0x2100002F)",
 };
+
+// ─────────────────────────────────────────────────────────────────
+// Standalone floating action panel (Wave E1 — send-only MVP)
+//
+// Lightweight overlay distinct from the main-panel `view` export
+// above. Exposes window.__openAllegiancePanel /
+// __closeAllegiancePanel for ad-hoc opening from devtools or hotkeys.
+// 2 spec-aligned buttons: Swear / Break.
+//
+// Receive-side (AllegianceUpdate, officer / motd / bans) is Wave F
+// scope — placeholder text below the action grid says so.
+// ─────────────────────────────────────────────────────────────────
+
+const SA_STYLE_ID = "hb-alleg-standalone-style";
+const SA_OVERLAY_ID = "hb-alleg-standalone";
+
+function ensureStandaloneStyles() {
+  if (document.getElementById(SA_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = SA_STYLE_ID;
+  style.textContent = `
+    #${SA_OVERLAY_ID} {
+      position: fixed;
+      top: 120px;
+      right: 24px;
+      width: 280px;
+      box-sizing: border-box;
+      z-index: 12000;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
+      border: 1px solid var(--hb-border-brass);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.65);
+      display: none;
+    }
+    #${SA_OVERLAY_ID}.open { display: block; }
+    .hb-alleg-sa-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      background: rgba(0, 0, 0, 0.45);
+      border-bottom: 1px solid var(--hb-border-brass-dim);
+      font-size: 12px;
+      color: var(--hb-text-gold);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      user-select: none;
+    }
+    .hb-alleg-sa-x {
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      background: transparent;
+      border: 1px solid var(--hb-border-brass-dim);
+      color: var(--hb-text-cream);
+      font-family: inherit;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .hb-alleg-sa-x:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    .hb-alleg-sa-body { padding: 10px; }
+    .hb-alleg-sa-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .hb-alleg-sa-btn {
+      box-sizing: border-box;
+      padding: 8px 6px;
+      font-family: var(--hb-font-serif);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--hb-text-cream);
+      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
+      border: 1px solid var(--hb-border-brass);
+      cursor: pointer;
+      text-transform: uppercase;
+      user-select: none;
+    }
+    .hb-alleg-sa-btn:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    .hb-alleg-sa-placeholder {
+      padding: 8px 6px;
+      font-size: 10px;
+      color: rgba(220, 200, 160, 0.55);
+      font-style: italic;
+      border-top: 1px solid var(--hb-border-brass-dim);
+      text-align: center;
+    }
+    .hb-alleg-sa-toast {
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: 6px;
+      padding: 4px 6px;
+      font-size: 10px;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.75);
+      border: 1px solid var(--hb-border-brass);
+      color: var(--hb-text-gold);
+      pointer-events: none;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+let saOverlay = null;
+
+function saCurrentSelectedGuid() {
+  try {
+    const em = window.liveScene3d?.entityManager;
+    const g = em?.getSelectedTarget?.();
+    return g ? (g >>> 0) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function saWithSession(label, fn) {
+  const handle = window.__sessionHandle;
+  if (typeof handle?.[label] !== "function") {
+    emit(`[allegiance] Wasm session not ready (${label}).`);
+    return;
+  }
+  try {
+    fn(handle);
+  } catch (err) {
+    emit(`[allegiance] ${label} failed: ${err?.message ?? err}`);
+  }
+}
+
+function saToast(text) {
+  if (!saOverlay) return;
+  const old = saOverlay.querySelector(".hb-alleg-sa-toast");
+  if (old) old.remove();
+  const t = document.createElement("div");
+  t.className = "hb-alleg-sa-toast";
+  t.textContent = text;
+  saOverlay.appendChild(t);
+  setTimeout(() => t.remove(), 1750);
+}
+
+function buildStandaloneOverlay() {
+  ensureStandaloneStyles();
+  const overlay = document.createElement("div");
+  overlay.id = SA_OVERLAY_ID;
+
+  const hdr = document.createElement("div");
+  hdr.className = "hb-alleg-sa-hdr";
+  const title = document.createElement("span");
+  setAcText(title, "Allegiance");
+  hdr.appendChild(title);
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "hb-alleg-sa-x";
+  closeBtn.title = "Close (Esc)";
+  closeBtn.textContent = "x";
+  closeBtn.addEventListener("click", closeStandalone);
+  hdr.appendChild(closeBtn);
+  overlay.appendChild(hdr);
+
+  const body = document.createElement("div");
+  body.className = "hb-alleg-sa-body";
+
+  const stack = document.createElement("div");
+  stack.className = "hb-alleg-sa-stack";
+
+  const ACTIONS = [
+    {
+      label: "Swear Allegiance to Selected",
+      confirm: "Swear allegiance to the selected target?",
+      method: "swearAllegiance",
+      verb: "swear",
+    },
+    {
+      label: "Break Allegiance with Selected",
+      confirm: "Break allegiance with the selected target?",
+      method: "breakAllegiance",
+      verb: "break",
+    },
+  ];
+
+  for (const a of ACTIONS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hb-alleg-sa-btn";
+    btn.dataset.action = a.verb;
+    setAcText(btn, a.label);
+    btn.addEventListener("click", () => {
+      const guid = saCurrentSelectedGuid();
+      if (!guid) { saToast("Click a player first"); return; }
+      if (!window.confirm(a.confirm)) return;
+      saWithSession(a.method, (h) => {
+        h[a.method](guid);
+        emit(`[allegiance/${a.verb}] target=0x${guid.toString(16).padStart(8, "0")}`);
+        saToast(`${a.verb === "swear" ? "Swear" : "Break"} sent`);
+      });
+    });
+    stack.appendChild(btn);
+  }
+  body.appendChild(stack);
+
+  const placeholder = document.createElement("div");
+  placeholder.className = "hb-alleg-sa-placeholder";
+  setAcText(placeholder, "Allegiance state + officer/motd/bans — coming in a future wave");
+  body.appendChild(placeholder);
+
+  overlay.appendChild(body);
+
+  overlay.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeStandalone();
+  });
+
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function openStandalone() {
+  if (!saOverlay) saOverlay = buildStandaloneOverlay();
+  saOverlay.classList.add("open");
+  saOverlay.tabIndex = -1;
+  try { saOverlay.focus({ preventScroll: true }); } catch (_) {}
+}
+
+function closeStandalone() {
+  if (!saOverlay) return;
+  saOverlay.classList.remove("open");
+}
+
+if (typeof window !== "undefined") {
+  if (!window.__hbAllegiancePanelEscBound) {
+    window.__hbAllegiancePanelEscBound = true;
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      if (saOverlay?.classList.contains("open")) closeStandalone();
+    });
+  }
+  window.__openAllegiancePanel = openStandalone;
+  window.__closeAllegiancePanel = closeStandalone;
+}

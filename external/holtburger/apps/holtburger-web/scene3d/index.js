@@ -375,6 +375,7 @@ export async function preInit3D(canvas) {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: !!quality.flags.antialias,
+    logarithmicDepthBuffer: true,
   });
   // 2026-05-21 Phase F — explicitly enable EXT_float_blend so the GPU
   // stops emitting "Using format enabled by implicitly enabled extension"

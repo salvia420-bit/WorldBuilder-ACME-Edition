@@ -229,6 +229,89 @@ impl ProtocolPack for RemovePlayerPermissionActionData {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddFriendActionData {
+    pub friend_name: String,
+}
+
+impl ProtocolUnpack for AddFriendActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let friend_name = read_string16(data, offset)?;
+        Some(Self { friend_name })
+    }
+}
+
+impl ProtocolPack for AddFriendActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        write_string16(writer, &self.friend_name);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveFriendActionData {
+    pub friend_guid: Guid,
+}
+
+impl ProtocolUnpack for RemoveFriendActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let friend_guid = Guid::unpack(data, offset)?;
+        Some(Self { friend_guid })
+    }
+}
+
+impl ProtocolPack for RemoveFriendActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        self.friend_guid.pack(writer);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModifyCharacterSquelchActionData {
+    pub add: bool,
+    pub target_guid: Guid,
+    pub target_name: String,
+    /// `ChatMessageType` bitmask. 0xFFFFFFFF squelches every category
+    /// (retail UX shortcut for "squelch everything"); ACE persists it
+    /// per-character in SquelchManager.
+    pub message_type: u32,
+}
+
+impl ProtocolUnpack for ModifyCharacterSquelchActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let add = LittleEndian::read_u32(&data[*offset..*offset + 4]) != 0;
+        *offset += 4;
+        let target_guid = Guid::unpack(data, offset)?;
+        let target_name = read_string16(data, offset)?;
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let message_type = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(Self {
+            add,
+            target_guid,
+            target_name,
+            message_type,
+        })
+    }
+}
+
+impl ProtocolPack for ModifyCharacterSquelchActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        writer
+            .write_u32::<LittleEndian>(u32::from(self.add))
+            .unwrap();
+        self.target_guid.pack(writer);
+        write_string16(writer, &self.target_name);
+        writer
+            .write_u32::<LittleEndian>(self.message_type)
+            .unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

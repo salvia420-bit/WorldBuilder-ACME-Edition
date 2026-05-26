@@ -12922,6 +12922,46 @@ enum SessionCommand {
     /// the negotiation. Maps to `GameAction::ResetTrade` (sub-opcode
     /// 0x0204). ACE resets both sides' item lists + accept flags.
     ResetTrade,
+    /// Allegiance: swear fealty to `target_guid` (the local player's
+    /// new patron). Maps to `GameAction::SwearAllegiance` (sub-opcode
+    /// 0x001D). ACE validates rank gap, mansion ownership, lock state,
+    /// and XP threshold; failures surface as WeenieError chat.
+    SwearAllegiance {
+        target_guid: u32,
+    },
+    /// Allegiance: break fealty with the player's current patron.
+    /// `target_guid` is the patron's GUID (retail ACUI fills this from
+    /// the local snapshot; ACE re-reads from server state regardless).
+    /// Maps to `GameAction::BreakAllegiance` (sub-opcode 0x001E).
+    BreakAllegiance {
+        target_guid: u32,
+    },
+    /// Social: add `friend_name` (string16) to the player's friends
+    /// list. Maps to `GameAction::AddFriend` (sub-opcode 0x0018). Retail
+    /// + ACE wire format is by-name; ACE resolves the name server-side
+    /// and surfaces failure via WeenieError chat.
+    AddFriend {
+        friend_name: String,
+    },
+    /// Social: remove `friend_guid` from the player's friends list.
+    /// Maps to `GameAction::RemoveFriend` (sub-opcode 0x0017). Retail +
+    /// ACE wire format is by-GUID (the friend entry already holds the
+    /// resolved guid).
+    RemoveFriend {
+        friend_guid: u32,
+    },
+    /// Social: squelch (`add=true`) or unsquelch (`add=false`) a
+    /// specific character. Maps to `GameAction::ModifyCharacterSquelch`
+    /// (sub-opcode 0x0058). `message_type` is a `ChatMessageType`
+    /// bitmask — `0xFFFFFFFF` mirrors ACE's "squelch everything"
+    /// shortcut. `target_name` is sent for ACE logging/parity; ACE keys
+    /// the squelch by guid.
+    ModifyCharacterSquelch {
+        target_guid: u32,
+        target_name: String,
+        add: bool,
+        message_type: u32,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -16921,6 +16961,88 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::ResetTrade)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("resetTrade: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Allegiance — swear fealty to `target_guid`. Sends
+    /// `GameAction::SwearAllegiance` (sub-opcode 0x001D). ACE owns all
+    /// validation (rank gap, mansion ownership, allegiance lock state,
+    /// XP threshold); failures surface as WeenieError chat.
+    #[wasm_bindgen(js_name = swearAllegiance)]
+    pub fn swear_allegiance(&self, target_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SwearAllegiance { target_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("swearAllegiance: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Allegiance — break fealty with `target_guid` (the patron).
+    /// Sends `GameAction::BreakAllegiance` (sub-opcode 0x001E). ACE
+    /// re-reads the patron from server state regardless of the wire
+    /// value; the JS layer fills it from the local snapshot for ACUI
+    /// parity.
+    #[wasm_bindgen(js_name = breakAllegiance)]
+    pub fn break_allegiance(&self, target_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BreakAllegiance { target_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("breakAllegiance: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Social — add `friend_name` to the player's friends list. Sends
+    /// `GameAction::AddFriend` (sub-opcode 0x0018). Wire format is
+    /// by-name (string16); ACE resolves the name server-side.
+    #[wasm_bindgen(js_name = addFriend)]
+    pub fn add_friend(&self, friend_name: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AddFriend { friend_name })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("addFriend: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Social — remove `friend_guid` from the player's friends list.
+    /// Sends `GameAction::RemoveFriend` (sub-opcode 0x0017). Wire
+    /// format is by-GUID.
+    #[wasm_bindgen(js_name = removeFriend)]
+    pub fn remove_friend(&self, friend_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RemoveFriend { friend_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("removeFriend: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Social — squelch/unsquelch a specific character. Sends
+    /// `GameAction::ModifyCharacterSquelch` (sub-opcode 0x0058). Pass
+    /// `add=true` to squelch, `add=false` to unsquelch. `message_type`
+    /// is a `ChatMessageType` bitmask — `0xFFFFFFFF` mirrors the retail
+    /// "squelch everything" UX shortcut. `target_name` is optional;
+    /// pass empty for unknown.
+    #[wasm_bindgen(js_name = modifyCharacterSquelch)]
+    pub fn modify_character_squelch(
+        &self,
+        target_guid: u32,
+        target_name: String,
+        add: bool,
+        message_type: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::ModifyCharacterSquelch {
+                target_guid,
+                target_name,
+                add,
+                message_type,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("modifyCharacterSquelch: cmd channel closed ({e})"))
             })
     }
 
@@ -22388,6 +22510,147 @@ async fn recv_loop(
                             return;
                         }
                         console_log_str("[trade/reset]");
+                    }
+                    Some(SessionCommand::SwearAllegiance { target_guid }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, SwearAllegianceActionData,
+                        };
+                        let action = GameAction::SwearAllegiance(Box::new(
+                            SwearAllegianceActionData {
+                                target_guid: Guid(target_guid),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(SwearAllegiance): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "swear_allegiance: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[allegiance/swear] target=0x{target_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::BreakAllegiance { target_guid }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            BreakAllegianceActionData, GameAction,
+                        };
+                        let action = GameAction::BreakAllegiance(Box::new(
+                            BreakAllegianceActionData {
+                                target_guid: Guid(target_guid),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(BreakAllegiance): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "break_allegiance: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[allegiance/break] target=0x{target_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::AddFriend { friend_name }) => {
+                        use holtburger_protocol::messages::{
+                            AddFriendActionData, GameAction,
+                        };
+                        let name_for_log = friend_name.clone();
+                        let action = GameAction::AddFriend(Box::new(AddFriendActionData {
+                            friend_name,
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(AddFriend): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("add_friend: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!("[friends/add] name={name_for_log}"));
+                    }
+                    Some(SessionCommand::RemoveFriend { friend_guid }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, RemoveFriendActionData,
+                        };
+                        let action = GameAction::RemoveFriend(Box::new(
+                            RemoveFriendActionData {
+                                friend_guid: Guid(friend_guid),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(RemoveFriend): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("remove_friend: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[friends/remove] target=0x{friend_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::ModifyCharacterSquelch {
+                        target_guid,
+                        target_name,
+                        add,
+                        message_type,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, ModifyCharacterSquelchActionData,
+                        };
+                        let action = GameAction::ModifyCharacterSquelch(Box::new(
+                            ModifyCharacterSquelchActionData {
+                                add,
+                                target_guid: Guid(target_guid),
+                                target_name,
+                                message_type,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(ModifyCharacterSquelch): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "modify_character_squelch: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[squelch/character] target=0x{target_guid:08X} add={add} mask=0x{message_type:08X}",
+                        ));
                     }
                     Some(SessionCommand::TargetedMissileAttack {
                         target_guid,

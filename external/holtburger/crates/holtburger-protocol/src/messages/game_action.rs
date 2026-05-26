@@ -37,6 +37,9 @@ pub enum GameAction {
     Tell(Box<TellActionData>),
     SwearAllegiance(Box<SwearAllegianceActionData>),
     BreakAllegiance(Box<BreakAllegianceActionData>),
+    AddFriend(Box<AddFriendActionData>),
+    RemoveFriend(Box<RemoveFriendActionData>),
+    ModifyCharacterSquelch(Box<ModifyCharacterSquelchActionData>),
     AddPlayerPermission(Box<AddPlayerPermissionActionData>),
     RemovePlayerPermission(Box<RemovePlayerPermissionActionData>),
     Emote(Box<EmoteActionData>),
@@ -149,6 +152,15 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::BreakAllegiance => GameAction::BreakAllegiance(Box::new(
                     BreakAllegianceActionData::unpack(data, offset)?,
                 )),
+                GameActionOpcode::AddFriend => {
+                    GameAction::AddFriend(Box::new(AddFriendActionData::unpack(data, offset)?))
+                }
+                GameActionOpcode::RemoveFriend => GameAction::RemoveFriend(Box::new(
+                    RemoveFriendActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::ModifyCharacterSquelch => GameAction::ModifyCharacterSquelch(
+                    Box::new(ModifyCharacterSquelchActionData::unpack(data, offset)?),
+                ),
                 GameActionOpcode::AddPlayerPermission => GameAction::AddPlayerPermission(Box::new(
                     AddPlayerPermissionActionData::unpack(data, offset)?,
                 )),
@@ -390,6 +402,21 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::BreakAllegiance(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::BreakAllegiance as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AddFriend(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AddFriend as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::RemoveFriend(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::RemoveFriend as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::ModifyCharacterSquelch(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::ModifyCharacterSquelch as u32)
                     .unwrap();
                 data.pack(buf);
             }

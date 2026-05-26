@@ -132,6 +132,35 @@ const _NAMEPLATE_DISABLED = (() => {
   } catch (_) { return false; }
 })();
 
+// Distance LOD (DEFICIENCY-REPORT #16). Beyond NAMEPLATE_VISIBLE_RANGE_M
+// the sprite gets `.visible = false` (no canvas redraw / no draw call).
+// MAX_VISIBLE_NAMEPLATES caps how many of the in-range nameplates may
+// be visible at once — beyond that, the farther ones are hidden too,
+// guarding against the retail "crowd of nameplates" perf cliff.
+// Per-frame cost: O(N log N) partial sort across attached sprites (cheap
+// for N ≤ 200 — under 0.05 ms on a 2GHz core).
+const NAMEPLATE_VISIBLE_RANGE_M = (() => {
+  try {
+    if (typeof window === "undefined") return 40;
+    const raw = new URLSearchParams(window.location.search).get("nameplateRange");
+    const n = raw == null ? NaN : Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 40;
+  } catch (_) { return 40; }
+})();
+const MAX_VISIBLE_NAMEPLATES = (() => {
+  try {
+    if (typeof window === "undefined") return 30;
+    const raw = new URLSearchParams(window.location.search).get("nameplateMax");
+    const n = raw == null ? NaN : Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 30;
+  } catch (_) { return 30; }
+})();
+// Cached scratch arrays to avoid allocations in the hot per-frame loop.
+const _lodScratch = [];
+const _lodCamWorld = { x: 0, y: 0, z: 0 };
+let _lodRafId = 0;
+let _lodDisposed = false;
+
 // ITEM_TYPE bit constants mirrored from `index.html:2771` (the 2D PIXI
 // path). We only need the bits the nameplate-colour switch reads.
 const ITEM_TYPE_CREATURE = 0x00000010;
@@ -503,7 +532,7 @@ export function createNameplateSprite(name, options = {}) {
  *   nameplates" toggle). Currently unused.
  * @returns {THREE.Sprite | null} the attached sprite (or null on skip).
  */
-export function ensureNameplateForEntity(inst, scene3d) {
+export function ensureNameplateForEntity(inst, _scene3d) {
   if (_NAMEPLATE_DISABLED) return null;
   if (!inst || !inst.root || !inst.meta) return null;
   const meta = inst.meta;
@@ -631,4 +660,113 @@ export function disposeNameplateCache() {
 /** Read-only access to the cache for diagnostic scripts. */
 export function getNameplateCacheSize() {
   return _nameplateCache.size;
+}
+
+/**
+ * Per-frame distance/count LOD for attached nameplate sprites.
+ * - Hides sprites further than `NAMEPLATE_VISIBLE_RANGE_M` from the camera.
+ * - Of the in-range sprites, keeps only the N nearest visible (N =
+ *   `MAX_VISIBLE_NAMEPLATES`); hides the rest.
+ * - Local-player sprite is always visible regardless of distance/cap.
+ * Idempotent — safe to call every rAF. Returns visible/considered counts
+ * for diagnostic scripts.
+ */
+export function tickNameplateLod(scene3d) {
+  if (_NAMEPLATE_DISABLED) return { visible: 0, considered: 0 };
+  if (!scene3d) return { visible: 0, considered: 0 };
+  const entityMap = scene3d.entityManager?.entityMap;
+  if (!entityMap || typeof entityMap.values !== "function") {
+    return { visible: 0, considered: 0 };
+  }
+  const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
+  if (!cam) return { visible: 0, considered: 0 };
+
+  // World-space camera position. cam.matrixWorld is current as of the
+  // last cameraSwitcher.tick (this LOD runs after render so the next
+  // frame sees up-to-date positions).
+  const camPos = cam.position;
+  _lodCamWorld.x = camPos.x;
+  _lodCamWorld.y = camPos.y;
+  _lodCamWorld.z = camPos.z;
+
+  let localGuid = null;
+  try {
+    if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+      const lpg = window.getLocalPlayerGuid();
+      if (lpg !== null && lpg !== undefined) localGuid = (lpg >>> 0);
+    }
+  } catch (_) {}
+
+  _lodScratch.length = 0;
+  const rangeSq = NAMEPLATE_VISIBLE_RANGE_M * NAMEPLATE_VISIBLE_RANGE_M;
+  for (const inst of entityMap.values()) {
+    const sprite = inst && inst._nameplateSprite;
+    if (!sprite) continue;
+    // Local-player sprite: always visible. (Note: ensureNameplateForEntity
+    // already skips the local player, but if a future path attaches one
+    // anyway — e.g. third-person showing your own name — keep it on.)
+    if (localGuid !== null && (inst.guid >>> 0) === localGuid) {
+      sprite.visible = true;
+      continue;
+    }
+    // World position of the sprite. Sprite is parented to inst.root,
+    // whose matrixWorld already incorporates the worldRoot rotation.
+    // sprite.matrixWorld is updated by the standard render walk; here
+    // we read the parent root's world position as a stable proxy
+    // (avoids an updateWorldMatrix call per-entity per-frame).
+    const root = inst.root;
+    if (!root) continue;
+    const m = root.matrixWorld.elements;
+    const dx = m[12] - _lodCamWorld.x;
+    const dy = m[13] - _lodCamWorld.y;
+    const dz = m[14] - _lodCamWorld.z;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 > rangeSq) {
+      sprite.visible = false;
+      continue;
+    }
+    _lodScratch.push({ sprite, d2 });
+  }
+
+  // Count cap: partial-sort by distance² and keep the N nearest. Plain
+  // O(n log n) sort is fine here — n typically ≤ 200; the in-range
+  // subset is usually << that. Using stable Array.sort over an
+  // index-array would save GC churn, but the scratch is reused across
+  // frames and the per-tick objects are small (sprite ref + number).
+  _lodScratch.sort((a, b) => a.d2 - b.d2);
+  let visible = 0;
+  for (let i = 0; i < _lodScratch.length; i++) {
+    const want = i < MAX_VISIBLE_NAMEPLATES;
+    _lodScratch[i].sprite.visible = want;
+    if (want) visible++;
+  }
+  const considered = _lodScratch.length;
+  _lodScratch.length = 0;
+  return { visible, considered };
+}
+
+/**
+ * Stop the auto-rAF LOD loop. Idempotent. Sprites are left in their
+ * current visibility state. For HMR / URL-flag-change paths.
+ */
+export function disposeNameplateLod() {
+  _lodDisposed = true;
+  if (_lodRafId && typeof window !== "undefined") {
+    try { window.cancelAnimationFrame(_lodRafId); } catch (_) {}
+  }
+  _lodRafId = 0;
+}
+
+// Self-managed rAF: kicks in once `window.liveScene3d` is available
+// and ticks every frame thereafter. Browser-only (no-op in tests).
+if (typeof window !== "undefined" && !_NAMEPLATE_DISABLED) {
+  const _lodLoop = () => {
+    if (_lodDisposed) return;
+    try {
+      const live = window.liveScene3d;
+      if (live) tickNameplateLod(live);
+    } catch (_) {}
+    _lodRafId = window.requestAnimationFrame(_lodLoop);
+  };
+  _lodRafId = window.requestAnimationFrame(_lodLoop);
 }

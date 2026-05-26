@@ -276,8 +276,8 @@ pub enum GameActionOpcode {
     // QueryMotd = 0x0255,
     // /// C2S: Clear the current Message of the Day (MOTD).
     // ClearMotd = 0x0256,
-    // /// C2S: Mute/squelch a specific character.
-    // ModifyCharacterSquelch = 0x0058,
+    /// C2S: Mute/squelch a specific character.
+    ModifyCharacterSquelch = 0x0058,
     // /// C2S: Mute/squelch an entire account.
     // ModifyAccountSquelch = 0x0059,
     // /// C2S: Mute/squelch a global chat channel.
@@ -435,10 +435,10 @@ pub enum GameActionOpcode {
     BreakAllegiance = 0x001E,
     // /// C2S: Request an update of allegiance information.
     // AllegianceUpdateRequest = 0x001F,
-    // /// C2S: Add a player to the friends list.
-    // AddFriend = 0x0018,
-    // /// C2S: Remove a player from the friends list.
-    // RemoveFriend = 0x0017,
+    /// C2S: Add a player to the friends list.
+    AddFriend = 0x0018,
+    /// C2S: Remove a player from the friends list.
+    RemoveFriend = 0x0017,
     // /// C2S: Query detailed allegiance hierarchy and status.
     // AllegianceInfoRequest = 0x027B,
     // /// C2S: Query the name of an allegiance member.
