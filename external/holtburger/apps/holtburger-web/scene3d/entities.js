@@ -2156,6 +2156,52 @@ export class EntityManager {
   }
 
   /**
+   * CMT Wave 16 / Phase 50 (2026-05-26): per-entity `PhysicsScriptTable`
+   * (DAT 0x34) DID accessor.
+   *
+   * Returns the entity's cached `physicsScriptTableDid` — the DID the
+   * Wave 17 `GameMessageScript` handler will use to look up the
+   * concrete `PhysicsScript` (0x33) corresponding to a `PScriptType`
+   * enum value the server broadcasts on opcode 0xF755.
+   *
+   * The wasm side caches this on every `ObjectCreate` (initial value
+   * from `PhysicsDesc.PhsTableID` > `Setup.default_phstable_id`,
+   * mirroring retail `acclient.c:320886-320900` Setup init and
+   * `acclient.c:322321-322331` PhysicsDesc override) and refreshes it
+   * on `UpdateObject` for runtime swaps (e.g. equip/unequip via
+   * `Creature.CalculateObjDesc`). See
+   * `external/holtburger/docs/physicsscript-bridge-research-2026-05-26.md`
+   * §1+§5 for the full chain.
+   *
+   * Returns `0` when:
+   *   - `guid` is 0 / unparseable,
+   *   - the wasm getter is unavailable (pre-session, mid-rebuild),
+   *   - the entity has never been seen (no ObjectCreate arrived yet),
+   *   - the entity exists but carries neither a PhysicsDesc override
+   *     nor a Setup `default_phstable_id` — i.e. it has no
+   *     PhysicsScriptTable. Wave 17's consumer should no-op for these
+   *     (matches retail's `CPhysicsObj::play_script` early-out when
+   *     `physics_script_table` is null at acclient.c:320335-320343).
+   *
+   * Mirrors the access shape of `getEquippedWeapon`, `getStance`,
+   * `isProjectile` — single wasm getter, returns a u32 number.
+   *
+   * @param {number} guid — entity GUID to query
+   * @returns {number} u32 PhysicsScriptTable DID (0x34xxxxxx), or 0 if none
+   */
+  getPhysicsScriptTableDid(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return 0;
+    try {
+      if (typeof window !== "undefined" && window.__sessionHandle
+          && typeof window.__sessionHandle.entityPhysicsScriptTableDid === "function") {
+        return (window.__sessionHandle.entityPhysicsScriptTableDid(g) >>> 0);
+      }
+    } catch (_) { /* never break callers */ }
+    return 0;
+  }
+
+  /**
    * CMT Wave 2 / Phase 5 (2026-05-26): per-entity MotionStance accessor.
    *
    * Returns the entity's last-observed `MotionStance` (one of

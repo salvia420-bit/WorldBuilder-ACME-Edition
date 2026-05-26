@@ -15615,6 +15615,84 @@ fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMe
     )
 }
 
+/// CMT Wave 16 / Phase 50 (2026-05-26): resolve the entity's
+/// `PhysicsScriptTable` (DAT 0x34) DID from its description, mirroring
+/// retail's two-source lookup chain.
+///
+/// **Priority (retail-accurate):**
+/// 1. `PhysicsDesc.PhsTableID` (our `petable_id`) — the runtime
+///    override the server can ship over the wire to swap an entity's
+///    table mid-game. Retail `acclient.c:322321-322331` reads
+///    `v3->phstable_id.id` here and overwrites
+///    `CPhysicsObj::physics_script_table`. Already absorbed into
+///    `PropertyDataId::PhysicsEffectTable` via
+///    `holtburger_world::hydration::WorldObjectPropertiesHydrationExt::hydrate_from_odd`.
+/// 2. Fall back to the entity's `Setup` model's
+///    `default_phstable_id` field, looked up synchronously against the
+///    global DAT source. Retail `CPhysicsObj::InitWithSetup` at
+///    `acclient.c:320886-320900` reads `setup->default_phstable_id.id`
+///    on initial setup load and stashes the table pointer there. Our
+///    `holtburger_dat::file_type::SetupModel::default_script_table`
+///    field is the same value (5th of the 5 trailing IDs; retail
+///    layout in `acclient.h:31143-31147`:
+///    `default_anim_id, default_script_id, default_mtable_id,
+///    default_stable_id, default_phstable_id`).
+///
+/// Returns `0` when neither source carries a table DID (entity has no
+/// PScriptTable — fine for inert scenery, walls, ground textures, etc.;
+/// `PhysicsScriptTable::GetScript` simply returns the sentinel and no
+/// script plays per `acclient.c:336931-336957`).
+#[cfg(target_arch = "wasm32")]
+fn resolve_physics_script_table_did(
+    entity: &holtburger_world::entity::Entity,
+) -> u32 {
+    use holtburger_common::properties::WorldObjectExt as _;
+    // 1) Runtime PhysicsDesc override — petable_id is read off
+    // `PropertyDataId::PhysicsEffectTable` (set by hydration from the
+    // wire `PhysicsDescriptionFlag::PETABLE` block at
+    // `description.rs:960-966`). When present this wins outright; retail
+    // does an unconditional Release+Re-Get at acclient.c:322321-322331
+    // without consulting Setup at all.
+    if let Some(id) = entity.petable_id().map(u32::from)
+        && id != 0
+    {
+        return id;
+    }
+    // 2) Fall back to the Setup model's `default_phstable_id`. The
+    // entity carries its Setup DID on `PropertyDataId::Setup` (= our
+    // `csetup_id`). Sync DAT read from the global resource source — we
+    // already do the same pattern at lib.rs:10730-10743 for the
+    // collision-radius scan, so the I/O profile is identical.
+    let setup_id = entity
+        .csetup_id()
+        .map(u32::from)
+        .unwrap_or(0);
+    if setup_id == 0 || (setup_id >> 24) != 0x02 {
+        return 0;
+    }
+    if !global_source::has_resource_source() {
+        return 0;
+    }
+    use holtburger_dat::ResourceSource;
+    let source = global_source::global_source();
+    let Ok(bytes) = source
+        .as_ref()
+        .get_file_by_key(holtburger_dat::ResourceKey::new("eor/portal", setup_id))
+    else {
+        return 0;
+    };
+    let Ok(setup) = holtburger_dat::file_type::SetupModel::unpack(
+        &mut std::io::Cursor::new(&bytes),
+    ) else {
+        return 0;
+    };
+    // `default_script_table` is retail's `default_phstable_id`
+    // (5th of the 5 ID slots — see `setup_model.rs:419-423`). `None`
+    // is encoded as the all-zero raw u32; our `decode_optional_resource_id`
+    // already maps `0` to `None`.
+    setup.default_script_table.unwrap_or(0)
+}
+
 /// Phase 4 step 4 follow-on: spatial-bypass version of
 /// `holtburger_world::handlers::inventory::handle_message`'s
 /// `GameMessage::ObjectCreate` arm. Inserts the entity into
@@ -15635,6 +15713,9 @@ fn apply_inventory_object_create(
     projectile_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashSet<u32>>,
     >,
+    physics_script_table_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    >,
 ) -> bool {
     use holtburger_common::properties::{
         PhysicsState, PropertyFloat, PropertyInt, WorldObjectExt as _,
@@ -15650,6 +15731,24 @@ fn apply_inventory_object_create(
     let pos = data.pos.unwrap_or_default();
     let mut entity = holtburger_world::entity::Entity::new(guid, entity_name, pos);
     entity.apply_description(data);
+
+    // CMT Wave 16 / Phase 50 (2026-05-26): cache the PhysicsScriptTable
+    // (DAT 0x34) DID on the entity record. `resolve_physics_script_table_did`
+    // implements retail's two-source chain: PhysicsDesc.PhsTableID
+    // (runtime override) > Setup.default_phstable_id (initial value).
+    // `0` is fine — entities without a table just won't play scripts
+    // when `GameMessageScript` arrives, matching retail's
+    // `CPhysicsObj::play_script` no-op when `physics_script_table` is null
+    // (acclient.c:320335-320343). Also stash into the shared
+    // `physics_script_table_index` so the JS-facing accessor can hit it
+    // without crossing the WorldState borrow.
+    let table_did = resolve_physics_script_table_did(&entity);
+    entity.physics_script_table_did = table_did;
+    if table_did != 0 {
+        physics_script_table_index
+            .borrow_mut()
+            .insert(u32::from(guid), table_did);
+    }
 
     let container_id = entity.container_id();
     let wielder_id = entity.wielder_id();
@@ -15790,6 +15889,9 @@ fn apply_inventory_object_delete(
     projectile_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashSet<u32>>,
     >,
+    physics_script_table_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    >,
 ) -> bool {
     let was_owned = world.player.inventory.contains(&guid);
     if was_owned {
@@ -15825,6 +15927,11 @@ fn apply_inventory_object_delete(
     // delete arm runs. Cheap O(1) removal; absent GUIDs are a no-op (the
     // set just won't contain non-projectile deletes).
     projectile_index.borrow_mut().remove(&g_u32);
+
+    // CMT Wave 16 / Phase 50 (2026-05-26): PhysicsScriptTable index
+    // cleanup. Symmetric with the projectile-index path above so the
+    // cache doesn't accumulate dead-GUID entries over a long session.
+    physics_script_table_index.borrow_mut().remove(&g_u32);
 
     was_owned
 }
@@ -16138,6 +16245,32 @@ pub struct SessionHandle {
     /// any of them when they enter flight.
     projectile_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashSet<u32>>,
+    >,
+    /// CMT Wave 16 / Phase 50 (2026-05-26): per-GUID cache of each
+    /// entity's resolved `PhysicsScriptTable` (DAT 0x34) DID. Mirrors
+    /// the `physics_script_table_did` field on the `Entity` record
+    /// inside `WorldState.entities` so JS can fetch the value without
+    /// having to walk the world state across the wasm boundary —
+    /// matching the access shape of `projectile_index` and
+    /// `wielder_index` directly above.
+    ///
+    /// Populated by the recv loop's ObjectCreate arm (initial value
+    /// from PhysicsDesc.PhsTableID > Setup.default_phstable_id chain;
+    /// see `resolve_physics_script_table_did`) and refreshed by the
+    /// UpdateObject arm (PhysicsDesc runtime swap; retail
+    /// `acclient.c:322321-322331`). Pruned by ObjectDelete /
+    /// InventoryRemoveObject.
+    ///
+    /// Absent / `0` means "no table" — `GameMessageScript` (opcode
+    /// 0xF755) handlers should no-op for these entities (mirrors
+    /// retail's `CPhysicsObj::play_script` early-out when
+    /// `physics_script_table` is null, acclient.c:320335-320343).
+    ///
+    /// Read by Wave 17 via
+    /// [`SessionHandle::entity_physics_script_table_did`] /
+    /// `EntityManager.getPhysicsScriptTableDid(guid)`.
+    physics_script_table_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     >,
     /// Phase 6 step D: latest cell-scene snapshot, refreshed by the
     /// recv loop on each `SessionCommand::TickMovement`. Carries the
@@ -16911,6 +17044,45 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = entityIsProjectile)]
     pub fn entity_is_projectile(&self, guid: u32) -> bool {
         self.projectile_index.borrow().contains(&guid)
+    }
+
+    /// **CMT Wave 16 / Phase 50 (2026-05-26).** Cached
+    /// `PhysicsScriptTable` (DAT 0x34) DID for the entity identified by
+    /// `guid`. Returns `0` for unknown GUIDs and for entities that
+    /// carry neither a `PhysicsDesc.PhsTableID` runtime override nor a
+    /// `Setup.default_phstable_id` (inert scenery, walls, etc.).
+    ///
+    /// **Resolution chain (retail-accurate):**
+    /// - `PhysicsDesc.PhsTableID` (our `petable_id`, from
+    ///   `description.rs:960-966` PETABLE block) takes priority — retail
+    ///   `acclient.c:322321-322331` swaps the entity's
+    ///   `physics_script_table` pointer unconditionally when this is on
+    ///   the wire.
+    /// - Falls back to the entity's `Setup` model's
+    ///   `default_phstable_id` (5th of the 5 trailing IDs in the Setup
+    ///   parser — see `setup_model.rs:419-423` + `acclient.h:31147`).
+    ///
+    /// Populated by the recv loop's `apply_inventory_object_create`
+    /// (initial value at ObjectCreate) and refreshed by the
+    /// `UpdateObject` arm on PhysicsDesc swaps. Pruned by
+    /// `apply_inventory_object_delete` so the index doesn't accumulate
+    /// dead GUIDs.
+    ///
+    /// Consumed by Wave 17's `play_effect_vfx.js` to resolve a
+    /// `GameMessageScript` (opcode 0xF755) `PScriptType` enum value
+    /// into a concrete `PhysicsScript` (0x33) DID via the per-entity
+    /// table; mirrors the access shape of `entityIsProjectile`,
+    /// `entityEquippedWeapon`, etc. — no live `world` borrow needed.
+    ///
+    /// See `external/holtburger/docs/physicsscript-bridge-research-2026-05-26.md`
+    /// §1 (the retail PlayEffect chain) and §5 (the lookup picture).
+    #[wasm_bindgen(js_name = entityPhysicsScriptTableDid)]
+    pub fn entity_physics_script_table_did(&self, guid: u32) -> u32 {
+        self.physics_script_table_index
+            .borrow()
+            .get(&guid)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// **Vendor UI (2026-05-19).** Pull the cached vendor state for a
@@ -19857,6 +20029,20 @@ pub async fn start_session(
     let projectile_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashSet<u32>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
+    // CMT Wave 16 / Phase 50 (2026-05-26): per-GUID
+    // PhysicsScriptTable DID cache, parallel to the
+    // `Entity.physics_script_table_did` field. Populated by
+    // `apply_inventory_object_create` (initial value from
+    // PhysicsDesc.PhsTableID > Setup.default_phstable_id; see
+    // `resolve_physics_script_table_did`) and refreshed by the
+    // UpdateObject arm on runtime swaps (retail
+    // `acclient.c:322321-322331`). JS reads via
+    // [`SessionHandle::entity_physics_script_table_did`] so Wave 17's
+    // GameMessageScript handler can resolve a PScriptType enum into the
+    // entity-specific PhysicsScript DID without a live `world` borrow.
+    let physics_script_table_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
     // Phase 6 step D: cell-scene snapshot, refreshed each TickMovement.
     let cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>> =
         std::rc::Rc::new(std::cell::RefCell::new(CellSceneSnapshot::default()));
@@ -19924,6 +20110,7 @@ pub async fn start_session(
         let latest_known_spells_inner = latest_known_spells.clone();
         let wielder_index_inner = wielder_index.clone();
         let projectile_index_inner = projectile_index.clone();
+        let physics_script_table_index_inner = physics_script_table_index.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
@@ -19961,6 +20148,7 @@ pub async fn start_session(
                 latest_known_spells_inner,
                 wielder_index_inner,
                 projectile_index_inner,
+                physics_script_table_index_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
@@ -20054,6 +20242,7 @@ pub async fn start_session(
         latest_known_spells,
         wielder_index,
         projectile_index,
+        physics_script_table_index,
         cell_scene_snapshot,
         door_part_snapshot,
         local_player_pose,
@@ -21261,6 +21450,9 @@ async fn recv_loop(
     projectile_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashSet<u32>>,
     >,
+    physics_script_table_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    >,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
@@ -21765,18 +21957,57 @@ async fn recv_loop(
                     if let Some(w) = world.as_mut() {
                         match &message {
                             GameMessage::ObjectCreate(data) => {
-                                if apply_inventory_object_create(w, data, &wielder_index, &projectile_index) {
+                                if apply_inventory_object_create(w, data, &wielder_index, &projectile_index, &physics_script_table_index) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::ObjectDelete(data) => {
-                                if apply_inventory_object_delete(w, data.guid, &wielder_index, &projectile_index) {
+                                if apply_inventory_object_delete(w, data.guid, &wielder_index, &projectile_index, &physics_script_table_index) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::InventoryRemoveObject(data) => {
-                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index, &projectile_index) {
+                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index, &projectile_index, &physics_script_table_index) {
                                     inventory_changed = true;
+                                }
+                            }
+                            // CMT Wave 16 / Phase 50 (2026-05-26):
+                            // PhysicsDesc runtime swap listener. ACE
+                            // re-broadcasts the full ObjectDescriptionData
+                            // (with a fresh PhysicsDesc.PhsTableID slot,
+                            // if applicable) on opcode 0xF7DB whenever a
+                            // long-lived entity changes appearance —
+                            // typically equip/unequip via
+                            // `Creature.CalculateObjDesc`. Retail
+                            // `acclient.c:322321-322331` reads the new
+                            // `phstable_id.id` and swaps the entity's
+                            // `physics_script_table` pointer. We mirror
+                            // that here: re-apply the description to the
+                            // cached entity (refreshes
+                            // `PropertyDataId::PhysicsEffectTable`) and
+                            // re-resolve the cached
+                            // `physics_script_table_did`. Returning the
+                            // same Setup → `default_phstable_id` value
+                            // when PhysicsDesc carries no override is the
+                            // correct retail behaviour (the override
+                            // doesn't sticky-clear; absence means use the
+                            // Setup default). The parallel
+                            // `physics_script_table_index` keeps the JS
+                            // accessor's value coherent with the entity
+                            // field.
+                            GameMessage::UpdateObject(data) => {
+                                let guid = data.public_weenie_desc.guid;
+                                if let Some(entity) = w.entities.get_mut(guid) {
+                                    entity.apply_description(data);
+                                    let new_did = resolve_physics_script_table_did(entity);
+                                    entity.physics_script_table_did = new_did;
+                                    let g_u32 = u32::from(guid);
+                                    let mut idx = physics_script_table_index.borrow_mut();
+                                    if new_did == 0 {
+                                        idx.remove(&g_u32);
+                                    } else {
+                                        idx.insert(g_u32, new_did);
+                                    }
                                 }
                             }
                             _ => {}
@@ -27529,6 +27760,93 @@ pub async fn fetch_particle_emitter(did: u32) -> Result<ParticleEmitterJs, JsVal
         trans_rand: pe.trans_rand,
         is_parent_local: pe.is_parent_local,
     })
+}
+
+/// Wave 16 P49: fetch + parse a PhysicsScriptTable (0x34xxxxxx) — the
+/// per-entity `PScriptType → weighted [(mod, script_id)]` lookup the
+/// client uses to resolve a `PlayScript` enum value broadcast by ACE
+/// (`GameMessageScript`, opcode `0xF755`) into a concrete
+/// `PhysicsScript (0x33xxxxxx)` DID. Without this resolver, all
+/// `PlayScript.Launch` events render with identical placeholder
+/// visuals; with it, war-magic / life-magic / projectile entities
+/// pick distinct particle systems off their own table.
+///
+/// Returns JSON shape (matches the Wave 17 resolver contract):
+/// ```json
+/// {
+///   "id": 872415236,
+///   "scripts": {
+///     "4":  [{"mod": 0.5, "scriptDid": 855638307},
+///            {"mod": 1.0, "scriptDid": 855638308}],
+///     "5":  [{"mod": 1.0, "scriptDid": 855638400}],
+///     ...
+///   }
+/// }
+/// ```
+/// Outer key is the `PScriptType` enum value as a decimal string
+/// (JSON object keys must be strings); inner entries are sorted by
+/// `mod` in DAT order (the picker walks them top-down looking for
+/// the first row where `incoming_mod <= entry.mod`).
+///
+/// Lookup pattern (mirrors `acclient.c:336552 PhysicsScriptTableData
+/// ::GetScript`): see
+/// `external/holtburger/docs/physicsscript-bridge-research-2026-05-26.md`
+/// §1.5.
+///
+/// Sibling exports: [`fetch_physics_script`] (0x33 — the script the
+/// returned `scriptDid` resolves to) and [`fetch_particle_emitter`]
+/// (0x32 — each `CreateParticleHook` inside that script).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchPhysicsScriptTable)]
+pub async fn fetch_physics_script_table(did: u32) -> Result<String, JsValue> {
+    use holtburger_dat::file_type::PhysicsScriptTable;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = global_source::global_source();
+    let key = ResourceKey::new("eor/portal", did);
+    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", did)) {
+        Ok(b) => b,
+        Err(_) => return Ok("null".to_string()),
+    };
+    let pst = match PhysicsScriptTable::unpack(&bytes) {
+        Ok(t) => t,
+        Err(_) => return Ok("null".to_string()),
+    };
+    // Manual JSON serialization — sibling exports
+    // (`fetch_combat_maneuver_table`, `fetch_palette_set`) emit JSON
+    // by hand to avoid pulling `serde_json` into the wasm cdylib's
+    // hot-path. Object keys are decimal-stringified `PScriptType`
+    // enum values; inner array order matches DAT byte order so the
+    // resolver's top-down `incoming_mod <= entry.mod` walk works.
+    let mut out = String::with_capacity(pst.script_table.len() * 48 + 32);
+    out.push_str("{\"id\":");
+    out.push_str(&pst.id.to_string());
+    out.push_str(",\"scripts\":{");
+    let mut first_outer = true;
+    for (script_type, data) in &pst.script_table {
+        if !first_outer { out.push(','); }
+        first_outer = false;
+        out.push('"');
+        out.push_str(&script_type.to_string());
+        out.push_str("\":[");
+        let mut first_inner = true;
+        for entry in &data.scripts {
+            if !first_inner { out.push(','); }
+            first_inner = false;
+            // `mod` is f32; `{}` Display avoids the trailing zeros
+            // that `Debug` would print and gives a stable, valid-JSON
+            // numeric literal (NaN/Inf would not be valid JSON, but
+            // PhysicsScriptTable mod values are finite thresholds —
+            // see acclient.c:336552).
+            out.push_str(&format!(
+                "{{\"mod\":{},\"scriptDid\":{}}}",
+                entry.mod_value, entry.script_id,
+            ));
+        }
+        out.push(']');
+    }
+    out.push_str("}}");
+    Ok(out)
 }
 
 // ============================================================

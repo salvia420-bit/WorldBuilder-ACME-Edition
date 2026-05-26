@@ -280,6 +280,34 @@ pub struct Entity {
     pub weapon_color: Option<u16>,
     pub resist_highlight: Option<u16>,
     pub resist_color: Option<u16>,
+
+    /// CMT Wave 16 / Phase 50 (2026-05-26): cached PhysicsScriptTable
+    /// (DAT 0x34) DID for this entity. `0` = none (entity carries no
+    /// table, or no table has been resolved yet).
+    ///
+    /// **Resolution chain (mirrors retail `acclient.c`):**
+    /// 1. If `PhysicsDesc.PhsTableID` (our `petable_id`) is on the
+    ///    description, use it — this is the runtime-override path the
+    ///    server can send to swap a long-lived entity's table (retail
+    ///    `acclient.c:322321-322331` reads `v3->phstable_id.id` and
+    ///    overwrites `CPhysicsObj::physics_script_table`).
+    /// 2. Otherwise fall back to the entity's `Setup` model's
+    ///    `default_phstable_id` field (retail
+    ///    `CPhysicsObj::InitWithSetup` at `acclient.c:320886-320900`).
+    ///
+    /// Populated on `ObjectCreate` and re-resolved on every subsequent
+    /// `apply_description` call (which is also the path for PhysicsDesc
+    /// runtime swaps), via the wasm-side helper that has the DAT source.
+    ///
+    /// Read by [Wave 17] via `entity_physics_script_table_did(guid)`
+    /// (and `EntityManager.getPhysicsScriptTableDid(guid)` in JS) so
+    /// `GameMessageScript` (opcode 0xF755) handlers can resolve a
+    /// `PScriptType` enum + `mod` against the right
+    /// `PhysicsScriptTable` for this specific entity.
+    ///
+    /// See `external/holtburger/docs/physicsscript-bridge-research-2026-05-26.md`
+    /// §5 for the full lookup picture.
+    pub physics_script_table_did: u32,
 }
 
 const OBJECT_POSITION_SEQUENCE_INDEX: usize = 0;
@@ -555,6 +583,10 @@ impl Entity {
             weapon_color: None,
             resist_highlight: None,
             resist_color: None,
+            // CMT Wave 16 / Phase 50 (2026-05-26): unresolved until the
+            // wasm-side helper inspects PhysicsDesc.petable_id or
+            // Setup.default_phstable_id (lib.rs has the DAT source).
+            physics_script_table_did: 0,
         }
     }
 }
@@ -615,6 +647,22 @@ impl EntityManager {
 
     pub fn remove(&mut self, guid: impl Into<Guid>) -> Option<Entity> {
         self.entities.remove(&guid.into())
+    }
+
+    /// CMT Wave 16 / Phase 50 (2026-05-26): cached
+    /// `PhysicsScriptTable` (DAT 0x34) DID for an entity.
+    ///
+    /// Returns `0` when the entity is unknown or when no table has been
+    /// resolved yet (Setup model carries no `default_phstable_id` AND
+    /// no `PhysicsDesc.PhsTableID` runtime override has arrived). Wave
+    /// 17's `play_effect_vfx.js` consumer reads this to resolve a
+    /// `GameMessageScript` `PScriptType` enum value into a concrete
+    /// `PhysicsScript` (0x33) DID against the entity's own table.
+    pub fn physics_script_table_did(&self, guid: impl Into<Guid>) -> u32 {
+        self.entities
+            .get(&guid.into())
+            .map(|e| e.physics_script_table_did)
+            .unwrap_or(0)
     }
 }
 

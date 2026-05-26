@@ -57,6 +57,8 @@
 | 46 | Server-resolved damage HUD line (5-entry ring + idle fade + sneak tag) | 15 | **shipped** 2026-05-26 |
 | 47 | Extended PlayScript VFX — 51 IDs (101/174 = 58% coverage) | 15 | **shipped** 2026-05-26 |
 | 48 | PhysicsScript bridge research — per-entity PScriptTable lookup mapped | 15 | **shipped** 2026-05-26 |
+| 49 | fetchPhysicsScriptTable wasm export — retail 0x34000004 has 139 PScriptType keys | 16 | **shipped** 2026-05-26 |
+| 50 | Per-entity physicsScriptTableDid caching + PhysicsDesc runtime swap listener | 16 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
