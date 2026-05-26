@@ -12542,6 +12542,26 @@ const CLIENT_EVENT_KIND_CHARACTER_ERROR: u32 = 20;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_CONTAINER_OPENED: u32 = 21;
 
+/// `kind = 22` — FellowshipUpdated. ACE sent one of
+/// `GameEvent::Fellowship{FullUpdate,Disband,UpdateFellow,
+/// FellowUpdateDone,FellowStatsDone}` and the recv loop has refreshed
+/// `latest_fellowship` from `world.fellowship`. JS reads via
+/// [`SessionHandle::player_fellowship`] which returns the full
+/// snapshot (or `None` post-disband / pre-join). Payload fields are
+/// unused (consumer pulls fresh state from the snapshot getter).
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_FELLOWSHIP_UPDATED: u32 = 22;
+
+/// `kind = 23` — TradeUpdated. ACE sent one of the trade GameEvents
+/// (RegisterTrade / OpenTrade / AddToTrade / AcceptTrade / ResetTrade /
+/// DeclineTrade / TradeFailure / ClearTradeAcceptance / CloseTrade) and
+/// the recv loop has refreshed `latest_trade` from `world.trade`. JS
+/// reads via [`SessionHandle::player_trade`] which returns the full
+/// snapshot (or `None` post-close / pre-open). Payload fields are
+/// unused (consumer pulls fresh state from the snapshot getter).
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_TRADE_UPDATED: u32 = 23;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -12866,6 +12886,42 @@ enum SessionCommand {
     FellowshipAssignNewLeader {
         new_leader_guid: u32,
     },
+    /// Trade: initiate a peer-to-peer trade negotiation with another
+    /// player. Maps to `GameAction::OpenTradeNegotiations` (sub-opcode
+    /// 0x01F6). ACE validates the partner is a Player (not NPC),
+    /// is in-range, and is not already trading; failures surface as
+    /// `GameEvent::TradeFailure`.
+    OpenTrade {
+        partner_guid: u32,
+    },
+    /// Trade: close the current trade window (without completing).
+    /// Maps to `GameAction::CloseTradeNegotiations` (sub-opcode
+    /// 0x01F7). ACE clears both sides' state + sends `CloseTrade`
+    /// to both participants.
+    CloseTrade,
+    /// Trade: add `item_guid` from the player's inventory into the
+    /// trade window. Maps to `GameAction::AddToTrade` (sub-opcode
+    /// 0x01F8). `trade_slot` is unused by ACE (always 0 on the wire);
+    /// the server echoes back via `GameEvent::AddToTrade` with
+    /// `trade_side=SelfSide`.
+    AddToTrade {
+        item_guid: u32,
+        trade_slot: u32,
+    },
+    /// Trade: mark the local player's side accepted. Maps to
+    /// `GameAction::AcceptTrade` (sub-opcode 0x01FA). When both sides
+    /// have accepted, ACE swaps items + sends TradeComplete. The
+    /// other 5 wire fields are filled from the current trade snapshot;
+    /// ACE primarily reads `who_accepted` server-side.
+    AcceptTrade,
+    /// Trade: withdraw acceptance OR decline the trade. Maps to
+    /// `GameAction::DeclineTrade` (sub-opcode 0x01FB). ACE clears
+    /// both sides' accept flags via `ClearTradeAcceptance`.
+    DeclineTrade,
+    /// Trade: clear all items from the trade window without closing
+    /// the negotiation. Maps to `GameAction::ResetTrade` (sub-opcode
+    /// 0x0204). ACE resets both sides' item lists + accept flags.
+    ResetTrade,
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -13945,6 +14001,323 @@ impl PlayerEnchantmentJs {
     pub fn caster_guid(&self) -> u32 { self.caster_guid }
 }
 
+/// Wave D (2026-05-25): JS-friendly subset of
+/// `holtburger_world::state::FellowshipState`. Mirrors the load-bearing
+/// fields the panel needs (name, leader, flags, members) and strips
+/// wire-internal bookkeeping (hashtable sequence ids, raw timestamps
+/// for departed entries — surfaced as u32 still, JS converts to
+/// elapsed-time on render).
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct FellowshipSnapshot {
+    name: String,
+    leader_guid: u32,
+    share_xp: bool,
+    even_share: bool,
+    open: bool,
+    is_locked: bool,
+    members: Vec<FellowshipMember>,
+    departed: Vec<FellowshipDepartedMember>,
+    locks: Vec<FellowshipLockEntry>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct FellowshipMember {
+    guid: u32,
+    name: String,
+    level: u32,
+    cached_cp: u32,
+    cached_luminance: u32,
+    max_health: u32,
+    max_stamina: u32,
+    max_mana: u32,
+    current_health: u32,
+    current_stamina: u32,
+    current_mana: u32,
+    share_loot: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct FellowshipDepartedMember {
+    guid: u32,
+    departed_timestamp: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct FellowshipLockEntry {
+    name: String,
+    timestamp: u32,
+    sequence: u32,
+}
+
+/// JS-facing wrapper around `FellowshipMember`. Mirrors
+/// [`PlayerEnchantmentJs`] in shape: each access clones the value out
+/// of the snapshot, so the JS panel re-renders against a stable view.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct FellowshipMemberJs {
+    guid: u32,
+    name: String,
+    level: u32,
+    cached_cp: u32,
+    cached_luminance: u32,
+    max_health: u32,
+    max_stamina: u32,
+    max_mana: u32,
+    current_health: u32,
+    current_stamina: u32,
+    current_mana: u32,
+    share_loot: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl FellowshipMemberJs {
+    #[wasm_bindgen(getter)]
+    pub fn guid(&self) -> u32 { self.guid }
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn level(&self) -> u32 { self.level }
+    #[wasm_bindgen(getter, js_name = cachedCp)]
+    pub fn cached_cp(&self) -> u32 { self.cached_cp }
+    #[wasm_bindgen(getter, js_name = cachedLuminance)]
+    pub fn cached_luminance(&self) -> u32 { self.cached_luminance }
+    #[wasm_bindgen(getter, js_name = maxHealth)]
+    pub fn max_health(&self) -> u32 { self.max_health }
+    #[wasm_bindgen(getter, js_name = maxStamina)]
+    pub fn max_stamina(&self) -> u32 { self.max_stamina }
+    #[wasm_bindgen(getter, js_name = maxMana)]
+    pub fn max_mana(&self) -> u32 { self.max_mana }
+    #[wasm_bindgen(getter, js_name = currentHealth)]
+    pub fn current_health(&self) -> u32 { self.current_health }
+    #[wasm_bindgen(getter, js_name = currentStamina)]
+    pub fn current_stamina(&self) -> u32 { self.current_stamina }
+    #[wasm_bindgen(getter, js_name = currentMana)]
+    pub fn current_mana(&self) -> u32 { self.current_mana }
+    #[wasm_bindgen(getter, js_name = shareLoot)]
+    pub fn share_loot(&self) -> bool { self.share_loot }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct FellowshipDepartedMemberJs {
+    guid: u32,
+    departed_timestamp: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl FellowshipDepartedMemberJs {
+    #[wasm_bindgen(getter)]
+    pub fn guid(&self) -> u32 { self.guid }
+    #[wasm_bindgen(getter, js_name = departedTimestamp)]
+    pub fn departed_timestamp(&self) -> u32 { self.departed_timestamp }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct FellowshipLockEntryJs {
+    name: String,
+    timestamp: u32,
+    sequence: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl FellowshipLockEntryJs {
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn timestamp(&self) -> u32 { self.timestamp }
+    #[wasm_bindgen(getter)]
+    pub fn sequence(&self) -> u32 { self.sequence }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct FellowshipSnapshotJs {
+    name: String,
+    leader_guid: u32,
+    share_xp: bool,
+    even_share: bool,
+    open: bool,
+    is_locked: bool,
+    members: Vec<FellowshipMember>,
+    departed: Vec<FellowshipDepartedMember>,
+    locks: Vec<FellowshipLockEntry>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl FellowshipSnapshotJs {
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    #[wasm_bindgen(getter, js_name = leaderGuid)]
+    pub fn leader_guid(&self) -> u32 { self.leader_guid }
+    #[wasm_bindgen(getter, js_name = shareXp)]
+    pub fn share_xp(&self) -> bool { self.share_xp }
+    #[wasm_bindgen(getter, js_name = evenShare)]
+    pub fn even_share(&self) -> bool { self.even_share }
+    #[wasm_bindgen(getter)]
+    pub fn open(&self) -> bool { self.open }
+    #[wasm_bindgen(getter, js_name = isLocked)]
+    pub fn is_locked(&self) -> bool { self.is_locked }
+    #[wasm_bindgen(getter)]
+    pub fn members(&self) -> Vec<FellowshipMemberJs> {
+        self.members
+            .iter()
+            .map(|m| FellowshipMemberJs {
+                guid: m.guid,
+                name: m.name.clone(),
+                level: m.level,
+                cached_cp: m.cached_cp,
+                cached_luminance: m.cached_luminance,
+                max_health: m.max_health,
+                max_stamina: m.max_stamina,
+                max_mana: m.max_mana,
+                current_health: m.current_health,
+                current_stamina: m.current_stamina,
+                current_mana: m.current_mana,
+                share_loot: m.share_loot,
+            })
+            .collect()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn departed(&self) -> Vec<FellowshipDepartedMemberJs> {
+        self.departed
+            .iter()
+            .map(|d| FellowshipDepartedMemberJs {
+                guid: d.guid,
+                departed_timestamp: d.departed_timestamp,
+            })
+            .collect()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn locks(&self) -> Vec<FellowshipLockEntryJs> {
+        self.locks
+            .iter()
+            .map(|l| FellowshipLockEntryJs {
+                name: l.name.clone(),
+                timestamp: l.timestamp,
+                sequence: l.sequence,
+            })
+            .collect()
+    }
+}
+
+/// AC Trade (2026-05-25, Discord deficiency #3): JS-facing snapshot of
+/// the local player's active peer-to-peer trade. Sourced from
+/// `world.trade` (the world dispatcher's `handlers::trade::handle_event`
+/// already mutates the canonical `state.trade: Option<TradeState>` for
+/// all 7 trade GameEvents: RegisterTrade, AddToTrade, AcceptTrade,
+/// ResetTrade, DeclineTrade / ClearTradeAcceptance / TradeFailure,
+/// CloseTrade). `partner_name` + per-item meta (name / icon / stack)
+/// are resolved at publish time from `world.entities` since the
+/// canonical `TradeState` only carries GUIDs.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct TradeSnapshot {
+    partner_guid: u32,
+    partner_name: String,
+    my_items: Vec<TradeItem>,
+    partner_items: Vec<TradeItem>,
+    my_accepted: bool,
+    partner_accepted: bool,
+    is_open: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct TradeItem {
+    guid: u32,
+    name: String,
+    icon_id: u32,
+    stack_size: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct TradeItemJs {
+    guid: u32,
+    name: String,
+    icon_id: u32,
+    stack_size: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl TradeItemJs {
+    #[wasm_bindgen(getter)]
+    pub fn guid(&self) -> u32 { self.guid }
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    #[wasm_bindgen(getter, js_name = iconId)]
+    pub fn icon_id(&self) -> u32 { self.icon_id }
+    #[wasm_bindgen(getter, js_name = stackSize)]
+    pub fn stack_size(&self) -> u32 { self.stack_size }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct TradeSnapshotJs {
+    partner_guid: u32,
+    partner_name: String,
+    my_items: Vec<TradeItem>,
+    partner_items: Vec<TradeItem>,
+    my_accepted: bool,
+    partner_accepted: bool,
+    is_open: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl TradeSnapshotJs {
+    #[wasm_bindgen(getter, js_name = partnerGuid)]
+    pub fn partner_guid(&self) -> u32 { self.partner_guid }
+    #[wasm_bindgen(getter, js_name = partnerName)]
+    pub fn partner_name(&self) -> String { self.partner_name.clone() }
+    #[wasm_bindgen(getter, js_name = myItems)]
+    pub fn my_items(&self) -> Vec<TradeItemJs> {
+        self.my_items
+            .iter()
+            .map(|i| TradeItemJs {
+                guid: i.guid,
+                name: i.name.clone(),
+                icon_id: i.icon_id,
+                stack_size: i.stack_size,
+            })
+            .collect()
+    }
+    #[wasm_bindgen(getter, js_name = partnerItems)]
+    pub fn partner_items(&self) -> Vec<TradeItemJs> {
+        self.partner_items
+            .iter()
+            .map(|i| TradeItemJs {
+                guid: i.guid,
+                name: i.name.clone(),
+                icon_id: i.icon_id,
+                stack_size: i.stack_size,
+            })
+            .collect()
+    }
+    #[wasm_bindgen(getter, js_name = myAccepted)]
+    pub fn my_accepted(&self) -> bool { self.my_accepted }
+    #[wasm_bindgen(getter, js_name = partnerAccepted)]
+    pub fn partner_accepted(&self) -> bool { self.partner_accepted }
+    #[wasm_bindgen(getter, js_name = isOpen)]
+    pub fn is_open(&self) -> bool { self.is_open }
+}
+
 /// Phase 4 step 4 follow-on: human-readable label for a `SkillType`
 /// numeric id. Mirrors the `Display` impl on
 /// `holtburger_common::stats::SkillType` (which uses strum's
@@ -14251,6 +14624,25 @@ pub struct SessionHandle {
     /// arm at recv_loop:15679 already buckets PlayerEnchantmentsUpdated
     /// into `stats_changed`).
     latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>>,
+    /// Wave D (2026-05-25): local player's active fellowship snapshot,
+    /// refreshed by the recv loop on every fellowship GameEvent (the
+    /// world dispatcher's `handlers::fellowship::handle_event` arm
+    /// already mutates `world.fellowship` for FullUpdate / UpdateFellow
+    /// / Quit / Dismiss / Disband; we re-publish from there into this
+    /// JS-facing cache). `None` pre-join and post-disband. JS reads via
+    /// [`SessionHandle::player_fellowship`] from the kind=22
+    /// FellowshipUpdated drain.
+    latest_fellowship: std::rc::Rc<std::cell::RefCell<Option<FellowshipSnapshot>>>,
+    /// AC Trade (2026-05-25): local player's active peer-to-peer
+    /// trade snapshot, refreshed by the recv loop on every trade
+    /// GameEvent (the world dispatcher's `handlers::trade::handle_event`
+    /// arm already mutates `world.trade` for RegisterTrade / AddToTrade
+    /// / AcceptTrade / ResetTrade / Decline-or-Clear-or-Failure /
+    /// CloseTrade; we re-publish from there into this JS-facing
+    /// cache). `None` pre-open and post-close. JS reads via
+    /// [`SessionHandle::player_trade`] from the kind=23 TradeUpdated
+    /// drain.
+    latest_trade: std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -16419,6 +16811,140 @@ impl SessionHandle {
             })
     }
 
+    /// Wave D (2026-05-25): the local player's active fellowship —
+    /// snapshot refreshed by the recv loop on every fellowship
+    /// `WorldEvent::FellowshipStateUpdated` (the world dispatcher
+    /// emits this for all five fellowship GameEvent arms: FullUpdate,
+    /// UpdateFellow, Quit, Dismiss, Disband). Returns `None` pre-join
+    /// and after disband. UI plugins should re-pull on each
+    /// `kind=22 fellowshipUpdated` drain.
+    #[wasm_bindgen(js_name = playerFellowship)]
+    pub fn player_fellowship(&self) -> Option<FellowshipSnapshotJs> {
+        self.latest_fellowship.borrow().as_ref().map(|f| {
+            FellowshipSnapshotJs {
+                name: f.name.clone(),
+                leader_guid: f.leader_guid,
+                share_xp: f.share_xp,
+                even_share: f.even_share,
+                open: f.open,
+                is_locked: f.is_locked,
+                members: f.members.clone(),
+                departed: f.departed.clone(),
+                locks: f.locks.clone(),
+            }
+        })
+    }
+
+    /// AC Trade — initiate a peer-to-peer trade with `partner_guid`.
+    /// Sends `GameAction::OpenTradeNegotiations` (sub-opcode 0x01F6).
+    /// ACE validates the partner is a Player (not NPC), is in-range,
+    /// and is not already trading; failures surface as
+    /// `GameEvent::TradeFailure`.
+    #[wasm_bindgen(js_name = openTrade)]
+    pub fn open_trade(&self, partner_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::OpenTrade { partner_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("openTrade: cmd channel closed ({e})"))
+            })
+    }
+
+    /// AC Trade — close the current trade window without completing.
+    /// Sends `GameAction::CloseTradeNegotiations` (sub-opcode 0x01F7).
+    /// ACE clears both sides' state and sends `CloseTrade` to both
+    /// participants.
+    #[wasm_bindgen(js_name = closeTrade)]
+    pub fn close_trade(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::CloseTrade)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("closeTrade: cmd channel closed ({e})"))
+            })
+    }
+
+    /// AC Trade — add `item_guid` from the player's inventory into the
+    /// trade window. Sends `GameAction::AddToTrade` (sub-opcode 0x01F8).
+    /// `trade_slot` is unused by ACE (always 0 on the wire); the server
+    /// echoes back via `GameEvent::AddToTrade` with `trade_side=SelfSide`.
+    #[wasm_bindgen(js_name = addToTrade)]
+    pub fn add_to_trade(&self, item_guid: u32, trade_slot: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AddToTrade {
+                item_guid,
+                trade_slot,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("addToTrade: cmd channel closed ({e})"))
+            })
+    }
+
+    /// AC Trade — mark the local player's side accepted. Sends
+    /// `GameAction::AcceptTrade` (sub-opcode 0x01FA). When both sides
+    /// have accepted, ACE swaps items and sends TradeComplete. The
+    /// recv-loop arm fills the 5 ancillary wire fields from the
+    /// current trade snapshot — ACE primarily reads `who_accepted`
+    /// server-side.
+    #[wasm_bindgen(js_name = acceptTrade)]
+    pub fn accept_trade(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AcceptTrade)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("acceptTrade: cmd channel closed ({e})"))
+            })
+    }
+
+    /// AC Trade — withdraw acceptance OR decline the trade. Sends
+    /// `GameAction::DeclineTrade` (sub-opcode 0x01FB). ACE clears both
+    /// sides' accept flags via `ClearTradeAcceptance`.
+    #[wasm_bindgen(js_name = declineTrade)]
+    pub fn decline_trade(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::DeclineTrade)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("declineTrade: cmd channel closed ({e})"))
+            })
+    }
+
+    /// AC Trade — clear all items from the trade window without
+    /// closing the negotiation. Sends `GameAction::ResetTrade`
+    /// (sub-opcode 0x0204). ACE resets both sides' item lists and
+    /// accept flags.
+    #[wasm_bindgen(js_name = resetTrade)]
+    pub fn reset_trade(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::ResetTrade)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("resetTrade: cmd channel closed ({e})"))
+            })
+    }
+
+    /// AC Trade (2026-05-25): the local player's active peer-to-peer
+    /// trade — snapshot refreshed by the recv loop on every trade
+    /// `WorldEvent::TradeStateUpdated` (the world dispatcher emits
+    /// this for all 9 trade GameEvent arms: RegisterTrade, AddToTrade,
+    /// AcceptTrade, ResetTrade, DeclineTrade / ClearTradeAcceptance /
+    /// TradeFailure, CloseTrade). Returns `None` pre-open and after
+    /// close. UI plugins should re-pull on each `kind=23 tradeUpdated`
+    /// drain.
+    #[wasm_bindgen(js_name = playerTrade)]
+    pub fn player_trade(&self) -> Option<TradeSnapshotJs> {
+        self.latest_trade.borrow().as_ref().map(|t| TradeSnapshotJs {
+            partner_guid: t.partner_guid,
+            partner_name: t.partner_name.clone(),
+            my_items: t.my_items.clone(),
+            partner_items: t.partner_items.clone(),
+            my_accepted: t.my_accepted,
+            partner_accepted: t.partner_accepted,
+            is_open: t.is_open,
+        })
+    }
+
     /// Phase 4 step 3.6 — JS-driven physics tick.
     ///
     /// Called from `index.html`'s `requestAnimationFrame(drainEvents)`
@@ -16786,6 +17312,17 @@ pub async fn start_session(
     // refreshed by the recv loop's stats_changed publish block.
     let latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Wave D (2026-05-25): local player's active fellowship snapshot,
+    // refreshed by the recv loop's fellowship_changed publish block.
+    let latest_fellowship: std::rc::Rc<
+        std::cell::RefCell<Option<FellowshipSnapshot>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // AC Trade (2026-05-25): local player's active peer-to-peer
+    // trade snapshot, refreshed by the recv loop's trade_changed
+    // publish block.
+    let latest_trade: std::rc::Rc<
+        std::cell::RefCell<Option<TradeSnapshot>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -16842,6 +17379,8 @@ pub async fn start_session(
         let latest_vendor_state_inner = latest_vendor_state.clone();
         let latest_container_contents_inner = latest_container_contents.clone();
         let latest_enchantments_inner = latest_enchantments.clone();
+        let latest_fellowship_inner = latest_fellowship.clone();
+        let latest_trade_inner = latest_trade.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -16865,6 +17404,8 @@ pub async fn start_session(
                 latest_vendor_state_inner,
                 latest_container_contents_inner,
                 latest_enchantments_inner,
+                latest_fellowship_inner,
+                latest_trade_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -16944,6 +17485,8 @@ pub async fn start_session(
         latest_vendor_state,
         latest_container_contents,
         latest_enchantments,
+        latest_fellowship,
+        latest_trade,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -17526,6 +18069,125 @@ fn publish_player_enchantments_snapshot(
     *latest_enchantments.borrow_mut() = next;
 }
 
+/// AC Trade (2026-05-25, Discord deficiency #3): copy `world.trade`
+/// (maintained by the world dispatcher's trade handler arm — see
+/// `crates/holtburger-world/src/handlers/trade.rs`) into the wasm-side
+/// cache the JS-facing `playerTrade()` getter reads.
+///
+/// Source = WorldContext (not raw event fold). The world handler
+/// already implements register / add-item / accept / reset / clear /
+/// close semantics across all 9 trade GameEvent arms via
+/// `state.register_trade / add_trade_item / accept_trade /
+/// clear_trade_acceptance / reset_trade / close_trade`, so a single
+/// republish covers every arm. `partner_name` + per-item meta (name,
+/// icon, stack-size) are resolved from `world.entities` since the
+/// canonical `TradeState` only carries GUIDs.
+#[cfg(target_arch = "wasm32")]
+fn publish_player_trade_snapshot(
+    world: &holtburger_world::WorldState,
+    latest_trade: &std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
+) {
+    use holtburger_common::properties::WorldObjectExt as _;
+    let next = world.trade.as_ref().map(|t| {
+        let resolve_item = |guid: holtburger_common::Guid| -> TradeItem {
+            world
+                .entities
+                .get(guid)
+                .map(|e| TradeItem {
+                    guid: u32::from(guid),
+                    name: e.name().to_string(),
+                    icon_id: e.icon_id.unwrap_or(0),
+                    stack_size: e.stack_size(),
+                })
+                .unwrap_or(TradeItem {
+                    guid: u32::from(guid),
+                    name: format!("0x{:08X}", u32::from(guid)),
+                    icon_id: 0,
+                    stack_size: 1,
+                })
+        };
+        let partner_name = world
+            .entities
+            .get(t.partner_guid)
+            .map(|e| e.name().to_string())
+            .unwrap_or_else(|| format!("0x{:08X}", u32::from(t.partner_guid)));
+        TradeSnapshot {
+            partner_guid: u32::from(t.partner_guid),
+            partner_name,
+            my_items: t.self_side.items.iter().copied().map(resolve_item).collect(),
+            partner_items: t
+                .partner_side
+                .items
+                .iter()
+                .copied()
+                .map(resolve_item)
+                .collect(),
+            my_accepted: t.self_side.accepted,
+            partner_accepted: t.partner_side.accepted,
+            is_open: true,
+        }
+    });
+    *latest_trade.borrow_mut() = next;
+}
+
+/// Wave D (2026-05-25): copy `world.fellowship` (maintained by the
+/// world dispatcher's fellowship handler arm — see
+/// `crates/holtburger-world/src/handlers/fellowship.rs`) into the
+/// wasm-side cache the JS-facing `playerFellowship()` getter reads.
+/// Source = WorldContext (not raw event fold) — the world handler
+/// already implements upsert / remove / disband semantics across all
+/// 5 fellowship GameEvents, so a single republish covers every arm.
+#[cfg(target_arch = "wasm32")]
+fn publish_player_fellowship_snapshot(
+    world: &holtburger_world::WorldState,
+    latest_fellowship: &std::rc::Rc<std::cell::RefCell<Option<FellowshipSnapshot>>>,
+) {
+    let next = world.fellowship.as_ref().map(|f| FellowshipSnapshot {
+        name: f.name.clone(),
+        leader_guid: u32::from(f.leader_guid),
+        share_xp: f.share_xp,
+        even_share: f.even_share,
+        open: f.open,
+        is_locked: f.is_locked,
+        members: f
+            .members
+            .iter()
+            .map(|m| FellowshipMember {
+                guid: u32::from(m.guid),
+                name: m.name.clone(),
+                level: m.level,
+                cached_cp: m.cached_cp,
+                cached_luminance: m.cached_luminance,
+                max_health: m.max_health,
+                max_stamina: m.max_stamina,
+                max_mana: m.max_mana,
+                current_health: m.current_health,
+                current_stamina: m.current_stamina,
+                current_mana: m.current_mana,
+                share_loot: m.share_loot,
+            })
+            .collect(),
+        departed: f
+            .departed_members
+            .iter()
+            .map(|d| FellowshipDepartedMember {
+                guid: u32::from(d.guid),
+                departed_timestamp: d.departed_timestamp,
+            })
+            .collect(),
+        locks: f
+            .locks
+            .iter()
+            .map(|l| FellowshipLockEntry {
+                name: l.name.clone(),
+                timestamp: l.lock.timestamp,
+                sequence: l.lock.sequence,
+            })
+            .collect(),
+    });
+    *latest_fellowship.borrow_mut() = next;
+}
+
 /// Phase 6 step D: refresh the cell-scene snapshot the rAF tick reads
 /// each frame. Computes `current_cell` from the local player's pose +
 /// the BFS render set at depth=1, parks them in a shared cell. JS
@@ -17672,6 +18334,8 @@ async fn recv_loop(
         std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
     >,
     latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>>,
+    latest_fellowship: std::rc::Rc<std::cell::RefCell<Option<FellowshipSnapshot>>>,
+    latest_trade: std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -17816,6 +18480,8 @@ async fn recv_loop(
                     // regressing.
                     let mut stats_changed = false;
                     let mut inventory_changed = false;
+                    let mut fellowship_changed = false;
+                    let mut trade_changed = false;
                     if should_route_message_to_world(&message)
                         && let Some(w) = world.as_mut()
                     {
@@ -17835,6 +18501,12 @@ async fn recv_loop(
                                 | WorldEvent::DerivedStatsUpdated(_)
                                 | WorldEvent::PlayerEnchantmentsUpdated { .. } => {
                                     stats_changed = true;
+                                }
+                                WorldEvent::FellowshipStateUpdated(_) => {
+                                    fellowship_changed = true;
+                                }
+                                WorldEvent::TradeStateUpdated(_) => {
+                                    trade_changed = true;
                                 }
                                 WorldEvent::EntitySpawned(_)
                                 | WorldEvent::EntityReplaced(_)
@@ -18175,6 +18847,45 @@ async fn recv_loop(
                         publish_player_inventory_snapshot(w, &latest_inventory);
                         queued_events.borrow_mut().push(ClientEvent {
                             kind: CLIENT_EVENT_KIND_INVENTORY_UPDATED,
+                            string_payload: None,
+                            u32_payload: None,
+                            u32_payload_2: None,
+                            f32_payload: None,
+                        });
+                    }
+                    if fellowship_changed && let Some(w) = world.as_ref() {
+                        // Wave D (2026-05-25): the world dispatcher's
+                        // fellowship handler fires `FellowshipStateUpdated`
+                        // for all 5 fellowship GameEvents (FullUpdate,
+                        // UpdateFellow, Quit, Dismiss, Disband — plus the
+                        // two ack arms FellowUpdateDone / FellowStatsDone
+                        // which are no-ops in the handler today). Republish
+                        // from `world.fellowship` here and signal JS with a
+                        // single kind=22 event — the panel re-fetches via
+                        // `handle.playerFellowship()`.
+                        publish_player_fellowship_snapshot(w, &latest_fellowship);
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_FELLOWSHIP_UPDATED,
+                            string_payload: None,
+                            u32_payload: None,
+                            u32_payload_2: None,
+                            f32_payload: None,
+                        });
+                    }
+                    if trade_changed && let Some(w) = world.as_ref() {
+                        // AC Trade (2026-05-25): the world dispatcher's
+                        // trade handler fires `TradeStateUpdated` for all
+                        // 9 trade GameEvent arms (RegisterTrade,
+                        // AddToTrade, AcceptTrade, ResetTrade,
+                        // DeclineTrade / ClearTradeAcceptance /
+                        // TradeFailure, CloseTrade). Republish from
+                        // `world.trade` here — `None` after CloseTrade,
+                        // `Some` otherwise — and signal JS with a single
+                        // kind=23 event. The trade-panel reads via
+                        // `handle.playerTrade()`.
+                        publish_player_trade_snapshot(w, &latest_trade);
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_TRADE_UPDATED,
                             string_payload: None,
                             u32_payload: None,
                             u32_payload_2: None,
@@ -21513,6 +22224,170 @@ async fn recv_loop(
                         console_log_str(&format!(
                             "[fellowship/assign-leader] new_leader=0x{new_leader_guid:08X}",
                         ));
+                    }
+                    Some(SessionCommand::OpenTrade { partner_guid }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, OpenTradeNegotiationsActionData,
+                        };
+                        let action = GameAction::OpenTradeNegotiations(Box::new(
+                            OpenTradeNegotiationsActionData {
+                                trade_partner_guid: Guid(partner_guid),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(OpenTrade): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("open_trade: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[trade/open] partner=0x{partner_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::CloseTrade) => {
+                        use holtburger_protocol::messages::{
+                            CloseTradeNegotiationsActionData, GameAction,
+                        };
+                        let action = GameAction::CloseTradeNegotiations(Box::new(
+                            CloseTradeNegotiationsActionData {},
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(CloseTrade): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("close_trade: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str("[trade/close]");
+                    }
+                    Some(SessionCommand::AddToTrade {
+                        item_guid,
+                        trade_slot,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            AddToTradeActionData, GameAction,
+                        };
+                        let action = GameAction::AddToTrade(Box::new(AddToTradeActionData {
+                            item_guid: Guid(item_guid),
+                            trade_slot,
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(AddToTrade): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("add_to_trade: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[trade/add] item=0x{item_guid:08X} slot={trade_slot}",
+                        ));
+                    }
+                    Some(SessionCommand::AcceptTrade) => {
+                        // ACE's HandleActionAcceptTrade primarily reads
+                        // who_accepted server-side; the 5 ancillary
+                        // fields exist for client-mirror bookkeeping.
+                        // Fill them from the live trade snapshot when
+                        // present, default to zeros pre-trade (ACE will
+                        // reject the action via TradeFailure).
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            AcceptTradeActionData, GameAction,
+                        };
+                        let (partner_guid, initiator_guid, trade_stamp,
+                             initiator_accepts, partner_accepts) = world
+                            .as_ref()
+                            .and_then(|w| w.trade.as_ref().map(|t| (
+                                t.partner_guid,
+                                t.initiator_guid,
+                                t.trade_stamp,
+                                u32::from(t.self_side.accepted),
+                                u32::from(t.partner_side.accepted),
+                            )))
+                            .unwrap_or((
+                                Guid(0),
+                                Guid(0),
+                                0.0,
+                                0,
+                                0,
+                            ));
+                        let action = GameAction::AcceptTrade(Box::new(AcceptTradeActionData {
+                            partner_guid,
+                            trade_stamp,
+                            trade_status: 1,
+                            initiator_guid,
+                            initiator_accepts,
+                            partner_accepts,
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(AcceptTrade): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("accept_trade: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[trade/accept] partner=0x{:08X}",
+                            u32::from(partner_guid),
+                        ));
+                    }
+                    Some(SessionCommand::DeclineTrade) => {
+                        use holtburger_protocol::messages::{
+                            DeclineTradeActionData, GameAction,
+                        };
+                        let action = GameAction::DeclineTrade(Box::new(
+                            DeclineTradeActionData {},
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(DeclineTrade): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("decline_trade: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str("[trade/decline]");
+                    }
+                    Some(SessionCommand::ResetTrade) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, ResetTradeActionData,
+                        };
+                        let action = GameAction::ResetTrade(Box::new(
+                            ResetTradeActionData {},
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(ResetTrade): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("reset_trade: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str("[trade/reset]");
                     }
                     Some(SessionCommand::TargetedMissileAttack {
                         target_guid,

@@ -105,6 +105,41 @@ const PAPERDOLL_SLOTS = [
   { elemId: "0x100005B3", equipMask: 0x00000100, x: 96,  y: 172, name: "Boots" },
 ];
 
+const iconCache = new Map();
+async function fetchPaperdollIconDataUrl(iconId) {
+  if (!iconId) return null;
+  const cached = iconCache.get(iconId);
+  if (cached !== undefined) {
+    if (cached instanceof Promise) return cached;
+    return cached;
+  }
+  const wasm = window.__hbWasm ?? window.__wasm ?? null;
+  if (!wasm?.fetch_surface_pixels) {
+    iconCache.set(iconId, null);
+    return null;
+  }
+  const p = (async () => {
+    try {
+      const r = await wasm.fetch_surface_pixels(iconId >>> 0);
+      if (!r || !r.width || !r.height || !r.pixels?.length) return null;
+      const canvas = document.createElement("canvas");
+      canvas.width = r.width; canvas.height = r.height;
+      const cx = canvas.getContext("2d");
+      const img = cx.createImageData(r.width, r.height);
+      img.data.set(r.pixels);
+      cx.putImageData(img, 0, 0);
+      return canvas.toDataURL("image/png");
+    } catch (e) {
+      console.warn(`[inventory] paperdoll icon ${iconId} fetch failed:`, e);
+      return null;
+    }
+  })();
+  iconCache.set(iconId, p);
+  const url = await p;
+  iconCache.set(iconId, url);
+  return url;
+}
+
 let stylesInjected = false;
 function ensureStyles() {
   if (stylesInjected) return;
@@ -764,7 +799,9 @@ function doMount(parentEl, _ctx) {
     for (const k of Object.keys(dollSlotEls)) {
       const e = dollSlotEls[k];
       e.el.classList.remove("equipped");
+      delete e.el.dataset.itemGuid;
       e.icon.style.display = "none";
+      e.icon.style.background = "";
       setAcText(e.tip, e.slot.name, { color: "#f0d8a0" });
     }
   }
@@ -786,9 +823,19 @@ function doMount(parentEl, _ctx) {
     if (!matched) return false;
     matched.el.classList.add("equipped");
     const tb = srcLi.dataset?.typeBit ?? "0x0";
+    const guid = String(item?.guid ?? srcLi.dataset?.guid ?? "");
+    matched.el.dataset.itemGuid = guid;
     matched.icon.style.display = "block";
     matched.icon.style.background = TYPE_COLOR[tb] || "#777";
     setAcText(matched.tip, `${item.name || matched.slot.name} — ${matched.slot.name}`, { color: "#f0d8a0" });
+    const iconId = (item?.iconId >>> 0) || 0;
+    if (iconId) {
+      fetchPaperdollIconDataUrl(iconId).then((url) => {
+        // Skip if the user has swapped items mid-fetch.
+        if (matched.el.dataset.itemGuid !== guid) return;
+        if (url) matched.icon.style.background = `url("${url}") center/contain no-repeat`;
+      });
+    }
     return true;
   }
 

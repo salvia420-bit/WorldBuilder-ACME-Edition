@@ -849,52 +849,118 @@ export const view = {
     }
     root.appendChild(tabs);
 
-    // Fellowship state — alone vs in. Player API doesn't expose this
-    // yet, default to alone. Debug toggle via window for testing.
-    const debug = window.__hbFellowshipDebug;
+    // Wave D: Fellowship state — alone vs in, driven by the real
+    // wasm snapshot (kind=22 fellowshipUpdated). The Alone-state DOM
+    // includes the Create form; the InFellowship DOM lists members
+    // with vital bars. `__hbFellowshipDebug` overrides for testing.
     let opts = { ignore: false, autoAccept: false, shareXp: true, shareLoot: true };
     let fellowshipName = "";
-    const aloneRefs = {};
-    const inRefs = {};
-    if (debug && Array.isArray(debug.members) && debug.members.length > 0) {
-      buildInState(root, debug.members, inRefs);
-    } else {
-      buildAloneState(root, fellowshipName, opts, (name) => {
-        if (!name) {
-          emit("[fellowship] Cannot create — name required.");
-          return;
-        }
-        const handle = window.__sessionHandle;
-        if (typeof handle?.fellowshipCreate !== "function") {
-          emit("[fellowship] Wasm session not ready.");
-          return;
-        }
-        try {
-          handle.fellowshipCreate(name, !!opts.shareXp);
-          emit(`[fellowship/create] name="${name}" share_xp=${!!opts.shareXp}`);
-        } catch (err) {
-          emit(`[fellowship] Create failed: ${err?.message ?? err}`);
-        }
-      }, aloneRefs);
+
+    // `stateRoot` wraps both DOM subtrees so a re-render can teardown
+    // the previous tree and rebuild for the new snapshot shape (Alone
+    // ↔ InFellowship transitions on join/disband).
+    const stateRoot = document.createElement("div");
+    stateRoot.style.position = "absolute";
+    stateRoot.style.top = "32px";
+    stateRoot.style.left = "0";
+    stateRoot.style.right = "0";
+    stateRoot.style.bottom = "0";
+
+    let mountedRefs = { aloneRefs: null, inRefs: null };
+
+    function deriveMembers(snapshot) {
+      if (!snapshot) return [];
+      return snapshot.members.map((m) => ({
+        guid:        m.guid,
+        name:        m.name,
+        level:       m.level,
+        health:      m.currentHealth,
+        healthMax:   m.maxHealth,
+        stamina:     m.currentStamina,
+        staminaMax:  m.maxStamina,
+        mana:        m.currentMana,
+        manaMax:     m.maxMana,
+        isLeader:    (m.guid >>> 0) === (snapshot.leaderGuid >>> 0),
+        shareLoot:   m.shareLoot,
+      }));
     }
+
+    function rebuildFromSnapshot(snapshot) {
+      while (stateRoot.firstChild) stateRoot.removeChild(stateRoot.firstChild);
+      const aloneRefs = {};
+      const inRefs = {};
+      const debug = window.__hbFellowshipDebug;
+      const debugMembers = (debug && Array.isArray(debug.members) && debug.members.length > 0)
+        ? debug.members : null;
+      const members = debugMembers ?? deriveMembers(snapshot);
+      if (members.length > 0) {
+        // Prefix leader with "*" via the existing buildInState shape —
+        // it doesn't know about leader markers, so embed inline.
+        const labeled = members.map((m) => ({
+          ...m,
+          name: m.isLeader ? `* ${m.name}` : m.name,
+        }));
+        buildInState(stateRoot, labeled, inRefs);
+      } else {
+        buildAloneState(stateRoot, fellowshipName, opts, (name) => {
+          if (!name) {
+            emit("[fellowship] Cannot create — name required.");
+            return;
+          }
+          const handle = window.__sessionHandle;
+          if (typeof handle?.fellowshipCreate !== "function") {
+            emit("[fellowship] Wasm session not ready.");
+            return;
+          }
+          try {
+            handle.fellowshipCreate(name, !!opts.shareXp);
+            emit(`[fellowship/create] name="${name}" share_xp=${!!opts.shareXp}`);
+          } catch (err) {
+            emit(`[fellowship] Create failed: ${err?.message ?? err}`);
+          }
+        }, aloneRefs);
+      }
+      mountedRefs = { aloneRefs, inRefs };
+
+      // Re-apply layout positions whenever the DOM shape flips.
+      applyFellowshipLayout({
+        root,
+        tabsEl: tabs,
+        tabHeaderEl: tabHeader,
+        tabBtns,
+        aloneRefs: mountedRefs.aloneRefs,
+        inRefs: mountedRefs.inRefs,
+      });
+    }
+
+    rebuildFromSnapshot(fetchFellowshipSnapshot());
+    root.appendChild(stateRoot);
 
     parentEl.appendChild(root);
 
-    // Apply retail layout positions. The view mounts via main-panel's
-    // showView() which only fires after wasm-ready, so the layout
-    // resolves on the first call and no retry loop is needed. The
-    // applier reads root.getBoundingClientRect() for scaleY, so the
-    // call must happen AFTER parentEl.appendChild(root).
+    // Apply retail layout positions for tabs (member content layout
+    // re-applies inside rebuildFromSnapshot). The applier reads
+    // root.getBoundingClientRect() for scaleY, so the call must
+    // happen AFTER parentEl.appendChild(root).
     applyFellowshipLayout({
       root,
       tabsEl: tabs,
       tabHeaderEl: tabHeader,
       tabBtns,
-      aloneRefs,
-      inRefs,
+      aloneRefs: mountedRefs.aloneRefs,
+      inRefs: mountedRefs.inRefs,
     });
 
-    return () => { root.remove(); };
+    // Re-render whenever the wasm side emits fellowshipUpdated — covers
+    // join/leave/disband as well as per-member vital ticks.
+    const unsub = subscribeFellowship(() => {
+      rebuildFromSnapshot(fetchFellowshipSnapshot());
+    });
+
+    return () => {
+      try { unsub(); } catch (_) {}
+      root.remove();
+    };
   },
 };
 
@@ -1058,6 +1124,129 @@ function ensureStandaloneStyles() {
       border-top: 1px solid var(--hb-border-brass-dim);
       text-align: center;
     }
+    /* Wave D — populated fellowship state */
+    .hb-fellow-state-hdr {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      padding: 4px 6px;
+      font-size: 11px;
+      color: var(--hb-text-gold);
+      border-top: 1px solid var(--hb-border-brass-dim);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .hb-fellow-state-hdr .name {
+      flex: 1 1 auto;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .hb-fellow-state-hdr .locked {
+      flex: 0 0 auto;
+      margin-left: 6px;
+      color: var(--hb-text-cream-bright);
+      font-size: 9px;
+      background: rgba(160, 40, 40, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      padding: 0 4px;
+    }
+    .hb-fellow-state-rows {
+      padding: 2px 4px 4px 4px;
+      max-height: 240px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.4);
+    }
+    .hb-fellow-state-row {
+      display: grid;
+      grid-template-columns: 14px 1fr auto;
+      gap: 4px;
+      align-items: center;
+      height: 18px;
+      padding: 1px 2px;
+      font-size: 10px;
+      border-bottom: 1px solid rgba(138, 117, 68, 0.18);
+    }
+    .hb-fellow-state-row.leader { color: var(--hb-text-gold); }
+    .hb-fellow-state-row .marker {
+      text-align: center;
+      color: var(--hb-text-gold);
+      font-weight: bold;
+    }
+    .hb-fellow-state-row .name {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .hb-fellow-state-row .meta {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9px;
+      color: var(--hb-text-cream-bright);
+    }
+    .hb-fellow-state-row .bars {
+      grid-column: 1 / span 3;
+      display: flex;
+      gap: 2px;
+      margin-top: 1px;
+    }
+    .hb-fellow-state-bar {
+      flex: 1 1 auto;
+      height: 3px;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(0, 0, 0, 0.65);
+      position: relative;
+      overflow: hidden;
+    }
+    .hb-fellow-state-bar > span {
+      display: block;
+      height: 100%;
+    }
+    .hb-fellow-state-bar.health > span  { background: #c33; }
+    .hb-fellow-state-bar.stamina > span { background: #c9a23a; }
+    .hb-fellow-state-bar.mana > span    { background: #4a8bd6; }
+    .hb-fellow-state-row .xp-mark {
+      color: var(--hb-text-numeric-green);
+      font-size: 9px;
+    }
+    .hb-fellow-state-departed {
+      margin-top: 4px;
+      padding: 2px 4px;
+      border-top: 1px solid var(--hb-border-brass-dim);
+      font-size: 10px;
+    }
+    .hb-fellow-state-departed summary {
+      cursor: pointer;
+      color: var(--hb-text-cream-bright);
+      letter-spacing: 0.04em;
+      user-select: none;
+      list-style: none;
+    }
+    .hb-fellow-state-departed summary::before {
+      content: "▸ ";
+      color: var(--hb-text-gold);
+    }
+    .hb-fellow-state-departed[open] summary::before { content: "▾ "; }
+    .hb-fellow-state-departed ul {
+      list-style: none;
+      margin: 4px 0 0 0;
+      padding: 0 0 0 12px;
+      color: rgba(220, 200, 160, 0.7);
+    }
+    .hb-fellow-state-departed li {
+      font-size: 9px;
+      padding: 1px 0;
+    }
+    .hb-fellow-state-empty {
+      padding: 8px 6px;
+      font-size: 10px;
+      color: rgba(220, 200, 160, 0.55);
+      font-style: italic;
+      border-top: 1px solid var(--hb-border-brass-dim);
+      text-align: center;
+    }
     .hb-fellow-sa-toast {
       position: absolute;
       left: 10px;
@@ -1077,6 +1266,130 @@ function ensureStandaloneStyles() {
 
 let standaloneOverlay = null;
 let standaloneUpdatesOn = false;
+
+// Wave D — pull the live fellowship snapshot off the wasm handle.
+// Returns the JS-side wrapper (or null pre-join / post-disband).
+function fetchFellowshipSnapshot() {
+  const handle = window.__sessionHandle;
+  if (typeof handle?.playerFellowship !== "function") return null;
+  try {
+    return handle.playerFellowship() ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Wave D — populate `container` with the populated-fellowship view
+// (header, member rows with vital bars + leader marker, departed list)
+// or the empty-state message. Idempotent: caller clears container
+// before calling on each event-driven rerender.
+function renderFellowshipState(container, snapshot) {
+  while (container.firstChild) container.removeChild(container.firstChild);
+  if (!snapshot) {
+    const empty = document.createElement("div");
+    empty.className = "hb-fellow-state-empty";
+    setAcText(empty, "Not in a fellowship — Create or wait for Recruit.");
+    container.appendChild(empty);
+    return;
+  }
+  const hdr = document.createElement("div");
+  hdr.className = "hb-fellow-state-hdr";
+  const nameEl = document.createElement("span");
+  nameEl.className = "name";
+  setAcText(nameEl, snapshot.name || "(unnamed)");
+  hdr.appendChild(nameEl);
+  if (snapshot.isLocked) {
+    const lock = document.createElement("span");
+    lock.className = "locked";
+    setAcText(lock, "LOCKED");
+    hdr.appendChild(lock);
+  }
+  container.appendChild(hdr);
+
+  const rows = document.createElement("div");
+  rows.className = "hb-fellow-state-rows";
+  const leaderGuid = (snapshot.leaderGuid >>> 0);
+  // members getter returns Vec<FellowshipMemberJs> — wasm-bindgen array
+  for (const m of snapshot.members) {
+    const isLeader = (m.guid >>> 0) === leaderGuid;
+    const row = document.createElement("div");
+    row.className = "hb-fellow-state-row" + (isLeader ? " leader" : "");
+    const marker = document.createElement("span");
+    marker.className = "marker";
+    marker.textContent = isLeader ? "*" : "";
+    row.appendChild(marker);
+    const nm = document.createElement("span");
+    nm.className = "name";
+    setAcText(nm, m.name || `0x${(m.guid >>> 0).toString(16).padStart(8, "0")}`);
+    row.appendChild(nm);
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    const lvl = document.createElement("span");
+    setAcText(lvl, `L${m.level || "?"}`);
+    meta.appendChild(lvl);
+    if (snapshot.shareXp) {
+      const xp = document.createElement("span");
+      xp.className = "xp-mark";
+      xp.textContent = "XP";
+      xp.title = "Sharing XP with this member";
+      meta.appendChild(xp);
+    }
+    row.appendChild(meta);
+
+    const bars = document.createElement("div");
+    bars.className = "bars";
+    const VITALS = [
+      { key: "health",  cur: m.currentHealth,  max: m.maxHealth },
+      { key: "stamina", cur: m.currentStamina, max: m.maxStamina },
+      { key: "mana",    cur: m.currentMana,    max: m.maxMana },
+    ];
+    for (const v of VITALS) {
+      const bar = document.createElement("div");
+      bar.className = `hb-fellow-state-bar ${v.key}`;
+      const fill = document.createElement("span");
+      const pct = v.max > 0 ? Math.max(0, Math.min(100, (v.cur / v.max) * 100)) : 0;
+      fill.style.width = `${pct}%`;
+      bar.appendChild(fill);
+      bar.title = `${v.key} ${v.cur}/${v.max}`;
+      bars.appendChild(bar);
+    }
+    row.appendChild(bars);
+    rows.appendChild(row);
+  }
+  container.appendChild(rows);
+
+  if (snapshot.departed && snapshot.departed.length > 0) {
+    const details = document.createElement("details");
+    details.className = "hb-fellow-state-departed";
+    const sum = document.createElement("summary");
+    setAcText(sum, `Departed (${snapshot.departed.length})`);
+    details.appendChild(sum);
+    const ul = document.createElement("ul");
+    for (const d of snapshot.departed) {
+      const li = document.createElement("li");
+      const guidHex = `0x${(d.guid >>> 0).toString(16).padStart(8, "0").toUpperCase()}`;
+      setAcText(li, guidHex);
+      ul.appendChild(li);
+    }
+    details.appendChild(ul);
+    container.appendChild(details);
+  }
+}
+
+// Subscribe `rerender` to fellowshipUpdated events on the plugin bus,
+// returning an unsubscribe handle for unmount cleanup. Mirrors how
+// other plugins consume `__pluginClient.events`.
+function subscribeFellowship(rerender) {
+  const bus = window.__pluginClient?.events;
+  if (!bus || typeof bus.on !== "function") return () => {};
+  const listener = () => {
+    try { rerender(); } catch (_) {}
+  };
+  bus.on("fellowshipUpdated", listener);
+  return () => {
+    if (typeof bus.off === "function") bus.off("fellowshipUpdated", listener);
+  };
+}
 
 function standaloneToast(text) {
   if (!standaloneOverlay) return;
@@ -1238,11 +1551,17 @@ function buildStandaloneOverlay() {
   }
   body.appendChild(grid);
 
-  // Wave-D placeholder.
-  const state = document.createElement("div");
-  state.className = "hb-fellow-sa-state";
-  setAcText(state, "Fellowship state — coming in Wave D");
-  body.appendChild(state);
+  // Wave D — populated state container, re-rendered on every
+  // fellowshipUpdated event from the plugin bus.
+  const stateContainer = document.createElement("div");
+  stateContainer.className = "hb-fellow-state";
+  body.appendChild(stateContainer);
+
+  const rerender = () => renderFellowshipState(stateContainer, fetchFellowshipSnapshot());
+  rerender();
+  // Stash the unsubscribe handle on the overlay so close/teardown can
+  // detach without leaving a dangling listener on the plugin bus.
+  overlay.__hbFellowUnsub = subscribeFellowship(rerender);
 
   overlay.appendChild(body);
 

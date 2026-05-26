@@ -988,6 +988,7 @@
       import * as mapPanelPlugin from "./plugins/map-panel.js";
       import * as allegiancePanelPlugin from "./plugins/allegiance-panel.js";
       import * as fellowshipPanelPlugin from "./plugins/fellowship-panel.js";
+      import * as tradePanelPlugin from "./plugins/trade-panel.js";
       import * as journalPanelPlugin from "./plugins/journal-panel.js";
       import * as contractsPanelPlugin from "./plugins/contracts-panel.js";
       import * as optionsPanelPlugin from "./plugins/options-panel.js";
@@ -8102,6 +8103,28 @@ void main() {
                     u32Payload: containerGuidU32,
                     u32Payload2: containerItemCount,
                   });
+                }
+              } else if (evt.kind === 22) {
+                // Wave D (2026-05-25): FellowshipUpdated. ACE sent one
+                // of the 5 fellowship GameEvents and the wasm side has
+                // refreshed `latest_fellowship` from `world.fellowship`.
+                // Consumer reads fresh state via
+                // `handle.playerFellowship()` (null pre-join /
+                // post-disband). Mirrors the enchantment pattern —
+                // payload-less signal, snapshot getter for the data.
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("fellowshipUpdated", {});
+                }
+              } else if (evt.kind === 23) {
+                // AC Trade (2026-05-25, Discord deficiency #3):
+                // TradeUpdated. ACE sent one of the 9 trade GameEvents
+                // and the wasm side has refreshed `latest_trade` from
+                // `world.trade`. Consumer reads fresh state via
+                // `handle.playerTrade()` (null pre-open / post-close).
+                // The trade-panel plugin subscribes and renders its
+                // floating window from the snapshot.
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("tradeUpdated", {});
                 }
               } else if (evt.kind === 13) {
                 // Phase 4 step 5: UseFailed (WeenieError /

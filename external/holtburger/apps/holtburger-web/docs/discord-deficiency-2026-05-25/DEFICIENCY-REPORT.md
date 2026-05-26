@@ -12,6 +12,34 @@
 
 ---
 
+## Status — Wave D executed 2026-05-25 (later same day)
+
+Three more items shipped after Wave C. D1 + D3 ran in parallel (disjoint files); D2 ran sequentially after D1 since both touched `src/lib.rs`.
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 5 (full) | Fellowship receive-side snapshot + member-list panel | **SHIPPED** | Wave D1. Rust: `FellowshipSnapshot` + `FellowshipMember/Departed/LockEntry` structs + `#[wasm_bindgen]` JS wrappers (`FellowshipSnapshotJs` etc.); `latest_fellowship: Rc<RefCell<Option<FellowshipSnapshot>>>` next to `latest_enchantments`; `publish_player_fellowship_snapshot()` mirroring the enchantment helper; `CLIENT_EVENT_KIND_FELLOWSHIP_UPDATED = 22`; recv-loop binding via existing `WorldEvent::FellowshipStateUpdated` (already maintained by `crates/holtburger-world/src/handlers/fellowship.rs` for the 5 fellowship events — DRY win); `SessionHandle::player_fellowship() -> Option<FellowshipSnapshotJs>` getter. JS: `index.html` kind=22 dispatch arm emitting `fellowshipUpdated`; `plugins/fellowship-panel.js` placeholder replaced with `fetchFellowshipSnapshot()` + `renderFellowshipState()` + subscription on `fellowshipUpdated`, both the standalone panel and main-panel gmFellowshipUI 0x21000030 view now render Alone ↔ InFellowship subtrees with leader marker + 3 vital bars (HP red / Stamina gold / Mana blue) per row. |
+| 3 | Trade system multi-step UI | **SHIPPED** | Wave D2. Rust: 6 wasm-bindgen send methods (`openTrade/closeTrade/addToTrade/acceptTrade/declineTrade/resetTrade`) + 6 `SessionCommand` variants + 6 send recv arms; `TradeSnapshot { partner_guid, partner_name, my_items, partner_items, my_accepted, partner_accepted, is_open }` + `TradeItem { guid, name, icon_id, stack_size }` with JS wrappers; `publish_player_trade_snapshot()` using existing `WorldEvent::TradeStateUpdated` (canonical world.trade maintained at `crates/holtburger-world/src/handlers/trade.rs` across all 9 trade events); `CLIENT_EVENT_KIND_TRADE_UPDATED = 23`; `SessionHandle::player_trade()` getter. JS: `plugins/trade-panel.js` NEW (593 LOC) — 360×280 floating window, two 4×3 12-slot grids ("You" / partner), Accept/Decline/Reset footer, partner-accept green dot indicator, self-accept gold highlight, drag-drop from inventory (mime `application/x-hb-inv-guid`, source: `inventory.js:734`), Esc/X close. `index.html` import + kind=23 dispatch arm. Debug: `window.__openTradePanel()`. |
+| 10 (icons) | Equipment paper-doll real icons | **SHIPPED** | Wave D3. Pure JS — `plugins/inventory.js` adds module-level `iconCache: Map` + `fetchPaperdollIconDataUrl(iconId)` helper mirroring `buffs-hud.js:73-105`. `placeEquippedInDoll` now: (a) tags slot el with `dataset.itemGuid` first, (b) paints TYPE_COLOR fallback instantly, (c) async-fetches real DAT icon via `item.iconId` → canvas → dataURL, (d) re-verifies guid hasn't changed before assignment (race-safe against rapid equip swaps). `clearPaperdoll` also clears the dataset + background. Each equipped slot now shows the real DAT sprite (sword, helmet, etc.) instead of solid-color placeholder. Items grid kept on TYPE_COLOR for this wave (out of scope). |
+
+**Files touched this wave:**
+- `src/lib.rs` +875 LOC (D1: ~345 + D2: ~530 — both snapshot infras + send methods + recv arms + getters)
+- `plugins/fellowship-panel.js` +395 LOC -38 (D1)
+- `plugins/inventory.js` +47 LOC (D3)
+- `plugins/trade-panel.js` NEW 593 LOC (D2)
+- `index.html` +23 LOC (D1 kind=22 arm + D2 kind=23 arm + D2 import line)
+
+`cargo check --target wasm32-unknown-unknown -p holtburger-web` clean (exactly 18 pre-existing warnings, no new ones). `node --check` clean on all JS.
+
+**Recommended Wave E** (next priorities):
+1. **Allegiance panel + officer/motd opcodes (#4)** — `SwearAllegiance/BreakAllegiance` live; 18 more commented (officer/motd/bans/gag/hometown-recall). Mirror Wave C2 send-side + D1 snapshot pattern.
+2. **Friends + Squelch + Titles (#20)** — all opcodes commented; same shape as above.
+3. **Equipment paper-doll burden % + drag-drop (#10 polish)** — need `playerBurden()` wasm getter + `DropItem` + `GetAndWieldItem` exports.
+4. **Inscriptions + books (#21)** — Writing GameAction handlers exist in ACE; UI is the new piece.
+5. **Reversed Z-buffer (#11)** — one-line `logarithmicDepthBuffer: true` on `THREE.WebGLRenderer` — try first; full reverse-Z if insufficient.
+
+---
+
 ## Status — Wave C executed 2026-05-25 (later same day)
 
 Three more items shipped after Wave B. Each agent owned disjoint file scope so the three ran in parallel without merge conflicts.
@@ -119,15 +147,13 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Holtburger status:** **Actually already shipped per PR-JJ 2026-05-23 — the inventory bullet was stale.** `recv_loop` in `src/lib.rs:17854` calls `publish_player_enchantments_snapshot()` on every `PlayerEnchantmentsUpdated`; the `kind=8 playerStatsUpdated` drain is the (intentionally coalesced) carrier. `plugins/buffs-hud.js:351-389` subscribes to `playerStatsUpdated`, refetches via `handle.playerEnchantments()`, classifies buff vs debuff via name-keyword heuristic, displays icons fetched from `fetch_surface_pixels`. No code change required.
 **Remediation:** None. Closed as already-shipped.
 
-### 3. Trade system (multi-step handshake)
+### 3. Trade system (multi-step handshake) — SHIPPED 2026-05-25 (Wave D2)
 **Severity:** load-bearing
 **Discord evidence:**
 > "trying desperately to make trade windows look more like inventory panel and not be infinite scrolling list" — #general line 6121
 > blode working on multirow listbox — #general line 8580
 
-**Holtburger status:** `OpenTradeNegotiations/AddToTrade/AcceptTrade/DeclineTrade/CloseTradeNegotiations/ResetTrade` ARE defined in `opcodes.rs:25-31` — but no UI handler, no `plugins/trade-panel.js`, no `RegisterTrade/OpenTrade/AddToTrade/Accept/Decline/Failure` event drain.
-**Upstream:** ACE has 7 GameEvents + 6 GameActions; Chorizite categorizes as full social system.
-**Remediation:** New `plugins/trade-panel.js`; wire `kind=22 TradeStateChanged` carrying full trade view; reuse vendor-ui drag-drop pattern.
+**Holtburger status:** Wave D2 shipped 6 `SessionHandle` wasm-bindgen methods (`openTrade/closeTrade/addToTrade/acceptTrade/declineTrade/resetTrade`) + `TradeSnapshot`/`TradeItem` Rust structs + JS wrappers + `publish_player_trade_snapshot()` via existing `WorldEvent::TradeStateUpdated` (canonical `world.trade` already maintained by `crates/holtburger-world/src/handlers/trade.rs` across all 9 trade events) + `CLIENT_EVENT_KIND_TRADE_UPDATED=23` + `player_trade()` getter. `plugins/trade-panel.js` NEW 593 LOC — 360×280 floating window, two 4×3 12-slot grids (You / partner), Accept/Decline/Reset footer, partner-accept green dot + self-accept gold highlight, drag-drop from inventory via mime `application/x-hb-inv-guid`, Esc/X close. Debug: `window.__openTradePanel()`.
 
 ### 4. Allegiance system
 **Severity:** load-bearing (player-facing core feature)
@@ -136,14 +162,16 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Upstream:** ACE has 30+ handlers in `Source/ACE.Server/Network/GameAction/Actions/` matching the commented-out opcodes.
 **Remediation:** Uncomment opcode stubs as packs are tested; introduce `plugins/allegiance-panel.js` with Swear/Break/Officer/Motd/Chat-Gag controls; route AllegianceUpdate through bus.
 
-### 5. Fellowship system — SHIPPED 2026-05-25 (Wave C2, send-side MVP)
+### 5. Fellowship system — SHIPPED 2026-05-25 (Wave C2 send-side + Wave D1 receive-side full)
 **Severity:** load-bearing
 **Discord evidence:**
 > "VI fellows…clients respond to your commands…but still share vitals and targeting info" — #general line 2788
 > "crash to desktop…much more frequently in fellowship…within 10-20mins" — #general line 3979 (memory leak speculation around fellow vitals)
 
-**Holtburger status:** Wave C2 shipped 6 `SessionHandle` wasm-bindgen methods (`fellowshipCreate/Quit/Dismiss/Recruit/UpdateRequest/AssignNewLeader`) wired through `SessionCommand` variants + recv-loop arms to opcodes 0x00A2-0x00A6 + 0x0290. Message structs in `crates/holtburger-protocol/src/messages/fellowship/actions.rs` (15/15 hex-fixture tests PASS). `plugins/fellowship-panel.js` augmented: existing retail gmFellowshipUI 0x21000030 main-panel view buttons (Recruit/Disband/Leave/Pass-Leader/Quit) now route to wasm; new standalone floating panel via `window.__openFellowshipPanel()` with Create/Quit/Recruit/Dismiss/Assign-Leader/Toggle-Updates + Share-XP form. Receive-side snapshot infra + member-list display + per-event ClientEvent kind deferred to Wave D ("Fellowship state — coming in Wave D" placeholder in source). `FellowshipChangeOpenness 0x0291` still commented (no current gameplay need).
-**Upstream:** ACE has FullUpdate/Disband/UpdateFellow/UpdateDone/StatsDone events — handled at protocol unpack, snapshot publish deferred.
+**Holtburger status:**
+- **Send-side (Wave C2):** 6 `SessionHandle` wasm-bindgen methods (`fellowshipCreate/Quit/Dismiss/Recruit/UpdateRequest/AssignNewLeader`) wired through `SessionCommand` variants + recv-loop arms to opcodes 0x00A2-0x00A6 + 0x0290. Message structs in `crates/holtburger-protocol/src/messages/fellowship/actions.rs` (15/15 hex-fixture tests PASS). Action buttons in both panels route to wasm.
+- **Receive-side (Wave D1):** `FellowshipSnapshot` Rust + `FellowshipSnapshotJs` wasm-bindgen wrapper (mirroring `PlayerEnchantmentJs` pattern); `latest_fellowship: Rc<RefCell<Option<FellowshipSnapshot>>>` next to `latest_enchantments`; `publish_player_fellowship_snapshot()` via existing `WorldEvent::FellowshipStateUpdated` (DRY win — `crates/holtburger-world/src/handlers/fellowship.rs` already maintains `world.fellowship` for all 5 fellowship events); `CLIENT_EVENT_KIND_FELLOWSHIP_UPDATED=22`; `SessionHandle::player_fellowship()` getter. JS: `index.html` kind=22 dispatch arm emits `fellowshipUpdated`; `plugins/fellowship-panel.js` placeholder replaced — both standalone panel AND retail gmFellowshipUI 0x21000030 main-panel view now render Alone ↔ InFellowship subtrees with leader marker + 3 vital bars (HP red / Stamina gold / Mana blue) per member row. `FellowshipChangeOpenness 0x0291` still commented (no current gameplay need).
+**Upstream:** ACE FullUpdate/Disband/UpdateFellow/UpdateDone/StatsDone events all flow through unpack → world.fellowship → snapshot publish → JS bus → panel render.
 
 ### 6. Cross-cell portal collision (player walking *through* a doorway)
 **Severity:** load-bearing
@@ -180,12 +208,12 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 **Holtburger status:** Panel `plugins/examine-target.js` was already retail-correct (uses `gmFloatyExaminationUI 0x2100006B` layout, native creature pane 0x10000153 with header + 2 stat rows + scrollable body + footer + icons + section dividers, AC font/colors via `ui/ac_font.js`). Wasm auto-fires `GameAction::IdentifyObject` on every ObjectCreate; response populates `EntityMap`. **What was missing:** the trigger. Wave A3 added right-click drag-threshold disambiguation in `scene3d/camera.js:428-478` — right-click + small movement (5px²) on an entity routes to `window.__showExamineFor(guid)`; right-click + drag still orbits camera. Manual validation: right-click a creature → main-panel opens to Examine view.
 **Remediation:** Closed. Radial menu (Use/Drop/Wield/Trade) follow-on tracked at #23.
 
-### 10. Equipment paper-doll + container browse — SHIPPED 2026-05-25 (recon-corrected + Wave C1 container)
+### 10. Equipment paper-doll + container browse — SHIPPED 2026-05-25 (recon-corrected + Wave C1 container + Wave D3 real icons)
 **Severity:** load-bearing
 **Discord evidence:** Suit builder workflows (#general lines 282, 462, 490); MagSuitBuilder discussion; the entire alt-client meta orbits item slot management.
 **Holtburger status:**
-- **Equipment paper-doll:** Already shipped — `plugins/inventory.js:67-101` has the full retail `PAPERDOLL_SLOTS` table (23 slots, element IDs from gmPaperDollUI 0x21000024, equipMask-bit dispatch) with `placeEquippedInDoll()` rendering via `playerInventory()`. Original "NOT YET IMPLEMENTED" claim was stale recon. Remaining polish (burden % computation, real sprite icons, drag-drop to/from paperdoll) tracked in Wave D.
-- **Container browse:** Wave C1 shipped `plugins/container-panel.js` (~400 LOC). Subscribes to `containerOpened` bus event (kind=21 from `index.html:8083`, PR-HH 2026-05-23). Resolves contents via `getContainerContents()` → `playerInventory()` lookup with `entityMap.meta` fallback. 280×220 floating panel, 6-col 36×36 icon grid via `fetch_surface_pixels`, click-to-Examine, Esc/close/click-outside dismiss. Debug: `window.__openContainerFor(guid, name?)`. Right-click reserved for future take-from-container wasm export.
+- **Equipment paper-doll (Wave D3 polish):** `plugins/inventory.js:67-101` has the full retail `PAPERDOLL_SLOTS` table (23 slots, element IDs from gmPaperDollUI 0x21000024, equipMask-bit dispatch). Wave D3 added module-level `iconCache: Map` + `fetchPaperdollIconDataUrl(iconId)` helper mirroring `buffs-hud.js:73-105`. `placeEquippedInDoll` now tags slot with `dataset.itemGuid`, paints TYPE_COLOR fallback instantly, then async-fetches the real DAT icon via `item.iconId` → canvas → dataURL; re-verifies guid hasn't changed before assignment (race-safe against rapid equip swaps). Each equipped slot now shows the real DAT sprite. Remaining polish (burden % computation, drag-drop FROM paperdoll → ground, TO paperdoll from pack) tracked in Wave E — needs `playerBurden()` + `DropItem`/`GetAndWieldItem` wasm exports.
+- **Container browse (Wave C1):** `plugins/container-panel.js` (~400 LOC). Subscribes to `containerOpened` bus event (kind=21 from `index.html:8083`, PR-HH 2026-05-23). Resolves contents via `getContainerContents()` → `playerInventory()` lookup with `entityMap.meta` fallback. 280×220 floating panel, 6-col 36×36 icon grid via `fetch_surface_pixels`, click-to-Examine, Esc/close/click-outside dismiss. Debug: `window.__openContainerFor(guid, name?)`. Right-click reserved for future take-from-container wasm export.
 
 ---
 
@@ -378,11 +406,18 @@ The **good news**: Holtburger's 3D render stack (Bruneton sky, takram clouds, te
 8. ~~Fellowship panel (#5)~~ — send-side wasm + action panel shipped; receive-side snapshot deferred to Wave D.
 9. ~~Weather rain + lightning (#12)~~ — full visual stack (rain particles + lightning flash + thunder cue) shipped under `scene3d/weather/`.
 
-### Wave D — next priorities
+### Wave D — SHIPPED 2026-05-25 (later same day)
 
-10. **Fellowship receive-side snapshot infra (#5 full)** — `latest_fellowship` snapshot + per-event publishers + `CLIENT_EVENT_KIND_FELLOWSHIP_UPDATED=22` + member-list display. Replaces the placeholder.
-11. **Trade system multi-step UI (#3)** — opcodes live, wasm methods missing. Pattern: identical to Wave C2's fellowship send-side MVP.
-12. **Allegiance panel (#4)** — Swear/Break opcodes live; 18 more commented. Same send-only MVP pattern.
-13. **Equipment paper-doll polish (#10 finish)** — burden % computation, real sprite icons (today TYPE_COLOR squares), drag-drop FROM paperdoll → ground and TO paperdoll from pack (needs `DropItem` + `GetAndWieldItem` wasm exports).
+10. ~~Fellowship receive-side snapshot infra (#5 full)~~ — snapshot + per-event publishers + kind=22 + member-list display all shipped.
+11. ~~Trade system multi-step UI (#3)~~ — 6 wasm methods + snapshot infra + 593-LOC trade-panel shipped.
+12. ~~Equipment paper-doll real icons (#10 polish)~~ — fetch_surface_pixels wired into paperdoll slots with race-safe async + TYPE_COLOR fallback.
+
+### Wave E — next priorities
+
+13. **Allegiance panel + officer/motd (#4)** — `SwearAllegiance/BreakAllegiance` live; 18 more opcodes commented (officer/motd/bans/gag/hometown-recall). Same shape as Wave C2 send-side + D1 receive-side pattern.
+14. **Friends + Squelch + Titles (#20)** — all opcodes commented; same shape.
+15. **Equipment paper-doll burden % + drag-drop (#10 finish)** — needs `playerBurden()` wasm getter + `DropItem` + `GetAndWieldItem` exports.
+16. **Inscriptions + books (#21)** — Writing GameAction handlers exist in ACE; UI is the new piece.
+17. **Reversed Z-buffer (#11)** — one-line `logarithmicDepthBuffer: true` on `THREE.WebGLRenderer` — try first; full reverse-Z if insufficient.
 
 **Discord-evidence theme to internalize:** the community measures alt-clients by *what verbs you can do*, not by render quality. Holtburger is graphically the strongest project discussed in the corpus, but a player who can't trade, can't appraise, can't fellowship, and can't see their own buffs will judge it harshly.
