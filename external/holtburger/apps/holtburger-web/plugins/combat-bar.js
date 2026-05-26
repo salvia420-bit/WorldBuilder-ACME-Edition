@@ -107,6 +107,45 @@ function ensureStyles() {
     }
     .hb-cb-power-row input[type="range"] {
       flex: 1;
+      position: relative;
+      z-index: 1;
+      background: transparent;
+    }
+    .hb-cb-power-wrap {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-height: 16px;
+    }
+    .hb-cb-power-wrap input[type="range"] {
+      flex: 1;
+      position: relative;
+      z-index: 1;
+    }
+    /* Recklessness active-band overlay — drawn between 10%–90% of
+       the track width when the local player has Recklessness Trained
+       (2) or Specialized (3) AND is in a melee / missile stance.
+       Sits BEHIND the slider thumb (z-index 0 vs thumb's 1) so the
+       thumb is always visible on top. Visual-only — never enforced
+       as a cap; see acpedia Recklessness page + Combat omnibus. */
+    .hb-cb-power-band {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      height: 10px;
+      left: 10%;
+      width: 80%;
+      background: rgba(220, 80, 40, 0.18);
+      border: 1px solid rgba(220, 80, 40, 0.32);
+      border-radius: 2px;
+      pointer-events: auto;
+      z-index: 0;
+      cursor: help;
+    }
+    .hb-cb-power-band.hb-cb-power-band-spec {
+      background: rgba(220, 80, 40, 0.26);
+      border-color: rgba(240, 100, 60, 0.45);
     }
     .hb-cb-power-val {
       flex: 0 0 36px;
@@ -344,6 +383,47 @@ function currentStanceIsMagic() {
   }
 }
 
+// SkillType::Recklessness = 50 — see
+// `external/holtburger/crates/holtburger-common/src/stats.rs:156`.
+// TrainingLevel: 0=Unusable, 1=Untrained, 2=Trained, 3=Specialized
+// (`stats.rs:287`). The wasm-side `playerStats().skills` is a flat
+// `Vec<u32>` of 5-tuples `[type, current, base, ranks, training]`
+// sorted by SkillType — see `src/lib.rs:13911-13915`.
+const SKILL_TYPE_RECKLESSNESS = 50;
+const TRAINING_TRAINED = 2;
+const TRAINING_SPECIALIZED = 3;
+
+// Reads the local player's Recklessness training level from the
+// session handle's stats snapshot. Returns the integer training
+// level (0..3) or `null` when stats/skills aren't available yet
+// (pre-login, pre-PlayerDescription, accessor throws). Callers
+// should treat any non-2/3 return as "no band".
+function readRecklessnessTrainingLevel() {
+  try {
+    const handle = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (!handle || typeof handle.playerStats !== "function") return null;
+    const stats = handle.playerStats();
+    const skills = stats?.skills;
+    if (!skills) return null;
+    // skills may be a real Array (Vec<u32> → Array) or wasm-bindgen
+    // typed-array; both index numerically. We treat anything with a
+    // numeric `.length` as iterable here. character-info.js does the
+    // same coercion (see tupleArrayAt).
+    const len = skills.length ?? 0;
+    if (len === 0) return null;
+    // 5-tuples: [type, current, base, ranks, training]
+    for (let i = 0; i + 4 < len; i += 5) {
+      const type = skills[i];
+      if (type === SKILL_TYPE_RECKLESSNESS) {
+        return skills[i + 4] ?? 0;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Seed window.__combatBarState at import time so picking.js reads
 // the persisted values (or DEFAULTS on a fresh session) even when
 // the user never opens the panel this session.
@@ -487,12 +567,71 @@ function renderAttackControls(bodyEl, state) {
   const powerLabel = document.createElement("label");
   setAcText(powerLabel, currentStanceIsRanged() ? "Accuracy" : "Power");
   powerRow.appendChild(powerLabel);
+  // Slider lives inside a position-relative wrapper so the Recklessness
+  // active-band overlay can be positioned absolutely between 10–90% of
+  // the slider's effective width without disturbing flex layout. The
+  // band is purely visual — see refreshRecklessnessBand() below.
+  const powerWrap = document.createElement("span");
+  powerWrap.className = "hb-cb-power-wrap";
   const powerSlider = document.createElement("input");
   powerSlider.type = "range";
   powerSlider.min = "0";
   powerSlider.max = "100";
   powerSlider.step = "1";
   powerSlider.value = String(Math.round(state.powerLevel * 100));
+  // Band element — populated/cleared by refreshRecklessnessBand(). The
+  // band is gated on (a) Recklessness Trained/Specialized AND (b) a
+  // non-magic stance. Inserted before the slider so the slider's thumb
+  // (z-index 1) stacks above the band (z-index 0) on every browser.
+  const reckBand = document.createElement("span");
+  reckBand.className = "hb-cb-power-band";
+  reckBand.style.display = "none";
+  powerWrap.appendChild(reckBand);
+  powerWrap.appendChild(powerSlider);
+  // Hook the band to playerStatsUpdated so a mid-session training-level
+  // change (redistribution gem, GM /skill set, etc.) re-evaluates the
+  // overlay without requiring the panel to close+reopen.
+  let _reckSub = null;
+  function refreshRecklessnessBand() {
+    // Magic stance — combat-bar transforms to spell-picker entirely
+    // (renderSpellPicker, not this fn), but defense-in-depth: if some
+    // future path leaves the slider rendered in magic, the band stays
+    // off because Recklessness doesn't apply to magic per the wiki.
+    if (currentStanceIsMagic()) {
+      reckBand.style.display = "none";
+      return;
+    }
+    const lvl = readRecklessnessTrainingLevel();
+    if (lvl !== TRAINING_TRAINED && lvl !== TRAINING_SPECIALIZED) {
+      reckBand.style.display = "none";
+      return;
+    }
+    const bonus = (lvl === TRAINING_SPECIALIZED) ? 20 : 10;
+    reckBand.style.display = "";
+    reckBand.classList.toggle("hb-cb-power-band-spec", lvl === TRAINING_SPECIALIZED);
+    reckBand.title =
+      `Recklessness active: +${bonus} Damage Rating ` +
+      `(also +${bonus} incoming non-crit damage from all sources). ` +
+      `Band is 10%–90% of the power bar.`;
+  }
+  refreshRecklessnessBand();
+  // The host client may not be wired yet at activate-time on a fresh
+  // session; fall back to __pluginClient lazily. We also re-check on
+  // playerStatsUpdated since the first kind=8 may carry the skill row.
+  const _reckClient = (typeof window !== "undefined") ? window.__pluginClient : null;
+  if (_reckClient?.events?.on) {
+    const onStats = () => refreshRecklessnessBand();
+    _reckClient.events.on("playerStatsUpdated", onStats);
+    _reckSub = () => {
+      try { _reckClient.events.off("playerStatsUpdated", onStats); } catch (_) {}
+    };
+  }
+  // Expose teardown via bodyEl so activate()'s dispose chain runs it
+  // alongside the existing __powerMeterDispose / __spellPickerDispose.
+  bodyEl.__reckBandDispose = () => {
+    try { if (_reckSub) _reckSub(); } catch (_) {}
+  };
+  powerRow.appendChild(powerWrap);
   const powerVal = document.createElement("span");
   powerVal.className = "hb-cb-power-val";
   setAcText(powerVal, `${powerSlider.value}%`);
@@ -527,7 +666,9 @@ function renderAttackControls(bodyEl, state) {
     syncWindowState(state);
     saveState(state);
   });
-  powerRow.appendChild(powerSlider);
+  // Slider is already inside powerWrap (which sits in powerRow). The
+  // previous append of powerSlider directly on powerRow was removed
+  // when the powerWrap layer was added (Phase 8 Recklessness band).
   powerRow.appendChild(powerVal);
   bodyEl.appendChild(powerRow);
 
@@ -1182,6 +1323,10 @@ export function activate(bodyEl, ctx) {
     // Stance-header playerStatsUpdated subscription.
     if (typeof bodyEl.__stanceHeaderDispose === "function") {
       try { bodyEl.__stanceHeaderDispose(); } catch {}
+    }
+    // Phase 8 (Wave 4) — Recklessness band's playerStatsUpdated sub.
+    if (typeof bodyEl.__reckBandDispose === "function") {
+      try { bodyEl.__reckBandDispose(); } catch {}
     }
   };
 }

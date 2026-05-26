@@ -15,6 +15,8 @@
 | 4 | #5 Power-slider candidate selection is a guess | 2 | **shipped** 2026-05-26 |
 | 5 | #2 Remote-player swings skip CMT | 2 | **shipped** 2026-05-26 |
 | 6 | #4 Missile branch never queries CMT | 2 | **shipped** 2026-05-26 (audit re-scoped — see Wave 2 finding) |
+| 7 | Missile aim-level dispatch (Wave 2 follow-on) | 3 | **shipped** 2026-05-26 |
+| 8 | Recklessness band overlay on combat-bar | 4 | **shipped** 2026-05-26 |
 
 ## Background (for any agent picking this up cold)
 
@@ -501,6 +503,91 @@ Plus frozen-object invariant + 30°-down trig case + 7 other boundary tests, all
 - Local player fires a bow → character now plays the correct `Aim*` clip (high arc on long shots, low aim on close targets) instead of `setSwingPose` vibe-pose.
 - Remote ranged attacker fires at us → their character plays the correct `Aim*` clip via `dispatchRemoteSwing` for the first time.
 - Drudge with bow (combined with Phase 5's `isHuman` gate removal) now plays its actual ranged attack motion instead of nothing.
+
+---
+
+## Wave 4 — Recklessness power-band overlay (RynthSuite + wiki cross-ref)
+
+### Background
+
+The RynthSuite cross-ref (this doc's earlier section) surfaced that RynthCore caps power at `0.8f` for Recklessness-trained characters. The acpedia research (`external/holtburger/docs/acpedia-combat-research-2026-05-26.md`) confirms Recklessness's active power-band is a UI overlay — *not* server-enforced — and gives the canonical band as **10–90%** (Combat omnibus page) or 20–80% (Recklessness skill page; sources disagree). Both pages agree on the *direction*: a contiguous middle band where the +10 DR (trained) / +20 DR (specialized) bonus activates.
+
+RynthSuite's 0.8 cap matches the skill page's "80%" upper bound — so the cap is a UI-side gameplay nuance that we should mirror visually (let the player see when they're inside the band, outside the band, or in the "safe Recklessness-trained" zone below 80%).
+
+### Phase 8: Recklessness band overlay on combat-bar
+
+**Status:** pending
+**Owner:** Agent G
+**Blocked on:** Wave 3 (shipped). No new wire surface needed — `sessionHandle.player.skills()` already returns `Vec<u32>` flat-packed as `[type, current, base, ranks, training, ...]` per `src/lib.rs:13963`. `SkillType::Recklessness = 50` and `TrainingLevel::{Unusable=0, Untrained=1, Trained=2, Specialized=3}` are defined in `external/holtburger/crates/holtburger-common/src/stats.rs:156` + `:287`.
+
+#### Files to touch
+
+- `external/holtburger/apps/holtburger-web/plugins/combat-bar.js` — the power-slider rendering lives here. Add the band overlay rendering + skill-state reactivity.
+- *(possibly)* a tiny helper module if the band-drawing math grows — but inline is fine if it fits the existing combat-bar.js shape.
+
+#### What to do
+
+1. **Read Recklessness skill state.** On `combat-bar` activate (or via the event the slider listens to today), call `sessionHandle.player.skills()`, walk the flat array in 5-tuples, find the entry where `type === 50` (Recklessness). The `training` field (index 4 in the tuple) gives `TrainingLevel` (0/1/2/3).
+
+2. **Draw the band.** If `training === 2` (Trained) or `training === 3` (Specialized), overlay a translucent colored band on the slider between **10% and 90%** of its width. Color suggestion: muted red/orange to match AC's red-X "danger" aesthetic (recklessness = risk). The band visually shows where the player gets BOTH the +DR bonus AND the incoming-damage penalty. Outside the band: no bonus, no penalty. **Do not enforce the band as a cap** — player can swing anywhere; we just visualize.
+
+3. **Tooltip / label.** When hovering the band, show "Recklessness active: +10 DR" (trained) or "+20 DR" (specialized), plus the incoming-damage penalty caveat. Match the existing combat-bar tooltip style.
+
+4. **Reactivity.** If the player gets trained/specialized mid-session (e.g., via a redistribution gem during testing), re-read skill state and re-draw. Listen for `kind=15` skill-update events (or whatever event the existing skill-panel uses) — read the existing handler to find it.
+
+5. **The 0.8 sweet-spot tick (optional).** RynthSuite's 0.8 cap is the "safe Recklessness-trained" boundary — full bonus, but inside the band so the penalty applies, and importantly *the band's risk is still bounded* (Recklessness damage scales linearly inside the band). Drawing a small tick at 0.8 within the band would be a nice power-user touch but isn't required for v1.
+
+#### What NOT to do
+
+- **Do NOT enforce a power cap.** RynthSuite caps bot-driven swings at 0.8 because the AI doesn't want to take maximum incoming damage; for a human player, capping their swing would be paternalistic. Just show them where the danger zone is.
+- **Do NOT modify the slider's wire payload.** The slider value sent on `sessionHandle.attack(targetGuid, height, slider)` stays as-is. The band is purely visual.
+- **Do NOT touch the magic/spell-picker form of combat-bar.** Recklessness doesn't apply to magic per the wiki — no band needed when in a magic stance. The existing stance-conditional rendering already handles this; just guard your band code on the melee/missile branches.
+
+#### Acceptance criteria
+
+- Untrained / Unusable Recklessness: no band drawn (existing slider unchanged).
+- Trained: red band 10%–90% with "+10 DR" tooltip.
+- Specialized: same band, "+20 DR" tooltip.
+- Magic stance: no band (band code gated to non-magic stances).
+- Missile stance: band still drawn (Recklessness applies to missile per the wiki).
+- `node --check` clean.
+- No regression in existing combat-bar tests (whatever exists under `apps/holtburger-web/`).
+
+#### Reporting
+
+Files changed (paths + line counts), the skill-state lookup approach used, screenshot or DOM snapshot proving the band renders for each training level (or — if you can't drive the browser — a clear note that visual validation is deferred to the user). Under 300 words. **Don't commit — parent agent handles commits.**
+
+### Wave 4 results — shipped 2026-05-26
+
+**Agent:** G
+**Files (+146 / -1, one file):**
+- `external/holtburger/apps/holtburger-web/plugins/combat-bar.js` — module-level `SKILL_TYPE_RECKLESSNESS = 50` + `readRecklessnessTrainingLevel()` helper walks `window.__sessionHandle.playerStats().skills` (the flat `[type, current, base, ranks, training, …]` Vec<u32>) in 5-tuples and returns the Recklessness training level. New CSS classes `hb-cb-power-wrap` (relative-positioned slider wrapper) + `hb-cb-power-band` / `hb-cb-power-band-spec` (10%–90% overlay between slider track and thumb). `refreshRecklessnessBand()` called at render and re-called on every `playerStatsUpdated` event via `__pluginClient.events.on(...)`; teardown wired into `bodyEl.__reckBandDispose` and chained into `activate()`'s dispose list alongside `__powerMeterDispose` / `__spellPickerDispose` / `__stanceHeaderDispose`. Magic-stance defense via `currentStanceIsMagic()` early-return.
+
+**Visual treatment:**
+- Trained: `rgba(220, 80, 40, 0.18)` fill / `rgba(220, 80, 40, 0.32)` border.
+- Specialized: `rgba(220, 80, 40, 0.26)` fill / `rgba(240, 100, 60, 0.45)` border (slightly punchier for +20 vs +10).
+- Band geometry: `left: 10%; width: 80%; height: 10px;` vertically centered on slider track; z-index 0 behind slider thumb's z-index 1.
+- Tooltip via native `title` attr matching `tab.title` / `combat-hud.js` style: `"Recklessness active: +10 Damage Rating (also +10 incoming non-crit damage from all sources). Band is 10%–90% of the power bar."` (or +20 for Spec).
+
+**Wire payload:** untouched. `state.powerLevel`, `syncWindowState`, and the slider's `input`/`change` listeners are unchanged; raw slider value still flows to `window.__combatBarState.powerLevel` → `picking.js` → `sessionHandle.attack(targetGuid, height, slider)`. Band is purely visual per the acpedia + RynthSuite cross-ref.
+
+**Validation:** `node --check` clean. Browser-side visual validation deferred — DOM snapshot when band is active: `<span class="hb-cb-power-wrap"><span class="hb-cb-power-band hb-cb-power-band-spec" title="…+20…" style=""></span><input type="range" …></span>`.
+
+**Net visible behavior:**
+- Player trained in Recklessness sees a red band between 10% and 90% of their melee/missile power slider, signaling "swing here for +10 DR (and +10 incoming non-crit damage)". Player swings outside the band → no bonus, no penalty.
+- Specialized Recklessness → punchier band + "+20" tooltip.
+- Magic stance → no band (combat-bar transforms to spell picker anyway; redundant guard for safety).
+- Mid-session redistribution (e.g. respec gem) → `playerStatsUpdated` event re-runs the band check; UI updates without reload.
+
+### Wave 4 follow-on candidates (not in scope for Phase 8)
+
+Captured here for visibility — these are NOT being shipped in Wave 4 unless the user requests them:
+
+- **Defender facing on the wire for Sneak Attack prediction.** Currently we have local + remote heading from MotionUpdate, but not necessarily *defender* yaw at swing-impact tick. The wiki confirms Sneak Attack works for melee/missile/magic and gates on attacker-behind-defender. Wire-surface change; estimate ~80–120 LOC across protocol parser + wasm getter + JS dispatch.
+- **Shield CMT validation.** Confirm "One-Handed (Shield)" CMT rows omit Backhand entries (per the Combat omnibus page). Quick parity-test addition; probably ~20 LOC.
+- **PowerLevel / AccuracyLevel STypeFloat surface.** Read PropertyDouble keys 86 (PowerLevel) + 87 (AccuracyLevel) for diag observability of server-vs-client power state. ~30 LOC.
+- **Spell-shape classifier.** Six War Magic shapes (arc/ring/wall/bolt/volley/blast) + five Void shapes (no wall/volley, adds DoT/debuff). Needed for projectile spawning, not animation. Map `SpellId` → `(school, shape, level)`. ~100 LOC + a data table generated from `external/LSD-Partial-2025-02-23_16-15/spells/`.
+- **Two-Handed Combat skill audit.** Not in the wiki research set — flag as follow-on.
 
 ## Coordination notes for agents
 
