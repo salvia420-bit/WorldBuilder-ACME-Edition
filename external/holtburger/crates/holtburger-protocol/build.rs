@@ -471,8 +471,8 @@ impl<'a> CodegenCtx<'a> {
             return;
         }
 
-        let fields = match self.collect_simple_fields(n) {
-            Ok(f) => f,
+        let steps = match self.collect_emit_steps(n, &raw_name) {
+            Ok(s) => s,
             Err(reason) => {
                 writeln!(self.buf, "// SKIPPED {kind_str} {name}: {reason} — port to PR 7.2.").unwrap();
                 kind.bump_skipped(&mut self.stats);
@@ -491,10 +491,14 @@ impl<'a> CodegenCtx<'a> {
         }
         writeln!(self.buf, "#[derive(Debug, Clone, PartialEq)]").unwrap();
         writeln!(self.buf, "pub struct {name} {{").unwrap();
-        if fields.is_empty() {
+        let fields_only: Vec<&SimpleField> = steps.iter().filter_map(|s| match s {
+            EmitStep::Field(f) => Some(f),
+            _ => None,
+        }).collect();
+        if fields_only.is_empty() {
             writeln!(self.buf, "    // No fields declared in protocol.xml for this opcode.").unwrap();
         }
-        for f in &fields {
+        for f in &fields_only {
             if let Some(t) = &f.text {
                 writeln!(self.buf, "    /// {}", escape_doc(t)).unwrap();
             }
@@ -509,16 +513,38 @@ impl<'a> CodegenCtx<'a> {
             writeln!(self.buf).unwrap();
             self.opcode_index.push((kind_str.to_string(), raw_name.clone(), op));
         }
+        // Emit derived subfield accessors (J3.A — `<subfield>` support).
+        // Mirrors Chorizite's `get =>` accessor pattern: the parent field is
+        // the wire source-of-truth; subfields are pure-derived from it.
+        for f in &fields_only {
+            for sf in &f.subfields {
+                if let Some(t) = &sf.text {
+                    writeln!(self.buf, "    /// Derived from `{}`. {}", f.name_snake, escape_doc(t)).unwrap();
+                } else {
+                    writeln!(self.buf, "    /// Derived from `{}` via protocol.xml `<subfield value=\"{}\">`.",
+                        f.name_snake, escape_xml_attr_for_doc(&sf.value_expr)).unwrap();
+                }
+                writeln!(self.buf, "    #[inline]").unwrap();
+                writeln!(self.buf, "    pub fn {sf_name}(&self) -> {sf_ty} {{ {sf_body} }}",
+                    sf_name = sf.name_snake,
+                    sf_ty = sf.rust_ty,
+                    sf_body = sf.rust_expr,
+                ).unwrap();
+            }
+        }
         writeln!(self.buf, "    /// Decode `{name}` from a little-endian wire stream at `*offset`.").unwrap();
         writeln!(self.buf, "    pub fn read_from(data: &[u8], offset: &mut usize) -> Result<Self, &'static str> {{").unwrap();
-        if fields.is_empty() {
+        if fields_only.is_empty() && !steps.iter().any(|s| matches!(s, EmitStep::Align(_))) {
             writeln!(self.buf, "        let _ = (data, offset);").unwrap();
         }
-        for f in &fields {
-            emit_read_field(&mut self.buf, &f.name_snake, &f.field_kind);
+        for step in &steps {
+            match step {
+                EmitStep::Field(f) => emit_read_field(&mut self.buf, &f.name_snake, &f.field_kind),
+                EmitStep::Align(n_bytes) => emit_align_pad(&mut self.buf, *n_bytes),
+            }
         }
         writeln!(self.buf, "        Ok(Self {{").unwrap();
-        for f in &fields {
+        for f in &fields_only {
             writeln!(self.buf, "            {},", f.name_snake).unwrap();
         }
         writeln!(self.buf, "        }})\n    }}").unwrap();
@@ -530,37 +556,128 @@ impl<'a> CodegenCtx<'a> {
         kind.bump_emitted(&mut self.stats);
     }
 
-    fn collect_simple_fields(&self, n: Node<'_, '_>) -> Result<Vec<SimpleField>, String> {
+    /// J3.A: walks `<type>`'s children and produces an ordered sequence of
+    /// "emit one field" / "emit one align-pad" steps. Each `<field>` may
+    /// carry zero-or-more `<subfield>` derived-accessor children; nothing
+    /// else nested under `<field>` is supported in the foundation tier.
+    fn collect_emit_steps(&self, n: Node<'_, '_>, parent_type_name: &str) -> Result<Vec<EmitStep>, String> {
         let mut out = Vec::new();
         let mut seen_names: BTreeMap<String, usize> = BTreeMap::new();
         for c in n.children().filter(|c| c.is_element()) {
             let tag = c.tag_name().name();
-            if tag != "field" {
-                return Err(format!("unsupported child `<{tag}>`"));
+            match tag {
+                "field" => {
+                    let f = self.build_simple_field(c, &mut seen_names, parent_type_name)?;
+                    out.push(EmitStep::Field(f));
+                }
+                "align" => {
+                    let n_bytes = align_byte_width_from_node(c)
+                        .ok_or_else(|| format!("<align> with type {:?}: unknown alignment width — only byte/short/ushort/int/uint/long/ulong supported", c.attribute("type")))?;
+                    out.push(EmitStep::Align(n_bytes));
+                }
+                other => {
+                    return Err(format!("unsupported child `<{other}>`"));
+                }
             }
-            let raw_name = c.attribute("name").ok_or_else(|| "<field> missing name".to_string())?;
-            let raw_type = c.attribute("type").ok_or_else(|| format!("<field {raw_name}> missing type"))?;
-
-            if c.children().any(|cc| cc.is_element()) {
-                return Err(format!("field {raw_name}: nested element body (subfield/switch); deferred"));
-            }
-
-            let mut snake = to_snake_case(raw_name);
-            let counter = seen_names.entry(snake.clone()).or_insert(0);
-            if *counter > 0 {
-                snake = format!("{snake}_{}", *counter + 1);
-            }
-            *counter += 1;
-            let snake = sanitize_rust_keyword(&snake);
-
-            let (rust_ty, field_kind) = match self.resolve_field(raw_type) {
-                Some(p) => p,
-                None => return Err(format!("field {raw_name}: type {raw_type:?} not in foundation tier")),
-            };
-
-            out.push(SimpleField { name_snake: snake, rust_ty, field_kind, text: c.attribute("text").map(|s| s.to_string()) });
         }
         Ok(out)
+    }
+
+    fn build_simple_field(
+        &self,
+        c: Node<'_, '_>,
+        seen_names: &mut BTreeMap<String, usize>,
+        parent_type_name: &str,
+    ) -> Result<SimpleField, String> {
+        let raw_name = c.attribute("name").ok_or_else(|| "<field> missing name".to_string())?;
+        let raw_type = c.attribute("type").ok_or_else(|| format!("<field {raw_name}> missing type"))?;
+
+        let mut snake = to_snake_case(raw_name);
+        let counter = seen_names.entry(snake.clone()).or_insert(0);
+        if *counter > 0 {
+            snake = format!("{snake}_{}", *counter + 1);
+        }
+        *counter += 1;
+        let snake = sanitize_rust_keyword(&snake);
+
+        let (rust_ty, field_kind) = match self.resolve_field(raw_type) {
+            Some(p) => p,
+            None => return Err(format!("field {raw_name}: type {raw_type:?} not in foundation tier")),
+        };
+
+        // Walk nested children. Only `<subfield>` is accepted; anything else
+        // (switch/if/maskmap inside a field body) trips the deferred-tier
+        // path with a clear reason.
+        let parent_rust_repr = match field_kind {
+            FieldKind::PrimU8 => Some("u8"),
+            FieldKind::PrimU16 => Some("u16"),
+            FieldKind::PrimU32 => Some("u32"),
+            FieldKind::PrimU64 => Some("u64"),
+            FieldKind::PrimI16 => Some("i16"),
+            FieldKind::PrimI32 => Some("i32"),
+            FieldKind::PrimI64 => Some("i64"),
+            _ => None,
+        };
+        let mut subfields = Vec::new();
+        for sc in c.children().filter(|cc| cc.is_element()) {
+            let stag = sc.tag_name().name();
+            if stag != "subfield" {
+                return Err(format!("field {raw_name}: nested element <{stag}> (only <subfield> supported); deferred"));
+            }
+            // <subfield> needs a numeric parent we can mask/shift. Enum/Struct
+            // parents would need to be cast to their underlying repr — defer.
+            let parent_repr = match parent_rust_repr {
+                Some(r) => r,
+                None => {
+                    return Err(format!(
+                        "field {raw_name}: <subfield> requires numeric parent, parent {raw_type:?} is non-numeric; deferred"
+                    ));
+                }
+            };
+            let sf_raw_name = sc.attribute("name").ok_or_else(|| format!("<subfield> in {parent_type_name}.{raw_name} missing name"))?;
+            let sf_raw_type = sc.attribute("type").ok_or_else(|| format!("<subfield {sf_raw_name}> missing type"))?;
+            let sf_value = sc.attribute("value").ok_or_else(|| format!("<subfield {sf_raw_name}> missing value expression"))?;
+
+            let (sf_rust_ty, _) = match self.resolve_field(sf_raw_type) {
+                Some(p) => p,
+                None => return Err(format!("subfield {sf_raw_name}: type {sf_raw_type:?} not in foundation tier")),
+            };
+            // Subfield-result rust_ty must be a numeric primitive for the
+            // bit-twiddle expression to type-check. We only accept the same
+            // set the parent accepts.
+            let sf_repr = match sf_rust_ty.as_str() {
+                "u8" | "u16" | "u32" | "u64" | "i16" | "i32" | "i64" => sf_rust_ty.clone(),
+                _ => return Err(format!("subfield {sf_raw_name}: result type {sf_rust_ty:?} is non-numeric; deferred")),
+            };
+
+            // Translate the C#-style value expression into Rust. The parent
+            // identifier in the XML always names the immediate parent field;
+            // rewrite it to `self.<snake>` so the generated accessor reads
+            // from the struct's stored parent value.
+            let rust_expr = match translate_subfield_expr(sf_value, raw_name, &snake, parent_repr, &sf_repr) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(format!("subfield {sf_raw_name}: cannot translate expression {sf_value:?}: {e}; deferred"));
+                }
+            };
+
+            let sf_snake = sanitize_rust_keyword(&to_snake_case(sf_raw_name));
+            subfields.push(SubfieldAccessor {
+                name_snake: sf_snake,
+                rust_ty: sf_repr,
+                rust_expr,
+                value_expr: sf_value.to_string(),
+                text: sc.attribute("text").map(|s| s.to_string()),
+            });
+        }
+
+        Ok(SimpleField {
+            name_snake: snake,
+            rust_ty,
+            field_kind,
+            text: c.attribute("text").map(|s| s.to_string()),
+            subfields,
+        })
     }
 
     fn resolve_field(&self, raw_type: &str) -> Option<(String, FieldKind)> {
@@ -599,10 +716,38 @@ impl<'a> CodegenCtx<'a> {
 
 // FIELD KIND + READ EMITTER ------------------------------------------------
 
+/// J3.A: one ordered step the struct emitter walks during `read_from` codegen.
+/// `<field>` produces a Field; `<align>` produces an Align(n_bytes) pad.
+enum EmitStep {
+    Field(SimpleField),
+    Align(usize),
+}
+
 struct SimpleField {
     name_snake: String,
     rust_ty: String,
     field_kind: FieldKind,
+    text: Option<String>,
+    /// J3.A: derived `<subfield>` accessors hanging off this field. Empty for
+    /// the vast majority of fields; populated only for the 10 subfield sites
+    /// in protocol.xml (`PHashTable.PackedSize.{Buckets,Count}`,
+    /// `BlobFragments.Size.BodySize`, `ItemProfile.PackedAmount.{Amount,PwdType}`,
+    /// `PackedMotionCommand.PackedSequence.{ServerActionSequence,Autonomous}`,
+    /// `RawMotionState.Flags.CommandListLength`,
+    /// `InterpertedMotionState.Flags.CommandListLength`,
+    /// `DDDRevision.IdDatFile.DatFileType`).
+    subfields: Vec<SubfieldAccessor>,
+}
+
+/// J3.A: one `<subfield>` derived accessor on a parent field. Its `rust_expr`
+/// is the already-translated Rust body — see [`translate_subfield_expr`].
+struct SubfieldAccessor {
+    name_snake: String,
+    rust_ty: String,
+    rust_expr: String,
+    /// Verbatim XML expression for the doc-comment trail when no `text=`
+    /// attribute is present.
+    value_expr: String,
     text: Option<String>,
 }
 
@@ -802,6 +947,13 @@ fn sanitize_const_name(s: &str) -> String {
 }
 
 fn collect_unsupported(n: Node<'_, '_>) -> Vec<&'static str> {
+    // J3.A (2026-05-27): `<align>` + `<subfield>` are now FOUNDATION-tier
+    // — `<align>` was always a child of `<type>` (or a child of `<switch>`
+    // cases, which already trip the `switch` unsupported branch); `<subfield>`
+    // is always a child of `<field>`, never a direct child of `<type>`, but
+    // we KEEP it out of the unsupported list defensively in case future XML
+    // ever places it at the top level. The real subfield-bearing fields are
+    // detected by `collect_simple_fields` walking into `<field>` children.
     let mut out = Vec::new();
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
@@ -809,10 +961,8 @@ fn collect_unsupported(n: Node<'_, '_>) -> Vec<&'static str> {
             "if" => push_unique(&mut out, "if"),
             "mask" => push_unique(&mut out, "mask"),
             "maskmap" => push_unique(&mut out, "maskmap"),
-            "subfield" => push_unique(&mut out, "subfield"),
             "table" => push_unique(&mut out, "table"),
             "vector" => push_unique(&mut out, "vector"),
-            "align" => push_unique(&mut out, "align"),
             _ => {}
         }
     }
@@ -839,5 +989,436 @@ fn line_of_offset(line_offsets: &[usize], offset: usize) -> usize {
     match line_offsets.binary_search(&offset) {
         Ok(idx) => idx + 1,
         Err(idx) => idx,
+    }
+}
+
+// J3.A: ALIGN + SUBFIELD HELPERS --------------------------------------------
+
+/// J3.A: emit the cursor-advance for a Chorizite `<align type="TYPE" />`
+/// directive. Equivalent to the C# template's
+/// `if ((reader.BaseStream.Position % N) != 0)
+///   reader.BaseStream.Position += N - (reader.BaseStream.Position % N);`
+/// — we use `*offset` (an absolute byte index into `data`) in place of the
+/// stream position, which is semantically identical. The pad bytes are
+/// skipped without inspection (the wire writer fills them with zeros).
+fn emit_align_pad(buf: &mut String, n_bytes: usize) {
+    let n = n_bytes;
+    writeln!(buf, "        // <align type=\"{n}\"> — advance cursor to next multiple of {n}.").unwrap();
+    writeln!(buf, "        {{").unwrap();
+    writeln!(buf, "            let pad = ({n} - (*offset % {n})) % {n};").unwrap();
+    writeln!(buf, "            if *offset + pad > data.len() {{ return Err(\"truncated align({n}) pad\"); }}").unwrap();
+    writeln!(buf, "            *offset += pad;").unwrap();
+    writeln!(buf, "        }}").unwrap();
+}
+
+/// J3.A: map `<align type="TYPE" />` to the alignment-pad byte width. Mirrors
+/// `Chorizite.ACProtocol.SourceGen.CSTemplateBase.WriteAlignmentCheck` which
+/// hardcodes `4` because every retail `<align>` site uses `type="uint"`; we
+/// generalize over the wire-primitive width table on the off-chance the XML
+/// ever ships a `<align type="ushort" />`.
+fn align_byte_width_from_node(n: Node<'_, '_>) -> Option<usize> {
+    let ty = n.attribute("type")?;
+    match ty {
+        "byte" | "bool" => Some(1),
+        "short" | "ushort" => Some(2),
+        "int" | "uint" | "float" => Some(4),
+        "long" | "ulong" | "double" => Some(8),
+        _ => None,
+    }
+}
+
+/// J3.A: translate the C#-style expression in `<subfield value="…">` into
+/// a Rust expression body that reads from `&self` against the parent's
+/// stored field. Mirrors what `Chorizite.ACProtocol`'s T4 template emits as a
+/// `get =>` accessor — same expression, different surface syntax + an
+/// explicit cast to the subfield's declared return type.
+///
+/// The XML uses C# casts (`(uint)1 << ((int)PackedSize >> 24)`) and the
+/// parent's field name as a bare identifier (`PackedSize & 0xFFFFFF`); the
+/// translator rewrites the identifier to `self.<snake>` and converts casts to
+/// the corresponding Rust `as` expression, threading the parent's repr type
+/// through so the implicit cast on each leaf identifier matches the source's
+/// implicit-cast behaviour.
+///
+/// Supported expression shape (covers all 10 retail sites):
+///   `expr  := term  (`+`|`-`|`*`|`/`|`&`|`|`|`^`|`<<`|`>>` expr)?`
+///   `term  := unary | `(` type `)` term | `(` expr `)` | ident | int_literal`
+///   `unary := `-` term`
+///
+/// Returns `Err(msg)` if it hits a token we don't recognise — the caller
+/// then SKIPs the bearing type with the original deferred-tier reason.
+fn translate_subfield_expr(
+    expr: &str,
+    parent_xml_name: &str,
+    parent_snake: &str,
+    parent_repr: &str,
+    sf_repr: &str,
+) -> Result<String, String> {
+    let tokens = tokenize_csharp_expr(expr)?;
+    let mut p = ExprParser { toks: &tokens, pos: 0 };
+    let rust_inner = p.parse_expr(parent_xml_name, parent_snake, parent_repr)?;
+    if p.pos != tokens.len() {
+        return Err(format!(
+            "trailing tokens after position {}: {:?}",
+            p.pos,
+            &tokens[p.pos..]
+        ));
+    }
+    // Cast the parent-repr-typed inner expression to the subfield's declared
+    // return type. This mirrors the C# `(ushort)(...)` wrap on the `get =>`
+    // accessor body and keeps the return-type column honest.
+    Ok(format!("({rust_inner}) as {sf_repr}"))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ExprTok {
+    Ident(String),
+    /// Numeric literal preserved as raw text + value so we can format it back
+    /// without dropping the hex form.
+    IntLit { raw: String },
+    /// `(byte)` / `(ushort)` / `(int)` etc. — a cast prefix.
+    Cast(String),
+    LParen,
+    RParen,
+    /// `&`, `|`, `^`, `+`, `-`, `*`, `/`
+    BinOp(char),
+    /// `<<` or `>>`
+    Shift(bool), // true = left, false = right
+}
+
+fn tokenize_csharp_expr(s: &str) -> Result<Vec<ExprTok>, String> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut out = Vec::new();
+    let is_ident_start = |b: u8| b.is_ascii_alphabetic() || b == b'_';
+    let is_ident_cont = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let cast_types = [
+        "byte", "short", "ushort", "int", "uint", "long", "ulong",
+        "float", "double", "bool",
+    ];
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        match b {
+            b'(' => {
+                // Lookahead for cast: `(` type `)`.
+                let rest = &s[i + 1..];
+                let mut matched_cast: Option<&str> = None;
+                for ct in cast_types.iter() {
+                    if rest.starts_with(ct) {
+                        let after = &rest[ct.len()..];
+                        if after.as_bytes().first().copied() == Some(b')') {
+                            matched_cast = Some(*ct);
+                            break;
+                        }
+                    }
+                }
+                if let Some(ct) = matched_cast {
+                    out.push(ExprTok::Cast(ct.to_string()));
+                    i += 1 + ct.len() + 1; // `(` + type + `)`
+                } else {
+                    out.push(ExprTok::LParen);
+                    i += 1;
+                }
+            }
+            b')' => {
+                out.push(ExprTok::RParen);
+                i += 1;
+            }
+            b'<' if bytes.get(i + 1) == Some(&b'<') => {
+                out.push(ExprTok::Shift(true));
+                i += 2;
+            }
+            b'>' if bytes.get(i + 1) == Some(&b'>') => {
+                out.push(ExprTok::Shift(false));
+                i += 2;
+            }
+            b'&' | b'|' | b'^' | b'+' | b'-' | b'*' | b'/' => {
+                out.push(ExprTok::BinOp(b as char));
+                i += 1;
+            }
+            _ if b.is_ascii_digit() => {
+                let start = i;
+                // Optional 0x / 0X hex prefix.
+                if b == b'0' && (bytes.get(i + 1) == Some(&b'x') || bytes.get(i + 1) == Some(&b'X')) {
+                    i += 2;
+                    while i < bytes.len() && bytes[i].is_ascii_hexdigit() {
+                        i += 1;
+                    }
+                } else {
+                    while i < bytes.len() && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
+                let raw = s[start..i].to_string();
+                out.push(ExprTok::IntLit { raw });
+            }
+            _ if is_ident_start(b) => {
+                let start = i;
+                while i < bytes.len() && is_ident_cont(bytes[i]) {
+                    i += 1;
+                }
+                out.push(ExprTok::Ident(s[start..i].to_string()));
+            }
+            _ => {
+                return Err(format!("unexpected character {:?} at offset {i} of {s:?}", b as char));
+            }
+        }
+    }
+    Ok(out)
+}
+
+struct ExprParser<'a> {
+    toks: &'a [ExprTok],
+    pos: usize,
+}
+
+impl<'a> ExprParser<'a> {
+    /// Precedence (low→high) — we follow C#: `|` < `^` < `&` < shift < `+`/`-`
+    /// < `*`/`/`. Top-level `parse_expr` handles `|`.
+    fn parse_expr(
+        &mut self,
+        parent_xml_name: &str,
+        parent_snake: &str,
+        parent_repr: &str,
+    ) -> Result<String, String> {
+        self.parse_or(parent_xml_name, parent_snake, parent_repr)
+    }
+    fn parse_or(&mut self, p: &str, ps: &str, pr: &str) -> Result<String, String> {
+        let mut lhs = self.parse_xor(p, ps, pr)?;
+        while matches!(self.peek(), Some(ExprTok::BinOp('|'))) {
+            self.pos += 1;
+            let rhs = self.parse_xor(p, ps, pr)?;
+            lhs = format!("({lhs} | {rhs})");
+        }
+        Ok(lhs)
+    }
+    fn parse_xor(&mut self, p: &str, ps: &str, pr: &str) -> Result<String, String> {
+        let mut lhs = self.parse_and(p, ps, pr)?;
+        while matches!(self.peek(), Some(ExprTok::BinOp('^'))) {
+            self.pos += 1;
+            let rhs = self.parse_and(p, ps, pr)?;
+            lhs = format!("({lhs} ^ {rhs})");
+        }
+        Ok(lhs)
+    }
+    fn parse_and(&mut self, p: &str, ps: &str, pr: &str) -> Result<String, String> {
+        let mut lhs = self.parse_shift(p, ps, pr)?;
+        while matches!(self.peek(), Some(ExprTok::BinOp('&'))) {
+            self.pos += 1;
+            let rhs = self.parse_shift(p, ps, pr)?;
+            lhs = format!("({lhs} & {rhs})");
+        }
+        Ok(lhs)
+    }
+    fn parse_shift(&mut self, p: &str, ps: &str, pr: &str) -> Result<String, String> {
+        let mut lhs = self.parse_addsub(p, ps, pr)?;
+        while let Some(tok) = self.peek() {
+            match tok {
+                ExprTok::Shift(true) => {
+                    self.pos += 1;
+                    let rhs = self.parse_addsub(p, ps, pr)?;
+                    lhs = format!("({lhs} << {rhs})");
+                }
+                ExprTok::Shift(false) => {
+                    self.pos += 1;
+                    let rhs = self.parse_addsub(p, ps, pr)?;
+                    lhs = format!("({lhs} >> {rhs})");
+                }
+                _ => break,
+            }
+        }
+        Ok(lhs)
+    }
+    fn parse_addsub(&mut self, p: &str, ps: &str, pr: &str) -> Result<String, String> {
+        let mut lhs = self.parse_muldiv(p, ps, pr)?;
+        while let Some(ExprTok::BinOp(op)) = self.peek() {
+            if *op == '+' || *op == '-' {
+                let op = *op;
+                self.pos += 1;
+                let rhs = self.parse_muldiv(p, ps, pr)?;
+                lhs = format!("({lhs} {op} {rhs})");
+            } else {
+                break;
+            }
+        }
+        Ok(lhs)
+    }
+    fn parse_muldiv(&mut self, p: &str, ps: &str, pr: &str) -> Result<String, String> {
+        let mut lhs = self.parse_cast_or_unary(p, ps, pr)?;
+        while let Some(ExprTok::BinOp(op)) = self.peek() {
+            if *op == '*' || *op == '/' {
+                let op = *op;
+                self.pos += 1;
+                let rhs = self.parse_cast_or_unary(p, ps, pr)?;
+                lhs = format!("({lhs} {op} {rhs})");
+            } else {
+                break;
+            }
+        }
+        Ok(lhs)
+    }
+    fn parse_cast_or_unary(
+        &mut self,
+        p: &str,
+        ps: &str,
+        pr: &str,
+    ) -> Result<String, String> {
+        // Cast prefix: (type) <term>
+        if let Some(ExprTok::Cast(ty)) = self.peek() {
+            let ty = ty.clone();
+            self.pos += 1;
+            let inner = self.parse_cast_or_unary(p, ps, pr)?;
+            let rust_ty = csharp_to_rust_primitive(&ty)?;
+            return Ok(format!("({inner} as {rust_ty})"));
+        }
+        // Unary minus.
+        if matches!(self.peek(), Some(ExprTok::BinOp('-'))) {
+            self.pos += 1;
+            let inner = self.parse_cast_or_unary(p, ps, pr)?;
+            return Ok(format!("(-({inner}))"));
+        }
+        self.parse_atom(p, ps, pr)
+    }
+    fn parse_atom(
+        &mut self,
+        parent_xml_name: &str,
+        parent_snake: &str,
+        parent_repr: &str,
+    ) -> Result<String, String> {
+        match self.peek().cloned() {
+            Some(ExprTok::LParen) => {
+                self.pos += 1;
+                let inner = self.parse_expr(parent_xml_name, parent_snake, parent_repr)?;
+                match self.peek() {
+                    Some(ExprTok::RParen) => self.pos += 1,
+                    other => return Err(format!("expected ')', got {other:?}")),
+                }
+                Ok(format!("({inner})"))
+            }
+            Some(ExprTok::Ident(ident)) => {
+                self.pos += 1;
+                if ident == parent_xml_name {
+                    // Read the stored parent field; rust_ty is already the
+                    // parent_repr type so no cast needed at the leaf.
+                    Ok(format!("self.{parent_snake}"))
+                } else {
+                    Err(format!(
+                        "identifier {ident:?} is not the parent field name ({parent_xml_name:?}); cross-field subfield expressions are deferred"
+                    ))
+                }
+            }
+            Some(ExprTok::IntLit { raw }) => {
+                self.pos += 1;
+                // Integer literal — typed as the parent's repr so it composes
+                // cleanly with `self.<snake>` (parent_repr) under `&`, `|`,
+                // `<<`, `>>`.
+                Ok(format!("({raw} as {parent_repr})"))
+            }
+            Some(other) => Err(format!("expected atom, got {other:?}")),
+            None => Err("expected atom, got end-of-input".to_string()),
+        }
+    }
+    fn peek(&self) -> Option<&ExprTok> {
+        self.toks.get(self.pos)
+    }
+}
+
+fn csharp_to_rust_primitive(ty: &str) -> Result<&'static str, String> {
+    match ty {
+        "byte" => Ok("u8"),
+        "short" => Ok("i16"),
+        "ushort" => Ok("u16"),
+        "int" => Ok("i32"),
+        "uint" => Ok("u32"),
+        "long" => Ok("i64"),
+        "ulong" => Ok("u64"),
+        "float" => Ok("f32"),
+        "double" => Ok("f64"),
+        "bool" => Ok("bool"),
+        other => Err(format!("unknown C# primitive {other:?}")),
+    }
+}
+
+/// Escapes XML-attribute text for placement inside a Rust doc-comment
+/// (`<` and `>` need backtick-escaping or they'd be parsed as HTML by rustdoc).
+fn escape_xml_attr_for_doc(s: &str) -> String {
+    s.replace('<', "&lt;").replace('>', "&gt;")
+}
+
+// J3.A: SUBFIELD EXPRESSION-TRANSLATOR UNIT TESTS ---------------------------
+//
+// build.rs `cfg(test)` modules don't run under `cargo test` (Cargo's test
+// harness only compiles `src/**` + `tests/**`); we run these only when
+// build.rs is explicitly compiled with `--test`. The real verification
+// surface for these helpers is the parity-test round-trip
+// (tests/generated_parity.rs).
+
+#[cfg(test)]
+mod expr_translator_tests {
+    use super::*;
+
+    fn xlate(expr: &str, parent_xml: &str, parent_snake: &str, parent_repr: &str, sf_repr: &str) -> String {
+        translate_subfield_expr(expr, parent_xml, parent_snake, parent_repr, sf_repr).unwrap()
+    }
+
+    #[test]
+    fn simple_mask() {
+        let s = xlate("PackedSequence & 0x7FFF", "PackedSequence", "packed_sequence", "u16", "u16");
+        assert!(s.contains("self.packed_sequence"));
+        assert!(s.contains("0x7FFF"));
+        assert!(s.ends_with(" as u16"));
+    }
+
+    #[test]
+    fn right_shift() {
+        let s = xlate("PackedAmount >> 24", "PackedAmount", "packed_amount", "u32", "i32");
+        assert!(s.contains("self.packed_amount"));
+        assert!(s.contains(">> "));
+        assert!(s.ends_with(" as i32"));
+    }
+
+    #[test]
+    fn shift_then_mask() {
+        let s = xlate("(PackedSequence >> 15) & 0x1", "PackedSequence", "packed_sequence", "u16", "u16");
+        assert!(s.contains("self.packed_sequence"));
+        assert!(s.contains(">> ") && s.contains("& "));
+    }
+
+    #[test]
+    fn cast_inside_shift() {
+        // `(uint)1 << ((int)PackedSize >> 24)` — PHashTable.Buckets.
+        let s = xlate("(uint)1 << ((int)PackedSize >> 24)", "PackedSize", "packed_size", "u32", "u32");
+        assert!(s.contains("self.packed_size"));
+        assert!(s.contains("as i32"));
+        assert!(s.contains("as u32"));
+    }
+
+    #[test]
+    fn subtract_literal() {
+        // BlobFragments.BodySize = Size - 16.
+        let s = xlate("Size - 16", "Size", "size", "u16", "u16");
+        assert!(s.contains("self.size"));
+        assert!(s.contains("- "));
+    }
+
+    #[test]
+    fn long_high_word() {
+        // DDDRevision.DatFileType = IdDatFile >> 32. The parent is `ulong`
+        // (u64); the subfield is `uint` (u32). The translator emits the
+        // shift on u64 then casts to u32.
+        let s = xlate("IdDatFile >> 32", "IdDatFile", "id_dat_file", "u64", "u32");
+        assert!(s.contains("self.id_dat_file"));
+        assert!(s.contains(">> "));
+        assert!(s.ends_with(" as u32"));
+    }
+
+    #[test]
+    fn rejects_cross_field() {
+        let err = translate_subfield_expr("PackedSequence & OtherField", "PackedSequence", "packed_sequence", "u16", "u16").unwrap_err();
+        assert!(err.contains("not the parent field name") || err.contains("cross-field"));
     }
 }
