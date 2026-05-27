@@ -39,6 +39,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, parseElementIdHex, getCachedLayout } from "../ui/ac_layout.js";
+import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
 
 /** Retail LayoutDescs covering the inventory window.
  *
@@ -249,6 +250,23 @@ function ensureStyles() {
       background:
         radial-gradient(ellipse at center, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.8) 100%);
       border: 1px solid var(--hb-border-brass-dim);
+      z-index: 0;
+    }
+    /* Wave 14 — PaperdollViewport canvas. Renders the local player's
+       3D rig behind the slot frames so equipped armor/dyes show on
+       the body AND the slot icon stays visible at the panel edge.
+       pointer-events:none lets slot clicks pass through to the slots. */
+    #${OVERLAY_ID} .hb-inv-paperdoll-viewport {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 1;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-inv-paperdoll-viewport canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
     }
     /* Each paperdoll body-slot — 28x28 brass-trim square positioned at
        the (x, y) from the PAPERDOLL_SLOTS table. Smaller than 32 to
@@ -262,6 +280,7 @@ function ensureStyles() {
       cursor: pointer;
       transition: filter 120ms ease;
       opacity: 0.6;
+      z-index: 2;
     }
     #${OVERLAY_ID} .hb-inv-doll-slot:hover { opacity: 1; filter: brightness(1.3); }
     #${OVERLAY_ID} .hb-inv-doll-slot.equipped {
@@ -278,6 +297,7 @@ function ensureStyles() {
       height: 20px;
       border: 1px solid rgba(255, 255, 255, 0.3);
       pointer-events: none;
+      z-index: 3;
     }
     #${OVERLAY_ID} .hb-inv-doll-tip {
       position: absolute;
@@ -654,6 +674,19 @@ function doMount(parentEl, _ctx) {
   const paperdollBg = document.createElement("div");
   paperdollBg.className = "hb-inv-paperdoll-bg";
   paperdoll.appendChild(paperdollBg);
+  // Wave 14 — 3D character doll viewport (mirrors retail
+  // gmPaperDollUI::RedressCreature at acclient.c:4146). Renders the
+  // local player rig BEHIND the slot squares so equipped armor shows on
+  // the body AND the slot frame still shows its icon. Loaded once the
+  // local player guid + meta are known; reloaded whenever the inventory
+  // snapshot changes (equip / dye / applyAppearance).
+  const paperdollViewport = new PaperdollViewport({
+    width: PAPERDOLL_W, height: PAPERDOLL_H,
+  });
+  const viewportWrap = document.createElement("div");
+  viewportWrap.className = "hb-inv-paperdoll-viewport";
+  viewportWrap.appendChild(paperdollViewport.dom);
+  paperdoll.appendChild(viewportWrap);
   const dollSlotEls = {};
   for (const s of PAPERDOLL_SLOTS) {
     const el = document.createElement("div");
@@ -1039,6 +1072,36 @@ function doMount(parentEl, _ctx) {
     }
   }
 
+  // Wave 14 — pull the local player's setup + substitution set from
+  // the live entity manager and (re)load the paperdoll viewport. The
+  // local-player meta path matches what dye-preview.js does for its
+  // half-scale player rig (see plugins/dye-preview.js:325-340): look up
+  // `window.getLocalPlayerGuid()` then resolve `entityMap.get(lpg).meta`
+  // which carries {modelId/setupId, mtableId, paletteId, subPalettes}
+  // populated by the spawn path + kept up to date by applyAppearance
+  // (entities.js:3846). PaperdollViewport.loadPlayer is idempotent on
+  // (setupId, mtableId, paletteId, subPalettes) so repeated rebuild()
+  // calls with no equip change are cheap.
+  function refreshPaperdollViewport() {
+    try {
+      const lpg = (typeof window.getLocalPlayerGuid === "function")
+        ? (window.getLocalPlayerGuid() >>> 0) : 0;
+      if (lpg === 0) return;
+      const em = window.liveScene3d?.entityManager;
+      const inst = em?.entityMap?.get?.(lpg);
+      const meta = inst?.meta;
+      if (!meta) return;
+      const setupId = (meta.modelId ?? meta.setupId ?? 0) >>> 0;
+      if (setupId === 0) return;
+      paperdollViewport.loadPlayer(
+        setupId,
+        (meta.mtableId ?? 0) >>> 0,
+        (meta.paletteId ?? 0) >>> 0,
+        meta.subPalettes ?? new Uint32Array(0),
+      ).catch(() => {});
+    } catch (_) { /* viewport is best-effort */ }
+  }
+
   function rebuild() {
     refreshInventorySnapshot();
     const equipped = document.getElementById("inv-equipped");
@@ -1062,6 +1125,11 @@ function doMount(parentEl, _ctx) {
         itemsGrid.appendChild(makeSlot(li));
       }
     }
+    // Wave 14 — refresh the 3D doll from the current local-player meta.
+    // Idempotent on unchanged (setupId, mtableId, paletteId, subPalettes);
+    // hot-swaps the rig when applyAppearance (entities.js:3846) has
+    // updated the player's substitution set.
+    refreshPaperdollViewport();
     // Burden rendering removed in Wave 13 — see status-indicators.js.
   }
 
@@ -1082,6 +1150,33 @@ function doMount(parentEl, _ctx) {
   if (!tryHook()) {
     pollTimer = setInterval(() => {
       if (tryHook()) { clearInterval(pollTimer); pollTimer = null; }
+    }, 500);
+  }
+
+  // Wave 14 — if the local player isn't spawned yet at mount time (or
+  // the inventory snapshot arrives before the entity instance), the
+  // initial rebuild()'s refreshPaperdollViewport call is a no-op. Poll
+  // until the player meta surfaces in the entity manager so the doll
+  // appears as soon as the spawn completes. Stops after first successful
+  // load (PaperdollViewport.loadPlayer remembers the load key).
+  let viewportLoadTimer = null;
+  function tryLoadViewport() {
+    const lpg = (typeof window.getLocalPlayerGuid === "function")
+      ? (window.getLocalPlayerGuid() >>> 0) : 0;
+    if (lpg === 0) return false;
+    const em = window.liveScene3d?.entityManager;
+    const inst = em?.entityMap?.get?.(lpg);
+    const setupId = (inst?.meta?.modelId ?? inst?.meta?.setupId ?? 0) >>> 0;
+    if (setupId === 0) return false;
+    refreshPaperdollViewport();
+    return true;
+  }
+  if (!tryLoadViewport()) {
+    viewportLoadTimer = setInterval(() => {
+      if (tryLoadViewport()) {
+        clearInterval(viewportLoadTimer);
+        viewportLoadTimer = null;
+      }
     }, 500);
   }
 
@@ -1182,11 +1277,16 @@ function doMount(parentEl, _ctx) {
     window.removeEventListener("keydown", onKey);
     delete window.__isInventoryItem;
     if (pollTimer) clearInterval(pollTimer);
+    if (viewportLoadTimer) clearInterval(viewportLoadTimer);
     if (canvasEl) {
       canvasEl.removeEventListener("dragover", onCanvasDragOver);
       canvasEl.removeEventListener("drop", onCanvasDrop);
     }
     for (const o of observers) o.disconnect();
+    // Wave 14 — release the WebGL context. Chrome caps live contexts
+    // around 16; without this the inventory view can leak a context
+    // per open/close cycle and eventually black-screen the doll.
+    try { paperdollViewport.dispose(); } catch (_) {}
     overlay.remove();
   };
 }
