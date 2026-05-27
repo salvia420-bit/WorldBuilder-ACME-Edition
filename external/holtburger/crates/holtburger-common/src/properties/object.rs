@@ -1,5 +1,6 @@
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
+use strum_macros::{Display, FromRepr};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -273,4 +274,147 @@ pub enum WeenieType {
     Pet = 69,
     PetDevice = 70,
     CombatPet = 71,
+}
+
+/// Decal-compatible object class taxonomy. Mirrors
+/// `Chorizite.Common.Enums.ObjectClass`
+/// (`Chorizite.Common/Enums/ObjectClass.cs:9-55`, vendored HEAD `e3b3bd2`).
+///
+/// Unlocks typed WorldObject subclass dispatch — currently we use generic
+/// Entity for everything. Drives equipment slot logic, NPC categorization,
+/// container vs item distinction.
+///
+/// The C# enum has no explicit discriminants — values follow `Unknown = 0`
+/// declaration order. Discriminants below mirror that order verbatim
+/// (`Unknown = 0` ... `Static = 44`, 45 variants total).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    FromRepr,
+    Default,
+)]
+#[repr(u32)]
+pub enum ObjectClass {
+    #[default]
+    Unknown = 0,
+    MeleeWeapon = 1,
+    Armor = 2,
+    Clothing = 3,
+    Jewelry = 4,
+    Monster = 5,
+    Food = 6,
+    Money = 7,
+    Misc = 8,
+    MissileWeapon = 9,
+    Container = 10,
+    Gem = 11,
+    SpellComponent = 12,
+    Key = 13,
+    Portal = 14,
+    TradeNote = 15,
+    ManaStone = 16,
+    Plant = 17,
+    BaseCooking = 18,
+    BaseAlchemy = 19,
+    BaseFletching = 20,
+    CraftedCooking = 21,
+    CraftedAlchemy = 22,
+    CraftedFletching = 23,
+    Player = 24,
+    Vendor = 25,
+    Door = 26,
+    Corpse = 27,
+    Lifestone = 28,
+    HealingKit = 29,
+    Lockpick = 30,
+    WandStaffOrb = 31,
+    Bundle = 32,
+    Book = 33,
+    Journal = 34,
+    Sign = 35,
+    Housing = 36,
+    Npc = 37,
+    Foci = 38,
+    Salvage = 39,
+    Ust = 40,
+    Services = 41,
+    Scroll = 42,
+    Bindstone = 43,
+    Static = 44,
+}
+
+#[cfg(test)]
+mod object_class_tests {
+    use super::*;
+
+    /// Asserts integer values match `Chorizite.Common/Enums/ObjectClass.cs:9-55`
+    /// (vendored HEAD `e3b3bd2`) — C# enum without explicit discriminants,
+    /// so values follow declaration order starting at `Unknown = 0`.
+    #[test]
+    fn object_class_values_match_chorizite() {
+        assert_eq!(ObjectClass::Unknown as u32, 0);
+        assert_eq!(ObjectClass::MeleeWeapon as u32, 1);
+        assert_eq!(ObjectClass::Armor as u32, 2);
+        assert_eq!(ObjectClass::Clothing as u32, 3);
+        assert_eq!(ObjectClass::Jewelry as u32, 4);
+        assert_eq!(ObjectClass::Monster as u32, 5);
+        assert_eq!(ObjectClass::Food as u32, 6);
+        assert_eq!(ObjectClass::Money as u32, 7);
+        assert_eq!(ObjectClass::Misc as u32, 8);
+        assert_eq!(ObjectClass::MissileWeapon as u32, 9);
+        assert_eq!(ObjectClass::Container as u32, 10);
+        assert_eq!(ObjectClass::Gem as u32, 11);
+        assert_eq!(ObjectClass::SpellComponent as u32, 12);
+        assert_eq!(ObjectClass::Key as u32, 13);
+        assert_eq!(ObjectClass::Portal as u32, 14);
+        assert_eq!(ObjectClass::TradeNote as u32, 15);
+        assert_eq!(ObjectClass::ManaStone as u32, 16);
+        assert_eq!(ObjectClass::Plant as u32, 17);
+        assert_eq!(ObjectClass::BaseCooking as u32, 18);
+        assert_eq!(ObjectClass::BaseAlchemy as u32, 19);
+        assert_eq!(ObjectClass::BaseFletching as u32, 20);
+        assert_eq!(ObjectClass::CraftedCooking as u32, 21);
+        assert_eq!(ObjectClass::CraftedAlchemy as u32, 22);
+        assert_eq!(ObjectClass::CraftedFletching as u32, 23);
+        assert_eq!(ObjectClass::Player as u32, 24);
+        assert_eq!(ObjectClass::Vendor as u32, 25);
+        assert_eq!(ObjectClass::Door as u32, 26);
+        assert_eq!(ObjectClass::Corpse as u32, 27);
+        assert_eq!(ObjectClass::Lifestone as u32, 28);
+        assert_eq!(ObjectClass::HealingKit as u32, 29);
+        assert_eq!(ObjectClass::Lockpick as u32, 30);
+        assert_eq!(ObjectClass::WandStaffOrb as u32, 31);
+        assert_eq!(ObjectClass::Bundle as u32, 32);
+        assert_eq!(ObjectClass::Book as u32, 33);
+        assert_eq!(ObjectClass::Journal as u32, 34);
+        assert_eq!(ObjectClass::Sign as u32, 35);
+        assert_eq!(ObjectClass::Housing as u32, 36);
+        assert_eq!(ObjectClass::Npc as u32, 37);
+        assert_eq!(ObjectClass::Foci as u32, 38);
+        assert_eq!(ObjectClass::Salvage as u32, 39);
+        assert_eq!(ObjectClass::Ust as u32, 40);
+        assert_eq!(ObjectClass::Services as u32, 41);
+        assert_eq!(ObjectClass::Scroll as u32, 42);
+        assert_eq!(ObjectClass::Bindstone as u32, 43);
+        assert_eq!(ObjectClass::Static as u32, 44);
+
+        // Round-trip via FromRepr
+        assert_eq!(ObjectClass::from_repr(0), Some(ObjectClass::Unknown));
+        assert_eq!(ObjectClass::from_repr(28), Some(ObjectClass::Lifestone));
+        assert_eq!(ObjectClass::from_repr(44), Some(ObjectClass::Static));
+        assert_eq!(ObjectClass::from_repr(45), None);
+        assert_eq!(ObjectClass::from_repr(100), None);
+
+        // Default value
+        assert_eq!(ObjectClass::default(), ObjectClass::Unknown);
+    }
 }

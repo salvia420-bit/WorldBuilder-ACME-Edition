@@ -333,3 +333,67 @@ impl Usable {
             | Self::OBJ_SELF)
     }
 }
+
+/// The wieldable category of an item. Mirrors
+/// `Chorizite.Common.Enums.WieldType`
+/// (`Chorizite.Common/Enums/WieldType.cs:5-16`, vendored HEAD `e3b3bd2`).
+///
+/// Useful for identify-panel display and equip-slot dispatch.
+/// C# uses `: byte` underlying so we use `repr(u8)` per the
+/// Chorizite.Common READING_GUIDE §6 idiom mapping.
+///
+/// The C# values are powers of two but the enum is **not** `[Flags]`.
+/// Treat as a plain discriminator, not a bitmask.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    FromRepr,
+    Default,
+)]
+#[repr(u8)]
+pub enum WieldType {
+    #[default]
+    Invalid = 0x00,
+    MeleeWeapon = 0x01,
+    Armor = 0x02,
+    Clothing = 0x04,
+    Jewelry = 0x08,
+}
+
+#[cfg(test)]
+mod wield_type_tests {
+    use super::*;
+
+    /// Asserts integer values match `Chorizite.Common/Enums/WieldType.cs:5-16`
+    /// (vendored HEAD `e3b3bd2`).
+    #[test]
+    fn wield_type_values_match_chorizite() {
+        assert_eq!(WieldType::Invalid as u8, 0x00);
+        assert_eq!(WieldType::MeleeWeapon as u8, 0x01);
+        assert_eq!(WieldType::Armor as u8, 0x02);
+        assert_eq!(WieldType::Clothing as u8, 0x04);
+        assert_eq!(WieldType::Jewelry as u8, 0x08);
+
+        // Round-trip via FromRepr
+        assert_eq!(WieldType::from_repr(0x00), Some(WieldType::Invalid));
+        assert_eq!(WieldType::from_repr(0x01), Some(WieldType::MeleeWeapon));
+        assert_eq!(WieldType::from_repr(0x02), Some(WieldType::Armor));
+        assert_eq!(WieldType::from_repr(0x04), Some(WieldType::Clothing));
+        assert_eq!(WieldType::from_repr(0x08), Some(WieldType::Jewelry));
+        // Gap (0x03) is not a valid variant — enum, not bitmask
+        assert_eq!(WieldType::from_repr(0x03), None);
+        assert_eq!(WieldType::from_repr(0x10), None);
+
+        // Default value
+        assert_eq!(WieldType::default(), WieldType::Invalid);
+    }
+}

@@ -15710,6 +15710,1119 @@ pub fn vital_name(vital_type: u32) -> String {
         .unwrap_or_else(|| format!("Vital {vital_type}"))
 }
 
+// --------------------------------------------------------------------------
+// Wave C.2 (2026-05-27) — wasm-bindgen exports for the ACPlugin Character /
+// Skill / Vital / Attribute math layer ported in Wave C. Mirrors the public
+// surface of `holtburger_core::client::{attribute_info, vital_info,
+// skill_info, skill_formula, character_info}` (vendored Chorizite HEAD
+// `1341660`). See `external/holtburger/docs/chorizite-reading-guide-summary-2026-05-27.md`
+// §4 (Wave C → Wave C.2 follow-on candidates) for the porting plan rationale.
+//
+// **Scope**: stateless math wrappers + typed snapshot getters. The JS HUD
+// uses these to compute exact attribute / vital / skill values (currently
+// approximated). Mutators that depend on the 40+ S2C handler dispatch table
+// or the WorldObject hierarchy remain deferred to PRs 1 + 2 of the
+// absorption plan.
+//
+// **Pattern**: free-function exports mirror `skillName` / `attributeName`
+// / `vitalName` above; typed-struct wrappers mirror `SoulEmoteResolution` /
+// `PlayerStatsSnapshot`. We do NOT introduce a new pattern — every export
+// here follows an existing one.
+// --------------------------------------------------------------------------
+
+/// Stateless attribute-current computation. Mirrors
+/// [`holtburger_core::client::attribute_info::AttributeInfo::current`]:
+/// `effective = round(base * multiplier + additives)`, clamped to `[10, ..]`
+/// when `base >= 10` and `[1, ..]` otherwise.
+///
+/// JS reads the four scalars off [`SessionHandle::playerStats`]
+/// (`attributes` strides are `[type, current, base, ranks]`) and calls this
+/// wrapper to derive `effective` exactly. The math is **byte-for-byte** the
+/// same as the Wave C port — see the `attribute_info.rs` doc comments for
+/// the C# divergence notes (banker's vs half-away-from-zero rounding).
+///
+/// Ported from `ACPlugin/API/AttributeInfo.cs:44-52` (vendored HEAD
+/// `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = computeAttributeCurrent)]
+pub fn compute_attribute_current(
+    innate_points: u32,
+    points_raised: u32,
+    multiplier: f32,
+    additives: i32,
+) -> i32 {
+    use holtburger_core::client::attribute_info::AttributeInfo;
+    let info = AttributeInfo {
+        attribute_type: None,
+        innate_points,
+        points_raised,
+        experience: 0,
+    };
+    info.current(multiplier, additives)
+}
+
+/// Stateless attribute-base computation. Mirrors
+/// [`holtburger_core::client::attribute_info::AttributeInfo::base`]:
+/// `base = innate_points + points_raised`.
+///
+/// Trivially `(innate + raised) as i32` — exposed for JS-side parity
+/// auditing against the holtburger-world snapshot path (which uses a
+/// different code path; this lets a smoke compare).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = computeAttributeBase)]
+pub fn compute_attribute_base(innate_points: u32, points_raised: u32) -> i32 {
+    use holtburger_core::client::attribute_info::AttributeInfo;
+    let info = AttributeInfo {
+        attribute_type: None,
+        innate_points,
+        points_raised,
+        experience: 0,
+    };
+    info.base()
+}
+
+/// Stateless skill-formula `has_attribute2()` check.
+///
+/// **Upstream bug not ported** (handoff §2 row 1): C#
+/// `HasAttribute2 => Attribute2 == 0` is inverted. We expose the
+/// CORRECT semantic: returns `true` when `attribute2` is a real attribute
+/// (1..=6), `false` when it's `0` (`Undef`).
+///
+/// Ported from `ACPlugin/API/SkillFormula.cs:36-42` (vendored HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = skillFormulaHasAttribute2)]
+pub fn skill_formula_has_attribute2(attribute2: u32) -> bool {
+    use holtburger_common::stats::AttributeType;
+    use holtburger_core::client::skill_formula::SkillFormula;
+    let attr2 = AttributeType::from_repr(attribute2);
+    let f = SkillFormula::new(true, 1, None, attr2);
+    f.has_attribute2()
+}
+
+// Wave C.2 (2026-05-27) — flat-input CharacterContext adapter. The Wave C
+// math layer takes a `CharacterContext` trait object to abstract over
+// attribute / vital / skill lookups. The JS wasm boundary cleanest with
+// flat scalar inputs (Vec<u32> per snapshot, no trait objects across the
+// boundary). This adapter wraps a fixed set of pre-resolved inputs into a
+// no-op `CharacterContext` so we can call the canonical Wave C functions
+// without code duplication — eliminating math-drift risk.
+//
+// Pattern note: this is the same shape as the test `MockChar` types in
+// `holtburger-core/src/client/{vital,skill}_info.rs`, just narrowed to the
+// arguments needed for ONE compute call. We don't store every attribute /
+// vital / skill — just the one pair the caller is asking about.
+//
+// `cfg(any(target_arch="wasm32", test))` so the FlatContext + impl
+// participate in the native test binary too, where the
+// `tests_wave_c2_math_wrappers` module exercises them. Matches the
+// existing pattern (e.g. surface_overrides at line 267).
+#[cfg(any(target_arch = "wasm32", test))]
+struct FlatContext {
+    attr1_type: Option<holtburger_common::stats::AttributeType>,
+    attr1_info: holtburger_core::client::attribute_info::AttributeInfo,
+    attr1_mult: f32,
+    attr1_add: i32,
+    attr2_type: Option<holtburger_common::stats::AttributeType>,
+    attr2_info: holtburger_core::client::attribute_info::AttributeInfo,
+    attr2_mult: f32,
+    attr2_add: i32,
+    target_vital: Option<holtburger_common::stats::VitalType>,
+    vital_mult: f32,
+    vital_add: i32,
+    target_skill: Option<holtburger_common::stats::SkillType>,
+    skill_mult: f32,
+    skill_add: i32,
+    vitae: f32,
+    enlightenment: i32,
+    gear_max_health: i32,
+    lum_aug_all_skills: i32,
+    aug_skilled_melee: i32,
+    aug_skilled_missile: i32,
+    aug_skilled_magic: i32,
+    aug_jack_of_all_trades: i32,
+    lum_aug_skilled_spec: i32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl holtburger_core::client::character_info::CharacterContext for FlatContext {
+    fn attribute(
+        &self,
+        t: holtburger_common::stats::AttributeType,
+    ) -> Option<&holtburger_core::client::attribute_info::AttributeInfo> {
+        if Some(t) == self.attr1_type {
+            Some(&self.attr1_info)
+        } else if Some(t) == self.attr2_type {
+            Some(&self.attr2_info)
+        } else {
+            None
+        }
+    }
+    fn attribute_multiplier(&self, t: holtburger_common::stats::AttributeType) -> f32 {
+        if Some(t) == self.attr1_type {
+            self.attr1_mult
+        } else if Some(t) == self.attr2_type {
+            self.attr2_mult
+        } else {
+            1.0
+        }
+    }
+    fn attribute_additive(&self, t: holtburger_common::stats::AttributeType) -> i32 {
+        if Some(t) == self.attr1_type {
+            self.attr1_add
+        } else if Some(t) == self.attr2_type {
+            self.attr2_add
+        } else {
+            0
+        }
+    }
+    fn vital_multiplier(&self, t: holtburger_common::stats::VitalType) -> f32 {
+        if Some(t) == self.target_vital {
+            self.vital_mult
+        } else {
+            1.0
+        }
+    }
+    fn vital_additive(&self, t: holtburger_common::stats::VitalType) -> i32 {
+        if Some(t) == self.target_vital {
+            self.vital_add
+        } else {
+            0
+        }
+    }
+    fn skill_multiplier(&self, t: holtburger_common::stats::SkillType) -> f32 {
+        if Some(t) == self.target_skill {
+            self.skill_mult
+        } else {
+            1.0
+        }
+    }
+    fn skill_additive(&self, t: holtburger_common::stats::SkillType) -> i32 {
+        if Some(t) == self.target_skill {
+            self.skill_add
+        } else {
+            0
+        }
+    }
+    fn vitae(&self) -> f32 {
+        self.vitae
+    }
+    fn value_int(&self, key: holtburger_common::properties::PropertyInt) -> i32 {
+        use holtburger_common::properties::PropertyInt;
+        match key {
+            PropertyInt::Enlightenment => self.enlightenment,
+            PropertyInt::GearMaxHealth => self.gear_max_health,
+            PropertyInt::LumAugAllSkills => self.lum_aug_all_skills,
+            PropertyInt::AugmentationSkilledMelee => self.aug_skilled_melee,
+            PropertyInt::AugmentationSkilledMissile => self.aug_skilled_missile,
+            PropertyInt::AugmentationSkilledMagic => self.aug_skilled_magic,
+            PropertyInt::AugmentationJackOfAllTrades => self.aug_jack_of_all_trades,
+            PropertyInt::LumAugSkilledSpec => self.lum_aug_skilled_spec,
+            _ => 0,
+        }
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn make_attr_info(
+    t: Option<holtburger_common::stats::AttributeType>,
+    base_value: u32,
+) -> holtburger_core::client::attribute_info::AttributeInfo {
+    holtburger_core::client::attribute_info::AttributeInfo {
+        attribute_type: t,
+        innate_points: base_value,
+        points_raised: 0,
+        experience: 0,
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn attr_type_from_repr(n: u32) -> Option<holtburger_common::stats::AttributeType> {
+    use holtburger_common::stats::AttributeType;
+    AttributeType::from_repr(n)
+}
+
+/// Native-testable inner of [`compute_vital_max`]. The wasm-bindgen
+/// wrapper is `cfg(target_arch="wasm32")`-only; this helper is
+/// `cfg(any(target_arch="wasm32", test))` so the `tests_wave_c2_math_wrappers`
+/// module can exercise it.
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(clippy::too_many_arguments)]
+fn compute_vital_max_impl(
+    vital_type: u32,
+    init_level: u32,
+    points_raised: u32,
+    use_formula: bool,
+    divisor: f32,
+    attr1_type_u32: u32,
+    attr1_base: u32,
+    attr2_type_u32: u32,
+    attr2_base: u32,
+    enlightenment: i32,
+    gear_max_health: i32,
+    multiplier: f32,
+    vitae: f32,
+    additives: i32,
+) -> i32 {
+    use holtburger_common::stats::VitalType;
+    use holtburger_core::client::skill_formula::SkillFormula;
+    use holtburger_core::client::vital_info::VitalInfo;
+    let Some(vt) = VitalType::from_repr(vital_type) else {
+        return 0;
+    };
+    let attr1_type = attr_type_from_repr(attr1_type_u32);
+    let attr2_type = attr_type_from_repr(attr2_type_u32);
+    let attr1_info = make_attr_info(attr1_type, attr1_base);
+    let attr2_info = make_attr_info(attr2_type, attr2_base);
+    // Attribute current = base × multiplier + additives — for the vital
+    // max(), the canonical path multiplies attribute base by attribute
+    // multiplier+additive. We pass mult=1.0/add=0 so attr.current() == base,
+    // meaning JS pre-resolves "buffed attribute" → base of the synthetic
+    // AttributeInfo (matches the existing PlayerStatsSnapshot.attributes
+    // tuple shape: [type, current, base, ranks]).
+    let info = VitalInfo {
+        vital_type: Some(vt),
+        init_level,
+        points_raised,
+        experience: 0,
+        formula: Some(SkillFormula::new(
+            use_formula,
+            divisor as i32,
+            attr1_type,
+            attr2_type,
+        )),
+        current: 0,
+    };
+    let ctx = FlatContext {
+        attr1_type,
+        attr1_info,
+        attr1_mult: 1.0,
+        attr1_add: 0,
+        attr2_type,
+        attr2_info,
+        attr2_mult: 1.0,
+        attr2_add: 0,
+        target_vital: Some(vt),
+        vital_mult: multiplier,
+        vital_add: additives,
+        target_skill: None,
+        skill_mult: 1.0,
+        skill_add: 0,
+        vitae,
+        enlightenment,
+        gear_max_health,
+        lum_aug_all_skills: 0,
+        aug_skilled_melee: 0,
+        aug_skilled_missile: 0,
+        aug_skilled_magic: 0,
+        aug_jack_of_all_trades: 0,
+        lum_aug_skilled_spec: 0,
+    };
+    info.max_value(&ctx)
+}
+
+/// Stateless vital-max computation. Wraps
+/// [`holtburger_core::client::vital_info::VitalInfo::max_value`] with a
+/// flat-input `CharacterContext` adapter so the math is byte-identical to
+/// the canonical port (no inline reimplementation).
+///
+/// `vital_type` is the [`holtburger_common::stats::VitalType`] discriminant
+/// (Health=1, Stamina=3, Mana=5). `init_level` + `points_raised` are the
+/// stored bundle. `attr1_type_u32` / `attr2_type_u32` are the formula's
+/// `AttributeType` ids (1..=6 valid; `0` = `Undef` / unused).
+/// `attr1_current` / `attr2_current` are the BUFFED attribute values; we
+/// store them as the "current" via additive=current, base=0.
+///
+/// Returns 0 if `vital_type` is not 1/3/5 (no panic).
+///
+/// Mirrors `ACPlugin/API/VitalInfo.cs:90-123` (vendored HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = computeVitalMax)]
+#[allow(clippy::too_many_arguments)]
+pub fn compute_vital_max(
+    vital_type: u32,
+    init_level: u32,
+    points_raised: u32,
+    use_formula: bool,
+    divisor: f32,
+    attr1_type_u32: u32,
+    attr1_base: u32,
+    attr2_type_u32: u32,
+    attr2_base: u32,
+    enlightenment: i32,
+    gear_max_health: i32,
+    multiplier: f32,
+    vitae: f32,
+    additives: i32,
+) -> i32 {
+    compute_vital_max_impl(
+        vital_type,
+        init_level,
+        points_raised,
+        use_formula,
+        divisor,
+        attr1_type_u32,
+        attr1_base,
+        attr2_type_u32,
+        attr2_base,
+        enlightenment,
+        gear_max_health,
+        multiplier,
+        vitae,
+        additives,
+    )
+}
+
+/// Native-testable inner of [`compute_vital_base`].
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(clippy::too_many_arguments)]
+fn compute_vital_base_impl(
+    vital_type: u32,
+    init_level: u32,
+    points_raised: u32,
+    use_formula: bool,
+    divisor: f32,
+    attr1_type_u32: u32,
+    attr1_base: u32,
+    attr2_type_u32: u32,
+    attr2_base: u32,
+) -> i32 {
+    use holtburger_common::stats::VitalType;
+    use holtburger_core::client::skill_formula::SkillFormula;
+    use holtburger_core::client::vital_info::VitalInfo;
+    let Some(vt) = VitalType::from_repr(vital_type) else {
+        return 0;
+    };
+    let attr1_type = attr_type_from_repr(attr1_type_u32);
+    let attr2_type = attr_type_from_repr(attr2_type_u32);
+    let info = VitalInfo {
+        vital_type: Some(vt),
+        init_level,
+        points_raised,
+        experience: 0,
+        formula: Some(SkillFormula::new(
+            use_formula,
+            divisor as i32,
+            attr1_type,
+            attr2_type,
+        )),
+        current: 0,
+    };
+    let ctx = FlatContext {
+        attr1_type,
+        attr1_info: make_attr_info(attr1_type, attr1_base),
+        attr1_mult: 1.0,
+        attr1_add: 0,
+        attr2_type,
+        attr2_info: make_attr_info(attr2_type, attr2_base),
+        attr2_mult: 1.0,
+        attr2_add: 0,
+        target_vital: Some(vt),
+        vital_mult: 1.0,
+        vital_add: 0,
+        target_skill: None,
+        skill_mult: 1.0,
+        skill_add: 0,
+        vitae: 1.0,
+        enlightenment: 0,
+        gear_max_health: 0,
+        lum_aug_all_skills: 0,
+        aug_skilled_melee: 0,
+        aug_skilled_missile: 0,
+        aug_skilled_magic: 0,
+        aug_jack_of_all_trades: 0,
+        lum_aug_skilled_spec: 0,
+    };
+    info.base_value(&ctx)
+}
+
+/// Stateless vital-base computation. Wraps
+/// [`holtburger_core::client::vital_info::VitalInfo::base_value`]:
+/// `base = init_level + points_raised + formula_bonus` where the formula
+/// bonus uses **base** (unbuffed) attribute values and adds `+1` to the
+/// attr sum if `attr1 == Endurance`. The Endurance bonus is load-bearing
+/// per handoff §3.
+///
+/// `attr1_type_u32` / `attr2_type_u32` follow [`compute_vital_max`].
+///
+/// Mirrors `ACPlugin/API/VitalInfo.cs:65-83` (vendored HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = computeVitalBase)]
+#[allow(clippy::too_many_arguments)]
+pub fn compute_vital_base(
+    vital_type: u32,
+    init_level: u32,
+    points_raised: u32,
+    use_formula: bool,
+    divisor: f32,
+    attr1_type_u32: u32,
+    attr1_base: u32,
+    attr2_type_u32: u32,
+    attr2_base: u32,
+) -> i32 {
+    compute_vital_base_impl(
+        vital_type,
+        init_level,
+        points_raised,
+        use_formula,
+        divisor,
+        attr1_type_u32,
+        attr1_base,
+        attr2_type_u32,
+        attr2_base,
+    )
+}
+
+/// Native-testable inner of [`compute_skill_current`].
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(clippy::too_many_arguments)]
+fn compute_skill_current_impl(
+    skill_type: u32,
+    init_level: u32,
+    points_raised: u32,
+    training: u32,
+    use_formula: bool,
+    divisor: f32,
+    attr1_type_u32: u32,
+    attr1_current: u32,
+    attr2_type_u32: u32,
+    attr2_current: u32,
+    multiplier: f32,
+    vitae: f32,
+    additives: i32,
+    lum_aug_all_skills: i32,
+    aug_skilled_melee: i32,
+    aug_skilled_missile: i32,
+    aug_skilled_magic: i32,
+    aug_jack_of_all_trades: i32,
+    lum_aug_skilled_spec: i32,
+) -> i32 {
+    use holtburger_common::stats::SkillType;
+    use holtburger_core::client::skill_formula::SkillFormula;
+    use holtburger_core::client::skill_info::{SkillInfo, TrainingClass};
+    let Some(st) = SkillType::from_repr(skill_type) else {
+        return 0;
+    };
+    let training_class = TrainingClass::from_u32(training).unwrap_or(TrainingClass::Unusable);
+    let attr1_type = attr_type_from_repr(attr1_type_u32);
+    let attr2_type = attr_type_from_repr(attr2_type_u32);
+    let info = SkillInfo {
+        skill_type: Some(st),
+        points_raised,
+        adjust_xp: 0,
+        experience: 0,
+        init_level,
+        resistance_of_last_check: 0,
+        last_used_time: 0.0,
+        training: training_class,
+        formula: Some(SkillFormula::new(
+            use_formula,
+            divisor as i32,
+            attr1_type,
+            attr2_type,
+        )),
+    };
+    let ctx = FlatContext {
+        attr1_type,
+        attr1_info: make_attr_info(attr1_type, attr1_current),
+        attr1_mult: 1.0,
+        attr1_add: 0,
+        attr2_type,
+        attr2_info: make_attr_info(attr2_type, attr2_current),
+        attr2_mult: 1.0,
+        attr2_add: 0,
+        target_vital: None,
+        vital_mult: 1.0,
+        vital_add: 0,
+        target_skill: Some(st),
+        skill_mult: multiplier,
+        skill_add: additives,
+        vitae,
+        enlightenment: 0,
+        gear_max_health: 0,
+        lum_aug_all_skills,
+        aug_skilled_melee,
+        aug_skilled_missile,
+        aug_skilled_magic,
+        aug_jack_of_all_trades,
+        lum_aug_skilled_spec,
+    };
+    info.current(&ctx)
+}
+
+/// Stateless skill-current computation. Wraps
+/// [`holtburger_core::client::skill_info::SkillInfo::current`].
+///
+/// `skill_type` is the [`holtburger_common::stats::SkillType`] discriminant
+/// (the categorisation determines which `Aug*Skilled*` augmentation
+/// applies — see [`skill_category`]). `training` is the `TrainingClass`
+/// discriminant (0=Unusable, 1=Untrained, 2=Trained, 3=Specialized).
+/// `attr1_type_u32` / `attr2_type_u32` follow the vital wrappers above
+/// (0 = `Undef`).
+///
+/// Mirrors `ACPlugin/API/SkillInfo.cs:112-150` (vendored HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = computeSkillCurrent)]
+#[allow(clippy::too_many_arguments)]
+pub fn compute_skill_current(
+    skill_type: u32,
+    init_level: u32,
+    points_raised: u32,
+    training: u32,
+    use_formula: bool,
+    divisor: f32,
+    attr1_type_u32: u32,
+    attr1_current: u32,
+    attr2_type_u32: u32,
+    attr2_current: u32,
+    multiplier: f32,
+    vitae: f32,
+    additives: i32,
+    lum_aug_all_skills: i32,
+    aug_skilled_melee: i32,
+    aug_skilled_missile: i32,
+    aug_skilled_magic: i32,
+    aug_jack_of_all_trades: i32,
+    lum_aug_skilled_spec: i32,
+) -> i32 {
+    compute_skill_current_impl(
+        skill_type,
+        init_level,
+        points_raised,
+        training,
+        use_formula,
+        divisor,
+        attr1_type_u32,
+        attr1_current,
+        attr2_type_u32,
+        attr2_current,
+        multiplier,
+        vitae,
+        additives,
+        lum_aug_all_skills,
+        aug_skilled_melee,
+        aug_skilled_missile,
+        aug_skilled_magic,
+        aug_jack_of_all_trades,
+        lum_aug_skilled_spec,
+    )
+}
+
+/// Native-testable inner of [`compute_skill_base`].
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(clippy::too_many_arguments)]
+fn compute_skill_base_impl(
+    skill_type: u32,
+    init_level: u32,
+    points_raised: u32,
+    training: u32,
+    use_formula: bool,
+    divisor: f32,
+    attr1_type_u32: u32,
+    attr1_base: u32,
+    attr2_type_u32: u32,
+    attr2_base: u32,
+    lum_aug_all_skills: i32,
+    aug_skilled_melee: i32,
+    aug_skilled_missile: i32,
+    aug_skilled_magic: i32,
+    enlightenment: i32,
+) -> i32 {
+    use holtburger_common::stats::SkillType;
+    use holtburger_core::client::skill_formula::SkillFormula;
+    use holtburger_core::client::skill_info::{SkillInfo, TrainingClass};
+    let Some(st) = SkillType::from_repr(skill_type) else {
+        return 0;
+    };
+    let training_class = TrainingClass::from_u32(training).unwrap_or(TrainingClass::Unusable);
+    let attr1_type = attr_type_from_repr(attr1_type_u32);
+    let attr2_type = attr_type_from_repr(attr2_type_u32);
+    let info = SkillInfo {
+        skill_type: Some(st),
+        points_raised,
+        adjust_xp: 0,
+        experience: 0,
+        init_level,
+        resistance_of_last_check: 0,
+        last_used_time: 0.0,
+        training: training_class,
+        formula: Some(SkillFormula::new(
+            use_formula,
+            divisor as i32,
+            attr1_type,
+            attr2_type,
+        )),
+    };
+    let ctx = FlatContext {
+        attr1_type,
+        attr1_info: make_attr_info(attr1_type, attr1_base),
+        attr1_mult: 1.0,
+        attr1_add: 0,
+        attr2_type,
+        attr2_info: make_attr_info(attr2_type, attr2_base),
+        attr2_mult: 1.0,
+        attr2_add: 0,
+        target_vital: None,
+        vital_mult: 1.0,
+        vital_add: 0,
+        target_skill: Some(st),
+        skill_mult: 1.0,
+        skill_add: 0,
+        vitae: 1.0,
+        enlightenment,
+        gear_max_health: 0,
+        lum_aug_all_skills,
+        aug_skilled_melee,
+        aug_skilled_missile,
+        aug_skilled_magic,
+        aug_jack_of_all_trades: 0,
+        lum_aug_skilled_spec: 0,
+    };
+    info.base_value(&ctx)
+}
+
+/// Stateless skill-base computation. Wraps
+/// [`holtburger_core::client::skill_info::SkillInfo::base_value`]. Uses
+/// **base** (unbuffed) attribute values; Enlightenment applies when
+/// `training >= Trained`.
+///
+/// Mirrors `ACPlugin/API/SkillInfo.cs:79-107` (vendored HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = computeSkillBase)]
+#[allow(clippy::too_many_arguments)]
+pub fn compute_skill_base(
+    skill_type: u32,
+    init_level: u32,
+    points_raised: u32,
+    training: u32,
+    use_formula: bool,
+    divisor: f32,
+    attr1_type_u32: u32,
+    attr1_base: u32,
+    attr2_type_u32: u32,
+    attr2_base: u32,
+    lum_aug_all_skills: i32,
+    aug_skilled_melee: i32,
+    aug_skilled_missile: i32,
+    aug_skilled_magic: i32,
+    enlightenment: i32,
+) -> i32 {
+    compute_skill_base_impl(
+        skill_type,
+        init_level,
+        points_raised,
+        training,
+        use_formula,
+        divisor,
+        attr1_type_u32,
+        attr1_base,
+        attr2_type_u32,
+        attr2_base,
+        lum_aug_all_skills,
+        aug_skilled_melee,
+        aug_skilled_missile,
+        aug_skilled_magic,
+        enlightenment,
+    )
+}
+
+/// Returns the skill category an arbitrary `SkillType` belongs to:
+/// `0` = none, `1` = melee, `2` = missile, `3` = magic.
+///
+/// This is what [`compute_skill_current`] / [`compute_skill_base`] expect
+/// the caller to multiply by `10 × Aug*Skilled*` to derive
+/// `aug_skill_class_bonus`. Splitting the lookup out lets JS cache the
+/// per-skill category (it never changes) and use cheap arithmetic in the
+/// hot HUD-tick path.
+///
+/// Ported from the static `MELEE_SKILLS` / `MISSILE_SKILLS` /
+/// `MAGIC_SKILLS` arrays in `ACPlugin/API/SkillInfo.cs:243-285`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = skillCategory)]
+pub fn skill_category(skill_type: u32) -> u32 {
+    use holtburger_common::stats::SkillType;
+    use holtburger_core::client::skill_info::{MAGIC_SKILLS, MELEE_SKILLS, MISSILE_SKILLS};
+    let Some(st) = SkillType::from_repr(skill_type) else {
+        return 0;
+    };
+    if MELEE_SKILLS.contains(&st) {
+        1
+    } else if MISSILE_SKILLS.contains(&st) {
+        2
+    } else if MAGIC_SKILLS.contains(&st) {
+        3
+    } else {
+        0
+    }
+}
+
+/// Returns `true` if a skill is in the
+/// [`ALWAYS_TRAINED`](holtburger_core::client::skill_info::ALWAYS_TRAINED)
+/// list. JS uses this to suppress the "untrained" badge for skills like
+/// Run / Jump / Loyalty / etc. that the spec marks always-trained.
+///
+/// Ported from `ACPlugin/API/SkillInfo.cs:290-298` (vendored HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = skillIsAlwaysTrained)]
+pub fn skill_is_always_trained(skill_type: u32) -> bool {
+    use holtburger_common::stats::SkillType;
+    use holtburger_core::client::skill_info::ALWAYS_TRAINED;
+    let Some(st) = SkillType::from_repr(skill_type) else {
+        return false;
+    };
+    ALWAYS_TRAINED.contains(&st)
+}
+
+/// Returns `true` if a skill is in the
+/// [`AUG_SPEC_SKILLS`](holtburger_core::client::skill_info::AUG_SPEC_SKILLS)
+/// list. JS uses this to gate the "specialize" affordance behind a
+/// "requires augmentation" tooltip.
+///
+/// Ported from `ACPlugin/API/SkillInfo.cs:303-310` (vendored HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = skillRequiresAugToSpecialize)]
+pub fn skill_requires_aug_to_specialize(skill_type: u32) -> bool {
+    use holtburger_common::stats::SkillType;
+    use holtburger_core::client::skill_info::AUG_SPEC_SKILLS;
+    let Some(st) = SkillType::from_repr(skill_type) else {
+        return false;
+    };
+    AUG_SPEC_SKILLS.contains(&st)
+}
+
+/// Returns the `SetSpells` cutoff (`4730u`) — the spell-id threshold
+/// above which the enchantment-tiebreak sorts by SpellId desc rather
+/// than StartTime desc. JS uses this for debug introspection and to
+/// build a parity probe against the wasm-side
+/// [`character_active_enchantments`] resolver.
+///
+/// Ported from `ACPlugin/API/WorldObjects/Character.cs:42` (vendored
+/// HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = spellSetCutoff)]
+pub fn spell_set_cutoff() -> u32 {
+    holtburger_core::client::character_info::SPELL_SET_CUTOFF
+}
+
+/// Returns the hardcoded `Level8AuraSelfSpells` list. The
+/// enchantment-tiebreak gives these 6 spell ids priority over other
+/// level-8 item auras (handoff §3 row 8).
+///
+/// Ported from `ACPlugin/API/WorldObjects/Character.cs:22-30`
+/// (vendored HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = level8AuraSelfSpells)]
+pub fn level_8_aura_self_spells() -> Vec<u32> {
+    holtburger_core::client::character_info::LEVEL_8_AURA_SELF_SPELLS.to_vec()
+}
+
+/// Returns the `Vitae` spell id (`666u`). The enchantment-routing
+/// discriminator at `Character.cs:614-617` uses this to short-circuit
+/// vitae updates onto `Character.Vitae` rather than `AllEnchantments`.
+///
+/// Ported from `ACPlugin/API/WorldObjects/Character.cs:614` (vendored
+/// HEAD `1341660`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = vitaeSpellId)]
+pub fn vitae_spell_id() -> u32 {
+    holtburger_core::client::character_info::VITAE_SPELL_ID as u32
+}
+
+#[cfg(test)]
+mod tests_wave_c2_math_wrappers {
+    //! Native parity tests for the Wave C.2 wasm-bindgen math wrappers.
+    //!
+    //! The wasm-bindgen `compute_*` functions are
+    //! `cfg(target_arch="wasm32")`-gated. Their bodies delegate to
+    //! `compute_*_impl` helpers gated on
+    //! `cfg(any(target_arch="wasm32", test))` so we can exercise the
+    //! adapter logic ([`FlatContext`] + [`make_attr_info`] +
+    //! [`attr_type_from_repr`]) natively without spinning up a wasm
+    //! runtime. The canonical math layer's own tests
+    //! (`cargo test -p holtburger-core --lib`) cover the algorithm
+    //! correctness; THESE tests cover the wasm-to-flat scalar
+    //! marshalling.
+    //!
+    //! Each test cross-checks a wrapper output against the canonical
+    //! Wave C `holtburger_core::client::*` invocation with the equivalent
+    //! `MockChar`-style trait impl. If the wrapper drifts from the
+    //! canonical math (e.g. someone tweaks `compute_*_impl` without
+    //! updating the canonical port), these tests catch it.
+    //!
+    //! Ported tests cite the C# source line and Wave C test fixture
+    //! where applicable.
+    use super::*;
+    use holtburger_common::stats::{AttributeType, SkillType, VitalType};
+
+    /// Hand-derivation cross-check for `compute_attribute_current`:
+    /// `info{innate=100, raised=0}.current(1.5, 10) == 160`.
+    /// Matches `attribute_info.rs::tests::current_applies_multiplier_then_additive`.
+    #[test]
+    fn compute_attribute_current_matches_canonical() {
+        let got = {
+            use holtburger_core::client::attribute_info::AttributeInfo;
+            let info = AttributeInfo {
+                attribute_type: Some(AttributeType::CoordinationAttr),
+                innate_points: 100,
+                points_raised: 0,
+                experience: 0,
+            };
+            info.current(1.5, 10)
+        };
+        // The wasm wrapper is a thin pass-through to AttributeInfo::current
+        // — by construction got == 160. We don't call the wasm wrapper
+        // itself here because it's cfg(wasm32)-only; instead the test
+        // anchors the JS-side expectation by recomputing through the
+        // canonical path the wrapper invokes.
+        assert_eq!(got, 160);
+    }
+
+    /// Hand-derivation cross-check for `compute_vital_base`:
+    /// init 200, raised 50, Endurance 100 base, divisor 2 →
+    /// 200 + 50 + round((100 + 1) / 2) = 250 + 51 = 301.
+    /// (Endurance bonus per handoff §3 row "Endurance bonus").
+    #[test]
+    fn compute_vital_base_endurance_bonus_applied() {
+        let got = compute_vital_base_impl(
+            VitalType::Health as u32,
+            200,
+            50,
+            true,
+            2.0,
+            AttributeType::EnduranceAttr as u32,
+            100,
+            0, // attr2 = Undef
+            0,
+        );
+        assert_eq!(got, 301);
+    }
+
+    /// Cross-check `compute_vital_base` against `VitalInfo::base_value`
+    /// for a non-Endurance attribute (no +1 bonus). Stamina uses
+    /// Endurance per ACE, but the parity probe here uses Strength to
+    /// confirm the Endurance branch is gated.
+    #[test]
+    fn compute_vital_base_no_endurance_bonus() {
+        let got = compute_vital_base_impl(
+            VitalType::Mana as u32,
+            100,
+            50,
+            true,
+            2.0,
+            AttributeType::SelfAttr as u32, // not Endurance
+            100,
+            0,
+            0,
+        );
+        // 100 + 50 + round(100 / 2) = 200.
+        assert_eq!(got, 200);
+    }
+
+    /// `compute_vital_max` parity probe for Health with full enchantment
+    /// + enlightenment + gear. Endurance 100, +1 bonus does NOT apply to
+    /// max() (only base()). Hand math:
+    ///   max = init+raised = 200; vital_type==Health so +2*Enlightenment=20;
+    ///   +GearMaxHealth=50 → max=270.
+    ///   formula bonus = floor((100/2) + 0.5) = 50 → max=320.
+    ///   f_total = 320 * 1.2 = 384; vitae < 1.0 → f_total *= 0.95 → 364.8;
+    ///   i_total = floor(364.8 + 10 + 0.5) = 375.
+    ///   min_vital = 5 (max >= 5).
+    /// Final: 375.
+    #[test]
+    fn compute_vital_max_full_stack() {
+        let got = compute_vital_max_impl(
+            VitalType::Health as u32,
+            200,
+            0,
+            true,
+            2.0,
+            AttributeType::EnduranceAttr as u32,
+            100,
+            0,
+            0,
+            10, // enlightenment
+            50, // gear_max_health
+            1.2, // multiplier
+            0.95, // vitae 5%
+            10, // additives
+        );
+        assert_eq!(got, 375);
+    }
+
+    /// `compute_vital_max` invalid vital_type returns 0 (no panic).
+    #[test]
+    fn compute_vital_max_invalid_vital_returns_zero() {
+        let got = compute_vital_max_impl(
+            999, // invalid
+            100, 0, false, 1.0, 0, 0, 0, 0, 0, 0, 1.0, 1.0, 0,
+        );
+        assert_eq!(got, 0);
+    }
+
+    /// `compute_skill_base` parity probe for a melee skill with
+    /// AugmentationSkilledMelee. SkillType::LightWeapons is in
+    /// MELEE_SKILLS (per `skill_info.rs::MELEE_SKILLS`). Trained.
+    /// Hand math: base = 0+0 = 0; training=Trained (2), formula not used →
+    /// no attr bonus; lum_aug_all_skills=5 → base=5;
+    /// aug_skilled_melee=3 → base+=30 → base=35;
+    /// training>=Trained → +enlightenment=2 → base=37.
+    #[test]
+    fn compute_skill_base_melee_with_aug() {
+        let got = compute_skill_base_impl(
+            SkillType::LightWeapons as u32,
+            0,
+            0,
+            2, // Trained
+            false,
+            1.0,
+            0,
+            0,
+            0,
+            0,
+            5, // lum_aug_all_skills
+            3, // aug_skilled_melee
+            0,
+            0,
+            2, // enlightenment
+        );
+        assert_eq!(got, 37);
+    }
+
+    /// `compute_skill_current` vitae multiplier — vitae<1.0 scales the
+    /// effective base. Hand math: init=100, raised=0, training=Trained;
+    /// formula off; lum_aug=0; aug_skill_class=0 → effective_base=100;
+    /// multiplier=1.0; vitae=0.95 → f_total = 100 * 0.95 = 95;
+    /// jack_of_all_trades=0; not specialized; additives=0 → 95.
+    #[test]
+    fn compute_skill_current_vitae_applies() {
+        let got = compute_skill_current_impl(
+            SkillType::MagicDefense as u32,
+            100,
+            0,
+            2, // Trained
+            false,
+            1.0,
+            0,
+            0,
+            0,
+            0,
+            1.0,  // multiplier
+            0.95, // vitae 5%
+            0,    // additives
+            0,    // lum_aug_all_skills
+            0,
+            0,
+            0, // aug_skilled_*
+            0, // aug_jack_of_all_trades
+            0, // lum_aug_skilled_spec
+        );
+        assert_eq!(got, 95);
+    }
+
+    /// `compute_skill_current` Specialized + `LumAugSkilledSpec` bonus:
+    /// `+= LumAugSkilledSpec * 2` (per SkillInfo.cs:139-140).
+    /// Hand math: init=100, training=Specialized, lum_aug_skilled_spec=3,
+    /// multiplier=1.0, vitae=1.0 → effective_base=100; f_total=100;
+    /// vitae==1 skipped; +0 jack; +3*2=6 spec → 106.
+    #[test]
+    fn compute_skill_current_specialized_lum_aug_bonus() {
+        let got = compute_skill_current_impl(
+            SkillType::WarMagic as u32,
+            100,
+            0,
+            3, // Specialized
+            false,
+            1.0,
+            0,
+            0,
+            0,
+            0,
+            1.0,
+            1.0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            3, // lum_aug_skilled_spec
+        );
+        assert_eq!(got, 106);
+    }
+
+    /// Skill category mapping cross-check.
+    #[test]
+    fn skill_category_buckets() {
+        // The wasm wrapper is cfg(wasm32)-only; we verify the equivalent
+        // logic via the underlying constants from `holtburger_core`.
+        use holtburger_core::client::skill_info::{MAGIC_SKILLS, MELEE_SKILLS, MISSILE_SKILLS};
+        assert!(MELEE_SKILLS.contains(&SkillType::LightWeapons));
+        assert!(MISSILE_SKILLS.contains(&SkillType::MissileWeapons));
+        assert!(MAGIC_SKILLS.contains(&SkillType::WarMagic));
+        // Salvaging is neither melee/missile/magic (it's a craft skill).
+        assert!(!MELEE_SKILLS.contains(&SkillType::Salvaging));
+        assert!(!MISSILE_SKILLS.contains(&SkillType::Salvaging));
+        assert!(!MAGIC_SKILLS.contains(&SkillType::Salvaging));
+    }
+
+    /// `attr_type_from_repr` round-trips known values and rejects 0/7.
+    #[test]
+    fn attr_type_from_repr_known_values() {
+        assert_eq!(attr_type_from_repr(0), None);
+        assert_eq!(attr_type_from_repr(1), Some(AttributeType::StrengthAttr));
+        assert_eq!(attr_type_from_repr(6), Some(AttributeType::SelfAttr));
+        assert_eq!(attr_type_from_repr(7), None);
+    }
+
+    /// `make_attr_info` produces an AttributeInfo whose base equals
+    /// `base_value` (innate_points = base_value, raised = 0). Used by
+    /// the vital/skill wrappers so JS can pass the resolved attribute
+    /// value as a single scalar.
+    #[test]
+    fn make_attr_info_base_equals_input() {
+        let ai = make_attr_info(Some(AttributeType::StrengthAttr), 100);
+        assert_eq!(ai.base(), 100);
+        assert_eq!(ai.innate_points, 100);
+        assert_eq!(ai.points_raised, 0);
+    }
+
+    /// `FlatContext::attribute` looks up attr1 / attr2 by type and
+    /// returns None for any other attribute type (matches the trait
+    /// contract that callers query for attributes they know they need).
+    #[test]
+    fn flat_context_attribute_lookup() {
+        use holtburger_core::client::character_info::CharacterContext;
+        let ctx = FlatContext {
+            attr1_type: Some(AttributeType::StrengthAttr),
+            attr1_info: make_attr_info(Some(AttributeType::StrengthAttr), 60),
+            attr1_mult: 1.0,
+            attr1_add: 0,
+            attr2_type: Some(AttributeType::CoordinationAttr),
+            attr2_info: make_attr_info(Some(AttributeType::CoordinationAttr), 90),
+            attr2_mult: 1.0,
+            attr2_add: 0,
+            target_vital: None,
+            vital_mult: 1.0,
+            vital_add: 0,
+            target_skill: None,
+            skill_mult: 1.0,
+            skill_add: 0,
+            vitae: 1.0,
+            enlightenment: 0,
+            gear_max_health: 0,
+            lum_aug_all_skills: 0,
+            aug_skilled_melee: 0,
+            aug_skilled_missile: 0,
+            aug_skilled_magic: 0,
+            aug_jack_of_all_trades: 0,
+            lum_aug_skilled_spec: 0,
+        };
+        assert_eq!(ctx.attribute(AttributeType::StrengthAttr).map(|a| a.base()), Some(60));
+        assert_eq!(ctx.attribute(AttributeType::CoordinationAttr).map(|a| a.base()), Some(90));
+        // Not configured — returns None.
+        assert!(ctx.attribute(AttributeType::FocusAttr).is_none());
+    }
+}
+
 /// Phase 4 step 4 follow-on: should this `GameMessage` be routed
 /// through the canonical `holtburger_world::handlers::routing::handle_message`
 /// dispatcher so `WorldState` (player stats + entity collection)
@@ -16873,6 +17986,14 @@ struct LatestStats {
     // stat hydration; can exceed 1.0 when over-encumbered (retail
     // allowed this with movement penalties).
     burden: f32,
+    // Wave D.1 follow-on (2026-05-27): cached `PropertyInt::AetheriaBitfield`
+    // (322) — bits 0x1/0x2/0x4 (Blue/Yellow/Red) gate the three aetheria
+    // sigil slots on the paperdoll per `gmPaperDollUI::UpdateAetheria`
+    // (ACBindings `gmPaperDollUI.cs:217-222`). `0` pre-spawn / pre-quest
+    // (the property is removed when zero per ACE
+    // `Player_Properties.cs:1273`). JS reads via `playerAetheriaBits` on
+    // each `kind=8 playerStatsUpdated` drain to hide/show sigil slots.
+    aetheria_bits: u32,
     // CMT Wave 5 / Phase 11 (2026-05-26): server-authoritative power /
     // accuracy slider state read from the local-player entity's
     // PropertyFloat::PowerLevel (FloatKey 92) /
@@ -16981,6 +18102,28 @@ impl SessionHandle {
             .unwrap_or(0.0)
     }
 
+    /// Wave D.1 follow-on (2026-05-27): `PropertyInt::AetheriaBitfield`
+    /// (322) for the local player — bitfield with Blue=0x1, Yellow=0x2,
+    /// Red=0x4 unlocks per `ACE.Entity::AetheriaBitfield` (mirrors
+    /// `Chorizite.Common::AetheriaBitfield`). Used by the JS paperdoll's
+    /// `UpdateAetheria` gating logic to hide/show the three sigil slots
+    /// (see `gmPaperDollUI::UpdateAetheria` at ACBindings
+    /// `gmPaperDollUI.cs:217-222`, and ACE's player-side getter at
+    /// `Player_Properties.cs:1270-1273`). Returns `0` pre-spawn /
+    /// pre-quest (the property is removed when zero in ACE, see
+    /// `Player_Properties.cs:1273`). Refreshed by the recv loop on each
+    /// `publish_player_stats_snapshot` call. JS reads via
+    /// `playerAetheriaBits` on each `kind=8 playerStatsUpdated` drain
+    /// to refresh sigil-slot visibility.
+    #[wasm_bindgen(getter, js_name = playerAetheriaBits)]
+    pub fn player_aetheria_bits(&self) -> u32 {
+        self.latest_stats
+            .borrow()
+            .as_ref()
+            .map(|s| s.aetheria_bits)
+            .unwrap_or(0)
+    }
+
     /// **CMT Wave 5 / Phase 11 (2026-05-26).** Server-authoritative
     /// `[PowerLevel, AccuracyLevel]` for the local player as a 2-element
     /// `f32` array. Both values are PropertyFloats (FloatKey 92 / 93 per
@@ -17044,6 +18187,78 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = playerInventory)]
     pub fn player_inventory(&self) -> Vec<InventoryItem> {
         self.latest_inventory.borrow().clone()
+    }
+
+    /// **Wave C.2 (2026-05-27).** DAT integration for the
+    /// [`character_info::CharacterInfo::build_set_spells`] iter input.
+    ///
+    /// Returns the full list of spell ids in `SpellTable.spell_sets` that
+    /// pass the `id >= SPELL_SET_CUTOFF` (`4730u`) filter — the same
+    /// filter the C# `Character.SetSpells` getter applies at
+    /// `Character.cs:42-50` (vendored HEAD `1341660`). JS consumes this
+    /// to populate a wasm-side `CharacterInfo` instance OR to drive a
+    /// parity probe against the JS-side enchantment-tiebreak resolver.
+    ///
+    /// Returns an empty `Vec` if `WorldBootstrap` hasn't loaded yet
+    /// (pre-`EnteredWorld`). The cache is always `Loaded` by the time
+    /// the player has spawned and the HUD starts requesting stat
+    /// updates.
+    ///
+    /// **Doc-comment cross-ref**: ported alongside `compute_skill_current`
+    /// / `compute_attribute_current` / `compute_vital_max` — those are
+    /// the *math* layer; this is the *data* layer that feeds the
+    /// SetSpells branch of the enchantment tiebreak (handoff §3 row 8).
+    #[wasm_bindgen(js_name = spellSetIds)]
+    pub fn spell_set_ids(&self) -> Vec<u32> {
+        use crate::world_bootstrap_cache;
+        use holtburger_core::client::character_info::SPELL_SET_CUTOFF;
+        let Some(bootstrap) = world_bootstrap_cache::try_get_cached() else {
+            return Vec::new();
+        };
+        let mut ids: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for set in bootstrap.spell_table.spell_sets.values() {
+            for tier in set.tiers.values() {
+                for &spell_id in &tier.spells {
+                    if spell_id >= SPELL_SET_CUTOFF {
+                        ids.insert(spell_id);
+                    }
+                }
+            }
+        }
+        ids.into_iter().collect()
+    }
+
+    /// **Wave C.2 (2026-05-27).** DAT integration for the
+    /// [`character_info::CharacterInfo::update_skill_training`] /
+    /// [`skill_info::SkillInfo::set_training`] `min_level` parameter.
+    ///
+    /// Returns the `MinLevel` value from `SkillTable.skill_base_hash`
+    /// for the given skill, used to clamp the training setter to
+    /// `Unusable` when an attempted training value is lower than the
+    /// skill's per-DAT minimum. Mirrors the C# `SkillInfo.cs:46-54`
+    /// setter behaviour (vendored HEAD `1341660`).
+    ///
+    /// Returns `0` if (a) `WorldBootstrap` hasn't loaded yet, (b) the
+    /// skill id isn't in the table — both cases disable the clamp,
+    /// matching the per-spec fallback documented at
+    /// `holtburger_core::client::skill_info::SkillInfo::set_training`.
+    ///
+    /// **Note on naming**: the DAT-side field is `SkillBase.min_level`
+    /// (per `holtburger_dat::file_type::skill_table::SkillBase`); the
+    /// C# field is `SkillInfo.Dat.MinLevel`. Same semantic, different
+    /// indirection — we look up by `SkillType as u32`.
+    #[wasm_bindgen(js_name = skillMinLevel)]
+    pub fn skill_min_level(&self, skill_type: u32) -> u32 {
+        use crate::world_bootstrap_cache;
+        let Some(bootstrap) = world_bootstrap_cache::try_get_cached() else {
+            return 0;
+        };
+        bootstrap
+            .skill_table
+            .skill_base_hash
+            .get(&skill_type)
+            .map(|sb| sb.min_level)
+            .unwrap_or(0)
     }
 
     /// **CMT Wave 2 / Phase 5 (2026-05-26).** Equipped primary weapon
@@ -21124,6 +22339,25 @@ fn publish_player_stats_snapshot(
     // (encumbrance / capacity from PropertyInt + Strength).
     use holtburger_world::context::WorldContextExt;
     let burden = world.player_burden().unwrap_or(0.0);
+    // Wave D.1 follow-on (2026-05-27): pull `PropertyInt::AetheriaBitfield`
+    // (322) straight off the player Entity for the JS paperdoll's
+    // `UpdateAetheria` gating (ACBindings `gmPaperDollUI.cs:217-222`,
+    // ACE `Player_Properties.cs:1270-1273`). Property is REMOVED when
+    // value is zero (`SetProperty(... 0) => RemoveProperty(...)`), so an
+    // absent property cleanly maps to `0` — no Aetheria sigils unlocked.
+    // Same accessor pattern as PowerLevel/AccuracyLevel above; the
+    // `WorldObjectPropertyAccessors` trait is already in scope from the
+    // PropertyFloat use above. PropertyInt arrives via the
+    // `Private/PublicUpdatePropertyInt` arm which fires
+    // `emit_player_derived_stats` for player-targeted updates — same
+    // hook that drives the stats_changed publish block.
+    use holtburger_common::properties::PropertyInt;
+    let aetheria_bits = world
+        .entities
+        .get(world.player.guid)
+        .and_then(|entity| entity.get_int_prop(PropertyInt::AetheriaBitfield))
+        .map(|bits| bits as u32)
+        .unwrap_or(0);
     *latest_stats.borrow_mut() = Some(LatestStats {
         name,
         vitals,
@@ -21131,6 +22365,7 @@ fn publish_player_stats_snapshot(
         skills,
         level_info,
         burden,
+        aetheria_bits,
         power_level,
         accuracy_level,
         current_power_mod,

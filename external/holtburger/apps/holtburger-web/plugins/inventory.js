@@ -56,6 +56,12 @@ import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import {
+  aetheriaSlotIsLocked,
+  formatBurdenText,
+  computeInventoryTitle,
+  parseSlotsViewChecked,
+} from "./inventory_helpers.js";
 
 /** Retail LayoutDescs covering the inventory window.
  *
@@ -165,9 +171,14 @@ const PAPERDOLL_SLOTS = [
   // Per acclient.c:220154 UpdateAetheria — these are SigilOne/Two/Three,
   // hidden until the player unlocks them via the Aetheria Quest at
   // levels 75/150/225 (wiki: "Inventory Panel" -> Equipment Slots -> Other).
-  { elemId: "0x10000592", equipMask: 0x10000000, hintIconDid: 0x06006BEF, x: 126, y: 8,   name: "Aetheria Blue" },
-  { elemId: "0x10000593", equipMask: 0x20000000, hintIconDid: 0x06006BF0, x: 158, y: 8,   name: "Aetheria Yellow" },
-  { elemId: "0x10000594", equipMask: 0x40000000, hintIconDid: 0x06006BF1, x: 190, y: 8,   name: "Aetheria Red" },
+  // `aetheriaBit` is the matching AetheriaBitfield mask (PropertyInt 322):
+  // Blue=0x1, Yellow=0x2, Red=0x4. Wave D.1 follow-on (2026-05-27) reads
+  // `handle.playerAetheriaBits` and applies the `.aetheria-locked` CSS
+  // class to slots whose bit is unset, per ACBindings
+  // `gmPaperDollUI.cs:217-222` (UpdateAetheria).
+  { elemId: "0x10000592", equipMask: 0x10000000, hintIconDid: 0x06006BEF, x: 126, y: 8,   name: "Aetheria Blue",   aetheriaBit: 0x1 },
+  { elemId: "0x10000593", equipMask: 0x20000000, hintIconDid: 0x06006BF0, x: 158, y: 8,   name: "Aetheria Yellow", aetheriaBit: 0x2 },
+  { elemId: "0x10000594", equipMask: 0x40000000, hintIconDid: 0x06006BF1, x: 190, y: 8,   name: "Aetheria Red",    aetheriaBit: 0x4 },
   // Head + cloak row (mid-top)
   { elemId: "0x100005B4", equipMask: 0x00000001, hintIconDid: 0x06006D7F, x: 84,  y: 28,  name: "Head" },
   { elemId: "0x100005EA", equipMask: 0x08000000, hintIconDid: 0x0600708F, x: 192, y: 44,  name: "Cloak" },
@@ -199,6 +210,12 @@ const PAPERDOLL_SLOTS = [
   { elemId: "0x100005BD", equipMask: 0x00000100, hintIconDid: 0x06006D85, x: 120, y: 172, name: "Boots" },
   { elemId: "0x1000044C", equipMask: 0x00800000, hintIconDid: 0x06000F5E, x: 156, y: 172, name: "Ammo" },
 ];
+
+// Wave D.1 follow-on (2026-05-27) — pure helpers (aetheriaSlotIsLocked,
+// formatBurdenText, computeInventoryTitle) live in inventory_helpers.js
+// so they can be unit-tested in Node without pulling three.js. The
+// in-doMount() refresh functions below delegate to them; the unit tests
+// at tests/inventory_paperdoll_helpers.test.cjs exercise them directly.
 
 // Wave 15 — both paperdoll-slot AND items-grid cells route their icon
 // fetches through the shared `ui/ac_icon_cache.js` cache so a fetch
@@ -406,9 +423,131 @@ function ensureStyles() {
       pointer-events: none;
       image-rendering: pixelated;
     }
-    /* Burden meter moved to plugins/status-indicators.js (real retail
-       indicator 0x100000F7 in gmFloatyIndicatorsUI 0x21000071). The
-       inventory panel no longer renders its own burden bar. */
+    /* Burden meter (the icon/bar) lives in plugins/status-indicators.js
+       (real retail indicator 0x100000F7 in gmFloatyIndicatorsUI
+       0x21000071). The numeric burden label below mirrors retail's
+       m_burdenText field in gmBackpackUI (ACBindings
+       gmBackpackUI.cs:101) which is always-visible text on the
+       inventory window — distinct from the meter icon. We park it in
+       the 28px gap between the paperdoll and the items grid. */
+    #${OVERLAY_ID} .hb-inv-burden-text {
+      position: absolute;
+      top: ${TITLE_H + PAPERDOLL_H + 8}px;
+      left: 6px;
+      right: 6px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 10px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+      pointer-events: auto;
+      user-select: none;
+      letter-spacing: 0.02em;
+    }
+    #${OVERLAY_ID} .hb-inv-burden-text .pct {
+      color: var(--hb-text-gold);
+      font-variant-numeric: tabular-nums;
+    }
+    #${OVERLAY_ID} .hb-inv-burden-text.over {
+      color: #ff8060;
+    }
+    #${OVERLAY_ID} .hb-inv-burden-text.over .pct {
+      color: #ff8060;
+    }
+    /* Aetheria-gated sigil slots — hidden when their AetheriaBitfield
+       (PropertyInt 322) bit is unset. Port of retail
+       gmPaperDollUI::UpdateAetheria (ACBindings gmPaperDollUI.cs:217-222).
+       display:none keeps the slot fully invisible AND ineligible for
+       drag-targeting (vs visibility:hidden which would still intercept
+       events). */
+    #${OVERLAY_ID} .hb-inv-doll-slot.aetheria-locked { display: none; }
+    /* Wave D.1 follow-on (2026-05-27) — m_SlotCheckbox port. "Slots"
+       toggle button. When checked the paperdoll body view is hidden
+       and the equipped items collapse into a flat grid in place of the
+       paperdoll. Port of retail gmPaperDollUI::m_SlotCheckbox
+       (ACBindings gmPaperDollUI.cs:134 + acclient.c:221636,221667,
+       221698-221728 — retail element 0x100005BE, default unchecked).
+
+       Anchored to the inventory overlay (NOT the paperdoll) so it sits
+       on the burden-text row in the 28px gap between paperdoll bottom
+       and items grid top, left of the bag column. Doesn't overlap any
+       paperdoll body slot — the top row of slots at y=8 ends at x=222
+       (Aetheria Red), and the paperdoll itself is 224 wide, so any
+       on-paperdoll placement risks clipping. */
+    #${OVERLAY_ID} .hb-inv-slots-toggle {
+      position: absolute;
+      top: ${TITLE_H + PAPERDOLL_H + 8}px;
+      right: ${BAG_COL_W + 12}px;
+      width: 50px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      padding: 0 4px;
+      font-size: 9px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      background: rgba(10, 8, 4, 0.85);
+      border: 1px solid var(--hb-border-brass);
+      cursor: pointer;
+      user-select: none;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      z-index: 5;
+      pointer-events: auto;
+    }
+    #${OVERLAY_ID} .hb-inv-slots-toggle:hover {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    #${OVERLAY_ID} .hb-inv-slots-toggle .check {
+      width: 8px;
+      height: 8px;
+      border: 1px solid var(--hb-border-brass);
+      background: rgba(0, 0, 0, 0.6);
+      box-sizing: border-box;
+    }
+    #${OVERLAY_ID} .hb-inv-slots-toggle.checked .check {
+      background: var(--hb-text-gold);
+    }
+    /* Slots view — hide the paperdoll 3D viewport + paperdoll bg
+       chrome AND drop the hand-tuned (x, y) anatomy positioning on
+       the doll slots so they reflow as a flat grid. Equipped slots
+       stay visible so the player can drag items off; empty slots
+       collapse (display:none) so the grid only shows what's actually
+       worn. Mirrors retail's hide-paperdoll-show-list pattern at
+       acclient.c:221700-221728 (the 9-slot toggle block). */
+    #${OVERLAY_ID}.slots-view .hb-inv-paperdoll-bg,
+    #${OVERLAY_ID}.slots-view .hb-inv-paperdoll-viewport {
+      display: none;
+    }
+    #${OVERLAY_ID}.slots-view .hb-inv-paperdoll {
+      display: grid;
+      grid-template-columns: repeat(6, ${SLOT_SIZE}px);
+      gap: 2px;
+      padding: 4px;
+      align-content: start;
+      justify-content: start;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--hb-border-brass-dim);
+    }
+    #${OVERLAY_ID}.slots-view .hb-inv-doll-slot {
+      position: relative;
+      top: auto !important;
+      left: auto !important;
+      width: ${SLOT_SIZE}px;
+      height: ${SLOT_SIZE}px;
+    }
+    /* Empty doll slots collapse in Slots view so only worn gear shows
+       (matches the retail "list of equipped items" affordance). */
+    #${OVERLAY_ID}.slots-view .hb-inv-doll-slot:not(.equipped) {
+      display: none;
+    }
     /* Items grid — pack contents below the paperdoll. Retail LayoutDesc
        0x100001CF is 120px tall (gmInventoryUI 0x21000023). Wave 12 used
        top/bottom anchors which computed to 114px; Wave 13 switches to a
@@ -716,12 +855,22 @@ function doMount(parentEl, _ctx) {
   viewportWrap.appendChild(paperdollViewport.dom);
   paperdoll.appendChild(viewportWrap);
   const dollSlotEls = {};
+  // Wave D.1 follow-on (2026-05-27) — track aetheria slots separately
+  // so the AetheriaBits gating pass can address them by bit. Mirrors
+  // retail's `m_sigilOneSlot`/`m_sigilTwoSlot`/`m_sigilThreeSlot`
+  // direct references in `gmPaperDollUI::UpdateAetheria` (ACBindings
+  // `gmPaperDollUI.cs:217-222`).
+  const aetheriaSlotEls = [];
   for (const s of PAPERDOLL_SLOTS) {
     const el = document.createElement("div");
     el.className = "hb-inv-doll-slot";
     el.dataset.equipMask = String(s.equipMask);
     el.dataset.name = s.name;
     el.dataset.elemId = s.elemId;
+    if (s.aetheriaBit) {
+      el.dataset.aetheriaBit = String(s.aetheriaBit);
+      aetheriaSlotEls.push({ el, bit: s.aetheriaBit >>> 0 });
+    }
     el.style.left = `${s.x}px`;
     el.style.top = `${s.y}px`;
     // Wave 16 — per-slot hint icon (helmet / sword / ring / etc.
@@ -797,7 +946,70 @@ function doMount(parentEl, _ctx) {
     paperdoll.appendChild(el);
     dollSlotEls[s.equipMask] = { el, icon, tip, slot: s };
   }
+
   overlay.appendChild(paperdoll);
+
+  // Wave D.1 follow-on (2026-05-27) — m_SlotCheckbox port. "Slots"
+  // toggle button anchored to the inventory overlay (NOT the paperdoll —
+  // see the CSS comment for why) in the 28px gap row between paperdoll
+  // bottom and items grid top, to the left of the bag column. Toggles
+  // between paperdoll view (default — checked=false) and a flat
+  // list-of-equipped-items view (checked=true). State persists across
+  // mounts via localStorage so the player's preference survives view
+  // swaps + page reloads.
+  //
+  // Mirrors retail gmPaperDollUI::m_SlotCheckbox (ACBindings
+  // gmPaperDollUI.cs:134, retail wiring at acclient.c:221636 — child
+  // 0x100005BE; default-unchecked via SetAttribute_Bool at :221667;
+  // toggle dispatch at :221698-221728 hiding/showing 9 paperdoll
+  // child elements). Our DOM-side equivalent toggles the .slots-view
+  // class on the overlay; CSS reflows the doll slots into a flat grid
+  // and hides the 3D viewport + paperdoll bg.
+  //
+  // Reading-guide compliance (ACBindings/READING_GUIDE.md §5
+  // anti-pattern #1): no retail element-ID constants are ported —
+  // 0x100005BE is mentioned in the citation comment only, not used as
+  // a runtime literal. Anti-pattern #5 (no UI framework port): we use
+  // a plain <div> click target, not UIElement_Button, since the DOM
+  // already provides hit-testing.
+  const SLOTS_VIEW_STORAGE_KEY = "hb-inv.slots-view.checked.v1";
+  let slotsViewChecked = false;
+  try {
+    slotsViewChecked = parseSlotsViewChecked(
+      window.localStorage?.getItem?.(SLOTS_VIEW_STORAGE_KEY) ?? null
+    );
+  } catch (_) { slotsViewChecked = false; }
+
+  const slotsToggle = document.createElement("div");
+  slotsToggle.className = "hb-inv-slots-toggle";
+  slotsToggle.title = "Toggle Slots view (flat list of equipped items)";
+  const slotsCheckBox = document.createElement("span");
+  slotsCheckBox.className = "check";
+  const slotsLabel = document.createElement("span");
+  slotsLabel.className = "slots-label";
+  setAcText(slotsLabel, "Slots", { color: "#f0d8a0" });
+  slotsToggle.appendChild(slotsCheckBox);
+  slotsToggle.appendChild(slotsLabel);
+  overlay.appendChild(slotsToggle);
+
+  function applySlotsViewClass() {
+    overlay.classList.toggle("slots-view", slotsViewChecked);
+    slotsToggle.classList.toggle("checked", slotsViewChecked);
+  }
+  // Reflect persisted state immediately so the first frame matches
+  // the user's last choice (avoids a flash of paperdoll on reload).
+  applySlotsViewClass();
+
+  slotsToggle.addEventListener("click", () => {
+    slotsViewChecked = !slotsViewChecked;
+    applySlotsViewClass();
+    try {
+      window.localStorage?.setItem?.(
+        SLOTS_VIEW_STORAGE_KEY,
+        slotsViewChecked ? "1" : "0",
+      );
+    } catch (_) { /* localStorage blocked → in-memory toggle only */ }
+  });
 
   // Bag column — see BAG_COUNT (8). The first tab is the main pack
   // (containerId 0 — items the player owns directly). The remaining 7
@@ -842,16 +1054,42 @@ function doMount(parentEl, _ctx) {
       bagCol.querySelectorAll(".hb-inv-bagtab").forEach((t) => t.classList.remove("selected"));
       tab.classList.add("selected");
       rebuildItemsGrid();
+      // Wave D.1 follow-on (2026-05-27) — port of retail
+      // `gmInventoryUI::RecvNotice_NewParentContainer` (ACBindings
+      // `gmInventoryUI.cs:218-223`): retitle the inventory window when
+      // the active container changes. "Inventory of <player>" on main
+      // pack; "Contents of <pack name>" on side pack.
+      refreshPanelTitle();
     });
     bagCol.appendChild(tab);
     bagTabEls.push({ tabEl: tab, iconEl: tabIcon });
   }
   overlay.appendChild(bagCol);
 
-  // Burden meter removed in Wave 13 — the real retail indicator lives
-  // in plugins/status-indicators.js (gmFloatyIndicatorsUI 0x21000071,
-  // top-left status strip). Wave 12 had mistaken paperdoll element
-  // 0x100005BE for the burden indicator; audit caught the mislabel.
+  // Burden meter (icon) lives in plugins/status-indicators.js — the
+  // retail `0x100000F7` indicator in gmFloatyIndicatorsUI 0x21000071.
+  // Wave 12 had mistaken paperdoll element 0x100005BE for the burden
+  // indicator; audit caught the mislabel.
+  //
+  // Wave D.1 follow-on (2026-05-27) — the *numeric* burden label
+  // (retail's `m_burdenText` in gmBackpackUI, ACBindings
+  // `gmBackpackUI.cs:101`) is always-visible text on the inventory
+  // window, distinct from the meter icon. Adds a one-line readout
+  // between the paperdoll and the items grid; reads from
+  // `handle.playerBurden` (0.0..N float, encumbrance / capacity per
+  // ACE `EncumbranceSystem.GetBurden`). Refreshed on every
+  // `playerStatsUpdated` event AND every rebuild() pass.
+  const burdenText = document.createElement("div");
+  burdenText.className = "hb-inv-burden-text";
+  const burdenLabel = document.createElement("span");
+  burdenLabel.className = "label";
+  setAcText(burdenLabel, "Burden", { color: "#f0d8a0" });
+  const burdenPct = document.createElement("span");
+  burdenPct.className = "pct";
+  setAcText(burdenPct, "—", { color: "#f0c060" });
+  burdenText.appendChild(burdenLabel);
+  burdenText.appendChild(burdenPct);
+  overlay.appendChild(burdenText);
 
   // Items grid (pack contents)
   const itemsGrid = document.createElement("div");
@@ -1161,6 +1399,80 @@ function doMount(parentEl, _ctx) {
     } catch (_) { /* viewport is best-effort */ }
   }
 
+  // Wave D.1 follow-on (2026-05-27) — gating helper for the three
+  // aetheria sigil slots. Ports retail `gmPaperDollUI::UpdateAetheria`
+  // (ACBindings `gmPaperDollUI.cs:217-222`): each of the three slots
+  // (Blue=0x1, Yellow=0x2, Red=0x4) is hidden when its bit is unset in
+  // PropertyInt::AetheriaBitfield (322). The bitfield is exposed by
+  // SessionHandle::playerAetheriaBits (lib.rs ~18105) — refreshed on
+  // every `kind=8 playerStatsUpdated` drain by the recv loop's
+  // `publish_player_stats_snapshot` block. `0` (pre-quest / pre-spawn)
+  // hides all three slots, which matches retail behaviour for a fresh
+  // character — the slots are revealed at levels 75/150/225 after the
+  // Aetheria Quest unlocks each color (wiki: "Inventory Panel").
+  function refreshAetheriaGating() {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    let bits = 0 >>> 0;
+    try {
+      if (handle && typeof handle.playerAetheriaBits === "number") {
+        bits = handle.playerAetheriaBits >>> 0;
+      } else if (handle && typeof handle.playerAetheriaBits === "function") {
+        bits = (handle.playerAetheriaBits() | 0) >>> 0;
+      }
+    } catch (_) { bits = 0 >>> 0; }
+    for (const { el, bit } of aetheriaSlotEls) {
+      // Delegate to the pure helper so the bit-test logic stays
+      // tested in lockstep (tests/inventory_paperdoll_helpers.test.cjs).
+      el.classList.toggle("aetheria-locked", aetheriaSlotIsLocked(bits, bit));
+    }
+  }
+
+  // Wave D.1 follow-on (2026-05-27) — port of retail
+  // `gmBackpackUI::SetLoadLevel` (ACBindings `gmBackpackUI.cs:151-156`)
+  // numeric-label leg: render the player's current burden as a
+  // percentage. Reads `handle.playerBurden` (0.0..N float — under capacity
+  // when <1.0, over-encumbered when >=1.0; mirrors ACE
+  // `EncumbranceSystem.GetBurden`). Shows "—" pre-spawn / before any
+  // stats hydration. Adds `.over` modifier when at or over capacity for
+  // a red color cue (retail does the same with `m_burdenMeter` state
+  // 4-5 swap, see status-indicators.js INDICATORS row "burden").
+  function refreshBurdenText() {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    let burden = NaN;
+    try {
+      if (handle && typeof handle.playerBurden === "number") {
+        burden = handle.playerBurden;
+      } else if (handle && typeof handle.playerBurden === "function") {
+        burden = handle.playerBurden();
+      }
+    } catch (_) { burden = NaN; }
+    // Delegate to the pure helper so percent/rounding/cap-color logic
+    // stays tested in lockstep (tests/inventory_paperdoll_helpers.test.cjs).
+    const { text, over } = formatBurdenText(burden);
+    setAcText(burdenPct, text, { color: over ? "#ff8060" : "#f0c060" });
+    burdenText.classList.toggle("over", over);
+  }
+
+  // Wave D.1 follow-on (2026-05-27) — port of retail
+  // `gmInventoryUI::RecvNotice_NewParentContainer` (ACBindings
+  // `gmInventoryUI.cs:218-223`). When a side pack tab is selected the
+  // panel title swaps to "Contents of <pack name>"; when the main pack
+  // is selected it reverts to "Inventory of <player>". Driven by the
+  // bag-tab click handler. Falls back to "Inventory" if neither the
+  // main-panel nor the player name is available yet.
+  function refreshPanelTitle() {
+    // For the main-pack branch, reuse the view's nameFor() so the
+    // title matches the one the main-panel registry sets on initial
+    // mount (avoids drift between the two paths).
+    let next;
+    if (selectedPackContainerId !== 0) {
+      next = computeInventoryTitle(selectedPackContainerId, bagSlots, null);
+    } else {
+      next = view.nameFor({});
+    }
+    try { window.__mainPanel?.setTitle?.(next); } catch (_) {}
+  }
+
   function rebuild() {
     refreshInventorySnapshot();
     const equipped = document.getElementById("inv-equipped");
@@ -1189,7 +1501,14 @@ function doMount(parentEl, _ctx) {
     // hot-swaps the rig when applyAppearance (entities.js:3846) has
     // updated the player's substitution set.
     refreshPaperdollViewport();
-    // Burden rendering removed in Wave 13 — see status-indicators.js.
+    // Wave D.1 follow-on (2026-05-27): aetheria-slot visibility + numeric
+    // burden readout + panel title. All three refresh on each rebuild
+    // pass; the playerStatsUpdated bus event subscription below adds a
+    // separate refresh for cases where stats change without a #inv-equipped
+    // / #inv-pack DOM delta (Strength change → burden % shifts, etc.).
+    refreshAetheriaGating();
+    refreshBurdenText();
+    refreshPanelTitle();
   }
 
   let observers = [];
@@ -1328,9 +1647,27 @@ function doMount(parentEl, _ctx) {
     canvasEl.addEventListener("drop", onCanvasDrop);
   }
 
-  // Wave 13: burden stats hooks removed (status-indicators.js owns the
-  // burden indicator now). The MutationObserver on #inv-equipped /
-  // #inv-pack already triggers rebuild() on every inventory delta.
+  // Wave D.1 follow-on (2026-05-27): burden + aetheria-gating refresh
+  // on the `playerStatsUpdated` bus event. Inventory deltas (kind=11)
+  // already drive rebuild() via the MutationObserver on
+  // #inv-equipped/#inv-pack, but pure stats deltas (kind=8) like a
+  // Strength change can shift burden % without altering the
+  // inventory DOM. Subscribing here keeps burden + aetheria visibility
+  // live in those cases. Pattern matches buffs-hud.js + spellbook.js.
+  let unsubscribeStats = null;
+  try {
+    const client = window.__pluginClient;
+    if (client?.events?.on) {
+      const onStats = () => {
+        refreshBurdenText();
+        refreshAetheriaGating();
+      };
+      client.events.on("playerStatsUpdated", onStats);
+      unsubscribeStats = () => {
+        try { client.events.off?.("playerStatsUpdated", onStats); } catch (_) {}
+      };
+    }
+  } catch (_) { /* bus may not be initialized yet */ }
 
   return () => {
     window.removeEventListener("keydown", onKey);
@@ -1341,6 +1678,7 @@ function doMount(parentEl, _ctx) {
       canvasEl.removeEventListener("dragover", onCanvasDragOver);
       canvasEl.removeEventListener("drop", onCanvasDrop);
     }
+    if (unsubscribeStats) unsubscribeStats();
     for (const o of observers) o.disconnect();
     // Wave 14 — release the WebGL context. Chrome caps live contexts
     // around 16; without this the inventory view can leak a context

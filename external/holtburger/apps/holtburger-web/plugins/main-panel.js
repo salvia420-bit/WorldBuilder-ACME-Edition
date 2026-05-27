@@ -294,6 +294,18 @@ export function currentViewId() {
   return stack.length > 0 ? stack[stack.length - 1].id : null;
 }
 
+// Wave D.1 follow-on (2026-05-27) — dynamically retitle the panel
+// without re-mounting the view. Mirrors `gmInventoryUI::RecvNotice_NewParentContainer`
+// (ACBindings `gmInventoryUI.cs:218-223`) which retitles the inventory
+// window when the player switches the active parent container (e.g.
+// "Inventory of <player>" → "Contents of <pack name>"). Falls back
+// silently if the panel isn't mounted (titleName=null).
+export function setTitle(text) {
+  if (!titleName) return false;
+  setAcText(titleName, text, { fontId: HEADING_FONT_ID });
+  return true;
+}
+
 function show() { overlay.dataset.open = "1"; }
 function hide() {
   _runCleanup();
@@ -490,7 +502,14 @@ export function mount(_ctx) {
   applyMainPanelLayout({ overlayEl: overlay, bodyEl });
 
   // Expose the panel API on window for plugin interop + ad-hoc console use.
-  window.__mainPanel = { registerView, showView, pushView, closeView, toggleView, isOpen, currentViewId };
+  // Wave D.1 follow-on (2026-05-27): `setTitle(text)` lets the active view
+  // re-title the shared title bar without re-mounting. Mirrors retail's
+  // `RecvNotice_NewParentContainer` (`gmInventoryUI.cs:218-223`) which
+  // mutates `m_titleText` when the active container changes (e.g.
+  // selecting a side pack swaps "Inventory of <player>" →
+  // "Contents of <pack name>"). Returns true if applied, false if the
+  // panel isn't mounted yet.
+  window.__mainPanel = { registerView, showView, pushView, closeView, toggleView, isOpen, currentViewId, setTitle };
 
   return () => {
     delete window.__mainPanel;

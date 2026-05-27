@@ -16,6 +16,15 @@ mod runtime;
 pub mod runtime_body_view_cache;
 mod simulation;
 pub mod types;
+
+// Wave C — Chorizite ACPlugin Character/Skill/Vital/Attribute math port
+// (2026-05-27). See `external/holtburger/docs/chorizite-absorption-plan-2026-05-27.md`
+// §Wave C and the per-module file headers for details.
+pub mod attribute_info;
+pub mod character_info;
+pub mod skill_formula;
+pub mod skill_info;
+pub mod vital_info;
 pub use builder::ClientRuntimeBuilder;
 pub use movement::MovementSystemHandle;
 // Re-exported so the wasm bundle can pass MotionStyle::Explicit(stance)

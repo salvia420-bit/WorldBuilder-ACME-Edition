@@ -96,6 +96,14 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 [dev-dependencies]
 holtburger-dat = { workspace = true }
 holtburger-common = { workspace = true }
+# Wave C.2 (2026-05-27) — native tests for `compute_{vital,skill}_*_impl`
+# need `holtburger_core::client::{attribute_info, vital_info, skill_info,
+# skill_formula, character_info}` available natively. The helpers are
+# `cfg(any(target_arch="wasm32", test))`-gated so the canonical math layer
+# can be exercised via `cargo test -p holtburger-web --lib` without
+# requiring a wasm runtime. The wasm32 dep block above already pulls
+# holtburger-core for the live recv-loop build.
+holtburger-core = { workspace = true }
 # F.37 (2026-05-14) — native tests for `walk_dedup::WalkDedupMapT`
 # need a tokio runtime + the `futures` join_all combinator. The
 # wasm32 build already pulls these via the cfg(wasm32)

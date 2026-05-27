@@ -11,12 +11,15 @@ pub use access::{
     HasProperties, HasPropertiesMut, WorldObjectPropertyAccessors, WorldObjectPropertyAccessorsMut,
 };
 pub use combat::{
-    AttackType, CombatUse, DamageType, EnchantmentTypeFlags, ImbuedEffectType, WeaponType,
+    AttackType, CombatUse, DamageType, EnchantmentTypeFlags, ImbuedEffectType,
+    SpellBookFilterOptions, SpellComponentType, SpellFlags, SpellType, WeaponType,
 };
-pub use inventory::{AttunedStatus, EquipMask, ItemType, MaterialType, PseudoEquipMask, Usable};
+pub use inventory::{
+    AttunedStatus, EquipMask, ItemType, MaterialType, PseudoEquipMask, Usable, WieldType,
+};
 pub use object::{
-    GfxObjFlags, IdentifyResponseFlags, ObjectDescriptionFlag, PhysicsDescriptionFlag,
-    PhysicsState, WeenieHeaderFlag, WeenieHeaderFlag2, WeenieType,
+    GfxObjFlags, IdentifyResponseFlags, ObjectClass, ObjectDescriptionFlag,
+    PhysicsDescriptionFlag, PhysicsState, WeenieHeaderFlag, WeenieHeaderFlag2, WeenieType,
 };
 pub use property_keys::{
     PropertyBool, PropertyDataId, PropertyFloat, PropertyInstanceId, PropertyInt, PropertyInt64,
