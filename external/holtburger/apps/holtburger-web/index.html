@@ -8719,6 +8719,62 @@ void main() {
                     teleportSeq: (evt.u32Payload ?? 0) >>> 0,
                   });
                 } catch (_) {}
+              } else if (evt.kind === 34 /* ContractsUpdated */) {
+                // Wave F.5 (2026-05-27): ACE pushed either
+                // `GameEvent::SendClientContractTrackerTable` (opcode
+                // 0x0314 — full snapshot at login) or
+                // `GameEvent::SendClientContractTracker` (opcode 0x0315
+                // — per-contract delta on Add / Erase / Update from
+                // `ContractManager`). The wasm-side recv arm has
+                // already folded the payload into `latest_contracts`.
+                // Consumer reads via `handle.playerContracts()` (null
+                // pre-event). The contracts-panel plugin subscribes
+                // and re-renders the list.
+                //
+                // u32Payload carries the affected contract_id (single-
+                // tracker path only; null on table-replace);
+                // u32Payload2 = 1 when the delta was a delete (Abandon
+                // / Erase), else 0. Plugins can use these for toast
+                // notifications without diffing snapshots.
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("contractsUpdated", {
+                    contractId: (evt.u32Payload ?? 0) >>> 0,
+                    deleted: ((evt.u32Payload2 ?? 0) >>> 0) === 1,
+                  });
+                }
+              } else if (evt.kind === 40 /* AllegiancePresence */) {
+                // Wave F.3 (2026-05-27): an allegiance member logged
+                // in or out. ACE pushed
+                // `Allegiance_AllegianceLoginNotification` (opcode
+                // 0x027A). The wasm-side recv arm has already flipped
+                // the matching member's `logged_in` flag in the cached
+                // snapshot, so the allegiance panel just needs to
+                // re-render. Forward the GUID + status so plugins can
+                // pop a chat-style notification.
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("allegiancePresence", {
+                    characterGuid: (evt.u32Payload ?? 0) >>> 0,
+                    isLoggedIn: ((evt.u32Payload2 ?? 0) >>> 0) === 1,
+                  });
+                  // The cached snapshot was mutated, so the panel
+                  // should refresh — easiest path is to re-emit the
+                  // generic allegianceUpdated event the F2 panel
+                  // already listens to.
+                  window.__pluginClient.events.emit("allegianceUpdated", {});
+                }
+              } else if (evt.kind === 41 /* AllegianceInfo */) {
+                // Wave F.3 (2026-05-27): server replied to an
+                // `Allegiance_AllegianceInfoRequest` query with a full
+                // `AllegianceProfile` (opcode 0x027C). Consumer reads
+                // the fresh snapshot via
+                // `handle.lastAllegianceInfoResponse()`. Used for
+                // examining other players' allegiance trees (not the
+                // local player's).
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("allegianceInfo", {
+                    targetGuid: (evt.u32Payload ?? 0) >>> 0,
+                  });
+                }
               } else if (evt.kind === 32 /* ObjectAppraised */) {
                 // ACPlugin PR-2 (2026-05-27): an entity's appraisal
                 // data was just refreshed in the entity store (the

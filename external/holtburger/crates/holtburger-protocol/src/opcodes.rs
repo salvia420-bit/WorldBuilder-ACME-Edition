@@ -599,8 +599,12 @@ pub enum GameActionOpcode {
     // ChessMovePass = 0x026D,
     // /// C2S: Propose or accept a chess stalemate.
     // ChessStalemate = 0x026E,
-    // /// C2S: Forfeit an active quest contract.
-    // AbandonContract = 0x0316,
+    /// C2S: Forfeit an active quest contract.
+    /// Wave F.5 (2026-05-27): mirrors Chorizite
+    /// `Social_AbandonContract` (ContractId payload) and ACE
+    /// `Player.HandleActionAbandonContract` which routes to
+    /// `ContractManager.Abandon`.
+    AbandonContract = 0x0316,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromRepr, Hash)]
@@ -728,10 +732,17 @@ pub enum GameEventOpcode {
     UpdateTitle = 0x002B,
     // /// S2C: Confirms that an allegiance data update is finished.
     // AllegianceAllegianceUpdateDone = 0x01C8,
-    // /// S2C: Notifies the player that an allegiance member has logged in.
-    // AllegianceLoginNotification = 0x027A,
-    // /// S2C: Detailed response to an allegiance information request.
-    // AllegianceInfoResponse = 0x027C,
+    /// S2C: Notifies the player that an allegiance member has logged in/out.
+    /// Wave-F3 (2026-05-27): port of
+    /// `Chorizite.ACProtocol/Messages/S2C/Events/Allegiance_AllegianceLoginNotificationEvent.generated.cs`.
+    /// Payload: `(character_id: u32, is_logged_in: u32 [ReadBool])`.
+    AllegianceLoginNotification = 0x027A,
+    /// S2C: Detailed response to an allegiance information request.
+    /// Wave-F3 (2026-05-27): port of
+    /// `Chorizite.ACProtocol/Messages/S2C/Events/Allegiance_AllegianceInfoResponseEvent.generated.cs`.
+    /// Payload: `(target_id: u32, profile: AllegianceProfile)`. Shares
+    /// the same `AllegianceProfile` body as `AllegianceUpdate` (0x0020).
+    AllegianceInfoResponse = 0x027C,
 
     // --- Inventory & World (Extra) ---
     /// S2C: Closes the view of a container on the ground.
@@ -863,10 +874,16 @@ pub enum GameEventOpcode {
     // AdminQueryPluginResponse = 0x02B3,
 
     // --- Contract Tracker ---
-    // /// S2C: Sends the full contract tracker table defined by the server.
-    // SendClientContractTrackerTable = 0x0314,
-    // /// S2C: Updates specific contract tracker progress data.
-    // SendClientContractTracker = 0x0315,
+    // Wave F.5 (2026-05-27): mirrors Chorizite
+    // `Social_SendClientContractTrackerTable` (full table at login) +
+    // `Social_SendClientContractTracker` (per-contract progress / add /
+    // delete). ACE emits both from `ContractManager` — Table at login
+    // when the player has ≥1 contract, single Tracker on Add / Erase /
+    // Update.
+    /// S2C: Sends the full contract tracker table defined by the server.
+    SendClientContractTrackerTable = 0x0314,
+    /// S2C: Updates specific contract tracker progress data.
+    SendClientContractTracker = 0x0315,
 
     // --- Miscellaneous ---
     // /// S2C: Opens the character barber (customization) UI.

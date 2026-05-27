@@ -316,42 +316,134 @@ function emit(text, cat = 0) {
   log.appendChild(li);
 }
 
-// Placeholder contracts until SessionHandle.contracts() lands.
-const SAMPLE_CONTRACTS = [
-  {
-    id: 100,
-    name: "Aerlinthe Smelting Quest",
-    npc: "Talid",
-    location: "Wai Jhou",
-    reward: "1500 XP",
-    progress: "0 / 5",
-    cooldown: "—",
-    complete: false,
-    desc: "Speak with Talid in Wai Jhou; he requires Pyreal nuggets for the colony.",
-  },
-  {
-    id: 101,
-    name: "Drudge Hunting",
-    npc: "Sergeant Maeli",
-    location: "Holtburg Outskirts",
-    reward: "2000 XP",
-    progress: "10 / 10",
-    cooldown: "00:24:11",
-    complete: true,
-    desc: "Slay 10 drudges in the Holtburg Outskirts. Reward: 2000 XP. Cooldown: 30m.",
-  },
-  {
-    id: 102,
-    name: "Daily Rare Pickup",
-    npc: "Rotating",
-    location: "Various",
-    reward: "Rare item",
-    progress: "—",
-    cooldown: "ready",
-    complete: false,
-    desc: "Pick up a daily rare from the rotating quest NPC.",
-  },
-];
+// Wave F.5 (2026-05-27) — real-data sourcing.
+//
+// Pre-Wave-F.5 this file shipped `SAMPLE_CONTRACTS` placeholder rows.
+// The wasm side now exports `SessionHandle.playerContracts()` which
+// returns a `ContractsSnapshotJs` with the actual `ContractTrackerJs`
+// rows folded from
+// `GameEvent::SendClientContractTracker{Table}` (opcodes 0x0314 /
+// 0x0315; see `apps/holtburger-web/src/lib.rs:33990+`). The panel
+// subscribes to the `contractsUpdated` bus event (`kind=34` drain)
+// and re-renders.
+//
+// `ContractStage` enum:
+//   1 = New  — accepted, no progress yet
+//   2 = InProgress — partial progress
+//   3 = DoneOrPendingRepeat — completed (check `timeWhenRepeats` for
+//       availability)
+//   4+ = contract-specific updates (per Chorizite enum)
+//
+// `timeWhenDone` / `timeWhenRepeats` are server epoch seconds (i64 on
+// the wire, surfaced as f64 since JS Number safely covers all AC time
+// stamps).
+
+// 7 = retail soft cap (gmContractsUI's header shows "N / 7"); ACE
+// `ContractManager.cs:24` has MaxContracts = 100 (the hard cap server
+// applies); we surface the retail-style 7 for the panel header.
+const CONTRACTS_DISPLAY_CAP = 7;
+const CONTRACT_STAGE = Object.freeze({
+  New: 1,
+  InProgress: 2,
+  DoneOrPendingRepeat: 3,
+});
+
+// Wave F.5 (2026-05-27) — pull the live contracts snapshot from wasm.
+// Returns `{ trackers: ContractTrackerJs[], displayContractId, count }`
+// or `null` pre-event.
+function fetchContractsSnapshot() {
+  const handle = window.__sessionHandle;
+  if (typeof handle?.playerContracts !== "function") return null;
+  try {
+    return handle.playerContracts() ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Stage label for the panel rows. Falls back to "Stage N" for the
+// "contract-specific" 4+ values which we don't have specialised
+// labels for yet.
+function stageLabel(stage) {
+  switch (stage) {
+    case CONTRACT_STAGE.New: return "New";
+    case CONTRACT_STAGE.InProgress: return "Active";
+    case CONTRACT_STAGE.DoneOrPendingRepeat: return "Done";
+    default: return `Stage ${stage}`;
+  }
+}
+
+// Format a server epoch in seconds as "HH:MM:SS" countdown remaining
+// from `now`. Returns "—" when `epoch_sec <= 0` (server's "not set"),
+// "ready" when the countdown is in the past, else "HH:MM:SS".
+function formatCountdown(epoch_sec, now_sec) {
+  if (!epoch_sec || epoch_sec <= 0) return "—";
+  const remaining = Math.floor(epoch_sec - now_sec);
+  if (remaining <= 0) return "ready";
+  const h = Math.floor(remaining / 3600);
+  const m = Math.floor((remaining % 3600) / 60);
+  const s = remaining % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+// Project a wasm `ContractTrackerJs` into the shape the row + detail
+// renderers consume. Names come from a future ContractTable DAT
+// lookup (Wave F.5 stretch); for now the panel shows the raw
+// `Contract #N` ID — readability win over surfacing a hex GUID.
+function projectTracker(t, now_sec) {
+  const id = (t.contractId >>> 0) || 0;
+  const stage = (t.stage >>> 0) || 0;
+  const done = Number(t.timeWhenDone || 0);
+  const repeats = Number(t.timeWhenRepeats || 0);
+  const isDone = stage === CONTRACT_STAGE.DoneOrPendingRepeat;
+  // Progress column: show "Done" / "Active" / "New" — DAT-side
+  // Contract.NumPickups is a future enhancement (Wave F.5 stretch).
+  // Cooldown column: only meaningful in stage 3 with a future
+  // timeWhenRepeats — else blank.
+  return {
+    id,
+    name: `Contract #${id}`,
+    stage,
+    stageLabel: stageLabel(stage),
+    progress: stageLabel(stage),
+    cooldown: isDone ? formatCountdown(repeats, now_sec) : "—",
+    complete: isDone,
+    timeWhenDone: done,
+    timeWhenRepeats: repeats,
+    desc: `Contract ${id} — stage ${stageLabel(stage)}.`,
+  };
+}
+
+/**
+ * Wave F.5 (2026-05-27) — pure helper. Builds the panel's display
+ * model from a wasm `ContractsSnapshotJs` (or `null`). Pulled out so
+ * `tests/contracts_panel.test.cjs` can exercise the projection
+ * + sort + countdown logic without a DOM.
+ */
+export function buildContractsViewModel(snapshot, now_sec) {
+  if (!snapshot) {
+    return {
+      rows: [],
+      count: 0,
+      displayCap: CONTRACTS_DISPLAY_CAP,
+      displayContractId: 0,
+    };
+  }
+  const rows = [];
+  // `snapshot.trackers` is already sorted by contract_id ascending on
+  // the wasm side (`apply_player_contracts_full`). Preserve that
+  // order for stable rendering across refreshes.
+  for (const t of snapshot.trackers || []) {
+    rows.push(projectTracker(t, now_sec));
+  }
+  return {
+    rows,
+    count: rows.length,
+    displayCap: CONTRACTS_DISPLAY_CAP,
+    displayContractId: (snapshot.displayContractId >>> 0) || 0,
+  };
+}
 
 // Helper: apply (x,y,w,h) from a LayoutDesc element to a DOM node,
 // clearing right/bottom anchors first so explicit left/top win.
@@ -511,7 +603,10 @@ export const view = {
 
     const hdrRightEl = document.createElement("div");
     hdrRightEl.className = "hb-contracts-hdr-lbl right";
-    setAcText(hdrRightEl, `${SAMPLE_CONTRACTS.length} / 7`);
+    // Pre-event placeholder: "0 / 7" until the first
+    // SendClientContractTrackerTable lands (Wave F.5 — refreshed in
+    // `rerender()` below).
+    setAcText(hdrRightEl, `0 / ${CONTRACTS_DISPLAY_CAP}`);
     root.appendChild(hdrRightEl);
 
     // ── List — retail 0x100005CF ───────────────────────────────────
@@ -587,30 +682,71 @@ export const view = {
     actBtn3El.disabled = true;
 
     // Selection state + click handlers --------------------------------
-    let selected = null;
+    // Wave F.5 (2026-05-27) — keep selection by contract_id across
+    // re-renders so an in-flight Abandon doesn't lose the selection
+    // when the server echoes back the delete and the list re-binds.
+    let selectedId = 0;
     function selectRow(c, rowEl) {
-      selected = c;
+      selectedId = c.id;
       listEl.querySelectorAll(".hb-contracts-row.selected").forEach((r) => r.classList.remove("selected"));
       rowEl?.classList.add("selected");
-      setAcText(detVal1El, c.npc ?? "—");
-      setAcText(detVal2El, c.location ?? "—");
-      setAcText(detVal3El, c.progress ?? "—");
-      setAcText(detVal4El, c.reward ?? c.cooldown ?? "—");
-      setAcText(detDescEl, c.desc ?? "");
+      // Wave F.5 (2026-05-27) — wire-derived detail rows. NPC + Location
+      // come from a future ContractTable DAT lookup (stretch); today
+      // we surface stage-derived stats only.
+      setAcText(detVal1El, "—");                 // NPC: DAT lookup (TODO)
+      setAcText(detVal2El, "—");                 // Loc: DAT lookup (TODO)
+      setAcText(detVal3El, c.progress);
+      setAcText(detVal4El, c.cooldown);
+      setAcText(detDescEl, c.desc);
       actBtn1El.disabled = false;
+      // Abandon is only sensible for active contracts; pre-WB stretch
+      // we always allow it server-side answers if invalid (no harm).
       actBtn2El.disabled = false;
-      actBtn3El.disabled = false;
+      actBtn3El.disabled = !c.complete;
     }
 
-    if (SAMPLE_CONTRACTS.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "hb-contracts-empty";
-      setAcText(empty, "No active contracts. Speak with a contract NPC to accept one.");
-      listEl.appendChild(empty);
-    } else {
-      for (const c of SAMPLE_CONTRACTS) {
+    // Wave F.5 (2026-05-27) — re-render the list from
+    // `handle.playerContracts()`. Called once at mount and again on
+    // every `contractsUpdated` bus event.
+    function rerender() {
+      const snap = fetchContractsSnapshot();
+      const now_sec = Math.floor(Date.now() / 1000);
+      const vm = buildContractsViewModel(snap, now_sec);
+
+      setAcText(hdrRightEl, `${vm.count} / ${vm.displayCap}`);
+
+      // Clear existing rows but keep the sticky header.
+      const oldRows = listEl.querySelectorAll(".hb-contracts-row, .hb-contracts-empty");
+      oldRows.forEach((r) => r.remove());
+
+      if (vm.rows.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "hb-contracts-empty";
+        setAcText(empty, snap
+          ? "No active contracts. Speak with a contract NPC to accept one."
+          : "Log in to view contracts.");
+        listEl.appendChild(empty);
+        // Reset selection + detail block when list goes empty.
+        selectedId = 0;
+        setAcText(detVal1El, "—");
+        setAcText(detVal2El, "—");
+        setAcText(detVal3El, "—");
+        setAcText(detVal4El, "—");
+        setAcText(detDescEl, "Select a contract to view details.");
+        actBtn1El.disabled = true;
+        actBtn2El.disabled = true;
+        actBtn3El.disabled = true;
+        return;
+      }
+
+      let kept = false;
+      for (const c of vm.rows) {
         const row = document.createElement("div");
         row.className = "hb-contracts-row" + (c.complete ? " complete" : "");
+        if (selectedId && c.id === selectedId) {
+          row.classList.add("selected");
+          kept = true;
+        }
         row.dataset.id = String(c.id);
         const name = document.createElement("span");
         name.className = "name";
@@ -626,22 +762,67 @@ export const view = {
         row.appendChild(cd);
         row.addEventListener("click", () => selectRow(c, row));
         listEl.appendChild(row);
+        if (kept && c.id === selectedId) {
+          // Refresh detail block from the new row data.
+          selectRow(c, row);
+        }
+      }
+      // Selection lost (e.g. abandoned). Clear detail block.
+      if (!kept) {
+        selectedId = 0;
+        setAcText(detVal1El, "—");
+        setAcText(detVal2El, "—");
+        setAcText(detVal3El, "—");
+        setAcText(detVal4El, "—");
+        setAcText(detDescEl, "Select a contract to view details.");
+        actBtn1El.disabled = true;
+        actBtn2El.disabled = true;
+        actBtn3El.disabled = true;
       }
     }
 
-    // Wire button clicks (placeholder game-actions — wire in J).
+    // Wire button clicks.
     actBtn1El.addEventListener("click", () => {
-      if (!selected) return;
-      emit(`[contracts] Map "${selected.name}" — quest-map waypoint (not wired yet)`);
+      if (!selectedId) return;
+      emit(`[contracts] Map "Contract #${selectedId}" — quest-map waypoint (not wired yet)`);
     });
     actBtn2El.addEventListener("click", () => {
-      if (!selected) return;
-      emit(`[contracts] Abandon "${selected.name}" — drop the selected contract (game-action not wired yet)`);
+      // Wave F.5 (2026-05-27) — real wire round-trip. Sends
+      // `GameAction::AbandonContract` (0x0316). ACE echoes back a
+      // `SendClientContractTracker` with `DeleteContract=true` and
+      // `rerender()` picks it up via the `contractsUpdated` event.
+      if (!selectedId) return;
+      const handle = window.__sessionHandle;
+      const cid = selectedId;
+      if (typeof handle?.abandonContract === "function") {
+        try {
+          handle.abandonContract(cid >>> 0);
+          emit(`[contracts] Abandoning contract #${cid}…`);
+        } catch (e) {
+          emit(`[contracts] Abandon failed: ${e?.message || e}`);
+        }
+      } else {
+        emit(`[contracts] Abandon unavailable — wasm not connected`);
+      }
     });
     actBtn3El.addEventListener("click", () => {
-      if (!selected) return;
-      emit(`[contracts] Mark Redo "${selected.name}" — request a refresh of the selected daily (game-action not wired yet)`);
+      if (!selectedId) return;
+      emit(`[contracts] Mark Redo "Contract #${selectedId}" — request a refresh of the selected daily (game-action not wired yet)`);
     });
+
+    // Wave F.5 (2026-05-27) — subscribe to bus event + initial render.
+    const bus = window.__pluginClient?.events;
+    let unsubscribe = () => {};
+    if (bus && typeof bus.on === "function") {
+      const listener = () => {
+        try { rerender(); } catch (_) {}
+      };
+      bus.on("contractsUpdated", listener);
+      unsubscribe = () => {
+        if (typeof bus.off === "function") bus.off("contractsUpdated", listener);
+      };
+    }
+    rerender();
 
     // Append in retail z-order: list/scrollbar first so detail block
     // and buttons overlay on top.
@@ -679,7 +860,10 @@ export const view = {
       actBtn1El, actBtn2El, actBtn3El,
     });
 
-    return () => { root.remove(); };
+    return () => {
+      try { unsubscribe(); } catch (_) {}
+      root.remove();
+    };
   },
 };
 
@@ -688,6 +872,6 @@ export const manifest = {
   name: "Contracts",
   icon: "📋",
   iconHidden: true,
-  version: "0.2.0",
-  description: "Contracts (gmContractsUI 0x21000069 — layout-port 2026-05-24)",
+  version: "0.3.0",
+  description: "Contracts (gmContractsUI 0x21000069 — Wave F.5 wire data + Abandon round-trip)",
 };

@@ -1,5 +1,6 @@
 mod access;
 mod combat;
+mod emote;
 mod inventory;
 mod object;
 mod property_keys;
@@ -14,6 +15,7 @@ pub use combat::{
     AttackType, CombatUse, DamageType, EnchantmentTypeFlags, ImbuedEffectType,
     SpellBookFilterOptions, SpellComponentType, SpellFlags, SpellType, WeaponType,
 };
+pub use emote::{EmoteCategory, EmoteType};
 pub use inventory::{
     AttunedStatus, EquipMask, ItemType, MaterialType, PseudoEquipMask, Usable, WieldType,
 };

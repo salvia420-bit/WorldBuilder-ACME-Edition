@@ -1,28 +1,49 @@
-// Buffs / debuffs HUD — popup strip of active enchantments, wired to
-// the status-indicators "buffs" / "debuffs" slots (retail's Beneficial
-// Spells / Harmful Spells indicators).
+// =============================================================================
+// Buffs / debuffs / cooldowns HUD — Wave F.2 (2026-05-27)
+// =============================================================================
 //
-// PR-JJ 2026-05-23:
-//   - Hidden by default; the user clicks the buffs (blue starburst,
-//     0x0600749C/D) or debuffs (red starburst, 0x0600749E/F) status
-//     indicator to toggle the strip. Clicking the same indicator
-//     again closes it. Clicking the other one swaps the filter.
-//   - Strip mounts below the status-indicators bar (top:40px ish so
-//     it doesn't collide with vitals at left:260px).
-//   - The two status indicators light up (active state) when their
-//     respective enchantment count > 0 — driven by this plugin via
-//     `window.__setStatusIndicator(id, bool)` (exposed by
-//     status-indicators.js).
+// Renders the local player's active enchantments + shared cooldowns as a
+// strip of icon cells. Pre-Wave-F.2 this was a name-keyword-heuristic
+// stub blocked on the wasm payload not carrying the `StatMod` tuple
+// (`type` / `statKey` / `statValue`). Wave F.2 extends
+// `PlayerEnchantmentJs` to surface the full tuple, which:
+//   1. Lets PR 4's `Character.applyEnchantment` cooldown discriminator
+//      (`Character.cs:619`, `type & 0x1000000`) route real wire data
+//      (previously only worked on synthetic test payloads).
+//   2. Lets us color buffs vs debuffs by the `EnchantmentTypeFlags.BENEFICIAL`
+//      bit (0x2000000) — the authoritative discriminator from the wire,
+//      replacing the brittle name-keyword heuristic.
+//   3. Lets us show "+10 STR" / "-5 STR" tooltips from `statKey` + `statValue`.
 //
-// Classification (buff vs debuff): no IS_BENEFICIAL flag on
-// spells-catalog.json yet, so we use a name-keyword heuristic that
-// covers the canonical retail debuff name family (Weakness / Harm /
-// Slow / Bane / etc.). Anything not matched is treated as a buff —
-// safe default for the visible-spells-strip use case. Refine when
-// we extract IS_BENEFICIAL from SpellTable.
+// Architecture:
+//   - Subscribes to `client.world` enchantment events (PR 4: emit deltas)
+//     OR falls back to polling `client.character.allEnchantments` on
+//     `playerStatsUpdated`.
+//   - Renders three logical groups: buffs, debuffs, cooldowns. The
+//     status-indicators plugin's two indicator icons (Beneficial /
+//     Harmful) drive a filter toggle that shows only that group.
+//   - Tiebreak: when `client.character` is present we use
+//     `getActiveEnchantments()` which honors the Character.cs:232-239
+//     tiebreak (Power desc → Level8AuraSelfSpells → set-spells beat
+//     non-set → SpellId desc within set, StartTime desc within non-set).
+//     Fallback path (no Character) iterates the wasm snapshot directly.
 //
-// Wasm source: `handle.playerEnchantments()` (new PR-JJ getter) —
-// re-pulled on every `playerStatsUpdated` event from the plugin bus.
+// Icons + names: prefers `wasm.getSpellRecord(spellId)` (Wave F.1 — byte-
+// correct retail spell record from `client_portal.dat`). Falls back to
+// `data/spells-catalog.json` pre-login.
+//
+// Citations:
+//   - `Enchantment.cs:NN` references `external/chorizite/ACPlugin/API/Enchantment.cs`
+//   - `Character.cs:NN` references `external/chorizite/ACPlugin/API/WorldObjects/Character.cs`
+//   - handoff §3 refs `external/holtburger/docs/chorizite-reading-guide-summary-2026-05-27.md` §3
+//
+// Wave F.2 file layout:
+//   - Module top: constants (EnchantmentTypeFlags + STAT_KEY_TO_NAME tables)
+//   - Classification: `classifyEnchantment(ench)` returns 'buff'|'debuff'|'cooldown'
+//   - Stat-mod formatting: `formatStatMod(ench)` returns "+10 STR" / "x1.25 STR" / ...
+//   - Render: `renderRow(group)` builds icon cells; `renderAll()` drives all 3 rows
+//   - Mount: subscribes to events, exposes `__buffsHudToggle` for status-indicators
+// =============================================================================
 
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
@@ -30,26 +51,157 @@ import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.
 const OVERLAY_ID = "hb-buffs-hud";
 const STYLE_ID = "hb-buffs-hud-style";
 
-// Debuff name-keyword heuristic. Case-insensitive substring match.
-const DEBUFF_PATTERNS = [
-  "weakness", "harm", "slow", "bane", "vulnerability", "foolishness",
-  "feeblemind", "bafflement", "senility", "frailty", "imperil",
-  "defenselessness", "lethargy", "helplessness", "hopelessness",
-  "halt", "confound", "curse", "drain", "leaden", "weariness",
-  "sluggish", "blight", "abasement", "humiliation", "stoic", "vapid",
-  "myopia", "fester", "fragile", "decay",
-];
+// ─── EnchantmentTypeFlags subset (`holtburger_common::properties::combat`) ───
+// Only the bits the HUD actually reads. Full enum at
+// `crates/holtburger-common/src/properties/combat.rs:99-122`.
+const ETF = Object.freeze({
+  ATTRIBUTE:      0x0000001,
+  SECOND_ATT:     0x0000002,
+  INT:            0x0000004,
+  FLOAT:          0x0000008,
+  SKILL:          0x0000010,
+  SINGLE_STAT:    0x0001000,
+  MULTIPLE_STAT:  0x0002000,
+  MULTIPLICATIVE: 0x0004000,
+  ADDITIVE:       0x0008000,
+  VITAE:          0x0800000,
+  COOLDOWN:       0x1000000,
+  BENEFICIAL:     0x2000000,
+});
 
-function classifyBuffDebuff(spellName) {
-  if (!spellName) return "buff";
-  const lower = spellName.toLowerCase();
-  for (const p of DEBUFF_PATTERNS) {
-    if (lower.includes(p)) return "debuff";
+// ─── StatKey label tables ───
+// Per `Enchantment.StatKey` doc (`Enchantment.cs:85-87`): the key is
+// AttributeId | VitalId | SkillId | PropertyInt depending on which
+// EnchantmentTypeFlags bit is set. Short ALL-CAPS abbreviations match
+// retail-AC's vitals HUD convention (`STR`, `END`, etc.).
+const ATTRIBUTE_NAME = Object.freeze({
+  1: "STR", 2: "END", 3: "COO", 4: "QCK", 5: "FOC", 6: "SEL",
+});
+const VITAL_NAME = Object.freeze({
+  1: "HP", 2: "HP", 3: "STAM", 4: "STAM", 5: "MANA", 6: "MANA",
+});
+// Top retail skills used most often in buffs — long-tail fallback prints
+// the raw id. Source: `holtburger_common::stats::SkillType` /
+// `Chorizite.Common/Enums/SkillId.cs`.
+const SKILL_NAME = Object.freeze({
+  6: "Melee D",  7: "Missile D", 14: "Run",   15: "Jump",
+  20: "Magic D", 24: "Mana C",   31: "Loyalty",
+  41: "War M",   42: "Life M",   43: "Item E", 44: "Creat E",
+  45: "Void M",  46: "Heavy W",  47: "Light W", 48: "Finesse",
+  49: "Missile", 50: "Two-Hand",
+  51: "Healing", 52: "Lock",    53: "Sneak", 54: "Salvg",
+  55: "App I",   56: "Arcane",  57: "App M",
+  // Resistance skills (43-49 range in some encodings):
+  60: "Slash P", 61: "Pierce P", 62: "Bludg P", 63: "Acid P",
+  64: "Fire P",  65: "Cold P",   66: "Elec P",
+});
+
+// ─── Constants ───
+// Wire's start_time/duration are seconds since the AC Derethian epoch.
+// Sky-system memory pinned this as the Unix epoch of 1999-11-02 — both
+// fields are deltas in seconds, so for "remaining time" purposes we can
+// take Date.now()/1000 - startTime directly without epoch math (the
+// snapshot landed at a wall-clock time, so all deltas come from there).
+function nowSeconds() {
+  return Date.now() / 1000;
+}
+
+function remainingSeconds(ench) {
+  // Per `Enchantment.cs:100-104` ExpiresAt formula:
+  //   Duration < 0 → MaxValue (permanent)
+  //   else → ClientReceivedAt + Duration - StartTime
+  // We approximate ClientReceivedAt as now() at first observation;
+  // for an actively-decaying buff the wire snapshot updates startTime
+  // as the server re-sends.
+  if (!Number.isFinite(ench.duration) || ench.duration < 0) return Infinity;
+  if (ench.duration === 0) return Infinity;  // permanent (cantrip / equipment)
+  const elapsed = nowSeconds() - ench.startTime;
+  return ench.duration - elapsed;
+}
+
+function fmtRemaining(secs) {
+  if (!Number.isFinite(secs) || secs <= 0) return "∞";
+  if (secs < 60) return `${Math.ceil(secs)}s`;
+  if (secs < 3600) {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${String(s).padStart(2, "0")}`;
   }
+  return `${Math.floor(secs / 3600)}h`;
+}
+
+// ─── Classification: buff vs debuff vs cooldown ───
+//
+// Per handoff §3 row "Critical semantics" #1: cooldown bit
+// `EnchantmentTypeFlags.COOLDOWN = 0x1000000`. PR 4's character.js
+// already routes these into `sharedCooldowns` — but we may also see
+// cooldown-flagged entries in the snapshot via the same path. We
+// double-check the bit here as a defensive cross-check.
+//
+// Buff vs debuff: PRIMARY signal is the
+// `EnchantmentTypeFlags.BENEFICIAL = 0x2000000` bit (set by the spell
+// table when it's a positive enchantment). FALLBACK signal is the
+// `statValue` sign for additive (>0 = buff, <0 = debuff) or its
+// distance from 1.0 for multiplicative (>1 = buff, <1 = debuff). The
+// fallback is necessary because the BENEFICIAL bit is occasionally
+// unset on legitimate buffs from older spells (per ACE PRs).
+export function classifyEnchantment(ench) {
+  const type = (ench?.type ?? ench?.statModType ?? 0) | 0;
+
+  if ((type & ETF.COOLDOWN) !== 0) return "cooldown";
+
+  // Beneficial bit is the authoritative wire signal.
+  if ((type & ETF.BENEFICIAL) !== 0) return "buff";
+
+  // Fallback: stat-mod sign.
+  const val = Number(ench?.statValue ?? ench?.statModValue ?? 0);
+  if ((type & ETF.ADDITIVE) !== 0) {
+    return val >= 0 ? "buff" : "debuff";
+  }
+  if ((type & ETF.MULTIPLICATIVE) !== 0) {
+    return val >= 1.0 ? "buff" : "debuff";
+  }
+  // Unknown — default to buff (safer than hiding the icon entirely).
   return "buff";
 }
 
-// Spell catalog cache.
+// ─── Stat-mod text formatting ───
+//
+// Returns a short "stat: delta" string like "+10 STR" or "x1.25 STR".
+// Empty string if we can't determine a meaningful label from the
+// (type, statKey, statValue) tuple.
+export function formatStatMod(ench) {
+  if (!ench) return "";
+  const type = (ench.type ?? ench.statModType ?? 0) | 0;
+  const key = (ench.statKey ?? ench.statModKey ?? 0) | 0;
+  const val = Number(ench.statValue ?? ench.statModValue ?? 0);
+
+  // Stat-name lookup keyed by the type flags.
+  let name = null;
+  if ((type & ETF.ATTRIBUTE) !== 0) name = ATTRIBUTE_NAME[key];
+  else if ((type & ETF.SECOND_ATT) !== 0) name = VITAL_NAME[key];
+  else if ((type & ETF.SKILL) !== 0) name = SKILL_NAME[key];
+  if (!name) name = `id ${key}`;
+
+  // Sign / format by additive vs multiplicative.
+  if ((type & ETF.ADDITIVE) !== 0) {
+    const intVal = Math.round(val);
+    const sign = intVal >= 0 ? "+" : "";
+    return `${sign}${intVal} ${name}`;
+  }
+  if ((type & ETF.MULTIPLICATIVE) !== 0) {
+    return `x${val.toFixed(2)} ${name}`;
+  }
+  return name;
+}
+
+// ─── Spell record lookup (Wave F.1) ───
+//
+// Reads from `wasm.getSpellRecord(spellId)` first (byte-correct retail
+// data from `client_portal.dat`); falls back to `data/spells-catalog.json`
+// for pre-login sessions. Returns the legacy-shaped record
+// `{name, icon, desc, level, ...}` so the rest of the plugin doesn't
+// branch on the source.
 let spellCatalog = null;
 let spellCatalogPromise = null;
 function loadSpellCatalog() {
@@ -69,12 +221,46 @@ function loadSpellCatalog() {
   return spellCatalogPromise;
 }
 
-// Wave 15 — icon cache consolidated into `ui/ac_icon_cache.js`. Local
-// thin wrapper preserves the historical `[buffs-hud]` warn label.
+function spellRecord(spellId) {
+  const handle = window.__sessionHandle;
+  // Try wasm first (Wave F.1).
+  if (handle?.getSpellRecord) {
+    try {
+      const raw = handle.getSpellRecord(spellId >>> 0);
+      if (raw) {
+        return {
+          name: raw.name,
+          icon: raw.iconId,
+          desc: raw.description,
+          school: raw.schoolName,
+          level: raw.roughLevel ?? 0,
+          isBeneficial: !!raw.isBeneficial,
+        };
+      }
+    } catch (_) { /* fall through */ }
+  }
+  // JSON catalog fallback.
+  const meta = spellCatalog?.[String(spellId)] || null;
+  if (meta) {
+    return {
+      name: meta.name,
+      icon: meta.icon,
+      desc: meta.desc,
+      school: meta.school,
+      level: meta.level,
+      isBeneficial: undefined,  // catalog has no beneficial flag
+    };
+  }
+  return null;
+}
+
+// Thin wrapper around the shared icon cache — preserves the
+// `[buffs-hud]` warn label on failure.
 async function fetchIconDataUrl(iconId) {
   return fetchIconDataUrlShared(iconId, "buffs-hud");
 }
 
+// ─── Styles ───
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
   const s = document.createElement("style");
@@ -87,16 +273,30 @@ function ensureStyles() {
       z-index: 51;
       pointer-events: auto;
       display: none;
-      gap: 3px;
+      flex-direction: column;
+      gap: 4px;
       padding: 4px 6px;
       max-width: 520px;
-      flex-wrap: wrap;
       font-family: var(--hb-font-serif);
       background: rgba(20, 14, 8, 0.92);
       border: 1px solid var(--hb-border-brass);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
     }
     #${OVERLAY_ID}[data-open="1"] { display: flex; }
+    #${OVERLAY_ID} .hb-buff-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      min-height: 26px;
+    }
+    #${OVERLAY_ID} .hb-buff-row-label {
+      color: var(--hb-text-muted-3);
+      font-size: 9px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding-right: 4px;
+      align-self: center;
+    }
     #${OVERLAY_ID} .hb-buff {
       width: 24px;
       height: 24px;
@@ -113,8 +313,12 @@ function ensureStyles() {
       transition: border-color 80ms;
     }
     #${OVERLAY_ID} .hb-buff:hover { border-color: var(--hb-text-gold); }
-    #${OVERLAY_ID} .hb-buff.debuff { border-color: rgba(180, 60, 60, 0.6); }
-    #${OVERLAY_ID} .hb-buff.debuff:hover { border-color: rgba(220, 80, 80, 1); }
+    #${OVERLAY_ID} .hb-buff.kind-buff      { border-color: rgba(80, 180, 80, 0.55); }
+    #${OVERLAY_ID} .hb-buff.kind-buff:hover { border-color: rgba(120, 220, 120, 1); }
+    #${OVERLAY_ID} .hb-buff.kind-debuff      { border-color: rgba(180, 60, 60, 0.6); }
+    #${OVERLAY_ID} .hb-buff.kind-debuff:hover { border-color: rgba(220, 80, 80, 1); }
+    #${OVERLAY_ID} .hb-buff.kind-cooldown    { border-color: rgba(120, 120, 180, 0.55); opacity: 0.7; }
+    #${OVERLAY_ID} .hb-buff.set-spell { box-shadow: 0 0 4px var(--hb-text-gold); border-color: var(--hb-text-gold); }
     #${OVERLAY_ID} .hb-buff img {
       width: 100%; height: 100%;
       image-rendering: pixelated;
@@ -155,63 +359,174 @@ function ensureStyles() {
   document.head.appendChild(s);
 }
 
-function fmtRemaining(secs) {
-  if (!Number.isFinite(secs) || secs <= 0) return "∞";
-  if (secs < 60) return `${Math.ceil(secs)}s`;
-  if (secs < 3600) {
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${String(s).padStart(2, "0")}`;
-  }
-  return `${Math.floor(secs / 3600)}h`;
-}
-
-function nowSeconds() {
-  return Date.now() / 1000;
-}
-
-function remainingSeconds(ench) {
-  if (!ench.duration || ench.duration <= 0) return Infinity;
-  const elapsed = nowSeconds() - ench.startTime;
-  return ench.duration - elapsed;
-}
-
-// Module-scope state — single overlay per page.
-let state = {
+// ─── Module-scope state ───
+const state = {
   overlayEl: null,
-  filter: null,            // "buff" | "debuff" | null (all)
-  enchantments: [],        // last-known snapshot (for in-place tick re-render)
+  rowsEl: { buff: null, debuff: null, cooldown: null },
+  filter: null,           // "buff" | "debuff" | "cooldown" | null (all)
+  /** @type {Map<number, object>} keyed by layeredId; values are normalized records */
+  enchantments: new Map(),
+  /** @type {Map<number, object>} keyed by layeredId; cooldown records */
+  cooldowns: new Map(),
+  /** Optional Character ref — when present we use its tiebreak. */
+  character: null,
   getCasterName: () => null,
 };
 
-function classifyEnch(ench) {
-  const meta = spellCatalog?.[String(ench.spellId)] || {};
-  return classifyBuffDebuff(meta.name);
+// ─── Normalization ───
+//
+// Accepts both the snake_case wire shape (raw `playerEnchantments()`
+// elements) and the camelCase PR-4 Character.applyEnchantment shape.
+// Produces a single normalized record the renderer expects.
+function normalizeEnchantment(e) {
+  if (!e) return null;
+  const spellId   = (e.spellId ?? e.spell_id ?? 0) >>> 0;
+  const layer     = (e.layer ?? 0) | 0;
+  return {
+    layeredId:     ((spellId << 16) | (layer & 0xFFFF)) >>> 0,
+    spellId,
+    layer,
+    spellCategory: (e.spellCategory ?? e.spell_category ?? 0) | 0,
+    power:         (e.power ?? e.powerLevel ?? e.power_level ?? 0) | 0,
+    startTime:     Number(e.startTime ?? e.start_time ?? 0),
+    duration:      Number(e.duration ?? 0),
+    casterGuid:    (e.casterGuid ?? e.caster_guid ?? 0) >>> 0,
+    type:          (e.type ?? e.statModType ?? e.stat_mod_type ?? 0) | 0,
+    statKey:       (e.statKey ?? e.statModKey ?? e.stat_mod_key ?? 0) | 0,
+    statValue:     Number(e.statValue ?? e.statModValue ?? e.stat_mod_value ?? 0),
+    hasSpellSetId: (e.hasSpellSetId ?? e.has_spell_set_id ?? 0) | 0,
+    spellSetId:    (e.spellSetId ?? e.spell_set_id ?? 0) | 0,
+  };
 }
 
-function render() {
-  const ov = state.overlayEl;
-  if (!ov) return;
-  const all = state.enchantments;
-  const filter = state.filter;
-  const list = filter
-    ? all.filter((e) => classifyEnch(e) === filter)
-    : all;
+// ─── Active-set sync ───
+//
+// Two source paths:
+//   (a) When PR 4's `client.character` is present: read
+//       `character.getActiveEnchantments()` (returns tiebreak-resolved
+//       per-category winners) + `character.sharedCooldowns.values()`.
+//   (b) Fallback: read raw `handle.playerEnchantments()` and classify
+//       in-band (no tiebreak; one icon per layered slot).
+function refreshFromCharacter(character) {
+  state.enchantments.clear();
+  state.cooldowns.clear();
+  if (!character) return;
+  // Apply the load-bearing tiebreak from PR 4 — returns the
+  // highest-Power winner per (category, layer). Cooldowns live on
+  // sharedCooldowns separately.
+  const winners = character.getActiveEnchantments();
+  for (const e of winners) {
+    if (!e) continue;
+    state.enchantments.set(e.layeredId >>> 0, e);
+  }
+  for (const cd of character.sharedCooldowns.values()) {
+    if (!cd) continue;
+    state.cooldowns.set(cd.layeredId >>> 0, {
+      ...cd,
+      // Mark as cooldown for the classifier.
+      type: (cd.type ?? 0) | ETF.COOLDOWN,
+    });
+  }
+}
 
-  ov.innerHTML = "";
+function refreshFromSnapshot(snapshot) {
+  state.enchantments.clear();
+  state.cooldowns.clear();
+  if (!Array.isArray(snapshot)) return;
+  for (const raw of snapshot) {
+    const n = normalizeEnchantment(raw);
+    if (!n) continue;
+    if ((n.type & ETF.COOLDOWN) !== 0) {
+      state.cooldowns.set(n.layeredId, n);
+    } else {
+      // Per-category tiebreak: keep the highest-Power entry.
+      const prev = [...state.enchantments.values()].find(
+        (p) => p.spellCategory === n.spellCategory
+              && p.layer === n.layer
+              && p.spellCategory !== 0,
+      );
+      if (prev && prev.power >= n.power) continue;
+      if (prev) state.enchantments.delete(prev.layeredId);
+      state.enchantments.set(n.layeredId, n);
+    }
+  }
+}
+
+// ─── Render ───
+function renderCell(ench, kind) {
+  const cell = document.createElement("div");
+  cell.className = `hb-buff kind-${kind}`;
+  cell.dataset.spellId = String(ench.spellId);
+  cell.dataset.kind = kind;
+  if (ench.hasSpellSetId) cell.classList.add("set-spell");
+
+  const meta = spellRecord(ench.spellId) || {};
+  // Initial fallback glyph while icon loads.
+  cell.textContent = kind === "debuff" ? "☠" : kind === "cooldown" ? "⏲" : "✦";
+  const iconId = meta.icon;
+  if (iconId) {
+    fetchIconDataUrl(iconId).then((url) => {
+      if (!url || !cell.isConnected) return;
+      cell.textContent = "";
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = meta.name || `Spell ${ench.spellId}`;
+      cell.appendChild(img);
+    });
+  }
+
+  if (ench.layer > 0) {
+    const layer = document.createElement("div");
+    layer.className = "hb-buff-layer";
+    setAcText(layer, String(ench.layer));
+    cell.appendChild(layer);
+  }
+
+  const remaining = remainingSeconds(ench);
+  const time = document.createElement("div");
+  time.className = "hb-buff-time";
+  setAcText(time, fmtRemaining(remaining));
+  cell.appendChild(time);
+
+  // ─── Tooltip ───
+  const casterName = state.getCasterName?.(ench.casterGuid)
+    || `0x${(ench.casterGuid >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  const modText = formatStatMod(ench);
+  const lines = [
+    `${meta.name || `Spell ${ench.spellId}`} (${kind})`,
+  ];
+  if (modText) lines.push(modText);
+  if (meta.school) lines.push(`School: ${meta.school}`);
+  lines.push(`Caster: ${casterName}`);
+  lines.push(`Power: ${ench.power}`);
+  if (ench.duration > 0 || ench.duration < 0) {
+    if (ench.duration < 0) {
+      lines.push(`Duration: permanent`);
+    } else {
+      lines.push(`Remaining: ${fmtRemaining(remaining)}`);
+    }
+  } else {
+    lines.push(`Duration: permanent`);
+  }
+  if (ench.hasSpellSetId) {
+    lines.push(`Set: id ${ench.spellSetId}`);
+  }
+  cell.title = lines.join("\n");
+
+  return cell;
+}
+
+function renderRow(rowEl, list, kind, emptyMsg) {
+  if (!rowEl) return;
+  rowEl.innerHTML = "";
   if (list.length === 0) {
     const empty = document.createElement("div");
     empty.className = "hb-buff-empty";
-    setAcText(empty, filter === "debuff"
-      ? "No harmful spells active."
-      : filter === "buff"
-        ? "No beneficial spells active."
-        : "No active spells.");
-    ov.appendChild(empty);
+    setAcText(empty, emptyMsg);
+    rowEl.appendChild(empty);
     return;
   }
-
-  // Longest-remaining first.
+  // Sort: longest-remaining first; permanent (∞) first.
   const sorted = list.slice().sort((a, b) => {
     const ra = remainingSeconds(a);
     const rb = remainingSeconds(b);
@@ -220,45 +535,44 @@ function render() {
     if (rb === Infinity) return 1;
     return rb - ra;
   });
-
   for (const ench of sorted) {
-    const meta = spellCatalog?.[String(ench.spellId)] || {};
-    const kind = classifyEnch(ench);
-    const cell = document.createElement("div");
-    cell.className = "hb-buff" + (kind === "debuff" ? " debuff" : "");
-    cell.dataset.spellId = String(ench.spellId);
-    cell.textContent = kind === "debuff" ? "☠" : "✦";
-    if (meta.icon) {
-      fetchIconDataUrl(meta.icon).then((url) => {
-        if (!url || !cell.isConnected) return;
-        cell.textContent = "";
-        const img = document.createElement("img");
-        img.src = url;
-        img.alt = meta.name || "";
-        cell.appendChild(img);
-      });
-    }
-    if (ench.layer > 0) {
-      const layer = document.createElement("div");
-      layer.className = "hb-buff-layer";
-      setAcText(layer, String(ench.layer));
-      cell.appendChild(layer);
-    }
-    const time = document.createElement("div");
-    time.className = "hb-buff-time";
-    setAcText(time, fmtRemaining(remainingSeconds(ench)));
-    cell.appendChild(time);
+    rowEl.appendChild(renderCell(ench, kind));
+  }
+}
 
-    const casterName = state.getCasterName?.(ench.casterGuid)
-      || `0x${(ench.casterGuid >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
-    cell.title =
-      `${meta.name || `Spell ${ench.spellId}`} (${kind})\n` +
-      `Caster: ${casterName}\n` +
-      `Power: ${ench.powerLevel}` +
-      (ench.duration > 0
-        ? `\nRemaining: ${fmtRemaining(remainingSeconds(ench))}`
-        : `\nDuration: permanent`);
-    ov.appendChild(cell);
+export function renderAll() {
+  const ov = state.overlayEl;
+  if (!ov) return;
+  const all = [...state.enchantments.values()];
+  const cooldowns = [...state.cooldowns.values()];
+  const buffs = all.filter((e) => classifyEnchantment(e) === "buff");
+  const debuffs = all.filter((e) => classifyEnchantment(e) === "debuff");
+
+  // Filter logic — when filter active, hide non-matching rows.
+  const showBuff     = !state.filter || state.filter === "buff";
+  const showDebuff   = !state.filter || state.filter === "debuff";
+  const showCooldown = !state.filter || state.filter === "cooldown";
+
+  for (const r of Object.values(state.rowsEl)) {
+    if (r) r.style.display = "none";
+  }
+
+  if (showBuff && state.rowsEl.buff) {
+    state.rowsEl.buff.style.display = "flex";
+    renderRow(state.rowsEl.buff, buffs, "buff",
+              "No beneficial spells active.");
+  }
+  if (showDebuff && state.rowsEl.debuff) {
+    state.rowsEl.debuff.style.display = "flex";
+    renderRow(state.rowsEl.debuff, debuffs, "debuff",
+              "No harmful spells active.");
+  }
+  if (showCooldown && state.rowsEl.cooldown) {
+    state.rowsEl.cooldown.style.display = cooldowns.length === 0 && state.filter !== "cooldown"
+      ? "none"   // hide if empty AND we aren't explicitly filtering to it
+      : "flex";
+    renderRow(state.rowsEl.cooldown, cooldowns, "cooldown",
+              "No active cooldowns.");
   }
 }
 
@@ -266,9 +580,10 @@ function syncIndicators() {
   if (typeof window.__setStatusIndicator !== "function") return;
   let nBuff = 0;
   let nDebuff = 0;
-  for (const e of state.enchantments) {
-    if (classifyEnch(e) === "debuff") nDebuff++;
-    else nBuff++;
+  for (const e of state.enchantments.values()) {
+    const kind = classifyEnchantment(e);
+    if (kind === "debuff") nDebuff++;
+    else if (kind === "buff") nBuff++;
   }
   window.__setStatusIndicator("buffs", nBuff > 0);
   window.__setStatusIndicator("debuffs", nDebuff > 0);
@@ -279,13 +594,12 @@ function toggleStrip(which) {
   if (!ov) return;
   const isOpen = ov.dataset.open === "1";
   if (isOpen && state.filter === which) {
-    // Same indicator clicked → close.
     ov.dataset.open = "0";
     state.filter = null;
   } else {
     state.filter = which || null;
     ov.dataset.open = "1";
-    render();
+    renderAll();
   }
 }
 
@@ -294,32 +608,50 @@ export const manifest = {
   name: "Buffs",
   icon: "✦",
   iconHidden: true,
-  version: "0.2.0",
-  description: "Active-spells strip — toggled by the Beneficial/Harmful status indicators",
+  version: "0.3.0",  // Wave F.2 — full StatMod + cooldown + Wave-F.1-icons
+  description: "Active-spells strip — buffs, debuffs, cooldowns with statMod display",
 };
 
 export function mount(ctx) {
   ensureStyles();
   loadSpellCatalog();
+
+  // Build overlay + the 3 row containers.
   const existing = document.getElementById(OVERLAY_ID);
   if (existing) existing.remove();
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
   overlay.dataset.open = "0";
+
+  const mkRow = (kind, labelText) => {
+    const row = document.createElement("div");
+    row.className = `hb-buff-row hb-buff-row-${kind}`;
+    const label = document.createElement("span");
+    label.className = "hb-buff-row-label";
+    setAcText(label, labelText);
+    row.appendChild(label);
+    return row;
+  };
+  state.rowsEl.buff = mkRow("buff", "Buffs");
+  state.rowsEl.debuff = mkRow("debuff", "Debuffs");
+  state.rowsEl.cooldown = mkRow("cooldown", "Cooldowns");
+  overlay.appendChild(state.rowsEl.buff);
+  overlay.appendChild(state.rowsEl.debuff);
+  overlay.appendChild(state.rowsEl.cooldown);
   document.body.appendChild(overlay);
   state.overlayEl = overlay;
 
-  // Expose toggle so status-indicators.js can drive us.
+  // Expose toggle for status-indicators.js.
   window.__buffsHudToggle = (which) => toggleStrip(which);
 
   let pollTimer = null;
-  let unsubscribe = null;
+  const unsubs = [];
   let tickTimer = null;
 
   function tryHook() {
     const client = ctx?.client ?? window.__pluginClient ?? null;
     const handle = window.__sessionHandle ?? null;
-    if (!client?.events?.on || !handle?.playerEnchantments) return false;
+    if (!handle?.playerEnchantments) return false;
 
     state.getCasterName = (guid) => {
       try {
@@ -328,24 +660,51 @@ export function mount(ctx) {
       } catch { return null; }
     };
 
+    // Prefer the typed Character if present.
+    const character = client?.character ?? client?.world?.character ?? null;
+    state.character = character;
+
     const refresh = () => {
       try {
-        const list = handle.playerEnchantments() || [];
-        state.enchantments = list;
+        if (state.character && typeof state.character.getActiveEnchantments === "function") {
+          refreshFromCharacter(state.character);
+        } else {
+          const list = handle.playerEnchantments() || [];
+          refreshFromSnapshot(list);
+        }
         syncIndicators();
-        if (overlay.dataset.open === "1") render();
+        if (overlay.dataset.open === "1") renderAll();
       } catch (e) {
-        state.enchantments = [];
-        syncIndicators();
+        console.warn("[buffs-hud] refresh failed", e);
       }
     };
 
-    client.events.on("playerStatsUpdated", refresh);
-    unsubscribe = () => client.events.off?.("playerStatsUpdated", refresh);
+    // Primary: PR 4's `client.world` bus events.
+    const world = client?.world ?? null;
+    if (world?.addEventListener) {
+      const evRefresh = () => refresh();
+      world.addEventListener("enchantmentAdded", evRefresh);
+      world.addEventListener("enchantmentRemoved", evRefresh);
+      world.addEventListener("enchantmentsChanged", evRefresh);
+      unsubs.push(() => {
+        world.removeEventListener("enchantmentAdded", evRefresh);
+        world.removeEventListener("enchantmentRemoved", evRefresh);
+        world.removeEventListener("enchantmentsChanged", evRefresh);
+      });
+    }
+
+    // Fallback / belt-and-braces: also subscribe to playerStatsUpdated
+    // — covers the case where world isn't yet bound or events haven't
+    // been wired by PR 4 in some test contexts.
+    if (client?.events?.on) {
+      client.events.on("playerStatsUpdated", refresh);
+      unsubs.push(() => client.events.off?.("playerStatsUpdated", refresh));
+    }
+
     refresh();
     // 1Hz tick keeps remaining-time labels honest while open.
     tickTimer = setInterval(() => {
-      if (overlay.dataset.open === "1") render();
+      if (overlay.dataset.open === "1") renderAll();
     }, 1000);
     return true;
   }
@@ -362,35 +721,100 @@ export function mount(ctx) {
   return () => {
     if (pollTimer) clearInterval(pollTimer);
     if (tickTimer) clearInterval(tickTimer);
-    if (unsubscribe) unsubscribe();
+    for (const u of unsubs) u();
+    unsubs.length = 0;
     delete window.__buffsHudToggle;
     overlay.remove();
     state.overlayEl = null;
+    state.rowsEl.buff = null;
+    state.rowsEl.debuff = null;
+    state.rowsEl.cooldown = null;
+    state.character = null;
+    state.enchantments.clear();
+    state.cooldowns.clear();
   };
 }
 
-// Debug helper — pop synthetic enchantments and open the strip.
+// ─── Debug helper ───
+//
+// Pop synthetic enchantments and open the strip. Mirrors retail buffs:
+// permanent buff, temp buff, set-spell, debuff, cooldown. Validates the
+// 3-row layout + classification + tiebreak in a manual smoke check.
 if (typeof window !== "undefined") {
   window.__buffsHudDebug = function (filter) {
     ensureStyles();
     loadSpellCatalog();
     if (!state.overlayEl) {
-      state.overlayEl = document.createElement("div");
-      state.overlayEl.id = OVERLAY_ID;
-      state.overlayEl.dataset.open = "0";
-      document.body.appendChild(state.overlayEl);
+      // Mount-lite path for debug — usually mount() will have been called.
+      const overlay = document.createElement("div");
+      overlay.id = OVERLAY_ID;
+      overlay.dataset.open = "0";
+      const mkRow = (kind, labelText) => {
+        const row = document.createElement("div");
+        row.className = `hb-buff-row hb-buff-row-${kind}`;
+        const label = document.createElement("span");
+        label.className = "hb-buff-row-label";
+        setAcText(label, labelText);
+        row.appendChild(label);
+        return row;
+      };
+      state.rowsEl.buff = mkRow("buff", "Buffs");
+      state.rowsEl.debuff = mkRow("debuff", "Debuffs");
+      state.rowsEl.cooldown = mkRow("cooldown", "Cooldowns");
+      overlay.appendChild(state.rowsEl.buff);
+      overlay.appendChild(state.rowsEl.debuff);
+      overlay.appendChild(state.rowsEl.cooldown);
+      document.body.appendChild(overlay);
+      state.overlayEl = overlay;
     }
     const now = Date.now() / 1000;
-    state.enchantments = [
-      { spellId: 1158, spellCategory: 12, layer: 0, powerLevel: 200, startTime: now - 30, duration: 600, casterGuid: 0xDEADBEEF },  // Strength Self VI (buff)
-      { spellId: 6,    spellCategory: 5,  layer: 0, powerLevel: 50,  startTime: now - 5,  duration: 60,  casterGuid: 0xDEADBEEF },  // Heal Self I (buff)
-      { spellId: 2192, spellCategory: 22, layer: 0, powerLevel: 400, startTime: now,      duration: 0,   casterGuid: 0xCAFE0001 },  // Cantrip (∞ buff)
-      { spellId: 3,    spellCategory: 13, layer: 1, powerLevel: 25,  startTime: now - 2,  duration: 30,  casterGuid: 0xBAD0CA57 },  // Weakness Other I (debuff)
+    const samples = [
+      // Strength Self VI — additive +60 STR, beneficial.
+      { spellId: 1158, spellCategory: 12, layer: 0, power: 200,
+        startTime: now - 30, duration: 600, casterGuid: 0xDEADBEEF,
+        type: ETF.BENEFICIAL | ETF.ADDITIVE | ETF.ATTRIBUTE | ETF.SINGLE_STAT,
+        statKey: 1, statValue: 60 },
+      // Quickness Other VI — multiplicative buff (set-spell).
+      { spellId: 1161, spellCategory: 14, layer: 0, power: 200,
+        startTime: now - 5, duration: 1800, casterGuid: 0xCAFE0001,
+        type: ETF.BENEFICIAL | ETF.MULTIPLICATIVE | ETF.ATTRIBUTE,
+        statKey: 4, statValue: 1.25, hasSpellSetId: 1, spellSetId: 42 },
+      // Cantrip — permanent equipment buff (no BENEFICIAL bit but +5 STR).
+      { spellId: 2192, spellCategory: 22, layer: 0, power: 400,
+        startTime: now, duration: -1, casterGuid: 0xCAFE0001,
+        type: ETF.ADDITIVE | ETF.ATTRIBUTE,
+        statKey: 1, statValue: 5 },
+      // Weakness Other VI — additive -60 STR (debuff).
+      { spellId: 3, spellCategory: 13, layer: 0, power: 200,
+        startTime: now - 2, duration: 120, casterGuid: 0xBAD0CA57,
+        type: ETF.ADDITIVE | ETF.ATTRIBUTE,
+        statKey: 1, statValue: -60 },
+      // Cooldown — Item cooldown bucket (e.g. lifestone tie).
+      { spellId: 666, spellCategory: 0, layer: 0, power: 0,
+        startTime: now, duration: 60, casterGuid: 0,
+        type: ETF.COOLDOWN, statKey: 0x101 /* lifestone-tie cooldown id */, statValue: 0 },
     ];
+    refreshFromSnapshot(samples);
     state.getCasterName = (g) => `Debug 0x${g.toString(16).toUpperCase()}`;
     syncIndicators();
     state.filter = filter || null;
     state.overlayEl.dataset.open = "1";
-    render();
+    renderAll();
   };
 }
+
+// ─── Test exports ───
+// Internal helpers exposed for `tests/buffs_hud.test.cjs`. NOT part of
+// the public plugin API.
+export const __test = Object.freeze({
+  ETF,
+  ATTRIBUTE_NAME,
+  VITAL_NAME,
+  SKILL_NAME,
+  normalizeEnchantment,
+  refreshFromSnapshot,
+  refreshFromCharacter,
+  state,
+  remainingSeconds,
+  fmtRemaining,
+});

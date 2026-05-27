@@ -621,6 +621,41 @@ function subscribeAllegiance(rerender) {
   };
 }
 
+// Wave F.3 (2026-05-27): subscribe to per-member login/logout events
+// (`Allegiance_AllegianceLoginNotification`, opcode 0x027A). The wasm
+// side ALSO re-emits `allegianceUpdated` after flipping the cached
+// `logged_in` flag, so the snapshot-driven panel will refresh through
+// the existing path. This handler adds the chat-style "X has logged in"
+// notification line that retail surfaces in the system chat tab — the
+// allegiance panel itself stays driven by the snapshot subscription.
+function subscribeAllegiancePresence() {
+  const bus = window.__pluginClient?.events;
+  if (!bus || typeof bus.on !== "function") return () => {};
+  const listener = (payload) => {
+    try {
+      const guid = (payload?.characterGuid >>> 0) || 0;
+      const isLoggedIn = !!payload?.isLoggedIn;
+      if (!guid) return;
+      const snap = fetchAllegianceSnapshot();
+      if (!snap) return;
+      // Resolve the member's display name out of the cached hierarchy.
+      // Look in monarch/patron/myself/vassals in that order.
+      const candidates = [snap.monarch, snap.patron, snap.myself, ...(snap.vassals || [])];
+      let name = "";
+      for (const m of candidates) {
+        if (m && (m.guid >>> 0) === guid) { name = m.name || ""; break; }
+      }
+      if (!name) name = `0x${guid.toString(16).padStart(8, "0").toUpperCase()}`;
+      const verb = isLoggedIn ? "has logged in" : "has logged out";
+      emit(`${name} ${verb}.`, 6 /* allegiance chat category */);
+    } catch (_) {}
+  };
+  bus.on("allegiancePresence", listener);
+  return () => {
+    if (typeof bus.off === "function") bus.off("allegiancePresence", listener);
+  };
+}
+
 export const view = {
   name: "Allegiance",
   nameFor: () => "Allegiance",
@@ -864,9 +899,15 @@ export const view = {
     const rerender = () => renderAllegianceState(renderRefs, fetchAllegianceSnapshot());
     rerender();
     const unsub = subscribeAllegiance(rerender);
+    // Wave F.3 (2026-05-27): per-member login/logout chat-line notifier.
+    // Snapshot refresh is already covered by `subscribeAllegiance` —
+    // this exists solely to emit the retail-style "X has logged in"
+    // line into the system chat tab.
+    const unsubPresence = subscribeAllegiancePresence();
 
     return () => {
       try { unsub(); } catch (_) {}
+      try { unsubPresence(); } catch (_) {}
       root.remove();
     };
   },
@@ -1450,6 +1491,9 @@ function buildStandaloneOverlay() {
   // standalone we keep the bus subscription alive for the page lifetime
   // (overlay is hidden, not destroyed, on close).
   subscribeAllegiance(renderStateBox);
+  // Wave F.3 (2026-05-27): emit per-member login chat lines in the
+  // standalone too. Same page-lifetime subscription rationale.
+  subscribeAllegiancePresence();
 
   overlay.appendChild(body);
 

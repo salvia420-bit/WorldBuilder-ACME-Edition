@@ -1350,6 +1350,7 @@ mod tests {
             meta_spell_id: 0,
             extras: SpellExtrasInfo::None,
             components: [0; 8],
+            decrypted_components: Vec::new(),
             caster_effect: 0,
             target_effect: 0,
             fizzle_effect: 0,

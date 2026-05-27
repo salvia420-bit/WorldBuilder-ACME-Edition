@@ -138,6 +138,9 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::FellowshipFellowUpdateDone => 0x01C9,
         GameEvent::FellowshipFellowStatsDone => 0x01CA,
         GameEvent::AllegianceUpdate(_) => 0x0020,
+        // Wave-F3 (2026-05-27): allegiance presence + info-response.
+        GameEvent::AllegianceLoginNotification(_) => 0x027A,
+        GameEvent::AllegianceInfoResponse(_) => 0x027C,
         GameEvent::FriendsListUpdate(_) => 0x0021,
         GameEvent::SetSquelchDb(_) => 0x01F4,
         GameEvent::CharacterTitle(_) => 0x0029,
@@ -146,6 +149,11 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::HouseData(_) => 0x0225,
         GameEvent::HouseProfile(_) => 0x021D,
         GameEvent::HouseUpdateRestrictions(_) => 0x0248,
+        // Wave F.5 (2026-05-27, parallel agent): Contracts opcodes added
+        // to the enum by Wave F.5; mapped here so the match stays
+        // exhaustive. F.5 owns the actual recv-loop handling.
+        GameEvent::SendClientContractTracker(_) => 0x0315,
+        GameEvent::SendClientContractTrackerTable(_) => 0x0314,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -12712,6 +12720,51 @@ const CLIENT_EVENT_KIND_OBJECT_APPRAISED: u32 = 32;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_PORTAL_SPACE_ENTERED: u32 = 33;
 
+// Kinds 34-39 reserved for parallel-running waves (F.4 Vendor, F.5
+// Contracts, F.6 Emote) per the 2026-05-27 parallel-coordination plan.
+// Wave F.3 (allegiance) claims 40 + 41.
+
+/// `kind = 34` — ContractsUpdated. Wave F.5 (2026-05-27). ACE emits
+/// `GameEvent::SendClientContractTrackerTable` (opcode 0x0314 — full
+/// snapshot at login when `GetContractsCount > 0`) and
+/// `GameEvent::SendClientContractTracker` (opcode 0x0315 — single-
+/// contract delta on Add / Erase / Update from `ContractManager`).
+/// Routes to retail `gmContractsUI::RecvNotice_UpdateContractTracker`
+/// at `acclient.c:211881`.
+///
+/// `u32Payload` = contract_id of the updated tracker (table-replace
+/// path leaves this `None`); `u32Payload2` = 1 when DeleteContract was
+/// set (Erase / Abandon), else 0. Consumer reads the full tracker list
+/// via [`SessionHandle::player_contracts`].
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CONTRACTS_UPDATED: u32 = 34;
+
+/// `kind = 40` — AllegiancePresence. Wave-F3 (2026-05-27): ACE pushes
+/// `GameEvent::AllegianceLoginNotification` (opcode 0x027A) when an
+/// allegiance member logs in or out. `u32_payload` = the character's
+/// GUID, `u32_payload_2` = `1` (login) / `0` (logout). String payload
+/// unused — the panel resolves the name via the cached hierarchy.
+///
+/// Source: port of
+/// `external/chorizite/Chorizite.ACProtocol/Chorizite.ACProtocol/Messages/
+/// S2C/Events/Allegiance_AllegianceLoginNotificationEvent.generated.cs`.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ALLEGIANCE_PRESENCE: u32 = 40;
+
+/// `kind = 41` — AllegianceInfoResponse. Wave-F3 (2026-05-27): ACE pushes
+/// `GameEvent::AllegianceInfoResponse` (opcode 0x027C) as the reply to a
+/// client's `Allegiance_AllegianceInfoRequest`. Carries the same
+/// `AllegianceProfile` body as `AllegianceUpdate` (0x0020) but scoped to
+/// a queried target (not necessarily the local player). `u32_payload`
+/// = `target_id` GUID. JS reads the snapshot via
+/// `SessionHandle.lastAllegianceInfoResponse()`.
+///
+/// Source: port of
+/// `external/chorizite/Chorizite.ACProtocol/Chorizite.ACProtocol/Messages/
+/// S2C/Events/Allegiance_AllegianceInfoResponseEvent.generated.cs`.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ALLEGIANCE_INFO: u32 = 41;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -13368,6 +13421,16 @@ enum SessionCommand {
     /// owns the unequip-first-if-needed sequencing.
     DropItem {
         item_guid: u32,
+    },
+    /// Wave F.5 (2026-05-27): JS-side abandon-contract action. Sends
+    /// `GameAction::AbandonContract` (sub-opcode 0x0316) carrying a
+    /// `ContractId`. ACE `Player.HandleActionAbandonContract` routes
+    /// to `ContractManager.Abandon → Erase` which broadcasts a
+    /// `SendClientContractTracker` with `DeleteContract=true`; the
+    /// recv-loop's contracts arm folds the delete into
+    /// `latest_contracts` and the JS contracts-panel re-renders.
+    AbandonContract {
+        contract_id: u32,
     },
 }
 
@@ -14590,6 +14653,19 @@ struct VendorState {
     alternate_currency_amount: u32,
     alternate_currency_name: String,
     items: Vec<VendorStateItem>,
+    // Wave F.4 (2026-05-27): typed-profile fields needed for the
+    // category-filter + acceptance-rule UI. The wire opcode (0x0062
+    // ApproachVendor) already carries these — see
+    // `ApproachVendorEventData` in holtburger-protocol. Default to
+    // "accept all" sentinels for back-compat with the Wave 7 init path:
+    //   * merchandise_item_types = 0xFFFFFFFF → all categories accepted
+    //   * min_value = u32::MAX (retail -1)    → no floor
+    //   * max_value = u32::MAX (retail -1)    → no cap
+    //   * deals_magic = true                  → magic items welcome
+    merchandise_item_types: u32,
+    min_value: u32,
+    max_value: u32,
+    deals_magic: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -14731,15 +14807,24 @@ impl VendorItemJs {
     pub fn icon_id(&self) -> u32 { self.icon_id }
 }
 
-/// PR-JJ 2026-05-23: Internal cache shape for `latest_enchantments`.
-/// Mirrors the load-bearing subset of
-/// `holtburger_protocol::messages::magic::types::Enchantment`. We
-/// don't store the per-stat modifier vector or the typed-arg payloads
-/// (mod_type / interp_type / start_value / etc.) — the buffs HUD
-/// only needs name/duration/category/power. Full enchantment shape
-/// is preserved in `world.player.enchantments` for spell-stack
-/// resolution; this is a JS-friendly subset.
-#[cfg(target_arch = "wasm32")]
+/// PR-JJ 2026-05-23 + Wave F.2 2026-05-27: Internal cache shape for
+/// `latest_enchantments`. Mirrors the full wire-level
+/// `holtburger_protocol::messages::magic::types::Enchantment` so the
+/// JS-side buffs HUD + Character cooldown discriminator have what they
+/// need to route, render, and tiebreak.
+///
+/// Wave F.2 extended the cached subset to include the `StatMod` tuple
+/// (`stat_mod_type` / `stat_mod_key` / `stat_mod_value`), the
+/// degrade-tracking fields, the optional `spell_set_id`, and the
+/// `has_spell_set_id` flag. **Why this matters**: PR 4's
+/// `Character.applyEnchantment` cooldown discriminator
+/// (`StatMod.Type & EnchantmentTypeFlags.COOLDOWN`, handoff §3 row 5)
+/// only works when the type/key/value triple is present — pre-Wave-F.2
+/// the wire snapshot dropped them, so cooldowns were silently misrouted
+/// as ordinary buffs. Tested via `tests/buffs_hud.test.cjs` (JS
+/// integration) and `tests_player_enchantment_snapshot_shape` below
+/// (native parity probe).
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone)]
 struct PlayerEnchantment {
     spell_id: u32,
@@ -14749,10 +14834,47 @@ struct PlayerEnchantment {
     start_time: f64,
     duration: f64,
     caster_guid: u32,
+    /// `EnchantmentTypeFlags` bitfield — high bits drive routing:
+    /// `0x1000000 COOLDOWN` → SharedCooldowns;
+    /// `0x2000000 BENEFICIAL` → buff coloring hint;
+    /// `0x0800000 VITAE` → vitae short-circuit (`Character.cs:614`).
+    /// Low bits (`STAT_TYPES = 0x000_00FF`) classify what `stat_mod_key`
+    /// references (Attribute, Skill, Int, Float, Cooldown).
+    stat_mod_type: u32,
+    /// PropertyAttribute / PropertyInt / PropertySkill / SharedCooldown
+    /// id depending on `stat_mod_type` low bits. For Cooldown this is
+    /// the sign-extended 12-bit cooldown id mirrored in the JS side via
+    /// `Character.signExtendLow12`.
+    stat_mod_key: u32,
+    /// Magnitude. **f32, can be negative** (debuffs). For additive flag
+    /// (`ENCHANTMENT_TYPE_ADDITIVE = 0x0008000`) this is the +/- delta
+    /// applied as `i32`. For multiplicative (`MULTIPLICATIVE = 0x0004000`)
+    /// it's the factor (1.0 = neutral, >1 buff, <1 debuff).
+    stat_mod_value: f32,
+    /// Wire-level "has spell set" flag (u16 on the wire) — `1` if the
+    /// enchantment is part of an equipped set (`EquipmentSet` enum).
+    /// Used by the buffs HUD to render the gold "set-spell" border.
+    has_spell_set_id: u16,
+    /// `Option<u32>` on the wire — `Some(id)` only if `has_spell_set_id`
+    /// is non-zero. We carry the id verbatim for tiebreak comparison
+    /// (`Character.cs:237` segregation rule per Wave C.2 handoff §7).
+    spell_set_id: Option<u32>,
+    /// Per-enchantment power decay rate; cantrip enchants are 0/0 and
+    /// don't decay. Mirrored verbatim — Character.cs tiebreak doesn't
+    /// use it but the HUD may show a "fading" tint on degraded buffs.
+    degrade_modifier: f32,
+    /// Lower bound power before the enchantment expires
+    /// (`Enchantment.cs:72`). Wire-cosmetic; passthrough.
+    degrade_limit: f32,
+    /// Server time of the last decay tick.
+    last_time_degraded: f64,
 }
 
 /// JS-facing wrapper around `PlayerEnchantment`. Cloneable per-access
-/// (wasm-bindgen vec semantics).
+/// (wasm-bindgen vec semantics). Wave F.2 extension surfaces the full
+/// `StatMod` tuple + spell-set + degrade fields as camelCase getters so
+/// the PR 4 `Character.applyEnchantment` cooldown discriminator can
+/// route off real wire data (not just synthetic test payloads).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 #[derive(Clone)]
@@ -14764,13 +14886,22 @@ pub struct PlayerEnchantmentJs {
     start_time: f64,
     duration: f64,
     caster_guid: u32,
+    stat_mod_type: u32,
+    stat_mod_key: u32,
+    stat_mod_value: f32,
+    has_spell_set_id: u16,
+    spell_set_id: Option<u32>,
+    degrade_modifier: f32,
+    degrade_limit: f32,
+    last_time_degraded: f64,
 }
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl PlayerEnchantmentJs {
-    /// Spell DataID. UI looks up display name + icon from
-    /// `data/spells-catalog.json` keyed by this id.
+    /// Spell DataID. UI looks up display name + icon from the wasm
+    /// `getSpellRecord(spellId)` export (Wave F.1) — the JSON catalog
+    /// is no longer the source of truth.
     #[wasm_bindgen(getter, js_name = spellId)]
     pub fn spell_id(&self) -> u32 { self.spell_id }
     /// Stacking category. Only one enchantment per (category, layer)
@@ -14797,6 +14928,41 @@ impl PlayerEnchantmentJs {
     /// caster's display name when known (entity store lookup).
     #[wasm_bindgen(getter, js_name = casterGuid)]
     pub fn caster_guid(&self) -> u32 { self.caster_guid }
+    /// `EnchantmentTypeFlags` bitfield. JS aliases: `type` (matches the
+    /// Chorizite Enchantment.cs property name `Type`) so
+    /// `Character.applyEnchantment` reads `enchantment.type & 0x1000000`
+    /// for the cooldown discriminator.
+    #[wasm_bindgen(getter, js_name = type)]
+    pub fn stat_mod_type(&self) -> u32 { self.stat_mod_type }
+    /// PropertyAttribute / PropertySkill / PropertyInt id depending on
+    /// the `type` low bits. Cooldown entries store the sign-extended
+    /// cooldown id here.
+    #[wasm_bindgen(getter, js_name = statKey)]
+    pub fn stat_mod_key(&self) -> u32 { self.stat_mod_key }
+    /// Magnitude as f32 — negative for debuffs, > 1.0 for multiplicative
+    /// buffs, < 1.0 for multiplicative debuffs. JS reads via
+    /// `enchantment.statValue` (mirrors `Enchantment.StatValue` in
+    /// `ACPlugin/API/Enchantment.cs:92`).
+    #[wasm_bindgen(getter, js_name = statValue)]
+    pub fn stat_mod_value(&self) -> f32 { self.stat_mod_value }
+    /// Non-zero when the enchantment is part of an equipped set.
+    /// Drives the buffs HUD gold "set-spell" border. Mirrors
+    /// `Enchantment.HasEquipmentSet` (`Enchantment.cs:36`).
+    #[wasm_bindgen(getter, js_name = hasSpellSetId)]
+    pub fn has_spell_set_id(&self) -> u16 { self.has_spell_set_id }
+    /// `EquipmentSet` id when present; `0` otherwise (the JS side
+    /// checks `hasSpellSetId` first).
+    #[wasm_bindgen(getter, js_name = spellSetId)]
+    pub fn spell_set_id(&self) -> u32 { self.spell_set_id.unwrap_or(0) }
+    /// Decay rate; `0` for cantrips / permanent enchants.
+    #[wasm_bindgen(getter, js_name = degradeModifier)]
+    pub fn degrade_modifier(&self) -> f32 { self.degrade_modifier }
+    /// Floor power below which the enchantment expires; `0` for cantrips.
+    #[wasm_bindgen(getter, js_name = degradeLimit)]
+    pub fn degrade_limit(&self) -> f32 { self.degrade_limit }
+    /// Last decay tick timestamp.
+    #[wasm_bindgen(getter, js_name = lastTimeDegraded)]
+    pub fn last_time_degraded(&self) -> f64 { self.last_time_degraded }
 }
 
 /// Wave D (2026-05-25): JS-friendly subset of
@@ -15163,6 +15329,105 @@ impl AllegianceSnapshotJs {
     #[wasm_bindgen(getter)]
     pub fn vassals(&self) -> Vec<AllegianceMemberJs> {
         self.vassals.iter().map(allegiance_member_to_js).collect()
+    }
+}
+
+/// Wave-F3 (2026-05-27): JS-facing snapshot of the most recent
+/// `Allegiance_AllegianceInfoResponse` (opcode 0x027C) the server pushed.
+/// Carries the same `AllegianceProfile` body as the local `AllegianceUpdate`
+/// snapshot but scoped to a queried target — JS consumers should treat
+/// `targetId` as the player whose tree is described.
+///
+/// Source: port of
+/// `external/chorizite/Chorizite.ACProtocol/Chorizite.ACProtocol/Messages/
+/// S2C/Events/Allegiance_AllegianceInfoResponseEvent.generated.cs`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct AllegianceInfoSnapshotJs {
+    target_id: u32,
+    name: String,
+    is_locked: bool,
+    motd: String,
+    motd_set_by: String,
+    total_members: u32,
+    total_vassals: u32,
+    monarch: Option<AllegianceMember>,
+    vassals: Vec<AllegianceMember>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl AllegianceInfoSnapshotJs {
+    #[wasm_bindgen(getter, js_name = targetId)]
+    pub fn target_id(&self) -> u32 { self.target_id }
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    #[wasm_bindgen(getter, js_name = isLocked)]
+    pub fn is_locked(&self) -> bool { self.is_locked }
+    #[wasm_bindgen(getter)]
+    pub fn motd(&self) -> String { self.motd.clone() }
+    #[wasm_bindgen(getter, js_name = motdSetBy)]
+    pub fn motd_set_by(&self) -> String { self.motd_set_by.clone() }
+    #[wasm_bindgen(getter, js_name = totalMembers)]
+    pub fn total_members(&self) -> u32 { self.total_members }
+    #[wasm_bindgen(getter, js_name = totalVassals)]
+    pub fn total_vassals(&self) -> u32 { self.total_vassals }
+    #[wasm_bindgen(getter)]
+    pub fn monarch(&self) -> Option<AllegianceMemberJs> {
+        self.monarch.as_ref().map(allegiance_member_to_js)
+    }
+    #[wasm_bindgen(getter)]
+    pub fn vassals(&self) -> Vec<AllegianceMemberJs> {
+        self.vassals.iter().map(allegiance_member_to_js).collect()
+    }
+}
+
+/// Wave-F3 (2026-05-27): convert a wire `AllegianceInfoResponseEventData`
+/// to its JS-facing snapshot. Walks the records list flagging the
+/// monarch + remaining members. The monarch is the root of the queried
+/// tree; everyone in `records` is a vassal/sub-vassal (we don't try to
+/// pick out a per-target "patron/myself" split since the response is
+/// about a queried character, not the local player).
+#[cfg(target_arch = "wasm32")]
+fn build_allegiance_info_snapshot_js(
+    data: &holtburger_protocol::messages::AllegianceInfoResponseEventData,
+) -> AllegianceInfoSnapshotJs {
+    use holtburger_protocol::messages::{
+        AllegianceDataEntry, AllegianceIndexFlags as PIdx,
+    };
+
+    fn to_member(e: &AllegianceDataEntry) -> AllegianceMember {
+        let logged_in = e.bitfield.0 & PIdx::LOGGED_IN != 0;
+        AllegianceMember {
+            guid: e.character_id.0,
+            name: e.name.clone(),
+            rank: e.rank as u32,
+            gender: e.gender as u32,
+            heritage_group: e.heritage_group as u32,
+            level: e.level,
+            loyalty: e.loyalty as u32,
+            leadership: e.leadership as u32,
+            cp_cached: e.cp_cached,
+            cp_tithed: e.cp_tithed,
+            logged_in,
+        }
+    }
+
+    let monarch = data.monarch.as_ref().map(to_member);
+    let vassals: Vec<AllegianceMember> =
+        data.records.iter().map(|(_parent, e)| to_member(e)).collect();
+
+    AllegianceInfoSnapshotJs {
+        target_id: data.target_id.0,
+        name: data.allegiance_name.clone(),
+        is_locked: data.is_locked,
+        motd: data.motd.clone(),
+        motd_set_by: data.motd_set_by.clone(),
+        total_members: data.total_members,
+        total_vassals: data.total_vassals,
+        monarch,
+        vassals,
     }
 }
 
@@ -16875,6 +17140,139 @@ mod tests_wave_c2_math_wrappers {
     }
 }
 
+/// Wave F.2 (2026-05-27) — native parity probes for the extended
+/// `PlayerEnchantment` cache shape that backs the JS-facing
+/// `playerEnchantments()` getter. Validates the new field surface
+/// (StatMod tuple + spell-set + degrade) ports the wire-level
+/// `holtburger_protocol::messages::magic::types::Enchantment` 1:1.
+///
+/// **Why native, not wasm-bindgen-test:** the JS-side integration is
+/// covered by `tests/buffs_hud.test.cjs`. These tests cover the
+/// Rust-side converter shape so a refactor of `PlayerEnchantment` (e.g.
+/// adding a field, removing one) doesn't silently break the JS without
+/// surfacing a Rust compile/test failure.
+#[cfg(test)]
+mod tests_player_enchantment_snapshot_shape {
+    use super::*;
+    use holtburger_common::Guid;
+    use holtburger_protocol::messages::magic::types::Enchantment as WireEnchantment;
+
+    fn sample_wire(power_level: u32, stat_mod_type: u32, stat_mod_value: f32) -> WireEnchantment {
+        WireEnchantment {
+            spell_id: 1158,
+            layer: 0,
+            spell_category: 12,
+            has_spell_set_id: 0,
+            power_level,
+            start_time: 100.0,
+            duration: 1800.0,
+            caster_guid: Guid::from(0xDEADBEEF_u32),
+            degrade_modifier: 0.0,
+            degrade_limit: 0.0,
+            last_time_degraded: 0.0,
+            stat_mod_type,
+            stat_mod_key: 1, // Strength
+            stat_mod_value,
+            spell_set_id: None,
+        }
+    }
+
+    #[test]
+    fn cooldown_bit_passes_through_unchanged() {
+        // Wave F.2 §critical-semantics row 1 — `Character.cs:619`
+        // cooldown discriminator. The wasm payload MUST carry the
+        // EnchantmentTypeFlags.COOLDOWN bit (`0x1000000`) so the
+        // JS-side Character can route to SharedCooldowns vs
+        // AllEnchantments.
+        const COOLDOWN_BIT: u32 = 0x1000000;
+        let wire = sample_wire(0, COOLDOWN_BIT, 0.0);
+        let cached = player_enchantment_from_wire(&wire);
+        assert_eq!(cached.stat_mod_type, COOLDOWN_BIT,
+            "cooldown bit must be preserved verbatim — JS uses (type & 0x1000000) as discriminator");
+        assert_eq!(cached.stat_mod_type & COOLDOWN_BIT, COOLDOWN_BIT);
+    }
+
+    #[test]
+    fn stat_mod_value_sign_preserved_for_debuff() {
+        // Debuff = negative stat_mod_value on an ADDITIVE flag
+        // (0x8000). The JS buffs HUD colors borders red on
+        // `statValue < 0` for additive flags.
+        let wire = sample_wire(100, 0x8001 /*ADDITIVE | ATTRIBUTE*/, -10.0);
+        let cached = player_enchantment_from_wire(&wire);
+        assert!(cached.stat_mod_value < 0.0);
+        assert!((cached.stat_mod_value + 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stat_mod_value_above_one_for_multiplicative_buff() {
+        // Multiplicative buff = factor > 1.0 (0x4000 flag).
+        let wire = sample_wire(100, 0x4001, 1.25);
+        let cached = player_enchantment_from_wire(&wire);
+        assert!(cached.stat_mod_value > 1.0);
+    }
+
+    #[test]
+    fn spell_set_id_round_trips_when_present() {
+        let mut wire = sample_wire(100, 0x8001, 10.0);
+        wire.has_spell_set_id = 1;
+        wire.spell_set_id = Some(42);
+        let cached = player_enchantment_from_wire(&wire);
+        assert_eq!(cached.has_spell_set_id, 1);
+        assert_eq!(cached.spell_set_id, Some(42));
+    }
+
+    #[test]
+    fn spell_set_id_none_passes_through() {
+        let wire = sample_wire(100, 0x8001, 10.0);
+        let cached = player_enchantment_from_wire(&wire);
+        assert_eq!(cached.has_spell_set_id, 0);
+        assert_eq!(cached.spell_set_id, None);
+    }
+
+    #[test]
+    fn all_wire_fields_covered() {
+        // Defensive check: if someone adds a field to the wire-level
+        // Enchantment struct and forgets to extend our cache, the
+        // round-trip values stay default. This is a smoke test rather
+        // than a real reflection probe (Rust has no reflection), but
+        // catches the common "I added a field, the converter still
+        // compiles" mistake at the cost of one assert per field.
+        let wire = WireEnchantment {
+            spell_id: 1,
+            layer: 2,
+            spell_category: 3,
+            has_spell_set_id: 1,
+            power_level: 5,
+            start_time: 6.0,
+            duration: 7.0,
+            caster_guid: Guid::from(8_u32),
+            degrade_modifier: 9.0,
+            degrade_limit: 10.0,
+            last_time_degraded: 11.0,
+            stat_mod_type: 12,
+            stat_mod_key: 13,
+            stat_mod_value: 14.0,
+            spell_set_id: Some(15),
+        };
+        let cached = player_enchantment_from_wire(&wire);
+        assert_eq!(cached.spell_id, 1);
+        assert_eq!(cached.layer, 2);
+        assert_eq!(cached.spell_category, 3);
+        assert_eq!(cached.has_spell_set_id, 1);
+        assert_eq!(cached.power_level, 5);
+        assert_eq!(cached.start_time, 6.0);
+        assert_eq!(cached.duration, 7.0);
+        assert_eq!(cached.caster_guid, 8);
+        assert!((cached.degrade_modifier - 9.0).abs() < 1e-6);
+        assert!((cached.degrade_limit - 10.0).abs() < 1e-6);
+        assert!((cached.last_time_degraded - 11.0).abs() < 1e-6);
+        assert_eq!(cached.stat_mod_type, 12);
+        assert_eq!(cached.stat_mod_key, 13);
+        assert!((cached.stat_mod_value - 14.0).abs() < 1e-6);
+        assert_eq!(cached.spell_set_id, Some(15));
+    }
+}
+
 /// Phase 4 step 4 follow-on: should this `GameMessage` be routed
 /// through the canonical `holtburger_world::handlers::routing::handle_message`
 /// dispatcher so `WorldState` (player stats + entity collection)
@@ -17441,6 +17839,17 @@ pub struct SessionHandle {
     /// [`SessionHandle::player_allegiance`] from the kind=25
     /// AllegianceUpdated drain.
     latest_allegiance: std::rc::Rc<std::cell::RefCell<Option<AllegianceSnapshot>>>,
+    /// Wave-F3 (2026-05-27): last `AllegianceInfoResponse` (opcode 0x027C)
+    /// payload — server's reply to a client's
+    /// `Allegiance_AllegianceInfoRequest` query for another player's
+    /// allegiance tree. `None` pre-reply. JS reads via
+    /// [`SessionHandle::last_allegiance_info_response`] from the kind=41
+    /// AllegianceInfo drain.
+    latest_allegiance_info: std::rc::Rc<
+        std::cell::RefCell<
+            Option<holtburger_protocol::messages::AllegianceInfoResponseEventData>,
+        >,
+    >,
     /// Wave-H1 (2026-05-26): local player's friends list snapshot.
     /// Refreshed by the recv loop on every
     /// `GameEvent::FriendsListUpdate` (opcode 0x0021) — ACE pushes
@@ -17693,6 +18102,15 @@ pub struct SessionHandle {
     terrain_heights_shadow: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
     >,
+    /// Wave F.5 (2026-05-27): local player's active contracts (quest
+    /// tracker). Refreshed by the recv loop on every
+    /// `GameEvent::SendClientContractTracker` (opcode 0x0315 — per-row
+    /// upsert/delete) and `GameEvent::SendClientContractTrackerTable`
+    /// (opcode 0x0314 — full replace at login). `None` when the player
+    /// has no contracts at login AND no Add/Update has fired in-session.
+    /// JS reads via [`SessionHandle::player_contracts`] from the
+    /// `kind=34 contractsUpdated` drain.
+    latest_contracts: std::rc::Rc<std::cell::RefCell<Option<ContractsSnapshot>>>,
 }
 
 /// Phase 6 step D: snapshot of the local player's current cell and
@@ -18862,6 +19280,17 @@ impl SessionHandle {
                 start_time: e.start_time,
                 duration: e.duration,
                 caster_guid: e.caster_guid,
+                // Wave F.2 — full StatMod tuple + spell-set + degrade
+                // fields surfaced so the JS cooldown discriminator
+                // (Character.cs:619) routes correctly on real wire data.
+                stat_mod_type: e.stat_mod_type,
+                stat_mod_key: e.stat_mod_key,
+                stat_mod_value: e.stat_mod_value,
+                has_spell_set_id: e.has_spell_set_id,
+                spell_set_id: e.spell_set_id,
+                degrade_modifier: e.degrade_modifier,
+                degrade_limit: e.degrade_limit,
+                last_time_degraded: e.last_time_degraded,
             })
             .collect()
     }
@@ -21138,6 +21567,19 @@ impl SessionHandle {
         })
     }
 
+    /// Wave-F3 (2026-05-27): last `AllegianceInfoResponse` (opcode 0x027C)
+    /// payload — reply to a client's `Allegiance_AllegianceInfoRequest`.
+    /// `None` until ACE replies. Plugins re-pull on each `kind=41
+    /// allegianceInfo` drain. Returns a snapshot keyed on `targetId` so
+    /// callers can confirm which queried player this is about.
+    #[wasm_bindgen(js_name = lastAllegianceInfoResponse)]
+    pub fn last_allegiance_info_response(&self) -> Option<AllegianceInfoSnapshotJs> {
+        self.latest_allegiance_info
+            .borrow()
+            .as_ref()
+            .map(build_allegiance_info_snapshot_js)
+    }
+
     /// Wave-H1 (2026-05-26): friends list snapshot — `None` pre-
     /// FullList. Refreshed by the recv-loop on every
     /// `GameEvent::FriendsListUpdate` (opcode 0x0021). Per
@@ -21506,6 +21948,153 @@ impl SessionHandle {
                 ))
             })
     }
+
+    // =====================================================================
+    // Wave F.4 (2026-05-27) — Typed VendorProfile export
+    // =====================================================================
+    //
+    // Surfaces the FULL retail VendorProfile shape (categorized stock,
+    // BuyAcceptCategories bitmask, deal-magic flag, min/max value caps,
+    // alternate currency) PLUS the canonical buy/sell-price math
+    // (acclient.c:719870 `ShopSystem::BuyPrice` /
+    // `ShopSystem::SellPrice`) as a single structured JS object.
+    //
+    // The existing `getVendorState` (Wave 7, 2026-05-19) returns the
+    // FLAT stock list + raw multipliers. F.4 returns the SAME data
+    // plus the typed shape (`buyAcceptCategories`, `dealsMagic`,
+    // `minValue`, `maxValue`) and pre-computed per-item buy/sell prices
+    // matching the retail formulas exactly.
+    //
+    // **Sources cited in code:**
+    //   * `external/chorizite/Chorizite.ACProtocol/.../VendorProfile.generated.cs`
+    //     (typed wire view: `Categories`, `MinValue`, `MaxValue`,
+    //     `DealsMagic`, `BuyPrice`, `SellPrice`, `CurrencyId`,
+    //     `CurrencyAmount`, `CurrencyName`)
+    //   * `holtburger_protocol::messages::trade::profile` (this PR's
+    //     Rust port — owns the retail formulas + acceptance codes)
+    //   * `acclient.c:719870 + 509817` (the load-bearing math + accept
+    //     logic) — all citations in `profile.rs` head-comment.
+
+    /// **Wave F.4 (2026-05-27).** Typed `VendorProfile` snapshot for the
+    /// vendor at `vendor_guid` — superset of `getVendorState`. Returns
+    /// `null` (JS) if no vendor state is cached for the GUID.
+    ///
+    /// JS shape (camelCase, structured):
+    ///
+    /// ```ts
+    /// type VendorProfileJs = {
+    ///   vendorGuid: number;
+    ///   vendorName: string;
+    ///   // Typed profile (Wave F.4 — new fields beyond getVendorState)
+    ///   buyAcceptCategories: number;          // ItemType bitmask (raw u32)
+    ///   buyAcceptCategoryNames: string[];     // human-readable category names
+    ///   dealsMagic: boolean;
+    ///   minValue: number;
+    ///   maxValue: number;
+    ///   hasNoMin: boolean;
+    ///   hasNoMax: boolean;
+    ///   // Multipliers (pass-through of getVendorState)
+    ///   buyMultiplier: number;
+    ///   sellMultiplier: number;
+    ///   // Alt currency (pass-through)
+    ///   alternateCurrencyWcid: number;
+    ///   alternateCurrencyAmount: number;
+    ///   alternateCurrencyName: string;
+    ///   // Stock with PRE-COMPUTED prices using retail formula
+    ///   stock: Array<{
+    ///     itemGuid: number;
+    ///     wcid: number;
+    ///     name: string;
+    ///     value: number;          // base value pre-markup
+    ///     stackSize: number;
+    ///     itemType: number;       // raw ItemType bitmask for THIS item
+    ///     iconId: number;
+    ///     buyPrice: number;       // ShopSystem::BuyPrice (retail formula)
+    ///     // The category this item falls into (matches the AC vendor
+    ///     // dropdown options). 0 = uncategorized.
+    ///     categoryBit: number;
+    ///   }>;
+    /// };
+    /// ```
+    ///
+    /// The `buyPrice` per stock entry uses the retail `ShopSystem::BuyPrice`
+    /// formula — including the special-case for promissory notes (flat
+    /// 1.0 multiplier when item_type == 0x40000). The vendor-ui.js
+    /// plugin can render this directly without recomputing.
+    #[wasm_bindgen(js_name = getCurrentVendorProfile)]
+    pub fn get_current_vendor_profile(&self, vendor_guid: u32) -> JsValue {
+        let cache = self.latest_vendor_state.borrow();
+        let Some(state) = cache.get(&vendor_guid) else {
+            return JsValue::NULL;
+        };
+
+        use holtburger_common::properties::ItemType;
+        use holtburger_protocol::messages::trade::profile::shop_buy_price;
+
+        let buy_accept_categories = state.merchandise_item_types;
+        let buy_accept_category_names: Vec<String> = ItemType::from_bits_truncate(
+            buy_accept_categories,
+        )
+        .iter_names()
+        .map(|(name, _)| name.to_string())
+        .collect();
+
+        let has_no_max = state.max_value == u32::MAX;
+        let has_no_min = state.min_value == u32::MAX;
+
+        let stock_js: Vec<serde_json::Value> = state
+            .items
+            .iter()
+            .map(|i| {
+                let buy_price = shop_buy_price(
+                    i.value as i32,
+                    i.item_type,
+                    state.buy_multiplier,
+                    if i.stack_size == 0 { 1 } else { i.stack_size as i32 },
+                );
+                // First-set bit of item_type — the canonical category for
+                // the dropdown (matches vendor-ui.js CATEGORY_TABLE).
+                let category_bit = if i.item_type == 0 {
+                    0
+                } else {
+                    i.item_type & i.item_type.wrapping_neg()
+                };
+                serde_json::json!({
+                    "itemGuid": i.item_guid,
+                    "wcid": i.wcid,
+                    "name": i.name,
+                    "value": i.value,
+                    "stackSize": i.stack_size,
+                    "itemType": i.item_type,
+                    "iconId": i.icon_id,
+                    "buyPrice": buy_price,
+                    "categoryBit": category_bit,
+                })
+            })
+            .collect();
+
+        let json = serde_json::json!({
+            "vendorGuid": state.vendor_guid,
+            "vendorName": state.vendor_name,
+            // Wave F.4 typed-profile fields
+            "buyAcceptCategories": buy_accept_categories,
+            "buyAcceptCategoryNames": buy_accept_category_names,
+            "dealsMagic": state.deals_magic,
+            "minValue": state.min_value,
+            "maxValue": state.max_value,
+            "hasNoMin": has_no_min,
+            "hasNoMax": has_no_max,
+            // Multipliers + alt currency (compatibility with getVendorState)
+            "buyMultiplier": state.buy_multiplier,
+            "sellMultiplier": state.sell_multiplier,
+            "alternateCurrencyWcid": state.alternate_currency_wcid,
+            "alternateCurrencyAmount": state.alternate_currency_amount,
+            "alternateCurrencyName": state.alternate_currency_name,
+            "stock": stock_js,
+        });
+
+        serde_wasm_bindgen::to_value(&json).unwrap_or(JsValue::NULL)
+    }
 }
 
 /// Phase 4 step 2a.5: construct an Aluvian / Male / Adventurer /
@@ -21825,6 +22414,14 @@ pub async fn start_session(
     let latest_allegiance: std::rc::Rc<
         std::cell::RefCell<Option<AllegianceSnapshot>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave-F3 (2026-05-27): last AllegianceInfoResponse (opcode 0x027C).
+    // Reply to a player's `Allegiance_AllegianceInfoRequest` — caches
+    // the queried target's full profile until the next reply arrives.
+    let latest_allegiance_info: std::rc::Rc<
+        std::cell::RefCell<
+            Option<holtburger_protocol::messages::AllegianceInfoResponseEventData>,
+        >,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Wave-H1 (2026-05-26): friends list snapshot, refreshed by the
     // recv-loop on every `GameEvent::FriendsListUpdate`.
     let latest_friends: std::rc::Rc<
@@ -21861,6 +22458,13 @@ pub async fn start_session(
     // every `GameEvent::HouseUpdateRestrictions` (opcode 0x0248).
     let latest_house_restrictions: std::rc::Rc<
         std::cell::RefCell<Option<HouseRestrictions>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave F.5 (2026-05-27): active contracts (quest tracker), refreshed
+    // by the recv loop on every `GameEvent::SendClientContractTracker`
+    // (opcode 0x0315) and `GameEvent::SendClientContractTrackerTable`
+    // (opcode 0x0314).
+    let latest_contracts: std::rc::Rc<
+        std::cell::RefCell<Option<ContractsSnapshot>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
@@ -21965,6 +22569,7 @@ pub async fn start_session(
         let latest_trade_inner = latest_trade.clone();
         let latest_book_inner = latest_book.clone();
         let latest_allegiance_inner = latest_allegiance.clone();
+        let latest_allegiance_info_inner = latest_allegiance_info.clone();
         let latest_friends_inner = latest_friends.clone();
         let latest_squelch_inner = latest_squelch.clone();
         let latest_title_inner = latest_title.clone();
@@ -21972,6 +22577,7 @@ pub async fn start_session(
         let latest_house_data_inner = latest_house_data.clone();
         let latest_house_profile_inner = latest_house_profile.clone();
         let latest_house_restrictions_inner = latest_house_restrictions.clone();
+        let latest_contracts_inner = latest_contracts.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let wielder_index_inner = wielder_index.clone();
         let projectile_index_inner = projectile_index.clone();
@@ -22004,6 +22610,7 @@ pub async fn start_session(
                 latest_trade_inner,
                 latest_book_inner,
                 latest_allegiance_inner,
+                latest_allegiance_info_inner,
                 latest_friends_inner,
                 latest_squelch_inner,
                 latest_title_inner,
@@ -22011,6 +22618,7 @@ pub async fn start_session(
                 latest_house_data_inner,
                 latest_house_profile_inner,
                 latest_house_restrictions_inner,
+                latest_contracts_inner,
                 latest_known_spells_inner,
                 wielder_index_inner,
                 projectile_index_inner,
@@ -22099,6 +22707,7 @@ pub async fn start_session(
         latest_trade,
         latest_book,
         latest_allegiance,
+        latest_allegiance_info,
         latest_friends,
         latest_squelch,
         latest_title,
@@ -22119,6 +22728,7 @@ pub async fn start_session(
         last_client_prediction,
         collision_scene,
         terrain_heights_shadow,
+        latest_contracts,
     })
 }
 
@@ -22804,12 +23414,53 @@ fn publish_player_known_spells_snapshot(
     *latest_known_spells.borrow_mut() = all.into_iter().collect();
 }
 
-/// PR-JJ 2026-05-23: copy the local player's active enchantments out
-/// of `world.player.enchantments` into the wasm-side cache that the
-/// JS-facing `playerEnchantments()` getter reads. Called from the
-/// stats_changed publish block in the recv loop alongside
-/// `publish_player_stats_snapshot` and
+/// PR-JJ 2026-05-23 + Wave F.2 2026-05-27: per-enchantment converter
+/// from the canonical wire-level `holtburger_protocol::messages::magic::
+/// types::Enchantment` to the wasm-side cache shape. Factored out so
+/// native tests (`tests_player_enchantment_snapshot_shape`) can probe
+/// field-by-field parity without spinning up a wasm runtime.
+///
+/// Carries the FULL wire tuple (no field dropped). The cooldown
+/// discriminator at the JS boundary
+/// (`Character.applyEnchantment(enc.type & 0x1000000)`,
+/// `Character.cs:619`) reads `stat_mod_type` — pre-Wave-F.2 this was
+/// silently dropped, so cooldown packets routed as buffs.
+#[cfg(any(target_arch = "wasm32", test))]
+fn player_enchantment_from_wire(
+    e: &holtburger_protocol::messages::magic::types::Enchantment,
+) -> PlayerEnchantment {
+    PlayerEnchantment {
+        spell_id: e.spell_id as u32,
+        spell_category: e.spell_category as u32,
+        layer: e.layer as u32,
+        power_level: e.power_level,
+        start_time: e.start_time,
+        duration: e.duration,
+        caster_guid: u32::from(e.caster_guid),
+        stat_mod_type: e.stat_mod_type,
+        stat_mod_key: e.stat_mod_key,
+        stat_mod_value: e.stat_mod_value,
+        has_spell_set_id: e.has_spell_set_id,
+        spell_set_id: e.spell_set_id,
+        degrade_modifier: e.degrade_modifier,
+        degrade_limit: e.degrade_limit,
+        last_time_degraded: e.last_time_degraded,
+    }
+}
+
+/// PR-JJ 2026-05-23 + Wave F.2 2026-05-27: copy the local player's
+/// active enchantments out of `world.player.enchantments` into the
+/// wasm-side cache that the JS-facing `playerEnchantments()` getter
+/// reads. Called from the `stats_changed` publish block in the recv
+/// loop alongside `publish_player_stats_snapshot` and
 /// `publish_player_known_spells_snapshot`.
+///
+/// **Wave F.2 change:** previously dropped the per-enchantment
+/// `stat_mod_type` / `stat_mod_key` / `stat_mod_value` tuple, breaking
+/// the JS-side cooldown discriminator (`Character.cs:619`,
+/// `StatMod.Type & EnchantmentTypeFlags.COOLDOWN`). Now copies the
+/// full wire shape verbatim. Cooldowns AND buffs flow through the
+/// same snapshot; the JS Character routes them by `type` bit.
 #[cfg(target_arch = "wasm32")]
 fn publish_player_enchantments_snapshot(
     world: &holtburger_world::WorldState,
@@ -22819,15 +23470,7 @@ fn publish_player_enchantments_snapshot(
         .player
         .enchantments
         .iter()
-        .map(|e| PlayerEnchantment {
-            spell_id: e.spell_id as u32,
-            spell_category: e.spell_category as u32,
-            layer: e.layer as u32,
-            power_level: e.power_level,
-            start_time: e.start_time,
-            duration: e.duration,
-            caster_guid: u32::from(e.caster_guid),
-        })
+        .map(player_enchantment_from_wire)
         .collect();
     *latest_enchantments.borrow_mut() = next;
 }
@@ -23380,6 +24023,11 @@ async fn recv_loop(
     latest_trade: std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
     latest_book: std::rc::Rc<std::cell::RefCell<Option<BookSnapshot>>>,
     latest_allegiance: std::rc::Rc<std::cell::RefCell<Option<AllegianceSnapshot>>>,
+    latest_allegiance_info: std::rc::Rc<
+        std::cell::RefCell<
+            Option<holtburger_protocol::messages::AllegianceInfoResponseEventData>,
+        >,
+    >,
     latest_friends: std::rc::Rc<std::cell::RefCell<Option<FriendsSnapshot>>>,
     latest_squelch: std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
     latest_title: std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
@@ -23388,6 +24036,7 @@ async fn recv_loop(
     latest_house_profile: std::rc::Rc<std::cell::RefCell<Option<HouseProfile>>>,
     latest_house_restrictions:
         std::rc::Rc<std::cell::RefCell<Option<HouseRestrictions>>>,
+    latest_contracts: std::rc::Rc<std::cell::RefCell<Option<ContractsSnapshot>>>,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     wielder_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
@@ -26222,6 +26871,16 @@ async fn recv_loop(
                                                     .alternate_currency_name
                                                     .clone(),
                                                 items,
+                                                // Wave F.4 (2026-05-27): persist the
+                                                // typed-profile fields the wire already
+                                                // carries. Surfaced via
+                                                // `getCurrentVendorProfile`.
+                                                merchandise_item_types: data
+                                                    .merchandise_item_types,
+                                                min_value: data.merchandise_min_value,
+                                                max_value: data.merchandise_max_value,
+                                                deals_magic: data.deal_magical_items
+                                                    != 0,
                                             },
                                         );
                                     }
@@ -26545,6 +27204,74 @@ async fn recv_loop(
                                         f32_payload: None,
                                     });
                                 }
+                                holtburger_protocol::messages::GameEvent::AllegianceLoginNotification(
+                                    data,
+                                ) => {
+                                    // Wave-F3 (2026-05-27): an allegiance
+                                    // member logged in or out. ACE pushes
+                                    // `Allegiance_AllegianceLoginNotification`
+                                    // (opcode 0x027A). Forward the wire
+                                    // GUID+flag to JS; the panel reads
+                                    // the name out of the cached hierarchy.
+                                    // Also flip the `logged_in` flag on
+                                    // any cached member matching the GUID
+                                    // so re-renders pick up immediately.
+                                    {
+                                        let mut cell = latest_allegiance.borrow_mut();
+                                        if let Some(snap) = cell.as_mut() {
+                                            let guid = data.character_id.0;
+                                            let flag = data.is_logged_in;
+                                            if let Some(m) = snap.monarch.as_mut() {
+                                                if m.guid == guid {
+                                                    m.logged_in = flag;
+                                                }
+                                            }
+                                            if let Some(m) = snap.patron.as_mut() {
+                                                if m.guid == guid {
+                                                    m.logged_in = flag;
+                                                }
+                                            }
+                                            if let Some(m) = snap.myself.as_mut() {
+                                                if m.guid == guid {
+                                                    m.logged_in = flag;
+                                                }
+                                            }
+                                            for v in snap.vassals.iter_mut() {
+                                                if v.guid == guid {
+                                                    v.logged_in = flag;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ALLEGIANCE_PRESENCE,
+                                        string_payload: None,
+                                        u32_payload: Some(data.character_id.0),
+                                        u32_payload_2: Some(u32::from(data.is_logged_in)),
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::AllegianceInfoResponse(
+                                    data,
+                                ) => {
+                                    // Wave-F3 (2026-05-27): server reply
+                                    // to an `Allegiance_AllegianceInfoRequest`
+                                    // query (opcode 0x027C). The payload
+                                    // is a full `AllegianceProfile` for
+                                    // the queried target — useful for
+                                    // examining other players'
+                                    // allegiance trees. Cache the latest
+                                    // for the panel + emit kind=41.
+                                    *latest_allegiance_info.borrow_mut() =
+                                        Some(*data.clone());
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ALLEGIANCE_INFO,
+                                        string_payload: None,
+                                        u32_payload: Some(data.target_id.0),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
                                 holtburger_protocol::messages::GameEvent::FriendsListUpdate(
                                     data,
                                 ) => {
@@ -26699,6 +27426,55 @@ async fn recv_loop(
                                             guest_count: data.guests.len() as u32,
                                             storage_count,
                                         });
+                                }
+                                holtburger_protocol::messages::GameEvent::SendClientContractTrackerTable(
+                                    data,
+                                ) => {
+                                    // Wave F.5 (2026-05-27): full
+                                    // contract-tracker push at login
+                                    // (ACE `Player_Networking.SendContractTrackerTable`
+                                    // when `GetContractsCount > 0`).
+                                    // Wholesale replace; sort by
+                                    // contract_id for a stable display
+                                    // order (ACE's wire order follows
+                                    // HashComparer bucketing).
+                                    apply_player_contracts_full(
+                                        data.as_ref(),
+                                        &latest_contracts,
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CONTRACTS_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::SendClientContractTracker(
+                                    data,
+                                ) => {
+                                    // Wave F.5 (2026-05-27): single-
+                                    // contract delta from ACE
+                                    // `ContractManager.Add` / `Erase` /
+                                    // `Update`. `delete_contract`
+                                    // routes to remove-by-id; otherwise
+                                    // upsert by contract_id. JS payload
+                                    // carries (contract_id, deleted-flag)
+                                    // so panel logic can react to add /
+                                    // remove without diffing snapshots.
+                                    apply_player_contracts_delta(
+                                        data.as_ref(),
+                                        &latest_contracts,
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CONTRACTS_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: Some(data.tracker.contract_id),
+                                        u32_payload_2: Some(
+                                            if data.delete_contract { 1 } else { 0 },
+                                        ),
+                                        f32_payload: None,
+                                    });
                                 }
                                 _ => {
                                     // Non-chat GameEvents drop through
@@ -28807,6 +29583,40 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[paperdoll/drop] item=0x{item_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::AbandonContract { contract_id }) => {
+                        // Wave F.5 (2026-05-27): AbandonContract
+                        // (0x0316). ACE:
+                        // `Player.HandleActionAbandonContract` →
+                        // `ContractManager.Abandon → Erase`. Server
+                        // broadcasts `SendClientContractTracker` with
+                        // `DeleteContract=true` so we don't optimistically
+                        // mutate `latest_contracts` here — the contract
+                        // panel waits for the server echo.
+                        use holtburger_protocol::messages::{
+                            AbandonContractActionData, GameAction,
+                        };
+                        let action = GameAction::AbandonContract(Box::new(
+                            AbandonContractActionData { contract_id },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(AbandonContract): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "abandon_contract: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[contracts/abandon] contract_id={contract_id}",
                         ));
                     }
                     Some(SessionCommand::TargetedMissileAttack {
@@ -33035,3 +33845,604 @@ mod tests_entity_surfaces_pixels_batch {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//   Wave F.6 (2026-05-27) — `CEmoteTable` taxonomy bridge.
+//
+//   `CEmoteTable` is NOT a DAT file (see architecture note in
+//   `crates/holtburger-protocol/src/messages/emote_table.rs`); it's a
+//   wire-side member of `CACQualities` carried in WeenieDesc payloads.
+//   The full table per-NPC therefore arrives via Object_CreateObject /
+//   appraise — surfacing live decoded tables to JS is part of Wave F.6
+//   stretch (`getNpcEmoteTable(guid)`), deferred until the WeenieDesc
+//   unpacker grows the `CACQualities` blob branch.
+//
+//   What F.6 ships now: a static **taxonomy** export — the 39 categories
+//   + 122 action types + per-type field-shape metadata + the
+//   "is_user_visible" filter — so the JS emote-panel can render the
+//   action palette without waiting on per-NPC data. This is the same
+//   pattern as Wave F.1's `getSpellRecord` (DAT-fed) but for the static
+//   enum side.
+//
+//   See:
+//     * external/chorizite/Chorizite.Common/Enums/EmoteCategory.cs
+//     * external/chorizite/Chorizite.Common/Enums/EmoteType.cs
+//     * crates/holtburger-common/src/properties/emote.rs (Rust port)
+//     * crates/holtburger-protocol/src/messages/emote_table.rs (wire parser)
+//     * apps/holtburger-web/plugins/emote-panel.js (JS consumer)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SessionHandle {
+    /// **Wave F.6.** Returns the static `CEmoteTable` taxonomy — the
+    /// full Chorizite-derived enumeration of `EmoteCategory` (39 values)
+    /// and `EmoteType` (122 values) with display names + the
+    /// user-visible classification + the wire-field shape per type.
+    ///
+    /// Shape:
+    /// ```js
+    /// {
+    ///   categories: [
+    ///     { id: 0x06, name: "Give", isCommon: true },
+    ///     ...
+    ///   ],
+    ///   types: [
+    ///     {
+    ///       id: 0x08, name: "Say", isUserVisible: true,
+    ///       shape: "Message",   // one of 26 wire variants
+    ///       fields: ["message"]  // per-variant field set
+    ///     },
+    ///     ...
+    ///   ]
+    /// }
+    /// ```
+    ///
+    /// **No bootstrap dependency** — the taxonomy is compile-time
+    /// constant (Rust enum), so this works pre-login. JS calls this
+    /// once on plugin boot to populate the emote-panel.
+    ///
+    /// **Source cross-references:**
+    ///   * `Chorizite.Common/Enums/EmoteCategory.cs:5-84` — 39 categories.
+    ///   * `Chorizite.Common/Enums/EmoteType.cs:5-251` — 122 types.
+    ///   * `Chorizite.ACProtocol/Types/Emote.generated.cs:89-281` —
+    ///     discriminant → field-shape mapping.
+    #[wasm_bindgen(js_name = getEmoteTaxonomy)]
+    pub fn get_emote_taxonomy(&self) -> JsValue {
+        use holtburger_common::properties::{EmoteCategory, EmoteType};
+
+        // "Common" categories — the most frequently used by NPCs in retail
+        // per inspection of vendor + quest-giver weenies. JS uses this to
+        // surface the common subset by default in the picker and let the
+        // user toggle to show the full 39.
+        let common_categories: &[EmoteCategory] = &[
+            EmoteCategory::Vendor,
+            EmoteCategory::Death,
+            EmoteCategory::HeartBeat,
+            EmoteCategory::Refuse,
+            EmoteCategory::Give,
+            EmoteCategory::HearChat,
+            EmoteCategory::QuestSuccess,
+            EmoteCategory::QuestFailure,
+            EmoteCategory::Taunt,
+            EmoteCategory::WoundedTaunt,
+            EmoteCategory::ReceiveCritical,
+            EmoteCategory::Wield,
+            EmoteCategory::UnWield,
+        ];
+
+        let categories_json: Vec<serde_json::Value> = (0x00u32..=0x26)
+            .filter_map(|id| {
+                let cat = EmoteCategory::from_repr(id)?;
+                Some(serde_json::json!({
+                    "id": id,
+                    "name": cat.display_name(),
+                    "rawName": format!("{}", cat),
+                    "isCommon": common_categories.contains(&cat),
+                }))
+            })
+            .collect();
+
+        // Per-type shape — mirrors the EmoteRecord enum in
+        // crates/holtburger-protocol/src/messages/emote_table.rs.
+        // shape() returns one of 26 strings naming the wire variant;
+        // fields() returns the corresponding per-variant field list.
+        fn shape(type_id: u32) -> (&'static str, &'static [&'static str]) {
+            match type_id {
+                0x01 | 0x08 | 0x0A | 0x0D | 0x10 | 0x11 | 0x12 | 0x14 | 0x15 | 0x16 | 0x17
+                | 0x18 | 0x19 | 0x1A | 0x1F | 0x33 | 0x3A | 0x3C | 0x3D | 0x40 | 0x41 | 0x43
+                | 0x44 | 0x4F | 0x50 | 0x51 | 0x53 | 0x58 | 0x79 => ("Message", &["message"]),
+                0x20 | 0x21 | 0x46 | 0x54 | 0x55 | 0x56 | 0x59 | 0x66 | 0x67 | 0x68 | 0x69
+                | 0x6A | 0x6B | 0x6C | 0x6D => ("MessageAmount", &["message", "amount"]),
+                0x35 | 0x36 | 0x37 | 0x45 => ("StatAmount", &["stat", "amount"]),
+                0x73 | 0x6E => ("Stat", &["stat"]),
+                0x76 => ("StatPercent", &["stat", "percent"]),
+                0x1E | 0x3B | 0x47 | 0x52 => ("MessageMinMax", &["message", "min", "max"]),
+                0x02 | 0x3E => ("AmountHeroXp", &["amount64", "heroXp64"]),
+                0x70 | 0x71 => ("Amount64", &["amount64"]),
+                0x22 | 0x2F | 0x30 | 0x5A | 0x77 | 0x78 | 0x6F => ("Amount", &["amount"]),
+                0x0E | 0x13 | 0x1B | 0x49 => ("SpellId", &["spellId"]),
+                0x03 | 0x4A => ("CreateProfile", &["cprofile"]),
+                0x4C => ("MessageCreateProfile", &["msg", "cprofile"]),
+                0x38 => ("Treasure", &["wealthRating", "treasureClass", "treasureType"]),
+                0x05 | 0x34 => ("Motion", &["motion"]),
+                0x04 | 0x06 | 0x0B | 0x57 => ("Frame", &["frame"]),
+                0x07 => ("PhysScript", &["physicsScript"]),
+                0x09 => ("Sound", &["sound"]),
+                0x1C | 0x1D => ("AmountStat", &["amount", "stat"]),
+                0x23 | 0x2D | 0x2E => ("MessageStat", &["message", "stat"]),
+                0x26 | 0x4B => ("MessageTestStringStat", &["message", "testString", "stat"]),
+                0x24 | 0x27 | 0x28 | 0x29 | 0x2A | 0x2B | 0x2C => {
+                    ("MessageMinMaxStat", &["message", "min", "max", "stat"])
+                }
+                0x72 => ("MessageMin64Max64Stat", &["message", "min64", "max64", "stat"]),
+                0x25 => ("MessageFminFmaxStat", &["message", "fmin", "fmax", "stat"]),
+                0x31 => ("PercentMin64Max64", &["percent", "min64", "max64"]),
+                0x32 => (
+                    "StatPercentMinMaxDisplay",
+                    &["stat", "percent", "min", "max", "display"],
+                ),
+                0x3F | 0x63 | 0x64 => ("Position", &["position"]),
+                _ => ("Bare", &[]),
+            }
+        }
+
+        let types_json: Vec<serde_json::Value> = (0x00u32..=0x79)
+            .filter_map(|id| {
+                let t = EmoteType::from_repr(id)?;
+                let (shape_name, fields) = shape(id);
+                Some(serde_json::json!({
+                    "id": id,
+                    "name": format!("{}", t),
+                    "isUserVisible": t.is_user_visible(),
+                    "shape": shape_name,
+                    "fields": fields,
+                }))
+            })
+            .collect();
+
+        let category_count = categories_json.len();
+        let type_count = types_json.len();
+        let json = serde_json::json!({
+            "categories": categories_json,
+            "types": types_json,
+            "categoryCount": category_count,
+            "typeCount": type_count,
+        });
+
+        serde_wasm_bindgen::to_value(&json).unwrap_or(JsValue::NULL)
+    }
+
+    /// **Wave F.6 stretch.** Returns the union of `EmoteType`s that the
+    /// soul-emote slash-command catalog (`SoulEmoteCatalog`, Wave 9.5)
+    /// can dispatch — useful for the JS emote-panel to cross-reference
+    /// which broader-CEmoteTable actions the local player can actually
+    /// fire via `/wave`, `/bow`, etc. Returns an array of `EmoteType`
+    /// IDs.
+    ///
+    /// Currently returns `[0x05 Motion, 0x08 Say]` since `SoulEmoteCatalog`
+    /// only carries pose-name → MotionCommand mappings + the chat text.
+    /// Future work: extend `SoulEmoteCatalog::from_asset` to populate
+    /// EmoteType per token (some pose tokens like `/admit` use Say, most
+    /// use Motion).
+    ///
+    /// Does NOT depend on `WorldBootstrap` — returns the static set.
+    #[wasm_bindgen(js_name = getSoulEmoteSupportedTypes)]
+    pub fn get_soul_emote_supported_types(&self) -> JsValue {
+        let supported = serde_json::json!([0x05u32, 0x08u32]);
+        serde_wasm_bindgen::to_value(&supported).unwrap_or(JsValue::NULL)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wave F.5 (2026-05-27) — Contracts panel plumbing
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Source-of-truth references:
+//   - Chorizite `ACBindings/Generated/Net/Types/CContractTracker.cs`
+//     (28-byte wire payload via `CContractTracker::Pack` @ 0x0059A180)
+//   - Chorizite `ACProtocol/Types/ContractTracker.generated.cs` (matching
+//     field order: u32 Version, u32 ContractId, u32 ContractStage,
+//     i64 TimeWhenDone, i64 TimeWhenRepeats)
+//   - Chorizite `Enums/ContractStage.generated.cs` (1=New, 2=InProgress,
+//     3=DoneOrPendingRepeat; values ≥4 = contract-specific updates)
+//   - ACE `ACE.Server/WorldObjects/Managers/ContractManager.cs` —
+//     Add / Erase / Update flows and Player_Networking
+//     SendContractTrackerTable login-time push
+//   - Retail `acclient.c:702427` (`CM_Social::DispatchUI_SendClientContractTracker`)
+//     confirming 28-byte tracker + two 4-byte i32 bools on the wire
+
+/// Internal mirror of one `ContractTracker` entry inside the SessionHandle
+/// snapshot cell. 1:1 with the wire payload but stored as a struct (vs.
+/// the protocol crate's `ContractTrackerEntry` tuple-of-fields) so the
+/// JS-side wrapper can borrow individual fields without re-parsing.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ContractTrackerView {
+    contract_id: u32,
+    stage: u32,
+    version: u32,
+    time_when_done: i64,
+    time_when_repeats: i64,
+}
+
+/// Internal snapshot of the local player's active contracts.
+/// Refreshed by `apply_player_contracts_full` on Table push and by
+/// `apply_player_contracts_delta` on single-tracker events.
+///
+/// `trackers` is sorted by `contract_id` (ascending) so the contracts
+/// panel can render in a deterministic order — ACE's wire order
+/// follows the `HashComparer(32)` bucket layout which is NOT
+/// lexicographic. `display_contract_id` tracks the "primary" contract
+/// (if any) that the server set via `SetAsDisplayContract`.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Default)]
+struct ContractsSnapshot {
+    trackers: Vec<ContractTrackerView>,
+    /// `0` = no primary set. ACE leaves this `false` in all observed
+    /// flows; we track it for future per-contract pinning logic.
+    display_contract_id: u32,
+}
+
+/// JS-facing wrapper for a single contract row. Names match the
+/// camelCase convention used by `AllegianceMemberJs` / `FriendEntryViewJs`.
+///
+/// `stage` is the raw `ContractStage` u32 (1/2/3 most common). JS
+/// translates to display strings.
+///
+/// `timeWhenDone` and `timeWhenRepeats` are server epoch seconds (i64
+/// — exposed as `f64` because wasm-bindgen lacks native i64 → JS
+/// number support and JS numbers can losslessly represent any value
+/// within `Number.MAX_SAFE_INTEGER` which trivially covers AC time
+/// stamps).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct ContractTrackerJs {
+    contract_id: u32,
+    stage: u32,
+    version: u32,
+    time_when_done: f64,
+    time_when_repeats: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl ContractTrackerJs {
+    #[wasm_bindgen(getter, js_name = contractId)]
+    pub fn contract_id(&self) -> u32 {
+        self.contract_id
+    }
+    #[wasm_bindgen(getter)]
+    pub fn stage(&self) -> u32 {
+        self.stage
+    }
+    #[wasm_bindgen(getter)]
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+    #[wasm_bindgen(getter, js_name = timeWhenDone)]
+    pub fn time_when_done(&self) -> f64 {
+        self.time_when_done
+    }
+    #[wasm_bindgen(getter, js_name = timeWhenRepeats)]
+    pub fn time_when_repeats(&self) -> f64 {
+        self.time_when_repeats
+    }
+}
+
+/// JS-facing wrapper for the full snapshot.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct ContractsSnapshotJs {
+    trackers: Vec<ContractTrackerView>,
+    display_contract_id: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl ContractsSnapshotJs {
+    #[wasm_bindgen(getter)]
+    pub fn trackers(&self) -> Vec<ContractTrackerJs> {
+        self.trackers
+            .iter()
+            .map(|t| ContractTrackerJs {
+                contract_id: t.contract_id,
+                stage: t.stage,
+                version: t.version,
+                time_when_done: t.time_when_done as f64,
+                time_when_repeats: t.time_when_repeats as f64,
+            })
+            .collect()
+    }
+    #[wasm_bindgen(getter, js_name = displayContractId)]
+    pub fn display_contract_id(&self) -> u32 {
+        self.display_contract_id
+    }
+    /// Count getter — JS panels reach for it constantly for the
+    /// "N / 7" header counter.
+    #[wasm_bindgen(getter)]
+    pub fn count(&self) -> u32 {
+        self.trackers.len() as u32
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn contract_view_from_wire(
+    entry: &holtburger_protocol::messages::ContractTrackerEntry,
+) -> ContractTrackerView {
+    ContractTrackerView {
+        contract_id: entry.contract_id,
+        stage: entry.stage,
+        version: entry.version,
+        time_when_done: entry.time_when_done,
+        time_when_repeats: entry.time_when_repeats,
+    }
+}
+
+/// Wave F.5 (2026-05-27): wholesale-replace the contracts snapshot
+/// from a `SendClientContractTrackerTable` event. ACE pushes this once
+/// at login when `GetContractsCount > 0`. Entries arrive in
+/// HashComparer bucket order; sort by contract_id ascending so the
+/// panel renders deterministically.
+#[cfg(any(target_arch = "wasm32", test))]
+fn apply_player_contracts_full(
+    payload: &holtburger_protocol::messages::SendClientContractTrackerTableEventData,
+    latest_contracts: &std::rc::Rc<std::cell::RefCell<Option<ContractsSnapshot>>>,
+) {
+    let mut trackers: Vec<ContractTrackerView> = payload
+        .trackers
+        .iter()
+        .map(|(_, entry)| contract_view_from_wire(entry))
+        .collect();
+    trackers.sort_by_key(|t| t.contract_id);
+    // Preserve any previously-set primary display contract — ACE
+    // doesn't re-emit it in the Table push.
+    let prior_display = latest_contracts
+        .borrow()
+        .as_ref()
+        .map(|s| s.display_contract_id)
+        .unwrap_or(0);
+    *latest_contracts.borrow_mut() = Some(ContractsSnapshot {
+        trackers,
+        display_contract_id: prior_display,
+    });
+}
+
+/// Wave F.5 (2026-05-27): apply a `SendClientContractTracker` delta to
+/// the snapshot. `delete_contract` removes by contract_id; otherwise
+/// upsert (replace existing or append new) preserving sort order.
+/// `set_as_display_contract` pins the primary; ACE doesn't toggle
+/// this off explicitly in current flows.
+#[cfg(any(target_arch = "wasm32", test))]
+fn apply_player_contracts_delta(
+    payload: &holtburger_protocol::messages::SendClientContractTrackerEventData,
+    latest_contracts: &std::rc::Rc<std::cell::RefCell<Option<ContractsSnapshot>>>,
+) {
+    let mut cell = latest_contracts.borrow_mut();
+    let snap = cell.get_or_insert_with(ContractsSnapshot::default);
+    let cid = payload.tracker.contract_id;
+    if payload.delete_contract {
+        snap.trackers.retain(|t| t.contract_id != cid);
+        if snap.display_contract_id == cid {
+            snap.display_contract_id = 0;
+        }
+        return;
+    }
+    let view = contract_view_from_wire(&payload.tracker);
+    match snap.trackers.iter_mut().find(|t| t.contract_id == cid) {
+        Some(existing) => {
+            *existing = view;
+        }
+        None => {
+            // Insert maintaining sort order on contract_id.
+            let idx = snap
+                .trackers
+                .binary_search_by_key(&cid, |t| t.contract_id)
+                .unwrap_or_else(|i| i);
+            snap.trackers.insert(idx, view);
+        }
+    }
+    if payload.set_as_display_contract {
+        snap.display_contract_id = cid;
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SessionHandle {
+    /// Wave F.5 (2026-05-27): local player's active contracts (quest
+    /// tracker). `None` when the player has no contracts at login AND
+    /// no Add has fired in-session. Refreshed by the recv-loop on every
+    /// `GameEvent::SendClientContractTracker` (opcode 0x0315) and
+    /// `GameEvent::SendClientContractTrackerTable` (opcode 0x0314).
+    /// UI plugins re-pull on each `kind=34 contractsUpdated` drain.
+    #[wasm_bindgen(js_name = playerContracts)]
+    pub fn player_contracts(&self) -> Option<ContractsSnapshotJs> {
+        self.latest_contracts
+            .borrow()
+            .as_ref()
+            .map(|s| ContractsSnapshotJs {
+                trackers: s.trackers.clone(),
+                display_contract_id: s.display_contract_id,
+            })
+    }
+
+    /// Wave F.5 (2026-05-27): drop a contract. Sends
+    /// `GameAction::AbandonContract` (sub-opcode 0x0316). ACE
+    /// `Player.HandleActionAbandonContract` → `ContractManager.Abandon`
+    /// → `Erase` echoes back a `SendClientContractTracker` with
+    /// `DeleteContract=true`; the snapshot updates on the echo.
+    #[wasm_bindgen(js_name = abandonContract)]
+    pub fn abandon_contract(&self, contract_id: u32) -> Result<(), JsValue> {
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AbandonContract { contract_id })
+            .map_err(|e| JsValue::from_str(&format!("abandon_contract: {e}")))
+    }
+}
+
+#[cfg(test)]
+mod contracts_tests {
+    use super::*;
+    use holtburger_protocol::messages::{
+        ContractTrackerEntry, SendClientContractTrackerEventData,
+        SendClientContractTrackerTableEventData,
+    };
+
+    fn make_entry(id: u32, stage: u32) -> ContractTrackerEntry {
+        ContractTrackerEntry {
+            version: 1,
+            contract_id: id,
+            stage,
+            time_when_done: 0,
+            time_when_repeats: 0,
+        }
+    }
+
+    #[test]
+    fn contracts_full_replace_sorts_by_id() {
+        let cell: std::rc::Rc<std::cell::RefCell<Option<ContractsSnapshot>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        // ACE-style wire-order: NOT lexicographic.
+        let payload = SendClientContractTrackerTableEventData {
+            trackers: vec![
+                (0x0042, make_entry(0x0042, 3)),
+                (0x0001, make_entry(0x0001, 1)),
+                (0x0014, make_entry(0x0014, 2)),
+            ],
+        };
+        apply_player_contracts_full(&payload, &cell);
+        let snap = cell.borrow().clone().expect("snapshot exists");
+        let ids: Vec<u32> = snap.trackers.iter().map(|t| t.contract_id).collect();
+        assert_eq!(ids, vec![0x0001, 0x0014, 0x0042], "sorted ascending");
+    }
+
+    #[test]
+    fn contracts_delta_upsert_new_entry() {
+        let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+        apply_player_contracts_delta(
+            &SendClientContractTrackerEventData {
+                tracker: make_entry(0x0008, 1),
+                delete_contract: false,
+                set_as_display_contract: false,
+            },
+            &cell,
+        );
+        let snap = cell.borrow().clone().expect("snapshot");
+        assert_eq!(snap.trackers.len(), 1);
+        assert_eq!(snap.trackers[0].contract_id, 0x0008);
+    }
+
+    #[test]
+    fn contracts_delta_upsert_replaces_existing() {
+        let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+        apply_player_contracts_delta(
+            &SendClientContractTrackerEventData {
+                tracker: make_entry(0x0008, 1),
+                delete_contract: false,
+                set_as_display_contract: false,
+            },
+            &cell,
+        );
+        apply_player_contracts_delta(
+            &SendClientContractTrackerEventData {
+                tracker: make_entry(0x0008, 3),
+                delete_contract: false,
+                set_as_display_contract: false,
+            },
+            &cell,
+        );
+        let snap = cell.borrow().clone().expect("snapshot");
+        assert_eq!(snap.trackers.len(), 1, "no dupes");
+        assert_eq!(snap.trackers[0].stage, 3, "stage replaced");
+    }
+
+    #[test]
+    fn contracts_delta_delete_removes_by_id() {
+        let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+        apply_player_contracts_full(
+            &SendClientContractTrackerTableEventData {
+                trackers: vec![
+                    (0x0001, make_entry(0x0001, 2)),
+                    (0x0008, make_entry(0x0008, 2)),
+                ],
+            },
+            &cell,
+        );
+        apply_player_contracts_delta(
+            &SendClientContractTrackerEventData {
+                tracker: make_entry(0x0001, 0),
+                delete_contract: true,
+                set_as_display_contract: false,
+            },
+            &cell,
+        );
+        let snap = cell.borrow().clone().expect("snapshot");
+        let ids: Vec<u32> = snap.trackers.iter().map(|t| t.contract_id).collect();
+        assert_eq!(ids, vec![0x0008], "0x0001 removed");
+    }
+
+    #[test]
+    fn contracts_delta_set_as_display_pins_id() {
+        let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+        apply_player_contracts_delta(
+            &SendClientContractTrackerEventData {
+                tracker: make_entry(0x0014, 2),
+                delete_contract: false,
+                set_as_display_contract: true,
+            },
+            &cell,
+        );
+        let snap = cell.borrow().clone().expect("snapshot");
+        assert_eq!(snap.display_contract_id, 0x0014);
+    }
+
+    #[test]
+    fn contracts_delete_clears_display_pin() {
+        let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+        apply_player_contracts_delta(
+            &SendClientContractTrackerEventData {
+                tracker: make_entry(0x0014, 2),
+                delete_contract: false,
+                set_as_display_contract: true,
+            },
+            &cell,
+        );
+        apply_player_contracts_delta(
+            &SendClientContractTrackerEventData {
+                tracker: make_entry(0x0014, 0),
+                delete_contract: true,
+                set_as_display_contract: false,
+            },
+            &cell,
+        );
+        let snap = cell.borrow().clone().expect("snapshot");
+        assert_eq!(snap.display_contract_id, 0, "display pin cleared");
+    }
+
+    #[test]
+    fn contracts_full_preserves_prior_display_pin() {
+        let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+        // Establish display via single-tracker delta.
+        apply_player_contracts_delta(
+            &SendClientContractTrackerEventData {
+                tracker: make_entry(0x0014, 2),
+                delete_contract: false,
+                set_as_display_contract: true,
+            },
+            &cell,
+        );
+        // Now apply a Table replace (e.g. relog) — ACE doesn't carry
+        // SetAsDisplay in the Table push.
+        apply_player_contracts_full(
+            &SendClientContractTrackerTableEventData {
+                trackers: vec![(0x0014, make_entry(0x0014, 2))],
+            },
+            &cell,
+        );
+        let snap = cell.borrow().clone().expect("snapshot");
+        assert_eq!(snap.display_contract_id, 0x0014, "display pin preserved");
+    }
+}
+

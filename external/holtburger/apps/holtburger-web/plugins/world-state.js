@@ -742,22 +742,23 @@ export class WorldState extends EventTarget {
    *
    * Per handoff §3 third quote (`Character.cs:619`): the wire packet
    * carries enchantments AND cooldowns combined; the
-   * EnchantmentTypeFlags.Cooldown bit is the discriminator. For PR 2
-   * we ASSUME the wasm side has already filtered cooldowns out
-   * (publish_player_enchantments_snapshot only takes "Enchantment"
-   * variants). PR 4 will add a separate dispatch for cooldowns.
+   * `EnchantmentTypeFlags.Cooldown` bit (0x1000000) is the discriminator.
+   * **Wave F.2 (2026-05-27) fix:** PR-2 ORIGINALLY assumed the wasm side
+   * filtered cooldowns out — that was never actually true, the wasm
+   * snapshot just dropped the discriminator field. Wave F.2 extended
+   * `PlayerEnchantmentJs` to surface the full `StatMod` tuple, so this
+   * dispatcher now passes `type`/`statKey`/`statValue` through to
+   * `Character.applyEnchantment`, which routes cooldowns into
+   * `sharedCooldowns` and ordinary enchantments into `allEnchantments`.
    *
    * Per handoff §3 seventh quote (`Character.cs:232-239`) — when more
    * than one enchantment occupies the same `(spell_category, layer)`,
    * the tiebreak is `Power desc → Level8AuraSelfSpells →
-   * SetSpells ? SpellId : StartTime → .First()`. PR 2 doesn't
-   * resolve the tiebreak (we emit all add/remove deltas verbatim); the
-   * buff-display UI on top of this should run the tiebreak when
-   * rendering its slot list.
+   * SetSpells ? SpellId : StartTime → .First()`. The diff layer doesn't
+   * resolve the tiebreak (we emit all add/remove deltas verbatim);
+   * Character's `getActiveEnchantments()` runs the tiebreak on demand.
    *
-   * @param {Array<{spell_id, spellId, layer, power_level, powerLevel,
-   *               start_time, startTime, duration, caster_guid,
-   *               casterGuid, spell_category, spellCategory}>} snapshot
+   * @param {Array<object>} snapshot raw wasm `playerEnchantments()` array
    */
   dispatchEnchantmentSnapshot(snapshot) {
     if (!Array.isArray(snapshot)) return;
@@ -770,10 +771,31 @@ export class WorldState extends EventTarget {
         spellId: sid,
         layer,
         powerLevel:   (e.power_level    ?? e.powerLevel    ?? 0) >>> 0,
+        // Wave F.2 (2026-05-27) — surface `power` too so PR-4's
+        // Character.applyEnchantment + tiebreak read the same field
+        // name without falling back. (Old code stored only powerLevel;
+        // the typed Character reads `power` per Enchantment.cs:46.)
+        power:        (e.power_level    ?? e.powerLevel    ?? e.power ?? 0) | 0,
         startTime:    (e.start_time     ?? e.startTime     ?? 0),
         duration:     (e.duration       ?? 0),
         casterGuid:   (e.caster_guid    ?? e.casterGuid    ?? 0) >>> 0,
         spellCategory:(e.spell_category ?? e.spellCategory ?? 0) >>> 0,
+        // Wave F.2 — full StatMod tuple + spell-set + degrade fields
+        // surfaced now that wasm `PlayerEnchantmentJs` carries them
+        // (apps/holtburger-web/src/lib.rs:14759 — extended in F.2).
+        // Without these the JS-side cooldown discriminator
+        // (`Character.cs:619`, `type & 0x1000000`) saw 0 and routed
+        // cooldowns as ordinary enchantments. Per handoff §3 row 5 +
+        // §4 PR-4 "New gotchas surfaced", this is the load-bearing
+        // fix unblocking real wire data routing.
+        type:         (e.stat_mod_type  ?? e.statModType   ?? e.type      ?? 0) | 0,
+        statKey:      (e.stat_mod_key   ?? e.statModKey    ?? e.statKey   ?? 0) | 0,
+        statValue:    Number(e.stat_mod_value ?? e.statModValue ?? e.statValue ?? 0),
+        hasSpellSetId:(e.has_spell_set_id ?? e.hasSpellSetId ?? 0) | 0,
+        spellSetId:   (e.spell_set_id    ?? e.spellSetId    ?? 0) | 0,
+        degradeModifier:   Number(e.degrade_modifier   ?? e.degradeModifier   ?? 0),
+        degradeLimit:      Number(e.degrade_limit      ?? e.degradeLimit      ?? 0),
+        lastTimeDegraded:  Number(e.last_time_degraded ?? e.lastTimeDegraded ?? 0),
       });
     }
 

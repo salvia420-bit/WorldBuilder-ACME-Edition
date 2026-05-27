@@ -197,3 +197,33 @@ pub enum ConfirmationType {
     Augmentation = 0x06,
     YesNo = 0x07,
 }
+
+/// Wave-F3 (2026-05-27): port of
+/// `Chorizite.Common.Enums.AllegianceOfficerLevel`
+/// (`external/chorizite/Chorizite.Common/Enums/AllegianceOfficerLevel.cs`).
+/// Used as the value type for `AllegianceHierarchy::Officers` (`uint →
+/// AllegianceOfficerLevel`) in the wire payload `Allegiance_AllegianceUpdate`
+/// (opcode 0x0020) and `Allegiance_AllegianceInfoResponseEvent` (opcode 0x027C).
+/// Three retail tiers: Speaker (broadcast), Seneschal (mid-rank), Castellan
+/// (highest). ACE's `SetAllegianceOfficer` GameAction (sub-opcode 0x003B)
+/// carries this as the `OfficerLevel` argument.
+#[repr(u32)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    FromRepr,
+)]
+pub enum AllegianceOfficerLevel {
+    Speaker = 0x01,
+    Seneschal = 0x02,
+    Castellan = 0x03,
+}

@@ -3,6 +3,7 @@ pub use crate::messages::book::events::*;
 pub use crate::messages::chat::events::*;
 pub use crate::messages::chat::turbine::*;
 pub use crate::messages::combat::events::*;
+pub use crate::messages::contracts::events::*;
 pub use crate::messages::fellowship::events::*;
 pub use crate::messages::friends::events::*;
 pub use crate::messages::house::events::*;
@@ -93,6 +94,14 @@ pub enum GameEvent {
     FellowshipFellowUpdateDone,
     FellowshipFellowStatsDone,
     AllegianceUpdate(Box<AllegianceUpdateEventData>),
+    /// Wave-F3 (2026-05-27): S2C notification that a member of the
+    /// player's allegiance logged in/out.
+    /// Opcode `AllegianceLoginNotification = 0x027A`.
+    AllegianceLoginNotification(Box<AllegianceLoginNotificationEventData>),
+    /// Wave-F3 (2026-05-27): S2C reply to a client's
+    /// `Allegiance_AllegianceInfoRequest` carrying a queried player's
+    /// `AllegianceProfile`. Opcode `AllegianceInfoResponse = 0x027C`.
+    AllegianceInfoResponse(Box<AllegianceInfoResponseEventData>),
     FriendsListUpdate(Box<FriendsListUpdateEventData>),
     SetSquelchDb(Box<SetSquelchDbEventData>),
     CharacterTitle(Box<CharacterTitleEventData>),
@@ -101,6 +110,16 @@ pub enum GameEvent {
     HouseData(Box<HouseDataEventData>),
     HouseProfile(Box<HouseProfileEventData>),
     HouseUpdateRestrictions(Box<HouseUpdateRestrictionsEventData>),
+    /// Wave F.5 (2026-05-27): single-contract delta from ACE's
+    /// `ContractManager` — Add (delete=false), Erase (delete=true), and
+    /// per-quest stage/timestamp updates (`MonitoredQuestFlags`
+    /// notification). Opcode `SendClientContractTracker = 0x0315`.
+    SendClientContractTracker(Box<SendClientContractTrackerEventData>),
+    /// Wave F.5 (2026-05-27): full contract-tracker table pushed at
+    /// login by ACE `Player_Networking.SendContractTrackerTable` when
+    /// the player has ≥1 contract. Opcode
+    /// `SendClientContractTrackerTable = 0x0314`.
+    SendClientContractTrackerTable(Box<SendClientContractTrackerTableEventData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -331,6 +350,14 @@ impl ProtocolUnpack for GameEventMessage {
                 GameEventOpcode::AllegianceUpdate => GameEvent::AllegianceUpdate(Box::new(
                     AllegianceUpdateEventData::unpack(data, offset)?,
                 )),
+                GameEventOpcode::AllegianceLoginNotification => {
+                    GameEvent::AllegianceLoginNotification(Box::new(
+                        AllegianceLoginNotificationEventData::unpack(data, offset)?,
+                    ))
+                }
+                GameEventOpcode::AllegianceInfoResponse => GameEvent::AllegianceInfoResponse(
+                    Box::new(AllegianceInfoResponseEventData::unpack(data, offset)?),
+                ),
                 GameEventOpcode::FriendsListUpdate => GameEvent::FriendsListUpdate(Box::new(
                     FriendsListUpdateEventData::unpack(data, offset)?,
                 )),
@@ -355,6 +382,16 @@ impl ProtocolUnpack for GameEventMessage {
                 GameEventOpcode::HouseUpdateRestrictions => GameEvent::HouseUpdateRestrictions(
                     Box::new(HouseUpdateRestrictionsEventData::unpack(data, offset)?),
                 ),
+                GameEventOpcode::SendClientContractTracker => {
+                    GameEvent::SendClientContractTracker(Box::new(
+                        SendClientContractTrackerEventData::unpack(data, offset)?,
+                    ))
+                }
+                GameEventOpcode::SendClientContractTrackerTable => {
+                    GameEvent::SendClientContractTrackerTable(Box::new(
+                        SendClientContractTrackerTableEventData::unpack(data, offset)?,
+                    ))
+                }
             },
             None => {
                 log::warn!(
@@ -698,6 +735,16 @@ impl ProtocolPack for GameEventMessage {
                     .unwrap();
                 data.pack(buf);
             }
+            GameEvent::AllegianceLoginNotification(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::AllegianceLoginNotification as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::AllegianceInfoResponse(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::AllegianceInfoResponse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
             GameEvent::FriendsListUpdate(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::FriendsListUpdate as u32)
                     .unwrap();
@@ -736,6 +783,20 @@ impl ProtocolPack for GameEventMessage {
             GameEvent::HouseUpdateRestrictions(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::HouseUpdateRestrictions as u32)
                     .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::SendClientContractTracker(data) => {
+                buf.write_u32::<LittleEndian>(
+                    GameEventOpcode::SendClientContractTracker as u32,
+                )
+                .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::SendClientContractTrackerTable(data) => {
+                buf.write_u32::<LittleEndian>(
+                    GameEventOpcode::SendClientContractTrackerTable as u32,
+                )
+                .unwrap();
                 data.pack(buf);
             }
             GameEvent::Unknown(opcode, data) => {

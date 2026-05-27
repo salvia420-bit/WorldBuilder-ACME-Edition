@@ -907,7 +907,7 @@ mod tests {
             },
         };
         let keep = compute_boot_keep_set(&bundle, 0xA9B4);
-        // Catalog tables: 6 + UI font + 2 glyph atlases = 9 portal records.
+        // Catalog tables: 6 + UI font + 2 glyph atlases + gmDefaultMap = 10 portal records.
         assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), CharGen::FILE_ID)));
         assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), SkillTable::FILE_ID)));
         assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), UI_FONT_ID)));
@@ -917,9 +917,9 @@ mod tests {
         assert!(keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0xA9B4_FFFF)));
         assert!(keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0xA9B4_FFFE)));
         assert!(keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0xA8B3_FFFF)));
-        // 9 catalog + 18 cell = 27 entries (no walk-discovered
+        // 10 catalog + 18 cell = 28 entries (no walk-discovered
         // records for an empty bundle).
-        assert_eq!(keep.len(), 9 + 18);
+        assert_eq!(keep.len(), 10 + 18);
         // Far-away cells are not in the keep set.
         assert!(!keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0x0000_FFFF)));
     }

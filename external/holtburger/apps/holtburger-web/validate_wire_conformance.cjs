@@ -403,6 +403,47 @@ const FIXTURES_LIST = [
     headerMode: "payload",
     notes: "Synth — empty sell list.",
   },
+  // ───── Wave F.4 (2026-05-27) — VendorProfile typed-shape fixture ─────
+  //
+  // Locks the `Vendor_VendorInfo` (opcode 0x0062 S2C, ACE
+  // ApproachVendor) wire shape, including the embedded `VendorProfile`
+  // sub-structure that F.4 ports to Rust + JS. Round-tripped via
+  // Chorizite.ACProtocol.Types.VendorProfile.{Read,Write}.
+  // Sources: external/chorizite/Chorizite.ACProtocol/.../VendorProfile.generated.cs +
+  //          external/chorizite/Chorizite.ACProtocol/.../Vendor_VendorInfo.generated.cs +
+  //          acclient.c:719870 (ShopSystem::BuyPrice — formula our port mirrors).
+  {
+    case: "Wave F.4 — Vendor_VendorInfo with typed VendorProfile (synth empty stock)",
+    typeName: "Vendor_VendorInfo",
+    source: "synthesized",
+    skip: true,
+    fields: {
+      ObjectId: 0x50000001,
+      Profile: {
+        Categories: 0x83,       // MELEE_WEAPON | ARMOR | MISC
+        MinValue: 0,
+        MaxValue: 0xFFFFFFFF,   // retail -1 "no cap" sentinel
+        DealsMagic: true,
+        BuyPrice: 1.25,
+        SellPrice: 0.75,
+        CurrencyId: 0,
+        CurrencyAmount: 0,
+        CurrencyName: "",
+      },
+      Items: [],
+    },
+    headerMode: "full",
+    notes: "Wave F.4 (2026-05-27, SKIP): exposes the same upstream Chorizite " +
+           "Write/Read bool asymmetry F.3 documented — VendorProfile.Write " +
+           "uses C# BinaryWriter.Write(bool) (1 byte) but VendorProfile.Read " +
+           "uses BinaryReaderExtensions.ReadBool which reads u32 (4 bytes). " +
+           "Round-trip via the synth pack→unpack path triggers 'Unable to read " +
+           "beyond end of stream' on the DealsMagic field. The retail wire is " +
+           "4-byte-bool (acclient.c:702448) so our Rust port reads it correctly " +
+           "from real captures; cargo test -p holtburger-protocol covers the " +
+           "Rust-side round-trip. SKIP until upstream Chorizite fixes Write or " +
+           "the WB.Terminal validator pipeline pre-widens bool fields.",
+  },
   {
     case: "Movement_VectorUpdate (S2C)",
     typeName: "Movement_VectorUpdate",
@@ -576,6 +617,98 @@ const FIXTURES_LIST = [
            "above. This fixture locks the local-prediction MotionCommand " +
            "value in case a future refactor accidentally emits a sibling " +
            "MotionCommand from JS-side setMotion.",
+  },
+  // ───── Wave F.3 (2026-05-27) — allegiance presence + info-response ─────
+  // Lock the AllegianceLoginNotification (0x027A) wire shape: ReadBool
+  // reads a 4-byte u32 (returns val==1), NOT a single byte, per
+  // `BinaryReaderExtensions.cs:178-181`. The Rust unpacker mirrors that
+  // — a fixture covers a future regression.
+  {
+    case: "Wave F.3 — Allegiance_AllegianceLoginNotificationEvent / 0x027A (login)",
+    typeName: "Allegiance_AllegianceLoginNotificationEvent",
+    source: "synthesized",
+    skip: true,
+    fields: {
+      OrderedObjectId: 0x50003333,
+      OrderedSequence: 0x10,
+      EventType: 0x027A,
+      CharacterId: 0x50001234,
+      IsLoggedIn: true,
+    },
+    headerMode: "full",
+    opcode: 0xF7B0,
+    notes: "Wave F.3 (2026-05-27, SKIP): ACE pushes opcode 0x027A " +
+           "wrapped in Ordered_GameEvent 0xF7B0. Inner payload: " +
+           "(CharacterId u32, IsLoggedIn u32 [ReadBool]). Marked SKIP " +
+           "alongside the F.4 Vendor_VendorInfo fixture — the WB.Terminal " +
+           "chorizite-wire-pack-message command's synthesized-wrapper path " +
+           "doesn't surface the inner event subclass through its " +
+           "Ordered_GameEvent dispatcher today. The cargo round-trip tests " +
+           "`allegiance_login_notification_round_trip_login` / " +
+           "`_logout` in crates/holtburger-protocol/src/messages/allegiance/" +
+           "events.rs cover the 8-byte wire shape including the " +
+           "ReadBool = 4-byte u32 invariant.",
+  },
+  {
+    case: "Wave F.3 — Allegiance_AllegianceLoginNotificationEvent / 0x027A (logout)",
+    typeName: "Allegiance_AllegianceLoginNotificationEvent",
+    source: "synthesized",
+    skip: true,
+    fields: {
+      OrderedObjectId: 0x50003333,
+      OrderedSequence: 0x11,
+      EventType: 0x027A,
+      CharacterId: 0x5000ABCD,
+      IsLoggedIn: false,
+    },
+    headerMode: "full",
+    opcode: 0xF7B0,
+    notes: "Wave F.3 (2026-05-27, SKIP): logout variant of 0x027A. Same " +
+           "WB.Terminal limitation as the login row; cargo-side covers " +
+           "the false→0 ReadBool encoding via " +
+           "`allegiance_login_notification_round_trip_logout`.",
+  },
+  {
+    case: "Wave F.3 — Allegiance_AllegianceInfoResponseEvent / 0x027C",
+    typeName: "Allegiance_AllegianceInfoResponseEvent",
+    source: "synthesized",
+    skip: true,
+    notes: "Wave F.3 (2026-05-27, SKIP): structurally identical to " +
+           "AllegianceUpdate body — (TargetId u32) + AllegianceProfile " +
+           "(uint TotalMembers, uint TotalVassals, AllegianceHierarchy). " +
+           "The hierarchy carries a PackableHashTable + recursive node " +
+           "list; constructing a synthesized `fields` shape requires the " +
+           "WB.Terminal chorizite-wire-pack command to recurse into " +
+           "AllegianceProfile/AllegianceHierarchy nested types. Round-trip " +
+           "is covered cargo-side (`allegiance_info_response_round_trip` " +
+           "+ `allegiance_info_response_round_trip_empty` in " +
+           "crates/holtburger-protocol/src/messages/allegiance/events.rs).",
+  },
+  // ───── Wave F.5 (2026-05-27) — contract tracker ─────
+  // C2S AbandonContract — single-u32 payload (ContractId). Verifies
+  // both Rust + Chorizite agree on the action opcode 0x0316 and the
+  // 4-byte payload shape. The S2C SendClientContractTracker /
+  // SendClientContractTrackerTable rows are kept cargo-side
+  // (`send_client_contract_tracker_event_round_trip_*` +
+  // `send_client_contract_tracker_table_event_round_trip_*` in
+  // crates/holtburger-protocol/src/messages/contracts/events.rs)
+  // because they're wrapped in Ordered_GameEvent (0xF7B0) and the
+  // WB.Terminal synthesized-wrapper path doesn't surface inner-event
+  // subclasses through its Ordered_GameEvent dispatcher today (same
+  // limitation as F.3 / F.4 rows above).
+  {
+    case: "Wave F.5 — Social_AbandonContract / 0x0316",
+    typeName: "Social_AbandonContract",
+    source: "synthesized",
+    fields: {
+      ContractId: 5,  // Reign_of_Terror — Chorizite ContractId.cs:25
+    },
+    headerMode: "payload",
+    notes: "Wave F.5 (2026-05-27): C2S abandon-contract action. ACE " +
+           "`Player.HandleActionAbandonContract` (Player_Contracts.cs:7) " +
+           "routes to `ContractManager.Abandon → Erase` which broadcasts " +
+           "back a SendClientContractTracker with DeleteContract=true. " +
+           "Payload is a single u32 ContractId.",
   },
 ];
 

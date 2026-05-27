@@ -623,6 +623,49 @@ function silentLog() {
     assert.equal(w.character.allEnchantments.size, 1);
   });
 
+  check('Wave F.2: snapshot with COOLDOWN bit routes into Character.sharedCooldowns', () => {
+    // Pre-Wave-F.2 the snapshot diff layer dropped `type`/`statKey`/
+    // `statValue`, so the cooldown discriminator in Character (§3 row 5)
+    // saw `type=0` and routed cooldowns as ordinary buffs. Wave F.2
+    // extends the diff layer to pass the full StatMod tuple through.
+    const w = new WorldState({ logger: silentLog() });
+    w.setLocalPlayerGuid(0x100);
+    w.dispatchItemCreateObject({ guid: 0x100, classId: 7 });
+    w.dispatchEnchantmentSnapshot([
+      // Normal buff.
+      { spell_id: 100, layer: 0, power_level: 100,
+        start_time: 0, duration: 60, caster_guid: 1, spell_category: 7,
+        stat_mod_type: 0x8001 /* ADDITIVE | ATTRIBUTE */,
+        stat_mod_key: 1, stat_mod_value: 10 },
+      // Cooldown — distinguished by the COOLDOWN bit.
+      { spell_id: 999, layer: 0, power_level: 0,
+        start_time: 0, duration: 30, caster_guid: 0, spell_category: 0,
+        stat_mod_type: 0x1000000 /* COOLDOWN */,
+        stat_mod_key: 0x101, stat_mod_value: 0 },
+    ]);
+    assert.equal(w.character.allEnchantments.size, 1,
+      'only the non-cooldown entry should land in allEnchantments');
+    assert.equal(w.character.sharedCooldowns.size, 1,
+      'cooldown entry must route to sharedCooldowns via §3 row 5');
+  });
+
+  check('Wave F.2: snapshot statValue + statKey + type reach Character record', () => {
+    const w = new WorldState({ logger: silentLog() });
+    w.setLocalPlayerGuid(0x100);
+    w.dispatchItemCreateObject({ guid: 0x100, classId: 7 });
+    w.dispatchEnchantmentSnapshot([
+      { spell_id: 100, layer: 0, power_level: 200,
+        start_time: 0, duration: 60, caster_guid: 1, spell_category: 7,
+        stat_mod_type: 0x8001, stat_mod_key: 1, stat_mod_value: 60.0 },
+    ]);
+    const key = ((100 << 16) | 0) >>> 0;
+    const ench = w.character.allEnchantments.get(key);
+    assert.ok(ench, 'should find the enchantment by layered key');
+    assert.equal(ench.type, 0x8001);
+    assert.equal(ench.statKey, 1);
+    assert.equal(ench.statValue, 60.0);
+  });
+
   check('dispatchEffectsPlayerTeleport reaches the Character', () => {
     const w = new WorldState({ logger: silentLog() });
     w.setLocalPlayerGuid(0x100);

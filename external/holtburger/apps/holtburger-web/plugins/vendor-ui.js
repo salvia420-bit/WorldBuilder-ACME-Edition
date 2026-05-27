@@ -196,7 +196,78 @@ function snapshotFromWasm(state) {
       itemType: i.itemType,
       iconId: i.iconId,
     })),
+    // Wave F.4 (2026-05-27): typed-profile fields. populated by
+    // `enrichWithProfile()` after the wasm getCurrentVendorProfile call.
+    // Defaults match retail "no restriction" sentinels.
+    buyAcceptCategories: 0xFFFFFFFF,
+    buyAcceptCategoryNames: [],
+    dealsMagic: true,
+    minValue: 0xFFFFFFFF,
+    maxValue: 0xFFFFFFFF,
+    hasNoMin: true,
+    hasNoMax: true,
   };
+}
+
+/**
+ * Wave F.4 (2026-05-27) — merge a `getCurrentVendorProfile` payload
+ * (typed VendorProfile, includes buyAcceptCategories / dealsMagic /
+ * minValue / maxValue / pre-computed per-item buyPrice) onto an
+ * existing `snapshotFromWasm` snapshot. The two wasm calls share the
+ * same `latest_vendor_state` cache, so the data is consistent.
+ *
+ * If `profile` is null (no F.4 export available, or the cache is
+ * stale), the snapshot keeps its Wave-7 shape with default "no
+ * restriction" sentinels in the new fields. Vendor-ui then degrades
+ * gracefully to the Wave-7 behavior.
+ *
+ * Cross-references:
+ *   - `apps/holtburger-web/src/lib.rs::SessionHandle::getCurrentVendorProfile`
+ *   - `crates/holtburger-protocol/src/messages/trade/profile.rs::VendorProfile`
+ *   - `external/chorizite/Chorizite.ACProtocol/.../VendorProfile.generated.cs`
+ */
+function enrichWithProfile(snapshot, profile) {
+  if (!profile) return snapshot;
+  snapshot.buyAcceptCategories = profile.buyAcceptCategories ?? 0xFFFFFFFF;
+  snapshot.buyAcceptCategoryNames = profile.buyAcceptCategoryNames ?? [];
+  snapshot.dealsMagic = !!profile.dealsMagic;
+  snapshot.minValue = profile.minValue ?? 0xFFFFFFFF;
+  snapshot.maxValue = profile.maxValue ?? 0xFFFFFFFF;
+  snapshot.hasNoMin = !!profile.hasNoMin;
+  snapshot.hasNoMax = !!profile.hasNoMax;
+  // Profile stock has pre-computed buyPrice + categoryBit per entry.
+  // Index by itemGuid so we can copy into the existing items array
+  // (which was built first from the flat Wave-7 path).
+  const byGuid = new Map();
+  for (const s of (profile.stock || [])) byGuid.set(s.itemGuid >>> 0, s);
+  for (const it of snapshot.items) {
+    const m = byGuid.get(it.itemGuid >>> 0);
+    if (!m) continue;
+    it.buyPrice = m.buyPrice;
+    it.categoryBit = m.categoryBit;
+  }
+  return snapshot;
+}
+
+/**
+ * Wave F.4 (2026-05-27) — retail-formula buy price for a vendor stock
+ * entry. Mirrors `ShopSystem::BuyPrice` from acclient.c:719870.
+ *
+ * Promissory notes (item type 0x40000) ignore the per-vendor
+ * multiplier — retail uses a flat 1.0. Other types: floor(unit_value *
+ * num_item * buy_multiplier + 0.1). Result is at least 1 pyreal
+ * (vendors don't give items away).
+ *
+ * Used for fallback display when the wasm typed export isn't available
+ * (e.g. pre-bake JS-only smoke tests).
+ */
+function shopBuyPrice(unitValue, itemType, buyMultiplier, numItem) {
+  const PROMISSORY_NOTE_BIT = 0x40000;
+  const multiplier = itemType === PROMISSORY_NOTE_BIT ? 1.0 : buyMultiplier;
+  const raw = Math.floor(multiplier * unitValue * numItem + 0.1);
+  if (raw === 0) return 1;
+  if (raw < 0 || raw > 0x7FFFFFFF) return -1;
+  return raw;
 }
 
 function ensureStyles() {
@@ -1151,7 +1222,18 @@ function renderItemsPane() {
   const sel = items.find((i) => i.itemGuid === state.selectedItemGuid);
   const myPyreals = countPyreals();
   if (sel) {
-    const price = Math.round((sel.value || 0) * (vs.buyMultiplier || 1));
+    // Wave F.4 (2026-05-27): prefer the wasm-precomputed `buyPrice`
+    // (retail ShopSystem::BuyPrice — includes promissory-note
+    // special-case + +0.1 floor offset). Falls back to the legacy
+    // value*multiplier calc when the F.4 export isn't available.
+    const price = (typeof sel.buyPrice === "number" && sel.buyPrice >= 0)
+      ? sel.buyPrice
+      : shopBuyPrice(
+          sel.value || 0,
+          sel.itemType || 0,
+          vs.buyMultiplier || 1,
+          1,
+        );
     setAcText(refs.name, sel.name || `wcid ${sel.wcid}`, { color: "#f0c87c" });
     setAcText(refs.price, `costs ${fmtPrice(price)} p (you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
   } else {
@@ -1173,7 +1255,13 @@ function renderItemsPane() {
       setAcText(badge, String(it.stackSize), { color: "#f0e8d0" });
       cell.appendChild(badge);
     }
-    cell.title = `${it.name} — ${fmtPrice((it.value || 0) * (vs.buyMultiplier || 1))}p`;
+    // Wave F.4: prefer pre-computed retail buyPrice over the
+    // value*multiplier estimate (which doesn't account for the
+    // promissory-note special-case or +0.1 floor adjust).
+    const tipPrice = (typeof it.buyPrice === "number" && it.buyPrice >= 0)
+      ? it.buyPrice
+      : shopBuyPrice(it.value || 0, it.itemType || 0, vs.buyMultiplier || 1, 1);
+    cell.title = `${it.name} — ${fmtPrice(tipPrice)}p`;
     cell.addEventListener("click", () => {
       state.selectedItemGuid = it.itemGuid;
       render();
@@ -1185,10 +1273,26 @@ function renderItemsPane() {
     refs.strip.appendChild(cell);
   }
 
-  // Rates strip
+  // Rates strip — Wave F.4 (2026-05-27): surface the typed-profile
+  // acceptance hints when available (deals-magic flag + min/max
+  // value caps + categorized accept list). The categories list mirrors
+  // what `VendorItemsUI::AddTypeFilter` does in retail
+  // (acclient.c:4597) for the dropdown but here in flat text.
+  let extras = "";
+  if (Array.isArray(vs.buyAcceptCategoryNames) && vs.buyAcceptCategoryNames.length) {
+    // Show the typed categories the vendor will BUY back from you.
+    // Limited to first 3 so the rates strip doesn't overflow.
+    const top = vs.buyAcceptCategoryNames.slice(0, 3).join("/").toLowerCase();
+    const more = vs.buyAcceptCategoryNames.length > 3 ? "…" : "";
+    extras += ` · Accepts: ${top}${more}`;
+  }
+  if (vs.dealsMagic === false) extras += " · No magic";
+  if (vs.hasNoMax === false && Number.isFinite(vs.maxValue)) {
+    extras += ` · Cap ${fmtPrice(vs.maxValue)} p`;
+  }
   refs.rates.innerHTML =
     `Sells <b>${Math.round((vs.buyMultiplier || 1) * 100)}%</b> · ` +
-    `Buys <b>${Math.round((vs.sellMultiplier || 1) * 100)}%</b>`;
+    `Buys <b>${Math.round((vs.sellMultiplier || 1) * 100)}%</b>${extras}`;
 
   // Enable Buy / Add buttons only when something is selected.
   refs.buyBtn.disabled = !sel;
@@ -1376,7 +1480,11 @@ export const manifest = {
   name: "Vendor Bar",
   icon: "💰",
   iconHidden: true,
-  version: "0.4.0",
+  // Wave F.4 (2026-05-27): typed VendorProfile consumption + retail
+  // buy/sell-price formula port. Adds categorized accept-list display,
+  // deal-magic flag surfacing, and per-stock-entry buyPrice using
+  // ShopSystem::BuyPrice (acclient.c:719870).
+  version: "0.5.0",
   description: "Retail-style horizontal vendor bar — auto-opens on kind=12 VendorOpened",
 };
 
@@ -1390,6 +1498,20 @@ export function mount(ctx) {
     const handle = window.__sessionHandle ?? null;
     if (!client?.events?.on || !handle?.getVendorState) return false;
 
+    const pullProfile = (vendorGuid) => {
+      // Wave F.4 (2026-05-27): pair with getCurrentVendorProfile for the
+      // typed-profile fields (buyAcceptCategories, dealsMagic, min/max,
+      // pre-computed buyPrice per stock entry). Falls back gracefully
+      // when the export isn't present (older wasm build).
+      if (typeof handle.getCurrentVendorProfile !== "function") return null;
+      try {
+        return handle.getCurrentVendorProfile(vendorGuid >>> 0);
+      } catch (e) {
+        console.warn("[vendor-ui] getCurrentVendorProfile failed", e);
+        return null;
+      }
+    };
+
     const onVendorOpened = (ev) => {
       const detail = ev.detail || {};
       const vendorGuid = (detail.u32Payload ?? detail.u32_payload ?? 0) >>> 0;
@@ -1401,19 +1523,23 @@ export function mount(ctx) {
       if (!raw) {
         setTimeout(() => {
           const retry = handle.getVendorState(vendorGuid);
-          if (retry) openWith(retry);
+          if (retry) openWith(retry, pullProfile(vendorGuid));
         }, 50);
         return;
       }
-      openWith(raw);
+      openWith(raw, pullProfile(vendorGuid));
     };
 
     const onInvChanged = () => {
       if (!state.vendorState?.vendorGuid) return;
       try {
-        const raw = handle.getVendorState(state.vendorState.vendorGuid >>> 0);
+        const vendorGuid = state.vendorState.vendorGuid >>> 0;
+        const raw = handle.getVendorState(vendorGuid);
         if (raw) {
-          state.vendorState = snapshotFromWasm(raw);
+          state.vendorState = enrichWithProfile(
+            snapshotFromWasm(raw),
+            pullProfile(vendorGuid),
+          );
           render();
         }
       } catch (e) {
@@ -1435,8 +1561,11 @@ export function mount(ctx) {
     return true;
   }
 
-  function openWith(rawState) {
-    state.vendorState = snapshotFromWasm(rawState);
+  function openWith(rawState, profilePayload = null) {
+    state.vendorState = enrichWithProfile(
+      snapshotFromWasm(rawState),
+      profilePayload,
+    );
     // Reset transient UI state on (re)open of a vendor.
     state.currentTab = "items";
     state.selectedItemGuid = null;

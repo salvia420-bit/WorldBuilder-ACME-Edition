@@ -1,6 +1,7 @@
 pub use crate::messages::book::actions::*;
 pub use crate::messages::chat::actions::*;
 pub use crate::messages::combat::actions::*;
+pub use crate::messages::contracts::actions::*;
 pub use crate::messages::fellowship::actions::*;
 pub use crate::messages::house::actions::*;
 pub use crate::messages::inventory::actions::*;
@@ -113,6 +114,12 @@ pub enum GameAction {
     AcceptTrade(Box<AcceptTradeActionData>),
     DeclineTrade(Box<DeclineTradeActionData>),
     ResetTrade(Box<ResetTradeActionData>),
+    /// Wave F.5 (2026-05-27): C2S drop-an-active-contract action.
+    /// ACE `Player.HandleActionAbandonContract` routes to
+    /// `ContractManager.Abandon → Erase` which broadcasts a
+    /// `SendClientContractTracker` with `DeleteContract=true`. Opcode
+    /// `AbandonContract = 0x0316`.
+    AbandonContract(Box<AbandonContractActionData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -403,6 +410,9 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::ResetTrade => {
                     GameAction::ResetTrade(Box::new(ResetTradeActionData::unpack(data, offset)?))
                 }
+                GameActionOpcode::AbandonContract => GameAction::AbandonContract(Box::new(
+                    AbandonContractActionData::unpack(data, offset)?,
+                )),
             },
             None => {
                 let remaining = data[*offset..].to_vec();
@@ -870,6 +880,11 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::ResetTrade(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::ResetTrade as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AbandonContract(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AbandonContract as u32)
                     .unwrap();
                 data.pack(buf);
             }
