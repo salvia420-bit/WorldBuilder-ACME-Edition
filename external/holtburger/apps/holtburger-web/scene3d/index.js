@@ -73,6 +73,11 @@ import { LandblockLRU, lbKeyFromXY } from "./landblock_lru.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
 import { ACMoons } from "./ac_moons.js";
 import { installDiag } from "./diag.js";
+// Wave 15 — opt-in bulk icon preload (?preloadIcons=1). Default OFF.
+// Populates the shared `ui/ac_icon_cache.js` cache so subsequent icon
+// fetches in inventory/vendor/container/trade/buffs/spell-research
+// return synchronously. See docs/wave-15-icon-preload-2026-05-26.md.
+import { preloadAllIcons as preloadAllIconsShared } from "../ui/ac_icon_cache.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -3339,6 +3344,46 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         "wire-agent scene ready (atmosphere/composer/clouds/skydome/CSM skipped)"
       );
     } catch {}
+  }
+
+  // Wave 15 — opt-in bulk icon preload (`?preloadIcons=1`). Default
+  // OFF; user opts in when they want offline-test or screenshot-capture
+  // sessions where the first inventory open should show real icons
+  // instantly instead of TYPE_COLOR fallbacks. The preload runs AFTER
+  // the scene is structurally ready (this point) and AFTER a 2s grace
+  // window so the first paint + atmosphere bake + initial LB load all
+  // settle before the wasm fetcher gets hit with 4,000+ surface
+  // requests. Progress logs to the console; the cache it populates
+  // (`ui/ac_icon_cache.js`) is the same one the plugin lazy fetches
+  // read from. See `docs/wave-15-icon-preload-2026-05-26.md`.
+  const preloadIconsEnabled = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search).get("preloadIcons") === "1";
+    } catch (_) { return false; }
+  })();
+  if (preloadIconsEnabled) {
+    // eslint-disable-next-line no-console
+    console.log("[wave15] ?preloadIcons=1 — scheduling bulk icon preload (deferred 2s after scene ready)");
+    setTimeout(() => {
+      preloadAllIconsShared({
+        batchSize: 32,
+        onProgress: ({ loaded, failed, total }) => {
+          // Log every ~10% so the console isn't spammed.
+          const step = Math.max(1, Math.floor(total / 10));
+          const seen = loaded + failed;
+          if (seen % step < 32 || seen === total) {
+            // eslint-disable-next-line no-console
+            console.log(`[wave15] icon preload: ${seen}/${total} (loaded=${loaded}, failed=${failed})`);
+          }
+        },
+      })
+        .then((r) => {
+          // eslint-disable-next-line no-console
+          console.log(`[wave15] icon preload complete: ${r.loaded}/${r.total} loaded, ${r.failed} failed in ${r.durationMs} ms`);
+        })
+        .catch((e) => console.warn("[wave15] icon preload failed:", e));
+    }, 2000);
   }
 
   return liveScene3d;

@@ -14,6 +14,10 @@
 // panel only subscribes to playerStatsUpdated once it's opened.
 
 import { setAcText } from "../ui/ac_font.js";
+import {
+  fetchIconDataUrl as fetchIconDataUrlShared,
+  getIconImmediate as getIconImmediateShared,
+} from "../ui/ac_icon_cache.js";
 
 const OVERLAY_ID = "hb-spell-research-panel";
 const STYLE_ID = "hb-spell-research-style";
@@ -93,40 +97,18 @@ function resolveComponentName(comp) {
   return String(comp);
 }
 
-const iconCache = new Map();
+// Wave 15 — icon cache consolidated into `ui/ac_icon_cache.js`. Local
+// thin wrappers preserve the historical `[spell-research]` warn label
+// AND the dragstart drag-ghost path's synchronous cache peek (replaces
+// pre-Wave 15 `iconCache.get(meta.icon)` at L526; now delegates to the
+// shared `getIconImmediate` so the ghost still uses the cached URL when
+// the panel had previously fetched it OR the boot-time bulk preload
+// (?preloadIcons=1) had populated it).
 async function fetchIconDataUrl(iconId) {
-  if (!iconId) return null;
-  const cached = iconCache.get(iconId);
-  if (cached !== undefined) {
-    if (cached instanceof Promise) return cached;
-    return cached;
-  }
-  const wasm = window.__hbWasm ?? null;
-  if (!wasm?.fetch_surface_pixels) {
-    iconCache.set(iconId, false);
-    return false;
-  }
-  const p = (async () => {
-    try {
-      const r = await wasm.fetch_surface_pixels(iconId >>> 0);
-      if (!r || !r.width || !r.height || !r.pixels?.length) return false;
-      const canvas = document.createElement("canvas");
-      canvas.width = r.width;
-      canvas.height = r.height;
-      const cx = canvas.getContext("2d");
-      const img = cx.createImageData(r.width, r.height);
-      img.data.set(r.pixels);
-      cx.putImageData(img, 0, 0);
-      return canvas.toDataURL("image/png");
-    } catch (e) {
-      console.warn(`[spell-research] icon ${iconId} fetch failed:`, e);
-      return false;
-    }
-  })();
-  iconCache.set(iconId, p);
-  const url = await p;
-  iconCache.set(iconId, url);
-  return url;
+  return fetchIconDataUrlShared(iconId, "spell-research");
+}
+function iconCacheGetSync(iconId) {
+  return getIconImmediateShared(iconId);
 }
 
 function ensureStyles() {
@@ -523,7 +505,10 @@ function makeRow(id, meta) {
 
     const ghost = document.createElement("div");
     ghost.className = "hb-sr-drag-ghost";
-    const cached = meta.icon ? iconCache.get(meta.icon) : undefined;
+    // Wave 15 — sync cache peek via shared module. Falls back to the
+    // school color when the URL isn't resolved yet (matches the
+    // pre-Wave 15 `iconCache.get(meta.icon)` short-circuit).
+    const cached = meta.icon ? iconCacheGetSync(meta.icon) : null;
     if (typeof cached === "string" && cached) {
       ghost.style.backgroundImage = `url(${cached})`;
     } else {

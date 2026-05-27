@@ -40,6 +40,7 @@
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, parseElementIdHex, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
+import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
 
 /** Retail LayoutDescs covering the inventory window.
  *
@@ -149,39 +150,15 @@ const PAPERDOLL_SLOTS = [
   { elemId: "0x100005B3", equipMask: 0x00000100, x: 120, y: 172, name: "Boots" },
 ];
 
-const iconCache = new Map();
+// Wave 15 — both paperdoll-slot AND items-grid cells route their icon
+// fetches through the shared `ui/ac_icon_cache.js` cache so a fetch
+// triggered in one plugin (vendor-ui, container-panel, etc.) is reused
+// elsewhere on the next request. Also enables the opt-in
+// `?preloadIcons=1` bulk-preload (4,224 icons via icon-manifest.json)
+// to back this same cache. Local thin wrapper preserves the historical
+// label so failure warnings still cite the inventory plugin.
 async function fetchPaperdollIconDataUrl(iconId) {
-  if (!iconId) return null;
-  const cached = iconCache.get(iconId);
-  if (cached !== undefined) {
-    if (cached instanceof Promise) return cached;
-    return cached;
-  }
-  const wasm = window.__hbWasm ?? window.__wasm ?? null;
-  if (!wasm?.fetch_surface_pixels) {
-    iconCache.set(iconId, null);
-    return null;
-  }
-  const p = (async () => {
-    try {
-      const r = await wasm.fetch_surface_pixels(iconId >>> 0);
-      if (!r || !r.width || !r.height || !r.pixels?.length) return null;
-      const canvas = document.createElement("canvas");
-      canvas.width = r.width; canvas.height = r.height;
-      const cx = canvas.getContext("2d");
-      const img = cx.createImageData(r.width, r.height);
-      img.data.set(r.pixels);
-      cx.putImageData(img, 0, 0);
-      return canvas.toDataURL("image/png");
-    } catch (e) {
-      console.warn(`[inventory] paperdoll icon ${iconId} fetch failed:`, e);
-      return null;
-    }
-  })();
-  iconCache.set(iconId, p);
-  const url = await p;
-  iconCache.set(iconId, url);
-  return url;
+  return fetchIconDataUrlShared(iconId, "inventory");
 }
 
 let stylesInjected = false;
@@ -866,12 +843,30 @@ function doMount(parentEl, _ctx) {
   function makeSlot(srcLi) {
     const slot = document.createElement("div");
     slot.className = "hb-inv-slot";
-    slot.dataset.guid = srcLi.dataset?.guid ?? "";
+    const guidStr = srcLi.dataset?.guid ?? "";
+    slot.dataset.guid = guidStr;
     const tb = srcLi.dataset?.typeBit ?? "0x0";
     slot.dataset.typeBit = tb;
     const icon = document.createElement("div");
     icon.className = "hb-inv-icon";
+    // TYPE_COLOR is the fallback while the real icon fetches (mirrors
+    // vendor-ui.js:623-634's emoji-first/icon-on-resolve pattern). The
+    // iconId arrives via the cached wasm snapshot — InventoryItem
+    // (src/lib.rs:14185-14227) carries `iconId` per
+    // `PublicWeenieDescription.icon_id`, so the items-grid path is
+    // symmetric with the paperdoll slot at L974-981.
     icon.style.background = TYPE_COLOR[tb] || "#444";
+    const item = guidStr ? getItemByGuid(guidStr) : null;
+    const iconId = (item?.iconId >>> 0) || 0;
+    if (iconId) {
+      fetchPaperdollIconDataUrl(iconId).then((url) => {
+        // Skip if the slot has been swapped out or replaced mid-fetch
+        // (rebuildItemsGrid wipes innerHTML on every inventory delta).
+        if (!icon.isConnected) return;
+        if (slot.dataset.guid !== guidStr) return;
+        if (url) icon.style.background = `url("${url}") center/contain no-repeat`;
+      });
+    }
     slot.appendChild(icon);
     // Stack count (if the source row has a ×N badge)
     const stack = srcLi.querySelector(".stack");

@@ -21,6 +21,7 @@
 // Click an item → routes to the existing Examine path (window.__showExamineFor).
 
 import { setAcText } from "../ui/ac_font.js";
+import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
 
 const OVERLAY_ID = "hb-container-panel";
 const STYLE_ID = "hb-container-panel-style";
@@ -30,40 +31,10 @@ let overlayEl = null;
 let onKeyDownHandler = null;
 let onDocMouseDownHandler = null;
 
-const iconCache = new Map();
-
+// Wave 15 — icon cache consolidated into `ui/ac_icon_cache.js`. Local
+// thin wrapper preserves the historical `[container-panel]` warn label.
 async function fetchIconDataUrl(iconId) {
-  if (!iconId) return null;
-  const cached = iconCache.get(iconId);
-  if (cached !== undefined) {
-    if (cached instanceof Promise) return cached;
-    return cached;
-  }
-  const wasm = window.__hbWasm ?? window.__wasm ?? null;
-  if (!wasm?.fetch_surface_pixels) {
-    iconCache.set(iconId, false);
-    return false;
-  }
-  const promise = (async () => {
-    try {
-      const r = await wasm.fetch_surface_pixels(iconId >>> 0);
-      if (!r || !r.width || !r.height || !r.pixels?.length) return false;
-      const canvas = document.createElement("canvas");
-      canvas.width = r.width; canvas.height = r.height;
-      const cx = canvas.getContext("2d");
-      const img = cx.createImageData(r.width, r.height);
-      img.data.set(r.pixels);
-      cx.putImageData(img, 0, 0);
-      return canvas.toDataURL("image/png");
-    } catch (e) {
-      console.warn(`[container-panel] icon ${iconId} fetch failed:`, e);
-      return false;
-    }
-  })();
-  iconCache.set(iconId, promise);
-  const url = await promise;
-  iconCache.set(iconId, url);
-  return url;
+  return fetchIconDataUrlShared(iconId, "container-panel");
 }
 
 function ensureStyles() {

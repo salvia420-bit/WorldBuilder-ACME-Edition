@@ -74,6 +74,7 @@
 import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
 
 // gmVendorUI 0x21000012 — element_id constants from
 // vendor_ui_layout_dump 2026-05-24. See head-comment block above for
@@ -163,44 +164,13 @@ function emojiForItemType(itemType) {
   return ITEM_TYPE_EMOJI[bit] || "📦";
 }
 
-// Icon cache — module-scoped so revisits hit cache across mounts.
-const iconCache = new Map();
-
+// Wave 15 — icon cache consolidated into `ui/ac_icon_cache.js` so the
+// vendor / container / trade / buffs / inventory plugins all share the
+// same cache (a fetch for icon X anywhere benefits everywhere on the
+// next request). Local thin wrapper preserves the historical
+// `[vendor-ui]` warn label.
 async function fetchIconDataUrl(iconId) {
-  if (!iconId) return null;
-  const cached = iconCache.get(iconId);
-  if (cached !== undefined) {
-    if (cached instanceof Promise) return cached;
-    return cached;
-  }
-  const wasm = window.__hbWasm ?? window.__wasm ?? null;
-  if (!wasm?.fetch_surface_pixels) {
-    iconCache.set(iconId, false);
-    return false;
-  }
-  const promise = (async () => {
-    try {
-      const result = await wasm.fetch_surface_pixels(iconId >>> 0);
-      if (!result || !result.width || !result.height || !result.pixels?.length) {
-        return false;
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = result.width;
-      canvas.height = result.height;
-      const ctx = canvas.getContext("2d");
-      const img = ctx.createImageData(result.width, result.height);
-      img.data.set(result.pixels);
-      ctx.putImageData(img, 0, 0);
-      return canvas.toDataURL("image/png");
-    } catch (err) {
-      console.warn(`[vendor-ui] icon ${iconId} fetch failed:`, err);
-      return false;
-    }
-  })();
-  iconCache.set(iconId, promise);
-  const url = await promise;
-  iconCache.set(iconId, url);
-  return url;
+  return fetchIconDataUrlShared(iconId, "vendor-ui");
 }
 
 function fmtPrice(n) {
