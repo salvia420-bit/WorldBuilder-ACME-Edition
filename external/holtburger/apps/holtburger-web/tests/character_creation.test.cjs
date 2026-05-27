@@ -1,15 +1,18 @@
-// character_creation.test.cjs — Wave D.2 (2026-05-27)
+// character_creation.test.cjs — Wave D.2 + J4.BC (2026-05-27)
 //
 // Unit tests for the character-creation wizard plugin
 // (plugins/character-creation.js). Covers the pure helpers:
 //
-//   [1] WizardState constants + transitionState matrix
+//   [1] WizardState constants + transitionState matrix (4-page flow
+//       after Wave J4.B.2 added the Attributes page)
 //   [2] validateCharacterName (length + charset)
 //   [3] computeSkillBudget (heritage override math)
 //   [4] buildCharGenPayload (dense skill array + camelCase shape)
 //   [5] seedSkillStatesFromTemplate (primary→3, normal→2)
 //   [6] pickDefaultTemplate + pickDefaultStartArea
 //   [7] randomizeAppearance (range clamping + headgear sentinel)
+//   [8] computeAttributeBudget (J4.B.2 — attribute spend math)
+//   [9] applyAttributeDelta (J4.B.2 — +/- button clamping)
 //
 // Wire-payload shape (item 4) is the load-bearing one — the wasm side
 // (apps/holtburger-web/src/lib.rs Wave D.2 block) deserialises it via
@@ -71,6 +74,8 @@ function check(name, fn) {
     seedSkillStatesFromTemplate,
     pickDefaultTemplate, pickDefaultStartArea,
     randomizeAppearance,
+    computeAttributeBudget, applyAttributeDelta,
+    CHARACTER_GEN_MIN_ATTRIBUTE, CHARACTER_GEN_MAX_ATTRIBUTE,
   } = mod;
 
   // ─── [1] WizardState + transitionState ─────────────────────────────
@@ -79,6 +84,8 @@ function check(name, fn) {
   check("WizardState constants are stable strings", () => {
     assert.equal(WizardState.NotStarted, "not-started");
     assert.equal(WizardState.Heritage, "heritage");
+    assert.equal(WizardState.Attributes, "attributes",
+      "J4.B.2 added Attributes between Heritage and Skills");
     assert.equal(WizardState.Skills, "skills");
     assert.equal(WizardState.Summary, "summary");
     assert.equal(WizardState.Submitting, "submitting");
@@ -90,14 +97,18 @@ function check(name, fn) {
     assert.equal(transitionState(WizardState.NotStarted, "open"), WizardState.Heritage);
   });
 
-  check("transitionState: linear next path Heritage → Skills → Summary → Submitting", () => {
-    assert.equal(transitionState(WizardState.Heritage, "next"), WizardState.Skills);
+  check("transitionState: linear next path Heritage → Attributes → Skills → Summary → Submitting", () => {
+    assert.equal(transitionState(WizardState.Heritage, "next"), WizardState.Attributes,
+      "J4.B.2 routes Heritage.next to Attributes (was Skills)");
+    assert.equal(transitionState(WizardState.Attributes, "next"), WizardState.Skills);
     assert.equal(transitionState(WizardState.Skills, "next"), WizardState.Summary);
     assert.equal(transitionState(WizardState.Summary, "submit"), WizardState.Submitting);
   });
 
-  check("transitionState: back from Skills → Heritage and Summary → Skills", () => {
-    assert.equal(transitionState(WizardState.Skills, "back"), WizardState.Heritage);
+  check("transitionState: back transitions Attributes → Heritage, Skills → Attributes, Summary → Skills", () => {
+    assert.equal(transitionState(WizardState.Attributes, "back"), WizardState.Heritage);
+    assert.equal(transitionState(WizardState.Skills, "back"), WizardState.Attributes,
+      "J4.B.2 routes Skills.back to Attributes (was Heritage)");
     assert.equal(transitionState(WizardState.Summary, "back"), WizardState.Skills);
   });
 
@@ -112,13 +123,17 @@ function check(name, fn) {
   });
 
   check("transitionState: cancel from any page returns NotStarted", () => {
-    for (const s of [WizardState.Heritage, WizardState.Skills, WizardState.Summary, WizardState.Failed]) {
+    for (const s of [WizardState.Heritage, WizardState.Attributes, WizardState.Skills, WizardState.Summary, WizardState.Failed]) {
       assert.equal(transitionState(s, "cancel"), WizardState.NotStarted, `cancel from ${s}`);
     }
   });
 
   check("transitionState: illegal transitions return null", () => {
     assert.equal(transitionState(WizardState.Heritage, "submit"), null);
+    assert.equal(transitionState(WizardState.Heritage, "back"), null,
+      "Heritage is the first page — no back");
+    assert.equal(transitionState(WizardState.Attributes, "submit"), null,
+      "submit is only legal from Summary");
     assert.equal(transitionState(WizardState.Submitting, "back"), null);
     assert.equal(transitionState(WizardState.Success, "next"), null);
     assert.equal(transitionState("bogus-state", "next"), null);
@@ -487,6 +502,112 @@ function check(name, fn) {
     }
     assert.equal(seenRealIndex, true,
       "with headgearCount=4 we should pick a real index in 100 rolls");
+  });
+
+  // ─── [8] computeAttributeBudget (J4.B.2 — attribute spend math) ────
+  console.log("\n[8] computeAttributeBudget (J4.B.2 — attribute spend math)");
+
+  // Default mid-range attribute spread (Adventurer template-style).
+  const balanced = {
+    strength: 10, endurance: 10, coordination: 10,
+    quickness: 10, focus: 10, self: 10,
+  };
+
+  check("computeAttributeBudget: exposes attribute bounds 10..100", () => {
+    assert.equal(CHARACTER_GEN_MIN_ATTRIBUTE, 10);
+    assert.equal(CHARACTER_GEN_MAX_ATTRIBUTE, 100);
+  });
+
+  check("computeAttributeBudget: balanced 6×10 = 60 against budget 60 → valid", () => {
+    const b = computeAttributeBudget(balanced, 60);
+    assert.equal(b.spent, 60);
+    assert.equal(b.budget, 60);
+    assert.equal(b.remaining, 0);
+    assert.equal(b.valid, true);
+    assert.equal(b.error, null);
+  });
+
+  check("computeAttributeBudget: incomplete (sum < budget) flags valid=false + error message", () => {
+    const b = computeAttributeBudget(balanced, 100);
+    assert.equal(b.spent, 60);
+    assert.equal(b.remaining, 40);
+    assert.equal(b.valid, false);
+    assert.equal(b.perAttrValid, true,
+      "each attribute is in [10,100] — only the sum is wrong");
+    assert.match(b.error, /unspent|below budget/i);
+  });
+
+  check("computeAttributeBudget: exceeded (sum > budget) flags valid=false + negative remaining", () => {
+    const heavy = { strength: 100, endurance: 100, coordination: 10, quickness: 10, focus: 10, self: 10 };
+    const b = computeAttributeBudget(heavy, 60);
+    assert.equal(b.spent, 240);
+    assert.equal(b.remaining, -180);
+    assert.equal(b.valid, false);
+    assert.match(b.error, /exceed/i);
+  });
+
+  check("computeAttributeBudget: out-of-range (below MIN) flags perAttrValid=false", () => {
+    const broken = { ...balanced, strength: 5 }; // below 10 min
+    const b = computeAttributeBudget(broken, 60);
+    assert.equal(b.perAttrValid, false);
+    assert.equal(b.valid, false);
+    assert.match(b.error, /10-100|must be/i);
+  });
+
+  check("computeAttributeBudget: out-of-range (above MAX) flags perAttrValid=false", () => {
+    const broken = { ...balanced, self: 200 }; // above 100 max
+    const b = computeAttributeBudget(broken, 250);
+    assert.equal(b.perAttrValid, false);
+    assert.equal(b.valid, false);
+  });
+
+  check("computeAttributeBudget: realistic Aluvian Adventurer (sum=330, budget=330)", () => {
+    // Mirror typical retail Adventurer-template Aluvian spread:
+    // sum 330, balanced.
+    const aluv = { strength: 55, endurance: 55, coordination: 55,
+                   quickness: 55, focus: 55, self: 55 };
+    const b = computeAttributeBudget(aluv, 330);
+    assert.equal(b.spent, 330);
+    assert.equal(b.valid, true);
+  });
+
+  // ─── [9] applyAttributeDelta (J4.B.2 — +/- button clamping) ────────
+  console.log("\n[9] applyAttributeDelta (J4.B.2 — +/- button clamping)");
+
+  check("applyAttributeDelta: +1 increments by 1 inside bounds", () => {
+    assert.equal(applyAttributeDelta(50, 1, 100), 51);
+  });
+
+  check("applyAttributeDelta: -1 decrements by 1 inside bounds", () => {
+    assert.equal(applyAttributeDelta(50, -1, 100), 49);
+  });
+
+  check("applyAttributeDelta: clamps to CHARACTER_GEN_MIN_ATTRIBUTE on under-flow", () => {
+    assert.equal(applyAttributeDelta(10, -1, 100), 10);
+    assert.equal(applyAttributeDelta(10, -50, 100), 10);
+  });
+
+  check("applyAttributeDelta: clamps to CHARACTER_GEN_MAX_ATTRIBUTE on over-flow", () => {
+    assert.equal(applyAttributeDelta(100, 1, 100), 100);
+    assert.equal(applyAttributeDelta(99, 5, 100), 100);
+  });
+
+  check("applyAttributeDelta: clamps positive delta to the remaining budget", () => {
+    // current=50, want to +20 but budget only has 3 left (incl current=50).
+    // So safeDesired = 50 + 3 - 50 = ... actually `remaining` in the
+    // function is the global remaining (excluding current), so:
+    //   remaining (excl current) = 3  → delta=+20 capped at +3 → 53.
+    assert.equal(applyAttributeDelta(50, 20, 3), 53);
+  });
+
+  check("applyAttributeDelta: zero delta is a no-op", () => {
+    assert.equal(applyAttributeDelta(42, 0, 100), 42);
+  });
+
+  check("applyAttributeDelta: handles negative remaining (over-budget recovery)", () => {
+    // User dropped below budget; the dec-button should still work
+    // (no positive delta is requested so `remaining` isn't consulted).
+    assert.equal(applyAttributeDelta(50, -5, -10), 45);
   });
 
   // ─── Summary ────────────────────────────────────────────────────────

@@ -116,29 +116,30 @@ impl SpellInfo {
         self.non_component_target_type == 0
     }
 
-    /// Spell "level" via the acclient.c rough heuristic (offset 0x005981D0
-    /// `CSpellBase::InqSpellLevelByRoughHeuristic`). Returns the highest
-    /// scarab tier (1..8) in the decrypted component list, or 0 when
-    /// the formula has no scarab. Used by spell-research-panel to
-    /// group spells by tier without parsing the trailing roman numeral
-    /// from the name (the LSD-catalog fallback). Wave F.1 promotion.
+    /// Returns the **ACE-canonical** spell level (1-8) per
+    /// `ACE.Server.Entity.SpellFormula.Level`
+    /// (`external/ACE/Source/ACE.Server/Entity/SpellFormula.cs:177-191`).
+    /// First-component scarab lookup; 0 for empty / non-scarab.
+    ///
+    /// Wave J4.A (2026-05-27) port; replaces the Wave F.1 max-tier
+    /// heuristic which mis-tagged tier-I spells as tier 7 by treating
+    /// herbs (Hyssop=7, Mandrake=8) as scarabs. See
+    /// [`holtburger_dat::file_type::spell_table::SpellBase::rough_level`]
+    /// for the full provenance + algorithm description.
     pub fn rough_level(&self) -> u32 {
-        let mut max_tier: u32 = 0;
-        for &c in &self.decrypted_components {
-            let tier = if (1..=8).contains(&c) {
-                c
-            } else if (110..=116).contains(&c) {
-                c - 109
-            } else if (192..=198).contains(&c) {
-                c - 191
-            } else {
-                0
-            };
-            if tier > max_tier {
-                max_tier = tier;
-            }
+        match self.decrypted_components.first().copied() {
+            Some(1) => 1,           // Lead
+            Some(2) => 2,           // Iron
+            Some(3) => 3,           // Copper
+            Some(4) => 4,           // Silver
+            Some(5) => 5,           // Gold
+            Some(6) => 6,           // Pyreal
+            Some(110) => 6,         // Diamond (collides with Pyreal)
+            Some(112) => 7,         // Platinum
+            Some(192) => 7,         // Dark (collides with Platinum)
+            Some(193) => 8,         // Mana (max tier)
+            _ => 0,                 // empty or non-scarab first
         }
-        max_tier
     }
 }
 

@@ -1,30 +1,54 @@
-// character-creation.js — Wave D.2 (2026-05-27)
+// character-creation.js — Wave D.2 + J4.BC (2026-05-27)
 //
-// 3-page wizard porting `gmCharGenMainUI` (external/chorizite/
-// ACBindings/Generated/Game/CharGen/gmCharGenMainUI.cs:5-220) condensed
-// from retail's 6-step `ECGProgress` state machine
-// (`ECG_HERITAGE→ECG_PROFESSION→ECG_SKILLS→ECG_APPEARANCE→ECG_TOWN→
-// ECG_SUMMARY`, cs:36-45) into 3 user-facing pages:
+// 4-page wizard porting `gmCharGenMainUI` (external/chorizite/
+// ACBindings/Generated/Game/CharGen/gmCharGenMainUI.cs:5-220).
 //
-//   Page 1 (heritage) → ECG_HERTAGE + ECG_PROFESSION + ECG_APPEARANCE
-//                       collapsed: heritage / gender / template /
-//                       name / appearance (randomized).
-//   Page 2 (skills)   → ECG_SKILLS: trained / specialized toggle per
-//                       skill against the heritage's skill_credits
-//                       budget. Pre-populated by template.
-//   Page 3 (summary)  → ECG_SUMMARY: read-only review + Submit.
-//                       Submit dispatches `0xF656
-//                       Character_SendCharGenResult` → ACE's
-//                       `Player.HandleCharacterCreate` → S2C `0xF643
-//                       CharGenVerificationResponse` (we already handle
-//                       both — `crates/holtburger-protocol/src/messages/
-//                       character/types.rs:236-433`).
+// Wave D.2 shipped a 3-page collapse of retail's 6-step `ECGProgress`
+// (`ECG_HERTAGE→ECG_PROFESSION→ECG_SKILLS→ECG_APPEARANCE→ECG_TOWN→
+// ECG_SUMMARY`, cs:36-45). Wave J4.BC splits Profession off Heritage so
+// the user can manually spend attribute credits (B.2) while keeping
+// Appearance + Town inline on Heritage (B.1 swatch pickers + B.3
+// start-area picker):
+//
+//   Page 1 (heritage)   → ECG_HERTAGE + ECG_APPEARANCE + ECG_TOWN
+//                         collapsed: heritage / gender / name / hair
+//                         /face/eyes swatch picker (J4.B.1) / start
+//                         area dropdown (J4.B.3). Templates still pre-
+//                         spread the attribute defaults but the user
+//                         picks finer-grained values on the next page.
+//   Page 2 (attributes) → ECG_PROFESSION: per-attribute spend UI
+//                         (J4.B.2). Slider + +/− buttons for each of
+//                         the 6 attributes. Mirrors `gmCGProfessionPage`
+//                         (external/chorizite/ACBindings/Generated/UI/
+//                         Elements/gmCGProfessionPage.cs:108-130
+//                         tagSlider) — six sliders, one per attribute,
+//                         pre-populated by the "Class Template" pick,
+//                         clamped to `CHARACTER_GEN_MIN_ATTRIBUTE..=
+//                         CHARACTER_GEN_MAX_ATTRIBUTE` ([10, 100], per
+//                         holtburger-core/src/character_gen.rs:15-16).
+//                         Sum MUST exactly equal heritage.attributeCredits
+//                         (validator enforces this — character_gen.rs:
+//                         337-349, both Exceeded and Incomplete fire).
+//   Page 3 (skills)     → ECG_SKILLS: trained / specialized toggle per
+//                         skill against the heritage's skill_credits
+//                         budget. Pre-populated by template.
+//   Page 4 (summary)    → ECG_SUMMARY: read-only review + Submit.
+//                         Submit dispatches `0xF656
+//                         Character_SendCharGenResult` → ACE's
+//                         `Player.HandleCharacterCreate` → S2C `0xF643
+//                         CharGenVerificationResponse` (we already handle
+//                         both — `crates/holtburger-protocol/src/messages/
+//                         character/types.rs:236-433`).
 //
 // State machine (mirrors `gmCharGenMainUI::SetProgressState`, cs:97):
-//   NotStarted → Heritage → Skills → Summary → Submitting → Success
-//                                                          → Failed
-//   Back transitions: Skills→Heritage, Summary→Skills.
-//   Failed → returns to the offending page (or Heritage as fallback).
+//   NotStarted → Heritage → Attributes → Skills → Summary → Submitting
+//                                                            → Success
+//                                                            → Failed
+//   Back transitions: Attributes→Heritage, Skills→Attributes,
+//                     Summary→Skills.
+//   Failed → returns to the Skills page (the most common rejection
+//   bucket — server-side name collisions, attribute budget mismatches,
+//   etc.); user clicks Back to walk all the way back if needed.
 //
 // Wire integration:
 //   - C2S `sendCharGenResult(payload)` — see `apps/holtburger-web/
@@ -44,6 +68,12 @@
 // drive them headless.
 
 import { setAcText } from "../ui/ac_font.js";
+import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+
+// J4.B.2 — attribute bounds (mirrors
+// holtburger-core/src/character_gen.rs:15-16).
+export const CHARACTER_GEN_MIN_ATTRIBUTE = 10;
+export const CHARACTER_GEN_MAX_ATTRIBUTE = 100;
 
 // ───────────────────────────────────────────────────────────────────────
 // 1. Pure state-machine + helpers (export for tests)
@@ -51,12 +81,19 @@ import { setAcText } from "../ui/ac_font.js";
 
 /**
  * Wizard states. Mirror `gmCharGenMainUI::ECGProgress` (cs:36-45)
- * condensed to the 3 user-facing pages + 3 submit states.
+ * condensed to the 4 user-facing pages + 3 submit states.
  *
  * Retail correspondence:
- *   Heritage       ← ECG_HERTAGE / ECG_PROFESSION / ECG_APPEARANCE
+ *   Heritage       ← ECG_HERTAGE / ECG_APPEARANCE / ECG_TOWN
+ *                    (start-area picker + swatches inline with
+ *                     heritage select).
+ *   Attributes     ← ECG_PROFESSION (Wave J4.B.2 added as a separate
+ *                    page so the user can manually spend the
+ *                    heritage's attribute_credits budget across the
+ *                    six attributes via sliders, mirroring
+ *                    gmCGProfessionPage.cs:108 tagSlider).
  *   Skills         ← ECG_SKILLS
- *   Summary        ← ECG_TOWN (start area) / ECG_SUMMARY
+ *   Summary        ← ECG_SUMMARY
  *   Submitting     ← `gmCharGenMainUI::DoFinish` await
  *                    (cs:197-203) — no retail enum, distinct in JS.
  *   Success/Failed ← `RecvNotice_CharGenVerificationResponse` branches
@@ -65,6 +102,7 @@ import { setAcText } from "../ui/ac_font.js";
 export const WizardState = Object.freeze({
   NotStarted: "not-started",
   Heritage:   "heritage",
+  Attributes: "attributes",
   Skills:     "skills",
   Summary:    "summary",
   Submitting: "submitting",
@@ -81,13 +119,16 @@ export const WizardState = Object.freeze({
  * keep it linear in v1 for simplicity (the Back button covers the
  * common case).
  *
+ * Wave J4.B.2 added the Attributes page between Heritage and Skills.
+ *
  * @returns {string|null} next state, or null if the transition is illegal.
  */
 export function transitionState(from, action) {
   const table = {
     [WizardState.NotStarted]: { open: WizardState.Heritage },
-    [WizardState.Heritage]:   { next: WizardState.Skills, cancel: WizardState.NotStarted },
-    [WizardState.Skills]:     { next: WizardState.Summary, back: WizardState.Heritage, cancel: WizardState.NotStarted },
+    [WizardState.Heritage]:   { next: WizardState.Attributes, cancel: WizardState.NotStarted },
+    [WizardState.Attributes]: { next: WizardState.Skills, back: WizardState.Heritage, cancel: WizardState.NotStarted },
+    [WizardState.Skills]:     { next: WizardState.Summary, back: WizardState.Attributes, cancel: WizardState.NotStarted },
     [WizardState.Summary]:    { submit: WizardState.Submitting, back: WizardState.Skills, cancel: WizardState.NotStarted },
     [WizardState.Submitting]: { ok: WizardState.Success, fail: WizardState.Failed },
     [WizardState.Success]:    { close: WizardState.NotStarted },
@@ -150,6 +191,75 @@ export function computeSkillBudget(skillStates, costsForSkill, budget) {
   }
   const remaining = budget - spent;
   return { spent, budget, remaining, valid: remaining >= 0 };
+}
+
+/**
+ * J4.B.2 — Attribute budget math. Mirrors `validate_attributes`
+ * (holtburger-core/src/character_gen.rs:313-350):
+ *
+ *   - Each attribute must be in `[CHARACTER_GEN_MIN_ATTRIBUTE,
+ *     CHARACTER_GEN_MAX_ATTRIBUTE]` (`[10, 100]`).
+ *   - Sum MUST equal `attributeBudget` (heritage.attributeCredits).
+ *     Both Exceeded (sum > budget) and Incomplete (sum < budget) fire
+ *     as validation errors server-side.
+ *
+ * Returns `{ spent, budget, remaining, valid, perAttrValid: bool, error }`.
+ * `valid` is true iff every attribute is in range AND remaining === 0.
+ */
+export function computeAttributeBudget(attributes, attributeBudget) {
+  const total =
+    (attributes.strength|0) + (attributes.endurance|0) +
+    (attributes.coordination|0) + (attributes.quickness|0) +
+    (attributes.focus|0) + (attributes.self|0);
+  const remaining = attributeBudget - total;
+  const allInRange = ["strength","endurance","coordination","quickness","focus","self"].every(
+    (k) => (attributes[k]|0) >= CHARACTER_GEN_MIN_ATTRIBUTE
+        && (attributes[k]|0) <= CHARACTER_GEN_MAX_ATTRIBUTE
+  );
+  let error = null;
+  if (!allInRange) error = `Each attribute must be ${CHARACTER_GEN_MIN_ATTRIBUTE}-${CHARACTER_GEN_MAX_ATTRIBUTE}.`;
+  else if (total > attributeBudget) error = `Attribute total ${total} exceeds budget ${attributeBudget}.`;
+  else if (total < attributeBudget) error = `Attribute total ${total} below budget ${attributeBudget} (${remaining} unspent).`;
+  return {
+    spent: total,
+    budget: attributeBudget,
+    remaining,
+    valid: allInRange && remaining === 0,
+    perAttrValid: allInRange,
+    error,
+  };
+}
+
+/**
+ * J4.B.2 — Bump one attribute by `delta` (typically ±1 or ±5),
+ * clamped to `[CHARACTER_GEN_MIN_ATTRIBUTE, CHARACTER_GEN_MAX_ATTRIBUTE]`
+ * AND to the heritage's remaining attribute budget on increment so the
+ * user can't go over (mirrors gmCGProfessionPage::SetAttribValue
+ * 0x00482C50 which clamps to remaining credits).
+ *
+ * Returns the new value (caller is responsible for assigning back).
+ * Pure: no side effects on `attributes` — call sites do `attributes[k]
+ * = applyAttributeDelta(...)`.
+ *
+ * @param {number} current — current attribute value.
+ * @param {number} delta — desired change (positive or negative).
+ * @param {number} remaining — heritage.attributeCredits − sum(other 5
+ *                              attributes + current). Caller computes
+ *                              this with `computeAttributeBudget`.
+ */
+export function applyAttributeDelta(current, delta, remaining) {
+  const desired = (current|0) + (delta|0);
+  if (desired < CHARACTER_GEN_MIN_ATTRIBUTE) return CHARACTER_GEN_MIN_ATTRIBUTE;
+  if (desired > CHARACTER_GEN_MAX_ATTRIBUTE) return CHARACTER_GEN_MAX_ATTRIBUTE;
+  // For increment, also clamp to the remaining budget (excluding the
+  // already-spent `current` value — the caller's `remaining` is the
+  // global remaining after subtracting all six current attributes).
+  if (delta > 0 && remaining < delta) {
+    // Allow up to remaining + current → still bounded by MAX above.
+    const safeDesired = (current|0) + remaining;
+    return safeDesired > CHARACTER_GEN_MAX_ATTRIBUTE ? CHARACTER_GEN_MAX_ATTRIBUTE : safeDesired;
+  }
+  return desired;
 }
 
 /**
@@ -269,7 +379,7 @@ export const manifest = {
   icon: "🧙",
   iconHidden: true,
   version: "0.1.0",
-  description: "3-page wizard ported from gmCharGenMainUI.",
+  description: "4-page wizard ported from gmCharGenMainUI (J4.BC).",
 };
 
 // The wizard is not mounted into a slot via Bar — it overlays the whole
@@ -410,6 +520,56 @@ function ensureStyles() {
     .hb-cc-summary-row > .key { color: #a08868; }
     .hb-cc-summary-row > .value { color: #f0d8a0; font-weight: bold; }
     .hb-cc-spinner { font-size: 14px; color: #c89858; text-align: center; padding: 40px; }
+    /* J4.B.1 — appearance swatch pickers */
+    .hb-cc-swatch-row {
+      display: flex; gap: 6px; padding: 4px 0;
+      overflow-x: auto; align-items: center; min-height: 44px;
+    }
+    .hb-cc-swatch-row > .label {
+      min-width: 70px; color: #c89858; font-size: 12px;
+      flex-shrink: 0;
+    }
+    .hb-cc-swatch {
+      width: 38px; height: 38px;
+      border: 1px solid #4a3c28;
+      background: #14100c; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; color: #806838; flex-shrink: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .hb-cc-swatch:hover { border-color: #c89858; }
+    .hb-cc-swatch.selected { border: 2px solid #f0d8a0; box-shadow: inset 0 0 0 1px #1a1410; }
+    .hb-cc-swatch > img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+    .hb-cc-swatch.none {
+      color: #806838; font-style: italic;
+      background: repeating-linear-gradient(45deg, #14100c, #14100c 4px, #1a1410 4px, #1a1410 8px);
+    }
+    /* J4.B.2 — attribute spending sliders */
+    .hb-cc-attr-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 4px; border-bottom: 1px dotted #2c2018;
+    }
+    .hb-cc-attr-row > .name {
+      width: 105px; color: #f0d8a0; font-size: 13px;
+    }
+    .hb-cc-attr-row > .value {
+      width: 36px; text-align: center; color: #f0d8a0;
+      font-weight: bold; font-size: 14px;
+      background: #14100c; border: 1px solid #4a3c28;
+      padding: 2px 0;
+    }
+    .hb-cc-attr-row input[type="range"] {
+      flex: 1; accent-color: #c89858;
+    }
+    .hb-cc-attr-row > .step-btn {
+      width: 28px; height: 24px;
+      background: #2c2018; color: #e8d8a8;
+      border: 1px solid #806838; cursor: pointer;
+      font-family: inherit; font-size: 12px;
+    }
+    .hb-cc-attr-row > .step-btn:hover:not(:disabled) { background: #3a2c20; }
+    .hb-cc-attr-row > .step-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   `;
   document.head.appendChild(style);
 }
@@ -479,8 +639,13 @@ function createWizardInstance(client, catalog, ctx) {
     // Page 1.5 — attribute spread (template-driven; UI exposed as
     // read-only in v1 — user uses pre-spread templates).
     attributes: { strength: 10, endurance: 10, coordination: 10, quickness: 10, focus: 10, self: 10 },
-    // Page 1 — appearance (randomized initially; user can re-roll).
+    // Page 1 — appearance (randomized initially; user can re-roll OR
+    // pick individual swatches via the J4.B.1 picker UI).
     appearance: null,
+    // Page 1 — per-gender icon strips cached from
+    // `getCharacterGenAppearanceStrips`; null until first render of the
+    // Heritage page, invalidated on heritage/gender change.
+    appearanceStrips: null,
     startArea: null,
     // Error state after Failed.
     errorMessage: null,
@@ -511,7 +676,7 @@ function createWizardInstance(client, catalog, ctx) {
 
   const progress = document.createElement("div");
   progress.className = "hb-cc-progress";
-  for (const [label] of [["Heritage"], ["Skills"], ["Summary"]]) {
+  for (const [label] of [["Heritage"], ["Attributes"], ["Skills"], ["Summary"]]) {
     const step = document.createElement("div");
     step.className = "hb-cc-progress-step";
     setAcText(step, label);
@@ -605,7 +770,12 @@ function createWizardInstance(client, catalog, ctx) {
   function render() {
     // Progress bar — highlight current.
     const steps = progress.querySelectorAll(".hb-cc-progress-step");
-    const order = [WizardState.Heritage, WizardState.Skills, WizardState.Summary];
+    const order = [
+      WizardState.Heritage,
+      WizardState.Attributes,
+      WizardState.Skills,
+      WizardState.Summary,
+    ];
     const idx = order.indexOf(state.wizard);
     steps.forEach((s, i) => {
       s.classList.toggle("active", i === idx);
@@ -617,6 +787,7 @@ function createWizardInstance(client, catalog, ctx) {
 
     switch (state.wizard) {
       case WizardState.Heritage:    renderHeritagePage(); break;
+      case WizardState.Attributes:  renderAttributesPage(); break;
       case WizardState.Skills:      renderSkillsPage(); break;
       case WizardState.Summary:     renderSummaryPage(); break;
       case WizardState.Submitting:  renderSubmitting(); break;
@@ -625,7 +796,10 @@ function createWizardInstance(client, catalog, ctx) {
     }
   }
 
-  // ── Page 1: heritage / gender / template / name. ──
+  // ── Page 1: heritage / gender / name / appearance swatches / start area. ──
+  // Wave J4.B.1 (swatch pickers) + J4.B.3 (start-area dropdown). The
+  // template select moved here from a dedicated profession page; the
+  // *attributes* themselves live on the J4.B.2 Attributes page below.
   function renderHeritagePage() {
     const sectionTitle = (label) => {
       const t = document.createElement("div");
@@ -653,6 +827,8 @@ function createWizardInstance(client, catalog, ctx) {
       state.heritageId = Number(heritageSel.value);
       const h = findHeritage(catalog, state.heritageId);
       if (h) applyHeritageDefaults(state, h);
+      // Heritage change invalidates the cached appearance strips.
+      state.appearanceStrips = null;
       render();
     });
     heritageRow.appendChild(heritageLabel);
@@ -679,13 +855,16 @@ function createWizardInstance(client, catalog, ctx) {
       state.genderId = Number(genderSel.value);
       const g = heritage.genders.find((x) => x.genderId === state.genderId);
       if (g) state.appearance = randomizeAppearance(g);
+      // Gender change invalidates the cached appearance strips.
+      state.appearanceStrips = null;
       render();
     });
     genderRow.appendChild(genderLabel);
     genderRow.appendChild(genderSel);
     body.appendChild(genderRow);
 
-    // Template select.
+    // Template select (still seeds attributes + skills, but the user
+    // can override on the Attributes / Skills pages).
     body.appendChild(sectionTitle("Class Template"));
     const tmplRow = document.createElement("div");
     tmplRow.className = "hb-cc-row";
@@ -716,28 +895,50 @@ function createWizardInstance(client, catalog, ctx) {
     tmplRow.appendChild(tmplSel);
     body.appendChild(tmplRow);
 
-    // Attribute spread (read-only — user picks pre-spread templates).
-    const tmpl = heritage.templates.find((x) => x.templateOption === state.templateOption);
-    if (tmpl) {
-      const attrHint = document.createElement("div");
-      attrHint.className = "hb-cc-hint";
-      const sum = state.attributes.strength + state.attributes.endurance +
-                  state.attributes.coordination + state.attributes.quickness +
-                  state.attributes.focus + state.attributes.self;
-      setAcText(attrHint,
-        `Attributes (${sum} / ${heritage.attributeCredits} pts): ` +
-        `STR ${state.attributes.strength}, END ${state.attributes.endurance}, ` +
-        `COO ${state.attributes.coordination}, QUI ${state.attributes.quickness}, ` +
-        `FOC ${state.attributes.focus}, SLF ${state.attributes.self}`);
-      body.appendChild(attrHint);
+    // J4.B.3 — Start area dropdown (gmCGTownPage.cs:1-185 equivalent
+    // collapsed onto Heritage). Heritage exposes `primaryStartAreaIds`
+    // + `secondaryStartAreaIds` (Aluvian → Holtburg only; Sho →
+    // Shoushi + Hebian-To; etc); we merge them and let the user pick.
+    const allowedAreaIds = [
+      ...(heritage.primaryStartAreaIds || []),
+      ...(heritage.secondaryStartAreaIds || []),
+    ].filter((id) => typeof id === "number" && id >= 0);
+    if (allowedAreaIds.length > 0) {
+      const areaRow = document.createElement("div");
+      areaRow.className = "hb-cc-row";
+      const areaLabel = document.createElement("label");
+      setAcText(areaLabel, "Start area:");
+      const areaSel = document.createElement("select");
+      for (const areaId of allowedAreaIds) {
+        const area = catalog.starterAreas.find((a) => a.startAreaId === areaId);
+        if (!area) continue;
+        const opt = document.createElement("option");
+        opt.value = String(area.startAreaId);
+        opt.textContent = area.name;
+        if (area.startAreaId === state.startArea) opt.selected = true;
+        areaSel.appendChild(opt);
+      }
+      areaSel.addEventListener("change", () => {
+        state.startArea = Number(areaSel.value);
+      });
+      areaRow.appendChild(areaLabel);
+      areaRow.appendChild(areaSel);
+      body.appendChild(areaRow);
     }
 
-    // Appearance — randomize button (user-facing v1; finer-grained pickers TBD).
+    // J4.B.1 — Appearance swatch pickers (hair / face-eyes / face-nose
+    // / face-mouth / headgear) per gmCGAppearancePage::InitChoices
+    // (gmCGAppearancePage.cs:346). One icon strip per feature; click
+    // a swatch to assign the index into state.appearance.*Style.
     body.appendChild(sectionTitle("Appearance"));
+    renderAppearanceSwatchPickers();
+
+    // "I don't care" shortcut — re-roll all randomized indices in one
+    // click (mirrors gmCharGenMainUI::DoRandom @ 0x004E8A00).
     const apprRow = document.createElement("div");
     apprRow.className = "hb-cc-row";
     const apprLabel = document.createElement("label");
-    setAcText(apprLabel, "Look:");
+    setAcText(apprLabel, "Shortcut:");
     const apprBtn = document.createElement("button");
     apprBtn.type = "button";
     apprBtn.className = "hb-cc-btn";
@@ -795,6 +996,274 @@ function createWizardInstance(client, catalog, ctx) {
     nextBtn.disabled = !validateCharacterName(state.name).ok;
     nextBtn.addEventListener("click", () => transition("next"));
     footer.appendChild(nextBtn);
+  }
+
+  // J4.B.1 — Render one swatch strip per appearance feature. Fetches
+  // per-gender icon DataIDs via `getCharacterGenAppearanceStrips`
+  // (apps/holtburger-web/src/lib.rs Wave J4.B export); each strip's
+  // swatch resolves its `iconImage` via `fetchIconDataUrl`
+  // (ui/ac_icon_cache.js — same path as vendor-ui / inventory icons).
+  //
+  // Async-friendly: the wasm call is synchronous, but icon thumbnails
+  // load asynchronously (each surface is a 32×32 RenderSurface DAT
+  // fetch). The DOM is built immediately with empty `<img>` placeholders
+  // and populated as fetches complete.
+  function renderAppearanceSwatchPickers() {
+    // Cache strips per gender so flipping back and forth doesn't re-fetch.
+    if (!state.appearanceStrips && client?.characters?.appearanceStrips) {
+      try {
+        state.appearanceStrips =
+          client.characters.appearanceStrips(state.heritageId, state.genderId);
+      } catch (e) {
+        console.warn("[character-creation] strips fetch failed:", e);
+      }
+    }
+    const strips = state.appearanceStrips;
+    if (!strips) {
+      const note = document.createElement("div");
+      note.className = "hb-cc-hint";
+      setAcText(note, "Appearance icons unavailable; use Randomize to pick a random look.");
+      body.appendChild(note);
+      return;
+    }
+
+    // Feature -> [{ index, iconImage, displayLabel? }, state.appearance key]
+    const features = [
+      { key: "hairStyle", label: "Hair", entries: strips.hairStyles, iconField: "iconImage" },
+      { key: "eyes",      label: "Eyes", entries: strips.eyeStrips,  iconField: "iconImage" },
+      { key: "nose",      label: "Nose", entries: strips.noseStrips, iconField: "iconImage" },
+      { key: "mouth",     label: "Mouth", entries: strips.mouthStrips, iconField: "iconImage" },
+    ];
+    for (const f of features) {
+      if (!Array.isArray(f.entries) || f.entries.length === 0) continue;
+      body.appendChild(buildSwatchRow(f, /* allowNone */ false));
+    }
+    // Headgear — optional ("None" picks the 0xFFFFFFFF sentinel).
+    if (Array.isArray(strips.headgearStyles) && strips.headgearStyles.length > 0) {
+      body.appendChild(buildSwatchRow({
+        key: "headgearStyle", label: "Hat",
+        entries: strips.headgearStyles, iconField: null /* Gear has no icon_image */,
+      }, /* allowNone */ true));
+    }
+  }
+
+  // Build a single feature row (label + horizontal swatch strip).
+  function buildSwatchRow(feature, allowNone) {
+    const row = document.createElement("div");
+    row.className = "hb-cc-swatch-row";
+    const lbl = document.createElement("div");
+    lbl.className = "label";
+    setAcText(lbl, feature.label + ":");
+    row.appendChild(lbl);
+
+    if (allowNone) {
+      // "No headgear" picks the 0xFFFFFFFF sentinel (matches retail).
+      const none = document.createElement("button");
+      none.type = "button";
+      none.className = "hb-cc-swatch none";
+      const isSel = (state.appearance?.[feature.key] === 0xFFFFFFFF);
+      if (isSel) none.classList.add("selected");
+      none.title = "No " + feature.label.toLowerCase();
+      setAcText(none, "—");
+      none.addEventListener("click", () => {
+        if (!state.appearance) return;
+        state.appearance[feature.key] = 0xFFFFFFFF;
+        if (feature.key === "headgearStyle") {
+          state.appearance.headgearColor = 0;
+          state.appearance.headgearHue = 0;
+        }
+        render();
+      });
+      row.appendChild(none);
+    }
+
+    feature.entries.forEach((entry) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "hb-cc-swatch";
+      const isSel = (state.appearance?.[feature.key] === entry.index);
+      if (isSel) btn.classList.add("selected");
+      btn.title = `${feature.label} #${entry.index}` + (entry.name ? ` — ${entry.name}` : "");
+
+      if (feature.iconField && entry[feature.iconField]) {
+        // Fetch icon asynchronously; placeholder text in the interim.
+        setAcText(btn, "·");
+        fetchIconDataUrlShared(entry[feature.iconField] >>> 0, "character-creation").then((url) => {
+          if (!url || !btn.isConnected) return;
+          btn.textContent = "";
+          const img = document.createElement("img");
+          img.src = url;
+          img.alt = entry.name || `${feature.label} #${entry.index}`;
+          btn.appendChild(img);
+        });
+      } else {
+        // Gear-only path — fall back to name or index.
+        setAcText(btn, String(entry.name ? entry.name.substring(0, 4) : `#${entry.index}`));
+      }
+      btn.addEventListener("click", () => {
+        if (!state.appearance) return;
+        state.appearance[feature.key] = entry.index;
+        // Defensive: if headgear flipped from "none" sentinel to a real
+        // entry, give it a randomized color (caller already had one if
+        // the wizard initialised via randomizeAppearance).
+        if (feature.key === "headgearStyle" && entry.index !== 0xFFFFFFFF) {
+          const g = heritageGenderFor(state);
+          const colorCount = g?.appearance?.clothingColorCount || 0;
+          if (colorCount > 0) {
+            state.appearance.headgearColor = Math.floor(Math.random() * colorCount);
+            state.appearance.headgearHue = Math.random();
+          }
+        }
+        render();
+      });
+      row.appendChild(btn);
+    });
+    return row;
+  }
+
+  // ── Page 2: attribute spending (J4.B.2). ──
+  function renderAttributesPage() {
+    const heritage = findHeritage(catalog, state.heritageId);
+    if (!heritage) return;
+
+    const budget = computeAttributeBudget(state.attributes, heritage.attributeCredits);
+
+    const banner = document.createElement("div");
+    banner.className = `hb-cc-budget${budget.valid ? "" : " exceeded"}`;
+    setAcText(banner,
+      `Attribute credits: ${budget.spent} spent / ${budget.budget} budget` +
+      (budget.valid ? " (fully allocated)"
+                     : budget.remaining > 0 ? ` (${budget.remaining} unspent)`
+                                            : ` (over by ${-budget.remaining})`));
+    body.appendChild(banner);
+
+    const hint = document.createElement("div");
+    hint.className = "hb-cc-hint";
+    setAcText(hint,
+      `Each attribute is ${CHARACTER_GEN_MIN_ATTRIBUTE}-${CHARACTER_GEN_MAX_ATTRIBUTE}; ` +
+      `total must equal ${heritage.attributeCredits} to advance.`);
+    body.appendChild(hint);
+
+    const attrs = [
+      ["strength",     "Strength"],
+      ["endurance",    "Endurance"],
+      ["coordination", "Coordination"],
+      ["quickness",    "Quickness"],
+      ["focus",        "Focus"],
+      ["self",         "Self"],
+    ];
+    for (const [key, label] of attrs) {
+      const row = document.createElement("div");
+      row.className = "hb-cc-attr-row";
+
+      const nameEl = document.createElement("div");
+      nameEl.className = "name";
+      setAcText(nameEl, label);
+      row.appendChild(nameEl);
+
+      // Compute remaining FOR THIS attribute (the budget minus all
+      // other five). The user can push this attribute up to either
+      // CHARACTER_GEN_MAX_ATTRIBUTE or `current + remainingGlobal`,
+      // whichever's smaller.
+      const others = attrs
+        .filter(([k]) => k !== key)
+        .reduce((sum, [k]) => sum + (state.attributes[k]|0), 0);
+      const remainingGlobalIncl = heritage.attributeCredits - others - (state.attributes[key]|0);
+
+      const dec = document.createElement("button");
+      dec.type = "button";
+      dec.className = "step-btn";
+      setAcText(dec, "−");
+      dec.disabled = state.attributes[key] <= CHARACTER_GEN_MIN_ATTRIBUTE;
+      dec.addEventListener("click", () => {
+        state.attributes[key] = applyAttributeDelta(
+          state.attributes[key], -1, remainingGlobalIncl);
+        render();
+      });
+      row.appendChild(dec);
+
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = String(CHARACTER_GEN_MIN_ATTRIBUTE);
+      slider.max = String(CHARACTER_GEN_MAX_ATTRIBUTE);
+      slider.value = String(state.attributes[key]);
+      slider.addEventListener("input", () => {
+        const desired = Number(slider.value);
+        const delta = desired - state.attributes[key];
+        state.attributes[key] = applyAttributeDelta(
+          state.attributes[key], delta, remainingGlobalIncl);
+        slider.value = String(state.attributes[key]);
+        // Only update the value cell + banner; full re-render on
+        // mouseup-equivalent (change event).
+        const val = row.querySelector(".value");
+        if (val) val.textContent = String(state.attributes[key]);
+      });
+      slider.addEventListener("change", () => render());
+      row.appendChild(slider);
+
+      const inc = document.createElement("button");
+      inc.type = "button";
+      inc.className = "step-btn";
+      setAcText(inc, "+");
+      // `+` disabled when at MAX or budget fully spent
+      // (remainingGlobalIncl = budget - others - current ≤ 0 means no
+      // room to add more).
+      inc.disabled = state.attributes[key] >= CHARACTER_GEN_MAX_ATTRIBUTE
+                  || remainingGlobalIncl <= 0;
+      inc.addEventListener("click", () => {
+        state.attributes[key] = applyAttributeDelta(
+          state.attributes[key], 1, remainingGlobalIncl);
+        render();
+      });
+      row.appendChild(inc);
+
+      const val = document.createElement("div");
+      val.className = "value";
+      setAcText(val, String(state.attributes[key]));
+      row.appendChild(val);
+
+      body.appendChild(row);
+    }
+
+    // ── Footer ──
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "hb-cc-btn";
+    setAcText(backBtn, "← Back");
+    backBtn.addEventListener("click", () => transition("back"));
+    footer.appendChild(backBtn);
+
+    const resetBtn = document.createElement("button");
+    resetBtn.type = "button";
+    resetBtn.className = "hb-cc-btn";
+    setAcText(resetBtn, "Reset to template");
+    resetBtn.addEventListener("click", () => {
+      const tmpl = heritage.templates.find((x) => x.templateOption === state.templateOption);
+      if (tmpl) {
+        state.attributes = {
+          strength: tmpl.strength, endurance: tmpl.endurance,
+          coordination: tmpl.coordination, quickness: tmpl.quickness,
+          focus: tmpl.focus, self: tmpl["self"],
+        };
+      }
+      render();
+    });
+    footer.appendChild(resetBtn);
+
+    const nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "hb-cc-btn primary";
+    setAcText(nextBtn, "Next →");
+    nextBtn.disabled = !budget.valid;
+    nextBtn.title = budget.valid ? "" : (budget.error || "Allocate exactly the budget to advance.");
+    nextBtn.addEventListener("click", () => transition("next"));
+    footer.appendChild(nextBtn);
+  }
+
+  // Resolve the currently-selected gender for state-dependent code paths.
+  function heritageGenderFor(s) {
+    const h = findHeritage(catalog, s.heritageId);
+    return h?.genders?.find((g) => g.genderId === s.genderId) || null;
   }
 
   // ── Page 2: skills. ──

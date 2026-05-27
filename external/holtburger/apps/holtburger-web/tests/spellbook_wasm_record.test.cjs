@@ -1,6 +1,12 @@
-// Wave F.1 (2026-05-27) — Node smoke test for the JS-side hybrid
-// catalog that prefers wasm-decoded SpellBase records over the
-// LSD-derived `data/spells-catalog.json` fallback.
+// Wave F.1 (2026-05-27) + Wave J4.A (2026-05-27) — Node smoke test for
+// the JS-side hybrid catalog that prefers wasm-decoded SpellBase records
+// over the LSD-derived `data/spells-catalog.json` fallback.
+//
+// J4.A note: with the SpellLevelCache port, the wasm `roughLevel` is
+// now ACE-canonical (first-component scarab lookup, mirrors
+// `SpellFormula.Level`). The Wave F.1 hybrid Proxy used to override
+// wasm's `roughLevel` with the JSON name-suffix `level` because the
+// pre-J4.A Rust heuristic was buggy. That override is gone.
 //
 // We can't import `plugins/spellbook.js` directly (it requires DOM,
 // AC font, plugin API surface — none available in Node). Instead, we
@@ -84,7 +90,12 @@ function makeHybridCatalog(jsonCatalog, mockHandle) {
       const fromWasm = spellRecordFromWasm(spellId, mockHandle);
       const fromJson = target[key];
       if (fromWasm && fromJson) {
-        return { ...fromWasm, level: fromJson.level ?? fromWasm.level };
+        // Wave J4.A (2026-05-27): wasm wins on all DAT-correct fields
+        // including `level` — Rust `rough_level()` now mirrors
+        // `ACE.Server.Entity.SpellFormula.Level` (first-component
+        // scarab lookup), so the JSON name-suffix override is no
+        // longer needed.
+        return { ...fromWasm };
       }
       if (fromWasm) return fromWasm;
       return fromJson;
@@ -174,7 +185,7 @@ const mockHandle = {
         displayOrder: 410,
         nonComponentTargetType: 1024,
         manaMod: 0,
-        roughLevel: 1,   // Lead Scarab tier
+        roughLevel: 1,   // Lead Scarab tier (ACE-canonical, first component)
         levelRoman: 'I',
       };
     }
@@ -219,23 +230,27 @@ check('wasm record wins over JSON for shared spell ID', () => {
   assert.equal(spell.flags?.beneficial, true);
 });
 
-check('JSON level overrides wasm roughLevel (handoff §F.1 gotcha)', () => {
-  // For spell 1, the wasm `roughLevel` happens to be 1 in this mock,
-  // but for real DAT it's 7 (Pyreal is highest scarab). The JSON
-  // `level: 1` (parsed from "Strength Other I" name suffix) must win.
-  const handleWithBadHeuristic = {
+check('wasm roughLevel wins over JSON level (Wave J4.A)', () => {
+  // Wave J4.A (2026-05-27): wasm `roughLevel` is now the
+  // ACE-canonical first-component scarab lookup (mirrors
+  // `SpellFormula.Level`), so it's authoritative. The JSON
+  // name-suffix override that Wave F.1 needed is gone. To prove
+  // the new behavior, give the wasm a deliberately-different level
+  // (5) and a JSON catalog claiming level 1 — wasm should win.
+  const handleWithDifferentLevel = {
     getSpellRecord(spellId) {
       if (spellId !== 1) return null;
       return {
         ...mockHandle.getSpellRecord(1),
-        roughLevel: 7,   // Bad heuristic — Pyreal scarab tier
-        levelRoman: 'VII',
+        roughLevel: 5,   // Synthetic — pretend this came from a Gold scarab
+        levelRoman: 'V',
       };
     },
   };
-  const cat = makeHybridCatalog(jsonCatalog, handleWithBadHeuristic);
+  const cat = makeHybridCatalog(jsonCatalog, handleWithDifferentLevel);
   const spell = cat['1'];
-  assert.equal(spell.level, 1, 'JSON-derived level=1 wins over wasm roughLevel=7');
+  assert.equal(spell.level, 5, 'wasm-derived level=5 wins over JSON level=1 (J4.A behavior)');
+  assert.equal(spell.levelRoman, 'V', 'wasm-derived levelRoman wins');
 });
 
 check('JSON-only spell still resolves when wasm has no record', () => {
@@ -318,6 +333,28 @@ check('Object.keys returns JSON catalog only (enumerability contract)', () => {
   // surfaces the JSON catalog so legacy spellbook iteration paths
   // still work. Wave F.1 doesn't break enumeration.
   assert.deepEqual(keys.sort(), ['1', '99', '_comment']);
+});
+
+check('Wave J4.A: wasm roughLevel surfaces as legacy `level` directly', () => {
+  // Smoke test for the J4.A behavior change: with the JSON override
+  // gone, the spread `{ ...fromWasm }` puts the wasm-derived
+  // (ACE-canonical) `level` into the merged record directly. For
+  // spell 1 the wasm mock has roughLevel=1, which becomes level=1
+  // via the legacy-shape coercion in `spellRecordFromWasm`.
+  const cat = makeHybridCatalog(jsonCatalog, mockHandle);
+  const spell = cat['1'];
+  assert.equal(spell.level, 1, 'wasm Lead-scarab level=1 surfaces as legacy `level`');
+  assert.equal(spell.levelRoman, 'I');
+  assert.equal(spell._waveF1, true, 'merged record carries the wasm marker');
+});
+
+check('Wave J4.A: tier-VIII spell with Mana scarab → level=8', () => {
+  // Spell id 1000 in our mock is a synthetic tier-8 spell. Validate
+  // the wasm roughLevel propagates correctly with no JSON shadowing.
+  const cat = makeHybridCatalog(jsonCatalog, mockHandle);
+  const spell = cat['1000'];
+  assert.equal(spell.level, 8, 'Mana scarab → tier 8');
+  assert.equal(spell.levelRoman, 'VIII');
 });
 
 console.log(`\n## Summary: ${passed} passed, ${failed} failed`);

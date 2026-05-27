@@ -208,14 +208,16 @@ function makeHybridCatalog(jsonCatalog) {
       const fromWasm = spellRecordFromWasm(spellId);
       const fromJson = target[key];
       if (fromWasm && fromJson) {
-        // Merge: wasm wins on DAT-correct fields (name, school, mana,
-        // icon, desc, components, flags), but the JSON catalog's
-        // `level` field (parsed from the spell name's roman-numeral
-        // suffix) wins because our `roughLevel` heuristic is the
-        // highest scarab, not the spell's intended tier. The
-        // canonical name-suffix algorithm lives in
-        // `scripts/build_spells_catalog.py:parse_level()`.
-        return { ...fromWasm, level: fromJson.level ?? fromWasm.level };
+        // Merge: wasm wins on **all** DAT-correct fields including
+        // `level`. Wave J4.A (2026-05-27) ports the ACE-canonical
+        // `SpellFormula.Level` (first-component scarab lookup) into
+        // the Rust `rough_level()`, so the wasm record's `roughLevel`
+        // — which arrives as `level` in the coerced legacy shape —
+        // is the correct tier (1-8). The pre-J4.A workaround that
+        // preferred the JSON name-suffix `level` (parsed from
+        // "Strength Other I" → 1) is no longer needed; the wasm
+        // already gets the right answer.
+        return { ...fromWasm };
       }
       if (fromWasm) return fromWasm;
       return fromJson;

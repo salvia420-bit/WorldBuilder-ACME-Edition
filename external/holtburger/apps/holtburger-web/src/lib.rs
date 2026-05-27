@@ -18765,7 +18765,9 @@ impl SessionHandle {
     ///   displayOrder: 410,
     ///   nonComponentTargetType: 1024,    // ItemType bitfield (0 = untargeted)
     ///   manaMod: 0,
-    ///   roughLevel: 1,                   // tier 1..8 from highest scarab
+    ///   roughLevel: 1,                   // tier 1..8 — ACE-canonical
+    ///                                    // first-component scarab lookup
+    ///                                    // (Wave J4.A, 2026-05-27).
     /// }
     /// ```
     ///
@@ -18843,7 +18845,10 @@ impl SessionHandle {
         const DAMAGE_OVER_TIME: u32 = 0x10000;
 
         let bf = spell.bitfield;
-        // Rough level via the acclient.c heuristic.
+        // ACE-canonical level (Wave J4.A): first-component scarab lookup
+        // per `ACE.Server.Entity.SpellFormula.Level`. Cached effectively
+        // free at parse time — no need to port the `SpellLevelCache`
+        // memoization layer that ACE wraps it in.
         let rough_level = spell.rough_level();
         // Tier name (1..8 → "I".."VIII") for human consumption.
         let level_roman = match rough_level {
@@ -35204,6 +35209,163 @@ impl SessionHandle {
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("sendCharGenResult: cmd channel closed ({e})"))
             })
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wave J4.B (2026-05-27) — Per-feature appearance icon strips.
+//
+// `get_character_gen_catalog` (above) returns *counts* per appearance feature
+// (hairStyleCount, eyeStripCount, …) because the bulk catalog payload pre-J4
+// was already ~12 KB and inlining ~30-60 icon_image DataIDs per gender ×
+// 22 gender/heritage pairs would have ~3x'd it on every wizard open.
+//
+// J4.B's swatch picker (plugins/character-creation.js renderHeritagePage) needs
+// the actual `iconImage` DataIDs so each swatch can fetch its surface pixels
+// via `fetch_surface_pixels` and render an icon thumbnail. Rather than amend
+// the bulk dump, we add a per-(heritage, gender) lookup endpoint that mirrors
+// `gmCGAppearancePage::InitChoices` (external/chorizite/ACBindings/Generated/
+// UI/Elements/gmCGAppearancePage.cs:346) — the retail page also reads
+// per-gender choice strips lazily on entry rather than upfront.
+//
+// Returns `null` when:
+//   - catalog not loaded yet (call `canCreateCharacter` first).
+//   - unknown heritage_id (filtered against `catalog.heritage_group`).
+//   - unknown gender_id within the heritage (filtered against `.genders.get`).
+//
+// Per-feature shapes:
+//   hairStyles:   [{ "index": u32, "iconImage": DataID, "bald": bool }, ...]
+//                 (`HairStyle::icon_image` from char_gen.rs:246, `bald` from :247)
+//   eyeStrips:    [{ "index": u32, "iconImage": DataID, "iconImageBald": DataID }, ...]
+//                 (paired bald variant for hairless picks; char_gen.rs:265-266)
+//   noseStrips, mouthStrips:
+//                 [{ "index": u32, "iconImage": DataID }, ...]
+//                 (`FaceStrip::icon_image` from char_gen.rs:284)
+//   headgearStyles, shirts, pants, footwear:
+//                 [{ "index": u32, "name": String }, ...]
+//                 (`Gear` has no icon_image — char_gen.rs:298-302 — so the
+//                  swatch picker shows the gear's name string instead. Retail
+//                  does the same per gmCGAppearancePage.cs:131 tagChoices.)
+//   hairColors, eyeColors, clothingColors:
+//                 [u32, ...] (palette DataIDs from `*_color_list`)
+//
+// JS plugin pattern: call once per gender change (gender select onChange);
+// loop the returned arrays, build an icon strip per feature, wire click
+// handlers that update `state.appearance.<feature>Index`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SessionHandle {
+    /// **Wave J4.B** — Per-(heritage, gender) appearance icon strips
+    /// for the wizard's swatch picker UI. Mirrors retail's lazy
+    /// per-gender strip init in `gmCGAppearancePage::InitChoices`
+    /// (external/chorizite/ACBindings/Generated/UI/Elements/
+    /// gmCGAppearancePage.cs:346).
+    ///
+    /// Returns `null` if the catalog isn't loaded yet, or the
+    /// heritage/gender pair is unknown. Otherwise an object with
+    /// per-feature arrays (`hairStyles`, `eyeStrips`, `noseStrips`,
+    /// `mouthStrips`, `headgearStyles`, `shirts`, `pants`, `footwear`,
+    /// `hairColors`, `eyeColors`, `clothingColors`).
+    ///
+    /// Caller fetches each `iconImage` DataID via
+    /// `fetch_surface_pixels(iconId)` (the same path the vendor and
+    /// inventory plugins use for item icons).
+    #[wasm_bindgen(js_name = getCharacterGenAppearanceStrips)]
+    pub fn get_character_gen_appearance_strips(
+        &self,
+        heritage_id: u32,
+        gender_id: u32,
+    ) -> JsValue {
+        let Some(catalog) = self.catalog.borrow().clone() else {
+            return JsValue::NULL;
+        };
+        let Some(heritage) = catalog.heritage_group(heritage_id) else {
+            return JsValue::NULL;
+        };
+        let Some(gender) = heritage.genders.get(&gender_id) else {
+            return JsValue::NULL;
+        };
+        let appearance = &gender.appearance;
+
+        let hair_styles: Vec<_> = appearance
+            .hair_styles
+            .iter()
+            .enumerate()
+            .map(|(idx, style)| {
+                serde_json::json!({
+                    "index": idx as u32,
+                    "iconImage": style.icon_image,
+                    "bald": style.bald,
+                })
+            })
+            .collect();
+        let eye_strips: Vec<_> = appearance
+            .eye_strips
+            .iter()
+            .enumerate()
+            .map(|(idx, strip)| {
+                serde_json::json!({
+                    "index": idx as u32,
+                    "iconImage": strip.icon_image,
+                    "iconImageBald": strip.icon_image_bald,
+                })
+            })
+            .collect();
+        let nose_strips: Vec<_> = appearance
+            .nose_strips
+            .iter()
+            .enumerate()
+            .map(|(idx, strip)| {
+                serde_json::json!({
+                    "index": idx as u32,
+                    "iconImage": strip.icon_image,
+                })
+            })
+            .collect();
+        let mouth_strips: Vec<_> = appearance
+            .mouth_strips
+            .iter()
+            .enumerate()
+            .map(|(idx, strip)| {
+                serde_json::json!({
+                    "index": idx as u32,
+                    "iconImage": strip.icon_image,
+                })
+            })
+            .collect();
+        let map_gear = |gears: &[holtburger_content::character_gen::CharacterGenGear]| {
+            gears
+                .iter()
+                .enumerate()
+                .map(|(idx, gear)| {
+                    serde_json::json!({
+                        "index": idx as u32,
+                        "name": gear.name,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let headgear_styles = map_gear(&appearance.headgear);
+        let shirts = map_gear(&appearance.shirts);
+        let pants = map_gear(&appearance.pants);
+        let footwear = map_gear(&appearance.footwear);
+
+        let json = serde_json::json!({
+            "heritageId": heritage_id,
+            "genderId": gender_id,
+            "hairStyles": hair_styles,
+            "eyeStrips": eye_strips,
+            "noseStrips": nose_strips,
+            "mouthStrips": mouth_strips,
+            "headgearStyles": headgear_styles,
+            "shirts": shirts,
+            "pants": pants,
+            "footwear": footwear,
+            "hairColors": appearance.hair_color_ids,
+            "eyeColors": appearance.eye_color_ids,
+            "clothingColors": appearance.clothing_color_ids,
+        });
+        serde_wasm_bindgen::to_value(&json).unwrap_or(JsValue::NULL)
     }
 }
 

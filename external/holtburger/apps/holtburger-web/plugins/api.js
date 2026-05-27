@@ -442,6 +442,13 @@ export function createClient(sessionHandle) {
     skillCostsFor(heritageId, skillId) {
       return sessionHandle.getSkillCostsForHeritage(heritageId, skillId);
     },
+    // Wave J4.B (2026-05-27) — per-(heritage, gender) appearance icon
+    // strips so the wizard's swatch picker can render thumbnails. See
+    // `apps/holtburger-web/src/lib.rs` `get_character_gen_appearance_strips`.
+    appearanceStrips(heritageId, genderId) {
+      if (!sessionHandle?.getCharacterGenAppearanceStrips) return null;
+      return sessionHandle.getCharacterGenAppearanceStrips(heritageId, genderId);
+    },
     createCharacter(build) {
       sessionHandle.sendCharGenResult(build);
     },
