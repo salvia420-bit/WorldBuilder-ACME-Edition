@@ -76,6 +76,28 @@ where
     Ok(values)
 }
 
+/// Read a "byte-length-prefix" pstring — a `length` field of
+/// `size_of_length` bytes, followed by `length` Windows-1252 bytes.
+///
+/// **Does NOT handle the AC1Legacy `PStringBase<char>` quirks** (no
+/// 0xFFFF u16 → u32 length escape, no 4-byte align-pad after the
+/// bytes). If the AC schema you are reading is annotated as
+/// `<AC1LegacyPStringBase>` or `<PStringBase type="char">`, prefer
+/// [`read_pstring_char`].
+///
+/// Existing callers that are SAFE on this primitive (verified
+/// 2026-05-27) are those whose strings are short enough that they
+/// never trigger the 0xFFFF escape AND that follow `read_pstring`
+/// with a manual `align_boundary(reader, 4)` call:
+///
+///   * `weenie::Weenie::read_options` (property-bucket string values)
+///   * `file_type::skill_table::parse_description` (skill name + desc)
+///   * `file_type::game_time::*::unpack` (year/day/season names)
+///   * `file_type::region::*` (terrain + region names)
+///   * `file_type::chat_pose_table::parse_pstring_aligned`
+///
+/// New parsers reading `PStringBase<char>` MUST use
+/// [`read_pstring_char`] instead.
 pub fn read_pstring<R: Read + Seek>(
     reader: &mut R,
     size_of_length: u32,
@@ -99,6 +121,77 @@ pub fn read_pstring<R: Read + Seek>(
     // encoding_rs can handle this.
     let (res, _, _) = encoding_rs::WINDOWS_1252.decode(&buffer);
     Ok(res.into_owned())
+}
+
+/// Read an AC1Legacy `PStringBase<char>` — the canonical AC string
+/// format used by `CContractTable`, `CharGen`, and other DAT records
+/// that go through retail's `PStringBase<char>::UnPack`.
+///
+/// # Wire format (per `acclient.c:296509-296568`)
+///
+/// ```text
+///   u16 length                          (if 0xFFFF, follow with u32 length)
+///   length × u8 Windows-1252 bytes
+///   pad to 4-byte boundary              (acclient.c:296564-296566)
+/// ```
+///
+/// The `0xFFFF` u16 sentinel followed by a `u32` extended length is
+/// the load-bearing detail that distinguishes this from
+/// [`read_pstring`] — retail strings exceeding 65,534 bytes
+/// (description text, multi-line UI strings) would silently truncate
+/// or misalign under the older primitive.
+///
+/// The 4-byte align-pad **after** the string body is also part of the
+/// retail UnPack contract, mirroring `acclient.c:296564-296566`. ACE
+/// DatLoader's `AC1LegacyPStringBase` reader implements the same
+/// pattern.
+///
+/// # Trailing NUL stripping
+///
+/// Retail's UnPack has a subtle quirk at `acclient.c:296547-296550`
+/// where it writes a NUL past the buffer end and then decrements
+/// `m_len` if the byte before the NUL was also NUL. This means the
+/// on-wire string may include trailing NUL bytes that the retail
+/// client trims silently. We strip trailing NULs here to match the
+/// observed behaviour (most retail strings have none, but the EoR
+/// `Contract.questflag_*` strings sometimes do).
+///
+/// # When to use which `read_pstring*`
+///
+/// - **[`read_pstring_char`] (this function)** — for any DAT field
+///   annotated `<PStringBase type="char">` or `<AC1LegacyPStringBase>`
+///   in `dats.xml`. This is the correct primitive for new code.
+/// - **[`read_pstring`]** — for callers that have already been
+///   verified against retail (see its doc-comment for the safe set).
+///
+/// # Ported from
+///
+/// `crates/holtburger-dat/src/file_type/contract_table.rs` (Wave F
+/// follow-on 2026-05-27). Promoted to `utils.rs` for reuse so future
+/// `PStringBase<char>` parsers don't need their own copy.
+pub fn read_pstring_char<R: Read + Seek>(reader: &mut R) -> binrw::BinResult<String> {
+    let len_u16 = u16::read_le(reader)?;
+    let len = if len_u16 == 0xFFFF {
+        u32::read_le(reader)? as usize
+    } else {
+        len_u16 as usize
+    };
+    let mut buf = vec![0u8; len];
+    reader.read_exact(&mut buf)?;
+    // Strip trailing NULs (retail's UnPack does this implicitly via the
+    // m_len decrement at acclient.c:296549-296550 — most strings have
+    // no NULs but the EoR `Contract.questflag_*` strings sometimes do).
+    while buf.last() == Some(&0) {
+        buf.pop();
+    }
+    // Align to 4-byte boundary.
+    let pos = reader.stream_position()?;
+    let pad = (4 - (pos % 4) as usize) % 4;
+    if pad > 0 {
+        reader.seek(SeekFrom::Current(pad as i64))?;
+    }
+    let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&buf);
+    Ok(decoded.into_owned())
 }
 
 pub fn read_obfuscated_string<R: Read + Seek>(reader: &mut R) -> binrw::BinResult<String> {
@@ -559,5 +652,141 @@ mod tests {
         // Recompute by hand: h=0, then b=0xE9 → signed=-23 → ((0<<4)|0)^0xFFFFFFE9 = 0xFFFFFFE9.
         // Mask 0x0FFFFFFF → 0x0FFFFFE9.
         assert_eq!(string_hash("é"), 0x0FFF_FFE9);
+    }
+
+    /// Helper that writes a `PStringBase<char>` to a buffer using the
+    /// retail-correct wire format (u16 length, 0xFFFF escape to u32,
+    /// padded to 4-byte boundary).
+    fn write_pstring_char(buf: &mut Vec<u8>, s: &str) {
+        let bytes = s.as_bytes();
+        let len = bytes.len();
+        if len < 0xFFFF {
+            buf.extend_from_slice(&(len as u16).to_le_bytes());
+        } else {
+            buf.extend_from_slice(&0xFFFFu16.to_le_bytes());
+            buf.extend_from_slice(&(len as u32).to_le_bytes());
+        }
+        buf.extend_from_slice(bytes);
+        while buf.len() % 4 != 0 {
+            buf.push(0);
+        }
+    }
+
+    #[test]
+    fn read_pstring_char_short_string() {
+        let mut buf = Vec::new();
+        write_pstring_char(&mut buf, "Hello");
+        // Length prefix (2) + 5 chars + 1 pad byte = 8 bytes.
+        assert_eq!(buf.len(), 8);
+
+        let mut cursor = Cursor::new(buf);
+        let s = read_pstring_char(&mut cursor).unwrap();
+        assert_eq!(s, "Hello");
+        // Cursor should be at the 4-byte boundary past the string.
+        assert_eq!(cursor.stream_position().unwrap(), 8);
+    }
+
+    #[test]
+    fn read_pstring_char_empty_string() {
+        let mut buf = Vec::new();
+        write_pstring_char(&mut buf, "");
+        // Length prefix (2) + 0 bytes + 2 pad bytes = 4 bytes.
+        assert_eq!(buf.len(), 4);
+
+        let mut cursor = Cursor::new(buf);
+        let s = read_pstring_char(&mut cursor).unwrap();
+        assert_eq!(s, "");
+        assert_eq!(cursor.stream_position().unwrap(), 4);
+    }
+
+    /// Verify the 0xFFFF length escape (acclient.c:296531-296535): a
+    /// u16 length of 0xFFFF is a sentinel meaning "follow with u32
+    /// length". Strings exceeding 65,534 bytes use this path.
+    #[test]
+    fn read_pstring_char_extended_length_escape() {
+        let long_str: String = "A".repeat(0xFFFF + 1);
+        let mut buf = Vec::new();
+        write_pstring_char(&mut buf, &long_str);
+
+        // Verify the format we wrote actually uses the u32 path.
+        assert_eq!(&buf[0..2], &0xFFFFu16.to_le_bytes());
+        assert_eq!(&buf[2..6], &((0xFFFF + 1) as u32).to_le_bytes());
+
+        let mut cursor = Cursor::new(buf);
+        let parsed = read_pstring_char(&mut cursor).unwrap();
+        assert_eq!(parsed.len(), long_str.len());
+        assert_eq!(parsed, long_str);
+    }
+
+    /// Verify the 4-byte align-pad after the string body
+    /// (acclient.c:296564-296566). A 1-byte string forces a 1-byte
+    /// pad to bring the cursor from offset 3 → 4; subsequent reads
+    /// must land on the 4-aligned offset, not the pad byte.
+    #[test]
+    fn read_pstring_char_align_pad_advances_cursor() {
+        // Layout: u16 length (2 bytes, offsets 0..2) + 1 ASCII byte
+        // (offset 2..3) + 1-byte pad (offset 3..4) + u32 canary
+        // (offset 4..8).
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&1u16.to_le_bytes()); // length
+        buf.push(b'X');
+        buf.push(0); // 1 pad byte (cursor at offset 3 → 4)
+        buf.extend_from_slice(&0xDEADBEEFu32.to_le_bytes()); // canary
+
+        let mut cursor = Cursor::new(buf);
+        let s = read_pstring_char(&mut cursor).unwrap();
+        assert_eq!(s, "X");
+        assert_eq!(cursor.stream_position().unwrap(), 4);
+        let canary = u32::read_le(&mut cursor).unwrap();
+        assert_eq!(canary, 0xDEADBEEF);
+    }
+
+    /// Verify each of the 4 possible cursor positions after the body
+    /// produces the correct align-pad (0, 1, 2, or 3 bytes). The
+    /// post-string position depends on `(length_prefix_size + body)
+    /// mod 4`.
+    #[test]
+    fn read_pstring_char_align_pad_all_remainders() {
+        // length=0 → pre-string cursor at 2, post-string at 2, pad 2 → 4.
+        // length=1 → pre-string cursor at 2, post-string at 3, pad 1 → 4.
+        // length=2 → pre-string cursor at 2, post-string at 4, pad 0 → 4.
+        // length=3 → pre-string cursor at 2, post-string at 5, pad 3 → 8.
+        for n in 0..=3usize {
+            let s: String = "A".repeat(n);
+            let mut buf = Vec::new();
+            write_pstring_char(&mut buf, &s);
+            // Append a u32 canary so we can verify cursor lands on the
+            // right boundary.
+            buf.extend_from_slice(&0xCAFEBABEu32.to_le_bytes());
+
+            let mut cursor = Cursor::new(buf);
+            let parsed = read_pstring_char(&mut cursor).unwrap();
+            assert_eq!(parsed, s, "length {} body mismatch", n);
+            // Cursor MUST be on a 4-byte boundary now.
+            let pos = cursor.stream_position().unwrap();
+            assert_eq!(pos % 4, 0, "length {} cursor not 4-aligned: {}", n, pos);
+
+            let canary = u32::read_le(&mut cursor).unwrap();
+            assert_eq!(canary, 0xCAFEBABE, "length {} canary not aligned", n);
+        }
+    }
+
+    /// Verify trailing NUL stripping (acclient.c:296547-296550). Some
+    /// retail EoR `Contract.questflag_*` strings have NUL bytes baked
+    /// into the on-wire length; retail strips them via the implicit
+    /// `m_len` decrement, so we mirror that.
+    #[test]
+    fn read_pstring_char_strips_trailing_nuls() {
+        // Build a 4-byte body of "AB\0\0" — length prefix 4, no pad needed.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&4u16.to_le_bytes()); // length
+        buf.extend_from_slice(b"AB\0\0");
+        // length=4, pre-string cursor 2, post-string 6, pad to 8.
+        buf.extend_from_slice(&[0u8, 0u8]); // 2-byte pad
+
+        let mut cursor = Cursor::new(buf);
+        let s = read_pstring_char(&mut cursor).unwrap();
+        assert_eq!(s, "AB");
+        assert_eq!(cursor.stream_position().unwrap(), 8);
     }
 }

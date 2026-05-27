@@ -9,5 +9,8 @@
   "iconHidden": true,
   "entry": "./house-panel.js",
   "environments": ["browser"],
-  "slots": ["panel"]
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "Shift+F6", "label": "Toggle House" }
+  ]
 }

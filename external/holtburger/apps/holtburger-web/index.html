@@ -1033,6 +1033,23 @@
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
       import { mountBar } from "./ui/bar.js";
+      // Polish A (2026-05-27): PR 8 plugin loader wired into runtime.
+      // The static `import * as <id>Plugin` lines below remain because
+      // they're load-bearing for non-bar uses (compass-hud side-effect
+      // import; mainPanelPlugin.registerView; spellbookPlugin.view; etc.).
+      // What the loader replaces: the manual `barSlots = […]` array
+      // literal that was hand-spreading each plugin's manifest +
+      // mount/activate refs. Now we run all 29 manifests through
+      // validateManifest → resolveDependencies → 5-stage lifecycle hooks
+      // (per Chorizite porting plan §5.5), then derive bar slots from
+      // the resolved set. The two ad-hoc slots (rynthsuite, fullscreen)
+      // that have no .manifest.json get appended after.
+      import { loadPlugins, fetchManifestIndex } from "./plugins/loader.js";
+      import {
+        buildManifestBindings as buildManifestHotkeyBindings,
+        setManifestBindings as setManifestHotkeyBindings,
+        matchHotkeyEvent as matchManifestHotkeyEvent,
+      } from "./ui/keymap.js";
       import * as combatBarPlugin from "./plugins/combat-bar.js";
       import * as spellbookPlugin from "./plugins/spellbook.js";
       import * as vitalsHudPlugin from "./plugins/vitals-hud.js";
@@ -1110,7 +1127,7 @@
         console.log("[plugins-disabled] ?plugins=none — skipping bar + main-panel registration");
       }
 
-      // 2026-05-17:
+      // 2026-05-17 history note (preserved):
       //  - the standalone `⚐ stance-toggle` slot was merged into
       //    the Combat plugin; one slot instead of two.
       //  - the top-of-screen vitals HUD overlay (previously a raw
@@ -1118,81 +1135,92 @@
       //    into `plugins/vitals-hud.js` and registered here with
       //    `iconHidden: true` so it claims no bar real estate but
       //    still runs through the per-slot `mount()` lifecycle.
-      const barSlots = [
-        {
-          ...vitalsHudPlugin.manifest,
-          mount: vitalsHudPlugin.mount,
-        },
-        {
-          // PR-JJ 2026-05-23: buffs/debuffs strip below vitals.
-          // Standalone overlay (like vitals-hud); iconHidden so no bar
-          // slot, claimed only for the mount lifecycle.
-          ...buffsHudPlugin.manifest,
-          mount: buffsHudPlugin.mount,
-        },
-        {
-          // PR-KK 2026-05-23: gmToolbarUI middle rows — 5 panel
-          // shortcuts (Allegiance/Spellbook/Attributes/Map/Options) +
-          // [Use | Target | Examine | Pack]. Sits above the existing
-          // 9-slot hotbar. iconHidden — claims no bar slot.
-          ...targetBarPlugin.manifest,
-          mount: targetBarPlugin.mount,
-        },
-        {
-          // PR-NN 2026-05-23: retail gmCombatUI horizontal bar —
-          // auto-shows when in combat stance, hides in peace. Power
-          // slider + 3 height buttons. iconHidden — claims no bar slot.
-          ...combatHudPlugin.manifest,
-          mount: combatHudPlugin.mount,
-        },
-        {
-          // Wave 7 / Phase 20 (2026-05-26): transient "Sneak Attack +N
-          // DR" overlay that flashes when picking.js's facing predicate
-          // fires (`sneakAttackPredicted` event). Reads training level
-          // via `ui/ac_damage_rating.js` and shows the sneak DR only
-          // (Recklessness is already visualized via combat-bar's
-          // power-band). iconHidden — pure overlay, no bar slot.
-          ...sneakHudPlugin.manifest,
-          mount: sneakHudPlugin.mount,
-        },
-        {
-          ...radarPlugin.manifest,
-          mount: radarPlugin.mount,
-        },
-        {
-          ...chatPanelPlugin.manifest,
-          mount: chatPanelPlugin.mount,
-        },
-        {
-          ...statusIndicatorsPlugin.manifest,
-          mount: statusIndicatorsPlugin.mount,
-        },
-        {
-          ...hotbarPlugin.manifest,
-          mount: hotbarPlugin.mount,
-        },
-        // Shared main-panel container — holds inventory / examine /
-        // (future) skills / magic / etc. as registered views. iconHidden
-        // so it doesn't claim a bar slot; F4 toggles inventory view.
-        {
-          ...mainPanelPlugin.manifest,
-          mount: mainPanelPlugin.mount,
-        },
-        // Wave 7.9 — dye-preview tooltip plugin. Subscribes to
-        // inventory.js drag-over events; renders a swatch tooltip
-        // when a dye pot is dragged over a dyeable armor. iconHidden
-        // — reactive, no bar slot.
-        {
-          ...dyePreviewPlugin.manifest,
-          mount: dyePreviewPlugin.mount,
-        },
-        // Examine watcher — rAF polls getSelectedTarget; on world-target
-        // change pushes the examine view onto main-panel. No DOM of its
-        // own; it just observes + triggers.
-        {
-          ...examineTargetPlugin.manifest,
-          mount: examineTargetPlugin.mount,
-        },
+      //
+      // 2026-05-27 (Polish A): the hand-spread `barSlots = [{...manifest,
+      // mount, activate}, …]` literal that lived here has been replaced
+      // by a loader-driven build. The loader (plugins/loader.js, PR 8)
+      // validates every manifest, dependency-orders them per Chorizite
+      // §5.5, runs lifecycle hooks, and returns a {manifest, module} set.
+      // We then map that set into bar slots, splicing in the two ad-hoc
+      // entries (rynthsuite, fullscreen) that have no .manifest.json.
+      //
+      //   • PLUGIN_MODULES — id → static-import namespace. Lets the
+      //     loader skip the dynamic-import path entirely (predictable
+      //     compile-time module graph).
+      //   • BAR_SLOT_ORDER — keeps the bar's icon/mount order stable
+      //     across loader-version changes (loader uses topological
+      //     sort, which is not the user-facing visual order).
+      //   • BAR_SLOT_SUPPRESS — manifests that ship today but whose
+      //     bar surface is intentionally hidden (stance-toggle merged
+      //     into combat-bar; emote-panel routed via Shift+F2).
+      //   • BAR_SLOT_EXPORT_OVERRIDES — per-id opt-outs from the
+      //     default "attach mount + activate if present" rule. The
+      //     combat-bar `mount: false` override preserves the existing
+      //     pre-Polish-A behaviour (combat-bar.mount currently does not
+      //     fire — flip in a follow-up after validating it doesn't
+      //     double-mount armed-spell cleanup).
+      const PLUGIN_MODULES = {
+        "vitals-hud": vitalsHudPlugin,
+        "buffs-hud": buffsHudPlugin,
+        "target-bar": targetBarPlugin,
+        "combat-hud": combatHudPlugin,
+        "sneak-hud": sneakHudPlugin,
+        "radar": radarPlugin,
+        "chat-panel": chatPanelPlugin,
+        "status-indicators": statusIndicatorsPlugin,
+        "hotbar": hotbarPlugin,
+        "main-panel": mainPanelPlugin,
+        "dye-preview": dyePreviewPlugin,
+        // manifest id is `examine-target-watcher` (intentional rename per
+        // examine-target.manifest.json:3); the .js filename remained.
+        "examine-target-watcher": examineTargetPlugin,
+        "combat-bar": combatBarPlugin,
+        "vendor-ui": vendorUiPlugin,
+        "spellbook": spellbookPlugin,
+        "inventory": inventoryPlugin,
+        "radial-menu": radialMenuPlugin,
+        "container-panel": containerPanelPlugin,
+        "map-panel": mapPanelPlugin,
+        "allegiance-panel": allegiancePanelPlugin,
+        "social-panel": socialPanelPlugin,
+        "fellowship-panel": fellowshipPanelPlugin,
+        "trade-panel": tradePanelPlugin,
+        "book-panel": bookPanelPlugin,
+        "journal-panel": journalPanelPlugin,
+        "contracts-panel": contractsPanelPlugin,
+        "house-panel": housePanelPlugin,
+        // emote-panel and stance-toggle ship manifests but are not
+        // statically imported above; the loader will fall back to
+        // dynamic import for those two (modulePath path inside
+        // fetchManifestIndex). They're BAR_SLOT_SUPPRESS-ed below.
+      };
+
+      const BAR_SLOT_ORDER = [
+        "vitals-hud", "buffs-hud", "target-bar", "combat-hud", "sneak-hud",
+        "radar", "chat-panel", "status-indicators", "hotbar", "main-panel",
+        "dye-preview", "examine-target-watcher",
+        // (rynthsuite + fullscreen ad-hoc slots get spliced here)
+        "combat-bar",
+        "vendor-ui",
+      ];
+
+      const BAR_SLOT_SUPPRESS = new Set([
+        "stance-toggle",  // merged into combat-bar 2026-05-17
+        "emote-panel",    // routed via Shift+F2 / Wave F.6 chat slash
+      ]);
+
+      const BAR_SLOT_EXPORT_OVERRIDES = {
+        // Pre-Polish-A behaviour: combat-bar's mount() was not wired
+        // through the barSlot literal. Preserving that omission here so
+        // Polish A is a pure refactor; flip to {mount:true, activate:true}
+        // in a follow-up if you've verified mount() is idempotent.
+        "combat-bar": { mount: false, activate: true },
+      };
+
+      // Ad-hoc bar slots (no .manifest.json — they're inlined here
+      // because they have no underlying plugin module). Spliced into
+      // BAR_SLOT_ORDER between `examine-target` and `combat-bar`.
+      const AD_HOC_BAR_SLOTS = [
         {
           id: "rynthsuite",
           name: "RynthSuite",
@@ -1273,21 +1301,122 @@
             refresh();
           },
         },
-        {
-          ...combatBarPlugin.manifest,
-          activate: combatBarPlugin.activate,
-        },
-        // PR-Z (2026-05-22): spellbook moved out of the bar — registered
-        // as a main-panel view below. Bar slot removed.
-        // PR-CC (2026-05-22): vendor-ui moved out of the bar — registered
-        // as a main-panel view below. The bar slot below still mounts
-        // the kind=12 event subscription (iconHidden so no icon shows);
-        // the view itself is auto-pushed onto main-panel.
-        {
-          ...vendorUiPlugin.manifest,
-          mount: vendorUiPlugin.mount,
-        },
       ];
+
+      // Drive the PR 8 loader. Returns a barSlots array ready for
+      // `mountBar({ slots: ... })`. The loader's `loaded` Map preserves
+      // its internal load order (dependency-resolved topological from
+      // resolveDependencies); we reorder per BAR_SLOT_ORDER for stable
+      // bar appearance. The two ad-hoc slots are spliced in at the
+      // documented join point.
+      async function buildBarSlotsViaLoader() {
+        // Build a manifest-index URL the loader can fetch. Using
+        // document.baseURI keeps it correct under both file:// and the
+        // dev server (vite/serve-static/etc.); the index.json sits next
+        // to the .manifest.json files it points at.
+        const indexUrl = new URL("./plugins/index.json", document.baseURI).href;
+
+        // [a] Discover manifests + per-plugin manifest.json files.
+        const { entries, skipped: indexSkipped } =
+          await fetchManifestIndex({ indexUrl });
+        for (const s of indexSkipped) {
+          console.warn(`[plugin-loader] index skip: ${s.reason}`);
+        }
+
+        // [b] Attach the pre-imported namespace module to each entry.
+        // The loader's dynamic-import fallback (entry.modulePath) only
+        // runs when entry.module is absent — used here for the two
+        // manifests that aren't statically imported (emote-panel,
+        // stance-toggle). Both end up BAR_SLOT_SUPPRESS-ed so this is
+        // belt-and-suspenders, but it keeps the lifecycle hooks running.
+        for (const entry of entries) {
+          const mod = PLUGIN_MODULES[entry.manifest?.id];
+          if (mod) entry.module = mod;
+        }
+
+        // [c] Validate, resolve deps, run lifecycle hooks. The 5-stage
+        // hooks (onBeforeLoad/onLoad) fire here; today no plugin exports
+        // them so this is a no-op pass that just builds the `loaded` Map.
+        const { loaded, skipped } = await loadPlugins({
+          entries,
+          environment: "browser",
+          context: { host: "holtburger-web" },
+          log: (level, msg) => {
+            // Quiet info; warn/error → console.
+            if (level === "warn") console.warn(`[plugin-loader] ${msg}`);
+            else if (level === "error") console.error(`[plugin-loader] ${msg}`);
+          },
+        });
+        for (const s of skipped) {
+          console.warn(`[plugin-loader] skipped ${s.id || "<unknown>"}: ${s.reason}`);
+        }
+
+        // Polish-A→B bridge (2026-05-27): register manifest-declared hotkeys
+        // with the keymap resolver. Polish B's API; consumed by the keydown
+        // handler below. Plugins without `hotkeys[]` in their manifest are
+        // silently ignored; legacy FKEY_VIEWS / FKEY_SHIFT_TOGGLES tables
+        // stay as a fallback for unmanifested plugins (character-info F1,
+        // options F10, spell-research Shift+F4).
+        try {
+          const manifestList = [...loaded.values()].map((v) => v.manifest);
+          const { map: hotkeyMap, duplicates } = buildManifestHotkeyBindings(manifestList);
+          setManifestHotkeyBindings(hotkeyMap);
+          if (duplicates && duplicates.length) {
+            console.warn(`[hotkey-bindings] duplicates: ${duplicates.map((d) => d.key).join(", ")}`);
+          }
+        } catch (err) {
+          console.warn(`[hotkey-bindings] skip: ${err?.message ?? err}`);
+        }
+
+        // [d] Build candidate slot map from the loaded set.
+        const candidateSlots = new Map();
+        for (const [id, { manifest, module }] of loaded) {
+          if (BAR_SLOT_SUPPRESS.has(id)) continue;
+          if (!module) continue;
+          const overrides = BAR_SLOT_EXPORT_OVERRIDES[id] || {};
+          const hasMount = typeof module.mount === "function";
+          const hasActivate = typeof module.activate === "function";
+          const includeMount = (overrides.mount !== false) && hasMount;
+          const includeActivate = (overrides.activate !== false) && hasActivate;
+          if (!includeMount && !includeActivate) continue;
+          const slot = { ...manifest };
+          if (includeMount) slot.mount = module.mount;
+          if (includeActivate) slot.activate = module.activate;
+          candidateSlots.set(id, slot);
+        }
+
+        // [e] Splice in BAR_SLOT_ORDER + ad-hoc entries. Anything in
+        // `candidateSlots` that's NOT in BAR_SLOT_ORDER gets appended
+        // at the end (future-proof; today nothing falls into this case
+        // because all candidate ids are listed in BAR_SLOT_ORDER).
+        const ordered = [];
+        const seen = new Set();
+        for (const id of BAR_SLOT_ORDER) {
+          if (id === "combat-bar" && AD_HOC_BAR_SLOTS.length > 0) {
+            // Splice the ad-hoc slots immediately before combat-bar to
+            // match the original explicit ordering (examine-target →
+            // rynthsuite → fullscreen → combat-bar → vendor-ui).
+            for (const adhoc of AD_HOC_BAR_SLOTS) ordered.push(adhoc);
+          }
+          const slot = candidateSlots.get(id);
+          if (slot) {
+            ordered.push(slot);
+            seen.add(id);
+          }
+        }
+        for (const [id, slot] of candidateSlots) {
+          if (!seen.has(id)) ordered.push(slot);
+        }
+        return ordered;
+      }
+
+      // Build the bar slots. Top-level await is fine inside a
+      // <script type="module">; the awaits later in this file
+      // (init(), manifest fetch) already exercise this path.
+      // When `?plugins=none` is set we skip the loader entirely —
+      // mountBar() below is already gated on !pluginsDisabled, so an
+      // empty array here just saves a round of 29 manifest fetches.
+      const barSlots = pluginsDisabled ? [] : await buildBarSlotsViaLoader();
 
       // Register views with the main-panel container (PR-U). Inventory
       // and Examine share one pane; main-panel.pushView routes between
@@ -1353,6 +1482,23 @@
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const tag = ev.target?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+        // Polish B (2026-05-27): manifest-declared hotkeys take precedence.
+        // Plugin id → view-name convention: strip "com.holtburger." prefix
+        // and "-panel" suffix (matches main-panel.registerView naming).
+        const action = matchManifestHotkeyEvent(ev);
+        if (action && action.pluginId) {
+          ev.preventDefault();
+          const view = action.pluginId
+            .replace(/^com\.holtburger\./, "")
+            .replace(/-panel$/, "");
+          window.__mainPanel?.toggleView?.(view);
+          return;
+        }
+
+        // Legacy FKEY tables — fallback for plugins without manifests
+        // (character-info, options, spell-research) and for inventory's
+        // F4 dispatch (combat-bar's manifest F4 is aspirational).
         if (ev.shiftKey) {
           const fn = FKEY_SHIFT_TOGGLES[ev.key];
           if (fn) {

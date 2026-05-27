@@ -9,5 +9,8 @@
   "iconHidden": true,
   "entry": "./map-panel.js",
   "environments": ["browser"],
-  "slots": ["panel"]
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "F3", "label": "Toggle Map" }
+  ]
 }

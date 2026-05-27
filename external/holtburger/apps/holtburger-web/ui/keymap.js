@@ -379,3 +379,256 @@ export function formatBinding(b) {
   parts.push(key);
   return parts.join("+");
 }
+
+// ---------------------------------------------------------------------
+// Manifest-declared hotkey registry (Polish B, 2026-05-27).
+//
+// Each plugin manifest declares `hotkeys: [{ id, default, label? }]`
+// (see plugins/schemas/plugin-manifest.json#/properties/hotkeys). PR 8
+// added the *schema* for these but enforcement lived as inline F-key
+// tables in `index.html` — completely decoupled from the manifests.
+// This module is the missing glue: at startup, the host walks every
+// loaded manifest's `hotkeys[]` and calls `setManifestBindings(map)`
+// with `{ '<KEY-STRING>': '<plugin-id>::<hotkey-id>' }`. After that,
+// hotkey dispatch becomes a single `matchHotkeyEvent(ev)` lookup
+// instead of two hardcoded `FKEY_VIEWS` / `FKEY_SHIFT_TOGGLES` tables.
+//
+// We DO NOT register a window keydown listener here — the host owns
+// the dispatch flow (it has to decide what to do with the resolved
+// action, e.g. `__mainPanel.toggleView(view)` vs `__toggleHousePanel()`
+// vs `pluginClient.events.emit('togglePanel', id)`). This module is
+// the resolver, not the dispatcher.
+//
+// Key-string grammar (matches manifest `default` strings):
+//   modifier-prefix ::= ("Ctrl" | "Shift" | "Alt" | "Meta") "+"
+//   key             ::= "F" digits | letter | digit | "Escape" | …
+//   key-string      ::= modifier-prefix* key
+//
+// Examples: "F4", "Shift+F2", "Ctrl+Shift+F5", "I", "Escape".
+//
+// The key portion is matched against `KeyboardEvent.key` (the
+// printable identifier) so manifest authors stay in human-readable
+// land. Modifier names line up with `KeyboardEvent.shiftKey` etc.
+
+/** @type {Map<string, {pluginId: string, hotkeyId: string, label: string|null, keyString: string}>} */
+let manifestBindings = new Map();
+
+/**
+ * Parse a hotkey key-string ("F4", "Shift+F2", "Ctrl+Alt+I") into a
+ * normalised match shape. Returns `null` on malformed input.
+ *
+ * Modifier names accepted: `Ctrl`, `Shift`, `Alt`, `Meta` (case
+ * sensitive — manifests are authored, not user-typed). Order is
+ * irrelevant during parse but normalisation re-emits in canonical
+ * Ctrl→Alt→Shift→Meta order to match `formatBinding` output.
+ *
+ * @param {string} s
+ * @returns {null | {key: string, shift: boolean, ctrl: boolean, alt: boolean, meta: boolean, canonical: string}}
+ */
+export function parseHotkeyString(s) {
+  if (typeof s !== "string" || s.length === 0) return null;
+  const parts = s.split("+").map((p) => p.trim()).filter((p) => p.length > 0);
+  if (parts.length === 0) return null;
+  const key = parts.pop();
+  if (!key) return null;
+  let shift = false, ctrl = false, alt = false, meta = false;
+  for (const mod of parts) {
+    if (mod === "Shift") shift = true;
+    else if (mod === "Ctrl") ctrl = true;
+    else if (mod === "Alt") alt = true;
+    else if (mod === "Meta") meta = true;
+    else return null; // Unknown modifier — reject rather than silently match.
+  }
+  const canonicalParts = [];
+  if (ctrl) canonicalParts.push("Ctrl");
+  if (alt) canonicalParts.push("Alt");
+  if (shift) canonicalParts.push("Shift");
+  if (meta) canonicalParts.push("Meta");
+  canonicalParts.push(key);
+  return { key, shift, ctrl, alt, meta, canonical: canonicalParts.join("+") };
+}
+
+/**
+ * Replace the current manifest-binding table. Pass an object keyed by
+ * hotkey-string (`"F4"`, `"Shift+F2"`) with values of shape
+ * `"<plugin-id>::<hotkey-id>"`. Keys are normalised via
+ * `parseHotkeyString`; malformed entries are skipped (with a console
+ * warn) so one bad manifest does not break the rest.
+ *
+ * Idempotent — calling twice with the same map is a no-op beyond the
+ * cache rebuild. The host should call this once at startup after the
+ * plugin loader has resolved its manifest set.
+ *
+ * @param {Record<string, string>} map
+ * @returns {{ registered: number, skipped: Array<{keyString: string, reason: string}> }}
+ */
+export function setManifestBindings(map) {
+  const next = new Map();
+  const skipped = [];
+  if (map == null || typeof map !== "object") {
+    manifestBindings = next;
+    return { registered: 0, skipped };
+  }
+  for (const [keyString, value] of Object.entries(map)) {
+    const parsed = parseHotkeyString(keyString);
+    if (!parsed) {
+      skipped.push({ keyString, reason: "malformed hotkey string" });
+      continue;
+    }
+    if (typeof value !== "string" || value.length === 0) {
+      skipped.push({ keyString, reason: "value must be non-empty string" });
+      continue;
+    }
+    const sepIdx = value.indexOf("::");
+    if (sepIdx < 1 || sepIdx > value.length - 3) {
+      skipped.push({ keyString, reason: `value must be "<plugin-id>::<hotkey-id>" (got ${JSON.stringify(value)})` });
+      continue;
+    }
+    const pluginId = value.slice(0, sepIdx);
+    const hotkeyId = value.slice(sepIdx + 2);
+    next.set(parsed.canonical, {
+      pluginId,
+      hotkeyId,
+      label: null,
+      keyString: parsed.canonical,
+      match: parsed,
+    });
+  }
+  manifestBindings = next;
+  try {
+    window.__diag?.input?.onManifestBindingsSet?.({
+      registered: next.size, skipped: skipped.length,
+    });
+  } catch (_) {}
+  return { registered: next.size, skipped };
+}
+
+/**
+ * Build the manifest-binding map from an array of loaded manifests.
+ * Convenience helper for the host startup path; mirrors the shape of
+ * `loadPlugins()` return values from `plugins/loader.js`.
+ *
+ * Each manifest's `hotkeys[]` entry contributes one binding:
+ *   `<hotkey.default>` → `"<manifest.id>::<hotkey.id>"`
+ *
+ * Duplicate key-strings are resolved last-wins (with a console warn),
+ * mirroring the `index.html` legacy behavior where F2 + F5 both routed
+ * to `spellbook`. The duplicate is *recorded* — the caller can decide
+ * whether it's intentional (multi-key alias) or a bug.
+ *
+ * @param {Array<{id: string, hotkeys?: Array<{id: string, default: string, label?: string}>}>} manifests
+ * @returns {{ map: Record<string, string>, labels: Record<string, string>, duplicates: Array<{keyString: string, conflicts: string[]}> }}
+ */
+export function buildManifestBindings(manifests) {
+  /** @type {Record<string, string>} */
+  const map = {};
+  /** @type {Record<string, string>} */
+  const labels = {};
+  /** @type {Map<string, string[]>} */
+  const seen = new Map();
+  if (!Array.isArray(manifests)) {
+    return { map, labels, duplicates: [] };
+  }
+  for (const m of manifests) {
+    if (m == null || typeof m.id !== "string") continue;
+    const hotkeys = Array.isArray(m.hotkeys) ? m.hotkeys : [];
+    for (const hk of hotkeys) {
+      if (hk == null || typeof hk.id !== "string" || typeof hk.default !== "string") continue;
+      const parsed = parseHotkeyString(hk.default);
+      if (!parsed) continue;
+      const value = `${m.id}::${hk.id}`;
+      const prevList = seen.get(parsed.canonical) || [];
+      prevList.push(value);
+      seen.set(parsed.canonical, prevList);
+      map[parsed.canonical] = value;
+      if (typeof hk.label === "string" && hk.label.length > 0) {
+        labels[parsed.canonical] = hk.label;
+      }
+    }
+  }
+  const duplicates = [];
+  for (const [k, list] of seen) {
+    if (list.length > 1) duplicates.push({ keyString: k, conflicts: list });
+  }
+  return { map, labels, duplicates };
+}
+
+/**
+ * Look up the manifest binding for a normalised key-string (e.g.
+ * `"F4"`, `"Shift+F2"`). Returns `null` if no manifest claims it.
+ *
+ * Used by retail-default lookup paths — the dispatcher should prefer
+ * `matchHotkeyEvent` which already handles user overrides + matching.
+ *
+ * @param {string} keyString
+ * @returns {null | {pluginId: string, hotkeyId: string, label: string|null, keyString: string}}
+ */
+export function getManifestBinding(keyString) {
+  const parsed = parseHotkeyString(keyString);
+  if (!parsed) return null;
+  const entry = manifestBindings.get(parsed.canonical);
+  if (!entry) return null;
+  return {
+    pluginId: entry.pluginId,
+    hotkeyId: entry.hotkeyId,
+    label: entry.label,
+    keyString: entry.keyString,
+  };
+}
+
+/**
+ * Resolve a `KeyboardEvent` to a manifest-declared plugin action.
+ * Returns `null` if no manifest binding matches.
+ *
+ * Walks the entire manifest-binding set (small — bounded by ~30
+ * plugins × ~few hotkeys each) checking modifier + key equality. The
+ * straightforward shape is correct for this size; revisit only if
+ * the binding set grows past ~200 entries.
+ *
+ * @param {KeyboardEvent} ev
+ * @returns {null | {pluginId: string, hotkeyId: string, label: string|null, keyString: string}}
+ */
+export function matchHotkeyEvent(ev) {
+  if (!ev || typeof ev.key !== "string") return null;
+  for (const entry of manifestBindings.values()) {
+    const m = entry.match;
+    if (!m) continue;
+    if (ev.key !== m.key) continue;
+    if (ev.shiftKey !== m.shift) continue;
+    if (ev.ctrlKey !== m.ctrl) continue;
+    if (ev.altKey !== m.alt) continue;
+    if (ev.metaKey !== m.meta) continue;
+    return {
+      pluginId: entry.pluginId,
+      hotkeyId: entry.hotkeyId,
+      label: entry.label,
+      keyString: entry.keyString,
+    };
+  }
+  return null;
+}
+
+/**
+ * Snapshot the current manifest bindings — entry per active binding,
+ * sorted by key-string. Used by the settings UI to render the bind
+ * list, and by tests for assertions.
+ *
+ * @returns {Array<{keyString: string, pluginId: string, hotkeyId: string}>}
+ */
+export function listManifestBindings() {
+  return [...manifestBindings.values()]
+    .map((e) => ({
+      keyString: e.keyString,
+      pluginId: e.pluginId,
+      hotkeyId: e.hotkeyId,
+    }))
+    .sort((a, b) => a.keyString.localeCompare(b.keyString));
+}
+
+/**
+ * Clear all manifest bindings. Mostly useful in tests; the host
+ * generally calls `setManifestBindings(newMap)` instead.
+ */
+export function clearManifestBindings() {
+  manifestBindings = new Map();
+}

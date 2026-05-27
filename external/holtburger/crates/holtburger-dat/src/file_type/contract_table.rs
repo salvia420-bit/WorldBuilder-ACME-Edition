@@ -65,10 +65,11 @@
 //! is enough for the panel display (no NUL bytes appear in any retail
 //! contract string per the EoR fixture).
 
+use crate::utils::read_pstring_char;
 use crate::{EOR_PORTAL_NAMESPACE, ResourceKey, StaticResourceKey};
 use binrw::{BinRead, BinResult};
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek};
 
 /// One row in [`ContractTable`].
 ///
@@ -185,33 +186,6 @@ impl BinRead for ContractTable {
         let contracts = parse_contract_hash_table(reader)?;
         Ok(Self { id, contracts })
     }
-}
-
-/// PStringBase<char> per `acclient.c:296509`. u16 length (if 0xFFFF,
-/// follow with u32). After the bytes, pad to 4-byte boundary.
-fn read_pstring_char<R: Read + Seek>(reader: &mut R) -> BinResult<String> {
-    let len_u16 = u16::read_le(reader)?;
-    let len = if len_u16 == 0xFFFF {
-        u32::read_le(reader)? as usize
-    } else {
-        len_u16 as usize
-    };
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf)?;
-    // Strip trailing NULs (retail's UnPack does this implicitly via the
-    // m_len decrement at acclient.c:296549-296550 — most strings have
-    // no NULs but the EoR `Contract.questflag_*` strings sometimes do).
-    while buf.last() == Some(&0) {
-        buf.pop();
-    }
-    // Align to 4-byte boundary.
-    let pos = reader.stream_position()?;
-    let pad = (4 - (pos % 4) as usize) % 4;
-    if pad > 0 {
-        reader.seek(SeekFrom::Current(pad as i64))?;
-    }
-    let (decoded, _, _) = encoding_rs::WINDOWS_1252.decode(&buf);
-    Ok(decoded.into_owned())
 }
 
 fn parse_contract<R: Read + Seek>(reader: &mut R) -> BinResult<Contract> {
