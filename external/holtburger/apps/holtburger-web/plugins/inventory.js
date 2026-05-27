@@ -22,7 +22,13 @@
 //     per the Inventory Panel wiki article; 9 with the Shadow of the
 //     Seventh Mule augmentation, gated on server-side state).
 //   - Lower 234x120: items grid for pack items (32x32 slots).
-//   - Bottom 120x14: burden meter (driven by playerBurden getter).
+//
+// Burden meter lives in `plugins/status-indicators.js` (the real retail
+// indicator 0x100000F7 in gmFloatyIndicatorsUI 0x21000071, anchored at
+// the top-left status strip). This panel does NOT render a duplicate
+// burden bar — Wave 12 originally mistook PAPERDOLL_ELEM_BURDEN
+// (0x100005BE) for the burden indicator, but that element is actually
+// a paperdoll button/checkbox (Wave 13 audit finding).
 //
 // Paperdoll has 22 slots total (per retail GetLocationInfoFromElementID
 // at acclient.c:219835): head/chest/abdomen/upper-arm/lower-arm/glove
@@ -39,8 +45,9 @@ import { loadLayout, findElementById, parseElementIdHex, getCachedLayout } from 
  *  - `gmInventoryUI` (0x21000023, 300×362) — outer-window children
  *    laying out the paperdoll area, bag column, items grid, title,
  *    and close button. Top-level element 0x100001CC.
- *  - `gmPaperDollUI` (0x21000024, 224×214) — body-slot positions
- *    plus the burden bar (0x100005BE at (42, 190) inside the panel).
+ *  - `gmPaperDollUI` (0x21000024, 224×214) — body-slot positions for
+ *    the equipment grid only. The real burden indicator lives in
+ *    `gmFloatyIndicatorsUI` 0x21000071 (status-indicators.js).
  *
  *  Per ElementDesc.element_id mapping (cross-checked against
  *  paperdoll_layout_dump output + retail-anatomy validation):
@@ -50,7 +57,6 @@ const PAPERDOLL_LAYOUT_ID = 0x21000024;
 const INV_ELEM_PAPERDOLL_AREA = 0x100001CD;
 const INV_ELEM_BAG_COLUMN    = 0x100001CE;
 const INV_ELEM_ITEMS_GRID    = 0x100001CF;
-const PAPERDOLL_ELEM_BURDEN  = 0x100005BE;
 
 
 const OVERLAY_ID = "hb-inventory";
@@ -63,6 +69,20 @@ const PAPERDOLL_H = 214;
 const BAG_COL_W = 60;
 const SLOT_SIZE = 32;
 const GRID_COLS = 7;
+
+// Wave 13.2 — ItemType bit for the Container subclass (side packs).
+// Source: external/ACE/Source/ACE.Entity/Enum/ItemType.cs:18
+//     Container = 0x00000200,
+// Surfaced on the wire via PropertyInt::ItemType and snapshot-published
+// as `InventoryItem.itemType` (src/lib.rs:14263-14266).
+const ITEM_TYPE_CONTAINER = 0x00000200;
+
+// Bag tabs: 1 main + 7 side packs (per the Inventory Panel wiki article:
+// "The top bag is your main inventory, and below it are slots for 7
+// additional containers."). The Shadow of the Seventh Mule augmentation
+// can add a 9th — surfaced when its wire event lands. Slots without an
+// owned pack stay dim/empty.
+const BAG_COUNT = 8;
 
 // Item-type-bit → color (mirrors index.html's #inventory-panel cat
 // CSS but adapted for our dark backdrop).
@@ -172,8 +192,9 @@ function ensureStyles() {
   style.textContent = `
     /* Inventory view — mounts inside main-panel's body slot. The
        main-panel owns position/frame/title; we just lay out our
-       content (paperdoll + bag column + items / examine swap +
-       burden meter) inside the provided bodyEl. */
+       content (paperdoll + bag column + items / examine swap)
+       inside the provided bodyEl. Burden indicator lives in
+       plugins/status-indicators.js (top-left status strip). */
     #${OVERLAY_ID} {
       position: absolute;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -295,53 +316,51 @@ function ensureStyles() {
       background: rgba(0, 0, 0, 0.35);
     }
     #${OVERLAY_ID} .hb-inv-bagtab {
+      position: relative;
       width: ${SLOT_SIZE - 4}px;
       height: ${SLOT_SIZE - 4}px;
       background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
       cursor: pointer;
       image-rendering: pixelated;
-      opacity: 0.65;
+      opacity: 1;
     }
-    #${OVERLAY_ID} .hb-inv-bagtab:hover { opacity: 1; }
-    #${OVERLAY_ID} .hb-inv-bagtab.selected { opacity: 1; filter: drop-shadow(0 0 3px var(--hb-text-gold)); }
-    /* Burden meter under paperdoll. */
-    #${OVERLAY_ID} .hb-inv-burden {
+    /* Empty tab (no pack equipped) — dimmed, non-interactive. */
+    #${OVERLAY_ID} .hb-inv-bagtab.empty {
+      opacity: 0.35;
+      cursor: default;
+    }
+    #${OVERLAY_ID} .hb-inv-bagtab:not(.empty):hover {
+      filter: brightness(1.25);
+    }
+    #${OVERLAY_ID} .hb-inv-bagtab.selected {
+      opacity: 1;
+      filter: drop-shadow(0 0 3px var(--hb-text-gold));
+    }
+    /* Pack icon overlay inside the tab (~24×24 centered in 28×28). */
+    #${OVERLAY_ID} .hb-inv-bagtab-icon {
       position: absolute;
-      top: ${TITLE_H + PAPERDOLL_H + 6}px;
-      left: 6px;
-      width: ${PAPERDOLL_W}px;
-      height: 14px;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      pointer-events: auto;
+      top: 2px; left: 2px;
+      width: 24px;
+      height: 24px;
+      background-position: center;
+      background-size: contain;
+      background-repeat: no-repeat;
+      pointer-events: none;
+      image-rendering: pixelated;
     }
-    #${OVERLAY_ID} .hb-inv-burden-label {
-      font-size: 9px;
-      color: var(--hb-text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
-    #${OVERLAY_ID} .hb-inv-burden-bar {
-      flex: 1;
-      height: 8px;
-      background: rgba(0, 0, 0, 0.7);
-      border: 1px solid var(--hb-border-brass-dim);
-      overflow: hidden;
-    }
-    #${OVERLAY_ID} .hb-inv-burden-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #6abc6a 0%, #d4b330 60%, #c83838 95%);
-      transition: width 200ms linear;
-    }
-    /* Items grid — pack contents below the paperdoll. */
+    /* Burden meter moved to plugins/status-indicators.js (real retail
+       indicator 0x100000F7 in gmFloatyIndicatorsUI 0x21000071). The
+       inventory panel no longer renders its own burden bar. */
+    /* Items grid — pack contents below the paperdoll. Retail LayoutDesc
+       0x100001CF is 120px tall (gmInventoryUI 0x21000023). Wave 12 used
+       top/bottom anchors which computed to 114px; Wave 13 switches to a
+       fixed 120px height to match retail. */
     #${OVERLAY_ID} .hb-inv-items {
       position: absolute;
       top: ${TITLE_H + PAPERDOLL_H + 28}px;
       left: 6px;
       right: 6px;
-      bottom: 6px;
+      height: 120px;
       overflow-y: auto;
       pointer-events: auto;
       padding: 4px;
@@ -519,7 +538,6 @@ export const manifest = {
 // gmInventoryUI. Refs:
 //   - paperdollEl  → top-level paperdoll panel container
 //   - bagcolEl     → narrow right-side bag-tab column
-//   - burdenEl     → burden meter (encumbrance bar)
 //   - itemsEl      → grid of pack-content slots below the paperdoll
 //   - dollSlotEls  → map of equipMask → { el, slot } for body slots
 //
@@ -527,9 +545,11 @@ export const manifest = {
 //   - Paperdoll area at (0, 23) inside the 300×362 window
 //   - Bag column at (239, 23), 61×339 — extends past paperdoll
 //   - Items grid at (0, 237), 234×120 — directly below paperdoll
-//   - Burden bar at (42, 190) INSIDE the paperdoll panel (224×214),
-//     anchored to the bottom via right_edge=2, bottom_edge=1. Width
-//     is 120, height 14.
+//
+// Burden indicator is owned by plugins/status-indicators.js (real
+// retail indicator 0x100000F7 in gmFloatyIndicatorsUI 0x21000071);
+// the Wave 12 attempt to anchor 0x100005BE here was an audit-flagged
+// mislabel (that element is actually a paperdoll button/checkbox).
 //
 // Both layouts cache after the first call; re-mounts re-apply
 // synchronously. Falls through silently if either layout fails to
@@ -538,11 +558,6 @@ function applyInventoryLayout(refs) {
   const apply = ([inv, doll]) => {
     let appliedRegions = 0;
     let slotUpdates = { updated: 0, missed: 0 };
-    // Paperdoll-panel origin in overlay coords. Used to anchor the
-    // burden bar (retail places it inside the paperdoll at (42, 190)
-    // but our DOM keeps the burden as a sibling of paperdoll). CSS
-    // default (6, 4) is the fallback when gmInventoryUI doesn't load.
-    let paperdollOrigin = { x: 6, y: 4 };
 
     if (inv) {
       const paperdollArea = findElementById(inv, INV_ELEM_PAPERDOLL_AREA);
@@ -551,8 +566,6 @@ function applyInventoryLayout(refs) {
 
       if (paperdollArea && refs.paperdollEl) {
         applyBox(refs.paperdollEl, paperdollArea);
-        if (typeof paperdollArea.x === "number") paperdollOrigin.x = paperdollArea.x;
-        if (typeof paperdollArea.y === "number") paperdollOrigin.y = paperdollArea.y;
         appliedRegions += 1;
       }
       if (bagcol && refs.bagcolEl) {
@@ -563,6 +576,8 @@ function applyInventoryLayout(refs) {
       }
       if (itemsGrid && refs.itemsEl) {
         refs.itemsEl.style.right = "";
+        // Bottom is no longer in CSS (Wave 13: fixed height 120px),
+        // but defensively clear anyway in case the rule comes back.
         refs.itemsEl.style.bottom = "";
         applyBox(refs.itemsEl, itemsGrid);
         appliedRegions += 1;
@@ -572,18 +587,6 @@ function applyInventoryLayout(refs) {
     if (doll) {
       // Body slots — uses the same map findElementById walks.
       slotUpdates = applySlotPositions(doll, refs.dollSlotEls);
-
-      // Burden bar at (42, 190) inside the paperdoll panel — translate
-      // to overlay coords using the just-applied (or CSS-default)
-      // paperdoll origin.
-      const burden = findElementById(doll, PAPERDOLL_ELEM_BURDEN);
-      if (burden && refs.burdenEl) {
-        if (typeof burden.x === "number") refs.burdenEl.style.left = `${paperdollOrigin.x + burden.x}px`;
-        if (typeof burden.y === "number") refs.burdenEl.style.top = `${paperdollOrigin.y + burden.y}px`;
-        if (typeof burden.width === "number") refs.burdenEl.style.width = `${burden.width}px`;
-        if (typeof burden.height === "number") refs.burdenEl.style.height = `${burden.height}px`;
-        appliedRegions += 1;
-      }
     }
 
     try {
@@ -722,47 +725,59 @@ function doMount(parentEl, _ctx) {
   }
   overlay.appendChild(paperdoll);
 
-  // Bag column — 8 tabs per retail (1 main + 7 side packs, per the
-  // Inventory Panel wiki article: "The top bag is your main inventory,
-  // and below it are slots for 7 additional containers."). The
-  // Shadow of the Seventh Mule augmentation can add a 9th — that's a
-  // server-side biota state we'll surface when the augmentation wire
-  // event lands (out of scope for Wave 12). Slots without an owned
-  // pack stay dim/empty until the player drags a pack in.
-  const BAG_COUNT = 8;
+  // Bag column — see BAG_COUNT (8). The first tab is the main pack
+  // (containerId 0 — items the player owns directly). The remaining 7
+  // slots are reserved for side packs (Container items in the player's
+  // inventory, identified by ItemType bit 0x200). Slots without an
+  // owned pack stay dim/empty until the player drags a pack in.
+  //
+  // Wave 13.2 — the items grid is now filtered by the currently
+  // selected pack's container_id. `selectedPackContainerId` defaults
+  // to 0 (main pack). `bagSlots` is rebuilt on each `rebuild()` pass
+  // from the wasm snapshot: index 0 always = main pack; indices 1..7
+  // populated dynamically with whichever Container items are in the
+  // player's main inventory.
+  let selectedPackContainerId = 0;
+  let bagSlots = new Array(BAG_COUNT).fill(null);
+  bagSlots[0] = { containerId: 0, name: "Main Pack", iconId: 0 };
+
   const bagCol = document.createElement("div");
   bagCol.className = "hb-inv-bagcol";
+  const bagTabEls = [];
   for (let i = 0; i < BAG_COUNT; i++) {
     const tab = document.createElement("div");
-    tab.className = "hb-inv-bagtab" + (i === 0 ? " selected" : "");
+    // Initial state: tab 0 (main pack) is selected, tabs 1..7 are empty.
+    // renderBagTabs() rebuilds these classes whenever the snapshot
+    // changes; this is just the pre-snapshot initial render.
+    const classes = ["hb-inv-bagtab"];
+    if (i === 0) classes.push("selected");
+    else classes.push("empty");
+    tab.className = classes.join(" ");
     tab.dataset.bag = String(i);
-    tab.title = i === 0 ? "Main pack" : `Side pack ${i}`;
+    tab.title = i === 0 ? "Main Pack" : "Empty pack slot";
+    // Icon overlay slot — populated when a side pack is equipped.
+    const tabIcon = document.createElement("div");
+    tabIcon.className = "hb-inv-bagtab-icon";
+    tabIcon.style.display = "none";
+    tab.appendChild(tabIcon);
     tab.addEventListener("click", () => {
+      const slot = bagSlots[i];
+      if (!slot) return; // empty slot — nothing to switch to
+      if (selectedPackContainerId === slot.containerId) return; // no-op
+      selectedPackContainerId = slot.containerId >>> 0;
       bagCol.querySelectorAll(".hb-inv-bagtab").forEach((t) => t.classList.remove("selected"));
       tab.classList.add("selected");
+      rebuildItemsGrid();
     });
     bagCol.appendChild(tab);
+    bagTabEls.push({ tabEl: tab, iconEl: tabIcon });
   }
   overlay.appendChild(bagCol);
 
-  // Burden meter
-  const burdenRow = document.createElement("div");
-  burdenRow.className = "hb-inv-burden";
-  const burdenLbl = document.createElement("span");
-  burdenLbl.className = "hb-inv-burden-label";
-  setAcText(burdenLbl, "Burden", { color: "#a8a090" });
-  burdenRow.appendChild(burdenLbl);
-  const burdenBar = document.createElement("div");
-  burdenBar.className = "hb-inv-burden-bar";
-  const burdenFill = document.createElement("div");
-  burdenFill.className = "hb-inv-burden-fill";
-  burdenBar.appendChild(burdenFill);
-  burdenRow.appendChild(burdenBar);
-  const burdenPct = document.createElement("span");
-  burdenPct.className = "hb-inv-burden-label";
-  setAcText(burdenPct, "0%", { color: "#a8a090" });
-  burdenRow.appendChild(burdenPct);
-  overlay.appendChild(burdenRow);
+  // Burden meter removed in Wave 13 — the real retail indicator lives
+  // in plugins/status-indicators.js (gmFloatyIndicatorsUI 0x21000071,
+  // top-left status strip). Wave 12 had mistaken paperdoll element
+  // 0x100005BE for the burden indicator; audit caught the mislabel.
 
   // Items grid (pack contents)
   const itemsGrid = document.createElement("div");
@@ -775,14 +790,10 @@ function doMount(parentEl, _ctx) {
   // in the same screen position regardless of which view is mounted.
 
   // Apply retail layout: body slots + paperdoll/bagcol/items region
-  // boxes + burden bar position. Falls through to CSS defaults if the
-  // layouts can't load. All four refs must be present in the DOM at
-  // this point — applyInventoryLayout reads style.left/top off the
-  // paperdoll to anchor the burden bar.
+  // boxes. Falls through to CSS defaults if the layouts can't load.
   applyInventoryLayout({
     paperdollEl: paperdoll,
     bagcolEl: bagCol,
-    burdenEl: burdenRow,
     itemsEl: itemsGrid,
     dollSlotEls,
   });
@@ -864,16 +875,26 @@ function doMount(parentEl, _ctx) {
     return slot;
   }
 
+  // Cached snapshot of the most recent SessionHandle.playerInventory()
+  // call (refreshed at the top of rebuild()). Wave 13.2 — keeping the
+  // snapshot lets the bag-tab click path filter the items grid without
+  // re-querying wasm. The snapshot already carries each item's
+  // containerId / itemType / iconId / name (see src/lib.rs:21208-21221).
+  let inventorySnapshot = [];
+  function refreshInventorySnapshot() {
+    try {
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (!handle?.playerInventory) { inventorySnapshot = []; return; }
+      inventorySnapshot = handle.playerInventory();
+    } catch (_) { inventorySnapshot = []; }
+  }
+
   // Find the inventory item record for a given source <li> via wasm.
   // The source <li>'s data-guid lets us look up the item's equipMask
   // from the SessionHandle.playerInventory() snapshot.
   function getItemByGuid(guid) {
-    try {
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (!handle?.playerInventory) return null;
-      const items = handle.playerInventory();
-      return items.find((it) => String(it.guid) === String(guid)) || null;
-    } catch (_) { return null; }
+    if (!inventorySnapshot || inventorySnapshot.length === 0) return null;
+    return inventorySnapshot.find((it) => String(it.guid) === String(guid)) || null;
   }
 
   // Clear any equipped icon from every paperdoll slot.
@@ -928,60 +949,120 @@ function doMount(parentEl, _ctx) {
     return true;
   }
 
-  function rebuild() {
-    const equipped = document.getElementById("inv-equipped");
-    const pack = document.getElementById("inv-pack");
-    clearPaperdoll();
+  // Wave 13.2 — recompute bagSlots from the wasm snapshot. Index 0 is
+  // always the main pack; indices 1..7 are populated dynamically with
+  // Container items (ItemType bit 0x200) in the player's main inventory
+  // (containerId === 0). Equipped items are excluded — side packs in
+  // retail show up under the main pack regardless of equip state.
+  // Selection survives a rebuild if the previously-selected container
+  // is still present; otherwise we fall back to the main pack.
+  function rebuildBagSlots() {
+    const next = new Array(BAG_COUNT).fill(null);
+    next[0] = { containerId: 0, name: "Main Pack", iconId: 0 };
+    let nextIdx = 1;
+    for (const it of inventorySnapshot) {
+      // Containers are tagged by ItemType bit 0x200 (Container subclass).
+      // We only list packs that the PLAYER directly owns (containerId 0).
+      // Nested packs (a pack inside a pack — rare but legal in retail)
+      // are unsupported by this UI; they'll surface as items under their
+      // parent pack just like any other inventoried item.
+      if ((it.itemType >>> 0) & ITEM_TYPE_CONTAINER) {
+        if ((it.containerId >>> 0) !== 0) continue;
+        if (nextIdx >= BAG_COUNT) break;
+        next[nextIdx++] = {
+          containerId: it.guid >>> 0,
+          name: it.name || `Side pack ${nextIdx - 1}`,
+          iconId: (it.iconId >>> 0) || 0,
+        };
+      }
+    }
+    bagSlots = next;
+    // If the previously-selected container vanished (pack dropped/sold),
+    // fall back to the main pack.
+    if (selectedPackContainerId !== 0
+        && !bagSlots.some((s) => s && s.containerId === selectedPackContainerId)) {
+      selectedPackContainerId = 0;
+    }
+    renderBagTabs();
+  }
+
+  function renderBagTabs() {
+    for (let i = 0; i < BAG_COUNT; i++) {
+      const { tabEl, iconEl } = bagTabEls[i];
+      const slot = bagSlots[i];
+      if (!slot) {
+        // Empty slot — dim, no icon, no tooltip beyond "Empty pack slot".
+        tabEl.classList.add("empty");
+        tabEl.classList.remove("selected");
+        tabEl.title = "Empty pack slot";
+        iconEl.style.display = "none";
+        iconEl.style.backgroundImage = "";
+        continue;
+      }
+      tabEl.classList.remove("empty");
+      tabEl.title = slot.name;
+      tabEl.classList.toggle("selected", slot.containerId === selectedPackContainerId);
+      // Phase 13.4 — pack icon overlay. Side packs (containerId !== 0)
+      // have an iconId from PublicWeenieDescription. Main pack uses the
+      // built-in slot art (no overlay).
+      if (slot.containerId !== 0 && slot.iconId) {
+        iconEl.style.display = "block";
+        fetchPaperdollIconDataUrl(slot.iconId).then((url) => {
+          // Skip if the slot's containerId changed mid-fetch.
+          if (bagSlots[i]?.containerId !== slot.containerId) return;
+          if (url) iconEl.style.backgroundImage = `url("${url}")`;
+        });
+      } else {
+        iconEl.style.display = "none";
+        iconEl.style.backgroundImage = "";
+      }
+    }
+  }
+
+  // Wave 13.2 — render only the items whose containerId matches the
+  // currently selected pack. Pack <li>s come from index.html's #inv-pack
+  // list, but containerId is on the wasm snapshot — we cross-reference
+  // via the cached `inventorySnapshot` (see refreshInventorySnapshot).
+  function rebuildItemsGrid() {
     itemsGrid.innerHTML = "";
-    // Equipped → paperdoll body slots
+    const pack = document.getElementById("inv-pack");
+    if (!pack) return;
+    for (const li of pack.children) {
+      const guidStr = li.dataset?.guid;
+      if (!guidStr) continue;
+      const item = getItemByGuid(guidStr);
+      // Snapshot may not have caught up yet — fall back to main-pack
+      // visibility so we never silently hide everything.
+      const itemContainerId = item ? (item.containerId >>> 0) : 0;
+      if (itemContainerId !== selectedPackContainerId) continue;
+      itemsGrid.appendChild(makeSlot(li));
+    }
+  }
+
+  function rebuild() {
+    refreshInventorySnapshot();
+    const equipped = document.getElementById("inv-equipped");
+    clearPaperdoll();
+    rebuildBagSlots();
+    // Equipped → paperdoll body slots. Items that don't match any
+    // paperdoll slot (unknown equipMask) fall through to the items grid,
+    // but only when the main pack is selected (mirrors retail —
+    // unknown-slot items live in the player's main inventory).
+    const orphanedEquipped = [];
     if (equipped) {
       for (const li of equipped.children) {
         const item = getItemByGuid(li.dataset.guid);
         const placed = placeEquippedInDoll(li, item);
-        if (!placed) {
-          // Couldn't match any slot (unknown equipMask) — fall back to grid.
-          itemsGrid.appendChild(makeSlot(li));
-        }
+        if (!placed) orphanedEquipped.push(li);
       }
     }
-    // Pack → items grid
-    if (pack) {
-      for (const li of pack.children) {
+    rebuildItemsGrid();
+    if (selectedPackContainerId === 0) {
+      for (const li of orphanedEquipped) {
         itemsGrid.appendChild(makeSlot(li));
       }
     }
-    // Wave-D4: burden meter — playerBurden is a getter (no parens) per
-    // the wasm-bindgen #[wasm_bindgen(getter)] attribute. Value is
-    // encumbrance/capacity (0..1+ where >1.0 = over-encumbered, which
-    // retail allowed with movement penalties).
-    updateBurden();
-  }
-
-  function updateBurden() {
-    try {
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (!handle) return;
-      const burden = Number(handle.playerBurden ?? 0);
-      const pctRaw = Math.max(0, Math.round(burden * 100));
-      const pctClamped = Math.min(100, pctRaw);
-      burdenFill.style.width = `${pctClamped}%`;
-      // Over-encumbered (>90%) tints red regardless of gradient;
-      // 50-90% gold; <=50% cream (matches retail's encumbrance bar
-      // colour ramp). The CSS-defined gradient handles the smooth
-      // transition; the inline override only applies above thresholds
-      // so the gradient still shows in normal range.
-      if (pctRaw > 100) {
-        burdenFill.style.background = "var(--hb-text-red, #c83838)";
-      } else {
-        burdenFill.style.background = ""; // restore CSS gradient
-      }
-      let labelColor = "var(--hb-text-cream)";
-      if (pctRaw > 90) labelColor = "#c83838";
-      else if (pctRaw > 50) labelColor = "var(--hb-text-gold)";
-      setAcText(burdenPct, `${pctRaw}%`, { color: labelColor });
-    } catch (e) {
-      // Pre-spawn / playerBurden missing — leave the bar at 0%.
-    }
+    // Burden rendering removed in Wave 13 — see status-indicators.js.
   }
 
   let observers = [];
@@ -1093,40 +1174,14 @@ function doMount(parentEl, _ctx) {
     canvasEl.addEventListener("drop", onCanvasDrop);
   }
 
-  // Wave-D4: burden refreshes on every stats bump (UpdateAttribute,
-  // equip/unequip, inventory delta — all bucketed into kind=8 by the
-  // recv loop's dispatcher). Best-effort: the plugin client may not be
-  // ready yet when the view mounts on first login, so a poll-loop
-  // fallback fires updateBurden() until it lands.
-  let unsubStats = null;
-  function tryHookStats() {
-    const pc = window.__pluginClient;
-    if (!pc?.events?.on) return false;
-    const onStats = () => updateBurden();
-    pc.events.on("playerStatsUpdated", onStats);
-    pc.events.on("playerInventoryChanged", onStats);
-    unsubStats = () => {
-      try { pc.events.off("playerStatsUpdated", onStats); } catch (_) {}
-      try { pc.events.off("playerInventoryChanged", onStats); } catch (_) {}
-    };
-    return true;
-  }
-  let statsPollTimer = null;
-  if (!tryHookStats()) {
-    statsPollTimer = setInterval(() => {
-      if (tryHookStats()) { clearInterval(statsPollTimer); statsPollTimer = null; }
-    }, 500);
-  }
-  // Initial pass — playerBurden is 0.0 pre-spawn, the kind=8 event
-  // refreshes once the biota lands.
-  updateBurden();
+  // Wave 13: burden stats hooks removed (status-indicators.js owns the
+  // burden indicator now). The MutationObserver on #inv-equipped /
+  // #inv-pack already triggers rebuild() on every inventory delta.
 
   return () => {
     window.removeEventListener("keydown", onKey);
     delete window.__isInventoryItem;
     if (pollTimer) clearInterval(pollTimer);
-    if (statsPollTimer) clearInterval(statsPollTimer);
-    if (unsubStats) unsubStats();
     if (canvasEl) {
       canvasEl.removeEventListener("dragover", onCanvasDragOver);
       canvasEl.removeEventListener("drop", onCanvasDrop);
