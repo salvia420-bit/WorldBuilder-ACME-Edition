@@ -8667,6 +8667,43 @@ void main() {
                     speed,
                   });
                 } catch (_) {}
+              } else if (evt.kind === 31 /* ContainerClosed */) {
+                // ACPlugin PR-2 (2026-05-27): non-vendor container
+                // explicitly closed by the player. Symmetric to
+                // kind=21 ContainerOpened. The new WorldState
+                // dispatcher (plugins/world-state.js,
+                // bindWorldStateToClient) subscribes via
+                // `client.events.on('containerClosed', ...)` and
+                // routes into `dispatchContainerClosed`. Existing
+                // chest/corpse plugins that watch only the open path
+                // continue to work — this is purely additive.
+                const containerName = evt.stringPayload || "Container";
+                const containerGuidU32 = (evt.u32Payload ?? 0) >>> 0;
+                try {
+                  window.__pluginClient?.events?.emit?.("containerClosed", {
+                    stringPayload: containerName,
+                    u32Payload: containerGuidU32,
+                  });
+                } catch (_) {}
+              } else if (evt.kind === 32 /* ObjectAppraised */) {
+                // ACPlugin PR-2 (2026-05-27): an entity's appraisal
+                // data was just refreshed in the entity store (the
+                // wasm-side already folded the IdentifyObjectResponse
+                // properties through `apply_identify_response`).
+                // Unblocks /assess UI, vendor tooltips, examine
+                // popovers — see ACPlugin handoff §4 priority row
+                // "0x00C9 Item_SetAppraiseInfo". Plugin handlers read
+                // updated props via the existing entity-store API +
+                // (in WorldState) via the typed WorldObject reflecting
+                // PR 1's setters.
+                const entityName = evt.stringPayload || "";
+                const entityGuidU32 = (evt.u32Payload ?? 0) >>> 0;
+                try {
+                  window.__pluginClient?.events?.emit?.("objectAppraised", {
+                    stringPayload: entityName,
+                    u32Payload: entityGuidU32,
+                  });
+                } catch (_) {}
               } else if (evt.kind === 13) {
                 // Phase 4 step 5: UseFailed (WeenieError /
                 // WeenieErrorWithString). Already mirrored as a

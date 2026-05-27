@@ -12660,6 +12660,44 @@ const CLIENT_EVENT_KIND_DEATH: u32 = 29;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_PLAY_EFFECT: u32 = 30;
 
+/// `kind = 31` — ContainerClosed. ACPlugin PR-2 (2026-05-27). Symmetric
+/// to `CLIENT_EVENT_KIND_CONTAINER_OPENED (= 21)`. ACE emits
+/// `GameEvent::CloseGroundContainer` (opcode 0x0052) when the player
+/// explicitly closes a non-vendor container (chest, corpse, salvage
+/// bag) — the world dispatcher folds it into
+/// `WorldEvent::ContainerClosed(Guid)`. JS reads via the bus
+/// `containerClosed` event (forwarded into `WorldState`'s
+/// `dispatchContainerClosed`).
+///
+/// `u32Payload` = container entity GUID; `string_payload` =
+/// container's display name (looked up via `world.entities` like the
+/// PR-HH ContainerOpened arm did). Closes ACPlugin coverage matrix
+/// row 10 / row 4 of the original 18-row audit
+/// (`World.cs:253-262`, ACPlugin
+/// `Item_StopViewingObjectContents`).
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CONTAINER_CLOSED: u32 = 31;
+
+/// `kind = 32` — ObjectAppraised. ACPlugin PR-2 (2026-05-27). ACE
+/// sent `GameEvent::IdentifyObjectResponse` (opcode 0x00C9) and the
+/// world dispatcher's `inventory::handle_event` arm already folded
+/// the appraisal payload (BoolProperties / IntProperties /
+/// Int64Properties / FloatProperties / StringProperties /
+/// DataIdProperties / SpellBook) into `entity.properties.*`. This
+/// event signals JS that fresh appraisal data is available for the
+/// target GUID; consumers fetch via the existing entity-store API.
+///
+/// Note: the pre-existing kind=3 META_REFRESH EntityUpdate already
+/// fires for portal entities (handles the appraisal-text chip).
+/// kind=32 generalizes the signal to NON-portal items so the /assess
+/// UI, vendor tooltips, etc. can refresh on every appraise — closes
+/// matrix row 12 (`Item_SetAppraiseInfo`, handoff §4 priority "0x00C9").
+///
+/// `u32Payload` = appraised entity GUID; `string_payload` =
+/// entity display name (best-effort lookup).
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_OBJECT_APPRAISED: u32 = 32;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -23273,11 +23311,45 @@ async fn recv_loop(
                                 WorldEvent::EntityBookUpdated { guid, .. } => {
                                     book_changed = Some(*guid);
                                 }
+                                // ACPlugin PR-2 (2026-05-27): split
+                                // ContainerClosed out of the catch-all OR
+                                // so we can emit `kind=31
+                                // CONTAINER_CLOSED` in addition to the
+                                // existing inventory-changed signal.
+                                // World.cs:253-262 fires
+                                // `containerClosed` from
+                                // OnItem_StopViewingObjectContents;
+                                // matrix row 10/row 4 → IMPLEMENTED.
+                                WorldEvent::ContainerClosed(container_guid) => {
+                                    inventory_changed = true;
+                                    let container_guid_u32 = u32::from(*container_guid);
+                                    // `w` (the mutable borrow established
+                                    // on the outer `world.as_mut()` arm
+                                    // at :23286) is in scope. Borrow it
+                                    // re-immutably here for the name
+                                    // lookup — Rust's NLL allows the
+                                    // mut borrow to coexist with this
+                                    // local read because we never touch
+                                    // it again until after the read ends.
+                                    let container_name = {
+                                        use holtburger_common::properties::WorldObjectExt as _;
+                                        w.entities
+                                            .get(*container_guid)
+                                            .map(|entity| entity.name().to_string())
+                                            .unwrap_or_else(|| "Container".to_string())
+                                    };
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CONTAINER_CLOSED,
+                                        string_payload: Some(container_name),
+                                        u32_payload: Some(container_guid_u32),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
                                 WorldEvent::EntitySpawned(_)
                                 | WorldEvent::EntityReplaced(_)
                                 | WorldEvent::EntityDespawned(_)
                                 | WorldEvent::ContainerOpened(_)
-                                | WorldEvent::ContainerClosed(_)
                                 | WorldEvent::PropertiesUpdated { .. } => {
                                     // Could affect inventory if the entity
                                     // is owned by the player; the snapshot
@@ -23380,6 +23452,31 @@ async fn recv_loop(
                                         }
                                     }
                                     inventory_changed = true;
+                                    // ACPlugin PR-2 (2026-05-27): emit
+                                    // kind=32 ObjectAppraised. The
+                                    // existing kind=3 META_REFRESH
+                                    // entity-update only fires for
+                                    // portals (the dest-chip). All other
+                                    // appraised types had no event
+                                    // surface — /assess UI, vendor
+                                    // tooltips, examine popovers were
+                                    // blocked entirely (matrix row 12).
+                                    // Now every EntityIdentified emits
+                                    // kind=32 with the GUID so plugins
+                                    // can refresh from the entity store.
+                                    let entity_name = entity
+                                        .properties()
+                                        .strings
+                                        .get(&PropertyString::Name)
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_OBJECT_APPRAISED,
+                                        string_payload: Some(entity_name),
+                                        u32_payload: Some(u32::from(entity_guid)),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
                                 }
                                 // Phase 6 step E: SetState packets for
                                 // door-flagged entities produce a

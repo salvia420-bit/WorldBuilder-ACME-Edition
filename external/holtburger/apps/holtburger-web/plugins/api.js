@@ -15,17 +15,17 @@
 //
 // | # | Chorizite (Source)                  | EventArgs Payload                              | api.js / kind=N           | Status      | Note                                                                 |
 // |---|-------------------------------------|------------------------------------------------|---------------------------|-------------|----------------------------------------------------------------------|
-// | 1 | World.OnWeenieCreated               | WorldObject Object                             | EntityUpdate kind=1 SPAWN | PARTIAL     | spawn/position channel only; no bus event "objectCreated" (TODO)     |
-// | 2 | World.OnWeenieReleased              | WorldObject Object                             | EntityUpdate kind=2 REMOVE| PARTIAL     | no bus event "objectReleased" (TODO)                                 |
-// | 3 | World.OnContainerOpened             | Container Container                            | kind=12 vendorOpened + kind=21 containerOpened | IMPLEMENTED | PR-HH 2026-05-23: ViewContents (opcode 0x0196) routed to kind=21 for chests/corpses; vendor stays on kind=12 |
-// | 4 | World.OnContainerClosed             | Container Container                            | —                         | MISSING     | StopViewingObjectContents not surfaced as ClientEvent (TODO)         |
+// | 1 | World.OnWeenieCreated               | WorldObject Object                             | EntityUpdate kind=1 SPAWN + bus "objectCreated" | IMPLEMENTED | PR-2 2026-05-27: bus event now fires via plugins/world-state.js     |
+// | 2 | World.OnWeenieReleased              | WorldObject Object                             | EntityUpdate kind=2 REMOVE+ bus "objectReleased" | IMPLEMENTED | PR-2 2026-05-27: bus event + recursive child release ported          |
+// | 3 | World.OnContainerOpened             | Container Container                            | kind=12 vendorOpened + kind=21 containerOpened | IMPLEMENTED | PR-2 2026-05-27: child-wait gate per World.cs:212-249 now correct    |
+// | 4 | World.OnContainerClosed             | Container Container                            | kind=31 + bus "containerClosed" | IMPLEMENTED | PR-2 2026-05-27: NEW wasm kind=31 ContainerClosed + JS dispatcher    |
 // | 5 | World.OnSelectionChanged            | WorldObject? Object                            | "selectionChanged" bus    | IMPLEMENTED | Q1b (2026-05-26): scene3d/picking.js emits {guid, prevGuid} on every change |
 // | 6 | Game.OnStateChanged                 | ClientState NewState, OldState                 | kinds {1,4,5,6,7} partial | PARTIAL     | no single "stateChanged" with old→new; spread across kinds (TODO)    |
 // | 7 | Game.OnCharactersChanged            | EventArgs.Empty (re-fire roster)               | kind=0 CharacterListRecv  | IMPLEMENTED | renderCharacterList drains kind=0 each fire                          |
 // | 8 | Game.OnWorldInfo                    | EventArgs.Empty (ServerName/Max/Cur)           | —                         | MISSING     | Login_WorldInfo parsed but not surfaced as ClientEvent (TODO)        |
 // | 9 | Character.OnVitaeChanged            | float Vitae, OldVitae                          | kind=8 "playerStatsUpdated"| PARTIAL    | coalesced; no vitae-specific channel + no oldVitae delta (TODO)      |
 // |10 | Character.OnVitalChanged            | VitalId Type, int Value, int OldValue          | kind=8 "playerStatsUpdated"| PARTIAL    | coalesced into one stats-bump; per-vital deltas dropped (TODO)       |
-// |11 | Character.OnEnchantmentChanged      | AddRemove Type, LayeredSpellId, Enchantment    | —                         | MISSING     | no enchantment surface; buffs-debuffs HUD blocked (TODO)             |
+// |11 | Character.OnEnchantmentChanged      | AddRemove Type, LayeredSpellId, Enchantment    | kind=8 + bus enchantmentAdded/Removed | PARTIAL | PR-2 2026-05-27: JS-side snapshot diff emits Added/Removed delta events; wire-level wrapper events (target_guid + sequence) deferred to Wave E for remote-creature buffs |
 // |12 | Character.OnSharedCooldownChanged   | AddRemove Type, SharedCooldown                 | —                         | MISSING     | shared-cooldown bus not wired (TODO)                                 |
 // |13 | Character.OnPortalSpaceEntered      | EventArgs.Empty                                | —                         | MISSING     | portal-space (loading screen) entered/exited not exposed (TODO)      |
 // |14 | Character.OnPortalSpaceExited       | EventArgs.Empty                                | kind=7 ENTERED_WORLD (~)  | PARTIAL     | EnteredWorld covers the post-portal arrival; entry edge missing (TODO)|
@@ -58,10 +58,10 @@
 //   "death"                (kind=29)        — {victimGuid, killerGuid, message} (Q1a)
 //   "selectionChanged"     (client-only)    — {guid, prevGuid} emitted from scene3d/picking.js on every target change (Q1b)
 //
-// Counts: 3 IMPLEMENTED, 6 PARTIAL, 6 MISSING, 3 N/A — total 18 Chorizite events.
-// Backlog gap-fill order (highest plugin-leverage first): #11 Enchantment,
-// #4 ContainerClosed, #6 StateChanged (unified), #8 WorldInfo,
-// then #12 SharedCooldown / #13 PortalSpaceEntered. See CHORIZITE_PORTING_PLAN.md §3.4.
+// Counts post-PR-2 (2026-05-27): 6 IMPLEMENTED, 6 PARTIAL, 3 MISSING, 3 N/A — total 18.
+// Pre-PR-2 baseline: 3 IMPLEMENTED, 6 PARTIAL, 6 MISSING, 3 N/A.
+// Remaining backlog (in order): #6 StateChanged (unified), #8 WorldInfo,
+// #12 SharedCooldown, #13 PortalSpaceEntered. See CHORIZITE_PORTING_PLAN.md §3.4.
 // =============================================================================
 
 // =============================================================================
@@ -280,6 +280,13 @@ export const eventArgsFactories = Object.freeze({
 
 // =============================================================================
 
+// PR-2 (2026-05-27): the new `WorldState` instance (port of `World.cs`).
+// Surfaced on the client as `client.world` per ACPlugin §4 (`Game.World`
+// row). See `plugins/world-state.js` for the dispatch table + load-bearing
+// container-open child-wait gate (`World.cs:212-249`).
+import { WorldState, bindWorldStateToClient } from './world-state.js';
+export { WorldState, bindWorldStateToClient } from './world-state.js';
+
 export function createClient(sessionHandle) {
   const bus = new EventTarget();
 
@@ -355,6 +362,21 @@ export function createClient(sessionHandle) {
     knownSpells() {
       return sessionHandle.playerKnownSpells();
     },
+    /**
+     * PR-2 surface — local player's active enchantment snapshot. Returns
+     * `[{spellId, spellCategory, layer, powerLevel, startTime, duration,
+     * casterGuid}, ...]` per `PlayerEnchantmentJs` (`src/lib.rs:14705-14745`).
+     * Snapshot is refreshed by the wasm side on every kind=8
+     * `playerStatsUpdated` drain (piggybacks the stats refresh).
+     * @returns {Array<object>}
+     */
+    enchantments() {
+      try {
+        return sessionHandle.playerEnchantments();
+      } catch (_) {
+        return [];
+      }
+    },
   });
 
   const AttackHeight = Object.freeze({ HIGH: 1, MEDIUM: 2, LOW: 3 });
@@ -396,7 +418,13 @@ export function createClient(sessionHandle) {
     },
   });
 
-  const world = Object.freeze({
+  // PR-2 (2026-05-27): `client.world` is now the WorldState instance (port
+  // of `World.cs`). Existing scene-query helpers (currentCell / isIndoor /
+  // renderSet / terrainHeightAt / doorPart) live on `client.scene` AND
+  // grafted onto `client.world` for back-compat — no existing callers were
+  // found in the codebase at the time of PR-2, but we preserve the
+  // attribute names defensively in case unbundled plugins reach for them.
+  const sceneQueries = Object.freeze({
     currentCell() {
       return sessionHandle.getCurrentCellId();
     },
@@ -413,6 +441,21 @@ export function createClient(sessionHandle) {
       return sessionHandle.getBuildingPartForDoor(guid);
     },
   });
+  const scene = sceneQueries;
+
+  // PR-2 (2026-05-27): construct a WorldState instance. Manager is wired
+  // by the host (index.html bootstrap will inject the typed
+  // WorldObjectManager once it's `load()`-ed); pre-attach we accept a
+  // null manager so unit tests can instantiate without DAT round-trips.
+  const world = new WorldState({ manager: null, client: null });
+  // Graft the existing scene-query methods so legacy `client.world.currentCell()`
+  // calls still resolve. Each is a plain delegate (the WorldState's own
+  // methods don't collide).
+  for (const [k, fn] of Object.entries(sceneQueries)) {
+    if (typeof fn === 'function' && !(k in world)) {
+      world[k] = fn;
+    }
+  }
 
   const collision = Object.freeze({
     sweep(fromX, fromY, fromZ, toX, toY, toZ, radius, landblockId) {
@@ -458,7 +501,8 @@ export function createClient(sessionHandle) {
     movement,
     chat,
     characters,
-    world,
+    world,   // WorldState instance (PR-2); scene-query helpers grafted on.
+    scene,   // Pure scene-query surface (preferred for renderer plugins).
     collision,
     sky,
     ui,
@@ -477,6 +521,14 @@ export function createClient(sessionHandle) {
       return sessionHandle.canCreateCharacter;
     },
   };
+
+  // PR-2 — bind the new WorldState onto the client's event-bus surface so
+  // `containerOpened` / `containerClosed` / `objectAppraised` /
+  // `playerStatsUpdated` / `selectionChanged` flow into typed dispatch.
+  // Idempotent: re-binding is harmless (the bus uses addEventListener
+  // with our own bridging callbacks; tests bypass this and dispatch
+  // directly on the WorldState instance).
+  bindWorldStateToClient(world, client);
 
   return Object.freeze(client);
 }

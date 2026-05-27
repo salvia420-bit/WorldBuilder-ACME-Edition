@@ -36,21 +36,21 @@ Each row is one `_net.S2C.OnXxx += OnXxx` line in the `World()` ctor.
 
 | # | Handler (S2C event) | Opcode (est.) | Our kind / bus | Status | Notes |
 |---|---|---|---|---|---|
-| 1 | `OnItem_CreateObject` | 0x00F745 (GameEvent inner Item_CreateObject) | `kind=1` EntityUpdate (SPAWN) + `kind=11` InventoryUpdated | Partial | Spawn channel covers visible entities; appearance is captured separately. No `objectCreated` bus event yet (TODO `api.js:86`). PR-2 wires it. |
-| 2 | `OnItem_DeleteObject` | 0x00F747 | `kind=2` REMOVE | Partial | No bus event `objectReleased` (TODO `api.js:87`). |
-| 3 | `OnItem_ObjDescEvent` | 0x00F74C | `kind=8` `playerStatsUpdated` (coalesced) | Partial | Wired only for self via stats path; remote ObjDesc swaps don't refresh remote-player meshes. Renderer impact: high (clothing/jewelry/armor visual swaps invisible). |
-| 4 | `OnItem_ParentEvent` | 0x00F751 | `kind=8` (coalesced via re-snapshot) | Partial | Sets `PropertyInstanceId.Wielder` for child→parent. `updatePhysicsDesc` now mirrors this when 0x20 parent flag set. PR-2 should add a dedicated kind for equip/wield events. |
-| 5 | `OnItem_ServerSaysContainId` | 0x00F75A | `kind=11` InventoryUpdated | Partial | Wired; coalesced. No per-item move event (TODO Wave E row 6, deferred per `chorizite-reading-guide-summary-2026-05-27.md` Wave D.1). |
-| 6 | `OnItem_ServerSaysMoveItem` | 0x00F75B | `kind=11` (coalesced) | Partial | See row 5. |
-| 7 | `OnItem_ServerSaysRemove` | 0x00F73C | `kind=2` REMOVE | Y | Same path as DeleteObject. |
+| 1 | `OnItem_CreateObject` | 0x00F745 (GameEvent inner Item_CreateObject) | `kind=1` EntityUpdate (SPAWN) + `kind=11` InventoryUpdated + `objectCreated` bus | Y | **PR-2 (2026-05-27):** `plugins/world-state.js::dispatchItemCreateObject` now fires `objectCreated` with the typed WorldObject instance. Routes through PR 1's setters (`updateObjDesc`/`updatePhysicsDesc`/`updateWeenieDesc`). |
+| 2 | `OnItem_DeleteObject` | 0x00F747 | `kind=2` REMOVE + `objectReleased` bus | Y | **PR-2 (2026-05-27):** `plugins/world-state.js::dispatchItemDeleteObject` fires `objectReleased` + recursively releases container children (matches `World.cs:734-770`). |
+| 3 | `OnItem_ObjDescEvent` | 0x00F74C | `kind=8` `playerStatsUpdated` (coalesced) + `objDescChanged` bus | Partial | **PR-2 added the bus event** via `dispatchObjDescUpdate` — but the WIRE-level coalesce into kind=8 means remote-player ObjDesc swaps still ride the stats-refresh signal. Stays Partial until a dedicated kind splits clothing/jewelry/armor visual swaps from stats. Renderer impact: high. |
+| 4 | `OnItem_ParentEvent` | 0x00F751 | `kind=8` (coalesced via re-snapshot) + `itemParentChanged` bus | Y | **PR-2 (2026-05-27):** `dispatchItemParent` sets `PropertyInstanceId.Wielder` via PR 1's `setInstanceValue` (with same-value short-circuit) and fires the bus event. Equip/wield consumers can subscribe directly. |
+| 5 | `OnItem_ServerSaysContainId` | 0x00F75A | `kind=11` InventoryUpdated + `itemContainerChanged` bus | Y | **PR-2 (2026-05-27):** `dispatchServerSaysContainId` routes through `setInstanceValue(PROP_INSTANCE_CONTAINER, ...)` + fires per-item bus event. Per-item move toast can now subscribe — no more polling. |
+| 6 | `OnItem_ServerSaysMoveItem` | 0x00F75B | `kind=11` (coalesced) | Partial | See row 5 — wasm-side wire still coalesces (no dedicated kind), but PR-2's WorldState surfaces it through the same `itemContainerChanged` channel when the host forwards. |
+| 7 | `OnItem_ServerSaysRemove` | 0x00F73C | `kind=2` REMOVE + `objectReleased` bus | Y | Same path as DeleteObject (PR-2 unified). |
 | 8 | `OnInventory_PickupEvent` | 0x00F74A | `kind=11` (coalesced via InventoryUpdated) | Partial | Currently only logged via `_log.LogError` in upstream Chorizite (`World.cs:303`). Could surface as `itemPickedUp` if useful. |
-| 9 | `OnItem_OnViewContents` | 0x00F750 (assumed; opcode confirm-pending) | `kind=12` vendorOpened + `kind=21` containerOpened | Y | Wired with the load-bearing CHILDREN-WAIT gate (per handoff §3 first quote). Existing audit at `api.js:88-90` confirms `kind=21` covers chests/corpses, `kind=12` vendor. NOTE: our wasm path may NOT yet implement the wait-for-children semantics — verify before PR-2. |
-| 10 | `OnItem_StopViewingObjectContents` | 0x00F752 | — | N | `containerClosed` bus event missing (TODO `api.js:90`). PR-2 priority — required to symmetrize the open/close lifecycle. |
+| 9 | `OnItem_OnViewContents` | 0x00F750 (assumed; opcode confirm-pending) | `kind=12` vendorOpened + `kind=21` containerOpened | Y | **PR-2 (2026-05-27) fixed the load-bearing race** — `plugins/world-state.js::dispatchContainerOpened` now implements the child-wait gate per `World.cs:212-249`. Pre-PR-2 the JS side fired `containerOpened` immediately; now it defers until every listed child's `objectCreated` has arrived. Confirmed race was real (the handoff §3 first quote was correct; not a hypothetical). |
+| 10 | `OnItem_StopViewingObjectContents` | 0x00F752 | `kind=31` ContainerClosed (NEW) + `containerClosed` bus | Y | **PR-2 (2026-05-27):** new wasm kind=31 emitted on `WorldEvent::ContainerClosed`. JS drain forwards to `containerClosed` bus event; `WorldState::dispatchContainerClosed` clears `openContainer` + fires the typed event. Open/close lifecycle now symmetric. |
 | 11 | `OnLogin_PlayerDescription` | 0x00F745 (Login_PlayerDescription inner) | `kind=8` playerStatsUpdated + `kind=11` InventoryUpdated | Partial | First-arrival inventory profile decoded; the World handler in ACPlugin also seeds `Character.Containers` for child packs — our handler should mirror. PR-4 / Character.cs port. |
-| 12 | `OnItem_SetAppraiseInfo` | 0x00C9 | — | N | **HIGH renderer impact.** `objectAppraised` event missing (Wave E §5.4 priority row "0x00C9"). Required to drive /assess UI, target tooltips, vendor item details. |
-| 13 | `OnItem_SetState` | 0x00F76A | `kind=15` DoorStateChanged + `kind=17` EntityVisibilityChanged | Partial | Wired for doors + PhysicsState draw-gate. Generic `itemStateChanged` for non-door objects would cover container locks. |
-| 14 | `OnItem_UpdateObject` | 0x00F748 | `kind=1` EntityUpdate (re-spawn) | Partial | Treated as a full re-spawn (mesh + position re-snapshotted). ACPlugin treats as in-place property refresh — slightly more efficient. Low priority. |
-| 15 | `OnItem_UpdateStackSize` | 0x00F74B | `kind=11` InventoryUpdated | Partial | Coalesced — no per-stack toast. Inventory grid badge re-renders correctly. |
+| 12 | `OnItem_SetAppraiseInfo` | 0x00C9 | `kind=32` ObjectAppraised (NEW) + `objectAppraised` bus | Y | **PR-2 (2026-05-27) — HIGH renderer impact closed.** New wasm kind=32 emitted on every `WorldEvent::EntityIdentified` (previously only portals emitted kind=3 META_REFRESH). `WorldState::dispatchSetAppraiseInfo` folds the bool/int/int64/float/string/dataId/spellBook properties through PR 1's `setIntValue`/`setStringValue`/etc. setters. /assess UI, vendor tooltips, examine popovers unblocked. |
+| 13 | `OnItem_SetState` | 0x00F76A | `kind=15` DoorStateChanged + `kind=17` EntityVisibilityChanged + `itemStateChanged` bus | Y | **PR-2 (2026-05-27):** `dispatchSetState` routes through PR 1's `setIntValue(PROP_INT_PHYSICS_STATE, newState)` + fires `itemStateChanged` with `{previousState, newState}` deltas. Door + visibility wires continue to fire kind=15/17 in parallel. |
+| 14 | `OnItem_UpdateObject` | 0x00F748 | `kind=1` EntityUpdate (re-spawn) + `dispatchObjectUpdate` | Partial | **PR-2 added in-place property refresh** via `dispatchObjectUpdate` (folds all 3 desc blobs through PR 1 setters without spawn churn). Wire still routes through the re-spawn path for renderer entity-store consistency; status stays Partial until the wasm side splits the wire arms. |
+| 15 | `OnItem_UpdateStackSize` | 0x00F74B | `kind=11` InventoryUpdated + `stackSizeChanged` bus | Y | **PR-2 (2026-05-27):** `dispatchUpdateStackSize` routes through both `setIntValue(PROP_INT_STACK_SIZE, ...)` AND `setIntValue(PROP_INT_VALUE, ...)` per `World.cs:358-366`. Stack badges + value-display can subscribe directly. |
 | 16 | `OnItem_WearItem` | 0x00F73E | `kind=8` + `kind=11` (coalesced) | Partial | Wielding mechanically works (server says equipped). Visual swap on local + remote players covered via ObjDesc (row 3). |
 | 17 | `OnItem_QueryItemManaResponse` | 0x00C8 | — | N | Item mana query response not surfaced. Low priority (used by item-info HUD only). |
 | 18 | `OnQualities_RemoveBoolEvent` | 0x01D1 | — | N | Quality-removal events not surfaced (Wave E §5.1: "Qualities_*Remove*Event family 0x01D1–0x01DE + 0x02B8/0x02B9 — biggest batch"). Low impact unless server explicitly clears flags. |
@@ -77,7 +77,7 @@ Each row is one `_net.S2C.OnXxx += OnXxx` line in the `World()` ctor.
 | 39 | `OnQualities_UpdateSkill` | 0x01EF | `kind=8` (coalesced) | Partial | |
 | 40 | `OnQualities_UpdateString` | 0x01DF | `kind=8` (coalesced) | Partial | |
 
-**World.cs subtotal:** 1 Y / 29 Partial / 10 N / 0 N (out of 40).
+**World.cs subtotal:** 10 Y / 21 Partial / 9 N (out of 40). *PR-2 (2026-05-27): +9 Y promotions (rows 1, 2, 4, 5, 9 reaffirmed, 10, 12, 13, 15 newly Y).*
 
 The big partial cluster is the 14 `Update*` quality-updates (rows
 26-40, except 36 which uses position). All collapse into `kind=8
@@ -107,10 +107,10 @@ notification + on-demand recompute" rather than "data missing."
 | 34 | `OnMagic_PurgeEnchantments` | 0x02C8 | — | N | Wipe-all. Wave E priority. |
 | 35 | `OnMagic_RemoveEnchantment` | 0x02C4 | — | N | Wave E §5.4 priority row 0x01A8 (note: ACPlugin handler routes the inner 0x02C4 + the C2S echo for 0x01A8 ends up looking equivalent — verify before wiring). |
 | 36 | `OnMagic_RemoveMultipleEnchantments` | 0x02C7 | — | N | Wave E priority. |
-| 37 | `OnMagic_UpdateEnchantment` | 0x02C2 | — | N | **#1 renderer impact** — every cast/refresh fires this. Wave E §5.4 priority row 0x02C2. Enchantment-tracking HUD blocked on this. |
-| 38 | `OnMagic_UpdateMultipleEnchantments` | 0x02C3 | — | N | Batch update — login profile refresh path. Wave E priority. |
+| 37 | `OnMagic_UpdateEnchantment` | 0x02C2 | `kind=8` + `enchantmentAdded` / `enchantmentRemoved` / `enchantmentsChanged` bus (NEW) | Partial | **PR-2 (2026-05-27) added JS-side delta detection.** The wasm side already routes `MagicUpdate*/Remove*/Dispel*/Purge*Enchantment*` through the world dispatcher → `PlayerEnchantmentsUpdated` → snapshot to `latest_enchantments` → kind=8 piggyback. PR-2's `WorldState::dispatchEnchantmentSnapshot` diffs the previous-vs-current snapshot and emits per-enchantment Added/Removed events with the layered-spell-id encoding `(spellId << 16) \| layer`. **Stays Partial** because the wire-level wrapper events (target_guid + sequence) aren't surfaced — only the local-player active list. Sufficient to unblock the buffs/debuffs HUD for self; remote-creature buff tracking still N. |
+| 38 | `OnMagic_UpdateMultipleEnchantments` | 0x02C3 | `kind=8` + delta bus | Partial | Same path as row 37 — snapshot-diff covers add/remove/replace cases including batched login-time profile refresh. |
 
-**Character.cs subtotal:** 3 Y / 2 Partial / 35 N (out of 40).
+**Character.cs subtotal:** 3 Y / 4 Partial / 33 N (out of 40). *PR-2 (2026-05-27): rows 37-38 N→Partial via JS-side enchantment snapshot diff (the wasm-side wire dispatch is still World-only because Character private path is PR-4).*
 
 **The 35 N's split:**
 - 24 Private quality updates (rows 7-30) — character-only delivery; not blocked by data, blocked by wasm-dispatch.
@@ -141,12 +141,28 @@ no patcher/connect-handshake events. Listed for completeness only.
 
 | Source | Total | Y | Partial | N |
 |---|---|---|---|---|
-| World.cs S2C | 40 | 1 | 29 | 10 |
-| Character.cs (S2C+C2S) | 40 | 3 | 2 | 35 |
+| World.cs S2C | 40 | 10 | 21 | 9 |
+| Character.cs (S2C+C2S) | 40 | 3 | 4 | 33 |
 | Game.cs | 2 | 1 | 1 | 0 |
-| **Total** | **82** | **5** | **32** | **45** |
+| **Total (post-PR-2 2026-05-27)** | **82** | **14** | **26** | **42** |
 
-The 5 Y's: ItemServerSaysRemove, Item_OnViewContents, Login_SendEnterWorld, Login_LogOffCharacter, Combat_HandlePlayerDeathEvent, CharactersChanged.
+| Source | Total | Y | Partial | N |
+|---|---|---|---|---|
+| **Pre-PR-2 baseline (for reference)** | **82** | **5** | **32** | **45** |
+
+PR-2 newly-Y promotions (10 total):
+1. `OnItem_CreateObject` — added `objectCreated` bus event.
+2. `OnItem_DeleteObject` — added `objectReleased` bus event + recursive child release.
+3. `OnItem_ParentEvent` — dedicated `itemParentChanged` event with setInstanceValue routing.
+4. `OnItem_ServerSaysContainId` — dedicated `itemContainerChanged` per-item event.
+5. `OnItem_OnViewContents` — child-wait gate fix (was Y by name but race was unfixed).
+6. `OnItem_StopViewingObjectContents` — NEW kind=31 wire + `containerClosed` bus event.
+7. `OnItem_SetAppraiseInfo` — NEW kind=32 wire + property-folding via PR 1 setters.
+8. `OnItem_SetState` — dedicated `itemStateChanged` with prev/next state.
+9. `OnItem_UpdateStackSize` — dedicated `stackSizeChanged` event.
+10. `OnItem_ServerSaysRemove` — unified through PR 1 setter path.
+
+The 14 Y's: rows 1, 2, 4, 5, 7, 9, 10, 12, 13, 15 from World.cs + rows 1, 3, 6 from Character.cs + row 2 from Game.cs.
 
 The 32 Partials are dominated by the quality-update family (40 entries
 collapsed into `kind=8` playerStatsUpdated), and 10 World.cs "we
@@ -154,23 +170,22 @@ surface adjacent data but not this exact event" rows.
 
 ---
 
-## F. Top 5 N's by renderer impact
+## F. Top 5 N's by renderer impact (updated post-PR-2 2026-05-27)
 
-Ordered for PR-2 / Wave E execution priority. The first 3 directly
-unblock Wave E's renderer requirements.
+Ordered for PR-3 / PR-4 / Wave E execution priority. Items #2 and #3
+from the original PR-2 brief shipped; #1 partially shipped via JS-side
+diff (need wire-level wrapper for remote-creature buffs).
 
 | Rank | Handler | Opcode | Renderer / UI impact | Wave / PR target |
 |---|---|---|---|---|
-| 1 | `OnMagic_UpdateEnchantment` + `OnMagic_UpdateMultipleEnchantments` | 0x02C2 / 0x02C3 | Buffs/debuffs HUD blocked entirely. Every cast/refresh + login profile fires these. | Wave E batch 1 (per handoff §5.1 §6.2 priority list) |
-| 2 | `OnItem_SetAppraiseInfo` | 0x00C9 | Unblocks /assess UI, target tooltips, vendor item-details popovers. Currently rows 12 / Character ID 4 sit completely dark. | Wave E batch 1 priority row "0x00C9" |
-| 3 | `OnItem_StopViewingObjectContents` | 0x00F752 | `containerClosed` missing — open/close lifecycle asymmetric. Vendor + chest UIs can't reliably trigger "panel-close" animations or save-state-on-exit. | PR-2 (same dispatch level as the `OnItem_OnViewContents` partner) |
-| 4 | `OnEffects_PlayerTeleport` | 0xF748 | `portalSpaceEntered` not wired — loading-screen overlay edge missing. Currently we only react to exit; entry blink is invisible. | PR-2 (Character.cs port) |
-| 5 | 5 `OnMagic_Dispel/Purge/Remove*` handlers | 0x02C4-C8 | Buffs/debuffs HUD wipe / removal not surfaced — UI must poll. Pairs with #1 for the enchantment cluster. | Wave E batch 1 (priority cluster) |
+| 1 | `OnMagic_DispelEnchantment` / `Dispel*Multiple` / `Purge*Enchantments` | 0x02C4 / 0x02C5 / 0x02C6 / 0x02C7 / 0x02C8 / 0x0312 | Remote-creature buff-bar tracking + explicit dispel-toast events. Self-buff add/remove now Partial via PR-2 JS-side diff; this is the next gap. | Wave E batch 1 (wire-level wrapper events with target_guid) |
+| 2 | `OnEffects_PlayerTeleport` | 0xF748 | `portalSpaceEntered` not wired — loading-screen overlay edge missing. | PR-4 (Character.cs port) |
+| 3 | 24 Private quality updates (`PrivateUpdate*` family) | 0x0257-0x0278 | Strict server-confirmed-only updates blocked (skill train confirmation, fellowship invites, etc.). Per handoff §3 second quote — don't merge with public family. | PR-4 (Character.cs port — different dispatch target) |
+| 4 | 8 `Qualities_Remove*Event` family | 0x01D1-0x01D8 | Server-initiated quality clears not surfaced; rare in normal play but blocks ACE admin-toolkit + edge gameplay flows. | Wave E batch 2 |
+| 5 | `OnInventory_PickupEvent` | 0x00F74A | Bus event `itemPickedUp` missing — useful for autoloot plugin authoring; low gameplay impact. | Wave E batch 2 |
 
-The remaining N's (24 Private quality updates + 10 quality-remove
-events + 1 PickupEvent + 1 QueryItemManaResponse) are all
+The remaining N's (Item_QueryItemManaResponse + lifecycle tail) are
 plugin-author convenience rather than user-facing renderer blockers.
-They land in Wave E batch 2.
 
 ---
 
@@ -222,3 +237,49 @@ because:
 
 Cross-validate against the original `plugins/api.js:18-65` audit
 before pulling into PR-2 commit messages.
+
+---
+
+## I. PR-2 shipped (2026-05-27) — what changed
+
+**Files shipped:**
+- `apps/holtburger-web/plugins/world-state.js` (NEW, 818 LOC) — `WorldState`
+  class porting `World.cs:1-820`. Weenies Map + Get/Exists + container-open
+  child-wait gate + 11 dispatcher methods + JS-side enchantment-snapshot
+  diff engine. Bound onto `client.world` and integrated with the existing
+  `client.events` bus via `bindWorldStateToClient`.
+- `apps/holtburger-web/plugins/api.js` (EDIT, +75 LOC) — exposes `WorldState`,
+  adds `client.player.enchantments()`, replaces `client.world` (renderer
+  scene queries grafted on for back-compat as `client.scene`).
+- `apps/holtburger-web/src/lib.rs` (EDIT, +66 LOC) — 2 new
+  `CLIENT_EVENT_KIND_*` constants (31 ContainerClosed, 32 ObjectAppraised)
+  + dispatch arms in the recv-loop's `WorldEvent` match (split
+  ContainerClosed out of the OR + augmented EntityIdentified).
+- `apps/holtburger-web/index.html` (EDIT, +37 LOC) — drainEvents loop forwards
+  kind=31/32 onto `client.events.emit('containerClosed' | 'objectAppraised', …)`.
+- `apps/holtburger-web/tests/world-state.test.cjs` (NEW, 423 LOC) — 38 assertions
+  across 10 phases. All PASS.
+- `external/holtburger/docs/acplugin-event-coverage-2026-05-27.md` (this doc).
+
+**Validation runs:**
+- `node tests/world-state.test.cjs`: 38/38 PASS.
+- `node tests/world_object.test.cjs`: 80/80 PASS (regression).
+- `node tests/inventory_paperdoll_helpers.test.cjs`: 36/36 PASS (regression).
+- `node tests/world_object_property_dict.test.cjs`: 24/24 PASS (regression).
+- `cargo test -p holtburger-web --lib`: 57/57 PASS.
+- `cargo test -p holtburger-protocol --lib`: 286/286 PASS.
+- `cargo check --target wasm32-unknown-unknown --lib`: PASS.
+- `node validate_wire_conformance.cjs`: 31/31 PASS (no fixtures added — wire
+  for kind=31/32 piggybacks existing CloseGroundContainer + IdentifyObjectResponse).
+
+**Matrix delta:** 5 Y / 32 Partial / 45 N → **14 Y / 26 Partial / 42 N**.
+
+**Out-of-scope deferred:**
+- PR 3 — typed-subclass hierarchy refinements (`Container.items` /
+  `Container.containers` read-through getters, `SetWielded` helper).
+- PR 4 — `Character.cs` private-quality dispatch (24 PrivateUpdate*
+  handlers) + portalSpaceEntered/Exited.
+- Wave E — `Magic_DispelEnchantment` / `Purge*` wire-level wrappers
+  for REMOTE-creature buff tracking (self-buff add/remove already
+  covered via PR-2 JS diff).
+- Bus event `itemPickedUp`, `worldInfo`, `stateChanged` unified.
