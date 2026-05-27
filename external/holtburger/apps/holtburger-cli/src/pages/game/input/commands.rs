@@ -1397,10 +1397,14 @@ mod tests {
 
     #[test]
     fn tell_command_dispatches_tell_client_command() {
+        // /tell uses the retail-strict comma parser (see commit fd7deb25 +
+        // parse_comma_targeted_command): the first comma terminates the
+        // target name. Without a comma the parser returns Err and the
+        // command logs a warning instead of dispatching.
         let player_guid = Guid(0x50000001);
         let mut state = GameState::new(player_guid, "Player".to_string(), "World".to_string());
         state.view.focused_pane = FocusedPane::Input;
-        state.chat_input.input.set_text("/tell Bestie hi there");
+        state.chat_input.input.set_text("/tell Bestie, hi there");
         state.update_layout(ratatui::layout::Rect::new(0, 0, 120, 80));
 
         let result = state.handle_input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -1409,6 +1413,30 @@ mod tests {
             result.commands.first(),
             Some(ClientCommand::Tell { target, message }) if target == "Bestie" && message == "hi there"
         ));
+    }
+
+    #[test]
+    fn tell_command_without_comma_warns_and_does_not_dispatch() {
+        // Regression guard for fd7deb25: the old space-separated form
+        // must NOT dispatch a Tell (it would have mis-targeted multi-word
+        // names like "The Buffing Bunny"). Instead it should log the
+        // "Use comma" warning.
+        let player_guid = Guid(0x50000001);
+        let mut state = GameState::new(player_guid, "Player".to_string(), "World".to_string());
+        state.view.focused_pane = FocusedPane::Input;
+        state.chat_input.input.set_text("/tell Bestie hi there");
+        state.update_layout(ratatui::layout::Rect::new(0, 0, 120, 80));
+
+        let result = state.handle_input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(
+            result.commands.is_empty(),
+            "expected no commands; got {:?}",
+            result.commands
+        );
+        assert!(state.chat.messages.iter().any(|m| {
+            m.text == "Use comma after the name for targeted chat."
+        }));
     }
 
     #[test]

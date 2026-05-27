@@ -433,16 +433,20 @@ const FIXTURES_LIST = [
       Items: [],
     },
     headerMode: "full",
-    notes: "Wave F.4 (2026-05-27, SKIP): exposes the same upstream Chorizite " +
-           "Write/Read bool asymmetry F.3 documented — VendorProfile.Write " +
-           "uses C# BinaryWriter.Write(bool) (1 byte) but VendorProfile.Read " +
-           "uses BinaryReaderExtensions.ReadBool which reads u32 (4 bytes). " +
+    notes: "Wave F.4 (2026-05-27, PERMANENT SKIP per J5.B 2026-05-27): " +
+           "exposes the same upstream Chorizite Write/Read bool asymmetry " +
+           "F.3 documented — VendorProfile.Write uses C# BinaryWriter.Write" +
+           "(bool) (1 byte) but VendorProfile.Read uses " +
+           "BinaryReaderExtensions.ReadBool which reads u32 (4 bytes). " +
            "Round-trip via the synth pack→unpack path triggers 'Unable to read " +
            "beyond end of stream' on the DealsMagic field. The retail wire is " +
            "4-byte-bool (acclient.c:702448) so our Rust port reads it correctly " +
            "from real captures; cargo test -p holtburger-protocol covers the " +
-           "Rust-side round-trip. SKIP until upstream Chorizite fixes Write or " +
-           "the WB.Terminal validator pipeline pre-widens bool fields.",
+           "Rust-side round-trip. PERMANENT SKIP: fixing requires either (a) " +
+           "upstream Chorizite VendorProfile.Write change (out of our control) " +
+           "or (b) extending the WB.Terminal validator pipeline to pre-widen " +
+           "bool fields on synth-pack (Wave-J6 scope, NOT J5). Do not " +
+           "investigate further without confirming upstream movement first.",
   },
   {
     case: "Movement_VectorUpdate (S2C)",

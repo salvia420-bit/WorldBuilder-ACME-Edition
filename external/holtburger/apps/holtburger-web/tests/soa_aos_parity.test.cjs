@@ -30,7 +30,22 @@ const crypto = require('node:crypto');
 
 const wasm = require('../pkg-node/holtburger_web.js');
 
-const DIST_DIR = '/mnt/wbterminal1/holtburger-dist-v2';
+// Default to the canonical 1070-machine bake location. Can be overridden
+// via the `HOLTBURGER_DIST_V2_MANIFEST` env var which, if set, MUST point
+// at the absolute path of a `manifest.json` file inside an alternate
+// baked v2 dist tree (the test will use the manifest's parent dir as
+// DIST_DIR). When neither the default DIST_DIR nor the env override
+// resolves to a present manifest, the test exits 0 with a SKIP message —
+// this lets `node tests/soa_aos_parity.test.cjs` run cleanly in a
+// standard dev env that hasn't run the `dat-shard` v2 pipeline.
+//
+// Populate the fixture by running the v2 dist bake (see external dist
+// pipeline notes); or point at an alternate bake via:
+//   HOLTBURGER_DIST_V2_MANIFEST=/path/to/manifest.json node tests/soa_aos_parity.test.cjs
+const DIST_MANIFEST_ENV = process.env.HOLTBURGER_DIST_V2_MANIFEST;
+const DIST_DIR = DIST_MANIFEST_ENV
+  ? path.dirname(DIST_MANIFEST_ENV)
+  : '/mnt/wbterminal1/holtburger-dist-v2';
 
 const RING_MIN_X = 0xA3;
 const RING_MAX_X = 0xAF;
@@ -354,17 +369,30 @@ function diffSnippet(aosCanon, soaCanon, limit = 3) {
   console.log('Task 3B — SoA vs AoS wasm-export parity (169 LBs)');
   console.log('==================================================');
 
-  if (!fs.existsSync(path.join(DIST_DIR, 'manifest.json'))) {
-    console.error(`FAIL: dist v2 missing at ${DIST_DIR}/manifest.json`);
-    process.exit(2);
-  }
-  if (!fs.existsSync(path.join(DIST_DIR, 'scenery'))) {
-    console.error(`FAIL: scenery dir missing at ${DIST_DIR}/scenery`);
-    process.exit(2);
-  }
-  if (!fs.existsSync(path.join(DIST_DIR, 'spawns'))) {
-    console.error(`FAIL: spawns dir missing at ${DIST_DIR}/spawns`);
-    process.exit(2);
+  // Guard on env-file presence: this test depends on a baked v2 dist
+  // tree (~4.7 GB) that lives outside the repo. In a standard dev env
+  // without the bake, exit 0 with a clear SKIP message instead of
+  // failing. CI / 1070 machines that have the bake (or supply the env
+  // override) will run the full 169 LB * 3 export comparison normally.
+  const manifestPath = path.join(DIST_DIR, 'manifest.json');
+  const sceneryPath = path.join(DIST_DIR, 'scenery');
+  const spawnsPath = path.join(DIST_DIR, 'spawns');
+  const missing = [];
+  if (!fs.existsSync(manifestPath)) missing.push(manifestPath);
+  if (!fs.existsSync(sceneryPath)) missing.push(`${sceneryPath}/`);
+  if (!fs.existsSync(spawnsPath)) missing.push(`${spawnsPath}/`);
+  if (missing.length > 0) {
+    console.log('--------------------------------------------------');
+    console.log(`SKIP: holtburger-dist-v2 not present at ${DIST_DIR}`);
+    console.log(`      missing: ${missing.join(', ')}`);
+    if (DIST_MANIFEST_ENV) {
+      console.log(`      (HOLTBURGER_DIST_V2_MANIFEST=${DIST_MANIFEST_ENV})`);
+    } else {
+      console.log(`      run the dat-shard v2 pipeline to populate the dist`);
+      console.log(`      tree, or point HOLTBURGER_DIST_V2_MANIFEST at an`);
+      console.log(`      alternate manifest.json to enable this test.`);
+    }
+    process.exit(0);
   }
 
   const server = makeServer();

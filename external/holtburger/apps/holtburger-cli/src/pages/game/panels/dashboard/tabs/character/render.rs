@@ -698,9 +698,7 @@ mod tests {
                 SkillType::MeleeDefense as u32,
                 SkillBase {
                     description: String::new(),
-                    _align1: (),
                     name: "Melee Defense".to_string(),
-                    _align2: (),
                     icon_id: 0,
                     trained_cost: 0,
                     specialized_cost: 0,
