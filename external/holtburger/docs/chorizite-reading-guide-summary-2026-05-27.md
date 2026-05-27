@@ -53,6 +53,13 @@ Every concrete PR sketch the 7 guides provide, in execution order.
 
 **PR 1 is the unblocker** for nearly everything downstream. Start there.
 
+**Shipped status (as of 2026-05-27):**
+
+- **PR 1 — DONE.** `world_object.js` rewritten (159 → 601 LOC) with full 8-typed-dict property store + `objectClass` lazy getter + `updateObjDesc`/`updatePhysicsDesc`/`updateWeenieDesc` (the 35-flag WeenieHeaderFlag unpacker). 11 `*EventArgs` factories + `ClientState` (8 variants) + `AddRemoveEventType` added to `plugins/api.js` (261 → 482 LoC). Event-coverage matrix shipped at `docs/acplugin-event-coverage-2026-05-27.md` (5 Y / 32 Partial / 45 N across 82 handler subscriptions). 80/80 new tests pass in `tests/world_object.test.cjs`; baseline regression checks (24+36) still green. **Skeleton bug fixed:** `canonical_classify.js` had `WHF_SPELL = 0x00100000` (the actual `RadarBlipColor` bit); correct value is `0x00400000` per `Chorizite.Common/Enums/WeenieHeaderFlag.cs:31` + our own `holtburger-common::properties::object`. This had been silently misclassifying scrolls as anything-with-RadarBlipColor. Regression test added.
+- **PR 2 — pending.** Now unblocked. Input list: `docs/acplugin-event-coverage-2026-05-27.md` 45 N rows + 32 Partial rows.
+- **PR 3 — partly pending.** Existing 31-subclass skeleton already inherits the new base correctly (per memory `project_chorizite_porting_plan_2026-05-19.md` + PR 1 verification). Equippable `SetWielded` helper + Container `Items`/`Containers` read-through getters are the remaining work.
+- **PR 4 — pending.** `Character.cs` JS-side bridge: route 40+ S2C handlers through PR 1's new `setIntValue`/`setStringValue`/etc. into the Wave C.2 wasm math.
+
 ---
 
 ## 2. Upstream bugs flagged by the Chorizite team

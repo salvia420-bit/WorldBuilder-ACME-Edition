@@ -95,8 +95,11 @@ const ODF_WIELD_ON_USE                = 0x20000000;
 const ODF_WIELDED_HAS_BEEN_USED       = 0x40000000;
 
 // WeenieHeaderFlag (bitflag enum, u32). Only Spell needed by the classifier.
-// Source: holtburger-common/src/properties/object.rs WeenieHeaderFlag.
-const WHF_SPELL                       = 0x00100000;
+// Source: Chorizite.Common/Enums/WeenieHeaderFlag.cs:31 ("Spell = 0x400000u")
+// cross-verified against holtburger-common/src/properties/object.rs (SPELL =
+// 0x00400000). The prior value here (0x00100000) was wrong — that bit is
+// `RadarBlipColor`, not Spell. Fixed 2026-05-27 during ACPlugin PR-1 port.
+const WHF_SPELL                       = 0x00400000;
 
 // ─────────────────────────────────────────────────────────────────────
 // The classifier — verbatim port of ACPlugin/API/WorldObject.cs:344-411

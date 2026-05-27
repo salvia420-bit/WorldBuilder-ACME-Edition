@@ -64,6 +64,222 @@
 // then #12 SharedCooldown / #13 PortalSpaceEntered. See CHORIZITE_PORTING_PLAN.md §3.4.
 // =============================================================================
 
+// =============================================================================
+// Chorizite/ACPlugin enum + EventArgs factory ports (ACPlugin PR-1, 2026-05-27)
+// =============================================================================
+// Direct 1:1 ports of:
+//   - external/chorizite/ACPlugin/API/ClientState.cs           (8-state enum)
+//   - external/chorizite/ACPlugin/API/AddRemoveEventType.cs    (2-member enum)
+//   - external/chorizite/ACPlugin/API/*EventArgs.cs            (11 DTOs)
+//
+// Per ACPlugin §9 first-PR sketch — the 11 EventArgs shapes are exposed
+// as plain JS object factories. Their field names match the upstream C#
+// property casing (camelCase preferred per JS convention, but each
+// factory documents the C# property it maps to).
+//
+// "Eatable" event semantics: WorldObjectSelected derives from C#'s
+// EatableEventArgs (per Chorizite.Common/EatableEventArgs.cs). We port
+// the .eaten convention — when a handler sets `event.eaten = true`, the
+// dispatcher MUST skip remaining handlers and report eaten=true to the
+// upstream system event (mirrors the retail behavior the combat bar
+// uses to swallow LMB clicks before the pick-target handler sees them).
+// See handoff §5.5 item 6. Not all events make sense as eatable — only
+// input-derived events (selectionChanged is the canonical example).
+
+/**
+ * Client lifecycle state. Direct port of `ClientState.cs:5-45`.
+ * Numeric values match the upstream C# enum exactly.
+ */
+export const ClientState = Object.freeze({
+  Initial: 0,            // ClientState.cs:9
+  GameStarted: 1,        // ClientState.cs:14 — "Client is done initializing"
+  CharacterSelect: 2,    // ClientState.cs:19
+  CreatingCharacter: 3,  // ClientState.cs:24
+  EnteringGame: 4,       // ClientState.cs:29
+  InGame: 5,             // ClientState.cs:34 — "Fully logged in to the game"
+  LoggingOut: 6,         // ClientState.cs:39
+  Disconnected: 7,       // ClientState.cs:44
+});
+
+/**
+ * Add-or-remove discriminator for enchantment/cooldown events. Direct
+ * port of `AddRemoveEventType.cs:2-5`.
+ */
+export const AddRemoveEventType = Object.freeze({
+  Added: 0,    // AddRemoveEventType.cs:3
+  Removed: 1,  // AddRemoveEventType.cs:4
+});
+
+/**
+ * Base shape for "eatable" events (mirror of Chorizite.Common/
+ * EatableEventArgs.cs). Handlers can set `.eaten = true` to swallow
+ * the event and prevent downstream propagation. See handoff §3 last
+ * quote and §5.5 item 6.
+ *
+ * Per the Chorizite convention, only INPUT-derived events should be
+ * eatable (mouse/key/selection). Skill/vital/death events are
+ * broadcast-only and should not derive from this shape.
+ */
+function makeEatable(payload) {
+  return {
+    ...payload,
+    eaten: false,
+    /** Convenience method — equivalent to `event.eaten = true`. */
+    eat() { this.eaten = true; },
+  };
+}
+
+// ─── 11 EventArgs factories (per ACPlugin/API/*EventArgs.cs) ───
+
+/**
+ * Port of `ObjectCreatedEventArgs.cs:7-19`.
+ * Fired by `World.OnWeenieCreated` (`World.cs:41-44`) when a new
+ * WorldObject enters the cache. Payload is the typed-class instance.
+ * @param {object} wobject WorldObject (or subclass) instance
+ */
+export function makeObjectCreated(wobject) {
+  return { object: wobject };
+}
+
+/**
+ * Port of `ObjectReleasedEventArgs.cs:7-19`.
+ * Fired by `World.OnWeenieReleased` (`World.cs:50-53`) when a
+ * WorldObject leaves the cache. Payload is the typed-class instance
+ * that was just removed.
+ * @param {object} wobject WorldObject (or subclass) instance
+ */
+export function makeObjectReleased(wobject) {
+  return { object: wobject };
+}
+
+/**
+ * Port of `ContainerOpenedEventArgs.cs:7-19`.
+ * Fired by `World.OnContainerOpened` (`World.cs:59-62`) AFTER all
+ * listed children's `Item_CreateObject` have arrived (per
+ * `World.cs:212-249` container-open watcher — load-bearing per
+ * handoff §3 first quote).
+ * @param {object} container Container instance
+ */
+export function makeContainerOpened(container) {
+  return { container };
+}
+
+/**
+ * Port of `ContainerClosedEventArgs.cs:7-19`.
+ * Fired by `World.OnContainerClosed` (`World.cs:68-71`).
+ * @param {object} container Container instance
+ */
+export function makeContainerClosed(container) {
+  return { container };
+}
+
+/**
+ * Port of `WorldObjectSelectedEventArgs.cs:7-15`.
+ * Fired by `World.OnSelectionChanged` (`World.cs:77-80`). Derives
+ * from EatableEventArgs — handlers can set `.eaten = true` to
+ * prevent the next handler from seeing the change (used by the
+ * combat bar to swallow LMB before the pick-target handler).
+ *
+ * @param {object|null} wobject Selected WorldObject, or null on deselect
+ */
+export function makeWorldObjectSelected(wobject) {
+  return makeEatable({ object: wobject });
+}
+
+/**
+ * Port of `GameStateChangedEventArgs.cs:11-31`.
+ * Fired by `Game.OnStateChanged` (per `Game.cs` state machine at
+ * lines 117-123 in ACPlugin).
+ * @param {number} newState ClientState
+ * @param {number} oldState ClientState
+ */
+export function makeGameStateChanged(newState, oldState) {
+  return { newState, oldState };
+}
+
+/**
+ * Port of `VitaeChangedEventArgs.cs:4-21`.
+ * Fired by `Character.OnVitaeChanged` (`Character.cs:116-120`).
+ * Vitae is `1.0 = no vitae, 0.95 = 5% vitae` — counter-intuitive.
+ * Don't invert. Per handoff §3 fourth quote.
+ *
+ * @param {number} vitae current vitae multiplier (1.0..0.5 ish)
+ * @param {number} oldVitae previous vitae multiplier
+ */
+export function makeVitaeChanged(vitae, oldVitae) {
+  return { vitae, oldVitae };
+}
+
+/**
+ * Port of `VitalChangedEventArgs.cs:13-35`.
+ * Fired by `Character.OnVitalChanged` (`Character.cs:125-129`).
+ * @param {number} type    VitalId (Health=1, Stamina=3, Mana=5 per ACE)
+ * @param {number} value   new current value
+ * @param {number} oldValue previous current value
+ */
+export function makeVitalChanged(type, value, oldValue) {
+  return { type, value, oldValue };
+}
+
+/**
+ * Port of `EnchantmentsChangedEventArgs.cs:9-36`.
+ * Fired by `Character.OnEnchantmentChanged` (`Character.cs:134-138`).
+ * `spellId` is derived from `layeredSpellId.id` (per C# property at
+ * EnchantmentsChangedEventArgs.cs:24).
+ *
+ * @param {number} type            AddRemoveEventType
+ * @param {object} enchantment     Enchantment record (LayeredId/SpellId/Layer/Power/StartTime/Duration/CasterId/Type/StatKey/StatValue)
+ */
+export function makeEnchantmentsChanged(type, enchantment) {
+  return {
+    type,
+    layeredSpellId: enchantment.layeredId ?? enchantment.LayeredId ?? null,
+    spellId: enchantment.spellId ?? enchantment.SpellId ?? enchantment.layeredId?.id ?? 0,
+    enchantment,
+  };
+}
+
+/**
+ * Port of `SharedCooldownsChangedEventArgs.cs:11-26`.
+ * Fired by `Character.OnSharedCooldownChanged` (`Character.cs:143-147`).
+ * @param {number} type        AddRemoveEventType
+ * @param {object} cooldown    SharedCooldown record
+ */
+export function makeSharedCooldownsChanged(type, cooldown) {
+  return { type, cooldown };
+}
+
+/**
+ * Port of `DeathEventArgs.cs:5-19`.
+ * Fired by `Character.OnDeath` (`Character.cs:171-175`).
+ * @param {string} text     server-formatted death message
+ * @param {number} killerId GUID of killer (0 if environment/falling)
+ */
+export function makeDeath(text, killerId) {
+  return { text, killerId };
+}
+
+// ─── Aggregate export so tests / consumers can iterate ───
+/**
+ * Map of factory-name → factory function. Used by tests and
+ * future PR-2 (S2C dispatch) to verify all 11 shapes have factories.
+ */
+export const eventArgsFactories = Object.freeze({
+  objectCreated: makeObjectCreated,
+  objectReleased: makeObjectReleased,
+  containerOpened: makeContainerOpened,
+  containerClosed: makeContainerClosed,
+  worldObjectSelected: makeWorldObjectSelected,
+  gameStateChanged: makeGameStateChanged,
+  vitaeChanged: makeVitaeChanged,
+  vitalChanged: makeVitalChanged,
+  enchantmentsChanged: makeEnchantmentsChanged,
+  sharedCooldownsChanged: makeSharedCooldownsChanged,
+  death: makeDeath,
+});
+
+// =============================================================================
+
 export function createClient(sessionHandle) {
   const bus = new EventTarget();
 
@@ -249,6 +465,11 @@ export function createClient(sessionHandle) {
     events: Object.freeze(events),
     AttackHeight,
     CombatMode,
+    // ACPlugin PR-1: enums + EventArgs factories surfaced on client so
+    // plugin authors don't need to import the module directly.
+    ClientState,
+    AddRemoveEventType,
+    eventArgsFactories,
     get account() {
       return sessionHandle.accountName;
     },
