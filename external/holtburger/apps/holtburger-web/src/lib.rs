@@ -18280,6 +18280,255 @@ impl SessionHandle {
         ids.into_iter().collect()
     }
 
+    /// **Wave F.1 (2026-05-27).** Byte-correct retail `CSpellBase`
+    /// record lookup from `client_portal.dat` (file `0x0E00000E`),
+    /// replacing the LSD-derived `data/spells-catalog.json` for
+    /// JS spellbook + combat-bar + spell-research-panel.
+    ///
+    /// Returns the spell record at `spell_id` as a structured JS object
+    /// (camelCase keys), or `null` (JS) when:
+    ///   * `WorldBootstrap` hasn't loaded yet (pre-EnteredWorld).
+    ///   * `spell_id` isn't in the table — e.g. server is offering an
+    ///     unknown / custom spell, or the spellbook references a stale
+    ///     ID across a content patch.
+    ///
+    /// The high bit (`0x80000000`) of a spell ID indicates an
+    /// enchantment-marker variant — the parser strips it before lookup
+    /// (mirrors `SpellCatalog::get` at `holtburger_world::spell:42-45`).
+    ///
+    /// ## Returned shape
+    ///
+    /// ```javascript
+    /// {
+    ///   id: 1,                           // u32 spell id (post-mask)
+    ///   name: "Strength Other I",
+    ///   description: "Increases the target's Strength by 10 points.",
+    ///   school: 4,                       // MagicSchool enum (1..5)
+    ///   schoolName: "Creature Enchantment",
+    ///   iconId: 100668300,               // RenderSurface DID
+    ///   category: 38,                    // SpellCategory enum
+    ///   bitfield: 4,                     // SpellFlags bitmask
+    ///   isSelfTargeted: false,           // bitfield & 0x8
+    ///   isUntargeted: false,             // non_component_target_type == 0
+    ///   isFastCast: false,               // bitfield & 0x4000
+    ///   isBeneficial: true,              // bitfield & 0x4
+    ///   baseMana: 10,                    // mana cost (pre-Mana Conv)
+    ///   baseRangeConstant: 50.0,         // range floor (meters)
+    ///   baseRangeMod: 0.0,               // skill-scaled range bonus
+    ///   power: 50,                       // raw u32 power
+    ///   spellEconomyMod: 1.0,
+    ///   formulaVersion: 4,
+    ///   componentLoss: 0.04,
+    ///   metaSpellType: 1,                // SpellType (1=Enchantment, 7=PortalSummon, etc.)
+    ///   metaSpellTypeName: "Enchantment",
+    ///   metaSpellId: 1,
+    ///   // Enchantment-extras (only when metaSpellType in [1, 12]):
+    ///   duration: 1800.0,                // seconds
+    ///   degradeModifier: 0.0,
+    ///   degradeLimit: 0.0,
+    ///   // PortalSummon-extras (only when metaSpellType == 7):
+    ///   // portalLifetime: 600.0,
+    ///   components: [1, 7, 33, 44, 49],  // DECRYPTED SpellComponentTable IDs (1..198)
+    ///   casterEffect: 8,                 // PlayScript DID
+    ///   targetEffect: 117,
+    ///   fizzleEffect: 0,
+    ///   recoveryInterval: 0.0,
+    ///   recoveryAmount: 0.0,
+    ///   displayOrder: 410,
+    ///   nonComponentTargetType: 1024,    // ItemType bitfield (0 = untargeted)
+    ///   manaMod: 0,
+    ///   roughLevel: 1,                   // tier 1..8 from highest scarab
+    /// }
+    /// ```
+    ///
+    /// JS consumers (Wave F.1):
+    ///   * `plugins/spellbook.js` — replaces `loadCatalog()` JSON fetch
+    ///     with per-spell on-demand record lookup.
+    ///   * `plugins/spell-research-panel.js` — same.
+    ///   * `plugins/combat-bar.js` — same (was indirect via spellbook).
+    ///
+    /// **Source cross-references:**
+    ///   * `external/chorizite/ACBindings/Generated/Net/Types/CSpellBase.cs`
+    ///     (offset 0x00598200 `UnPack`, 0x005981D0 `InqSpellLevelByRoughHeuristic`)
+    ///   * `external/DatReaderWriter/DatReaderWriter/Types/SpellBase.cs:204-247`
+    ///     (C# parity)
+    ///   * `holtburger_dat::file_type::spell_table::SpellBase` (Rust parser).
+    #[wasm_bindgen(js_name = getSpellRecord)]
+    pub fn get_spell_record(&self, spell_id: u32) -> JsValue {
+        use crate::world_bootstrap_cache;
+        let Some(bootstrap) = world_bootstrap_cache::try_get_cached() else {
+            return JsValue::NULL;
+        };
+        // High bit marks enchantments in the spell book — strip before lookup.
+        let masked_id = spell_id & 0x7FFFFFFF;
+        let Some(spell) = bootstrap.spell_table.spells.get(&masked_id) else {
+            return JsValue::NULL;
+        };
+
+        let decrypted = spell.decrypt_components();
+        let school_name = match spell.school {
+            0 => "None",
+            1 => "War Magic",
+            2 => "Life Magic",
+            3 => "Item Enchantment",
+            4 => "Creature Enchantment",
+            5 => "Void Magic",
+            _ => "Unknown",
+        };
+        let meta_spell_type_name = match spell.meta_spell_type {
+            0 => "None",
+            1 => "Enchantment",
+            2 => "Projectile",
+            3 => "Boost",
+            4 => "Transfer",
+            5 => "PortalLink",
+            6 => "PortalRecall",
+            7 => "PortalSummon",
+            8 => "PortalSending",
+            9 => "Dispel",
+            10 => "LifeProjectile",
+            11 => "FellowBoost",
+            12 => "FellowEnchantment",
+            13 => "FellowPortalSending",
+            14 => "FellowDispel",
+            15 => "EnchantmentProjectile",
+            _ => "Unknown",
+        };
+        // SpellFlags bit decoding per `holtburger_common::properties::combat::SpellFlags`
+        // (mirrors `Chorizite.Common/Enums/SpellFlags.cs`).
+        const SELF_TARGETED: u32 = 0x8;
+        const BENEFICIAL: u32 = 0x4;
+        const FAST_CAST: u32 = 0x4000;
+        const PROJECTILE: u32 = 0x100;
+        const RESISTABLE: u32 = 0x1;
+        const PK_SENSITIVE: u32 = 0x2;
+        const REVERSED: u32 = 0x10;
+        const NOT_INDOOR: u32 = 0x20;
+        const NOT_OUTDOOR: u32 = 0x40;
+        const NOT_RESEARCHABLE: u32 = 0x80;
+        const CREATURE_SPELL: u32 = 0x200;
+        const EXCLUDED_FROM_ITEM_DESCS: u32 = 0x400;
+        const IGNORES_MANA_CONV: u32 = 0x800;
+        const NON_TRACKING_PROJECTILE: u32 = 0x1000;
+        const FELLOWSHIP_SPELL: u32 = 0x2000;
+        const INDOOR_LONG_RANGE: u32 = 0x8000;
+        const DAMAGE_OVER_TIME: u32 = 0x10000;
+
+        let bf = spell.bitfield;
+        // Rough level via the acclient.c heuristic.
+        let rough_level = spell.rough_level();
+        // Tier name (1..8 → "I".."VIII") for human consumption.
+        let level_roman = match rough_level {
+            1 => "I",
+            2 => "II",
+            3 => "III",
+            4 => "IV",
+            5 => "V",
+            6 => "VI",
+            7 => "VII",
+            8 => "VIII",
+            _ => "",
+        };
+
+        let json = serde_json::json!({
+            "id": masked_id,
+            "name": spell.name,
+            "description": spell.description,
+            "school": spell.school,
+            "schoolName": school_name,
+            "iconId": spell.icon_id,
+            "category": spell.category,
+            "bitfield": bf,
+            "flags": {
+                "resistable":         (bf & RESISTABLE) != 0,
+                "pkSensitive":        (bf & PK_SENSITIVE) != 0,
+                "beneficial":         (bf & BENEFICIAL) != 0,
+                "selfTargeted":       (bf & SELF_TARGETED) != 0,
+                "reversed":           (bf & REVERSED) != 0,
+                "notIndoor":          (bf & NOT_INDOOR) != 0,
+                "notOutdoor":         (bf & NOT_OUTDOOR) != 0,
+                "notResearchable":    (bf & NOT_RESEARCHABLE) != 0,
+                "projectile":         (bf & PROJECTILE) != 0,
+                "creatureSpell":      (bf & CREATURE_SPELL) != 0,
+                "excludedFromItemDescs": (bf & EXCLUDED_FROM_ITEM_DESCS) != 0,
+                "ignoresManaConv":    (bf & IGNORES_MANA_CONV) != 0,
+                "nonTrackingProjectile": (bf & NON_TRACKING_PROJECTILE) != 0,
+                "fellowshipSpell":    (bf & FELLOWSHIP_SPELL) != 0,
+                "fastCast":           (bf & FAST_CAST) != 0,
+                "indoorLongRange":    (bf & INDOOR_LONG_RANGE) != 0,
+                "damageOverTime":     (bf & DAMAGE_OVER_TIME) != 0,
+            },
+            // Convenience top-level booleans (matches the legacy
+            // spells-catalog.json shape for plugins/spellbook.js).
+            "isSelfTargeted":    (bf & SELF_TARGETED) != 0,
+            "isUntargeted":      spell.is_untargeted(),
+            "isFastCast":        (bf & FAST_CAST) != 0,
+            "isBeneficial":      (bf & BENEFICIAL) != 0,
+            "baseMana": spell.base_mana,
+            "baseRangeConstant": spell.base_range_constant,
+            "baseRangeMod": spell.base_range_mod,
+            "power": spell.power,
+            "spellEconomyMod": spell.spell_economy_mod,
+            "formulaVersion": spell.formula_version,
+            "componentLoss": spell.component_loss,
+            "metaSpellType": spell.meta_spell_type,
+            "metaSpellTypeName": meta_spell_type_name,
+            "metaSpellId": spell.meta_spell_id,
+            "duration": match &spell.extras {
+                holtburger_dat::file_type::spell_table::SpellExtras::Enchantment { duration, .. } => *duration,
+                _ => 0.0,
+            },
+            "degradeModifier": match &spell.extras {
+                holtburger_dat::file_type::spell_table::SpellExtras::Enchantment { degrade_modifier, .. } => *degrade_modifier,
+                _ => 0.0,
+            },
+            "degradeLimit": match &spell.extras {
+                holtburger_dat::file_type::spell_table::SpellExtras::Enchantment { degrade_limit, .. } => *degrade_limit,
+                _ => 0.0,
+            },
+            "portalLifetime": match &spell.extras {
+                holtburger_dat::file_type::spell_table::SpellExtras::PortalSummon { portal_lifetime } => *portal_lifetime,
+                _ => 0.0,
+            },
+            "components": decrypted,
+            "casterEffect": spell.caster_effect,
+            "targetEffect": spell.target_effect,
+            "fizzleEffect": spell.fizzle_effect,
+            "recoveryInterval": spell.recovery_interval,
+            "recoveryAmount": spell.recovery_amount,
+            "displayOrder": spell.display_order,
+            "nonComponentTargetType": spell.non_component_target_type,
+            "manaMod": spell.mana_mod,
+            "roughLevel": rough_level,
+            "levelRoman": level_roman,
+        });
+
+        match serde_wasm_bindgen::to_value(&json) {
+            Ok(v) => v,
+            Err(_) => JsValue::NULL,
+        }
+    }
+
+    // Wave F.1 stretch — `getSpellComponentRecord` deferred to F.2.
+    // The SpellComponentsTable doesn't ship with the WorldBootstrap
+    // prefetch (the 5-table boot only includes SkillTable / SpellTable /
+    // XpTable / MotionKinematics / ChatPoseTable). Extending the
+    // prefetch + adding the cache mod is straightforward but the
+    // existing `data/spell-components.json` already provides byte-correct
+    // values (it's generated by the dump_spell_components example
+    // against the same retail DAT this parser reads), so spellbook.js
+    // can keep using it for now.
+    //
+    // Promotion sketch (Wave F.2):
+    //   1. Add `SpellComponentsTable` to `WorldBootstrap` (Arc<Table>).
+    //   2. Add `SpellComponentsTable::FILE_ID` to the 5→6-table prefetch
+    //      key list in `lib.rs::load_world_bootstrap`.
+    //   3. Add `#[wasm_bindgen(js_name = getSpellComponentRecord)]
+    //      pub fn get_spell_component_record(&self, component_id: u32)
+    //      -> JsValue` here, reading from bootstrap.spell_components_table.
+    //   4. Migrate `plugins/spellbook.js::loadComponentNames` to await
+    //      a per-id wasm lookup instead of the JSON fetch.
+
     /// **Wave C.2 (2026-05-27).** DAT integration for the
     /// [`character_info::CharacterInfo::update_skill_training`] /
     /// [`skill_info::SkillInfo::set_training`] `min_level` parameter.

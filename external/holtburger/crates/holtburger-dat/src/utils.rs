@@ -152,6 +152,104 @@ pub fn align_boundary<R: Read + Seek>(reader: &mut R, boundary: u32) -> binrw::B
     Ok(())
 }
 
+/// AC SpellBase name/desc hash — the PJW-variant used **only** for
+/// spell-formula component decryption. Ports `SpellBase.GetStringHash`
+/// from `external/DatReaderWriter/DatReaderWriter/Types/SpellBase.cs:120-138`
+/// (verbatim against the retail acclient algorithm).
+///
+/// ## NOT THE SAME as the other `string_hash` in this module!
+///
+/// - [`string_hash`] (this module): used for StringTable / EnumMapper /
+///   DBObj name lookups. Algorithm: `((h << 4) | (h >> 28)) ^ signed`
+///   followed by a `& 0x0FFFFFFF` mask each round.
+/// - [`spellbase_string_hash`] (here): used for SpellBase component
+///   decryption keys. Algorithm: `result = c + (result << 4)`, with a
+///   conditional shift-fold-then-mask **only** when the top nibble is
+///   nonzero.
+///
+/// Both treat input as Windows-1252 sign-extended bytes, but the
+/// per-round mixing is different. The C# port at SpellBase.cs:120
+/// uses the latter; the C# port at StringHashExtensions.cs uses the
+/// former. This split is real in retail acclient.exe — different code
+/// paths use different hash families. Don't merge them.
+///
+/// This is the **load-bearing** hash for two retail features:
+///   1. Spell-formula component decryption (see [`decrypt_spell_components`]).
+///   2. Taper rotation in player spell research (ACE-server formula at
+///      `Server.Spells/Spells/SpellLogic.cs`, not yet ported).
+pub fn spellbase_string_hash(s: &str) -> u32 {
+    let (bytes, _, _) = encoding_rs::WINDOWS_1252.encode(s);
+    let mut result: i64 = 0;
+    for &b in bytes.iter() {
+        let c = b as i8; // sbyte semantics, matching the C# `foreach (sbyte c in str)`
+        result = (c as i64) + (result << 4);
+        if (result & 0xF0000000) != 0 {
+            result = (result ^ ((result & 0xF0000000) >> 24)) & 0x0FFFFFFF;
+        }
+    }
+    result as u32
+}
+
+/// AC SpellBase component-decryption constants from
+/// `acclient.exe` (S_CONSTANT discoveries documented in
+/// `external/DatReaderWriter/DatReaderWriter/Types/SpellBase.cs:16-19`):
+/// ```text
+///   SPELLBASE_NAME_HASH_KEY = 0x12107680u  (303068800 decimal)
+///   SPELLBASE_DESC_HASH_KEY = 0xBEADCF45u  (-1095905467 decimal, as signed)
+/// ```
+pub const SPELLBASE_NAME_HASH_KEY: u32 = 0x12107680;
+pub const SPELLBASE_DESC_HASH_KEY: u32 = 0xBEADCF45;
+
+/// Decrypt the 8-entry encrypted component array on
+/// [`super::file_type::spell_table::SpellBase`] into the list of plaintext
+/// `SpellComponentTable` IDs that make up the spell's cast formula
+/// (scarabs + herbs/talismans, 1..198 per retail's component table).
+///
+/// Ports `SpellBase.DecryptComponents` from
+/// `external/DatReaderWriter/DatReaderWriter/Types/SpellBase.cs:144-174`.
+///
+/// Algorithm:
+/// ```text
+///   key       = (hash(name) % NAME_KEY) + (hash(desc) % DESC_KEY)
+///   comp[i]   = encrypted[i] == 0 ? 0 : (encrypted[i] - key)
+///   if comp > 198: comp &= 0xFF      // accent-char fixup
+/// ```
+/// The 198 ceiling is the highest valid component ID in retail
+/// ("Essence of Kemeroi" for Void spells, per the SpellComponentTable
+/// dump at `apps/holtburger-web/data/spell-components.json`).
+///
+/// Returns the filtered list of non-zero component IDs in slot order;
+/// trailing zero slots are dropped (matches C# `Where(x => x > 0)`).
+/// Most spells use 4-5 components — a windup formula of "N scarabs +
+/// 1 talisman" — so the returned `Vec` is typically 4..=6 long.
+pub fn decrypt_spell_components(
+    name: &str,
+    description: &str,
+    encrypted: &[u32; 8],
+) -> Vec<u32> {
+    let name_hash = spellbase_string_hash(name);
+    let desc_hash = spellbase_string_hash(description);
+    // Note: u32 modulo can't overflow since both operands are u32.
+    // Addition WRAPS in the C# parser (uint arithmetic).
+    let key = (name_hash % SPELLBASE_NAME_HASH_KEY)
+        .wrapping_add(desc_hash % SPELLBASE_DESC_HASH_KEY);
+
+    let mut out = Vec::with_capacity(8);
+    for &enc in encrypted.iter() {
+        if enc == 0 {
+            continue;
+        }
+        let mut comp = enc.wrapping_sub(key);
+        if comp > 198 {
+            comp &= 0xFF;
+        }
+        if comp > 0 {
+            out.push(comp);
+        }
+    }
+    out
+}
+
 pub fn decompress_lrs(input: &[u8]) -> Vec<u8> {
     if input.len() < 4 {
         return input.to_vec();

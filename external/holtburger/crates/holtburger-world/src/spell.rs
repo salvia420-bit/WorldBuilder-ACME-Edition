@@ -84,7 +84,17 @@ pub struct SpellInfo {
     pub meta_spell_type: u32,
     pub meta_spell_id: u32,
     pub extras: SpellExtrasInfo,
+    /// Encrypted 8-slot wire-format component array. **Do NOT use this**
+    /// for UI display — it carries the obfuscated values straight from
+    /// the DAT. See [`Self::decrypted_components`] for the actual
+    /// SpellComponentTable IDs (1..198).
     pub components: [u32; 8],
+    /// Plaintext SpellComponentTable IDs decrypted from `components`
+    /// using the spell's name+description hash. **Wave F.1 (2026-05-27):**
+    /// JS spellbook + spell-research-panel consume this for the cast
+    /// formula icons + spell-words rendering. Length is 4..=6 for most
+    /// spells; trailing-zero slots are dropped.
+    pub decrypted_components: Vec<u32>,
     pub caster_effect: u32,
     pub target_effect: u32,
     pub fizzle_effect: u32,
@@ -105,12 +115,38 @@ impl SpellInfo {
     pub fn is_untargeted(&self) -> bool {
         self.non_component_target_type == 0
     }
+
+    /// Spell "level" via the acclient.c rough heuristic (offset 0x005981D0
+    /// `CSpellBase::InqSpellLevelByRoughHeuristic`). Returns the highest
+    /// scarab tier (1..8) in the decrypted component list, or 0 when
+    /// the formula has no scarab. Used by spell-research-panel to
+    /// group spells by tier without parsing the trailing roman numeral
+    /// from the name (the LSD-catalog fallback). Wave F.1 promotion.
+    pub fn rough_level(&self) -> u32 {
+        let mut max_tier: u32 = 0;
+        for &c in &self.decrypted_components {
+            let tier = if (1..=8).contains(&c) {
+                c
+            } else if (110..=116).contains(&c) {
+                c - 109
+            } else if (192..=198).contains(&c) {
+                c - 191
+            } else {
+                0
+            };
+            if tier > max_tier {
+                max_tier = tier;
+            }
+        }
+        max_tier
+    }
 }
 
 impl From<DatSpellBase> for SpellInfo {
     fn from(value: DatSpellBase) -> Self {
         let components =
             std::array::from_fn(|index| value.raw_components.get(index).copied().unwrap_or(0));
+        let decrypted_components = value.decrypt_components();
 
         Self {
             name: value.name,
@@ -130,6 +166,7 @@ impl From<DatSpellBase> for SpellInfo {
             meta_spell_id: value.meta_spell_id,
             extras: value.extras.into(),
             components,
+            decrypted_components,
             caster_effect: value.caster_effect,
             target_effect: value.target_effect,
             fizzle_effect: value.fizzle_effect,

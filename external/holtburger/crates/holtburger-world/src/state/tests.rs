@@ -1162,6 +1162,7 @@ fn test_spell_name_resolution() {
             meta_spell_id: 0,
             extras: crate::spell::SpellExtrasInfo::None,
             components: [0; 8],
+            decrypted_components: Vec::new(),
             caster_effect: 0,
             target_effect: 0,
             fizzle_effect: 0,

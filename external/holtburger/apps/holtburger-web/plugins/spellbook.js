@@ -122,6 +122,123 @@ function loadCatalog() {
   return catalogPromise;
 }
 
+// Wave F.1 (2026-05-27) — DAT-driven spell record lookup, replacing
+// the LSD-derived `data/spells-catalog.json` with byte-correct retail
+// data from `client_portal.dat` (file 0x0E00000E, parsed by
+// `holtburger_dat::file_type::spell_table::SpellBase` and exposed via
+// the wasm-bindgen export `SessionHandle::getSpellRecord(spell_id)`).
+//
+// The wasm path is preferred when `getSpellRecord` is available AND
+// WorldBootstrap has been loaded (i.e., post-EnteredWorld). The
+// catalog JSON is kept as a fallback for sessions that aren't logged
+// in (settings panel preview, plugin dev mode) and for spells the
+// SpellTable doesn't have records for (custom/server-defined).
+//
+// JSON catalog shape mapping (legacy):
+//   { name, school, level, untargeted, mana, icon, desc, duration, components }
+// Wasm record shape (Wave F.1, expanded):
+//   { id, name, school, schoolName, isUntargeted, isSelfTargeted, baseMana,
+//     iconId, description, components, bitfield, flags{...}, ... }
+//
+// We coerce the wasm record into the legacy shape so existing UI code
+// keeps working without changes. The richer wasm-only fields (flags,
+// duration, recovery, etc.) flow through unchanged for new consumers.
+function spellRecordFromWasm(spellId) {
+  // SessionHandle is exposed by index.html during start_session.
+  const handle = window.__sessionHandle;
+  if (!handle?.getSpellRecord) return null;
+  let raw;
+  try {
+    raw = handle.getSpellRecord(spellId);
+  } catch (e) {
+    return null;
+  }
+  if (!raw) return null;
+  // Coerce to legacy spells-catalog.json shape so existing UI code
+  // keeps working without changes.
+  return {
+    // Legacy keys preserved (UI consumes these in many places):
+    name:        raw.name,
+    school:      raw.school,
+    level:       raw.roughLevel ?? 0,
+    levelRoman:  raw.levelRoman ?? "",
+    untargeted:  !!raw.isSelfTargeted,
+    mana:        raw.baseMana,
+    icon:        raw.iconId,
+    desc:        raw.description,
+    duration:    raw.duration ?? 0,
+    components:  Array.isArray(raw.components) ? raw.components : [],
+    // New Wave F.1 fields available to consumers that want them:
+    _waveF1:     true,
+    bitfield:    raw.bitfield,
+    flags:       raw.flags,
+    isFastCast:  raw.isFastCast,
+    isBeneficial: raw.isBeneficial,
+    metaSpellType: raw.metaSpellType,
+    metaSpellTypeName: raw.metaSpellTypeName,
+    baseRangeConstant: raw.baseRangeConstant,
+    baseRangeMod: raw.baseRangeMod,
+    power:       raw.power,
+    category:    raw.category,
+    casterEffect: raw.casterEffect,
+    targetEffect: raw.targetEffect,
+    fizzleEffect: raw.fizzleEffect,
+    recoveryInterval: raw.recoveryInterval,
+    recoveryAmount: raw.recoveryAmount,
+    displayOrder: raw.displayOrder,
+  };
+}
+
+// Build a catalog-shaped lookup from the union of (a) the legacy JSON
+// catalog (fallback / pre-login), and (b) per-id wasm records overriding
+// the JSON entries when available. Lazy-resolves wasm records on demand
+// — we don't enumerate the 6,266-spell DAT at startup; the spellbook UI
+// only ever asks about a player's known-spell list (typically 30-300
+// entries by mid-game).
+function makeHybridCatalog(jsonCatalog) {
+  return new Proxy(jsonCatalog || {}, {
+    get(target, key) {
+      // Numeric-string keys are spell IDs; non-numeric are JSON metadata
+      // like `_comment`. Pass non-numeric through unmodified.
+      const spellId = Number(key);
+      if (!Number.isFinite(spellId) || spellId <= 0 || String(spellId) !== key) {
+        return target[key];
+      }
+      // Prefer wasm record when available (post-EnteredWorld).
+      const fromWasm = spellRecordFromWasm(spellId);
+      const fromJson = target[key];
+      if (fromWasm && fromJson) {
+        // Merge: wasm wins on DAT-correct fields (name, school, mana,
+        // icon, desc, components, flags), but the JSON catalog's
+        // `level` field (parsed from the spell name's roman-numeral
+        // suffix) wins because our `roughLevel` heuristic is the
+        // highest scarab, not the spell's intended tier. The
+        // canonical name-suffix algorithm lives in
+        // `scripts/build_spells_catalog.py:parse_level()`.
+        return { ...fromWasm, level: fromJson.level ?? fromWasm.level };
+      }
+      if (fromWasm) return fromWasm;
+      return fromJson;
+    },
+    has(target, key) {
+      const spellId = Number(key);
+      if (Number.isFinite(spellId) && spellId > 0) {
+        if (spellRecordFromWasm(spellId)) return true;
+      }
+      return key in target;
+    },
+    // `Object.keys` / `Object.entries` still enumerate the JSON catalog
+    // (~6,266 spells in v1, but pruned to ~3.7k playable in retail).
+    // The Wave F.1 wasm lookup is a per-id overlay, not an enumeration
+    // replacement (the SpellTable is enormous to iterate in JS — we
+    // don't materialize it; we look up on demand).
+    ownKeys(target) { return Reflect.ownKeys(target); },
+    getOwnPropertyDescriptor(target, key) {
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+  });
+}
+
 // Phase J.2 — spell-component ID → name. Loaded once and shared.
 let componentNamesPromise = null;
 function loadComponentNames() {
@@ -939,20 +1056,20 @@ function doMount(parentEl, ctx) {
       return;
     }
 
-    // 1) Materialize the desired set: catalogued + known, plus
-    //    uncatalogued-but-known placeholders.
-    const cataloguedIds = new Set(Object.keys(catalog).map((k) => Number(k)));
+    // 1) Materialize the desired set from the player's known-spells
+    //    list. Wave F.1: we no longer iterate `Object.entries(catalog)`
+    //    — the wasm-record overlay isn't enumerable, and the JSON
+    //    catalog has ~6,266 entries we don't want to scan. Instead,
+    //    look up each known spell ID directly against the hybrid
+    //    catalog (Proxy handles wasm preference + JSON fallback).
     const desired = new Map(); // id -> meta
-    for (const [idStr, meta] of Object.entries(catalog)) {
-      const id = Number(idStr);
-      if (!knownIds.has(id)) continue;
-      desired.set(id, meta);
-    }
-    // Spells the character knows but our 26-entry starter catalog
-    // doesn't have a name/school for. Always show them with a
-    // placeholder so the user knows they're learned.
     for (const id of knownIds) {
-      if (!cataloguedIds.has(id)) {
+      const meta = catalog[String(id)];
+      if (meta) {
+        desired.set(id, meta);
+      } else {
+        // Uncatalogued (neither wasm DAT nor JSON has a record): show
+        // a placeholder so the user knows they've learned the spell.
         desired.set(id, {
           name: `Spell #${id}`,
           school: 0,
@@ -1032,7 +1149,11 @@ function doMount(parentEl, ctx) {
 
   rerenderList();
   loadCatalog().then((c) => {
-    catalog = c;
+    // Wave F.1 — wrap the legacy JSON catalog in a Proxy that prefers
+    // wasm-decoded SpellBase records when available (post-EnteredWorld
+    // with WorldBootstrap loaded). Falls back to the JSON catalog for
+    // pre-login UI states and for spells the SpellTable doesn't have.
+    catalog = makeHybridCatalog(c);
     refreshKnown();
   });
   // Phase J.2 — fetch component names in parallel.
