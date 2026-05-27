@@ -454,12 +454,36 @@ impl<'a> CodegenCtx<'a> {
         // current schema (no cycles); we cap at 5 iterations defensively
         // so a hypothetical mutual-recursion schema bug surfaces as a
         // clear panic rather than an infinite loop.
+        //
+        // J3.E: templated `<type ... templated="T">` (or `templated="T,U">`)
+        // declarations are NEVER emitted as concrete Rust types — they're
+        // inlined at every use-site (see `build_packable_field`). They get a
+        // precise SKIP note explaining why; downstream consumers grep for
+        // "inlined at use-site" instead of the old generic-templated-marker
+        // reason. The PackableList/PackableHashTable/PHashTable namespace is
+        // closed (3 types, 96 use-sites total); the inliner panics if a
+        // template appears it doesn't recognise.
         let candidates: Vec<Node<'_, '_>> = types_node
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "type")
             .filter(|n| n.attribute("primitive").is_none())
+            .filter(|n| n.attribute("templated").is_none())
             .filter(|n| n.children().any(|c| c.is_element()))
             .collect();
+        // Emit a clean SKIP per templated type so the downstream tests can
+        // grep the new reason.
+        for n in types_node.children().filter(|n| n.is_element() && n.tag_name().name() == "type") {
+            if n.attribute("templated").is_some() {
+                if let Some(raw_name) = n.attribute("name") {
+                    let templated_params = n.attribute("templated").unwrap_or("");
+                    writeln!(
+                        self.buf,
+                        "// SKIPPED datatype {raw_name}: templated=\"{templated_params}\" (J3.E inlines at every use-site via `<field type=\"{raw_name}\" generic*=...>`; no concrete Rust struct emitted)."
+                    ).unwrap();
+                    self.stats.datatypes_skipped += 1;
+                }
+            }
+        }
         let mut emitted: BTreeSet<String> = BTreeSet::new();
         for pass in 0..5 {
             let pass_start_buf_len = self.buf.len();
@@ -647,7 +671,9 @@ impl<'a> CodegenCtx<'a> {
         }).collect();
         let has_switch = steps.iter().any(|s| matches!(s, EmitStep::Switch(_)));
         let has_table = steps.iter().any(|s| matches!(s, EmitStep::Table(_)));
-        if fields_only.is_empty() && vectors_only.is_empty() && !has_switch && !has_table {
+        let has_if = steps.iter().any(|s| matches!(s, EmitStep::If(_)));
+        let has_packable = steps.iter().any(|s| matches!(s, EmitStep::Packable(_)));
+        if fields_only.is_empty() && vectors_only.is_empty() && !has_switch && !has_table && !has_if && !has_packable {
             writeln!(self.buf, "    // No fields declared in protocol.xml for this opcode.").unwrap();
         }
         // Emit fields + vectors in protocol.xml ORDER so the wire-decode
@@ -691,6 +717,20 @@ impl<'a> CodegenCtx<'a> {
                             }
                             writeln!(self.buf, "    pub {}: Option<{}>,", gated.name_snake, gated.rust_ty).unwrap();
                         }
+                        for pf in &group.packables {
+                            let rust_ty = packable_rust_ty(pf);
+                            if let Some(t) = &pf.text {
+                                writeln!(self.buf, "    /// Gated on {} (`{}`). {}",
+                                    escape_doc(&bit_label),
+                                    escape_doc(&mm.parent_snake),
+                                    escape_doc(t)).unwrap();
+                            } else {
+                                writeln!(self.buf, "    /// Gated on {} (`{}`).",
+                                    escape_doc(&bit_label),
+                                    escape_doc(&mm.parent_snake)).unwrap();
+                            }
+                            writeln!(self.buf, "    pub {}: Option<{}>,", pf.name_snake, rust_ty).unwrap();
+                        }
                     }
                 }
                 EmitStep::Switch(sw) => {
@@ -708,6 +748,45 @@ impl<'a> CodegenCtx<'a> {
                     }
                     writeln!(self.buf, "    pub {}: std::collections::BTreeMap<{}, {}>,",
                         tb.name_snake, tb.key_rust_ty, tb.value_rust_ty).unwrap();
+                }
+                EmitStep::If(ifb) => {
+                    if let Some(t) = &ifb.text {
+                        writeln!(self.buf, "    /// `<if test=\"{}\">`. {}",
+                            escape_xml_attr_for_doc(&ifb.test_xml),
+                            escape_doc(t)).unwrap();
+                    } else {
+                        writeln!(self.buf, "    /// Conditional fields gated by `<if test=\"{}\">`.",
+                            escape_xml_attr_for_doc(&ifb.test_xml)).unwrap();
+                    }
+                    // Emit one Option<T> per nested field (in true-branch
+                    // then false-branch order, matching the wire-decode
+                    // order). Nested non-field steps (vector, align) don't
+                    // contribute struct fields directly — but in retail,
+                    // every if-branch body is fields-only.
+                    emit_if_struct_fields(&mut self.buf, &ifb.true_steps, "true");
+                    emit_if_struct_fields(&mut self.buf, &ifb.false_steps, "false");
+                }
+                EmitStep::Packable(pf) => {
+                    let (label, rust_ty) = match pf.kind {
+                        PackableKind::List => (
+                            "PackableList".to_string(),
+                            format!("Vec<{}>", pf.value_rust_ty),
+                        ),
+                        PackableKind::HashTable => (
+                            format!("PackableHashTable<{}, {}>", pf.key_rust_ty, pf.value_rust_ty),
+                            format!("Vec<({}, {})>", pf.key_rust_ty, pf.value_rust_ty),
+                        ),
+                        PackableKind::PHashTable => (
+                            format!("PHashTable<{}, {}>", pf.key_rust_ty, pf.value_rust_ty),
+                            format!("Vec<({}, {})>", pf.key_rust_ty, pf.value_rust_ty),
+                        ),
+                    };
+                    if let Some(t) = &pf.text {
+                        writeln!(self.buf, "    /// Inlined templated `{}`. {}", label, escape_doc(t)).unwrap();
+                    } else {
+                        writeln!(self.buf, "    /// Inlined templated `{}` (J3.E use-site).", label).unwrap();
+                    }
+                    writeln!(self.buf, "    pub {}: {},", pf.name_snake, rust_ty).unwrap();
                 }
             }
         }
@@ -747,6 +826,8 @@ impl<'a> CodegenCtx<'a> {
             && !has_maskmap
             && !has_switch
             && !has_table
+            && !has_if
+            && !has_packable
             && !steps.iter().any(|s| matches!(s, EmitStep::Align(_)))
         {
             writeln!(self.buf, "        let _ = (data, offset);").unwrap();
@@ -759,6 +840,8 @@ impl<'a> CodegenCtx<'a> {
                 EmitStep::Maskmap(mm) => emit_read_maskmap(&mut self.buf, mm),
                 EmitStep::Switch(sw) => emit_read_switch(&mut self.buf, sw, "        "),
                 EmitStep::Table(tb) => emit_read_table(&mut self.buf, tb, "        "),
+                EmitStep::If(ifb) => emit_read_if(&mut self.buf, ifb, "        "),
+                EmitStep::Packable(pf) => emit_read_packable(&mut self.buf, pf, "        "),
             }
         }
         writeln!(self.buf, "        Ok(Self {{").unwrap();
@@ -772,10 +855,18 @@ impl<'a> CodegenCtx<'a> {
                         for gated in &group.fields {
                             writeln!(self.buf, "            {},", gated.name_snake).unwrap();
                         }
+                        for pf in &group.packables {
+                            writeln!(self.buf, "            {},", pf.name_snake).unwrap();
+                        }
                     }
                 }
                 EmitStep::Switch(sw) => writeln!(self.buf, "            {},", sw.field_snake).unwrap(),
                 EmitStep::Table(tb) => writeln!(self.buf, "            {},", tb.name_snake).unwrap(),
+                EmitStep::If(ifb) => {
+                    emit_if_struct_field_names(&mut self.buf, &ifb.true_steps);
+                    emit_if_struct_field_names(&mut self.buf, &ifb.false_steps);
+                }
+                EmitStep::Packable(pf) => writeln!(self.buf, "            {},", pf.name_snake).unwrap(),
             }
         }
         writeln!(self.buf, "        }})\n    }}").unwrap();
@@ -805,6 +896,19 @@ impl<'a> CodegenCtx<'a> {
             let tag = c.tag_name().name();
             match tag {
                 "field" => {
+                    // J3.E: PackableList/PackableHashTable/PHashTable use-sites
+                    // are inlined here — they wear `<field>` clothing but
+                    // describe a templated wire shape (count prefix + vector
+                    // or table). Detect via the type name + presence of
+                    // genericType / genericKey+genericValue attributes; route
+                    // through `build_packable_field` so the codegen matches
+                    // the inlined wire layout.
+                    if let Some(packable_kind) = packable_kind_for_field(c) {
+                        let pf = self.build_packable_field(c, packable_kind, &mut seen_names)?;
+                        siblings.add_packable(&pf);
+                        out.push(EmitStep::Packable(pf));
+                        continue;
+                    }
                     let f = self.build_simple_field(c, &mut seen_names, parent_type_name)?;
                     siblings.add_field(&f);
                     out.push(EmitStep::Field(f));
@@ -825,6 +929,11 @@ impl<'a> CodegenCtx<'a> {
                         parent_type_name,
                         &siblings,
                     )?;
+                    // J3.E: register each gated field as a sibling so later
+                    // maskmaps that name them as a parent (PublicWeenieDesc's
+                    // `<maskmap name="Header2">`) can resolve via the
+                    // `Option<T>` local emitted at decode time.
+                    siblings.add_maskmap_gated(&mm);
                     out.push(EmitStep::Maskmap(mm));
                 }
                 "switch" => {
@@ -845,12 +954,172 @@ impl<'a> CodegenCtx<'a> {
                     )?;
                     out.push(EmitStep::Table(tb));
                 }
+                "if" => {
+                    let ifb = self.build_if_block(
+                        c,
+                        &mut seen_names,
+                        parent_type_name,
+                        &mut siblings,
+                    )?;
+                    out.push(EmitStep::If(ifb));
+                }
                 other => {
                     return Err(format!("unsupported child `<{other}>`"));
                 }
             }
         }
         Ok(out)
+    }
+
+    /// J3.E: build an [`IfBlock`] from a `<if test="EXPR">` element. Parses
+    /// the boolean test against the sibling-lookup index, then recursively
+    /// collects the `<true>` (and optional `<false>`) body steps. Each gated
+    /// field's snake-name is added to the parent's `seen_names` so a
+    /// collision between true and false branches (AllegianceData's
+    /// `TimeOnline` ulong vs uint) auto-disambiguates as `_2`. Sibling
+    /// lookup is ALSO extended with the gated fields so subsequent
+    /// non-if-block fields (the trailing `<vector>` in AllegianceHierarchy,
+    /// the trailing `<field name="Name">` in AllegianceData) can reference
+    /// them — though in practice the retail schema never references an
+    /// if-gated field from outside the if-block.
+    fn build_if_block(
+        &self,
+        c: Node<'_, '_>,
+        seen_names: &mut BTreeMap<String, usize>,
+        parent_type_name: &str,
+        siblings: &mut SiblingLookup,
+    ) -> Result<IfBlock, String> {
+        let test_xml = c.attribute("test")
+            .ok_or_else(|| "<if> missing test= attribute".to_string())?;
+        let test_rust = translate_if_test_expr(test_xml, siblings)
+            .map_err(|e| format!("<if test={test_xml:?}>: cannot translate boolean expression: {e}"))?;
+
+        // Walk `<true>` / `<false>` children. The C# generator's XPath
+        // selectors look for exact `./true` and `./false` tags; we mirror.
+        let mut true_steps = Vec::new();
+        let mut false_steps = Vec::new();
+        for branch in c.children().filter(|b| b.is_element()) {
+            let tag = branch.tag_name().name();
+            let dest = match tag {
+                "true" => &mut true_steps,
+                "false" => &mut false_steps,
+                other => return Err(format!("<if test={test_xml:?}>: unexpected child <{other}>; only <true>/<false> allowed")),
+            };
+            // Each branch is treated like a mini-`<type>` body: walk its
+            // children through the same emit-steps machinery. We share
+            // `seen_names` + `siblings` with the parent so collisions across
+            // branches surface as `_2`-suffixed snake-names AND so a later
+            // sibling can reference any gated field by its XML name.
+            for body in branch.children().filter(|b| b.is_element()) {
+                let btag = body.tag_name().name();
+                match btag {
+                    "field" => {
+                        if let Some(packable_kind) = packable_kind_for_field(body) {
+                            let pf = self.build_packable_field(body, packable_kind, seen_names)
+                                .map_err(|e| format!("<if test={test_xml:?}> <{tag}>: {e}"))?;
+                            siblings.add_packable(&pf);
+                            dest.push(EmitStep::Packable(pf));
+                            continue;
+                        }
+                        let f = self.build_simple_field(body, seen_names, parent_type_name)
+                            .map_err(|e| format!("<if test={test_xml:?}> <{tag}>: {e}"))?;
+                        siblings.add_field(&f);
+                        dest.push(EmitStep::Field(f));
+                    }
+                    "vector" => {
+                        let v = self.build_vector_field(body, seen_names, parent_type_name, siblings)
+                            .map_err(|e| format!("<if test={test_xml:?}> <{tag}>: {e}"))?;
+                        dest.push(EmitStep::Vector(v));
+                    }
+                    "align" => {
+                        let n_bytes = align_byte_width_from_node(body)
+                            .ok_or_else(|| format!("<if test={test_xml:?}> <{tag}>: <align> with type {:?}: unknown alignment width", body.attribute("type")))?;
+                        dest.push(EmitStep::Align(n_bytes));
+                    }
+                    other => {
+                        return Err(format!("<if test={test_xml:?}> <{tag}>: unsupported child <{other}>"));
+                    }
+                }
+            }
+        }
+        if true_steps.is_empty() && false_steps.is_empty() {
+            return Err(format!("<if test={test_xml:?}>: both branches empty (no <true>/<false> with fields)"));
+        }
+
+        Ok(IfBlock {
+            test_xml: test_xml.to_string(),
+            test_rust,
+            true_steps,
+            false_steps,
+            text: c.attribute("text").map(|s| s.to_string()),
+        })
+    }
+
+    /// J3.E: build a [`PackableField`] from a `<field type="PackableList"
+    /// genericType="...">` (or PackableHashTable/PHashTable with
+    /// genericKey+genericValue). Resolves the element types up front via
+    /// `resolve_field`; templated marker `T`/`U` in the generic attrs would
+    /// indicate a templated type inside a templated type (none in the
+    /// retail schema; the inliner panics on the recursive case).
+    fn build_packable_field(
+        &self,
+        c: Node<'_, '_>,
+        kind: PackableKind,
+        seen_names: &mut BTreeMap<String, usize>,
+    ) -> Result<PackableField, String> {
+        let raw_name = c.attribute("name")
+            .ok_or_else(|| format!("<field type={:?}> missing name= attribute", c.attribute("type").unwrap_or("?")))?;
+        // Resolve element types based on kind.
+        let (key_rust_ty, key_kind, value_rust_ty, value_kind) = match kind {
+            PackableKind::List => {
+                let raw_t = c.attribute("genericType")
+                    .ok_or_else(|| format!("<field {raw_name} type=\"PackableList\"> missing genericType= attribute"))?;
+                if raw_t == "T" {
+                    return Err(format!(
+                        "<field {raw_name} type=\"PackableList\" genericType=\"T\">: templated marker not allowed in a use-site (nested templated types are not supported)"
+                    ));
+                }
+                let (ty, k) = self.resolve_field(raw_t)
+                    .ok_or_else(|| format!("<field {raw_name} type=\"PackableList\" genericType={raw_t:?}>: element type not in foundation tier"))?;
+                // For List, store element in value slot; key slot unused.
+                ("()".to_string(), FieldKind::PrimU8, ty, k)
+            }
+            PackableKind::HashTable | PackableKind::PHashTable => {
+                let raw_k = c.attribute("genericKey")
+                    .ok_or_else(|| format!("<field {raw_name} type=\"{:?}\"> missing genericKey= attribute", kind_name(kind)))?;
+                let raw_v = c.attribute("genericValue")
+                    .ok_or_else(|| format!("<field {raw_name} type=\"{:?}\"> missing genericValue= attribute", kind_name(kind)))?;
+                if raw_k == "T" || raw_k == "U" || raw_v == "T" || raw_v == "U" {
+                    return Err(format!(
+                        "<field {raw_name} type=\"{}\" genericKey={raw_k:?} genericValue={raw_v:?}>: templated marker not allowed in a use-site",
+                        kind_name(kind)
+                    ));
+                }
+                let (kty, kk) = self.resolve_field(raw_k)
+                    .ok_or_else(|| format!("<field {raw_name} type=\"{}\" genericKey={raw_k:?}>: key type not in foundation tier", kind_name(kind)))?;
+                let (vty, vk) = self.resolve_field(raw_v)
+                    .ok_or_else(|| format!("<field {raw_name} type=\"{}\" genericValue={raw_v:?}>: value type not in foundation tier", kind_name(kind)))?;
+                (kty, kk, vty, vk)
+            }
+        };
+
+        let mut snake = to_snake_case(raw_name);
+        let counter = seen_names.entry(snake.clone()).or_insert(0);
+        if *counter > 0 {
+            snake = format!("{snake}_{}", *counter + 1);
+        }
+        *counter += 1;
+        let snake = sanitize_rust_keyword(&snake);
+
+        Ok(PackableField {
+            name_snake: snake,
+            kind,
+            key_rust_ty,
+            key_kind,
+            value_rust_ty,
+            value_kind,
+            text: c.attribute("text").map(|s| s.to_string()),
+        })
     }
 
     /// J3.D: build a [`SwitchBlock`] from a `<switch name="DiscField">`
@@ -928,6 +1197,13 @@ impl<'a> CodegenCtx<'a> {
                 let btag = body.tag_name().name();
                 match btag {
                     "field" => {
+                        if let Some(packable_kind) = packable_kind_for_field(body) {
+                            let pf = self.build_packable_field(body, packable_kind, &mut case_seen_names)
+                                .map_err(|e| format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: {e}"))?;
+                            case_siblings.add_packable(&pf);
+                            steps.push(EmitStep::Packable(pf));
+                            continue;
+                        }
                         let f = self.build_simple_field(body, &mut case_seen_names, parent_type_name)
                             .map_err(|e| format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: {e}"))?;
                         case_siblings.add_field(&f);
@@ -971,6 +1247,16 @@ impl<'a> CodegenCtx<'a> {
                         )
                         .map_err(|e| format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: nested {e}"))?;
                         steps.push(EmitStep::Switch(nested));
+                    }
+                    "if" => {
+                        let ifb = self.build_if_block(
+                            body,
+                            &mut case_seen_names,
+                            parent_type_name,
+                            &mut case_siblings,
+                        )
+                        .map_err(|e| format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: {e}"))?;
+                        steps.push(EmitStep::If(ifb));
                     }
                     other => {
                         return Err(format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: unsupported body child <{other}>"));
@@ -1136,6 +1422,7 @@ impl<'a> CodegenCtx<'a> {
                 .map_err(|e| format!("<maskmap name={parent_xml_name:?}>: <mask value={raw_value:?}>: {e}"))?;
 
             let mut fields = Vec::new();
+            let mut packables = Vec::new();
             for fc in mc.children().filter(|cc| cc.is_element()) {
                 let ftag = fc.tag_name().name();
                 if ftag != "field" {
@@ -1143,11 +1430,23 @@ impl<'a> CodegenCtx<'a> {
                         "<maskmap name={parent_xml_name:?}> <mask value={raw_value:?}>: unexpected child <{ftag}>; only <field> allowed inside <mask>"
                     ));
                 }
+                // J3.E: detect inlined Packable use-sites here too — the
+                // PackableList/PackableHashTable members of ACBaseQualities,
+                // ACQualities, EnchantmentRegistry, PhysicsDesc, etc. all
+                // appear inside `<mask>` bodies. Without this detection the
+                // build_simple_field path would fail with the generic
+                // "type X not in foundation tier" reason.
+                if let Some(packable_kind) = packable_kind_for_field(fc) {
+                    let pf = self.build_packable_field(fc, packable_kind, seen_names)
+                        .map_err(|e| format!("<maskmap name={parent_xml_name:?}> <mask value={raw_value:?}>: {e}"))?;
+                    packables.push(pf);
+                    continue;
+                }
                 let f = self.build_simple_field(fc, seen_names, parent_type_name)
                     .map_err(|e| format!("<maskmap name={parent_xml_name:?}> <mask value={raw_value:?}>: {e}"))?;
                 fields.push(f);
             }
-            if fields.is_empty() {
+            if fields.is_empty() && packables.is_empty() {
                 return Err(format!(
                     "<maskmap name={parent_xml_name:?}> <mask value={raw_value:?}>: contains no <field> children"
                 ));
@@ -1156,6 +1455,7 @@ impl<'a> CodegenCtx<'a> {
                 bit_value,
                 value_xml: raw_value.to_string(),
                 fields,
+                packables,
                 text: mc.attribute("text").map(|s| s.to_string()),
             });
         }
@@ -1440,6 +1740,21 @@ enum EmitStep {
     /// iteration). Templated `T,U` tables fall through to a precise SKIP
     /// reason pointing at J3.E.
     Table(TableField),
+    /// J3.E: `<if test="EXPR">` boolean conditional. The `true_steps` (and
+    /// optional `false_steps`) decode iff the EXPR is true. All gated fields
+    /// are emitted as `Option<T>` on the struct so the `Self { ... }`
+    /// construction is well-typed regardless of which branch fired. The 6
+    /// retail sites use simple comparison/bool expressions (see
+    /// `translate_if_test_expr`).
+    If(IfBlock),
+    /// J3.E: templated PackableList/PackableHashTable/PHashTable inlined at
+    /// use-site. The schema's `<field type="PackableList" genericType="X">`
+    /// (or PackableHashTable/PHashTable with genericKey+genericValue) has no
+    /// concrete `<vector>` or `<table>` element — instead it represents an
+    /// inlined wire layout: PackableList = u32 count + N×T;
+    /// PackableHashTable = u16 count + u16 maxsize + N×(K,V);
+    /// PHashTable = u32 packed-size + N×(K,V) where count = packed & 0xFFFFFF.
+    Packable(PackableField),
 }
 
 /// J3.C: one `<maskmap name="ParentField" [xor="0x..."]>` block. Resolves the
@@ -1485,6 +1800,11 @@ struct MaskGroup {
     value_xml: String,
     /// The gated fields. Each becomes one `Option<T>` on the struct.
     fields: Vec<SimpleField>,
+    /// J3.E: gated `<field type="PackableList"/PackableHashTable/PHashTable">`
+    /// inlined as Vec<T> / Vec<(K, V)>. Each becomes one
+    /// `Option<Vec<…>>` on the struct. Separated from `fields` (which holds
+    /// only SimpleField) so the codegen can route to the right read path.
+    packables: Vec<PackableField>,
     /// Optional doc text from the `<mask text="…">` attribute.
     /// Reserved for future use (per-mask doc comments above the gated
     /// Option block); we currently inline a per-field doc-comment derived
@@ -1581,6 +1901,69 @@ struct TableField {
     length_expr_rust: String,
     length_xml: String,
     text: Option<String>,
+}
+
+/// J3.E: one `<if test="EXPR">` block. The `test_rust` is the already-
+/// translated boolean Rust expression that reads from sibling locals; the
+/// `true_steps` (and optional `false_steps`) are the body steps. All gated
+/// fields surface as `Option<T>` on the struct.
+struct IfBlock {
+    /// Verbatim XML `test=` attribute for the doc-comment.
+    test_xml: String,
+    /// Rust boolean expression that evaluates to `true` when the truthy
+    /// branch should fire. References sibling local-variable names (NOT
+    /// `self.*` — we're inside `read_from` before any struct construction).
+    test_rust: String,
+    /// True-branch body steps. Decoded if `test_rust` is true. Empty if the
+    /// XML has no `<true>` child (none in retail, but supported defensively).
+    true_steps: Vec<EmitStep>,
+    /// False-branch body steps. Decoded if `test_rust` is false. Empty for
+    /// the 5 retail sites without a `<false>` child; populated for
+    /// `AllegianceData` (Flags == 0x4 → ulong TimeOnline else uint TimeOnline
+    /// + uint AllegianceAge). The seen-names uniquifier auto-disambiguates
+    /// when both branches declare a field with the same XML name (collision
+    /// surfaces as `_2`-suffixed snake-name on the second occurrence).
+    false_steps: Vec<EmitStep>,
+    /// Optional doc text from the `<if text="…">` attribute.
+    text: Option<String>,
+}
+
+/// J3.E: one inlined PackableList/PackableHashTable/PHashTable use-site.
+/// Three wire shapes, three Rust shapes:
+///
+/// - `List`: `Vec<T>`. Wire = u32 count + N×T.
+/// - `HashTable`: `Vec<(K, V)>`. Wire = u16 count + u16 maxsize + N×(K,V).
+///   Vec-of-tuples (not `BTreeMap`) preserves insertion order AND avoids the
+///   K: Ord requirement (struct keys like `LayeredSpellId` have no Ord).
+/// - `PHashTable`: `Vec<(K, V)>`. Wire = u32 packed + N×(K,V) where the
+///   packed u32 encodes count in the low 24 bits + buckets in the top 8.
+struct PackableField {
+    name_snake: String,
+    kind: PackableKind,
+    /// For HashTable/PHashTable: key element. For List: ignored.
+    key_rust_ty: String,
+    key_kind: FieldKind,
+    /// For HashTable/PHashTable: value element. For List: this holds the
+    /// list element type.
+    value_rust_ty: String,
+    value_kind: FieldKind,
+    text: Option<String>,
+}
+
+/// J3.E: wire-shape discriminator for PackableField. The three variants
+/// correspond 1:1 to the three templated `<type>` declarations.
+#[derive(Clone, Copy, Debug)]
+enum PackableKind {
+    /// `<type name="PackableList" parent="List" templated="T">` — wire
+    /// = u32 count + N×T → Rust = `Vec<T>`.
+    List,
+    /// `<type name="PackableHashTable" parent="Dictionary" templated="T,U">`
+    /// — wire = u16 count + u16 maxsize + N×(K,V) → Rust = `Vec<(K, V)>`.
+    HashTable,
+    /// `<type name="PHashTable" parent="Dictionary" templated="T,U">` —
+    /// wire = u32 packed + N×(K,V) where count = packed & 0xFFFFFF → Rust =
+    /// `Vec<(K, V)>`.
+    PHashTable,
 }
 
 /// J3.B: a `<vector name="Foo" type="ElementTy" length="LenExpr" />` child of
@@ -1757,6 +2140,10 @@ const PRIMITIVE_BUILTINS: &[(&str, &str)] = &[
     ("float", "f32"),
     ("double", "f64"),
     ("string", "String"),
+    // J3.E: capital-`String` is the C# convention from the schema —
+    // `Fellowship.Locks` uses `genericKey="String"`. Alias to the same
+    // length-prefixed UTF-8 wire format.
+    ("String", "String"),
     ("WString", "WString"),
     ("ObjectId", "u32"),
     ("LandcellId", "u32"),
@@ -1896,10 +2283,26 @@ fn collect_unsupported(n: Node<'_, '_>) -> Vec<&'static str> {
     // with a precise per-case reason. `<table name="X" key="K" value="V" length="LenExpr">`
     // is also FOUNDATION-tier when K and V are concrete (non-templated)
     // resolvable types. Templated `T,U`-typed tables defer cleanly to J3.E.
+    //
+    // J3.E (2026-05-27): `<if test="...">` is now FOUNDATION-tier — boolean
+    // expressions over sibling fields (six retail sites: SpellBookPage,
+    // Enchantment, PageData, AllegianceHierarchy, AllegianceData, ObjDesc).
+    // Per-if resolution lives in `collect_emit_steps`; this top-level pass
+    // never returns "if" anymore — failures are reported with a precise
+    // reason. The 6 retail tests are comparisons (`X < N`, `X > 0`, `X == V`,
+    // bare `X` bool); the C# expression translator handles all of them after
+    // a small extension for the `<`/`>`/`==` operators (see
+    // `translate_if_test_expr`).
+    //
+    // J3.E (2026-05-27): templated types (PackableList/PackableHashTable/
+    // PHashTable) are inlined at the use-site by `build_packable_field` —
+    // detected by `<field type="PackableList" genericType="...">` (or
+    // PackableHashTable/PHashTable with genericKey+genericValue). The
+    // `<type templated=...>` declarations themselves SKIP cleanly with a
+    // "inlined at use-site" reason since they have no concrete struct shape.
     let mut out = Vec::new();
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
-            "if" => push_unique(&mut out, "if"),
             "mask" => push_unique(&mut out, "mask"),
             _ => {}
         }
@@ -1967,6 +2370,34 @@ struct SiblingLookup {
     /// the typed-enum `read_from` already-emitted error rather than racing
     /// the match scrutinee.
     enum_fields_by_xml_name: BTreeMap<String, EnumFieldRef>,
+    /// J3.E: sibling fields whose Rust-side type is `WireBool` (4-byte bool).
+    /// Used by `<if test="X">` to emit a bare-identifier truthy check on the
+    /// sibling local without an extra `!= 0` cast. The single retail site is
+    /// `PageData`'s `TextIncluded` (line 5871).
+    bool_fields_by_xml_name: BTreeSet<String>,
+    /// J3.E: gated maskmap fields — siblings that live inside a previous
+    /// `<maskmap>` block. They surface as `Option<T>` on the struct, and as
+    /// `Option<T>` locals in `read_from`. When a LATER `<maskmap>` names one
+    /// as its parent (e.g. PublicWeenieDesc's second `<maskmap name="Header2">`
+    /// where Header2 is gated by the first maskmap), we resolve it via
+    /// `option_<snake>.unwrap_or(0) as u64` — bits are 0 (no fields fire) if
+    /// the parent maskmap didn't materialise the field.
+    gated_fields_by_xml_name: BTreeMap<String, GatedFieldRef>,
+}
+
+/// J3.E: bookkeeping for a maskmap-gated field referenced as a later
+/// maskmap's parent. The local in `read_from` is an `Option<T>`; we
+/// resolve it via `.unwrap_or_default() as <bits_repr>` so a `None` gates
+/// every later mask `OFF` uniformly.
+#[derive(Clone)]
+struct GatedFieldRef {
+    snake: String,
+    /// The underlying bit-repr (`u32`/`u16`/`u64`) — pulls flag enums down
+    /// to their raw repr via the same flag-enum path used by
+    /// `numeric_repr_for_field_kind`. Reserved for future width-aware bit
+    /// math; currently the codegen widens unconditionally to u64.
+    #[allow(dead_code)]
+    rust_repr: String,
 }
 
 /// J3.D: bookkeeping for an enum-typed sibling field. Its decode emits two
@@ -2032,12 +2463,56 @@ impl SiblingLookup {
         // `resolve_field`), so they're already in `fields_by_xml_name`.
         if let FieldKind::Enum(_name, repr, _is_flag) = &f.field_kind {
             self.enum_fields_by_xml_name.insert(
-                xml_name,
+                xml_name.clone(),
                 EnumFieldRef {
                     snake: f.name_snake.clone(),
                     rust_repr: repr.rust_ty().to_string(),
                 },
             );
+        }
+        // J3.E: track bool-typed fields so `<if test="X">` can emit a
+        // bare-identifier truthy check on the WireBool local. Only `Bool4Byte`
+        // (the 4-byte wire bool, the only bool flavour) qualifies.
+        if matches!(f.field_kind, FieldKind::Bool4Byte) {
+            self.bool_fields_by_xml_name.insert(xml_name);
+        }
+    }
+
+    /// J3.E: register a Packable field as a sibling so subsequent fields can
+    /// reference it (currently unused — no retail site has a `<vector>` or
+    /// `<if>` reference a PackableList/PackableHashTable count). Defensive
+    /// registration mirrors `add_field`: only the verbatim XML name is
+    /// stored (with a sentinel Rust repr `Vec<…>`), and the type isn't
+    /// usable as a numeric sibling.
+    fn add_packable(&mut self, _pf: &PackableField) {
+        // No-op: PackableField has no numeric width that vector-length or
+        // maskmap-parent can reference. The registration would only matter
+        // if a future schema added a `<vector length="PackableListCount">`
+        // shape, which doesn't currently exist.
+    }
+
+    /// J3.E: register every numeric-eligible field gated by a `<maskmap>`'s
+    /// `<mask>` body. These surface in `read_from` as `Option<T>` locals;
+    /// when a LATER `<maskmap>` references one as its parent (PublicWeenieDesc:
+    /// the second `<maskmap name="Header2">` after Header2 was gated by the
+    /// first maskmap), `resolve_maskmap_parent_bits` looks here and emits
+    /// `<snake>.unwrap_or_default() as u64`.
+    fn add_maskmap_gated(&mut self, mm: &MaskmapBlock) {
+        for group in &mm.masks {
+            for gated in &group.fields {
+                // Same width-detection path as `add_field`. Flag enums
+                // resolve through their parent="uint" repr (already in
+                // FieldKind::PrimU32 etc.); strict enums skip.
+                if let Some(repr) = numeric_repr_for_field_kind(&gated.field_kind) {
+                    self.gated_fields_by_xml_name.insert(
+                        gated.xml_name.clone(),
+                        GatedFieldRef {
+                            snake: gated.name_snake.clone(),
+                            rust_repr: repr.to_string(),
+                        },
+                    );
+                }
+            }
         }
     }
 }
@@ -2112,6 +2587,14 @@ fn numeric_repr_for_field_kind(k: &FieldKind) -> Option<&'static str> {
         FieldKind::PrimI32 => Some("i32"),
         FieldKind::PrimI64 => Some("i64"),
         FieldKind::PackedDword => Some("u32"),
+        // J3.E: float + bool registered so `<if test="X cmp N">` can resolve
+        // the LHS sibling. They're not valid as vector-length or maskmap-
+        // parent sources — `translate_vector_length_expr` operates on the
+        // sibling-lookup but the retail schema never wires a float into a
+        // length/parent slot, so the wider net is safe.
+        FieldKind::PrimF32 => Some("f32"),
+        FieldKind::PrimF64 => Some("f64"),
+        FieldKind::Bool4Byte => Some("bool"),
         _ => None,
     }
 }
@@ -2142,6 +2625,14 @@ fn resolve_maskmap_parent_bits(
     if let Some(ef) = siblings.enum_fields_by_xml_name.get(parent_xml_name) {
         return Ok(format!("{}_bits as u64", ef.snake));
     }
+    // J3.E: parent is itself a maskmap-gated field (Option<T>). Resolves
+    // to 0 when the parent maskmap didn't materialise it — so every later
+    // maskmap on this parent fires NO gates (matches the wire semantics:
+    // if Header2's bit was clear, no Header2-derived fields are on the
+    // wire). PublicWeenieDesc is the only retail site.
+    if let Some(gf) = siblings.gated_fields_by_xml_name.get(parent_xml_name) {
+        return Ok(format!("{}.map_or(0u64, |v| v as u64)", gf.snake));
+    }
     Err(format!(
         "parent {parent_xml_name:?} is not a sibling numeric field — maskmap parents must be declared before the <maskmap> in the same <type> body"
     ))
@@ -2156,6 +2647,9 @@ fn resolve_maskmap_parent_snake(
     }
     if let Some(ef) = siblings.enum_fields_by_xml_name.get(parent_xml_name) {
         return Some(ef.snake.clone());
+    }
+    if let Some(gf) = siblings.gated_fields_by_xml_name.get(parent_xml_name) {
+        return Some(gf.snake.clone());
     }
     None
 }
@@ -2369,6 +2863,11 @@ fn emit_read_maskmap(buf: &mut String, mm: &MaskmapBlock) {
             writeln!(buf, "        let mut {snake}: Option<{ty}> = None;",
                 snake = gated.name_snake, ty = gated.rust_ty).unwrap();
         }
+        for pf in &group.packables {
+            let ty = packable_rust_ty(pf);
+            writeln!(buf, "        let mut {snake}: Option<{ty}> = None;",
+                snake = pf.name_snake).unwrap();
+        }
     }
     for group in &mm.masks {
         let mask = group.bit_value;
@@ -2390,6 +2889,24 @@ fn emit_read_maskmap(buf: &mut String, mm: &MaskmapBlock) {
         }
         for gated in &group.fields {
             writeln!(buf, "            {snake} = Some({snake}_v);", snake = gated.name_snake).unwrap();
+        }
+        // J3.E: gated Packable inline-decoded into `<snake>_v` then
+        // assigned. We rename the PackableField to use a `_v`-suffixed
+        // snake locally so the existing `emit_read_packable` doesn't need
+        // to know about Option-wrapping.
+        for pf in &group.packables {
+            let mut tmp = PackableField {
+                name_snake: format!("{}_v", pf.name_snake),
+                kind: pf.kind,
+                key_rust_ty: pf.key_rust_ty.clone(),
+                key_kind: pf.key_kind.clone(),
+                value_rust_ty: pf.value_rust_ty.clone(),
+                value_kind: pf.value_kind.clone(),
+                text: pf.text.clone(),
+            };
+            emit_read_packable(buf, &tmp, "            ");
+            let _ = &mut tmp;
+            writeln!(buf, "            {snake} = Some({snake}_v);", snake = pf.name_snake).unwrap();
         }
         writeln!(buf, "        }} // end mask {label}").unwrap();
     }
@@ -2468,6 +2985,8 @@ fn emit_step_indented(buf: &mut String, step: &EmitStep, indent: &str) {
         EmitStep::Maskmap(mm) => emit_read_maskmap_indented(buf, mm, indent),
         EmitStep::Switch(sw) => emit_read_switch(buf, sw, indent),
         EmitStep::Table(tb) => emit_read_table_indented(buf, tb, indent),
+        EmitStep::If(ifb) => emit_read_if(buf, ifb, indent),
+        EmitStep::Packable(pf) => emit_read_packable(buf, pf, indent),
     }
 }
 
@@ -2517,6 +3036,14 @@ fn emit_switch_enum_recursive(buf: &mut String, step: &EmitStep) {
             }
             writeln!(buf, "}}\n").unwrap();
         }
+        EmitStep::If(ifb) => {
+            // Defensive recursion in case a future schema places a switch
+            // inside an <if> branch — the retail 6 if-sites are all
+            // field-only.
+            for inner in ifb.true_steps.iter().chain(ifb.false_steps.iter()) {
+                emit_switch_enum_recursive(buf, inner);
+            }
+        }
         // Nested switches can also appear inside maskmap gated fields (none
         // in the current schema, but the schema permits it via the same
         // tree-walk path). Maskmap recursion would need its own walk; we
@@ -2547,6 +3074,12 @@ fn collect_case_payload_fields(steps: &[EmitStep]) -> Vec<(String, String)> {
                             format!("Option<{}>", gated.rust_ty),
                         ));
                     }
+                    for pf in &g.packables {
+                        out.push((
+                            pf.name_snake.clone(),
+                            format!("Option<{}>", packable_rust_ty(pf)),
+                        ));
+                    }
                 }
             }
             EmitStep::Switch(inner) => out.push((
@@ -2560,6 +3093,26 @@ fn collect_case_payload_fields(steps: &[EmitStep]) -> Vec<(String, String)> {
                     tb.key_rust_ty, tb.value_rust_ty
                 ),
             )),
+            EmitStep::If(ifb) => {
+                let mut seen: BTreeSet<String> = BTreeSet::new();
+                for (snake, ty) in collect_if_payload_locals(&ifb.true_steps)
+                    .into_iter()
+                    .chain(collect_if_payload_locals(&ifb.false_steps).into_iter())
+                {
+                    if seen.insert(snake.clone()) {
+                        out.push((snake, format!("Option<{ty}>")));
+                    }
+                }
+            }
+            EmitStep::Packable(pf) => {
+                let ty = match pf.kind {
+                    PackableKind::List => format!("Vec<{}>", pf.value_rust_ty),
+                    PackableKind::HashTable | PackableKind::PHashTable => {
+                        format!("Vec<({}, {})>", pf.key_rust_ty, pf.value_rust_ty)
+                    }
+                };
+                out.push((pf.name_snake.clone(), ty));
+            }
             EmitStep::Align(_) => {}
         }
     }
@@ -2652,6 +3205,201 @@ fn emit_read_table(buf: &mut String, tb: &TableField, indent: &str) {
     writeln!(buf, "{indent}}}").unwrap();
 }
 
+/// J3.E: emit the read for a `<if test="EXPR">` block. Generates:
+///   1. Pre-declare every gated Option<T> from both branches as `None`.
+///   2. `if (test_rust) { … } else { … }`.
+///   3. Inside each branch, decode the gated fields into local `_v`-suffixed
+///      variables, then `name = Some(name_v);`.
+///
+/// Mirrors `emit_read_maskmap`'s shape — the gated fields surface as
+/// `Option<T>` on the struct so `Self { ... }` is well-typed regardless of
+/// which branch fired.
+fn emit_read_if(buf: &mut String, ifb: &IfBlock, indent: &str) {
+    writeln!(buf, "{indent}// <if test=\"{}\">", escape_xml_attr_for_doc(&ifb.test_xml)).unwrap();
+    // Pre-declare each gated field as None. Walk the body steps and pull
+    // out every (snake, rust_ty) pair via `collect_if_payload_locals`.
+    let true_locals = collect_if_payload_locals(&ifb.true_steps);
+    let false_locals = collect_if_payload_locals(&ifb.false_steps);
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for (snake, ty) in true_locals.iter().chain(false_locals.iter()) {
+        if seen.insert(snake.clone()) {
+            writeln!(buf, "{indent}let mut {snake}: Option<{ty}> = None;").unwrap();
+        }
+    }
+    writeln!(buf, "{indent}if {test} {{", test = ifb.test_rust).unwrap();
+    let inner = format!("{indent}    ");
+    for step in &ifb.true_steps {
+        emit_if_branch_step(buf, step, &inner);
+    }
+    for (snake, _) in &true_locals {
+        writeln!(buf, "{inner}{snake} = Some({snake}_v);").unwrap();
+    }
+    writeln!(buf, "{indent}}}").unwrap();
+    if !ifb.false_steps.is_empty() {
+        writeln!(buf, "{indent}else {{").unwrap();
+        for step in &ifb.false_steps {
+            emit_if_branch_step(buf, step, &inner);
+        }
+        for (snake, _) in &false_locals {
+            writeln!(buf, "{inner}{snake} = Some({snake}_v);").unwrap();
+        }
+        writeln!(buf, "{indent}}}").unwrap();
+    }
+}
+
+/// J3.E: emit one step inside an `<if>` branch body — `<field>` decodes into
+/// a `<snake>_v` local (which the surrounding `emit_read_if` then assigns
+/// into the pre-declared Option); `<vector>` and `<align>` route through
+/// their existing indented emitters.
+fn emit_if_branch_step(buf: &mut String, step: &EmitStep, indent: &str) {
+    match step {
+        EmitStep::Field(f) => {
+            let tmp = format!("{}_v", f.name_snake);
+            emit_read_field_indented(buf, &tmp, &f.field_kind, indent);
+        }
+        EmitStep::Vector(v) => {
+            // No retail site has a vector inside an <if>; mirror the
+            // emit_read_vector path defensively (the vector decodes into
+            // a `_v`-suffixed local).
+            let mut adj = v.name_snake.clone();
+            adj.push_str("_v");
+            let mut tmp = VectorField {
+                name_snake: adj,
+                element_rust_ty: v.element_rust_ty.clone(),
+                element_kind: v.element_kind.clone(),
+                length_expr_rust: v.length_expr_rust.clone(),
+                length_xml: v.length_xml.clone(),
+                text: v.text.clone(),
+            };
+            // No suffix added because the outer emit_read_if doesn't
+            // currently support vectors in if-bodies (would need its own
+            // pre-declared Option<Vec<T>>). Defensive only.
+            let _ = &mut tmp;
+            emit_read_vector_indented(buf, v, indent);
+        }
+        EmitStep::Align(n) => emit_align_pad_indented(buf, *n, indent),
+        EmitStep::Packable(pf) => {
+            // No retail site has a Packable inside an <if>; defensive.
+            emit_read_packable(buf, pf, indent);
+        }
+        EmitStep::Maskmap(_) | EmitStep::Switch(_) | EmitStep::Table(_) | EmitStep::If(_) => {
+            // No retail site nests these inside an <if>; if a future
+            // schema does, we'd need to extend collect_if_payload_locals
+            // to surface their gated/payload fields as if-locals.
+            writeln!(buf, "{indent}// UNSUPPORTED nested step inside <if>; please extend J3.E.").unwrap();
+        }
+    }
+}
+
+/// J3.E: collect (snake, rust_ty) pairs for the Option<T> struct fields
+/// each branch's body steps produce. Mirrors `collect_case_payload_fields`
+/// but only handles the steps that appear inside retail `<if>` branches
+/// (field-only); other variants get a defensive empty entry to keep the
+/// codegen warning-free.
+fn collect_if_payload_locals(steps: &[EmitStep]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for step in steps {
+        match step {
+            EmitStep::Field(f) => out.push((f.name_snake.clone(), f.rust_ty.clone())),
+            EmitStep::Vector(v) => out.push((
+                v.name_snake.clone(),
+                format!("Vec<{}>", v.element_rust_ty),
+            )),
+            EmitStep::Packable(pf) => {
+                let ty = match pf.kind {
+                    PackableKind::List => format!("Vec<{}>", pf.value_rust_ty),
+                    PackableKind::HashTable | PackableKind::PHashTable => {
+                        format!("Vec<({}, {})>", pf.key_rust_ty, pf.value_rust_ty)
+                    }
+                };
+                out.push((pf.name_snake.clone(), ty));
+            }
+            EmitStep::Align(_) => {}
+            EmitStep::Maskmap(_) | EmitStep::Switch(_) | EmitStep::Table(_) | EmitStep::If(_) => {}
+        }
+    }
+    out
+}
+
+/// J3.E: emit struct-field declarations for the gated fields in one branch
+/// of an `<if>`. Each field becomes `pub <snake>: Option<T>,` since it's
+/// only assigned by one branch (or stays `None` if the other branch fires).
+fn emit_if_struct_fields(buf: &mut String, steps: &[EmitStep], branch_label: &str) {
+    for (snake, ty) in collect_if_payload_locals(steps) {
+        writeln!(buf, "    /// Gated on `<if>` `{branch_label}` branch — present iff the test selected this branch.").unwrap();
+        writeln!(buf, "    pub {snake}: Option<{ty}>,").unwrap();
+    }
+}
+
+/// J3.E: emit the `<snake>,` lines in `Ok(Self { … })` for an `<if>` block.
+/// Walks both branches in declaration order, dedups across branches so a
+/// shared snake-name (rare; only when sites declare two unrelated fields
+/// with the same name) doesn't duplicate the line. The dedup also covers
+/// the AllegianceData case where both branches declare a `TimeOnline` —
+/// the `seen_names` uniquifier on `build_simple_field` has already
+/// suffixed the second to `time_online_2`, so the snake-names ARE
+/// distinct and dedup is a no-op.
+fn emit_if_struct_field_names(buf: &mut String, steps: &[EmitStep]) {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for (snake, _) in collect_if_payload_locals(steps) {
+        if seen.insert(snake.clone()) {
+            writeln!(buf, "            {snake},").unwrap();
+        }
+    }
+}
+
+/// J3.E: emit the read for a templated PackableList/PackableHashTable/
+/// PHashTable inlined at a use-site. The three wire shapes:
+///
+/// - List (`Vec<T>`): u32 count + N×T.
+/// - HashTable (`Vec<(K,V)>`): u16 count + u16 maxsize + N×(K,V).
+/// - PHashTable (`Vec<(K,V)>`): u32 packed + N×(K,V). The packed u32 holds
+///   count in the low 24 bits (`packed & 0xFFFFFF`) and buckets in the top
+///   8 (`1 << (packed >> 24)`); buckets is unused for the wire decode.
+fn emit_read_packable(buf: &mut String, pf: &PackableField, indent: &str) {
+    let snake = &pf.name_snake;
+    let inner = format!("{indent}    ");
+    match pf.kind {
+        PackableKind::List => {
+            writeln!(buf, "{indent}// inlined PackableList<{}>", pf.value_rust_ty).unwrap();
+            writeln!(buf, "{indent}if *offset + 4 > data.len() {{ return Err(\"truncated PackableList count for {snake}\"); }}").unwrap();
+            writeln!(buf, "{indent}let {snake}_count: usize = u32::from_le_bytes([data[*offset], data[*offset+1], data[*offset+2], data[*offset+3]]) as usize; *offset += 4;").unwrap();
+            writeln!(buf, "{indent}let mut {snake}: Vec<{}> = Vec::with_capacity({snake}_count.min(1024));", pf.value_rust_ty).unwrap();
+            writeln!(buf, "{indent}for _ in 0..{snake}_count {{").unwrap();
+            writeln!(buf, "{inner}let __elem: {} = {{", pf.value_rust_ty).unwrap();
+            emit_read_field_indented(buf, "__elem", &pf.value_kind, &format!("{inner}    "));
+            writeln!(buf, "{inner}    __elem").unwrap();
+            writeln!(buf, "{inner}}};").unwrap();
+            writeln!(buf, "{inner}{snake}.push(__elem);").unwrap();
+            writeln!(buf, "{indent}}}").unwrap();
+        }
+        PackableKind::HashTable => {
+            writeln!(buf, "{indent}// inlined PackableHashTable<{}, {}>", pf.key_rust_ty, pf.value_rust_ty).unwrap();
+            writeln!(buf, "{indent}if *offset + 4 > data.len() {{ return Err(\"truncated PackableHashTable count for {snake}\"); }}").unwrap();
+            writeln!(buf, "{indent}let {snake}_count: usize = u16::from_le_bytes([data[*offset], data[*offset+1]]) as usize; *offset += 2;").unwrap();
+            writeln!(buf, "{indent}let _{snake}_maxsize: u16 = u16::from_le_bytes([data[*offset], data[*offset+1]]); *offset += 2;").unwrap();
+            writeln!(buf, "{indent}let mut {snake}: Vec<({}, {})> = Vec::with_capacity({snake}_count.min(1024));", pf.key_rust_ty, pf.value_rust_ty).unwrap();
+            writeln!(buf, "{indent}for _ in 0..{snake}_count {{").unwrap();
+            emit_read_field_indented(buf, "__k", &pf.key_kind, &inner);
+            emit_read_field_indented(buf, "__v", &pf.value_kind, &inner);
+            writeln!(buf, "{inner}{snake}.push((__k, __v));").unwrap();
+            writeln!(buf, "{indent}}}").unwrap();
+        }
+        PackableKind::PHashTable => {
+            writeln!(buf, "{indent}// inlined PHashTable<{}, {}>", pf.key_rust_ty, pf.value_rust_ty).unwrap();
+            writeln!(buf, "{indent}if *offset + 4 > data.len() {{ return Err(\"truncated PHashTable packed-size for {snake}\"); }}").unwrap();
+            writeln!(buf, "{indent}let {snake}_packed: u32 = u32::from_le_bytes([data[*offset], data[*offset+1], data[*offset+2], data[*offset+3]]); *offset += 4;").unwrap();
+            writeln!(buf, "{indent}let {snake}_count: usize = ({snake}_packed & 0xFFFFFF) as usize;").unwrap();
+            writeln!(buf, "{indent}let mut {snake}: Vec<({}, {})> = Vec::with_capacity({snake}_count.min(1024));", pf.key_rust_ty, pf.value_rust_ty).unwrap();
+            writeln!(buf, "{indent}for _ in 0..{snake}_count {{").unwrap();
+            emit_read_field_indented(buf, "__k", &pf.key_kind, &inner);
+            emit_read_field_indented(buf, "__v", &pf.value_kind, &inner);
+            writeln!(buf, "{inner}{snake}.push((__k, __v));").unwrap();
+            writeln!(buf, "{indent}}}").unwrap();
+        }
+    }
+}
+
 /// J3.D: resolve a `<switch name="X">` discriminator against the sibling
 /// lookup. Returns `(scrutinee_rust_expr, rust_repr, disc_kind)` — the
 /// scrutinee expression is what the read codegen's match scrutinee reads to
@@ -2731,6 +3479,254 @@ fn emit_align_pad(buf: &mut String, n_bytes: usize) {
 /// hardcodes `4` because every retail `<align>` site uses `type="uint"`; we
 /// generalize over the wire-primitive width table on the off-chance the XML
 /// ever ships a `<align type="ushort" />`.
+/// J3.E: detect a templated PackableList/PackableHashTable/PHashTable use-site
+/// from a `<field type="…">` element. Returns the wire-shape discriminator,
+/// or `None` if the type is not one of the three known templates.
+fn packable_kind_for_field(c: Node<'_, '_>) -> Option<PackableKind> {
+    match c.attribute("type")? {
+        "PackableList" => Some(PackableKind::List),
+        "PackableHashTable" => Some(PackableKind::HashTable),
+        "PHashTable" => Some(PackableKind::PHashTable),
+        _ => None,
+    }
+}
+
+/// J3.E: human-readable name for a PackableKind (used in error messages so
+/// the SKIP reasons name the actual templated type).
+fn kind_name(k: PackableKind) -> &'static str {
+    match k {
+        PackableKind::List => "PackableList",
+        PackableKind::HashTable => "PackableHashTable",
+        PackableKind::PHashTable => "PHashTable",
+    }
+}
+
+/// J3.E: compute the Rust struct-field type for a PackableField. List
+/// becomes `Vec<T>`; HashTable/PHashTable become `Vec<(K, V)>` (insertion-
+/// ordered vec-of-tuples avoids the K: Ord requirement that BTreeMap would
+/// need — load-bearing for keys like `LayeredSpellId` which are structs).
+fn packable_rust_ty(pf: &PackableField) -> String {
+    match pf.kind {
+        PackableKind::List => format!("Vec<{}>", pf.value_rust_ty),
+        PackableKind::HashTable | PackableKind::PHashTable => {
+            format!("Vec<({}, {})>", pf.key_rust_ty, pf.value_rust_ty)
+        }
+    }
+}
+
+/// J3.E: translate a `<if test="EXPR">` boolean expression into a Rust
+/// expression evaluating to `bool` at `read_from`'s local scope. Supports
+/// the six retail forms:
+///
+///   - `CastingLikelihood < 2.0` — float comparison
+///   - `HasEquipmentSet > 0` / `PaletteCount > 0` / `RecordCount > 0` — int > 0
+///   - `TextIncluded` — bool (WireBool) bare-identifier truthy check
+///   - `Flags == 0x4` — int == hex
+///
+/// The expression is tokenised via `tokenize_csharp_expr` (extended with
+/// `<`, `>`, `==` operators), then re-emitted with the LHS identifier
+/// substituted for the sibling's local-variable name and the appropriate
+/// width-cast so the comparison composes regardless of the field's repr.
+fn translate_if_test_expr(expr: &str, siblings: &SiblingLookup) -> Result<String, String> {
+    let tokens = tokenize_if_test_expr(expr)
+        .map_err(|e| format!("tokenize failed: {e}"))?;
+
+    // Three recognised shapes:
+    //   [Ident]               -> bare-bool check on a WireBool sibling.
+    //   [Ident Op Literal]    -> comparison against a literal value.
+    //   [Ident == LitOrIdent] -> equality comparison.
+    // We pattern-match the token sequence directly rather than build a full
+    // bool-expression parser; the six retail forms are all of one shape or
+    // the other.
+    if tokens.len() == 1 {
+        let ident = match &tokens[0] {
+            IfTok::Ident(s) => s.clone(),
+            other => return Err(format!("expected identifier, got {other:?}")),
+        };
+        // Bare bool sibling — must be a WireBool (4-byte bool) field. We
+        // look up via fields_by_xml_name; the snake-local stores a Rust
+        // `bool` (WireBool type alias), so a bare-identifier check just
+        // references the local directly.
+        let (snake, _) = siblings.fields_by_xml_name.get(&ident)
+            .ok_or_else(|| format!("identifier {ident:?} is not a sibling field"))?
+            .clone();
+        // We also look up the "bool kind" status — if the sibling is a
+        // numeric field we still allow it as a `!= 0` check (defensive; no
+        // retail site does this).
+        let bool_xml_marker = siblings.bool_fields_by_xml_name.contains(&ident);
+        if bool_xml_marker {
+            return Ok(snake);
+        }
+        // Numeric fallback: `<snake> != 0` — but the retail bool sites are
+        // all proper bool. We emit a width-cast and != 0 if the sibling
+        // turns out to be a numeric (covers future schema growth).
+        return Ok(format!("({snake} as u64) != 0"));
+    }
+
+    if tokens.len() == 3 {
+        let lhs = match &tokens[0] {
+            IfTok::Ident(s) => s.clone(),
+            other => return Err(format!("expected identifier LHS, got {other:?}")),
+        };
+        let op = match &tokens[1] {
+            IfTok::Cmp(o) => *o,
+            other => return Err(format!("expected comparison operator, got {other:?}")),
+        };
+        let (snake, repr) = siblings.fields_by_xml_name.get(&lhs)
+            .ok_or_else(|| format!("identifier {lhs:?} is not a sibling field"))?
+            .clone();
+        // RHS may be a numeric literal (int or float) or an identifier (a
+        // sibling field). The retail forms are all literal-RHS.
+        match &tokens[2] {
+            IfTok::IntLit { raw } => {
+                // Cast LHS to a wide signed type so a u8 sibling can compare
+                // against a hex literal without truncation, AND so signed-
+                // unsigned mixes are well-defined.
+                return Ok(format!("({snake} as i128) {} {raw}i128", op_as_rust(op)));
+            }
+            IfTok::FloatLit { raw } => {
+                // Float comparison — preserve the LHS's float type.
+                let lhs_expr = if repr == "f32" || repr == "f64" {
+                    snake.clone()
+                } else {
+                    format!("({snake} as f64)")
+                };
+                let rhs_lit = if repr == "f32" {
+                    format!("{raw}f32")
+                } else {
+                    format!("{raw}f64")
+                };
+                return Ok(format!("{lhs_expr} {} {rhs_lit}", op_as_rust(op)));
+            }
+            IfTok::Ident(rhs_id) => {
+                // Identifier RHS — defer to a future schema (no retail site uses).
+                let (rhs_snake, _) = siblings.fields_by_xml_name.get(rhs_id)
+                    .ok_or_else(|| format!("RHS identifier {rhs_id:?} is not a sibling field"))?
+                    .clone();
+                return Ok(format!("({snake} as i128) {} ({rhs_snake} as i128)", op_as_rust(op)));
+            }
+            other => return Err(format!("expected literal or identifier RHS, got {other:?}")),
+        }
+    }
+
+    Err(format!("unsupported test shape: {tokens:?}"))
+}
+
+/// J3.E: comparison operator for `<if test=...>` translation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CmpOp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+}
+
+fn op_as_rust(op: CmpOp) -> &'static str {
+    match op {
+        CmpOp::Lt => "<",
+        CmpOp::Le => "<=",
+        CmpOp::Gt => ">",
+        CmpOp::Ge => ">=",
+        CmpOp::Eq => "==",
+        CmpOp::Ne => "!=",
+    }
+}
+
+/// J3.E: tokeniser for `<if test=...>` expressions. Subset of the C# subfield
+/// tokeniser (no casts, no shifts, no `&`/`|`); adds the comparison
+/// operators `<`, `>`, `<=`, `>=`, `==`, `!=` AND float literals (`2.0`).
+#[derive(Clone, Debug, PartialEq)]
+enum IfTok {
+    Ident(String),
+    IntLit { raw: String },
+    FloatLit { raw: String },
+    Cmp(CmpOp),
+}
+
+fn tokenize_if_test_expr(s: &str) -> Result<Vec<IfTok>, String> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut out = Vec::new();
+    let is_ident_start = |b: u8| b.is_ascii_alphabetic() || b == b'_';
+    let is_ident_cont = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        match b {
+            b'<' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(IfTok::Cmp(CmpOp::Le));
+                    i += 2;
+                } else {
+                    out.push(IfTok::Cmp(CmpOp::Lt));
+                    i += 1;
+                }
+            }
+            b'>' => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    out.push(IfTok::Cmp(CmpOp::Ge));
+                    i += 2;
+                } else {
+                    out.push(IfTok::Cmp(CmpOp::Gt));
+                    i += 1;
+                }
+            }
+            b'=' if bytes.get(i + 1) == Some(&b'=') => {
+                out.push(IfTok::Cmp(CmpOp::Eq));
+                i += 2;
+            }
+            b'!' if bytes.get(i + 1) == Some(&b'=') => {
+                out.push(IfTok::Cmp(CmpOp::Ne));
+                i += 2;
+            }
+            _ if b.is_ascii_digit() || (b == b'-' && bytes.get(i + 1).is_some_and(|nb| nb.is_ascii_digit())) => {
+                let start = i;
+                if b == b'-' { i += 1; }
+                if i + 1 < bytes.len() && bytes[i] == b'0' && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
+                    i += 2;
+                    while i < bytes.len() && bytes[i].is_ascii_hexdigit() {
+                        i += 1;
+                    }
+                    let raw = s[start..i].to_string();
+                    out.push(IfTok::IntLit { raw });
+                } else {
+                    let mut has_dot = false;
+                    while i < bytes.len() {
+                        if bytes[i].is_ascii_digit() {
+                            i += 1;
+                        } else if bytes[i] == b'.' && !has_dot {
+                            has_dot = true;
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let raw = s[start..i].to_string();
+                    if has_dot {
+                        out.push(IfTok::FloatLit { raw });
+                    } else {
+                        out.push(IfTok::IntLit { raw });
+                    }
+                }
+            }
+            _ if is_ident_start(b) => {
+                let start = i;
+                while i < bytes.len() && is_ident_cont(bytes[i]) {
+                    i += 1;
+                }
+                out.push(IfTok::Ident(s[start..i].to_string()));
+            }
+            _ => return Err(format!("unexpected character {:?} at offset {i} of {s:?}", b as char)),
+        }
+    }
+    Ok(out)
+}
+
 fn align_byte_width_from_node(n: Node<'_, '_>) -> Option<usize> {
     let ty = n.attribute("type")?;
     match ty {

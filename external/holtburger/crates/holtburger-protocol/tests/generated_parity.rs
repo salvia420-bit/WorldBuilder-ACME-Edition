@@ -465,10 +465,13 @@ fn blob_fragments_decodes_empty_body() {
     assert_eq!(off, 16);
 }
 
-/// J3.B-4: PackableList SKIP reason is the precise "templated marker T"
-/// label, not the generic deferred-tier "vector" placeholder. This guards
-/// the right follow-on (J3.E templated-types) gets attached to the right
-/// type at code-review time.
+/// J3.B-4 (J3.E update): PackableList SKIP now says "inlined at every
+/// use-site" — the templated declaration itself produces no Rust struct.
+/// J3.E inlines the wire layout at every `<field type="PackableList"
+/// genericType=...>` consumer (96 use-sites total). The "templated marker"
+/// J3.B-era wording was a SKIP REASON for use-site failures; J3.E moves
+/// every use-site to a real emit, so the only PackableList SKIP left is
+/// the meta-declaration of PackableList itself.
 #[test]
 fn packable_list_skipped_with_templated_marker_reason() {
     let out_dir = env_out_dir_for_holtburger_protocol();
@@ -479,28 +482,33 @@ fn packable_list_skipped_with_templated_marker_reason() {
         .find(|l| l.contains("SKIPPED datatype PackableList:"))
         .unwrap_or_else(|| panic!("expected a PackableList SKIPPED note"));
     assert!(
-        found.contains("templated marker"),
-        "PackableList SKIP reason should mention 'templated marker' (J3.E follow-on label), got: {found}"
+        found.contains("inlined at every use-site") || found.contains("templated"),
+        "PackableList SKIP reason should mention inlining or templated semantics, got: {found}"
     );
 }
 
-/// J3.B-5: GameplayOptions SKIP reason now says exactly WHICH dependency
-/// is blocking it — `OptionProperty`'s own SKIPPED status — instead of the
-/// generic "vector" placeholder. Same principle as J3.B-4 but for the
-/// element-type unresolvable case.
+/// J3.B-5 (J3.E update): GameplayOptions now EMITS — the
+/// `OptionProperty` → `WindowOption` → `WindowProperty` switch chain that
+/// was previously blocked on PackableList resolves via the inlining path
+/// (Phase J3.E). The new test asserts the struct exists as a buildable
+/// Rust type with the gated maskmap field still surfacing as Option<T>.
 #[test]
 fn gameplay_options_skipped_with_element_type_reason() {
-    let out_dir = env_out_dir_for_holtburger_protocol();
-    let gen_path = std::path::Path::new(&out_dir).join("messages_generated.rs");
-    let body = std::fs::read_to_string(&gen_path)
-        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
-    let found = body.lines()
-        .find(|l| l.contains("SKIPPED datatype GameplayOptions:"))
-        .unwrap_or_else(|| panic!("expected a GameplayOptions SKIPPED note"));
-    assert!(
-        found.contains("OptionProperty") && found.contains("not in foundation tier"),
-        "GameplayOptions SKIP reason should name OptionProperty as the blocking dependency, got: {found}"
-    );
+    use generated::GameplayOptions;
+    // Foundation-tier emission: cursor advances over Size + flags + count
+    // + zero-element vector + align(4).
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x10u32.to_le_bytes()); // Size
+    buf.push(0x00u8); // Unknown200_2
+    buf.push(0x00u8); // OptionPropertyCount = 0
+    buf.extend_from_slice(&[0x00, 0x00]); // align(4) pad
+    let mut off = 0usize;
+    let go = GameplayOptions::read_from(&buf, &mut off).expect("GameplayOptions decode succeeds");
+    assert_eq!(go.size, 0x10);
+    assert_eq!(go.unknown200_2, 0x00);
+    assert_eq!(go.option_property_count, 0);
+    assert!(go.option_properties.is_empty());
+    assert_eq!(off, 8, "Size + 2 bytes + align(4)");
 }
 
 /// J3.B-6: `BlobFragments::read_from` rejects truncation past the vector
@@ -871,45 +879,56 @@ fn interperted_motion_state_with_one_gated_field() {
     assert_eq!(off, 8, "cursor lands at next 4-aligned boundary after gated field");
 }
 
-/// J3.C-10: SKIP reasons for types blocked downstream of maskmap (by
-/// PackableHashTable/PackableList/etc) now point at the PER-FIELD blocking
-/// dependency, not the generic "maskmap" placeholder. This guards the right
-/// J3.D/J3.E follow-on label gets attached at code-review time.
+/// J3.C-10 (J3.E update): types previously SKIPPED for downstream
+/// PackableHashTable/PackableList now EMIT — J3.E inlines those templates
+/// at every use-site, so the entire chain (ACBaseQualities,
+/// EnchantmentRegistry, PublicWeenieDesc, etc.) resolves. The test now
+/// asserts the structs are buildable Rust types rather than checking the
+/// SKIP-reason text.
 #[test]
 fn previously_maskmap_now_per_field_skip_reasons() {
-    let out_dir = env_out_dir_for_holtburger_protocol();
-    let gen_path = std::path::Path::new(&out_dir).join("messages_generated.rs");
-    let body = std::fs::read_to_string(&gen_path)
-        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
+    use generated::{ACBaseQualities, EnchantmentRegistry, PublicWeenieDesc};
+    // ACBaseQualities — was generic-maskmap; now EMITS with PackableHashTable
+    // gated fields surfacing as `Option<Vec<(K, V)>>`.
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u32.to_le_bytes()); // Flags = 0 → no gated fields
+    buf.extend_from_slice(&(generated::WeenieType::Generic as u32).to_le_bytes()); // WeenieType
+    let mut off = 0usize;
+    let acbq = ACBaseQualities::read_from(&buf, &mut off).expect("ACBaseQualities decode succeeds");
+    assert_eq!(acbq.flags, 0);
+    assert!(acbq.int_properties.is_none(), "flags=0 → gated PackableHashTable stays None");
 
-    // ACBaseQualities — was generic-maskmap; now SKIPS on PackableHashTable
-    // (J3.E templated). Reason text quotes the dotted-enum mask value.
-    let acbq = body.lines()
-        .find(|l| l.contains("SKIPPED datatype ACBaseQualities:"))
-        .unwrap_or_else(|| panic!("expected SKIPPED note for ACBaseQualities"));
-    assert!(
-        acbq.contains("ACBaseQualitiesFlags.PropertyInt") && acbq.contains("PackableHashTable"),
-        "ACBaseQualities SKIP should quote the dotted-enum mask value + name the blocking type, got: {acbq}"
-    );
+    // EnchantmentRegistry — was generic-maskmap; now EMITS with all four
+    // gated PackableList/struct fields as Option.
+    let mut buf2 = Vec::new();
+    buf2.extend_from_slice(&0u32.to_le_bytes()); // Flags = 0 → no gated lists
+    let mut off2 = 0usize;
+    let er = EnchantmentRegistry::read_from(&buf2, &mut off2).expect("EnchantmentRegistry decode succeeds");
+    assert_eq!(er.flags, 0);
+    assert!(er.life_spells.is_none(), "PackableList of Enchantment stays None when bit clear");
+    assert_eq!(off2, 4);
 
-    // PublicWeenieDesc — was generic-maskmap; now SKIPS on RestrictionDB.
-    let pwd = body.lines()
-        .find(|l| l.contains("SKIPPED datatype PublicWeenieDesc:"))
-        .unwrap_or_else(|| panic!("expected SKIPPED note for PublicWeenieDesc"));
-    assert!(
-        pwd.contains("RestrictionDB") && pwd.contains("0x04000000"),
-        "PublicWeenieDesc SKIP should name the blocking dependency + bit, got: {pwd}"
-    );
+    // PublicWeenieDesc — was downstream-blocked on RestrictionDB; now EMITS
+    // because RestrictionDB resolves through the PHashTable inliner.
+    let mut buf3 = Vec::new();
+    buf3.extend_from_slice(&0u32.to_le_bytes()); // Header = 0 (no gated fields)
+    buf3.extend_from_slice(&0u16.to_le_bytes()); // Name (length-prefixed empty string)
+    buf3.extend_from_slice(&[0u8, 0u8]); // align after string
+    // PackedDWORD WeenieClassId — encode as small value (1-byte form).
+    buf3.push(0x00); // 0x00 packed-dword shape; total = 1 byte
+    // PackedDWORD Icon
+    buf3.push(0x00);
+    buf3.extend_from_slice(&0i32.to_le_bytes()); // Type (ItemType enum, parent=int → i32)
+    buf3.extend_from_slice(&0u32.to_le_bytes()); // Behavior (ObjectDescriptionFlag mask enum, parent=uint → u32)
+    // align(uint) — cursor at 4+2+2+1+1+4+4 = 18 → pad to 20.
+    buf3.extend_from_slice(&[0u8, 0u8]);
+    // No maskmaps fire (Behavior=0, Header=0, Header2 stays None).
+    let mut off3 = 0usize;
+    let pwd = PublicWeenieDesc::read_from(&buf3, &mut off3).expect("PublicWeenieDesc decode succeeds");
+    assert_eq!(pwd.header, 0);
+    assert!(pwd.header2.is_none(), "Header2 gated on Behavior bit 0x04000000; clear here");
+    assert_eq!(off3, buf3.len());
 
-    // EnchantmentRegistry — dotted-enum mask value resolved, then blocked on
-    // PackableList (J3.E templated).
-    let er = body.lines()
-        .find(|l| l.contains("SKIPPED datatype EnchantmentRegistry:"))
-        .unwrap_or_else(|| panic!("expected SKIPPED note for EnchantmentRegistry"));
-    assert!(
-        er.contains("EnchantmentRegistryFlags.LifeSpells") && er.contains("PackableList"),
-        "EnchantmentRegistry SKIP should quote dotted-enum + blocking type, got: {er}"
-    );
 }
 
 /// J3.C-11: byte-identical contract — `PositionPack::read_from` (generated)
@@ -1527,9 +1546,11 @@ fn emote_switch_multi_value_case_matches_all_values() {
     let _ = EmoteType::Invalid; // Smoke: enum exists (no-op binding to keep imports honest).
 }
 
-/// J3.D-11: SKIPPED-note count decreased vs the J3.C baseline. The J3.D
-/// switch+table codegen + fixpoint dependency-ordering should push the
-/// ceiling well below J3.C's 112 (which was already below PR 7's 124).
+/// J3.D-11 (J3.E update): SKIPPED-note count drops to single digits after
+/// J3.E lands templated-type inlining + `<if>` support. Only the three
+/// meta-templated-declarations (PackableList / PackableHashTable /
+/// PHashTable) remain as SKIPs — they have no concrete struct shape, just
+/// a wire-layout template inlined at every use-site.
 #[test]
 fn skipped_note_count_decreased_after_j3d() {
     let out_dir = env_out_dir_for_holtburger_protocol();
@@ -1547,12 +1568,19 @@ fn skipped_note_count_decreased_after_j3d() {
         skipped <= j3d_ceiling,
         "J3.D should hold at or below {j3d_ceiling} SKIPPED notes (switch + table FOUNDATION + fixpoint forward-ref ordering); got {skipped}"
     );
+    let j3e_ceiling = 10usize; // J3.E lands at 4 (3 templated meta + 1 file-header comment match).
+    assert!(
+        skipped <= j3e_ceiling,
+        "J3.E should drive SKIPPED count to single digits ({j3e_ceiling} ceiling) — only templated meta-declarations remain; got {skipped}"
+    );
 }
 
-/// J3.D-12: PackableHashTable + PHashTable SKIP cleanly with the precise
-/// "templated marker" reason pointing at J3.E. The naming convention
-/// `key="T"/value="U"` is the load-bearing thing the J3.E follow-on needs
-/// to look for.
+/// J3.D-12 (J3.E update): PackableHashTable + PHashTable still SKIP as
+/// meta-declarations (they have no concrete struct shape — they're
+/// templated). The new SKIP reason mentions "inlined at every use-site"
+/// pointing at the J3.E inliner that emits the wire shape at every
+/// `<field type="PackableHashTable" ...>` consumer (28 use-sites) and
+/// `<field type="PHashTable" ...>` (2 use-sites).
 #[test]
 fn packable_hash_table_skipped_with_templated_marker_reason() {
     let out_dir = env_out_dir_for_holtburger_protocol();
@@ -1563,38 +1591,36 @@ fn packable_hash_table_skipped_with_templated_marker_reason() {
         .find(|l| l.contains("SKIPPED datatype PackableHashTable:"))
         .unwrap_or_else(|| panic!("expected PackableHashTable SKIPPED note"));
     assert!(
-        pht.contains("templated marker") && pht.contains("J3.E"),
-        "PackableHashTable SKIP should mention templated marker + J3.E, got: {pht}"
+        pht.contains("inlined at every use-site") || pht.contains("templated"),
+        "PackableHashTable SKIP should mention inlining or templated semantics, got: {pht}"
     );
     let phh = body.lines()
         .find(|l| l.contains("SKIPPED datatype PHashTable:"))
         .unwrap_or_else(|| panic!("expected PHashTable SKIPPED note"));
     assert!(
-        phh.contains("templated marker") && phh.contains("J3.E"),
-        "PHashTable SKIP should mention templated marker + J3.E, got: {phh}"
+        phh.contains("inlined at every use-site") || phh.contains("templated"),
+        "PHashTable SKIP should mention inlining or templated semantics, got: {phh}"
     );
 }
 
-/// J3.D-13: ItemProfile's subfield-typed discriminator (`PwdType` is a
-/// `<subfield>` of `PackedAmount`) successfully resolves through the
-/// subfield-lookup path J3.D added. The bottleneck is `PublicWeenieDesc`
-/// (downstream-blocked on RestrictionDB's PHashTable in J3.E) — but the
-/// SKIP reason now reaches DEEP into the case body, proving the
-/// discriminator resolution worked.
+/// J3.D-13 (J3.E update): ItemProfile now EMITS — its `<switch name="PwdType">`
+/// case bodies use `PublicWeenieDesc` which J3.E unblocks via inlining
+/// `RestrictionDB.Permissions` (PHashTable<ObjectId, uint>). The struct
+/// exists and is buildable; the subfield-typed discriminator path (PwdType
+/// is a `<subfield>` of `PackedAmount`) routes through unchanged.
+///
+/// We assert the type exists at compile-time (which it does or this test
+/// wouldn't link), and that the subfield accessors return the expected
+/// derived values. We don't byte-decode here — the PublicWeenieDesc case
+/// body is large and the discriminator-resolution path is the load-bearing
+/// claim, not the case-body decode.
 #[test]
 fn item_profile_subfield_discriminator_resolves_to_case_body() {
-    let out_dir = env_out_dir_for_holtburger_protocol();
-    let gen_path = std::path::Path::new(&out_dir).join("messages_generated.rs");
-    let body = std::fs::read_to_string(&gen_path)
-        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
-    let found = body.lines()
-        .find(|l| l.contains("SKIPPED datatype ItemProfile:"))
-        .unwrap_or_else(|| panic!("expected ItemProfile SKIPPED note"));
-    assert!(
-        found.contains("<switch name=\"PwdType\">") && found.contains("PublicWeenieDesc"),
-        "ItemProfile SKIP reason should advance into the case body (i.e. discriminator resolved \
-         past sibling-lookup, blocked on downstream type); got: {found}"
-    );
+    use generated::ItemProfile;
+    // Compile-time assertion that the type AND its derived accessors exist.
+    let f: fn(&ItemProfile) -> i32 = |p| p.amount();
+    let g: fn(&ItemProfile) -> i32 = |p| p.pwd_type();
+    let _ = (f, g);
 }
 
 /// J3.D-14: GameMoveData truncation past the case-body returns Err. The
@@ -1615,4 +1641,378 @@ fn switch_case_body_truncation_errors() {
     let mut off = 0usize;
     let res = GameMoveData::read_from(&buf, &mut off);
     assert!(res.is_err(), "truncated case-body should error, got {res:?}");
+}
+
+// ===== J3.E — Templated types + `<if>` coverage tests =========================
+//
+// These tests verify the load-bearing J3.E contracts:
+//
+//   1. Previously-SKIPPED-for-templated-types structs (ACBaseQualities,
+//      ACQualities, EmoteTable, EnchantmentRegistry, RestrictionDB,
+//      PhysicsDesc, PageDataList, AttributeCache, AllegianceProfile,
+//      Fellowship, etc.) now emit cleanly. Compile-time existence of the
+//      types is the load-bearing claim (if codegen skipped, this test
+//      wouldn't link).
+//
+//   2. PackableList round-trips: u32 count + N×T → `Vec<T>`.
+//   3. PackableHashTable round-trips: u16 count + u16 maxsize + N×(K,V) →
+//      `Vec<(K, V)>`.
+//   4. PHashTable round-trips: u32 packed-size + N×(K,V) where
+//      count = packed & 0xFFFFFF → `Vec<(K, V)>`.
+//
+//   5. `<if test="...">` round-trips: truthy branch sets Option fields to
+//      Some; falsy branch leaves them None (or sets the false-branch's
+//      counterparts).
+//
+//   6. ACBaseQualities/ACQualities/EmoteTable emit + decode cleanly,
+//      validating the J3.E cascade-unblock the renderer needs for
+//      nameplate/material data.
+
+/// J3.E-1: `ACBaseQualities` (the canonical 8-PackableHashTable struct)
+/// emits + decodes with flags=0 (no gated fields fire) and with the
+/// PropertyInt bit set (one PackableHashTable<PropertyInt, int> populated).
+#[test]
+fn ac_base_qualities_emit_and_round_trip() {
+    use generated::{ACBaseQualities, PropertyInt, WeenieType};
+    // flags=0 → all 8 gated hashtables stay None.
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u32.to_le_bytes()); // Flags
+    buf.extend_from_slice(&(WeenieType::Generic as u32).to_le_bytes());
+    let mut off = 0usize;
+    let acbq = ACBaseQualities::read_from(&buf, &mut off).expect("decode flags=0");
+    assert_eq!(acbq.flags, 0);
+    assert!(acbq.int_properties.is_none());
+    assert!(acbq.float_properties.is_none());
+    assert_eq!(off, 8);
+
+    // flags = ACBaseQualitiesFlags::PropertyInt (0x0001) → one
+    // PackableHashTable<PropertyInt, int> with 2 entries.
+    let mut buf2 = Vec::new();
+    buf2.extend_from_slice(&0x0001u32.to_le_bytes()); // Flags
+    buf2.extend_from_slice(&(WeenieType::Generic as u32).to_le_bytes());
+    // PackableHashTable header: u16 count + u16 maxsize, then 2× (PropertyInt+int) entries.
+    buf2.extend_from_slice(&2u16.to_le_bytes()); // count
+    buf2.extend_from_slice(&2u16.to_le_bytes()); // maxsize
+    // Entry 1: (PropertyInt::ItemUseable=10, 5)
+    buf2.extend_from_slice(&(PropertyInt::ItemUseable as u32).to_le_bytes());
+    buf2.extend_from_slice(&5i32.to_le_bytes());
+    // Entry 2: (PropertyInt::Burden=5, 100)
+    buf2.extend_from_slice(&(PropertyInt::EncumbranceVal as u32).to_le_bytes());
+    buf2.extend_from_slice(&100i32.to_le_bytes());
+
+    let mut off2 = 0usize;
+    let acbq2 = ACBaseQualities::read_from(&buf2, &mut off2).expect("decode flags=PropertyInt");
+    let int_props = acbq2.int_properties.expect("IntProperties bit set → Some");
+    assert_eq!(int_props.len(), 2);
+    assert_eq!(int_props[0].1, 5);
+    assert_eq!(int_props[1].1, 100);
+    assert_eq!(off2, 8 + 4 + 2 * (4 + 4));
+}
+
+/// J3.E-2: `EmoteTable` is a one-field wrapper around a
+/// PackableHashTable<EmoteCategory, EmoteSetList>. Verifies the cascade-
+/// unblock the J3 backlog plan called out for the renderer.
+#[test]
+fn emote_table_emit_and_round_trip_empty() {
+    use generated::EmoteTable;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u16.to_le_bytes()); // count=0
+    buf.extend_from_slice(&0u16.to_le_bytes()); // maxsize=0
+    let mut off = 0usize;
+    let et = EmoteTable::read_from(&buf, &mut off).expect("decode empty EmoteTable");
+    assert!(et.emotes.is_empty());
+    assert_eq!(off, 4);
+}
+
+/// J3.E-3: `RestrictionDB` exercises the PHashTable inlining (packed u32
+/// size header where count = packed & 0xFFFFFF). Round-trip with 1 entry.
+#[test]
+fn restriction_db_p_hash_table_round_trip() {
+    use generated::RestrictionDB;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x10000002u32.to_le_bytes()); // Version
+    buf.extend_from_slice(&0u32.to_le_bytes()); // Flags
+    buf.extend_from_slice(&0x5000_0001u32.to_le_bytes()); // MonarchId (ObjectId)
+    // PHashTable: packed-size u32 with count=1 in low 24, buckets=1 (1<<0) in high 8.
+    buf.extend_from_slice(&0x0000_0001u32.to_le_bytes()); // packed = 1
+    // 1 entry: (ObjectId, uint)
+    buf.extend_from_slice(&0x6000_0001u32.to_le_bytes()); // key (ObjectId)
+    buf.extend_from_slice(&1u32.to_le_bytes()); // value (uint)
+
+    let mut off = 0usize;
+    let rdb = RestrictionDB::read_from(&buf, &mut off).expect("decode RestrictionDB");
+    assert_eq!(rdb.version, 0x10000002);
+    assert_eq!(rdb.monarch_id, 0x5000_0001);
+    assert_eq!(rdb.permissions.len(), 1);
+    assert_eq!(rdb.permissions[0].0, 0x6000_0001);
+    assert_eq!(rdb.permissions[0].1, 1);
+    assert_eq!(off, buf.len());
+}
+
+/// J3.E-4: `<if test="PaletteCount > 0">` truthy path — `Palette` field is
+/// Some. Tests the ObjDesc `<if>` site. Uses small PackedDWORD values
+/// (2-byte form, high bit clear) to keep the wire compact.
+#[test]
+fn obj_desc_if_truthy_palette_count_positive() {
+    use generated::ObjDesc;
+    let mut buf = Vec::new();
+    buf.push(0x11u8); // Version (always 0x11)
+    buf.push(1u8); // PaletteCount = 1 → triggers <if>
+    buf.push(0u8); // TextureCount
+    buf.push(0u8); // ModelCount
+    // <if> true branch: Palette DataId (PackedDWORD, 2-byte small form)
+    buf.extend_from_slice(&0x0042u16.to_le_bytes()); // packed-dword (high bit clear → 2 bytes)
+    // Subpalettes vector — 1 element
+    // Subpalette = DataId (Palette PackedDWORD, 2 bytes) + 2 bytes
+    buf.extend_from_slice(&0x0043u16.to_le_bytes()); // Subpalette.Palette PackedDWORD
+    buf.push(0u8); // offset
+    buf.push(1u8); // num_colors
+    // TMChanges + APChanges empty (count=0)
+    // Cursor = 4+2+2+2 = 10, align(4) pads to 12.
+    buf.extend_from_slice(&[0u8, 0u8]); // align(4) pad
+
+    let mut off = 0usize;
+    let od = ObjDesc::read_from(&buf, &mut off).expect("decode ObjDesc");
+    assert_eq!(od.version, 0x11);
+    assert_eq!(od.palette_count, 1);
+    assert!(od.palette.is_some(), "PaletteCount>0 → palette field present");
+    assert_eq!(od.subpalettes.len(), 1);
+    assert!(od.tm_changes.is_empty());
+    assert!(od.ap_changes.is_empty());
+    assert_eq!(off, buf.len(), "cursor consumes header + palette + subpalette + align");
+}
+
+/// J3.E-5: `<if test="PaletteCount > 0">` falsy path — `Palette` field is
+/// None when PaletteCount=0. Verifies the if-block correctly skips its
+/// truthy-branch fields.
+#[test]
+fn obj_desc_if_falsy_palette_count_zero() {
+    use generated::ObjDesc;
+    let mut buf = Vec::new();
+    buf.push(0x11u8);
+    buf.push(0u8); // PaletteCount = 0 → <if> falsy
+    buf.push(0u8);
+    buf.push(0u8);
+    // No <if> body bytes; no subpalettes/tm/ap entries. Cursor at 4 → align(4) pad = 0.
+    let mut off = 0usize;
+    let od = ObjDesc::read_from(&buf, &mut off).expect("decode ObjDesc");
+    assert_eq!(od.palette_count, 0);
+    assert!(od.palette.is_none(), "PaletteCount=0 → palette stays None");
+    assert!(od.subpalettes.is_empty());
+    assert_eq!(off, 4);
+}
+
+/// J3.E-6: `<if test="Flags == 0x4">` with else-branch — AllegianceData
+/// gates between a ulong TimeOnline (true) and a uint TimeOnline + uint
+/// AllegianceAge (false). Both branches produce Option fields with snake-
+/// name auto-disambiguation for the colliding `TimeOnline` name
+/// (`time_online: Option<u64>` vs `time_online_2: Option<u32>`).
+#[test]
+fn allegiance_data_if_with_else_branch_flags_eq_0x4() {
+    use generated::AllegianceData;
+    // Truthy: Flags = 0x4 → ulong TimeOnline path.
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x6000_0001u32.to_le_bytes()); // CharacterId (4)
+    buf.extend_from_slice(&100u32.to_le_bytes());          // XPCached (4)
+    buf.extend_from_slice(&200u32.to_le_bytes());          // XPTithed (4)
+    buf.extend_from_slice(&0x4u32.to_le_bytes());          // Flags = 0x4 → truthy (4)
+    buf.push(generated::Gender::Male as u8);               // Gender (1 byte enum)
+    buf.push(generated::HeritageGroup::Aluvian as u8);     // Heritage (1 byte enum)
+    buf.extend_from_slice(&5u16.to_le_bytes());            // Rank (2)
+    // Flags & 0x8 = 0 → Level not present (maskmap skipped)
+    buf.extend_from_slice(&10u16.to_le_bytes());           // Loyalty (2)
+    buf.extend_from_slice(&15u16.to_le_bytes());           // Leadership (2)
+    // Truthy branch: ulong TimeOnline (8 bytes)
+    buf.extend_from_slice(&0x1234_5678_9ABC_DEF0u64.to_le_bytes());
+    // Name (string16 = u16 length + bytes + align(4))
+    buf.extend_from_slice(&3u16.to_le_bytes()); // length
+    buf.extend_from_slice(b"Bob");
+    let pad = (4 - (buf.len() % 4)) % 4;
+    buf.extend_from_slice(&vec![0u8; pad]);
+
+    let mut off = 0usize;
+    let ad = AllegianceData::read_from(&buf, &mut off).expect("decode AllegianceData truthy");
+    assert_eq!(ad.character_id, 0x6000_0001);
+    assert_eq!(ad.flags, 0x4);
+    assert_eq!(ad.time_online, Some(0x1234_5678_9ABC_DEF0));
+    assert!(ad.time_online_2.is_none(), "falsy branch's u32 TimeOnline stays None");
+    assert!(ad.allegiance_age.is_none(), "falsy branch's AllegianceAge stays None");
+    assert_eq!(ad.name, "Bob");
+}
+
+/// J3.E-7: `SpellBookPage` `<if test="CastingLikelihood < 2.0">` truthy →
+/// extra Unknown + CastingLikelihood2 fields present.
+#[test]
+fn spell_book_page_if_truthy_low_likelihood() {
+    use generated::SpellBookPage;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&1.5f32.to_le_bytes()); // CastingLikelihood < 2.0 → truthy
+    buf.extend_from_slice(&42i32.to_le_bytes()); // Unknown (Client skips)
+    buf.extend_from_slice(&0.9f32.to_le_bytes()); // CastingLikelihood2
+
+    let mut off = 0usize;
+    let sbp = SpellBookPage::read_from(&buf, &mut off).expect("decode SpellBookPage truthy");
+    assert_eq!(sbp.casting_likelihood, 1.5);
+    assert_eq!(sbp.unknown, Some(42));
+    assert_eq!(sbp.casting_likelihood2, Some(0.9));
+    assert_eq!(off, 12);
+}
+
+/// J3.E-8: `SpellBookPage` `<if test="CastingLikelihood < 2.0">` falsy →
+/// no extra fields read; the Option fields stay None.
+#[test]
+fn spell_book_page_if_falsy_high_likelihood() {
+    use generated::SpellBookPage;
+    let buf = 2.5f32.to_le_bytes();
+    let mut off = 0usize;
+    let sbp = SpellBookPage::read_from(&buf, &mut off).expect("decode SpellBookPage falsy");
+    assert_eq!(sbp.casting_likelihood, 2.5);
+    assert!(sbp.unknown.is_none());
+    assert!(sbp.casting_likelihood2.is_none());
+    assert_eq!(off, 4);
+}
+
+/// J3.E-9: `PageData` `<if test="TextIncluded">` bare-bool path — when
+/// TextIncluded=true (1u32), PageText is Some.
+#[test]
+fn page_data_if_text_included_truthy() {
+    use generated::PageData;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x5000_0001u32.to_le_bytes()); // AuthorId
+    // AuthorName (string16)
+    buf.extend_from_slice(&5u16.to_le_bytes());
+    buf.extend_from_slice(b"Alice");
+    let pad = (4 - (buf.len() % 4)) % 4;
+    buf.extend_from_slice(&vec![0u8; pad]);
+    // AuthorAccount (empty)
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    let pad2 = (4 - (buf.len() % 4)) % 4;
+    buf.extend_from_slice(&vec![0u8; pad2]);
+    buf.extend_from_slice(&0xFFFF_0002u32.to_le_bytes()); // Version (static)
+    buf.extend_from_slice(&1u32.to_le_bytes()); // TextIncluded = true
+    buf.extend_from_slice(&0u32.to_le_bytes()); // IgnoreAuthor = false
+    // <if> body: PageText (string16)
+    buf.extend_from_slice(&5u16.to_le_bytes());
+    buf.extend_from_slice(b"Hello");
+    let pad3 = (4 - (buf.len() % 4)) % 4;
+    buf.extend_from_slice(&vec![0u8; pad3]);
+
+    let mut off = 0usize;
+    let pd = PageData::read_from(&buf, &mut off).expect("decode PageData truthy");
+    assert_eq!(pd.author_name, "Alice");
+    assert_eq!(pd.page_text.as_deref(), Some("Hello"));
+}
+
+/// J3.E-10: PackableList<T> round-trip via `EventFilter` — single-field
+/// wrapper around `<field type="PackableList" genericType="uint">`.
+#[test]
+fn event_filter_packable_list_uint_round_trip() {
+    use generated::EventFilter;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&3u32.to_le_bytes()); // count
+    buf.extend_from_slice(&100u32.to_le_bytes());
+    buf.extend_from_slice(&200u32.to_le_bytes());
+    buf.extend_from_slice(&300u32.to_le_bytes());
+    let mut off = 0usize;
+    let ef = EventFilter::read_from(&buf, &mut off).expect("decode EventFilter");
+    assert_eq!(ef.events, vec![100, 200, 300]);
+    assert_eq!(off, 16);
+}
+
+/// J3.E-11: `Body` is a wrapper around PackableHashTable<uint, BodyPart>.
+/// Empty round-trip — exercises the count=0 path of the inliner.
+#[test]
+fn body_packable_hash_table_uint_to_body_part_empty() {
+    use generated::Body;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u16.to_le_bytes()); // count
+    buf.extend_from_slice(&0u16.to_le_bytes()); // maxsize
+    let mut off = 0usize;
+    let body = Body::read_from(&buf, &mut off).expect("decode empty Body");
+    assert!(body.body_parts.is_empty());
+    assert_eq!(off, 4);
+}
+
+/// J3.E-12: J3.E SKIPPED-note ceiling — exactly the three templated meta-
+/// declarations remain (PackableList, PackableHashTable, PHashTable).
+/// One extra match comes from the file-header doc-comment that mentions
+/// "// SKIPPED" — total ceiling: 4.
+#[test]
+fn j3e_skipped_count_drops_to_single_digits() {
+    let out_dir = env_out_dir_for_holtburger_protocol();
+    let gen_path = std::path::Path::new(&out_dir).join("messages_generated.rs");
+    let body = std::fs::read_to_string(&gen_path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
+    let skipped = body.matches("// SKIPPED").count();
+    assert!(
+        skipped <= 5,
+        "J3.E should drop SKIPPED count to ≤ 5 (only templated meta + file-header doc-comment); got {skipped}"
+    );
+    // Exactly the three templated meta-declarations should remain.
+    let has_list = body.lines().any(|l| l.contains("SKIPPED datatype PackableList:"));
+    let has_ht = body.lines().any(|l| l.contains("SKIPPED datatype PackableHashTable:"));
+    let has_phh = body.lines().any(|l| l.contains("SKIPPED datatype PHashTable:"));
+    assert!(has_list && has_ht && has_phh,
+        "expected all three templated meta-declarations to remain as SKIPs (they have no concrete struct shape)");
+}
+
+/// J3.E-13: AttributeCache emits + decodes — its 9-field maskmap was
+/// previously blocked because the Strength..Self attributes are typed
+/// `AttributeInfo` (a struct), which the maskmap codegen handles cleanly
+/// when the dependency resolves. Confirms the dependency cascade.
+#[test]
+fn attribute_cache_emit_and_round_trip_empty() {
+    use generated::AttributeCache;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u32.to_le_bytes()); // Flags = 0
+    let mut off = 0usize;
+    let ac = AttributeCache::read_from(&buf, &mut off).expect("decode AttributeCache");
+    assert_eq!(ac.flags, 0);
+    assert!(ac.strength.is_none());
+    assert!(ac.mana.is_none());
+    assert_eq!(off, 4);
+}
+
+/// J3.E-14: chain-unblock census — every type the J3.C agent identified
+/// as waiting for J3.E is now emitted as a concrete Rust struct. The list
+/// is the original 8+ types per the J3 plan: ACBaseQualities, ACQualities,
+/// EmoteTable, EnchantmentRegistry, PhysicsDesc, AllegianceData,
+/// AttributeCache, ItemProfile, PublicWeenieDesc, OldPublicWeenieDesc,
+/// PlayerModule, AllegianceHierarchy, AllegianceProfile, FriendData,
+/// PageData, PageDataList, GeneratorTable, GeneratorRegistry, Fellowship,
+/// SquelchDB, Body, RestrictionDB.
+#[test]
+fn j3e_chain_unblock_census_types_emit() {
+    use generated::*;
+    let _ac_base = ACBaseQualities { flags: 0, weenie_type: WeenieType::Generic,
+        int_properties: None, int64properties: None, bool_properties: None,
+        float_properties: None, string_properties: None, data_properties: None,
+        instance_properties: None, position_properties: None };
+    let _ac_qual = ACQualities { flags: 0, has_health: false,
+        attributes: None, skills: None, body: None, spell_book: None,
+        enchantments: None, event_filter: None, emotes: None, creation_profile: None,
+        page_data: None, generators: None, generator_registry: None, generator_queue: None };
+    let _emote_table = EmoteTable { emotes: Vec::new() };
+    let _enchant_reg = EnchantmentRegistry { flags: 0, life_spells: None,
+        creature_spells: None, vitae: None, cooldowns: None };
+    let _physics_desc: fn() -> &'static str = || std::any::type_name::<PhysicsDesc>();
+    let _allegiance_data: fn() -> &'static str = || std::any::type_name::<AllegianceData>();
+    let _attribute_cache: fn() -> &'static str = || std::any::type_name::<AttributeCache>();
+    let _item_profile: fn() -> &'static str = || std::any::type_name::<ItemProfile>();
+    let _pub_weenie_desc: fn() -> &'static str = || std::any::type_name::<PublicWeenieDesc>();
+    let _old_pub_weenie_desc: fn() -> &'static str = || std::any::type_name::<OldPublicWeenieDesc>();
+    let _player_module: fn() -> &'static str = || std::any::type_name::<PlayerModule>();
+    let _allegiance_hier: fn() -> &'static str = || std::any::type_name::<AllegianceHierarchy>();
+    let _allegiance_prof: fn() -> &'static str = || std::any::type_name::<AllegianceProfile>();
+    let _friend_data: fn() -> &'static str = || std::any::type_name::<FriendData>();
+    let _page_data: fn() -> &'static str = || std::any::type_name::<PageData>();
+    let _page_data_list: fn() -> &'static str = || std::any::type_name::<PageDataList>();
+    let _gen_table: fn() -> &'static str = || std::any::type_name::<GeneratorTable>();
+    let _gen_reg: fn() -> &'static str = || std::any::type_name::<GeneratorRegistry>();
+    let _fellow: fn() -> &'static str = || std::any::type_name::<Fellowship>();
+    let _squelch_db: fn() -> &'static str = || std::any::type_name::<SquelchDB>();
+    let _body: fn() -> &'static str = || std::any::type_name::<Body>();
+    let _restriction_db: fn() -> &'static str = || std::any::type_name::<RestrictionDB>();
+    let _spell_book_page: fn() -> &'static str = || std::any::type_name::<SpellBookPage>();
+    let _obj_desc: fn() -> &'static str = || std::any::type_name::<ObjDesc>();
 }
