@@ -520,6 +520,17 @@ export function createClient(sessionHandle) {
     get canCreateCharacter() {
       return sessionHandle.canCreateCharacter;
     },
+    // PR 4 (2026-05-27): `client.character` — typed `Character` instance
+    // for the local player. Null pre-spawn / pre-PLAYER_SPAWNED. Once
+    // `world.setLocalPlayerGuid(guid)` lands + the kind=10 ObjectCreate
+    // for that GUID is dispatched into `world.dispatchItemCreateObject`,
+    // this getter returns the typed Character with vitae / enchantment /
+    // cooldown state ready for HUD consumption. Also available as
+    // `client.world.character` for plugins that already hold a `world`
+    // reference.
+    get character() {
+      return world.character;
+    },
   };
 
   // PR-2 — bind the new WorldState onto the client's event-bus surface so

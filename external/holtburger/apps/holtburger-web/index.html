@@ -3925,7 +3925,18 @@ void main() {
       // PlayerCreate lands. ensureNameplate skips entries whose guid
       // matches this.
       let localPlayerGuid = null;
-      function setLocalPlayerGuid(guid) { localPlayerGuid = guid >>> 0; }
+      function setLocalPlayerGuid(guid) {
+        localPlayerGuid = guid >>> 0;
+        // ACPlugin PR-4 (2026-05-27): forward to WorldState so the
+        // typed Character spawn path can construct a Character (not a
+        // generic Player) when the kind=10 ObjectCreate for this GUID
+        // arrives. Idempotent + defensive — works when the plugin
+        // client hasn't been built yet (early kind=1).
+        if (window.__pluginClient?.world?.setLocalPlayerGuid) {
+          try { window.__pluginClient.world.setLocalPlayerGuid(localPlayerGuid); }
+          catch (e) { console.warn('[pr-4] world.setLocalPlayerGuid failed', e); }
+        }
+      }
       function getLocalPlayerGuid() { return localPlayerGuid; }
       // Track the local player's landblock so handlePositionUpdate
       // can emit a `landblockChanged` event on LB-boundary crossings.
@@ -8641,6 +8652,17 @@ void main() {
                     message: evt.stringPayload || "",
                   });
                 }
+                // ACPlugin PR-4 (2026-05-27): forward into the typed
+                // Character.applyCombatHandlePlayerDeath — the filter
+                // (victimId == self) is INSIDE Character so this is
+                // a safe broadcast-side hook.
+                try {
+                  window.__pluginClient?.world?.dispatchCombatHandlePlayerDeath?.(
+                    evt.stringPayload || "",
+                    (evt.u32Payload >>> 0) || 0,
+                    (evt.u32Payload2 >>> 0) || 0,
+                  );
+                } catch (_) {}
               } else if (evt.kind === 30 /* PlayEffect */) {
                 // CMT Wave 11 / Phase 34 (2026-05-26): bridge ACE's
                 // `GameMessage::PlayEffect` (opcode `0xF755` =
@@ -8683,6 +8705,18 @@ void main() {
                   window.__pluginClient?.events?.emit?.("containerClosed", {
                     stringPayload: containerName,
                     u32Payload: containerGuidU32,
+                  });
+                } catch (_) {}
+              } else if (evt.kind === 33 /* PortalSpaceEntered */) {
+                // ACPlugin PR-4 (2026-05-27): Character.OnPortalSpaceEntered
+                // mirror. Bridges PlayerTeleport into the typed Character's
+                // `applyEffectsPlayerTeleport` via WorldState's dispatcher,
+                // and fires the bus event so the loading-screen overlay
+                // and any other plugin can subscribe.
+                try {
+                  window.__pluginClient?.world?.dispatchEffectsPlayerTeleport?.();
+                  window.__pluginClient?.events?.emit?.('portalSpaceEntered', {
+                    teleportSeq: (evt.u32Payload ?? 0) >>> 0,
                   });
                 } catch (_) {}
               } else if (evt.kind === 32 /* ObjectAppraised */) {

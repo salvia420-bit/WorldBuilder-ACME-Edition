@@ -12698,6 +12698,20 @@ const CLIENT_EVENT_KIND_CONTAINER_CLOSED: u32 = 31;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_OBJECT_APPRAISED: u32 = 32;
 
+/// `kind = 33` — PortalSpaceEntered. ACPlugin PR-4 (2026-05-27). ACE
+/// emits `GameMessage::PlayerTeleport` (opcode `0xF748`) when the local
+/// player enters portal space (loading-screen). Maps to
+/// `Character.OnPortalSpaceEntered` (`Character.cs:153-157`) — the
+/// edge-trigger for the loading-screen overlay. Symmetric to
+/// `CLIENT_EVENT_KIND_ENTERED_WORLD (= 7)` which covers the
+/// portal-space-EXITED edge (post-portal arrival via `Item_SetState`
+/// dropping the Hidden bit per `Character.cs:461-466`).
+///
+/// `u32Payload` = teleport sequence number (per
+/// `PlayerTeleport.teleport_sequence`); other slots unused.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_PORTAL_SPACE_ENTERED: u32 = 33;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -24022,6 +24036,17 @@ async fn recv_loop(
                                     "[step 3.6] post-teleport LoginComplete send failed: {e}"
                                 ));
                             }
+                            // ACPlugin PR-4 (2026-05-27): Character.OnPortalSpaceEntered
+                            // mirror. `Character.cs:468-471` fires the bus
+                            // event on every Effects_PlayerTeleport — the
+                            // loading-screen overlay listens for it.
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_PORTAL_SPACE_ENTERED,
+                                string_payload: None,
+                                u32_payload: Some(u32::from(data.teleport_sequence)),
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
                         }
                         GameMessage::CharacterEnterWorldServerReady => {
                             // Server is acknowledging our CharacterEnterWorldRequest;

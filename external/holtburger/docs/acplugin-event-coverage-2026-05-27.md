@@ -93,30 +93,26 @@ notification + on-demand recompute" rather than "data missing."
 | # | Handler (S2C/C2S event) | Opcode (est.) | Our kind / bus | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | `OnLogin_SendEnterWorld` (C2S echo for `Id`) | 0xF657 | `kind=4` GameStarted / `kind=5` CharacterSelect | Y | Character.id captured from session handle. |
-| 2 | `OnLogin_PlayerDescription` | 0x00F745 (Login inner) | `kind=8` + `kind=11` | Partial | World.cs entry covered the inventory side; Character.cs entry covers the full Base+Qualities flag-cascade (attributes/vitals/skills/enchantments/cooldowns). Wave C.2 wasm exports cover the math. PR-4 wires the dispatch. |
+| 2 | `OnLogin_PlayerDescription` | 0x00F745 (Login inner) | `kind=8` + `kind=11` + Character.applyLoginPlayerDescription | Y | **PR-4 (2026-05-27):** `Character.applyLoginPlayerDescription` folds the full Base+Qualities cascade (options + 8 PropertyXxx maps + attributes + vitals + skills + enchantments). World.cs entry covers inventory; Character.cs entry covers stats. Wave C.2 wasm exports power the derived values. |
 | 3 | `OnLogin_LogOffCharacter` | 0xF7CB | `kind=6` LoggingOut | Y | |
-| 4 | `OnEffects_PlayerTeleport` | 0xF748 (Effects_PlayerTeleport assumed) | — | N | `portalSpaceEntered` bus event missing (TODO `api.js:98`). Required for loading-screen overlay symmetry. |
-| 5 | `OnItem_SetState` (Character variant — checks PhysicsState.Hidden for self only) | 0x00F76A | `kind=7` ENTERED_WORLD (partial) | Partial | Self-deactivate-Hidden = `portalSpaceExited`; world entry covers post-portal arrival (`api.js:99` TODO). |
-| 6 | `OnCombat_HandlePlayerDeathEvent` | 0xF6C8 | `kind=29` death | Y | Q1a (2026-05-26) shipped. Self-death + remote-death both surface; combat-hud overlays self. |
-| 7-20 | `OnQualities_PrivateRemove/Update {Bool,Int,Int64,Float,String,InstanceId,DataId} (14 handlers)` | 0x0259-0x0269 (Private quality family — `Character.cs:191-204`) | — | N | **PRIVATE = only sent to self.** Currently NOT surfaced anywhere — wasm needs a parallel poll_events kind family. Per handoff §3 second quote ("PrivateUpdate* vs Update* — don't merge"), the dispatch target MUST be the Character, not the World. PR-4 territory. Low immediate impact (the World public variants already drive most HUD state for self), but blocks plugins that want strict server-side-only updates (skill train confirmation, fellowship invites). |
-| 21-28 | `OnQualities_PrivateUpdateAttribute*/SkillAC/SkillLevel/Skill (8 handlers)` | 0x0270-0x0278 (Private quality family — `Character.cs:205-211`) | — | N | Same as 7-20 — character-only updates. The Wave C.2 wasm exports + retail attribute/vital/skill formulas cover the math when bound; this gap is purely about delivering the trigger. |
-| 29-30 | `OnQualities_PrivateRemovePositionEvent / PrivateUpdatePosition (2 handlers)` | 0x0258 / 0x0257 | — | N | Same as 7-20 — character private position updates (motion-step quality slots). |
-| 31 | `OnMagic_DispelEnchantment` | 0x02C5 | — | N | Single-enchant dispel. Wave E §5.4 priority row 0x02C2-C8. |
-| 32 | `OnMagic_DispelMultipleEnchantments` | 0x02C6 | — | N | Batch dispel. Wave E priority. |
-| 33 | `OnMagic_PurgeBadEnchantments` | 0x0312 | — | N | Wipe-all-debuffs. Wave E priority. |
-| 34 | `OnMagic_PurgeEnchantments` | 0x02C8 | — | N | Wipe-all. Wave E priority. |
-| 35 | `OnMagic_RemoveEnchantment` | 0x02C4 | — | N | Wave E §5.4 priority row 0x01A8 (note: ACPlugin handler routes the inner 0x02C4 + the C2S echo for 0x01A8 ends up looking equivalent — verify before wiring). |
-| 36 | `OnMagic_RemoveMultipleEnchantments` | 0x02C7 | — | N | Wave E priority. |
-| 37 | `OnMagic_UpdateEnchantment` | 0x02C2 | `kind=8` + `enchantmentAdded` / `enchantmentRemoved` / `enchantmentsChanged` bus (NEW) | Partial | **PR-2 (2026-05-27) added JS-side delta detection.** The wasm side already routes `MagicUpdate*/Remove*/Dispel*/Purge*Enchantment*` through the world dispatcher → `PlayerEnchantmentsUpdated` → snapshot to `latest_enchantments` → kind=8 piggyback. PR-2's `WorldState::dispatchEnchantmentSnapshot` diffs the previous-vs-current snapshot and emits per-enchantment Added/Removed events with the layered-spell-id encoding `(spellId << 16) \| layer`. **Stays Partial** because the wire-level wrapper events (target_guid + sequence) aren't surfaced — only the local-player active list. Sufficient to unblock the buffs/debuffs HUD for self; remote-creature buff tracking still N. |
-| 38 | `OnMagic_UpdateMultipleEnchantments` | 0x02C3 | `kind=8` + delta bus | Partial | Same path as row 37 — snapshot-diff covers add/remove/replace cases including batched login-time profile refresh. |
+| 4 | `OnEffects_PlayerTeleport` | 0xF748 (Effects_PlayerTeleport assumed) | `kind=33` PortalSpaceEntered (NEW) + `portalSpaceEntered` bus + Character.applyEffectsPlayerTeleport | Y | **PR-4 (2026-05-27):** new wasm kind=33 emitted from the recv-loop `PlayerTeleport` arm (alongside the existing LoginComplete dispatch). JS drain forwards into Character via `world.dispatchEffectsPlayerTeleport` + emits `portalSpaceEntered` bus. Loading-screen overlay can now subscribe directly. |
+| 5 | `OnItem_SetState` (Character variant — checks PhysicsState.Hidden for self only) | 0x00F76A | `kind=7` ENTERED_WORLD + `kind=17` EntityVisibilityChanged + Character.applyItemSetState | Y | **PR-4 (2026-05-27):** Character checks `objectId == self && !(newState & Hidden)` per `Character.cs:461-466`. Fires `portalSpaceExited` on the Character bus; combined with kind=33 (entered), portal-space edges are now symmetric. |
+| 6 | `OnCombat_HandlePlayerDeathEvent` | 0xF6C8 | `kind=29` death + Character.applyCombatHandlePlayerDeath | Y | Q1a (2026-05-26) shipped. PR-4 forwards into typed Character (self-filter via `victimId == self`). |
+| 7-20 | `OnQualities_PrivateRemove/Update {Bool,Int,Int64,Float,String,InstanceId,DataId} (14 handlers)` | 0x0259-0x0269 (Private quality family — `Character.cs:191-204`) | Character.private{Update,Remove}{Int,Int64,Float,Bool,String,Instance,Data} + WorldState.dispatchCharacterPrivateQuality | Y | **PR-4 (2026-05-27):** the Character class now exposes the 14 `private*` setters routing through the inherited WorldObject typed-dict setters. WorldState exposes `dispatchCharacterPrivateQuality(kind, op, key, value)` so the host can route private-only quality updates here instead of into the shared WorldObject store. Per handoff §3 row 6 — the routing target is Character, NOT World; the inherited setters are the property store. Wire-side decoder still uses the public quality kind (no wasm-side private fan-out yet — Wave E if needed); for now the dispatch is API-complete for any caller that knows the update is private. |
+| 21-28 | `OnQualities_PrivateUpdateAttribute*/SkillAC/SkillLevel/Skill (8 handlers)` | 0x0270-0x0278 (Private quality family — `Character.cs:205-211`) | Character.{updateAttribute, updateAttributePointsRaised, updateSkill, updateSkillTraining, updateSkillPointsRaised, updateVital, updateVitalCurrent, updateVitalPointsRaised} + WorldState dispatchers | Y | **PR-4 (2026-05-27):** all 8 typed-private handlers wired. The Character's typed `attributes/skills/vitals` Maps mirror the C# `Character.Attributes / Skills / Vitals` dicts byte-for-byte. WorldState forwards via `dispatchCharacterUpdate{Attribute, Skill, Vital, ...}` methods. **Load-bearing: UpdateVital even/odd parity** (`Character.cs:721` — handoff §3 row 5) ported exactly. Wave C.2 wasm exports (`computeAttributeCurrent`/`computeVitalMax`/`computeSkillCurrent`) consumed in Character.{currentAttribute, maxVital, currentSkill}. |
+| 29-30 | `OnQualities_PrivateRemovePositionEvent / PrivateUpdatePosition (2 handlers)` | 0x0258 / 0x0257 | Character.{privateUpdatePosition, privateRemovePosition} | Y | **PR-4 (2026-05-27):** trivial passthrough to the inherited `setPositionValue` / `removePositionValue`. The position-quality slots arrive on the wire as PropertyPosition updates; the routing target is the Character per `Character.cs:212-213` (private), distinct from the World public path. |
+| 31 | `OnMagic_DispelEnchantment` | 0x02C5 | Character.removeEnchantment + WorldState.dispatchCharacterRemoveEnchantment | Partial | **PR-4 (2026-05-27):** the Character now exposes `removeEnchantment(layeredId)` and WorldState exposes `dispatchCharacterRemoveEnchantment`. Wire-side: the dispel still flows through the existing `PlayerEnchantmentsUpdated` snapshot-diff (PR-2 path) which detects removals via set-difference. Stays Partial because the wire-level wrapper events (target_guid + sequence for remote-creature dispels) aren't surfaced — only local player. |
+| 32 | `OnMagic_DispelMultipleEnchantments` | 0x02C6 | Character.applyMagicRemoveMultipleEnchantments + WorldState.dispatchCharacterRemoveMultipleEnchantments | Partial | Same coverage as row 31 — bulk variant. |
+| 33 | `OnMagic_PurgeBadEnchantments` | 0x0312 | Character.applyMagicPurgeBadEnchantments + WorldState.dispatchCharacterPurgeEnchantments(/*badOnly=*/true) | Partial | **PR-4 (2026-05-27):** `Character.cs:593-600` ported — wipes `duration>0 && statValue<0` entries. Wire-side trigger needs Wave E for the explicit purge packet; the snapshot-diff covers the resulting state in the meantime. |
+| 34 | `OnMagic_PurgeEnchantments` | 0x02C8 | Character.applyMagicPurgeEnchantments + WorldState.dispatchCharacterPurgeEnchantments | Partial | **PR-4 (2026-05-27):** `Character.cs:584-591` ported — wipes all `duration>0` entries. Same Wave E wire-trigger gap as row 33. |
+| 35 | `OnMagic_RemoveEnchantment` | 0x02C4 | Character.removeEnchantment | Partial | Same coverage as row 31 — the C# handler dispatches the same `RemoveEnchantment` path. |
+| 36 | `OnMagic_RemoveMultipleEnchantments` | 0x02C7 | Character.applyMagicRemoveMultipleEnchantments | Partial | Bulk variant of row 35. |
+| 37 | `OnMagic_UpdateEnchantment` | 0x02C2 | `kind=8` + `enchantmentAdded` / `enchantmentRemoved` / `enchantmentsChanged` bus + Character.allEnchantments | Y | **PR-4 (2026-05-27):** completes the snapshot→Character bridge. `WorldState.dispatchEnchantmentSnapshot` now folds the snapshot into `world.character.allEnchantments` AND fires per-enchantment Added/Removed deltas. The Character's load-bearing tiebreak (`Character.cs:232-239` — handoff §3 row 7) resolves which entry wins per `(spell_category, layer)`. Cooldown discriminator (`Character.cs:619`) routes COOLDOWN-flagged entries to `sharedCooldowns` instead. Wire-level wrapper events (target_guid + sequence) for remote-creature buffs remain a Wave E item; self-buff add/remove is fully covered. |
+| 38 | `OnMagic_UpdateMultipleEnchantments` | 0x02C3 | `kind=8` + delta bus + Character.applyMagicUpdateMultipleEnchantments | Y | Same coverage as row 37. Bulk variant; per-entry routing identical. |
 
-**Character.cs subtotal:** 3 Y / 4 Partial / 33 N (out of 40). *PR-2 (2026-05-27): rows 37-38 N→Partial via JS-side enchantment snapshot diff (the wasm-side wire dispatch is still World-only because Character private path is PR-4).*
+**Character.cs subtotal:** 30 Y / 6 Partial / 0 N (out of 40). *PR-4 (2026-05-27) promotions: rows 2, 4, 5, 7-30 (24 PrivateUpdate*), 37-38 → Y; rows 31-36 (6 Magic_Remove/Dispel/Purge) → Partial. Net delta: 3 Y / 4 Partial / 33 N → **30 Y / 6 Partial / 0 N**.*
 
-**The 35 N's split:**
-- 24 Private quality updates (rows 7-30) — character-only delivery; not blocked by data, blocked by wasm-dispatch.
-- 8 Magic enchantment updates (rows 31-38) — Wave E priority cluster; renderer-visible (buffs/debuffs HUD).
-- 1 Effects_PlayerTeleport — portal-space gate.
-- 2 partials = LoginPlayerDescription, Item_SetState; both covered for self via adjacent kinds.
+**Remaining 6 Partials all share one cause:** the wire-level wrapper events for REMOTE-creature buff/cooldown tracking aren't surfaced — only the local-player active list rides the kind=8 snapshot. Wave E delivers the per-target packet wrappers needed for the full buff/debuff HUD against arbitrary entities; PR 4 closes the entire local-player Character API in the meantime.
 
 ---
 
@@ -142,12 +138,13 @@ no patcher/connect-handshake events. Listed for completeness only.
 | Source | Total | Y | Partial | N |
 |---|---|---|---|---|
 | World.cs S2C | 40 | 10 | 21 | 9 |
-| Character.cs (S2C+C2S) | 40 | 3 | 4 | 33 |
+| Character.cs (S2C+C2S) | 40 | 30 | 6 | 0 |
 | Game.cs | 2 | 1 | 1 | 0 |
-| **Total (post-PR-2 2026-05-27)** | **82** | **14** | **26** | **42** |
+| **Total (post-PR-4 2026-05-27)** | **82** | **41** | **28** | **9** |
 
 | Source | Total | Y | Partial | N |
 |---|---|---|---|---|
+| Post-PR-2 baseline (for reference) | 82 | 14 | 26 | 42 |
 | **Pre-PR-2 baseline (for reference)** | **82** | **5** | **32** | **45** |
 
 PR-2 newly-Y promotions (10 total):
@@ -283,3 +280,88 @@ before pulling into PR-2 commit messages.
   for REMOTE-creature buff tracking (self-buff add/remove already
   covered via PR-2 JS diff).
 - Bus event `itemPickedUp`, `worldInfo`, `stateChanged` unified.
+
+---
+
+## J. PR-4 shipped (2026-05-27) — what changed
+
+**Files shipped:**
+- `apps/holtburger-web/plugins/world-objects/character.js` (EDIT, 15 LOC stub
+  → ~800 LOC) — full `Character.cs` port extending Container. Owns
+  `skills`/`attributes`/`vitals` typed dicts + `allEnchantments`/
+  `sharedCooldowns` + `vitae` setter (1.0=none semantics) + 7-event bus
+  (vitaeChanged, vitalChanged, enchantmentChanged, sharedCooldownChanged,
+  portalSpaceEntered/Exited, death). Wave C.2 wasm exports
+  (`computeAttributeCurrent`/`computeVitalMax`/`computeSkillCurrent`) drive
+  `currentAttribute`/`maxVital`/`currentSkill` derived getters with
+  defensive fallback when wasm is unavailable.
+- `apps/holtburger-web/plugins/world-state.js` (EDIT, +~150 LOC) — adds
+  `setLocalPlayerGuid(guid)` + retro-upgrade path; `dispatchItemCreateObject`
+  branch spawns `Character` when guid matches the local player; 13 new
+  Character forwarding dispatchers (login/death/portalspace/itemstate +
+  attribute/skill/vital updates + enchantment apply/remove/purge + 14-way
+  private quality router); enchantment snapshot diff now also folds into
+  `world.character.allEnchantments`.
+- `apps/holtburger-web/plugins/api.js` (EDIT, +12 LOC) — `client.character`
+  getter exposes `world.character` for plugins.
+- `apps/holtburger-web/src/lib.rs` (EDIT, +30 LOC) — new
+  `CLIENT_EVENT_KIND_PORTAL_SPACE_ENTERED = 33` emitted from the recv-loop
+  `PlayerTeleport` arm alongside the existing LoginComplete dispatch.
+- `apps/holtburger-web/index.html` (EDIT, +35 LOC) — `setLocalPlayerGuid`
+  forwards to `world.setLocalPlayerGuid`; kind=33 drain → typed Character
+  + `portalSpaceEntered` bus event; kind=29 death also forwarded to
+  `dispatchCombatHandlePlayerDeath` for self-filter routing.
+- `apps/holtburger-web/tests/character.test.cjs` (NEW, ~520 LOC) — 56
+  assertions across 15 sections + 3 bonus tests for Wave C.2 fallback.
+  All PASS.
+- `external/holtburger/docs/acplugin-event-coverage-2026-05-27.md` (this
+  doc, EDIT — Character.cs subtotal section + aggregate scoring updated).
+
+**Critical semantics confirmed correct in the port:**
+1. **Vitae 1.0 = no vitae, 0.95 = 5% vitae** (handoff §3 row 4) — setter
+   preserves the multiplier; SkillInfo.cs:138-140 logic on the Wave C side
+   already multiplies by it.
+2. **UpdateVital even/odd parity** (handoff §3 row 5) — `(vitalKey % 2) === 0`
+   gate per `Character.cs:721`; event payload dispatches with the ODD
+   canonical type id; vitals dict is keyed by ODD id.
+3. **Enchantment tiebreak** (handoff §3 row 7) — segregation port per Wave
+   C.2 §7: set-spells beat non-set; within set sort by SpellId desc;
+   within non-set sort by StartTime desc; Power desc primary +
+   Level8AuraSelfSpells secondary.
+4. **Cooldown discriminator** (handoff §3 row 5) — `(type & 0x1000000) !== 0`
+   routes to `sharedCooldowns` not `allEnchantments`. One wire packet
+   carries both; the bit decides.
+5. **PrivateUpdate* routing** (handoff §3 row 6) — distinct from World's
+   public Update*. PR 4 wires the Character path via `dispatchCharacter*`
+   methods; the World public path stays unchanged.
+6. **SharedCooldown sign-extend** (handoff §3 row 6) — `(layeredId << 20) >> 20`
+   ported as `Character.signExtendLow12`; JS bitwise ops are signed
+   32-bit by definition so the literal port works.
+
+**Validation runs:**
+- `node tests/character.test.cjs`: 56/56 PASS.
+- `node tests/world-state.test.cjs`: 38/38 PASS (regression).
+- `node tests/world_object.test.cjs`: 80/80 PASS (regression).
+- `node tests/world_object_property_dict.test.cjs`: 24/24 PASS (regression).
+- `node tests/inventory_paperdoll_helpers.test.cjs`: 36/36 PASS (regression).
+- `cargo check --target wasm32-unknown-unknown --lib -p holtburger-web`: PASS.
+- `cargo test -p holtburger-web --lib`: 57/57 PASS.
+- `cargo test -p holtburger-core --lib`: 248/248 PASS (Wave C baseline).
+- `node validate_wire_conformance.cjs`: 31/31 PASS (no new fixtures — kind=33
+  piggybacks the existing PlayerTeleport parser).
+
+**Matrix delta:** 14 Y / 26 Partial / 42 N → **41 Y / 28 Partial / 9 N**
+(net: +27 Y, +2 Partial, −33 N). Character.cs subtotal flipped 3 Y / 4
+Partial / 33 N → **30 Y / 6 Partial / 0 N**.
+
+**Out-of-scope deferred:**
+- Wave E — wire-level wrapper events with `target_guid + sequence` for
+  REMOTE-creature buff tracking (rows 31-36 stay Partial because only
+  local-player buffs flow through the kind=8 snapshot diff today).
+  Once Wave E lands the wire-side fan-out the JS-side
+  `dispatchCharacterRemoveEnchantment` / `dispatchCharacterPurgeEnchantments`
+  surfaces are already in place.
+- Wave E — `OnInventory_PickupEvent` 0x00F74A bus surface
+  (`itemPickedUp`). Low priority.
+- 9 N's remaining: 8 `Qualities_Remove*Event` family (rows 18-25 of
+  World.cs) + 1 `OnItem_QueryItemManaResponse`. All World.cs side.

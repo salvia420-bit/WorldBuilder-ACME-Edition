@@ -37,6 +37,7 @@
 // =============================================================================
 
 import { WorldObject } from './world-objects/world_object.js';
+import { Character } from './world-objects/character.js';
 
 // PropertyInt / PropertyInstanceId constants needed by the dispatch table.
 // Sourced from `crates/holtburger-common/src/properties/property_keys/`.
@@ -146,7 +147,64 @@ export class WorldState extends EventTarget {
     // `WorldObject.LastAppraisalTime` (`WorldObject.cs:131`).
     this._lastAppraisalAt = new Map();
 
+    // PR 4 (2026-05-27): the local player's `Character` instance. Set
+    // when `dispatchItemCreateObject` sees a GUID matching
+    // `_localPlayerGuid` — until then, null. The heuristic for picking
+    // out the local player vs other Players: WorldState exposes
+    // `setLocalPlayerGuid(guid)` which JS index.html calls from the
+    // kind=1 PLAYER_SPAWNED drain (`setLocalPlayerGuid(spawnedPlayerGuid)`
+    // already global). On Character spawn the host should set this BEFORE
+    // forwarding the kind=10 ObjectCreate; pre-PR-4 the local-player
+    // typed dispatch went through the manager's `Player` subclass — PR 4
+    // adds a Character override which is a strict superset.
+    this._localPlayerGuid = 0;
+    /** @type {Character|null} The local player's typed Character. */
+    this.character = null;
+
     this._disposed = false;
+  }
+
+  /**
+   * Tell the WorldState which GUID is the local player. Call this from
+   * the kind=1 PLAYER_SPAWNED drain BEFORE the kind=10 ObjectCreate so
+   * the typed dispatch in `dispatchItemCreateObject` can construct the
+   * Character instance with the correct id. If the GUID already exists
+   * in the cache as a generic WorldObject/Player (e.g. the
+   * ObjectCreate raced PLAYER_SPAWNED), `setLocalPlayerGuid` retro-
+   * upgrades the entry to a Character.
+   *
+   * @param {number} guid
+   */
+  setLocalPlayerGuid(guid) {
+    const g = (guid | 0) >>> 0;
+    this._localPlayerGuid = g;
+    const existing = this.weenies.get(g);
+    if (existing && !(existing instanceof Character)) {
+      // Retro-upgrade: build a Character and copy over the property
+      // store. PR 4's typical flow is set-guid-then-create; the
+      // retro-upgrade path covers the race for safety.
+      const ch = new Character(g, existing.classId, existing.taxonomy, existing.enums, existing.manager);
+      ch.objDescFlags = existing.objDescFlags;
+      ch.weenieFlags = existing.weenieFlags;
+      ch.canonicalObjectClass = existing.canonicalObjectClass;
+      ch.classificationSource = existing.classificationSource;
+      ch.objectDescription = existing.objectDescription;
+      ch.physicsDesc = existing.physicsDesc;
+      ch.weenieDescription = existing.weenieDescription;
+      // Copy property dicts.
+      for (const [k, v] of existing.intValues)      ch.intValues.set(k, v);
+      for (const [k, v] of existing.int64Values)    ch.int64Values.set(k, v);
+      for (const [k, v] of existing.stringValues)   ch.stringValues.set(k, v);
+      for (const [k, v] of existing.boolValues)     ch.boolValues.set(k, v);
+      for (const [k, v] of existing.floatValues)    ch.floatValues.set(k, v);
+      for (const [k, v] of existing.instanceValues) ch.instanceValues.set(k, v);
+      for (const [k, v] of existing.dataValues)     ch.dataValues.set(k, v);
+      for (const [k, v] of existing.positionValues) ch.positionValues.set(k, v);
+      this.weenies.set(g, ch);
+      this.character = ch;
+    } else if (existing instanceof Character) {
+      this.character = existing;
+    }
   }
 
   // ─── Public surface (mirrors `World.cs:136-165`) ───
@@ -239,11 +297,30 @@ export class WorldState extends EventTarget {
     // until then we fall back to the bare-creation path. The deferral
     // matches the handoff scope.
     let wo = this.weenies.get(guid);
+    const isLocalPlayer = this._localPlayerGuid !== 0 && guid === this._localPlayerGuid;
+
     if (!wo) {
-      // Defer construction to the manager when available — it owns the
-      // typed-subclass dispatch via `canonicalClassify`. Otherwise build
-      // a sentinel.
-      if (this.manager?.loaded) {
+      if (isLocalPlayer) {
+        // PR 4: typed Character for the local player. Bypasses the
+        // manager's typed-subclass dispatch — Character has its own
+        // S2C handler bodies + vitae / enchantment / cooldown state
+        // that the generic Player subclass can't carry.
+        wo = new Character(
+          guid,
+          payload?.classId ?? payload?.wcid ?? 0,
+          this.manager?.taxonomy ?? null,
+          this.manager?.enums ?? null,
+          this.manager ?? null,
+        );
+        if (payload?.objDescFlags !== undefined) wo.objDescFlags = payload.objDescFlags;
+        if (payload?.weenieFlags !== undefined)  wo.weenieFlags = payload.weenieFlags;
+        if (payload?.canonicalObjectClass)        wo.canonicalObjectClass = payload.canonicalObjectClass;
+        if (payload?.classificationSource)        wo.classificationSource = payload.classificationSource;
+        this.character = wo;
+      } else if (this.manager?.loaded) {
+        // Defer construction to the manager when available — it owns the
+        // typed-subclass dispatch via `canonicalClassify`. Otherwise build
+        // a sentinel.
         wo = this.manager.onObjectCreated({
           guid,
           classId: payload?.classId ?? payload?.wcid ?? 0,
@@ -263,6 +340,14 @@ export class WorldState extends EventTarget {
       }
       if (!wo) return null;
       this.weenies.set(guid, wo);
+      // PR-3: inject `_world` back-reference so Container/Item read-through
+      // getters resolve via this WorldState (mirror of C# `ACPlugin.Instance.Game.World`).
+      if (typeof wo.setWorld === 'function') wo.setWorld(this);
+    } else if (isLocalPlayer && !(wo instanceof Character)) {
+      // Retro-upgrade: a non-Character spawn landed before
+      // `setLocalPlayerGuid`. Convert the existing entry now.
+      this.setLocalPlayerGuid(guid);
+      wo = this.weenies.get(guid);
     }
 
     // `World.cs:186-188` — apply the three description blobs in the
@@ -726,6 +811,134 @@ export class WorldState extends EventTarget {
         },
       }));
     }
+
+    // PR 4: forward the same snapshot into the typed Character so its
+    // `AllEnchantments` map and `getActiveEnchantments` tiebreak reflect
+    // the latest server state. The wire-side snapshot doesn't carry
+    // `statMod` (type/key/value) — Wave E will extend the wasm payload;
+    // until then, the Character's allEnchantments folds the available
+    // fields and the cooldown discriminator branch is unreachable from
+    // the snapshot path (still works for synthetic wire payloads that
+    // do carry `type`).
+    if (this.character) {
+      // Drop entries the snapshot no longer contains (mirrors C#
+      // `Character.cs:573-580` RemoveMultiple behavior at the diff
+      // boundary). Then apply each present entry via applyEnchantment;
+      // the Character's own dedup (`allEnchantments.set` on existing key)
+      // mirrors `Character.cs:631-633`.
+      const presentKeys = new Set();
+      for (const e of next.values()) {
+        const k = ((e.spellId >>> 0) << 16) | (e.layer & 0xFFFF);
+        presentKeys.add(k >>> 0);
+      }
+      for (const k of [...this.character.allEnchantments.keys()]) {
+        if (!presentKeys.has(k >>> 0)) {
+          this.character.removeEnchantment(k);
+        }
+      }
+      for (const e of next.values()) {
+        this.character.applyEnchantment(e);
+      }
+    }
+  }
+
+  // ─── PR 4: Character.cs forwarding methods ────────────────────────
+  //
+  // Each of these forwards an S2C wire event to the typed Character
+  // instance when it exists. WorldState owns the World-side dispatch
+  // (PR 2); Character owns the local-player-only dispatch (PR 4). Per
+  // handoff §3 row 6: don't merge with World public dispatchers.
+
+  /** `Character.cs:380-449` — login player description fold. */
+  dispatchLoginPlayerDescription(payload) {
+    if (!this.character) {
+      this.log.warn?.('[world-state] dispatchLoginPlayerDescription: no Character; setLocalPlayerGuid first');
+      return;
+    }
+    this.character.applyLoginPlayerDescription(payload);
+  }
+
+  /** `Character.cs:455-459` — local player death broadcast. */
+  dispatchCombatHandlePlayerDeath(message, victimId, killerId) {
+    if (this.character) this.character.applyCombatHandlePlayerDeath(message, victimId, killerId);
+  }
+
+  /** `Character.cs:461-466` — `Item_SetState` for the local player. */
+  dispatchCharacterItemSetState(objectId, newState) {
+    if (this.character) this.character.applyItemSetState(objectId, newState);
+  }
+
+  /** `Character.cs:468-471` — `Effects_PlayerTeleport` (S2C). */
+  dispatchEffectsPlayerTeleport() {
+    if (this.character) this.character.applyEffectsPlayerTeleport();
+  }
+
+  /**
+   * PrivateUpdate / PrivateRemove dispatch for the 14 quality types
+   * (`Character.cs:473-562`). `kind` is one of:
+   *   'int' / 'int64' / 'float' / 'bool' / 'string' /
+   *   'instance' / 'data' / 'position'
+   * `op` is `'update'` or `'remove'`.
+   */
+  dispatchCharacterPrivateQuality(kind, op, key, value) {
+    if (!this.character) return;
+    const fn = `private${op[0].toUpperCase() + op.slice(1)}${kind[0].toUpperCase() + kind.slice(1)}`;
+    if (typeof this.character[fn] === 'function') {
+      if (op === 'remove') this.character[fn](key);
+      else this.character[fn](key, value);
+    }
+  }
+
+  /** `Character.cs:481-491` — private skill / skill-level / skill-AC updates. */
+  dispatchCharacterUpdateSkill(skillType, value) {
+    if (this.character) this.character.updateSkill(skillType, value);
+  }
+  dispatchCharacterUpdateSkillTraining(skillType, value) {
+    if (this.character) this.character.updateSkillTraining(skillType, value);
+  }
+  dispatchCharacterUpdateSkillPointsRaised(skillType, value) {
+    if (this.character) this.character.updateSkillPointsRaised(skillType, value);
+  }
+
+  /** `Character.cs:493-498` — private attribute / level updates. */
+  dispatchCharacterUpdateAttribute(attributeType, value) {
+    if (this.character) this.character.updateAttribute(attributeType, value);
+  }
+  dispatchCharacterUpdateAttributePointsRaised(attributeType, raised) {
+    if (this.character) this.character.updateAttributePointsRaised(attributeType, raised);
+  }
+
+  /** `Character.cs:500-506` — private vital second-att / level updates. */
+  dispatchCharacterUpdateVital(vitalKey, value, isInitial = false) {
+    if (this.character) this.character.updateVital(vitalKey, value, isInitial);
+  }
+  dispatchCharacterUpdateVitalCurrent(vitalKey, value) {
+    if (this.character) this.character.updateVitalCurrent(vitalKey, value);
+  }
+
+  /** `Character.cs:613-639` — direct ApplyEnchantment (for wire payloads carrying StatMod). */
+  dispatchCharacterApplyEnchantment(enchantment) {
+    if (this.character) this.character.applyEnchantment(enchantment);
+  }
+
+  /** `Character.cs:580-582` / `:608-610` — single dispel / remove. */
+  dispatchCharacterRemoveEnchantment(layeredOrId) {
+    if (this.character) this.character.removeEnchantment(layeredOrId);
+  }
+
+  /** `Character.cs:564-572` / `:574-578` / `:602-606` — bulk variants. */
+  dispatchCharacterUpdateMultipleEnchantments(list) {
+    if (this.character) this.character.applyMagicUpdateMultipleEnchantments(list);
+  }
+  dispatchCharacterRemoveMultipleEnchantments(list) {
+    if (this.character) this.character.applyMagicRemoveMultipleEnchantments(list);
+  }
+
+  /** `Character.cs:584-591` / `:593-600` — purge variants. */
+  dispatchCharacterPurgeEnchantments(badOnly = false) {
+    if (!this.character) return;
+    if (badOnly) this.character.applyMagicPurgeBadEnchantments();
+    else         this.character.applyMagicPurgeEnchantments();
   }
 
   /**
@@ -761,6 +974,9 @@ export class WorldState extends EventTarget {
     this._pendingContainerOpens.clear();
     this._enchantmentSnapshot.clear();
     this._lastAppraisalAt.clear();
+    // PR 4: drop the typed Character handle. The local-player GUID
+    // stays — a relog with the same character can reuse the heuristic.
+    this.character = null;
   }
 
   dispose() {

@@ -197,6 +197,59 @@ export class WorldObject {
     // post-construction so the snapshot/HUDs can introspect.
     this.canonicalObjectClass = null;
     this.classificationSource = null;
+
+    // PR-3: back-reference to the owning `WorldState` (`World.cs` mirror).
+    // C# uses the ambient `ACPlugin.Instance.Game.World` singleton at
+    // `Item.cs:46, 70` and elsewhere for `World.Get(...)` lookups. JS has
+    // no singleton — the host injects `_world` on adoption via the
+    // WorldState dispatcher (see plugins/world-state.js:dispatchItemCreateObject).
+    // Container subclass `items`/`containers` getters fall back to
+    // `this.manager?.objects` when `_world` is null (manager-only flows).
+    this._world = null;
+  }
+
+  /**
+   * Inject the owning `WorldState` (PR 2 mirror of `ACPlugin.Instance.Game.World`).
+   * Called by the WorldState dispatcher on adoption. Idempotent.
+   *
+   * @param {object|null} world  WorldState instance (or null to detach)
+   */
+  setWorld(world) {
+    this._world = world;
+  }
+
+  /**
+   * Iterate every weenie currently visible to this object. Used by
+   * Container subclass read-through getters (`Container.items`,
+   * `Container.containers`) and `Item.parentContainer`. Mirrors the
+   * C# `ACPlugin.Instance.Game.World` ambient lookup.
+   *
+   * Resolves in this order:
+   *   1. Injected `_world.weenies` (PR 2 WorldState)
+   *   2. `manager.objects` (PR 1 WorldObjectManager)
+   *   3. empty iterable
+   *
+   * @returns {Iterable<WorldObject>}
+   */
+  _allWeenies() {
+    if (this._world?.weenies) return this._world.weenies.values();
+    if (this.manager?.objects) return this.manager.objects.values();
+    return [];
+  }
+
+  /**
+   * Look up a weenie by GUID from the same scope as `_allWeenies`. Mirrors
+   * `ACPlugin.Instance.Game.World.Get(uint guid)`.
+   *
+   * @param {number} guid
+   * @returns {WorldObject|null}
+   */
+  _lookupWeenie(guid) {
+    if (!guid) return null;
+    const g = guid >>> 0;
+    if (this._world?.weenies) return this._world.weenies.get(g) ?? null;
+    if (this.manager?.objects) return this.manager.objects.get(g) ?? null;
+    return null;
   }
 
   // ─── HasValue predicates (WorldObject.cs:164-229) ───
