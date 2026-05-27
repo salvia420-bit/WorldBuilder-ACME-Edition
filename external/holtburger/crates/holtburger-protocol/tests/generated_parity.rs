@@ -308,10 +308,19 @@ fn align_consumes_pad_bytes_when_present() {
     assert_eq!(buf2[off2], 0xFF, "sentinel byte should be the next thing in the stream");
 }
 
-/// J3.A-6: skipped-note count went down vs the PR 7 baseline (124 per the
-/// reading guide row). Asserting the count *fell* is the load-bearing
-/// coverage-growth claim. Asserting it stays under a ceiling guards against
-/// regressions if a future build.rs change re-broadens the SKIP filter.
+/// J3.A-6 (tightened by J3.B): skipped-note count went down vs the PR 7
+/// baseline (124 per the reading guide row). Asserting the count *fell* is
+/// the load-bearing coverage-growth claim. Asserting it stays under a
+/// ceiling guards against regressions if a future build.rs change
+/// re-broadens the SKIP filter.
+///
+/// J3.B baseline: 117 (one new emit — `BlobFragments` — net of two new
+/// precise-reason SKIPs: `PackableList` element="T" templated, and
+/// `GameplayOptions` element-type `OptionProperty` blocked by its own
+/// `<switch>`). Both new SKIPs are STILL counted; the `BlobFragments` move
+/// from SKIP → emit is what drives the -1 net delta. Subsequent J3.C-E
+/// will drop more aggressively as the maskmap/if/switch shape becomes
+/// foundation-tier.
 #[test]
 fn skipped_note_count_decreased_vs_pr7_baseline() {
     // Walk the generated module's source via the file embedded into the
@@ -327,10 +336,179 @@ fn skipped_note_count_decreased_vs_pr7_baseline() {
         skipped < pr7_baseline,
         "expected SKIPPED-note count to drop below PR 7's 124 baseline; got {skipped}"
     );
+    let j3a_ceiling = 118usize; // J3.A landed at 118 (-10 vs PR 7's 128 reported live).
     assert!(
-        skipped <= 122,
-        "J3.A should remove at least 2 SKIPPED notes (the previously subfield-only-blocked datatype + the standalone align cases); got {skipped}"
+        skipped <= j3a_ceiling,
+        "J3.B should not regress the J3.A ceiling of {j3a_ceiling}; got {skipped}"
     );
+    let j3b_ceiling = 117usize; // Net -1 after J3.B per the build-warning audit.
+    assert!(
+        skipped <= j3b_ceiling,
+        "J3.B should hold at or below {j3b_ceiling} SKIPPED notes (BlobFragments now emits, with two precise-reason replacements for the previously-vector SKIPs on PackableList + GameplayOptions); got {skipped}"
+    );
+}
+
+// ===== J3.B — `<vector length="...">` coverage tests ===========================
+//
+// These tests verify three load-bearing things:
+//   1. The previously-SKIPPED `BlobFragments` datatype now emits cleanly as a
+//      struct with a `Vec<u8>` field whose length resolves from a subfield
+//      of a sibling (`BodySize = Size - 16`).
+//   2. The SKIPPED-note reason for `PackableList` switched from the generic
+//      "vector" deferred-tier reason to the precise "templated marker T"
+//      reason — the right J3.E follow-on label, not the generic vector
+//      placeholder.
+//   3. `BlobFragments::read_from` round-trips a hand-built wire payload —
+//      decoded `data_field.len()` equals `size - 16`, with the actual bytes
+//      preserved verbatim from the input slice.
+
+/// J3.B-1: `BlobFragments` previously SKIPPED for `<vector>` now emits + is
+/// constructible. The compile-time existence of the type is the load-bearing
+/// assertion (if codegen skipped it, this test wouldn't link).
+///
+/// `FragmentGroup` is a u16-backed enum per protocol.xml (no `Default`
+/// variant); we use `Event = 0x0005`. The vector field is renamed
+/// `data_field` because raw "data" collides with the `read_from` parameter
+/// name (handled by `sanitize_rust_keyword`).
+#[test]
+fn blob_fragments_emit_previously_skipped_struct() {
+    use generated::{BlobFragments, FragmentGroup};
+    let bf = BlobFragments {
+        sequence: 0,
+        id: 0,
+        count: 1,
+        size: 16,
+        index: 0,
+        group: FragmentGroup::Event,
+        data_field: Vec::new(),
+    };
+    // Field type is Vec<u8>; the BodySize subfield method computes
+    // self.size - 16. For size=16 → 0 bytes, the vec is empty and the
+    // derived accessor returns 0.
+    assert_eq!(bf.data_field.len(), 0);
+    assert_eq!(bf.body_size(), 0);
+}
+
+/// J3.B-2: `BlobFragments::read_from` round-trips a hand-built wire payload
+/// whose vector-length resolves from a SIBLING'S SUBFIELD (`BodySize` is a
+/// `<subfield>` of the `Size` field, with value `Size - 16`). This is the
+/// load-bearing field-cross-reference machinery — the vector emitter has to
+/// substitute the subfield's verbatim XML expression with the parent's
+/// snake-name local variable, since `&self` isn't constructible until after
+/// `read_from` completes.
+///
+/// Wire layout per protocol.xml line 5877:
+///   Sequence (u32) + Id (u32) + Count (u16) + Size (u16) + Index (u16)
+///   + Group (FragmentGroup as u16) + Data (Vec<u8>, length = Size - 16).
+/// Pre-vector header = 4+4+2+2+2+2 = 16 bytes (matches the BodySize
+/// `Size - 16` formula's "16" → so `Size` IS the total wire-bytes count of
+/// header + body).
+#[test]
+fn blob_fragments_round_trips_via_read_from_with_subfield_length() {
+    use generated::{BlobFragments, FragmentGroup};
+    let payload: Vec<u8> = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE]; // 5 body bytes
+    let size_field: u16 = (16 + payload.len()) as u16; // size includes the 16-byte header
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x1111_2222u32.to_le_bytes()); // sequence
+    buf.extend_from_slice(&0x3333_4444u32.to_le_bytes()); // id
+    buf.extend_from_slice(&3u16.to_le_bytes()); // count
+    buf.extend_from_slice(&size_field.to_le_bytes()); // size = 16 + 5 = 21
+    buf.extend_from_slice(&0u16.to_le_bytes()); // index
+    buf.extend_from_slice(&(FragmentGroup::Event as u16).to_le_bytes()); // group
+    buf.extend_from_slice(&payload); // 5-byte body
+
+    let mut off = 0usize;
+    let bf = BlobFragments::read_from(&buf, &mut off).expect("decode succeeds");
+    assert_eq!(bf.sequence, 0x1111_2222);
+    assert_eq!(bf.id, 0x3333_4444);
+    assert_eq!(bf.count, 3);
+    assert_eq!(bf.size, size_field);
+    assert_eq!(bf.group, FragmentGroup::Event);
+    assert_eq!(bf.body_size(), payload.len() as u16, "subfield computed length");
+    assert_eq!(bf.data_field, payload, "vector bytes match input verbatim");
+    assert_eq!(off, 16 + payload.len(), "cursor consumed exactly header + body bytes");
+}
+
+/// J3.B-3: `BlobFragments` with zero-length body. Verifies the empty-vector
+/// path (size == 16 → BodySize == 0 → loop runs 0 times → empty Vec).
+/// Catches a hypothetical bug where an off-by-one in the length expression
+/// might read one byte past EOF.
+#[test]
+fn blob_fragments_decodes_empty_body() {
+    use generated::{BlobFragments, FragmentGroup};
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&7u32.to_le_bytes()); // sequence
+    buf.extend_from_slice(&13u32.to_le_bytes()); // id
+    buf.extend_from_slice(&1u16.to_le_bytes()); // count
+    buf.extend_from_slice(&16u16.to_le_bytes()); // size = 16 → BodySize = 0
+    buf.extend_from_slice(&0u16.to_le_bytes()); // index
+    buf.extend_from_slice(&(FragmentGroup::Event as u16).to_le_bytes()); // group
+
+    let mut off = 0usize;
+    let bf = BlobFragments::read_from(&buf, &mut off).expect("decode succeeds");
+    assert_eq!(bf.body_size(), 0);
+    assert!(bf.data_field.is_empty());
+    assert_eq!(off, 16);
+}
+
+/// J3.B-4: PackableList SKIP reason is the precise "templated marker T"
+/// label, not the generic deferred-tier "vector" placeholder. This guards
+/// the right follow-on (J3.E templated-types) gets attached to the right
+/// type at code-review time.
+#[test]
+fn packable_list_skipped_with_templated_marker_reason() {
+    let out_dir = env_out_dir_for_holtburger_protocol();
+    let gen_path = std::path::Path::new(&out_dir).join("messages_generated.rs");
+    let body = std::fs::read_to_string(&gen_path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
+    let found = body.lines()
+        .find(|l| l.contains("SKIPPED datatype PackableList:"))
+        .unwrap_or_else(|| panic!("expected a PackableList SKIPPED note"));
+    assert!(
+        found.contains("templated marker"),
+        "PackableList SKIP reason should mention 'templated marker' (J3.E follow-on label), got: {found}"
+    );
+}
+
+/// J3.B-5: GameplayOptions SKIP reason now says exactly WHICH dependency
+/// is blocking it — `OptionProperty`'s own SKIPPED status — instead of the
+/// generic "vector" placeholder. Same principle as J3.B-4 but for the
+/// element-type unresolvable case.
+#[test]
+fn gameplay_options_skipped_with_element_type_reason() {
+    let out_dir = env_out_dir_for_holtburger_protocol();
+    let gen_path = std::path::Path::new(&out_dir).join("messages_generated.rs");
+    let body = std::fs::read_to_string(&gen_path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
+    let found = body.lines()
+        .find(|l| l.contains("SKIPPED datatype GameplayOptions:"))
+        .unwrap_or_else(|| panic!("expected a GameplayOptions SKIPPED note"));
+    assert!(
+        found.contains("OptionProperty") && found.contains("not in foundation tier"),
+        "GameplayOptions SKIP reason should name OptionProperty as the blocking dependency, got: {found}"
+    );
+}
+
+/// J3.B-6: `BlobFragments::read_from` rejects truncation past the vector
+/// body. Verifies the `if *offset + N > data.len()` check inside the
+/// generated element-read fires when fewer than `BodySize` bytes remain
+/// after the header.
+#[test]
+fn blob_fragments_truncation_after_header_errors() {
+    use generated::{BlobFragments, FragmentGroup};
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u32.to_le_bytes()); // sequence
+    buf.extend_from_slice(&0u32.to_le_bytes()); // id
+    buf.extend_from_slice(&1u16.to_le_bytes()); // count
+    buf.extend_from_slice(&20u16.to_le_bytes()); // size = 20 → BodySize = 4
+    buf.extend_from_slice(&0u16.to_le_bytes()); // index
+    buf.extend_from_slice(&(FragmentGroup::Event as u16).to_le_bytes()); // group
+    buf.extend_from_slice(&[0xAB, 0xCD]); // only 2 bytes available (need 4)
+
+    let mut off = 0usize;
+    let res = BlobFragments::read_from(&buf, &mut off);
+    assert!(res.is_err(), "truncated body should error, got {res:?}");
 }
 
 // Reach the `$OUT_DIR` directory that build.rs writes into. The integration

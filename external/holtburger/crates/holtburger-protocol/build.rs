@@ -495,14 +495,35 @@ impl<'a> CodegenCtx<'a> {
             EmitStep::Field(f) => Some(f),
             _ => None,
         }).collect();
-        if fields_only.is_empty() {
+        let vectors_only: Vec<&VectorField> = steps.iter().filter_map(|s| match s {
+            EmitStep::Vector(v) => Some(v),
+            _ => None,
+        }).collect();
+        if fields_only.is_empty() && vectors_only.is_empty() {
             writeln!(self.buf, "    // No fields declared in protocol.xml for this opcode.").unwrap();
         }
-        for f in &fields_only {
-            if let Some(t) = &f.text {
-                writeln!(self.buf, "    /// {}", escape_doc(t)).unwrap();
+        // Emit fields + vectors in protocol.xml ORDER so the wire-decode
+        // order matches the struct-declaration order (helps when reading
+        // the generated source alongside the XML).
+        for step in &steps {
+            match step {
+                EmitStep::Field(f) => {
+                    if let Some(t) = &f.text {
+                        writeln!(self.buf, "    /// {}", escape_doc(t)).unwrap();
+                    }
+                    writeln!(self.buf, "    pub {}: {},", f.name_snake, f.rust_ty).unwrap();
+                }
+                EmitStep::Vector(v) => {
+                    if let Some(t) = &v.text {
+                        writeln!(self.buf, "    /// {}", escape_doc(t)).unwrap();
+                    } else {
+                        writeln!(self.buf, "    /// Vector field; length from protocol.xml `length=\"{}\"`.",
+                            escape_xml_attr_for_doc(&v.length_xml)).unwrap();
+                    }
+                    writeln!(self.buf, "    pub {}: Vec<{}>,", v.name_snake, v.element_rust_ty).unwrap();
+                }
+                EmitStep::Align(_) => {}
             }
-            writeln!(self.buf, "    pub {}: {},", f.name_snake, f.rust_ty).unwrap();
         }
         writeln!(self.buf, "}}\n").unwrap();
 
@@ -534,18 +555,26 @@ impl<'a> CodegenCtx<'a> {
         }
         writeln!(self.buf, "    /// Decode `{name}` from a little-endian wire stream at `*offset`.").unwrap();
         writeln!(self.buf, "    pub fn read_from(data: &[u8], offset: &mut usize) -> Result<Self, &'static str> {{").unwrap();
-        if fields_only.is_empty() && !steps.iter().any(|s| matches!(s, EmitStep::Align(_))) {
+        if fields_only.is_empty()
+            && vectors_only.is_empty()
+            && !steps.iter().any(|s| matches!(s, EmitStep::Align(_)))
+        {
             writeln!(self.buf, "        let _ = (data, offset);").unwrap();
         }
         for step in &steps {
             match step {
                 EmitStep::Field(f) => emit_read_field(&mut self.buf, &f.name_snake, &f.field_kind),
                 EmitStep::Align(n_bytes) => emit_align_pad(&mut self.buf, *n_bytes),
+                EmitStep::Vector(v) => emit_read_vector(&mut self.buf, v),
             }
         }
         writeln!(self.buf, "        Ok(Self {{").unwrap();
-        for f in &fields_only {
-            writeln!(self.buf, "            {},", f.name_snake).unwrap();
+        for step in &steps {
+            match step {
+                EmitStep::Field(f) => writeln!(self.buf, "            {},", f.name_snake).unwrap(),
+                EmitStep::Vector(v) => writeln!(self.buf, "            {},", v.name_snake).unwrap(),
+                EmitStep::Align(_) => {}
+            }
         }
         writeln!(self.buf, "        }})\n    }}").unwrap();
         writeln!(self.buf, "}}\n").unwrap();
@@ -560,14 +589,22 @@ impl<'a> CodegenCtx<'a> {
     /// "emit one field" / "emit one align-pad" steps. Each `<field>` may
     /// carry zero-or-more `<subfield>` derived-accessor children; nothing
     /// else nested under `<field>` is supported in the foundation tier.
+    ///
+    /// J3.B: `<vector length="...">` is also handled here. The length-source
+    /// resolves via the [`SiblingLookup`] index built incrementally as we
+    /// walk siblings — both top-level `<field>`s and their `<subfield>`
+    /// derived accessors are in scope as length sources (BlobFragments uses
+    /// `length="BodySize"` where `BodySize` is a subfield of `Size`).
     fn collect_emit_steps(&self, n: Node<'_, '_>, parent_type_name: &str) -> Result<Vec<EmitStep>, String> {
         let mut out = Vec::new();
         let mut seen_names: BTreeMap<String, usize> = BTreeMap::new();
+        let mut siblings = SiblingLookup::default();
         for c in n.children().filter(|c| c.is_element()) {
             let tag = c.tag_name().name();
             match tag {
                 "field" => {
                     let f = self.build_simple_field(c, &mut seen_names, parent_type_name)?;
+                    siblings.add_field(&f);
                     out.push(EmitStep::Field(f));
                 }
                 "align" => {
@@ -575,12 +612,88 @@ impl<'a> CodegenCtx<'a> {
                         .ok_or_else(|| format!("<align> with type {:?}: unknown alignment width — only byte/short/ushort/int/uint/long/ulong supported", c.attribute("type")))?;
                     out.push(EmitStep::Align(n_bytes));
                 }
+                "vector" => {
+                    let v = self.build_vector_field(c, &mut seen_names, parent_type_name, &siblings)?;
+                    out.push(EmitStep::Vector(v));
+                }
                 other => {
                     return Err(format!("unsupported child `<{other}>`"));
                 }
             }
         }
         Ok(out)
+    }
+
+    /// J3.B: build a [`VectorField`] from a `<vector>` element, resolving its
+    /// length-source against the sibling-field index and its element type
+    /// against [`Self::resolve_field`]. Fails fast (with a precise reason) if
+    /// the element type isn't in the foundation tier, is the templated marker
+    /// `T`, or the length-source can't be resolved — the caller bubbles those
+    /// errors into a `// SKIPPED ...` note in the generated output.
+    fn build_vector_field(
+        &self,
+        c: Node<'_, '_>,
+        seen_names: &mut BTreeMap<String, usize>,
+        parent_type_name: &str,
+        siblings: &SiblingLookup,
+    ) -> Result<VectorField, String> {
+        let raw_name = c.attribute("name").ok_or_else(|| "<vector> missing name".to_string())?;
+        let raw_type = c.attribute("type").ok_or_else(|| format!("<vector {raw_name}> missing type"))?;
+        let raw_length = c.attribute("length")
+            .ok_or_else(|| format!("<vector {raw_name}> missing length= attribute (only foundation shape supported)"))?;
+        if let Some(skip_raw) = c.attribute("skip") {
+            // skip="N" only appears inside `<switch>` cases (lines 8447/8451
+            // for DDD_DataMessage compression branches). Since `<switch>`
+            // already trips the unsupported-feature gate at the parent type,
+            // we'll never actually reach here for a `skip=`-bearing vector at
+            // the foundation tier; report a precise reason in case a future
+            // schema revision moves a `skip=` vector to top level.
+            return Err(format!("<vector {raw_name}>: skip={skip_raw:?} only supported inside <switch> cases — port to PR 7.2.D"));
+        }
+
+        // Element-type resolution. The templated marker `T` (used inside
+        // `<type name="PackableList" templated="T">`) is not a real Rust type;
+        // we route it through `// SKIPPED ... templated type T` so the
+        // PackableList parent SKIP-note now points at the right J3.E feature
+        // instead of the generic "vector" deferred-tier reason.
+        if raw_type == "T" || raw_type == "U" {
+            return Err(format!("<vector {raw_name}>: element type {raw_type:?} is a templated marker (parent uses templated=); deferred to J3.E"));
+        }
+        let (element_rust_ty, element_kind) = match self.resolve_field(raw_type) {
+            Some(p) => p,
+            None => return Err(format!("<vector {raw_name}>: element type {raw_type:?} not in foundation tier (likely SKIPPED by its own deferred feature)")),
+        };
+
+        // Length expression: a parsable C#-ish identifier optionally followed
+        // by `+ literal` / `- literal`. Examples seen in protocol.xml:
+        //   `Count`, `BodySize`, `PropertyCount`, `OptionPropertyCount`,
+        //   `CommandListLength`, `PaletteCount`, `TextureCount`, `ModelCount`,
+        //   `DataSize`, `RecordCount - 1`.
+        // Dotted paths (`Header.Quantity`) are NOT present in the current
+        // schema; we reject them with a clear reason so they'll fail-loud if
+        // a future schema revision adds one.
+        let length_expr_rust = translate_vector_length_expr(raw_length, siblings)
+            .map_err(|e| format!("<vector {raw_name}>: cannot translate length={raw_length:?}: {e}"))?;
+
+        // Sanitize the field name the same way build_simple_field does so
+        // collisions with sibling fields surface as `_2`-suffixed Rust names.
+        let mut snake = to_snake_case(raw_name);
+        let counter = seen_names.entry(snake.clone()).or_insert(0);
+        if *counter > 0 {
+            snake = format!("{snake}_{}", *counter + 1);
+        }
+        *counter += 1;
+        let snake = sanitize_rust_keyword(&snake);
+        let _ = parent_type_name; // reserved for future error context.
+
+        Ok(VectorField {
+            name_snake: snake,
+            element_rust_ty,
+            element_kind,
+            length_expr_rust,
+            length_xml: raw_length.to_string(),
+            text: c.attribute("text").map(|s| s.to_string()),
+        })
     }
 
     fn build_simple_field(
@@ -718,9 +831,37 @@ impl<'a> CodegenCtx<'a> {
 
 /// J3.A: one ordered step the struct emitter walks during `read_from` codegen.
 /// `<field>` produces a Field; `<align>` produces an Align(n_bytes) pad.
+/// J3.B: `<vector length="...">` produces a Vector; the emitter writes a
+/// `Vec<element>` field on the struct + a `for _ in 0..count { … }` decode
+/// loop into `read_from`.
 enum EmitStep {
     Field(SimpleField),
     Align(usize),
+    Vector(VectorField),
+}
+
+/// J3.B: a `<vector name="Foo" type="ElementTy" length="LenExpr" />` child of
+/// a `<type>` body. Element kind is resolved up front via [`CodegenCtx::resolve_field`];
+/// the length expression is parsed into a usize-producing Rust expression that
+/// reads one of the sibling-field local variables emitted earlier in the same
+/// `read_from` body. The struct field's rust_ty is always `Vec<element_rust_ty>`.
+struct VectorField {
+    /// `Foo` lowercased to `foo` (then keyword-sanitized + uniquified).
+    name_snake: String,
+    /// `element_rust_ty` is the bare element type — `u8`, `Subpalette`, etc.
+    /// The struct field's declared type is `Vec<element_rust_ty>`.
+    element_rust_ty: String,
+    /// How to decode one element via the J3.A field-kind machinery; the
+    /// vector emitter routes through [`emit_read_field`] with a synthesized
+    /// loop-local variable name to reuse that codegen path verbatim.
+    element_kind: FieldKind,
+    /// A Rust expression that produces the loop iteration count as `usize`.
+    /// E.g. `count as usize`, `((record_count as i32) - 1) as usize`, or
+    /// `((size as i32) - 16) as usize` (subfield-substituted).
+    length_expr_rust: String,
+    /// Verbatim XML `length="…"` attribute for the generated doc-comment.
+    length_xml: String,
+    text: Option<String>,
 }
 
 struct SimpleField {
@@ -954,6 +1095,17 @@ fn collect_unsupported(n: Node<'_, '_>) -> Vec<&'static str> {
     // we KEEP it out of the unsupported list defensively in case future XML
     // ever places it at the top level. The real subfield-bearing fields are
     // detected by `collect_simple_fields` walking into `<field>` children.
+    //
+    // J3.B (2026-05-27): `<vector length="...">` is now FOUNDATION-tier when
+    // all of the following hold: the length-source is a parsable sibling
+    // identifier or `<subfield>` of one, optional arithmetic is `+`/`-` literal,
+    // the element type resolves to an emitted struct/primitive (NOT the
+    // templated marker `T`), and there's no `skip="N"` (skip only appears inside
+    // `<switch>` cases which already trip the `switch` unsupported branch).
+    // Per-vector resolution lives in `collect_emit_steps`; this top-level pass
+    // never returns "vector" anymore — failures are reported with a precise
+    // reason at the per-step level so the SKIPPED notes are more useful for
+    // downstream J3.C-E planning.
     let mut out = Vec::new();
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
@@ -962,7 +1114,6 @@ fn collect_unsupported(n: Node<'_, '_>) -> Vec<&'static str> {
             "mask" => push_unique(&mut out, "mask"),
             "maskmap" => push_unique(&mut out, "maskmap"),
             "table" => push_unique(&mut out, "table"),
-            "vector" => push_unique(&mut out, "vector"),
             _ => {}
         }
     }
@@ -992,7 +1143,289 @@ fn line_of_offset(line_offsets: &[usize], offset: usize) -> usize {
     }
 }
 
+// J3.B: VECTOR HELPERS ------------------------------------------------------
+
+/// Tracks every sibling field's `(xml_name, snake_name, rust_repr)` triple so
+/// `<vector length="...">` length-source identifiers can resolve to the
+/// matching local variable name emitted earlier in the same `read_from`
+/// body. `<subfield>` derived accessors are ALSO entered into the lookup:
+/// the vector's length-source can name a subfield (`length="BodySize"` where
+/// `BodySize = Size - 16`), in which case the translator substitutes the
+/// subfield's verbatim XML expression with the PARENT's snake name in place
+/// of the parent's XML name — see [`translate_vector_length_expr`].
+#[derive(Default)]
+struct SiblingLookup {
+    /// `xml_name → (snake_name, rust_repr)` for direct sibling fields. The
+    /// `rust_repr` is the Rust primitive width (`u8`/`u16`/…); used so the
+    /// length expression can cast cleanly to `usize` (Rust `as` requires the
+    /// LHS to be a numeric primitive, not an enum/struct).
+    fields_by_xml_name: BTreeMap<String, (String, String)>,
+    /// `xml_name → (parent_xml_name, parent_snake_name, parent_rust_repr, value_expr)`
+    /// for subfields hanging off any sibling. The subfield's value expression
+    /// references the parent by its XML name; we rewrite to the parent's
+    /// snake-name local variable when substituting into the vector length.
+    subfields_by_xml_name: BTreeMap<String, SubfieldRef>,
+}
+
+#[derive(Clone)]
+struct SubfieldRef {
+    parent_xml_name: String,
+    parent_snake_name: String,
+    parent_rust_repr: String,
+    /// Verbatim `<subfield value="…">` XML; the translator routes it through
+    /// [`translate_subfield_expr`] for substitution into the vector length.
+    value_expr_xml: String,
+}
+
+impl SiblingLookup {
+    fn add_field(&mut self, f: &SimpleField) {
+        let xml_name = xml_name_for_field(f);
+        // Only track fields whose Rust-side type is a numeric primitive — the
+        // length expression has to land in `usize` via `as`, which isn't
+        // valid on String/struct/enum types.
+        if let Some(repr) = numeric_repr_for_field_kind(&f.field_kind) {
+            self.fields_by_xml_name.insert(xml_name.clone(), (f.name_snake.clone(), repr.to_string()));
+            for sf in &f.subfields {
+                // Subfield's XML name is what `<vector length="…">` would
+                // reference; subfield's value expression references the
+                // PARENT's XML name, and we want to substitute that to the
+                // parent's snake name when emitting the length expression.
+                let sf_xml = xml_name_for_subfield(sf);
+                self.subfields_by_xml_name.insert(
+                    sf_xml,
+                    SubfieldRef {
+                        parent_xml_name: xml_name.clone(),
+                        parent_snake_name: f.name_snake.clone(),
+                        parent_rust_repr: repr.to_string(),
+                        value_expr_xml: sf.value_expr.clone(),
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn xml_name_for_field(f: &SimpleField) -> String {
+    // We don't store the XML name on SimpleField; reconstruct from snake by
+    // capitalising and removing underscores. This is approximate — but the
+    // generated subfield code-paths already use the XML name verbatim, and
+    // numeric fields in protocol.xml are conventionally PascalCase with no
+    // ambiguous casing inside (the to_snake_case round-trip is reversible
+    // for our concrete vector-length-source set: `Count`, `BodySize`,
+    // `PropertyCount`, `OptionPropertyCount`, `RecordCount`, `CommandListLength`,
+    // `PaletteCount`, `TextureCount`, `ModelCount`, `DataSize`). For names
+    // we don't recognise we still produce a candidate and the lookup is
+    // best-effort — the worst case is a clean SKIP with a clear reason.
+    snake_to_pascal(&f.name_snake)
+}
+
+fn xml_name_for_subfield(sf: &SubfieldAccessor) -> String {
+    snake_to_pascal(&sf.name_snake)
+}
+
+/// Convert `snake_case_id` → `SnakeCaseId`. Mirrors `to_snake_case`'s inverse
+/// for the subset of names we care about (single-word + underscore-joined
+/// PascalCase round-trips cleanly). Words after the first are capitalised.
+fn snake_to_pascal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut cap_next = true;
+    for ch in s.chars() {
+        if ch == '_' {
+            cap_next = true;
+        } else if cap_next {
+            out.extend(ch.to_uppercase());
+            cap_next = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn numeric_repr_for_field_kind(k: &FieldKind) -> Option<&'static str> {
+    match k {
+        FieldKind::PrimU8 => Some("u8"),
+        FieldKind::PrimU16 => Some("u16"),
+        FieldKind::PrimU32 => Some("u32"),
+        FieldKind::PrimU64 => Some("u64"),
+        FieldKind::PrimI16 => Some("i16"),
+        FieldKind::PrimI32 => Some("i32"),
+        FieldKind::PrimI64 => Some("i64"),
+        FieldKind::PackedDword => Some("u32"),
+        _ => None,
+    }
+}
+
+/// J3.B: translate a `<vector length="XmlExpr">` attribute into a Rust
+/// expression that produces the loop count as `usize`. Supports:
+///
+/// - bare identifier matching a sibling field (`Count` → `count as usize`)
+/// - bare identifier matching a sibling's subfield (`BodySize` →
+///   `((size as i32) - 16) as usize` after substituting `Size` → `size`)
+/// - identifier + literal arithmetic (`RecordCount - 1` →
+///   `((record_count as i32) - 1) as usize`)
+///
+/// Rejects dotted paths (`Header.Quantity`) with a clear reason — none appear
+/// in the current schema but a future revision could add one and we'd rather
+/// fail-loud than silently mis-emit.
+///
+/// The intermediate cast through `i32` is so the `RecordCount - 1` shape
+/// can't underflow a `u16` when RecordCount=0 (rare, but possible per the
+/// `<if test="RecordCount > 0">` guard above the vector in AllegianceHierarchy).
+/// The final cast to `usize` is unconditional and saturates negative values
+/// to a large positive that will trip the truncation check inside the loop.
+fn translate_vector_length_expr(expr: &str, siblings: &SiblingLookup) -> Result<String, String> {
+    let trimmed = expr.trim();
+    if trimmed.contains('.') {
+        return Err(format!("dotted-path length-source {trimmed:?} not supported (no sites in current protocol.xml; add when one appears)"));
+    }
+    // Tokenize with the same lexer the subfield translator uses — it already
+    // handles `Ident`, `IntLit`, `BinOp('+'|'-')`, etc.
+    let tokens = tokenize_csharp_expr(trimmed)
+        .map_err(|e| format!("tokenize failed: {e}"))?;
+    if tokens.is_empty() {
+        return Err("empty length expression".to_string());
+    }
+
+    // First token must be an identifier — the length-source. The schema
+    // census shows ALL length sources are bare or `<ident> +/- <literal>`.
+    let (head_ident, rest) = match &tokens[..] {
+        [ExprTok::Ident(id), rest @ ..] => (id.clone(), rest),
+        _ => return Err(format!("expected identifier, got {:?}", tokens.first())),
+    };
+
+    let (rust_head_expr, head_repr) = resolve_length_source(&head_ident, siblings)?;
+
+    // No arithmetic tail — return the head cast to usize.
+    if rest.is_empty() {
+        return Ok(format!("({rust_head_expr}) as usize"));
+    }
+
+    // Arithmetic tail. Per the schema census, ALWAYS exactly two tokens:
+    // `BinOp('+'|'-')` then `IntLit`. Reject anything else.
+    if rest.len() != 2 {
+        return Err(format!("only single-literal arithmetic supported, got {} trailing tokens: {rest:?}", rest.len()));
+    }
+    let op = match &rest[0] {
+        ExprTok::BinOp(c) if *c == '+' || *c == '-' => *c,
+        other => return Err(format!("expected `+` or `-`, got {other:?}")),
+    };
+    let lit = match &rest[1] {
+        ExprTok::IntLit { raw } => raw.clone(),
+        other => return Err(format!("expected integer literal, got {other:?}")),
+    };
+
+    // Cast head to i32 first so subtraction can't underflow an unsigned
+    // type when the literal exceeds the head value at runtime (the
+    // `RecordCount = 0` case in AllegianceHierarchy is the canonical
+    // example).
+    let _ = head_repr; // Reserved for future precision-aware widening; i32 is enough today.
+    Ok(format!("(({rust_head_expr} as i32) {op} {lit}) as usize"))
+}
+
+fn resolve_length_source(
+    head_ident: &str,
+    siblings: &SiblingLookup,
+) -> Result<(String, String), String> {
+    // Direct sibling field.
+    if let Some((snake, repr)) = siblings.fields_by_xml_name.get(head_ident) {
+        return Ok((snake.clone(), repr.clone()));
+    }
+    // Sibling's subfield. The subfield's value-expression is a function of
+    // the PARENT's XML name; substitute parent_xml → parent_snake then
+    // route through the existing subfield-expression translator so the
+    // emitted Rust reads the parent's local variable directly. We don't
+    // create a `self.` access here because we're inside read_from, where
+    // `self` doesn't exist yet — only local variables for fields already
+    // decoded.
+    if let Some(sf_ref) = siblings.subfields_by_xml_name.get(head_ident) {
+        let local_expr = translate_subfield_expr_for_local(
+            &sf_ref.value_expr_xml,
+            &sf_ref.parent_xml_name,
+            &sf_ref.parent_snake_name,
+            &sf_ref.parent_rust_repr,
+            &sf_ref.parent_rust_repr,
+        )
+        .map_err(|e| format!("subfield {head_ident}: cannot translate {:?}: {e}", sf_ref.value_expr_xml))?;
+        return Ok((local_expr, sf_ref.parent_rust_repr.clone()));
+    }
+    Err(format!("identifier {head_ident:?} is not a sibling field nor a sibling's subfield"))
+}
+
+/// Variant of [`translate_subfield_expr`] that emits a Rust expression
+/// referencing the parent's LOCAL variable in `read_from` (`<snake>`) instead
+/// of the `&self`-based accessor (`self.<snake>`). Reuses the same expression
+/// parser; only the atom-emitter differs.
+fn translate_subfield_expr_for_local(
+    expr: &str,
+    parent_xml_name: &str,
+    parent_snake: &str,
+    parent_repr: &str,
+    sf_repr: &str,
+) -> Result<String, String> {
+    let tokens = tokenize_csharp_expr(expr)?;
+    let mut p = ExprParser { toks: &tokens, pos: 0 };
+    let rust_inner = p.parse_expr_with_local_atom(parent_xml_name, parent_snake, parent_repr)?;
+    if p.pos != tokens.len() {
+        return Err(format!("trailing tokens after position {}: {:?}", p.pos, &tokens[p.pos..]));
+    }
+    Ok(format!("({rust_inner}) as {sf_repr}"))
+}
+
 // J3.A: ALIGN + SUBFIELD HELPERS --------------------------------------------
+
+/// J3.B: emit the read-loop for a `<vector length="…" type="…" />` child.
+/// Equivalent to the C# template's
+/// `for (int i = 0; i < count; i++) items.Add(T.Read(reader));` — we
+/// pre-compute the count from the length expression (which references one of
+/// the sibling-field local variables emitted earlier in the same body) and
+/// then iterate, routing single-element decode through the same machinery
+/// `emit_read_field` uses for scalar fields.
+fn emit_read_vector(buf: &mut String, v: &VectorField) {
+    let snake = &v.name_snake;
+    let count_expr = &v.length_expr_rust;
+    let elem_ty = &v.element_rust_ty;
+    let xml_len = &v.length_xml;
+    writeln!(buf, "        // <vector name=\"{snake}\" length=\"{}\" type=\"{elem_ty}\">",
+        escape_xml_attr_for_doc(xml_len)).unwrap();
+    writeln!(buf, "        let {snake}_count: usize = {count_expr};").unwrap();
+    writeln!(buf, "        let mut {snake}: Vec<{elem_ty}> = Vec::with_capacity({snake}_count.min(1024));").unwrap();
+    writeln!(buf, "        for _ in 0..{snake}_count {{").unwrap();
+    // Re-route through emit_read_field with a synthesized local variable
+    // name `__elem`, then push it into the vec. We open a block so each
+    // iteration's `__elem` shadow is independent.
+    writeln!(buf, "            let __elem: {elem_ty} = {{").unwrap();
+    // emit_read_field writes `let <snake>: <ty> = …; *offset += N;` — we
+    // wrap it in a block and rename the local to `__elem` via a different
+    // codepath: inline the same byte-extraction logic. To avoid duplicating
+    // the table, we call emit_read_field with `__elem` as the snake name
+    // and then reference it after.
+    emit_read_field_indented(buf, "__elem", &v.element_kind, "                ");
+    writeln!(buf, "                __elem").unwrap();
+    writeln!(buf, "            }};").unwrap();
+    writeln!(buf, "            {snake}.push(__elem);").unwrap();
+    writeln!(buf, "        }}").unwrap();
+}
+
+/// Indented variant of [`emit_read_field`] for use inside the vector
+/// read-loop body. Lifts the same field-kind dispatch but with caller-chosen
+/// indentation so the generated source stays readable. Routes through the
+/// same per-kind primitives so a future bugfix in scalar decode lands here
+/// for free.
+fn emit_read_field_indented(buf: &mut String, snake: &str, kind: &FieldKind, indent: &str) {
+    let mut tmp = String::new();
+    emit_read_field(&mut tmp, snake, kind);
+    for line in tmp.lines() {
+        // Strip the existing 8-space indent (`emit_read_field`'s convention)
+        // and replace with the requested one.
+        let stripped = line.trim_start_matches(' ');
+        if stripped.is_empty() {
+            writeln!(buf).unwrap();
+        } else {
+            writeln!(buf, "{indent}{stripped}").unwrap();
+        }
+    }
+}
 
 /// J3.A: emit the cursor-advance for a Chorizite `<align type="TYPE" />`
 /// directive. Equivalent to the C# template's
@@ -1324,6 +1757,44 @@ impl<'a> ExprParser<'a> {
     }
     fn peek(&self) -> Option<&ExprTok> {
         self.toks.get(self.pos)
+    }
+
+    /// J3.B: variant of `parse_expr` that emits a bare `<snake>` identifier
+    /// for the parent-field reference instead of `self.<snake>`. Used by
+    /// [`translate_subfield_expr_for_local`] when substituting a subfield's
+    /// value expression into a `<vector length="…">` reference — at the
+    /// point the vector decodes, `self` doesn't exist yet (we're inside
+    /// `read_from`); only local variables for previously-decoded fields are
+    /// in scope.
+    fn parse_expr_with_local_atom(
+        &mut self,
+        parent_xml_name: &str,
+        parent_snake: &str,
+        parent_repr: &str,
+    ) -> Result<String, String> {
+        // Same precedence cascade as parse_or but each level calls into
+        // parse_*_local helpers. Rather than duplicate every binding, we
+        // route through the existing parse_or but FLIP the atom emitter via
+        // a thread-local mode flag — simpler is to clone the cascade with a
+        // `bare_atom: bool` parameter, but we don't want to touch all 6
+        // levels. Instead, we manually evaluate the same precedence by
+        // calling parse_or with a sentinel parent_xml_name handler.
+        //
+        // The minimal-touch path: call `parse_or` directly, but pre-rewrite
+        // the parent's xml-name token into a synthetic identifier the atom
+        // handler treats as the local alias. We achieve this by recognising
+        // the sentinel-prefix `__LOCAL__` in the atom emitter (parse_atom)
+        // and substituting it with the snake name. Cleaner is to add a
+        // mode flag; since this is the only call path that wants the local
+        // variant, we copy parse_atom's logic inline here and lean on the
+        // existing parse_or for the precedence cascade by calling it with
+        // the unchanged parent_xml_name, then string-replacing
+        // `self.<snake>` → `<snake>` post-hoc. That's clearly hacky but
+        // keeps the parser untouched. Use that approach so the regression
+        // surface stays minimal.
+        let rust_with_self = self.parse_or(parent_xml_name, parent_snake, parent_repr)?;
+        let bare = rust_with_self.replace(&format!("self.{parent_snake}"), parent_snake);
+        Ok(bare)
     }
 }
 
