@@ -1,0 +1,124 @@
+{
+  "_comment": "Generated from ACE-World-Database-v0.9.292.sql by scripts/build_dye_recipes.py. Maps dye-pot wcid -> (paletteTemplate int, shade float) extracted directly from the dye-pot's own weenie_properties_int (PropertyInt.PaletteTemplate=3) + weenie_properties_float (PropertyFloat.Shade=12) \u2014 recipes 3844 (base) and 9068 (rare eternal) just CopyFromSourceToTarget those values onto the dyed armor at success time (see ace-server RecipeManager.cs:ModifyInt + RecipeManager_New.cs:GetNewRecipe). To regenerate: python3 external/holtburger/apps/holtburger-web/scripts/build_dye_recipes.py",
+  "_source": "ACE-World-Database-v0.9.292.sql",
+  "_recipeIds": [
+    3844,
+    9068
+  ],
+  "dyePots": {
+    "8043": {
+      "name": "Verdalim Dye Pot",
+      "paletteTemplate": 84,
+      "shade": 0.0,
+      "_recipeId": 3844
+    },
+    "8044": {
+      "name": "Hennacin Dye Pot",
+      "paletteTemplate": 85,
+      "shade": 0.0,
+      "_recipeId": 3844
+    },
+    "8045": {
+      "name": "Berimphur Dye Pot",
+      "paletteTemplate": 86,
+      "shade": 0.0,
+      "_recipeId": 3844
+    },
+    "8650": {
+      "name": "Lapyan Dye Pot",
+      "paletteTemplate": 88,
+      "shade": 0.0,
+      "_recipeId": 3844
+    },
+    "8651": {
+      "name": "Minalim Dye Pot",
+      "paletteTemplate": 89,
+      "shade": 0.0,
+      "_recipeId": 3844
+    },
+    "8652": {
+      "name": "Argenory Dye Pot",
+      "paletteTemplate": 90,
+      "shade": 0.0,
+      "_recipeId": 3844
+    },
+    "11475": {
+      "name": "Thananim Dye Pot",
+      "paletteTemplate": 93,
+      "shade": 0.0,
+      "_recipeId": 3844
+    },
+    "11476": {
+      "name": "Colban Dye Pot",
+      "paletteTemplate": 91,
+      "shade": 0.0,
+      "_recipeId": 3844
+    },
+    "11477": {
+      "name": "Relanim Dye Pot",
+      "paletteTemplate": 92,
+      "shade": 0.0,
+      "_recipeId": 3844
+    },
+    "30082": {
+      "name": "Perennial Thananim Dye",
+      "paletteTemplate": 93,
+      "shade": 0.0,
+      "_recipeId": 9068
+    },
+    "30083": {
+      "name": "Perennial Colban Dye",
+      "paletteTemplate": 91,
+      "shade": 0.0,
+      "_recipeId": 9068
+    },
+    "30084": {
+      "name": "Perennial Botched Dye",
+      "paletteTemplate": 87,
+      "shade": 0.0,
+      "_recipeId": 9068
+    },
+    "30085": {
+      "name": "Perennial Verdalim Dye",
+      "paletteTemplate": 84,
+      "shade": 0.0,
+      "_recipeId": 9068
+    },
+    "30086": {
+      "name": "Perennial Hennacin Dye",
+      "paletteTemplate": 85,
+      "shade": 0.0,
+      "_recipeId": 9068
+    },
+    "30087": {
+      "name": "Perennial Berimphur Dye",
+      "paletteTemplate": 86,
+      "shade": 0.0,
+      "_recipeId": 9068
+    },
+    "30088": {
+      "name": "Perennial Lapyan Dye",
+      "paletteTemplate": 88,
+      "shade": 0.0,
+      "_recipeId": 9068
+    },
+    "30089": {
+      "name": "Perennial Minalim Dye",
+      "paletteTemplate": 89,
+      "shade": 0.0,
+      "_recipeId": 9068
+    },
+    "30090": {
+      "name": "Perennial Relanim Dye",
+      "paletteTemplate": 92,
+      "shade": 0.0,
+      "_recipeId": 9068
+    },
+    "30091": {
+      "name": "Perennial Argenory Dye",
+      "paletteTemplate": 90,
+      "shade": 0.0,
+      "_recipeId": 9068
+    }
+  }
+}
