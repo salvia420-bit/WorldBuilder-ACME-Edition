@@ -16458,6 +16458,15 @@ pub struct SessionHandle {
     /// the JS-side displacement-vector heading estimator that today's
     /// 3D camera math falls back to.
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
+    /// Wave 10 Phase 10.4 (2026-05-26): JS-readable shadow of "can the
+    /// local player legally jump RIGHT NOW?", refreshed by the recv-loop
+    /// on every TickMovement alongside [`Self::local_player_pose`].
+    /// Mirrors the substate + airborne gates inside the
+    /// `SessionCommand::Jump` arm so the JS spacebar keyup handler can
+    /// pre-check via [`SessionHandle::can_jump_now`] and skip the
+    /// local-prediction arms-up overlay + jump-charge bar when the
+    /// wasm-side gate would reject. `false` pre-spawn.
+    local_player_can_jump: std::rc::Rc<std::cell::RefCell<bool>>,
     /// PR-SS 2026-05-23: timestamp of the most-recent
     /// `SessionEvent::Message` from the WS transport — the freshest
     /// server packet of any kind. JS polls `sessionLastRecvAgeMs()`
@@ -17892,6 +17901,29 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = getLocalPlayerPose)]
     pub fn get_local_player_pose(&self) -> Option<LocalPlayerPose> {
         *self.local_player_pose.borrow()
+    }
+
+    /// **Wave 10 Phase 10.4 (2026-05-26).** Synchronous, JS-readable
+    /// gate that mirrors the substate + airborne checks inside the
+    /// `SessionCommand::Jump` arm (see `lib.rs:27248-27286`). Returns
+    /// `true` only when the wasm-side jump pipeline would actually
+    /// fire the `GameAction::Jump` wire packet; returns `false` when:
+    ///
+    /// - Pre-spawn (no WorldState / player entity yet);
+    /// - The player is currently airborne (ACE forbids double-jumps);
+    /// - `motion_allows_jump(current_substate)` rejects (interactive /
+    ///   held-pose / cast-windup substates — see PhatSDK
+    ///   `CMotionInterp::motion_allows_jump`).
+    ///
+    /// The JS spacebar keyup handler (`index.html` ~7950) polls this
+    /// BEFORE firing the local-prediction `em.setMotion(Jump)` +
+    /// `em.setAirborne(true)` overlay so blocked space-presses don't
+    /// produce a brief arms-up flash before the next reconciliation
+    /// touchdown clears it. The wasm-side gate is still the authoritative
+    /// rejector — this getter just lets JS skip the visual side-effect.
+    #[wasm_bindgen(js_name = canJumpNow)]
+    pub fn can_jump_now(&self) -> bool {
+        *self.local_player_can_jump.borrow()
     }
 
     /// **Wave 3.F (physics-replay parity, 2026-05-19).** Pure-prediction
@@ -20365,6 +20397,14 @@ pub async fn start_session(
     // pose, refreshed by the recv-loop on each TickMovement.
     let local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Wave 10 Phase 10.4 (2026-05-26): shared bool shadow mirroring the
+    // `SessionCommand::Jump` arm's gate, refreshed by the recv-loop on
+    // each TickMovement alongside `local_player_pose`. JS reads via
+    // `SessionHandle::can_jump_now` to pre-check spacebar releases.
+    // Defaults to `false` until the first post-spawn tick publishes the
+    // first real value (pre-spawn the player can't jump anyway).
+    let local_player_can_jump: std::rc::Rc<std::cell::RefCell<bool>> =
+        std::rc::Rc::new(std::cell::RefCell::new(false));
     // PR-SS 2026-05-23: timestamp of last server packet. Recv loop
     // writes on every SessionEvent::Message; JS-side link-status
     // indicator polls `sessionLastRecvAgeMs()` to tint the icon.
@@ -20423,6 +20463,7 @@ pub async fn start_session(
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
+        let local_player_can_jump_inner = local_player_can_jump.clone();
         let last_recv_instant_inner = last_recv_instant.clone();
         let last_ping_rtt_ms_inner = last_ping_rtt_ms.clone();
         let collision_scene_inner = collision_scene.clone();
@@ -20461,6 +20502,7 @@ pub async fn start_session(
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
+                local_player_can_jump_inner,
                 last_recv_instant_inner,
                 last_ping_rtt_ms_inner,
                 collision_scene_inner,
@@ -20555,6 +20597,7 @@ pub async fn start_session(
         cell_scene_snapshot,
         door_part_snapshot,
         local_player_pose,
+        local_player_can_jump,
         last_recv_instant,
         last_ping_rtt_ms,
         last_client_prediction,
@@ -21751,6 +21794,29 @@ fn publish_local_player_pose(
     });
 }
 
+/// **Wave 10 Phase 10.4 (2026-05-26).** Companion to
+/// [`publish_local_player_pose`] — refreshes the `can_jump_now`
+/// shadow read by JS via [`SessionHandle::can_jump_now`]. Mirrors the
+/// gate in the `SessionCommand::Jump` arm (lib.rs:27248-27286):
+/// `false` when airborne (no double-jump) OR when the current substate
+/// rejects per PhatSDK `CMotionInterp::motion_allows_jump`. The JS
+/// spacebar keyup polls this BEFORE firing the local-prediction
+/// arms-up overlay, so blocked space-presses don't flash the overlay
+/// before the next reconciliation touchdown clears it.
+///
+/// Refreshed at the same TickMovement cadence as the pose shadow so
+/// the bool tracks the live `current_substate` (the post-tick diff
+/// in the TickMovement arm is what mutates it).
+#[cfg(target_arch = "wasm32")]
+fn publish_local_player_can_jump(
+    world: &holtburger_world::WorldState,
+    cell: &std::rc::Rc<std::cell::RefCell<bool>>,
+) {
+    let allowed = !world.player.is_airborne
+        && holtburger_world::player::motion_allows_jump(world.player.current_substate);
+    *cell.borrow_mut() = allowed;
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn recv_loop(
     mut session: holtburger_session::Session,
@@ -21801,6 +21867,7 @@ async fn recv_loop(
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
     >,
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
+    local_player_can_jump: std::rc::Rc<std::cell::RefCell<bool>>,
     last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
     last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>>,
     collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
@@ -27564,6 +27631,14 @@ async fn recv_loop(
                         // `None`; post-spawn it stays `Some` and the
                         // recv-loop overwrites in place.
                         publish_local_player_pose(w, &local_player_pose);
+
+                        // Wave 10 Phase 10.4 (2026-05-26): refresh the
+                        // `can_jump_now` shadow alongside the pose. JS
+                        // spacebar keyup polls this before firing the
+                        // local-prediction arms-up overlay so blocked
+                        // releases don't flash. Same cadence/justification
+                        // as the pose shadow above.
+                        publish_local_player_can_jump(w, &local_player_can_jump);
 
                         // Workstream C (3D camera collision,
                         // 2026-05-11): refresh the JS-readable shadow

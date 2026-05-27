@@ -7955,6 +7955,23 @@ void main() {
               const holdMs = performance.now() - window.__jumpKeydownTs;
               window.__jumpKeydownTs = null;
               jumpChargeUi.hide();
+              // Wave 10 Phase 10.4 (2026-05-26) — pre-check the wasm-side
+              // gate (mirror of `SessionCommand::Jump` arm at
+              // lib.rs:27248-27286: airborne + substate check) so blocked
+              // releases don't fire the local-prediction arms-up overlay
+              // below. The wasm-side gate still authoritatively rejects,
+              // but without this pre-check the overlay flashes briefly
+              // until the next reconciliation touchdown clears it.
+              // `typeof` guard handles stale-wasm-bundle fallback: if the
+              // export is missing the JS optimistically allows the jump
+              // and only the visual flash leaks through.
+              const canJump =
+                typeof handle.canJumpNow === "function"
+                  ? handle.canJumpNow()
+                  : true;
+              if (!canJump) {
+                return;
+              }
               const power = Math.max(0, Math.min(1, holdMs / 500));
               try {
                 handle.jump(power);
