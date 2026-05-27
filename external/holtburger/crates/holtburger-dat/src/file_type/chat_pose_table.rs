@@ -1,4 +1,4 @@
-use crate::utils::{align_boundary, read_pstring};
+use crate::utils::read_pstring_char;
 use crate::{EOR_PORTAL_NAMESPACE, ResourceKey, StaticResourceKey};
 use binrw::{BinRead, BinResult};
 use std::collections::HashMap;
@@ -88,9 +88,7 @@ fn parse_pstring_aligned<R: Read + Seek>(
     _endian: binrw::Endian,
     _args: (),
 ) -> BinResult<String> {
-    let value = read_pstring(reader, 2)?;
-    align_boundary(reader, 4)?;
-    Ok(value)
+    read_pstring_char(reader)
 }
 
 #[cfg(test)]

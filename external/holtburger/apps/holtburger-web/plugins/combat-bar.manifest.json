@@ -8,8 +8,5 @@
   "icon": "⚔",
   "entry": "./combat-bar.js",
   "environments": ["browser"],
-  "slots": ["bar", "panel"],
-  "hotkeys": [
-    { "id": "toggle", "default": "F4", "label": "Toggle Combat panel" }
-  ]
+  "slots": ["bar", "panel"]
 }

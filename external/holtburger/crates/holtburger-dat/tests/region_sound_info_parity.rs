@@ -112,7 +112,7 @@ fn find_sound_info_slice_bounds(region_bytes: &[u8]) -> (usize, usize) {
     use binrw::BinRead;
     use holtburger_dat::file_type::game_time::GameTime;
     use holtburger_dat::file_type::region::{LandDefs, SkyDesc};
-    use holtburger_dat::utils::{align_boundary, read_pstring};
+    use holtburger_dat::utils::read_pstring_char;
 
     let mut cursor = Cursor::new(region_bytes);
 
@@ -120,8 +120,7 @@ fn find_sound_info_slice_bounds(region_bytes: &[u8]) -> (usize, usize) {
     let _id = u32::read_le(&mut cursor).unwrap();
     let _region_number = u32::read_le(&mut cursor).unwrap();
     let _version = u32::read_le(&mut cursor).unwrap();
-    let _name = read_pstring(&mut cursor, 2).unwrap();
-    align_boundary(&mut cursor, 4).unwrap();
+    let _name = read_pstring_char(&mut cursor).unwrap();
 
     let _land_defs = LandDefs::unpack(&mut cursor).unwrap();
     let _game_time = GameTime::unpack(&mut cursor).unwrap();

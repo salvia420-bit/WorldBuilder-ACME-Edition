@@ -11,6 +11,6 @@
   "environments": ["browser"],
   "slots": ["panel"],
   "hotkeys": [
-    { "id": "toggle", "default": "I", "label": "Toggle Inventory" }
+    { "id": "toggle", "default": "F4", "label": "Toggle Inventory" }
   ]
 }

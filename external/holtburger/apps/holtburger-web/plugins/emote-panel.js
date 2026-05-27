@@ -29,7 +29,13 @@
 //   * external/chorizite/Chorizite.ACProtocol/Types/Emote.generated.cs
 //   * apps/holtburger-web/src/lib.rs (getEmoteTaxonomy wasm export)
 //
-// Hotkey: Shift+F2 (added in index.html FKEY_SHIFT_TOGGLES).
+// Hotkey: Shift+F2 — declared in `emote-panel.manifest.json` and routed
+// via the manifest-hotkey path in index.html (Polish B's `matchHotkeyEvent`
+// dispatcher → `__mainPanel.toggleView("emote")`). The legacy
+// `window.__toggleEmotePanel` global was removed in Wave J1.A (2026-05-27)
+// as part of the orphan-hotkey cleanup: there were no remaining callers
+// after Polish B's manifest path took over, and a `FKEY_SHIFT_TOGGLES[F2]`
+// entry was never wired in index.html (Polish B audit finding).
 
 const PANEL_ID = "hb-emote-panel";
 
@@ -257,76 +263,6 @@ function dispatchEmoteAction(t, ctx) {
   };
 }
 
-// Build the panel DOM. Idempotent — returns the existing overlay if
-// already created.
-function buildPanel(taxonomy, ctx) {
-  let overlay = document.getElementById(PANEL_ID);
-  if (overlay) return overlay;
-
-  overlay = document.createElement("div");
-  overlay.id = PANEL_ID;
-
-  // Title bar
-  const titleBar = document.createElement("div");
-  titleBar.className = "hb-ep-title";
-  const titleText = document.createElement("div");
-  titleText.className = "hb-ep-title-text";
-  titleText.textContent = "Emote Palette";
-  titleBar.appendChild(titleText);
-  const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
-  closeBtn.className = "hb-ep-close";
-  closeBtn.textContent = "×";
-  closeBtn.addEventListener("click", () => {
-    overlay.dataset.open = "0";
-  });
-  titleBar.appendChild(closeBtn);
-  overlay.appendChild(titleBar);
-
-  // Toolbar — filter + show-all toggle
-  const toolbar = document.createElement("div");
-  toolbar.className = "hb-ep-toolbar";
-  const filterInput = document.createElement("input");
-  filterInput.type = "text";
-  filterInput.placeholder = "Filter actions…";
-  filterInput.id = `${PANEL_ID}-filter`;
-  toolbar.appendChild(filterInput);
-  const allLabel = document.createElement("label");
-  const allCheckbox = document.createElement("input");
-  allCheckbox.type = "checkbox";
-  allCheckbox.id = `${PANEL_ID}-show-all`;
-  allLabel.appendChild(allCheckbox);
-  allLabel.appendChild(document.createTextNode("All"));
-  toolbar.appendChild(allLabel);
-  overlay.appendChild(toolbar);
-
-  // Body — sections per category
-  const body = document.createElement("div");
-  body.className = "hb-ep-body";
-  body.id = `${PANEL_ID}-body`;
-  overlay.appendChild(body);
-
-  // Status bar
-  const status = document.createElement("div");
-  status.className = "hb-ep-status";
-  status.id = `${PANEL_ID}-status`;
-  status.textContent = "Hover an action for details.";
-  overlay.appendChild(status);
-
-  // Wire up filter + show-all re-render handlers.
-  function render() {
-    const showAll = allCheckbox.checked;
-    const filterText = (filterInput.value || "").trim().toLowerCase();
-    renderSections(body, taxonomy, ctx, { showAll, filterText, statusEl: status });
-  }
-  filterInput.addEventListener("input", render);
-  allCheckbox.addEventListener("change", render);
-  render();
-
-  document.body.appendChild(overlay);
-  return overlay;
-}
-
 function renderSections(body, taxonomy, ctx, opts) {
   body.innerHTML = "";
   const { showAll, filterText, statusEl } = opts;
@@ -417,39 +353,12 @@ function renderSections(body, taxonomy, ctx, opts) {
     `${matchingTypes.length} of ${taxonomy.typeCount} actions visible — ${sortedShapes.length} shape group(s).`;
 }
 
-// Public API: toggle the panel. Lazy on first call.
-let cachedTaxonomy = null;
-function toggle(ctx) {
-  ensureStyles();
-  const handle = ctx?.handle ?? window.__sessionHandle ?? null;
-  if (!cachedTaxonomy && handle && typeof handle.getEmoteTaxonomy === "function") {
-    try {
-      const tax = handle.getEmoteTaxonomy();
-      if (tax && tax.types && tax.categories) {
-        cachedTaxonomy = tax;
-      }
-    } catch (e) {
-      console.warn("[emote-panel] getEmoteTaxonomy failed:", e);
-    }
-  }
-  if (!cachedTaxonomy) {
-    // Fallback — synthesize a minimal taxonomy so the panel surface
-    // still renders pre-login (with all actions disabled).
-    cachedTaxonomy = {
-      categories: [],
-      types: [],
-      categoryCount: 0,
-      typeCount: 0,
-    };
-  }
-  const overlay = buildPanel(cachedTaxonomy, ctx);
-  overlay.dataset.open = overlay.dataset.open === "1" ? "0" : "1";
-}
-
-// Expose to global for hotkey wiring (Shift+F2 in index.html).
-if (typeof window !== "undefined") {
-  window.__toggleEmotePanel = () => toggle({ handle: window.__sessionHandle });
-}
+// J1.A removed the standalone-overlay `toggle()` path: it wasn't
+// exported (module scope hid it from devtools too), wasn't called
+// internally, and the manifest's Shift+F2 routes through main-panel's
+// `view` (line 469 below). If a future need surfaces a separate
+// floating-overlay surface distinct from the main-panel view, re-derive
+// from git history rather than carrying speculative code.
 
 export const manifest = {
   id: "emote-panel",

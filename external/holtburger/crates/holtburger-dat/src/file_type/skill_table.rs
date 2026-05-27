@@ -1,4 +1,4 @@
-use crate::utils::{align_boundary, read_pstring};
+use crate::utils::read_pstring_char;
 use crate::{EOR_PORTAL_NAMESPACE, ResourceKey, StaticResourceKey};
 use binrw::{BinRead, BinResult};
 use std::collections::HashMap;
@@ -36,12 +36,8 @@ impl StaticResourceKey for SkillTable {
 pub struct SkillBase {
     #[br(parse_with = parse_description)]
     pub description: String,
-    #[br(parse_with = parse_align)]
-    pub _align1: (),
     #[br(parse_with = parse_description)]
     pub name: String,
-    #[br(parse_with = parse_align)]
-    pub _align2: (),
     pub icon_id: u32,
     pub trained_cost: i32,
     pub specialized_cost: i32,
@@ -70,12 +66,7 @@ fn parse_description<R: Read + Seek>(
     _endian: binrw::Endian,
     _args: (),
 ) -> BinResult<String> {
-    read_pstring(reader, 2)
-}
-
-fn parse_align<R: Read + Seek>(reader: &mut R, _endian: binrw::Endian, _args: ()) -> BinResult<()> {
-    align_boundary(reader, 4)?;
-    Ok(())
+    read_pstring_char(reader)
 }
 
 fn parse_skill_hash_table<R: Read + Seek>(
@@ -114,8 +105,6 @@ fn parse_skill_hash_table<R: Read + Seek>(
         map.entry(id).or_insert_with(|| SkillBase {
             name: name.to_string(),
             description: format!("Retired skill: {}", name),
-            _align1: (),
-            _align2: (),
             icon_id: 0,
             trained_cost: 0, // Cannot be trained in modern AC
             specialized_cost: 0,

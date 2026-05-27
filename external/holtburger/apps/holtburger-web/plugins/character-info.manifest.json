@@ -1,0 +1,16 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "character-info",
+  "name": "Character",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Character info view — Attributes / Skills / Titles tabs (gmCharacterInfoUI 0x2100001A). Toggled via F1; mounts as a view of plugins/main-panel.js.",
+  "icon": "👤",
+  "iconHidden": true,
+  "entry": "./character-info.js",
+  "environments": ["browser"],
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "F1", "label": "Toggle Character" }
+  ]
+}

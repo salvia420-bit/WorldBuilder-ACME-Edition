@@ -113,9 +113,9 @@ function syncWindowState(state) {
 }
 
 // Module-scope disarm helper. Clears armedSpellId in localStorage +
-// window.__combatBarState without touching DOM. Used by the mount()
-// event subscribers (death / zone change) so the disarm works even
-// when the combat-bar panel is closed. When the panel IS open,
+// window.__combatBarState without touching DOM. Used by the module-load
+// IIFE's event subscribers (death / zone change) so the disarm works
+// even when the combat-bar panel is closed. When the panel IS open,
 // activate()'s local setArmed updates the row "armed" class; the
 // next renderRows after reopen reads the fresh state either way.
 function clearArmedSpell() {
@@ -512,8 +512,84 @@ function readRecklessnessTrainingLevel() {
 // Seed window.__combatBarState at import time so picking.js reads
 // the persisted values (or DEFAULTS on a fresh session) even when
 // the user never opens the panel this session.
+//
+// Wave J1.A (2026-05-27) — also installs the auto-disarm hooks that
+// previously lived in an exported `mount(ctx)` lifecycle. The bar's
+// per-slot mount pass intentionally skipped combat-bar (Polish A's
+// `BAR_SLOT_EXPORT_OVERRIDES["combat-bar"] = { mount: false, ... }`
+// in index.html, around line 1236), which meant `mount()` was an
+// orphan — declared but never invoked. The disarm logic is correctness-
+// critical (clear armed spell on zone change / death even when the
+// combat panel is closed), so we run it at module-load time instead.
+// The poll loop below handles the case where `window.__pluginClient`
+// isn't ready yet (it's set by index.html post-login).
 if (typeof window !== "undefined") {
   syncWindowState(loadState());
+  installAutoDisarmHooks();
+}
+
+// Auto-disarm subscriptions. Runs at module-load (see syncWindowState
+// IIFE above) so the disarm hook is live even before the user opens
+// the combat panel — armed-spell state lives in localStorage +
+// window.__combatBarState, so it survives across sessions and panel
+// open/close. Two trigger events:
+//   - `landblockChanged` — zone exit clears armed spell (matches
+//     retail AC's "armed spell cleared on portal / teleport"). The
+//     first emission also catches the log-in case (lastLocalPlayerLb
+//     starts at 0 in index.html), so reloading the page with a stale
+//     armed spell no longer leaves the UI lying to the user.
+//   - `playerStatsUpdated` with HP=0 — death clears armed spell.
+//
+// Previously this lived in an exported `mount(ctx)` lifecycle fn that
+// the bar would invoke. Wave J1.A (2026-05-27) moved it inline because
+// index.html's `BAR_SLOT_EXPORT_OVERRIDES["combat-bar"]` intentionally
+// skipped combat-bar's `mount()` (see index.html ~line 1232-1236 for
+// the historical rationale), so the hooks never fired.
+function installAutoDisarmHooks() {
+  let pollTimer = null;
+
+  function tryHook() {
+    const client = window.__pluginClient ?? null;
+    if (!client?.events?.on || !client?.player) {
+      return false;
+    }
+    const onZoneChange = () => clearArmedSpell();
+    const onStatsUpdated = () => {
+      try {
+        const stats = client.player.stats;
+        const vitals = stats?.vitals;
+        if (!vitals) return;
+        // vitals packs [type, current, base, buffed_max] × N — see
+        // plugins/vitals-hud.js for the same wire-layout reader.
+        // Type 1 = HP; current at offset +1.
+        for (let i = 0; i + 3 < vitals.length; i += 4) {
+          if (vitals[i] === 1 && vitals[i + 1] === 0) {
+            clearArmedSpell();
+            return;
+          }
+        }
+      } catch {
+        // Stats accessor can throw pre-biota; ignore.
+      }
+    };
+    client.events.on("landblockChanged", onZoneChange);
+    client.events.on("playerStatsUpdated", onStatsUpdated);
+    return true;
+  }
+
+  if (!tryHook()) {
+    pollTimer = setInterval(() => {
+      if (tryHook()) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }, 500);
+  }
+  // No teardown — disposers live for the page lifetime, mirroring how
+  // the prior `mount(ctx)` disposer was never invoked (bar teardown
+  // isn't plumbed today; see ui/bar.js:583-584 "TODO: bar teardown
+  // not yet plumbed"). If/when bar teardown lands we can surface the
+  // disposer back through a return value or a window-scoped handle.
 }
 
 // Stance label — one-word descriptor read off the wasm-side stance.
@@ -1334,67 +1410,13 @@ export const manifest = {
   description: "Stance toggle + attack settings + spell picker",
 };
 
-// Auto-disarm subscriptions. Mount runs at bar init (pre-login) so
-// the plugin keeps a live disarm hook even when the panel is closed.
-// Two trigger events:
-//   - `landblockChanged` — zone exit clears armed spell (matches
-//     retail AC's "armed spell cleared on portal / teleport")
-//   - `playerStatsUpdated` with HP=0 — death clears armed spell
-// The first emission of `landblockChanged` also catches the
-// log-in case (lastLocalPlayerLb starts at 0 in index.html), so
-// reloading the page with a stale armed spell no longer leaves the
-// UI lying to the user.
-export function mount(ctx) {
-  let pollTimer = null;
-  let unsubLb = null;
-  let unsubStats = null;
-
-  function tryHook() {
-    const client = ctx?.client ?? window.__pluginClient ?? null;
-    if (!client?.events?.on || !client?.player) {
-      return false;
-    }
-    const onZoneChange = () => clearArmedSpell();
-    const onStatsUpdated = () => {
-      try {
-        const stats = client.player.stats;
-        const vitals = stats?.vitals;
-        if (!vitals) return;
-        // vitals packs [type, current, base, buffed_max] × N — see
-        // plugins/vitals-hud.js for the same wire-layout reader.
-        // Type 1 = HP; current at offset +1.
-        for (let i = 0; i + 3 < vitals.length; i += 4) {
-          if (vitals[i] === 1 && vitals[i + 1] === 0) {
-            clearArmedSpell();
-            return;
-          }
-        }
-      } catch {
-        // Stats accessor can throw pre-biota; ignore.
-      }
-    };
-    client.events.on("landblockChanged", onZoneChange);
-    client.events.on("playerStatsUpdated", onStatsUpdated);
-    unsubLb = () => client.events.off("landblockChanged", onZoneChange);
-    unsubStats = () => client.events.off("playerStatsUpdated", onStatsUpdated);
-    return true;
-  }
-
-  if (!tryHook()) {
-    pollTimer = setInterval(() => {
-      if (tryHook()) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-    }, 500);
-  }
-
-  return () => {
-    if (pollTimer) clearInterval(pollTimer);
-    if (unsubLb) unsubLb();
-    if (unsubStats) unsubStats();
-  };
-}
+// Wave J1.A (2026-05-27) — the previously-exported `mount(ctx)` lifecycle
+// fn that handled auto-disarm on zone-change/death has been moved into
+// the module-load IIFE above (`installAutoDisarmHooks`). The export was
+// orphaned by Polish A's `BAR_SLOT_EXPORT_OVERRIDES["combat-bar"]` in
+// index.html (around line 1232-1236) which intentionally skipped combat-
+// bar's mount() to preserve pre-refactor behaviour. Now that the hook
+// runs at module-load instead, combat-bar no longer needs a mount export.
 
 export function activate(bodyEl, ctx) {
   ensureStyles();

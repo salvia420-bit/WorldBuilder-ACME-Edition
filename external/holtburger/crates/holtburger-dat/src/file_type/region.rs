@@ -25,7 +25,7 @@
 //! order — but each is gated on its specific bit. `TerrainInfo` is unconditional.
 
 use crate::file_type::game_time::GameTime;
-use crate::utils::{align_boundary, read_pstring};
+use crate::utils::{align_boundary, read_pstring_char};
 use binrw::{
     BinRead, BinResult,
     io::{Read, Seek},
@@ -139,8 +139,7 @@ pub struct DayGroup {
 impl DayGroup {
     pub fn unpack<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
         let chance_of_occur = f32::read_le(reader)?;
-        let day_name = read_pstring(reader, 2)?;
-        align_boundary(reader, 4)?;
+        let day_name = read_pstring_char(reader)?;
 
         // PhatSDK SkyDesc.cpp:117-125 — SkyObjects come BEFORE SkyTime
         // (counter-intuitive, but matches both the schema and the C++
@@ -661,8 +660,7 @@ pub struct TerrainType {
 
 impl TerrainType {
     pub fn unpack<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
-        let terrain_name = read_pstring(reader, 2)?;
-        align_boundary(reader, 4)?;
+        let terrain_name = read_pstring_char(reader)?;
         let terrain_color = u32::read_le(reader)?;
         let num = u32::read_le(reader)?;
         let mut scene_types = Vec::with_capacity(num as usize);
@@ -759,8 +757,7 @@ impl Region {
         let id = u32::read_le(reader)?;
         let region_number = u32::read_le(reader)?;
         let version = u32::read_le(reader)?;
-        let region_name = read_pstring(reader, 2)?;
-        align_boundary(reader, 4)?;
+        let region_name = read_pstring_char(reader)?;
 
         let land_defs = LandDefs::unpack(reader)?;
         let game_time = GameTime::unpack(reader)?;

@@ -11,6 +11,7 @@
   "environments": ["browser"],
   "slots": ["panel"],
   "hotkeys": [
-    { "id": "toggle", "default": "F5", "label": "Toggle Spellbook" }
+    { "id": "toggle", "default": "F5", "label": "Toggle Spellbook" },
+    { "id": "toggle-alt", "default": "F2", "label": "Toggle Spellbook (alt)" }
   ]
 }

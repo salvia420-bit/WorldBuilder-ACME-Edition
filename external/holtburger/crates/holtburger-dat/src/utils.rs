@@ -77,27 +77,22 @@ where
 }
 
 /// Read a "byte-length-prefix" pstring — a `length` field of
-/// `size_of_length` bytes, followed by `length` Windows-1252 bytes.
+/// `size_of_length` bytes (1 / 2 / 4), followed by `length`
+/// Windows-1252 bytes.
 ///
 /// **Does NOT handle the AC1Legacy `PStringBase<char>` quirks** (no
 /// 0xFFFF u16 → u32 length escape, no 4-byte align-pad after the
 /// bytes). If the AC schema you are reading is annotated as
-/// `<AC1LegacyPStringBase>` or `<PStringBase type="char">`, prefer
-/// [`read_pstring_char`].
+/// `<AC1LegacyPStringBase>` or `<PStringBase type="char">`, use
+/// [`read_pstring_char`] instead — it embeds both quirks.
 ///
-/// Existing callers that are SAFE on this primitive (verified
-/// 2026-05-27) are those whose strings are short enough that they
-/// never trigger the 0xFFFF escape AND that follow `read_pstring`
-/// with a manual `align_boundary(reader, 4)` call:
-///
-///   * `weenie::Weenie::read_options` (property-bucket string values)
-///   * `file_type::skill_table::parse_description` (skill name + desc)
-///   * `file_type::game_time::*::unpack` (year/day/season names)
-///   * `file_type::region::*` (terrain + region names)
-///   * `file_type::chat_pose_table::parse_pstring_aligned`
-///
-/// New parsers reading `PStringBase<char>` MUST use
-/// [`read_pstring_char`] instead.
+/// Retained for callers that need a non-`PStringBase<char>` width
+/// (e.g. `size_of_length = 1` for inline byte-prefixed names, or
+/// `size_of_length = 4` for the rare uint-length-prefixed payloads
+/// in StringTable). Wave J2 (2026-05-27) migrated all known
+/// `PStringBase<char>` callers in `holtburger-dat` to
+/// [`read_pstring_char`]; new code reading that schema annotation
+/// MUST use the corrected primitive.
 pub fn read_pstring<R: Read + Seek>(
     reader: &mut R,
     size_of_length: u32,

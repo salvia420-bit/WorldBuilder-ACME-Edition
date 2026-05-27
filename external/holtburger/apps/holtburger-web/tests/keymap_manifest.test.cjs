@@ -331,23 +331,44 @@ if (typeof globalThis.window === 'undefined') {
 
   check('aggregate of all real manifests produces expected core bindings', () => {
     const r = buildManifestBindings(manifestsWithHotkeys);
-    // Per Polish B: F3=map, F5=spellbook, F6=journal, F7=contracts, F8=allegiance, F9=fellowship, Shift+F2=emote, Shift+F6=house
-    // (F4 owned by combat-bar manifest, even though index.html legacy says inventory; Polish B preserves combat-bar's manifest claim and the duplicate falls to inventory's own "I" hotkey.)
+    // Per Polish B + Wave J1.A + Wave J1.B (2026-05-27 orphan cleanup +
+    // legacy FKEY consolidation):
+    //   F1=character-info, F2=spellbook (alt), F3=map, F4=inventory,
+    //   F5=spellbook, F6=journal, F7=contracts, F8=allegiance,
+    //   F9=fellowship, F10=options-panel, Shift+F2=emote,
+    //   Shift+F4=spell-research-panel, Shift+F6=house.
+    // Wave J1.A removed `combat-bar`'s aspirational F4 hotkey (no JS
+    // listener; F4 is the de-facto open-inventory binding) and moved
+    // F4 onto `inventory.manifest.json` where it now reflects the actual
+    // dispatch. Inventory's prior "I" hotkey was orphaned (no handler
+    // anywhere) so it was retired alongside the combat-bar F4 claim.
+    // Wave J1.B (this commit) added F1 / F10 / Shift+F4 manifests for
+    // the previously-unmanifested character-info / options-panel /
+    // spell-research-panel plugins and folded F2 into spellbook as a
+    // multi-hotkey (matches the retail dual-binding F2+F5 → Spellbook).
+    // Source-of-truth for these names is the FKEY_VIEWS table that the
+    // same commit deletes from index.html.
     const expected = {
+      'F1': 'character-info::toggle',
+      'F2': 'spellbook::toggle-alt',
       'F3': 'map-panel::toggle',
-      'F4': 'combat-bar::toggle',
+      'F4': 'inventory::toggle',
       'F5': 'spellbook::toggle',
       'F6': 'journal-panel::toggle',
       'F7': 'contracts-panel::toggle',
       'F8': 'allegiance-panel::toggle',
       'F9': 'fellowship-panel::toggle',
+      'F10': 'options-panel::toggle',
       'Shift+F2': 'emote-panel::toggle',
+      'Shift+F4': 'spell-research-panel::toggle',
       'Shift+F6': 'house-panel::toggle',
-      'I': 'inventory::toggle',
     };
     for (const [k, v] of Object.entries(expected)) {
       assert.equal(r.map[k], v, `expected ${k} → ${v}, got ${r.map[k]}`);
     }
+    // The orphaned "I" hotkey must not reappear.
+    assert.equal(r.map.I, undefined,
+      'inventory should no longer claim "I" (Wave J1.A orphan removal)');
   });
 
   // ─── Summary ───

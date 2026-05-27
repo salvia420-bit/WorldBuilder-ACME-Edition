@@ -1052,54 +1052,46 @@
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
       import { mountBar } from "./ui/bar.js";
-      // Polish A (2026-05-27): PR 8 plugin loader wired into runtime.
-      // The static `import * as <id>Plugin` lines below remain because
-      // they're load-bearing for non-bar uses (compass-hud side-effect
-      // import; mainPanelPlugin.registerView; spellbookPlugin.view; etc.).
-      // What the loader replaces: the manual `barSlots = […]` array
-      // literal that was hand-spreading each plugin's manifest +
-      // mount/activate refs. Now we run all 29 manifests through
-      // validateManifest → resolveDependencies → 5-stage lifecycle hooks
-      // (per Chorizite porting plan §5.5), then derive bar slots from
-      // the resolved set. The two ad-hoc slots (rynthsuite, fullscreen)
-      // that have no .manifest.json get appended after.
+      // Polish A (2026-05-27) + J1.C (2026-05-27): PR 8 plugin loader
+      // wired into runtime. J1.C consolidated the static-import set: only
+      // plugins whose JS exports something other than `mount`/`activate`
+      // (i.e. `.view`, `.registerView`, side-effects) remain as static
+      // imports. The remaining ~18 bar-slot-only plugins now load
+      // dynamically via the loader's `modulePath` resolution path.
+      //
+      // Retained static imports (each has a non-bar consumer cited inline):
+      //   - mainPanelPlugin       — registerView host (used by 9 view exports)
+      //   - spellbookPlugin       — `.view` registered for F5 panel
+      //   - inventoryPlugin       — `.view` registered for F4 panel
+      //   - examineTargetPlugin   — `.view` registered (and dispatched on selection)
+      //   - characterInfoPlugin   — `.view` registered for F1 panel
+      //   - mapPanelPlugin        — `.view` registered for F3 panel
+      //   - allegiancePanelPlugin — `.view` registered for F8 panel
+      //   - fellowshipPanelPlugin — `.view` registered for F9 panel
+      //   - journalPanelPlugin    — `.view` registered for F6 panel
+      //   - contractsPanelPlugin  — `.view` registered for F7 panel
+      //   - optionsPanelPlugin    — `.view` registered for F10 panel
+      //   - compass-hud           — side-effect import (no named exports)
+      //
+      // Truly orphan imports DELETED by J1.C (no reference anywhere):
+      //   spellResearchPlugin (1100), debugOverlayPlugin (1102).
       import { loadPlugins, fetchManifestIndex } from "./plugins/loader.js";
       import {
         buildManifestBindings as buildManifestHotkeyBindings,
         setManifestBindings as setManifestHotkeyBindings,
         matchHotkeyEvent as matchManifestHotkeyEvent,
       } from "./ui/keymap.js";
-      import * as combatBarPlugin from "./plugins/combat-bar.js";
       import * as spellbookPlugin from "./plugins/spellbook.js";
-      import * as vitalsHudPlugin from "./plugins/vitals-hud.js";
-      import * as buffsHudPlugin from "./plugins/buffs-hud.js";
-      import * as targetBarPlugin from "./plugins/target-bar.js";
-      import * as combatHudPlugin from "./plugins/combat-hud.js";
-      import * as sneakHudPlugin from "./plugins/sneak-hud.js";
-      import * as vendorUiPlugin from "./plugins/vendor-ui.js";
-      import * as radarPlugin from "./plugins/radar.js";
-      import * as chatPanelPlugin from "./plugins/chat-panel.js";
-      import * as statusIndicatorsPlugin from "./plugins/status-indicators.js";
-      import * as hotbarPlugin from "./plugins/hotbar.js";
       import * as inventoryPlugin from "./plugins/inventory.js";
-      import * as dyePreviewPlugin from "./plugins/dye-preview.js";
       import * as examineTargetPlugin from "./plugins/examine-target.js";
-      import * as radialMenuPlugin from "./plugins/radial-menu.js";
-      import * as containerPanelPlugin from "./plugins/container-panel.js";
       import * as mainPanelPlugin from "./plugins/main-panel.js";
       import * as characterInfoPlugin from "./plugins/character-info.js";
       import * as mapPanelPlugin from "./plugins/map-panel.js";
       import * as allegiancePanelPlugin from "./plugins/allegiance-panel.js";
-      import * as socialPanelPlugin from "./plugins/social-panel.js";
       import * as fellowshipPanelPlugin from "./plugins/fellowship-panel.js";
-      import * as tradePanelPlugin from "./plugins/trade-panel.js";
-      import * as bookPanelPlugin from "./plugins/book-panel.js";
       import * as journalPanelPlugin from "./plugins/journal-panel.js";
       import * as contractsPanelPlugin from "./plugins/contracts-panel.js";
       import * as optionsPanelPlugin from "./plugins/options-panel.js";
-      import * as spellResearchPlugin from "./plugins/spell-research-panel.js";
-      import * as housePanelPlugin from "./plugins/house-panel.js";
-      import * as debugOverlayPlugin from "./plugins/debug-overlay.js";
       import "./plugins/compass-hud.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
       // CMT Wave 2 / Phase 5 (2026-05-26): remote-player swing dispatch.
@@ -1178,40 +1170,25 @@
       //     pre-Polish-A behaviour (combat-bar.mount currently does not
       //     fire — flip in a follow-up after validating it doesn't
       //     double-mount armed-spell cleanup).
+      // J1.C (2026-05-27): only plugins with non-bar uses (`.view`,
+      // `.registerView` hosts) retain entries here; the ~18 bar-slot-only
+      // plugins (vitals-hud, buffs-hud, target-bar, combat-hud, sneak-hud,
+      // radar, chat-panel, status-indicators, hotbar, dye-preview,
+      // combat-bar, vendor-ui, radial-menu, container-panel, social-panel,
+      // trade-panel, book-panel, house-panel) now resolve via the loader's
+      // dynamic `modulePath` path. Same with emote-panel + stance-toggle.
       const PLUGIN_MODULES = {
-        "vitals-hud": vitalsHudPlugin,
-        "buffs-hud": buffsHudPlugin,
-        "target-bar": targetBarPlugin,
-        "combat-hud": combatHudPlugin,
-        "sneak-hud": sneakHudPlugin,
-        "radar": radarPlugin,
-        "chat-panel": chatPanelPlugin,
-        "status-indicators": statusIndicatorsPlugin,
-        "hotbar": hotbarPlugin,
         "main-panel": mainPanelPlugin,
-        "dye-preview": dyePreviewPlugin,
         // manifest id is `examine-target-watcher` (intentional rename per
         // examine-target.manifest.json:3); the .js filename remained.
         "examine-target-watcher": examineTargetPlugin,
-        "combat-bar": combatBarPlugin,
-        "vendor-ui": vendorUiPlugin,
         "spellbook": spellbookPlugin,
         "inventory": inventoryPlugin,
-        "radial-menu": radialMenuPlugin,
-        "container-panel": containerPanelPlugin,
         "map-panel": mapPanelPlugin,
         "allegiance-panel": allegiancePanelPlugin,
-        "social-panel": socialPanelPlugin,
         "fellowship-panel": fellowshipPanelPlugin,
-        "trade-panel": tradePanelPlugin,
-        "book-panel": bookPanelPlugin,
         "journal-panel": journalPanelPlugin,
         "contracts-panel": contractsPanelPlugin,
-        "house-panel": housePanelPlugin,
-        // emote-panel and stance-toggle ship manifests but are not
-        // statically imported above; the loader will fall back to
-        // dynamic import for those two (modulePath path inside
-        // fetchManifestIndex). They're BAR_SLOT_SUPPRESS-ed below.
       };
 
       const BAR_SLOT_ORDER = [
@@ -1373,9 +1350,11 @@
         // Polish-A→B bridge (2026-05-27): register manifest-declared hotkeys
         // with the keymap resolver. Polish B's API; consumed by the keydown
         // handler below. Plugins without `hotkeys[]` in their manifest are
-        // silently ignored; legacy FKEY_VIEWS / FKEY_SHIFT_TOGGLES tables
-        // stay as a fallback for unmanifested plugins (character-info F1,
-        // options F10, spell-research Shift+F4).
+        // silently ignored. Wave J1.B (2026-05-27) retired the legacy
+        // FKEY_VIEWS / FKEY_SHIFT_TOGGLES fallback tables; every dispatched
+        // F-key now flows through a manifest hotkey (character-info F1,
+        // options-panel F10, spell-research-panel Shift+F4 ship with their
+        // own manifests as of J1.B).
         try {
           const manifestList = [...loaded.values()].map((v) => v.manifest);
           const { map: hotkeyMap, duplicates } = buildManifestHotkeyBindings(manifestList);
@@ -1476,26 +1455,38 @@
       //   F9 Fellowship   F10 Options (PR-II 2026-05-23)
       // Shift+F4 toggles the Spell Research panel; Shift+F6 toggles the
       // House panel. These overlays live outside main-panel's view set
-      // (each is its own document-body overlay), so they need their own
-      // hotkey rather than a FKEY_VIEWS entry.
+      // (each is its own document-body overlay), so they need a custom
+      // PLUGIN_HOTKEY_DISPATCH entry rather than the generic
+      // toggleView(viewName) path.
       // Examine is no longer auto-fired on selection (regression fix
       // 2026-05-22): clicking a vendor / NPC now passes through to the
       // interact path. Open examine via main-panel toggle if needed.
-      const FKEY_VIEWS = {
-        F1: "character",
-        F2: "spellbook",
-        F3: "map",
-        F4: "inventory",
-        F5: "spellbook",
-        F6: "journal",
-        F7: "contracts",
-        F8: "allegiance",
-        F9: "fellowship",
-        F10: "options",
-      };
-      const FKEY_SHIFT_TOGGLES = {
-        F4: () => window.__toggleSpellResearchPanel?.(),
-        F6: () => window.__toggleHousePanel?.(),
+      //
+      // Wave J1.B (2026-05-27): the FKEY_VIEWS / FKEY_SHIFT_TOGGLES
+      // tables that lived here have been retired in favour of manifest
+      // hotkey declarations (plugins/*.manifest.json#/hotkeys[]). The
+      // bridge below resolves a `KeyboardEvent` to a manifest action
+      // via `matchManifestHotkeyEvent` and dispatches via:
+      //   1. PLUGIN_HOTKEY_DISPATCH explicit override — when the plugin
+      //      is a standalone overlay (no main-panel view) or its view
+      //      name does not match the bridge's generic strip rule.
+      //   2. The generic rule — strip "com.holtburger." prefix and
+      //      "-panel" suffix from the plugin id, then call
+      //      `__mainPanel.toggleView(viewName)`.
+      // Source of truth for what's bound where: plugins/*.manifest.json.
+      const PLUGIN_HOTKEY_DISPATCH = {
+        // character-info.js's view registers as "character" (see
+        // mainPanelPlugin.registerView("character", …) above). The
+        // generic strip rule would dispatch to "character-info", which
+        // is unregistered. Explicit override keeps the manifest id
+        // aligned with the file basename.
+        "character-info": () => window.__mainPanel?.toggleView?.("character"),
+        // spell-research-panel.js is a standalone overlay (its own
+        // document-body element, not a main-panel view). The plugin
+        // exposes window.__toggleSpellResearchPanel; the bridge calls
+        // it directly. Same pattern that house-panel / emote-panel
+        // could later adopt for their non-main-panel hotkeys.
+        "spell-research-panel": () => window.__toggleSpellResearchPanel?.(),
       };
       window.addEventListener("keydown", (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
@@ -1505,31 +1496,23 @@
         // Polish B (2026-05-27): manifest-declared hotkeys take precedence.
         // Plugin id → view-name convention: strip "com.holtburger." prefix
         // and "-panel" suffix (matches main-panel.registerView naming).
+        // Wave J1.B: PLUGIN_HOTKEY_DISPATCH takes precedence over the
+        // generic strip rule for the standalone-overlay / mismatched-name
+        // cases (character-info → "character", spell-research-panel →
+        // standalone overlay).
         const action = matchManifestHotkeyEvent(ev);
         if (action && action.pluginId) {
           ev.preventDefault();
-          const view = action.pluginId
-            .replace(/^com\.holtburger\./, "")
-            .replace(/-panel$/, "");
-          window.__mainPanel?.toggleView?.(view);
-          return;
-        }
-
-        // Legacy FKEY tables — fallback for plugins without manifests
-        // (character-info, options, spell-research) and for inventory's
-        // F4 dispatch (combat-bar's manifest F4 is aspirational).
-        if (ev.shiftKey) {
-          const fn = FKEY_SHIFT_TOGGLES[ev.key];
-          if (fn) {
-            ev.preventDefault();
-            fn();
+          const dispatch = PLUGIN_HOTKEY_DISPATCH[action.pluginId];
+          if (dispatch) {
+            dispatch();
+          } else {
+            const view = action.pluginId
+              .replace(/^com\.holtburger\./, "")
+              .replace(/-panel$/, "");
+            window.__mainPanel?.toggleView?.(view);
           }
           return;
-        }
-        const view = FKEY_VIEWS[ev.key];
-        if (view) {
-          ev.preventDefault();
-          window.__mainPanel?.toggleView?.(view);
         }
       });
 

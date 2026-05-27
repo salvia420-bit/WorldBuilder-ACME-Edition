@@ -1,0 +1,16 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "options-panel",
+  "name": "Options",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Options view — main-panel port of retail gmConfigUI (0x21000029). Toggled via F10; mounts as a view of plugins/main-panel.js.",
+  "icon": "⚙",
+  "iconHidden": true,
+  "entry": "./options-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "F10", "label": "Toggle Options" }
+  ]
+}

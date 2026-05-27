@@ -10,7 +10,7 @@
 //! We mirror `BinaryReader::ReadString` from `external/GDL/PhatSDK/Support/`
 //! `BinaryReader.cpp:48-73` which reads `WORD len; bytes; ReadAlign();`.
 
-use crate::utils::{align_boundary, read_pstring};
+use crate::utils::read_pstring_char;
 use binrw::{
     BinRead, BinResult,
     io::{Read, Seek},
@@ -56,8 +56,7 @@ impl GameTime {
         let day_length = f32::read_le(reader)?;
         let days_per_year = u32::read_le(reader)?;
 
-        let year_spec = read_pstring(reader, 2)?;
-        align_boundary(reader, 4)?;
+        let year_spec = read_pstring_char(reader)?;
 
         let num_times_of_day = u32::read_le(reader)?;
         let mut times_of_day = Vec::with_capacity(num_times_of_day as usize);
@@ -70,8 +69,7 @@ impl GameTime {
         for _ in 0..num_days_of_week {
             // dats.xml:2790-2792 — each entry is a bare AC1LegacyPStringBase
             // (no Season-style wrapping). Same align-to-4 contract applies.
-            let name = read_pstring(reader, 2)?;
-            align_boundary(reader, 4)?;
+            let name = read_pstring_char(reader)?;
             days_of_week.push(name);
         }
 
@@ -100,8 +98,7 @@ impl TimeOfDay {
         // dats.xml:2798 — `bool size="4"`. AC writes the bool as a 4-byte uint.
         let is_night_raw = u32::read_le(reader)?;
         let is_night = is_night_raw != 0;
-        let name = read_pstring(reader, 2)?;
-        align_boundary(reader, 4)?;
+        let name = read_pstring_char(reader)?;
         Ok(TimeOfDay {
             start,
             is_night,
@@ -113,8 +110,7 @@ impl TimeOfDay {
 impl Season {
     pub fn unpack<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
         let start = u32::read_le(reader)?;
-        let name = read_pstring(reader, 2)?;
-        align_boundary(reader, 4)?;
+        let name = read_pstring_char(reader)?;
         Ok(Season { start, name })
     }
 }
