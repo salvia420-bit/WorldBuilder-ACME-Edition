@@ -1088,3 +1088,531 @@ fn locate_workspace_target_dir() -> Option<std::path::PathBuf> {
     }
     None
 }
+
+// ===== J3.D — `<switch>` discriminated-union + `<table>` Dictionary<K,V> =====
+//
+// These tests verify the load-bearing J3.D contracts:
+//
+//   1. Previously-SKIPPED-for-`<switch>` structs (LoginRequestHeader,
+//      GameMoveData, WindowProperty, WindowOption, MovementData, Emote,
+//      C2S_Communication_TurbineChat, S2C_Communication_TurbineChat,
+//      S2C_Character_CharGenVerificationResponse, S2C_DDD_DataMessage) now
+//      emit cleanly with an enum-per-switch + `<disc>_data` struct field.
+//      Compile-time existence is the load-bearing claim.
+//
+//   2. Each emitted struct round-trips a hand-built wire payload, with the
+//      switch dispatch producing the right typed variant for the case the
+//      discriminator selects.
+//
+//   3. Nested switches (TurbineChat's `Type → BlobDispatchType`,
+//      WindowProperty's `Key_a → TitleSource`) emit nested enum types with
+//      case-scoped naming so sibling nested switches don't collide.
+//
+//   4. Multi-value cases (`value="0x01 | 0x06"`) collapse into a single
+//      variant with a guarded match arm; the variant is selected for ANY
+//      of the listed values.
+//
+//   5. Subfield-typed discriminators (ItemProfile's `PwdType` is a subfield
+//      of `PackedAmount`) resolve via the same path enums + primitives use —
+//      we can't fully exercise ItemProfile in J3.D (its case bodies need
+//      `PublicWeenieDesc` which is downstream-blocked on RestrictionDB's
+//      PHashTable until J3.E), but the SKIP reason proves the discriminator
+//      lookup succeeded and the bottleneck is downstream.
+//
+//   6. Vector `skip="N"` inside a `<switch>` case (DDD_DataMessage)
+//      correctly subtracts N from the length expression.
+//
+//   7. `<align>` inside a `<switch>` case (CharGenVerificationResponse)
+//      pads the cursor to the next 4-multiple.
+//
+//   8. Unknown discriminators return `Err("unknown <EnumName> discriminator")`.
+//
+//   9. `<table>` codegen graciously SKIPs with a precise J3.E reason for
+//      templated `T,U` markers (PackableHashTable + PHashTable).
+
+/// J3.D-1: `LoginRequestHeader` previously SKIPPED for `<switch>` now emits.
+/// Round-trips a payload with `auth_type = AccountPassword` (case `0x2`),
+/// which carries a single Password WString field.
+#[test]
+fn login_request_header_switch_account_password() {
+    use generated::{LoginRequestHeader, LoginRequestHeaderAuthTypeData, NetAuthType};
+    // Helper: write a `string16_le` to the buffer. The wire format is
+    // u16 length + bytes + 4-byte align. read_string16 is the inverse.
+    fn write_string16(buf: &mut Vec<u8>, s: &str) {
+        let bytes = s.as_bytes();
+        buf.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+        buf.extend_from_slice(bytes);
+        let pad = (4 - (buf.len() % 4)) % 4;
+        buf.extend_from_slice(&vec![0u8; pad]);
+    }
+    let mut buf = Vec::new();
+    write_string16(&mut buf, "12345"); // ClientVersion (5 bytes + align)
+    buf.extend_from_slice(&100u32.to_le_bytes()); // Length
+    buf.extend_from_slice(&(NetAuthType::AccountPassword as u32).to_le_bytes()); // AuthType = 0x2
+    buf.extend_from_slice(&0u32.to_le_bytes()); // Flags
+    buf.extend_from_slice(&42u32.to_le_bytes()); // Sequence
+    write_string16(&mut buf, "alice"); // Account
+    write_string16(&mut buf, ""); // AccountToLoginAs (empty)
+    // case 0x2 payload: Password (WString)
+    write_string16(&mut buf, "hunter2"); // Password
+
+    let mut off = 0usize;
+    let lr = LoginRequestHeader::read_from(&buf, &mut off).expect("decode succeeds");
+    assert_eq!(lr.client_version, "12345");
+    assert_eq!(lr.length, 100);
+    assert_eq!(lr.auth_type, NetAuthType::AccountPassword);
+    assert_eq!(lr.sequence, 42);
+    assert_eq!(lr.account, "alice");
+    match lr.auth_type_data {
+        LoginRequestHeaderAuthTypeData::Case_2 { password } => {
+            assert_eq!(password, "hunter2");
+        }
+        other => panic!("expected Case_2 (AccountPassword), got {other:?}"),
+    }
+    assert_eq!(off, buf.len(), "all bytes consumed");
+}
+
+/// J3.D-2: GameMoveData with case 0x4 (4-byte payload). Discriminator is
+/// `int` (i32) — exercises the primitive-int discriminator path.
+#[test]
+fn game_move_data_switch_case_4() {
+    use generated::{GameMoveData, GameMoveDataTypeData};
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x4i32.to_le_bytes()); // Type = 0x4
+    buf.extend_from_slice(&0x5000_0001u32.to_le_bytes()); // PlayerId
+    buf.extend_from_slice(&0x1i32.to_le_bytes()); // Team = 0x1
+    // case 0x4: IdPieceToMove + YGrid (2 i32s)
+    buf.extend_from_slice(&7i32.to_le_bytes()); // IdPieceToMove
+    buf.extend_from_slice(&3i32.to_le_bytes()); // YGrid
+
+    let mut off = 0usize;
+    let gmd = GameMoveData::read_from(&buf, &mut off).expect("decode succeeds");
+    assert_eq!(gmd.r#type, 0x4);
+    assert_eq!(gmd.player_id, 0x5000_0001);
+    assert_eq!(gmd.team, 0x1);
+    match gmd.type_data {
+        GameMoveDataTypeData::Case_4 { id_piece_to_move, y_grid } => {
+            assert_eq!(id_piece_to_move, 7);
+            assert_eq!(y_grid, 3);
+        }
+        other => panic!("expected Case_4, got {other:?}"),
+    }
+    assert_eq!(off, buf.len(), "exact cursor advance");
+}
+
+/// J3.D-3: GameMoveData case 0x5 (4 i32 payload). Same struct, different
+/// variant — covers the multi-arm dispatch.
+#[test]
+fn game_move_data_switch_case_5() {
+    use generated::{GameMoveData, GameMoveDataTypeData};
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x5i32.to_le_bytes()); // Type
+    buf.extend_from_slice(&0u32.to_le_bytes()); // PlayerId
+    buf.extend_from_slice(&2i32.to_le_bytes()); // Team
+    // case 0x5: IdPieceToMove + YGrid + XTo + YTo
+    buf.extend_from_slice(&11i32.to_le_bytes());
+    buf.extend_from_slice(&2i32.to_le_bytes());
+    buf.extend_from_slice(&7i32.to_le_bytes());
+    buf.extend_from_slice(&4i32.to_le_bytes());
+
+    let mut off = 0usize;
+    let gmd = GameMoveData::read_from(&buf, &mut off).expect("decode succeeds");
+    match gmd.type_data {
+        GameMoveDataTypeData::Case_5 { id_piece_to_move, y_grid, x_to, y_to } => {
+            assert_eq!(id_piece_to_move, 11);
+            assert_eq!(y_grid, 2);
+            assert_eq!(x_to, 7);
+            assert_eq!(y_to, 4);
+        }
+        other => panic!("expected Case_5, got {other:?}"),
+    }
+    assert_eq!(off, buf.len());
+}
+
+/// J3.D-4: S2C_Communication_TurbineChat — full NESTED switch round-trip
+/// (the canonical worst-case shape per the J3.D brief). Outer disc =
+/// `TurbineChatType` (uint enum), inner disc = `BlobDispatchType` (uint).
+/// Case 0x01 / 0x01 = "inbound SendToRoomChatEvent" — 7 payload fields.
+#[test]
+fn turbine_chat_s2c_nested_switch_round_trip() {
+    use generated::{
+        S2C_Communication_TurbineChat,
+        S2C_Communication_TurbineChatTypeData,
+        S2C_Communication_TurbineChat_Case_1BlobDispatchTypeData,
+        TurbineChatType, ChatType,
+    };
+    fn write_string16(buf: &mut Vec<u8>, s: &str) {
+        let bytes = s.as_bytes();
+        buf.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+        buf.extend_from_slice(bytes);
+        let pad = (4 - (buf.len() % 4)) % 4;
+        buf.extend_from_slice(&vec![0u8; pad]);
+    }
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&200u32.to_le_bytes()); // MessageSize
+    buf.extend_from_slice(&(TurbineChatType::ServerToClientMessage as u32).to_le_bytes()); // Type=0x01
+    buf.extend_from_slice(&0x01u32.to_le_bytes()); // BlobDispatchType=0x01
+    buf.extend_from_slice(&1i32.to_le_bytes()); // TargetType
+    buf.extend_from_slice(&100i32.to_le_bytes()); // TargetId
+    buf.extend_from_slice(&2i32.to_le_bytes()); // TransportType
+    buf.extend_from_slice(&200i32.to_le_bytes()); // TransportId
+    buf.extend_from_slice(&0xDEAD_BEEFu32.to_le_bytes()); // Cookie
+    buf.extend_from_slice(&100u32.to_le_bytes()); // PayloadSize
+    // outer case 0x01 -> inner case 0x01: 7 payload fields
+    buf.extend_from_slice(&42u32.to_le_bytes()); // RoomId
+    write_string16(&mut buf, "Bob"); // DisplayName
+    write_string16(&mut buf, "Hello, world!"); // Text
+    buf.extend_from_slice(&0u32.to_le_bytes()); // ExtraDataSize
+    buf.extend_from_slice(&0x5000_BEEFu32.to_le_bytes()); // SpeakerId
+    buf.extend_from_slice(&0i32.to_le_bytes()); // HResult
+    buf.extend_from_slice(&(ChatType::Allegiance as u32).to_le_bytes()); // ChatType
+
+    let mut off = 0usize;
+    let tc = S2C_Communication_TurbineChat::read_from(&buf, &mut off).expect("decode succeeds");
+    assert_eq!(tc.r#type, TurbineChatType::ServerToClientMessage);
+    assert_eq!(tc.blob_dispatch_type, 0x01);
+    assert_eq!(tc.cookie, 0xDEAD_BEEFu32 as i32);
+    // Walk the nested dispatch
+    let inner = match tc.type_data {
+        S2C_Communication_TurbineChatTypeData::Case_1 { blob_dispatch_type_data } => blob_dispatch_type_data,
+        other => panic!("expected outer Case_1 (ServerToClientMessage), got {other:?}"),
+    };
+    match inner {
+        S2C_Communication_TurbineChat_Case_1BlobDispatchTypeData::Case_1 {
+            room_id, display_name, text, extra_data_size, speaker_id, h_result, chat_type,
+        } => {
+            assert_eq!(room_id, 42);
+            assert_eq!(display_name, "Bob");
+            assert_eq!(text, "Hello, world!");
+            assert_eq!(extra_data_size, 0);
+            assert_eq!(speaker_id, 0x5000_BEEF);
+            assert_eq!(h_result, 0);
+            assert_eq!(chat_type, ChatType::Allegiance);
+        }
+    }
+    assert_eq!(off, buf.len(), "all bytes consumed");
+}
+
+/// J3.D-5: WindowProperty — case 0x1000008d has a NESTED `<switch>` over
+/// TitleSource WITH trailing fields after the nested switch ends. Exercises
+/// the "fields after a switch" code path inside a case body.
+#[test]
+fn window_property_nested_switch_with_trailing_fields() {
+    use generated::{
+        WindowProperty, WindowPropertyKeyAData, WindowProperty_Case_1000008DTitleSourceData,
+    };
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x1000008du32.to_le_bytes()); // Key_a
+    // case 0x1000008d:
+    buf.extend_from_slice(&0xAAAAu32.to_le_bytes()); // Unknown_c
+    buf.push(0x00u8); // TitleSource = 0x00
+    // nested switch case 0x00: StringId + FileId
+    buf.extend_from_slice(&0x123u32.to_le_bytes()); // StringId
+    buf.extend_from_slice(&0x456u32.to_le_bytes()); // FileId
+    // trailing fields after the nested switch
+    buf.extend_from_slice(&0xBBBBu32.to_le_bytes()); // Unknown_1b
+    buf.extend_from_slice(&0xCCCCu16.to_le_bytes()); // Unknown_1c
+
+    let mut off = 0usize;
+    let wp = WindowProperty::read_from(&buf, &mut off).expect("decode succeeds");
+    assert_eq!(wp.key_a, 0x1000008d);
+    match wp.key_a_data {
+        WindowPropertyKeyAData::Case_1000008D {
+            unknown_c, title_source, title_source_data, unknown_1b, unknown_1c,
+        } => {
+            assert_eq!(unknown_c, 0xAAAA);
+            assert_eq!(title_source, 0x00);
+            match title_source_data {
+                WindowProperty_Case_1000008DTitleSourceData::Case_0 { string_id, file_id } => {
+                    assert_eq!(string_id, 0x123);
+                    assert_eq!(file_id, 0x456);
+                }
+                other => panic!("expected inner Case_0, got {other:?}"),
+            }
+            assert_eq!(unknown_1b, 0xBBBB);
+            assert_eq!(unknown_1c, 0xCCCC);
+        }
+        other => panic!("expected outer Case_1000008D, got {other:?}"),
+    }
+    assert_eq!(off, buf.len());
+}
+
+/// J3.D-6: MovementData case 0x0000 has a `<maskmap>` INSIDE the case body.
+/// The maskmap parent (`OptionFlags`) is a strict enum (`MovementOption`)
+/// declared OUTSIDE the switch — exercises the enum-typed-maskmap-parent
+/// lookup that J3.D extended to handle this case.
+#[test]
+fn movement_data_switch_case_0_with_inner_maskmap() {
+    use generated::{
+        MovementData, MovementDataMovementTypeData, MovementType, MovementOption, StanceMode,
+    };
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&100u16.to_le_bytes()); // ObjectMovementSequence
+    buf.extend_from_slice(&200u16.to_le_bytes()); // ObjectServerControlSequence
+    buf.extend_from_slice(&0u16.to_le_bytes()); // Autonomous
+    buf.push(MovementType::InterpertedMotionState as u8); // MovementType = 0x0
+    buf.push(MovementOption::StickToObject as u8); // OptionFlags (1 byte enum)
+    buf.extend_from_slice(&(StanceMode::HandCombat as u16).to_le_bytes()); // Stance (ushort)
+    // case 0x0000: State (InterpertedMotionState — Flags + align)
+    // Cursor entering case body is at offset 10 (after MovementData's header).
+    buf.extend_from_slice(&0u32.to_le_bytes()); // InterpertedMotionState.Flags = 0 → cursor 14
+    // InterpertedMotionState's trailing `<align type="uint">` pads to a
+    // multiple of 4: cursor 14 mod 4 = 2, pad 2 bytes → cursor 16.
+    buf.extend_from_slice(&[0u8, 0u8]);
+    // maskmap StickyObject bit: OptionFlags & 0x01 != 0 -> read ObjectId.
+    buf.extend_from_slice(&0x5000_BEEFu32.to_le_bytes()); // StickyObject → cursor 20
+
+    let mut off = 0usize;
+    let md = MovementData::read_from(&buf, &mut off).expect("decode succeeds");
+    assert_eq!(md.movement_type, MovementType::InterpertedMotionState);
+    match md.movement_type_data {
+        MovementDataMovementTypeData::Case_0 { state, sticky_object } => {
+            assert_eq!(state.flags, 0);
+            assert_eq!(sticky_object, Some(0x5000_BEEF), "maskmap bit fired -> Some");
+        }
+        other => panic!("expected Case_0, got {other:?}"),
+    }
+    assert_eq!(off, buf.len());
+}
+
+/// J3.D-7: DDD_DataMessage exercises `<vector skip="N">` INSIDE a `<switch>`
+/// case. Compression=0x00 has `<vector skip="4">` (length = DataSize - 4);
+/// 0x01 has `<vector skip="8">` after FileSize (length = DataSize - 8).
+/// Verifies the skip-arithmetic path the J3.D vector emitter now supports.
+#[test]
+fn ddd_data_message_switch_vector_skip_uncompressed() {
+    use generated::{
+        S2C_DDD_DataMessage, S2C_DDD_DataMessageCompressionData, DatFileType, CompressionType,
+    };
+    // Compression=0 -> Data length = DataSize - 4 (skip="4").
+    let payload: Vec<u8> = vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+    let data_size: u32 = 4 + payload.len() as u32; // DataSize includes the 4-byte header
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(DatFileType::Portal as i64).to_le_bytes()); // DatFile (i64)
+    buf.extend_from_slice(&0u32.to_le_bytes()); // ResourceType
+    buf.extend_from_slice(&0x06000001u32.to_le_bytes()); // ResourceId
+    buf.extend_from_slice(&7u32.to_le_bytes()); // Iteration
+    buf.push(CompressionType::None as u8); // Compression (u8) = 0
+    buf.extend_from_slice(&3u32.to_le_bytes()); // Version
+    buf.extend_from_slice(&data_size.to_le_bytes()); // DataSize
+    // case 0x00: vector length = DataSize - 4 = payload.len()
+    buf.extend_from_slice(&payload);
+
+    let mut off = 0usize;
+    let msg = S2C_DDD_DataMessage::read_from(&buf, &mut off).expect("decode succeeds");
+    assert_eq!(msg.compression, CompressionType::None);
+    assert_eq!(msg.data_size, data_size);
+    match msg.compression_data {
+        S2C_DDD_DataMessageCompressionData::Case_0 { data_field } => {
+            assert_eq!(data_field, payload, "vector body matches input verbatim");
+        }
+        other => panic!("expected Case_0 (uncompressed), got {other:?}"),
+    }
+    assert_eq!(off, buf.len(), "exact cursor advance");
+}
+
+/// J3.D-8: DDD_DataMessage compressed case 0x01 — case body has a leading
+/// field (`FileSize`) followed by the vector with skip="8". The vector's
+/// length expression accounts for both the original DataSize and the 8 bytes
+/// already consumed by the case header (4 for the discriminator+payload-size
+/// prefix, 4 for FileSize) — wait, actually `skip=8` reflects the case body
+/// having consumed 8 bytes BEFORE the vector starts (DataSize counts ALL
+/// bytes of the message body INCLUDING the leading 4-byte DataSize header
+/// AND the case-internal headers).
+#[test]
+fn ddd_data_message_switch_vector_skip_compressed() {
+    use generated::{
+        S2C_DDD_DataMessage, S2C_DDD_DataMessageCompressionData, DatFileType, CompressionType,
+    };
+    let payload: Vec<u8> = vec![0xAA; 12]; // 12 bytes of "compressed" data
+    let data_size: u32 = 8 + payload.len() as u32;
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(DatFileType::Portal as i64).to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&0x06000002u32.to_le_bytes());
+    buf.extend_from_slice(&8u32.to_le_bytes());
+    buf.push(CompressionType::ZLib as u8); // Compression = 1
+    buf.extend_from_slice(&5u32.to_le_bytes());
+    buf.extend_from_slice(&data_size.to_le_bytes());
+    // case 0x01: FileSize + vector (length = DataSize - 8)
+    buf.extend_from_slice(&0x1000u32.to_le_bytes()); // FileSize = uncompressed bytes
+    buf.extend_from_slice(&payload);
+
+    let mut off = 0usize;
+    let msg = S2C_DDD_DataMessage::read_from(&buf, &mut off).expect("decode succeeds");
+    assert_eq!(msg.compression, CompressionType::ZLib);
+    match msg.compression_data {
+        S2C_DDD_DataMessageCompressionData::Case_1 { file_size, data_field } => {
+            assert_eq!(file_size, 0x1000);
+            assert_eq!(data_field, payload);
+        }
+        other => panic!("expected Case_1 (compressed), got {other:?}"),
+    }
+    assert_eq!(off, buf.len());
+}
+
+/// J3.D-9: Unknown discriminator returns the typed-enum's read-from error
+/// (for enum-typed discs) or "unknown <EnumName> discriminator" (for
+/// primitive discs). We exercise the primitive path via GameMoveData with
+/// an out-of-range type value.
+#[test]
+fn switch_unknown_discriminator_errors() {
+    use generated::GameMoveData;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&999i32.to_le_bytes()); // Type = unknown
+    buf.extend_from_slice(&0u32.to_le_bytes()); // PlayerId
+    buf.extend_from_slice(&0i32.to_le_bytes()); // Team
+    // Don't bother with case-body bytes — the switch should error first.
+    let mut off = 0usize;
+    let res = GameMoveData::read_from(&buf, &mut off);
+    assert!(res.is_err(), "unknown discriminator should error, got {res:?}");
+    let err = res.unwrap_err();
+    assert!(
+        err.contains("unknown") && err.contains("GameMoveDataTypeData"),
+        "error should name the switch's enum type, got: {err}"
+    );
+}
+
+/// J3.D-10: Multi-value case selects the variant for ANY listed value.
+/// `Emote` case `0x35 | 0x36 | 0x37 | 0x45` produces variant
+/// `Case_35_36_37_45 { stat, amount }`. Test the match for each listed
+/// value via a sweep.
+#[test]
+fn emote_switch_multi_value_case_matches_all_values() {
+    use generated::{Emote, EmoteTypeData, EmoteType};
+    // Sweep each value in the multi-value case `0x35 | 0x36 | 0x37 | 0x45`.
+    for &emote_type_value in &[0x35u32, 0x36, 0x37, 0x45] {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&emote_type_value.to_le_bytes()); // Type
+        buf.extend_from_slice(&0.5f32.to_le_bytes()); // Delay
+        buf.extend_from_slice(&1.0f32.to_le_bytes()); // Extent
+        // case body: Stat + Amount
+        buf.extend_from_slice(&100u32.to_le_bytes()); // Stat
+        buf.extend_from_slice(&7u32.to_le_bytes()); // Amount
+
+        let mut off = 0usize;
+        let e = Emote::read_from(&buf, &mut off)
+            .unwrap_or_else(|err| panic!("[type=0x{emote_type_value:X}] decode failed: {err}"));
+        assert_eq!(e.r#type as u32, emote_type_value);
+        match e.type_data {
+            EmoteTypeData::Case_35_36_37_45 { stat, amount } => {
+                assert_eq!(stat, 100);
+                assert_eq!(amount, 7);
+            }
+            other => panic!("[type=0x{emote_type_value:X}] expected Case_35_36_37_45, got {other:?}"),
+        }
+        assert_eq!(off, buf.len());
+    }
+    // Sanity: a value NOT in the multi-value case selects a different variant
+    // (or errors). 0x32 has its own case (Stat + Percent + Min + Max + Display).
+    // Build a payload for 0x32 + verify a different variant resolves.
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x32u32.to_le_bytes()); // EmoteType = StatAdd
+    buf.extend_from_slice(&0.5f32.to_le_bytes()); // Delay
+    buf.extend_from_slice(&1.0f32.to_le_bytes()); // Extent
+    buf.extend_from_slice(&50u32.to_le_bytes()); // Stat
+    buf.extend_from_slice(&0.25f64.to_le_bytes()); // Percent (double=8 bytes)
+    buf.extend_from_slice(&10u32.to_le_bytes()); // Min
+    buf.extend_from_slice(&20u32.to_le_bytes()); // Max
+    buf.extend_from_slice(&1u32.to_le_bytes()); // Display = true (4-byte wire bool)
+
+    let mut off = 0usize;
+    let e = Emote::read_from(&buf, &mut off).expect("decode succeeds");
+    assert!(
+        !matches!(e.type_data, EmoteTypeData::Case_35_36_37_45 { .. }),
+        "0x32 must NOT match the 0x35|0x36|0x37|0x45 case variant"
+    );
+    let _ = EmoteType::Invalid; // Smoke: enum exists (no-op binding to keep imports honest).
+}
+
+/// J3.D-11: SKIPPED-note count decreased vs the J3.C baseline. The J3.D
+/// switch+table codegen + fixpoint dependency-ordering should push the
+/// ceiling well below J3.C's 112 (which was already below PR 7's 124).
+#[test]
+fn skipped_note_count_decreased_after_j3d() {
+    let out_dir = env_out_dir_for_holtburger_protocol();
+    let gen_path = std::path::Path::new(&out_dir).join("messages_generated.rs");
+    let body = std::fs::read_to_string(&gen_path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
+    let skipped = body.matches("// SKIPPED").count();
+    let j3c_ceiling = 112usize;
+    assert!(
+        skipped < j3c_ceiling,
+        "J3.D should drive SKIPPED count below J3.C's {j3c_ceiling}, got {skipped}"
+    );
+    let j3d_ceiling = 90usize; // J3.D landed at 88 with margin for re-emit thrash.
+    assert!(
+        skipped <= j3d_ceiling,
+        "J3.D should hold at or below {j3d_ceiling} SKIPPED notes (switch + table FOUNDATION + fixpoint forward-ref ordering); got {skipped}"
+    );
+}
+
+/// J3.D-12: PackableHashTable + PHashTable SKIP cleanly with the precise
+/// "templated marker" reason pointing at J3.E. The naming convention
+/// `key="T"/value="U"` is the load-bearing thing the J3.E follow-on needs
+/// to look for.
+#[test]
+fn packable_hash_table_skipped_with_templated_marker_reason() {
+    let out_dir = env_out_dir_for_holtburger_protocol();
+    let gen_path = std::path::Path::new(&out_dir).join("messages_generated.rs");
+    let body = std::fs::read_to_string(&gen_path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
+    let pht = body.lines()
+        .find(|l| l.contains("SKIPPED datatype PackableHashTable:"))
+        .unwrap_or_else(|| panic!("expected PackableHashTable SKIPPED note"));
+    assert!(
+        pht.contains("templated marker") && pht.contains("J3.E"),
+        "PackableHashTable SKIP should mention templated marker + J3.E, got: {pht}"
+    );
+    let phh = body.lines()
+        .find(|l| l.contains("SKIPPED datatype PHashTable:"))
+        .unwrap_or_else(|| panic!("expected PHashTable SKIPPED note"));
+    assert!(
+        phh.contains("templated marker") && phh.contains("J3.E"),
+        "PHashTable SKIP should mention templated marker + J3.E, got: {phh}"
+    );
+}
+
+/// J3.D-13: ItemProfile's subfield-typed discriminator (`PwdType` is a
+/// `<subfield>` of `PackedAmount`) successfully resolves through the
+/// subfield-lookup path J3.D added. The bottleneck is `PublicWeenieDesc`
+/// (downstream-blocked on RestrictionDB's PHashTable in J3.E) — but the
+/// SKIP reason now reaches DEEP into the case body, proving the
+/// discriminator resolution worked.
+#[test]
+fn item_profile_subfield_discriminator_resolves_to_case_body() {
+    let out_dir = env_out_dir_for_holtburger_protocol();
+    let gen_path = std::path::Path::new(&out_dir).join("messages_generated.rs");
+    let body = std::fs::read_to_string(&gen_path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", gen_path.display()));
+    let found = body.lines()
+        .find(|l| l.contains("SKIPPED datatype ItemProfile:"))
+        .unwrap_or_else(|| panic!("expected ItemProfile SKIPPED note"));
+    assert!(
+        found.contains("<switch name=\"PwdType\">") && found.contains("PublicWeenieDesc"),
+        "ItemProfile SKIP reason should advance into the case body (i.e. discriminator resolved \
+         past sibling-lookup, blocked on downstream type); got: {found}"
+    );
+}
+
+/// J3.D-14: GameMoveData truncation past the case-body returns Err. The
+/// case dispatch reads 5 i32s for case 0x5; if fewer than that many bytes
+/// remain, we surface the underlying primitive-read truncation error.
+#[test]
+fn switch_case_body_truncation_errors() {
+    use generated::GameMoveData;
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0x5i32.to_le_bytes()); // Type
+    buf.extend_from_slice(&0u32.to_le_bytes()); // PlayerId
+    buf.extend_from_slice(&0i32.to_le_bytes()); // Team
+    // case 0x5 needs 4 i32s; we supply only 2 then truncate.
+    buf.extend_from_slice(&1i32.to_le_bytes());
+    buf.extend_from_slice(&2i32.to_le_bytes());
+    // missing: x_to, y_to
+
+    let mut off = 0usize;
+    let res = GameMoveData::read_from(&buf, &mut off);
+    assert!(res.is_err(), "truncated case-body should error, got {res:?}");
+}

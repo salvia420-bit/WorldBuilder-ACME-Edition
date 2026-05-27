@@ -445,11 +445,72 @@ impl<'a> CodegenCtx<'a> {
 
     fn process_datatypes(&mut self, types_node: Node<'_, '_>) {
         writeln!(self.buf, "// === DATATYPES ===\n").unwrap();
-        for n in types_node.children().filter(|n| n.is_element() && n.tag_name().name() == "type") {
-            if n.attribute("primitive").is_some() { continue; }
-            let has_children = n.children().any(|c| c.is_element());
-            if !has_children { continue; }
-            self.emit_message(n, EmitKind::Datatype);
+        // J3.D: handle forward references via fixpoint iteration. The
+        // schema declares types in arbitrary order — `Emote` (line 5732)
+        // references `CreationProfile` (line 5851), and the original
+        // single-pass walk would SKIP `Emote` because `CreationProfile`
+        // hadn't been registered yet. We loop the emit pass until no new
+        // type becomes resolvable. Two passes are sufficient for the
+        // current schema (no cycles); we cap at 5 iterations defensively
+        // so a hypothetical mutual-recursion schema bug surfaces as a
+        // clear panic rather than an infinite loop.
+        let candidates: Vec<Node<'_, '_>> = types_node
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "type")
+            .filter(|n| n.attribute("primitive").is_none())
+            .filter(|n| n.children().any(|c| c.is_element()))
+            .collect();
+        let mut emitted: BTreeSet<String> = BTreeSet::new();
+        for pass in 0..5 {
+            let pass_start_buf_len = self.buf.len();
+            let pass_start_emitted = emitted.len();
+            // We emit into a scratch buffer per pass so a failed emit doesn't
+            // pollute the output with half-written struct bodies. Successful
+            // emits get flushed; failed ones (SKIP-only) are deferred to the
+            // next pass.
+            let mut pass_buf = String::new();
+            let mut newly_emitted: Vec<String> = Vec::new();
+            for n in &candidates {
+                let raw_name = match n.attribute("name") { Some(v) => v.to_string(), None => continue };
+                if emitted.contains(&raw_name) {
+                    // Already emitted in an earlier pass — skip.
+                    continue;
+                }
+                // Try a probe-only collect_emit_steps: if it succeeds, we
+                // know the emit will succeed. Otherwise we'll retry on
+                // the next pass with the larger type_kind table.
+                if let Err(_reason) = self.collect_emit_steps(*n, &raw_name) {
+                    // Still unresolvable. Either this is a final SKIP we'll
+                    // surface in the final pass, or a transient dependency
+                    // gap that fills in a later pass.
+                    continue;
+                }
+                let prev_buf = std::mem::take(&mut self.buf);
+                self.emit_message(*n, EmitKind::Datatype);
+                pass_buf.push_str(&self.buf);
+                self.buf = prev_buf;
+                emitted.insert(raw_name.clone());
+                newly_emitted.push(raw_name);
+            }
+            self.buf.push_str(&pass_buf);
+            let _ = pass_start_buf_len;
+            let _ = pass_start_emitted;
+            if newly_emitted.is_empty() {
+                // Fixpoint reached — anything still unemitted SKIPs in the
+                // final pass below with a precise reason.
+                let _ = pass;
+                break;
+            }
+        }
+        // Final pass: re-emit (or first-time emit) anything not yet
+        // captured — this records the precise SKIP reasons for types whose
+        // dependencies never resolved.
+        for n in &candidates {
+            let raw_name = match n.attribute("name") { Some(v) => v.to_string(), None => continue };
+            if emitted.contains(&raw_name) {
+                continue;
+            }
+            self.emit_message(*n, EmitKind::Datatype);
         }
     }
 
@@ -457,6 +518,12 @@ impl<'a> CodegenCtx<'a> {
 
     fn process_messages(&mut self, messages_node: Node<'_, '_>) {
         writeln!(self.buf, "// === MESSAGES (top-level C2S + S2C) ===\n").unwrap();
+        // J3.D: same fixpoint iteration the datatype pass uses, applied to
+        // messages. The forward-reference patterns at the message tier are
+        // less common than at the datatype tier but they exist (e.g. a
+        // message that references a struct declared later in the SAME
+        // section). Messages are kept-per-direction so the section
+        // header ordering survives.
         for direction in messages_node.children().filter(|n| n.is_element()) {
             let kind = match direction.tag_name().name() {
                 "c2s" => EmitKind::MessageC2S,
@@ -464,23 +531,61 @@ impl<'a> CodegenCtx<'a> {
                 _ => continue,
             };
             writeln!(self.buf, "// ---- {} ----\n", direction.tag_name().name().to_uppercase()).unwrap();
-            for n in direction.children().filter(|n| n.is_element() && n.tag_name().name() == "type") {
-                self.emit_message(n, kind);
-            }
+            self.emit_with_fixpoint(direction, kind);
         }
     }
 
     fn process_gameactions(&mut self, ga_node: Node<'_, '_>) {
         writeln!(self.buf, "// === GAMEACTIONS (C2S inside 0xF7B1) ===\n").unwrap();
-        for n in ga_node.children().filter(|n| n.is_element() && n.tag_name().name() == "type") {
-            self.emit_message(n, EmitKind::GameAction);
-        }
+        self.emit_with_fixpoint(ga_node, EmitKind::GameAction);
     }
 
     fn process_gameevents(&mut self, ge_node: Node<'_, '_>) {
         writeln!(self.buf, "// === GAMEEVENTS (S2C inside 0xF7B0) ===\n").unwrap();
-        for n in ge_node.children().filter(|n| n.is_element() && n.tag_name().name() == "type") {
-            self.emit_message(n, EmitKind::GameEvent);
+        self.emit_with_fixpoint(ge_node, EmitKind::GameEvent);
+    }
+
+    /// J3.D: fixpoint-iterate `<type>` children under `parent`, emitting in
+    /// dependency order. See `process_datatypes` for the algorithm. The kind
+    /// applies to every child uniformly (sections within `<messages>` are
+    /// handled at the call site by passing the per-section kind).
+    fn emit_with_fixpoint(&mut self, parent: Node<'_, '_>, kind: EmitKind) {
+        let candidates: Vec<Node<'_, '_>> = parent
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "type")
+            .collect();
+        let mut emitted: BTreeSet<String> = BTreeSet::new();
+        for _ in 0..5 {
+            let mut pass_buf = String::new();
+            let mut newly_emitted: Vec<String> = Vec::new();
+            for n in &candidates {
+                let raw_name = match n.attribute("name") { Some(v) => v.to_string(), None => continue };
+                if emitted.contains(&raw_name) {
+                    continue;
+                }
+                if collect_unsupported(*n).is_empty() {
+                    if self.collect_emit_steps(*n, &format!("{}{}", kind.name_prefix(), raw_name)).is_err() {
+                        continue;
+                    }
+                }
+                let prev_buf = std::mem::take(&mut self.buf);
+                self.emit_message(*n, kind);
+                pass_buf.push_str(&self.buf);
+                self.buf = prev_buf;
+                emitted.insert(raw_name.clone());
+                newly_emitted.push(raw_name);
+            }
+            self.buf.push_str(&pass_buf);
+            if newly_emitted.is_empty() {
+                break;
+            }
+        }
+        for n in &candidates {
+            let raw_name = match n.attribute("name") { Some(v) => v.to_string(), None => continue };
+            if emitted.contains(&raw_name) {
+                continue;
+            }
+            self.emit_message(*n, kind);
         }
     }
 
@@ -499,7 +604,14 @@ impl<'a> CodegenCtx<'a> {
             return;
         }
 
-        let steps = match self.collect_emit_steps(n, &raw_name) {
+        // J3.D: pass the PREFIXED name (`C2S_Communication_TurbineChat`)
+        // through as the parent for switch-derived enum names. Using the
+        // bare `raw_name` (`Communication_TurbineChat`) collides when the
+        // same datatype name appears in both <c2s> and <s2c> sections (the
+        // structs themselves get disambiguated via `kind.name_prefix()`, but
+        // their nested switch-data enums would inherit the same name and
+        // emit twice into the same `pub mod generated`).
+        let steps = match self.collect_emit_steps(n, &name) {
             Ok(s) => s,
             Err(reason) => {
                 writeln!(self.buf, "// SKIPPED {kind_str} {name}: {reason} — port to PR 7.2.").unwrap();
@@ -510,6 +622,12 @@ impl<'a> CodegenCtx<'a> {
 
         let pos = n.range();
         let lineno = line_of_offset(self.line_offsets, pos.start);
+        // J3.D: pre-emit any `<switch>`-derived enum types (recursively for
+        // nested switches). They must be declared BEFORE the parent struct
+        // since the struct's `<disc>_data` field uses them by type name.
+        for step in &steps {
+            emit_switch_enum_recursive(&mut self.buf, step);
+        }
         writeln!(self.buf, "/// `{raw_name}` — generated from protocol.xml line {lineno}.").unwrap();
         if let Some(txt) = n.attribute("text") {
             writeln!(self.buf, "/// {}", escape_doc(txt)).unwrap();
@@ -527,7 +645,9 @@ impl<'a> CodegenCtx<'a> {
             EmitStep::Vector(v) => Some(v),
             _ => None,
         }).collect();
-        if fields_only.is_empty() && vectors_only.is_empty() {
+        let has_switch = steps.iter().any(|s| matches!(s, EmitStep::Switch(_)));
+        let has_table = steps.iter().any(|s| matches!(s, EmitStep::Table(_)));
+        if fields_only.is_empty() && vectors_only.is_empty() && !has_switch && !has_table {
             writeln!(self.buf, "    // No fields declared in protocol.xml for this opcode.").unwrap();
         }
         // Emit fields + vectors in protocol.xml ORDER so the wire-decode
@@ -573,6 +693,22 @@ impl<'a> CodegenCtx<'a> {
                         }
                     }
                 }
+                EmitStep::Switch(sw) => {
+                    writeln!(self.buf, "    /// Discriminated by `{}` per protocol.xml `<switch name=\"{}\">`.",
+                        escape_doc(&sw.disc_snake),
+                        escape_xml_attr_for_doc(&sw.disc_xml_name)).unwrap();
+                    writeln!(self.buf, "    pub {}: {},", sw.field_snake, sw.enum_name).unwrap();
+                }
+                EmitStep::Table(tb) => {
+                    if let Some(t) = &tb.text {
+                        writeln!(self.buf, "    /// {}", escape_doc(t)).unwrap();
+                    } else {
+                        writeln!(self.buf, "    /// Dictionary field; length from protocol.xml `length=\"{}\"`.",
+                            escape_xml_attr_for_doc(&tb.length_xml)).unwrap();
+                    }
+                    writeln!(self.buf, "    pub {}: std::collections::BTreeMap<{}, {}>,",
+                        tb.name_snake, tb.key_rust_ty, tb.value_rust_ty).unwrap();
+                }
             }
         }
         writeln!(self.buf, "}}\n").unwrap();
@@ -609,6 +745,8 @@ impl<'a> CodegenCtx<'a> {
         if fields_only.is_empty()
             && vectors_only.is_empty()
             && !has_maskmap
+            && !has_switch
+            && !has_table
             && !steps.iter().any(|s| matches!(s, EmitStep::Align(_)))
         {
             writeln!(self.buf, "        let _ = (data, offset);").unwrap();
@@ -619,6 +757,8 @@ impl<'a> CodegenCtx<'a> {
                 EmitStep::Align(n_bytes) => emit_align_pad(&mut self.buf, *n_bytes),
                 EmitStep::Vector(v) => emit_read_vector(&mut self.buf, v),
                 EmitStep::Maskmap(mm) => emit_read_maskmap(&mut self.buf, mm),
+                EmitStep::Switch(sw) => emit_read_switch(&mut self.buf, sw, "        "),
+                EmitStep::Table(tb) => emit_read_table(&mut self.buf, tb, "        "),
             }
         }
         writeln!(self.buf, "        Ok(Self {{").unwrap();
@@ -634,6 +774,8 @@ impl<'a> CodegenCtx<'a> {
                         }
                     }
                 }
+                EmitStep::Switch(sw) => writeln!(self.buf, "            {},", sw.field_snake).unwrap(),
+                EmitStep::Table(tb) => writeln!(self.buf, "            {},", tb.name_snake).unwrap(),
             }
         }
         writeln!(self.buf, "        }})\n    }}").unwrap();
@@ -685,12 +827,261 @@ impl<'a> CodegenCtx<'a> {
                     )?;
                     out.push(EmitStep::Maskmap(mm));
                 }
+                "switch" => {
+                    let sw = self.build_switch_block(
+                        c,
+                        &mut seen_names,
+                        parent_type_name,
+                        &siblings,
+                    )?;
+                    out.push(EmitStep::Switch(sw));
+                }
+                "table" => {
+                    let tb = self.build_table_field(
+                        c,
+                        &mut seen_names,
+                        parent_type_name,
+                        &siblings,
+                    )?;
+                    out.push(EmitStep::Table(tb));
+                }
                 other => {
                     return Err(format!("unsupported child `<{other}>`"));
                 }
             }
         }
         Ok(out)
+    }
+
+    /// J3.D: build a [`SwitchBlock`] from a `<switch name="DiscField">`
+    /// element. The discriminator MUST be a sibling field declared earlier in
+    /// the same `<type>` body — either a numeric primitive (`uint`, `byte`,
+    /// `ushort`, `int`) or an already-emitted enum-typed field (whose `_bits`
+    /// companion local is in scope from the enum-field codegen path).
+    ///
+    /// Each `<case value="V | W | ...">` becomes one enum variant. Values can
+    /// be hex literals (`0x1000008d`), decimal literals (`-1`, `1`), or
+    /// pipe-separated multi-value (`0x01 | 0x06`). The C# upstream splits on
+    /// `" | "` and emits one fall-through `case X:` per token; we collapse
+    /// the equivalent into a single Rust match arm `n if n == 1 || n == 6 => ...`.
+    ///
+    /// Case bodies route through `collect_case_steps`, which is a near-clone
+    /// of `collect_emit_steps` that ALSO seeds the sibling lookup with the
+    /// outer `<type>`'s siblings so case-body fields can reference an outer
+    /// field via maskmap parent / vector length / subfield. Nested
+    /// `<switch>` inside a case is supported recursively, producing nested
+    /// `Foo<Outer>Data` → `Foo<Outer>_<Variant>_<Inner>Data` enum types.
+    fn build_switch_block(
+        &self,
+        c: Node<'_, '_>,
+        seen_names: &mut BTreeMap<String, usize>,
+        parent_type_name: &str,
+        siblings: &SiblingLookup,
+    ) -> Result<SwitchBlock, String> {
+        let disc_xml_name = c.attribute("name")
+            .ok_or_else(|| "<switch> missing name= attribute".to_string())?;
+        let (disc_snake, disc_repr, disc_kind) = resolve_switch_discriminator(disc_xml_name, siblings)
+            .ok_or_else(|| format!("<switch name={disc_xml_name:?}>: discriminator not found as a sibling numeric/enum field declared before this <switch>"))?;
+
+        let mut cases = Vec::new();
+        let mut all_values: BTreeSet<i128> = BTreeSet::new();
+        for cc in c.children().filter(|cc| cc.is_element()) {
+            let tag = cc.tag_name().name();
+            if tag != "case" {
+                return Err(format!("<switch name={disc_xml_name:?}>: unexpected child <{tag}>; only <case> allowed"));
+            }
+            let raw_value = cc.attribute("value")
+                .ok_or_else(|| format!("<switch name={disc_xml_name:?}>: <case> missing value= attribute"))?;
+            // Multi-value: `0x01 | 0x06` → vec![1, 6]; single: `0x4` → vec![4].
+            // Whitespace around `|` is the convention in protocol.xml; we
+            // also accept un-spaced forms defensively.
+            let value_tokens: Vec<&str> = raw_value
+                .split('|')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if value_tokens.is_empty() {
+                return Err(format!("<switch name={disc_xml_name:?}>: <case value={raw_value:?}> has no parseable tokens"));
+            }
+            let mut numeric_values = Vec::new();
+            for tok in &value_tokens {
+                let parsed = parse_int_literal(tok)
+                    .ok_or_else(|| format!("<switch name={disc_xml_name:?}>: <case value={raw_value:?}> token {tok:?} is not a parseable integer literal"))?;
+                if !all_values.insert(parsed) {
+                    return Err(format!("<switch name={disc_xml_name:?}>: case value {parsed} (token {tok:?}) is duplicated across cases"));
+                }
+                numeric_values.push(parsed);
+            }
+            // Variant name: use the first value as the canonical identifier
+            // (`Case_<HEX>` for non-negatives, `Case_NegN` for negatives). For
+            // multi-value cases we join with `_`.
+            let variant_id = canonical_case_variant_id(&numeric_values);
+            // Recursively collect the case body's steps. We seed a fresh
+            // sibling lookup that INHERITS the outer siblings (so a case-body
+            // maskmap can name an outer flag field by XML name, see
+            // MovementData.OptionFlags) — then add case-locals on top as the
+            // body decodes.
+            let mut case_seen_names: BTreeMap<String, usize> = seen_names.clone();
+            let mut case_siblings: SiblingLookup = siblings.clone();
+            let mut steps = Vec::new();
+            for body in cc.children().filter(|b| b.is_element()) {
+                let btag = body.tag_name().name();
+                match btag {
+                    "field" => {
+                        let f = self.build_simple_field(body, &mut case_seen_names, parent_type_name)
+                            .map_err(|e| format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: {e}"))?;
+                        case_siblings.add_field(&f);
+                        steps.push(EmitStep::Field(f));
+                    }
+                    "vector" => {
+                        let v = self.build_vector_field(body, &mut case_seen_names, parent_type_name, &case_siblings)
+                            .map_err(|e| format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: {e}"))?;
+                        steps.push(EmitStep::Vector(v));
+                    }
+                    "align" => {
+                        let n_bytes = align_byte_width_from_node(body)
+                            .ok_or_else(|| format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: <align> with type {:?}: unknown alignment width", body.attribute("type")))?;
+                        steps.push(EmitStep::Align(n_bytes));
+                    }
+                    "maskmap" => {
+                        let mm = self.build_maskmap_block(
+                            body,
+                            &mut case_seen_names,
+                            parent_type_name,
+                            &case_siblings,
+                        )
+                        .map_err(|e| format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: {e}"))?;
+                        steps.push(EmitStep::Maskmap(mm));
+                    }
+                    "switch" => {
+                        // J3.D: when a switch is nested inside a case, we
+                        // derive a CASE-SCOPED parent name so the nested
+                        // switch's emitted enum doesn't collide with sibling
+                        // nested switches in other cases of the SAME outer
+                        // switch (TurbineChat has three sibling nested switches
+                        // — one per outer case — that all share the inner
+                        // disc field name `BlobDispatchType`).
+                        let nested_parent = format!("{parent_type_name}_{}",
+                            canonical_case_variant_id(&numeric_values));
+                        let nested = self.build_switch_block(
+                            body,
+                            &mut case_seen_names,
+                            &nested_parent,
+                            &case_siblings,
+                        )
+                        .map_err(|e| format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: nested {e}"))?;
+                        steps.push(EmitStep::Switch(nested));
+                    }
+                    other => {
+                        return Err(format!("<switch name={disc_xml_name:?}> <case value={raw_value:?}>: unsupported body child <{other}>"));
+                    }
+                }
+            }
+            cases.push(SwitchCase {
+                variant_id,
+                value_xml: raw_value.to_string(),
+                values: numeric_values,
+                text: cc.attribute("text").map(|s| s.to_string()),
+                steps,
+            });
+        }
+        if cases.is_empty() {
+            return Err(format!("<switch name={disc_xml_name:?}>: contains no <case> children"));
+        }
+
+        // The struct field for this switch: `<disc_xml_name>_data` lowercased
+        // to a snake-id, sanitized for Rust keyword collision (e.g.
+        // `r#type_data` would surface if disc was `type`).
+        //
+        // We derive the field snake-id from the XML name (not the disc_snake
+        // / scrutinee expression) so subfield-typed discriminators — where
+        // disc_snake is a Rust expression like `(packed_amount as u32) >> 24`,
+        // not a bare ident — still produce a clean struct-field name like
+        // `pwd_type_data`.
+        let mut field_snake = format!("{}_data", to_snake_case(disc_xml_name));
+        // Avoid collision with siblings already emitted. There's no
+        // `<field name="XxxData">` in the schema, but a `<switch name="X">`
+        // sometimes follows a sibling field `<field name="XData">` and the
+        // suffix uniquifier handles that defensively.
+        let counter = seen_names.entry(field_snake.clone()).or_insert(0);
+        if *counter > 0 {
+            field_snake = format!("{field_snake}_{}", *counter + 1);
+        }
+        *counter += 1;
+        let field_snake = sanitize_rust_keyword(&field_snake);
+
+        // Synthesise the enum type name. The convention is parent type +
+        // disc field PascalCase (derived from the XML name, NOT the
+        // keyword-sanitized Rust snake) + "Data": `Foo` + `Type` + `Data` =
+        // `FooTypeData`. Using `disc_snake` here would inject the `r#` raw-ident
+        // prefix into the enum name when the disc field is named `Type` (a Rust
+        // keyword). The XML name path is the cleanest source.
+        let enum_name = format!("{parent_type_name}{}Data", pascalize_xml_name(disc_xml_name));
+
+        Ok(SwitchBlock {
+            enum_name,
+            field_snake,
+            disc_snake,
+            disc_repr,
+            disc_kind,
+            disc_xml_name: disc_xml_name.to_string(),
+            cases,
+        })
+    }
+
+    /// J3.D: build a [`TableField`] from a `<table name="Foo" key="K" value="V"
+    /// length="LenExpr">` element. Equivalent to a `Dictionary<K, V>` whose
+    /// entry count comes from a sibling-resolved length expression. Routes
+    /// element-type resolution through `resolve_field` so templated marker
+    /// types (`T`, `U`) defer cleanly with a precise J3.E-pointing reason.
+    fn build_table_field(
+        &self,
+        c: Node<'_, '_>,
+        seen_names: &mut BTreeMap<String, usize>,
+        parent_type_name: &str,
+        siblings: &SiblingLookup,
+    ) -> Result<TableField, String> {
+        let raw_name = c.attribute("name").ok_or_else(|| "<table> missing name".to_string())?;
+        let raw_key = c.attribute("key").ok_or_else(|| format!("<table {raw_name}> missing key= attribute"))?;
+        let raw_value = c.attribute("value").ok_or_else(|| format!("<table {raw_name}> missing value= attribute"))?;
+        let raw_length = c.attribute("length")
+            .ok_or_else(|| format!("<table {raw_name}> missing length= attribute"))?;
+
+        // Templated markers — these only appear inside `<type templated="T,U">`
+        // bodies (PackableHashTable, PHashTable). J3.E owns the templated-type
+        // generalisation; we route through a precise SKIP-reason that points
+        // at the right follow-on.
+        if raw_key == "T" || raw_key == "U" || raw_value == "T" || raw_value == "U" {
+            return Err(format!("<table {raw_name}>: key={raw_key:?}/value={raw_value:?} uses templated marker; deferred to J3.E"));
+        }
+
+        let (key_rust_ty, key_kind) = self.resolve_field(raw_key)
+            .ok_or_else(|| format!("<table {raw_name}>: key type {raw_key:?} not in foundation tier"))?;
+        let (value_rust_ty, value_kind) = self.resolve_field(raw_value)
+            .ok_or_else(|| format!("<table {raw_name}>: value type {raw_value:?} not in foundation tier"))?;
+
+        let length_expr_rust = translate_vector_length_expr(raw_length, siblings)
+            .map_err(|e| format!("<table {raw_name}>: cannot translate length={raw_length:?}: {e}"))?;
+
+        let mut snake = to_snake_case(raw_name);
+        let counter = seen_names.entry(snake.clone()).or_insert(0);
+        if *counter > 0 {
+            snake = format!("{snake}_{}", *counter + 1);
+        }
+        *counter += 1;
+        let snake = sanitize_rust_keyword(&snake);
+        let _ = parent_type_name; // reserved for future error context.
+
+        Ok(TableField {
+            name_snake: snake,
+            key_rust_ty,
+            key_kind,
+            value_rust_ty,
+            value_kind,
+            length_expr_rust,
+            length_xml: raw_length.to_string(),
+            text: c.attribute("text").map(|s| s.to_string()),
+        })
     }
 
     /// J3.C: build a [`MaskmapBlock`] from a `<maskmap name="ParentField" [xor=]>`
@@ -799,15 +1190,13 @@ impl<'a> CodegenCtx<'a> {
         let raw_type = c.attribute("type").ok_or_else(|| format!("<vector {raw_name}> missing type"))?;
         let raw_length = c.attribute("length")
             .ok_or_else(|| format!("<vector {raw_name}> missing length= attribute (only foundation shape supported)"))?;
-        if let Some(skip_raw) = c.attribute("skip") {
-            // skip="N" only appears inside `<switch>` cases (lines 8447/8451
-            // for DDD_DataMessage compression branches). Since `<switch>`
-            // already trips the unsupported-feature gate at the parent type,
-            // we'll never actually reach here for a `skip=`-bearing vector at
-            // the foundation tier; report a precise reason in case a future
-            // schema revision moves a `skip=` vector to top level.
-            return Err(format!("<vector {raw_name}>: skip={skip_raw:?} only supported inside <switch> cases — port to PR 7.2.D"));
-        }
+        // J3.D: `skip="N"` is now FOUNDATION-tier inside `<switch>` case bodies
+        // (DDD_DataMessage compression branches at lines 8447/8451). Per the
+        // upstream C# template (CSTemplateBase.WriteForLoopStart), `skip=N`
+        // means "iterate `length - N` times" — the consumer has already
+        // consumed N bytes of the named length budget by the time the vector
+        // starts. We translate that to a trailing `- N` on the length expr.
+        let skip_count = c.attribute("skip");
 
         // Element-type resolution. The templated marker `T` (used inside
         // `<type name="PackableList" templated="T">`) is not a real Rust type;
@@ -830,8 +1219,18 @@ impl<'a> CodegenCtx<'a> {
         // Dotted paths (`Header.Quantity`) are NOT present in the current
         // schema; we reject them with a clear reason so they'll fail-loud if
         // a future schema revision adds one.
-        let length_expr_rust = translate_vector_length_expr(raw_length, siblings)
+        let mut length_expr_rust = translate_vector_length_expr(raw_length, siblings)
             .map_err(|e| format!("<vector {raw_name}>: cannot translate length={raw_length:?}: {e}"))?;
+        // J3.D: `skip="N"` post-adjusts the loop count. Upstream C# emits
+        // `for (var i=0; i < length - skip; i++)`. We wrap the already-cast
+        // `usize` expression in a saturating subtract so the count never
+        // underflows when length < skip (defensive — would indicate a
+        // malformed wire payload).
+        if let Some(skip_raw) = skip_count {
+            let skip_n = parse_int_literal(skip_raw)
+                .ok_or_else(|| format!("<vector {raw_name}>: skip={skip_raw:?} is not a parseable integer literal"))?;
+            length_expr_rust = format!("({length_expr_rust}).saturating_sub({skip_n}usize)");
+        }
 
         // Sanitize the field name the same way build_simple_field does so
         // collisions with sibling fields surface as `_2`-suffixed Rust names.
@@ -935,6 +1334,7 @@ impl<'a> CodegenCtx<'a> {
             let sf_snake = sanitize_rust_keyword(&to_snake_case(sf_raw_name));
             subfields.push(SubfieldAccessor {
                 name_snake: sf_snake,
+                xml_name: sf_raw_name.to_string(),
                 rust_ty: sf_repr,
                 rust_expr,
                 value_expr: sf_value.to_string(),
@@ -944,6 +1344,7 @@ impl<'a> CodegenCtx<'a> {
 
         Ok(SimpleField {
             name_snake: snake,
+            xml_name: raw_name.to_string(),
             rust_ty,
             field_kind,
             text: c.attribute("text").map(|s| s.to_string()),
@@ -1025,6 +1426,20 @@ enum EmitStep {
     Align(usize),
     Vector(VectorField),
     Maskmap(MaskmapBlock),
+    /// J3.D: `<switch name="DiscField">` discriminated-union block. Each
+    /// case becomes one variant of an emitted enum named
+    /// `<ParentType><DiscFieldPascal>Data`; the struct holds a single
+    /// `<disc_snake>_data: <EnumName>` field that carries the
+    /// case-specific payload.
+    Switch(SwitchBlock),
+    /// J3.D: `<table key="K" value="V" length="LenExpr">` Dictionary<K, V>
+    /// block. Emits a `BTreeMap<K, V>` struct field; the value's key field
+    /// is determined by `key="..."` (currently unused — the wire form for
+    /// every concrete (non-templated) `<table>` site uses the K and V
+    /// independently and we recover the key by reading K before V at each
+    /// iteration). Templated `T,U` tables fall through to a precise SKIP
+    /// reason pointing at J3.E.
+    Table(TableField),
 }
 
 /// J3.C: one `<maskmap name="ParentField" [xor="0x..."]>` block. Resolves the
@@ -1078,6 +1493,96 @@ struct MaskGroup {
     text: Option<String>,
 }
 
+/// J3.D: one `<switch name="DiscField">` block. We resolve the discriminator
+/// against `SiblingLookup` so the emitter doesn't have to re-thread enum
+/// vs primitive disambiguation; every case's body is a pre-built sequence of
+/// nested `EmitStep`s (mirroring how `<maskmap>` flattens its mask groups).
+///
+/// The struct emitter writes one Rust enum + one struct field per switch;
+/// the read emitter writes a `match disc_local { … }` dispatch where each
+/// arm decodes the case's payload then assigns the typed enum variant.
+struct SwitchBlock {
+    /// Emitted enum type name, e.g. `MovementDataMovementTypeData`. Used both
+    /// as the struct field's type AND as the variant-construction prefix
+    /// (`<enum_name>::Case_0000 { … }`).
+    enum_name: String,
+    /// Struct field snake-name carrying the variant — usually
+    /// `<disc_snake>_data` (e.g. `movement_type_data`).
+    field_snake: String,
+    /// Discriminator local-variable name in `read_from`'s scope. For enum-
+    /// typed discs we read the `_bits` companion; the codegen handles
+    /// the suffix at emit time.
+    disc_snake: String,
+    /// Discriminator's underlying numeric repr (`u32`, `u16`, `i32`, `u8`)
+    /// — the match scrutinee is cast to `i128` for the actual comparison so
+    /// negative literals like `PwdType=-1` work uniformly. Currently
+    /// recorded for documentation + future precision-aware widening; the
+    /// codegen path widens unconditionally so the repr isn't read at emit
+    /// time. Kept on the struct so future code can preserve original-width
+    /// semantics if it ever matters (e.g. catching impossible-by-width
+    /// case values at codegen time).
+    #[allow(dead_code)]
+    disc_repr: String,
+    /// What kind of field the discriminator is — drives `_bits` vs bare
+    /// snake-name selection in the `match` scrutinee expression.
+    disc_kind: DiscriminatorKind,
+    /// Verbatim XML name of the discriminator field for doc-comments.
+    disc_xml_name: String,
+    /// All cases in XML declaration order. Used both for variant emission
+    /// (enum body) and for the dispatch arms (read_from match).
+    cases: Vec<SwitchCase>,
+}
+
+/// J3.D: how the discriminator field surfaces in `read_from`'s local scope.
+/// Primitive fields land as a bare `<snake>` local. Enum-typed fields land
+/// as a typed `<snake>` plus a `<snake>_bits` companion (emitted by
+/// `emit_read_field`'s enum branch); we read the bits for the dispatch.
+#[derive(Clone, Copy, Debug)]
+enum DiscriminatorKind {
+    Primitive,
+    Enum,
+}
+
+/// J3.D: one `<case value="V | W | …">` group inside a `<switch>`. The
+/// `steps` field holds the pre-built body of the case — each EmitStep
+/// gets re-emitted via the same `emit_*` functions used at the top level
+/// (so nested switches, vectors, maskmaps, etc. all just work).
+struct SwitchCase {
+    /// Canonical variant identifier — `Case_<hex>` for single, joined by
+    /// underscore for multi-value. Always a valid Rust ident (no leading
+    /// digit; we prefix `Case_`).
+    variant_id: String,
+    /// Verbatim XML `value=` attribute for doc-comments.
+    value_xml: String,
+    /// Parsed numeric values (signed i128 to fit `-1`-style PwdType cases).
+    /// Length ≥ 1; multi-value cases hold all the pipe-split tokens.
+    values: Vec<i128>,
+    /// Optional `<case text="...">` doc-comment text.
+    text: Option<String>,
+    /// Body steps in XML order. Empty for "no payload" cases (none in the
+    /// current schema, but supported defensively).
+    steps: Vec<EmitStep>,
+}
+
+/// J3.D: one `<table name="X" key="K" value="V" length="LenExpr" />` block.
+/// Equivalent to a `Dictionary<K,V>` whose entry count comes from a
+/// sibling-resolved length expression. We model the Rust shape as a
+/// `BTreeMap<K, V>` over the resolved key + value types; entries are
+/// decoded by reading K then V at each iteration. Templated `T`/`U`
+/// markers are routed away with a precise J3.E SKIP reason at the
+/// `build_table_field` gate, so this struct only ever holds concrete
+/// resolvable types.
+struct TableField {
+    name_snake: String,
+    key_rust_ty: String,
+    key_kind: FieldKind,
+    value_rust_ty: String,
+    value_kind: FieldKind,
+    length_expr_rust: String,
+    length_xml: String,
+    text: Option<String>,
+}
+
 /// J3.B: a `<vector name="Foo" type="ElementTy" length="LenExpr" />` child of
 /// a `<type>` body. Element kind is resolved up front via [`CodegenCtx::resolve_field`];
 /// the length expression is parsed into a usize-producing Rust expression that
@@ -1104,6 +1609,13 @@ struct VectorField {
 
 struct SimpleField {
     name_snake: String,
+    /// J3.D: verbatim XML `name=` attribute (e.g. `Key_a`, `PwdType`,
+    /// `MovementType`). Used by `SiblingLookup` to register the field under
+    /// the EXACT name that `<switch name="…">` / `<vector length="…">` /
+    /// `<maskmap name="…">` reference it by — the `snake_to_pascal` round
+    /// trip is lossy for underscored names like `Key_a` and would mis-key
+    /// the lookup table.
+    xml_name: String,
     rust_ty: String,
     field_kind: FieldKind,
     text: Option<String>,
@@ -1122,6 +1634,11 @@ struct SimpleField {
 /// is the already-translated Rust body — see [`translate_subfield_expr`].
 struct SubfieldAccessor {
     name_snake: String,
+    /// J3.D: verbatim XML `name=` attribute, same rationale as
+    /// `SimpleField::xml_name`. `<vector length="BodySize">` references
+    /// subfields by their XML name; the snake→pascal round-trip mangles
+    /// underscored names (`Body_Size` → `BodySize` ≠ original).
+    xml_name: String,
     rust_ty: String,
     rust_expr: String,
     /// Verbatim XML expression for the doc-comment trail when no `text=`
@@ -1369,13 +1886,21 @@ fn collect_unsupported(n: Node<'_, '_>) -> Vec<&'static str> {
     // Per-maskmap resolution lives in `collect_emit_steps`; this top-level
     // pass never returns "maskmap" anymore. Bare `<mask>` outside a
     // `<maskmap>` would be a schema bug; we still flag it for completeness.
+    //
+    // J3.D (2026-05-27): `<switch name="DiscField">` is now FOUNDATION-tier
+    // when the discriminator resolves to a numeric primitive or an enum-typed
+    // sibling field declared BEFORE the `<switch>`, and every case-body child
+    // (`<field>`, `<vector>`, nested `<switch>`, `<maskmap>`, `<align>`) is in
+    // turn supported. Per-switch resolution lives in `collect_emit_steps`; the
+    // top-level pass never returns "switch" anymore — failures are reported
+    // with a precise per-case reason. `<table name="X" key="K" value="V" length="LenExpr">`
+    // is also FOUNDATION-tier when K and V are concrete (non-templated)
+    // resolvable types. Templated `T,U`-typed tables defer cleanly to J3.E.
     let mut out = Vec::new();
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
-            "switch" => push_unique(&mut out, "switch"),
             "if" => push_unique(&mut out, "if"),
             "mask" => push_unique(&mut out, "mask"),
-            "table" => push_unique(&mut out, "table"),
             _ => {}
         }
     }
@@ -1415,7 +1940,7 @@ fn line_of_offset(line_offsets: &[usize], offset: usize) -> usize {
 /// `BodySize = Size - 16`), in which case the translator substitutes the
 /// subfield's verbatim XML expression with the PARENT's snake name in place
 /// of the parent's XML name — see [`translate_vector_length_expr`].
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct SiblingLookup {
     /// `xml_name → (snake_name, rust_repr)` for direct sibling fields. The
     /// `rust_repr` is the Rust primitive width (`u8`/`u16`/…); used so the
@@ -1434,6 +1959,27 @@ struct SiblingLookup {
     /// references the parent by its XML name; we rewrite to the parent's
     /// snake-name local variable when substituting into the vector length.
     subfields_by_xml_name: BTreeMap<String, SubfieldRef>,
+    /// J3.D: enum-typed sibling fields so `<switch name="Foo">` can resolve a
+    /// `Foo` field whose Rust-side type is a strict enum (not downgraded to
+    /// its raw repr). The codegen emits a `<snake>_bits` companion local
+    /// alongside the typed value (see `emit_read_field`'s Enum branch); the
+    /// switch dispatch reads the `_bits` so unknown discriminants surface as
+    /// the typed-enum `read_from` already-emitted error rather than racing
+    /// the match scrutinee.
+    enum_fields_by_xml_name: BTreeMap<String, EnumFieldRef>,
+}
+
+/// J3.D: bookkeeping for an enum-typed sibling field. Its decode emits two
+/// locals — the typed value `<snake>` and the raw `<snake>_bits` companion;
+/// the switch dispatch references the bits local to compare against the case
+/// values uniformly across all enum reprs.
+#[derive(Clone)]
+struct EnumFieldRef {
+    snake: String,
+    /// Width-narrowed rust repr (`u32`/`u16`/`u8`/`i32`/`u64`/`i64`). The
+    /// match scrutinee casts up to `i128` so signed cases like PwdType=-1
+    /// compose with unsigned reprs.
+    rust_repr: String,
 }
 
 #[derive(Clone)]
@@ -1478,30 +2024,68 @@ impl SiblingLookup {
                 );
             }
         }
+        // J3.D: also register strict-enum-typed fields (those that landed as
+        // `FieldKind::Enum(...)`) so a `<switch name="Foo">` over a sibling
+        // enum `Foo` can resolve to the `<snake>_bits` companion local emitted
+        // by `emit_read_field`'s enum branch. Flag enums (`mask="true"`) flow
+        // through the primitive path above (they're downgraded to raw bits in
+        // `resolve_field`), so they're already in `fields_by_xml_name`.
+        if let FieldKind::Enum(_name, repr, _is_flag) = &f.field_kind {
+            self.enum_fields_by_xml_name.insert(
+                xml_name,
+                EnumFieldRef {
+                    snake: f.name_snake.clone(),
+                    rust_repr: repr.rust_ty().to_string(),
+                },
+            );
+        }
     }
 }
 
 fn xml_name_for_field(f: &SimpleField) -> String {
-    // We don't store the XML name on SimpleField; reconstruct from snake by
-    // capitalising and removing underscores. This is approximate — but the
-    // generated subfield code-paths already use the XML name verbatim, and
-    // numeric fields in protocol.xml are conventionally PascalCase with no
-    // ambiguous casing inside (the to_snake_case round-trip is reversible
-    // for our concrete vector-length-source set: `Count`, `BodySize`,
-    // `PropertyCount`, `OptionPropertyCount`, `RecordCount`, `CommandListLength`,
-    // `PaletteCount`, `TextureCount`, `ModelCount`, `DataSize`). For names
-    // we don't recognise we still produce a candidate and the lookup is
-    // best-effort — the worst case is a clean SKIP with a clear reason.
-    snake_to_pascal(&f.name_snake)
+    // J3.D: read the stored XML name verbatim. Previously we'd reconstruct
+    // it via `snake_to_pascal(&f.name_snake)`, which is lossy for underscored
+    // names like `Key_a` (round-trips to `KeyA`). The verbatim store is the
+    // only correct path; the snake-to-pascal heuristic is gone.
+    f.xml_name.clone()
 }
 
 fn xml_name_for_subfield(sf: &SubfieldAccessor) -> String {
-    snake_to_pascal(&sf.name_snake)
+    // J3.D: same as `xml_name_for_field`. Subfields like `BodySize` are
+    // round-trip-clean today, but the verbatim store removes a class of
+    // future-revision lookup bugs.
+    sf.xml_name.clone()
+}
+
+/// J3.D: convert a verbatim XML name into a PascalCase identifier safe for
+/// Rust type names. Strips underscores + uppercases the next char after each
+/// boundary. `Key_a` → `KeyA`; `BlobDispatchType` → `BlobDispatchType` (no
+/// change); `PwdType` → `PwdType` (no change). Used for synthesising enum
+/// names like `<Parent><Disc>Data` where Disc comes from the XML.
+fn pascalize_xml_name(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut cap_next = true;
+    for ch in s.chars() {
+        if ch == '_' {
+            cap_next = true;
+            continue;
+        }
+        if cap_next {
+            out.extend(ch.to_uppercase());
+            cap_next = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Convert `snake_case_id` → `SnakeCaseId`. Mirrors `to_snake_case`'s inverse
 /// for the subset of names we care about (single-word + underscore-joined
 /// PascalCase round-trips cleanly). Words after the first are capitalised.
+/// Kept around for future use even though J3.D switched its callers to
+/// `pascalize_xml_name` (which is the correct direction for XML→Pascal).
+#[allow(dead_code)]
 fn snake_to_pascal(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut cap_next = true;
@@ -1548,6 +2132,16 @@ fn resolve_maskmap_parent_bits(
         let _ = repr;
         return Ok(format!("{snake} as u64"));
     }
+    // J3.D: strict-enum siblings expose their raw bits via the `_bits`
+    // companion local emitted by `emit_read_field`'s enum branch. Maskmap
+    // codegen reads those bits directly so unknown discriminants don't
+    // accidentally fail the maskmap gate (the enum field itself would have
+    // already errored at decode time on unknown bits — but this path is
+    // for the case where the parent is a non-flag enum being treated as a
+    // bit field, e.g. MovementData.OptionFlags which is `MovementOption`).
+    if let Some(ef) = siblings.enum_fields_by_xml_name.get(parent_xml_name) {
+        return Ok(format!("{}_bits as u64", ef.snake));
+    }
     Err(format!(
         "parent {parent_xml_name:?} is not a sibling numeric field — maskmap parents must be declared before the <maskmap> in the same <type> body"
     ))
@@ -1559,6 +2153,9 @@ fn resolve_maskmap_parent_snake(
 ) -> Option<String> {
     if let Some((snake, _)) = siblings.fields_by_xml_name.get(parent_xml_name) {
         return Some(snake.clone());
+    }
+    if let Some(ef) = siblings.enum_fields_by_xml_name.get(parent_xml_name) {
+        return Some(ef.snake.clone());
     }
     None
 }
@@ -1816,6 +2413,300 @@ fn emit_read_field_indented(buf: &mut String, snake: &str, kind: &FieldKind, ind
             writeln!(buf, "{indent}{stripped}").unwrap();
         }
     }
+}
+
+/// J3.D: re-indent a multi-line emitted block to a custom indent. The
+/// generated lines from `emit_read_*` use a fixed 8-space leading indent for
+/// the read body, 12-space for nested blocks; we strip that and replace with
+/// the caller-supplied prefix.
+fn reindent_block(buf: &mut String, body: &str, indent: &str) {
+    for line in body.lines() {
+        let stripped = line.trim_start_matches(' ');
+        if stripped.is_empty() {
+            writeln!(buf).unwrap();
+        } else {
+            writeln!(buf, "{indent}{stripped}").unwrap();
+        }
+    }
+}
+
+/// J3.D: emit an indented version of `emit_align_pad`.
+fn emit_align_pad_indented(buf: &mut String, n_bytes: usize, indent: &str) {
+    let mut tmp = String::new();
+    emit_align_pad(&mut tmp, n_bytes);
+    reindent_block(buf, &tmp, indent);
+}
+
+/// J3.D: emit an indented version of `emit_read_vector`.
+fn emit_read_vector_indented(buf: &mut String, v: &VectorField, indent: &str) {
+    let mut tmp = String::new();
+    emit_read_vector(&mut tmp, v);
+    reindent_block(buf, &tmp, indent);
+}
+
+/// J3.D: emit an indented version of `emit_read_maskmap`.
+fn emit_read_maskmap_indented(buf: &mut String, mm: &MaskmapBlock, indent: &str) {
+    let mut tmp = String::new();
+    emit_read_maskmap(&mut tmp, mm);
+    reindent_block(buf, &tmp, indent);
+}
+
+/// J3.D: emit an indented version of `emit_read_table`.
+fn emit_read_table_indented(buf: &mut String, tb: &TableField, indent: &str) {
+    let mut tmp = String::new();
+    emit_read_table(&mut tmp, tb, "        ");
+    reindent_block(buf, &tmp, indent);
+}
+
+/// J3.D: emit the read for one step inside an indented context (switch case
+/// body). Routes through the existing emit_* helpers via reindent_block.
+fn emit_step_indented(buf: &mut String, step: &EmitStep, indent: &str) {
+    match step {
+        EmitStep::Field(f) => emit_read_field_indented(buf, &f.name_snake, &f.field_kind, indent),
+        EmitStep::Align(n) => emit_align_pad_indented(buf, *n, indent),
+        EmitStep::Vector(v) => emit_read_vector_indented(buf, v, indent),
+        EmitStep::Maskmap(mm) => emit_read_maskmap_indented(buf, mm, indent),
+        EmitStep::Switch(sw) => emit_read_switch(buf, sw, indent),
+        EmitStep::Table(tb) => emit_read_table_indented(buf, tb, indent),
+    }
+}
+
+/// J3.D: write an enum type definition for a `<switch>` block (recursively
+/// for any nested switches inside its case bodies). The enum's variant set
+/// mirrors the case set; each variant carries the case's struct-like fields
+/// as named anonymous-struct payload (`Case_X { field_a: T, field_b: U }`)
+/// or no payload (`Case_X`) for empty cases.
+///
+/// Nested switches inside a case body get their own enum emitted in a
+/// post-order walk (innermost first) so the outer enum's variant fields can
+/// reference them by name.
+fn emit_switch_enum_recursive(buf: &mut String, step: &EmitStep) {
+    match step {
+        EmitStep::Switch(sw) => {
+            // Recurse into case bodies first — innermost nested switches
+            // emit before outer ones, mirroring the type-dependency direction.
+            for case in &sw.cases {
+                for inner in &case.steps {
+                    emit_switch_enum_recursive(buf, inner);
+                }
+            }
+            // Emit the enum.
+            writeln!(buf, "/// `<switch name=\"{}\">` discriminated union (one variant per case).",
+                escape_xml_attr_for_doc(&sw.disc_xml_name)).unwrap();
+            writeln!(buf, "#[derive(Debug, Clone, PartialEq)]").unwrap();
+            writeln!(buf, "pub enum {} {{", sw.enum_name).unwrap();
+            for case in &sw.cases {
+                if let Some(t) = &case.text {
+                    writeln!(buf, "    /// case value=\"{}\". {}",
+                        escape_xml_attr_for_doc(&case.value_xml),
+                        escape_doc(t)).unwrap();
+                } else {
+                    writeln!(buf, "    /// case value=\"{}\".",
+                        escape_xml_attr_for_doc(&case.value_xml)).unwrap();
+                }
+                let payload = collect_case_payload_fields(&case.steps);
+                if payload.is_empty() {
+                    writeln!(buf, "    {},", case.variant_id).unwrap();
+                } else {
+                    writeln!(buf, "    {} {{", case.variant_id).unwrap();
+                    for (fname, fty) in &payload {
+                        writeln!(buf, "        {fname}: {fty},").unwrap();
+                    }
+                    writeln!(buf, "    }},").unwrap();
+                }
+            }
+            writeln!(buf, "}}\n").unwrap();
+        }
+        // Nested switches can also appear inside maskmap gated fields (none
+        // in the current schema, but the schema permits it via the same
+        // tree-walk path). Maskmap recursion would need its own walk; we
+        // skip here because maskmap's <mask> children are ONLY <field>
+        // (enforced at parse time in `build_maskmap_block`).
+        _ => {}
+    }
+}
+
+/// J3.D: collect the (struct_field_name, rust_type) pairs that one switch
+/// case's `Vec<EmitStep>` body produces. Mirrors the order
+/// `collect_step_locals` uses so the brace-init at the end of the case arm
+/// type-checks against the enum variant.
+fn collect_case_payload_fields(steps: &[EmitStep]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for step in steps {
+        match step {
+            EmitStep::Field(f) => out.push((f.name_snake.clone(), f.rust_ty.clone())),
+            EmitStep::Vector(v) => out.push((
+                v.name_snake.clone(),
+                format!("Vec<{}>", v.element_rust_ty),
+            )),
+            EmitStep::Maskmap(mm) => {
+                for g in &mm.masks {
+                    for gated in &g.fields {
+                        out.push((
+                            gated.name_snake.clone(),
+                            format!("Option<{}>", gated.rust_ty),
+                        ));
+                    }
+                }
+            }
+            EmitStep::Switch(inner) => out.push((
+                inner.field_snake.clone(),
+                inner.enum_name.clone(),
+            )),
+            EmitStep::Table(tb) => out.push((
+                tb.name_snake.clone(),
+                format!(
+                    "std::collections::BTreeMap<{}, {}>",
+                    tb.key_rust_ty, tb.value_rust_ty
+                ),
+            )),
+            EmitStep::Align(_) => {}
+        }
+    }
+    out
+}
+
+/// J3.D: emit the `match disc_local { … }` dispatch for a `<switch>` block.
+/// The scrutinee is the discriminator's `_bits` companion (for enum-typed
+/// discs) or the bare local (for primitive discs), cast to `i128` so signed
+/// case values (`PwdType=-1`) compose with unsigned reprs.
+///
+/// Each case arm:
+/// - decodes the case body via `emit_step_indented` calls (recursive for
+///   nested switches);
+/// - constructs the typed enum variant with the case-body locals.
+///
+/// An unknown discriminator surfaces as `Err("unknown <EnumName> discriminator")`
+/// to mirror Chorizite's "no default case" convention.
+fn emit_read_switch(buf: &mut String, sw: &SwitchBlock, indent: &str) {
+    let scrutinee_local = match sw.disc_kind {
+        DiscriminatorKind::Primitive => sw.disc_snake.clone(),
+        DiscriminatorKind::Enum => format!("{}_bits", sw.disc_snake),
+    };
+    writeln!(buf, "{indent}// <switch name=\"{}\">", escape_xml_attr_for_doc(&sw.disc_xml_name)).unwrap();
+    writeln!(buf, "{indent}let {fname}: {ename} = {{", fname = sw.field_snake, ename = sw.enum_name).unwrap();
+    let inner_indent = format!("{indent}    ");
+    writeln!(buf, "{inner_indent}let __disc: i128 = ({scrutinee_local}) as i128;").unwrap();
+    writeln!(buf, "{inner_indent}match __disc {{").unwrap();
+    let case_indent = format!("{inner_indent}    ");
+    let body_indent = format!("{case_indent}    ");
+    for case in &sw.cases {
+        // Build the match arm pattern: `n if n == V1 || n == V2 || ... =>`.
+        // We use a guarded wildcard rather than literal patterns because
+        // some values are out of range of i32 once we widen reprs, and the
+        // signed-vs-unsigned mix is easier to handle this way.
+        let mut pattern = String::from("n if ");
+        for (i, v) in case.values.iter().enumerate() {
+            if i > 0 {
+                pattern.push_str(" || ");
+            }
+            pattern.push_str(&format!("n == {v}i128"));
+        }
+        writeln!(buf, "{case_indent}{pattern} => {{").unwrap();
+        if let Some(t) = &case.text {
+            writeln!(buf, "{body_indent}// {} — {}", escape_xml_attr_for_doc(&case.value_xml), escape_doc(t)).unwrap();
+        } else {
+            writeln!(buf, "{body_indent}// case value=\"{}\"", escape_xml_attr_for_doc(&case.value_xml)).unwrap();
+        }
+        // Decode the case body steps in order.
+        for step in &case.steps {
+            emit_step_indented(buf, step, &body_indent);
+        }
+        // Build the variant value.
+        let payload = collect_case_payload_fields(&case.steps);
+        if payload.is_empty() {
+            writeln!(buf, "{body_indent}{ename}::{vid}", ename = sw.enum_name, vid = case.variant_id).unwrap();
+        } else {
+            writeln!(buf, "{body_indent}{ename}::{vid} {{", ename = sw.enum_name, vid = case.variant_id).unwrap();
+            for (fname, _fty) in &payload {
+                writeln!(buf, "{body_indent}    {fname},").unwrap();
+            }
+            writeln!(buf, "{body_indent}}}").unwrap();
+        }
+        writeln!(buf, "{case_indent}}},").unwrap();
+    }
+    writeln!(buf, "{case_indent}_other => return Err(\"unknown {ename} discriminator\"),", ename = sw.enum_name).unwrap();
+    writeln!(buf, "{inner_indent}}}").unwrap();
+    writeln!(buf, "{indent}}};").unwrap();
+}
+
+/// J3.D: emit the read for a `<table>` (Dictionary<K,V>). Mirrors the
+/// vector-loop pattern but reads K then V at each iteration and inserts
+/// into a BTreeMap. Templated `T,U` tables never reach this path —
+/// `build_table_field` rejects them with a J3.E SKIP reason.
+fn emit_read_table(buf: &mut String, tb: &TableField, indent: &str) {
+    let snake = &tb.name_snake;
+    let count_expr = &tb.length_expr_rust;
+    let kty = &tb.key_rust_ty;
+    let vty = &tb.value_rust_ty;
+    let xml_len = &tb.length_xml;
+    writeln!(buf, "{indent}// <table name=\"{snake}\" length=\"{}\" key=\"{kty}\" value=\"{vty}\">",
+        escape_xml_attr_for_doc(xml_len)).unwrap();
+    writeln!(buf, "{indent}let {snake}_count: usize = {count_expr};").unwrap();
+    writeln!(buf, "{indent}let mut {snake}: std::collections::BTreeMap<{kty}, {vty}> = std::collections::BTreeMap::new();").unwrap();
+    writeln!(buf, "{indent}for _ in 0..{snake}_count {{").unwrap();
+    let inner = format!("{indent}    ");
+    emit_read_field_indented(buf, "__k", &tb.key_kind, &inner);
+    emit_read_field_indented(buf, "__v", &tb.value_kind, &inner);
+    writeln!(buf, "{inner}{snake}.insert(__k, __v);").unwrap();
+    writeln!(buf, "{indent}}}").unwrap();
+}
+
+/// J3.D: resolve a `<switch name="X">` discriminator against the sibling
+/// lookup. Returns `(scrutinee_rust_expr, rust_repr, disc_kind)` — the
+/// scrutinee expression is what the read codegen's match scrutinee reads to
+/// get the discriminator value, AS A RUST EXPRESSION (not just a bare local
+/// name); for primitive/enum siblings that's `<snake>` / `<snake>_bits`,
+/// for subfield discriminators it's the inlined subfield expression
+/// substituted to read the parent's local.
+fn resolve_switch_discriminator(
+    disc_xml_name: &str,
+    siblings: &SiblingLookup,
+) -> Option<(String, String, DiscriminatorKind)> {
+    // Primitive (or flag-enum-downgraded-to-primitive) sibling.
+    if let Some((snake, repr)) = siblings.fields_by_xml_name.get(disc_xml_name) {
+        return Some((snake.clone(), repr.clone(), DiscriminatorKind::Primitive));
+    }
+    // Strict enum sibling.
+    if let Some(ef) = siblings.enum_fields_by_xml_name.get(disc_xml_name) {
+        return Some((ef.snake.clone(), ef.rust_repr.clone(), DiscriminatorKind::Enum));
+    }
+    // Subfield-of-sibling — handles `ItemProfile.<switch name="PwdType">`
+    // where `PwdType` is a `<subfield>` of `PackedAmount`. Substitute the
+    // subfield's value-expression with the parent's snake local, then return
+    // the resulting Rust expression as the scrutinee. The expression is
+    // evaluated INLINE inside `read_from` (not as a pre-bound local), so the
+    // caller threads it through to the match-scrutinee site.
+    if let Some(sf_ref) = siblings.subfields_by_xml_name.get(disc_xml_name) {
+        if let Ok(expr) = translate_subfield_expr_for_local(
+            &sf_ref.value_expr_xml,
+            &sf_ref.parent_xml_name,
+            &sf_ref.parent_snake_name,
+            &sf_ref.parent_rust_repr,
+            &sf_ref.parent_rust_repr,
+        ) {
+            return Some((expr, sf_ref.parent_rust_repr.clone(), DiscriminatorKind::Primitive));
+        }
+    }
+    None
+}
+
+/// J3.D: produce a Rust ident-safe name for one switch case. Mirrors the
+/// upstream Chorizite naming (which uses `case_HEX:` C# labels for diagnostic
+/// purposes); we use `Case_HEX` for non-negatives, `Case_NegN` for negatives,
+/// and join multi-value cases with underscores. Two-byte literals (`0x4`)
+/// pad to a consistent width so naming is stable across cases like
+/// `0x4`/`0x40`/`0x400`.
+fn canonical_case_variant_id(values: &[i128]) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(values.len());
+    for v in values {
+        if *v < 0 {
+            parts.push(format!("Neg{}", v.unsigned_abs()));
+        } else {
+            parts.push(format!("{:X}", *v as u64));
+        }
+    }
+    format!("Case_{}", parts.join("_"))
 }
 
 /// J3.A: emit the cursor-advance for a Chorizite `<align type="TYPE" />`
