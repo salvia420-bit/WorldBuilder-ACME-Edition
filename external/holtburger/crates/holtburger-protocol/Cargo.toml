@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+build = "build.rs"
 
 [dependencies]
 log.workspace = true
@@ -19,5 +20,12 @@ strum_macros.workspace = true
 byteorder.workspace = true
 hex.workspace = true
 encoding_rs.workspace = true
+
+[build-dependencies]
+# Used at compile time only by build.rs to parse
+# external/chorizite/Chorizite.ACProtocol/Chorizite.ACProtocol/protocol.xml
+# and emit src/generated/messages_generated.rs (PR 7 — codegen tier-1).
+# Runtime crate stays free of any XML dependency.
+roxmltree = "0.20"
 
 [dev-dependencies]

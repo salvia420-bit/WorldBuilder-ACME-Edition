@@ -416,6 +416,35 @@ export function createClient(sessionHandle) {
     createTest(name) {
       sessionHandle.createTestCharacter(name);
     },
+    // Wave D.2 (2026-05-27) — rich char-gen wizard surface; mirrors
+    // `gmCharGenMainUI` (external/chorizite/ACBindings/Generated/Game/
+    // CharGen/gmCharGenMainUI.cs:48-79). The wizard plugin
+    // (plugins/character-creation.js) consumes both:
+    //   - `getCatalog()` returns the heritages/genders/templates/skills
+    //     dump loaded from CharGen DAT (0x0E000002) + SkillTable
+    //     (0x0E000004) at start_session — see src/lib.rs
+    //     `get_character_gen_catalog`. Null until canCreateCharacter
+    //     flips true.
+    //   - `skillCostsFor(heritageId, skillId)` returns the
+    //     heritage-corrected (trainedCost, specializedCost) tuple for
+    //     a given skill — wizard re-reads as user picks heritage.
+    //   - `createCharacter(build)` is the rich submit path. `build` is
+    //     a plain JS object mirroring CharacterGenBuildJs (heritage,
+    //     gender, templateOption, attribute fields, appearance,
+    //     skillAdvancementClasses [N×u32 per SkillAdvancementClass
+    //     enum 0..=3], name, startArea). Throws JsValue strings on
+    //     validation failure (`CharacterGenBuilder` errors); success
+    //     dispatches a CharacterCreate wire packet and resolves
+    //     immediately. Outcome later via kind=5 / kind=6 events.
+    getCatalog() {
+      return sessionHandle.getCharacterGenCatalog();
+    },
+    skillCostsFor(heritageId, skillId) {
+      return sessionHandle.getSkillCostsForHeritage(heritageId, skillId);
+    },
+    createCharacter(build) {
+      sessionHandle.sendCharGenResult(build);
+    },
   });
 
   // PR-2 (2026-05-27): `client.world` is now the WorldState instance (port

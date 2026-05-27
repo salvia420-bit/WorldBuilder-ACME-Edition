@@ -811,6 +811,25 @@
         </div>
       </div>
 
+      <!-- Wave D.2 (2026-05-27) — rich 3-page Character Creation wizard
+           launcher. Port of gmCharGenMainUI (external/chorizite/ACBindings/
+           Generated/Game/CharGen/gmCharGenMainUI.cs:5-220). Opens the
+           character-creation plugin's fullscreen overlay; the legacy
+           single-name `#create-form` below remains in place as a quick
+           one-click path for smoke tests + agent-driven autoLogin
+           captures. Both gated on `handle.canCreateCharacter`. -->
+      <div id="create-wizard-launcher" hidden style="margin-top:10px;">
+        <button type="button" id="create-wizard-btn" class="hb-cc-launcher-btn"
+          style="background:#806838;color:#1a1410;border:1px solid #c89858;padding:8px 18px;cursor:pointer;font-weight:bold;border-radius:2px;">
+          🧙 New Character (full wizard)
+        </button>
+        <span class="hint" style="margin-left:8px;">
+          Heritage / skills / summary. Pick a non-Aluvian heritage or a
+          custom skill plan here; the legacy one-click form below stays
+          for quick smoke tests.
+        </span>
+      </div>
+
       <form id="create-form" hidden>
         <fieldset>
           <legend>Create test character (Phase 4 step 2a.5)</legend>
@@ -7410,6 +7429,40 @@ void main() {
           renderCharacterList();
           if (handle.canCreateCharacter) {
             createForm.hidden = false;
+            // Wave D.2 (2026-05-27) — also reveal the rich 3-page
+            // wizard launcher. The wizard plugin owns its own fullscreen
+            // overlay; we only wire the launch button here. Re-using
+            // the existing `canCreateCharacter` gate so both UIs flip
+            // visible at the same time (catalog ready ⇒ both work).
+            const wizardLauncher = document.getElementById("create-wizard-launcher");
+            const wizardBtn = document.getElementById("create-wizard-btn");
+            if (wizardLauncher) wizardLauncher.hidden = false;
+            if (wizardBtn && !wizardBtn._wired) {
+              wizardBtn._wired = true;
+              wizardBtn.addEventListener("click", async () => {
+                try {
+                  const mod = await import("./plugins/character-creation.js");
+                  mod.openWizard({
+                    client: window.__pluginClient,
+                    onSuccess: ({ name }) => {
+                      createStatus.innerHTML =
+                        `<span class="ok">[OK]</span> Wizard created <strong>${name}</strong>. Character list refreshing…`;
+                      mod.closeWizard();
+                      // Re-render the list — recv loop already
+                      // updated `handle.characterList()` via the
+                      // post-CharacterCreate CharacterList re-fire.
+                      renderCharacterList();
+                    },
+                    onCancel: () => {
+                      // User dismissed. No status change.
+                    },
+                  });
+                } catch (err) {
+                  createStatus.innerHTML =
+                    `<span class="fail">[FAIL]</span> character-creation plugin load failed: <code>${String(err?.message ?? err)}</code>`;
+                }
+              });
+            }
             // Populate the retail LanguageString naming hint below the
             // input. Cache is filled by the ac_strings preload (~L1372).
             const hintEl = document.getElementById("create-name-hint");
@@ -8585,6 +8638,14 @@ void main() {
                   `Click Spawn on the new row to enter world.`;
                 createBtn.disabled = false;
                 createNameInput.value = "";
+                // Wave D.2 — fan out to the plugin-client bus so the
+                // character-creation wizard plugin (which is listening
+                // via `client.events.on("characterCreated", ...)`) can
+                // transition its Submitting→Success state.
+                if (window.__pluginClient?.events?.emit) {
+                  window.__pluginClient.events.emit("characterCreated",
+                    { guid: newGuid, name: newName });
+                }
               } else if (evt.kind === 6) {
                 // CharacterCreateFailed — surface the response code
                 // (NameInUse, NameNotAllowed, etc.) and re-enable the
@@ -8595,6 +8656,11 @@ void main() {
                   `<span class="fail">[FAIL]</span> CharacterCreate rejected: ` +
                   `<code>${label}</code> (code ${code}).`;
                 createBtn.disabled = false;
+                // Wave D.2 — bus fan-out (see kind=5 comment above).
+                if (window.__pluginClient?.events?.emit) {
+                  window.__pluginClient.events.emit("characterCreateFailed",
+                    { code, reason: label });
+                }
               } else if (evt.kind === 4) {
                 // Disconnected — recv loop terminated. The UI stays
                 // up but commands won't go anywhere.

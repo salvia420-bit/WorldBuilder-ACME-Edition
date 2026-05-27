@@ -34790,3 +34790,420 @@ impl SessionHandle {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Wave D.2 (2026-05-27) — Character-Creation wizard plumbing
+//
+// Ports `gmCharGenMainUI` (`external/chorizite/ACBindings/Generated/Game/
+// CharGen/gmCharGenMainUI.cs:5-220`) to the browser. Retail's 6-step
+// progress state machine (ECG_HERITAGE → ECG_PROFESSION → ECG_SKILLS →
+// ECG_APPEARANCE → ECG_TOWN → ECG_SUMMARY, cs:36-45) is condensed in
+// Holtburger to a 3-page wizard (heritage / skills / summary) — see
+// `plugins/character-creation.js` for the JS shell.
+//
+// Two new wasm exports (richer alternates to the existing
+// `createTestCharacter(name)` one-shot at `lib.rs:20280`):
+//
+//   1. `SessionHandle.getCharacterGenCatalog()` — exposes the
+//      `CharacterGenCatalog` (already loaded at `start_session` from
+//      DAT 0x0E000002 `CharGen` + 0x0E000004 `SkillTable`, see
+//      `lib.rs:22346`+`22759`) as a plain JS object so the wizard
+//      can render heritage / gender / template / skill dropdowns
+//      with the same data the cli + the
+//      `holtburger_core::CharacterGenBuilder` validate against. Mirrors
+//      `holtburger-cli/src/pages/selection/creation.rs` which reads
+//      identical fields off the catalog Rust-side.
+//
+//   2. `SessionHandle.sendCharGenResult(payload)` — accepts a JS
+//      object mirroring `CharacterGenBuild` (`crates/holtburger-core/
+//      src/character_gen.rs:75-104`), runs it through
+//      `CharacterGenBuilder::build_request` (so every constraint ACE
+//      validates server-side is also validated client-side — heritage
+//      gating, skill-slot count, attribute budget, appearance index
+//      ranges), and on success dispatches `SessionCommand::
+//      CreateCharacter`. The character_slot is auto-assigned to the
+//      next free slot (mirrors `create_test_character`); ACE replies
+//      with `CharacterCreateResponse` + a fresh `CharacterList`, which
+//      the recv-loop turns into the existing kind=5 / kind=6 events
+//      (`lib.rs:13486-13490`).
+//
+// Wire opcodes:
+//   - C2S `Character_SendCharGenResult` = `GameOpcode::CharacterCreate`
+//     (`0xF656`, see `crates/holtburger-protocol/src/messages/character/
+//     types.rs:236-369` for the exact 21-field layout). Already shipped.
+//   - S2C `CharGenVerificationResponse` = `GameOpcode::
+//     CharacterCreateResponse` (`0xF643`, types.rs:372-433). Already
+//     shipped — recv-loop handler at `lib.rs:24822`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Wave D.2 — JSON-friendly mirror of `CharacterGenBuild` for the JS
+/// wizard. JS sends one of these; we round-trip through
+/// `holtburger_core::CharacterGenBuilder::build_request` for validation
+/// before dispatching the wire packet.
+///
+/// Field naming matches the camelCase shape the wizard already uses
+/// (`heritage`, `gender`, `templateOption`, `name`, `startArea`, etc).
+/// Skill advancement classes are numeric per
+/// `SkillAdvancementClass::from_repr` (Inactive=0, Untrained=1,
+/// Trained=2, Specialized=3 — `crates/holtburger-protocol/src/messages/
+/// character/types.rs:120-125`).
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CharacterGenBuildJs {
+    heritage: u32,
+    gender: u32,
+    template_option: i32,
+    strength_ability: u32,
+    endurance_ability: u32,
+    coordination_ability: u32,
+    quickness_ability: u32,
+    focus_ability: u32,
+    self_ability: u32,
+    /// Per-skill SkillAdvancementClass tag (0/1/2/3). Length MUST equal
+    /// `catalog.expected_skill_slots` (the validator rejects mismatched
+    /// counts — `character_gen.rs:358-364`).
+    skill_advancement_classes: Vec<u32>,
+    name: String,
+    start_area: u32,
+    appearance: CharacterCreateAppearanceJs,
+    /// Optional — if absent or null, the recv-loop auto-assigns the
+    /// next free slot. Wizard does NOT need to compute this; passing
+    /// `null` is the supported path.
+    #[serde(default)]
+    character_slot: Option<u32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CharacterCreateAppearanceJs {
+    eyes: u32,
+    nose: u32,
+    mouth: u32,
+    hair_color: u32,
+    eye_color: u32,
+    hair_style: u32,
+    /// `u32::MAX` (`4294967295` / `0xFFFFFFFF`) sentinel for "no
+    /// headgear" — matches `character_gen.rs:483-490` optional path.
+    headgear_style: u32,
+    headgear_color: u32,
+    shirt_style: u32,
+    shirt_color: u32,
+    pants_style: u32,
+    pants_color: u32,
+    footwear_style: u32,
+    footwear_color: u32,
+    skin_hue: f64,
+    hair_hue: f64,
+    headgear_hue: f64,
+    shirt_hue: f64,
+    pants_hue: f64,
+    footwear_hue: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl CharacterCreateAppearanceJs {
+    fn into_wire(self) -> holtburger_protocol::messages::CharacterCreateAppearanceData {
+        holtburger_protocol::messages::CharacterCreateAppearanceData {
+            eyes: self.eyes,
+            nose: self.nose,
+            mouth: self.mouth,
+            hair_color: self.hair_color,
+            eye_color: self.eye_color,
+            hair_style: self.hair_style,
+            headgear_style: self.headgear_style,
+            headgear_color: self.headgear_color,
+            shirt_style: self.shirt_style,
+            shirt_color: self.shirt_color,
+            pants_style: self.pants_style,
+            pants_color: self.pants_color,
+            footwear_style: self.footwear_style,
+            footwear_color: self.footwear_color,
+            skin_hue: self.skin_hue,
+            hair_hue: self.hair_hue,
+            headgear_hue: self.headgear_hue,
+            shirt_hue: self.shirt_hue,
+            pants_hue: self.pants_hue,
+            footwear_hue: self.footwear_hue,
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SessionHandle {
+    /// **Wave D.2** — JS-shaped snapshot of the `CharacterGenCatalog`
+    /// the wizard renders against. Returns `null` until
+    /// `start_session` finishes loading `CharGen` (DAT 0x0E000002) +
+    /// `SkillTable` (DAT 0x0E000004) — poll `canCreateCharacter` to
+    /// gate on readiness.
+    ///
+    /// Shape (all numeric ids as `Number`, names as `String`):
+    /// ```json
+    /// {
+    ///   "expectedSkillSlots": 56,
+    ///   "starterAreas": [{ "startAreaId": 0, "name": "Holtburg" }, ...],
+    ///   "heritages": [{
+    ///     "heritageId": 1, "name": "Aluvian",
+    ///     "attributeCredits": 330, "skillCredits": 50,
+    ///     "primaryStartAreaIds": [0], "secondaryStartAreaIds": [...],
+    ///     "templates": [{ "templateOption": 0, "name": "Adventurer",
+    ///                     "strength": 10, ..., "normalSkills": [...],
+    ///                     "primarySkills": [...] }, ...],
+    ///     "genders": [{ "genderId": 1, "name": "Male",
+    ///                   "appearance": {
+    ///                     "hairColorCount": 12, "hairStyleCount": 8,
+    ///                     "eyeColorCount": 6, "eyeStripCount": 8,
+    ///                     "noseStripCount": 8, "mouthStripCount": 8,
+    ///                     "headgearCount": 0, "shirtCount": 1,
+    ///                     "pantsCount": 1, "footwearCount": 1,
+    ///                     "clothingColorCount": 16
+    ///                   } }, ...]
+    ///   }, ...],
+    ///   "skills": [{ "skillId": 1, "name": "Axe",
+    ///                "chargenUse": true, "trainedCost": 6,
+    ///                "specializedCost": 4 }, ...]
+    /// }
+    /// ```
+    ///
+    /// Per-heritage skill overrides are NOT inlined into the top-level
+    /// `skills` table — call `getSkillCostsForHeritage(heritageId,
+    /// skillId)` for the heritage-corrected costs at render time.
+    /// (We omit them from the bulk dump because they're sparse and
+    /// the wizard re-reads costs as the user clicks through heritages
+    /// anyway — pushing the override matrix bumps the payload ~3x
+    /// for ~12 heritage × 56 skills of redundant data.)
+    #[wasm_bindgen(js_name = getCharacterGenCatalog)]
+    pub fn get_character_gen_catalog(&self) -> JsValue {
+        let Some(catalog) = self.catalog.borrow().clone() else {
+            return JsValue::NULL;
+        };
+
+        let starter_areas: Vec<_> = catalog
+            .starter_areas
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "startAreaId": a.start_area_id,
+                    "name": a.name,
+                    "locationCount": a.locations.len(),
+                })
+            })
+            .collect();
+
+        let heritages: Vec<_> = catalog
+            .heritage_groups
+            .values()
+            .map(|h| {
+                let templates: Vec<_> = h
+                    .templates
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "templateOption": t.template_option,
+                            "name": t.name,
+                            "iconImage": t.icon_image,
+                            "titleId": t.title_id,
+                            "strength": t.strength,
+                            "endurance": t.endurance,
+                            "coordination": t.coordination,
+                            "quickness": t.quickness,
+                            "focus": t.focus,
+                            "self": t.self_stat,
+                            "normalSkills": t.normal_skills,
+                            "primarySkills": t.primary_skills,
+                        })
+                    })
+                    .collect();
+
+                let genders: Vec<_> = h
+                    .genders
+                    .values()
+                    .map(|g| {
+                        let a = &g.appearance;
+                        serde_json::json!({
+                            "genderId": g.gender_id,
+                            "name": g.name,
+                            "iconImage": g.icon_image,
+                            "appearance": {
+                                "hairColorCount": a.hair_color_ids.len(),
+                                "hairStyleCount": a.hair_styles.len(),
+                                "eyeColorCount": a.eye_color_ids.len(),
+                                "eyeStripCount": a.eye_strips.len(),
+                                "noseStripCount": a.nose_strips.len(),
+                                "mouthStripCount": a.mouth_strips.len(),
+                                "headgearCount": a.headgear.len(),
+                                "shirtCount": a.shirts.len(),
+                                "pantsCount": a.pants.len(),
+                                "footwearCount": a.footwear.len(),
+                                "clothingColorCount": a.clothing_color_ids.len(),
+                            },
+                        })
+                    })
+                    .collect();
+
+                serde_json::json!({
+                    "heritageId": h.heritage_id,
+                    "name": h.name,
+                    "iconImage": h.icon_image,
+                    "attributeCredits": h.attribute_credits,
+                    "skillCredits": h.skill_credits,
+                    "primaryStartAreaIds": h.primary_start_area_ids,
+                    "secondaryStartAreaIds": h.secondary_start_area_ids,
+                    "templates": templates,
+                    "genders": genders,
+                })
+            })
+            .collect();
+
+        let skills: Vec<_> = catalog
+            .skill_definitions
+            .values()
+            .map(|s| {
+                serde_json::json!({
+                    "skillId": s.skill_id,
+                    "name": s.name,
+                    "description": s.description,
+                    "chargenUse": s.chargen_use,
+                    "trainedCost": s.trained_cost,
+                    "specializedCost": s.specialized_cost,
+                })
+            })
+            .collect();
+
+        let json = serde_json::json!({
+            "expectedSkillSlots": catalog.expected_skill_slots,
+            "starterAreas": starter_areas,
+            "heritages": heritages,
+            "skills": skills,
+        });
+
+        serde_wasm_bindgen::to_value(&json).unwrap_or(JsValue::NULL)
+    }
+
+    /// **Wave D.2** — Heritage-aware (skill_id, heritage_id) cost
+    /// lookup. Wizard calls this per-skill per-render so the skill
+    /// page shows the right cost when the heritage has an override
+    /// (e.g. Sho's bow specialization discount per
+    /// `holtburger-content/src/character_gen.rs:85-103`).
+    ///
+    /// Returns `{ trainedCost, specializedCost }` or `null` if either
+    /// the heritage or skill id is unknown to the loaded catalog.
+    #[wasm_bindgen(js_name = getSkillCostsForHeritage)]
+    pub fn get_skill_costs_for_heritage(&self, heritage_id: u32, skill_id: u32) -> JsValue {
+        let Some(catalog) = self.catalog.borrow().clone() else {
+            return JsValue::NULL;
+        };
+        let Some(costs) = catalog.skill_costs_for_heritage(heritage_id, skill_id) else {
+            return JsValue::NULL;
+        };
+        let json = serde_json::json!({
+            "trainedCost": costs.trained_cost,
+            "specializedCost": costs.specialized_cost,
+        });
+        serde_wasm_bindgen::to_value(&json).unwrap_or(JsValue::NULL)
+    }
+
+    /// **Wave D.2** — Rich character-creation submit. Accepts a JS
+    /// object matching `CharacterGenBuildJs`, runs the catalog-aware
+    /// validator (`holtburger_core::CharacterGenBuilder::build_request`,
+    /// which mirrors every server-side check ACE performs in
+    /// `Player.HandleCharacterCreate` — heritage gating, skill-slot
+    /// count, attribute budget, appearance index ranges, name
+    /// non-empty), and on success dispatches a
+    /// `SessionCommand::CreateCharacter` over the recv-loop channel.
+    ///
+    /// `character_slot` is auto-assigned to the next free slot
+    /// when the JS payload doesn't include one (mirrors
+    /// `create_test_character`'s slot-picking at
+    /// `lib.rs:20287`). Callers SHOULD omit `characterSlot` and let
+    /// the wasm pick — the value is implementation-defined per
+    /// retail (see `gmCharGenMainUI::DoFinish` cs:199-203 which also
+    /// doesn't track slot indices client-side).
+    ///
+    /// Errors (all returned as `JsValue::from_str(...)` so JS catches
+    /// can show the message):
+    /// - `"sendCharGenResult: catalog not loaded yet …"` — pre-DAT
+    ///   load; gate on `canCreateCharacter`.
+    /// - `"sendCharGenResult: invalid payload: <serde err>"` — JS
+    ///   passed a malformed object (missing field, wrong type).
+    /// - `"sendCharGenResult: validation: [<errs>]"` —
+    ///   `CharacterGenBuilder` rejected one or more invariants. JS
+    ///   should surface the error list to the wizard's "Failed"
+    ///   state so the user can fix the offending page.
+    /// - `"sendCharGenResult: cmd channel closed (<err>)"` — recv
+    ///   loop has already exited.
+    ///
+    /// Outcome arrives via `poll_events` as `kind=5 CharacterCreated`
+    /// (`lib.rs:13486-89`) on success, or `kind=6
+    /// CharacterCreateFailed` (`:13490`) on server-side rejection.
+    #[wasm_bindgen(js_name = sendCharGenResult)]
+    pub fn send_char_gen_result(&self, payload: JsValue) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        use holtburger_core::{CharacterGenBuild, CharacterGenBuilder};
+        use holtburger_protocol::messages::SkillAdvancementClass;
+
+        let catalog_borrow = self.catalog.borrow();
+        let catalog = catalog_borrow.as_ref().ok_or_else(|| {
+            JsValue::from_str(
+                "sendCharGenResult: catalog not loaded yet. Either start_session was given an empty asset_url, the fetch is still in flight, or the fetch failed. Poll handle.canCreateCharacter to wait.",
+            )
+        })?;
+
+        let payload: CharacterGenBuildJs = serde_wasm_bindgen::from_value(payload)
+            .map_err(|e| JsValue::from_str(&format!("sendCharGenResult: invalid payload: {e}")))?;
+
+        let skill_advancement_classes: Vec<SkillAdvancementClass> = payload
+            .skill_advancement_classes
+            .into_iter()
+            .map(|raw| {
+                SkillAdvancementClass::from_repr(raw).ok_or_else(|| {
+                    JsValue::from_str(&format!(
+                        "sendCharGenResult: invalid SkillAdvancementClass tag {raw} (expected 0..=3)"
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        let character_slot = payload.character_slot.unwrap_or_else(|| {
+            let occupied: Vec<u32> =
+                (0..self.character_list.borrow().len() as u32).collect();
+            first_available_character_slot(&occupied)
+        });
+
+        let build = CharacterGenBuild {
+            heritage: payload.heritage,
+            gender: payload.gender,
+            appearance: payload.appearance.into_wire(),
+            template_option: payload.template_option,
+            strength_ability: payload.strength_ability,
+            endurance_ability: payload.endurance_ability,
+            coordination_ability: payload.coordination_ability,
+            quickness_ability: payload.quickness_ability,
+            focus_ability: payload.focus_ability,
+            self_ability: payload.self_ability,
+            character_slot,
+            skill_advancement_classes,
+            name: payload.name,
+            start_area: payload.start_area,
+            is_admin: false,
+            is_sentinel: false,
+        };
+
+        let builder = CharacterGenBuilder::new(catalog.clone());
+        let request = builder.build_request(build).map_err(|errors| {
+            JsValue::from_str(&format!(
+                "sendCharGenResult: validation: {errors:?}"
+            ))
+        })?;
+
+        self.cmd_tx
+            .unbounded_send(SessionCommand::CreateCharacter {
+                request: Box::new(request),
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("sendCharGenResult: cmd channel closed ({e})"))
+            })
+    }
+}
+

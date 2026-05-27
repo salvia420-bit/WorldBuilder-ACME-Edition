@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "character-creation",
+  "name": "Character Creation",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "3-page wizard (heritage / skills / summary) — port of gmCharGenMainUI (external/chorizite/ACBindings/Generated/Game/CharGen/gmCharGenMainUI.cs:5-220) condensed from retail's 6-step state machine (ECG_HERITAGE→ECG_PROFESSION→ECG_SKILLS→ECG_APPEARANCE→ECG_TOWN→ECG_SUMMARY) into 3 pages.",
+  "icon": "🧙",
+  "iconHidden": true,
+  "entry": "./character-creation.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}

@@ -4,6 +4,7 @@
     { "manifestPath": "./allegiance-panel.manifest.json", "devPath": "./allegiance-panel.manifest.dev.json" },
     { "manifestPath": "./book-panel.manifest.json", "devPath": "./book-panel.manifest.dev.json" },
     { "manifestPath": "./buffs-hud.manifest.json", "devPath": "./buffs-hud.manifest.dev.json" },
+    { "manifestPath": "./character-creation.manifest.json", "devPath": "./character-creation.manifest.dev.json" },
     { "manifestPath": "./chat-panel.manifest.json", "devPath": "./chat-panel.manifest.dev.json" },
     { "manifestPath": "./combat-bar.manifest.json", "devPath": "./combat-bar.manifest.dev.json" },
     { "manifestPath": "./combat-hud.manifest.json", "devPath": "./combat-hud.manifest.dev.json" },
