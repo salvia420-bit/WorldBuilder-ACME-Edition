@@ -1,5 +1,14 @@
 // Right-side inventory window — port of retail gmInventoryUI (layout
-// 0x21000023, 300x362) + gmPaperDollUI (layout 0x21000024, 224x214).
+// 0x21000023, 300x362) + gmPaperDollUI (layout 0x21000037, 800x600).
+//
+// Wave 16 audit: Wave 12 mistakenly read body-slot positions from
+// LayoutDesc 0x21000024 (the 224×214 paperdoll-root that only carries
+// frame chrome). The retail inventory paperdoll element forest actually
+// lives in LayoutDesc 0x21000037 (800×600 "gmInventoryUI" — the
+// inventory window's element template tree), which exposes all 24
+// equipment slots PLUS their hint-icon image DIDs as direct top-level
+// elements (each 32×32, IncorporationFlags 0x1E — Width/Height/ZLevel
+// authoritative; X positions come from this plugin's hand-tuned table).
 //
 // Strategy mirrors the chat panel (PR-L): index.html already has full
 // inventory wiring — `#inventory-panel` + `#inv-equipped` + `#inv-pack`
@@ -30,15 +39,21 @@
 // (0x100005BE) for the burden indicator, but that element is actually
 // a paperdoll button/checkbox (Wave 13 audit finding).
 //
-// Paperdoll has 22 slots total (per retail GetLocationInfoFromElementID
-// at acclient.c:219835): head/chest/abdomen/upper-arm/lower-arm/glove
-// (HandWear)/upper-leg/lower-leg/foot armor; head/chest/upper-leg
-// undershirts; necklace + 2 bracelets + 2 rings (jewelry); cloak; shield;
-// trinket; 3 Aetheria (Sigil1/2/3, hidden until the Aetheria Quest
-// AetheriaBits attribute unlocks them).
+// Paperdoll has 24 slots total (per retail GetLocationInfoFromElementID
+// at acclient.c:219835 + the Wave 16 survey of LayoutDesc 0x21000037):
+// head/chest/abdomen/upper-arm/lower-arm/glove (HandWear)/upper-leg/
+// lower-leg/foot armor; head/chest/upper-leg undershirts; necklace + 2
+// bracelets + 2 rings (jewelry); cloak; weapon-ready + ammo-ready +
+// shield-ready (the three "ReadySlot" hand slots); trinket; 3 Aetheria
+// (SigilOne/Two/Three, hidden until the Aetheria Quest AetheriaBits
+// attribute unlocks them). Wave 12 surveyed the wrong layout
+// (0x21000024) and so missed WeaponReady (0x1000044B) / AmmoReady
+// (0x1000044C) and conflated ShieldReady (0x1000044D, retail element
+// in 0x21000037) with the layout-0x21000024 element 0x100001E1 — Wave
+// 16 dedupes onto the canonical 0x21000037 elementIds.
 
 import { setAcText } from "../ui/ac_font.js";
-import { loadLayout, findElementById, parseElementIdHex, getCachedLayout } from "../ui/ac_layout.js";
+import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
 
@@ -47,15 +62,28 @@ import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.
  *  - `gmInventoryUI` (0x21000023, 300×362) — outer-window children
  *    laying out the paperdoll area, bag column, items grid, title,
  *    and close button. Top-level element 0x100001CC.
- *  - `gmPaperDollUI` (0x21000024, 224×214) — body-slot positions for
- *    the equipment grid only. The real burden indicator lives in
+ *  - `gmInventoryPaperdollElements` (0x21000037, 800×600) — body-slot
+ *    element templates (24 entries) referenced by the inventory layout
+ *    via element IDs 0x10000446-0x100005EA. Each top-level element
+ *    here is a 32×32 template carrying a single child whose ImageDids
+ *    list contains the per-slot hint icon DID (helmet/sword/ring/etc.
+ *    silhouette). Per the Wave 16 layout-0x21000037 survey + the
+ *    Wave-1 UI-port extraction of the 24 hint PNGs into
+ *    data/ui-sprites/slot-hints/. The real burden indicator lives in
  *    `gmFloatyIndicatorsUI` 0x21000071 (status-indicators.js).
  *
- *  Per ElementDesc.element_id mapping (cross-checked against
- *  paperdoll_layout_dump output + retail-anatomy validation):
+ *  Per ElementDesc.element_id mapping (cross-checked against the Wave
+ *  16 layout-0x21000037 dump + retail-anatomy validation):
  */
 const INVENTORY_LAYOUT_ID = 0x21000023;
-const PAPERDOLL_LAYOUT_ID = 0x21000024;
+// LayoutDesc 0x21000037 holds the 24 paperdoll-slot ElementId templates
+// (see PAPERDOLL_SLOTS' elemId column + hintIconDid extraction in
+// data/ui-sprites/slot-hints/). Not loaded at runtime — its elements
+// carry no positioning info (Wave 16 survey: IncorporationFlags 0x1E
+// excludes the X bit on every entry), so applyInventoryLayout reads
+// only the outer 0x21000023 region positions; PAPERDOLL_SLOTS' (x, y)
+// columns are authoritative for body-slot positions.
+// (PAPERDOLL_LAYOUT_ID = 0x21000037 — doc-only constant retired Wave 16)
 const INV_ELEM_PAPERDOLL_AREA = 0x100001CD;
 const INV_ELEM_BAG_COLUMN    = 0x100001CE;
 const INV_ELEM_ITEMS_GRID    = 0x100001CF;
@@ -96,19 +124,34 @@ const TYPE_COLOR = {
 };
 
 // Paperdoll equipment slot table — element IDs + equipMask bits from
-// gmPaperDollUI::GetLocationInfoFromElementID at acclient.c:219835-219952.
-// X+Y coords come straight from gmPaperDollUI-0x21000024 LayoutDesc dump
-// (apps/holtburger-tools/examples/paperdoll_layout_dump.rs). retail
-// layout uses 32×32 slots in a 224×214 anatomy box. The Aetheria slots
-// (SigilOne/Two/Three) and TrinketOne are hidden by retail until the
-// player completes the Aetheria Quest (per acclient.c:220154
-// gmPaperDollUI::UpdateAetheria — gates on PSetIntStat 0x142 AetheriaBits
-// 0x1 / 0x2 / 0x4). We render them as dimmed slots for now; the visibility
-// gating will be wired when the AetheriaBits arrives over the wire.
+// the Wave 16 LayoutDesc 0x21000037 dump (24 top-level 32×32 element
+// templates) + gmPaperDollUI::GetLocationInfoFromElementID at
+// acclient.c:219835-219952 (retail equipMask mapping). Each entry's
+// `hintIconDid` is the 0x06xxxxxx RenderSurface DID carried by the
+// element's child ImageMedia in 0x21000037 — the per-slot "ghost"
+// silhouette (helmet / sword / ring / etc.) that retail draws under
+// the slot frame when the slot is empty. The 24 hint PNGs are
+// extracted to data/ui-sprites/slot-hints/ via WB.Terminal's
+// chorizite-extract-ui-textures command (see Phase 16.1).
 //
-// EquipMask values cite ACE.Entity/Enum/EquipMask.cs (which matches the
-// chorizite Chorizite.Common/Enums/EquipMask.cs verbatim) and the retail
-// element_id table at acclient.c:219839-219951.
+// X+Y coords are the hand-tuned positions Wave 12 derived from the
+// 224×214 paperdoll body anatomy (kept verbatim where the original
+// 22 slots stayed); the 3 new ready-slot entries (WeaponReady /
+// AmmoReady / ShieldReady) land in a bottom hand-row alongside Boots.
+// retail layout 0x21000037 itself does NOT carry XY for these
+// elements (IncorporationFlags 0x1E = Y/Width/Height/ZLevel only —
+// X is null), so the hand-tuned coords here remain authoritative.
+//
+// The Aetheria slots (SigilOne/Two/Three) and TrinketOne are hidden
+// by retail until the player completes the Aetheria Quest (per
+// acclient.c:220154 gmPaperDollUI::UpdateAetheria — gates on
+// PSetIntStat 0x142 AetheriaBits 0x1 / 0x2 / 0x4). We render them as
+// dimmed slots for now; the visibility gating will be wired when the
+// AetheriaBits arrives over the wire.
+//
+// EquipMask values cite ACE.Entity/Enum/EquipMask.cs (which matches
+// the chorizite Chorizite.Common/Enums/EquipMask.cs verbatim) and the
+// retail element_id table at acclient.c:219839-219951.
 //
 // Side values: 0 = both/center, 1 = LEFT, 2 = RIGHT
 // (per acclient.h:4546-4552 UI_SLOT_SIDE_NULL=0, _LEFT=1, _RIGHT=2).
@@ -116,38 +159,45 @@ const TYPE_COLOR = {
 // `item.equipMask & slot.equipMask`.
 const PAPERDOLL_SLOTS = [
   // Top-row chrome (left of head): Necklace + Trinket
-  { elemId: "0x100001DA", equipMask: 0x00008000, x: 8,   y: 8,   name: "Necklace" },
-  { elemId: "0x1000058E", equipMask: 0x04000000, x: 8,   y: 44,  name: "Trinket" },
+  { elemId: "0x10000446", equipMask: 0x00008000, hintIconDid: 0x06000F68, x: 8,   y: 8,   name: "Necklace" },
+  { elemId: "0x1000058F", equipMask: 0x04000000, hintIconDid: 0x06006A6C, x: 8,   y: 44,  name: "Trinket" },
   // Top-row chrome (right of head): 3 Aetheria slots (Blue/Yellow/Red).
   // Per acclient.c:220154 UpdateAetheria — these are SigilOne/Two/Three,
   // hidden until the player unlocks them via the Aetheria Quest at
   // levels 75/150/225 (wiki: "Inventory Panel" -> Equipment Slots -> Other).
-  { elemId: "0x10000595", equipMask: 0x10000000, x: 126, y: 8,   name: "Aetheria Blue" },
-  { elemId: "0x10000596", equipMask: 0x20000000, x: 158, y: 8,   name: "Aetheria Yellow" },
-  { elemId: "0x10000597", equipMask: 0x40000000, x: 190, y: 8,   name: "Aetheria Red" },
+  { elemId: "0x10000592", equipMask: 0x10000000, hintIconDid: 0x06006BEF, x: 126, y: 8,   name: "Aetheria Blue" },
+  { elemId: "0x10000593", equipMask: 0x20000000, hintIconDid: 0x06006BF0, x: 158, y: 8,   name: "Aetheria Yellow" },
+  { elemId: "0x10000594", equipMask: 0x40000000, hintIconDid: 0x06006BF1, x: 190, y: 8,   name: "Aetheria Red" },
   // Head + cloak row (mid-top)
-  { elemId: "0x100005AB", equipMask: 0x00000001, x: 84,  y: 28,  name: "Head" },
-  { elemId: "0x100005E9", equipMask: 0x08000000, x: 192, y: 44,  name: "Cloak" },
+  { elemId: "0x100005B4", equipMask: 0x00000001, hintIconDid: 0x06006D7F, x: 84,  y: 28,  name: "Head" },
+  { elemId: "0x100005EA", equipMask: 0x08000000, hintIconDid: 0x0600708F, x: 192, y: 44,  name: "Cloak" },
   // Upper torso (chest armor + arm armor + chest under-shirt)
-  { elemId: "0x100005AE", equipMask: 0x00000800, x: 48,  y: 64,  name: "Upper arm" },
-  { elemId: "0x100005AC", equipMask: 0x00000200, x: 84,  y: 64,  name: "Chest armor" },
-  { elemId: "0x100001E2", equipMask: 0x00000002, x: 192, y: 80,  name: "Shirt" },
+  { elemId: "0x100005B7", equipMask: 0x00000800, hintIconDid: 0x06006D87, x: 48,  y: 64,  name: "Upper arm" },
+  { elemId: "0x100005B5", equipMask: 0x00000200, hintIconDid: 0x06006D7B, x: 84,  y: 64,  name: "Chest armor" },
+  { elemId: "0x1000044E", equipMask: 0x00000002, hintIconDid: 0x060032C5, x: 192, y: 80,  name: "Shirt" },
   // Mid torso (lower arm + abdomen + wrist L/R)
-  { elemId: "0x100005AF", equipMask: 0x00001000, x: 48,  y: 100, name: "Lower arm" },
-  { elemId: "0x100005AD", equipMask: 0x00000400, x: 84,  y: 100, name: "Abdomen" },
-  { elemId: "0x100001DD", equipMask: 0x00020000, x: 8,   y: 80,  name: "Bracelet (R)" },
-  { elemId: "0x100001DB", equipMask: 0x00010000, x: 156, y: 80,  name: "Bracelet (L)" },
+  { elemId: "0x100005B8", equipMask: 0x00001000, hintIconDid: 0x06006D81, x: 48,  y: 100, name: "Lower arm" },
+  { elemId: "0x100005B6", equipMask: 0x00000400, hintIconDid: 0x06006D79, x: 84,  y: 100, name: "Abdomen" },
+  { elemId: "0x10000449", equipMask: 0x00020000, hintIconDid: 0x06000F6A, x: 8,   y: 80,  name: "Bracelet (R)" },
+  { elemId: "0x10000447", equipMask: 0x00010000, hintIconDid: 0x06000F5D, x: 156, y: 80,  name: "Bracelet (L)" },
   // Upper legs + ring L/R + pants
-  { elemId: "0x100005B1", equipMask: 0x00002000, x: 120, y: 100, name: "Upper leg" },
-  { elemId: "0x100001E3", equipMask: 0x00000040, x: 192, y: 116, name: "Pants" },
-  { elemId: "0x100001DE", equipMask: 0x00080000, x: 8,   y: 116, name: "Ring (R)" },
-  { elemId: "0x100001DC", equipMask: 0x00040000, x: 156, y: 116, name: "Ring (L)" },
+  { elemId: "0x100005BA", equipMask: 0x00002000, hintIconDid: 0x06006D89, x: 120, y: 100, name: "Upper leg" },
+  { elemId: "0x1000044F", equipMask: 0x00000040, hintIconDid: 0x060032C4, x: 192, y: 116, name: "Pants" },
+  { elemId: "0x1000044A", equipMask: 0x00080000, hintIconDid: 0x06000F6B, x: 8,   y: 116, name: "Ring (R)" },
+  { elemId: "0x10000448", equipMask: 0x00040000, hintIconDid: 0x06000F5A, x: 156, y: 116, name: "Ring (L)" },
   // Lower legs + gloves
-  { elemId: "0x100005B0", equipMask: 0x00000020, x: 48,  y: 136, name: "Gloves" },
-  { elemId: "0x100005B2", equipMask: 0x00004000, x: 120, y: 136, name: "Lower leg" },
-  // Feet + shield (shield lives at the lower-left chrome corner)
-  { elemId: "0x100001E1", equipMask: 0x00200000, x: 8,   y: 172, name: "Shield" },
-  { elemId: "0x100005B3", equipMask: 0x00000100, x: 120, y: 172, name: "Boots" },
+  { elemId: "0x100005B9", equipMask: 0x00000020, hintIconDid: 0x06006D7D, x: 48,  y: 136, name: "Gloves" },
+  { elemId: "0x100005BB", equipMask: 0x00004000, hintIconDid: 0x06006D83, x: 120, y: 136, name: "Lower leg" },
+  // Bottom hand-ready row + Boots
+  //   ShieldReady   (Shield bit 0x00200000) — Wave 12 had Shield at the
+  //   same anchor with the old layout-0x21000024 elementId 0x100001E1;
+  //   Wave 16 dedupes onto the canonical 0x21000037 element 0x1000044D.
+  //   WeaponReady   (MeleeWeapon bit 0x00100000) — main-hand slot.
+  //   AmmoReady     (MissileAmmo bit 0x00800000) — quiver/quarrel slot.
+  { elemId: "0x1000044D", equipMask: 0x00200000, hintIconDid: 0x06000F6C, x: 8,   y: 172, name: "Shield" },
+  { elemId: "0x1000044B", equipMask: 0x00100000, hintIconDid: 0x06000F66, x: 48,  y: 172, name: "Weapon" },
+  { elemId: "0x100005BD", equipMask: 0x00000100, hintIconDid: 0x06006D85, x: 120, y: 172, name: "Boots" },
+  { elemId: "0x1000044C", equipMask: 0x00800000, hintIconDid: 0x06000F5E, x: 156, y: 172, name: "Ammo" },
 ];
 
 // Wave 15 — both paperdoll-slot AND items-grid cells route their icon
@@ -247,12 +297,23 @@ function ensureStyles() {
     }
     /* Each paperdoll body-slot — 28x28 brass-trim square positioned at
        the (x, y) from the PAPERDOLL_SLOTS table. Smaller than 32 to
-       fit more slots in the 224x214 anatomy box. */
+       fit more slots in the 224x214 anatomy box. The per-slot hint
+       icon (helmet/sword/ring silhouette from
+       data/ui-sprites/slot-hints/0x06xxxxxx.png) is set via inline
+       background-image during slot creation — see PAPERDOLL_SLOTS
+       entries' hintIconDid field. Each PNG is the retail 32×32
+       child-ImageMedia from LayoutDesc 0x21000037 and already
+       includes the dark stone frame, so we DON'T layer a separate
+       slot-bg image underneath. */
     #${OVERLAY_ID} .hb-inv-doll-slot {
       position: absolute;
       width: 28px;
       height: 28px;
-      background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
+      background-color: rgba(0, 0, 0, 0.4);
+      background-size: 100% 100%;
+      background-repeat: no-repeat;
+      background-position: center;
+      border: 1px solid var(--hb-border-brass-dim);
       image-rendering: pixelated;
       cursor: pointer;
       transition: filter 120ms ease;
@@ -530,9 +591,8 @@ export const manifest = {
   description: "Right-side inventory window (gmInventoryUI 0x21000023)",
 };
 
-// Apply retail layout to the inventory window — body slot positions
-// from gmPaperDollUI + outer-window region positions from
-// gmInventoryUI. Refs:
+// Apply retail layout to the inventory window — outer-window region
+// positions from gmInventoryUI. Refs:
 //   - paperdollEl  → top-level paperdoll panel container
 //   - bagcolEl     → narrow right-side bag-tab column
 //   - itemsEl      → grid of pack-content slots below the paperdoll
@@ -548,13 +608,22 @@ export const manifest = {
 // the Wave 12 attempt to anchor 0x100005BE here was an audit-flagged
 // mislabel (that element is actually a paperdoll button/checkbox).
 //
+// Body-slot positions are hand-tuned per PAPERDOLL_SLOTS' (x, y).
+// The retail layout that holds the slot ElementIds — LayoutDesc
+// 0x21000037 — has IncorporationFlags 0x1E on every slot element
+// (Y/Width/Height/ZLevel meaningful, X explicitly omitted) per the
+// Wave 16 dump, so it carries 32×32 templates with no useful XY for
+// positioning. Wave 16 therefore skips the paperdoll-layout load
+// entirely; the slot ElemIds on PAPERDOLL_SLOTS still cite layout
+// 0x21000037 for the hint-icon DID correspondence, but
+// applySlotPositions is no longer invoked.
+//
 // Both layouts cache after the first call; re-mounts re-apply
 // synchronously. Falls through silently if either layout fails to
 // load — the hand-tuned defaults in CSS stay in effect.
 function applyInventoryLayout(refs) {
-  const apply = ([inv, doll]) => {
+  const apply = (inv) => {
     let appliedRegions = 0;
-    let slotUpdates = { updated: 0, missed: 0 };
 
     if (inv) {
       const paperdollArea = findElementById(inv, INV_ELEM_PAPERDOLL_AREA);
@@ -581,26 +650,21 @@ function applyInventoryLayout(refs) {
       }
     }
 
-    if (doll) {
-      // Body slots — uses the same map findElementById walks.
-      slotUpdates = applySlotPositions(doll, refs.dollSlotEls);
-    }
-
     try {
       window.__diag?.layout?.onInventoryApplied?.({
-        appliedRegions, slotUpdates,
-        invLoaded: !!inv, dollLoaded: !!doll,
+        appliedRegions,
+        // Slot positions are hand-tuned (see PAPERDOLL_SLOTS docstring);
+        // layout 0x21000037 carries no useful XY for the slot elements.
+        slotUpdates: { updated: 0, missed: 0, source: "hand-tuned" },
+        invLoaded: !!inv,
+        dollLoaded: false,
       });
     } catch (_) {}
   };
 
   const cachedInv = getCachedLayout(INVENTORY_LAYOUT_ID);
-  const cachedDoll = getCachedLayout(PAPERDOLL_LAYOUT_ID);
-  if (cachedInv && cachedDoll) { apply([cachedInv, cachedDoll]); return; }
-  Promise.all([
-    loadLayout(INVENTORY_LAYOUT_ID),
-    loadLayout(PAPERDOLL_LAYOUT_ID),
-  ]).then(apply).catch(() => {});
+  if (cachedInv) { apply(cachedInv); return; }
+  loadLayout(INVENTORY_LAYOUT_ID).then(apply).catch(() => {});
 }
 
 function applyBox(el, layoutEl) {
@@ -608,19 +672,6 @@ function applyBox(el, layoutEl) {
   if (typeof layoutEl.y === "number") el.style.top = `${layoutEl.y}px`;
   if (typeof layoutEl.width === "number") el.style.width = `${layoutEl.width}px`;
   if (typeof layoutEl.height === "number") el.style.height = `${layoutEl.height}px`;
-}
-
-function applySlotPositions(layout, dollSlotEls) {
-  let updated = 0, missed = 0;
-  for (const slot of Object.values(dollSlotEls)) {
-    const id = parseElementIdHex(slot.slot.elemId);
-    const el = findElementById(layout, id);
-    if (!el) { missed += 1; continue; }
-    if (typeof el.x === "number") slot.el.style.left = `${el.x}px`;
-    if (typeof el.y === "number") slot.el.style.top = `${el.y}px`;
-    updated += 1;
-  }
-  return { updated, missed };
 }
 
 // Inventory view — mounted inside main-panel's body slot. Returns
@@ -673,6 +724,19 @@ function doMount(parentEl, _ctx) {
     el.dataset.elemId = s.elemId;
     el.style.left = `${s.x}px`;
     el.style.top = `${s.y}px`;
+    // Wave 16 — per-slot hint icon (helmet / sword / ring / etc.
+    // silhouette) drawn under any equipped item. Sourced from
+    // data/ui-sprites/slot-hints/0xXXXXXXXX.png, extracted via
+    // WB.Terminal's chorizite-extract-ui-textures from each retail
+    // 0x21000037 element's child ImageMedia DID. Stored on the slot
+    // dataset so placeEquippedInDoll can restore it on unequip.
+    const hintDid = (s.hintIconDid >>> 0) || 0;
+    if (hintDid) {
+      const hintHex = "0x" + hintDid.toString(16).toUpperCase().padStart(8, "0");
+      const hintUrl = `./data/ui-sprites/slot-hints/${hintHex}.png`;
+      el.style.backgroundImage = `url("${hintUrl}")`;
+      el.dataset.hintUrl = hintUrl;
+    }
     const icon = document.createElement("div");
     icon.className = "hb-inv-doll-icon";
     icon.style.display = "none";
