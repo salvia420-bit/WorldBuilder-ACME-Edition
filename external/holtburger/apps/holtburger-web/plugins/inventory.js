@@ -18,9 +18,18 @@
 // Layout: 300 wide x 362 tall.
 //   - Top 25px: title bar with character name + close button.
 //   - Left 224x214 (below title): paperdoll area for equipped items.
-//   - Right 60x ~340: narrow bag column (placeholder tabs for now).
-//   - Lower 234x ~120: items grid for pack items (32x32 slots).
-//   - Bottom 120x14: burden meter (placeholder until equipMask wiring).
+//   - Right 61x339: bag-tab column (1 main pack + 7 side packs = 8 tabs,
+//     per the Inventory Panel wiki article; 9 with the Shadow of the
+//     Seventh Mule augmentation, gated on server-side state).
+//   - Lower 234x120: items grid for pack items (32x32 slots).
+//   - Bottom 120x14: burden meter (driven by playerBurden getter).
+//
+// Paperdoll has 22 slots total (per retail GetLocationInfoFromElementID
+// at acclient.c:219835): head/chest/abdomen/upper-arm/lower-arm/glove
+// (HandWear)/upper-leg/lower-leg/foot armor; head/chest/upper-leg
+// undershirts; necklace + 2 bracelets + 2 rings (jewelry); cloak; shield;
+// trinket; 3 Aetheria (Sigil1/2/3, hidden until the Aetheria Quest
+// AetheriaBits attribute unlocks them).
 
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, parseElementIdHex, getCachedLayout } from "../ui/ac_layout.js";
@@ -65,44 +74,58 @@ const TYPE_COLOR = {
 };
 
 // Paperdoll equipment slot table — element IDs + equipMask bits from
-// gmPaperDollUI::GetLocationInfoFromElementID at acclient.c:219835.
-// Y coords come from the gmPaperDollUI-0x21000024 LayoutDesc JSON;
-// X coords are hand-tuned to approximate retail body anatomy in the
-// 224x214 paperdoll area (no X data is set in the LayoutDesc — retail
-// computes it via parent flow at runtime).
+// gmPaperDollUI::GetLocationInfoFromElementID at acclient.c:219835-219952.
+// X+Y coords come straight from gmPaperDollUI-0x21000024 LayoutDesc dump
+// (apps/holtburger-tools/examples/paperdoll_layout_dump.rs). retail
+// layout uses 32×32 slots in a 224×214 anatomy box. The Aetheria slots
+// (SigilOne/Two/Three) and TrinketOne are hidden by retail until the
+// player completes the Aetheria Quest (per acclient.c:220154
+// gmPaperDollUI::UpdateAetheria — gates on PSetIntStat 0x142 AetheriaBits
+// 0x1 / 0x2 / 0x4). We render them as dimmed slots for now; the visibility
+// gating will be wired when the AetheriaBits arrives over the wire.
 //
-// Side values: 0 = both/center, 1 = right-arm, 2 = left-arm.
+// EquipMask values cite ACE.Entity/Enum/EquipMask.cs (which matches the
+// chorizite Chorizite.Common/Enums/EquipMask.cs verbatim) and the retail
+// element_id table at acclient.c:219839-219951.
+//
+// Side values: 0 = both/center, 1 = LEFT, 2 = RIGHT
+// (per acclient.h:4546-4552 UI_SLOT_SIDE_NULL=0, _LEFT=1, _RIGHT=2).
 // Equipped items render in the slot whose equipMask bit matches
 // `item.equipMask & slot.equipMask`.
 const PAPERDOLL_SLOTS = [
-  // Head row
-  { elemId: "0x100005AB", equipMask: 0x00000001, x: 96,  y: 8,   name: "Head" },
-  { elemId: "0x100001DA", equipMask: 0x00008000, x: 96,  y: 44,  name: "Necklace" },
-  { elemId: "0x100001E1", equipMask: 0x00200000, x: 64,  y: 28,  name: "Earring (L)" },
-  // Shoulders / upper torso
-  { elemId: "0x100005AE", equipMask: 0x00000800, x: 32,  y: 64,  name: "Upper arm (L)" },
-  { elemId: "0x100005AC", equipMask: 0x00000200, x: 96,  y: 64,  name: "Chest armor" },
-  { elemId: "0x100001E2", equipMask: 0x00000002, x: 64,  y: 64,  name: "Chest under" },
-  { elemId: "0x10000596", equipMask: 0x20000000, x: 160, y: 64,  name: "Right hand" },
-  { elemId: "0x100005E9", equipMask: 0x08000000, x: 192, y: 64,  name: "Wand/staff" },
-  // Mid torso
-  { elemId: "0x100005AF", equipMask: 0x00001000, x: 32,  y: 100, name: "Lower arm (L)" },
-  { elemId: "0x100005AD", equipMask: 0x00000400, x: 96,  y: 100, name: "Abdomen" },
-  { elemId: "0x10000595", equipMask: 0x10000000, x: 160, y: 100, name: "Shield" },
-  { elemId: "0x1000050E", equipMask: 0x04000000, x: 192, y: 100, name: "Aetheria" },
-  // Hands / waist row
-  { elemId: "0x100001DB", equipMask: 0x00010000, x: 32,  y: 116, name: "Ring (R)" },
-  { elemId: "0x100005B0", equipMask: 0x00000020, x: 64,  y: 116, name: "Gloves" },
-  { elemId: "0x100001DD", equipMask: 0x00020000, x: 160, y: 116, name: "Ring (L)" },
-  { elemId: "0x10000597", equipMask: 0x40000000, x: 192, y: 116, name: "Missile" },
-  // Legs
-  { elemId: "0x100005B1", equipMask: 0x00002000, x: 64,  y: 136, name: "Upper leg" },
-  { elemId: "0x100001E3", equipMask: 0x00000040, x: 96,  y: 136, name: "Underpants" },
-  { elemId: "0x100005B2", equipMask: 0x00004000, x: 128, y: 136, name: "Lower leg" },
-  { elemId: "0x100001DC", equipMask: 0x00040000, x: 32,  y: 152, name: "Bracelet (R)" },
-  { elemId: "0x100001DE", equipMask: 0x00080000, x: 160, y: 152, name: "Bracelet (L)" },
-  // Feet
-  { elemId: "0x100005B3", equipMask: 0x00000100, x: 96,  y: 172, name: "Boots" },
+  // Top-row chrome (left of head): Necklace + Trinket
+  { elemId: "0x100001DA", equipMask: 0x00008000, x: 8,   y: 8,   name: "Necklace" },
+  { elemId: "0x1000058E", equipMask: 0x04000000, x: 8,   y: 44,  name: "Trinket" },
+  // Top-row chrome (right of head): 3 Aetheria slots (Blue/Yellow/Red).
+  // Per acclient.c:220154 UpdateAetheria — these are SigilOne/Two/Three,
+  // hidden until the player unlocks them via the Aetheria Quest at
+  // levels 75/150/225 (wiki: "Inventory Panel" -> Equipment Slots -> Other).
+  { elemId: "0x10000595", equipMask: 0x10000000, x: 126, y: 8,   name: "Aetheria Blue" },
+  { elemId: "0x10000596", equipMask: 0x20000000, x: 158, y: 8,   name: "Aetheria Yellow" },
+  { elemId: "0x10000597", equipMask: 0x40000000, x: 190, y: 8,   name: "Aetheria Red" },
+  // Head + cloak row (mid-top)
+  { elemId: "0x100005AB", equipMask: 0x00000001, x: 84,  y: 28,  name: "Head" },
+  { elemId: "0x100005E9", equipMask: 0x08000000, x: 192, y: 44,  name: "Cloak" },
+  // Upper torso (chest armor + arm armor + chest under-shirt)
+  { elemId: "0x100005AE", equipMask: 0x00000800, x: 48,  y: 64,  name: "Upper arm" },
+  { elemId: "0x100005AC", equipMask: 0x00000200, x: 84,  y: 64,  name: "Chest armor" },
+  { elemId: "0x100001E2", equipMask: 0x00000002, x: 192, y: 80,  name: "Shirt" },
+  // Mid torso (lower arm + abdomen + wrist L/R)
+  { elemId: "0x100005AF", equipMask: 0x00001000, x: 48,  y: 100, name: "Lower arm" },
+  { elemId: "0x100005AD", equipMask: 0x00000400, x: 84,  y: 100, name: "Abdomen" },
+  { elemId: "0x100001DD", equipMask: 0x00020000, x: 8,   y: 80,  name: "Bracelet (R)" },
+  { elemId: "0x100001DB", equipMask: 0x00010000, x: 156, y: 80,  name: "Bracelet (L)" },
+  // Upper legs + ring L/R + pants
+  { elemId: "0x100005B1", equipMask: 0x00002000, x: 120, y: 100, name: "Upper leg" },
+  { elemId: "0x100001E3", equipMask: 0x00000040, x: 192, y: 116, name: "Pants" },
+  { elemId: "0x100001DE", equipMask: 0x00080000, x: 8,   y: 116, name: "Ring (R)" },
+  { elemId: "0x100001DC", equipMask: 0x00040000, x: 156, y: 116, name: "Ring (L)" },
+  // Lower legs + gloves
+  { elemId: "0x100005B0", equipMask: 0x00000020, x: 48,  y: 136, name: "Gloves" },
+  { elemId: "0x100005B2", equipMask: 0x00004000, x: 120, y: 136, name: "Lower leg" },
+  // Feet + shield (shield lives at the lower-left chrome corner)
+  { elemId: "0x100001E1", equipMask: 0x00200000, x: 8,   y: 172, name: "Shield" },
+  { elemId: "0x100005B3", equipMask: 0x00000100, x: 120, y: 172, name: "Boots" },
 ];
 
 const iconCache = new Map();
@@ -253,13 +276,16 @@ function ensureStyles() {
       z-index: 70;
     }
     #${OVERLAY_ID} .hb-inv-doll-slot:hover .hb-inv-doll-tip { opacity: 1; }
-    /* Bag column — narrow vertical strip on the right. */
+    /* Bag column — narrow vertical strip on the right. Tall enough
+       to fit 8 tabs (main + 7 side packs) plus future Mule-aug 9th.
+       Retail's LayoutDesc 0x21000023 sets this to 61×339; the CSS
+       fallback uses a similar height in case the layout doesn't load. */
     #${OVERLAY_ID} .hb-inv-bagcol {
       position: absolute;
       top: ${TITLE_H + 4}px;
       right: 6px;
       width: ${BAG_COL_W}px;
-      height: ${PAPERDOLL_H}px;
+      height: 308px;
       display: flex;
       flex-direction: column;
       gap: 2px;
@@ -696,14 +722,21 @@ function doMount(parentEl, _ctx) {
   }
   overlay.appendChild(paperdoll);
 
-  // Bag column — 4 placeholder tabs for now (Main, Bag 1, 2, 3).
+  // Bag column — 8 tabs per retail (1 main + 7 side packs, per the
+  // Inventory Panel wiki article: "The top bag is your main inventory,
+  // and below it are slots for 7 additional containers."). The
+  // Shadow of the Seventh Mule augmentation can add a 9th — that's a
+  // server-side biota state we'll surface when the augmentation wire
+  // event lands (out of scope for Wave 12). Slots without an owned
+  // pack stay dim/empty until the player drags a pack in.
+  const BAG_COUNT = 8;
   const bagCol = document.createElement("div");
   bagCol.className = "hb-inv-bagcol";
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < BAG_COUNT; i++) {
     const tab = document.createElement("div");
     tab.className = "hb-inv-bagtab" + (i === 0 ? " selected" : "");
     tab.dataset.bag = String(i);
-    tab.title = i === 0 ? "Main pack" : `Bag ${i}`;
+    tab.title = i === 0 ? "Main pack" : `Side pack ${i}`;
     tab.addEventListener("click", () => {
       bagCol.querySelectorAll(".hb-inv-bagtab").forEach((t) => t.classList.remove("selected"));
       tab.classList.add("selected");

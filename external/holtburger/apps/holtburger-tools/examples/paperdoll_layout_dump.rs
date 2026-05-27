@@ -83,27 +83,34 @@ fn find_by_id<'a>(
     None
 }
 
+// Labels reflect the retail acclient.c:219835 (gmPaperDollUI::
+// GetLocationInfoFromElementID) elemID -> ACE EquipMask mapping. The
+// earlier table had several elements mislabeled (Earring/Wand/Right
+// hand/Missile don't exist on the AC paperdoll — those four elements
+// are actually Shield/Cloak/SigilTwo/SigilThree per the retail switch
+// statement). Trinket lives at 0x1000058E, not 0x1000050E (the latter
+// is a chat floating-target element).
 const PAPERDOLL_ELEMS: &[(&str, &str)] = &[
     ("0x100005AB", "Head"),
     ("0x100001DA", "Necklace"),
-    ("0x100001E1", "Earring (L)"),
-    ("0x100005AE", "Upper arm (L)"),
+    ("0x1000058E", "Trinket (TrinketOne)"),
+    ("0x100005AE", "Upper arm armor"),
     ("0x100005AC", "Chest armor"),
-    ("0x100001E2", "Chest under"),
-    ("0x10000596", "Right hand"),
-    ("0x100005E9", "Wand/staff"),
-    ("0x100005AF", "Lower arm (L)"),
-    ("0x100005AD", "Abdomen"),
-    ("0x10000595", "Shield"),
-    ("0x1000050E", "Aetheria"),
-    ("0x100001DB", "Ring (R)"),
-    ("0x100005B0", "Gloves"),
-    ("0x100001DD", "Ring (L)"),
-    ("0x10000597", "Missile"),
-    ("0x100005B1", "Upper leg"),
-    ("0x100001E3", "Underpants"),
-    ("0x100005B2", "Lower leg"),
-    ("0x100001DC", "Bracelet (R)"),
-    ("0x100001DE", "Bracelet (L)"),
-    ("0x100005B3", "Boots"),
+    ("0x100001E2", "Shirt (ChestWear)"),
+    ("0x100005E9", "Cloak"),
+    ("0x10000595", "Aetheria Blue (SigilOne)"),
+    ("0x10000596", "Aetheria Yellow (SigilTwo)"),
+    ("0x10000597", "Aetheria Red (SigilThree)"),
+    ("0x100005AF", "Lower arm armor"),
+    ("0x100005AD", "Abdomen armor"),
+    ("0x100001DB", "Bracelet Left (WristWearLeft)"),
+    ("0x100005B0", "Gloves (HandWear)"),
+    ("0x100001DD", "Bracelet Right (WristWearRight)"),
+    ("0x100005B1", "Upper leg armor"),
+    ("0x100001E3", "Pants (UpperLegWear)"),
+    ("0x100005B2", "Lower leg armor"),
+    ("0x100001DC", "Ring Left (FingerWearLeft)"),
+    ("0x100001DE", "Ring Right (FingerWearRight)"),
+    ("0x100001E1", "Shield"),
+    ("0x100005B3", "Boots (FootWear)"),
 ];
