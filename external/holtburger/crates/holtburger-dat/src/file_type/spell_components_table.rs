@@ -124,6 +124,15 @@ pub struct SpellComponentsTable {
 
 impl SpellComponentsTable {
     pub const FILE_ID: u32 = 0x0E00000F;
+
+    /// Parse a `SpellComponentsTable` from raw `client_portal.dat`
+    /// bytes. Mirrors the `Font::unpack` / `LanguageString::unpack`
+    /// pattern so wasm-side callers don't take a direct `binrw`
+    /// dependency.
+    pub fn unpack(data: &[u8]) -> binrw::BinResult<Self> {
+        let mut cursor = binrw::io::Cursor::new(data);
+        <Self as binrw::BinRead>::read_options(&mut cursor, binrw::Endian::Little, ())
+    }
 }
 
 impl StaticResourceKey for SpellComponentsTable {

@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "dye-preview",
+  "name": "Dye Preview",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Preview tooltip when a Dye Pot is dragged over a dyeable armor — wiki-grounded outcome via wasm compositor.",
+  "icon": "🎨",
+  "iconHidden": true,
+  "entry": "./dye-preview.js",
+  "environments": ["browser"],
+  "slots": ["overlay", "watcher"]
+}

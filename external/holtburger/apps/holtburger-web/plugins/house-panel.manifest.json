@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "house-panel",
+  "name": "House",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Housing MVP — Buy / Query / Abandon / Rent (send-side only)",
+  "icon": "H",
+  "iconHidden": true,
+  "entry": "./house-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}

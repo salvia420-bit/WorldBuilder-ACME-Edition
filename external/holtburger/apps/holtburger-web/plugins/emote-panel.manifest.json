@@ -1,0 +1,15 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "emote-panel",
+  "name": "Emote Palette",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Categorized emote action picker (Wave F.6, CEmoteTable taxonomy). Shift+F2 toggles the panel. Surfaces all 122 EmoteType discriminants with field-shape hints; click an action for dispatch (Motion routes through soul-emote slash commands).",
+  "icon": "☺",
+  "entry": "./emote-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "Shift+F2", "label": "Toggle Emote Palette" }
+  ]
+}

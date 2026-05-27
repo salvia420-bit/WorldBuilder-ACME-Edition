@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "status-indicators",
+  "name": "Status Indicators",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Top-left status icons (gmFloatyIndicatorsUI 0x21000071)",
+  "icon": "⚠",
+  "iconHidden": true,
+  "entry": "./status-indicators.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"]
+}

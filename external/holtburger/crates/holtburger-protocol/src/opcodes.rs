@@ -453,8 +453,15 @@ pub enum GameActionOpcode {
     AddFriend = 0x0018,
     /// C2S: Remove a player from the friends list.
     RemoveFriend = 0x0017,
-    // /// C2S: Query detailed allegiance hierarchy and status.
-    // AllegianceInfoRequest = 0x027B,
+    /// C2S: Request allegiance info for a player by name. Server
+    /// responds with a `GameEventOpcode::AllegianceInfoResponse`
+    /// (0x027C) carrying the same `AllegianceHierarchy` payload as a
+    /// regular `AllegianceUpdate`. ACE handler:
+    /// `Player_Allegiance.cs:914 HandleActionAllegianceInfoRequest`.
+    /// Chorizite shape:
+    /// `Chorizite.ACProtocol/Messages/C2S/Actions/Allegiance_AllegianceInfoRequest.generated.cs`
+    /// — one `string16L` payload (`TargetName`).
+    AllegianceInfoRequest = 0x027B,
     // /// C2S: Query the name of an allegiance member.
     // QueryAllegianceName = 0x0030,
     // /// C2S: Clear a custom name for an allegiance member.

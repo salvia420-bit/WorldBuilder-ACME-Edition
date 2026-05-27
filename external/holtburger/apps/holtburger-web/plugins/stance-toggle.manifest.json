@@ -1,0 +1,12 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "stance-toggle",
+  "name": "Combat Stance",
+  "author": "holtburger",
+  "version": "0.0.1",
+  "description": "Peace ↔ Combat toggle (retail dove icon equivalent)",
+  "icon": "⚐",
+  "entry": "./stance-toggle.js",
+  "environments": ["browser"],
+  "slots": ["bar"]
+}

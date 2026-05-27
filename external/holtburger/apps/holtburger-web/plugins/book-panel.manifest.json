@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "book-panel",
+  "name": "Book",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Book reader / editor — auto-opens on kind=24 BookUpdated, wires Use/Edit/Add/Delete + Set Inscription",
+  "icon": "B",
+  "iconHidden": true,
+  "entry": "./book-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "radar",
+  "name": "Compass",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Top-right compass/radar disk (retail gmRadarUI 0x21000074)",
+  "icon": "🧭",
+  "iconHidden": true,
+  "entry": "./radar.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"]
+}

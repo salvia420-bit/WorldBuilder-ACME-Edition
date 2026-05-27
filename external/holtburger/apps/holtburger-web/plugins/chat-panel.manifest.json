@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "chat-panel",
+  "name": "Chat",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Bottom-left chat panel (retail gmFloatyMainChatUI 0x2100006F)",
+  "icon": "💬",
+  "iconHidden": true,
+  "entry": "./chat-panel.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"]
+}

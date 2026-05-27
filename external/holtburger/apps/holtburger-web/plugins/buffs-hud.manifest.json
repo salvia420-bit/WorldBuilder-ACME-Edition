@@ -1,0 +1,14 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "buffs-hud",
+  "name": "Buffs",
+  "author": "holtburger",
+  "version": "0.3.0",
+  "description": "Active-spells strip — buffs, debuffs, cooldowns with statMod display",
+  "icon": "✦",
+  "iconHidden": true,
+  "entry": "./buffs-hud.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"],
+  "dependencies": ["spellbook@^0.2.0?"]
+}

@@ -11,6 +11,7 @@ pub mod terrain_subdiv;
 pub mod utils;
 pub mod walk;
 pub mod weenie;
+pub mod well_known_ids;
 
 use crate::utils::FileExtPolyfill;
 pub use archive::{HbaReader, HbaStreamWriter, HbaWriter};

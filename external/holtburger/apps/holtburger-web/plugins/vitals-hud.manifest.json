@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "vitals-hud",
+  "name": "Vitals",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Top-of-screen HP/Stamina/Mana bars (always visible)",
+  "icon": "❤",
+  "iconHidden": true,
+  "entry": "./vitals-hud.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"]
+}

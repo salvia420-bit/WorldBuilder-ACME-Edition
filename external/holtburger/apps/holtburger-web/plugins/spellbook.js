@@ -690,6 +690,22 @@ function showSpellDetail(meta, anchorX, anchorY, componentNames) {
     el.appendChild(desc);
   }
 
+  // Wave F.1 follow-on (2026-05-27) — SpellCategoryDB name lookup.
+  // Shows the stacking-group name (e.g. "StrengthRaising") so the
+  // player can see at a glance which spells conflict for the
+  // refresh-overwrites-existing-buff rule.
+  if (meta.category != null && typeof window?.getSpellCategoryName === "function") {
+    try {
+      const catName = window.getSpellCategoryName(meta.category >>> 0);
+      if (catName) {
+        const catRow = document.createElement("div");
+        catRow.className = "hb-sb-detail-meta";
+        setAcText(catRow, `Category: ${catName} (#${meta.category})`);
+        el.appendChild(catRow);
+      }
+    } catch (_) {}
+  }
+
   if (Array.isArray(meta.components) && meta.components.length > 0) {
     const comps = document.createElement("div");
     comps.className = "hb-sb-detail-comps";

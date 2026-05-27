@@ -13432,6 +13432,16 @@ enum SessionCommand {
     AbandonContract {
         contract_id: u32,
     },
+    /// Wave F.3 follow-on (2026-05-27): JS-side allegiance-info refresh
+    /// action. Sends `GameAction::AllegianceInfoRequest` (sub-opcode
+    /// 0x027B) carrying a target player name. ACE
+    /// `Player.HandleActionAllegianceInfoRequest` responds with a
+    /// `GameEventAllegianceInfoResponse` (0x027C); the recv-loop's
+    /// allegiance arm folds it into `latest_allegiance` and the JS
+    /// allegiance-panel re-renders on the `allegianceUpdated` event.
+    AllegianceInfoRequest {
+        target_name: String,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -29619,6 +29629,42 @@ async fn recv_loop(
                             "[contracts/abandon] contract_id={contract_id}",
                         ));
                     }
+                    Some(SessionCommand::AllegianceInfoRequest { target_name }) => {
+                        // Wave F.3 follow-on (2026-05-27):
+                        // AllegianceInfoRequest (0x027B). ACE:
+                        // `Player.HandleActionAllegianceInfoRequest` →
+                        // permission-checks ≥ Seneschal, looks up the
+                        // player by name, enqueues an
+                        // `AllegianceInfoResponse` (0x027C) which the
+                        // recv-loop's allegiance arm folds into
+                        // `latest_allegiance`.
+                        use holtburger_protocol::messages::{
+                            AllegianceInfoRequestActionData, GameAction,
+                        };
+                        let action = GameAction::AllegianceInfoRequest(Box::new(
+                            AllegianceInfoRequestActionData {
+                                target_name: target_name.clone(),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(AllegianceInfoRequest): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "allegiance_info_request: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[allegiance/info-request] target={target_name:?}",
+                        ));
+                    }
                     Some(SessionCommand::TargetedMissileAttack {
                         target_guid,
                         attack_height,
@@ -34443,6 +34489,304 @@ mod contracts_tests {
         );
         let snap = cell.borrow().clone().expect("snapshot");
         assert_eq!(snap.display_contract_id, 0x0014, "display pin preserved");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Wave F follow-on cluster (2026-05-27)
+//
+// Three deferred items from Waves F.1, F.3, F.5:
+//
+//   1. `getSpellComponentRecord(component_id)` — on-demand DAT load of
+//      `SpellComponentsTable` (0x0E00000F). Cached in a thread-local
+//      after first call. Doesn't touch `WorldBootstrap`.
+//
+//   2. `getSpellCategoryName(category_id)` — pure synchronous lookup
+//      backed by `holtburger_protocol::messages::magic::spell_category_db`
+//      (729-entry static binary-searched table).
+//
+//   3. `getContractRecord(contract_id)` — on-demand DAT load of
+//      `ContractTable` (0x0E00001D). Cached in a thread-local after
+//      first call. Doesn't touch `WorldBootstrap`.
+//
+//   4. `SessionHandle::requestAllegianceInfo(target_name)` — C2S
+//      `GameAction::AllegianceInfoRequest` (0x027B). Sends through the
+//      same recv-loop dispatch as `AbandonContract`. Server replies
+//      with an `AllegianceInfoResponse` (0x027C) that the existing
+//      allegiance arm folds into `latest_allegiance`.
+// ─────────────────────────────────────────────────────────────────
+
+/// Wave F.1 follow-on (2026-05-27): synchronous SpellCategory name
+/// lookup. Returns the camelCase enum name (e.g.
+/// "StrengthRaising" for category 1) or `null` if the id isn't in
+/// `ACE.Entity.Enum.SpellCategory` (gaps at 622, 700..703).
+///
+/// Pure const-data lookup — no IO. Useful for spellbook tooltips
+/// ("stacks with Strength X") and stacking-conflict UI.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = getSpellCategoryName)]
+pub fn get_spell_category_name(category_id: u32) -> Option<String> {
+    holtburger_protocol::messages::magic::spell_category_db::name(category_id)
+        .map(|s| s.to_string())
+}
+
+/// Thread-local cache for the SpellComponentsTable. The table is small
+/// (~30 KB), so we read it once and keep it in-memory for the page's
+/// lifetime. Single-threaded wasm32 → `RefCell` is sufficient.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static SPELL_COMPONENTS_CACHE: std::cell::RefCell<
+        Option<std::sync::Arc<holtburger_dat::file_type::SpellComponentsTable>>,
+    > = const { std::cell::RefCell::new(None) };
+    static CONTRACT_TABLE_CACHE: std::cell::RefCell<
+        Option<std::sync::Arc<holtburger_dat::file_type::ContractTable>>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// Helper: prefetch + parse a holtburger-dat asset from the global
+/// ResourceSource. Returns the raw bytes after prefetch — the caller
+/// is responsible for parsing them via the type's `unpack()` helper
+/// (this side-steps having to depend on `binrw` directly).
+#[cfg(target_arch = "wasm32")]
+async fn fetch_dat_asset_bytes(
+    namespace: &'static str,
+    file_id: u32,
+    asset_name: &'static str,
+) -> Result<Vec<u8>, anyhow::Error> {
+    use holtburger_dat::ResourceSource;
+
+    let source = global_source::try_global_source().ok_or_else(|| {
+        anyhow::anyhow!("init_resource_source must be called before {asset_name} load")
+    })?;
+    let key = holtburger_dat::ResourceKey::new(namespace, file_id);
+    source
+        .prefetch(&[key])
+        .await
+        .map_err(|e| anyhow::anyhow!("prefetch {asset_name}: {e}"))?;
+    source
+        .get_file_by_key(key)
+        .map_err(|e| anyhow::anyhow!("get {asset_name}: {e}"))
+}
+
+/// Wave F.1 follow-on (2026-05-27): one-shot prefetch of the
+/// SpellComponentsTable (`0x0E00000F`). Page-scoped cached after first
+/// call. JS callers should `await` this once at boot (or lazily
+/// before opening the spellbook) so subsequent
+/// [`get_spell_component_record`] calls hit the in-memory cache.
+///
+/// Pre-Wave-F.1 the spellbook fetched `data/spell-components.json` —
+/// the same data, just generated as a static JSON dump. This export
+/// replaces that dump with a per-page DAT load.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = prefetchSpellComponentsTable)]
+pub async fn prefetch_spell_components_table() -> Result<(), JsValue> {
+    use holtburger_dat::EOR_PORTAL_NAMESPACE;
+    use holtburger_dat::file_type::SpellComponentsTable;
+
+    // Fast-path: cache hit (subsequent calls are no-ops).
+    if SPELL_COMPONENTS_CACHE.with(|cell| cell.borrow().is_some()) {
+        return Ok(());
+    }
+    let bytes = fetch_dat_asset_bytes(
+        EOR_PORTAL_NAMESPACE,
+        SpellComponentsTable::FILE_ID,
+        "spell components table",
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&format!("prefetch_spell_components_table: {e}")))?;
+    let table = SpellComponentsTable::unpack(&bytes).map_err(|e| {
+        JsValue::from_str(&format!("parse spell components table: {e}"))
+    })?;
+    SPELL_COMPONENTS_CACHE.with(|cell| {
+        *cell.borrow_mut() = Some(std::sync::Arc::new(table));
+    });
+    Ok(())
+}
+
+/// Wave F.1 follow-on (2026-05-27): per-id SpellComponent record
+/// lookup. Returns `null` if the table hasn't been prefetched yet
+/// (call [`prefetch_spell_components_table`] first) or the id isn't
+/// in retail's component table (1..198 with gaps).
+///
+/// Output shape mirrors `holtburger_dat::file_type::SpellComponent`:
+///
+/// ```text
+///   { id, name, category, iconDid, type, typeName,
+///     gesture, gestureName, time, text, cdm }
+/// ```
+///
+/// `typeName` follows `SpellComponentType`:
+/// 1=Scarab, 2=Herb, 3=Powder, 4=Potion, 5=Talisman, 6=Taper.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = getSpellComponentRecord)]
+pub fn get_spell_component_record(component_id: u32) -> JsValue {
+    let table = match SPELL_COMPONENTS_CACHE.with(|cell| cell.borrow().clone()) {
+        Some(t) => t,
+        None => return JsValue::NULL,
+    };
+    let Some(component) = table.components.get(&component_id) else {
+        return JsValue::NULL;
+    };
+    let type_name = match component.ty {
+        1 => "Scarab",
+        2 => "Herb",
+        3 => "Powder",
+        4 => "Potion",
+        5 => "Talisman",
+        6 => "Taper",
+        _ => "Unknown",
+    };
+    let gesture_name = match component.gesture {
+        // Scarab MagicPowerUpNN (acclient.h MotionCommand)
+        0x1000_006F => Some("MagicPowerUp01"),
+        0x1000_0070 => Some("MagicPowerUp02"),
+        0x1000_0071 => Some("MagicPowerUp03"),
+        0x1000_0072 => Some("MagicPowerUp04"),
+        0x1000_0073 => Some("MagicPowerUp05"),
+        0x1000_0074 => Some("MagicPowerUp06"),
+        0x1000_0075 => Some("MagicPowerUp07"),
+        0x1000_0076 => Some("MagicPowerUp08"),
+        0x1000_0077 => Some("MagicPowerUp09"),
+        0x1000_0078 => Some("MagicPowerUp10"),
+        // Talisman cast gestures
+        0x4000_002B => Some("MagicBlast"),
+        0x4000_002C => Some("MagicHeal"),
+        0x4000_002D => Some("MagicHarm"),
+        0x4000_002E => Some("MagicEnchantItem"),
+        0x4000_002F => Some("MagicPortal"),
+        0x4000_0030 => Some("MagicPray"),
+        0x4000_0031 => Some("MagicSelfHead"),
+        0x4000_0032 => Some("MagicSelfHeart"),
+        0x4000_0033 => Some("MagicBonus"),
+        0x4000_0034 => Some("MagicClap"),
+        0x4000_0035 => Some("MagicThrowMissile"),
+        0x4000_0036 => Some("MagicTransfer"),
+        0x4000_0039 => Some("MagicVision"),
+        0x4000_00D3 => Some("CastSpell"),
+        _ => None,
+    };
+    let json = serde_json::json!({
+        "id": component_id,
+        "name": component.name,
+        "category": component.category,
+        "iconDid": component.icon_did,
+        "type": component.ty,
+        "typeName": type_name,
+        "gesture": component.gesture,
+        "gestureName": gesture_name,
+        "time": component.time,
+        "text": component.text,
+        "cdm": component.cdm,
+    });
+    serde_wasm_bindgen::to_value(&json).unwrap_or(JsValue::NULL)
+}
+
+/// Wave F.5 follow-on (2026-05-27): one-shot prefetch of the
+/// ContractTable (`0x0E00001D`). Page-scoped cached after first call.
+/// JS callers (contracts-panel) should `await` this once before
+/// rendering so per-contract lookups via
+/// [`get_contract_record`] are synchronous.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = prefetchContractTable)]
+pub async fn prefetch_contract_table() -> Result<(), JsValue> {
+    use holtburger_dat::EOR_PORTAL_NAMESPACE;
+    use holtburger_dat::file_type::ContractTable;
+
+    if CONTRACT_TABLE_CACHE.with(|cell| cell.borrow().is_some()) {
+        return Ok(());
+    }
+    let bytes = fetch_dat_asset_bytes(
+        EOR_PORTAL_NAMESPACE,
+        ContractTable::FILE_ID,
+        "contract table",
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&format!("prefetch_contract_table: {e}")))?;
+    let table = ContractTable::unpack(&bytes)
+        .map_err(|e| JsValue::from_str(&format!("parse contract table: {e}")))?;
+    CONTRACT_TABLE_CACHE.with(|cell| {
+        *cell.borrow_mut() = Some(std::sync::Arc::new(table));
+    });
+    Ok(())
+}
+
+/// Wave F.5 follow-on (2026-05-27): per-id Contract record lookup.
+/// Returns `null` if the table hasn't been prefetched yet (call
+/// [`prefetch_contract_table`] first) or the id isn't in retail's
+/// contract table (sparse 1..655, 322 entries in EoR).
+///
+/// Output shape mirrors `holtburger_dat::file_type::Contract`:
+///
+/// ```text
+///   { id, version, name, description, descriptionProgress,
+///     nameNpcStart, nameNpcEnd,
+///     questflagStamped, questflagStarted, questflagFinished,
+///     questflagProgress, questflagTimer, questflagRepeatTime,
+///     locationNpcStart: { cellId, origin, orientation },
+///     locationNpcEnd:   { cellId, origin, orientation },
+///     locationQuestArea: { cellId, origin, orientation } }
+/// ```
+///
+/// Pre-Wave-F.5-followon the contracts panel shipped `Contract #N`
+/// placeholders for the contract name; this export lets the panel
+/// surface "Jailbreak: Ardent Leader" etc.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = getContractRecord)]
+pub fn get_contract_record(contract_id: u32) -> JsValue {
+    let table = match CONTRACT_TABLE_CACHE.with(|cell| cell.borrow().clone()) {
+        Some(t) => t,
+        None => return JsValue::NULL,
+    };
+    let Some(c) = table.contracts.get(&contract_id) else {
+        return JsValue::NULL;
+    };
+    let pos_to_json = |p: &holtburger_dat::file_type::ContractPosition| {
+        serde_json::json!({
+            "cellId": p.cell_id,
+            "origin": p.origin,
+            "orientation": p.orientation,
+        })
+    };
+    let json = serde_json::json!({
+        "id": contract_id,
+        "version": c.version,
+        "name": c.contract_name,
+        "description": c.description,
+        "descriptionProgress": c.description_progress,
+        "nameNpcStart": c.name_npc_start,
+        "nameNpcEnd": c.name_npc_end,
+        "questflagStamped": c.questflag_stamped,
+        "questflagStarted": c.questflag_started,
+        "questflagFinished": c.questflag_finished,
+        "questflagProgress": c.questflag_progress,
+        "questflagTimer": c.questflag_timer,
+        "questflagRepeatTime": c.questflag_repeat_time,
+        "locationNpcStart": pos_to_json(&c.location_npc_start),
+        "locationNpcEnd": pos_to_json(&c.location_npc_end),
+        "locationQuestArea": pos_to_json(&c.location_quest_area),
+    });
+    serde_wasm_bindgen::to_value(&json).unwrap_or(JsValue::NULL)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SessionHandle {
+    /// Wave F.3 follow-on (2026-05-27): query allegiance info for a
+    /// player by name. Sends `GameAction::AllegianceInfoRequest`
+    /// (sub-opcode 0x027B). Server (ACE
+    /// `Player.HandleActionAllegianceInfoRequest`) responds with a
+    /// `GameEventAllegianceInfoResponse` (0x027C) which the recv-loop
+    /// folds into `latest_allegiance`. UI plugins observe the refresh
+    /// via the existing `allegianceUpdated` bus event.
+    ///
+    /// ACE requires the caller to have `AllegiancePermissionLevel >=
+    /// Seneschal` and the target to be a member of the caller's
+    /// allegiance (else the server returns a chat-message error).
+    #[wasm_bindgen(js_name = requestAllegianceInfo)]
+    pub fn request_allegiance_info(&self, target_name: String) -> Result<(), JsValue> {
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AllegianceInfoRequest { target_name })
+            .map_err(|e| JsValue::from_str(&format!("request_allegiance_info: {e}")))
     }
 }
 

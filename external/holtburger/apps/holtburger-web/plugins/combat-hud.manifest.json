@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "combat-hud",
+  "name": "Combat HUD",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Retail gmCombatUI horizontal bar — auto-shows when in combat stance",
+  "icon": "⚔",
+  "iconHidden": true,
+  "entry": "./combat-hud.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"]
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "allegiance-panel",
+  "name": "Allegiance",
+  "author": "holtburger",
+  "version": "0.3.0",
+  "description": "Allegiance + companion-tab view (gmAllegianceUI 0x2100002F)",
+  "icon": "🛡",
+  "iconHidden": true,
+  "entry": "./allegiance-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "F8", "label": "Toggle Allegiance" }
+  ]
+}

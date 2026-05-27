@@ -576,6 +576,34 @@ impl ProtocolPack for DoAllegianceLockActionActionData {
     }
 }
 
+/// Wave F.3 follow-on (2026-05-27): C2S request to query allegiance
+/// info for a player. Server responds with a
+/// `GameEventOpcode::AllegianceInfoResponse` (0x027C) carrying the
+/// queried player's `AllegianceHierarchy`.
+///
+/// Wire: one `string16L` payload (`TargetName`) — Chorizite shape at
+/// `Chorizite.ACProtocol/Messages/C2S/Actions/Allegiance_AllegianceInfoRequest.generated.cs`.
+/// ACE handler: `Player_Allegiance.cs:914 HandleActionAllegianceInfoRequest`
+/// which permission-checks `>= Seneschal`, looks up the player by
+/// name, and enqueues a `GameEventAllegianceInfoResponse`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AllegianceInfoRequestActionData {
+    pub target_name: String,
+}
+
+impl ProtocolUnpack for AllegianceInfoRequestActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let target_name = read_string16(data, offset)?;
+        Some(Self { target_name })
+    }
+}
+
+impl ProtocolPack for AllegianceInfoRequestActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        write_string16(writer, &self.target_name);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,6 +724,61 @@ mod tests {
 
         let fixture = hex::decode("04030201190200000600426573746965").unwrap();
         assert_pack_unpack_parity(&fixture, &action);
+    }
+
+    #[test]
+    fn test_allegiance_info_request_round_trip() {
+        // Wave F.3 follow-on (2026-05-27): C2S AllegianceInfoRequest
+        // (0x027B). Wire: sequence:u32 + opcode:u32 + string16L+pad.
+        let action = GameActionMessage {
+            sequence: 0x11223344,
+            action: GameAction::AllegianceInfoRequest(Box::new(
+                AllegianceInfoRequestActionData {
+                    target_name: "Bestie".to_string(),
+                },
+            )),
+        };
+
+        let mut buf = Vec::new();
+        action.pack(&mut buf);
+
+        // Layout sanity: u32 seq (4) + u32 opcode (4) + u16 len (2) +
+        // "Bestie" (6) + 0 pad bytes (already 4-aligned at offset 16).
+        // Total = 16 bytes.
+        assert_eq!(buf.len(), 16, "expected 16-byte wire packet");
+        // Opcode at offset 4..8 = 0x027B little-endian.
+        assert_eq!(&buf[4..8], &0x027Bu32.to_le_bytes());
+        // String length at offset 8..10 = 6.
+        assert_eq!(&buf[8..10], &6u16.to_le_bytes());
+        assert_eq!(&buf[10..16], b"Bestie");
+
+        let mut off = 0;
+        let parsed = GameActionMessage::unpack(&buf, &mut off).expect("unpack");
+        assert_eq!(off, buf.len(), "no trailing bytes");
+        assert_eq!(parsed, action);
+    }
+
+    #[test]
+    fn test_allegiance_info_request_alignment_pad() {
+        // 1-char name forces a 1-byte align-pad after the string —
+        // verify the round-trip survives.
+        let action = GameActionMessage {
+            sequence: 1,
+            action: GameAction::AllegianceInfoRequest(Box::new(
+                AllegianceInfoRequestActionData {
+                    target_name: "X".to_string(),
+                },
+            )),
+        };
+        let mut buf = Vec::new();
+        action.pack(&mut buf);
+        // 4 (seq) + 4 (opcode) + 2 (len) + 1 (char) + 1 (pad) = 12
+        assert_eq!(buf.len(), 12, "1-char name + pad should total 12 bytes");
+
+        let mut off = 0;
+        let parsed = GameActionMessage::unpack(&buf, &mut off).expect("unpack");
+        assert_eq!(off, buf.len());
+        assert_eq!(parsed, action);
     }
 
     #[test]

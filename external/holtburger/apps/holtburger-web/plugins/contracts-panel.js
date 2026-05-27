@@ -387,23 +387,69 @@ function formatCountdown(epoch_sec, now_sec) {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
+// Wave F.5 follow-on (2026-05-27) — DAT-backed Contract name lookup.
+//
+// The wasm bundle exposes `prefetchContractTable()` (one-shot async
+// load of `ContractTable` 0x0E00001D) + `getContractRecord(id)`
+// (synchronous per-id lookup returning the full Contract record).
+// Pre-followon the panel shipped `Contract #N` placeholders. Now we
+// surface the real `contractName` (e.g. "Jailbreak: Ardent Leader")
+// and use `nameNpcStart` + `description` for the detail block.
+//
+// The prefetch fires once on first call to `projectTracker` (idempotent
+// thread-local cache on the wasm side; subsequent calls are no-ops).
+// Until the prefetch resolves we keep the placeholder name so the
+// initial render isn't blocked on a DAT load.
+let contractTablePrefetched = false;
+let contractTablePrefetchInFlight = null;
+async function ensureContractTablePrefetched() {
+  if (contractTablePrefetched) return true;
+  if (contractTablePrefetchInFlight) return contractTablePrefetchInFlight;
+  if (typeof window?.prefetchContractTable !== "function") return false;
+  contractTablePrefetchInFlight = (async () => {
+    try {
+      await window.prefetchContractTable();
+      contractTablePrefetched = true;
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      contractTablePrefetchInFlight = null;
+    }
+  })();
+  return contractTablePrefetchInFlight;
+}
+
+function lookupContractRecord(id) {
+  if (typeof window?.getContractRecord !== "function") return null;
+  try {
+    return window.getContractRecord(id >>> 0) ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Project a wasm `ContractTrackerJs` into the shape the row + detail
-// renderers consume. Names come from a future ContractTable DAT
-// lookup (Wave F.5 stretch); for now the panel shows the raw
-// `Contract #N` ID — readability win over surfacing a hex GUID.
+// renderers consume. After the ContractTable prefetch resolves the
+// `name` + `desc` columns flip from `Contract #N` placeholders to the
+// real DAT values via `lookupContractRecord(id)`.
 function projectTracker(t, now_sec) {
   const id = (t.contractId >>> 0) || 0;
   const stage = (t.stage >>> 0) || 0;
   const done = Number(t.timeWhenDone || 0);
   const repeats = Number(t.timeWhenRepeats || 0);
   const isDone = stage === CONTRACT_STAGE.DoneOrPendingRepeat;
-  // Progress column: show "Done" / "Active" / "New" — DAT-side
-  // Contract.NumPickups is a future enhancement (Wave F.5 stretch).
-  // Cooldown column: only meaningful in stage 3 with a future
-  // timeWhenRepeats — else blank.
+  // DAT-backed name lookup (null if table not prefetched yet).
+  const rec = lookupContractRecord(id);
+  const name = rec?.name || `Contract #${id}`;
+  const npc = rec?.nameNpcStart || rec?.nameNpcEnd || "";
+  const desc = rec?.description
+    ? `${rec.description}${npc ? ` (NPC: ${npc})` : ""} — stage ${stageLabel(stage)}.`
+    : `Contract ${id} — stage ${stageLabel(stage)}.`;
   return {
     id,
-    name: `Contract #${id}`,
+    name,
+    npc,
     stage,
     stageLabel: stageLabel(stage),
     progress: stageLabel(stage),
@@ -411,7 +457,8 @@ function projectTracker(t, now_sec) {
     complete: isDone,
     timeWhenDone: done,
     timeWhenRepeats: repeats,
-    desc: `Contract ${id} — stage ${stageLabel(stage)}.`,
+    desc,
+    descriptionProgress: rec?.descriptionProgress || "",
   };
 }
 
@@ -690,12 +737,18 @@ export const view = {
       selectedId = c.id;
       listEl.querySelectorAll(".hb-contracts-row.selected").forEach((r) => r.classList.remove("selected"));
       rowEl?.classList.add("selected");
-      // Wave F.5 (2026-05-27) — wire-derived detail rows. NPC + Location
-      // come from a future ContractTable DAT lookup (stretch); today
-      // we surface stage-derived stats only.
-      setAcText(detVal1El, "—");                 // NPC: DAT lookup (TODO)
-      setAcText(detVal2El, "—");                 // Loc: DAT lookup (TODO)
-      setAcText(detVal3El, c.progress);
+      // Wave F.5 follow-on (2026-05-27) — DAT-backed detail rows.
+      // `c.npc` is `nameNpcStart` from ContractTable; cell_id (NW
+      // 16-bit landblock id) provides a coarse location hint via
+      // the start NPC's `location.cellId`. Falls back to "—" when
+      // the prefetch hasn't resolved yet or the contract has no
+      // start NPC location.
+      const rec = lookupContractRecord(c.id);
+      const cellId = rec?.locationNpcStart?.cellId || 0;
+      const lbId = cellId ? `0x${((cellId >>> 16) & 0xFFFF).toString(16).padStart(4, "0").toUpperCase()}` : "";
+      setAcText(detVal1El, c.npc || "—");
+      setAcText(detVal2El, lbId || "—");
+      setAcText(detVal3El, c.descriptionProgress || c.progress);
       setAcText(detVal4El, c.cooldown);
       setAcText(detDescEl, c.desc);
       actBtn1El.disabled = false;
@@ -823,6 +876,17 @@ export const view = {
       };
     }
     rerender();
+
+    // Wave F.5 follow-on (2026-05-27) — kick off the ContractTable
+    // DAT prefetch in the background. When it resolves, re-render so
+    // the placeholder names flip to the real DAT-backed names. Fire
+    // and forget — the panel stays usable even if the prefetch fails.
+    (async () => {
+      const ok = await ensureContractTablePrefetched();
+      if (ok) {
+        try { rerender(); } catch (_) {}
+      }
+    })();
 
     // Append in retail z-order: list/scrollbar first so detail block
     // and buttons overlay on top.

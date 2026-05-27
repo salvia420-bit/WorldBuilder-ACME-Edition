@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "target-bar",
+  "name": "Target Bar",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Retail gmToolbarUI middle rows — 5 panel shortcuts + Use/Target/Examine + Pack",
+  "icon": "⊙",
+  "iconHidden": true,
+  "entry": "./target-bar.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"]
+}

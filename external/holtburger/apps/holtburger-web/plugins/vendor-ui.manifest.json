@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "vendor-ui",
+  "name": "Vendor Bar",
+  "author": "holtburger",
+  "version": "0.5.0",
+  "description": "Retail-style horizontal vendor bar — auto-opens on kind=12 VendorOpened",
+  "icon": "💰",
+  "iconHidden": true,
+  "entry": "./vendor-ui.js",
+  "environments": ["browser"],
+  "slots": ["panel", "overlay"]
+}

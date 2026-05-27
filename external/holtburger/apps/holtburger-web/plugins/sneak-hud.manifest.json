@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "sneak-hud",
+  "name": "Sneak Attack HUD",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Transient 'Sneak Attack +N DR' overlay on facing-gated swings",
+  "icon": "🗡",
+  "iconHidden": true,
+  "entry": "./sneak-hud.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"]
+}

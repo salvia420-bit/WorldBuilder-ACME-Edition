@@ -1,0 +1,16 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "spellbook",
+  "name": "Spellbook",
+  "author": "holtburger",
+  "version": "0.2.0",
+  "description": "Known spells — main-panel view (S / F5 hotkey).",
+  "icon": "📖",
+  "iconHidden": true,
+  "entry": "./spellbook.js",
+  "environments": ["browser"],
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "F5", "label": "Toggle Spellbook" }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "fellowship-panel",
+  "name": "Fellowship",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Fellowship view (gmFellowshipUI 0x21000030)",
+  "icon": "🤝",
+  "iconHidden": true,
+  "entry": "./fellowship-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}

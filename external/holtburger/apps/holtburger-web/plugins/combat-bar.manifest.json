@@ -1,0 +1,15 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "combat-bar",
+  "name": "Combat",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Stance toggle + attack settings + spell picker",
+  "icon": "⚔",
+  "entry": "./combat-bar.js",
+  "environments": ["browser"],
+  "slots": ["bar", "panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "F4", "label": "Toggle Combat panel" }
+  ]
+}

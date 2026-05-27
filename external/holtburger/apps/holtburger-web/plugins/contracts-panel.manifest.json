@@ -1,0 +1,16 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "contracts-panel",
+  "name": "Contracts",
+  "author": "holtburger",
+  "version": "0.3.0",
+  "description": "Contracts (gmContractsUI 0x21000069 — Wave F.5 wire data + Abandon round-trip)",
+  "icon": "📋",
+  "iconHidden": true,
+  "entry": "./contracts-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "F7", "label": "Toggle Contracts" }
+  ]
+}

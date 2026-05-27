@@ -227,3 +227,127 @@ pub enum AllegianceOfficerLevel {
     Seneschal = 0x02,
     Castellan = 0x03,
 }
+
+/// Vital subset enum: the 7-value `PropertyAttribute2nd` from Chorizite.Common.
+///
+/// Mirrors `Chorizite.Common.Enums.PropertyAttribute2nd`
+/// (`Chorizite.Common/Enums/PropertyAttribute2nd.cs:2-17`, vendored HEAD
+/// `e3b3bd2`). The C# is declared `: ushort` — we use `repr(u16)` to
+/// match (per Chorizite.Common READING_GUIDE §6 idiom mapping).
+///
+/// This is the "secondary attribute" (vital) subset of the wider
+/// `PropertyInt` table — `Health`/`MaxHealth`/`Stamina`/`MaxStamina`/
+/// `Mana`/`MaxMana`. The retail wire payload `UpdateVital` (carried via
+/// `Character::PrivateUpdateVital` per ACPlugin) uses these IDs.
+///
+/// Cross-reference: our existing [`crate::stats::VitalType`] (1/3/5 =
+/// MaxHealth/MaxStamina/MaxMana) covers only the *max* triplet — see
+/// `properties/property_keys/ints.rs` for the `VitalType::from_id`
+/// mapper. `PropertyAttribute2nd` is the Chorizite-canonical 6-vital
+/// pairing with even-IDs (current) and odd-IDs (max). The
+/// `ACPlugin::Character.cs:721` even/odd parity discriminator
+/// (handoff §3 gotcha "UpdateVital even/odd parity") lives here.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    FromRepr,
+    Default,
+)]
+#[repr(u16)]
+pub enum PropertyAttribute2nd {
+    #[default]
+    None = 0x00,
+    MaxHealth = 0x01,
+    Health = 0x02,
+    MaxStamina = 0x03,
+    Stamina = 0x04,
+    MaxMana = 0x05,
+    Mana = 0x06,
+}
+
+impl PropertyAttribute2nd {
+    /// True for the "max" half of each vital pair (odd IDs:
+    /// MaxHealth/MaxStamina/MaxMana).
+    ///
+    /// This is the inverse of the ACPlugin even/odd parity check at
+    /// `Character.cs:721`, where `(int)key % 2 == 0` selects current
+    /// vital. We expose both forms for caller convenience — handoff §3
+    /// "UpdateVital even/odd parity" notes the parity is load-bearing.
+    pub fn is_max(&self) -> bool {
+        (*self as u16) % 2 == 1
+    }
+
+    /// True for the "current" half of each vital pair (even IDs:
+    /// Health/Stamina/Mana). `None = 0x00` is treated as a current-side
+    /// sentinel.
+    pub fn is_current(&self) -> bool {
+        !self.is_max()
+    }
+}
+
+#[cfg(test)]
+mod property_attribute2nd_tests {
+    use super::*;
+
+    /// Asserts `PropertyAttribute2nd` integer values match
+    /// `Chorizite.Common/Enums/PropertyAttribute2nd.cs:2-17` (vendored
+    /// HEAD `e3b3bd2`). All 7 variants enumerated.
+    #[test]
+    fn property_attribute2nd_values_match_chorizite() {
+        assert_eq!(PropertyAttribute2nd::None as u16, 0x00);
+        assert_eq!(PropertyAttribute2nd::MaxHealth as u16, 0x01);
+        assert_eq!(PropertyAttribute2nd::Health as u16, 0x02);
+        assert_eq!(PropertyAttribute2nd::MaxStamina as u16, 0x03);
+        assert_eq!(PropertyAttribute2nd::Stamina as u16, 0x04);
+        assert_eq!(PropertyAttribute2nd::MaxMana as u16, 0x05);
+        assert_eq!(PropertyAttribute2nd::Mana as u16, 0x06);
+
+        // Round-trip via FromRepr
+        assert_eq!(PropertyAttribute2nd::from_repr(0x00), Some(PropertyAttribute2nd::None));
+        assert_eq!(PropertyAttribute2nd::from_repr(0x06), Some(PropertyAttribute2nd::Mana));
+        assert_eq!(PropertyAttribute2nd::from_repr(0x07), None);
+        assert_eq!(PropertyAttribute2nd::from_repr(0xFF), None);
+
+        assert_eq!(PropertyAttribute2nd::default(), PropertyAttribute2nd::None);
+    }
+
+    /// Asserts even/odd parity matches the ACPlugin `Character.cs:721`
+    /// discriminator. Max-IDs are odd; current-IDs are even.
+    #[test]
+    fn property_attribute2nd_parity() {
+        // Max-side (odd IDs)
+        assert!(PropertyAttribute2nd::MaxHealth.is_max());
+        assert!(PropertyAttribute2nd::MaxStamina.is_max());
+        assert!(PropertyAttribute2nd::MaxMana.is_max());
+
+        // Current-side (even IDs)
+        assert!(PropertyAttribute2nd::Health.is_current());
+        assert!(PropertyAttribute2nd::Stamina.is_current());
+        assert!(PropertyAttribute2nd::Mana.is_current());
+
+        // `None = 0x00` falls in the current-side bucket
+        assert!(PropertyAttribute2nd::None.is_current());
+
+        // Disjoint by construction
+        for v in [
+            PropertyAttribute2nd::None,
+            PropertyAttribute2nd::MaxHealth,
+            PropertyAttribute2nd::Health,
+            PropertyAttribute2nd::MaxStamina,
+            PropertyAttribute2nd::Stamina,
+            PropertyAttribute2nd::MaxMana,
+            PropertyAttribute2nd::Mana,
+        ] {
+            assert_ne!(v.is_max(), v.is_current());
+        }
+    }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "radial-menu",
+  "name": "Radial menu",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Right-click context menu for entity actions (Examine/Wield/Use/Drop/Trade/Attack).",
+  "icon": "◎",
+  "iconHidden": true,
+  "entry": "./radial-menu.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}

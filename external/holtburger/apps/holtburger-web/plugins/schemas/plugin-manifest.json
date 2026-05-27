@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://holtburger.local/schemas/plugin-manifest.json",
+  "title": "Holtburger Plugin Manifest",
+  "description": "Schema for plugin manifests under apps/holtburger-web/plugins/. Adapted from Chorizite's PluginManifest (external/chorizite/Chorizite/Chorizite.Core/Plugins/PluginManifest.cs:13-148) for the browser/JS world. Departures (per Chorizite READING_GUIDE §4.1): `entry` instead of `entryFile`; `environments` uses browser/tui/cli rather than Client/Launcher/Inspector; `dependencies` accepts npm-style semver ranges plus Chorizite's `?` optional suffix; `slots` + `hotkeys` are new declarative fields.",
+  "type": "object",
+  "required": ["id", "name", "version"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional JSON-Schema-self-reference; ignored by loader. Permits IDE validation.",
+      "format": "uri"
+    },
+    "id": {
+      "type": "string",
+      "description": "Unique plugin id across all plugins. Mirrors PluginManifest.Id (PluginManifest.cs:23). Reverse-DNS or kebab-case both accepted.",
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.\\-]+$"
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name. Mirrors PluginManifest.Name (PluginManifest.cs:28).",
+      "minLength": 1
+    },
+    "author": {
+      "type": "string",
+      "description": "Plugin author. Mirrors PluginManifest.Author (PluginManifest.cs:33)."
+    },
+    "version": {
+      "type": "string",
+      "description": "Semver-shape version string (e.g. `1.2.3` or `0.1.0-rc.1`). Mirrors PluginManifest.Version (PluginManifest.cs:38) — Chorizite validates with `new Version(Version)`, which is `MAJOR.MINOR[.BUILD[.REVISION]]`. The loader's `parseSemver` accepts npm-style semver plus the C# `System.Version` shape for round-trip compatibility.",
+      "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?(\\.[0-9]+)?(-[0-9A-Za-z.\\-]+)?(\\+[0-9A-Za-z.\\-]+)?$"
+    },
+    "description": {
+      "type": "string",
+      "description": "One-line plugin description. Mirrors PluginManifest.Description (PluginManifest.cs:43)."
+    },
+    "repo": {
+      "type": "string",
+      "description": "Repository URL. Mirrors PluginManifest.Repo (PluginManifest.cs:48).",
+      "format": "uri"
+    },
+    "icon": {
+      "type": "string",
+      "description": "Either a path to an icon file (relative to the manifest), a remote URL, or a single literal glyph (`⚔`, `📖`, etc) used by the bar. Mirrors PluginManifest.Icon (PluginManifest.cs:53). The existing bar slot pattern uses 1-2 character glyphs because the bar renders them via CSS text content, not <img>."
+    },
+    "iconHidden": {
+      "type": "boolean",
+      "description": "Holtburger-specific extension (not in Chorizite). When true, the plugin still runs its `mount` lifecycle but claims no bar real-estate. Used by always-on overlays like vitals-hud/buffs-hud/radar/chat-panel.",
+      "default": false
+    },
+    "dependencies": {
+      "type": "array",
+      "description": "Per-plugin dependency list. Format: `\"<id>@<version>\"` or `\"<id>@<version>?\"` (trailing `?` = optional, resolver continues if missing). Mirrors Chorizite's PluginManager.StartPlugin (PluginManager.cs:191-220). Versions accept npm-style semver ranges (`^1.0.0`, `~1.2`, `1.2.3`, `*`).",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9_.\\-]+(@[^?]+\\??)?$"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "environments": {
+      "type": "array",
+      "description": "Environments in which this plugin runs. Holtburger uses browser/tui/cli (vs. Chorizite's Client/Launcher/Inspector/DocGen per porting-plan §9 item 7). Empty array = all environments.",
+      "items": {
+        "type": "string",
+        "enum": ["browser", "tui", "cli", "all"]
+      },
+      "uniqueItems": true,
+      "default": ["browser"]
+    },
+    "entry": {
+      "type": "string",
+      "description": "Relative module path to the plugin's ESM entry. Loader dispatches by extension (`.js` / `.mjs` = ESM; future `.wasm` reserved). Holtburger uses `entry` instead of Chorizite's `entryFile` per READING_GUIDE §4.1 departures table — this is the same field, renamed."
+    },
+    "slots": {
+      "type": "array",
+      "description": "Declares which UI slots this plugin contributes to (e.g. `bar`, `hud`, `panel`). Lets the loader pre-allocate DOM without instantiating the plugin. NEW vs Chorizite — Chorizite plugins are not slot-typed.",
+      "items": {
+        "type": "string",
+        "enum": ["bar", "hud", "panel", "overlay", "watcher"]
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "hotkeys": {
+      "type": "array",
+      "description": "Declares default key bindings up-front so the settings UI can show them without instantiating the plugin. NEW vs Chorizite.",
+      "items": {
+        "type": "object",
+        "required": ["id", "default"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": {
+            "type": "string",
+            "description": "Default binding string (e.g. `F4`, `Ctrl+I`, `Shift+F2`)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable label for the settings UI."
+          }
+        }
+      },
+      "default": []
+    }
+  }
+}

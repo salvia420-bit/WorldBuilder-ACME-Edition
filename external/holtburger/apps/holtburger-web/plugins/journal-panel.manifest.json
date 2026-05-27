@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "journal-panel",
+  "name": "Journal",
+  "author": "holtburger",
+  "version": "0.2.0",
+  "description": "Quest Journal (gmJournalUI 0x21000066, parchment 9-slice)",
+  "icon": "📜",
+  "iconHidden": true,
+  "entry": "./journal-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}

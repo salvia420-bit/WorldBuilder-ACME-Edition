@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "map-panel",
+  "name": "Map",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Map of Dereth (gmMapUI 0x21000026, world bitmap 0x0600127D)",
+  "icon": "🗺",
+  "iconHidden": true,
+  "entry": "./map-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}

@@ -45,6 +45,11 @@ pub enum GameAction {
     AddAllegianceBan(Box<AddAllegianceBanActionData>),
     RemoveAllegianceBan(Box<RemoveAllegianceBanActionData>),
     BreakAllegianceBoot(Box<BreakAllegianceBootActionData>),
+    /// Wave F.3 follow-on (2026-05-27): C2S request to query
+    /// allegiance info for a player. Server responds with a
+    /// `GameEventOpcode::AllegianceInfoResponse` (0x027C). Wire:
+    /// `string16L TargetName`. Opcode `AllegianceInfoRequest = 0x027B`.
+    AllegianceInfoRequest(Box<AllegianceInfoRequestActionData>),
     DoAllegianceLockAction(Box<DoAllegianceLockActionActionData>),
     RecallAllegianceHometown(Box<RecallAllegianceHometownActionData>),
     AddFriend(Box<AddFriendActionData>),
@@ -201,6 +206,9 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::BreakAllegianceBoot => GameAction::BreakAllegianceBoot(Box::new(
                     BreakAllegianceBootActionData::unpack(data, offset)?,
                 )),
+                GameActionOpcode::AllegianceInfoRequest => GameAction::AllegianceInfoRequest(
+                    Box::new(AllegianceInfoRequestActionData::unpack(data, offset)?),
+                ),
                 GameActionOpcode::DoAllegianceLockAction => GameAction::DoAllegianceLockAction(
                     Box::new(DoAllegianceLockActionActionData::unpack(data, offset)?),
                 ),
@@ -535,6 +543,11 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::BreakAllegianceBoot(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::BreakAllegianceBoot as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AllegianceInfoRequest(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AllegianceInfoRequest as u32)
                     .unwrap();
                 data.pack(buf);
             }

@@ -836,6 +836,58 @@ export const view = {
     });
     root.appendChild(swearBtnEl);
 
+    // Wave F.3 follow-on (2026-05-27) — Refresh button. Sends
+    // `GameAction::AllegianceInfoRequest` (0x027B) targeting the
+    // currently-selected vassal (or self when no vassal selected).
+    // ACE responds with an `AllegianceInfoResponse` (0x027C) that the
+    // existing allegiance arm folds into `latest_allegiance` — the
+    // panel re-renders on the `allegianceUpdated` bus event.
+    //
+    // Positioned as a small "↻" floating in the top-right of the
+    // panel header so it doesn't disturb the retail layout positions.
+    const refreshBtnEl = document.createElement("button");
+    refreshBtnEl.type = "button";
+    refreshBtnEl.className = "hb-alleg-btn";
+    refreshBtnEl.style.position = "absolute";
+    refreshBtnEl.style.top = "2px";
+    refreshBtnEl.style.right = "2px";
+    refreshBtnEl.style.width = "20px";
+    refreshBtnEl.style.height = "18px";
+    refreshBtnEl.style.padding = "0";
+    refreshBtnEl.style.fontSize = "12px";
+    refreshBtnEl.style.lineHeight = "16px";
+    setAcText(refreshBtnEl, "↻");
+    refreshBtnEl.title = "Request allegiance info refresh (ACE: AllegianceInfoRequest 0x027B)";
+    refreshBtnEl.addEventListener("click", () => {
+      const handle = window.__sessionHandle;
+      if (typeof handle?.requestAllegianceInfo !== "function") {
+        emit(`[allegiance/refresh] wasm not connected`);
+        return;
+      }
+      // Prefer the standalone overlay's selected vassal as the
+      // target. Falls back to the local player's own name (which
+      // ACE handles for self-info queries). The exact wire-target
+      // name doesn't matter much for the panel render — the server
+      // always returns the caller's allegiance hierarchy on success.
+      let target = saCurrentSelectedName?.() || "";
+      if (!target) {
+        // Read the monarch row from the rendered panel as a sensible
+        // self-target — the panel always populates this from the
+        // active allegiance state.
+        const monarchVal = monarchMonarchRowEl.querySelector?.(".value");
+        if (monarchVal && monarchVal.textContent && monarchVal.textContent !== "—") {
+          target = monarchVal.textContent.trim();
+        }
+      }
+      try {
+        handle.requestAllegianceInfo(target);
+        emit(`[allegiance/refresh] requested${target ? ` (target=${target})` : ""}`);
+      } catch (e) {
+        emit(`[allegiance/refresh] failed: ${e?.message || e}`);
+      }
+    });
+    root.appendChild(refreshBtnEl);
+
     const breakBtnEl = document.createElement("button");
     breakBtnEl.type = "button";
     breakBtnEl.className = "hb-alleg-btn";

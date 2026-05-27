@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "hotbar",
+  "name": "Hotbar",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Bottom-center 1-9 hotbar (gmFloatyToolbarUI 0x21000070)",
+  "icon": "1",
+  "iconHidden": true,
+  "entry": "./hotbar.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"]
+}

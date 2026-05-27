@@ -274,6 +274,51 @@ async function main() {
     assert.equal(panel.view.nameFor(), 'Contracts');
   });
 
+  // [10] Wave F.5 follow-on (2026-05-27) — DAT-backed name lookup.
+  // Without `window.getContractRecord` (pre-prefetch) the panel falls
+  // back to `Contract #N` placeholders.
+  check('falls back to placeholder name when DAT not prefetched', () => {
+    const snap = {
+      trackers: [{ contractId: 0x00C8, stage: 2 }],
+      displayContractId: 0,
+    };
+    delete globalThis.window.getContractRecord;
+    const vm = buildContractsViewModel(snap, 1_712_000_000);
+    assert.equal(vm.rows[0].name, 'Contract #200',
+      'falls back to placeholder when getContractRecord not exposed');
+  });
+
+  // [11] With a stubbed `getContractRecord` exposed (post-prefetch),
+  // the panel surfaces the DAT-backed name + NPC.
+  check('uses DAT name when getContractRecord returns a record', () => {
+    globalThis.window.getContractRecord = (id) => {
+      if (id === 0x00C8) {
+        return {
+          id: 0x00C8,
+          name: 'Jailbreak: Ardent Leader',
+          nameNpcStart: 'Avarin',
+          nameNpcEnd: 'Avarin',
+          description: 'Defeat the Large Ardent Moarsman in the Freebooter Prison.',
+          descriptionProgress: '%d/1 Large Ardent Moarsman',
+          locationNpcStart: { cellId: 0x69010100, origin: [0, 0, 0], orientation: [1, 0, 0, 0] },
+        };
+      }
+      return null;
+    };
+    const snap = {
+      trackers: [{ contractId: 0x00C8, stage: 2 }],
+      displayContractId: 0,
+    };
+    const vm = buildContractsViewModel(snap, 1_712_000_000);
+    assert.equal(vm.rows[0].name, 'Jailbreak: Ardent Leader');
+    assert.equal(vm.rows[0].npc, 'Avarin');
+    assert.equal(vm.rows[0].descriptionProgress, '%d/1 Large Ardent Moarsman');
+    assert.ok(vm.rows[0].desc.includes('Defeat the Large'));
+    assert.ok(vm.rows[0].desc.includes('Avarin'));
+    // Cleanup.
+    delete globalThis.window.getContractRecord;
+  });
+
   console.log('═══════════════════════════════════════════════════════════════');
   console.log(`Passed: ${passed}    Failed: ${failed}`);
   if (failed > 0) {

@@ -369,6 +369,96 @@ pub enum WieldType {
     Jewelry = 0x08,
 }
 
+/// Plain (non-bitflag) item-container kind discriminant.
+///
+/// Mirrors `Chorizite.Common.Enums.ContainerProperties`
+/// (`Chorizite.Common/Enums/ContainerProperties.cs:5-12`, vendored HEAD
+/// `e3b3bd2`). Despite the plural name, the C# is a plain `enum` (NOT
+/// `[Flags]`) with only 3 values:
+///
+/// * `None = 0x00` — generic worldobject (not a container)
+/// * `Container = 0x01` — backpack, chest, vendor inventory, corpse
+/// * `Foci = 0x02` — magic foci (also extends Container per ACPlugin
+///   §4 inheritance — `Foci : Container` in the C# hierarchy)
+///
+/// Carried as the `ContainerType` quality on container weenies. The
+/// retail `acclient.exe::CContainer::Wrap` reads this u32 to decide
+/// which open animation to play (no-op for `None`, treasure-chest open
+/// for `Container`, foci-glow for `Foci`).
+///
+/// **Naming note:** Wave G keeps the C# variant name `Container` even
+/// though `ItemType::CONTAINER` already exists in this same module —
+/// they're orthogonal taxonomies (ItemType is a 32-bit bitmask of WHAT
+/// kind of item, ContainerProperties is a 3-state enum of HOW it
+/// containers). No collision because they're in different types.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    Display, FromRepr, Default,
+)]
+#[repr(u32)]
+pub enum ContainerProperties {
+    #[default]
+    None = 0x00,
+    Container = 0x01,
+    Foci = 0x02,
+}
+
+bitflags! {
+    /// Equipment-coverage bitmask: which body parts an item protects.
+    ///
+    /// Mirrors `Chorizite.Common.Enums.CoverageMask`
+    /// (`Chorizite.Common/Enums/CoverageMask.cs:7-39`, vendored HEAD `e3b3bd2`).
+    ///
+    /// `[Flags]` bitmask with 15 entries — 6 underwear slots
+    /// (0x02..0x40) + 9 outer slots (0x100..0x10000). Note bit `0x01` and
+    /// `0x80` are unused gaps in the retail/Chorizite layout.
+    ///
+    /// Used by the identify panel (PR-6) to describe armor body-part
+    /// coverage in tooltips ("Chest, Abdomen, Upper Legs").
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+    pub struct CoverageMask: u32 {
+        const UPPER_LEGS_UNDERWEAR  = 0x00000002;
+        const LOWER_LEGS_UNDERWEAR  = 0x00000004;
+        const CHEST_UNDERWEAR       = 0x00000008;
+        const ABDOMEN_UNDERWEAR     = 0x00000010;
+        const UPPER_ARMS_UNDERWEAR  = 0x00000020;
+        const LOWER_ARMS_UNDERWEAR  = 0x00000040;
+        const UPPER_LEGS            = 0x00000100;
+        const LOWER_LEGS            = 0x00000200;
+        const CHEST                 = 0x00000400;
+        const ABDOMEN               = 0x00000800;
+        const UPPER_ARMS            = 0x00001000;
+        const LOWER_ARMS            = 0x00002000;
+        const HEAD                  = 0x00004000;
+        const HANDS                 = 0x00008000;
+        const FEET                  = 0x00010000;
+    }
+}
+
+impl CoverageMask {
+    /// User-facing label per bit. Matches the order in the C# source.
+    pub fn iter_display_names(&self) -> impl Iterator<Item = &'static str> {
+        self.iter_names().map(|(name, _)| match name {
+            "UPPER_LEGS_UNDERWEAR" => "Upper Legs Underwear",
+            "LOWER_LEGS_UNDERWEAR" => "Lower Legs Underwear",
+            "CHEST_UNDERWEAR" => "Chest Underwear",
+            "ABDOMEN_UNDERWEAR" => "Abdomen Underwear",
+            "UPPER_ARMS_UNDERWEAR" => "Upper Arms Underwear",
+            "LOWER_ARMS_UNDERWEAR" => "Lower Arms Underwear",
+            "UPPER_LEGS" => "Upper Legs",
+            "LOWER_LEGS" => "Lower Legs",
+            "CHEST" => "Chest",
+            "ABDOMEN" => "Abdomen",
+            "UPPER_ARMS" => "Upper Arms",
+            "LOWER_ARMS" => "Lower Arms",
+            "HEAD" => "Head",
+            "HANDS" => "Hands",
+            "FEET" => "Feet",
+            _ => name,
+        })
+    }
+}
+
 #[cfg(test)]
 mod wield_type_tests {
     use super::*;
@@ -395,5 +485,86 @@ mod wield_type_tests {
 
         // Default value
         assert_eq!(WieldType::default(), WieldType::Invalid);
+    }
+}
+
+#[cfg(test)]
+mod container_properties_tests {
+    use super::*;
+
+    /// Asserts `ContainerProperties` integer values match
+    /// `Chorizite.Common/Enums/ContainerProperties.cs:5-12` (vendored HEAD
+    /// `e3b3bd2`). All 3 variants enumerated.
+    #[test]
+    fn container_properties_values_match_chorizite() {
+        assert_eq!(ContainerProperties::None as u32, 0x00);
+        assert_eq!(ContainerProperties::Container as u32, 0x01);
+        assert_eq!(ContainerProperties::Foci as u32, 0x02);
+
+        // Round-trip via FromRepr
+        assert_eq!(ContainerProperties::from_repr(0x00), Some(ContainerProperties::None));
+        assert_eq!(ContainerProperties::from_repr(0x01), Some(ContainerProperties::Container));
+        assert_eq!(ContainerProperties::from_repr(0x02), Some(ContainerProperties::Foci));
+        // Not a bitmask — out-of-range values return None
+        assert_eq!(ContainerProperties::from_repr(0x03), None);
+        assert_eq!(ContainerProperties::from_repr(0x04), None);
+
+        // Default
+        assert_eq!(ContainerProperties::default(), ContainerProperties::None);
+
+        // Cross-enum: `ItemType::CONTAINER` is 0x200 (bit 9) — completely
+        // distinct from `ContainerProperties::Container = 0x01`. Document
+        // the non-collision so future hand-merges of the two taxonomies
+        // don't get confused.
+        assert_eq!(ItemType::CONTAINER.bits(), 0x200);
+        assert_ne!(
+            ContainerProperties::Container as u32,
+            ItemType::CONTAINER.bits()
+        );
+    }
+}
+
+#[cfg(test)]
+mod coverage_mask_tests {
+    use super::*;
+
+    /// Asserts `CoverageMask` bit values match
+    /// `Chorizite.Common/Enums/CoverageMask.cs:7-39` (vendored HEAD
+    /// `e3b3bd2`). All 15 variants enumerated.
+    #[test]
+    fn coverage_mask_values_match_chorizite() {
+        // Underwear cluster (lower bits)
+        assert_eq!(CoverageMask::UPPER_LEGS_UNDERWEAR.bits(), 0x00000002);
+        assert_eq!(CoverageMask::LOWER_LEGS_UNDERWEAR.bits(), 0x00000004);
+        assert_eq!(CoverageMask::CHEST_UNDERWEAR.bits(), 0x00000008);
+        assert_eq!(CoverageMask::ABDOMEN_UNDERWEAR.bits(), 0x00000010);
+        assert_eq!(CoverageMask::UPPER_ARMS_UNDERWEAR.bits(), 0x00000020);
+        assert_eq!(CoverageMask::LOWER_ARMS_UNDERWEAR.bits(), 0x00000040);
+
+        // Outer-layer cluster (higher bits)
+        assert_eq!(CoverageMask::UPPER_LEGS.bits(), 0x00000100);
+        assert_eq!(CoverageMask::LOWER_LEGS.bits(), 0x00000200);
+        assert_eq!(CoverageMask::CHEST.bits(), 0x00000400);
+        assert_eq!(CoverageMask::ABDOMEN.bits(), 0x00000800);
+        assert_eq!(CoverageMask::UPPER_ARMS.bits(), 0x00001000);
+        assert_eq!(CoverageMask::LOWER_ARMS.bits(), 0x00002000);
+        assert_eq!(CoverageMask::HEAD.bits(), 0x00004000);
+        assert_eq!(CoverageMask::HANDS.bits(), 0x00008000);
+        assert_eq!(CoverageMask::FEET.bits(), 0x00010000);
+
+        // Bit-OR — full-coverage robe covers most upper slots
+        let robe = CoverageMask::CHEST | CoverageMask::ABDOMEN | CoverageMask::UPPER_ARMS;
+        assert_eq!(robe.bits(), 0x00001C00);
+
+        // Gap at bit 0x01 and bit 0x80 (between LOWER_ARMS_UNDERWEAR=0x40
+        // and UPPER_LEGS=0x100 there's no 0x80). Chorizite leaves these
+        // unused — `from_bits_truncate` drops them silently.
+        let with_gap = CoverageMask::from_bits_truncate(0x00000081);
+        assert_eq!(with_gap.bits(), 0x00000000);
+
+        // Display names spot-check
+        let multi = CoverageMask::CHEST | CoverageMask::HEAD | CoverageMask::HANDS;
+        let names: Vec<&str> = multi.iter_display_names().collect();
+        assert_eq!(names, vec!["Chest", "Head", "Hands"]);
     }
 }

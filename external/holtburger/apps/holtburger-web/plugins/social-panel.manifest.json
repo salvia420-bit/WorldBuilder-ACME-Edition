@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "social-panel",
+  "name": "Social",
+  "author": "holtburger",
+  "version": "0.2.0",
+  "description": "Friends + squelch + title — send + receive (Waves E2 / H1 / H2 / H3 / I2)",
+  "icon": "🤝",
+  "iconHidden": true,
+  "entry": "./social-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}

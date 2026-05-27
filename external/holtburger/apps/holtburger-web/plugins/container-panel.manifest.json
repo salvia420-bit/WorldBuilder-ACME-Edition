@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "container-panel",
+  "name": "Container",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Chest / corpse / bag contents panel — auto-opens on kind=21 ContainerOpened",
+  "icon": "📦",
+  "iconHidden": true,
+  "entry": "./container-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}

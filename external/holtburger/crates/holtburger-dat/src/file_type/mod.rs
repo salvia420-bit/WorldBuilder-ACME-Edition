@@ -4,6 +4,7 @@ pub mod char_gen;
 pub mod chat_pose_table;
 pub mod clothing;
 pub mod combat_maneuver_table;
+pub mod contract_table;
 pub mod degrade_info;
 pub mod did_mapper;
 pub mod dual_did_mapper;
@@ -51,6 +52,7 @@ pub use clothing::{
     ClothingBaseEffect, ClothingTable,
 };
 pub use combat_maneuver_table::{CombatManeuver, CombatManeuverTable};
+pub use contract_table::{Contract, ContractPosition, ContractTable};
 pub use degrade_info::{GfxObjDegradeInfo, GfxObjInfo};
 pub use did_mapper::DidMapper;
 pub use dual_did_mapper::DualDidMapper;

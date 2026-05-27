@@ -1,0 +1,16 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "inventory",
+  "name": "Inventory",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Right-side inventory window (gmInventoryUI 0x21000023)",
+  "icon": "🎒",
+  "iconHidden": true,
+  "entry": "./inventory.js",
+  "environments": ["browser"],
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "I", "label": "Toggle Inventory" }
+  ]
+}

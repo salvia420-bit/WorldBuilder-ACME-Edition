@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "main-panel",
+  "name": "Main Panel",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Shared right-side pane — inventory / examine / skills / ...",
+  "icon": "🪟",
+  "iconHidden": true,
+  "entry": "./main-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}
