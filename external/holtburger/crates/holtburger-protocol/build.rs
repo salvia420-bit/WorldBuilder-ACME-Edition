@@ -115,6 +115,12 @@ struct CodegenCtx<'a> {
     xml_path: &'a Path,
     line_offsets: &'a [usize],
     type_kind: HashMap<String, TypeKind>,
+    /// J3.C: variant_name → numeric value for every emitted enum. Lets the
+    /// maskmap codegen translate `EnumName.VariantName` mask-value references
+    /// to a raw u64 literal at codegen time. Built incrementally as enums
+    /// are emitted; populated even for enums that drop variants to aliases
+    /// (the alias's underlying constant is preserved).
+    enum_variant_values: HashMap<String, BTreeMap<String, i128>>,
     opcode_index: Vec<(String, String, u32)>,
     stats: Stats,
 }
@@ -123,7 +129,13 @@ struct CodegenCtx<'a> {
 enum TypeKind {
     Primitive(&'static str),
     Struct,
-    Enum(EnumRepr),
+    /// `Enum(repr, is_flag)`. `is_flag=true` for enums declared with
+    /// `mask="true"` (the wire value can be any OR of declared bits). The
+    /// read codegen for flag enums never errors on unknown discriminants —
+    /// instead it materialises the matched-variant value if known, or a
+    /// stand-in zero-bits sentinel value (the raw bits are preserved in
+    /// the `_bits` companion local for the maskmap-parent path).
+    Enum(EnumRepr, bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -225,6 +237,7 @@ impl<'a> CodegenCtx<'a> {
             xml_path,
             line_offsets,
             type_kind: HashMap::new(),
+            enum_variant_values: HashMap::new(),
             opcode_index: Vec::new(),
             stats: Stats::default(),
         };
@@ -304,11 +317,24 @@ impl<'a> CodegenCtx<'a> {
                 return;
             }
         };
+        // J3.C: flag enums (`mask="true"`) treat unknown wire discriminants
+        // as valid (any OR of declared bits is legal). Recorded in the type
+        // kind so `resolve_field` can downgrade flag-enum field references
+        // to their underlying numeric repr (`u32` for `parent="uint"`), at
+        // which point unknown bit compositions are statically representable.
+        let is_flag_enum = n.attribute("mask") == Some("true");
 
         // Dedup by discriminant.
         let mut seen_disc = BTreeSet::new();
         let mut variants: Vec<(String, i128, Option<String>)> = Vec::new();
         let mut aliases: Vec<(String, i128, String, Option<String>)> = Vec::new();
+        // J3.C: enum-variant value table for downstream maskmap value-ref
+        // resolution. We index by the ORIGINAL XML variant name (NOT the
+        // sanitised Rust ident) because `<maskmap>` references use the XML
+        // form (e.g. `ACBaseQualitiesFlags.PropertyInt`). Aliases that map to
+        // the same discriminant get the same value entry — preserves the
+        // semantics of Chorizite's "this name is also that bit".
+        let mut variant_value_table: BTreeMap<String, i128> = BTreeMap::new();
         for v in n.children().filter(|c| c.is_element() && c.tag_name().name() == "value") {
             let vname = match v.attribute("name") { Some(v) => v.to_string(), None => continue };
             let vraw = match v.attribute("value") { Some(v) => v, None => continue };
@@ -317,6 +343,7 @@ impl<'a> CodegenCtx<'a> {
                 None => continue,
             };
             let text = v.attribute("text").map(|s| s.to_string());
+            variant_value_table.insert(vname.clone(), parsed);
             if seen_disc.insert(parsed) {
                 variants.push((vname, parsed, text));
             } else {
@@ -383,7 +410,8 @@ impl<'a> CodegenCtx<'a> {
         writeln!(self.buf, "            other => Err(other),").unwrap();
         writeln!(self.buf, "        }})\n    }}\n}}\n").unwrap();
 
-        self.type_kind.insert(name, TypeKind::Enum(repr));
+        self.type_kind.insert(name.clone(), TypeKind::Enum(repr, is_flag_enum));
+        self.enum_variant_values.insert(name, variant_value_table);
         self.stats.enums_emitted += 1;
     }
 
@@ -523,6 +551,28 @@ impl<'a> CodegenCtx<'a> {
                     writeln!(self.buf, "    pub {}: Vec<{}>,", v.name_snake, v.element_rust_ty).unwrap();
                 }
                 EmitStep::Align(_) => {}
+                EmitStep::Maskmap(mm) => {
+                    for group in &mm.masks {
+                        let bit_label = if group.value_xml.contains('.') {
+                            group.value_xml.clone()
+                        } else {
+                            format!("bit 0x{:08X}", group.bit_value)
+                        };
+                        for gated in &group.fields {
+                            if let Some(t) = &gated.text {
+                                writeln!(self.buf, "    /// Gated on {} (`{}`). {}",
+                                    escape_doc(&bit_label),
+                                    escape_doc(&mm.parent_snake),
+                                    escape_doc(t)).unwrap();
+                            } else {
+                                writeln!(self.buf, "    /// Gated on {} (`{}`).",
+                                    escape_doc(&bit_label),
+                                    escape_doc(&mm.parent_snake)).unwrap();
+                            }
+                            writeln!(self.buf, "    pub {}: Option<{}>,", gated.name_snake, gated.rust_ty).unwrap();
+                        }
+                    }
+                }
             }
         }
         writeln!(self.buf, "}}\n").unwrap();
@@ -555,8 +605,10 @@ impl<'a> CodegenCtx<'a> {
         }
         writeln!(self.buf, "    /// Decode `{name}` from a little-endian wire stream at `*offset`.").unwrap();
         writeln!(self.buf, "    pub fn read_from(data: &[u8], offset: &mut usize) -> Result<Self, &'static str> {{").unwrap();
+        let has_maskmap = steps.iter().any(|s| matches!(s, EmitStep::Maskmap(_)));
         if fields_only.is_empty()
             && vectors_only.is_empty()
+            && !has_maskmap
             && !steps.iter().any(|s| matches!(s, EmitStep::Align(_)))
         {
             writeln!(self.buf, "        let _ = (data, offset);").unwrap();
@@ -566,6 +618,7 @@ impl<'a> CodegenCtx<'a> {
                 EmitStep::Field(f) => emit_read_field(&mut self.buf, &f.name_snake, &f.field_kind),
                 EmitStep::Align(n_bytes) => emit_align_pad(&mut self.buf, *n_bytes),
                 EmitStep::Vector(v) => emit_read_vector(&mut self.buf, v),
+                EmitStep::Maskmap(mm) => emit_read_maskmap(&mut self.buf, mm),
             }
         }
         writeln!(self.buf, "        Ok(Self {{").unwrap();
@@ -574,6 +627,13 @@ impl<'a> CodegenCtx<'a> {
                 EmitStep::Field(f) => writeln!(self.buf, "            {},", f.name_snake).unwrap(),
                 EmitStep::Vector(v) => writeln!(self.buf, "            {},", v.name_snake).unwrap(),
                 EmitStep::Align(_) => {}
+                EmitStep::Maskmap(mm) => {
+                    for group in &mm.masks {
+                        for gated in &group.fields {
+                            writeln!(self.buf, "            {},", gated.name_snake).unwrap();
+                        }
+                    }
+                }
             }
         }
         writeln!(self.buf, "        }})\n    }}").unwrap();
@@ -616,12 +676,110 @@ impl<'a> CodegenCtx<'a> {
                     let v = self.build_vector_field(c, &mut seen_names, parent_type_name, &siblings)?;
                     out.push(EmitStep::Vector(v));
                 }
+                "maskmap" => {
+                    let mm = self.build_maskmap_block(
+                        c,
+                        &mut seen_names,
+                        parent_type_name,
+                        &siblings,
+                    )?;
+                    out.push(EmitStep::Maskmap(mm));
+                }
                 other => {
                     return Err(format!("unsupported child `<{other}>`"));
                 }
             }
         }
         Ok(out)
+    }
+
+    /// J3.C: build a [`MaskmapBlock`] from a `<maskmap name="ParentField" [xor=]>`
+    /// element. Resolves the parent's bit-source via [`SiblingLookup`] and
+    /// parses every `<mask value="...">` child (either a hex literal or a
+    /// dotted `EnumName.VariantName` reference). The mask child's nested
+    /// `<field>` children flow through the same `build_simple_field` path
+    /// the foundation-tier uses — no subfield/maskmap-nesting recursion
+    /// (Chorizite's schema never nests).
+    fn build_maskmap_block(
+        &self,
+        c: Node<'_, '_>,
+        seen_names: &mut BTreeMap<String, usize>,
+        parent_type_name: &str,
+        siblings: &SiblingLookup,
+    ) -> Result<MaskmapBlock, String> {
+        let parent_xml_name = c.attribute("name")
+            .ok_or_else(|| "<maskmap> missing name= attribute".to_string())?;
+
+        // Resolve the parent field. It MUST be a sibling that was already
+        // emitted earlier in this same <type> body — schema convention.
+        // Either a numeric primitive (uint/int/byte/ushort) directly, or an
+        // already-tracked flag enum (handled separately via `enum_parent_bits`).
+        let parent_bits_rust = resolve_maskmap_parent_bits(parent_xml_name, siblings, &self.type_kind)
+            .map_err(|e| format!("<maskmap name={parent_xml_name:?}>: {e}"))?;
+        let parent_snake = resolve_maskmap_parent_snake(parent_xml_name, siblings)
+            .ok_or_else(|| format!("<maskmap name={parent_xml_name:?}>: parent field not found among siblings"))?;
+
+        let xor_mask = if let Some(raw) = c.attribute("xor") {
+            // J3.C: the only schema site with xor= is PositionPack (line 6471)
+            // where Flags^0x78 inverts the polarity of WQuat/XQuat/YQuat/ZQuat
+            // gates. Implementation is identical to the no-xor path except the
+            // gate uses `(bits ^ xor) & value != 0`. We support it directly.
+            let val = parse_int_literal(raw)
+                .ok_or_else(|| format!("<maskmap name={parent_xml_name:?}> xor={raw:?} is not a parseable integer literal"))?;
+            Some(val as u64)
+        } else {
+            None
+        };
+
+        let mut masks = Vec::new();
+        for mc in c.children().filter(|cc| cc.is_element()) {
+            let mtag = mc.tag_name().name();
+            if mtag != "mask" {
+                return Err(format!(
+                    "<maskmap name={parent_xml_name:?}>: unexpected child <{mtag}>; only <mask> allowed"
+                ));
+            }
+            let raw_value = mc.attribute("value")
+                .ok_or_else(|| format!("<maskmap name={parent_xml_name:?}>: <mask> missing value= attribute"))?;
+            let bit_value = parse_mask_value(raw_value, &self.enum_variant_values)
+                .map_err(|e| format!("<maskmap name={parent_xml_name:?}>: <mask value={raw_value:?}>: {e}"))?;
+
+            let mut fields = Vec::new();
+            for fc in mc.children().filter(|cc| cc.is_element()) {
+                let ftag = fc.tag_name().name();
+                if ftag != "field" {
+                    return Err(format!(
+                        "<maskmap name={parent_xml_name:?}> <mask value={raw_value:?}>: unexpected child <{ftag}>; only <field> allowed inside <mask>"
+                    ));
+                }
+                let f = self.build_simple_field(fc, seen_names, parent_type_name)
+                    .map_err(|e| format!("<maskmap name={parent_xml_name:?}> <mask value={raw_value:?}>: {e}"))?;
+                fields.push(f);
+            }
+            if fields.is_empty() {
+                return Err(format!(
+                    "<maskmap name={parent_xml_name:?}> <mask value={raw_value:?}>: contains no <field> children"
+                ));
+            }
+            masks.push(MaskGroup {
+                bit_value,
+                value_xml: raw_value.to_string(),
+                fields,
+                text: mc.attribute("text").map(|s| s.to_string()),
+            });
+        }
+        if masks.is_empty() {
+            return Err(format!(
+                "<maskmap name={parent_xml_name:?}>: contains no <mask> children"
+            ));
+        }
+
+        Ok(MaskmapBlock {
+            parent_snake,
+            parent_bits_rust,
+            xor_mask,
+            masks,
+        })
     }
 
     /// J3.B: build a [`VectorField`] from a `<vector>` element, resolving its
@@ -811,7 +969,28 @@ impl<'a> CodegenCtx<'a> {
                 "PackedDWORD" => Some(("u32".to_string(), FieldKind::PackedDword)),
                 _ => None,
             },
-            TypeKind::Enum(repr) => Some((raw_type.to_string(), FieldKind::Enum(raw_type.to_string(), *repr))),
+            TypeKind::Enum(repr, is_flag) => {
+                // J3.C: flag enums (`mask="true"`) carry arbitrary OR-of-bit
+                // wire compositions; an unknown discriminant is LEGAL not an
+                // error. To stay type-safe, the field stores the RAW bit
+                // pattern (e.g. `u32`) rather than the typed enum — the enum
+                // variants remain available for downstream consumers that
+                // want to match individual bits via `value & Enum::Variant as
+                // repr`. The maskmap codegen reads the same raw bits via the
+                // SiblingLookup's flag-enum-aware bit-source resolver.
+                if *is_flag {
+                    Some((repr.rust_ty().to_string(), match *repr {
+                        EnumRepr::U8 => FieldKind::PrimU8,
+                        EnumRepr::U16 => FieldKind::PrimU16,
+                        EnumRepr::U32 => FieldKind::PrimU32,
+                        EnumRepr::U64 => FieldKind::PrimU64,
+                        EnumRepr::I32 => FieldKind::PrimI32,
+                        EnumRepr::I64 => FieldKind::PrimI64,
+                    }))
+                } else {
+                    Some((raw_type.to_string(), FieldKind::Enum(raw_type.to_string(), *repr, *is_flag)))
+                }
+            }
             TypeKind::Struct => Some((raw_type.to_string(), FieldKind::Struct(raw_type.to_string()))),
         }
     }
@@ -834,10 +1013,69 @@ impl<'a> CodegenCtx<'a> {
 /// J3.B: `<vector length="...">` produces a Vector; the emitter writes a
 /// `Vec<element>` field on the struct + a `for _ in 0..count { … }` decode
 /// loop into `read_from`.
+/// J3.C: `<maskmap name="ParentField">` produces a Maskmap; the emitter writes
+/// `Option<T>` struct fields for each gated field + a `if (parent_bits & bit)
+/// != 0 { … }` decode block in `read_from`. Multiple maskmaps for the same
+/// parent are independent steps — the order they appear in XML matches the
+/// wire-decode order (matters for `PublicWeenieDesc`'s 3 `Header` maskmaps
+/// that split MaterialType / IconUnderlay / etc. into separate ordered
+/// blocks).
 enum EmitStep {
     Field(SimpleField),
     Align(usize),
     Vector(VectorField),
+    Maskmap(MaskmapBlock),
+}
+
+/// J3.C: one `<maskmap name="ParentField" [xor="0x..."]>` block. Resolves the
+/// parent field's bit-source at parse time (via [`SiblingLookup`]) so the
+/// emitter doesn't have to thread enum/primitive disambiguation through the
+/// codegen path again. Every gated field's snake-name + type lives inside
+/// the [`MaskGroup`] entries; the struct emitter walks them to emit
+/// `Option<T>` declarations and the read emitter wraps each in the
+/// corresponding `if (bits & mask) != 0 { … }` block.
+struct MaskmapBlock {
+    /// The parent field's snake-name as it appears in `read_from`'s local
+    /// scope (e.g. `flags`, `header`).
+    parent_snake: String,
+    /// The Rust expression that produces the raw u32-shaped bits from the
+    /// parent's stored local. For a primitive `uint` field: just `flags`.
+    /// For a flag enum: we read the raw u32 BEFORE the variant-match (see
+    /// the codegen path that emits a `<snake>_raw` companion). Width-cast
+    /// fits in u64 to accommodate ulong-backed flags should they appear.
+    parent_bits_rust: String,
+    /// Optional `xor=` modifier from `<maskmap xor="0x...">`. When present,
+    /// the maskmap iterates entries whose corresponding bits in
+    /// `parent_bits ^ xor` are SET (effectively flipping the polarity for the
+    /// xor'd bits). Only one schema site uses this (`PositionPack`'s WQuat
+    /// suite where the absence of a bit indicates the field is present).
+    xor_mask: Option<u64>,
+    /// All `<mask value="...">` groups in XML declaration order.
+    masks: Vec<MaskGroup>,
+}
+
+/// J3.C: one `<mask value="...">` group inside a `<maskmap>`. Each group
+/// gates one OR MORE fields on the same bit; when the gate fires, all of
+/// the contained fields are read in order. Multi-field groups appear in
+/// `PhysicsDesc` (ParentId + ParentLocation), `CreatureAppraisalProfile`
+/// (attribute suite + Stamina/Mana family), `Item_SetAppraiseInfo` (5 group
+/// triples across armor/weapon/resist highlight masks + the BaseArmorXxx
+/// 9-tuple), and `PlayerModule` (Unknown100_1 + OptionStrings on bit 0x100).
+struct MaskGroup {
+    /// The numeric bit value the gate compares against (`bits & value != 0`
+    /// after applying any `xor_mask`). Widened to u64 to fit the rare ulong
+    /// flag enum (none today; defensive).
+    bit_value: u64,
+    /// Verbatim XML `value=` attribute for the doc-comment.
+    value_xml: String,
+    /// The gated fields. Each becomes one `Option<T>` on the struct.
+    fields: Vec<SimpleField>,
+    /// Optional doc text from the `<mask text="…">` attribute.
+    /// Reserved for future use (per-mask doc comments above the gated
+    /// Option block); we currently inline a per-field doc-comment derived
+    /// from each field's own `text=`.
+    #[allow(dead_code)]
+    text: Option<String>,
 }
 
 /// J3.B: a `<vector name="Foo" type="ElementTy" length="LenExpr" />` child of
@@ -907,7 +1145,10 @@ enum FieldKind {
     String16,
     WString,
     PackedDword,
-    Enum(String, EnumRepr),
+    /// `Enum(name, repr, is_flag)`. `is_flag` controls the read codegen's
+    /// unknown-discriminant policy — flag enums (`mask="true"`) preserve the
+    /// raw bits without erroring, regular enums error on unknown values.
+    Enum(String, EnumRepr, bool),
     Struct(String),
 }
 
@@ -965,8 +1206,18 @@ fn emit_read_field(buf: &mut String, snake: &str, kind: &FieldKind) {
         FieldKind::PackedDword => {
             writeln!(buf, "        let {snake}: u32 = read_packed_dword(data, offset)?;").unwrap();
         }
-        FieldKind::Enum(name, _repr) => {
+        FieldKind::Enum(name, repr, _is_flag) => {
+            // J3.C: capture the raw underlying-repr value into a `<snake>_bits`
+            // companion local alongside the typed variant match. Flag enums
+            // (`mask="true"`) are routed to raw-primitive storage UPSTREAM in
+            // `resolve_field` — so reaching this branch implies a strict
+            // single-discriminant enum, and unknowns are a wire error worth
+            // surfacing. The `_bits` companion is still emitted so siblings
+            // (e.g. inside `<switch>`) can grab the raw representation when
+            // needed — same access pattern across both strict and flag enums.
+            let repr_ty = repr.rust_ty();
             writeln!(buf, "        let {snake}_raw = {name}::read_from(data, offset)?;").unwrap();
+            writeln!(buf, "        let {snake}_bits: {repr_ty} = match {snake}_raw {{ Ok(v) => v as {repr_ty}, Err(raw) => raw }};").unwrap();
             writeln!(buf, "        let {snake}: {name} = match {snake}_raw {{ Ok(v) => v, Err(_) => return Err(\"unknown {name} discriminant\") }};").unwrap();
         }
         FieldKind::Struct(name) => {
@@ -1106,13 +1357,24 @@ fn collect_unsupported(n: Node<'_, '_>) -> Vec<&'static str> {
     // never returns "vector" anymore — failures are reported with a precise
     // reason at the per-step level so the SKIPPED notes are more useful for
     // downstream J3.C-E planning.
+    //
+    // J3.C (2026-05-27): `<maskmap name="...">` is now FOUNDATION-tier when:
+    //   - the parent field resolves to a numeric primitive or a `parent="uint"`
+    //     enum (flag enums are the common case);
+    //   - every `<mask value="...">` is a hex literal or a dotted
+    //     `EnumName.VariantName` whose enum was already emitted;
+    //   - no `xor=` modifier (only PositionPack uses one — SKIP'd with a
+    //     precise reason pointing at J3.F follow-on);
+    //   - every gated field resolves through `resolve_field`.
+    // Per-maskmap resolution lives in `collect_emit_steps`; this top-level
+    // pass never returns "maskmap" anymore. Bare `<mask>` outside a
+    // `<maskmap>` would be a schema bug; we still flag it for completeness.
     let mut out = Vec::new();
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
             "switch" => push_unique(&mut out, "switch"),
             "if" => push_unique(&mut out, "if"),
             "mask" => push_unique(&mut out, "mask"),
-            "maskmap" => push_unique(&mut out, "maskmap"),
             "table" => push_unique(&mut out, "table"),
             _ => {}
         }
@@ -1159,6 +1421,13 @@ struct SiblingLookup {
     /// `rust_repr` is the Rust primitive width (`u8`/`u16`/…); used so the
     /// length expression can cast cleanly to `usize` (Rust `as` requires the
     /// LHS to be a numeric primitive, not an enum/struct).
+    ///
+    /// J3.C: flag enums (`mask="true"`) flow through `resolve_field` as
+    /// primitives (the enum's `parent="uint"` repr replaces the typed
+    /// variant on the struct field) — so they automatically show up here
+    /// with the correct width and the maskmap codegen needs no extra
+    /// flag-enum bookkeeping to resolve a `<maskmap name="Header">`-style
+    /// parent reference.
     fields_by_xml_name: BTreeMap<String, (String, String)>,
     /// `xml_name → (parent_xml_name, parent_snake_name, parent_rust_repr, value_expr)`
     /// for subfields hanging off any sibling. The subfield's value expression
@@ -1183,6 +1452,13 @@ impl SiblingLookup {
         // Only track fields whose Rust-side type is a numeric primitive — the
         // length expression has to land in `usize` via `as`, which isn't
         // valid on String/struct/enum types.
+        //
+        // J3.C: flag enums (`mask="true"`) are routed through
+        // `resolve_field` to raw-primitive storage upstream, so they appear
+        // here as `FieldKind::PrimU32`/`PrimU16`/etc and flow through the
+        // numeric path automatically. The XML name is preserved (capitalised
+        // from snake), so `<maskmap name="Header">` finds the underlying
+        // `header: u32` local without any flag-enum-specific bookkeeping.
         if let Some(repr) = numeric_repr_for_field_kind(&f.field_kind) {
             self.fields_by_xml_name.insert(xml_name.clone(), (f.name_snake.clone(), repr.to_string()));
             for sf in &f.subfields {
@@ -1254,6 +1530,65 @@ fn numeric_repr_for_field_kind(k: &FieldKind) -> Option<&'static str> {
         FieldKind::PackedDword => Some("u32"),
         _ => None,
     }
+}
+
+/// J3.C: produce the Rust expression for the raw bit-pattern of a maskmap's
+/// parent field. The parent must already exist as a sibling — either a true
+/// numeric primitive field, or a flag-enum-typed field that was downgraded
+/// to its underlying repr by `resolve_field`'s flag-enum branch. Both paths
+/// land here as a numeric snake-name local in `read_from`'s scope.
+fn resolve_maskmap_parent_bits(
+    parent_xml_name: &str,
+    siblings: &SiblingLookup,
+    _type_kind: &HashMap<String, TypeKind>,
+) -> Result<String, String> {
+    if let Some((snake, repr)) = siblings.fields_by_xml_name.get(parent_xml_name) {
+        // Numeric primitive parent — cast to u64 so all downstream bit math
+        // is uniform-width regardless of the source's 8/16/32-bit footprint.
+        let _ = repr;
+        return Ok(format!("{snake} as u64"));
+    }
+    Err(format!(
+        "parent {parent_xml_name:?} is not a sibling numeric field — maskmap parents must be declared before the <maskmap> in the same <type> body"
+    ))
+}
+
+fn resolve_maskmap_parent_snake(
+    parent_xml_name: &str,
+    siblings: &SiblingLookup,
+) -> Option<String> {
+    if let Some((snake, _)) = siblings.fields_by_xml_name.get(parent_xml_name) {
+        return Some(snake.clone());
+    }
+    None
+}
+
+/// J3.C: parse a `<mask value="...">` attribute. Two recognised forms:
+///   - Hex literal: `0x80000000`, `0x4`, `0x0000_0001`
+///   - Dotted enum reference: `ACBaseQualitiesFlags.PropertyInt` resolves via
+///     the previously-emitted enum's variant table.
+fn parse_mask_value(
+    raw: &str,
+    enum_values: &HashMap<String, BTreeMap<String, i128>>,
+) -> Result<u64, String> {
+    let trimmed = raw.trim();
+    if let Some(parsed) = parse_int_literal(trimmed) {
+        // i128 → u64 truncation is fine for the schema's 32-bit-flag range
+        // (and the rare 64-bit flag — we widened to u64 deliberately).
+        return Ok(parsed as u64);
+    }
+    if let Some((enum_name, variant_name)) = trimmed.split_once('.') {
+        let table = enum_values
+            .get(enum_name)
+            .ok_or_else(|| format!("enum {enum_name:?} not emitted before this <mask> reference (forward reference?)"))?;
+        let v = table.get(variant_name).ok_or_else(|| {
+            format!("enum {enum_name:?} has no variant named {variant_name:?}")
+        })?;
+        return Ok(*v as u64);
+    }
+    Err(format!(
+        "mask value {raw:?} is neither a hex literal nor an `EnumName.VariantName` dotted reference"
+    ))
 }
 
 /// J3.B: translate a `<vector length="XmlExpr">` attribute into a Rust
@@ -1405,6 +1740,62 @@ fn emit_read_vector(buf: &mut String, v: &VectorField) {
     writeln!(buf, "            }};").unwrap();
     writeln!(buf, "            {snake}.push(__elem);").unwrap();
     writeln!(buf, "        }}").unwrap();
+}
+
+/// J3.C: emit the bit-gated read sequence for a `<maskmap name="ParentField"
+/// [xor=]>` block. Each `<mask value="...">` group becomes an `if (parent_bits
+/// [^xor] & bit) != 0 { … } else { … }` chain that either reads + assigns
+/// `Some(value)` to the gated locals, or leaves them as `None`.
+///
+/// Each gated field is also pre-declared as `let mut <snake>: Option<T> = None;`
+/// at the head of the maskmap block, so the `Ok(Self { ... })` construction
+/// can refer to the variable unconditionally regardless of whether the bit
+/// fired.
+fn emit_read_maskmap(buf: &mut String, mm: &MaskmapBlock) {
+    let parent_bits = &mm.parent_bits_rust;
+    let parent_snake = &mm.parent_snake;
+    // Compute `effective_bits` once per maskmap. xor= adjusts polarity:
+    //   no xor: gate = (bits & mask) != 0
+    //   xor=X:  gate = ((bits ^ X) & mask) != 0
+    // PositionPack is the only schema site using xor (line 6471, Flags^0x78).
+    writeln!(buf, "        // <maskmap name=\"{parent_snake}\">").unwrap();
+    if let Some(xor) = mm.xor_mask {
+        writeln!(buf, "        let __mm_bits: u64 = {parent_bits} ^ 0x{xor:X}u64; // xor=0x{xor:X}").unwrap();
+    } else {
+        writeln!(buf, "        let __mm_bits: u64 = {parent_bits};").unwrap();
+    }
+    // Pre-declare every gated Option<T> as `None`. The if-block then
+    // re-binds via shadowing inside the gated scope so the assigned local
+    // is reachable in `Ok(Self { ... })`.
+    for group in &mm.masks {
+        for gated in &group.fields {
+            writeln!(buf, "        let mut {snake}: Option<{ty}> = None;",
+                snake = gated.name_snake, ty = gated.rust_ty).unwrap();
+        }
+    }
+    for group in &mm.masks {
+        let mask = group.bit_value;
+        let label = if group.value_xml.contains('.') {
+            group.value_xml.replace('\"', "")
+        } else {
+            format!("0x{:X}", mask)
+        };
+        writeln!(buf, "        // <mask value=\"{}\">", escape_xml_attr_for_doc(&group.value_xml)).unwrap();
+        writeln!(buf, "        if (__mm_bits & 0x{mask:X}u64) != 0 {{").unwrap();
+        // Decode each gated field into a `_v`-suffixed local then assign that
+        // into the outer Option. We can't reuse the gated snake name as both
+        // the Option binding (`let mut x: Option<T> = None`) and the decoded
+        // value (`let x: T = …`) because the inner shadow would type-error on
+        // `x = Some(x)`. The `_v` suffix is internal to the gated scope.
+        for gated in &group.fields {
+            let tmp_name = format!("{}_v", gated.name_snake);
+            emit_read_field_indented(buf, &tmp_name, &gated.field_kind, "            ");
+        }
+        for gated in &group.fields {
+            writeln!(buf, "            {snake} = Some({snake}_v);", snake = gated.name_snake).unwrap();
+        }
+        writeln!(buf, "        }} // end mask {label}").unwrap();
+    }
 }
 
 /// Indented variant of [`emit_read_field`] for use inside the vector
