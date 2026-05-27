@@ -415,14 +415,42 @@ const FIXTURES_LIST = [
   {
     case: "Wave F.4 — Vendor_VendorInfo with typed VendorProfile (synth empty stock)",
     typeName: "Vendor_VendorInfo",
-    source: "synthesized",
-    skip: true,
-    fields: {
+    source: "rust-test",
+    // Bytes dumped from cargo test
+    // `dump_vendor_vendor_info_fixture_hex` in
+    // crates/holtburger-protocol/src/messages/trade/profile.rs via
+    // `DUMP_FIXTURE_HEX=1`. Layout:
+    //   b0f70000   outer opcode 0xF7B0 (GameMessage::GameEvent)
+    //   01000050   OrderedObjectId = 0x50000001 (target = vendor guid)
+    //   00000000   OrderedSequence = 0
+    //   62000000   EventType = 0x0062 (ApproachVendor)
+    //   01000050   ObjectId / vendor_guid = 0x50000001
+    //   83000000   Categories = 0x83 (MELEE_WEAPON | ARMOR | MISC)
+    //   00000000   MinValue = 0
+    //   ffffffff   MaxValue = 0xFFFFFFFF (-1 "no cap" sentinel)
+    //   01000000   DealsMagic = true (4-byte u32 — matches Chorizite ReadBool)
+    //   0000a03f   BuyPrice = 1.25 (f32)
+    //   0000403f   SellPrice = 0.75 (f32)
+    //   00000000   CurrencyId = 0
+    //   00000000   CurrencyAmount = 0
+    //   00000000   CurrencyName = empty string16L + 4-byte align
+    //   00000000   Items = PackableList<ItemProfile> empty (count=0)
+    hex: "b0f70000010000500000000062000000010000508300000000000000ffffffff010000000000a03f0000403f00000000000000000000000000000000",
+    unpackOnly: true,
+    expectFields: {
+      OrderedObjectId: 0x50000001,
+      OrderedSequence: 0,
+      EventType: "Vendor_VendorInfo",
       ObjectId: 0x50000001,
       Profile: {
-        Categories: 0x83,       // MELEE_WEAPON | ARMOR | MISC
+        // Chorizite serializes ItemType bitmask as comma-separated flag
+        // names. 0x83 = MELEE_WEAPON(0x01) | ARMOR(0x02) | MISC(0x80) →
+        // "MeleeWeapon, Armor, Misc".
+        Categories: "MeleeWeapon, Armor, Misc",
         MinValue: 0,
-        MaxValue: 0xFFFFFFFF,   // retail -1 "no cap" sentinel
+        MaxValue: 0xFFFFFFFF,
+        // The load-bearing bool — this is the field whose
+        // Write/Read asymmetry triggered the original SKIP.
         DealsMagic: true,
         BuyPrice: 1.25,
         SellPrice: 0.75,
@@ -430,23 +458,22 @@ const FIXTURES_LIST = [
         CurrencyAmount: 0,
         CurrencyName: "",
       },
-      Items: [],
     },
     headerMode: "full",
-    notes: "Wave F.4 (2026-05-27, PERMANENT SKIP per J5.B 2026-05-27): " +
-           "exposes the same upstream Chorizite Write/Read bool asymmetry " +
-           "F.3 documented — VendorProfile.Write uses C# BinaryWriter.Write" +
-           "(bool) (1 byte) but VendorProfile.Read uses " +
-           "BinaryReaderExtensions.ReadBool which reads u32 (4 bytes). " +
-           "Round-trip via the synth pack→unpack path triggers 'Unable to read " +
-           "beyond end of stream' on the DealsMagic field. The retail wire is " +
-           "4-byte-bool (acclient.c:702448) so our Rust port reads it correctly " +
-           "from real captures; cargo test -p holtburger-protocol covers the " +
-           "Rust-side round-trip. PERMANENT SKIP: fixing requires either (a) " +
-           "upstream Chorizite VendorProfile.Write change (out of our control) " +
-           "or (b) extending the WB.Terminal validator pipeline to pre-widen " +
-           "bool fields on synth-pack (Wave-J6 scope, NOT J5). Do not " +
-           "investigate further without confirming upstream movement first.",
+    opcode: 0xF7B0,
+    notes: "FIXED 2026-05-27 via Wave J5.B `unpackOnly` bypass (handoff " +
+           "§2 row 10). Hex extracted from cargo test " +
+           "`dump_vendor_vendor_info_fixture_hex` in profile.rs with " +
+           "DUMP_FIXTURE_HEX=1. The upstream Chorizite asymmetry " +
+           "(VendorProfile.Write uses BinaryWriter.Write(bool)=1byte but " +
+           "VendorProfile.Read uses BinaryReaderExtensions.ReadBool=4byte) " +
+           "means the synth pack→unpack path can't round-trip the " +
+           "DealsMagic field. The retail wire is 4-byte-bool " +
+           "(acclient.c:702448) — Rust pack emits 4-byte u32, Chorizite " +
+           "reader correctly consumes it. The expectFields block asserts " +
+           "the full 9-field VendorProfile (including DealsMagic=true) " +
+           "decoded correctly, catching silent field-shift bugs that pure " +
+           "unpack-success wouldn't surface.",
   },
   {
     case: "Movement_VectorUpdate (S2C)",
@@ -630,63 +657,112 @@ const FIXTURES_LIST = [
   {
     case: "Wave F.3 — Allegiance_AllegianceLoginNotificationEvent / 0x027A (login)",
     typeName: "Allegiance_AllegianceLoginNotificationEvent",
-    source: "synthesized",
-    skip: true,
-    fields: {
+    source: "rust-test",
+    // Bytes dumped from cargo test
+    // `allegiance_login_notification_round_trip_login` via
+    // `DUMP_FIXTURE_HEX=1`. Layout:
+    //   b0f70000              outer opcode 0xF7B0 (GameMessage::GameEvent)
+    //   33330050              OrderedObjectId = 0x50003333
+    //   10000000              OrderedSequence = 0x10
+    //   7a020000              EventType = 0x027A (AllegianceLoginNotification)
+    //   34120050              CharacterId = 0x50001234
+    //   01000000              IsLoggedIn = 1 (true, 4-byte u32 — matches Chorizite ReadBool)
+    hex: "b0f7000033330050100000007a0200003412005001000000",
+    unpackOnly: true,
+    expectFields: {
       OrderedObjectId: 0x50003333,
       OrderedSequence: 0x10,
-      EventType: 0x027A,
+      // EventType is serialized as the enum name by Chorizite's JSON
+      // converter, not the underlying u32. The typeName="Allegiance_
+      // AllegianceLoginNotificationEvent" already constrains this; we
+      // assert the name as a belt-and-suspenders.
+      EventType: "Allegiance_AllegianceLoginNotificationEvent",
       CharacterId: 0x50001234,
       IsLoggedIn: true,
     },
     headerMode: "full",
     opcode: 0xF7B0,
-    notes: "Wave F.3 (2026-05-27, SKIP): ACE pushes opcode 0x027A " +
-           "wrapped in Ordered_GameEvent 0xF7B0. Inner payload: " +
-           "(CharacterId u32, IsLoggedIn u32 [ReadBool]). Marked SKIP " +
-           "alongside the F.4 Vendor_VendorInfo fixture — the WB.Terminal " +
-           "chorizite-wire-pack-message command's synthesized-wrapper path " +
-           "doesn't surface the inner event subclass through its " +
-           "Ordered_GameEvent dispatcher today. The cargo round-trip tests " +
-           "`allegiance_login_notification_round_trip_login` / " +
-           "`_logout` in crates/holtburger-protocol/src/messages/allegiance/" +
-           "events.rs cover the 8-byte wire shape including the " +
-           "ReadBool = 4-byte u32 invariant.",
+    notes: "FIXED 2026-05-27 via Wave J5.B `unpackOnly` bypass (handoff " +
+           "§2 row 10). Hex extracted from cargo test " +
+           "`allegiance_login_notification_round_trip_login` in " +
+           "crates/holtburger-protocol/src/messages/allegiance/events.rs " +
+           "with DUMP_FIXTURE_HEX=1. Skips Chorizite's broken " +
+           "Write(bool)=1byte / ReadBool=4byte round-trip step; Chorizite's " +
+           "ReadBool DOES correctly read the 4-byte u32 representation that " +
+           "Rust-pack produces (which matches the ACE wire). Cargo " +
+           "round-trip covers the full Rust-side write→read invariant.",
   },
   {
     case: "Wave F.3 — Allegiance_AllegianceLoginNotificationEvent / 0x027A (logout)",
     typeName: "Allegiance_AllegianceLoginNotificationEvent",
-    source: "synthesized",
-    skip: true,
-    fields: {
+    source: "rust-test",
+    // Layout identical to login row except OrderedSequence=0x11,
+    // CharacterId=0x5000ABCD, IsLoggedIn=0 (false, still 4-byte u32).
+    hex: "b0f7000033330050110000007a020000cdab005000000000",
+    unpackOnly: true,
+    expectFields: {
       OrderedObjectId: 0x50003333,
       OrderedSequence: 0x11,
-      EventType: 0x027A,
+      EventType: "Allegiance_AllegianceLoginNotificationEvent",
       CharacterId: 0x5000ABCD,
       IsLoggedIn: false,
     },
     headerMode: "full",
     opcode: 0xF7B0,
-    notes: "Wave F.3 (2026-05-27, SKIP): logout variant of 0x027A. Same " +
-           "WB.Terminal limitation as the login row; cargo-side covers " +
-           "the false→0 ReadBool encoding via " +
-           "`allegiance_login_notification_round_trip_logout`.",
+    notes: "FIXED 2026-05-27 via Wave J5.B `unpackOnly` bypass (handoff " +
+           "§2 row 10). Hex extracted from cargo test " +
+           "`allegiance_login_notification_round_trip_logout`. Same " +
+           "guarantee as the login row — Rust-pack 4-byte 0 is correctly " +
+           "read as `false` by Chorizite's ReadBool.",
   },
   {
     case: "Wave F.3 — Allegiance_AllegianceInfoResponseEvent / 0x027C",
     typeName: "Allegiance_AllegianceInfoResponseEvent",
-    source: "synthesized",
-    skip: true,
-    notes: "Wave F.3 (2026-05-27, SKIP): structurally identical to " +
-           "AllegianceUpdate body — (TargetId u32) + AllegianceProfile " +
-           "(uint TotalMembers, uint TotalVassals, AllegianceHierarchy). " +
-           "The hierarchy carries a PackableHashTable + recursive node " +
-           "list; constructing a synthesized `fields` shape requires the " +
-           "WB.Terminal chorizite-wire-pack command to recurse into " +
-           "AllegianceProfile/AllegianceHierarchy nested types. Round-trip " +
-           "is covered cargo-side (`allegiance_info_response_round_trip` " +
-           "+ `allegiance_info_response_round_trip_empty` in " +
-           "crates/holtburger-protocol/src/messages/allegiance/events.rs).",
+    source: "rust-test",
+    // Bytes dumped from cargo test `allegiance_info_response_round_trip`
+    // via `DUMP_FIXTURE_HEX=1`. Wraps an AllegianceProfile with a full
+    // monarch + patron node tree. Beyond the standard outer-header +
+    // (target_id, total_members, total_vassals) prefix, the body is the
+    // shared AllegianceHierarchy serialized via the
+    // `pack_allegiance_hierarchy_body` helper.
+    hex: "b0f7000033330060200000007c02000033330060020000000100000002000b00010000011111006002000000020000000700537065616b6572000000090053656e65736368616c00393000000300000000000000000000000a005265706c79204d4f544410004d6f6e6172636851756572796d61726b0000adde00001901b4a90000c8420000a042000000000000803f000000000000000000000000110053616d706c6520416c6c656769616e63650000f15365000000000000000011110060d20400002e1600000d0000000101050046000000c8009600201c0000100e000010004d6f6e6172636851756572796d61726b00001111006022220060d20400002e1600000d0000000101030032000000c8009600201c0000100e00000700506174726f6e51000000",
+    unpackOnly: true,
+    expectFields: {
+      OrderedObjectId: 0x60003333,
+      OrderedSequence: 0x20,
+      EventType: "Allegiance_AllegianceInfoResponseEvent",
+      TargetId: 0x60003333,
+      // Profile.{TotalMembers, TotalVassals} sit directly under the
+      // Chorizite AllegianceProfile typed view. The nested
+      // AllegianceHierarchy carries the rest of the body.
+      Profile: {
+        TotalMembers: 2,
+        TotalVassals: 1,
+        Hierarchy: {
+          // Critical bool fields — these are what the upstream Chorizite
+          // Write/Read asymmetry trips on. Rust pack emits 4-byte u32;
+          // Chorizite's ReadBool consumes 4 bytes.
+          IsLocked: false,
+          Motd: "Reply MOTD",
+          MotdSetBy: "MonarchQuerymark",
+          AllegianceName: "Sample Allegiance",
+          MonarchBroadcastTime: 12345,
+          MonarchBroadcastsToday: 3,
+          ChatRoomId: 0xDEAD,
+        },
+      },
+    },
+    headerMode: "full",
+    opcode: 0xF7B0,
+    notes: "FIXED 2026-05-27 via Wave J5.B `unpackOnly` bypass (handoff " +
+           "§2 row 10). Hex extracted from cargo test " +
+           "`allegiance_info_response_round_trip`. AllegianceHierarchy " +
+           "body contains a nested `is_locked` bool (false→0 u32) — same " +
+           "asymmetry. Rust pack writes 4-byte u32 booleans throughout " +
+           "matching the retail wire; Chorizite's reader handles them. " +
+           "Cargo `allegiance_info_response_round_trip` + " +
+           "`allegiance_info_response_round_trip_empty` cover the full " +
+           "Rust-side round-trip across both populated + empty hierarchies.",
   },
   // ───── Wave F.5 (2026-05-27) — contract tracker ─────
   // C2S AbandonContract — single-u32 payload (ContractId). Verifies
@@ -790,6 +866,52 @@ function sha256(hex) {
     .digest("hex");
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Field-comparison helper for `unpackOnly` fixtures
+// ─────────────────────────────────────────────────────────────────
+//
+// Walks a flat `expectFields` object and asserts that each key resolves
+// to the expected value inside the unpacked Chorizite fields tree.
+// Supports nested paths via dotted keys (e.g. "Profile.DealsMagic")
+// and numeric equality on integer / float values.
+//
+// Returns null on full match; on mismatch returns
+// { path, expected, actual } for the first divergence.
+function diffExpectFields(expected, actual) {
+  if (!expected || typeof expected !== "object") return null;
+  for (const [key, want] of Object.entries(expected)) {
+    const got = resolveFieldPath(actual, key);
+    if (want !== null && typeof want === "object" && !Array.isArray(want)) {
+      const nested = diffExpectFields(want, got || {});
+      if (nested) return { path: `${key}.${nested.path}`, expected: nested.expected, actual: nested.actual };
+      continue;
+    }
+    // For booleans / numbers / strings: tolerant equality (number ↔ number, etc.)
+    if (typeof want === "boolean" && (got === 0 || got === 1 || typeof got === "boolean")) {
+      const gotBool = got === true || got === 1;
+      if (gotBool !== want) return { path: key, expected: want, actual: got };
+      continue;
+    }
+    if (typeof want === "number" && typeof got === "number") {
+      if (Math.abs(want - got) > 1e-5) return { path: key, expected: want, actual: got };
+      continue;
+    }
+    if (want !== got) return { path: key, expected: want, actual: got };
+  }
+  return null;
+}
+
+function resolveFieldPath(obj, path) {
+  if (!obj) return undefined;
+  const parts = path.split(".");
+  let cur = obj;
+  for (const p of parts) {
+    if (cur == null) return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
 async function runFixture(wbt, fx) {
   const result = {
     case: fx.case,
@@ -864,6 +986,50 @@ async function runFixture(wbt, fx) {
     if (!unpack.success) {
       result.status = "FAIL";
       result.detail = { step: "unpack", error: unpack.error, hex: hex.slice(0, 80) + (hex.length > 80 ? "…" : "") };
+      return result;
+    }
+
+    // ───────────────────────────────────────────────────────────
+    // Wave J5.B (2026-05-27): `unpackOnly: true` mode.
+    // ───────────────────────────────────────────────────────────
+    //
+    // Some fixtures cannot exercise Chorizite's full Pack→Unpack
+    // round-trip because of the upstream
+    // `BinaryWriter.Write(bool)` (1 byte) vs
+    // `BinaryReaderExtensions.ReadBool` (4 bytes) asymmetry
+    // (handoff §2 row 10). For those, Rust-pack (which emits the
+    // wire-correct 4-byte u32) → Chorizite-unpack DOES work; we
+    // just can't re-pack and compare.
+    //
+    // Contract: when `unpackOnly === true`:
+    //   - Chorizite-unpack MUST succeed (already asserted above).
+    //   - Decoded fields MUST match `expectFields` if supplied.
+    //   - The repack round-trip step is SKIPPED.
+    // This is a STRONGER guarantee than the synth-pack path —
+    // Rust-pack produces real wire bytes a Chorizite reader can
+    // consume, which is the actual production contract.
+    if (fx.unpackOnly === true) {
+      if (fx.expectFields) {
+        const diff = diffExpectFields(fx.expectFields, unpack.fields);
+        if (diff) {
+          result.status = "FAIL";
+          result.detail = {
+            step: "expectFields",
+            hex: hex,
+            mismatch: diff,
+            fields: unpack.fields,
+          };
+          return result;
+        }
+      }
+      result.status = "PASS";
+      result.detail = {
+        bytes: hex,
+        byteLen: hex.length / 2,
+        sha256: sha256(hex),
+        fields: unpack.fields,
+        mode: "unpack-only (round-trip skipped: upstream Chorizite bool asymmetry per handoff §2 row 10)",
+      };
       return result;
     }
 

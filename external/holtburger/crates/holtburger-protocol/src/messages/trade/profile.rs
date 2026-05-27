@@ -747,4 +747,48 @@ mod tests {
         // 1.1 × 200 × 1 + 0.1 → 220.1 → floor → 220
         assert_eq!(buy_price, 220);
     }
+
+    // Wave J5.B follow-on (2026-05-27): dump the FULL wire shape of
+    // `Vendor_VendorInfo` (Chorizite) / `ApproachVendor` (Rust) wrapped
+    // in the outer `GameMessage::GameEvent` 0xF7B0 frame, when the
+    // `DUMP_FIXTURE_HEX=1` env var is set. The bytes are then fed into
+    // `apps/holtburger-web/validate_wire_conformance.cjs`'s `unpackOnly`
+    // fixture for the Wave F.4 Vendor profile — which can't round-trip
+    // via Chorizite's synth-pack path because of the upstream
+    // `BinaryWriter.Write(bool)`=1 byte vs `BinaryReaderExtensions.
+    // ReadBool()`=4 bytes asymmetry (handoff §2 row 10). Rust packs the
+    // wire-correct 4-byte u32, which Chorizite's reader handles fine.
+    #[test]
+    fn dump_vendor_vendor_info_fixture_hex() {
+        use crate::messages::game_event::{GameEvent, GameEventMessage};
+        use crate::messages::game_message::GameMessage;
+        use crate::traits::ProtocolPack;
+
+        let event = ApproachVendorEventData {
+            vendor_guid: Guid::from(0x5000_0001),
+            // Categories: 0x83 — matches F.4 fixture
+            // (ItemType::MELEE_WEAPON | ARMOR | MISC = 0x01 | 0x02 | 0x80 = 0x83).
+            merchandise_item_types: 0x83,
+            merchandise_min_value: 0,
+            merchandise_max_value: u32::MAX, // -1 sentinel
+            deal_magical_items: 1,           // true (4-byte u32)
+            buy_multiplier: 1.25,
+            sell_multiplier: 0.75,
+            alternate_currency_wcid: 0,
+            alternate_currency_amount: 0,
+            alternate_currency_name: String::new(),
+            items: vec![],
+        };
+        let msg = GameEventMessage {
+            target: Guid::from(0x5000_0001),
+            sequence: 0,
+            event: GameEvent::ApproachVendor(Box::new(event)),
+        };
+        if std::env::var("DUMP_FIXTURE_HEX").ok().as_deref() == Some("1") {
+            let game_msg = GameMessage::GameEvent(Box::new(msg));
+            let mut packed = Vec::new();
+            game_msg.pack(&mut packed);
+            eprintln!("FIXTURE_HEX[vendor_vendor_info]: {}", hex::encode(&packed));
+        }
+    }
 }

@@ -598,7 +598,7 @@ pub fn pack_allegiance_hierarchy_body(buf: &mut Vec<u8>, body: &AllegianceHierar
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messages::{GameEvent, GameEventMessage};
+    use crate::messages::{GameEvent, GameEventMessage, GameMessage};
     use holtburger_common::math::{Quaternion, Vector3};
 
     fn round_trip(msg: &GameEventMessage) {
@@ -608,6 +608,23 @@ mod tests {
         let unpacked = GameEventMessage::unpack(&packed, &mut offset).expect("unpack failed");
         assert_eq!(offset, packed.len(), "extra bytes left after unpack");
         assert_eq!(&unpacked, msg, "round-trip mismatch");
+    }
+
+    /// Wave J5.B follow-on (2026-05-27): also dump the FULL wire shape
+    /// (outer `GameMessage::GameEvent` wrapper — opcode 0xF7B0 + target +
+    /// sequence + event_type + payload) as hex when the
+    /// `DUMP_FIXTURE_HEX` env var is set. Used to extract bytes the
+    /// `validate_wire_conformance.cjs` `unpackOnly` fixtures consume.
+    /// Bypasses the upstream Chorizite `Write(bool)=1byte` /
+    /// `ReadBool()=4byte` asymmetry — Rust's bool→u32 pack matches
+    /// what Chorizite's reader expects (handoff §2 row 10).
+    fn dump_fixture_hex_if_requested(name: &str, msg: &GameEventMessage) {
+        if std::env::var("DUMP_FIXTURE_HEX").ok().as_deref() == Some("1") {
+            let game_msg = GameMessage::GameEvent(Box::new(msg.clone()));
+            let mut packed = Vec::new();
+            game_msg.pack(&mut packed);
+            eprintln!("FIXTURE_HEX[{}]: {}", name, hex::encode(&packed));
+        }
     }
 
     fn sample_data_entry(name: &str, rank: u16, level: u32, guid: u32) -> AllegianceDataEntry {
@@ -734,6 +751,7 @@ mod tests {
             event: GameEvent::AllegianceLoginNotification(Box::new(event)),
         };
         round_trip(&msg);
+        dump_fixture_hex_if_requested("allegiance_login_notification_login", &msg);
     }
 
     #[test]
@@ -748,6 +766,7 @@ mod tests {
             event: GameEvent::AllegianceLoginNotification(Box::new(event)),
         };
         round_trip(&msg);
+        dump_fixture_hex_if_requested("allegiance_login_notification_logout", &msg);
     }
 
     // Wave-F3 (2026-05-27): AllegianceInfoResponse (0x027C) — shares the
@@ -801,6 +820,7 @@ mod tests {
             event: GameEvent::AllegianceInfoResponse(Box::new(event)),
         };
         round_trip(&msg);
+        dump_fixture_hex_if_requested("allegiance_info_response", &msg);
     }
 
     #[test]

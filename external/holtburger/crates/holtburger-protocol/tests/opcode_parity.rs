@@ -249,6 +249,22 @@ const CATEGORIZATION_GATE_ALLOWLIST: &[(&str, u32, &str)] = &[
          Chorizite categorizes it as top-level S2CMessageType.\
          Character_ServerSaysAttemptFailed, which is wrong.",
     ),
+    (
+        "GameEventOpcode",
+        0x00B5,
+        "BookModifyPageResponse is the S2C response to the C2S \
+         Writing_BookModifyPage (0x00AB). Chorizite's enum has a GAP \
+         at 0x00B5 — it declares 0x00B4 Writing_BookOpen and \
+         0x00B6 Writing_BookAddPageResponse but skips 0x00B5 entirely. \
+         ACE-Server GameEventBookModifyPageResponse confirms 0x00B5 is \
+         the canonical response opcode (the C2S/S2C pair is documented in \
+         the absorption-plan wave 14 inventory work). Chorizite is \
+         incomplete here; not a Rust error. Pattern matches the existing \
+         Book*Response cluster: 0x00B6 BookAddPageResponse (Chorizite \
+         has), 0x00B7 BookDeletePageResponse (Chorizite has). The \
+         BookModifyPage request → BookModifyPageResponse reply pair is \
+         analogous.",
+    ),
 ];
 
 /// True if `(label, value)` is on the allowlist.
