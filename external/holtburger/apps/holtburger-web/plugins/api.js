@@ -24,7 +24,7 @@
 // | 7 | Game.OnCharactersChanged            | EventArgs.Empty (re-fire roster)               | kind=0 CharacterListRecv  | IMPLEMENTED | renderCharacterList drains kind=0 each fire                          |
 // | 8 | Game.OnWorldInfo                    | EventArgs.Empty (ServerName/Max/Cur)           | —                         | MISSING     | Login_WorldInfo parsed but not surfaced as ClientEvent (TODO)        |
 // | 9 | Character.OnVitaeChanged            | float Vitae, OldVitae                          | kind=8 "playerStatsUpdated"| PARTIAL    | coalesced; no vitae-specific channel + no oldVitae delta (TODO)      |
-// |10 | Character.OnVitalChanged            | VitalId Type, int Value, int OldValue          | kind=8 "playerStatsUpdated"| PARTIAL    | coalesced into one stats-bump; per-vital deltas dropped (TODO)       |
+// |10 | Character.OnVitalChanged            | VitalId Type, int Value, int OldValue          | kinds 42/43/44 "vitalChangedHealth/Stamina/Mana" | IMPLEMENTED | Wave 3.C (2026-05-28): per-vital granular events emit current+buffedMax; coalesced kind=8 still fires alongside for non-HUD subs; oldValue field deferred (recv loop discards prior on update_vital_current) |
 // |11 | Character.OnEnchantmentChanged      | AddRemove Type, LayeredSpellId, Enchantment    | kind=8 + bus enchantmentAdded/Removed | PARTIAL | PR-2 2026-05-27: JS-side snapshot diff emits Added/Removed delta events; wire-level wrapper events (target_guid + sequence) deferred to Wave E for remote-creature buffs |
 // |12 | Character.OnSharedCooldownChanged   | AddRemove Type, SharedCooldown                 | —                         | MISSING     | shared-cooldown bus not wired (TODO)                                 |
 // |13 | Character.OnPortalSpaceEntered      | EventArgs.Empty                                | —                         | MISSING     | portal-space (loading screen) entered/exited not exposed (TODO)      |
@@ -47,7 +47,10 @@
 // kind=29 Death                  — emits "death" {victimGuid, killerGuid, message}; combat-hud subscribes for self-death overlay
 //
 // ---- Bus-emitted events (canonical list — subscribe via client.events.on) ----
-//   "playerStatsUpdated"   (kind=8)         — vitals/skills/attrs refreshed
+//   "playerStatsUpdated"   (kind=8)         — vitals/skills/attrs refreshed (coalesced)
+//   "vitalChangedHealth"   (kind=42)        — {current, buffedMax} (Wave 3.C 2026-05-28)
+//   "vitalChangedStamina"  (kind=43)        — {current, buffedMax} (Wave 3.C)
+//   "vitalChangedMana"     (kind=44)        — {current, buffedMax} (Wave 3.C)
 //   "landblockChanged"     (zone-cross)     — {prevLb, lbId} from local player move
 //   "vendorOpened"         (kind=12)        — {stringPayload, u32Payload, u32Payload2}
 //   "damageDealt"          (kind=19 JSON)   — {defenderName, damage, damageType, ...}
@@ -315,7 +318,7 @@ export function createClient(sessionHandle) {
   // TODO(coverage-table row 6):  add unified "stateChanged" {oldState,newState} bus event
   // TODO(coverage-table row 8):  add "worldInfo" bus event (ServerName/MaxConnections/CurrentConnections)
   // TODO(coverage-table row 9):  split kind=8 into per-vital "vitaeChanged" with old/new
-  // TODO(coverage-table row 10): split kind=8 into per-vital "vitalChanged" {type,value,oldValue}
+  // row 10: DONE (Wave 3.C 2026-05-28) — per-vital "vitalChangedHealth/Stamina/Mana" {current,buffedMax} via kinds 42/43/44. oldValue deferred (recv loop's update_vital_current discards prior).
   // TODO(coverage-table row 11): add "enchantmentChanged" {type,layeredSpellId,enchantment} bus event
   // TODO(coverage-table row 12): add "sharedCooldownChanged" {type,cooldown} bus event
   // TODO(coverage-table row 13): add "portalSpaceEntered" bus event

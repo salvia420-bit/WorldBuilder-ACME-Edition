@@ -8968,6 +8968,34 @@ void main() {
                     targetGuid: (evt.u32Payload ?? 0) >>> 0,
                   });
                 }
+              } else if (
+                evt.kind === 42 /* Wave 3.C VitalHealth */ ||
+                evt.kind === 43 /* Wave 3.C VitalStamina */ ||
+                evt.kind === 44 /* Wave 3.C VitalMana */
+              ) {
+                // === Wave 3.C — per-vital events (2026-05-28) ===
+                // Granular vital updates emitted IN ADDITION to the
+                // coalesced kind=8 `playerStatsUpdated`. Vitals HUD
+                // subscribes to these so each bar animates smoothly
+                // without repainting all three when only one moved.
+                // Payload (per src/lib.rs `CLIENT_EVENT_KIND_VITAL_*`):
+                //   u32Payload  = current (post-update)
+                //   u32Payload2 = buffed_max
+                // Vital type lives in the kind itself (HP=42 / ST=43 /
+                // MN=44). Non-vital subscribers keep using kind=8 — the
+                // coalesced signal still fires alongside these.
+                if (window.__pluginClient?.events) {
+                  const busName =
+                    evt.kind === 42 ? "vitalChangedHealth"
+                    : evt.kind === 43 ? "vitalChangedStamina"
+                    : "vitalChangedMana";
+                  const current = (evt.u32Payload ?? 0) >>> 0;
+                  const buffedMax = (evt.u32Payload2 ?? 0) >>> 0;
+                  window.__pluginClient.events.emit(busName, {
+                    current,
+                    buffedMax,
+                  });
+                }
               } else if (evt.kind === 32 /* ObjectAppraised */) {
                 // ACPlugin PR-2 (2026-05-27): an entity's appraisal
                 // data was just refreshed in the entity store (the

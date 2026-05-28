@@ -10,6 +10,16 @@
 // for refresh, and registered with `iconHidden: true` so it doesn't
 // claim a bar slot.
 //
+// === Wave 3.C — per-vital events (2026-05-28) ===
+// The plugin now ALSO subscribes to `vitalChangedHealth/Stamina/Mana`
+// (kind=42/43/44, see src/lib.rs + index.html drainEvents) for smooth
+// per-bar animation. The coalesced `playerStatsUpdated` (kind=8)
+// remains the fallback path so first-paint after login (when only
+// kind=8 fires from the snapshot-publish hook) still works, and any
+// state we don't read from the snapshot (e.g. derived/buffed_max
+// recomputed by an attribute change) still rebuilds the row. The
+// per-vital fast path mutates ONLY the bar that moved.
+//
 // Layout-driven positions: retail's gmFloatyVitalsUI (LayoutDesc
 // 0x2100006C) packs three 150×16 horizontal bars inside a 160×58
 // frame. Element-id map confirmed by vitals_hud_layout_dump 2026-05-24:
@@ -178,6 +188,44 @@ function buildVitalRow(type) {
   };
 }
 
+// === Wave 3.C — per-vital granular paint (2026-05-28) ===
+//
+// Mutate a single vital row in place given the wire-side (current,
+// buffedMax) tuple from kind=42/43/44. Called from the per-vital bus
+// subscription so only the bar that moved repaints. If no row exists
+// yet for `type` (e.g. the per-vital event arrived before the first
+// kind=8 snapshot built the row), this is a no-op — the next kind=8
+// `playerStatsUpdated` will build it via `renderVitals`.
+//
+// Mirrors the per-row mutation block inside `renderVitals` to stay
+// byte-identical at the DOM level. Only the rebuild / cleanup paths
+// from the full renderer are skipped.
+function applyVitalDelta(overlay, type, current, buffedMax) {
+  const refs = overlay.__vitalRefs;
+  if (!refs) return; // First-paint race; kind=8 will build the row.
+  const entry = refs.get(type);
+  if (!entry) return; // Row not in the packet yet — wait for kind=8.
+
+  const pct = buffedMax > 0
+    ? Math.max(0, Math.min(100, (current / buffedMax) * 100))
+    : 0;
+  const pctStr = `${pct.toFixed(1)}%`;
+  const numsStr = `${current} / ${buffedMax}`;
+
+  if (entry.lastPctStr !== pctStr) {
+    entry.fillEl.style.width = pctStr;
+    entry.lastPctStr = pctStr;
+  }
+  if (entry.lastNumsStr !== numsStr) {
+    entry.numsEl.textContent = numsStr;
+    entry.lastNumsStr = numsStr;
+  }
+  // The overlay may still be hidden if the first snapshot hasn't
+  // landed (hidden=true sentinel set by renderVitals on empty
+  // input). Reveal it now — we have authoritative wire data.
+  if (overlay.hidden) overlay.hidden = false;
+}
+
 // Build-once / mutate-many. We stash a per-type Map of row refs on the
 // overlay element itself (`overlay.__vitalRefs`) so the renderer stays
 // pure-functional from the caller's perspective. Dynamic bar count is
@@ -340,7 +388,31 @@ export function mount(ctx) {
       }
     };
     client.events.on("playerStatsUpdated", render);
-    unsubscribe = () => client.events.off("playerStatsUpdated", render);
+
+    // === Wave 3.C — per-vital granular subscriptions (2026-05-28) ===
+    // Vital types match `holtburger_common::stats::VitalType` (Health=1,
+    // Stamina=3, Mana=5) and the VITAL_SHORT / VITAL_CLASS maps above.
+    // Each handler paints exactly one bar — full `render()` only fires
+    // on the coalesced kind=8 fallback.
+    const onHealth = (e) => {
+      applyVitalDelta(overlay, 1, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0);
+    };
+    const onStamina = (e) => {
+      applyVitalDelta(overlay, 3, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0);
+    };
+    const onMana = (e) => {
+      applyVitalDelta(overlay, 5, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0);
+    };
+    client.events.on("vitalChangedHealth", onHealth);
+    client.events.on("vitalChangedStamina", onStamina);
+    client.events.on("vitalChangedMana", onMana);
+
+    unsubscribe = () => {
+      client.events.off("playerStatsUpdated", render);
+      client.events.off("vitalChangedHealth", onHealth);
+      client.events.off("vitalChangedStamina", onStamina);
+      client.events.off("vitalChangedMana", onMana);
+    };
     render();
     return true;
   }

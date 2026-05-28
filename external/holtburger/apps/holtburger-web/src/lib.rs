@@ -12765,6 +12765,65 @@ const CLIENT_EVENT_KIND_ALLEGIANCE_PRESENCE: u32 = 40;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_ALLEGIANCE_INFO: u32 = 41;
 
+// === Wave 3.C — per-vital events (2026-05-28) ===
+//
+// The coalesced `CLIENT_EVENT_KIND_PLAYER_STATS_UPDATED` (kind=8)
+// signal fires once per recv iteration regardless of how many
+// per-vital wire messages landed in that iteration. That single
+// "stats changed somewhere" event made the vitals HUD repaint all
+// three bars on every tick, which caused bursty / stepped CSS-width
+// animation when only one vital was actually changing.
+//
+// These three new kinds let JS subscribe per-vital so the vitals bar
+// only animates the bar that actually moved. They fire IN ADDITION to
+// kind=8 — non-vital subscribers (skill panel, attribute panel,
+// burden indicator, etc.) keep using the coalesced signal so this
+// change is purely additive. The recv loop emits one kind=42/43/44
+// per `WorldEvent::VitalUpdated(v)` in the per-event loop below
+// (search "Wave 3.C" in this file for the emit site).
+//
+// Payload contract — all three kinds use the same fields:
+//   `u32Payload`   = current vital value (post-update)
+//   `u32Payload2`  = buffed_max (so JS doesn't need a snapshot round-
+//                    trip to compute the percentage)
+//   No string / f32 payloads. The vital type is in the kind itself.
+//
+// Vital IDs map to ACE's `PropertyAttribute2nd` (= ACPlugin
+// `VitalId`):
+//   Health  = 1   → kind=42
+//   Stamina = 3   → kind=43
+//   Mana    = 5   → kind=44
+//
+// Refs:
+//   external/chorizite/ACPlugin/API/Character.cs:721   (OnVitalChanged
+//                                                       contract — wave J4
+//                                                       even/odd parity)
+//   crates/holtburger-core/src/client/vital_info.rs    (derived-vital math)
+//   apps/holtburger-web/plugins/vitals-hud.js          (JS subscriber)
+//   apps/holtburger-web/index.html drainEvents         (kind→bus router)
+
+/// `kind = 42` — Wave 3.C (2026-05-28): Health-vital granular update.
+/// Fires once per `WorldEvent::VitalUpdated(v)` whose `vital_type ==
+/// VitalType::Health`. Fires IN ADDITION to kind=8 — the coalesced
+/// stats event still fires for the snapshot getters that non-HUD
+/// panels poll. `u32Payload` = current (post-update); `u32Payload2`
+/// = buffed_max. JS handler in `drainEvents` emits
+/// `vitalChangedHealth` on the plugin bus.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_VITAL_HEALTH: u32 = 42;
+
+/// `kind = 43` — Wave 3.C (2026-05-28): Stamina-vital granular update.
+/// Mirrors `CLIENT_EVENT_KIND_VITAL_HEALTH` for Stamina (`VitalType::
+/// Stamina = 3`). JS handler emits `vitalChangedStamina`.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_VITAL_STAMINA: u32 = 43;
+
+/// `kind = 44` — Wave 3.C (2026-05-28): Mana-vital granular update.
+/// Mirrors `CLIENT_EVENT_KIND_VITAL_HEALTH` for Mana (`VitalType::
+/// Mana = 5`). JS handler emits `vitalChangedMana`.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_VITAL_MANA: u32 = 44;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -24221,8 +24280,31 @@ async fn recv_loop(
                         for ev in &world_events {
                             use holtburger_world::WorldEvent;
                             match ev {
-                                WorldEvent::VitalUpdated(_)
-                                | WorldEvent::AttributeUpdated(_)
+                                // === Wave 3.C — per-vital events (2026-05-28) ===
+                                // Split the per-vital case OUT of the
+                                // catch-all OR so we can emit a granular
+                                // kind=42/43/44 with (current, buffed_max)
+                                // alongside the coalesced kind=8. Non-HUD
+                                // subscribers (skill panel, attribute panel,
+                                // burden indicator) keep using kind=8 — the
+                                // per-vital events are additive.
+                                WorldEvent::VitalUpdated(vital) => {
+                                    stats_changed = true;
+                                    use holtburger_world::stats::VitalType;
+                                    let kind = match vital.vital_type {
+                                        VitalType::Health => CLIENT_EVENT_KIND_VITAL_HEALTH,
+                                        VitalType::Stamina => CLIENT_EVENT_KIND_VITAL_STAMINA,
+                                        VitalType::Mana => CLIENT_EVENT_KIND_VITAL_MANA,
+                                    };
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind,
+                                        string_payload: None,
+                                        u32_payload: Some(vital.current),
+                                        u32_payload_2: Some(vital.buffed_max),
+                                        f32_payload: None,
+                                    });
+                                }
+                                WorldEvent::AttributeUpdated(_)
                                 | WorldEvent::SkillUpdated(_)
                                 | WorldEvent::LevelInfoUpdated(_)
                                 | WorldEvent::DerivedStatsUpdated(_)
