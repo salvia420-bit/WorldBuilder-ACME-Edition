@@ -60,16 +60,16 @@ function distSq(a, b) {
 }
 
 export function attachEvents(diag) {
-  // One-time inactive-tap warning. Fires when the oracle is loaded OR
-  // the URL has ?diag=1 but `?eventLog=on` is not set. We can't enable
-  // it here (the buffer must be set up in preInit3D before any source
-  // pushes); the warning just tells the operator how to fix it.
+  // One-time inactive-tap warning. Fires only when an oracle is loaded but
+  // the tap is missing — that's a real misconfig (the oracle has nothing
+  // to diff against). `?diag=1` paths used to warn here too, but
+  // `scene3d/index.js` already auto-enables eventLog under `?diag=1` and
+  // `attachEvents` runs before `liveScene3d` is built, so tapLive() is
+  // always false at this point on the diag path → the warning was a
+  // false positive. Keep the oracle check; drop the URL check.
   try {
     const hasOracle = (diag?.expected !== null && diag?.expected !== undefined);
-    const urlHasDiag = (typeof window !== "undefined" && window.location?.search)
-      ? new URLSearchParams(window.location.search).get("diag") === "1"
-      : false;
-    if ((hasOracle || urlHasDiag) && !tapLive()) {
+    if (hasOracle && !tapLive()) {
       // eslint-disable-next-line no-console
       console.warn(
         "[diag.events] tap is inactive — eventLog ring buffer is off. " +

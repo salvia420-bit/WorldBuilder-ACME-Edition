@@ -123,6 +123,19 @@ export class WorldState extends EventTarget {
     // pending child; we watch our own `objectCreated` bus event.
     this._pendingContainerOpens = new Map();
 
+    // 2026-05-27 — container-itself-not-yet-arrived queue. Mirrors
+    // _pendingContainerOpens but for the case where the CONTAINER weenie
+    // (not the children) hasn't landed via dispatchItemCreateObject yet.
+    // Observed live as `[world-state] dispatchContainerOpened: unknown
+    // container 0xXXXXXXXX` on the boot trace: ACE published
+    // ContainerOpened (kind=21) before the corresponding ObjectCreate
+    // (kind=10) for that container. Pre-fix the dispatch dropped on the
+    // floor; now we queue the (containerGuid, items) tuple and replay
+    // it from dispatchItemCreateObject when the matching guid registers.
+    // Latest queued entry wins on re-queue (simple/correct: ACE wouldn't
+    // re-publish ContainerOpened with stale items between drains).
+    this._pendingContainerOpenForContainer = new Map();
+
     // Enchantment delta tracking — kind=8 PlayerStatsUpdated coalesces
     // all enchantment events (add/remove/update/purge). We diff the
     // current snapshot vs the last to emit `enchantmentAdded` and
@@ -363,7 +376,21 @@ export class WorldState extends EventTarget {
     // arrived (`World.cs:236-246`).
     this._resolveContainerGate(guid);
 
+    // 2026-05-27 — replay a ContainerOpened that arrived before this
+    // weenie did. See `_pendingContainerOpenForContainer` for the
+    // rationale; without this, the open is dropped on the floor.
+    this._replayPendingContainerOpen(guid);
+
     return wo;
+  }
+
+  /** Replay a deferred ContainerOpened once the container weenie lands. */
+  _replayPendingContainerOpen(guid) {
+    const cid = guid >>> 0;
+    const items = this._pendingContainerOpenForContainer.get(cid);
+    if (items === undefined) return;
+    this._pendingContainerOpenForContainer.delete(cid);
+    this.dispatchContainerOpened(cid, items);
   }
 
   /**
@@ -480,9 +507,11 @@ export class WorldState extends EventTarget {
     const cid = containerGuid >>> 0;
     const container = this.weenies.get(cid);
     if (!container) {
-      this.log.warn(
-        `[world-state] dispatchContainerOpened: unknown container 0x${cid.toString(16)}`
-      );
+      // Container weenie hasn't arrived yet — queue the event for replay
+      // when the ObjectCreate for `cid` lands. See
+      // `_pendingContainerOpenForContainer` for the rationale; this
+      // mirrors the items-not-yet-arrived gate one layer up.
+      this._pendingContainerOpenForContainer.set(cid, items);
       return;
     }
 
@@ -562,6 +591,10 @@ export class WorldState extends EventTarget {
   dispatchContainerClosed(containerGuid) {
     if (this._disposed) return;
     const cid = containerGuid >>> 0;
+    // Always cancel any queued container-not-arrived open for this guid —
+    // even when the weenie never landed. Otherwise a late ObjectCreate
+    // would replay an open that the server already retracted.
+    this._pendingContainerOpenForContainer.delete(cid);
     const container = this.weenies.get(cid);
     if (!container) {
       this.log.warn(
@@ -994,6 +1027,7 @@ export class WorldState extends EventTarget {
     this.openContainer = null;
     this.selected = null;
     this._pendingContainerOpens.clear();
+    this._pendingContainerOpenForContainer.clear();
     this._enchantmentSnapshot.clear();
     this._lastAppraisalAt.clear();
     // PR 4: drop the typed Character handle. The local-player GUID

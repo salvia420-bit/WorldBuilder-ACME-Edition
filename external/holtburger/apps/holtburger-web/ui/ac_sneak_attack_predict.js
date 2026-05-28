@@ -148,7 +148,7 @@ export function isAttackerBehindDefender({
 // Exits non-zero on any assertion failure so CI / wrapper scripts can
 // hook the result.
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (typeof process !== "undefined" && process.argv && import.meta.url === `file://${process.argv[1]}`) {
   let pass = 0;
   let fail = 0;
   function assert(cond, label) {

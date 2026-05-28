@@ -463,21 +463,6 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
-  // Aurora — camera-following sky overlay. tick() bumps uTime and
-  // copies the active camera's position so the polar-axis dome appears
-  // infinite (the standard sky-overlay trick). No-op when ?aurora=off.
-  if (scene3d?.aurora) {
-    try {
-      const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
-      scene3d.aurora.tick(dt, cam);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      if (!scene3d._auroraTickWarned) {
-        scene3d._auroraTickWarned = true;
-        console.warn("[aurora] tick threw:", e);
-      }
-    }
-  }
   // Workstream Sky-D — sky dome + celestial body renderer. Runs AFTER
   // Sky-C so the freshly-written `skyBackgroundColor` (Sky-C's horizon
   // color sink) + `skyLightingController._lastState.ambColorArgb`
@@ -889,6 +874,32 @@ export function installSharedDrainHook(scene3d) {
         console.warn("[phase7.4b] shared-drain hook dispatch:", e);
       }
     }
+    // 2026-05-28 perf: when an entity batch arrives in one tick, extract
+    // every unique setupId (modelId) ahead of dispatching and fire a
+    // single AnimationCache.getBatch(...) — this pre-warms the wasm-side
+    // `shards` cache so each subsequent em.spawn(meta) → animationCache
+    // .get(...) hits a warm fetcher instead of paying the cold-fetch
+    // (mean 558ms per spawn observed in the spawn-trace data). The
+    // getBatch call is fire-and-forget: the per-spawn .get(...) will
+    // either await the in-flight prewarm promise or hit the now-warm
+    // wasm cache. Idempotent — re-fires for already-prewarmed setupIds
+    // are filtered internally.
+    const _prewarmFromBatch = (arr) => {
+      const batchFn = scene3d?.wasmExports?.fetchEntityAnimationKeyframesBatch;
+      if (typeof batchFn !== "function") return;
+      if (!em?.animationCache?.getBatch) return;
+      const setupIds = new Set();
+      for (let i = 0; i < arr.length; i += 1) {
+        const upd = arr[i];
+        if (!upd) continue;
+        if ((upd.kind | 0) !== KIND_SPAWN) continue;
+        const mid = (upd.modelId >>> 0);
+        if (mid !== 0) setupIds.add(mid);
+      }
+      if (setupIds.size < 2) return; // single-spawn batch — prewarm overhead not worth it
+      em.animationCache.getBatch([...setupIds], batchFn).catch(() => {});
+    };
+
     // eslint-disable-next-line no-undef
     window.__scene3dEntityHook = function entityHook(updOrArray) {
       if (!updOrArray) return;
@@ -896,6 +907,7 @@ export function installSharedDrainHook(scene3d) {
       // pollEntityUpdates() array in one call). Iterate read-only;
       // the 2D loop owns the `.free()` lifetime.
       if (typeof updOrArray.length === "number" && typeof updOrArray !== "string") {
+        _prewarmFromBatch(updOrArray);
         for (let i = 0; i < updOrArray.length; i += 1) {
           dispatchOne(updOrArray[i]);
         }
@@ -971,6 +983,9 @@ export function installSharedDrainHook(scene3d) {
         }, localGuid=${localGuid !== null ? "0x" + localGuid.toString(16) : "null"}, ` +
         `local=${localEvents.length}, other=${otherEvents.length}) through 3D EntityManager`
       );
+      // 2026-05-28 perf: prewarm the AnimationCache for every setup we're
+      // about to spawn so each em.spawn() lands a warm wasm cache.
+      _prewarmFromBatch(queued);
       for (const upd of localEvents) {
         dispatchOne(upd);
       }

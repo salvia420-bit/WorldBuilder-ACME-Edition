@@ -779,14 +779,48 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   }
   const registry = scene3d.cellContainers3d;
   if (!(registry instanceof Map)) return;
-  for (const [thisCellId, container] of registry) {
-    // ?cellBugParity=retail keeps indoor EnvCells visible regardless of BFS gate.
-    const want = CELL_BUG_PARITY && container?.userData?.isEnvCell
-      ? true
-      : visibleSet.has(thisCellId >>> 0);
-    if (container.visible !== want) {
-      container.visible = want;
+  // 2026-05-28 perf: instead of iterating the whole registry (typically
+  // 600+ entries with only ~10 actually visible), diff against the prior
+  // frame's visible set. Cell becomes visible → set true; cell drops out
+  // → set false; unchanged cells are skipped entirely. Steady-state diff
+  // is 0-3 cells per tick, so the inner loop usually does no work at all.
+  // Falls back to full-registry scan under CELL_BUG_PARITY because that
+  // mode wants every EnvCell visible regardless of the diff.
+  if (CELL_BUG_PARITY) {
+    for (const [thisCellId, container] of registry) {
+      const want = container?.userData?.isEnvCell
+        ? true
+        : visibleSet.has(thisCellId >>> 0);
+      if (container.visible !== want) {
+        container.visible = want;
+      }
     }
+  } else {
+    const lastVisible = scene3d._lastCellVisibleSet ?? (scene3d._lastCellVisibleSet = new Set());
+    // Visible this frame: ensure container.visible=true. Always check
+    // (not just newly-visible) so an LRU-evicted-and-re-baked cell
+    // converges — re-bake assigns a fresh container with visible=false
+    // even though the cellId may already be in lastVisible. Cost is
+    // bounded by visibleSet.size (~11 typically).
+    for (const cellId of visibleSet) {
+      const container = registry.get(cellId);
+      if (container && container.visible !== true) {
+        container.visible = true;
+      }
+    }
+    // Newly-hidden cells: iterate prior frame's set and flip out anything
+    // no longer visible. Typical diff is 0-3 entries.
+    for (const cellId of lastVisible) {
+      if (visibleSet.has(cellId)) continue;
+      const container = registry.get(cellId);
+      if (container && container.visible !== false) {
+        container.visible = false;
+      }
+    }
+    // Roll the snapshot forward. Replace contents in place so the Set
+    // object is stable across frames (avoids per-frame allocation).
+    lastVisible.clear();
+    for (const cellId of visibleSet) lastVisible.add(cellId);
   }
 
   // Wave-3 diag hook: post-flip notify so diag.pvs can detect transitions
@@ -849,6 +883,31 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     if (lbKey === 0) continue;
     if (seen.has(lbKey)) continue;
     seen.add(lbKey);
+  }
+  // 2026-05-28 perf: expand the load ring by one LB so prefetch leads
+  // motion. Drive-2 captured a 3.3s spike at +101.9s when the player
+  // approached the edge of the original PVS-driven ring and 6 new LBs
+  // had to load all at once. By also firing load hooks for the 8-LB
+  // neighbour ring around every PVS-visible LB, those loads start ~5s
+  // earlier (one ring's traversal time at run speed). Idempotency in
+  // both loadStatics + loadBuildings makes redundant calls free.
+  const ringSeen = scene3d._pvsRingLbScratch || (scene3d._pvsRingLbScratch = new Set());
+  ringSeen.clear();
+  for (const lbKey of seen) {
+    ringSeen.add(lbKey);
+    const lbX = (lbKey >>> 24) & 0xff;
+    const lbY = (lbKey >>> 16) & 0xff;
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = lbX + dx;
+        const ny = lbY + dy;
+        if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
+        ringSeen.add(((nx << 24) | (ny << 16)) >>> 0);
+      }
+    }
+  }
+  for (const lbKey of ringSeen) {
     const lbX = (lbKey >>> 24) & 0xff;
     const lbY = (lbKey >>> 16) & 0xff;
     // Fire-and-forget — each hook resolves a Promise but we don't

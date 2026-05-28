@@ -126,6 +126,10 @@ export function setupClickPicking({
   getLocalPlayerGuid,
 }) {
   if (!canvas || !liveScene3d || !sessionHandle) {
+    console.warn(
+      "[picking] setupClickPicking early-return — click + __fireAttackOnTarget will be missing.",
+      { canvas: !!canvas, liveScene3d: !!liveScene3d, sessionHandle: !!sessionHandle },
+    );
     return { destroy() {} };
   }
 

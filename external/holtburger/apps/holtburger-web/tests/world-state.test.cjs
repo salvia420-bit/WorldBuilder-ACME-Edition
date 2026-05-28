@@ -163,14 +163,71 @@ function silentLog() {
     assert.deepEqual(firedFor, [0xB00, 0xA00], 'A resolves after B');
   });
 
-  check('unknown container GUID → warn-no-throw, no event', () => {
+  check('container weenie not yet arrived → ContainerOpened deferred, no warn', () => {
     const warnings = [];
     const w = new WorldState({ logger: { warn(...a) { warnings.push(a.join(' ')); }, error() {}, info() {}, log() {} } });
-    let fired = false;
-    w.addEventListener('containerOpened', () => { fired = true; });
+    let firedCount = 0;
+    w.addEventListener('containerOpened', () => { firedCount += 1; });
+    // Open before the container's weenie exists — must NOT warn (race is
+    // expected; ACE can publish ContainerOpened before the matching kind=10
+    // ObjectCreate lands).
     w.dispatchContainerOpened(0xDEAD, []);
-    assert.equal(fired, false);
-    assert.ok(warnings[0]?.includes('0xdead'), `expected warn mentioning 0xdead, got: ${JSON.stringify(warnings)}`);
+    assert.equal(firedCount, 0, 'no event until weenie arrives');
+    assert.equal(warnings.length, 0, `no warn expected on race, got: ${JSON.stringify(warnings)}`);
+    // When the weenie arrives, the queued open replays + fires.
+    w.dispatchItemCreateObject({ guid: 0xDEAD, classId: 0 });
+    assert.equal(firedCount, 1, 'replay fires once');
+  });
+
+  check('container-arrives-late → replay propagates children container-ref', () => {
+    const w = new WorldState({ logger: silentLog() });
+    // Children arrive first, then the open (still pre-container), then container.
+    const child1 = w.dispatchItemCreateObject({ guid: 0x200, classId: 0 });
+    const child2 = w.dispatchItemCreateObject({ guid: 0x300, classId: 0 });
+    let fired = null;
+    w.addEventListener('containerOpened', (e) => { fired = e.detail; });
+    w.dispatchContainerOpened(0x100, [
+      { guid: 0x200, containerType: 1 },
+      { guid: 0x300, containerType: 1 },
+    ]);
+    assert.equal(fired, null, 'still pending — container missing');
+    // Now the container weenie arrives → replay fires.
+    const container = w.dispatchItemCreateObject({ guid: 0x100, classId: 0 });
+    assert.ok(fired);
+    assert.equal(fired.container, container);
+    // Children inherit the container-id via the replayed dispatch.
+    assert.equal(child1.instanceValue(2 /* PROP_INSTANCE_CONTAINER */, 0), 0x100);
+    assert.equal(child2.instanceValue(2, 0), 0x100);
+  });
+
+  check('container-arrives-late → second pending child still gated correctly', () => {
+    // Container arrives last; one child arrives before, one after.
+    const w = new WorldState({ logger: silentLog() });
+    w.dispatchItemCreateObject({ guid: 0x200, classId: 0 });
+    let firedCount = 0;
+    w.addEventListener('containerOpened', () => { firedCount += 1; });
+    w.dispatchContainerOpened(0x100, [
+      { guid: 0x200, containerType: 1 },
+      { guid: 0x300, containerType: 1 },
+    ]);
+    assert.equal(firedCount, 0, 'container not present yet');
+    w.dispatchItemCreateObject({ guid: 0x100, classId: 0 });
+    // Container arrived → replay re-runs. Child 0x300 still missing → gate
+    // re-armed at the items level. Should NOT fire yet.
+    assert.equal(firedCount, 0, 'second child still missing on replay');
+    w.dispatchItemCreateObject({ guid: 0x300, classId: 0 });
+    assert.equal(firedCount, 1, 'second child arrived — gate fires once');
+  });
+
+  check('container-closed cancels a queued (container-not-arrived) open', () => {
+    const w = new WorldState({ logger: silentLog() });
+    let firedOpenCount = 0;
+    w.addEventListener('containerOpened', () => { firedOpenCount += 1; });
+    w.dispatchContainerOpened(0x100, []);  // container weenie missing
+    w.dispatchContainerClosed(0x100);       // server cancels (will warn — close path unchanged)
+    // Now the container weenie finally arrives — the closed open should NOT fire.
+    w.dispatchItemCreateObject({ guid: 0x100, classId: 0 });
+    assert.equal(firedOpenCount, 0, 'queued open should be cancelled by close');
   });
 
   // ─── [3] Container-closed (World.cs:253-262) ───

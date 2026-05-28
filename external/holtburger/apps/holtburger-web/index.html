@@ -1866,7 +1866,6 @@
                   import("./scene3d/atmosphere_pipeline.js"),
                   import("./scene3d/atmosphere_lights.js"),
                   import("./scene3d/atmosphere_sky.js"),
-                  import("./scene3d/aurora.js"),
                   // CMT Wave 11 / Phase 34 (2026-05-26): import the
                   // PlayEffect VFX module so its `playEffect` listener
                   // self-registers on `window.__pluginClient.events`
@@ -1893,7 +1892,6 @@
                     atmospherePipelineMod,
                     atmosphereLightsMod,
                     atmosphereSkyMod,
-                    _aurora,
                     _playEffectVfx,
                     _spellShapePreview,
                   ]) => {
@@ -6652,7 +6650,7 @@ void main() {
         renderStatus.innerHTML =
           `<span class="fail">[FAIL]</span> Render failed: <code>${msg}</code><br/><span class="hint">${hint}</span>`;
         // eslint-disable-next-line no-console
-        console.error("fetch_landblock_heightmaps failed:", err);
+        console.error("renderHoltburg threw — setupClickPicking will be skipped, click + __fireAttackOnTarget missing:", err);
        }
       }
 
@@ -10123,10 +10121,30 @@ void main() {
         // CharacterError::EnterGameCharacterInWorld (0x0D) which
         // means the character is in-world on ACE's end and we need to
         // fully restart Connect + Spawn after the kick wait.
+        //
+        // 2026-05-28 — Bug 11 fix: check `__bootStateHistory` for any
+        // "in-world" transition since the spawn click, not just the
+        // current `__bootState`. The wire-agent boot path fires
+        // `in-world` → `ready` within ~90ms, and the 50ms poll cadence
+        // can land on "ready" instead of "in-world", missing the
+        // equality check, falling through to the 10s timeout, and
+        // re-triggering the kick-dance even though the session is live.
+        // Reading the history is O(history-length) but the array stays
+        // tiny (< 30 entries for a full agentic login).
         const waitForSpawnOutcome = async (timeoutMs, since) => {
           const deadline = Date.now() + timeoutMs;
           while (Date.now() < deadline) {
             if (window.__bootState === "in-world") return "in-world";
+            // Catch the brief in-world → ready transition where the
+            // current bootState already advanced past "in-world".
+            const history = window.__bootStateHistory;
+            if (Array.isArray(history)) {
+              for (let i = history.length - 1; i >= 0; i--) {
+                const entry = history[i];
+                if (!entry || entry.ts < since) break;
+                if (entry.state === "in-world") return "in-world";
+              }
+            }
             const ce = window.__lastCharacterError;
             if (ce && ce.ts >= since) {
               if (ce.code === 0x0D) return "char-in-world"; // retry

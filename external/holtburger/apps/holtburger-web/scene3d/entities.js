@@ -11,6 +11,18 @@ const WIREFRAME_MODE = (() => {
   } catch (_) { return false; }
 })();
 
+// 2026-05-28 — `?spawnTrace=1` opt-in per-stage timing for entity spawn.
+// When set, _spawnImpl captures `performance.now()` deltas around the two
+// dominant async stages (animationCache.get, materialCache.preload /
+// fetchEntitySurfacesPixels) and emits one `[spawn-trace]` log per spawn
+// with the breakdown. Zero cost when off (single boolean check).
+const SPAWN_TRACE = (() => {
+  try {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("spawnTrace") === "1";
+  } catch (_) { return false; }
+})();
+
 // Phase 7.4b — EntityManager: per-entity Object3D rig + AnimationMixer.
 //
 // Sister to the 2D path's `entityMap` + `tickEntityAnimations`
@@ -1334,6 +1346,8 @@ export class EntityManager {
         "EntityManager: wasmExports.fetchEntityAnimationKeyframes missing"
       );
     }
+    const _spawnTraceT0 = SPAWN_TRACE ? performance.now() : 0;
+    const _spawnTraceAnimStart = _spawnTraceT0;
     const animEntry = await this.animationCache.get(
       setupId,
       mtableId,
@@ -1347,6 +1361,7 @@ export class EntityManager {
         paletteSubsFlat: subPalettes,
       }
     );
+    const _spawnTraceAnimMs = SPAWN_TRACE ? (performance.now() - _spawnTraceAnimStart) : 0;
     // 2026-05-16 — `AnimationCache.get()` now returns `partGroups`
     // pre-converted to `{ groups: [{geometry, surfaceDid}], surfaceDids }`
     // and frees its wasm partMesh handles inside the cache. Multiple
@@ -1432,7 +1447,13 @@ export class EntityManager {
     const hasPaletteSubs =
       paletteId !== 0 ||
       (subPalettes && subPalettes.length > 0);
-    if (hasPaletteSubs && typeof this.wasmExports?.fetchEntitySurfacesPixels === "function") {
+    const _spawnTraceMatStart = SPAWN_TRACE ? performance.now() : 0;
+    // 2026-05-28 perf: wire-agent mode discards the texture from
+    // fetchEntitySurfacesPixels anyway (per-DID wireframe materials
+    // are palette-independent), so route wire spawns through the
+    // cheaper cache.preload branch below. Real-mode entities still
+    // take the palette path so their dyed surfaces look right.
+    if (hasPaletteSubs && !WIREFRAME_MODE && typeof this.wasmExports?.fetchEntitySurfacesPixels === "function") {
       try {
         const dids = new Uint32Array([...allSurfaceDids]);
         if (dids.length > 0) {
@@ -1453,19 +1474,55 @@ export class EntityManager {
               subPaletteTripleCount: (subPalettes.length / 3) | 0,
             });
           } catch (_) {}
-          const results = await this.wasmExports.fetchEntitySurfacesPixels(
-            dids,
-            paletteId,
-            subPalettes
-          );
-          // Build entity-owned materials keyed by DID, parallel to
-          // dids[]. We DON'T install into materialCache (it's keyed
-          // by surface DID alone, which would collide with non-
-          // recoloured uses).
+
+          // 2026-05-28 perf: paletted-material dedup. Check the cache
+          // for each (DID, paletteId, subPalettes) before firing wasm
+          // fetches. Spawn-trace data showed 57/97 spawns going this
+          // path with mean 897ms wasm-fetch; many entities share outfit
+          // signatures so a transparent dedup layer skips most fetches.
+          // The cache holds CACHE-OWNED materials so they survive entity
+          // dispose — see MaterialCache.installPaletted.
           const entityMaterials = new Map();
-          for (let i = 0; i < dids.length; i += 1) {
-            const did = dids[i] >>> 0;
-            const sp = results[i];
+          const missDids = [];
+          const missIdx = [];
+          if (this.materialCache && !WIREFRAME_MODE) {
+            for (let i = 0; i < dids.length; i += 1) {
+              const did = dids[i] >>> 0;
+              const cached = this.materialCache.getCachedPaletted(did, paletteId, subPalettes);
+              if (cached) {
+                entityMaterials.set(did, cached);
+              } else {
+                missDids.push(did);
+                missIdx.push(i);
+              }
+            }
+          } else {
+            // Wire mode: every DID still needs the wasm fetch result
+            // because surfacePixelsToTexture has size side-effects we
+            // observe (even though wire mode then drops the texture).
+            // Keep the original path: fetch all, recolour all.
+            for (let i = 0; i < dids.length; i += 1) {
+              missDids.push(dids[i] >>> 0);
+              missIdx.push(i);
+            }
+          }
+
+          // Fire wasm fetch only for the DIDs we don't already have
+          // cached. Pass the SUBSET Uint32Array so the wasm side only
+          // does the residual work.
+          let results = null;
+          if (missDids.length > 0) {
+            const fetchDids = new Uint32Array(missDids);
+            results = await this.wasmExports.fetchEntitySurfacesPixels(
+              fetchDids,
+              paletteId,
+              subPalettes
+            );
+          }
+
+          for (let mi = 0; mi < missDids.length; mi += 1) {
+            const did = missDids[mi] >>> 0;
+            const sp = results ? results[mi] : null;
             if (!sp || sp.width === 0 || sp.height === 0) {
               // Empty — fall back to scene-cache fallback. The cache
               // returns the shared fallbackMaterial in that case.
@@ -1509,8 +1566,8 @@ export class EntityManager {
                 mat.userData = { __disposable: true };
                 inst.registerOwnedMaterial(mat);
               }
-              // Cache-owned materials don't get a per-entity name or
-              // __disposable flag — MaterialCache owns their lifetime.
+              // Wire mode: don't pollute palette cache (materials are
+              // shared per-DID-hash, palette-independent).
               entityMaterials.set(did, mat);
             } else {
               mat = new THREE.MeshStandardMaterial({
@@ -1520,15 +1577,18 @@ export class EntityManager {
                 side: THREE.DoubleSide,
                 transparent: false,
               });
-              mat.name = `entity-${guid.toString(16)}-surface-${did.toString(16)}`;
-              // Perf B3 (2026-05-18) — entity-owned recoloured surface
-              // material. NOT shared with MaterialCache (keyed by
-              // (entity, did) instead of just did). Free at entity
-              // dispose; tag so `_disposeMaterialIfOwned` lets it
-              // through.
-              mat.userData = { ...(mat.userData || {}), __disposable: true };
-              inst.registerOwnedTexture(tex);
-              inst.registerOwnedMaterial(mat);
+              mat.name = `paletted-${did.toString(16)}-${paletteId.toString(16)}`;
+              // 2026-05-28 — install into the paletted-material cache
+              // so the next entity with the same (DID, paletteId,
+              // subPalettes) signature gets a cache hit. installPaletted
+              // tags __cacheOwned so per-entity dispose doesn't free it.
+              if (this.materialCache) {
+                this.materialCache.installPaletted(did, paletteId, subPalettes, mat, tex);
+              } else {
+                mat.userData = { ...(mat.userData || {}), __disposable: true };
+                inst.registerOwnedTexture(tex);
+                inst.registerOwnedMaterial(mat);
+              }
               entityMaterials.set(did, mat);
             }
           }
@@ -1559,6 +1619,8 @@ export class EntityManager {
         try { window.__diag?.assets?.onMaterialError?.({ guid, dids: allSurfaceDids, error: e, source: "surface" }); } catch (_) {}
       }
     }
+    const _spawnTraceMatMs = SPAWN_TRACE ? (performance.now() - _spawnTraceMatStart) : 0;
+    const _spawnTraceRigStart = SPAWN_TRACE ? performance.now() : 0;
 
     // Build per-part Groups + per-surface Mesh leaves.
     for (let p = 0; p < partCount; p += 1) {
@@ -1852,6 +1914,19 @@ export class EntityManager {
         this._nameplateSpriteWarned = true;
         console.warn("[task-13] ensureNameplateForEntity threw:", e);
       }
+    }
+    if (SPAWN_TRACE) {
+      const rigMs = performance.now() - _spawnTraceRigStart;
+      const totalMs = performance.now() - _spawnTraceT0;
+      const surfaceCount = allSurfaceDids?.size ?? 0;
+      const path = hasPaletteSubs ? "palette" : "cache";
+      // eslint-disable-next-line no-console
+      console.log(
+        `[spawn-trace] guid=0x${guid.toString(16)} setup=0x${setupId.toString(16)} ` +
+        `parts=${partCount} surfaces=${surfaceCount} path=${path} | ` +
+        `anim=${_spawnTraceAnimMs.toFixed(1)}ms mat=${_spawnTraceMatMs.toFixed(1)}ms ` +
+        `rig=${rigMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`
+      );
     }
     return inst;
   }

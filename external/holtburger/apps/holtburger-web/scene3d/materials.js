@@ -893,6 +893,23 @@ export class MaterialCache {
     /** @type {Map<number, Promise<THREE.MeshStandardMaterial>>} */
     this.pendingFetches = new Map();
     /**
+     * 2026-05-28 — Paletted-material dedup cache. Keyed by
+     * `${surfaceDid}|${paletteId}|${subPalettesHash}` so multiple
+     * entities sharing the same outfit signature (same surface +
+     * palette substitutions) hit one cached material instead of
+     * minting a fresh recoloured one per entity. Spawn-trace data on
+     * the 120s drive showed 57/97 spawns going the palette path with
+     * mean 897ms wasm-fetch each — most are dedupable.
+     *
+     * Cache-owned: tagged `__cacheOwned: true` so per-entity dispose
+     * doesn't free a material another entity is still using. Lives
+     * for scene lifetime; cleared on scene rebuild.
+     * @type {Map<string, THREE.Material>}
+     */
+    this.palettedMaterials = new Map();
+    /** @type {Map<string, THREE.DataTexture>} — cache-owned paletted textures. */
+    this.palettedTextures = new Map();
+    /**
      * Sidecar to `pendingFetches` keyed by the same DID — records the
      * wall-clock at which the fetch was kicked off so `__diag.assets
      * .stuck(thresholdMs)` can identify entries that have been in-flight
@@ -1020,6 +1037,47 @@ export class MaterialCache {
     }
     this.fallbackHits += 1;
     return this.fallbackMaterial;
+  }
+
+  /**
+   * Build the dedup key for a paletted-material lookup.
+   * `subPalettes` is a Uint32Array of (offset_u8, length_u8, slot_u16)
+   * triples (or empty); we hash by joining numbers with a separator so
+   * the key is stable per (DID, paletteId, exact sub-palette tuple).
+   */
+  _paletteKey(surfaceDid, paletteId, subPalettes) {
+    if (!subPalettes || subPalettes.length === 0) {
+      return `${surfaceDid >>> 0}|${paletteId >>> 0}|`;
+    }
+    // Uint32Array join() is fast enough for the typical 1-12 entry
+    // sub-palette payloads; no hot allocation pattern beyond the
+    // resulting string itself.
+    return `${surfaceDid >>> 0}|${paletteId >>> 0}|${Array.from(subPalettes).join(",")}`;
+  }
+
+  /**
+   * Synchronous lookup for an already-cached paletted material.
+   * Returns null on miss so the caller can fetch + install.
+   */
+  getCachedPaletted(surfaceDid, paletteId, subPalettes) {
+    const key = this._paletteKey(surfaceDid, paletteId, subPalettes);
+    return this.palettedMaterials.get(key) ?? null;
+  }
+
+  /**
+   * Install a freshly-fetched paletted material into the cache.
+   * The caller is responsible for building the THREE.Material; we
+   * tag it `__cacheOwned` so per-entity dispose doesn't free it.
+   */
+  installPaletted(surfaceDid, paletteId, subPalettes, material, texture = null) {
+    const key = this._paletteKey(surfaceDid, paletteId, subPalettes);
+    material.userData = { ...(material.userData || {}), __cacheOwned: true };
+    if (texture) {
+      texture.userData = { ...(texture.userData || {}), __cacheOwned: true };
+      this.palettedTextures.set(key, texture);
+    }
+    this.palettedMaterials.set(key, material);
+    return material;
   }
 
   /**
