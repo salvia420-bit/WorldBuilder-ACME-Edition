@@ -14,9 +14,11 @@
 //      - opaque + DoubleSide when flags=0
 //      - transparent + depthWrite=false when Translucent (0x10) is set
 //      - alphaTest=0.5 when Base1ClipMap (0x4) is set without Translucent
-//      - emissiveMap + emissive colour when Luminous (0x40) is set
+//      - alpha blend (transparent, depthWrite off) when Alpha (0x100) set
 //      - AdditiveBlending when Additive (0x10000) is set
-//      - matte roughness=1.0 when Diffuse (0x20) is set
+//      - flat grayscale emissive when the luminosity FLOAT > 0 (NOT the
+//        0x40 bit, which retail never sets — census 2026-05-28: 0/6152)
+//      - albedo color scaled by the diffuse FLOAT (NOT the 0x20 bit)
 //   3. Two-sided distinct-surface polys produce two materials with
 //      independent flag decoding (simulates the wasm-side back-face
 //      emission — Rust emits two tris with different surface_dids
@@ -212,25 +214,41 @@ check(
   `alphaTest=${matClip.alphaTest}, transparent=${matClip.transparent}`,
 );
 
-// (d) Luminous — self-illuminating.
-const matLum = cache._materialFromFlags(SURFACE_TYPE.Luminous, stubTex);
+// (d) Self-illumination — driven by the luminosity FLOAT, not the 0x40
+// bit. Retail sets the bit on 0/6152 surfaces but 762 carry luminosity>0
+// (census 2026-05-28); acclient.c SetSurface @454688 reads the float.
+const fl = (flags, floats) =>
+  cache._materialFromFlags(flags, stubTex, undefined, undefined, undefined, undefined, floats);
+// The 0x40 bit ALONE (no float) must NOT self-illuminate any more.
+const matLumBitOnly = fl(SURFACE_TYPE.Luminous, undefined);
 check(
-  "Luminous (0x40): emissiveMap = same texture",
-  matLum.emissiveMap === stubTex,
-  `emissiveMap.uuid=${matLum.emissiveMap?.uuid}, stub.uuid=${stubTex.uuid}`,
+  "Luminous bit alone (no float): emissive stays black (inert)",
+  matLumBitOnly.emissive &&
+    matLumBitOnly.emissive.r === 0 &&
+    matLumBitOnly.emissive.g === 0 &&
+    matLumBitOnly.emissive.b === 0,
+  `emissive=${JSON.stringify(matLumBitOnly.emissive)}`,
 );
+// luminosity float > 0 drives flat grayscale emissive, NO emissiveMap.
+const matLum = fl(0, { luminosity: 0.5 });
 check(
-  "Luminous: emissive = white",
+  "luminosity float>0: emissive=white, intensity=clamp(lum)",
   matLum.emissive &&
     matLum.emissive.r === 1 &&
     matLum.emissive.g === 1 &&
-    matLum.emissive.b === 1,
-  `emissive=${JSON.stringify(matLum.emissive)}`,
+    matLum.emissive.b === 1 &&
+    Math.abs(matLum.emissiveIntensity - 0.5) < 1e-6,
+  `emissive=${JSON.stringify(matLum.emissive)}, intensity=${matLum.emissiveIntensity}`,
 );
 check(
-  "Luminous: emissiveIntensity > 0",
-  matLum.emissiveIntensity > 0,
-  `emissiveIntensity=${matLum.emissiveIntensity}`,
+  "luminosity float>0: NO emissiveMap (retail flat grayscale, acclient.c @454688)",
+  !matLum.emissiveMap,
+  `emissiveMap=${matLum.emissiveMap}`,
+);
+check(
+  "luminosity float clamps to 2.0",
+  fl(0, { luminosity: 9.0 }).emissiveIntensity === 2.0,
+  `intensity=${fl(0, { luminosity: 9.0 }).emissiveIntensity}`,
 );
 
 // (e) Additive — flames, sparks.
@@ -243,24 +261,54 @@ check(
   `blending=${matAdd.blending}, transparent=${matAdd.transparent}, depthWrite=${matAdd.depthWrite}`,
 );
 
-// (f) Diffuse — matte.
-const matMat = cache._materialFromFlags(SURFACE_TYPE.Diffuse, stubTex);
+// (f) Diffuse reflectance — driven by the diffuse FLOAT, not the 0x20 bit.
+// Retail sets the bit on 0/6152 surfaces; the float scales albedo color
+// (acclient.c SetSurface @454458).
+const matDiffBitOnly = fl(SURFACE_TYPE.Diffuse, undefined);
 check(
-  "Diffuse (0x20): roughness=1.0 (matte)",
-  matMat.roughness === 1.0,
-  `roughness=${matMat.roughness}`,
+  "Diffuse bit alone (no float): color stays white (inert)",
+  matDiffBitOnly.color &&
+    matDiffBitOnly.color.r === 1 &&
+    matDiffBitOnly.color.g === 1 &&
+    matDiffBitOnly.color.b === 1,
+  `color=${JSON.stringify(matDiffBitOnly.color)}`,
+);
+const matDiff = fl(0, { diffuse: 0.5 });
+check(
+  "diffuse float (0.5): albedo color scaled to ~0.5 grayscale",
+  matDiff.color &&
+    Math.abs(matDiff.color.r - 0.5) < 1e-6 &&
+    Math.abs(matDiff.color.g - 0.5) < 1e-6 &&
+    Math.abs(matDiff.color.b - 0.5) < 1e-6,
+  `color=${JSON.stringify(matDiff.color)}`,
+);
+check(
+  "diffuse float ~1.0: color left white (no-op)",
+  (() => {
+    const m = fl(0, { diffuse: 1.0 });
+    return m.color.r === 1 && m.color.g === 1 && m.color.b === 1;
+  })(),
+  "color should remain white at diffuse=1.0",
 );
 
-// (g) Combined Translucent + Luminous → both flags applied.
-const matComboTL = cache._materialFromFlags(
-  SURFACE_TYPE.Translucent | SURFACE_TYPE.Luminous,
-  stubTex,
-);
+// (f2) Alpha (0x100) — texture-alpha blend (new branch; 253 retail surfaces).
+const matAlpha = fl(SURFACE_TYPE.Alpha, undefined);
 check(
-  "Translucent | Luminous: transparent=true AND emissiveMap set",
+  "Alpha (0x100): transparent=true, depthWrite=false, opacity=1 (texture alpha)",
+  matAlpha.transparent === true &&
+    matAlpha.depthWrite === false &&
+    matAlpha.opacity === 1,
+  `transparent=${matAlpha.transparent}, depthWrite=${matAlpha.depthWrite}, opacity=${matAlpha.opacity}`,
+);
+
+// (g) Combined Translucent bit + luminosity float → both applied.
+const matComboTL = fl(SURFACE_TYPE.Translucent, { luminosity: 0.4 });
+check(
+  "Translucent + lum float: transparent=true AND flat emissive (no map)",
   matComboTL.transparent === true &&
-    matComboTL.emissiveMap === stubTex,
-  `transparent=${matComboTL.transparent}, hasEmissiveMap=${!!matComboTL.emissiveMap}`,
+    matComboTL.emissive.r === 1 &&
+    !matComboTL.emissiveMap,
+  `transparent=${matComboTL.transparent}, emissive=${JSON.stringify(matComboTL.emissive)}, hasMap=${!!matComboTL.emissiveMap}`,
 );
 
 // (h) Combined Translucent + Additive — Additive wins (checked first).
@@ -289,7 +337,10 @@ const fakeSurfaceB = {
   width: 1,
   height: 1,
   pixels: new Uint8Array([50, 100, 200, 255]),
-  surfaceType: SURFACE_TYPE.Luminous,
+  // Retail self-illum is float-driven, not bit-driven — give B a
+  // luminosity float (the 0x40 bit is inert now).
+  surfaceType: 0,
+  luminosity: 0.7,
 };
 
 // Patch surfacePixelsToTexture into the cache via a closure with a
@@ -308,7 +359,14 @@ function fakeInstall(cache, did, sp) {
   );
   tex.needsUpdate = true;
   const surfaceTypeFlags = (sp.surfaceType ?? 0) >>> 0;
-  const mat = cache._materialFromFlags(surfaceTypeFlags, tex);
+  const surfaceFloats = {
+    translucency: sp.translucency ?? 0,
+    luminosity: sp.luminosity ?? 0,
+    diffuse: sp.diffuse ?? 0,
+  };
+  const mat = cache._materialFromFlags(
+    surfaceTypeFlags, tex, undefined, undefined, undefined, undefined, surfaceFloats,
+  );
   mat.name = `scene3d-surface-${(did >>> 0).toString(16).padStart(8, "0")}`;
   mat.userData = { ...(mat.userData || {}), surfaceTypeFlags };
   cache.textures.set(did >>> 0, tex);
@@ -332,10 +390,12 @@ check(
   `transparent=${matA.transparent}, flags=0x${matA.userData.surfaceTypeFlags.toString(16)}`,
 );
 check(
-  "two-sided distinct: matB has Luminous flags decoded",
-  matB.emissiveMap != null &&
-    matB.userData.surfaceTypeFlags === SURFACE_TYPE.Luminous,
-  `hasEmissiveMap=${!!matB.emissiveMap}, flags=0x${matB.userData.surfaceTypeFlags.toString(16)}`,
+  "two-sided distinct: matB self-illuminates from its luminosity float",
+  matB.emissive &&
+    matB.emissive.r === 1 &&
+    !matB.emissiveMap &&
+    Math.abs(matB.emissiveIntensity - 0.7) < 1e-6,
+  `emissive=${JSON.stringify(matB.emissive)}, hasMap=${!!matB.emissiveMap}, intensity=${matB.emissiveIntensity}`,
 );
 check(
   "MaterialCache stores both materials independently",

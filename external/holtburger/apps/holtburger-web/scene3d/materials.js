@@ -82,6 +82,10 @@ export function materialCanCastShadow(material) {
   const flags = (material.userData?.surfaceTypeFlags ?? 0) >>> 0;
   if (flags & SURFACE_TYPE.Translucent) return false;
   if (flags & SURFACE_TYPE.Additive) return false;
+  // Alpha (0x100) / InvAlpha (0x200) are alpha-blended like Translucent —
+  // a depth-only shadow pass would render them as solid boxes.
+  if (flags & SURFACE_TYPE.Alpha) return false;
+  if (flags & SURFACE_TYPE.InvAlpha) return false;
   return true;
 }
 
@@ -1376,14 +1380,18 @@ export class MaterialCache {
    *   - Base1ClipMap (0x4): `alphaTest = 0.5, transparent = false`.
    *     Binary alpha mask — the alpha channel cuts holes (foliage,
    *     fence cutouts) without depth-sort issues.
-   *   - Luminous (0x40): emissive map + colour. Self-illuminating
-   *     surfaces (torches, lanterns, glowing runes) survive even when
-   *     the sun is off in indoor cells.
+   *   - Alpha (0x100): texture-alpha blend (SRCALPHA/INVSRCALPHA),
+   *     `transparent = true, depthWrite = false`; opacity comes from the
+   *     texture's own alpha channel. acclient.c SetSurface @454470.
    *   - Additive (0x10000): `blending = AdditiveBlending` +
    *     `transparent = true, depthWrite = false`. For flame, sparks,
    *     and other particle-style additive surfaces.
-   *   - Diffuse (0x20): `metalness = 0.0, roughness = 1.0` — matte,
-   *     no specular reflection.
+   *   - Self-illumination is driven by the luminosity FLOAT (not the
+   *     0x40 bit, which retail never sets): emissive = grayscale
+   *     luminosity, flat (no emissiveMap), per acclient.c @454688.
+   *   - Diffuse reflectance is driven by the diffuse FLOAT (not the
+   *     0x20 bit): albedo `color` ×= diffuse (no-op at ~1.0), per
+   *     acclient.c @454458 — NOT a roughness/matte hint.
    *   - **No explicit TwoSided bit.** All surfaces default to
    *     `side: DoubleSide` because the AC two-sidedness bit lives on
    *     the Polygon (`sides_type == 0x2`), not the Surface; the Rust
@@ -1437,28 +1445,38 @@ export class MaterialCache {
     };
     const isTranslucent = (flags & SURFACE_TYPE.Translucent) !== 0;
     const isClipMap = (flags & SURFACE_TYPE.Base1ClipMap) !== 0;
-    const isLuminous = (flags & SURFACE_TYPE.Luminous) !== 0;
     const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0;
-    const isDiffuse = (flags & SURFACE_TYPE.Diffuse) !== 0;
+    // Alpha (0x100): texture-alpha blend — SRCALPHA/INVSRCALPHA, depthWrite
+    // off (acclient.c D3DPolyRender::SetSurface @454470). 253 retail
+    // surfaces carry it; pre-2026-05-28 they fell through to opaque here.
+    const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
+    // `isLuminous` (the 0x40 bit) is kept ONLY to gate the normal-map skip
+    // below — self-illumination itself is now driven by the luminosity
+    // FLOAT (`hasLum`). Retail's portal.dat sets the Luminous/Diffuse bits
+    // on 0/6152 surfaces (census 2026-05-28) while 762 carry luminosity>0
+    // and 6150 carry diffuse>0; acclient.c SetSurface reads the floats, not
+    // the bits (emissive @454688, diffuse @454458).
+    const isLuminous = (flags & SURFACE_TYPE.Luminous) !== 0;
+    const hasLum = sfLuminosity > 0;
     if (isAdditive) {
       // Additive blend (flames, sparks). depthWrite=false so additive
       // surfaces don't occlude geometry behind them.
       opts.blending = THREE.AdditiveBlending;
       opts.transparent = true;
       opts.depthWrite = false;
-    } else if (isTranslucent) {
-      // True alpha blend. depthWrite=false to avoid sort artefacts
-      // (the renderer painter-sorts transparent objects automatically).
+    } else if (isTranslucent || isAlpha) {
+      // Alpha blend (SRCALPHA/INVSRCALPHA), depthWrite off — the renderer
+      // painter-sorts transparent objects. Retail routes both Translucent
+      // (0x10, acclient.c:454513) and Alpha (0x100, :454470) through this
+      // same blend state.
       opts.transparent = true;
       opts.depthWrite = false;
-      // Wave 8 — apply the per-surface translucency float when set
-      // (ACE convention: 0=opaque, 1=invisible). Pre-Wave-8 the flag
-      // alone meant "full alpha-blend pipeline + opacity=1.0" which
-      // was indistinguishable from opaque except for sort behaviour.
-      // Now retail's true alpha value reaches the GPU. Surfaces with
-      // the Translucent bit but T=0 (most of them) still render at
-      // full opacity — matches the pre-Wave-8 visual.
-      if (sfTranslucency > 0) {
+      // Translucent's alpha is the per-surface translucency float
+      // (final_alpha = 1 - T, acclient.c:454523; ACE: 0=opaque, 1=invisible).
+      // Alpha (0x100) instead takes its alpha from the texture's own alpha
+      // channel, so leave opacity at 1.0 for it. Translucent surfaces with
+      // T=0 (most) also render at full opacity.
+      if (isTranslucent && sfTranslucency > 0) {
         opts.opacity = Math.max(0, 1 - sfTranslucency);
       }
     } else if (isClipMap) {
@@ -1467,40 +1485,31 @@ export class MaterialCache {
       opts.alphaTest = 0.5;
       opts.transparent = false;
     }
-    if (isLuminous) {
-      // Self-illuminating. emissiveMap reuses the same texture so the
-      // entire surface glows according to its colour values; the white
-      // multiplier on `emissive` lets the unmodulated texture pass
-      // through. emissiveIntensity 0.6 is the pre-Wave-8 hardcoded
-      // fallback (1.0 looks blown-out under the default sun rig).
-      // Phase 1.4 — Lava category still sets roughness=0.4 above; the
-      // Luminous flag overlays emissive on top without overriding it.
+    if (hasLum) {
+      // Self-illumination, driven by the per-surface luminosity FLOAT
+      // (not the never-set 0x40 bit). Retail writes a flat GRAYSCALE
+      // emissive: D3DMATERIAL9.Emissive.rgb = luminosity (acclient.c
+      // D3DPolyRender::SetSurface @454688) — it is NOT modulated by the
+      // surface texture, so we set emissive=white scaled by intensity and
+      // deliberately attach NO emissiveMap. Clamp to (0, 2] as a sanity
+      // fence (ACE convention ~[0,1] with occasional HDR-ish pushes >1).
+      // NOTE (eye-test): a texture-modulated "richer glow" variant
+      // (emissiveMap=texture) is a possible future flag; flat grayscale
+      // is the retail-faithful default. 762 retail surfaces have lum>0.
       opts.emissive = new THREE.Color(0xffffff);
-      opts.emissiveMap = texture;
-      // Wave 8 — use the per-surface luminosity float when set.
-      // ACE convention is intensity in [0, 1] with occasional retail
-      // pushes >1; we clamp to (0, 2] as a sanity fence in case of
-      // bad DAT data. Surfaces with the Luminous bit but L=0 keep
-      // the pre-Wave-8 0.6 fallback (the unset value can mean either
-      // "use default" or "no glow"; choosing default preserves the
-      // pre-Wave-8 visual for the 99% case).
-      opts.emissiveIntensity = sfLuminosity > 0
-        ? Math.min(2.0, sfLuminosity)
-        : 0.6;
+      opts.emissiveIntensity = Math.min(2.0, sfLuminosity);
     }
-    if (isDiffuse) {
-      // Diffuse flag wins over category-default roughness — AC's
-      // explicit matte hint should trump heuristic guesses.
-      opts.metalness = 0.0;
-      // Wave 8 — refine matte intensity using the per-surface diffuse
-      // float when set. AC's `diffuse` parameter is the diffuse-
-      // contribution scalar (higher = more diffuse = more matte). Map
-      // directly onto PBR roughness: D=1 → roughness 1 (full matte),
-      // D=0 → roughness 0 (mirror). The pre-Wave-8 path hardcoded
-      // roughness=1.0 (≡ D=1 fallback) which is also what surfaces
-      // with D=0 in the DAT get from this branch — preserving the
-      // existing look for the 99% case.
-      opts.roughness = sfDiffuse > 0 ? Math.min(1.0, sfDiffuse) : 1.0;
+    // Diffuse reflectance, driven by the per-surface diffuse FLOAT (not the
+    // never-set 0x20 bit). Retail uses `diffuse` as a diffuse-reflectance
+    // multiplier on the material's diffuse colour (D3DMATERIAL9.Diffuse/
+    // Ambient.rgb = diffuse × sunlight, acclient.c SetSurface @454458) —
+    // NOT a roughness/matte hint as the pre-2026-05-28 path assumed. The
+    // PBR analogue is the albedo tint `color`, multiplied with `map`.
+    // No-op at d≈1.0 (~96% of retail surfaces); dims the 241 with d≠1.
+    // d==0 (2 surfaces) is left full-bright rather than forced black,
+    // pending the GPU eye-test.
+    if (sfDiffuse > 0 && Math.abs(sfDiffuse - 1.0) > 0.01) {
+      opts.color = new THREE.Color(sfDiffuse, sfDiffuse, sfDiffuse);
     }
     const mat = new THREE.MeshStandardMaterial(opts);
 
@@ -1593,6 +1602,7 @@ export class MaterialCache {
       texture &&
       !isAdditive &&
       !isTranslucent &&
+      !isAlpha &&
       (stoneish || this.forcePom);
     if (pomShouldApply) {
       _installPomShaderPatch(mat, heightTexture, this.pomOpts || {});
@@ -1608,7 +1618,7 @@ export class MaterialCache {
     // them — and applying a shadow attenuation to additive blending
     // would darken sparks/flames). The patch is composed after Detail
     // (if active) so both effects stack cleanly.
-    if (this.csmState && !isAdditive && !isTranslucent) {
+    if (this.csmState && !isAdditive && !isTranslucent && !isAlpha) {
       _installCsmShaderPatch(mat, this.csmState);
     }
     return mat;
