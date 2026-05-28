@@ -488,9 +488,23 @@ The biggest opportunity. The `UseWithTarget` wire is live but our app has zero h
 
 ---
 
-## Wave 6 — Wave 1 follow-ons (3 parallel agents)
+## Wave 6 — Wave 1 follow-ons (CLOSED 2026-05-28; 3 parallel agents)
 
-Surfaced by Wave 1's visibility flags. All three are isolated surfaces; safe to run as one parallel batch.
+Three sibling agents shipped concurrently against disjoint surfaces with annotated comment blocks for clean lib.rs / opcodes.rs / validate.cjs merges.
+
+### Wave 6 closing summary
+
+| Agent | Status | Commit | Notes |
+|---|---|---|---|
+| 6.A | shipped | `8d21a126` | +20 opcode entries (16 Remove* + 4 Attr/Skill) + 20 dispatch arms decoding through generated `S2C_Qualities_*`; build.rs f32→f64 override for `UpdateFloat` (ACE writes double per `GameMessagePrivateUpdatePropertyFloat.cs:13`); recv-loop `should_route_message_to_world` extended for 14 PrivateUpdateProperty*/PublicUpdateProperty* variants. 68/68 generated-parity tests PASS. |
+| 6.B | shipped | `8d21a126` | New `plugins/lifestone-popup.{js,manifest.json}` with bind/recall/cancel actions. Typed-click pre-empt in `picking.js`. New `SessionCommand::TeleToLifestone` + `teleToLifestone()` wasm export (recall opcode 0x0063 per ACE `Player_Location.cs:132`). Bind reuses existing `useObject` (Use 0x0036). +21 unit tests. |
+| 6.C | shipped | `8d21a126` | Activated 4 GameEventOpcodes (Misc_PortalStorm Brewing/Imminent/Storm/Subsided = 0x02C9-0x02CC) with Chorizite canonical casing. 2 EventData structs + 5 round-trip tests. `CLIENT_EVENT_KIND_PORTAL_STORM = 45` + recv arms + drainEvents route + 1 wire fixture (40→41 conformance). Payload shape compatible with Wave 1.F status-indicators subscription. |
+
+**Validation gate:** cargo workspace PASS, wire conformance 41/41, generated-parity 68/68, holtburger-protocol 348/348, holtburger-world 279/279, wasm-pack PASS, all Wave 6 tests + regression tests PASS.
+
+**Mid-build race noted:** at one point during parallel execution, cargo errored on `non-exhaustive patterns` in `game_event.rs:452` (6.C added variants before 6.A's neighbor commits landed). Both agents reported resolved-on-retry; final cargo state is clean.
+
+---
 
 ### Agent 6.A — Qualities codegen recv-loop wiring
 
@@ -575,11 +589,19 @@ Tuck into existing Wave 6 agents or a 6.D polish pass:
 
 ---
 
-## Wave 7 — Real-particle templates for placeholder-fallback path (3 parallel agents)
+## Wave 7 — Real-particle templates (STRUCK 2026-05-28 by Wave 8 audit refresh)
 
-Generated from Wave 2.C's canonical map (`data/playscript-canonical-physics-scripts.json`, 147 entries). The Wave 17 PhysicsScript resolver already plays real visuals when an entity has `physicsScriptTableDid` populated — but most entities don't, so they hit `_runPlaceholderDispatch` and get sphere/cube/torus bursts regardless. This wave fills that fallback with real `ParticleEmitterInfo` POJOs driven by the canonical map.
+**Status: ALL 3 AGENTS STRUCK.** See `docs/audit-refresh-2026-05-28.md` § Wave 7.
+
+Audit found:
+- **7.A + 7.B** premise inverted by Wave 2.C: only 27 IDs are unmappable (4 sentinels + 23 ambient by-design). The 147 retail-mapped IDs already resolve through `play_effect_vfx.js:1258`'s real-VFX chain when the entity has `physicsScriptTableDid` populated.
+- **7.C** premise closed by CMT Wave 16 / Phase 50: per-entity `physicsScriptTableDid` population is comprehensive at `lib.rs:17535` (ObjectCreate) + `lib.rs:24749` (UpdateObject).
+
+The original Wave 7 briefs below are preserved as historical record. **Do not dispatch.**
 
 Recommend splitting across 3 parallel agents by PScript family — disjoint output keys, easy parallel commit.
+
+> ~~Wave 7 brief (historical — do not dispatch):~~
 
 ### Agent 7.A — Launch + Splatter + Spark families (~50 IDs)
 
@@ -621,20 +643,28 @@ Recommend splitting across 3 parallel agents by PScript family — disjoint outp
 
 ---
 
-## Wave 8 — Audit refresh (recommended before Wave 4+)
+## Wave 8 — Audit refresh (CLOSED 2026-05-28; 1 read-only agent)
 
-**Status:** 4 of 9 agents across Waves 1+2 found their tasks already partially or wholly addressed by post-audit commits. **The post-J4 audit doc is now demonstrably ≥1-week stale across the board.** Continuing to spawn agents from the stale audit wastes compute on no-ops + pivots.
+**Delivered:** `external/holtburger/docs/audit-refresh-2026-05-28.md` (263 lines), commit `0f318d05`.
 
-**Recommendation:** before drafting Wave 4+ briefs from the original 15-opportunity menu, run a 1-agent audit refresh pass against current `master HEAD`. The refresh checks each remaining opportunity (Wave 3, 4, 5) against:
-- Recent commit log (`git log --since` the audit date)
-- Existence of expected files / line numbers cited in the audit
-- TODO/FIXME comments at the cited locations
+### Headline findings (full detail in refresh doc)
 
-**Output:** updated team-agents doc with corrected scope (or strike-throughs for closed items).
+5 of 8 Wave-4/5/7 tasks have CLOSED or significantly reduced scope (higher staleness rate than Wave 1+2's 4/9):
 
-**Effort:** S (~2-3 hrs single-agent).
+| Task | Verdict | Effort delta | Brief citation correction |
+|---|---|---|---|
+| 4.A Train Skills UI | PARTIAL | S-M → S | `gmTrainSkillsUI.cs` doesn't exist → use `gmSkillUI.cs` (288 LOC). Wire+core+CLI shipped; only wasm export + plugin missing. |
+| 4.B Remote-entity buffs | STILL OPEN | M → M | Opcode is `0x02C7` not `0x02C4`. Wire layer in; downstream discard at `holtburger-world/src/player/mutations.rs` (`if target != self.guid { return false }`). |
+| 5.A Tradeskill wire | PARTIAL | M → S | `GameActionDoTradeSkillAttempt.cs` doesn't exist → real flow is `GameActionUseWithTarget.cs:15` → `Player_Use.cs:29` → `Managers/RecipeManager.cs`. Only `useWithTarget` wasm export missing. |
+| 5.B Tradeskill data | **KILL** | M → 0 | `CCraftTable` DAT type doesn't exist; ACE uses DB-backed `Recipe*` models. Saves ~1 week of misdirected parser work. |
+| 5.C Tradeskill UI | STILL OPEN, XS | M → XS | No retail UI exists to port; will be a fresh design. |
+| 7.A real templates Launch | CLOSED | M → 0 | Wave 2.C corrected the placeholder count; real chain resolves these. |
+| 7.B real templates Explode | CLOSED | M → 0 | Same as 7.A. |
+| 7.C entity DID population | CLOSED | S-M → 0 | Already comprehensive in CMT Wave 16 / Phase 50. |
 
-**When to run:** before Wave 4 dispatch. Wave 3 is small enough that pre-flight per agent is acceptable; Waves 4+ are bigger and a wasted scope re-pivot is more expensive.
+**Net savings:** ~1-2 weeks of agent time. Highest unfilled gap is **Wave 4.B** (remote-entity buff dispatch) — only audit task at original M-effort.
+
+---
 
 ---
 
@@ -671,18 +701,16 @@ After Wave 5 closes, write `docs/handoff-2026-06-XX.md` summarizing all 15 oppor
 | 1 | 6 | Codegen + 5 isolated parsers/plugins/scene tweaks | ✅ closed 2026-05-28 |
 | 2 | 3 | scene3d/ shader + VFX | ✅ closed 2026-05-28 |
 | 3 | 3 | HUD plugins + per-vital wasm split | ✅ closed 2026-05-28 |
-| 4 | 2 | Train Skills + Remote Buffs (both touch lib.rs + protocol) | pending (audit-refresh recommended first) |
-| 5 | 1 (or 3 sub) | Tradeskill end-to-end | pending |
-| 6 | 3 | Wave 1 follow-ons: codegen wiring, Lifestone UI, Portal Storm dispatch | pending |
-| 7 | 3 | Wave 2.C follow-on: real-particle templates + per-entity DID population | pending |
-| 8 | 1 | Audit refresh against current `master HEAD` | recommended before Wave 4+ |
-| **Total** | **22** | **15 original + 7 surfaced follow-ons** | |
+| 4 | 2 | Train Skills (S, reduced) + Remote Buffs (M, opcode fix) | pending — use Wave 8 refreshed scope |
+| 5 | 2 | Tradeskill wire (S) + UI (XS); 5.B KILLED | pending — use Wave 8 refreshed scope |
+| 6 | 3 | Codegen wiring + Lifestone UI + Portal Storm dispatch | ✅ closed 2026-05-28 |
+| 7 | — | STRUCK by audit refresh | ✅ closed 2026-05-28 (no work) |
+| 8 | 1 | Audit refresh | ✅ closed 2026-05-28 |
+| **Total** | **20** | **6 of 8 waves closed; Waves 4+5 reduced by audit** | |
 
-Eight waves; ~22 agent slots. With ~24h cadence per wave, full sweep ships in ~7-9 days of orchestrator time (agent compute is parallel within each wave).
+**Remaining after this round:**
+- **Wave 4** (2 agents, ~S+M): Train Skills UI + Remote Buffs
+- **Wave 5** (2 agents, S+XS): Tradeskill wire + UI (5.B killed)
+- **Wave 6 polish** (1 small agent): 3 sub-flags collected during Wave 3 (examine meta-read, entityAppearanceChanged emit, vitalChanged oldValue capture)
 
-**Recommended ordering:**
-- Wave 3 next (small, pre-flight per agent handles staleness)
-- Wave 6 in parallel with or after Wave 3 (lib.rs surface overlaps with 3.C but coordinated)
-- Wave 7 in parallel with Wave 6 (entirely disjoint — particle-templates vs protocol)
-- Wave 8 between Wave 3 and Wave 4 (refresh before the bigger waves)
-- Wave 4 and 5 last (informed by refreshed audit)
+Remaining total: ~5 agent slots, all small. Full sweep can close in 1-2 more waves.
