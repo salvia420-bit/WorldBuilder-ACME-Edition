@@ -229,9 +229,23 @@ All six touched disjoint files. Closed in one batch as planned.
 
 ---
 
-## Wave 2 — Scene/shader parallel (3 agents)
+## Wave 2 — Scene/shader parallel (CLOSED 2026-05-28; 3 parallel agents)
 
-All three live in `scene3d/` but touch distinct files. Coordinate if any agent finds shared shader helpers (rare).
+All three lived in `scene3d/` but touched distinct files. Closed in one batch.
+
+### Wave 2 closing summary
+
+| Agent | Status | Commit | Notes |
+|---|---|---|---|
+| 2.A | shipped | `686801e8` | 32-color palette LUT in terrain fragment shader, retail-grounded RGBs from `client_portal.dat` 0x13000000. Dump tool + regenerator script + 22-test suite. Tint at default 0.25; surfaced as configurable. |
+| 2.B | pivot-shipped | `87b2828d` | Pre-flight: Phase 1.1 Sobel-X already shipped in commit `fd475f2`; deferred-state comment was stale. Pivoted to the *actual* missing visibility — wired the `normalMaps` quality flag end-to-end (UI toggle was no-op) + per-category `normalScale` defaults table. +18 unit tests. |
+| 2.C | pivot-shipped | `a8bcea72` | Pre-flight: audit's "124 placeholder IDs" was off by 120 — only 4 sentinels remain. Pivoted to building scaffolding for the actual remaining work: dumped 4.2 MB retail PhysicsScript catalog, derived 147-entry canonical PScript→DID map (`data/playscript-canonical-physics-scripts.json`), +13 lockdown assertions. Unblocks Wave 7. |
+
+**Validation gate:** cargo check workspace PASS, wire conformance 40/40, all touched JS parses, 4 wave-2 tests PASS (terrain palette 22/22, normal gate skipped on missing three module but covered by quality-preset 32/32, resolver 67/67, quality 32/32).
+
+**Audit-staleness pattern alert:** 4 of 9 agents across Waves 1+2 found their tasks already partially or wholly addressed by post-audit commits. **The post-J4 audit doc is now demonstrably ≥1-week stale across the board.** See "Wave 8 — audit refresh (recommended before Wave 4+)" below. Pre-flight verification stays mandatory in every agent brief until refresh lands.
+
+---
 
 ### Agent 2.A — Terrain palette swap
 
@@ -534,7 +548,69 @@ Surfaced by Wave 1's visibility flags. All three are isolated surfaces; safe to 
 - **InstancedMesh per-instance `receiveShadow`** (Wave 1.E): Three.js `InstancedMesh` can't toggle `receiveShadow` per-instance; would need shader-level support. Park until visual smoke shows distant InstancedMesh statics are visibly hurt by the bake-time-only decision.
 - **`SetWielded` optimistic local update layer** (Wave 1.D): PR 4+ territory; pair with Wave 5 inventory work.
 - **Mini-Game indicator (chess) wiring** (Wave 1.F): not wired server-side per ACE either; larger scope than Portal Storm. Defer until chess support is on roadmap.
-- **Audit-doc refresh** (Wave 1.B + 1.C surprise): the post-J4 audit drafted on 2026-05-27 had two stale items by 2026-05-28. Refresh the audit against `master HEAD` before drafting Wave 7+ plans.
+
+---
+
+## Wave 7 — Real-particle templates for placeholder-fallback path (3 parallel agents)
+
+Generated from Wave 2.C's canonical map (`data/playscript-canonical-physics-scripts.json`, 147 entries). The Wave 17 PhysicsScript resolver already plays real visuals when an entity has `physicsScriptTableDid` populated — but most entities don't, so they hit `_runPlaceholderDispatch` and get sphere/cube/torus bursts regardless. This wave fills that fallback with real `ParticleEmitterInfo` POJOs driven by the canonical map.
+
+Recommend splitting across 3 parallel agents by PScript family — disjoint output keys, easy parallel commit.
+
+### Agent 7.A — Launch + Splatter + Spark families (~50 IDs)
+
+**Goal:** highest-traffic combat IDs. Launch (0x04, 103 unique retail scripts) + Splatter family + Spark family.
+
+**Surface:**
+- New: `apps/holtburger-web/scene3d/playscript_real_templates.js` — lazy ParticleManager template factory; loads canonical map at init, fetches the per-ID `PhysicsScript` at first use, builds synthetic `ParticleEmitterInfo` POJOs from `CreateParticle` hooks.
+- `scene3d/play_effect_vfx.js#_runPlaceholderDispatch` — call the new module for resolvable IDs; keep sphere/cube/torus fallback as last resort.
+- `apps/holtburger-web/particles/particle_emitter_info.js` — reuse existing POJO schema.
+
+**Refs:** Wave 2.C commit `a8bcea72`. Canonical map at `data/playscript-canonical-physics-scripts.json`. Picker logic at `~/ac-headers/acclient.c:336552` (weighted pick by `speed`).
+
+**Visibility check:** `_runPlaceholderDispatch` may have stage-specific branches (windup vs hit vs end). Verify your template fires at the right stage; if a Launch script renders mid-projectile instead of at the muzzle, log it.
+
+**Effort:** M.
+
+### Agent 7.B — Explode + Health/Shield/Enchant families (~50 IDs)
+
+**Goal:** explosion + buff-overlay IDs. Explode (0x05, 70 unique scripts) + Health/Shield/Enchant.
+
+**Surface:** same module as 7.A; disjoint case arms in `_runPlaceholderDispatch`.
+
+**Coordination:** 7.A and 7.B both edit `playscript_real_templates.js` + `_runPlaceholderDispatch`. Use clearly-labeled `// === Wave 7.A — ... ===` / `// === Wave 7.B — ... ===` comment blocks per lib.rs etiquette. Map of which IDs each agent owns documented in their commits.
+
+**Effort:** M.
+
+### Agent 7.C — physicsScriptTableDid per-entity population (visibility unblocker)
+
+**Goal:** the visibility flag from 2.C — most entities lack `physicsScriptTableDid` so the real-VFX resolver never even attempts. Audit `scene3d/entities.js` to find where the field is populated and extend coverage to all entity classes that should have a table.
+
+**Surface:**
+- `scene3d/entities.js` — extend `_extractPhysicsScriptTableDid` (or equivalent) per the Wave 16 patterns.
+- `apps/holtburger-web/src/lib.rs` may need a new wasm export if the data isn't surfaced. Check `crates/holtburger-dat/src/file_type/setup.rs` (or where SetupModel.default_phstable_id lives).
+- Memory: `project_holtburger_combat_phase_h_done_2026-05-17.md` for Wave 16 entity collision context.
+
+**Validation:** smoke on 1070: cast a spell on an NPC; verify real particles render (not placeholder) on a class that previously had no DID populated. Add lockdown test to test_play_effect_resolver.mjs.
+
+**Effort:** S-M.
+
+---
+
+## Wave 8 — Audit refresh (recommended before Wave 4+)
+
+**Status:** 4 of 9 agents across Waves 1+2 found their tasks already partially or wholly addressed by post-audit commits. **The post-J4 audit doc is now demonstrably ≥1-week stale across the board.** Continuing to spawn agents from the stale audit wastes compute on no-ops + pivots.
+
+**Recommendation:** before drafting Wave 4+ briefs from the original 15-opportunity menu, run a 1-agent audit refresh pass against current `master HEAD`. The refresh checks each remaining opportunity (Wave 3, 4, 5) against:
+- Recent commit log (`git log --since` the audit date)
+- Existence of expected files / line numbers cited in the audit
+- TODO/FIXME comments at the cited locations
+
+**Output:** updated team-agents doc with corrected scope (or strike-throughs for closed items).
+
+**Effort:** S (~2-3 hrs single-agent).
+
+**When to run:** before Wave 4 dispatch. Wave 3 is small enough that pre-flight per agent is acceptable; Waves 4+ are bigger and a wasted scope re-pivot is more expensive.
 
 ---
 
@@ -569,11 +645,20 @@ After Wave 5 closes, write `docs/handoff-2026-06-XX.md` summarizing all 15 oppor
 | Wave | Agents | Surface | Status |
 |---|---:|---|---|
 | 1 | 6 | Codegen + 5 isolated parsers/plugins/scene tweaks | ✅ closed 2026-05-28 |
-| 2 | 3 | scene3d/ shader + VFX | pending |
+| 2 | 3 | scene3d/ shader + VFX | ✅ closed 2026-05-28 |
 | 3 | 3 | HUD plugins + per-vital wasm split | pending |
-| 4 | 2 | Train Skills + Remote Buffs (both touch lib.rs + protocol) | pending |
+| 4 | 2 | Train Skills + Remote Buffs (both touch lib.rs + protocol) | pending (audit-refresh recommended first) |
 | 5 | 1 (or 3 sub) | Tradeskill end-to-end | pending |
 | 6 | 3 | Wave 1 follow-ons: codegen wiring, Lifestone UI, Portal Storm dispatch | pending |
-| **Total** | **18** | **15 original + 3 surfaced follow-ons** | |
+| 7 | 3 | Wave 2.C follow-on: real-particle templates + per-entity DID population | pending |
+| 8 | 1 | Audit refresh against current `master HEAD` | recommended before Wave 4+ |
+| **Total** | **22** | **15 original + 7 surfaced follow-ons** | |
 
-Six waves; ~18 agent slots. With ~24h cadence per wave, full sweep ships in ~6-7 days of orchestrator time (agent compute is parallel within each wave). Wave 6 can run before, after, or in parallel with Waves 2-5; recommend slotting between Wave 3 and Wave 4 so 6.A's codegen recv-loop wiring lands before Wave 3.C's per-vital event split (they overlap surface).
+Eight waves; ~22 agent slots. With ~24h cadence per wave, full sweep ships in ~7-9 days of orchestrator time (agent compute is parallel within each wave).
+
+**Recommended ordering:**
+- Wave 3 next (small, pre-flight per agent handles staleness)
+- Wave 6 in parallel with or after Wave 3 (lib.rs surface overlaps with 3.C but coordinated)
+- Wave 7 in parallel with Wave 6 (entirely disjoint — particle-templates vs protocol)
+- Wave 8 between Wave 3 and Wave 4 (refresh before the bigger waves)
+- Wave 4 and 5 last (informed by refreshed audit)
