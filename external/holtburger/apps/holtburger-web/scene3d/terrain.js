@@ -476,7 +476,7 @@ in float terrainCode;                 // Phase 1.2 — per-vertex (uint8→float
 // (defaults to 1.0 when the modulation ranges table is unavailable);
 // the fragment shader gates the multiply behind
 // uTerrainModulationEnabled so an attribute of all-1.0s with the gate
-// off is also a no-op. See `buildTerrainVertexBrightness` for math.
+// off is also a no-op. See buildTerrainVertexBrightness for math.
 in float vertexBrightness;
 
 uniform float uTime;                  // Phase 2.2 — shared wall-clock seconds
@@ -756,7 +756,7 @@ in float vBrightness;                 // 2026-05-28 — TerrainTex per-vertex br
 
 // 2026-05-28 — gate for the TerrainTex modulation multiply. 0.0 = no
 // modulation (final color unchanged), 1.0 = full multiply by
-// vBrightness. Driven by the URL flag `?terrainMod=on` (defaults off
+// vBrightness. Driven by the URL flag ?terrainMod=on (defaults off
 // per project_terrain_vertex_modulation_gap memo: the modulation was
 // authored into the DAT but never applied by retail's shipped client,
 // so it's opt-in until visual verification confirms the
@@ -1047,9 +1047,9 @@ void main() {
     csmShadow = mix(0.45, 1.0, s);
   }
 
-  // 2026-05-28 — TerrainTex modulation multiply. `vBrightness` is the
+  // 2026-05-28 — TerrainTex modulation multiply. vBrightness is the
   // per-vertex factor in [min_bright/100, max_bright/100] (most natural
-  // terrain 0.9..1.0, Ice + RoadType 0.3..0.6). `mix(1.0, vBrightness, gate)`
+  // terrain 0.9..1.0, Ice + RoadType 0.3..0.6). mix(1.0, vBrightness, gate)
   // collapses to 1.0 when the URL flag is off → no-op; collapses to
   // vBrightness when on → per-vertex linear modulation of the lit color.
   // Applied to the LIGHTING result (pre-cloud/csm multiply) so cloud
