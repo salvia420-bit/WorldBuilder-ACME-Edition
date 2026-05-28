@@ -1,0 +1,188 @@
+//! dump_terrain_palette — Wave 2.A regenerator.
+//!
+//! Opens `client_portal.dat`, parses the Region DBObj
+//! (DID `0x13000000`), walks `TerrainDesc.terrain_types`, and emits the
+//! 32-entry terrain palette as JSON to stdout matching the schema
+//! consumed by `apps/holtburger-web/data/terrain_palette.json`.
+//!
+//! Usage:
+//!   cargo run -p holtburger-dat --example dump_terrain_palette \
+//!     > apps/holtburger-web/data/terrain_palette.json
+//!
+//! Looks up the DAT path via `HOLTBURGER_PORTAL_DAT` or the
+//! workspace-relative fallbacks in `holtburger_dat::utils::get_portal_dat_path`
+//! (final fallback `$HOME/ac_base_dats/client_portal.dat`).
+//! Exit 2 if the DAT can't be located or parsed.
+//!
+//! ## On-disk color format
+//!
+//! `TerrainType.TerrainColor` is a single u32 read as little-endian
+//! from the DAT (`ACE.DatLoader/Entity/TerrainType.cs:17`). The retail
+//! `RGBAUnion` (PhatSDK `Palette.h:18-26`) packs as
+//! `union { DWORD color; struct { BYTE b; BYTE g; BYTE r; BYTE a; }; }`
+//! — i.e. **BGRA byte order**, the standard Windows COLORREF / GDI
+//! layout. Reading the four disk bytes as a little-endian u32 gives
+//! a DWORD whose **low byte is blue, then green, then red, then
+//! alpha** (`0xAARRGGBB`).
+//!
+//! The retail `CTerrainType` ctor (`acclient.c:303368-303371`) sets
+//! each byte field individually to `-1` (0xFF) for the default
+//! "all-white opaque" — symmetric across channels so it can't be used
+//! to verify ordering. PhatSDK's `RGBAUnion` is the authoritative
+//! layout source.
+//!
+//! ## Schema
+//!
+//! ```json
+//! {
+//!   "_comment": "...",
+//!   "_source_file_id": "0x13000000",
+//!   "_terrain_type_count": 32,
+//!   "palette": [
+//!     { "index": 0, "name": "BarrenRock", "r": 100, "g": 150, "b": 100, "a": 255, "hex": "0xFF649664" },
+//!     ...
+//!   ]
+//! }
+//! ```
+//!
+//! `r`, `g`, `b`, `a` are the four decomposed channel bytes in
+//! traditional RGBA order; `hex` is the on-disk u32 expressed as
+//! `0xAARRGGBB` (Windows COLORREF). JS consumers should use the
+//! `r`/`g`/`b`/`a` fields directly — they're already corrected for
+//! BGRA → RGBA channel re-ordering.
+
+use binrw::io::Cursor;
+use holtburger_dat::DatDatabase;
+use holtburger_dat::file_type::Region;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+/// Retail Region DID — the only Region currently shipped in retail
+/// `client_portal.dat`. The `0x1300xxxx` namespace reserves room for
+/// alternate realms but they are not present.
+const REGION_FILE_ID: u32 = 0x1300_0000;
+
+fn resolve_dat_path() -> Option<PathBuf> {
+    if let Some(path) = holtburger_dat::utils::get_portal_dat_path() {
+        return Some(path);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home).join("ac_base_dats/client_portal.dat");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn escape_json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn main() -> ExitCode {
+    let dat_path = match resolve_dat_path() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "client_portal.dat not found; set HOLTBURGER_PORTAL_DAT or place at ~/ac_base_dats/client_portal.dat"
+            );
+            return ExitCode::from(2);
+        }
+    };
+
+    let dat = match DatDatabase::new(&dat_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("failed to open {}: {e}", dat_path.display());
+            return ExitCode::from(2);
+        }
+    };
+
+    let bytes = match dat.get_file(REGION_FILE_ID) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "Region 0x{:08X} not in DAT: {e}",
+                REGION_FILE_ID
+            );
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut cursor = Cursor::new(&bytes);
+    let region = match Region::unpack(&mut cursor) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Region 0x{:08X} parse failed: {e}", REGION_FILE_ID);
+            return ExitCode::from(2);
+        }
+    };
+
+    let terrain_types = &region.terrain_info.terrain_types;
+
+    // Retail Region 1 ships 32 terrain types (index 0..31). The 33rd
+    // surface texture slot (RoadType, index 32) is a per-cell road-bit
+    // overlay, not a terrain type, and lives outside TerrainDesc.
+    let mut out = String::with_capacity(8_192);
+    out.push_str("{\n");
+    out.push_str("  \"_comment\": \"Generated by `cargo run -p holtburger-dat --example dump_terrain_palette`. Source: client_portal.dat file 0x13000000 (Region) → TerrainDesc.terrain_types. Schema: ACE.DatLoader/Entity/TerrainType.cs (TerrainName + TerrainColor uint32). PhatSDK RGBAUnion (Palette.h:18-26) packs the dword as union { DWORD; struct { BYTE b; BYTE g; BYTE r; BYTE a; }; } — i.e. on-disk BGRA / Windows COLORREF layout. r/g/b/a fields are already decomposed into RGBA order; hex is the raw u32 (0xAARRGGBB). Wave 2.A — terrain palette swap.\",\n");
+    out.push_str(&format!(
+        "  \"_source_file_id\": \"0x{:08X}\",\n",
+        REGION_FILE_ID
+    ));
+    out.push_str(&format!(
+        "  \"_region_name\": {},\n",
+        escape_json_str(&region.region_name)
+    ));
+    out.push_str(&format!(
+        "  \"_terrain_type_count\": {},\n",
+        terrain_types.len()
+    ));
+    out.push_str("  \"palette\": [\n");
+    let last_idx = terrain_types.len().saturating_sub(1);
+    for (i, tt) in terrain_types.iter().enumerate() {
+        // tt.terrain_color is the raw u32 read LE — PhatSDK's RGBAUnion
+        // packs the low byte as BLUE (not red): the dword is the
+        // standard Windows COLORREF 0xAARRGGBB. Decompose for direct
+        // THREE.Color consumption (which wants R/G/B/A floats).
+        let raw = tt.terrain_color;
+        let b = (raw & 0xFF) as u8;
+        let g = ((raw >> 8) & 0xFF) as u8;
+        let r = ((raw >> 16) & 0xFF) as u8;
+        let a = ((raw >> 24) & 0xFF) as u8;
+        out.push_str(&format!(
+            "    {{\"index\": {}, \"name\": {}, \"r\": {}, \"g\": {}, \"b\": {}, \"a\": {}, \"hex\": \"0x{:08X}\"}}",
+            i,
+            escape_json_str(&tt.terrain_name),
+            r,
+            g,
+            b,
+            a,
+            raw
+        ));
+        if i < last_idx {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push_str("  ]\n");
+    out.push_str("}\n");
+
+    print!("{out}");
+
+    ExitCode::SUCCESS
+}
