@@ -12793,7 +12793,20 @@ const CLIENT_EVENT_KIND_ALLEGIANCE_INFO: u32 = 41;
 //   `u32Payload`   = current vital value (post-update)
 //   `u32Payload2`  = buffed_max (so JS doesn't need a snapshot round-
 //                    trip to compute the percentage)
-//   No string / f32 payloads. The vital type is in the kind itself.
+//   `f32Payload`   = prev_current (pre-mutation value) when the
+//                    holtburger-world handler could capture it.
+//                    `None` when unavailable (initial-spawn hydrate /
+//                    paths that synthesize a Vital without going
+//                    through the in-place mutation). Added by Wave 6
+//                    polish (2026-05-28); JS consumers must treat
+//                    `None` as "delta unavailable". Encoded as a
+//                    non-NaN f32 since vital values < 2^24 are
+//                    exactly representable; the JS bridge casts back
+//                    to a number naturally. ACPlugin's
+//                    `Character.OnVitalChanged` exposes `int OldValue`
+//                    per `VitalChangedEventArgs.cs:13-35` — this
+//                    payload satisfies that contract.
+//   String payload unused. The vital type is in the kind itself.
 //
 // Vital IDs map to ACE's `PropertyAttribute2nd` (= ACPlugin
 // `VitalId`):
@@ -12805,17 +12818,23 @@ const CLIENT_EVENT_KIND_ALLEGIANCE_INFO: u32 = 41;
 //   external/chorizite/ACPlugin/API/Character.cs:721   (OnVitalChanged
 //                                                       contract — wave J4
 //                                                       even/odd parity)
+//   external/chorizite/ACPlugin/API/VitalChangedEventArgs.cs:13-35
+//                                                      (OldValue field)
 //   crates/holtburger-core/src/client/vital_info.rs    (derived-vital math)
+//   crates/holtburger-world/src/player/mutations.rs    (oldValue snapshot
+//                                                       sites — Wave 6 polish)
 //   apps/holtburger-web/plugins/vitals-hud.js          (JS subscriber)
 //   apps/holtburger-web/index.html drainEvents         (kind→bus router)
 
 /// `kind = 42` — Wave 3.C (2026-05-28): Health-vital granular update.
-/// Fires once per `WorldEvent::VitalUpdated(v)` whose `vital_type ==
-/// VitalType::Health`. Fires IN ADDITION to kind=8 — the coalesced
-/// stats event still fires for the snapshot getters that non-HUD
-/// panels poll. `u32Payload` = current (post-update); `u32Payload2`
-/// = buffed_max. JS handler in `drainEvents` emits
-/// `vitalChangedHealth` on the plugin bus.
+/// Fires once per `WorldEvent::VitalUpdated { vital, prev_current }`
+/// whose `vital.vital_type == VitalType::Health`. Fires IN ADDITION
+/// to kind=8 — the coalesced stats event still fires for the snapshot
+/// getters that non-HUD panels poll. `u32Payload` = current
+/// (post-update); `u32Payload2` = buffed_max; `f32Payload` =
+/// `prev_current` (pre-mutation, Wave 6 polish 2026-05-28) — None
+/// when the handler couldn't capture. JS handler in `drainEvents`
+/// emits `vitalChangedHealth` on the plugin bus.
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_VITAL_HEALTH: u32 = 42;
 
@@ -12867,6 +12886,35 @@ const CLIENT_EVENT_KIND_VITAL_MANA: u32 = 44;
 //   apps/holtburger-web/index.html drainEvents                   (router)
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_PORTAL_STORM: u32 = 45;
+
+/// === Wave 4.B — remote-entity enchantments updated (2026-05-28) ===
+///
+/// Fired by the recv loop's pre-route hook in the GameMessage processing
+/// block whenever ACE broadcasts a `MagicUpdateEnchantment` /
+/// `MagicUpdateMultipleEnchantments` / `MagicRemoveEnchantment` /
+/// `MagicRemoveMultipleEnchantments` / `MagicDispelEnchantment` /
+/// `MagicDispelMultipleEnchantments` / `MagicPurgeEnchantments` /
+/// `MagicPurgeBadEnchantments` event whose `target` is NOT the local
+/// player. The companion `entity_enchantments_index` is updated BEFORE
+/// the event is queued so the JS consumer can call `handle.
+/// entityEnchantments(guid)` and find a current snapshot.
+///
+/// Payload:
+///   u32_payload  = target GUID (the entity whose enchantments changed)
+///   u32_payload_2 = current cached enchantment count (post-mutation)
+///   string_payload = None
+///   f32_payload  = None
+///
+/// Consumed by:
+///   - plugins/buffs-hud.js → re-render per-target overlay
+///   - scene3d/nameplate_sprite.js → refresh buff badge on the target's
+///     nameplate
+///
+/// **Self-target events** still flow through the `latest_enchantments`
+/// snapshot + `kind=8 playerStatsUpdated` cadence — Wave 4.B does NOT
+/// touch the self path.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ENTITY_ENCHANTMENTS_UPDATED: u32 = 46;
 
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
@@ -13013,6 +13061,35 @@ enum SessionCommand {
     /// - Out-of-range / not-interactive → `GameEvent::WeenieError`,
     ///   normalised into `kind=13 UseFailed`.
     UseObject { guid: u32 },
+    // === Wave 5.A — tradeskill useWithTarget (2026-05-28) ===
+    /// Tradeskill primitive: apply `item_guid` (typically a material,
+    /// salvage stack, or tinker) to `target_guid` (the recipient
+    /// item being modified). Recv loop wraps in
+    /// `GameAction::UseWithTarget(Box<UseWithTargetActionData>)` and
+    /// sends via `session.send_action`.
+    ///
+    /// ACE handles the rest server-side starting at
+    /// `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/
+    /// GameActionUseWithTarget.cs:15` → `Player.HandleActionUseWith
+    /// Target` (`Player_Use.cs:29`) → `Managers/RecipeManager.cs`
+    /// (~1071 LOC) which owns the full tradeskill outcome logic
+    /// (salvage / tinker / imbue / dye / craft).
+    ///
+    /// Responses arrive over the existing recv-loop handlers — no
+    /// new arm needed:
+    /// - **Success/failure chat lines** ("You successfully …" /
+    ///   "You failed …") flow back via `GameEvent::ChatBroadcast` /
+    ///   `GameMessage::Communication_*` into the existing chat
+    ///   plugin.
+    /// - **Inventory deltas** (consumed material + modified target)
+    ///   land as `GameEvent::InventoryChange` /
+    ///   `GameMessage::UpdateObject` and reach the inventory plugin
+    ///   via the existing object-mutation pipeline.
+    ///
+    /// Caller should gate on `kind=7 EnteredWorld` (and in
+    /// practice, on both items being visible in inventory —
+    /// pre-EnteredWorld attempts are silently dropped by ACE).
+    UseWithTarget { item_guid: u32, target_guid: u32 },
     /// Phase 4 step 3: keyboard / click input → AC `MoveToState`
     /// packet. Each axis is `-1` / `0` / `+1`; `run` is the
     /// shift-modifier flag.
@@ -13556,6 +13633,35 @@ enum SessionCommand {
     /// allegiance-panel re-renders on the `allegianceUpdated` event.
     AllegianceInfoRequest {
         target_name: String,
+    },
+    /// Wave 4.A (2026-05-28): JS-side progression action — spend
+    /// experience to raise a skill rank. Sends
+    /// `GameAction::RaiseSkill(RaiseSkillActionData)` (sub-opcode
+    /// 0x0046). ACE `Player.HandleActionRaiseSkill`
+    /// (`~/ace-server/Source/ACE.Server/Network/GameAction/Actions/
+    /// GameActionRaiseSkill.cs`) validates the XP cost, debits
+    /// `AvailableExperience`, and broadcasts a `PrivateUpdateSkill`
+    /// (already wired through the world dispatcher; the JS train-skills
+    /// plugin re-renders on `playerStatsUpdated`). Mirrors
+    /// `ClientCommand::RaiseSkill` in `holtburger-core` and the cli's
+    /// `progression.rs:22-27` driver.
+    RaiseSkill {
+        skill_type: u32,
+        xp_spent: u32,
+    },
+    /// Wave 4.A (2026-05-28): JS-side progression action — spend skill
+    /// credits to TRAIN (Untrained→Trained) a previously untrained skill.
+    /// Sends `GameAction::TrainSkill(TrainSkillActionData)` (sub-opcode
+    /// 0x0047). ACE `Player.HandleActionTrainSkill`
+    /// (`~/ace-server/Source/ACE.Server/Network/GameAction/Actions/
+    /// GameActionTrainSkill.cs`) validates the credit cost, debits
+    /// `AvailableSkillCredits`, and broadcasts a `PrivateUpdateSkill`
+    /// flipping the skill to TrainingLevel::Trained. Mirrors
+    /// `ClientCommand::TrainSkill` in `holtburger-core` and the cli's
+    /// `progression.rs:28-35` driver.
+    TrainSkill {
+        skill_type: u32,
+        credits: u32,
     },
 }
 
@@ -17791,6 +17897,14 @@ fn apply_inventory_object_delete(
     physics_script_table_index: &std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     >,
+    // === Wave 4.B — remote enchantments index cleanup (2026-05-28) ===
+    //
+    // Drop the deleted entity's cached enchantment list so the index
+    // doesn't accumulate dead-GUID entries over a long session.
+    // Symmetric with the `physics_script_table_index` path above.
+    entity_enchantments_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
+    >,
 ) -> bool {
     let was_owned = world.player.inventory.contains(&guid);
     if was_owned {
@@ -17831,6 +17945,16 @@ fn apply_inventory_object_delete(
     // cleanup. Symmetric with the projectile-index path above so the
     // cache doesn't accumulate dead-GUID entries over a long session.
     physics_script_table_index.borrow_mut().remove(&g_u32);
+
+    // === Wave 4.B — remote enchantments index cleanup (2026-05-28) ===
+    //
+    // Same lifetime guarantee as the projectile + physics-script-table
+    // indexes above — when the entity despawns the per-GUID enchantment
+    // list goes with it. The JS consumer (buffs HUD / nameplate sprite)
+    // won't see ObjectDelete events for the entity it's currently
+    // rendering enchantments for anyway, but this guards against the
+    // long-session leak.
+    entity_enchantments_index.borrow_mut().remove(&g_u32);
 
     was_owned
 }
@@ -18181,6 +18305,36 @@ pub struct SessionHandle {
     /// `EntityManager.getPhysicsScriptTableDid(guid)`.
     physics_script_table_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    >,
+    /// === Wave 4.B — remote enchantments index (2026-05-28) ===
+    ///
+    /// Per-GUID cache of each entity's active enchantments — the buff /
+    /// debuff stacks that ACE broadcasts via `MagicUpdateEnchantment` /
+    /// `MagicUpdateMultipleEnchantments` / `MagicDispelEnchantment` etc.
+    /// for non-self targets. Mirrors the `latest_enchantments` shape used
+    /// by [`SessionHandle::player_enchantments`], but keyed by entity
+    /// GUID instead of being implicit-self.
+    ///
+    /// **Why this exists:** `holtburger_world::player::mutations::upsert_
+    /// enchantment` (and its 4 siblings) short-circuit with `if target !=
+    /// self.guid { return false; }` — every remote enchantment arrives
+    /// on the wire and is then explicitly discarded by the world handler.
+    /// Wave F.2 added the full StatMod tuple to `PlayerEnchantmentJs`
+    /// (Wave 4.B's renderer prerequisite) but didn't lift the discard
+    /// guard; this index is the non-invasive plumb-around (mirrors the
+    /// `physics_script_table_index` pattern from CMT Wave 16).
+    ///
+    /// Populated by the recv loop's pre-route hook in the GameMessage
+    /// processing block when the inbound event's `target` != local
+    /// player's guid. Pruned by `apply_inventory_object_delete` so the
+    /// index doesn't accumulate dead GUIDs (same lifetime as
+    /// `physics_script_table_index`).
+    ///
+    /// Read by [`SessionHandle::entity_enchantments`] to power the buffs
+    /// HUD's per-target overlay and the nameplate sprite's buff /
+    /// debuff badge.
+    entity_enchantments_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
     >,
     /// Phase 6 step D: latest cell-scene snapshot, refreshed by the
     /// recv loop on each `SessionCommand::TickMovement`. Carries the
@@ -18668,6 +18822,12 @@ struct LatestStats {
     // or before either property has landed.
     current_power_mod: Option<f32>,
     accuracy_mod: Option<f32>,
+    // Wave 4.A (2026-05-28): cached `PropertyInt::AvailableSkillCredits`
+    // (24) for the train-skills plugin's "credits available" footer and
+    // Train-button enabled gate. Mirrors `WorldContextExt::
+    // player_unspent_skill_points` (`crates/holtburger-world/src/state/
+    // types.rs:171-174`). `0` pre-spawn / before the property has landed.
+    skill_credits: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -19475,6 +19635,73 @@ impl SessionHandle {
                 degrade_limit: e.degrade_limit,
                 last_time_degraded: e.last_time_degraded,
             })
+            .collect()
+    }
+
+    /// === Wave 4.B — remote enchantments query (2026-05-28) ===
+    ///
+    /// The remote-entity counterpart to [`Self::player_enchantments`].
+    /// Returns the active enchantment stack for any entity GUID — buff /
+    /// debuff updates flow through the recv loop's pre-route hook (see
+    /// [`Self::entity_enchantments_index`]) and land here so the buffs
+    /// HUD's per-target overlay and the nameplate-sprite badge can read
+    /// them without a live world borrow.
+    ///
+    /// Empty vec when:
+    /// - the GUID hasn't been observed (no entity by this id);
+    /// - the entity has been observed but ACE hasn't yet broadcast any
+    ///   enchantments for it (fresh spawn);
+    /// - the entity's enchantments were purged (e.g. dispel-all) and the
+    ///   wire flowed but the cleared list is empty.
+    ///
+    /// Same record shape as [`Self::player_enchantments`] — JS code can
+    /// reuse the same normalizer / renderer / classifier across self +
+    /// remote without branching on which getter sourced the snapshot.
+    #[wasm_bindgen(js_name = entityEnchantments)]
+    pub fn entity_enchantments(&self, guid: u32) -> Vec<PlayerEnchantmentJs> {
+        self.entity_enchantments_index
+            .borrow()
+            .get(&guid)
+            .map(|list| {
+                list.iter()
+                    .map(|e| PlayerEnchantmentJs {
+                        spell_id: e.spell_id,
+                        spell_category: e.spell_category,
+                        layer: e.layer,
+                        power_level: e.power_level,
+                        start_time: e.start_time,
+                        duration: e.duration,
+                        caster_guid: e.caster_guid,
+                        stat_mod_type: e.stat_mod_type,
+                        stat_mod_key: e.stat_mod_key,
+                        stat_mod_value: e.stat_mod_value,
+                        has_spell_set_id: e.has_spell_set_id,
+                        spell_set_id: e.spell_set_id,
+                        degrade_modifier: e.degrade_modifier,
+                        degrade_limit: e.degrade_limit,
+                        last_time_degraded: e.last_time_degraded,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// === Wave 4.B — list of entities with active enchantments (2026-05-28) ===
+    ///
+    /// Returns every GUID with at least one cached entry in the remote-
+    /// entity enchantment index. UI consumers (buffs HUD per-target
+    /// overlay, nameplate sprite refresh tick) iterate this to know
+    /// which nameplates need a buff badge without polling
+    /// `entity_enchantments(guid)` for every entity in the scene.
+    ///
+    /// Order is unspecified (HashMap iteration); callers should not
+    /// depend on a particular sequence.
+    #[wasm_bindgen(js_name = entityEnchantmentGuids)]
+    pub fn entity_enchantment_guids(&self) -> Vec<u32> {
+        self.entity_enchantments_index
+            .borrow()
+            .keys()
+            .copied()
             .collect()
     }
 
@@ -20702,6 +20929,47 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::UseObject { guid })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("use_object: cmd channel closed ({e})"))
+            })
+    }
+
+    // === Wave 5.A — tradeskill useWithTarget (2026-05-28) ===
+    /// Tradeskill C2S primitive: apply `itemGuid` to `targetGuid`.
+    /// Mirrors `useObject` above but for the two-argument
+    /// `GameAction::UseWithTarget` (action opcode 0x0035 per
+    /// `Chorizite.ACProtocol.Enums.GameActionType.Inventory_
+    /// UseWithTargetEvent` and ACE `GameActionType.UseWithTarget`).
+    ///
+    /// ACE routes through `GameActionUseWithTarget.cs:15` →
+    /// `Player_Use.cs:29` (`HandleActionUseWithTarget`) →
+    /// `Managers/RecipeManager.cs`. Outcomes (success/failure +
+    /// inventory deltas) arrive over the existing chat + object-
+    /// mutation handlers — no new recv arm needed.
+    ///
+    /// Argument order matches the underlying Chorizite payload
+    /// (`Inventory_UseWithTargetEvent { ObjectId, TargetId }`) and
+    /// the Rust `UseWithTargetActionData { item_guid, target_guid }`
+    /// so the JS caller dispatches as
+    /// `handle.useWithTarget(itemGuid, targetGuid)`.
+    ///
+    /// **Timing.** Caller should gate on `kind=7 EnteredWorld`. ACE
+    /// silently drops pre-world calls. Both `itemGuid` and
+    /// `targetGuid` must be the player's known object IDs (typically
+    /// from inventory or PVS-visible entities) — otherwise ACE
+    /// responds with `GameEvent::WeenieError` (lands as
+    /// `kind=13 UseFailed`).
+    ///
+    /// Returns `Ok(())` on cmd-channel enqueue; failure surfaces only
+    /// if the recv loop is gone (process tear-down).
+    #[wasm_bindgen(js_name = useWithTarget)]
+    pub fn use_with_target(&self, item_guid: u32, target_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::UseWithTarget {
+                item_guid,
+                target_guid,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("use_with_target: cmd channel closed ({e})"))
             })
     }
 
@@ -22712,6 +22980,27 @@ pub async fn start_session(
     let physics_script_table_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // === Wave 4.B — remote enchantments index (2026-05-28) ===
+    //
+    // Per-GUID cache of each entity's active enchantments. Mirrors the
+    // `physics_script_table_index` shape (one Rc<RefCell<HashMap>>
+    // threaded through recv_loop), but the value type is the full
+    // `Vec<PlayerEnchantment>` snapshot so the JS-facing
+    // `entityEnchantments(guid)` getter can reconstruct the same
+    // `PlayerEnchantmentJs` shape `playerEnchantments()` returns.
+    //
+    // Populated by the recv loop's pre-route hook (right after
+    // `GameMessage::unpack`, before `should_route_message_to_world` runs)
+    // when the inbound event's `target` != local player guid — the
+    // canonical world handler discards those with
+    // `if target != self.guid { return false; }`
+    // (`crates/holtburger-world/src/player/mutations.rs:440-548`).
+    //
+    // Pruned on ObjectDelete / InventoryRemoveObject (same lifetime as
+    // `physics_script_table_index` — see `apply_inventory_object_delete`).
+    let entity_enchantments_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
     // Phase 6 step D: cell-scene snapshot, refreshed each TickMovement.
     let cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>> =
         std::rc::Rc::new(std::cell::RefCell::new(CellSceneSnapshot::default()));
@@ -22790,6 +23079,8 @@ pub async fn start_session(
         let wielder_index_inner = wielder_index.clone();
         let projectile_index_inner = projectile_index.clone();
         let physics_script_table_index_inner = physics_script_table_index.clone();
+        // Wave 4.B (2026-05-28) — clone for recv_loop param.
+        let entity_enchantments_index_inner = entity_enchantments_index.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
@@ -22831,6 +23122,8 @@ pub async fn start_session(
                 wielder_index_inner,
                 projectile_index_inner,
                 physics_script_table_index_inner,
+                // === Wave 4.B — remote enchantments index (2026-05-28) ===
+                entity_enchantments_index_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
@@ -22927,6 +23220,8 @@ pub async fn start_session(
         wielder_index,
         projectile_index,
         physics_script_table_index,
+        // === Wave 4.B — remote enchantments index (2026-05-28) ===
+        entity_enchantments_index,
         cell_scene_snapshot,
         door_part_snapshot,
         local_player_pose,
@@ -23477,6 +23772,13 @@ fn publish_player_stats_snapshot(
         .and_then(|entity| entity.get_int_prop(PropertyInt::AetheriaBitfield))
         .map(|bits| bits as u32)
         .unwrap_or(0);
+    // Wave 4.A (2026-05-28): cache `AvailableSkillCredits` alongside the
+    // other PropertyInt-derived stats. Sourced via
+    // `WorldContextExt::player_unspent_skill_points` — same fall-back
+    // (`unwrap_or(0)`) as the WorldContextExt impl so the value
+    // matches what the cli sees. (`WorldContextExt` already in scope
+    // from the burden read a few lines above.)
+    let skill_credits = world.player_unspent_skill_points();
     *latest_stats.borrow_mut() = Some(LatestStats {
         name,
         vitals,
@@ -23489,6 +23791,7 @@ fn publish_player_stats_snapshot(
         accuracy_level,
         current_power_mod,
         accuracy_mod,
+        skill_credits,
     });
 }
 
@@ -24255,6 +24558,16 @@ async fn recv_loop(
     physics_script_table_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     >,
+    // === Wave 4.B — remote enchantments index (2026-05-28) ===
+    //
+    // Per-GUID cache of each entity's active enchantments. The recv loop
+    // populates this from the pre-route hook on every Magic*Enchantment
+    // GameEvent whose `target` != local player guid (which the canonical
+    // `holtburger_world::player::mutations` handlers discard with
+    // `if target != self.guid { return false; }`).
+    entity_enchantments_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
+    >,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
@@ -24402,6 +24715,223 @@ async fn recv_loop(
                     let mut fellowship_changed = false;
                     let mut trade_changed = false;
                     let mut book_changed: Option<holtburger_common::Guid> = None;
+                    // === Wave 4.B — remote enchantments pre-route hook (2026-05-28) ===
+                    //
+                    // ACE broadcasts buff / debuff stacks for non-self
+                    // entities via the same `MagicUpdateEnchantment` (etc.)
+                    // GameEvents the local player receives. The canonical
+                    // `holtburger_world::player::mutations` handlers gate
+                    // every one with `if target != self.guid { return false; }`
+                    // (mutations.rs:440-548), so remote enchantments arrive
+                    // on the wire and are dropped — leaving raid healers
+                    // unable to see if their group's buffs landed, PvP
+                    // players unable to tell if their debuffs stuck, and
+                    // the new Wave-F.2 buffs HUD blind to anything outside
+                    // the local player.
+                    //
+                    // The non-invasive fix (per `docs/audit-refresh-2026-
+                    // 05-28.md` §"Wave 4.B recommendation") is a parallel
+                    // `entity_enchantments_index` HashMap — mirroring the
+                    // CMT-Wave-16 `physics_script_table_index` pattern.
+                    // World shape stays unchanged; the buffs HUD + nameplate
+                    // sprite read via `handle.entityEnchantments(guid)`.
+                    //
+                    // We intercept the wire BEFORE
+                    // `should_route_message_to_world` runs so the world
+                    // handler's discard guard is irrelevant — the index is
+                    // populated regardless of whether the world dispatcher
+                    // accepts or drops the event downstream.
+                    //
+                    // **Why pre-route, not post-route**: the world handlers
+                    // return `false` for non-self enchantments, so post-route
+                    // the per-GUID payload data is gone (no `WorldEvent`
+                    // emit). Pre-route gives us the typed event with the
+                    // `target` field still populated by `game_event.rs:225-278`.
+                    //
+                    // **Self-target events** still flow through the
+                    // `latest_enchantments` snapshot + `kind=8
+                    // playerStatsUpdated` cadence — we explicitly skip
+                    // self-targets here so we don't double-publish.
+                    //
+                    // Coordinates with Wave 6.A's `should_route_message_to_
+                    // world` extension (commit 8d21a126): that filter
+                    // gates `PrivateUpdateProperty*` for the world
+                    // dispatcher; this hook is upstream of the filter and
+                    // doesn't depend on it.
+                    let mut entity_enchantments_changed: Option<u32> = None;
+                    if let GameMessage::GameEvent(event_msg) = &message {
+                        let self_guid: Option<u32> = world
+                            .as_ref()
+                            .map(|w| u32::from(w.player.guid))
+                            .filter(|&g| g != 0);
+                        // Helper closure: returns Some(target_guid) when
+                        // we should populate the index, None when we
+                        // should let the existing self-path handle it.
+                        let extract_remote_target = |target: holtburger_common::Guid| -> Option<u32> {
+                            let g = u32::from(target);
+                            if g == 0 {
+                                return None;
+                            }
+                            match self_guid {
+                                Some(sg) if sg == g => None,
+                                _ => Some(g),
+                            }
+                        };
+                        use holtburger_protocol::messages::GameEvent;
+                        match &event_msg.event {
+                            GameEvent::MagicUpdateEnchantment(data) => {
+                                if let Some(g) = extract_remote_target(data.target) {
+                                    let mut idx = entity_enchantments_index.borrow_mut();
+                                    let entry = idx.entry(g).or_default();
+                                    // Replace existing (spell_id, layer)
+                                    // or append. Mirrors
+                                    // `Player::upsert_enchantment`
+                                    // (mutations.rs:450-458).
+                                    let snap = player_enchantment_from_wire(&data.enchantment);
+                                    if let Some(existing) = entry.iter_mut().find(|e| {
+                                        e.spell_id as u16 == data.enchantment.spell_id
+                                            && e.layer as u16 == data.enchantment.layer
+                                    }) {
+                                        *existing = snap;
+                                    } else {
+                                        entry.push(snap);
+                                    }
+                                    entity_enchantments_changed = Some(g);
+                                }
+                            }
+                            GameEvent::MagicUpdateMultipleEnchantments(data) => {
+                                if let Some(g) = extract_remote_target(data.target) {
+                                    let mut idx = entity_enchantments_index.borrow_mut();
+                                    let entry = idx.entry(g).or_default();
+                                    for ench in &data.enchantments {
+                                        let snap = player_enchantment_from_wire(ench);
+                                        if let Some(existing) = entry.iter_mut().find(|e| {
+                                            e.spell_id as u16 == ench.spell_id
+                                                && e.layer as u16 == ench.layer
+                                        }) {
+                                            *existing = snap;
+                                        } else {
+                                            entry.push(snap);
+                                        }
+                                    }
+                                    entity_enchantments_changed = Some(g);
+                                }
+                            }
+                            GameEvent::MagicRemoveEnchantment(data) => {
+                                if let Some(g) = extract_remote_target(data.target) {
+                                    let mut idx = entity_enchantments_index.borrow_mut();
+                                    if let Some(entry) = idx.get_mut(&g) {
+                                        entry.retain(|e| {
+                                            e.spell_id as u16 != data.spell_id
+                                                || e.layer as u16 != data.layer
+                                        });
+                                        if entry.is_empty() {
+                                            idx.remove(&g);
+                                        }
+                                    }
+                                    entity_enchantments_changed = Some(g);
+                                }
+                            }
+                            GameEvent::MagicDispelEnchantment(data) => {
+                                // mutations.rs:261-269 routes
+                                // DispelEnchantment through
+                                // remove_enchantment; we mirror that shape.
+                                if let Some(g) = extract_remote_target(data.target) {
+                                    let mut idx = entity_enchantments_index.borrow_mut();
+                                    if let Some(entry) = idx.get_mut(&g) {
+                                        entry.retain(|e| {
+                                            e.spell_id as u16 != data.spell_id
+                                                || e.layer as u16 != data.layer
+                                        });
+                                        if entry.is_empty() {
+                                            idx.remove(&g);
+                                        }
+                                    }
+                                    entity_enchantments_changed = Some(g);
+                                }
+                            }
+                            GameEvent::MagicRemoveMultipleEnchantments(data) => {
+                                if let Some(g) = extract_remote_target(data.target) {
+                                    let mut idx = entity_enchantments_index.borrow_mut();
+                                    if let Some(entry) = idx.get_mut(&g) {
+                                        for (sid, layer) in &data.spells {
+                                            entry.retain(|e| {
+                                                e.spell_id as u16 != *sid
+                                                    || e.layer as u16 != *layer
+                                            });
+                                        }
+                                        if entry.is_empty() {
+                                            idx.remove(&g);
+                                        }
+                                    }
+                                    entity_enchantments_changed = Some(g);
+                                }
+                            }
+                            GameEvent::MagicDispelMultipleEnchantments(data) => {
+                                if let Some(g) = extract_remote_target(data.target) {
+                                    let mut idx = entity_enchantments_index.borrow_mut();
+                                    if let Some(entry) = idx.get_mut(&g) {
+                                        for (sid, layer) in &data.spells {
+                                            entry.retain(|e| {
+                                                e.spell_id as u16 != *sid
+                                                    || e.layer as u16 != *layer
+                                            });
+                                        }
+                                        if entry.is_empty() {
+                                            idx.remove(&g);
+                                        }
+                                    }
+                                    entity_enchantments_changed = Some(g);
+                                }
+                            }
+                            GameEvent::MagicPurgeEnchantments(data) => {
+                                // Purge non-VITAE; leave VITAE entries
+                                // alone (per mutations.rs:526-548
+                                // `keep_bad=false` branch — kept
+                                // enchantments are those with the VITAE
+                                // flag).
+                                if let Some(g) = extract_remote_target(data.target) {
+                                    let mut idx = entity_enchantments_index.borrow_mut();
+                                    if let Some(entry) = idx.get_mut(&g) {
+                                        use holtburger_common::properties::EnchantmentTypeFlags;
+                                        entry.retain(|e| {
+                                            let flags = EnchantmentTypeFlags::from_bits_truncate(
+                                                e.stat_mod_type,
+                                            );
+                                            flags.contains(EnchantmentTypeFlags::VITAE)
+                                        });
+                                        if entry.is_empty() {
+                                            idx.remove(&g);
+                                        }
+                                    }
+                                    entity_enchantments_changed = Some(g);
+                                }
+                            }
+                            GameEvent::MagicPurgeBadEnchantments(data) => {
+                                // Purge debuffs only; preserve beneficials
+                                // AND vitae (mutations.rs `keep_bad=true`
+                                // branch — kept are BENEFICIAL | VITAE).
+                                if let Some(g) = extract_remote_target(data.target) {
+                                    let mut idx = entity_enchantments_index.borrow_mut();
+                                    if let Some(entry) = idx.get_mut(&g) {
+                                        use holtburger_common::properties::EnchantmentTypeFlags;
+                                        entry.retain(|e| {
+                                            let flags = EnchantmentTypeFlags::from_bits_truncate(
+                                                e.stat_mod_type,
+                                            );
+                                            flags.contains(EnchantmentTypeFlags::BENEFICIAL)
+                                                || flags.contains(EnchantmentTypeFlags::VITAE)
+                                        });
+                                        if entry.is_empty() {
+                                            idx.remove(&g);
+                                        }
+                                    }
+                                    entity_enchantments_changed = Some(g);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     if should_route_message_to_world(&message)
                         && let Some(w) = world.as_mut()
                     {
@@ -24422,7 +24952,27 @@ async fn recv_loop(
                                 // subscribers (skill panel, attribute panel,
                                 // burden indicator) keep using kind=8 — the
                                 // per-vital events are additive.
-                                WorldEvent::VitalUpdated(vital) => {
+                                // === Wave 6 polish — vitalChanged oldValue (2026-05-28) ===
+                                // ACPlugin's `Character.OnVitalChanged` carries
+                                // `int OldValue` per `VitalChangedEventArgs.cs:13-35`.
+                                // Wave 3.C's per-vital event split (kind=42/43/44)
+                                // emitted only {current, buffedMax} because the
+                                // mutation site overwrote the cached vital before
+                                // the recv loop's event scan could capture the
+                                // prior. Wave 6 polish (holtburger-world handlers
+                                // `update_vital_current` + `update_vital` +
+                                // `update_health_fraction`) now snapshot the prior
+                                // value BEFORE the in-place mutation and surface it
+                                // on `WorldEvent::VitalUpdated { prev_current }`.
+                                //
+                                // We thread it through `f32_payload` as a non-NaN
+                                // f32. Vitals max out at ~1500 retail, well below
+                                // f32's 2^24 = 16M lossless integer range, so the
+                                // u32→f32 cast is exact for every realistic value.
+                                // `None` (handler couldn't capture, e.g. mid-spawn
+                                // hydrate) maps to `f32_payload: None` and JS
+                                // consumers must treat it as "delta unavailable".
+                                WorldEvent::VitalUpdated { vital, prev_current } => {
                                     stats_changed = true;
                                     use holtburger_world::stats::VitalType;
                                     let kind = match vital.vital_type {
@@ -24435,7 +24985,7 @@ async fn recv_loop(
                                         string_payload: None,
                                         u32_payload: Some(vital.current),
                                         u32_payload_2: Some(vital.buffed_max),
-                                        f32_payload: None,
+                                        f32_payload: prev_current.map(|v| v as f32),
                                     });
                                 }
                                 WorldEvent::AttributeUpdated(_)
@@ -24847,12 +25397,14 @@ async fn recv_loop(
                                 }
                             }
                             GameMessage::ObjectDelete(data) => {
-                                if apply_inventory_object_delete(w, data.guid, &wielder_index, &projectile_index, &physics_script_table_index) {
+                                // === Wave 4.B — propagate to entity_enchantments_index (2026-05-28) ===
+                                if apply_inventory_object_delete(w, data.guid, &wielder_index, &projectile_index, &physics_script_table_index, &entity_enchantments_index) {
                                     inventory_changed = true;
                                 }
                             }
                             GameMessage::InventoryRemoveObject(data) => {
-                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index, &projectile_index, &physics_script_table_index) {
+                                // === Wave 4.B — propagate to entity_enchantments_index (2026-05-28) ===
+                                if apply_inventory_object_delete(w, data.object_guid, &wielder_index, &projectile_index, &physics_script_table_index, &entity_enchantments_index) {
                                     inventory_changed = true;
                                 }
                             }
@@ -24926,6 +25478,36 @@ async fn recv_loop(
                             string_payload: None,
                             u32_payload: None,
                             u32_payload_2: None,
+                            f32_payload: None,
+                        });
+                    }
+                    // === Wave 4.B — emit remote-entity enchantment event (2026-05-28) ===
+                    //
+                    // The pre-route hook just mutated
+                    // `entity_enchantments_index` for a non-self target.
+                    // Signal the UI layer so the buffs HUD's per-target
+                    // overlay + the nameplate sprite's buff badge can
+                    // refresh. JS reads the new snapshot via
+                    // `handle.entityEnchantments(guid)`.
+                    //
+                    // **Why a dedicated event kind** (not piggyback on
+                    // playerStatsUpdated): a remote enchantment change
+                    // does NOT modify the local player's stats — the
+                    // buffs HUD shouldn't re-pull `playerEnchantments()`
+                    // and the stats snapshot publisher shouldn't republish.
+                    // u32_payload carries the target GUID so the UI can
+                    // selectively re-render only that nameplate / target.
+                    if let Some(target_guid) = entity_enchantments_changed {
+                        let count = entity_enchantments_index
+                            .borrow()
+                            .get(&target_guid)
+                            .map(|v| v.len() as u32)
+                            .unwrap_or(0);
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_ENTITY_ENCHANTMENTS_UPDATED,
+                            string_payload: None,
+                            u32_payload: Some(target_guid),
+                            u32_payload_2: Some(count),
                             f32_payload: None,
                         });
                     }
@@ -28359,6 +28941,47 @@ async fn recv_loop(
                             return;
                         }
                     }
+                    // === Wave 5.A — tradeskill useWithTarget (2026-05-28) ===
+                    Some(SessionCommand::UseWithTarget {
+                        item_guid,
+                        target_guid,
+                    }) => {
+                        // Wrap (item, target) in
+                        // `GameAction::UseWithTarget(UseWithTargetActionData {...})`
+                        // (action opcode 0x0035 — Chorizite
+                        // `Inventory_UseWithTargetEvent`, ACE
+                        // `GameActionType.UseWithTarget`). The same
+                        // path the cli's ClientCommand::UseWithTarget
+                        // takes via send_game_action
+                        // (`crates/holtburger-core/src/client/commands.rs:436`).
+                        //
+                        // ACE handles the response in
+                        // `Player_Use.cs::HandleActionUseWithTarget`
+                        // (`~/ace-server/Source/ACE.Server/WorldObjects/
+                        // Player_Use.cs:29`) → `Managers/RecipeManager.cs`.
+                        // Success/failure flows back as chat (existing
+                        // ChatBroadcast / Communication_* handlers) +
+                        // inventory deltas (existing InventoryChange /
+                        // UpdateObject handlers) — no new recv arm.
+                        let action =
+                            holtburger_protocol::messages::GameAction::UseWithTarget(Box::new(
+                                holtburger_protocol::messages::UseWithTargetActionData {
+                                    item_guid: holtburger_common::Guid::from(item_guid),
+                                    target_guid: holtburger_common::Guid::from(target_guid),
+                                },
+                            ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(UseWithTarget): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("use_with_target: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
                     Some(SessionCommand::PopulateTerrain {
                         landblock_id,
                         heights,
@@ -28587,6 +29210,75 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[remove_spell] spell_id={spell_id}",
+                        ));
+                    }
+                    // === Wave 4.A — Train Skills wasm exports (2026-05-28) ===
+                    //
+                    // Wire arms for the two progression GameActions. Both
+                    // mirror `ClientCommand::{RaiseSkill,TrainSkill}` already
+                    // routed in `holtburger-core` (commands.rs:178-179,
+                    // 862-878) — same `send_action(GameAction::...)` shape
+                    // as RemoveSpellFromBook above. ACE owns all validation
+                    // (skill exists, sufficient XP / credits, training
+                    // class transition legality); failures land back as
+                    // chat-message `WeenieError`s and the server's
+                    // `PrivateUpdateSkill` echo keeps the JS stats panel
+                    // honest. No optimistic local-side mutation — same
+                    // server-broadcast-of-truth pattern as setWielded
+                    // (lib.rs:35672-35720).
+                    Some(SessionCommand::RaiseSkill { skill_type, xp_spent }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, RaiseSkillActionData,
+                        };
+                        let action = GameAction::RaiseSkill(Box::new(
+                            RaiseSkillActionData { skill_type, xp_spent },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(RaiseSkill): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "raise_skill: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[raise_skill] skill_type={skill_type} xp_spent={xp_spent}",
+                        ));
+                    }
+                    Some(SessionCommand::TrainSkill { skill_type, credits }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, TrainSkillActionData,
+                        };
+                        let action = GameAction::TrainSkill(Box::new(
+                            TrainSkillActionData {
+                                skill_type,
+                                credits_spent: credits as i32,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(TrainSkill): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "train_skill: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[train_skill] skill_type={skill_type} credits={credits}",
                         ));
                     }
                     Some(SessionCommand::SetCharacterOption { option, value }) => {
@@ -35716,6 +36408,110 @@ impl SessionHandle {
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("setWielded: cmd channel closed ({e})"))
             })
+    }
+
+    // === Wave 4.A — Train Skills wasm exports (2026-05-28) ===
+    //
+    // Two `#[wasm_bindgen]` exports on `SessionHandle` that drive the
+    // progression GameActions whose protocol + ClientCommand routing
+    // shipped in earlier waves:
+    //   - `crates/holtburger-protocol/src/opcodes.rs:528-530`
+    //     (`RaiseSkill 0x0046`, `TrainSkill 0x0047`)
+    //   - `crates/holtburger-protocol/src/messages/player/actions.rs:67-125`
+    //     (`RaiseSkillActionData` + `TrainSkillActionData` pack/unpack)
+    //   - `crates/holtburger-core/src/client/commands.rs:862-877`
+    //     (`ClientCommand::{RaiseSkill,TrainSkill}` → `send_game_action`)
+    //
+    // The cli already drives these via `apps/holtburger-cli/src/pages/
+    // game/domains/progression.rs:22-34`; this exposes the same surface
+    // to the browser train-skills plugin. The `useObject` pattern at
+    // `lib.rs:20698-20706` (pre-wave; cmd-channel send → recv-loop
+    // builds GameAction → `session.send_action`) is the model. The
+    // matching SessionCommand variants + recv-loop arms live near
+    // `SessionCommand::RemoveSpellFromBook` (the closest progression-
+    // adjacent action surface).
+    //
+    // **Server contract:** ACE handles all validation server-side:
+    //   - `Player.HandleActionRaiseSkill`
+    //     (`~/ace-server/Source/ACE.Server/Network/GameAction/Actions/
+    //     GameActionRaiseSkill.cs`) — XP-cost lookup, debits
+    //     `AvailableExperience`, broadcasts `PrivateUpdateSkill` echo +
+    //     `PrivateUpdatePropertyInt64(AvailableExperience)`.
+    //   - `Player.HandleActionTrainSkill`
+    //     (`~/ace-server/Source/ACE.Server/Network/GameAction/Actions/
+    //     GameActionTrainSkill.cs`) — credit-cost lookup (heritage-
+    //     adjusted), debits `AvailableSkillCredits`, broadcasts
+    //     `PrivateUpdateSkill` flipping the skill to
+    //     `TrainingLevel::Trained` + `PrivateUpdatePropertyInt(
+    //     AvailableSkillCredits)`.
+    //
+    // Failures (insufficient XP / credits, illegal training-class
+    // transition, unknown skill) surface as `GameEvent::WeenieError`
+    // chat. The JS plugin re-renders on the server-broadcast
+    // `playerStatsUpdated` event — never optimistically mutating local
+    // state, mirroring the `setWielded` rationale above.
+    //
+    // **JS facade.** `plugins/api.js` adds `client.player.raiseSkill(
+    // skillId, xpSpent)` and `client.player.trainSkill(skillId,
+    // credits)` mirrors next to the existing `useObject`/etc. methods.
+
+    /// Send the C2S `Train_TrainSkill` (sub-opcode 0x0046 of the
+    /// `GameAction` 0xF61B carrier) to spend `xp_spent` experience on
+    /// `skill_id` (the `SkillType` discriminant — Axe=1, …,
+    /// Summoning=54). ACE validates the cost against the player's
+    /// `AvailableExperience` and the skill's next-rank table; success
+    /// echoes back as `PrivateUpdateSkill`.
+    #[wasm_bindgen(js_name = raiseSkill)]
+    pub fn raise_skill(&self, skill_id: u32, xp_spent: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RaiseSkill {
+                skill_type: skill_id,
+                xp_spent,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("raiseSkill: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Send the C2S `Train_TrainSkillAdvancementClass` (sub-opcode
+    /// 0x0047 of the `GameAction` 0xF61B carrier) to spend `credits`
+    /// skill credits training `skill_id` (the `SkillType` discriminant).
+    /// ACE validates the credit cost (per-heritage-adjusted) against
+    /// the player's `AvailableSkillCredits`; success echoes back as
+    /// `PrivateUpdateSkill` with `training` flipped to Trained (2).
+    /// Note: ACE's wire field is `credits_spent: i32` — the JS surface
+    /// takes `u32` for symmetry with `raiseSkill`; values >2^31-1 will
+    /// wrap (no realistic credit cost approaches that).
+    #[wasm_bindgen(js_name = trainSkill)]
+    pub fn train_skill(&self, skill_id: u32, credits: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::TrainSkill {
+                skill_type: skill_id,
+                credits,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("trainSkill: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Wave 4.A (2026-05-28): expose the local player's
+    /// `PropertyInt::AvailableSkillCredits` (24) for the train-skills
+    /// plugin's "credits available" footer + Train-button gate. Mirrors
+    /// `holtburger_world::context::WorldContextExt::player_unspent_skill_points`
+    /// (`crates/holtburger-world/src/state/types.rs:171-174`). Returns
+    /// `0` pre-spawn / before the property has landed. Refreshed by the
+    /// recv loop on each `publish_player_stats_snapshot` call (same
+    /// trigger as `playerStats()`); JS polls on
+    /// `playerStatsUpdated`.
+    #[wasm_bindgen(getter, js_name = playerSkillCredits)]
+    pub fn player_skill_credits(&self) -> u32 {
+        self.latest_stats
+            .borrow()
+            .as_ref()
+            .map(|s| s.skill_credits)
+            .unwrap_or(0)
     }
 }
 

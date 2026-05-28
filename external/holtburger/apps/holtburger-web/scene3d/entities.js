@@ -3980,6 +3980,17 @@ export class EntityManager {
 
     this.remove(g);
     await this.spawn(newMeta);
+    // === Wave 6 polish — entityAppearanceChanged emit (2026-05-28) ===
+    // Notify the plugin bus that this entity's visible appearance just
+    // landed (despawn+respawn path). Wave 3.B's examine-target plugin
+    // subscribes via `client.events.on("entityAppearanceChanged", ...)`
+    // to tear down + rebuild its embedded PaperdollViewport so the dyed
+    // gear re-renders. Without this emit, the subscription never fires.
+    // The hot-swap variant (`_applyAppearanceHotSwap`) carries a
+    // matching emit at its `return true` site below.
+    try {
+      window.__pluginClient?.events?.emit?.("entityAppearanceChanged", { guid: g });
+    } catch (_) {}
     return true;
   }
 
@@ -4162,6 +4173,17 @@ export class EntityManager {
         subPalettesCount: ((newMeta.subPalettes?.length ?? 0) / 3) | 0,
         paletteId: (newMeta.paletteId ?? 0) >>> 0,
       });
+    } catch (_) {}
+
+    // === Wave 6 polish — entityAppearanceChanged emit (2026-05-28) ===
+    // Hot-swap variant: appearance changed mid-game without despawn+
+    // respawn. Mirror the emit from the despawn+respawn path above so
+    // examine-target.js (and any other subscriber) refreshes when the
+    // hot-swap succeeds. The fallback (`swapped=false`) does NOT emit
+    // here because the caller's despawn+respawn path will fire its own
+    // emit after spawn lands.
+    try {
+      window.__pluginClient?.events?.emit?.("entityAppearanceChanged", { guid });
     } catch (_) {}
 
     return true;

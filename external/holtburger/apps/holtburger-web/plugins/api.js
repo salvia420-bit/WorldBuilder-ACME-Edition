@@ -24,7 +24,7 @@
 // | 7 | Game.OnCharactersChanged            | EventArgs.Empty (re-fire roster)               | kind=0 CharacterListRecv  | IMPLEMENTED | renderCharacterList drains kind=0 each fire                          |
 // | 8 | Game.OnWorldInfo                    | EventArgs.Empty (ServerName/Max/Cur)           | —                         | MISSING     | Login_WorldInfo parsed but not surfaced as ClientEvent (TODO)        |
 // | 9 | Character.OnVitaeChanged            | float Vitae, OldVitae                          | kind=8 "playerStatsUpdated"| PARTIAL    | coalesced; no vitae-specific channel + no oldVitae delta (TODO)      |
-// |10 | Character.OnVitalChanged            | VitalId Type, int Value, int OldValue          | kinds 42/43/44 "vitalChangedHealth/Stamina/Mana" | IMPLEMENTED | Wave 3.C (2026-05-28): per-vital granular events emit current+buffedMax; coalesced kind=8 still fires alongside for non-HUD subs; oldValue field deferred (recv loop discards prior on update_vital_current) |
+// |10 | Character.OnVitalChanged            | VitalId Type, int Value, int OldValue          | kinds 42/43/44 "vitalChangedHealth/Stamina/Mana" | IMPLEMENTED | Wave 3.C (2026-05-28): per-vital granular events emit current+buffedMax. Wave 6 polish (2026-05-28) added oldValue: holtburger-world handlers snapshot pre-mutation, wasm threads through f32_payload, drainEvents surfaces as `oldValue` on the bus payload. Coalesced kind=8 still fires alongside for non-HUD subs. |
 // |11 | Character.OnEnchantmentChanged      | AddRemove Type, LayeredSpellId, Enchantment    | kind=8 + bus enchantmentAdded/Removed | PARTIAL | PR-2 2026-05-27: JS-side snapshot diff emits Added/Removed delta events; wire-level wrapper events (target_guid + sequence) deferred to Wave E for remote-creature buffs |
 // |12 | Character.OnSharedCooldownChanged   | AddRemove Type, SharedCooldown                 | —                         | MISSING     | shared-cooldown bus not wired (TODO)                                 |
 // |13 | Character.OnPortalSpaceEntered      | EventArgs.Empty                                | —                         | MISSING     | portal-space (loading screen) entered/exited not exposed (TODO)      |
@@ -48,9 +48,9 @@
 //
 // ---- Bus-emitted events (canonical list — subscribe via client.events.on) ----
 //   "playerStatsUpdated"   (kind=8)         — vitals/skills/attrs refreshed (coalesced)
-//   "vitalChangedHealth"   (kind=42)        — {current, buffedMax} (Wave 3.C 2026-05-28)
-//   "vitalChangedStamina"  (kind=43)        — {current, buffedMax} (Wave 3.C)
-//   "vitalChangedMana"     (kind=44)        — {current, buffedMax} (Wave 3.C)
+//   "vitalChangedHealth"   (kind=42)        — {current, buffedMax, oldValue?} (Wave 3.C 2026-05-28; oldValue added Wave 6 polish 2026-05-28)
+//   "vitalChangedStamina"  (kind=43)        — {current, buffedMax, oldValue?} (Wave 3.C; oldValue Wave 6 polish)
+//   "vitalChangedMana"     (kind=44)        — {current, buffedMax, oldValue?} (Wave 3.C; oldValue Wave 6 polish)
 //   "landblockChanged"     (zone-cross)     — {prevLb, lbId} from local player move
 //   "vendorOpened"         (kind=12)        — {stringPayload, u32Payload, u32Payload2}
 //   "damageDealt"          (kind=19 JSON)   — {defenderName, damage, damageType, ...}
@@ -318,7 +318,7 @@ export function createClient(sessionHandle) {
   // TODO(coverage-table row 6):  add unified "stateChanged" {oldState,newState} bus event
   // TODO(coverage-table row 8):  add "worldInfo" bus event (ServerName/MaxConnections/CurrentConnections)
   // TODO(coverage-table row 9):  split kind=8 into per-vital "vitaeChanged" with old/new
-  // row 10: DONE (Wave 3.C 2026-05-28) — per-vital "vitalChangedHealth/Stamina/Mana" {current,buffedMax} via kinds 42/43/44. oldValue deferred (recv loop's update_vital_current discards prior).
+  // row 10: DONE (Wave 3.C + Wave 6 polish 2026-05-28) — per-vital "vitalChangedHealth/Stamina/Mana" {current,buffedMax,oldValue?} via kinds 42/43/44. oldValue threaded through f32_payload from holtburger-world handlers (`update_vital_current` / `update_vital` / `update_health_fraction`) which snapshot pre-mutation; `undefined` when the handler couldn't capture (initial spawn hydrate).
   // TODO(coverage-table row 11): add "enchantmentChanged" {type,layeredSpellId,enchantment} bus event
   // TODO(coverage-table row 12): add "sharedCooldownChanged" {type,cooldown} bus event
   // TODO(coverage-table row 13): add "portalSpaceEntered" bus event
@@ -331,6 +331,15 @@ export function createClient(sessionHandle) {
     },
     useObject(guid) {
       sessionHandle.useObject(guid);
+    },
+    // === Wave 5.C / Agent 5.C — Tradeskill drag-and-drop dispatch (2026-05-28) ===
+    // Wraps Wave 5.A's `sessionHandle.useWithTarget(item, target)` wasm
+    // export. Mirrors `useObject` shape. If Wave 5.A's export is missing
+    // (stale wasm pkg), the call is a no-op — plugins/tradeskill.js
+    // surfaces a one-time console.warn so the user sees the staleness.
+    useWithTarget(itemGuid, targetGuid) {
+      if (typeof sessionHandle.useWithTarget !== "function") return;
+      sessionHandle.useWithTarget(itemGuid >>> 0, targetGuid >>> 0);
     },
     // === Wave 6.B / Agent 6.B — Lifestone bind/recall UI (2026-05-28) ===
     // Bind == `useObject(lifestoneGuid)` (server-decided by WeenieType).
@@ -384,6 +393,33 @@ export function createClient(sessionHandle) {
         return sessionHandle.playerEnchantments();
       } catch (_) {
         return [];
+      }
+    },
+    // === Wave 4.A — Train Skills (2026-05-28) ===
+    // Surface the two progression GameActions next to combat / cast /
+    // useObject. Both no-op-return (Result<(), JsValue> on the wasm side);
+    // ACE owns validation and echoes the resulting stats via
+    // `PrivateUpdateSkill` → `playerStatsUpdated` bus event, which the
+    // `plugins/train-skills.js` plugin subscribes to for live re-render.
+    raiseSkill(skillId, xpSpent) {
+      sessionHandle.raiseSkill(skillId >>> 0, xpSpent >>> 0);
+    },
+    trainSkill(skillId, credits) {
+      sessionHandle.trainSkill(skillId >>> 0, credits >>> 0);
+    },
+    /**
+     * Current `AvailableSkillCredits` (PropertyInt 24) for the local
+     * player. Drives the train-skills panel's "credits available" footer
+     * and Train-button enabled gate. Returns `0` pre-spawn / before the
+     * property has landed; refreshed by the recv loop on every
+     * `playerStatsUpdated` drain (same trigger as `stats`/`inventory`).
+     * @returns {number}
+     */
+    get skillCredits() {
+      try {
+        return sessionHandle.playerSkillCredits >>> 0;
+      } catch (_) {
+        return 0;
       }
     },
   });

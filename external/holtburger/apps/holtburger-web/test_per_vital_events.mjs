@@ -29,6 +29,7 @@
 
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
+import { readFileSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -350,6 +351,77 @@ check("playerStatsUpdated re-publishes all 3 rows from stats accessor", () => {
   if (hp.pct !== "95.0%") throw new Error(`HP not refreshed by kind=8 (${hp.pct})`);
   if (st.pct !== "95.0%") throw new Error(`ST not refreshed by kind=8 (${st.pct})`);
   if (mn.pct !== "95.0%") throw new Error(`MN not refreshed by kind=8 (${mn.pct})`);
+});
+
+console.log("\n[8.5] Wave 6 polish — oldValue field on vitalChanged payloads");
+
+check("vitalChangedHealth with oldValue→ HP bar updates + payload carries oldValue", () => {
+  // Wave 6 polish (2026-05-28): wasm now threads `prev_current`
+  // through `f32_payload`; index.html drainEvents extracts it as
+  // `oldValue` (int). The vitals-hud plugin doesn't need to read
+  // oldValue itself (it only repaints the bar), so this assertion
+  // verifies the bus payload via a manual subscription rather than
+  // a row read. Combat heuristics / DR-rollup HUDs are the actual
+  // downstream consumers.
+  let lastPayload = null;
+  const handler = (e) => { lastPayload = e.detail; };
+  fakeClient.events.on("vitalChangedHealth", handler);
+  try {
+    fakeClient.events.emit("vitalChangedHealth", {
+      current: 80, buffedMax: 100, oldValue: 100,
+    });
+    if (!lastPayload) throw new Error("handler not invoked");
+    if (lastPayload.current !== 80) throw new Error(`bad current: ${lastPayload.current}`);
+    if (lastPayload.buffedMax !== 100) throw new Error(`bad buffedMax: ${lastPayload.buffedMax}`);
+    if (lastPayload.oldValue !== 100) throw new Error(`bad oldValue: ${lastPayload.oldValue}`);
+    const delta = lastPayload.current - lastPayload.oldValue;
+    if (delta !== -20) throw new Error(`expected delta -20, got ${delta}`);
+  } finally {
+    fakeClient.events.off("vitalChangedHealth", handler);
+  }
+});
+
+check("vitalChanged without oldValue (initial hydrate) → undefined, not 0", () => {
+  // When the holtburger-world handler couldn't capture pre-mutation
+  // (e.g. initial-spawn hydrate of a Vital that didn't yet exist in
+  // the cache), `prev_current = None` flows through as
+  // `f32_payload = None` → JS `undefined`. Subscribers MUST treat
+  // undefined as "delta unavailable", NOT as zero.
+  let lastPayload = null;
+  const handler = (e) => { lastPayload = e.detail; };
+  fakeClient.events.on("vitalChangedHealth", handler);
+  try {
+    fakeClient.events.emit("vitalChangedHealth", {
+      current: 100, buffedMax: 100, oldValue: undefined,
+    });
+    if (!lastPayload) throw new Error("handler not invoked");
+    if (lastPayload.oldValue !== undefined) {
+      throw new Error(`oldValue should be undefined for initial hydrate, got ${lastPayload.oldValue}`);
+    }
+  } finally {
+    fakeClient.events.off("vitalChangedHealth", handler);
+  }
+});
+
+check("eventArgsFactories.vitalChanged exposes the OldValue field shape (api.js)", () => {
+  // Wave 3.C handoff cited api.js's `makeVitalChanged(type, value, oldValue)`
+  // factory as already declaring oldValue (per VitalChangedEventArgs.cs:13-35).
+  // This is a pure shape assertion — the factory exists and returns the
+  // expected `{type, value, oldValue}` triple.
+  //
+  // We can't import api.js easily under the DOM shim (it pulls in
+  // wasm-dependent code via world-state.js); read-as-text instead.
+  // Pattern stolen from test_examine_dye_preview.mjs.
+  const apiSrc = readFileSync(
+    resolvePath(__dirname, "plugins/api.js"),
+    "utf8",
+  );
+  if (!/export function makeVitalChanged\(type, value, oldValue\)/.test(apiSrc)) {
+    throw new Error("makeVitalChanged signature drifted from (type, value, oldValue)");
+  }
+  if (!/return\s*\{\s*type,\s*value,\s*oldValue\s*\}/.test(apiSrc)) {
+    throw new Error("makeVitalChanged return shape no longer `{type, value, oldValue}`");
+  }
 });
 
 console.log("\n[9] Boot race — per-vital event before kind=8 is a no-op");

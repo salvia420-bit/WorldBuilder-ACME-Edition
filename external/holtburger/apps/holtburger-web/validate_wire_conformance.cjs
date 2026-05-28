@@ -340,6 +340,46 @@ const FIXTURES_LIST = [
            "Chorizite C2S Object_SendForceObjdesc + Rust GameOpcode::" +
            "ForceObjectDescSend all agree.",
   },
+  // ───── Wave 5.A (2026-05-28) — tradeskill UseWithTarget wire ─────
+  //
+  // Locks the GameAction::UseWithTarget (action opcode 0x0035 = Chorizite
+  // `Inventory_UseWithTargetEvent`, ACE `GameActionType.UseWithTarget`)
+  // payload shape: two consecutive u32 GUIDs (ObjectId + TargetId, 8
+  // bytes). Promoted from the existing parity test at
+  // crates/holtburger-protocol/src/messages/object/types.rs:647-653
+  // (`test_use_with_target_data_parity`) which already round-trips
+  // through cargo against `tests/fixtures/use_with_target_data.bin`
+  // (`33333333 44444444`).
+  //
+  // Three-source cross-reference:
+  //   - Chorizite: external/chorizite/Chorizite.ACProtocol/.../C2S/Actions/
+  //     Inventory_UseWithTargetEvent.generated.cs (ObjectId u32 + TargetId u32)
+  //   - ACE: ~/ace-server/Source/ACE.Server/Network/GameAction/Actions/
+  //     GameActionUseWithTarget.cs:15 (reads ObjectId + TargetId, dispatches
+  //     to Player.HandleActionUseWithTarget → RecipeManager.cs).
+  //   - Rust: crates/holtburger-protocol/src/messages/object/types.rs:516
+  //     UseWithTargetActionData { item_guid, target_guid } (matches both).
+  //
+  // The companion wasm `useWithTarget(itemGuid, targetGuid)` export
+  // (apps/holtburger-web/src/lib.rs, Wave 5.A block) sends the same
+  // shape — this fixture catches a future regression that re-orders
+  // the GUIDs or pads the payload.
+  {
+    case: "Wave 5.A — Inventory_UseWithTargetEvent / 0x0035 (tradeskill)",
+    typeName: "Inventory_UseWithTargetEvent",
+    source: "synthesized",
+    fields: {
+      ObjectId: "0x33333333",  // material being applied (matches rust fixture)
+      TargetId: "0x44444444",  // target item being modified (matches rust fixture)
+    },
+    headerMode: "payload",
+    notes: "Wave 5.A (2026-05-28): tradeskill C2S primitive. Payload = 8 " +
+           "bytes (ObjectId u32 + TargetId u32). Same values the Rust crate's " +
+           "`test_use_with_target_data_parity` round-trips via " +
+           "`tests/fixtures/use_with_target_data.bin`. ACE response (success/" +
+           "failure chat + InventoryChange/UpdateObject) flows back through " +
+           "existing recv handlers — no new recv arm needed.",
+  },
 
   // ───── Synthesized via JSON pack (no known-good Rust hex) ─────
   // These go through pack-only (we don't have a target hex to compare).
@@ -386,6 +426,34 @@ const FIXTURES_LIST = [
     fields: { SpellId: { Id: 1, Layer: 0 } },
     headerMode: "payload",
     notes: "Synth pack→unpack of untargeted magic cast.",
+  },
+  // ───── Wave 4.A (2026-05-28) — Train Skills wire ─────────────────
+  //
+  // Locks the C2S `Train_TrainSkill` (RaiseSkill 0x0046; spend XP) wire
+  // shape. Chorizite type is `Train_TrainSkill` with fields {Skill, Experience}
+  // — see external/chorizite/Chorizite.ACProtocol/Chorizite.ACProtocol/
+  // Messages/C2S/Actions/Train_TrainSkill.generated.cs: Read calls
+  // `Skill = (SkillId)reader.ReadInt32(); Experience = reader.ReadUInt32();`.
+  // The Rust counterpart `RaiseSkillActionData { skill_type, xp_spent }`
+  // packs/unpacks the same two u32s little-endian (see
+  // `crates/holtburger-protocol/src/messages/player/actions.rs:67-94`).
+  //
+  // SkillType::MeleeDefense = 6 = SkillId.MeleeDefense per
+  // `external/chorizite/Chorizite.Common/Enums/SkillId.cs:20` —
+  // identical enum repr to our `holtburger_common::stats::SkillType`
+  // (stats.rs:88: `MeleeDefense = 6`).
+  {
+    case: "Wave 4.A — Train_TrainSkill / synth (raise MeleeDefense)",
+    typeName: "Train_TrainSkill",
+    source: "synthesized",
+    fields: { Skill: "MeleeDefense", Experience: 1000 },
+    headerMode: "payload",
+    notes:
+      "Wave 4.A: locks the RaiseSkill (0x0046) wire shape. Pack→unpack via " +
+      "WB.Terminal's Chorizite.ACProtocol oracle confirms the two-u32 layout " +
+      "matches `crates/holtburger-protocol/src/messages/player/actions.rs` " +
+      "(`RaiseSkillActionData::pack` writes skill_type then xp_spent, both " +
+      "u32 LE). ACE responds with Qualities_PrivateUpdateSkillLevel.",
   },
   {
     case: "Vendor_Buy / synth empty",

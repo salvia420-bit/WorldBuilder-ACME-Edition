@@ -1,0 +1,16 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "train-skills",
+  "name": "Train Skills",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Train + raise skills (Wave 4.A) — spend credits / XP. Surfaces gmSkillUI's TrainSkill + RaiseSelection methods on the wasm wire (RaiseSkill 0x0046, TrainSkill 0x0047).",
+  "icon": "📜",
+  "iconHidden": true,
+  "entry": "./train-skills.js",
+  "environments": ["browser"],
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "F11", "label": "Toggle Train Skills" }
+  ]
+}

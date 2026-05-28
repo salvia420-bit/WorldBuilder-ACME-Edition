@@ -546,7 +546,19 @@ function populateFromEntity(body, ctx, nameEl, guidEl) {
   const guid = (ctx.guid >>> 0) || 0;
   const em = window.liveScene3d?.entityManager;
   const ent = em?.entityMap?.get?.(guid) || em?.entityMap?.get?.(String(guid)) || null;
-  nameEl.textContent = ent?.name || ctx.name || "(unnamed)";
+  // === Wave 6 polish — examine meta-vs-flat read (2026-05-28) ===
+  // Real `EntityInstance` objects (entities.js:798) store their
+  // wire-supplied fields (type/level/health/etc.) under `inst.meta` —
+  // the spawn meta dict built by `toMeta(upd)` in scene3d/loop.js. The
+  // debug stub at `__examineTargetDebug.open` (line 826) flattens
+  // those onto the root for testability, hence the pre-fix accessors
+  // worked in dev but rendered an empty Combat + Position section for
+  // every live NPC. Read meta-first, fall back to flat for the debug
+  // stub. See Wave 3.B handoff for the original bug surface.
+  const meta = ent?.meta || null;
+  const v = (key) => meta?.[key] ?? ent?.[key];
+  const entName = ent?.name ?? meta?.name;
+  nameEl.textContent = entName || ctx.name || "(unnamed)";
   guidEl.textContent = `0x${guid.toString(16).toUpperCase().padStart(8, "0")}`;
   if (!ent) {
     section(body, "Status");
@@ -554,26 +566,37 @@ function populateFromEntity(body, ctx, nameEl, guidEl) {
     return;
   }
   section(body, "Identity");
-  if (ent.type != null) r(body, "Type", String(ent.type));
-  if (ent.classId != null) r(body, "Class", `0x${ent.classId.toString(16)}`);
-  if (ent.wcid != null) r(body, "Wcid", String(ent.wcid));
-  if (ent.position) {
+  const type_ = v("type");
+  const classId = v("classId");
+  const wcid = v("wcid");
+  if (type_ != null) r(body, "Type", String(type_));
+  if (classId != null) r(body, "Class", `0x${classId.toString(16)}`);
+  if (wcid != null) r(body, "Wcid", String(wcid));
+  const position = v("position");
+  const landblock = v("landblock");
+  if (position) {
     section(body, "Position");
-    const p = ent.position;
+    const p = position;
     r(body, "X", p.x?.toFixed?.(1) ?? p.x);
     r(body, "Y", p.y?.toFixed?.(1) ?? p.y);
     r(body, "Z", p.z?.toFixed?.(1) ?? p.z);
-    if (ent.landblock != null) r(body, "Landblock", `0x${ent.landblock.toString(16).padStart(8, "0").toUpperCase()}`);
+    if (landblock != null) r(body, "Landblock", `0x${landblock.toString(16).padStart(8, "0").toUpperCase()}`);
   }
   section(body, "Combat");
-  if (ent.level != null) r(body, "Level", String(ent.level));
-  if (ent.health != null) r(body, "Health", String(ent.health));
-  if (ent.stamina != null) r(body, "Stamina", String(ent.stamina));
-  if (ent.mana != null) r(body, "Mana", String(ent.mana));
-  if (ent.motionState != null) {
+  const level = v("level");
+  const health = v("health");
+  const stamina = v("stamina");
+  const mana = v("mana");
+  if (level != null) r(body, "Level", String(level));
+  if (health != null) r(body, "Health", String(health));
+  if (stamina != null) r(body, "Stamina", String(stamina));
+  if (mana != null) r(body, "Mana", String(mana));
+  const motionState = v("motionState");
+  const heading = v("heading");
+  if (motionState != null) {
     section(body, "Animation");
-    r(body, "Motion", String(ent.motionState));
-    if (ent.heading != null) r(body, "Heading", (ent.heading * 180 / Math.PI).toFixed(1) + "°");
+    r(body, "Motion", String(motionState));
+    if (heading != null) r(body, "Heading", (heading * 180 / Math.PI).toFixed(1) + "°");
   }
 }
 

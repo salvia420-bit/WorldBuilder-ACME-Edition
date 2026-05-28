@@ -371,6 +371,22 @@ const state = {
   /** Optional Character ref — when present we use its tiebreak. */
   character: null,
   getCasterName: () => null,
+  // === Wave 4.B — remote-entity enchantment cache (2026-05-28) ===
+  // Per-GUID cache of normalized enchantment lists for non-self
+  // entities. Populated by `refreshEntityFromSnapshot()` on every
+  // `entityEnchantmentsUpdated` (kind=46) drain. Read by
+  // `getEntityEnchantments(guid)` / `getEntityBuffSummary(guid)` —
+  // the latter is what `nameplate_sprite.js` calls to drive the
+  // per-target buff badge.
+  //
+  // Same shape as `enchantments` above (normalized records) but
+  // keyed by entity GUID at the top level. Each value is a Map
+  // (layeredId → record) so the per-(spell_id, layer) tiebreak
+  // matches the self-path semantics.
+  /** @type {Map<number, Map<number, object>>} guid → (layeredId → record) */
+  entityEnchantments: new Map(),
+  /** @type {Set<(guid:number)=>void>} listeners notified on entity change */
+  entityChangeListeners: new Set(),
 };
 
 // ─── Normalization ───
@@ -449,6 +465,123 @@ function refreshFromSnapshot(snapshot) {
       if (prev) state.enchantments.delete(prev.layeredId);
       state.enchantments.set(n.layeredId, n);
     }
+  }
+}
+
+// === Wave 4.B — per-entity enchantment ingestion (2026-05-28) ===
+//
+// Refresh `state.entityEnchantments[guid]` from a raw wasm snapshot
+// produced by `handle.entityEnchantments(guid)`. Mirror semantics of
+// `refreshFromSnapshot` (per-category tiebreak; cooldown vs non-cooldown
+// split) but scoped to a single non-self GUID. Empty array → entry is
+// removed entirely so consumers can short-circuit on `Map.has(guid)`.
+function refreshEntityFromSnapshot(guid, snapshot) {
+  const g = (guid >>> 0);
+  if (!Array.isArray(snapshot) || snapshot.length === 0) {
+    state.entityEnchantments.delete(g);
+  } else {
+    const bucket = new Map();
+    for (const raw of snapshot) {
+      const n = normalizeEnchantment(raw);
+      if (!n) continue;
+      // Cooldowns on remote entities are extremely rare (the cooldown
+      // bucket is normally local-player-only via SharedCooldowns), but
+      // we route them into the same bucket so the consumer can choose
+      // to display or hide them. The nameplate badge skips cooldowns
+      // (only renders buff + debuff counts).
+      const prev = [...bucket.values()].find(
+        (p) => p.spellCategory === n.spellCategory
+              && p.layer === n.layer
+              && p.spellCategory !== 0,
+      );
+      if (prev && prev.power >= n.power) continue;
+      if (prev) bucket.delete(prev.layeredId);
+      bucket.set(n.layeredId, n);
+    }
+    if (bucket.size === 0) {
+      state.entityEnchantments.delete(g);
+    } else {
+      state.entityEnchantments.set(g, bucket);
+    }
+  }
+  // Notify listeners (nameplate sprite etc.) so they can refresh just
+  // the affected target's badge without a global repaint.
+  for (const fn of state.entityChangeListeners) {
+    try { fn(g); } catch (e) { console.warn("[buffs-hud] entity listener threw", e); }
+  }
+}
+
+/**
+ * Public helper: get the normalized enchantment list for an entity.
+ * Returns an empty array when the entity has no cached enchantments
+ * (never spawned with a buff, or buffs were purged).
+ *
+ * Useful for plugins that want raw enchantment data — for nameplate
+ * badge rendering use `getEntityBuffSummary(guid)` instead, which
+ * returns the buff/debuff/cooldown counts already classified.
+ *
+ * @param {number} guid Entity GUID (u32).
+ * @returns {object[]} Normalized enchantment records (see normalizeEnchantment).
+ */
+export function getEntityEnchantments(guid) {
+  const bucket = state.entityEnchantments.get(guid >>> 0);
+  return bucket ? [...bucket.values()] : [];
+}
+
+/**
+ * Public helper: get classified buff/debuff/cooldown counts for an
+ * entity. Returns `{ buffs, debuffs, cooldowns, total }` with int
+ * counts. Used by the nameplate sprite to drive its buff badge —
+ * a small "+N" / "-N" indicator above the target's name.
+ *
+ * Pure function over `state.entityEnchantments[guid]`; safe to call
+ * every nameplate-LOD tick.
+ *
+ * @param {number} guid Entity GUID (u32).
+ * @returns {{buffs:number, debuffs:number, cooldowns:number, total:number, hasSet:boolean}}
+ */
+export function getEntityBuffSummary(guid) {
+  const list = getEntityEnchantments(guid);
+  let buffs = 0;
+  let debuffs = 0;
+  let cooldowns = 0;
+  let hasSet = false;
+  for (const e of list) {
+    const k = classifyEnchantment(e);
+    if (k === "buff") buffs += 1;
+    else if (k === "debuff") debuffs += 1;
+    else cooldowns += 1;
+    if (e.hasSpellSetId) hasSet = true;
+  }
+  return { buffs, debuffs, cooldowns, total: list.length, hasSet };
+}
+
+/**
+ * Subscribe to per-entity enchantment changes. The callback fires
+ * after every `entityEnchantmentsUpdated` (kind=46) drain with the
+ * affected GUID; callers can selectively refresh just that target's
+ * UI (nameplate badge, target frame, etc.) without polling.
+ *
+ * Returns a `dispose` function — call it on cleanup to remove the
+ * listener.
+ *
+ * @param {(guid:number)=>void} fn Callback receiving the changed GUID.
+ * @returns {()=>void} Dispose function.
+ */
+export function onEntityEnchantmentsChange(fn) {
+  if (typeof fn !== "function") return () => {};
+  state.entityChangeListeners.add(fn);
+  return () => state.entityChangeListeners.delete(fn);
+}
+
+/**
+ * Hard reset of the per-entity cache. Called on disconnect /
+ * re-login to drop stale entries that survived the connection.
+ */
+export function clearEntityEnchantments() {
+  state.entityEnchantments.clear();
+  for (const fn of state.entityChangeListeners) {
+    try { fn(0); } catch (_) {}
   }
 }
 
@@ -701,6 +834,32 @@ export function mount(ctx) {
       unsubs.push(() => client.events.off?.("playerStatsUpdated", refresh));
     }
 
+    // === Wave 4.B — remote-entity enchantment subscription (2026-05-28) ===
+    //
+    // Subscribe to the new `entityEnchantmentsUpdated` event the recv
+    // loop emits from the pre-route hook (kind=46). The payload carries
+    // `{ guid, count }` — we pull a fresh snapshot from the wasm side
+    // for that GUID and fold it into `state.entityEnchantments[guid]`.
+    //
+    // Why a separate path from playerStatsUpdated: the local player's
+    // stats don't change when a remote target gets buffed, so we don't
+    // want to re-fetch the self-snapshot for every drudge that gets
+    // hit with Weakness. Per-target route keeps the cadence honest.
+    if (client?.events?.on) {
+      const onEntityEnch = (payload) => {
+        const guid = (payload?.guid ?? 0) >>> 0;
+        if (!guid) return;
+        try {
+          const snapshot = handle.entityEnchantments?.(guid) || [];
+          refreshEntityFromSnapshot(guid, snapshot);
+        } catch (e) {
+          console.warn("[buffs-hud] entityEnchantments fetch failed", e);
+        }
+      };
+      client.events.on("entityEnchantmentsUpdated", onEntityEnch);
+      unsubs.push(() => client.events.off?.("entityEnchantmentsUpdated", onEntityEnch));
+    }
+
     refresh();
     // 1Hz tick keeps remaining-time labels honest while open.
     tickTimer = setInterval(() => {
@@ -814,7 +973,23 @@ export const __test = Object.freeze({
   normalizeEnchantment,
   refreshFromSnapshot,
   refreshFromCharacter,
+  // === Wave 4.B — remote-entity helpers exposed for tests (2026-05-28) ===
+  refreshEntityFromSnapshot,
   state,
   remainingSeconds,
   fmtRemaining,
 });
+
+// === Wave 4.B — global access for nameplate sprite (2026-05-28) ===
+//
+// `scene3d/nameplate_sprite.js` runs outside the plugin import graph
+// (it's loaded by the 3D bootstrap, not the plugin loader), so the
+// canonical per-entity buff-summary accessor needs to live on `window`
+// where the sprite layer can find it. Mirrors the
+// `window.__buffsHudToggle` and `window.__setStatusIndicator` pattern
+// from elsewhere in the plugin.
+if (typeof window !== "undefined") {
+  window.__buffsHudGetEntitySummary = (guid) => getEntityBuffSummary(guid);
+  window.__buffsHudGetEntityEnchantments = (guid) => getEntityEnchantments(guid);
+  window.__buffsHudOnEntityChange = (fn) => onEntityEnchantmentsChange(fn);
+}

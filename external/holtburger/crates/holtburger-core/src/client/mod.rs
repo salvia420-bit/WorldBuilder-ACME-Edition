@@ -302,7 +302,12 @@ impl ClientRuntime {
                         level_info: level_info.clone(),
                     });
             }
-            WorldEvent::VitalUpdated(vital) => {
+            WorldEvent::VitalUpdated { vital, .. } => {
+                // Wave 6 polish — prev_current omitted: the CLI client_view
+                // path doesn't yet expose delta semantics. Adding it here
+                // would need a matching extension to ClientViewEvent::
+                // PlayerVitalsUpdated; deferred until a CLI consumer asks
+                // for it.
                 let mut vitals = HashMap::new();
                 vitals.insert(vital.vital_type, vital.clone());
                 let _ = self

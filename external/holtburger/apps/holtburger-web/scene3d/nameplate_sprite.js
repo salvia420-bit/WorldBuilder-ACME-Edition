@@ -655,6 +655,247 @@ export function disposeNameplateCache() {
     try { entry.material.dispose(); } catch (_) {}
   }
   _nameplateCache.clear();
+  // === Wave 4.B — buff-badge cache cleanup (2026-05-28) ===
+  for (const entry of _buffBadgeCache.values()) {
+    try { entry.texture.dispose(); } catch (_) {}
+    try { entry.material.dispose(); } catch (_) {}
+  }
+  _buffBadgeCache.clear();
+}
+
+// =========================================================================
+// === Wave 4.B — per-nameplate buff/debuff badge (2026-05-28) =============
+// =========================================================================
+//
+// Renders a small chip ABOVE the nameplate showing the target's active
+// buff / debuff counts: green "+2" / red "-1" pill. Drives off the
+// per-entity enchantment index Wave 4.B added to wasm via
+// `handle.entityEnchantments(guid)` — surfaced as
+// `window.__buffsHudGetEntitySummary(guid)` by `plugins/buffs-hud.js`.
+//
+// Why a separate sprite (not merged into the nameplate texture):
+//   1. Counts change at MUCH higher frequency than names — a buff
+//      arriving / fading shouldn't re-bake the underlying name texture.
+//   2. Per-name nameplate texture is shared across all entities with
+//      the same name (e.g. 10 Sparring Golems), so per-target counts
+//      would invalidate the cache.
+//   3. Color-coded chip is far easier to read at a glance than a count
+//      glued onto the name.
+//
+// Lifecycle:
+//   - Created lazily on the first non-zero summary fetched for an
+//     entity (so most NPCs without enchantments pay zero memory cost).
+//   - Updated by `_refreshBuffBadgeFor(inst)` — called from the LOD
+//     tick for in-range nameplates, and synchronously from the
+//     entity-change listener for the affected GUID.
+//   - Disposed alongside the entity (the parent root is removed and
+//     this sprite goes with it).
+//
+// Cache key: `${buffs}|${debuffs}|${cooldowns}` so identical chip
+// states reuse the GPU resource.
+// =========================================================================
+
+const _buffBadgeCache = new Map();
+const BUFF_BADGE_CANVAS_HEIGHT = 28;
+const BUFF_BADGE_CANVAS_PAD_X = 8;
+const BUFF_BADGE_AC_Z_OFFSET = 2.7;  // Above the nameplate (which sits at 2.2 m).
+const BUFF_BADGE_WORLD_HEIGHT = 0.35;
+const BUFF_BADGE_PX_PER_METRE = 80;
+
+function _bakeBuffBadge(buffs, debuffs, cooldowns) {
+  if (typeof document === "undefined") return null;
+  const cacheKey = `${buffs}|${debuffs}|${cooldowns}`;
+  const hit = _buffBadgeCache.get(cacheKey);
+  if (hit) return hit;
+
+  // Pre-measure: compose a text string from non-zero parts.
+  // Buffs render green "+N", debuffs red "-N", cooldowns gray "*N".
+  const parts = [];
+  if (buffs > 0) parts.push({ text: `+${buffs}`, color: "#5cd66c" });
+  if (debuffs > 0) parts.push({ text: `-${debuffs}`, color: "#e07060" });
+  if (cooldowns > 0) parts.push({ text: `*${cooldowns}`, color: "#a0a0c8" });
+  if (parts.length === 0) return null;
+
+  const canvas = document.createElement("canvas");
+  // Estimate width: ~14 px per char + 6 px separator between parts.
+  // Recompute after first measure if too small.
+  let canvasWidth = BUFF_BADGE_CANVAS_PAD_X * 2;
+  for (const p of parts) canvasWidth += p.text.length * 14 + 6;
+  canvas.width = Math.max(48, canvasWidth);
+  canvas.height = BUFF_BADGE_CANVAS_HEIGHT;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = false;
+
+  // Background pill: black 70% alpha with 1 px brass border.
+  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath();
+    ctx.roundRect(1, 1, canvas.width - 2, canvas.height - 2, 6);
+    ctx.fill();
+  } else {
+    ctx.fillRect(1, 1, canvas.width - 2, canvas.height - 2);
+  }
+
+  // Text with per-segment colors.
+  ctx.font = "bold 18px monospace";
+  ctx.textBaseline = "middle";
+  let x = BUFF_BADGE_CANVAS_PAD_X;
+  for (const p of parts) {
+    ctx.fillStyle = p.color;
+    ctx.fillText(p.text, x, canvas.height / 2);
+    x += ctx.measureText(p.text).width + 6;
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  texture.minFilter = THREE.NearestFilter;
+  texture.magFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false;
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    sizeAttenuation: true,
+    toneMapped: false,
+  });
+  material.name = `buff-badge-${cacheKey}`;
+
+  const entry = { texture, material, canvasWidth: canvas.width };
+  _buffBadgeCache.set(cacheKey, entry);
+  return entry;
+}
+
+/**
+ * Refresh (or create / remove) the buff badge sprite on an entity.
+ * Pulls fresh counts from `window.__buffsHudGetEntitySummary(guid)`
+ * (set by `plugins/buffs-hud.js`). Idempotent — same counts → no work.
+ *
+ * Returns the attached sprite, or null if the entity has no
+ * enchantments (in which case any existing badge is removed).
+ *
+ * @param {object} inst EntityInstance from EntityManager.
+ * @returns {THREE.Sprite | null}
+ */
+export function refreshBuffBadgeForEntity(inst) {
+  if (_NAMEPLATE_DISABLED) return null;
+  if (!inst || !inst.root) return null;
+  // Skip local player — buff state is shown in the main HUD's buffs
+  // strip, not above the player's own head.
+  try {
+    if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+      const lpg = window.getLocalPlayerGuid();
+      if (lpg !== null && lpg !== undefined && (lpg >>> 0) === (inst.guid >>> 0)) {
+        return null;
+      }
+    }
+  } catch (_) {}
+
+  const summaryFn = (typeof window !== "undefined")
+    ? window.__buffsHudGetEntitySummary
+    : null;
+  // Plugin not mounted yet — skip silently. The buffs-hud plugin sets
+  // up this global in its module-load init, but during the entity
+  // spawn burst at login the plugin may not have run yet.
+  if (typeof summaryFn !== "function") return inst._buffBadgeSprite || null;
+
+  const summary = summaryFn(inst.guid >>> 0) || { buffs: 0, debuffs: 0, cooldowns: 0 };
+  const { buffs = 0, debuffs = 0, cooldowns = 0 } = summary;
+  const newKey = `${buffs}|${debuffs}|${cooldowns}`;
+  const existing = inst._buffBadgeSprite || null;
+  const prevKey = existing?.userData?.badgeKey ?? null;
+
+  if (newKey === prevKey) return existing;  // No change.
+
+  // Remove any existing badge so we can re-attach with the new texture.
+  if (existing) {
+    try { existing.parent && existing.parent.remove(existing); } catch (_) {}
+    inst._buffBadgeSprite = null;
+  }
+
+  if (buffs === 0 && debuffs === 0 && cooldowns === 0) return null;
+
+  const baked = _bakeBuffBadge(buffs, debuffs, cooldowns);
+  if (!baked) return null;
+  const sprite = new THREE.Sprite(baked.material);
+  sprite.name = `buff_badge_${inst.guid >>> 0}`;
+  const worldWidth = baked.canvasWidth / BUFF_BADGE_PX_PER_METRE;
+  sprite.scale.set(worldWidth, BUFF_BADGE_WORLD_HEIGHT, 1);
+  sprite.renderOrder = 11;  // Above the nameplate (which is 10).
+  sprite.position.set(0, 0, BUFF_BADGE_AC_Z_OFFSET);
+  sprite.userData = { badgeKey: newKey, buffs, debuffs, cooldowns };
+
+  inst.root.add(sprite);
+  inst._buffBadgeSprite = sprite;
+  return sprite;
+}
+
+/**
+ * Remove the buff badge sprite from an entity (and its userData slot).
+ * Called by EntityManager cleanup paths or when buffs are fully purged.
+ */
+export function removeBuffBadgeFromEntity(inst) {
+  if (!inst || !inst._buffBadgeSprite) return;
+  try {
+    inst._buffBadgeSprite.parent &&
+      inst._buffBadgeSprite.parent.remove(inst._buffBadgeSprite);
+  } catch (_) {}
+  inst._buffBadgeSprite = null;
+}
+
+/** Read-only buff badge cache size (test helper). */
+export function getBuffBadgeCacheSize() {
+  return _buffBadgeCache.size;
+}
+
+// === Wave 4.B — subscribe to per-entity enchantment changes (2026-05-28) ===
+//
+// The buffs-hud plugin exposes a subscription helper at
+// `window.__buffsHudOnEntityChange(fn)` that fires for every per-target
+// enchantment delta. When the plugin is mounted (and the helper is
+// installed), wire a callback that refreshes the affected entity's
+// badge synchronously — no rAF poll needed.
+//
+// Browser-only; no-op in Node test harnesses.
+let _wavefourBSubscribed = false;
+if (typeof window !== "undefined" && !_NAMEPLATE_DISABLED) {
+  const trySubscribe = () => {
+    if (_wavefourBSubscribed) return true;
+    const sub = window.__buffsHudOnEntityChange;
+    if (typeof sub !== "function") return false;
+    sub((guid) => {
+      try {
+        const live = window.liveScene3d;
+        if (!live) return;
+        // guid === 0 is the "clear all" signal from
+        // clearEntityEnchantments(); rebuild every nameplate.
+        if (guid === 0) {
+          const entityMap = live.entityManager?.entityMap;
+          if (!entityMap) return;
+          for (const inst of entityMap.values()) {
+            if (inst._nameplateSprite) refreshBuffBadgeForEntity(inst);
+          }
+          return;
+        }
+        const inst = live.entityManager?.entityMap?.get(guid >>> 0);
+        if (inst) refreshBuffBadgeForEntity(inst);
+      } catch (e) {
+        console.warn("[nameplate_sprite] buff-badge refresh failed", e);
+      }
+    });
+    _wavefourBSubscribed = true;
+    return true;
+  };
+  // Try immediately; if the buffs-hud plugin hasn't loaded yet, poll
+  // every 500 ms until it does. Stops after one successful subscribe.
+  if (!trySubscribe()) {
+    const watchId = setInterval(() => {
+      if (trySubscribe()) clearInterval(watchId);
+    }, 500);
+  }
 }
 
 /** Read-only access to the cache for diagnostic scripts. */
@@ -739,6 +980,24 @@ export function tickNameplateLod(scene3d) {
     const want = i < MAX_VISIBLE_NAMEPLATES;
     _lodScratch[i].sprite.visible = want;
     if (want) visible++;
+    // === Wave 4.B — sync buff badge visibility with nameplate (2026-05-28) ===
+    //
+    // The badge lives on the same entity root as the nameplate, so the
+    // entity manager's visibility passes for the rig will already affect
+    // both. But the nameplate's per-frame LOD path explicitly toggles
+    // `.visible` per-sprite — we need to mirror that on the badge so it
+    // hides when the nameplate hides (same range + count cap).
+    //
+    // Pull from `_lodScratch[i].inst` set in the in-range push below. To
+    // avoid widening the scratch tuple shape, we walk back to the entity
+    // by reading the sprite's parent root and looking up the entity by
+    // userData (set at spawn). Cheap — only runs for in-range nameplates.
+    const sprite = _lodScratch[i].sprite;
+    const root = sprite.parent;
+    if (root) {
+      const badge = root.children?.find((c) => c?.name?.startsWith?.("buff_badge_"));
+      if (badge) badge.visible = want;
+    }
   }
   const considered = _lodScratch.length;
   _lodScratch.length = 0;

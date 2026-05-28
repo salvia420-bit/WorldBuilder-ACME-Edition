@@ -272,6 +272,103 @@ check("emits diag hook for telemetry", () => {
   }
 });
 
+// ─── Wave 6 polish (2026-05-28) — meta-vs-flat read for populateFromEntity ─
+console.log("\n[2.5] Wave 6 polish — populateFromEntity meta-vs-flat read");
+
+check("populateFromEntity reads ent.meta?.X ?? ent.X (not direct ent.X)", () => {
+  // Real EntityInstance objects (entities.js:798) store their
+  // wire-supplied fields under `inst.meta`. The pre-Wave-6-polish
+  // accessor `ent.type` / `ent.level` / `ent.health` worked only for
+  // the debug stub (__examineTargetDebug.open, examine-target.js:826)
+  // which flattens the meta dict onto root for testability. Live NPCs
+  // rendered empty Combat + Position sections. The fix uses
+  // `meta?.[key] ?? ent?.[key]` as a single accessor.
+  //
+  // Lockdown patterns: ensure the new helper is in place AND the old
+  // direct-access pattern is gone for the meta-bound fields. We grep
+  // for absence of the bare-access tokens to prevent regression.
+  const populate = examineSrc.match(/function\s+populateFromEntity\s*\([^)]*\)\s*\{[\s\S]*?^\}/m)?.[0];
+  if (!populate) throw new Error("populateFromEntity body not found");
+  // Sentinel: helper `const v = (key) => meta?.[key] ?? ent?.[key];`
+  if (!/const\s+v\s*=\s*\(key\)\s*=>\s*meta\?\.\[key\]\s*\?\?\s*ent\?\.\[key\]/.test(populate)) {
+    throw new Error("meta-first accessor `(key) => meta?.[key] ?? ent?.[key]` missing");
+  }
+  // Anti-pattern: direct `ent.type`, `ent.level`, etc. should be gone
+  // from populateFromEntity (they may still exist elsewhere — we
+  // limited the regex to the function body).
+  const bare = ["ent.type", "ent.level", "ent.health", "ent.stamina", "ent.mana"];
+  for (const tok of bare) {
+    if (populate.includes(tok)) {
+      throw new Error(`pre-fix bare-access token \`${tok}\` still present in populateFromEntity`);
+    }
+  }
+});
+
+check("populateFromEntity falls back to flat fields for the debug stub", () => {
+  // The `?? ent?.[key]` half of the accessor preserves the debug-stub
+  // behavior so `__examineTargetDebug.open()` still renders correctly.
+  // Ensure the OR-fallback is present (the `??` chain).
+  if (!/meta\?\.\[key\]\s*\?\?\s*ent\?\.\[key\]/.test(examineSrc)) {
+    throw new Error("flat-field fallback `?? ent?.[key]` missing — debug stub will break");
+  }
+});
+
+// ─── Wave 6 polish (2026-05-28) — entityAppearanceChanged emit in entities.js ─
+console.log("\n[2.6] Wave 6 polish — entityAppearanceChanged emit in entities.js");
+
+check("entities.js applyAppearance fires entityAppearanceChanged post-respawn", () => {
+  // Wave 3.B added the subscription on examine-target.js but no emit
+  // site existed. Wave 6 polish adds the emit at the two appearance-
+  // change paths: applyAppearance (despawn+respawn) AND
+  // _applyAppearanceHotSwap (hot-swap). Lockdown: grep entities.js
+  // source for the matching emit calls at the right code paths.
+  const entitiesSrc = readFileSync(
+    resolvePath(__dirname, "scene3d/entities.js"),
+    "utf8",
+  );
+  // Pattern: `entityAppearanceChanged` event name plus the guid payload.
+  const emitMatches = entitiesSrc.match(
+    /window\.__pluginClient\?\.events\?\.emit\?\.\("entityAppearanceChanged",\s*\{[^}]*guid[^}]*\}\)/g
+  );
+  if (!emitMatches || emitMatches.length < 2) {
+    throw new Error(
+      `expected ≥2 entityAppearanceChanged emit sites (applyAppearance + _applyAppearanceHotSwap), found ${emitMatches?.length ?? 0}`
+    );
+  }
+});
+
+check("entities.js emit is gated to not throw when bus missing", () => {
+  // The emit must use optional-chaining throughout so missing
+  // __pluginClient (early boot / standalone smoke) silently no-ops.
+  const entitiesSrc = readFileSync(
+    resolvePath(__dirname, "scene3d/entities.js"),
+    "utf8",
+  );
+  // Pattern: `window.__pluginClient?.events?.emit?.(`
+  if (!/window\.__pluginClient\?\.events\?\.emit\?\.\("entityAppearanceChanged"/.test(entitiesSrc)) {
+    throw new Error("entityAppearanceChanged emit missing optional-chaining guard");
+  }
+});
+
+check("subscription chain — examine-target subscribes, entities.js now emits", () => {
+  // Round-trip verification: the consumer side (examine-target) was
+  // wired in Wave 3.B; the producer side (entities.js) is now wired
+  // by Wave 6 polish. Together they form: applyAppearance →
+  // entityAppearanceChanged → examine-target.onAppearanceRefresh →
+  // renderEntityPaperdoll(refresh). This assert is a literal token
+  // co-location check that both sides reference the same event name.
+  if (!examineSrc.includes('"entityAppearanceChanged"')) {
+    throw new Error("examine-target.js missing entityAppearanceChanged subscription");
+  }
+  const entitiesSrc = readFileSync(
+    resolvePath(__dirname, "scene3d/entities.js"),
+    "utf8",
+  );
+  if (!entitiesSrc.includes('"entityAppearanceChanged"')) {
+    throw new Error("entities.js missing entityAppearanceChanged emit");
+  }
+});
+
 // ─── [3] Integration — verify ac_paperdoll_viewport.js still exports ──
 console.log("\n[3] PaperdollViewport export sanity");
 

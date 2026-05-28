@@ -1200,6 +1200,44 @@ function doMount(parentEl, _ctx) {
         ev.dataTransfer.effectAllowed = "move";
       });
     }
+    // === Wave 5.C — tradeskill drag-end hook (2026-05-28) ===
+    // Items-grid slots act as drop targets for any inventory item with
+    // the application/x-hb-inv-guid mime. When the source GUID !=
+    // the slot's own GUID, we emit `hb:inventory-item-on-item-drop`
+    // (source + target are both items, never paperdoll/equip slots —
+    // those route via the paperdoll drop handler at L929 instead).
+    // Subscriber: plugins/tradeskill.js → useWithTarget(src, tgt).
+    slot.addEventListener("dragenter", (ev) => {
+      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
+        ev.preventDefault();
+      }
+    });
+    slot.addEventListener("dragover", (ev) => {
+      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+      }
+    });
+    slot.addEventListener("drop", (ev) => {
+      const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid");
+      if (!guidStr) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const sourceGuid = (parseInt(guidStr, 10) >>> 0);
+      const targetGuid = (parseInt(slot.dataset.guid, 10) >>> 0);
+      // Self-drop (e.g. re-arrange) is a no-op for tradeskill.
+      if (!sourceGuid || !targetGuid || sourceGuid === targetGuid) return;
+      try {
+        window.dispatchEvent(new CustomEvent("hb:inventory-item-on-item-drop", {
+          detail: {
+            sourceGuid,
+            targetGuid,
+            sourceIsEquipSlot: false,
+            targetIsEquipSlot: false,
+          },
+        }));
+      } catch (_) {}
+    });
     // Single click → select + push examine view onto main-panel stack.
     // The shared container swaps the whole pane to examine; "Back"
     // returns to inventory. Matches retail's full-pane transition.

@@ -33,6 +33,8 @@
     { "manifestPath": "./status-indicators.manifest.json", "devPath": "./status-indicators.manifest.dev.json" },
     { "manifestPath": "./target-bar.manifest.json", "devPath": "./target-bar.manifest.dev.json" },
     { "manifestPath": "./trade-panel.manifest.json", "devPath": "./trade-panel.manifest.dev.json" },
+    { "manifestPath": "./tradeskill.manifest.json", "devPath": "./tradeskill.manifest.dev.json" },
+    { "manifestPath": "./train-skills.manifest.json", "devPath": "./train-skills.manifest.dev.json" },
     { "manifestPath": "./vendor-ui.manifest.json", "devPath": "./vendor-ui.manifest.dev.json" },
     { "manifestPath": "./vitals-hud.manifest.json", "devPath": "./vitals-hud.manifest.dev.json" }
   ]

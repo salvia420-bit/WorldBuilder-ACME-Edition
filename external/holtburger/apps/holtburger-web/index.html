@@ -1092,6 +1092,8 @@
       import * as journalPanelPlugin from "./plugins/journal-panel.js";
       import * as contractsPanelPlugin from "./plugins/contracts-panel.js";
       import * as optionsPanelPlugin from "./plugins/options-panel.js";
+      // Wave 4.A (2026-05-28) — Train Skills view (gmSkillUI port).
+      import * as trainSkillsPlugin from "./plugins/train-skills.js";
       import "./plugins/compass-hud.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
       // CMT Wave 2 / Phase 5 (2026-05-26): remote-player swing dispatch.
@@ -1189,6 +1191,8 @@
         "fellowship-panel": fellowshipPanelPlugin,
         "journal-panel": journalPanelPlugin,
         "contracts-panel": contractsPanelPlugin,
+        // Wave 4.A (2026-05-28) — Train Skills (gmSkillUI port).
+        "train-skills": trainSkillsPlugin,
       };
 
       const BAR_SLOT_ORDER = [
@@ -1438,6 +1442,13 @@
         // Character / Spellbook / etc. — shares the right-side pane and
         // gets brass-rim chrome from main-panel's container slot.
         mainPanelPlugin.registerView("options",   optionsPanelPlugin.view);
+        // Wave 4.A (2026-05-28): Train Skills view — gmSkillUI port,
+        // surfaces RaiseSkill (0x0046) / TrainSkill (0x0047) wire on
+        // the player's known skills. F11 hotkey via PLUGIN_HOTKEY_DISPATCH
+        // (the generic strip rule would land on "train-skills" already
+        // and toggleView("train-skills") works without an explicit override,
+        // but spelling it out keeps the wiring discoverable).
+        mainPanelPlugin.registerView("train-skills", trainSkillsPlugin.view);
       }
       // PR-GG (2026-05-23): vendor-ui is its own top-level horizontal bar
       // (retail gmVendorUI layout 0x21000012), NOT a main-panel view.
@@ -8981,6 +8992,12 @@ void main() {
                 // Payload (per src/lib.rs `CLIENT_EVENT_KIND_VITAL_*`):
                 //   u32Payload  = current (post-update)
                 //   u32Payload2 = buffed_max
+                //   f32Payload  = oldValue (Wave 6 polish 2026-05-28)
+                //                 — pre-mutation value, undefined when
+                //                 the holtburger-world handler couldn't
+                //                 capture (initial-spawn hydrate path).
+                //                 Subscribers expecting OldValue must
+                //                 fall back to `current` when undefined.
                 // Vital type lives in the kind itself (HP=42 / ST=43 /
                 // MN=44). Non-vital subscribers keep using kind=8 — the
                 // coalesced signal still fires alongside these.
@@ -8991,9 +9008,19 @@ void main() {
                     : "vitalChangedMana";
                   const current = (evt.u32Payload ?? 0) >>> 0;
                   const buffedMax = (evt.u32Payload2 ?? 0) >>> 0;
+                  // f32Payload is `Option<f32>` on the wasm side; the
+                  // JS getter returns `undefined` for None. Cast to int
+                  // when present (vitals are integer values; the f32
+                  // carrier was only for payload-slot reuse, the value
+                  // is still exact for any vital < 16M).
+                  const f32prev = evt.f32Payload;
+                  const oldValue = (f32prev !== undefined && f32prev !== null)
+                    ? (f32prev | 0)
+                    : undefined;
                   window.__pluginClient.events.emit(busName, {
                     current,
                     buffedMax,
+                    oldValue,
                   });
                 }
               } else if (evt.kind === 45 /* Wave 6.C PortalStorm */) {
@@ -9027,6 +9054,37 @@ void main() {
                     level,
                     extent,
                   });
+                }
+              } else if (evt.kind === 46 /* Wave 4.B EntityEnchantmentsUpdated */) {
+                // === Wave 4.B — remote-entity enchantments dispatch (2026-05-28) ===
+                //
+                // Wire layer is complete on inbound for non-self
+                // targets — the recv loop's pre-route hook updates
+                // `entity_enchantments_index` for every
+                // `MagicUpdateEnchantment` / DispelEnchantment / Purge etc.
+                // whose `target` != local player guid. This event signals
+                // the JS side that the new snapshot is ready to pull
+                // via `handle.entityEnchantments(guid)`.
+                //
+                // Payload (per `src/lib.rs::CLIENT_EVENT_KIND_ENTITY_ENCHANTMENTS_UPDATED`):
+                //   u32Payload    = target entity GUID
+                //   u32Payload_2  = current cached enchantment count (post-mutation)
+                //   stringPayload = None
+                //   f32Payload    = None
+                //
+                // Subscribers (`plugins/buffs-hud.js` + `scene3d/
+                // nameplate_sprite.js`) re-pull the per-GUID snapshot
+                // and refresh just the affected target's UI — without
+                // touching the local-player path.
+                if (window.__pluginClient?.events) {
+                  const guid = (evt.u32Payload ?? 0) >>> 0;
+                  const count = (evt.u32Payload_2 ?? 0) >>> 0;
+                  if (guid !== 0) {
+                    window.__pluginClient.events.emit("entityEnchantmentsUpdated", {
+                      guid,
+                      count,
+                    });
+                  }
                 }
               } else if (evt.kind === 32 /* ObjectAppraised */) {
                 // ACPlugin PR-2 (2026-05-27): an entity's appraisal

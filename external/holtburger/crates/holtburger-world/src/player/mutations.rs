@@ -145,8 +145,20 @@ impl PlayerState {
                 buffed_max,
                 current,
             };
+            // === Wave 6 polish — vitalChanged oldValue (2026-05-28) ===
+            // Capture the prior `current` (when the vital existed pre-
+            // hydrate) so JS subscribers can compute the delta. ACE's
+            // `UpdateVital` arrives on (re-)hydrate AND on rank-up; the
+            // pre-existing value is the right oldValue in both cases.
+            let prev_current = self
+                .vitals
+                .get(&vital_type)
+                .map(|prev| prev.current);
             self.vitals.insert(vital_type, vital_obj.clone());
-            events.push(WorldEvent::VitalUpdated(vital_obj));
+            events.push(WorldEvent::VitalUpdated {
+                vital: vital_obj,
+                prev_current,
+            });
         }
     }
 
@@ -160,8 +172,18 @@ impl PlayerState {
         if let Some(vital_type) = stats::VitalType::from_id(vital_id)
             && let Some(vital_obj) = self.vitals.get_mut(&vital_type)
         {
+            // === Wave 6 polish — vitalChanged oldValue (2026-05-28) ===
+            // Snapshot BEFORE the in-place mutation. ACPlugin's
+            // `Character.OnVitalChanged` exposes `int OldValue`; combat
+            // bars / regen tickers / HoT visualisers need the delta.
+            // Without this capture, the pre-mutation value was lost the
+            // moment we wrote `vital_obj.current = current`.
+            let prev_current = Some(vital_obj.current);
             vital_obj.current = current;
-            events.push(WorldEvent::VitalUpdated(vital_obj.clone()));
+            events.push(WorldEvent::VitalUpdated {
+                vital: vital_obj.clone(),
+                prev_current,
+            });
         }
     }
 

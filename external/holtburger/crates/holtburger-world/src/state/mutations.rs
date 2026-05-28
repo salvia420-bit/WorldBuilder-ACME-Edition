@@ -794,8 +794,19 @@ impl WorldState {
         {
             let new_current = (health_fraction * vital_obj.buffed_max as f32) as u32;
             if vital_obj.current != new_current {
+                // === Wave 6 polish — vitalChanged oldValue (2026-05-28) ===
+                // Snapshot prior value BEFORE the in-place mutation so the
+                // health-fraction-driven update path also carries OldValue.
+                // This path fires on UpdateHealthFraction broadcasts which
+                // ACE sends for damage-taken bar-fill animations; the
+                // delta is exactly what combat-hud needs to animate the
+                // shrink. See VitalChangedEventArgs.cs:13-35 for contract.
+                let prev_current = Some(vital_obj.current);
                 vital_obj.current = new_current;
-                events.push(WorldEvent::VitalUpdated(vital_obj.clone()));
+                events.push(WorldEvent::VitalUpdated {
+                    vital: vital_obj.clone(),
+                    prev_current,
+                });
                 updated = true;
             }
         }

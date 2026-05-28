@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "tradeskill",
+  "name": "Tradeskill",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Drag-and-drop tradeskill dispatcher — item-on-item drops call useWithTarget (Wave 5.C)",
+  "icon": "🔨",
+  "iconHidden": true,
+  "entry": "./tradeskill.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}

@@ -99,7 +99,27 @@ pub enum WorldEvent {
         cause: RuntimeBodyResetCause,
     },
     EntityDespawned(Guid),
-    VitalUpdated(stats::Vital),
+    /// === Wave 6 polish — vitalChanged oldValue (2026-05-28) ===
+    ///
+    /// `prev_current` carries the vital's `current` value BEFORE the
+    /// mutation, when the emit site is able to capture it. ACPlugin's
+    /// `Character.OnVitalChanged` (Character.cs:125-129 + the
+    /// `VitalChangedEventArgs` carrier at `VitalChangedEventArgs.cs:13-35`)
+    /// surfaces `int OldValue` to consumers — combat heuristics
+    /// (dodge-incoming-blow telemetry, regen-rate tracking) depend on
+    /// the delta, not just the new value. Pre-Wave-6-polish the recv
+    /// loop discarded the old value because the mutation site overwrites
+    /// the vital cache before lib.rs's per-event scan sees it.
+    ///
+    /// `None` when the emit site doesn't have a pre-mutation snapshot
+    /// (e.g. initial-spawn vital hydrate before `vitals` is populated,
+    /// or paths that synthesise a full Vital without going through the
+    /// in-place mutation). JS consumers must treat `None` as "delta
+    /// unavailable" — the legacy single-value path is still correct.
+    VitalUpdated {
+        vital: stats::Vital,
+        prev_current: Option<u32>,
+    },
     AttributeUpdated(stats::Attribute),
     SkillUpdated(stats::Skill),
     LevelInfoUpdated(stats::CharacterLevelInfo),
