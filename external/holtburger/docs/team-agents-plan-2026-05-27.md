@@ -318,7 +318,21 @@ All three lived in `scene3d/` but touched distinct files. Closed in one batch.
 
 ---
 
-## Wave 3 — HUD / plugin / vitals (3 agents)
+## Wave 3 — HUD / plugin / vitals (CLOSED 2026-05-28; 3 parallel agents)
+
+First wave with NO stale-audit pivots — all three agents shipped their original scope.
+
+### Wave 3 closing summary
+
+| Agent | Status | Commit | Notes |
+|---|---|---|---|
+| 3.A | shipped | `bcca8ca6` | Hotbar fire wiring via `decideFireAction()` pure helper (mirrors retail acclient.c:239995 gmToolbarUI::UseShortcut). 3-branch path: castSelf / castOnTarget / useItem / needTarget / none. Numkey 1-9 inherits via existing keymap chain. +15 unit tests. Drag-drop accepts both spell-id and inv-guid mime types. |
+| 3.B | shipped | `9642c500` | PaperdollViewport embedded in examine detail-pane (224×178). NPC inventory visibility verified — ACE only broadcasts visible armor slots, no false-empty. +16 unit tests. 2 follow-on flags raised (see Wave 6 polish). |
+| 3.C | shipped | `2b2a92ed` | 3 new CLIENT_EVENT_KIND constants (VITAL_HEALTH=42 / STAMINA=43 / MANA=44) wired end-to-end: lib.rs emit → index.html drainEvents → vitals-hud subscribe. Coalesced kind=8 retained as fallback. +14 unit tests. Pre-flight surprise: api.js already had TODOs anticipating this with target event shapes. |
+
+**Validation gate:** cargo check workspace PASS, wire conformance 40/40 (no protocol changes), 45 new test assertions PASS, status-indicators regression 37/37 PASS.
+
+---
 
 ### Agent 3.A — Hotbar fire wiring
 
@@ -543,11 +557,21 @@ Surfaced by Wave 1's visibility flags. All three are isolated surfaces; safe to 
 
 ---
 
+### Wave 6 polish — small flags collected from Wave 3 (S effort each)
+
+Tuck into existing Wave 6 agents or a 6.D polish pass:
+
+- **examine-target meta-vs-flat read** (Wave 3.B flag): `plugins/examine-target.js:447-480` `populateFromEntity` reads `ent.type`/`ent.level`/`ent.health` directly, but real entity-map instances store these under `inst.meta`. Pre-existing bug — examined live NPCs render empty Combat/Position section. Fix: `ent.meta?.X ?? ent.X` across all populate sites.
+- **entityAppearanceChanged emit** (Wave 3.B flag): no emit site exists; `scene3d/entities.js:applyAppearance` (line 3921) mutates `inst.meta` without firing. Wave 3.B's subscription is harmless but hot-swap needs the emit at entities.js:3982 (post-spawn) and `_applyAppearanceHotSwap` success path.
+- **vitalChanged oldValue capture** (Wave 3.C flag): `update_vital_current` mutates the cached vital in place before the WorldEvent reaches lib.rs, so `oldValue` is lost. ACPlugin's `Character.OnVitalChanged` carries it. Small refactor in `holtburger-world` handlers to capture pre-mutation snapshot.
+
 ### Deferred from Wave 1 (parked — not in Wave 6)
 
 - **InstancedMesh per-instance `receiveShadow`** (Wave 1.E): Three.js `InstancedMesh` can't toggle `receiveShadow` per-instance; would need shader-level support. Park until visual smoke shows distant InstancedMesh statics are visibly hurt by the bake-time-only decision.
 - **`SetWielded` optimistic local update layer** (Wave 1.D): PR 4+ territory; pair with Wave 5 inventory work.
 - **Mini-Game indicator (chess) wiring** (Wave 1.F): not wired server-side per ACE either; larger scope than Portal Storm. Defer until chess support is on roadmap.
+- **Plumb quality preset through wasm boundary** (Wave 2.B flag): so disabled-preset clients save the wasm Sobel work, not just the GPU upload. Touch `fetch_surface_pixels()` call sites.
+- **Hotbar per-item icon resolution** (Wave 3.A polish): currently placeholder compass-disk sprite for all items; needs entityManager item-icon cache hookup.
 
 ---
 
@@ -646,7 +670,7 @@ After Wave 5 closes, write `docs/handoff-2026-06-XX.md` summarizing all 15 oppor
 |---|---:|---|---|
 | 1 | 6 | Codegen + 5 isolated parsers/plugins/scene tweaks | ✅ closed 2026-05-28 |
 | 2 | 3 | scene3d/ shader + VFX | ✅ closed 2026-05-28 |
-| 3 | 3 | HUD plugins + per-vital wasm split | pending |
+| 3 | 3 | HUD plugins + per-vital wasm split | ✅ closed 2026-05-28 |
 | 4 | 2 | Train Skills + Remote Buffs (both touch lib.rs + protocol) | pending (audit-refresh recommended first) |
 | 5 | 1 (or 3 sub) | Tradeskill end-to-end | pending |
 | 6 | 3 | Wave 1 follow-ons: codegen wiring, Lifestone UI, Portal Storm dispatch | pending |
