@@ -2827,6 +2827,66 @@ pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
     Ok(out)
 }
 
+/// Fetch the per-terrain-type vertex modulation ranges from the retail
+/// Region (0x13000000) record. Returns a flat `Uint32Array` of
+/// `33 × 6 = 198` u32s in row-major order: row `i` (terrain type `i`)
+/// is `[min_bright, max_bright, min_sat, max_sat, min_hue, max_hue]`.
+///
+/// **Context (2026-05-28 audit).** Retail's `TerrainTex` carries six
+/// u32 fields per terrain type (`(max|min)_vert_(bright|saturate|hue)`)
+/// — see `holtburger_dat::file_type::region::TerrainTex:537-567` for
+/// the parser. acclient.c only Pack/UnPacks the values; the rendering
+/// path that would APPLY them was apparently cut before retail
+/// shipped. However the values are deliberately authored (Ice = type
+/// 2 and RoadType = 32 have `bright=30..60` vs `90..100` for natural
+/// terrain), so wiring them as a per-vertex HSL nudge restores the
+/// authors' intent.
+///
+/// Best-guess unit interpretation (no retail code to verify against):
+/// `bright`/`saturate` as percentage in 0-100, `hue` as either degrees
+/// or AC's internal 0-256. JS-side `terrain.js::buildVertexModulation`
+/// owns the application.
+///
+/// Returns a `Vec<u32>` (one allocation) rather than a `Vec<struct>`
+/// so the wasm-bindgen ABI doesn't need a new exported type. The
+/// shape `Uint32Array(198)` is documented at the call site.
+///
+/// `0` for every channel when no Region is loaded (degenerate test
+/// builds with empty DAT) — JS reads that as "no modulation, pass
+/// through".
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_terrain_modulation_ranges() -> Result<Vec<u32>, JsValue> {
+    use holtburger_dat::file_type::Region;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = global_source::global_source();
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", 0x1300_0000))
+        .map_err(|e| JsValue::from_str(&format!("Region 0x13000000: {e}")))?;
+    let mut cursor = std::io::Cursor::new(&bytes[..]);
+    let region = Region::unpack(&mut cursor)
+        .map_err(|e| JsValue::from_str(&format!("Region::unpack: {e}")))?;
+    // 33 terrain types × 6 channels = 198 u32s. Zero-fill for any
+    // missing slot (Region writers don't always emit all 33; retail
+    // ships 33).
+    let mut out = vec![0u32; 33 * 6];
+    for td in &region.terrain_info.land_surfaces.tex_merge.terrain_desc {
+        let idx = td.terrain_type as usize;
+        if idx >= 33 {
+            continue;
+        }
+        let t = &td.terrain_tex;
+        let base = idx * 6;
+        out[base] = t.min_vert_bright;
+        out[base + 1] = t.max_vert_bright;
+        out[base + 2] = t.min_vert_saturate;
+        out[base + 3] = t.max_vert_saturate;
+        out[base + 4] = t.min_vert_hue;
+        out[base + 5] = t.max_vert_hue;
+    }
+    Ok(out)
+}
+
 /// Phase 3 step 3.6 — fetch the retail TexMerge alpha masks (corner,
 /// side, road) and decode each to RGBA8. Mirrors
 /// [`fetch_terrain_textures`] but for the PFID_A8 mask textures the

@@ -117,6 +117,79 @@ function buildWireTerrainColors(terrainCodes) {
   return out;
 }
 
+/**
+ * 2026-05-28 — Per-vertex brightness factor for TerrainTex vertex
+ * modulation.
+ *
+ * Retail's `TerrainTex` carries (min_bright, max_bright) ranges per
+ * terrain type — 90..100 for most natural terrain (very subtle
+ * variation), 30..60 for Ice (type 2) and RoadType (type 32). The
+ * values are written to the DAT but acclient.c never applies them; we
+ * restore the authors' intent here by picking a random value per
+ * vertex within the type's range, hashed by world position so the
+ * same vertex always gets the same modulation (cache-stable, no
+ * frame-to-frame flicker, seamless across LB seams).
+ *
+ * Best-guess unit interpretation (untestable against acclient.c since
+ * no application code exists): `bright` is a percentage in 0-100,
+ * applied as a multiplier on the final fragment color
+ * (`color *= bright / 100`). This makes Ice/Road dramatically darker
+ * (0.3-0.6× luminance) while leaving natural terrain barely touched
+ * (0.9-1.0×). The fragment shader gates the multiply behind
+ * `uTerrainModulationEnabled` so the attribute is a no-op when the
+ * quality preset / URL flag is off.
+ *
+ * The hash uses world-frame XY (`lbX * 192 + local_x`, ditto Y) so
+ * vertices on the seam between two adjacent landblocks resolve to the
+ * same random value — no visible discontinuity at LB boundaries.
+ *
+ * Saturation + hue ranges are NOT applied today; only brightness.
+ * Adding them is straightforward — a follow-on, gated behind the
+ * same URL flag — once a visual eye-test shows the brightness pass
+ * looks plausible.
+ *
+ * @param {Float32Array} positions  flat [x0,y0,z0,x1,y1,z1,...] in LB-local metres
+ * @param {Uint8Array}   terrainCodes per-vertex terrain type byte
+ * @param {Uint32Array}  modRanges  flat [33×6] (min_b,max_b,min_s,max_s,min_h,max_h)
+ * @param {number}       lbX        landblock X (0..255)
+ * @param {number}       lbY        landblock Y (0..255)
+ * @returns {Float32Array} length = vertexCount; each value in [min/100, max/100]
+ */
+function buildTerrainVertexBrightness(positions, terrainCodes, modRanges, lbX, lbY) {
+  const vertexCount = (positions.length / 3) | 0;
+  const out = new Float32Array(vertexCount);
+  const lbOriginX = lbX * 192;
+  const lbOriginY = lbY * 192;
+  for (let i = 0; i < vertexCount; i += 1) {
+    const type = terrainCodes[i] | 0;
+    if (type >= 33) {
+      out[i] = 1.0; // unknown type → no modulation
+      continue;
+    }
+    const base = type * 6;
+    const minB = modRanges[base] | 0;
+    const maxB = modRanges[base + 1] | 0;
+    // No range → no modulation. Defensive: zero-filled modRanges
+    // from a fetch-failure produces (0, 0) → out=0 which would render
+    // black. Clamp to 1.0 instead so a missing table is a no-op.
+    if (minB === 0 && maxB === 0) {
+      out[i] = 1.0;
+      continue;
+    }
+    // World-frame hash input — see docstring re: LB-seam continuity.
+    const worldX = lbOriginX + positions[i * 3 + 0];
+    const worldY = lbOriginY + positions[i * 3 + 1];
+    // Mirrors the GLSL `hash21` already used in this file's vertex
+    // shader for water-wave noise (line ~440). Stable across reloads
+    // because it's pure-arithmetic with no time/random dependency.
+    const t = Math.sin(worldX * 127.1 + worldY * 311.7) * 43758.5453;
+    const rand01 = t - Math.floor(t); // fract — in [0, 1)
+    const valuePct = minB + (maxB - minB) * rand01; // in [minB, maxB]
+    out[i] = valuePct * 0.01; // percentage → multiplier
+  }
+  return out;
+}
+
 // === Wave 2.A / Agent 2.A — terrain palette LUT (2026-05-28) ===
 //
 // Retail's Region 1 ("Dereth") publishes a 32-entry terrain palette via
@@ -397,6 +470,14 @@ const TERRAIN_VERTEX_GLSL = `
 precision highp float;
 
 in float terrainCode;                 // Phase 1.2 — per-vertex (uint8→float)
+// 2026-05-28 — per-vertex brightness factor in [0..1+] sourced from
+// TerrainTex's (min_vert_bright, max_vert_bright) range with a
+// world-position-hashed random pick per vertex. Always supplied
+// (defaults to 1.0 when the modulation ranges table is unavailable);
+// the fragment shader gates the multiply behind
+// uTerrainModulationEnabled so an attribute of all-1.0s with the gate
+// off is also a no-op. See `buildTerrainVertexBrightness` for math.
+in float vertexBrightness;
 
 uniform float uTime;                  // Phase 2.2 — shared wall-clock seconds
 uniform int uWaterCodeMask;           // Phase 2.2 — bitmask of water terrain codes (bit i = code i)
@@ -408,6 +489,7 @@ out vec2 vGridUv;
 out vec3 vWorldPos;  // Clouds-L: terrain world-space position for cloud-shadow projection
 out float vViewDepth; // CSM-on-terrain: view-space depth (positive = in front of camera) for cascade selection
 flat out int vTerrainCode;            // Phase 1.2 — passed flat-int to FS
+out float vBrightness;                // 2026-05-28 — TerrainTex brightness modulation (interpolated, applies in FS)
 // Phase 1.3 — AC-space LB-local position + interpolated geometry
 // normal, used by the fragment shader for slope-gated triplanar
 // sampling. Both are in AC coords (Z-up); the worldRoot Y-up rotation
@@ -512,6 +594,12 @@ void main() {
   // disagree but we deliberately pick one per triangle rather than
   // blending (terrain codes are discrete categories).
   vTerrainCode = code;
+  // 2026-05-28 — pass per-vertex brightness through to FS. Linear
+  // interpolation across the triangle gives a smooth gradient between
+  // vertices' picked values (each vertex's value is hashed by world
+  // position so neighbours differ slightly). Fragment shader applies
+  // the multiply at the end of color composition, gated by uniform.
+  vBrightness = vertexBrightness;
   // vAcPos passes the UNDISPLACED position so the Phase 1.3 triplanar
   // sampler reads consistent values across frames (displacement is
   // visual-only; collision math + detail-normal projections stay
@@ -664,6 +752,16 @@ flat in int vTerrainCode;             // provoking-vertex terrain code
 in vec3 vAcPos;                       // Phase 1.3 — LB-local AC pos (z=up)
 in vec3 vAcNormal;                    // Phase 1.3 — geometry normal (AC z-up)
 flat in int vIsWater;                 // Phase 2.2 — 1 if water, 0 otherwise
+in float vBrightness;                 // 2026-05-28 — TerrainTex per-vertex brightness modulation factor
+
+// 2026-05-28 — gate for the TerrainTex modulation multiply. 0.0 = no
+// modulation (final color unchanged), 1.0 = full multiply by
+// vBrightness. Driven by the URL flag `?terrainMod=on` (defaults off
+// per project_terrain_vertex_modulation_gap memo: the modulation was
+// authored into the DAT but never applied by retail's shipped client,
+// so it's opt-in until visual verification confirms the
+// best-guess unit interpretation looks right on real hardware).
+uniform float uTerrainModulationEnabled;
 // Perf D1 — water-modulation sines folded to vertex rate.
 //   .x = sin(uTime * 0.3)   tint breath (constant per draw, so this is
 //                           literally the same value at every vertex
@@ -949,7 +1047,17 @@ void main() {
     csmShadow = mix(0.45, 1.0, s);
   }
 
-  fragColor = vec4(result * ndotl * cloudShadow * csmShadow, 1.0);
+  // 2026-05-28 — TerrainTex modulation multiply. `vBrightness` is the
+  // per-vertex factor in [min_bright/100, max_bright/100] (most natural
+  // terrain 0.9..1.0, Ice + RoadType 0.3..0.6). `mix(1.0, vBrightness, gate)`
+  // collapses to 1.0 when the URL flag is off → no-op; collapses to
+  // vBrightness when on → per-vertex linear modulation of the lit color.
+  // Applied to the LIGHTING result (pre-cloud/csm multiply) so cloud
+  // shadow + CSM darken on top of the modulation, not the other way
+  // around — matches how a brightness-modulated diffuse channel would
+  // sit in a PBR composition.
+  vec3 modulated = result * mix(1.0, vBrightness, uTerrainModulationEnabled);
+  fragColor = vec4(modulated * ndotl * cloudShadow * csmShadow, 1.0);
 }
 `;
 
@@ -1127,6 +1235,29 @@ async function resolveTerrainRingOpts(
     const built = buildTerrainAtlasArrayBytes(terrainTextures);
     roadCanvas = built.roadCanvas;
 
+    // 2026-05-28 — TerrainTex vertex-modulation ranges. Six u32s per
+    // terrain type (33 × 6 = 198 values): min/max for brightness,
+    // saturation, hue. Authored deliberately in retail (Ice=2 and
+    // RoadType=32 are dramatic outliers vs natural-terrain default
+    // 90..100 brightness); acclient.c never applied them — likely a
+    // cut feature — but the values let us "alive" the author intent
+    // as a per-vertex HSL nudge. Fetch once and stash on scene3d so
+    // per-LB bake can mint vertexBrightness attributes without
+    // re-fetching. Failure falls back to a 198-zero buffer (treated
+    // as "no modulation, pass through" downstream).
+    if (typeof wasmExports.fetch_terrain_modulation_ranges === "function") {
+      try {
+        const raw = await wasmExports.fetch_terrain_modulation_ranges();
+        scene3d.terrainModulationRanges = new Uint32Array(raw);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[terrain] fetch_terrain_modulation_ranges failed:", e);
+        scene3d.terrainModulationRanges = new Uint32Array(33 * 6);
+      }
+    } else {
+      scene3d.terrainModulationRanges = new Uint32Array(33 * 6);
+    }
+
     // Per-code layer of a `sampler2DArray`. Replaces the prior
     // `CanvasTexture` of a 6x6 packed atlas (1536x1536); the packed
     // atlas had no inter-tile gutter so the GPU's bilinear+mipmap
@@ -1225,7 +1356,30 @@ async function resolveTerrainRingOpts(
     // runtime slider overrides it via existing/opts.
     terrainPaletteTexture,
     terrainPaletteStrength: DEFAULT_TERRAIN_PALETTE_STRENGTH,
+    // 2026-05-28 — TerrainTex modulation toggle. Off by default (the
+    // shipped retail client never applied this data); flip via URL
+    // flag `?terrainMod=on` to A/B test the look. The check is run
+    // once per ring (not per LB) so toggling at runtime requires a
+    // page reload.
+    terrainModulationEnabled: readTerrainModulationFlag(),
   };
+}
+
+/**
+ * 2026-05-28 — Parse `?terrainMod=on` from the page URL. Returns true
+ * only for the literal value `"on"` (case-insensitive); any other
+ * value (including missing) is false. Wrapped in a try/catch so the
+ * non-browser test harness (Node-side smoke tests) doesn't blow up on
+ * missing `window`.
+ */
+function readTerrainModulationFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("terrainMod");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
 }
 
 /**
@@ -1416,6 +1570,30 @@ export async function bakeTerrainForLandblock(
   } else {
     geom = landblockMeshToGeometry(wasmMesh);
   }
+  // 2026-05-28 — per-vertex brightness attribute for the TerrainTex
+  // modulation. Always built; the fragment-shader application is
+  // gated by `uTerrainModulationEnabled` so the attribute being
+  // present is a no-op when modulation is off. See
+  // `buildTerrainVertexBrightness` for the math + the
+  // `project_terrain_vertex_modulation_gap_2026-05-28.md` memo for
+  // the audit trail. Skipped on a missing ranges table (defensive —
+  // shouldn't happen post-2026-05-28 wasm).
+  if (scene3d.terrainModulationRanges) {
+    const positions = geom.getAttribute("position");
+    const terrainCodesAttr = geom.getAttribute("terrainCode");
+    if (positions && terrainCodesAttr) {
+      const vertexBrightness = buildTerrainVertexBrightness(
+        positions.array,
+        terrainCodesAttr.array,
+        scene3d.terrainModulationRanges,
+        lbX, lbY,
+      );
+      geom.setAttribute(
+        "vertexBrightness",
+        new THREE.BufferAttribute(vertexBrightness, 1, false),
+      );
+    }
+  }
   let vertexTypesTex = null;
   // Wire-agent: skip the per-LB DataTexture upload and use a pair of
   // shared MeshBasicMaterials. The fill material reads a per-vertex
@@ -1501,6 +1679,14 @@ export async function bakeTerrainForLandblock(
         value: Number.isFinite(opts.terrainPaletteStrength)
           ? opts.terrainPaletteStrength
           : DEFAULT_TERRAIN_PALETTE_STRENGTH,
+      },
+      // 2026-05-28 — TerrainTex modulation gate. 0.0 = no per-vertex
+      // brightness multiply (default — modulation was not applied by
+      // shipped retail per the audit memo); 1.0 = apply. Wired from
+      // `opts.terrainModulationEnabled` which `resolveTerrainRingOpts`
+      // sets from the URL flag `?terrainMod=on`.
+      uTerrainModulationEnabled: {
+        value: opts.terrainModulationEnabled ? 1.0 : 0.0,
       },
       // Phase 1.2 — terrain detail-normal array + per-code slice
       // table + per-frame wind direction + quality gate. When

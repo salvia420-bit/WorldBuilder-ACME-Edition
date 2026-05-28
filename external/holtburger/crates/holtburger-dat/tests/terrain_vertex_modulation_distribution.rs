@@ -93,15 +93,15 @@ fn terrain_vertex_modulation_distribution_against_retail() {
             max_bright_seen = max_bright_seen.max(t.max_vert_bright);
             max_sat_seen = max_sat_seen.max(t.max_vert_saturate);
             max_hue_seen = max_hue_seen.max(t.max_vert_hue);
-            // Capture a few samples for visual inspection.
-            if samples.len() < 8 {
-                samples.push((
-                    td.terrain_type,
-                    t.min_vert_bright, t.max_vert_bright,
-                    t.min_vert_saturate, t.max_vert_saturate,
-                    t.min_vert_hue, t.max_vert_hue,
-                ));
-            }
+            // Capture all 33 samples — we want to see the full table
+            // when re-investigating whether the author intent justifies
+            // implementation despite acclient.c not applying.
+            samples.push((
+                td.terrain_type,
+                t.min_vert_bright, t.max_vert_bright,
+                t.min_vert_saturate, t.max_vert_saturate,
+                t.min_vert_hue, t.max_vert_hue,
+            ));
         }
     }
 
