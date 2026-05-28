@@ -413,6 +413,20 @@ export class CameraSwitcher {
     }
     this.controls = null;
 
+    // Wave 2 / F1 fix (2026-05-28) — remove the previous mode's
+    // DOM listeners before the new mode's build appends fresh ones.
+    // Without this, every switchMode call leaks 4 listeners onto the
+    // canvas/document so right-clicks fire the radial menu N times
+    // after N toggles.
+    if (Array.isArray(this._listeners) && this._listeners.length > 0) {
+      for (const entry of this._listeners) {
+        if (!entry) continue;
+        const [evtName, fn, target] = entry;
+        try { target?.removeEventListener?.(evtName, fn); } catch (_) {}
+      }
+      this._listeners.length = 0;
+    }
+
     this.mode = next;
     if (next === "follow") {
       // Retail Asheron's Call mouselook: cursor stays visible (no

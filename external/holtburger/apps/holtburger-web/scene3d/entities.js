@@ -2610,6 +2610,10 @@ export class EntityManager {
     const currentlyAirborne = !!inst._isAirborne;
     if (wantAirborne === currentlyAirborne) return; // idempotent
     inst._isAirborne = wantAirborne;
+    // Wave 3 / I6 fix (2026-05-28) — clear the stuck-airborne stamp on
+    // any state change. The takeoff path re-stamps in _tickJumpPoseTween
+    // once the takeoff tween completes; the landing path leaves it null.
+    inst._airborneStablishedMs = null;
 
     const isHumanShape = inst.parts && inst.parts.length >= 16;
 
@@ -3266,7 +3270,34 @@ export class EntityManager {
    */
   _tickJumpPoseTween(inst, nowMs) {
     const tween = inst._jumpPoseTween;
-    if (!tween) return;
+    if (!tween) {
+      // Wave 3 / I6 fix (2026-05-28) — stuck-airborne timeout. When the
+      // takeoff tween completes we stash `_airborneStablishedMs`. If
+      // no kind=18 (airborne=0) packet arrives within
+      // MAX_STUCK_AIRBORNE_MS, force-land manually so a dropped touch-
+      // down packet doesn't strand the entity in arms-up forever.
+      // Threshold is generous (8s) — most jumps land within 1.5s; we
+      // only want to catch the genuinely-broken case, not interrupt
+      // long arc jumps off cliffs.
+      if (inst._isAirborne && inst._airborneStablishedMs != null) {
+        const MAX_STUCK_AIRBORNE_MS = 8000;
+        const ageMs = nowMs - inst._airborneStablishedMs;
+        if (ageMs > MAX_STUCK_AIRBORNE_MS) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[entities/I6] stuck-airborne timeout (${(ageMs / 1000).toFixed(1)}s) — force-landing`
+          );
+          inst._airborneStablishedMs = null;
+          inst._isAirborne = false;
+          if (inst._jumpPoseStash) {
+            this._clearHumanJumpPose(inst);
+          } else if (inst.airborneTilt) {
+            this._clearGenericJumpPose(inst);
+          }
+        }
+      }
+      return;
+    }
     const t = (nowMs - tween.startMs) / tween.durationMs;
     const clampedT = Math.max(0, Math.min(1, t));
     // Ease-out cubic: 1 - (1-t)^3. Snappier than linear, gentler
@@ -3326,6 +3357,10 @@ export class EntityManager {
         } else {
           inst.airborneTilt = tween.toTilt.clone();
         }
+        // Wave 3 / I6 fix (2026-05-28) — record when takeoff stabilised
+        // so the stuck-airborne timeout in the no-tween branch can fire
+        // if a kind=18 (airborne=0) packet is dropped en route.
+        inst._airborneStablishedMs = nowMs;
       }
       inst._jumpPoseTween = null;
     }
@@ -4516,7 +4551,8 @@ export class EntityManager {
                   },
                 });
               }
-              audioMgr.play(waveId, pos, { gain: volume }).catch(() => {});
+              // Wave 3 / A4 — follow the entity so HRTF tracks moving sources.
+              audioMgr.play(waveId, pos, { gain: volume, followGuid: (guid >>> 0) }).catch(() => {});
             }, delayMs);
             timeoutIds.push(tid);
           }
@@ -5369,7 +5405,8 @@ export class EntityManager {
               },
             });
           }
-          audioMgr.play(entry.waveDid, { x: px, y: py, z: pz }, { gain }).catch(() => {});
+          // Wave 3 / A4 — follow the entity so HRTF tracks moving sources.
+          audioMgr.play(entry.waveDid, { x: px, y: py, z: pz }, { gain, followGuid: (inst.guid >>> 0) }).catch(() => {});
         })
         .catch(() => {});
       this._soundTableHookFires = (this._soundTableHookFires | 0) + 1;

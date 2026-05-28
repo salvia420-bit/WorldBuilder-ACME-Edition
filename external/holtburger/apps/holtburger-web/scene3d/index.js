@@ -502,8 +502,24 @@ export async function preInit3D(canvas) {
   }
 
   const scene = new THREE.Scene();
-  if (typeof window !== "undefined" && window.__particleSortObjects === false) {
-    scene.sortObjects = false;
+  // Wave 3 / L2 fix (2026-05-28) — particle_manager.js was the original
+  // home of this URL parse, but it's `await import()`'d from
+  // play_effect_vfx.js:1063 and entities.js:4434 (dynamic import), so
+  // its module-load code runs AFTER this scene construction. Reading
+  // `window.__particleSortObjects` here found `undefined`, so the
+  // `?particleSortObjects=off` toggle never took effect. Parse the
+  // flag inline instead; particle_manager.js's later parse stays
+  // (idempotent, same URL produces the same answer) for back-compat.
+  let particleSortObjectsOff = false;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("particleSortObjects");
+      if (v != null && v.toLowerCase() === "off") particleSortObjectsOff = true;
+    }
+  } catch (_) {}
+  if (particleSortObjectsOff) scene.sortObjects = false;
+  if (typeof window !== "undefined") {
+    window.__particleSortObjects = !particleSortObjectsOff;
   }
   if (wireframeMode) {
     // 2026-05-22 — vertical sky gradient via a 1×256 CanvasTexture in
@@ -1445,6 +1461,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             z: cam.quaternion.z,
           }
         );
+        // Wave 3 / A4 fix (2026-05-28) — also update follow-mode panner
+        // positions so HRTF tracks moving NPCs / projectiles instead of
+        // locking to spawn-time pose. Callers opt in via
+        // `audioMgr.play(..., { followGuid: g })`; ambient sounds and
+        // pure UI sounds skip this path naturally (no followGuid).
+        const emap = liveScene3dRef?.entityManager?.entityMap;
+        if (emap) {
+          liveScene3dRef.audioManager.updateFollowingPositions((guid) => {
+            const inst = emap.get(guid >>> 0);
+            const p = inst?.root?.position;
+            return p ? { x: p.x, y: p.y, z: p.z } : null;
+          });
+        }
       } catch (_) {
         // Don't let a listener-sync failure kill the frame.
       }

@@ -183,6 +183,12 @@ export async function loadTerrainPaletteLut() {
         console.warn(
           `[wave-2.A] terrain_palette.json HTTP ${r.status}; palette tint disabled`
         );
+        // Wave 3 / M6 fix (2026-05-28) — palette failure makes biome
+        // tints disappear silently (e.g. code 0 BarrenRock and code 24
+        // Argila both map to 0x0500145C; without palette they render
+        // identically). Defensive `__diag.terrain.onPaletteLoadFailed`
+        // hook so future tooling can surface the regression.
+        try { window.__diag?.terrain?.onPaletteLoadFailed?.({ status: r.status, reason: "http_error" }); } catch (_) {}
         return null;
       }
       json = await r.json();
@@ -191,6 +197,7 @@ export async function loadTerrainPaletteLut() {
       console.warn(
         `[wave-2.A] terrain_palette.json fetch failed (${e?.message ?? e}); palette tint disabled`
       );
+      try { window.__diag?.terrain?.onPaletteLoadFailed?.({ error: String(e?.message ?? e), reason: "fetch_threw" }); } catch (_) {}
       return null;
     }
 

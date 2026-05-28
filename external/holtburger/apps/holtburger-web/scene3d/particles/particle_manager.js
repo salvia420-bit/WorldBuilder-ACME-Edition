@@ -260,6 +260,18 @@ export class ParticleManager {
           if (m && m.parent) m.parent.remove(m);
         }
       }
+      // Wave 3 / L1 fix (2026-05-28) — closes the TODO(E3) below in
+      // destroyParticleEmitter. Walk partStorage to free per-slot cloned
+      // materials on auto-finish; same disposal pattern destroyParticleEmitter
+      // applies on explicit teardown, but reachable here when an emitter
+      // ages out naturally via updateParticles() returning false.
+      if (e && e.partStorage) {
+        for (let i = 0; i < e.partStorage.length; i++) {
+          const slotMesh = e.partStorage[i];
+          if (!slotMesh) continue;
+          _disposeMaterialIfOwned(slotMesh.material);
+        }
+      }
       this.particleTable.delete(id);
     }
   }
@@ -292,9 +304,9 @@ export class ParticleManager {
     // across slots and cache-owned by the geometryFactory — we do NOT
     // dispose it here.
     //
-    // TODO(E3): the `tick()` auto-removal path (~line 121) drops dead
-    // emitters from the table without this disposal walk. Same leak
-    // pattern; scoped out of this PR. Follow-on welcome.
+    // Wave 3 / L1 fix (2026-05-28) — `tick()`'s auto-removal branch now
+    // mirrors this disposal walk, so naturally-finishing emitters no
+    // longer leak per-slot materials.
     if (e.partStorage) {
       for (let i = 0; i < e.partStorage.length; i++) {
         const slotMesh = e.partStorage[i];

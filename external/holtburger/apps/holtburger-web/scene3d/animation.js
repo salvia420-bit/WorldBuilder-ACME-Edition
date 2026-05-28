@@ -602,6 +602,12 @@ export class AnimationCache {
      * @private
      */
     _evictLruIfNeeded() {
+        // Wave 2 / R3 fix (2026-05-28) — capture peak entry count before
+        // eviction trims it back, so `getStats().watermark` actually
+        // reflects how high the cache pressed against `maxEntries`.
+        if (this.entries.size > this.sizeWatermark) {
+            this.sizeWatermark = this.entries.size;
+        }
         let evicted = 0;
         for (const key of this.entries.keys()) {
             if (this.entries.size <= this.maxEntries) break;

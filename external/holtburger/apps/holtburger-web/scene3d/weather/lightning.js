@@ -25,7 +25,19 @@ export class LightningSystem {
     this._audio = audioManager || null;
     this._getCameraWorldPos =
       typeof getCameraWorldPos === "function" ? getCameraWorldPos : null;
-    this._thunderDid = (thunderDid ?? DEFAULT_THUNDER_DID) >>> 0;
+    // Wave 3 / L5 fix (2026-05-28) — reject 0 / non-finite thunderDids
+    // so `?thunderDid=0` or a bad override doesn't silently kill the
+    // audio cue. The visual flash will still fire either way; we want
+    // a console signal when the audio half is misconfigured.
+    let resolvedThunderDid = thunderDid ?? DEFAULT_THUNDER_DID;
+    if (!Number.isFinite(resolvedThunderDid) || (resolvedThunderDid >>> 0) === 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[weather/lightning] invalid thunderDid ${thunderDid}; using default 0x${DEFAULT_THUNDER_DID.toString(16).toUpperCase()}`
+      );
+      resolvedThunderDid = DEFAULT_THUNDER_DID;
+    }
+    this._thunderDid = resolvedThunderDid >>> 0;
 
     this._rate = 0;        // flashes/sec (λ)
     this._intensity = 1.0; // multiplier on PULSE_INTENSITIES

@@ -151,7 +151,16 @@ export class Particle {
     this.birthtime = now;
     this.lifetime = 0;
 
-    this.lifespan = info.getRandomLifespan();
+    // Wave 3 / L4 fix (2026-05-28) — guard against non-finite lifespan
+    // values from corrupted PhysicsScript / 0x33 records. A lifespan of
+    // Infinity makes `lifetime < lifespan` always true in killParticle
+    // (particle_emitter.js:191), so the particle never dies and the
+    // emitter never auto-removes. NaN propagates the same way (NaN
+    // comparisons return false in one direction). Clamp non-finite to
+    // 1.0s — matches the existing update() handling at line 404 which
+    // already special-cases `lifespan > 0`.
+    const rawLifespan = info.getRandomLifespan();
+    this.lifespan = Number.isFinite(rawLifespan) ? rawLifespan : 1.0;
 
     // Snapshot the parent frame. ACE: if partIdx==-1, copy parent.Position.Frame,
     // else copy parent.PartArray.Parts[partIdx].Pos.Frame.

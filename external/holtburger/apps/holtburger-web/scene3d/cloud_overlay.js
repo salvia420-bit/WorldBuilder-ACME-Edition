@@ -399,18 +399,29 @@ export class CloudOverlay {
    * 60 Hz position precision.
    */
   tick(stateOverride) {
+    // Wave 3 / O1 fix (2026-05-28) — `handle.getSkyState()` returns a
+    // wasm-bindgen handle that owns Rust-side memory; without an explicit
+    // `.free()` every rAF leaks ~100 B of wasm linear memory (~22 MB/min
+    // at 60 fps). Only free state we obtained ourselves — `stateOverride`
+    // is the caller's handle and not ours to drop.
+    let ownedState = null;
     try {
       const handle = this.sessionHandleAccessor();
       if (this.camera?.position) {
         wxUpdateFromPosition(this.camera.position.x, this.camera.position.z);
       }
-      const state = stateOverride
-        ?? (handle && typeof handle.getSkyState === 'function'
-              ? handle.getSkyState()
-              : null);
+      let state = stateOverride;
+      if (state == null && handle && typeof handle.getSkyState === 'function') {
+        state = handle.getSkyState();
+        ownedState = state;
+      }
       if (state) this.volume.tick(state, null);
     } catch (err) {
       this.lastError = String(err);
+    } finally {
+      if (ownedState && typeof ownedState.free === 'function') {
+        try { ownedState.free(); } catch (_) {}
+      }
     }
   }
 

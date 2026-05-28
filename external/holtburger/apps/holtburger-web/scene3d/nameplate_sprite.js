@@ -117,6 +117,23 @@ const CANVAS_PADDING_X = 16;
 /** @type {Map<string, { texture: THREE.CanvasTexture, material: THREE.SpriteMaterial }>} */
 const _nameplateCache = new Map();
 
+// Wave 1 / A1+A2 fix (2026-05-28) — FIFO caps so neither cache grows
+// unboundedly through long sessions with many unique names / enchant-
+// state tuples. Eviction does NOT dispose the texture/material because
+// other live sprites may still hold references to the evicted entry;
+// GC reclaims the GPU resources naturally once the last sprite using
+// them despawns. The cap therefore bounds JS Map growth (the actual
+// leak vector); GPU memory tracks live-sprite count, not cache size.
+const NAMEPLATE_CACHE_CAP = 512;
+const BUFF_BADGE_CACHE_CAP = 128;
+function _capCacheFifo(cache, max) {
+  while (cache.size > max) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey === undefined) break;
+    cache.delete(firstKey);
+  }
+}
+
 // Sentinel so we only attach one cache-flush watch per AC-font load.
 let _pendingAcFontWatch = false;
 
@@ -292,6 +309,7 @@ function _bakeWithCanvasText(cacheKey, textCanvas) {
 
   const entry = { texture, material, canvasWidth };
   _nameplateCache.set(cacheKey, entry);
+  _capCacheFifo(_nameplateCache, NAMEPLATE_CACHE_CAP);
   return entry;
 }
 
@@ -457,6 +475,7 @@ function getOrBakeNameplateMaterial(name, colorHex) {
 
   const entry = { texture, material, canvasWidth };
   _nameplateCache.set(cacheKey, entry);
+  _capCacheFifo(_nameplateCache, NAMEPLATE_CACHE_CAP);
   return entry;
 }
 
@@ -766,6 +785,7 @@ function _bakeBuffBadge(buffs, debuffs, cooldowns) {
 
   const entry = { texture, material, canvasWidth: canvas.width };
   _buffBadgeCache.set(cacheKey, entry);
+  _capCacheFifo(_buffBadgeCache, BUFF_BADGE_CACHE_CAP);
   return entry;
 }
 

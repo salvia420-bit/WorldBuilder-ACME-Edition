@@ -2061,10 +2061,26 @@ export class MaterialCache {
     try {
       w = sp.width;
       h = sp.height;
-    } catch (_) {
+    } catch (e) {
+      // Wave 1 / B1 fix (2026-05-28) — surface pixel-read threw on a
+      // wasm-bindgen wrapper backed by a null Rust pointer. Record so
+      // operators can see WHICH surface DIDs are failing instead of
+      // staring at grey entities with no explanation.
+      try {
+        window.__diag?.assets?.onMaterialError?.({
+          did, error: e, source: "surface",
+        });
+      } catch (_) {}
       return this.fallbackMaterial;
     }
     if (w === 0 || h === 0) {
+      // Wave 1 / B1 fix (2026-05-28) — zero-dim surface (empty pixels
+      // payload, parser truncation, etc.). Same fallback as throw case.
+      try {
+        window.__diag?.assets?.onMaterialError?.({
+          did, error: `zero-dim (${w}x${h})`, source: "surface",
+        });
+      } catch (_) {}
       try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
       return this.fallbackMaterial;
     }

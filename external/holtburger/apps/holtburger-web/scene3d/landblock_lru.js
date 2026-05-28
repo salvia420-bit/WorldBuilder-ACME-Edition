@@ -272,7 +272,60 @@ export class LandblockLRU {
         `resident=${this.entries.size} totalEvicted=${this._evictedTotal}`
       );
     }
+    // Wave 3 / A6 instrumentation (2026-05-28) — investigation-first for
+    // the R2 hypothesis (Three.js internal program cache may retain
+    // compiled programs of disposed materials). Records a snapshot of
+    // renderer.info.{programs,memory.{geometries,textures}} keyed by
+    // the just-evicted LB so operators can trend program count vs
+    // eviction count over a long traversal session. Ring-buffered to
+    // 200 entries; lazy-initialised on first call so the namespace
+    // doesn't exist until something has been evicted.
+    this._recordProgramSnapshot(lbKey);
     return true;
+  }
+
+  /**
+   * Snapshot the WebGLRenderer's program cache + memory counters to
+   * `window.__diag.renderer.evictionProgramSnapshots` (ring buffer cap
+   * 200). Detached from `evict` to keep the hot eviction path readable;
+   * any throw inside is swallowed so a diag failure can't kill an LB
+   * eviction.
+   */
+  _recordProgramSnapshot(lbKey) {
+    if (typeof window === "undefined") return;
+    try {
+      const renderer = this.scene3d?.renderer;
+      if (!renderer || !renderer.info) return;
+      const programCount = Array.isArray(renderer.info.programs)
+        ? renderer.info.programs.length
+        : 0;
+      if (!window.__diag) window.__diag = {};
+      if (!window.__diag.renderer) {
+        window.__diag.renderer = {
+          evictionProgramSnapshots: [],
+          maxSnapshots: 200,
+          peakPrograms: 0,
+          lastPrograms: 0,
+        };
+      }
+      const d = window.__diag.renderer;
+      d.lastPrograms = programCount;
+      if (programCount > d.peakPrograms) d.peakPrograms = programCount;
+      d.evictionProgramSnapshots.push({
+        ts: typeof performance !== "undefined" ? performance.now() : Date.now(),
+        lbKey: lbKey >>> 0,
+        programs: programCount,
+        geometries: renderer.info.memory?.geometries ?? 0,
+        textures: renderer.info.memory?.textures ?? 0,
+        residentLbs: this.entries.size,
+        evictionsTotal: this._evictedTotal,
+      });
+      while (d.evictionProgramSnapshots.length > d.maxSnapshots) {
+        d.evictionProgramSnapshots.shift();
+      }
+    } catch (_) {
+      // Never let a diag throw kill an eviction.
+    }
   }
 
   dispose() {

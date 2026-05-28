@@ -1189,6 +1189,26 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
     return false;
   }
 
+  // Wave 3 / A5 fix (2026-05-28) — register the PlayEffect emitters
+  // with the entity manager's per-guid tracking so entity-remove
+  // (entities.js:4259) destroys them early if the target despawns
+  // inside the 2.5 s one-shot window. Without this, the emitter
+  // outlives its parent rig: when the setTimeout below fires,
+  // `destroyParticleEmitter`'s `if (m && m.parent) m.parent.remove(m)`
+  // no-ops because the rig is already detached, and the per-slot
+  // material disposal still runs but the JS-side ParticleEmitter
+  // instance has held a now-stale `this.parent` reference for the
+  // remainder of its lifetime. Mirrors the H2 spawn-time chain at
+  // entities.js:4693-4694 which also writes into this map.
+  {
+    let perGuidIds = em._particleEmittersForGuid.get(targetGuid);
+    if (!perGuidIds) {
+      perGuidIds = [];
+      em._particleEmittersForGuid.set(targetGuid, perGuidIds);
+    }
+    for (const eid of spawnedEmitterIds) perGuidIds.push(eid);
+  }
+
   // 10. Schedule one-shot cleanup. PlayEffect events are by definition
   //     one-shot (the wire opcode broadcasts a single "play this script
   //     once" cue); long-lived per-entity scripts go through the H2
@@ -1200,6 +1220,21 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   setTimeout(() => {
     for (const eid of spawnedEmitterIds) {
       try { wm.destroyParticleEmitter(eid); } catch (_) {}
+    }
+    // Wave 3 / A5 fix — prune from per-guid tracking so a future
+    // entity-remove doesn't double-destroy these already-destroyed
+    // emitter IDs. (`destroyParticleEmitter` is safe to call twice —
+    // returns false on the second — but pruning keeps the map honest
+    // and prevents the map from accumulating stale IDs.)
+    const perGuidIds = em._particleEmittersForGuid.get(targetGuid);
+    if (perGuidIds && perGuidIds.length > 0) {
+      const toRemove = new Set(spawnedEmitterIds);
+      const remaining = perGuidIds.filter((id) => !toRemove.has(id));
+      if (remaining.length === 0) {
+        em._particleEmittersForGuid.delete(targetGuid);
+      } else {
+        em._particleEmittersForGuid.set(targetGuid, remaining);
+      }
     }
   }, ONE_SHOT_LIFETIME_MS);
 

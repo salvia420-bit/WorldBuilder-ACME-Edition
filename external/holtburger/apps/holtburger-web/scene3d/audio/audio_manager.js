@@ -65,6 +65,16 @@ export class AudioManager {
     /** @type {Map<number, Promise<AudioBuffer|null>>} */
     this._bufferCache = new Map();
 
+    // Wave 3 / A4 fix (2026-05-28) — sounds whose source should follow
+    // a moving entity. Key = AudioBufferSourceNode (unique per play());
+    // value = { panner, guid }. Per-frame `updateFollowingPositions`
+    // walks this map and rewrites the panner position from the live
+    // entity position so HRTF panning tracks moving NPCs / projectiles
+    // instead of locking to the spawn point. Removed in `source.onended`
+    // when the sound naturally ends (one-shots) or is stopped (loops).
+    /** @type {Map<AudioBufferSourceNode, { panner: PannerNode, guid: number }>} */
+    this._followingHandles = new Map();
+
     // Diagnostics (read by capture scripts).
     this.playCount = 0;
     this.skipCount = 0;
@@ -126,6 +136,33 @@ export class AudioManager {
   setMasterGain(value) {
     this._masterGainValue = Math.max(0.0, Math.min(1.0, value));
     if (this._master) this._master.gain.value = this._masterGainValue;
+  }
+
+  /**
+   * Wave 3 / A4 — per-rAF position update for follow-mode sounds.
+   * Walks `_followingHandles` and rewrites each panner's position from
+   * the caller-supplied `lookupPosition(guid) → {x,y,z}|null` callback.
+   * Missing entities (despawned mid-sound) get skipped silently — the
+   * panner keeps its last known position; the source ends naturally
+   * within a few frames for one-shots, or stays at the last known
+   * position for loops until something stops it.
+   *
+   * @param {(guid: number) => {x:number, y:number, z:number}|null|undefined} lookupPosition
+   */
+  updateFollowingPositions(lookupPosition) {
+    if (typeof lookupPosition !== "function") return;
+    if (this._followingHandles.size === 0) return;
+    for (const { panner, guid } of this._followingHandles.values()) {
+      const pos = lookupPosition(guid);
+      if (!pos) continue;
+      if (panner.positionX && typeof panner.positionX.value === "number") {
+        panner.positionX.value = pos.x;
+        panner.positionY.value = pos.y;
+        panner.positionZ.value = pos.z;
+      } else if (typeof panner.setPosition === "function") {
+        panner.setPosition(pos.x, pos.y, pos.z);
+      }
+    }
   }
 
   /**
@@ -286,6 +323,30 @@ export class AudioManager {
     gain.gain.value = (opts.gain ?? 1.0);
 
     source.connect(gain).connect(panner).connect(this._master);
+    // Wave 2 / G1 fix (2026-05-28) — disconnect the chain when the source
+    // ends. For one-shots, `onended` fires when the buffer finishes; for
+    // loops it fires when the caller calls `source.stop()`. Without this,
+    // gain + panner nodes accumulate in the Web Audio graph until GC,
+    // which is non-deterministic and can stack hundreds of orphan nodes
+    // in long sessions.
+    // Wave 3 / A4 fix (2026-05-28) — also drop the follow-mode tracking
+    // entry so updateFollowingPositions stops touching a dead panner.
+    source.onended = () => {
+      try { source.disconnect(); } catch (_) {}
+      try { gain.disconnect(); } catch (_) {}
+      try { panner.disconnect(); } catch (_) {}
+      this._followingHandles.delete(source);
+    };
+    // Wave 3 / A4 fix (2026-05-28) — register for follow-mode tracking
+    // if the caller asked the sound to track a moving entity. The
+    // per-rAF `updateFollowingPositions` call will rewrite this panner's
+    // position each frame from the entity's current world pose.
+    if (opts.followGuid != null && Number.isFinite(opts.followGuid)) {
+      this._followingHandles.set(source, {
+        panner,
+        guid: opts.followGuid >>> 0,
+      });
+    }
     try {
       source.start(0);
       this.playCount += 1;
