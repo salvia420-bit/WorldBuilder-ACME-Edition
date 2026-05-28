@@ -938,7 +938,14 @@ function doMount(parentEl, _ctx) {
       // self-drop on a re-arrange).
       if (el.dataset.itemGuid && String(el.dataset.itemGuid) === String(guid)) return;
       const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (handle?.wieldFromPack) {
+      // Wave 1.D (2026-05-27): prefer `setWielded` (C# Character.cs:757-762
+      // `SetWielded(weenie, slot)` naming). Falls back to legacy
+      // `wieldFromPack` if the wasm pkg is pre-Wave-1.D so a stale build
+      // doesn't break paperdoll wield.
+      if (handle?.setWielded) {
+        try { handle.setWielded(guid, s.equipMask >>> 0); }
+        catch (e) { console.warn("[paperdoll] setWielded failed:", e); }
+      } else if (handle?.wieldFromPack) {
         try { handle.wieldFromPack(guid, s.equipMask >>> 0); }
         catch (e) { console.warn("[paperdoll] wieldFromPack failed:", e); }
       }

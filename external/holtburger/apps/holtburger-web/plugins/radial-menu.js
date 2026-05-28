@@ -167,15 +167,22 @@ function buildItems(guid) {
     },
   });
 
-  if (isInPack && typeof window.__sessionHandle?.wieldFromPack === "function") {
+  // Wave 1.D (2026-05-27): prefer `setWielded` (Character.cs:757-762
+  // C# name) over legacy `wieldFromPack`. Both drive the same C2S
+  // `GameAction::GetAndWieldItem` (0x001A) opcode; we accept either
+  // export so stale wasm builds keep working.
+  const wieldFn =
+    (typeof window.__sessionHandle?.setWielded === "function" && window.__sessionHandle.setWielded.bind(window.__sessionHandle)) ||
+    (typeof window.__sessionHandle?.wieldFromPack === "function" && window.__sessionHandle.wieldFromPack.bind(window.__sessionHandle));
+  if (isInPack && wieldFn) {
     // Slot hint: prefer the entity meta's equipMask (future PublicWeenieDescription
     // surfaces ValidLocations); fall back to 0 so ACE picks the default slot.
     const slotMask = (ent?.meta?.equipMask >>> 0) || 0;
     items.push({
       label: "Wield",
       action: () => {
-        try { window.__sessionHandle.wieldFromPack(guid >>> 0, slotMask); }
-        catch (e) { console.warn("[radial-menu] wieldFromPack failed:", e); }
+        try { wieldFn(guid >>> 0, slotMask); }
+        catch (e) { console.warn("[radial-menu] setWielded/wieldFromPack failed:", e); }
       },
     });
   }

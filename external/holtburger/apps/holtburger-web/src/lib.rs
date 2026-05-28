@@ -35367,5 +35367,54 @@ impl SessionHandle {
         });
         serde_wasm_bindgen::to_value(&json).unwrap_or(JsValue::NULL)
     }
+
+    // === Wave 1.D — SetWielded port (2026-05-27) ===
+    //
+    // Ports `external/chorizite/ACPlugin/API/WorldObjects/Character.cs:757-762`
+    // `internal void SetWielded(WorldObject weenie, EquipMask slot)` — the
+    // server-confirmed wield helper. PR 3 (commit 2386c721) shipped the JS
+    // `equippable.setWielded()` mirror but never exposed a wasm-side entry
+    // point that drives the C2S wire. This export closes the loop:
+    // paperdoll slot drop → JS facade `setWielded(itemGuid, slot)` →
+    // `SessionCommand::WieldFromPack` → `GameAction::GetAndWieldItem`
+    // (sub-opcode 0x001A) → ACE's `GameActionGetAndWieldItem.Handle`
+    // (`~/ace-server/Source/ACE.Server/Network/GameAction/Actions/
+    // GameActionGetAndWieldItem.cs:8-15`).
+    //
+    // Reuses the existing `WieldFromPack` SessionCommand variant so no new
+    // wire plumbing is added — this is a naming bridge that matches the
+    // C# Character.cs SetWielded surface. The previously-shipped
+    // `wieldFromPack` wasm name remains for back-compat with the inventory
+    // + radial-menu callers (`plugins/inventory.js:941-944`,
+    // `plugins/radial-menu.js:170-178`); new equippable-driven call sites
+    // (per `plugins/world-objects/equippable.js:97`) should prefer
+    // `setWielded` to match the C# port nomenclature.
+    //
+    // ACE owns all validation (item ownership, slot match, wield reqs).
+    // Failures surface as `GameEvent::WeenieError` chat. Confirmed wield
+    // arrives back as `GameEvent::WieldObject (0x0023)`, routed by the
+    // world crate's `wield_entity_for` (`crates/holtburger-world/src/
+    // state/mutations.rs:959-985`) which atomically mutates the same two
+    // properties (`PropertyInstanceId::Wielder` + `PropertyInt::
+    // CurrentWieldedLocation`) that C# `Character.cs:758-759` updates
+    // locally. We rely on the server-broadcast path rather than
+    // optimistic local mutation so the UI never desyncs from authoritative
+    // state.
+    //
+    /// Send the C2S `Inventory_GetAndWieldItem` (0x001A) opcode to
+    /// equip `item_guid` from the player's pack into `slot` (EquipMask
+    /// bit). Mirrors `Character.cs:757-762` `SetWielded(weenie, slot)`.
+    #[wasm_bindgen(js_name = setWielded)]
+    pub fn set_wielded(&self, item_guid: u32, slot: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::WieldFromPack {
+                item_guid,
+                equip_mask: slot,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("setWielded: cmd channel closed ({e})"))
+            })
+    }
 }
 
