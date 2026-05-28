@@ -105,8 +105,41 @@ export const SURFACE_CATEGORY = Object.freeze({
 });
 
 // Category-aware material defaults applied AFTER the surface-type flag
-// decoder. normalScale stays at the THREE default until Phase 1.1 ships
-// procedural normal maps.
+// decoder. Procedural normal maps (Phase 1.1) ship per-surface via
+// `holtburger_dat::normal_gen::normal_from_luminance` (Sobel-X on the
+// Rec.601 luminance channel); wiring is at `_materialFromFlags` below.
+// === Wave 2.B — procedural normals (2026-05-28) === closed the visibility
+// gap: the quality preset's `normalMaps` flag is now consumed by
+// `MaterialCache` (it was a no-op flag prior). See `normalMapsEnabled`
+// constructor opt + the gate in `_materialFromFlags`.
+// === Wave 2.B — procedural normals (2026-05-28) ===
+// `normalScale` per-category: the Sobel-X height-to-normal pipeline emits
+// the same magnitude regardless of surface, so to land the bump strength
+// roughly where it should be we scale per-category at material-build
+// time. Stone/Brick/Tile get the strongest bumps (deep mortar/grout
+// detail), Wood is mid (anisotropic grain), Cloth/Foliage are subtle
+// (cloth fibers, leaf veins shouldn't lift like brick), Sand/Snow flat
+// (no real macro relief — would look noisy). Metal is mid (rivets,
+// brushed scoring). Lava is subtle (we want the emissive bloom to read
+// before the lava-skin micro-relief). Missing categories use 0.8 (Phase
+// 1.1 hand-off note default; preserves prior behaviour for Dirt/Water/
+// Generic). The Phase 1.5 per-DID override still beats this — when the
+// wasm bundle supplies a finite `normalScaleOverride` for a specific DID
+// (eg. surface_overrides.json hand tuning), that wins.
+const CATEGORY_NORMAL_SCALE_DEFAULTS = Object.freeze({
+  [SURFACE_CATEGORY.Stone]: 1.0,
+  [SURFACE_CATEGORY.Brick]: 1.1,
+  [SURFACE_CATEGORY.Tile]: 0.9,
+  [SURFACE_CATEGORY.Wood]: 0.7,
+  [SURFACE_CATEGORY.Metal]: 0.6,
+  [SURFACE_CATEGORY.Sand]: 0.4,
+  [SURFACE_CATEGORY.Snow]: 0.3,
+  [SURFACE_CATEGORY.Foliage]: 0.5,
+  [SURFACE_CATEGORY.Cloth]: 0.5,
+  [SURFACE_CATEGORY.Lava]: 0.4,
+  // Water / Dirt / Generic — fall through to the 0.8 default below.
+});
+
 const CATEGORY_MATERIAL_DEFAULTS = Object.freeze({
   [SURFACE_CATEGORY.Stone]: { roughness: 0.85, metalness: 0.0 },
   [SURFACE_CATEGORY.Wood]: { roughness: 0.8, metalness: 0.0 },
@@ -852,6 +885,7 @@ export class MaterialCache {
    *   pomEnabled?: boolean,
    *   pomOpts?: object,
    *   forcePom?: boolean,
+   *   normalMapsEnabled?: boolean,
    * }} [opts]
    * `detailTileCache`: optional shared `Map<key, THREE.Texture>` (built
    * once at scene init via `loadDetailTileCache` from adapter.js). When
@@ -880,6 +914,19 @@ export class MaterialCache {
    * being non-empty). Used by the visual-smoke capture to verify the
    * patch installs on real Holtburg surfaces without requiring a
    * specific Stone DID to be on-screen.
+   *
+   * `normalMapsEnabled`: Phase 1.1 / Wave 2.B gate. When `true`, the
+   * per-surface procedural normal map baked in
+   * `holtburger_dat::normal_gen::normal_from_luminance` (Sobel-X over
+   * Rec.601 luminance) is wired onto the `MeshStandardMaterial.normalMap`
+   * slot, giving stone/brick/wood/etc. surfaces tangent-space micro-relief
+   * under directional + probe lighting. When `false`, the normal texture
+   * is dropped at the gate — the material falls back to flat shading
+   * (cheap-path for `low` and `mid` quality presets where the +texture
+   * memory cost outweighs the visual delta on weaker GPUs). Default
+   * `true` (preserves behaviour for any caller that constructs a
+   * MaterialCache without going through the quality preset, eg. test
+   * harnesses and the Node-side material smoke tests).
    */
   constructor(opts = {}) {
     /** @type {Map<number, THREE.MeshStandardMaterial>} */
@@ -980,6 +1027,15 @@ export class MaterialCache {
     this.pomEnabled = !!opts.pomEnabled;
     this.pomOpts = opts.pomOpts ?? null;
     this.forcePom = !!opts.forcePom;
+
+    // === Wave 2.B — procedural normals (2026-05-28) ===
+    // Phase 1.1 normal map gate. Defaults to `true` so legacy callers and
+    // test harnesses that don't plumb the quality preset still get the
+    // pre-Wave-2.B behaviour. Quality-preset call sites (index.js +
+    // statics.js + buildings.js) pass `quality.flags.normalMaps` so
+    // `low`/`mid` presets opt out per the preset table in quality.js.
+    this.normalMapsEnabled =
+      opts.normalMapsEnabled === undefined ? true : !!opts.normalMapsEnabled;
 
     // Shared fallback for the 0xFF "no surface" bucket and for any
     // surface DID that fails to resolve (zero-size SurfacePixels, etc).
@@ -1416,16 +1472,34 @@ export class MaterialCache {
     // (empty normal_pixels → null texture), so `!isLuminous` is
     // belt-and-braces. Phase 1.5 normalScale override beats the 0.8
     // default when present.
-    if (normalTexture && !isLuminous) {
+    // === Wave 2.B — procedural normals (2026-05-28) ===
+    // Gate on `this.normalMapsEnabled` so `low`/`mid` quality presets can
+    // skip the +texture memory + sampler bandwidth. Wasm still bakes the
+    // normal pixels (cached per-DID at decode time); the gate prevents
+    // GPU upload via the unused texture. Wasm-side skip is a heavier
+    // refactor (would have to plumb the preset through the JS↔wasm
+    // boundary at every fetch site); skipping at the JS gate captures
+    // the dominant cost (GPU memory + fragment-shader work).
+    if (this.normalMapsEnabled && normalTexture && !isLuminous) {
       mat.normalMap = normalTexture;
       const overrideScale =
         overrides && Number.isFinite(overrides.normalScale)
           ? overrides.normalScale
           : null;
-      mat.normalScale.setScalar(overrideScale ?? 0.8);
+      // === Wave 2.B — procedural normals (2026-05-28) ===
+      // Fallback chain: explicit per-DID override (Phase 1.5) → per-category
+      // default (Wave 2.B) → 0.8 baseline (Phase 1.1 hand-off).
+      let scale = overrideScale;
+      if (scale === null && typeof category === "number") {
+        const catScale = CATEGORY_NORMAL_SCALE_DEFAULTS[category];
+        if (typeof catScale === "number") scale = catScale;
+      }
+      if (scale === null) scale = 0.8;
+      mat.normalScale.setScalar(scale);
       if (overrideScale !== null) {
         mat.userData = { ...(mat.userData || {}), normalScaleOverride: overrideScale };
       }
+      mat.userData = { ...(mat.userData || {}), normalScaleEffective: scale };
     }
 
     // Phase 0.2 — Detail flag composites a tiled grayscale overlay
@@ -1555,7 +1629,13 @@ export class MaterialCache {
       const category = typeof sp.category === "number" ? sp.category : undefined;
       // Phase 1.1: procedural normal pixels (RGB8). Empty for Luminous
       // surfaces and the empty-fallback surface.
-      const normalTex = surfacePixelsToNormalTexture(sp.normalPixels, sp.width, sp.height);
+      // === Wave 2.B — procedural normals (2026-05-28) ===
+      // When the quality preset disables normal maps, skip the GPU
+      // texture upload entirely (not just the material wire-up). Saves
+      // RGBA8 → DataTexture buffer alloc + GL texture handle per DID.
+      const normalTex = this.normalMapsEnabled
+        ? surfacePixelsToNormalTexture(sp.normalPixels, sp.width, sp.height)
+        : null;
       // Phase 3.1: heightmap (R8). Empty for Luminous/constant-lum
       // surfaces — adapter returns null and the POM patch is skipped.
       // `sp.heightPixels` is missing on pre-3.1 wasm builds — guard.
@@ -2008,7 +2088,13 @@ export class MaterialCache {
       return this.fallbackMaterial;
     }
     const tex = surfacePixelsToTexture(pixels, w, h);
-    const normalTex = surfacePixelsToNormalTexture(normalPixels, w, h);
+    // === Wave 2.B — procedural normals (2026-05-28) ===
+    // Gate normal-pixel → GPU texture conversion on the preset flag, same
+    // as the main `get()` path above. Saves the DataTexture alloc + GL
+    // upload when `normalMaps` is off in the quality preset.
+    const normalTex = this.normalMapsEnabled
+      ? surfacePixelsToNormalTexture(normalPixels, w, h)
+      : null;
     const heightTex = heightPixels ? surfacePixelsToHeightTexture(heightPixels, w, h) : null;
     // Phase 7 follow-on #7+8: surface_type bitfield from the wasm side.
     const surfaceTypeFlags = surfaceType >>> 0;

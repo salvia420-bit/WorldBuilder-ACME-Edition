@@ -448,6 +448,12 @@ function resolveBuildingsOpts(scene3d) {
       csmState: scene3d.csmState ?? null,
       pomEnabled: !!scene3d.pomEnabled,
       forcePom: !!scene3d.forcePom,
+      // === Wave 2.B — procedural normals (2026-05-28) ===
+      // Quality-preset gate for Phase 1.1 procedural normal maps. Set on
+      // scene3d in index.js from `quality.flags.normalMaps`. Undefined
+      // (eg. legacy capture flows) → MaterialCache defaults to `true`
+      // (back-compat for any caller that bypasses index.js plumbing).
+      normalMapsEnabled: scene3d.normalMapsEnabled,
     });
   // Stash on scene3d so subsequent ring calls (and the lazy hook in
   // Objective 6) share the same MaterialCache. Phase 7.3 EnvCells +

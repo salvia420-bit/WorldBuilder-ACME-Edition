@@ -883,6 +883,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // from scene3d at construction.
     detailTileCache,
     forceDetail,
+    // === Wave 2.B — procedural normals (2026-05-28) ===
+    // Phase 1.1 normal map gate. Sourced from `quality.flags.normalMaps`
+    // (true on `high` + `ultra`, false on `low` + `mid` per the Wave 2.B
+    // preset adjustment). Each MaterialCache reads this off scene3d and
+    // gates the per-surface `mat.normalMap = normalTexture` wire-up.
+    // Wasm-side normal_pixels bake still runs (cheap, ~one-shot per DID
+    // at decode); the savings here are GPU texture memory + sampler
+    // bandwidth + fragment-shader normal-mapping cost on weaker tiers.
+    normalMapsEnabled: !!quality?.flags?.normalMaps,
     // Visual-fidelity Phase 3.1 — POM gate, sourced from
     // `quality.flags.pom` (high/ultra). Each MaterialCache reads this
     // and installs the parallax shader patch on Stone/Brick/Tile

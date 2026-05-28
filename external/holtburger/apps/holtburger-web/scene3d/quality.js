@@ -22,7 +22,14 @@ export const PRESETS = {
     low: {
         antialias: false,
         shadows: false,
-        normalMaps: true,
+        // Wave 2.B (2026-05-28): procedural normal maps off on `low`.
+        // Saves +texture memory and sampler bandwidth on integrated /
+        // mobile GPUs where the Sobel-derived bumps don't visibly beat
+        // the flat-shading baseline. Wasm still bakes normal_pixels per
+        // surface (cheap, ~one-shot per DID); the gate at MaterialCache
+        // prevents GPU upload. Users can opt back in via the Graphics
+        // settings UI's "Normal maps" toggle.
+        normalMaps: false,
         detailFlag: false,
         terrainDetailNormal: false,
         triplanar: false,
@@ -42,7 +49,11 @@ export const PRESETS = {
     mid: {
         antialias: true,
         shadows: true,
-        normalMaps: true,
+        // Wave 2.B (2026-05-28): procedural normal maps off on `mid`.
+        // The +texture memory + per-fragment normal-map work cost more
+        // FPS on mid-tier hardware than the visual delta returns. Users
+        // can opt in via Graphics settings or `?normalMaps=on`.
+        normalMaps: false,
         detailFlag: true,
         terrainDetailNormal: true,
         triplanar: true,

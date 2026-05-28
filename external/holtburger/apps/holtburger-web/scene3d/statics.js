@@ -213,6 +213,12 @@ export function getOrCreateMaterialCache(scene3d) {
     csmState: scene3d.csmState ?? null,
     pomEnabled: !!scene3d.pomEnabled,
     forcePom: !!scene3d.forcePom,
+    // === Wave 2.B — procedural normals (2026-05-28) ===
+    // Quality-preset gate for Phase 1.1 procedural normal maps. Set on
+    // scene3d in index.js from `quality.flags.normalMaps`. Undefined
+    // (eg. legacy capture flows that bypass index.js) → MaterialCache
+    // defaults to `true` (back-compat).
+    normalMapsEnabled: scene3d.normalMapsEnabled,
     // Wire-agent (?wireframe=1) — orthogonal to quality preset. When
     // true, cache returns shared MeshBasicMaterial({wireframe:true})
     // and preload no-ops the surface-pixel fetch.

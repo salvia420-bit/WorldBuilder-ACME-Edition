@@ -480,7 +480,9 @@ function effectiveFlags(state) {
     antialias: true,
     shadows: true,
     csm: false,
-    normalMaps: true,
+    // Wave 2.B (2026-05-28): mirrors the `mid` preset (false). Users on
+    // `high`/`ultra` see this overridden after quality.js boots.
+    normalMaps: false,
     detailFlag: true,
     triplanar: true,
     pom: false,
