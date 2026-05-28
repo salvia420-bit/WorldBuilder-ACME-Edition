@@ -44,6 +44,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
 
 const EXAMINE_LAYOUT_ID = 0x2100006B;
 // Retail popup root is 310x400 inside an 800x600 canvas. Our embed
@@ -230,6 +231,35 @@ function ensureStyles() {
       background: var(--hb-overlay-hover);
       border-color: var(--hb-border-brass);
       color: var(--hb-text-cream-bright);
+    }
+    /* Embedded PaperdollViewport (Wave 3.B) — renders the examined
+       entity's rig with their current equipped armor + dye palette
+       inside the scrollable body. Sits at the top of the body content
+       stack before the Identity section. Transparent background lets
+       the body's brass-bordered backdrop show through. */
+    .hb-exa-paperdoll-wrap {
+      position: relative;
+      width: 100%;
+      height: 180px;
+      margin: 0 0 6px 0;
+      background: linear-gradient(180deg, #2a2418, #1c160e 60%, #14110a);
+      border: 1px solid var(--hb-border-brass-dim);
+      box-sizing: border-box;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .hb-exa-paperdoll-wrap canvas {
+      display: block;
+      pointer-events: none;
+    }
+    .hb-exa-paperdoll-empty {
+      font-size: 10px;
+      color: var(--hb-text-muted);
+      font-style: italic;
+      padding: 8px;
+      text-align: center;
     }
   `;
   document.head.appendChild(style);
@@ -444,6 +474,74 @@ function populateFromInventory(body, ctx, nameEl, guidEl) {
   r(body, "GUID", guidEl.textContent);
 }
 
+// Wave 3.B (2026-05-28) — render the examined entity's full rig
+// (with their current equipped gear + dye palette) into the supplied
+// wrapper element. Reuses the same PaperdollViewport that
+// `plugins/inventory.js` mounts for the player's own paperdoll
+// (`refreshPaperdollViewport` at inventory.js:1389). For the examined
+// entity, we source `setupId / mtableId / paletteId / subPalettes`
+// from `entityMap.get(guid).meta` — populated by the spawn-time
+// `ObjectCreate` / `EntityUpdate` wire flow (see
+// `entities.js:_applyAppearanceHotSwap` for the contract).
+//
+// Returns the PaperdollViewport instance (caller disposes on unmount)
+// or null when the entity is missing / has no usable setupId. The
+// wrapper element is mutated in-place: on success, the viewport canvas
+// is appended; on failure, an "(no preview available)" sentinel is
+// rendered instead.
+//
+// Visibility note: NPCs + remote players ALWAYS have their visible
+// armor in `meta.subPalettes` + `meta.modelChanges` /
+// `meta.textureChanges` (the server sends ObjectDescription on every
+// PVS-enter so the entity can render at all). Hidden / inventory-only
+// slots are excluded from the wire packet by retail design, so the
+// preview matches what's on-screen — no extra slots missing vs. the
+// nameplate visible rendering.
+function renderEntityPaperdoll(wrapEl, guid) {
+  if (!wrapEl) return null;
+  wrapEl.innerHTML = "";
+  const g = (Number(guid) >>> 0);
+  if (!g) {
+    const note = document.createElement("div");
+    note.className = "hb-exa-paperdoll-empty";
+    setAcText(note, "(no entity selected)");
+    wrapEl.appendChild(note);
+    return null;
+  }
+  const em = window.liveScene3d?.entityManager;
+  const inst = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
+  const meta = inst?.meta;
+  const setupId = (meta?.modelId ?? meta?.setupId ?? 0) >>> 0;
+  if (!meta || setupId === 0) {
+    const note = document.createElement("div");
+    note.className = "hb-exa-paperdoll-empty";
+    setAcText(note, meta
+      ? "(no model id — preview unavailable)"
+      : "(entity not in PVS — no preview)");
+    wrapEl.appendChild(note);
+    return null;
+  }
+  // Match the inventory paperdoll dimensions so the viewport reads
+  // consistently across panels. Width clamped to the body slot's
+  // ~284px usable interior (300 minus left/right body padding).
+  const viewport = new PaperdollViewport({ width: 224, height: 178 });
+  wrapEl.appendChild(viewport.dom);
+  viewport.loadPlayer(
+    setupId,
+    (meta.mtableId ?? 0) >>> 0,
+    (meta.paletteId ?? 0) >>> 0,
+    meta.subPalettes ?? new Uint32Array(0),
+  ).catch(() => { /* loadPlayer logs internally on failure */ });
+  try {
+    window.__diag?.examine?.onPaperdollMounted?.({
+      guid: g, setupId, mtableId: (meta.mtableId ?? 0) >>> 0,
+      paletteId: (meta.paletteId ?? 0) >>> 0,
+      subPaletteTriples: ((meta.subPalettes?.length ?? 0) / 3) | 0,
+    });
+  } catch (_) {}
+  return viewport;
+}
+
 function populateFromEntity(body, ctx, nameEl, guidEl) {
   const guid = (ctx.guid >>> 0) || 0;
   const em = window.liveScene3d?.entityManager;
@@ -562,6 +660,21 @@ export const view = {
     body.className = "hb-exa-body";
     root.appendChild(body);
 
+    // Wave 3.B (2026-05-28) — embedded paperdoll preview. Renders the
+    // examined entity's full rig with equipped armor + dye palette via
+    // the same PaperdollViewport that powers the inventory panel
+    // (`plugins/inventory.js:1389`). Sits at the top of the scrollable
+    // body so the player sees the dyed gear above the stats. Only
+    // populated for the `fromEntity` path; inventory items are NOT
+    // creatures so the paperdoll wrap stays hidden for that flow.
+    // Reference: `external/chorizite/ACBindings/Generated/UI/Elements/
+    // gmFloatyExaminationUI.cs` for the canonical retail layout (icon
+    // top-right + rig area + stat rows below).
+    const paperdollWrap = document.createElement("div");
+    paperdollWrap.className = "hb-exa-paperdoll-wrap";
+    paperdollWrap.style.display = "none"; // shown only on fromEntity below
+    body.appendChild(paperdollWrap);
+
     // Inscription section — appended at the tail of the scrollable
     // body. Hidden when no inscription is present for the examined guid.
     const inscWrap = document.createElement("div");
@@ -612,10 +725,17 @@ export const view = {
           ? (Number(ctx.srcLi.dataset.guid) >>> 0)
           : null);
 
+    let paperdollViewport = null;
     if (ctx?.fromInventory) {
       populateFromInventory(body, ctx, nameEl, guidEl);
     } else {
       populateFromEntity(body, ctx ?? {}, nameEl, guidEl);
+      // Wave 3.B — render the entity's gear/dye preview at the top
+      // of the body. renderEntityPaperdoll handles the entity-missing
+      // / no-setupId fallbacks internally; returns null when the
+      // viewport couldn't be constructed (no entry to dispose then).
+      paperdollWrap.style.display = "";
+      paperdollViewport = renderEntityPaperdoll(paperdollWrap, examineGuid);
     }
     renderInscription(inscWrap, examineGuid);
 
@@ -624,15 +744,38 @@ export const view = {
     // gates the Set Inscription button).
     const pc = window.__pluginClient ?? null;
     const onRefresh = () => renderInscription(inscWrap, examineGuid);
+    // Wave 3.B — refresh the paperdoll when the examined entity's
+    // appearance changes (e.g. NPC equips a new item via ACE's
+    // applyAppearance broadcast). Local-player-only events fire for
+    // `playerInventoryChanged`; non-player entities re-publish via
+    // ObjectCreate/EntityUpdate which flows through entity refresh.
+    const onAppearanceRefresh = () => {
+      if (!examineGuid || ctx?.fromInventory) return;
+      // Tear down + rebuild the viewport so the new substitutions land.
+      // PaperdollViewport's _lastLoadKey debounce will no-op when
+      // nothing meaningful changed.
+      if (paperdollViewport) {
+        try { paperdollViewport.dispose(); } catch (_) {}
+        paperdollViewport = null;
+      }
+      paperdollWrap.style.display = "";
+      paperdollViewport = renderEntityPaperdoll(paperdollWrap, examineGuid);
+    };
     if (pc?.events?.on) {
       pc.events.on("bookUpdated", onRefresh);
       pc.events.on("playerInventoryChanged", onRefresh);
+      pc.events.on("entityAppearanceChanged", onAppearanceRefresh);
     }
 
     return () => {
       if (pc?.events?.off) {
         try { pc.events.off("bookUpdated", onRefresh); } catch (_) {}
         try { pc.events.off("playerInventoryChanged", onRefresh); } catch (_) {}
+        try { pc.events.off("entityAppearanceChanged", onAppearanceRefresh); } catch (_) {}
+      }
+      if (paperdollViewport) {
+        try { paperdollViewport.dispose(); } catch (_) {}
+        paperdollViewport = null;
       }
       root.remove();
     };
