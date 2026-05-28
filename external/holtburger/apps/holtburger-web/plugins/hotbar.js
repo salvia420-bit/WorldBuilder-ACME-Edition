@@ -9,17 +9,34 @@
 // row 2). Cross-referenced against acclient.c gmToolbarUI::PostInit +
 // InitShortcutArray (2026-05-24).
 //
-// First-pass behaviour:
+// Behaviour (Wave 3.A 2026-05-28 — real fire wiring shipped):
 //   - 9 brass-trim slots numbered 1-9 in a horizontal row (row 1 only;
 //     row 2 is a follow-on UX expansion). Slot positions and the outer
 //     panel dimensions are now driven by the retail LayoutDesc.
 //   - Drag-drop a spell from the Spellbook into a slot (uses the
 //     existing `application/x-hb-spell-id` mime — same as combat-bar's
 //     spell row drag handler).
+//   - Drag-drop an item from the Inventory into a slot (uses the
+//     existing `application/x-hb-inv-guid` mime — same as picking.js
+//     drag-onto-canvas + target-bar drop handlers).
 //   - Click a bound slot to fire the bound spell/item; empty slots
-//     are no-ops. Real fire wiring (cast spell / use item) is a
-//     follow-on; for now it just logs via the chat-log.
-//   - Number key 1-9 fires the matching slot if it's bound.
+//     are no-ops. Fire path mirrors the combat-bar / target-bar
+//     contract:
+//       * Spell slot, isSelfTargeted=true   → castUntargetedSpell
+//         (combat-bar.js:1330 untargeted branch).
+//       * Spell slot, isSelfTargeted=false  → castTargetedSpell on the
+//         currently-selected entity (matches retail "arm spell then
+//         click target" via the soft-target read from
+//         entityManager.getSelectedTarget()). No target → chat hint,
+//         no wire packet sent.
+//       * Item slot                          → sessionHandle.useObject
+//         (target-bar.js:388 useBtn handler).
+//   - Number key 1-9 fires the matching slot if it's bound. Suppressed
+//     while focused on a text input so chat send is not eaten.
+//
+// Retail click→fire chain reference: acclient.c:239995
+// `gmToolbarUI::UseShortcut(slot, i_bUse)` — branches on target-mode
+// (armed-spell + selected-target) vs ItemHolder::UseObject(itemID).
 
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
@@ -153,6 +170,40 @@ function saveState(s) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch (_) {}
 }
 
+// Pure decision helper — given a slot binding + spell metadata + soft-
+// target GUID, return the fire-action descriptor the caller should
+// dispatch. Factored out of fireSlot() so the test suite can exercise
+// the spell-vs-item branching without booting wasm / DOM.
+//
+// Returns one of:
+//   { kind: "none" }
+//   { kind: "useItem",         itemGuid }
+//   { kind: "castSelf",        spellId }
+//   { kind: "castOnTarget",    spellId, targetGuid }
+//   { kind: "needTarget",      spellId }      // armed but no selection
+//
+// `isSelfTargeted` is the spell's per-record flag (from
+// SessionHandle::getSpellRecord(spellId).isSelfTargeted). When the spell
+// table hasn't loaded yet, pass `true` so the cast defaults to self —
+// matches the JSON-catalog default in plugins/spellbook.js:165.
+export function decideFireAction(bound, { isSelfTargeted, softTargetGuid }) {
+  if (!bound) return { kind: "none" };
+  if (bound.itemGuid) {
+    return { kind: "useItem", itemGuid: (bound.itemGuid >>> 0) };
+  }
+  if (bound.spellId) {
+    if (isSelfTargeted) {
+      return { kind: "castSelf", spellId: bound.spellId };
+    }
+    const g = (softTargetGuid ?? 0) >>> 0;
+    if (g === 0) {
+      return { kind: "needTarget", spellId: bound.spellId };
+    }
+    return { kind: "castOnTarget", spellId: bound.spellId, targetGuid: g };
+  }
+  return { kind: "none" };
+}
+
 export const manifest = {
   id: "hotbar",
   name: "Hotbar",
@@ -281,27 +332,138 @@ export function mount(ctx) {
       // a generic spell glyph.
       icon.style.backgroundImage = "url('./data/ui-sprites/0x06004CC1.png')"; // compass disk as placeholder
       icon.style.opacity = "1";
+    } else if (bound && bound.itemGuid) {
+      // Item icon — generic placeholder (full per-item icon resolution
+      // requires hooking through entity-manager's item-icon cache, a
+      // follow-on UX polish). The bound-state highlight on the slot
+      // border is enough to signal "this slot holds an item".
+      icon.style.backgroundImage = "url('./data/ui-sprites/0x06004CC1.png')";
+      icon.style.opacity = "1";
     } else {
       icon.style.backgroundImage = "";
       icon.style.opacity = "0";
     }
   }
 
+  // Read the soft-target GUID — the most recently clicked entity in the
+  // 3D scene (set by picking.js#onPointerDown → entityManager.set
+  // SelectedTarget). Mirrors target-bar.js#getSelectedTargetGuid (line
+  // 261) and combat-bar.js's armed-spell fire path (which reads the
+  // same GUID indirectly via the picking.js click handler).
+  function getSoftTargetGuid() {
+    try {
+      const em = window.liveScene3d?.entityManager;
+      return (em?.getSelectedTarget?.() ?? 0) >>> 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  // Mirror a single visibility line to the existing chat-log overlay.
+  // Best-effort — chat-log may not exist pre-login or if chat plugin
+  // is unmounted; silently drop in that case.
+  function logToChat(text) {
+    const src = document.getElementById("chat-log");
+    if (!src) return;
+    const li = document.createElement("li");
+    li.dataset.cat = "0";
+    li.className = "cat-0";
+    li.textContent = text;
+    src.appendChild(li);
+  }
+
   function fireSlot(idx) {
     const bound = state.slots[idx];
     if (!bound) return;
     const client = ctx?.client ?? window.__pluginClient ?? null;
-    if (bound.spellId && client?.player?.castSpell) {
-      try { client.player.castSpell(bound.spellId); } catch (_) {}
+    const handle = window.__sessionHandle ?? null;
+
+    // Resolve the spell's self-target flag from the wasm SpellTable
+    // accessor when available. SessionHandle::getSpellRecord returns
+    // null pre-WorldBootstrap and throws when the SpellTable isn't
+    // loaded — fall back to true (self-cast) in both cases. This
+    // matches the JSON-catalog default in plugins/spellbook.js (the
+    // legacy `untargeted` field defaults true when a spell record
+    // omits `isSelfTargeted`).
+    let isSelfTargeted = true;
+    if (bound.spellId) {
+      try {
+        const rec = handle?.getSpellRecord?.(bound.spellId);
+        if (rec && typeof rec.isSelfTargeted === "boolean") {
+          isSelfTargeted = rec.isSelfTargeted;
+        }
+      } catch (_) {
+        // getSpellRecord throws if SpellTable not loaded — keep default.
+      }
     }
-    // Mirror to chat for visibility.
-    const src = document.getElementById("chat-log");
-    if (src) {
-      const li = document.createElement("li");
-      li.dataset.cat = "0";
-      li.className = "cat-0";
-      li.textContent = `Hotbar ${idx + 1}: fired ${bound.spellId ? `spell 0x${bound.spellId.toString(16)}` : "(unbound)"}`;
-      src.appendChild(li);
+    const action = decideFireAction(bound, {
+      isSelfTargeted,
+      softTargetGuid: getSoftTargetGuid(),
+    });
+
+    switch (action.kind) {
+      case "useItem": {
+        // Item slot — straight UseObject. Matches target-bar.js:388
+        // (Use Selected button) and retail acclient.c:240034
+        // `ItemHolder::UseObject(itemID, 0, 0)` (UseShortcut's
+        // i_bUse=true branch). ACE handles the rest server-side
+        // (potion drink, portal gem teleport, tinker UI open, etc.).
+        if (typeof handle?.useObject !== "function") {
+          logToChat(`Hotbar ${idx + 1}: not logged in — useObject unavailable`);
+          return;
+        }
+        try {
+          handle.useObject(action.itemGuid);
+          logToChat(
+            `Hotbar ${idx + 1}: use item 0x${action.itemGuid.toString(16).toUpperCase()}`,
+          );
+        } catch (e) {
+          logToChat(`Hotbar ${idx + 1}: useObject failed — ${e?.message ?? e}`);
+        }
+        return;
+      }
+      case "castSelf": {
+        if (typeof client?.player?.castSpell !== "function") {
+          logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
+          return;
+        }
+        try {
+          client.player.castSpell(action.spellId, null);
+          logToChat(
+            `Hotbar ${idx + 1}: cast spell 0x${action.spellId.toString(16).toUpperCase()} on self`,
+          );
+        } catch (e) {
+          logToChat(`Hotbar ${idx + 1}: cast failed — ${e?.message ?? e}`);
+        }
+        return;
+      }
+      case "castOnTarget": {
+        if (typeof client?.player?.castSpell !== "function") {
+          logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
+          return;
+        }
+        try {
+          client.player.castSpell(action.spellId, action.targetGuid);
+          logToChat(
+            `Hotbar ${idx + 1}: cast spell 0x${action.spellId.toString(16).toUpperCase()} on 0x${action.targetGuid.toString(16).toUpperCase()}`,
+          );
+        } catch (e) {
+          logToChat(`Hotbar ${idx + 1}: cast failed — ${e?.message ?? e}`);
+        }
+        return;
+      }
+      case "needTarget": {
+        // Match retail UX: an armed targeted spell with no selection
+        // is a no-op. We surface a hint instead of silently swallowing
+        // so the player learns the binding works.
+        logToChat(
+          `Hotbar ${idx + 1}: spell 0x${action.spellId.toString(16).toUpperCase()} needs a target — click an entity first`,
+        );
+        return;
+      }
+      case "none":
+      default:
+        logToChat(`Hotbar ${idx + 1}: (unbound)`);
     }
   }
 
@@ -327,16 +489,22 @@ export function mount(ctx) {
     el.addEventListener("click", () => fireSlot(i));
 
     // Drag-drop: spellbook + combat-bar use mime "application/x-hb-spell-id".
+    // Inventory uses "application/x-hb-inv-guid" (per inventory.js:904 and
+    // picking.js's canvas-drop give path). The hotbar accepts either kind.
+    function dragHasAcceptedType(types) {
+      if (!types) return false;
+      const arr = Array.from(types);
+      return arr.includes("application/x-hb-spell-id")
+          || arr.includes("application/x-hb-inv-guid");
+    }
     el.addEventListener("dragenter", (ev) => {
-      const types = ev.dataTransfer?.types;
-      if (types && Array.from(types).includes("application/x-hb-spell-id")) {
+      if (dragHasAcceptedType(ev.dataTransfer?.types)) {
         ev.preventDefault();
         el.classList.add("drag-over");
       }
     });
     el.addEventListener("dragover", (ev) => {
-      const types = ev.dataTransfer?.types;
-      if (types && Array.from(types).includes("application/x-hb-spell-id")) {
+      if (dragHasAcceptedType(ev.dataTransfer?.types)) {
         ev.preventDefault();
         ev.dataTransfer.dropEffect = "copy";
       }
@@ -345,11 +513,23 @@ export function mount(ctx) {
     el.addEventListener("drop", (ev) => {
       el.classList.remove("drag-over");
       const sid = ev.dataTransfer?.getData("application/x-hb-spell-id");
-      if (!sid) return;
-      ev.preventDefault();
-      state.slots[i] = { spellId: Number(sid) };
-      saveState(state);
-      renderSlot(i);
+      const iguid = ev.dataTransfer?.getData("application/x-hb-inv-guid");
+      if (sid) {
+        ev.preventDefault();
+        state.slots[i] = { spellId: Number(sid) };
+        saveState(state);
+        renderSlot(i);
+        return;
+      }
+      if (iguid) {
+        ev.preventDefault();
+        const guid = parseInt(iguid, 10) >>> 0;
+        if (guid > 0) {
+          state.slots[i] = { itemGuid: guid };
+          saveState(state);
+          renderSlot(i);
+        }
+      }
     });
 
     // Right-click → clear slot.
