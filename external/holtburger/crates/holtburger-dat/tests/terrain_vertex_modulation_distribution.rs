@@ -6,11 +6,23 @@
 //! `terrain.js` — only `texture_id`, `tex_tiling`, `detail_*` reach the
 //! atlas builder).
 //!
-//! This test reports whether retail uses the modulation (max != min for
-//! one or more channels per terrain type) so a per-vertex HSL nudge in
-//! the terrain shader would actually produce visible variation. If every
-//! terrain type has max == min for every channel, the feature is a no-op
-//! in retail and we can skip wiring it.
+//! This test reports the retail distribution: all 33 terrain types
+//! have nonzero ranges (max != min) for brightness, saturation, AND
+//! hue. So the values look like real signal at first glance.
+//!
+//! **HOWEVER:** the 2026-05-28 follow-on verification of `acclient.c`
+//! found these 6 fields appear **only** inside `TerrainTex::Pack`
+//! (`acclient.c:304995-305025`) and `TerrainTex::UnPack`
+//! (`acclient.c:305081-305111`). Zero application sites elsewhere
+//! in the 31 MB decompile; ACE.Server only copies the values, never
+//! reads them. **The fields are dead data in retail** — likely a
+//! cut feature. Implementing modulation in our shader would be
+//! creative invention, not retail fidelity.
+//!
+//! This test stays as documentation so a future implementer doesn't
+//! re-tread the same path. See
+//! `project_terrain_vertex_modulation_gap_2026-05-28.md` in memory
+//! for the full verdict.
 //!
 //! SKIPs cleanly without retail data.
 
