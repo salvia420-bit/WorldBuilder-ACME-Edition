@@ -38,6 +38,8 @@
 import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
 import { tickLightingForCellState } from "./lighting.js";
 import { getTerrainVisualZ } from "./terrain.js?v=phase-d-batch";
+import { SHADOW_RECEIVE_RANGE_SQ_M as BUILDINGS_SHADOW_RANGE_SQ_M } from "./buildings.js";
+import { SHADOW_RECEIVE_RANGE_SQ_M as STATICS_SHADOW_RANGE_SQ_M } from "./statics.js";
 
 // Entity-update kind constants — mirror the wasm `ENTITY_UPDATE_KIND_*`
 // constants from `crates/holtburger-session/src/lib.rs`. Listed here
@@ -367,6 +369,277 @@ function tickTerrainSunDir(scene3d) {
   }
 }
 
+// Wave 1.E (2026-05-28) — player-tracked dynamic shadow-receive gate.
+//
+// Replaces FU2's spawn-anchored bake-time tag (`receiveShadow` set
+// once per placement against the Holtburg LB centre) with a per-frame
+// re-tag against the LIVE player position. Closes the
+// `TODO(FU2-future)` flagged in `scene3d/buildings.js` +
+// `scene3d/statics.js`: once the player walks beyond ~SHADOW_RECEIVE
+// _RANGE_M from spawn, the static snapshot stops matching reality and
+// shadows pop on/off at landblock boundaries as new LBs lazy-bake.
+//
+// Wiring contract:
+//   - Reads `scene3d.entityManager.getLocalPlayerWorldPos()` (AC
+//     coords). Pre-spawn the resolver returns null and we no-op.
+//   - Walks `scene3d.buildingsGroup.children` (per-placement
+//     `THREE.Group`s — see `buildOneBuilding` topology) and
+//     `scene3d.staticsGroup.children` (plain `THREE.Mesh` singletons,
+//     `THREE.LOD` LOD-wrapped singletons). Skips `THREE.InstancedMesh`
+//     and LOD-wrapped InstancedMesh entirely — per the FU2 doc those
+//     have uniform `.receiveShadow` across the batch (per-instance
+//     receiveShadow isn't a thing in three.js), so the distance gate
+//     can't discriminate without splitting the InstancedMesh.
+//   - Skips when `shadowsEnabled || csmEnabled` is false (no shadow
+//     map at all → tag is moot) and when `quality.preset === "low"`
+//     (the C2/C3 gates already force receiveShadow=false bake-time).
+//
+// Cost model: throttled to ~5 Hz (every 200 ms) AND a 4 m player-move
+// threshold. A static walking-speed pause skips entirely; a sustained
+// run produces one walk every 200 ms or so. Per walk we touch at most
+// ~46 building Groups + ~225 statics × 1-2 LOD levels at Holtburg
+// 9-LB scope (orders of magnitude under the 460+ frustum-test cost
+// the bake-time gate was avoiding). At 13×13 ring scope (16,700
+// placements with most as InstancedMesh) the singleton count we walk
+// is still 2-3× the ring LBs — well under 5 ms even worst-case.
+//
+// Mutation strategy: assign `mesh.receiveShadow = next` only if it
+// changed. three.js doesn't dirty-check on assign but the GPU pass
+// reads the property fresh each frame, so a no-op assign is free —
+// the change-guard is for the diag counter, not the GPU.
+//
+// CSM cascade visibility verified (Wave 1.E): csm.js
+// DEFAULT_CSM_SPLITS = [30, 100, 300] m; lighting.js single-shadow
+// path uses sceneSize=600 m. 80 m gate sits well inside cascade 2
+// (100 m far) AND the single-shadow frustum half-extent (600 m),
+// so a placement flipped to `receiveShadow=true` ALWAYS has a shadow
+// map covering it. Without this check the gate would be a no-op for
+// the 80-100 m band in the single-shadow path AND a no-op past 300 m
+// in the CSM path — log loudly if the cascade config ever drifts
+// below the receive gate.
+const SHADOW_GATE_TICK_INTERVAL_S = 0.2;
+const SHADOW_GATE_PLAYER_DELTA_SQ_M = 16; // 4 m
+
+function _isShadowReceiveCandidate(node) {
+  // Skip InstancedMesh + LOD-wrapped InstancedMesh — uniform
+  // receiveShadow across the batch (FU2 doc). Plain Mesh + plain LOD
+  // (whose children are plain Mesh) are the only per-placement
+  // singletons the gate can discriminate.
+  if (!node) return false;
+  if (node.isInstancedMesh) return false;
+  if (node.isLOD) {
+    // Could still be LOD-wrapping an InstancedMesh — peek at the
+    // first level.
+    const child = node.levels?.[0]?.object;
+    if (child?.isInstancedMesh) return false;
+  }
+  return true;
+}
+
+function _setReceiveShadowForBuildings(group, withinRange, counters) {
+  // Buildings: per-placement Group → per-part hingeWrapper Group →
+  // per-surface Mesh (see `buildOneBuilding` topology in buildings.js).
+  // The shadow-receive bool lives on each leaf surface Mesh; iterate
+  // the part wrappers via `userData.partGroups` for stable ordering.
+  const partGroups = group.userData?.partGroups;
+  if (!Array.isArray(partGroups)) return;
+  for (const hingeWrapper of partGroups) {
+    if (!hingeWrapper?.children) continue;
+    for (const mesh of hingeWrapper.children) {
+      if (!mesh?.isMesh) continue;
+      // Skip translucent / additive surfaces that already have
+      // receiveShadow=false from the materials.js gate; the
+      // material-level decision is authoritative regardless of range.
+      if (mesh.material?.transparent === true) continue;
+      const next = withinRange;
+      if (mesh.receiveShadow !== next) {
+        mesh.receiveShadow = next;
+        counters.changed += 1;
+      } else {
+        counters.unchanged += 1;
+      }
+    }
+  }
+}
+
+function _setReceiveShadowForStaticsNode(node, withinRange, counters) {
+  // Statics: plain THREE.Mesh OR THREE.LOD wrapping two plain
+  // Meshes (full + degraded). InstancedMesh path is filtered out by
+  // _isShadowReceiveCandidate; here we only see per-placement nodes.
+  if (node.isLOD) {
+    const levels = node.levels;
+    if (!Array.isArray(levels)) return;
+    for (const lvl of levels) {
+      const child = lvl?.object;
+      if (!child?.isMesh) continue;
+      const next = withinRange;
+      if (child.receiveShadow !== next) {
+        child.receiveShadow = next;
+        counters.changed += 1;
+      } else {
+        counters.unchanged += 1;
+      }
+    }
+    return;
+  }
+  if (node.isMesh) {
+    const next = withinRange;
+    if (node.receiveShadow !== next) {
+      node.receiveShadow = next;
+      counters.changed += 1;
+    } else {
+      counters.unchanged += 1;
+    }
+  }
+}
+
+function _staticsNodeWorldXY(node) {
+  // Both plain Mesh + plain LOD carry the world XY in `.position`
+  // (`buildSingletonNode` sets `mesh.position.set(worldX, worldY, z)`
+  // before optionally wrapping in LOD whose `position.copy(mesh.position)`
+  // also runs). InstancedMesh path is excluded upstream.
+  return [node.position.x, node.position.y];
+}
+
+export function tickShadowReceiveGate(scene3d) {
+  if (!scene3d) return;
+  // Hard skip when no shadow path is active — the bake-time
+  // receiveShadow tag is meaningless if the renderer never builds a
+  // shadow map. Matches buildings.js `shadowsEnabled || csmEnabled`
+  // bake-time gate.
+  const shadowsLive = !!scene3d.shadowsEnabled || !!scene3d.csmEnabled;
+  if (!shadowsLive) return;
+  // Hard skip at low preset — the C2/C3 bake-time gates already
+  // forced every receiveShadow to false; flipping any to true would
+  // contradict the preset contract (CSM frustum-test cost the preset
+  // is paying down).
+  if (scene3d.quality?.preset === "low") return;
+
+  // Throttle: time + player-move guard. Either gate alone is too
+  // permissive — a stationary player would re-walk every 200 ms
+  // (cheap but pointless); a fast player would skip walks for
+  // arbitrarily long if only the move-guard ran.
+  const tsSec = scene3d.frameTime?.tsSec
+    ?? (typeof performance !== "undefined" && performance.now
+        ? performance.now() * 0.001
+        : Date.now() * 0.001);
+  if (!scene3d._shadowGateState) {
+    scene3d._shadowGateState = {
+      lastTickSec: 0,
+      lastPlayerX: NaN,
+      lastPlayerY: NaN,
+      lastChangedCount: 0,
+      lastUnchangedCount: 0,
+      lastWalkedCount: 0,
+      cascadeMismatchWarned: false,
+    };
+  }
+  const st = scene3d._shadowGateState;
+  if (tsSec - st.lastTickSec < SHADOW_GATE_TICK_INTERVAL_S) return;
+
+  const em = scene3d.entityManager;
+  if (!em || typeof em.getLocalPlayerWorldPos !== "function") return;
+  let pos;
+  try { pos = em.getLocalPlayerWorldPos(); } catch (_) { pos = null; }
+  if (!pos) return;
+  const px = pos.x;
+  const py = pos.y;
+  if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+
+  // Player-move guard. First call has NaN cached → dx/dy NaN →
+  // comparison false → falls through to walk (correct: bake-time
+  // tag is stale by definition once the player spawns somewhere
+  // other than the Holtburg LB centre).
+  const dx = px - st.lastPlayerX;
+  const dy = py - st.lastPlayerY;
+  if (Number.isFinite(st.lastPlayerX) && (dx * dx + dy * dy) < SHADOW_GATE_PLAYER_DELTA_SQ_M) {
+    // Mark the tick as "checked" so the throttle interval resets,
+    // but skip the walk. Prevents a back-to-back tick re-doing the
+    // distance compute the very next frame.
+    st.lastTickSec = tsSec;
+    return;
+  }
+
+  const counters = { changed: 0, unchanged: 0, walked: 0 };
+
+  // Buildings — per-placement Groups under buildingsGroup. Each
+  // Group's `.position` carries the world XY (set in
+  // `buildOneBuilding`).
+  const buildingsGroup = scene3d.buildingsGroup;
+  if (buildingsGroup?.children?.length) {
+    for (const child of buildingsGroup.children) {
+      if (!child || !child.isGroup) continue;
+      // Skip MaterialCache fill-companion meshes (wire-mode) that
+      // also live under buildingsGroup. They carry `userData.lbX/lbY`
+      // but no `partGroups` array — the building-receive helper
+      // bails on missing partGroups, so the early continue here is
+      // a perf nicety not a correctness fix.
+      if (!Array.isArray(child.userData?.partGroups)) continue;
+      const bx = child.position.x;
+      const by = child.position.y;
+      const ddx = bx - px;
+      const ddy = by - py;
+      const within = (ddx * ddx + ddy * ddy) < BUILDINGS_SHADOW_RANGE_SQ_M;
+      _setReceiveShadowForBuildings(child, within, counters);
+      counters.walked += 1;
+    }
+  }
+
+  // Statics — per-placement Mesh / LOD under staticsGroup. The
+  // InstancedMesh path (ring driver) is filtered by
+  // _isShadowReceiveCandidate; the per-LB lazy baker emits plain
+  // Mesh + LOD only (see statics.js `bakeStaticsForLandblock`
+  // doc-comment), and the ring driver's singletons (modelIds with
+  // only one instance) are also plain Mesh + LOD.
+  const staticsGroup = scene3d.staticsGroup;
+  if (staticsGroup?.children?.length) {
+    for (const child of staticsGroup.children) {
+      if (!_isShadowReceiveCandidate(child)) continue;
+      const [sx, sy] = _staticsNodeWorldXY(child);
+      const ddx = sx - px;
+      const ddy = sy - py;
+      const within = (ddx * ddx + ddy * ddy) < STATICS_SHADOW_RANGE_SQ_M;
+      _setReceiveShadowForStaticsNode(child, within, counters);
+      counters.walked += 1;
+    }
+  }
+
+  st.lastTickSec = tsSec;
+  st.lastPlayerX = px;
+  st.lastPlayerY = py;
+  st.lastChangedCount = counters.changed;
+  st.lastUnchangedCount = counters.unchanged;
+  st.lastWalkedCount = counters.walked;
+
+  // Visibility cross-check: CSM cascade far-plane vs the gate radius.
+  // If a future tuning bump pushes the gate beyond the largest
+  // cascade's reach, the gate flips placements to receiveShadow=true
+  // but no shadow map covers them → silent no-op. Warn once so the
+  // mismatch surfaces in console + the diag snapshot.
+  if (!st.cascadeMismatchWarned) {
+    const csmState = scene3d.csmState ?? scene3d.lighting?.csmState ?? null;
+    if (csmState && Array.isArray(csmState.splits)) {
+      const farCascade = csmState.splits[csmState.splits.length - 1];
+      // The larger of the two gate radii is the binding constraint
+      // (whichever module's receivers we tag farther out).
+      const maxRangeSq = Math.max(
+        BUILDINGS_SHADOW_RANGE_SQ_M,
+        STATICS_SHADOW_RANGE_SQ_M
+      );
+      const maxRange = Math.sqrt(maxRangeSq);
+      if (Number.isFinite(farCascade) && maxRange > farCascade) {
+        st.cascadeMismatchWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[wave1e] shadow-receive gate radius ${maxRange.toFixed(0)}m > far CSM cascade ${farCascade}m; ` +
+            `placements in the ${farCascade.toFixed(0)}-${maxRange.toFixed(0)}m band will have receiveShadow=true ` +
+            `but no shadow map covering them. Bump csm.js DEFAULT_CSM_SPLITS or lower SHADOW_RECEIVE_RANGE_M.`
+        );
+      }
+    }
+  }
+}
+
 export function tickPerFrame(scene3d, sessionHandle, dt) {
   tickCellVisibility3D(scene3d, sessionHandle);
   // 2026-05-16 — PVS-driven scenery + buildings expansion (paired with
@@ -408,6 +681,24 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
     if (!scene3d._lightingTickWarned) {
       scene3d._lightingTickWarned = true;
       console.warn("[phase7.6] tickLightingForCellState threw:", e);
+    }
+  }
+  // Wave 1.E (2026-05-28) — player-tracked shadow-receive gate.
+  // Re-tags `receiveShadow` on per-placement building Groups +
+  // singleton statics so the FU2 distance gate tracks the LIVE
+  // player position instead of staying frozen at the spawn-anchored
+  // bake-time snapshot. Self-throttled to ~5 Hz with a 4 m player-
+  // move guard; runs AFTER tickLightingForCellState so a thrown
+  // walk never blocks lighting from settling. Hard no-op when
+  // `shadowsEnabled || csmEnabled` is false OR `quality.preset ===
+  // "low"`.
+  try {
+    tickShadowReceiveGate(scene3d);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._shadowGateTickWarned) {
+      scene3d._shadowGateTickWarned = true;
+      console.warn("[wave1e] tickShadowReceiveGate threw:", e);
     }
   }
   // Workstream Sky-C — dynamic sky lighting (color + intensity +

@@ -72,25 +72,28 @@ const HOLTBURG_Y = 0xb4;
 // FU2 (perf follow-on 2026-05-18) — distance-tier follow-on for C2's
 // `low`-preset receiveShadow gate. At mid/high/ultra a placement gets
 // `receiveShadow = true` only when its world-space distance to the
-// spawn point (Holtburg LB centre) is under SHADOW_RECEIVE_RANGE_M.
-// Beyond that it falls back to `receiveShadow = false`. Reasoning:
+// reference point is under SHADOW_RECEIVE_RANGE_M. Beyond that it
+// falls back to `receiveShadow = false`. Reasoning:
 //
 //   - CSM frustum-test cost scales linearly with receiver count; the
 //     audit measured a meaningful win when distant statics were
 //     dropped (~16,700 placements over a 13×13 ring with most >60 m
-//     from spawn).
-//   - 60 m is a conservative half-LB radius — well inside the
-//     near-field where shadow receivers visually matter.
-//   - **Static reference, not player-tracking.** We compare against
-//     the spawn point at bake time; we don't re-bake on movement.
-//     The world-expand step 1 ring is ≤6 LBs around Holtburg (≤576 m
-//     radius), so the spawn-point distance is a stable proxy for
-//     "near the player" at session start. TODO(FU2-future): player-
-//     tracking gate that updates `receiveShadow` on LB-cross would
-//     need a per-frame walk of `staticsGroup` children — defer until
-//     we have movement-driven re-bake infrastructure.
-const SHADOW_RECEIVE_RANGE_M = 60.0;
-const SHADOW_RECEIVE_RANGE_SQ_M = SHADOW_RECEIVE_RANGE_M * SHADOW_RECEIVE_RANGE_M;
+//     from the reference point).
+//   - 80 m gives ~1.3× the half-LB radius — comfortably inside the
+//     CSM mid-cascade reach (DEFAULT_CSM_SPLITS[1]=100 m in csm.js)
+//     AND the Phase-0.1 single-shadow sun frustum (sceneSize=600 m in
+//     lighting.js), so shadows up to 80 m always have a covering
+//     cascade.
+//
+// Wave 1.E (2026-05-28) — bake-time tagging stays spawn-anchored as
+// the warm cache seed; per-frame `tickShadowReceiveGate` (loop.js)
+// re-tags `receiveShadow` from the LIVE player position so distant
+// statics light up / dim out as the player traverses landblock
+// boundaries instead of staying frozen at the spawn-anchored snapshot.
+// Bumped 60→80 m so the warm cache covers the player's first wander
+// before the gate first ticks.
+export const SHADOW_RECEIVE_RANGE_M = 80.0;
+export const SHADOW_RECEIVE_RANGE_SQ_M = SHADOW_RECEIVE_RANGE_M * SHADOW_RECEIVE_RANGE_M;
 // Spawn point = Holtburg LB centre. Matches the convention used by
 // scene3d/index.js to seed the initial camera at session start.
 const SPAWN_REF_X = HOLTBURG_X * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
@@ -588,11 +591,13 @@ function buildSingletonNode({
   if (staticsShadow) {
     mesh.castShadow = staticsMatCastsShadow;
     // FU2 (perf follow-on 2026-05-18) — distance-tier gate on top of
-    // C2's low-preset gate. Foreground (<60 m from spawn) at mid/high/
-    // ultra keeps receiveShadow=true; everything else (low preset OR
-    // >=60 m) gets false. Spawn-anchored at bake time, not player-
-    // tracked. TODO(FU2-future): per-frame walk on LB-cross to update
-    // when we have movement-driven re-bake infra.
+    // C2's low-preset gate. Foreground (<SHADOW_RECEIVE_RANGE_M from
+    // the reference point) at mid/high/ultra keeps receiveShadow=true;
+    // everything else (low preset OR beyond range) gets false. Bake-
+    // time tag is spawn-anchored as the warm cache seed; per-frame
+    // `tickShadowReceiveGate` (loop.js, Wave 1.E 2026-05-28) re-tags
+    // from the LIVE player position so the gate tracks the player
+    // across landblock boundaries instead of staying frozen at spawn.
     mesh.receiveShadow = placementReceiveShadow;
   }
 

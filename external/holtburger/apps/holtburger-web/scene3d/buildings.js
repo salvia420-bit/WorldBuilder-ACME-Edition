@@ -65,19 +65,24 @@ const HOLTBURG_Y = 0xb4;
 // FU2 (perf follow-on 2026-05-18) — distance-tier follow-on for C3's
 // `low`-preset receiveShadow gate. At mid/high/ultra a building gets
 // `receiveShadow = true` only when its world-space distance to the
-// spawn point (Holtburg LB centre) is under SHADOW_RECEIVE_RANGE_M.
-// Beyond that it falls back to `receiveShadow = false`.
+// reference point is under SHADOW_RECEIVE_RANGE_M. Beyond that it
+// falls back to `receiveShadow = false`.
 //
-// Mirrors statics.js's FU2 predicate (commit-pair w/ C2). 60 m is the
-// half-LB radius — well inside the near-field where shadow receivers
-// visually matter. Static reference (spawn-anchored at bake time), not
-// player-tracked. The world-expand step 1 ring is ≤6 LBs around
-// Holtburg (≤576 m radius) so the spawn distance is a stable proxy for
-// "near the player" at session start. TODO(FU2-future): player-tracking
-// gate that walks `buildingsGroup` on LB-cross to flip
-// `receiveShadow` — defer until movement-driven re-bake exists.
-const SHADOW_RECEIVE_RANGE_M = 60.0;
-const SHADOW_RECEIVE_RANGE_SQ_M = SHADOW_RECEIVE_RANGE_M * SHADOW_RECEIVE_RANGE_M;
+// Mirrors statics.js's FU2 predicate (commit-pair w/ C2). 80 m gives
+// ~1.3× the half-LB radius, comfortably inside the CSM mid-cascade
+// reach (DEFAULT_CSM_SPLITS[1]=100m in csm.js) AND the Phase-0.1
+// single-shadow sun frustum (sceneSize=600m in lighting.js); shadows
+// rendered up to 80m always have a covering cascade.
+//
+// Wave 1.E (2026-05-28) — bake-time tagging stays spawn-anchored as
+// the warm cache seed; per-frame `tickShadowReceiveGate` (loop.js)
+// re-tags `receiveShadow` from the LIVE player position so shadows no
+// longer pop at landblock boundaries as the player crosses out of the
+// spawn neighbourhood. Bumped 60→80 m so the warm cache covers the
+// player's first wander before the gate first ticks (player walks
+// 6m/s × ~200ms tick = 1.2m; ample slack).
+export const SHADOW_RECEIVE_RANGE_M = 80.0;
+export const SHADOW_RECEIVE_RANGE_SQ_M = SHADOW_RECEIVE_RANGE_M * SHADOW_RECEIVE_RANGE_M;
 const SPAWN_REF_X = HOLTBURG_X * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
 const SPAWN_REF_Y = HOLTBURG_Y * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
 
@@ -399,13 +404,16 @@ function buildOneBuilding(
         // Translucent surfaces already get receiveShadow=false via the
         // per-material gate in materials.js (separate code path).
         // FU2 (perf follow-on 2026-05-18) — distance-tier gate on top
-        // of C3's low-preset gate. Foreground (<60 m from spawn) at
-        // mid/high/ultra keeps receiveShadow=true; everything else
-        // (low preset OR >=60 m) gets false. Spawn-anchored at bake
-        // time, not player-tracked. TODO(FU2-future): per-frame walk
-        // on LB-cross to update when we have movement-driven re-bake
-        // infra. Per-placement (not per-surface) since every surface
-        // mesh under this Group shares the same world position.
+        // of C3's low-preset gate. Foreground (<SHADOW_RECEIVE_RANGE_M
+        // from the reference point) at mid/high/ultra keeps
+        // receiveShadow=true; everything else (low preset OR beyond
+        // range) gets false. Bake-time tag is spawn-anchored as the
+        // warm cache seed; per-frame `tickShadowReceiveGate` (loop.js,
+        // Wave 1.E 2026-05-28) re-tags from the LIVE player position
+        // so shadows stay attached to the player's neighbourhood as
+        // they traverse landblock boundaries. Per-placement (not
+        // per-surface) since every surface mesh under this Group
+        // shares the same world position.
         mesh.receiveShadow = placementReceiveShadow;
       }
       hingeWrapper.add(mesh);
