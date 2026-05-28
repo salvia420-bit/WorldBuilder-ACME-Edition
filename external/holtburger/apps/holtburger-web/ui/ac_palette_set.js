@@ -77,8 +77,12 @@ export function getPaletteSet(setId) {
 
 /**
  * Pick the Palette DataID for a given shade float in [0, 1]. Mirrors
- * ACE's `PaletteSet::GetPaletteID(shade)` rounding semantics:
- * `idx = clamp(floor(shade * palettes.length), 0, palettes.length - 1)`.
+ * ACE's `PaletteSet::GetPaletteID(shade)` rounding EXACTLY:
+ * `idx = (int)((count - 0.000001) * shade)` (PaletteSet.cs:43; acclient
+ * `PalSet::GetPaletteID` @470493). The `-0.000001` epsilon biases exact
+ * fractional boundaries to the LOWER bucket — e.g. count=4, shade=0.25 →
+ * idx 0, not 1. The pre-2026-05-28 `floor(shade * count)` picked the
+ * higher bucket at boundaries (off-by-one variant selection).
  *
  * Returns the chosen palette_did, or null if the PaletteSet isn't
  * loaded.
@@ -90,7 +94,10 @@ export function getPaletteSet(setId) {
 export function pickPaletteForShade(set, shade) {
   if (!set?.palettes?.length) return null;
   const s = Math.max(0, Math.min(1, shade));
-  const idx = Math.min(set.palettes.length - 1, Math.floor(s * set.palettes.length));
+  const idx = Math.min(
+    set.palettes.length - 1,
+    Math.max(0, Math.floor((set.palettes.length - 0.000001) * s)),
+  );
   return set.palettes[idx];
 }
 

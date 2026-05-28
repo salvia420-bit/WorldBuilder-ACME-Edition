@@ -355,12 +355,18 @@ export function _resetTerrainPaletteLutForTest() {
   _terrainPaletteTextureSingleton = null;
 }
 
-// Default tint strength. 0.0 = palette disabled (atlas-only); 1.0 =
-// palette is the only colour signal. ~0.25 nudges atlas colours toward
-// the canonical biome tint without losing the photographic surface
-// texture detail. Driven per-LB via `uTerrainPaletteStrength` so a
-// future quality-preset gate or runtime slider can adjust at zero
-// shader-recompile cost.
+// Opt-in tint strength for the per-biome palette nudge. 0.0 = disabled
+// (atlas-only); 1.0 = palette is the only colour signal.
+//
+// T8 (2026-05-28): this tint samples `TerrainType.terrain_color`, which the
+// DAT parser documents as the RADAR/MINIMAP colour (region.rs:653) — NOT the
+// retail terrain tint, so it's an approximation. It is now OFF by default and
+// opt-in via `?terrainPalette=on` (was silently on at 0.25). The retail
+// per-biome differentiation for biomes that SHARE a base texture (e.g. codes
+// 0/24/31 → 0x0500145C) is the per-type vertex bright/sat/hue modulation
+// (`TerrainTex.{max,min}_vert_*`, the `?terrainMod` path), not a colour tint
+// — see the [Terrain vertex modulation] memory (brightness opt-in; sat/hue
+// deferred pending a 1070 eye-test).
 const DEFAULT_TERRAIN_PALETTE_STRENGTH = 0.25;
 export { DEFAULT_TERRAIN_PALETTE_STRENGTH };
 
@@ -854,16 +860,18 @@ void main() {
 
   vec3 result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
 
-  // Wave 2.A — terrain-palette tint. Sample the four cell-corner
-  // palette colours with the SAME bilinear weights used for atlas
-  // tiles above, then modulate result by the blended palette colour
-  // scaled by uTerrainPaletteStrength. Multiplicative blend
-  // (mix(white, palette, strength)) preserves atlas luminance while
-  // nudging hue toward the canonical retail per-biome tint — the
-  // bright photographic tile detail stays, but two cells that share
-  // an atlas tile (e.g. BarrenRock 0 and Argila 24 both pointing at
-  // 0x0500145C) now read as different biomes via the retail-authored
-  // palette colour each carries.
+  // Wave 2.A — terrain-palette tint (OPT-IN, off by default since T8).
+  // Sample the four cell-corner palette colours with the SAME bilinear
+  // weights used for atlas tiles above, then modulate result by the blended
+  // palette colour scaled by uTerrainPaletteStrength.
+  //
+  // T8 (2026-05-28): the per-code LUT is TerrainType.terrain_color, which is
+  // the RADAR/MINIMAP colour (region.rs:653) -- an approximation, NOT the retail
+  // terrain tint. It does differentiate biomes that share a base atlas tile
+  // (e.g. BarrenRock 0 / Argila 24 both 0x0500145C), but via the wrong source,
+  // so it's now gated behind the terrainPalette=on URL flag. The retail
+  // mechanism is the per-type vertex bright/sat/hue modulation (the terrainMod
+  // path), not a colour tint.
   if (uTerrainPaletteEnabled > 0.5) {
     vec3 p00 = paletteFor(t00);
     vec3 p10 = paletteFor(t10);
@@ -1355,7 +1363,12 @@ async function resolveTerrainRingOpts(
     // strength is the default unless a future quality preset or
     // runtime slider overrides it via existing/opts.
     terrainPaletteTexture,
-    terrainPaletteStrength: DEFAULT_TERRAIN_PALETTE_STRENGTH,
+    // T8: opt-in only (`?terrainPalette=on`). Was on-by-default at 0.25, but it
+    // sources the minimap colour (region.rs:653), not the retail terrain
+    // palette — defaulting off avoids a non-faithful biome tint.
+    terrainPaletteStrength: readTerrainPaletteFlag()
+      ? DEFAULT_TERRAIN_PALETTE_STRENGTH
+      : 0,
     // 2026-05-28 — TerrainTex modulation toggle. Off by default (the
     // shipped retail client never applied this data); flip via URL
     // flag `?terrainMod=on` to A/B test the look. The check is run
@@ -1376,6 +1389,22 @@ function readTerrainModulationFlag() {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     const v = new URLSearchParams(window.location.search).get("terrainMod");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * T8 (2026-05-28) — Parse `?terrainPalette=on`. Gates the minimap-colour
+ * per-biome tint (`uTerrainPaletteStrength`), now OFF by default because it
+ * sources the radar/minimap colour rather than the retail terrain palette.
+ * Same try/catch shape as `readTerrainModulationFlag` for the Node harness.
+ */
+function readTerrainPaletteFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("terrainPalette");
     return typeof v === "string" && v.toLowerCase() === "on";
   } catch (_) {
     return false;

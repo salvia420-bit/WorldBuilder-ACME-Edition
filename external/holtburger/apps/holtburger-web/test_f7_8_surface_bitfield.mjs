@@ -301,6 +301,16 @@ check(
   `transparent=${matAlpha.transparent}, depthWrite=${matAlpha.depthWrite}, opacity=${matAlpha.opacity}`,
 );
 
+// (f3) InvAlpha (0x200) — inverse alpha blend. Pre-2026-05-28 this fell
+// through to opaque despite materialCanCastShadow classifying it transparent.
+// First cut routes it through the alpha-blend branch (acclient.c @454478).
+const matInvAlpha = fl(SURFACE_TYPE.InvAlpha, undefined);
+check(
+  "InvAlpha (0x200): transparent=true, depthWrite=false (not opaque)",
+  matInvAlpha.transparent === true && matInvAlpha.depthWrite === false,
+  `transparent=${matInvAlpha.transparent}, depthWrite=${matInvAlpha.depthWrite}`,
+);
+
 // (g) Combined Translucent bit + luminosity float → both applied.
 const matComboTL = fl(SURFACE_TYPE.Translucent, { luminosity: 0.4 });
 check(

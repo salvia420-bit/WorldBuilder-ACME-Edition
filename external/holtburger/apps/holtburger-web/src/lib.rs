@@ -3322,12 +3322,16 @@ pub struct ModelMesh {
     positions: Vec<f32>,
     /// 6 floats per triangle (3 vertices × uv). Length = `tri_count * 6`.
     uvs: Vec<f32>,
-    /// 3 floats per triangle (one face normal, broadcast to all 3 verts
-    /// at draw time). Length = `tri_count * 3`.
+    /// T6: 9 floats per triangle (PER-VERTEX normals — authored
+    /// `SWVertex.normal`, fallback face normal). Length = `tri_count * 9`.
     normals: Vec<f32>,
     /// One byte per triangle, indexing into `surfaces`. Length = `tri_count`.
     /// `0xFF` means "no surface" (caller paints flat fallback).
     surface_indices: Vec<u8>,
+    /// T2: one byte per triangle = the polygon `sides_type` (the per-poly
+    /// cull bit). `1` = two-sided (DoubleSide); else single-sided (FrontSide
+    /// under `?perPolyCull`). Length = `tri_count`.
+    sides_types: Vec<u8>,
     /// Unique surface DIDs referenced by the model's polygons, in
     /// first-seen order. JS resolves each to RGBA8 via the existing
     /// surface chain (Surface → SurfaceTexture → Texture → to_rgba8).
@@ -3357,6 +3361,9 @@ impl ModelMesh {
     pub fn normals(&self) -> Vec<f32> { self.normals.clone() }
     #[wasm_bindgen(getter, js_name = surfaceIndices)]
     pub fn surface_indices(&self) -> Vec<u8> { self.surface_indices.clone() }
+    /// T2: per-triangle `sides_type` (cull bit). Length = `tri_count`.
+    #[wasm_bindgen(getter, js_name = sidesTypes)]
+    pub fn sides_types(&self) -> Vec<u8> { self.sides_types.clone() }
     #[wasm_bindgen(getter)]
     pub fn surfaces(&self) -> Vec<u32> { self.surfaces.clone() }
     #[wasm_bindgen(getter, js_name = triCount)]
@@ -3400,8 +3407,19 @@ impl ModelMesh {
 struct Tri {
     pos: [[f32; 3]; 3],
     uv: [[f32; 2]; 3],
-    normal: [f32; 3],
+    /// T6 (2026-05-28): PER-VERTEX normals (one per triangle vertex), not a
+    /// single broadcast face normal. Sourced from the authored `SWVertex.normal`
+    /// (rotated by the part frame) so curved geometry smooth-shades like retail;
+    /// falls back to the computed face normal per-vertex when the authored
+    /// normal is degenerate (zero-length).
+    normals: [[f32; 3]; 3],
     surface_did: u32,
+    /// T2 (2026-05-28): the polygon's `sides_type` — the per-poly CULL bit.
+    /// `1` = CullMode.None (two-sided); anything else (`0` Landblock, `2`
+    /// Clockwise, `3`) = single-sided (acclient `D3DPolyRender` @455346:
+    /// `sides_type == 1 ? CULLMODE_NONE : CULLMODE_CW`). The JS adapter uses
+    /// this to pick FrontSide vs DoubleSide per polygon (behind `?perPolyCull`).
+    sides_type: u8,
 }
 
 /// Walk a [`GfxObj`]'s polygons, fan-triangulate each, transform by
@@ -3524,10 +3542,14 @@ fn append_gfx_tris_with_tex_swaps(
             && neg_surface_did != 0
             && neg_surface_did != pos_surface_did;
 
-        // Resolve ring of (position, pos_uv, neg_uv) per vertex.
+        // Resolve ring of (position, pos_uv, neg_uv, normal) per vertex.
         let mut ring_pos: Vec<[f32; 3]> = Vec::with_capacity(poly.vertex_ids.len());
         let mut ring_uv_pos: Vec<[f32; 2]> = Vec::with_capacity(poly.vertex_ids.len());
         let mut ring_uv_neg: Vec<[f32; 2]> = Vec::with_capacity(poly.vertex_ids.len());
+        // T6: authored per-vertex normal, rotated by the part frame (direction
+        // only — no translation), normalised. `None` when the authored normal
+        // is degenerate (zero) → the fan loop falls back to the face normal.
+        let mut ring_normal: Vec<Option<[f32; 3]>> = Vec::with_capacity(poly.vertex_ids.len());
         let mut ok = true;
         for (i, &raw) in poly.vertex_ids.iter().enumerate() {
             if raw < 0 { ok = false; break; }
@@ -3562,6 +3584,15 @@ fn append_gfx_tris_with_tex_swaps(
             ring_pos.push([p.x + part_offset.x, p.y + part_offset.y, p.z + part_offset.z]);
             ring_uv_pos.push(uv_pos);
             ring_uv_neg.push(uv_neg);
+            // T6: rotate the authored normal by the part frame (direction only).
+            let rn = quat_rotate(part_rot, vert.normal);
+            let rn_len2 = rn.x * rn.x + rn.y * rn.y + rn.z * rn.z;
+            if rn_len2 > 1e-12 {
+                let inv = 1.0 / rn_len2.sqrt();
+                ring_normal.push(Some([rn.x * inv, rn.y * inv, rn.z * inv]));
+            } else {
+                ring_normal.push(None);
+            }
         }
         if !ok || ring_pos.len() < 3 { continue; }
 
@@ -3574,25 +3605,34 @@ fn append_gfx_tris_with_tex_swaps(
             let len2 = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
             if len2 < 1e-12 { continue; }
             let inv_len = 1.0 / len2.sqrt();
-            let nx = n[0] * inv_len;
-            let ny = n[1] * inv_len;
-            let nz = n[2] * inv_len;
+            // Computed face normal — the per-vertex fallback when a vertex has
+            // no authored normal.
+            let face = [n[0] * inv_len, n[1] * inv_len, n[2] * inv_len];
+            // T6: prefer authored per-vertex normals; fall back to `face`.
+            let n0 = ring_normal[0].unwrap_or(face);
+            let n1 = ring_normal[i - 1].unwrap_or(face);
+            let n2 = ring_normal[i].unwrap_or(face);
             tris.push(Tri {
                 pos: [a, b, c],
                 uv: [ring_uv_pos[0], ring_uv_pos[i - 1], ring_uv_pos[i]],
-                normal: [nx, ny, nz],
+                normals: [n0, n1, n2],
                 surface_did: pos_surface_did,
+                sides_type: poly.sides_type as u8,
             });
             if emit_back_face {
-                // Reversed winding (A, C, B) + flipped normal so the
-                // back face's triangle has its outward normal pointing
-                // the opposite way. UV ring follows the same reversal
-                // so neg_uv_indices line up with the back vertices.
+                // Reversed winding (A, C, B) + flipped normals so the back
+                // face's normals point the opposite way. UV ring follows the
+                // same reversal so neg_uv_indices line up with the back
+                // vertices; normals reverse to [n0, n2, n1] then negate.
+                let neg = |v: [f32; 3]| [-v[0], -v[1], -v[2]];
                 tris.push(Tri {
                     pos: [a, c, b],
                     uv: [ring_uv_neg[0], ring_uv_neg[i], ring_uv_neg[i - 1]],
-                    normal: [-nx, -ny, -nz],
+                    normals: [neg(n0), neg(n2), neg(n1)],
                     surface_did: neg_surface_did,
+                    // Explicit opposite face of a 2-sided-distinct poly →
+                    // single-sided (its own winding is the front for `neg`).
+                    sides_type: poly.sides_type as u8,
                 });
             }
         }
@@ -3916,7 +3956,36 @@ where
             .filter(|(p, _, _)| *p as usize == pi)
             .map(|(_, old, new)| (*old, *new))
             .collect();
-        on_part(pi, &gfx, offset, rot, &part_tex_swaps_buf);
+
+        // SetupModel per-part default scale (flag 0x02). ACE applies
+        // `GfxObjScale = DefaultScale[i]` to the part geometry (PartArray.cs:349,
+        // :538) — a per-part scale distinct from the object-level ObjectDesc
+        // scale, combined in the part frame (AFrame.Combine: scale the vertex in
+        // part-local space, THEN rotate, THEN translate). The appender does
+        // `quat_rotate(part_rot, vert.origin) + part_offset`, so scaling
+        // `vert.origin` here (pre-rotation) matches that ordering. Face normals
+        // are recomputed post-transform, so scaled positions suffice. Only ~5%
+        // of setups carry non-unit scale; skip the clone otherwise.
+        let part_scale = setup.default_scale.get(pi).copied();
+        let non_unit = part_scale.map_or(false, |s| s.x != 1.0 || s.y != 1.0 || s.z != 1.0);
+        if non_unit {
+            let s = part_scale.unwrap();
+            let mut scaled = gfx.clone();
+            for v in scaled.vertex_array.vertices.values_mut() {
+                v.origin.x *= s.x;
+                v.origin.y *= s.y;
+                v.origin.z *= s.z;
+                // T6: normals transform by the inverse-transpose; for a
+                // diagonal scale that's the component-wise reciprocal
+                // (re-normalised later in the appender). Guard zero components.
+                if s.x != 0.0 { v.normal.x /= s.x; }
+                if s.y != 0.0 { v.normal.y /= s.y; }
+                if s.z != 0.0 { v.normal.z /= s.z; }
+            }
+            on_part(pi, &scaled, offset, rot, &part_tex_swaps_buf);
+        } else {
+            on_part(pi, &gfx, offset, rot, &part_tex_swaps_buf);
+        }
     }
     Some(())
 }
@@ -4114,10 +4183,11 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     command: u32,
 ) -> Option<(
     Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
+    Vec<f32>,
     f32,
     u32,
 )> {
-    use holtburger_dat::file_type::{Animation, MotionTable};
+    use holtburger_dat::file_type::MotionTable;
     use holtburger_dat::ResourceKey;
 
     // Humanoid setups (0x02000001 etc.) ship `default_motion_table
@@ -4161,39 +4231,12 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // path got away with it because style_defaults stores the
     // pre-masked substate, not the full command.
     let motion_data = mtable.motion_data_for_cycle(resolved_stance, command)?;
-    let anim_data = motion_data.anims.first()?;
-    let anim_did = anim_data.anim_id;
-    let framerate = anim_data.framerate;
-    if (anim_did >> 24) != 0x03 { return None; }
-
-    let anim_bytes = source.get_file_by_key(ResourceKey::new("eor/portal", anim_did)).ok()?;
-    let anim = Animation::read(&mut std::io::Cursor::new(&anim_bytes)).ok()?;
-    if anim.part_frames.is_empty() { return None; }
-
-    // AnimData specifies the playback range as [low_frame,
-    // high_frame] *INCLUSIVE on both ends*, with `high_frame == -1`
-    // meaning "play to the last frame of the Animation". Per
-    // ACE.Server/Physics/Animation/AnimSequenceNode.cs:30 the
-    // default `HighFrame = -1` and `get_ending_frame() = HighFrame +
-    // 1 - EPSILON` (inclusive end). My initial impl treated it as
-    // `[low, high)` exclusive end and clamped -1 to 0 via max(0),
-    // which gave an empty 0..0 range for the common "play everything"
-    // case. The correct semantic:
-    //   if high_frame == -1: range = [low_frame, num_part_frames)
-    //   else                : range = [low_frame, high_frame + 1)
-    let total = anim.part_frames.len();
-    let low = (anim_data.low_frame.max(0) as usize).min(total);
-    let high = if anim_data.high_frame < 0 {
-        total
-    } else {
-        ((anim_data.high_frame as usize).saturating_add(1)).min(total)
-    };
-    if low >= high { return None; }
-    Some((
-        anim.part_frames[low..high].to_vec(),
-        framerate,
-        resolved_stance,
-    ))
+    // T4 (2026-05-28): concatenate ALL AnimData segments (was `anims.first()`
+    // only) with per-segment timing + reverse playback. See
+    // `build_concatenated_motion_frames`.
+    let (frames, frame_times, duration) =
+        build_concatenated_motion_frames(source, motion_data)?;
+    Some((frames, frame_times, duration, resolved_stance))
 }
 
 /// 2026-05-18 motion-table-x-envcell experiment: resolve a transition
@@ -4224,10 +4267,11 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     to_command: u32,
 ) -> Option<(
     Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
+    Vec<f32>,
     f32,
     u32,
 )> {
-    use holtburger_dat::file_type::{Animation, MotionTable};
+    use holtburger_dat::file_type::MotionTable;
     use holtburger_dat::ResourceKey;
 
     let mt_id = mtable_override
@@ -4244,28 +4288,110 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     };
 
     let motion_data = mtable.motion_data_for_link(resolved_stance, from_command, to_command)?;
-    let anim_data = motion_data.anims.first()?;
-    let anim_did = anim_data.anim_id;
-    let framerate = anim_data.framerate;
-    if (anim_did >> 24) != 0x03 { return None; }
+    // T4 (2026-05-28): concatenate ALL AnimData segments with per-segment
+    // timing + reverse playback (was `anims.first()`). Links are commonly
+    // multi-segment (windup → strike → recover → settle) and ~22% of retail
+    // AnimData are reverse-framerate, which previously produced a null clip.
+    let (frames, frame_times, duration) =
+        build_concatenated_motion_frames(source, motion_data)?;
+    Some((frames, frame_times, duration, resolved_stance))
+}
 
-    let anim_bytes = source.get_file_by_key(ResourceKey::new("eor/portal", anim_did)).ok()?;
-    let anim = Animation::read(&mut std::io::Cursor::new(&anim_bytes)).ok()?;
-    if anim.part_frames.is_empty() { return None; }
+/// T4 (2026-05-28) — concatenate ALL `AnimData` segments of a `MotionData`
+/// into a single keyframe sequence with per-frame absolute times, mirroring
+/// ACE's `Sequence` / `AnimSequenceNode` chaining
+/// (`ACE.Server/Physics/Animation/Sequence.cs:203-216,438`).
+///
+/// Each segment plays its frame slice `[low_frame, high_frame]` **inclusive**
+/// (`high_frame == -1` → to the last frame of the Animation, per
+/// `AnimSequenceNode.get_ending_frame` = `HighFrame + 1 - EPSILON`). When a
+/// segment's `framerate` is **negative** it plays in REVERSE
+/// (`AnimSequenceNode` runs `HighFrame → LowFrame`; ~22% of retail AnimData),
+/// timed at `1/|framerate|`. Segments are appended end-to-end and each frame
+/// is stamped with its cumulative time so the JS clip builder can lay down
+/// `KeyframeTrack` times that honour per-segment rate changes.
+///
+/// Pre-2026-05-28 only `motion_data.anims.first()` was used and the JS side
+/// rejected `framerate <= 0` to a null clip — truncating ~every multi-segment
+/// swing/cast/transition (23% of retail MotionData) and dropping reverse
+/// segments entirely.
+///
+/// Returns `(frames, frame_times_secs, total_duration_secs)` or `None` when no
+/// segment yields a usable frame (so callers keep their rest-pose fallback).
+#[cfg(any(target_arch = "wasm32", test))]
+fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    motion_data: &holtburger_dat::file_type::motion_table::MotionData,
+) -> Option<(
+    Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
+    Vec<f32>,
+    f32,
+)> {
+    use holtburger_dat::file_type::Animation;
+    use holtburger_dat::ResourceKey;
 
-    let total = anim.part_frames.len();
-    let low = (anim_data.low_frame.max(0) as usize).min(total);
-    let high = if anim_data.high_frame < 0 {
-        total
-    } else {
-        ((anim_data.high_frame as usize).saturating_add(1)).min(total)
-    };
-    if low >= high { return None; }
-    Some((
-        anim.part_frames[low..high].to_vec(),
-        framerate,
-        resolved_stance,
-    ))
+    let mut frames: Vec<holtburger_dat::file_type::setup_model::AnimationFrame> = Vec::new();
+    let mut times: Vec<f32> = Vec::new();
+    let mut t = 0.0f32;
+
+    for anim_data in &motion_data.anims {
+        let anim_did = anim_data.anim_id;
+        if (anim_did >> 24) != 0x03 {
+            continue;
+        }
+        let Ok(anim_bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", anim_did)) else {
+            continue;
+        };
+        let Ok(anim) = Animation::read(&mut std::io::Cursor::new(&anim_bytes)) else {
+            continue;
+        };
+        if anim.part_frames.is_empty() {
+            continue;
+        }
+
+        let total = anim.part_frames.len();
+        let low = (anim_data.low_frame.max(0) as usize).min(total);
+        let high = if anim_data.high_frame < 0 {
+            total
+        } else {
+            ((anim_data.high_frame as usize).saturating_add(1)).min(total)
+        };
+        if low >= high {
+            continue;
+        }
+
+        // Per-segment dt from |framerate|. A zero/non-finite framerate is
+        // degenerate (no timing) — skip rather than divide by zero.
+        let fr = anim_data.framerate.abs();
+        if !(fr > 0.0) {
+            continue;
+        }
+        let dt = 1.0 / fr;
+
+        let slice = &anim.part_frames[low..high];
+        if anim_data.framerate < 0.0 {
+            // Reverse playback: HighFrame → LowFrame (AnimSequenceNode).
+            for af in slice.iter().rev() {
+                frames.push(af.clone());
+                times.push(t);
+                t += dt;
+            }
+        } else {
+            for af in slice.iter() {
+                frames.push(af.clone());
+                times.push(t);
+                t += dt;
+            }
+        }
+    }
+
+    if frames.is_empty() {
+        return None;
+    }
+    // `t` after the final increment == last_frame_time + last_dt == the time
+    // the last frame holds until (== clip duration; matches the legacy
+    // single-anim `num_frames / framerate`).
+    Some((frames, times, t))
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -4792,8 +4918,9 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
     let mut sidx_lookup: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
     let mut positions = Vec::with_capacity(tris.len() * 9);
     let mut uvs = Vec::with_capacity(tris.len() * 6);
-    let mut normals = Vec::with_capacity(tris.len() * 3);
+    let mut normals = Vec::with_capacity(tris.len() * 9);
     let mut surface_indices = Vec::with_capacity(tris.len());
+    let mut sides_types: Vec<u8> = Vec::with_capacity(tris.len());
 
     let mut bbox_min = [f32::INFINITY; 3];
     let mut bbox_max = [f32::NEG_INFINITY; 3];
@@ -4812,17 +4939,20 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
             idx
         };
         surface_indices.push(sidx);
+        sides_types.push(tri.sides_type);
 
         for v in 0..3 {
             let p = tri.pos[v];
             positions.extend_from_slice(&p);
             uvs.extend_from_slice(&tri.uv[v]);
+            // T6: per-vertex normals (9 floats/tri), no longer a single
+            // broadcast face normal (was 3 floats/tri).
+            normals.extend_from_slice(&tri.normals[v]);
             for k in 0..3 {
                 if p[k] < bbox_min[k] { bbox_min[k] = p[k]; }
                 if p[k] > bbox_max[k] { bbox_max[k] = p[k]; }
             }
         }
-        normals.extend_from_slice(&tri.normal);
     }
 
     if !bbox_min[0].is_finite() {
@@ -4835,6 +4965,7 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
         uvs,
         normals,
         surface_indices,
+        sides_types,
         surfaces,
         bbox_min,
         bbox_max,
@@ -5975,9 +6106,14 @@ pub async fn fetch_dye_preview_pixels(
             "fetch_dye_preview_pixels: sub_palettes must be flat [paletteDid, offset, length, ...] triples",
         ));
     }
-    let triples: Vec<(u32, u8, u8)> = sub_palettes
+    // Dye-preview triples come from ClothingTable CloSubPaletteRange, whose
+    // offset/numColors are absolute palette indices (uint32, often >255 for
+    // 2048-entry body palettes) — NOT the /8-packed bytes of the wire path.
+    // Keep them as u32 so they aren't truncated (pre-2026-05-28 `as u8` wrapped
+    // any offset >255 to garbage).
+    let triples: Vec<(u32, u32, u32)> = sub_palettes
         .chunks_exact(3)
-        .map(|c| (c[0], c[1] as u8, c[2] as u8))
+        .map(|c| (c[0], c[1], c[2]))
         .collect();
     let source = global_source::global_source();
     // Prefetch: SurfaceTexture itself + every overlay Palette. The
@@ -6025,14 +6161,14 @@ pub async fn fetch_dye_preview_pixels(
         for (sub_id, offset, length) in &triples {
             let Ok(spb) = source.get_file_by_key(ResourceKey::new("eor/portal", *sub_id)) else { continue; };
             let Ok(sp) = Palette::unpack(&spb) else { continue; };
+            // ClothingTable CloSubPaletteRange offset/numColors are already
+            // absolute (acclient BuildObjDesc copies them raw — no /8). The copy
+            // is dst[i] = src[i] over [off, off+count) (Palette::Modify) — NOT
+            // src[0..]. Pre-2026-05-28 this read src[i] (from index 0), pulling
+            // the wrong colours whenever offset > 0.
             let off = *offset as usize;
-            let len = (*length as usize).min(sp.colors.len());
-            for i in 0..len {
-                let dst = off + i;
-                if dst < composed.colors.len() {
-                    composed.colors[dst] = sp.colors[i];
-                }
-            }
+            let count = *length as usize;
+            composed.splice_from(&sp, off, count);
         }
         Ok(composed)
     });
@@ -6317,14 +6453,16 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         for (sub_id, offset, length) in sub_palettes {
             let Ok(spb) = source.get_file_by_key(ResourceKey::new("eor/portal", *sub_id)) else { continue; };
             let Ok(sp) = Palette::unpack(&spb) else { continue; };
-            let off = *offset as usize;
-            let len = (*length as usize).min(sp.colors.len());
-            for i in 0..len {
-                let dst = off + i;
-                if dst < composed.colors.len() {
-                    composed.colors[dst] = sp.colors[i];
-                }
-            }
+            // Wire ObjDesc sub-palettes pack offset/numColors as /8 bytes
+            // (acclient Subpalette::UnPack: offset = byte*8;
+            // numColors = (byte==0 ? 256 : byte) * 8). The copy is dst[i] = src[i]
+            // over the absolute range [off, off+count) (Palette::Modify) — NOT
+            // src[0..]. Pre-2026-05-28 this used raw byte offset + src[i], so
+            // every server-pushed recolor (skin/hair/eyes/dyed armor) landed in
+            // the wrong, far-too-small palette slice and read the wrong source.
+            let off = (*offset as usize) * 8;
+            let count = (if *length == 0 { 256 } else { *length as usize }) * 8;
+            composed.splice_from(&sp, off, count);
         }
         Ok(composed)
     });
@@ -9176,6 +9314,7 @@ impl EnvCellPlacement {
             uvs: Vec::new(),
             normals: Vec::new(),
             surface_indices: Vec::new(),
+            sides_types: Vec::new(),
             surfaces: Vec::new(),
             bbox_min: [0.0; 3],
             bbox_max: [0.0; 3],
@@ -9254,11 +9393,18 @@ fn append_environment_tris(
                 let len2 = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
                 if len2 < 1e-12 { continue; }
                 let inv_len = 1.0 / len2.sqrt();
+                // Environment (EnvCell) geometry has no authored-normal path
+                // here; broadcast the computed face normal to all 3 vertices
+                // (unchanged behaviour, satisfies the per-vertex Tri.normals).
+                let face = [n[0] * inv_len, n[1] * inv_len, n[2] * inv_len];
                 tris.push(Tri {
                     pos: [a, b, c],
                     uv: [ring_uv[0], ring_uv[i - 1], ring_uv[i]],
-                    normal: [n[0] * inv_len, n[1] * inv_len, n[2] * inv_len],
+                    normals: [face, face, face],
                     surface_did,
+                    // Environment (EnvCell) geometry stays two-sided (DoubleSide)
+                    // — unchanged behaviour, never single-sided by the cull flag.
+                    sides_type: 1,
                 });
             }
         }
@@ -10765,6 +10911,7 @@ impl ModelMesh {
             uvs: self.uvs.clone(),
             normals: self.normals.clone(),
             surface_indices: self.surface_indices.clone(),
+            sides_types: self.sides_types.clone(),
             surfaces: self.surfaces.clone(),
             bbox_min: self.bbox_min,
             bbox_max: self.bbox_max,
@@ -11063,7 +11210,7 @@ pub async fn fetch_entity_cycle_frames(
                     MotionTable::WALK_FORWARD_COMMAND,
                     MotionTable::RUN_FORWARD_COMMAND,
                 ] {
-                    if let Some((frames, _, _)) =
+                    if let Some((frames, _, _, _)) =
                         try_resolve_cycle_frames(s, &setup, mt_override, stance, command)
                     {
                         for f in frames.iter() {
@@ -11099,7 +11246,7 @@ pub async fn fetch_entity_cycle_frames(
     // dispatches stance once at the top).
     let bake_cycle = |command: u32| -> (Vec<ModelMesh>, f32, u32) {
         match try_resolve_cycle_frames(source.as_ref(), &setup, mt_override, stance, command) {
-            Some((frames, framerate, resolved_stance)) => {
+            Some((frames, _frame_times, duration, resolved_stance)) => {
                 let mut out = Vec::with_capacity(frames.len());
                 for f in &frames {
                     let mut tris = Vec::new();
@@ -11114,6 +11261,15 @@ pub async fn fetch_entity_cycle_frames(
                     );
                     out.push(pack_model_mesh(tris));
                 }
+                // 2D sprite path plays meshes at a single uniform framerate.
+                // Derive it from the total clip duration so multi-segment
+                // cycles preserve overall timing; exact (== AnimData.framerate)
+                // for the single-AnimData walk/run cycles this path bakes.
+                let framerate = if duration > 0.0 {
+                    frames.len() as f32 / duration
+                } else {
+                    0.0
+                };
                 (out, framerate, resolved_stance)
             }
             None => (Vec::new(), 0.0, 0),
@@ -11751,6 +11907,12 @@ pub struct EntityAnimationData {
     /// `[(x, y, z, qw, qx, qy, qz) per part] per frame`. Empty when
     /// no cycle resolved. See struct doc for layout invariants.
     part_frames: Vec<f32>,
+    /// T4 (2026-05-28): per-frame absolute clip time (seconds), length ==
+    /// num_frames. Lets JS lay down KeyframeTrack times that honour per-segment
+    /// (per-AnimData) framerate + reverse playback. Empty when no cycle resolved.
+    frame_times: Vec<f32>,
+    /// T4: total clip duration in seconds (== last frame time + its segment dt).
+    duration: f32,
     /// **Task E (2026-05-12).** Sorted-by-`time_in_clip_s` list of
     /// `AnimationHookJs` entries baked from each `AnimationFrame.hooks`
     /// in the resolved cycle. Frame `i` contributes its hooks at time
@@ -11836,6 +11998,22 @@ impl EntityAnimationData {
         self.part_frames.clone()
     }
 
+    /// T4 (2026-05-28): per-frame absolute clip times (seconds), length ==
+    /// numFrames. JS `buildAnimationClip` uses these as KeyframeTrack times so
+    /// multi-segment cycles/links with differing per-AnimData framerates (and
+    /// reverse segments) play at the correct relative speed. Empty when no
+    /// cycle resolved; JS falls back to uniform `i / framerate` in that case.
+    #[wasm_bindgen(getter, js_name = frameTimes)]
+    pub fn frame_times(&self) -> Vec<f32> {
+        self.frame_times.clone()
+    }
+
+    /// T4: total clip duration in seconds. `0.0` when no cycle resolved.
+    #[wasm_bindgen(getter)]
+    pub fn duration(&self) -> f32 {
+        self.duration
+    }
+
     /// Cohere-B (2026-05-12): clone per-part rest-pose origins.
     /// `partCount * 3` floats — `[x, y, z]` per part. JS reads at
     /// spawn to set each `partGroup.position` before the
@@ -11895,6 +12073,8 @@ impl EntityAnimationData {
             framerate: 0.0,
             resolved_stance,
             part_frames: Vec::new(),
+            frame_times: Vec::new(),
+            duration: 0.0,
             rest_origins,
             rest_orientations,
             // Task E (2026-05-12): no cycle resolved → no hooks. JS keeps
@@ -11946,6 +12126,12 @@ pub(crate) struct EntityAnimationKeyframesInner {
     pub framerate: f32,
     pub resolved_stance: u32,
     pub part_frames: Vec<f32>,
+    /// T4 (2026-05-28): per-frame absolute clip time (seconds), length ==
+    /// num_frames. Honours per-AnimData framerate + reverse playback across
+    /// concatenated segments. JS uses this for KeyframeTrack times.
+    pub frame_times: Vec<f32>,
+    /// T4: total clip duration (seconds) == last frame time + its segment dt.
+    pub duration: f32,
     pub rest_origins: Vec<f32>,
     pub rest_orientations: Vec<f32>,
     pub hooks: Vec<HookDataPlain>,
@@ -12026,6 +12212,8 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             framerate: 0.0,
             resolved_stance: 0,
             part_frames: Vec::new(),
+            frame_times: Vec::new(),
+            duration: 0.0,
             rest_origins,
             rest_orientations,
             hooks: Vec::new(),
@@ -12078,10 +12266,10 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
     } else {
         None
     };
-    let (frames, framerate, resolved_stance) = match link_result {
-        Some(triple) => triple,
+    let (frames, frame_times, duration, resolved_stance) = match link_result {
+        Some(t) => t,
         None => match try_resolve_cycle_frames(source, &setup, mt_override, stance, motion_command) {
-            Some(triple) => triple,
+            Some(t) => t,
             None => {
                 let fallback_stance = if stance != 0 { stance } else { 0 };
                 return Ok(EntityAnimationKeyframesInner {
@@ -12091,6 +12279,8 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
                     framerate: 0.0,
                     resolved_stance: fallback_stance,
                     part_frames: Vec::new(),
+                    frame_times: Vec::new(),
+                    duration: 0.0,
                     rest_origins,
                     rest_orientations,
                     hooks: Vec::new(),
@@ -12105,7 +12295,6 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
     let num_frames = frames.len();
     let mut part_frames: Vec<f32> = Vec::with_capacity(num_frames * part_count * 7);
     let mut hooks_out: Vec<HookDataPlain> = Vec::new();
-    let inv_fps: f64 = if framerate > 0.0 { 1.0 / framerate as f64 } else { 0.0 };
     for (frame_idx, af) in frames.iter().enumerate() {
         for pi in 0..part_count {
             if let Some(f) = af.frames.get(pi) {
@@ -12120,7 +12309,8 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
                 part_frames.extend_from_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
             }
         }
-        let frame_time = frame_idx as f64 * inv_fps;
+        // Per-segment absolute time (honours per-AnimData framerate + reverse).
+        let frame_time = frame_times.get(frame_idx).copied().unwrap_or(0.0) as f64;
         for h in &af.hooks {
             hooks_out.push(HookDataPlain {
                 time_in_clip_s: frame_time,
@@ -12136,6 +12326,14 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Back-compat single `framerate` (effective avg over the concatenated
+    // clip); JS prefers the per-frame `frame_times`. Exact for single-AnimData
+    // cycles: num_frames / (num_frames * dt) == 1/dt == the AnimData framerate.
+    let framerate = if duration > 0.0 {
+        num_frames as f32 / duration
+    } else {
+        0.0
+    };
     Ok(EntityAnimationKeyframesInner {
         part_tris: parts_tris,
         part_count: part_count as u32,
@@ -12143,6 +12341,8 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
         framerate,
         resolved_stance,
         part_frames,
+        frame_times,
+        duration,
         rest_origins,
         rest_orientations,
         hooks: hooks_out,
@@ -12356,6 +12556,8 @@ fn inner_to_wasm_animation_data(inner: EntityAnimationKeyframesInner) -> EntityA
         framerate: inner.framerate,
         resolved_stance: inner.resolved_stance,
         part_frames: inner.part_frames,
+        frame_times: inner.frame_times,
+        duration: inner.duration,
         rest_origins: inner.rest_origins,
         rest_orientations: inner.rest_orientations,
         hooks,
@@ -33567,9 +33769,12 @@ mod tests_substitution {
         override_colors[42] = 0xFF0000FF; // ARGB → blue
         let override_pal = pack_palette(override_pal_id, &override_colors);
 
-        // Overlay only rewrites two consecutive entries starting at 42.
-        // entry 0 (= dst 42) = green; entry 1 (= dst 43) = unused here.
-        let overlay_colors = vec![0xFF00FF00u32, 0xFFFFFFFFu32];
+        // Overlay is a full 256-colour palette with green at absolute index
+        // 42. The canonical copy is dst[i] = src[i] (Palette::Modify), so the
+        // overlay's replacement colour must live at the SAME absolute index
+        // the texture samples (42) — NOT at index 0.
+        let mut overlay_colors = vec![0u32; 256];
+        overlay_colors[42] = 0xFF00FF00; // ARGB → green
         let overlay_pal = pack_palette(overlay_pal_id, &overlay_colors);
 
         let texture = pack_p8_texture_1x1(texture_id, 42, intrinsic_pal_id);
@@ -33609,9 +33814,14 @@ mod tests_substitution {
         assert_eq!(out.pixels, vec![0, 0, 0xFF, 0xFF], "expected blue (override palette wins)");
     }
 
-    /// base override + overlay rewriting index 42 → overlay's first
-    /// colour wins for that index. Mirrors C#'s post-overlay state
-    /// where SubPalettes splice atop the base.
+    /// base override + an overlay splice covering the sampled index → the
+    /// overlay colour wins there. Exercises the canonical WIRE semantics:
+    /// the offset byte is ×8 (acclient `Subpalette::UnPack`: offset = byte*8)
+    /// and the copy is dst[i] = src[i] at the SAME absolute index
+    /// (`Palette::Modify`). Offset byte 5 → absolute 40, count byte 1 → 8
+    /// colours → range [40,48); the texture samples index 42 and
+    /// overlay.colors[42] = green. (Pre-2026-05-28 this used raw offset +
+    /// src[0], so it neither reached index 42 nor read the right source.)
     #[test]
     fn entity_surface_pixels_overlay_splices_into_base() {
         let (source, surface_id, override_pal_id, overlay_pal_id) =
@@ -33620,9 +33830,13 @@ mod tests_substitution {
             &source,
             surface_id,
             override_pal_id,
-            &[(overlay_pal_id, 42u8, 1u8)], // splice 1 colour at offset 42
+            &[(overlay_pal_id, 5u8, 1u8)], // wire bytes: offset 5 (→40), count 1 (→8)
         );
-        assert_eq!(out.pixels, vec![0, 0xFF, 0, 0xFF], "expected green (overlay wins at offset 42)");
+        assert_eq!(
+            out.pixels,
+            vec![0, 0xFF, 0, 0xFF],
+            "expected green: overlay.colors[42] spliced into [40,48) via offset-byte×8"
+        );
     }
 
     /// Phase C regression: setup with no `default_motion_table` and
@@ -33943,23 +34157,27 @@ mod tests_substitution {
         );
     }
 
-    /// Out-of-range overlay slice — defensive clamp prevents panic
-    /// and silently truncates beyond palette bounds. The two
-    /// in-range writes still apply.
+    /// Out-of-range overlay slice — canonical `Palette::Modify` REJECTS the
+    /// whole splice when `offset + numColors > palette length` (acclient guard
+    /// `offset + numcolors <= num_colors`), rather than clamping/truncating.
+    /// Offset byte 42 → absolute 336 (×8), count byte 200 → 1600 (×8) → range
+    /// [336,1936) far exceeds the 256-colour base, so nothing is written and
+    /// the base (override blue) survives at the sampled index 42.
     #[test]
-    fn entity_surface_pixels_overlay_clamps_out_of_range() {
+    fn entity_surface_pixels_overlay_rejects_out_of_range() {
         let (source, surface_id, override_pal_id, overlay_pal_id) =
             build_palette_overlay_source();
         let out = fetch_entity_surface_pixels_impl(
             &source,
             surface_id,
             override_pal_id,
-            &[(overlay_pal_id, 42u8, 200u8)], // length way exceeds overlay's 2 entries
+            &[(overlay_pal_id, 42u8, 200u8)], // abs range [336,1936) ≫ 256 → rejected
         );
-        // The overlay only has 2 colours. Length is clamped to 2 →
-        // index 42 = green (overlay[0]); index 43 = white (overlay[1]).
-        // Sample pixel reads index 42 → green.
-        assert_eq!(out.pixels, vec![0, 0xFF, 0, 0xFF]);
+        assert_eq!(
+            out.pixels,
+            vec![0, 0, 0xFF, 0xFF],
+            "expected blue: out-of-range splice rejected wholesale, base override survives"
+        );
     }
 
     // ============================================================
@@ -34176,6 +34394,10 @@ mod tests_substitution {
             2,
             "two-sided distinct-surface poly must emit pos + neg tris"
         );
+        // T2: both tris carry the polygon's sides_type (2 = Clockwise =
+        // single-sided / CULLMODE_CW), so the cull flag treats them FrontSide.
+        assert_eq!(tris[0].sides_type, 2);
+        assert_eq!(tris[1].sides_type, 2);
         // First tri = front face, pos surface, original winding.
         assert_eq!(tris[0].surface_did, 0xAABB0001);
         assert_eq!(tris[0].pos[0], [0.0, 0.0, 0.0]);
@@ -34186,10 +34408,11 @@ mod tests_substitution {
         assert_eq!(tris[1].pos[0], [0.0, 0.0, 0.0]);
         assert_eq!(tris[1].pos[1], [0.0, 1.0, 0.0]);
         assert_eq!(tris[1].pos[2], [1.0, 0.0, 0.0]);
-        // Normals are antiparallel.
-        assert!((tris[0].normal[0] + tris[1].normal[0]).abs() < 1e-6);
-        assert!((tris[0].normal[1] + tris[1].normal[1]).abs() < 1e-6);
-        assert!((tris[0].normal[2] + tris[1].normal[2]).abs() < 1e-6);
+        // Per-vertex normals (T6): front vertex 0 and the back face's
+        // corresponding vertex 0 are antiparallel (back negates the front).
+        assert!((tris[0].normals[0][0] + tris[1].normals[0][0]).abs() < 1e-6);
+        assert!((tris[0].normals[0][1] + tris[1].normals[0][1]).abs() < 1e-6);
+        assert!((tris[0].normals[0][2] + tris[1].normals[0][2]).abs() < 1e-6);
     }
 
     /// Same `sides_type=2` two-sided polygon but with pos and neg
@@ -34389,6 +34612,255 @@ mod tests_animation_keyframes_batch {
         (MockSource { files }, setup_ids)
     }
 
+    /// **T5 — SetupModel per-part default_scale (flag 0x02).** ACE applies
+    /// `GfxObjScale = DefaultScale[i]` to part geometry (PartArray.cs:349,:538).
+    /// Pre-2026-05-28 holtburger parsed `default_scale` (setup_model.rs:302) but
+    /// never applied it in any triangulation path. This proves a non-unit
+    /// per-part scale now scales the part's vertices in part-local space
+    /// (before the placement frame), and that an axis-specific scale only
+    /// affects that axis.
+    #[test]
+    fn default_scale_applies_to_part_geometry() {
+        let setup_id: u32 = 0x0200_0900;
+        let part_id: u32 = 0x0100_0900;
+        let surface: u32 = 0xAA00_0900;
+        // synth_gfx => verts (0,0,0),(1,0,0),(0,1,0), one front-face poly.
+        let gfx_bytes = synth_gfx(part_id, surface, 0.0);
+
+        let make_source = |scale: Option<Vector3>| {
+            let setup = SetupModel {
+                id: setup_id,
+                flags: if scale.is_some() { 0x02 } else { 0 },
+                parts: vec![part_id],
+                parent_index: vec![],
+                default_scale: scale.map(|s| vec![s]).unwrap_or_default(),
+                holding_locations: HashMap::new(),
+                connection_points: HashMap::new(),
+                placement_frames: HashMap::new(),
+                cyl_spheres: vec![],
+                spheres: vec![],
+                height: 1.0,
+                radius: 1.0,
+                step_up: 0.1,
+                step_down: 0.1,
+                sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+                selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+                lights: HashMap::new(),
+                default_animation: None,
+                default_script: None,
+                default_motion_table: None,
+                default_sound_table: None,
+                default_script_table: None,
+            };
+            let mut setup_bytes = Vec::new();
+            setup.pack(&mut Cursor::new(&mut setup_bytes)).unwrap();
+            let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+            files.insert(("eor/portal".into(), setup_id), setup_bytes);
+            files.insert(("eor/portal".into(), part_id), gfx_bytes.clone());
+            MockSource { files }
+        };
+
+        // Control: no scale → the (1,0,0) vertex stays at x=1.
+        let base = triangulate_setup_model_per_part(&make_source(None), setup_id, &[], &[])
+            .expect("control triangulation");
+        assert_eq!(base.len(), 1, "one part");
+        assert_eq!(base[0].len(), 1, "one front-face tri");
+        let max_x_base = base[0][0].pos.iter().map(|p| p[0]).fold(f32::MIN, f32::max);
+        assert!(
+            (max_x_base - 1.0).abs() < 1e-6,
+            "control max-x should be 1.0, got {max_x_base}"
+        );
+
+        // Scaled x×3 (y,z×1): the (1,0,0) vertex becomes (3,0,0); y unaffected.
+        let scaled = triangulate_setup_model_per_part(
+            &make_source(Some(Vector3 { x: 3.0, y: 1.0, z: 1.0 })),
+            setup_id,
+            &[],
+            &[],
+        )
+        .expect("scaled triangulation");
+        let tri = &scaled[0][0];
+        let max_x = tri.pos.iter().map(|p| p[0]).fold(f32::MIN, f32::max);
+        let max_y = tri.pos.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+        assert!((max_x - 3.0).abs() < 1e-6, "scaled max-x should be 3.0, got {max_x}");
+        assert!(
+            (max_y - 1.0).abs() < 1e-6,
+            "x-only scale must not change y, got {max_y}"
+        );
+    }
+
+    /// Synth a minimal Animation (0x03) record: 1 part, `frames_x.len()`
+    /// frames, each frame's part-origin.x = `frames_x[i]` (a marker so tests
+    /// can assert frame ORDER), identity quaternion, 0 hooks. No pos_frames.
+    fn synth_animation(anim_id: u32, frames_x: &[f32]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&anim_id.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes()); // flags: no POS_FRAMES
+        b.extend_from_slice(&1u32.to_le_bytes()); // num_parts
+        b.extend_from_slice(&(frames_x.len() as u32).to_le_bytes()); // num_frames
+        for &x in frames_x {
+            // Frame: origin (x,0,0) + quat identity (w,x,y,z = 1,0,0,0).
+            b.extend_from_slice(&x.to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            b.extend_from_slice(&1.0f32.to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes()); // num_hooks = 0
+        }
+        b
+    }
+
+    /// **T4 (2026-05-28).** `build_concatenated_motion_frames` chains ALL
+    /// AnimData segments (was `anims.first()` only) with per-segment timing,
+    /// and plays negative-framerate segments in reverse. Mirrors ACE's
+    /// Sequence/AnimSequenceNode chaining + reverse playback.
+    #[test]
+    fn motion_frames_concatenate_segments_and_reverse() {
+        use holtburger_dat::file_type::motion_table::{AnimData, MotionData, MotionDataFlags};
+
+        let anim_a: u32 = 0x0300_0A01; // 2 frames: x = 0,1
+        let anim_b: u32 = 0x0300_0A02; // 3 frames: x = 0,1,2
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), anim_a), synth_animation(anim_a, &[0.0, 1.0]));
+        files.insert(("eor/portal".into(), anim_b), synth_animation(anim_b, &[0.0, 1.0, 2.0]));
+        let source = MockSource { files };
+        let approx = |a: f32, b: f32| (a - b).abs() < 1e-5;
+
+        // (1) Forward multi-AnimData concatenation with DIFFERING framerates.
+        let md = MotionData {
+            bitfield: 0,
+            flags: MotionDataFlags::empty(),
+            anims: vec![
+                AnimData { anim_id: anim_a, low_frame: 0, high_frame: -1, framerate: 10.0 },
+                AnimData { anim_id: anim_b, low_frame: 0, high_frame: -1, framerate: 20.0 },
+            ],
+            velocity: None,
+            omega: None,
+        };
+        let (frames, times, duration) =
+            build_concatenated_motion_frames(&source, &md).expect("concatenated frames");
+        let xs: Vec<f32> = frames.iter().map(|f| f.frames[0].origin.x).collect();
+        // Pre-T4 this returned only segment A's 2 frames (anims.first()).
+        assert_eq!(xs, vec![0.0, 1.0, 0.0, 1.0, 2.0], "all 5 frames, both segments, in order");
+        // seg A dt=0.1 → t 0.0,0.1; seg B dt=0.05 → t 0.2,0.25,0.3; dur 0.35.
+        assert!(
+            approx(times[0], 0.0)
+                && approx(times[1], 0.1)
+                && approx(times[2], 0.2)
+                && approx(times[3], 0.25)
+                && approx(times[4], 0.30),
+            "per-segment times: {times:?}"
+        );
+        assert!(approx(duration, 0.35), "duration {duration}");
+
+        // (2) Negative framerate → REVERSE playback (HighFrame → LowFrame).
+        // Pre-T4 the JS side rejected framerate<=0 to a null clip (no anim).
+        let md_rev = MotionData {
+            bitfield: 0,
+            flags: MotionDataFlags::empty(),
+            anims: vec![AnimData {
+                anim_id: anim_b,
+                low_frame: 0,
+                high_frame: -1,
+                framerate: -20.0,
+            }],
+            velocity: None,
+            omega: None,
+        };
+        let (rframes, rtimes, rduration) =
+            build_concatenated_motion_frames(&source, &md_rev).expect("reverse frames");
+        let rxs: Vec<f32> = rframes.iter().map(|f| f.frames[0].origin.x).collect();
+        assert_eq!(rxs, vec![2.0, 1.0, 0.0], "reverse segment plays frames high→low");
+        assert!(
+            approx(rtimes[0], 0.0) && approx(rtimes[1], 0.05) && approx(rtimes[2], 0.10),
+            "reverse timed at 1/|framerate|: {rtimes:?}"
+        );
+        assert!(approx(rduration, 0.15), "reverse duration {rduration}");
+    }
+
+    /// **T6 (2026-05-28).** The triangulator carries the AUTHORED per-vertex
+    /// `SWVertex.normal` (rotated by the part frame) instead of a single
+    /// computed face normal, so curved geometry smooth-shades like retail.
+    /// Falls back to the face normal only when the authored normal is zero.
+    #[test]
+    fn appender_uses_authored_vertex_normals() {
+        use holtburger_common::{Quaternion, Vector3};
+
+        // One triangle in the XY plane → FACE normal is +Z. Author a DISTINCT
+        // +X normal on every vertex so authored-vs-face is distinguishable.
+        let build = |normal: Vector3| {
+            let mk = |x: f32, y: f32| SWVertex {
+                num_uvs: 1,
+                origin: Vector3 { x, y, z: 0.0 },
+                normal,
+                uvs: vec![Vec2Duv { u: x, v: y }],
+            };
+            let mut vertices = HashMap::new();
+            vertices.insert(0u16, mk(0.0, 0.0));
+            vertices.insert(1u16, mk(1.0, 0.0));
+            vertices.insert(2u16, mk(0.0, 1.0));
+            let poly = Polygon {
+                num_pts: 3,
+                stippling: 0,
+                sides_type: 1,
+                pos_surface: 0,
+                neg_surface: -1,
+                vertex_ids: vec![0, 1, 2],
+                pos_uv_indices: vec![0, 0, 0],
+                neg_uv_indices: vec![],
+            };
+            let mut polygons = HashMap::new();
+            polygons.insert(0u16, poly);
+            GfxObj {
+                id: 0x0100_0B01,
+                flags: GfxObjFlags::HAS_DRAWING,
+                surfaces: vec![0x0800_0B01],
+                vertex_array: CVertexArray { vertex_type: 1, vertices },
+                physics_polygons: HashMap::new(),
+                physics_bsp: None,
+                sort_center: Vector3::zero(),
+                polygons,
+                drawing_bsp: Some(BspNode::Leaf(BspLeaf {
+                    index: 0,
+                    solid: 0,
+                    sphere: Some(Sphere { center: Vector3::zero(), radius: 1.0 }),
+                    poly_ids: vec![0],
+                })),
+                did_degrade: None,
+            }
+        };
+
+        // (1) Authored +X normal must win over the +Z face normal, on all 3 verts.
+        let gfx = build(Vector3 { x: 1.0, y: 0.0, z: 0.0 });
+        let mut tris = Vec::new();
+        append_gfx_tris(&mut tris, &gfx, Vector3::zero(), Quaternion::identity());
+        assert_eq!(tris.len(), 1, "one front-face tri");
+        // T2: synth poly carries sides_type=1 (two-sided) → plumbed through.
+        assert_eq!(tris[0].sides_type, 1, "sides_type plumbed from poly");
+        for v in 0..3 {
+            let nrm = tris[0].normals[v];
+            assert!(
+                (nrm[0] - 1.0).abs() < 1e-6 && nrm[1].abs() < 1e-6 && nrm[2].abs() < 1e-6,
+                "vertex {v}: authored +X normal expected, got {nrm:?}"
+            );
+        }
+
+        // (2) Degenerate (zero) authored normal → fall back to the +Z face normal.
+        let gfx0 = build(Vector3::zero());
+        let mut tris0 = Vec::new();
+        append_gfx_tris(&mut tris0, &gfx0, Vector3::zero(), Quaternion::identity());
+        assert_eq!(tris0.len(), 1);
+        for v in 0..3 {
+            let nrm = tris0[0].normals[v];
+            assert!(
+                nrm[0].abs() < 1e-6 && nrm[1].abs() < 1e-6 && (nrm[2] - 1.0).abs() < 1e-6,
+                "vertex {v}: face +Z fallback expected, got {nrm:?}"
+            );
+        }
+    }
+
     /// **Load-bearing correctness test (F.40).** For a populated set
     /// of synthetic setups (K=8), prove that running
     /// `build_entity_animation_data_inner` once per setup produces
@@ -34459,7 +34931,7 @@ mod tests_animation_keyframes_batch {
                 for (ti, (bt, it)) in bp.iter().zip(ip.iter()).enumerate() {
                     assert_eq!(bt.pos, it.pos, "[{i}] part {pi} tri {ti} pos");
                     assert_eq!(bt.uv, it.uv, "[{i}] part {pi} tri {ti} uv");
-                    assert_eq!(bt.normal, it.normal, "[{i}] part {pi} tri {ti} normal");
+                    assert_eq!(bt.normals, it.normals, "[{i}] part {pi} tri {ti} normals");
                     assert_eq!(
                         bt.surface_did, it.surface_did,
                         "[{i}] part {pi} tri {ti} surface_did"

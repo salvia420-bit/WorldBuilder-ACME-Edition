@@ -519,8 +519,10 @@ const FALLBACK_SURFACE_DID = 0;
  * triangle in the source mesh:
  *   - The 3 vertex positions are copied verbatim.
  *   - The 3 vertex UVs are copied verbatim.
- *   - The single face normal is broadcast to 3 per-vertex normals
- *     (three.js's MeshStandardMaterial expects per-vertex normals).
+ *   - The 3 per-vertex normals are copied verbatim (T6, 2026-05-28): the
+ *     wasm side emits the authored `SWVertex.normal` per vertex (rotated by
+ *     the part frame), so curved geometry smooth-shades. Was previously a
+ *     single broadcast face normal → faceted shading.
  *
  * Triangles with `surfaceIndex === 0xFF` ("no surface", per
  * `lib.rs:1295`) are bucketed under a synthetic FALLBACK group keyed
@@ -551,7 +553,7 @@ const FALLBACK_SURFACE_DID = 0;
  *
  * Note: an empty `triCount === 0` mesh returns `{ groups: [], surfaceDids: [] }`.
  */
-export function meshToGeometryGroups(wasmMesh) {
+export function meshToGeometryGroups(wasmMesh, opts) {
   // wasm-bindgen sometimes hands us a wrapper whose inner Rust pointer
   // is null (the entity's mesh DID resolved but `fetchEntityModelRender`
   // returned no triangles, or the wasm-side cache evicted the mesh
@@ -571,20 +573,43 @@ export function meshToGeometryGroups(wasmMesh) {
   // and we want a single self-consistent view we can safely retain.
   const positions = wasmMesh.positions; // Float32Array, len = triCount * 9
   const uvs = wasmMesh.uvs; // Float32Array, len = triCount * 6
-  const normals = wasmMesh.normals; // Float32Array, len = triCount * 3
+  const normals = wasmMesh.normals; // Float32Array, len = triCount * 9 (per-vertex, T6)
   const sIdx = wasmMesh.surfaceIndices; // Uint8Array, len = triCount
   const surfaces = wasmMesh.surfaces; // Uint32Array, unique DIDs
 
-  // Bucket triangles by their surface index. surfaceIndex → array of
-  // triangle indices. Doing two passes (count first, then write) saves
-  // the O(N) Array#push allocations.
-  const byIdx = new Map(); // surface_idx_byte → number[] of tri indices
+  // T2 (2026-05-28): per-poly back-face culling. Default OFF — the renderer
+  // has always drawn objects DoubleSide (so winding never mattered). When
+  // `?perPolyCull=on`, single-sided polys (sides_type != 1) render FrontSide
+  // with REVERSED winding: the wasm emits AC's CW-from-+Z vertex order, and
+  // THREE's FrontSide wants it reversed after `worldRoot.rotation.x = -π/2`
+  // (the exact convention terrain proved in F#27, ~line 201 above). The cull
+  // group is tagged `doubleSided` so the consumer picks the material side via
+  // `materialCache.getCached(did, doubleSided)`. NEEDS a 1070 eye-test to
+  // confirm object winding before this is defaulted on.
+  const perPolyCull =
+    (opts && opts.perPolyCull) ||
+    (typeof globalThis !== "undefined" && globalThis.__perPolyCull === true);
+  let sidesTypes = null;
+  if (perPolyCull) {
+    try {
+      sidesTypes = wasmMesh.sidesTypes; // Uint8Array, len = triCount
+    } catch (_) {
+      sidesTypes = null;
+    }
+  }
+
+  // Bucket triangles by surfaceIndex (cull off) or by (surfaceIndex,
+  // cullMode) (cull on), so each (surface, sides) pair gets its own
+  // geometry + material side.
+  const byKey = new Map();
   for (let t = 0; t < triCount; t += 1) {
     const si = sIdx[t];
-    let bucket = byIdx.get(si);
+    const dbl = sidesTypes ? sidesTypes[t] === 1 : true;
+    const key = perPolyCull ? si * 2 + (dbl ? 1 : 0) : si;
+    let bucket = byKey.get(key);
     if (!bucket) {
       bucket = [];
-      byIdx.set(si, bucket);
+      byKey.set(key, bucket);
     }
     bucket.push(t);
   }
@@ -592,50 +617,34 @@ export function meshToGeometryGroups(wasmMesh) {
   const groups = [];
   const surfaceDids = [];
 
-  for (const [surfIdx, triIndices] of byIdx) {
+  for (const [key, triIndices] of byKey) {
+    const surfIdx = perPolyCull ? Math.floor(key / 2) : key;
+    const doubleSided = perPolyCull ? key % 2 === 1 : true;
+    // Single-sided polys reverse winding (output vertex order 0,2,1) so THREE
+    // FrontSide shows the same face D3D's CULLMODE_CW does. DoubleSide groups
+    // keep the source order (winding irrelevant — both faces drawn).
+    const order = doubleSided ? [0, 1, 2] : [0, 2, 1];
     const n = triIndices.length;
     const groupPositions = new Float32Array(n * 9);
     const groupUvs = new Float32Array(n * 6);
-    const groupNormals = new Float32Array(n * 9); // broadcast face → 3 verts
+    const groupNormals = new Float32Array(n * 9); // per-vertex normals (T6)
 
     for (let i = 0; i < n; i += 1) {
       const t = triIndices[i];
       const pSrc = t * 9;
       const uSrc = t * 6;
-      const nSrc = t * 3;
-      const pDst = i * 9;
-      const uDst = i * 6;
-      const nDst = i * 9;
-      // 3 verts × xyz: 9 floats per triangle.
-      groupPositions[pDst + 0] = positions[pSrc + 0];
-      groupPositions[pDst + 1] = positions[pSrc + 1];
-      groupPositions[pDst + 2] = positions[pSrc + 2];
-      groupPositions[pDst + 3] = positions[pSrc + 3];
-      groupPositions[pDst + 4] = positions[pSrc + 4];
-      groupPositions[pDst + 5] = positions[pSrc + 5];
-      groupPositions[pDst + 6] = positions[pSrc + 6];
-      groupPositions[pDst + 7] = positions[pSrc + 7];
-      groupPositions[pDst + 8] = positions[pSrc + 8];
-      // 3 verts × uv: 6 floats per triangle.
-      groupUvs[uDst + 0] = uvs[uSrc + 0];
-      groupUvs[uDst + 1] = uvs[uSrc + 1];
-      groupUvs[uDst + 2] = uvs[uSrc + 2];
-      groupUvs[uDst + 3] = uvs[uSrc + 3];
-      groupUvs[uDst + 4] = uvs[uSrc + 4];
-      groupUvs[uDst + 5] = uvs[uSrc + 5];
-      // 1 face normal → broadcast to 3 vertex normals: 9 floats per tri.
-      const nx = normals[nSrc + 0];
-      const ny = normals[nSrc + 1];
-      const nz = normals[nSrc + 2];
-      groupNormals[nDst + 0] = nx;
-      groupNormals[nDst + 1] = ny;
-      groupNormals[nDst + 2] = nz;
-      groupNormals[nDst + 3] = nx;
-      groupNormals[nDst + 4] = ny;
-      groupNormals[nDst + 5] = nz;
-      groupNormals[nDst + 6] = nx;
-      groupNormals[nDst + 7] = ny;
-      groupNormals[nDst + 8] = nz;
+      const nSrc = t * 9;
+      for (let d = 0; d < 3; d += 1) {
+        const sv = order[d]; // source vertex index (reversed when single-sided)
+        groupPositions[i * 9 + d * 3 + 0] = positions[pSrc + sv * 3 + 0];
+        groupPositions[i * 9 + d * 3 + 1] = positions[pSrc + sv * 3 + 1];
+        groupPositions[i * 9 + d * 3 + 2] = positions[pSrc + sv * 3 + 2];
+        groupUvs[i * 6 + d * 2 + 0] = uvs[uSrc + sv * 2 + 0];
+        groupUvs[i * 6 + d * 2 + 1] = uvs[uSrc + sv * 2 + 1];
+        groupNormals[i * 9 + d * 3 + 0] = normals[nSrc + sv * 3 + 0];
+        groupNormals[i * 9 + d * 3 + 1] = normals[nSrc + sv * 3 + 1];
+        groupNormals[i * 9 + d * 3 + 2] = normals[nSrc + sv * 3 + 2];
+      }
     }
 
     const geom = new THREE.BufferGeometry();
@@ -663,7 +672,7 @@ export function meshToGeometryGroups(wasmMesh) {
       surfaceDid = surfaces[surfIdx] >>> 0;
       surfaceDids.push(surfaceDid);
     }
-    groups.push({ geometry: geom, surfaceDid });
+    groups.push({ geometry: geom, surfaceDid, doubleSided });
   }
 
   return { groups, surfaceDids };
@@ -687,26 +696,10 @@ export function meshToFusedGeometry(wasmMesh) {
 
   const positions = Float32Array.from(wasmMesh.positions);
   const uvs = Float32Array.from(wasmMesh.uvs);
-  const wasmNormals = wasmMesh.normals; // length = triCount * 3 (face normals)
-
-  // Broadcast face normals → vertex normals (3 copies per triangle).
-  const normals = new Float32Array(triCount * 9);
-  for (let t = 0; t < triCount; t += 1) {
-    const nSrc = t * 3;
-    const nDst = t * 9;
-    const nx = wasmNormals[nSrc + 0];
-    const ny = wasmNormals[nSrc + 1];
-    const nz = wasmNormals[nSrc + 2];
-    normals[nDst + 0] = nx;
-    normals[nDst + 1] = ny;
-    normals[nDst + 2] = nz;
-    normals[nDst + 3] = nx;
-    normals[nDst + 4] = ny;
-    normals[nDst + 5] = nz;
-    normals[nDst + 6] = nx;
-    normals[nDst + 7] = ny;
-    normals[nDst + 8] = nz;
-  }
+  // T6 (2026-05-28): wasm now emits PER-VERTEX normals (triCount*9 — the
+  // authored SWVertex.normal per vertex), so copy verbatim. Was previously a
+  // triCount*3 face-normal buffer broadcast 3× here.
+  const normals = Float32Array.from(wasmMesh.normals);
 
   const geom = new THREE.BufferGeometry();
   geom.setAttribute(

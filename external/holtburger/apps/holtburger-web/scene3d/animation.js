@@ -61,7 +61,8 @@ const FLOATS_PER_PART_PER_FRAME = 7;
  * for debugger ergonomics).
  */
 export function buildAnimationClip(animData, partNames) {
-    const { partCount, numFrames, framerate, partFrames } = animData;
+    const { partCount, numFrames, framerate, partFrames, frameTimes, duration } =
+        animData;
 
     if (
         typeof partCount !== "number" ||
@@ -72,7 +73,7 @@ export function buildAnimationClip(animData, partNames) {
             `buildAnimationClip: animData must carry numeric partCount/numFrames/framerate; got ${typeof partCount}/${typeof numFrames}/${typeof framerate}`
         );
     }
-    if (numFrames === 0 || framerate <= 0) {
+    if (numFrames === 0) {
         // No cycle resolved — caller renders rest pose only.
         return null;
     }
@@ -89,37 +90,40 @@ export function buildAnimationClip(animData, partNames) {
         );
     }
 
-    // Times array — same for every track. Frame i lands at i / framerate
-    // seconds. Uniform timing is the correct AC semantics.
+    // Times array — same for every track. T4 (2026-05-28): prefer the
+    // per-frame `frameTimes` from wasm. A single `AnimData` carries one
+    // framerate, but a MotionData chains MULTIPLE AnimData (≈23% of retail) —
+    // e.g. a swing's windup→strike→recover→settle — each with its own rate
+    // AND sign (≈22% are negative = reverse playback). The wasm side now
+    // concatenates all segments (ACE Sequence/AnimSequenceNode chaining) and
+    // emits the cumulative per-frame time, so a single uniform `i / framerate`
+    // can no longer represent the clip. We fall back to uniform timing only
+    // for legacy/plain animData with no frameTimes (the smoke test, or a
+    // single-AnimData cycle where the two are identical anyway).
     //
-    // F#13 (animation framerate variance) — AUDIT RESULT: close-as-NIL.
-    // The AC data model carries framerate per-cycle, not per-frame.
-    // Verified against three independent sources on 2026-05-10:
-    //   1. crates/holtburger-dat/src/file_type/motion_table.rs:138-154 —
-    //      `AnimData { anim_id, low_frame, high_frame, framerate: f32 }`.
-    //      One f32 framerate per (stance, command) cycle. No per-frame
-    //      timing.
-    //   2. crates/holtburger-dat/src/file_type/animation.rs:15-23 +
-    //      crates/holtburger-dat/src/file_type/setup_model.rs:129-149 —
-    //      `Animation { num_frames, part_frames: Vec<AnimationFrame> }`
-    //      and `AnimationFrame { frames: Vec<Frame>, hooks: Vec<...> }`.
-    //      `Frame { origin: Vector3, orientation: Quaternion }`. No
-    //      time/delta/duration field anywhere in the per-frame record.
-    //   3. external/ACE/Source/ACE.Server/Physics/Animation/AnimData.cs
-    //      + external/DatReaderWriter/.../AnimationTests.cs — ACE and
-    //      DatReaderWriter both model `AnimData` with exactly the same
-    //      four fields. No per-frame timing in either ref impl.
-    // AC's `AnimationHook` payloads (sounds, particles, attack cones)
-    // also carry no time data — hooks are attached to a specific frame
-    // index, played as that frame is rendered.
-    // Therefore: uniform `times[i] = i / framerate` IS the authoritative
-    // AC semantics. There is no judder source from this code — any
-    // observed judder would be a different bug (mixer step size,
-    // crossFade timing, dt accumulation in the rAF loop).
-    const times = new Float32Array(numFrames);
-    const dt = 1.0 / framerate;
-    for (let f = 0; f < numFrames; f += 1) {
-        times[f] = f * dt;
+    // Frames themselves are still authored keys snapped via InterpolateDiscrete
+    // (PhatSDK `(long)floor(frame_number)`); only the per-frame *time stamps*
+    // become non-uniform across segments.
+    let times;
+    const hasFrameTimes =
+        frameTimes &&
+        typeof frameTimes.length === "number" &&
+        frameTimes.length === numFrames;
+    if (hasFrameTimes) {
+        times =
+            frameTimes instanceof Float32Array
+                ? frameTimes
+                : Float32Array.from(frameTimes);
+    } else {
+        if (framerate <= 0) {
+            // No usable timing source — caller renders rest pose only.
+            return null;
+        }
+        times = new Float32Array(numFrames);
+        const dt = 1.0 / framerate;
+        for (let f = 0; f < numFrames; f += 1) {
+            times[f] = f * dt;
+        }
     }
 
     const tracks = [];
@@ -173,8 +177,55 @@ export function buildAnimationClip(animData, partNames) {
         );
     }
 
-    const duration = numFrames / framerate;
-    return new THREE.AnimationClip("", duration, tracks);
+    // Prefer the wasm-provided total duration (T4 — last frame time + its
+    // segment dt). Fall back to the legacy numFrames/framerate, then to the
+    // last frame time.
+    let clipDuration;
+    if (typeof duration === "number" && duration > 0) {
+        clipDuration = duration;
+    } else if (framerate > 0) {
+        clipDuration = numFrames / framerate;
+    } else {
+        clipDuration = times.length ? times[times.length - 1] : 0;
+    }
+    return new THREE.AnimationClip("", clipDuration, tracks);
+}
+
+/**
+ * T11 (2026-05-28) — locomotion cycle playback-rate factor (anti-ice-skating).
+ *
+ * Retail scales a movement cycle's framerate by the ratio of the entity's
+ * ACTUAL ground speed to the speed the cycle was AUTHORED to move at
+ * (`MotionData.velocity` magnitude) — ACE `AnimData.Framerate = base * speed`,
+ * `MotionInterp.apply_run_to_command`. Holtburger currently plays walk/run
+ * cycles at a fixed `setEffectiveTimeScale(1.0)` (entities.js), so foot-speed
+ * desyncs from ground travel ("ice-skating") whenever actual ≠ authored speed
+ * (encumbrance, run-skill, backpedal).
+ *
+ * This is the pure factor. `baseSpeed <= 0` (or non-finite inputs) → 1.0
+ * (no-op), and the result is clamped to [0.25, 4.0] so a bad/zero authored
+ * velocity can't freeze or hyper-spin the rig.
+ *
+ * NOT YET WIRED: applying it needs (1) `MotionData.velocity` surfaced to JS as
+ * the cycle's `baseSpeed` and (2) a per-entity actual ground speed at the
+ * animation tick (entities.js exposes angular velocity / projectile speed but
+ * no linear ground speed today). Both, plus a 1070 eye-test of the resulting
+ * gait, are the remaining T11 work — see docs/3d-render-fidelity-audit.
+ *
+ * @param {number} actualSpeed - entity ground speed (m/s); sign ignored.
+ * @param {number} baseSpeed   - authored cycle speed (|MotionData.velocity|).
+ * @returns {number} timeScale to pass to `action.setEffectiveTimeScale`.
+ */
+export function cycleTimeScale(actualSpeed, baseSpeed) {
+    if (
+        !Number.isFinite(actualSpeed) ||
+        !Number.isFinite(baseSpeed) ||
+        baseSpeed <= 1e-4
+    ) {
+        return 1.0;
+    }
+    const f = Math.abs(actualSpeed) / baseSpeed;
+    return Math.min(4.0, Math.max(0.25, f));
 }
 
 /**

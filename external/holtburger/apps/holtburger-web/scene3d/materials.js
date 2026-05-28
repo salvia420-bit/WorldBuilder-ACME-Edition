@@ -935,6 +935,15 @@ export class MaterialCache {
   constructor(opts = {}) {
     /** @type {Map<number, THREE.MeshStandardMaterial>} */
     this.materials = new Map();
+    /**
+     * T2 (2026-05-28): FrontSide (single-sided) variants, keyed by surfaceDid.
+     * Built lazily by `getCached(did, false)` for `?perPolyCull=on`. Each is a
+     * `.clone()` of the DoubleSide base with `side = FrontSide` — clones SHARE
+     * the underlying textures (THREE clone copies map refs), so no texture
+     * duplication. Empty (never built) when the cull flag is off.
+     * @type {Map<number, THREE.Material>}
+     */
+    this.frontSideMaterials = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
     this.textures = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
@@ -1082,7 +1091,25 @@ export class MaterialCache {
    * Bumps `realHits` / `fallbackHits` so callers can spot the ratio
    * of resolved vs fallback materials at instantiation time.
    */
-  getCached(surfaceDid) {
+  getCached(surfaceDid, doubleSided = true) {
+    const base = this._getCachedDouble(surfaceDid);
+    // T2: per-poly single-sided variant (FrontSide) for `?perPolyCull=on`.
+    // Wireframe mode ignores cull (both faces always drawn), so keep base.
+    if (doubleSided || this.wireframeMode) {
+      return base;
+    }
+    const key = surfaceDid >>> 0;
+    let front = this.frontSideMaterials.get(key);
+    if (!front) {
+      front = base.clone();
+      front.side = THREE.FrontSide;
+      this.frontSideMaterials.set(key, front);
+    }
+    return front;
+  }
+
+  /** The DoubleSide base material for a surface (original `getCached` body). */
+  _getCachedDouble(surfaceDid) {
     if (this.wireframeMode) {
       return this._wireframeMaterialFor(surfaceDid >>> 0);
     }
@@ -1450,6 +1477,16 @@ export class MaterialCache {
     // off (acclient.c D3DPolyRender::SetSurface @454470). 253 retail
     // surfaces carry it; pre-2026-05-28 they fell through to opaque here.
     const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
+    // InvAlpha (0x200): inverse alpha blend — retail's D3DPolyRender::SetSurface
+    // (acclient.c @454478) flips the factors vs Alpha (INVSRCALPHA/SRCALPHA
+    // instead of SRCALPHA/INVSRCALPHA). `materialCanCastShadow` (above) already
+    // classifies 0x200 as transparent; pre-2026-05-28 the render path had no
+    // branch, so InvAlpha surfaces rendered fully opaque — an internal
+    // inconsistency. First cut: route through the same alpha-blend branch as
+    // Alpha (transparent + depthWrite off). A faithful inverse blend (alpha =
+    // 1 - texAlpha) would need a custom blend func / shader and is deferred
+    // until a retail occurrence count justifies it.
+    const isInvAlpha = (flags & SURFACE_TYPE.InvAlpha) !== 0;
     // `isLuminous` (the 0x40 bit) is kept ONLY to gate the normal-map skip
     // below — self-illumination itself is now driven by the luminosity
     // FLOAT (`hasLum`). Retail's portal.dat sets the Luminous/Diffuse bits
@@ -1464,7 +1501,7 @@ export class MaterialCache {
       opts.blending = THREE.AdditiveBlending;
       opts.transparent = true;
       opts.depthWrite = false;
-    } else if (isTranslucent || isAlpha) {
+    } else if (isTranslucent || isAlpha || isInvAlpha) {
       // Alpha blend (SRCALPHA/INVSRCALPHA), depthWrite off — the renderer
       // painter-sorts transparent objects. Retail routes both Translucent
       // (0x10, acclient.c:454513) and Alpha (0x100, :454470) through this

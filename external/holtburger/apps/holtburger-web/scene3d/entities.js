@@ -1674,7 +1674,8 @@ export class EntityManager {
         if (inst._entityMaterials && inst._entityMaterials.has(did)) {
           mat = inst._entityMaterials.get(did);
         } else if (this.materialCache) {
-          mat = this.materialCache.getCached(did);
+          // T2: g.doubleSided drives FrontSide vs DoubleSide (default true).
+          mat = this.materialCache.getCached(did, g.doubleSided);
         } else {
           mat = this._fallbackMaterial();
         }
@@ -4178,7 +4179,7 @@ export class EntityManager {
         if (entityMaterials && entityMaterials.has(did)) {
           mat = entityMaterials.get(did);
         } else if (this.materialCache) {
-          mat = this.materialCache.getCached(did);
+          mat = this.materialCache.getCached(did, grp.doubleSided);
         } else {
           mat = this._fallbackMaterial();
         }
@@ -6434,7 +6435,7 @@ export class EntityManager {
       if (inst._entityMaterials && inst._entityMaterials.has(did)) {
         mat = inst._entityMaterials.get(did);
       } else if (this.materialCache) {
-        mat = this.materialCache.getCached(did);
+        mat = this.materialCache.getCached(did, g.doubleSided);
       } else {
         mat = this._fallbackMaterial();
       }

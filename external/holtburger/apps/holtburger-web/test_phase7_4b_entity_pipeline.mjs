@@ -122,6 +122,7 @@ const entitiesSrc = loadModule("scene3d/entities.js");
 // then entities. Skipped exports → exposed via the factory's return.
 function stripExports(src) {
     return src
+        .replace(/^\s*export\s+async\s+function\s+/gm, "async function ")
         .replace(/^\s*export\s+function\s+/gm, "function ")
         .replace(/^\s*export\s+class\s+/gm, "class ")
         .replace(/^\s*export\s+const\s+/gm, "const ")
@@ -182,7 +183,9 @@ function makePartMesh(partIdx) {
             partIdx * 1.0 + 0.25, 0.5, 0.0,
         ]),
         uvs: new Float32Array([0, 0, 1, 0, 0.5, 1]),
-        normals: new Float32Array([0, 0, 1]),
+        // T6 (2026-05-28): per-vertex normals — 9 floats/tri (3 distinct
+        // normals), no longer a single broadcast face normal (was [0,0,1]).
+        normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
         surfaceIndices: new Uint8Array([0]),
         surfaces: new Uint32Array([0x08001234]),
     };

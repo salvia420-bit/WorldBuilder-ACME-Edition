@@ -7,6 +7,7 @@ pub mod manifest;
 pub mod normal_gen;
 pub mod physics;
 pub mod surface_classify;
+pub mod terrain_merge;
 pub mod terrain_subdiv;
 pub mod utils;
 pub mod walk;

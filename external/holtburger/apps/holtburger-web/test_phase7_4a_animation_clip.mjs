@@ -122,14 +122,53 @@ const animSrc = await import("node:fs").then((m) =>
 // silently fail.
 const patched = animSrc
     .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
+    // animation.js also imports meshToGeometryGroups from ./adapter.js; strip
+    // it (buildAnimationClip never touches it, but the bare import would make
+    // `new Function` throw "Cannot use import statement outside a module").
+    .replace(
+        /^\s*import\s+\{[^}]*\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
+        "",
+    )
     .replace(/^\s*export\s+function\s+/gm, "function ")
     .replace(/^\s*export\s+class\s+/gm, "class ");
 // Wrap in a function that returns the symbols we need.
 const factory = new Function(
     "THREE",
-    `${patched}\n; return { buildAnimationClip, AnimationCache };`,
+    `${patched}\n; return { buildAnimationClip, AnimationCache, cycleTimeScale };`,
 );
-const { buildAnimationClip, AnimationCache } = factory(THREE);
+const { buildAnimationClip, AnimationCache, cycleTimeScale } = factory(THREE);
+
+// ---- T11: cycle playback-rate factor (anti-ice-skating) -------------
+check(
+    "cycleTimeScale: actual == base → 1.0",
+    Math.abs(cycleTimeScale(4, 4) - 1.0) < 1e-9,
+    `got ${cycleTimeScale(4, 4)}`,
+);
+check(
+    "cycleTimeScale: 2× speed → 2.0",
+    Math.abs(cycleTimeScale(8, 4) - 2.0) < 1e-9,
+    `got ${cycleTimeScale(8, 4)}`,
+);
+check(
+    "cycleTimeScale: half speed → 0.5",
+    Math.abs(cycleTimeScale(2, 4) - 0.5) < 1e-9,
+    `got ${cycleTimeScale(2, 4)}`,
+);
+check(
+    "cycleTimeScale: clamps low (0 speed → 0.25)",
+    cycleTimeScale(0, 4) === 0.25,
+    `got ${cycleTimeScale(0, 4)}`,
+);
+check(
+    "cycleTimeScale: clamps high (100/4 → 4.0)",
+    cycleTimeScale(100, 4) === 4.0,
+    `got ${cycleTimeScale(100, 4)}`,
+);
+check(
+    "cycleTimeScale: zero/invalid base → 1.0 no-op",
+    cycleTimeScale(8, 0) === 1.0 && cycleTimeScale(NaN, 4) === 1.0,
+    `got ${cycleTimeScale(8, 0)}, ${cycleTimeScale(NaN, 4)}`,
+);
 
 // ---- Stage 1: synthetic keyframe round-trip -------------------------
 //
@@ -175,6 +214,36 @@ check(
     `AnimationClip.duration = numFrames / framerate = ${numFrames / framerate}`,
     clip != null && Math.abs(clip.duration - numFrames / framerate) < 1e-6,
     `duration=${clip?.duration}`,
+);
+
+// T4 (2026-05-28): when wasm supplies per-frame `frameTimes` + `duration`
+// (multi-AnimData clip with differing per-segment framerates / reverse
+// segments), buildAnimationClip uses them verbatim instead of uniform
+// i/framerate. Here: 3 frames at non-uniform times [0, 0.1, 0.3], dur 0.5.
+const ftClip = buildAnimationClip(
+    {
+        partCount,
+        numFrames,
+        framerate, // back-compat field; frameTimes must win
+        partFrames,
+        frameTimes: new Float32Array([0.0, 0.1, 0.3]),
+        duration: 0.5,
+    },
+    partNames,
+);
+check(
+    "T4: frameTimes drives non-null clip with provided duration (not numFrames/framerate)",
+    ftClip != null && Math.abs(ftClip.duration - 0.5) < 1e-6,
+    `duration=${ftClip?.duration} (expected 0.5, uniform would be ${numFrames / framerate})`,
+);
+check(
+    "T4: KeyframeTrack times match the supplied frameTimes [0, 0.1, 0.3]",
+    ftClip != null &&
+        ftClip.tracks.length > 0 &&
+        Math.abs(ftClip.tracks[0].times[0] - 0.0) < 1e-6 &&
+        Math.abs(ftClip.tracks[0].times[1] - 0.1) < 1e-6 &&
+        Math.abs(ftClip.tracks[0].times[2] - 0.3) < 1e-6,
+    `times=[${ftClip?.tracks?.[0]?.times?.join(", ")}]`,
 );
 
 // Track names: every part contributes `${name}.position` and
