@@ -356,9 +356,264 @@ export function mount(_ctx) {
     }
   }, 1000);
 
+  // Wave 1.F (2026-05-28) — state wiring for vitae / burden / buffs /
+  // debuffs / minigame / portalstorm. linkstatus already drives itself
+  // via the 1Hz poll loop above. Indicators with no upstream emit site
+  // remain at inactive default; their hypothesized hooks are documented
+  // inline so a downstream wave can flip them on once the wire lands.
+  //
+  // Canonical state machines (Chorizite ACBindings):
+  //   - gmUIElement_BurdenIndicator      RecvNotice_LoadChanged(float) — 5 states (light → overburdened)
+  //   - gmUIElement_VitaeIndicator       RecvNotice_VitaeChanged()      — 3 states (visible when vitae<1.0)
+  //   - gmUIElement_EffectsIndicator     RecvNotice_EnchantmentsChanged — 3 states (count>0 = active)
+  //   - gmUIElement_PortalStormIndicator RecvNotice_PortalStormLevel(f) — 2 states (extent>0 = warn)
+  //   - gmUIElement_LinkStatusIndicator  UpdateLinkState                — 4 states (already wired above)
+  //   - gmUIElement_MiniGameIndicator    chess overlay                   — 3 states (no emit yet)
+  //
+  // Subscription pattern: pull the plugin client lazily — status-indicators
+  // mounts during bar mount, BEFORE login completes + `window.__pluginClient`
+  // exists. Same poll-for-client pattern as vitals-hud.js:324-355.
+  const eventUnsubs = [];
+  let clientPollTimer = null;
+
+  // Shared sprite-flip helper. Mirrors `window.__setStatusIndicator`'s
+  // active/inactive sprite swap so event-driven updates match the visual
+  // path that buffs-hud uses today (otherwise vitae/buff/debuff would
+  // never swap to their `active` DID even though .active class flipped).
+  function setIndicatorActive(id, active) {
+    const el = indicatorEls[id];
+    if (!el) return;
+    const ind = INDICATORS.find((i) => i.id === id);
+    if (!ind) return;
+    el.classList.toggle("active", !!active);
+    el.style.backgroundImage = `url("./data/ui-sprites/${active ? ind.active : ind.inactive}.png")`;
+  }
+
+  // Burden thresholds mirror ACE.EncumbranceSystem.GetBurdenState — the
+  // wasm `playerBurden` getter already returns the encumbrance/capacity
+  // ratio (0.0 unloaded → 1.0 capped → 2.0 over-encumbered → ...). The
+  // canonical 5-state ramp from acclient.c gmUIElement_BurdenIndicator
+  // is light/moderate/heavy/very-heavy/over but we have a single sprite
+  // here, so we collapse to a simple "active when carrying significant
+  // load (>=50%)" gate. The CSS .active class brightens the icon; an
+  // additional `over` data attribute is set when ratio>=1.0 so future
+  // styles can tint it red.
+  function applyBurden(ratio) {
+    const el = indicatorEls.burden;
+    if (!el) return;
+    // 0.50 is the gentlest threshold that visibly distinguishes "carrying
+    // a real load" from "empty backpack"; matches the 2-state collapse
+    // documented above. ACE's GetBurdenState() returns 1..5 — when we
+    // later have 5 distinct sprites this can become a state index.
+    const active = ratio >= 0.5;
+    setIndicatorActive("burden", active);
+    el.dataset.over = ratio >= 1.0 ? "1" : "0";
+  }
+
+  // Vitae: 1.0 = no vitae, <1.0 = active death penalty (counter-intuitive
+  // per handoff §3 row 4 / Character.cs:80-88). Active when ratio<1.0.
+  function applyVitae(vitae) {
+    const el = indicatorEls.vitae;
+    if (!el) return;
+    const active = vitae < 1.0;
+    setIndicatorActive("vitae", active);
+  }
+
+  // Buff/debuff fallback: emit our own indicator state from raw enchantment
+  // events. buffs-hud (when loaded) ALSO drives these via __setStatusIndicator,
+  // so this is belt-and-braces — bus-event subscription means the indicator
+  // still updates even if the buffs-hud plugin isn't loaded.
+  //
+  // EnchantmentTypeFlags (mirrors plugins/buffs-hud.js:ETF):
+  const ETF_COOLDOWN    = 0x1000000;
+  const ETF_BENEFICIAL  = 0x2000000;
+  const ETF_ADDITIVE    = 0x40000;
+  const ETF_MULTIPLICATIVE = 0x80000;
+  function classifyEnchKind(e) {
+    const t = (e?.type ?? e?.statModType ?? 0) | 0;
+    if ((t & ETF_COOLDOWN) !== 0) return "cooldown";
+    if ((t & ETF_BENEFICIAL) !== 0) return "buff";
+    const v = Number(e?.statValue ?? e?.statModValue ?? 0);
+    if ((t & ETF_ADDITIVE) !== 0) return v >= 0 ? "buff" : "debuff";
+    if ((t & ETF_MULTIPLICATIVE) !== 0) return v >= 1.0 ? "buff" : "debuff";
+    return "buff";
+  }
+  function applyEnchantmentSnapshot(snapshot) {
+    if (!Array.isArray(snapshot)) return;
+    let nBuff = 0, nDebuff = 0;
+    for (const e of snapshot) {
+      const k = classifyEnchKind(e);
+      if (k === "buff") nBuff += 1;
+      else if (k === "debuff") nDebuff += 1;
+    }
+    setIndicatorActive("buffs", nBuff > 0);
+    setIndicatorActive("debuffs", nDebuff > 0);
+  }
+
+  function tryWireClient() {
+    const client = window.__pluginClient ?? null;
+    if (!client?.events?.on) return false;
+
+    // Vitae — preferred path is `client.character` (typed Character with
+    // its own vitaeChanged event); pre-Character-spawn fall back to
+    // re-reading on every playerStatsUpdated.
+    const onVitaeChanged = (evt) => {
+      const v = Number(evt?.detail?.vitae ?? 1.0);
+      applyVitae(v);
+    };
+    const onStatsUpdated = () => {
+      // Vitae fallback: when typed Character isn't ready yet,
+      // playerStatsUpdated still fires kind=8 and we can re-bind to
+      // the typed Character once it lands.
+      const ch = client.character ?? client.world?.character ?? null;
+      if (ch && typeof ch.vitae === "number") applyVitae(ch.vitae);
+      // Burden: read the wasm getter on every stats refresh. Mirrors
+      // gmUIElement_BurdenIndicator::RecvNotice_LoadChanged from
+      // ACBindings — the retail event fires whenever EncumbranceSystem
+      // recomputes; our wasm side bundles that into kind=8.
+      try {
+        const handle = window.__sessionHandle;
+        if (handle && typeof handle.playerBurden === "number") {
+          applyBurden(handle.playerBurden);
+        } else if (handle?.playerBurden && typeof handle.playerBurden === "function") {
+          // Defensive: depending on wasm-bindgen output the property
+          // surfaces as a getter (number) or a method (function).
+          applyBurden(handle.playerBurden());
+        }
+      } catch (_) {}
+    };
+    client.events.on("playerStatsUpdated", onStatsUpdated);
+    eventUnsubs.push(() => client.events.off?.("playerStatsUpdated", onStatsUpdated));
+
+    // Attach vitae listener to Character once it's available. The typed
+    // Character is set lazily on PLAYER_SPAWNED + ObjectCreate; we wait
+    // for the FIRST playerStatsUpdated and re-check each subsequent one
+    // until it's there, then attach.
+    let charAttached = false;
+    const tryAttachChar = () => {
+      if (charAttached) return;
+      const ch = client.character ?? client.world?.character ?? null;
+      if (!ch || typeof ch.addEventListener !== "function") return;
+      ch.addEventListener("vitaeChanged", onVitaeChanged);
+      eventUnsubs.push(() => ch.removeEventListener?.("vitaeChanged", onVitaeChanged));
+      charAttached = true;
+      // Seed initial state.
+      if (typeof ch.vitae === "number") applyVitae(ch.vitae);
+    };
+    client.events.on("playerStatsUpdated", tryAttachChar);
+    eventUnsubs.push(() => client.events.off?.("playerStatsUpdated", tryAttachChar));
+
+    // Buffs/debuffs — subscribe to world-state's per-enchantment events.
+    // World-state's bus is `client.world` (it extends EventTarget). We
+    // refresh on any add/remove using the full snapshot via
+    // playerEnchantments() so the count stays in sync (avoids drift
+    // from buffs-hud's parallel __setStatusIndicator calls).
+    const refreshEnchIndicators = () => {
+      try {
+        const snap = client.player?.enchantments?.();
+        if (snap) applyEnchantmentSnapshot(snap);
+      } catch (_) {}
+    };
+    const world = client.world;
+    if (world && typeof world.addEventListener === "function") {
+      world.addEventListener("enchantmentAdded", refreshEnchIndicators);
+      world.addEventListener("enchantmentRemoved", refreshEnchIndicators);
+      world.addEventListener("enchantmentsChanged", refreshEnchIndicators);
+      eventUnsubs.push(() => {
+        world.removeEventListener("enchantmentAdded", refreshEnchIndicators);
+        world.removeEventListener("enchantmentRemoved", refreshEnchIndicators);
+        world.removeEventListener("enchantmentsChanged", refreshEnchIndicators);
+      });
+    }
+    // Belt-and-braces: also refresh on every stats update (catches the
+    // first snapshot before world-state runs its diff).
+    client.events.on("playerStatsUpdated", refreshEnchIndicators);
+    eventUnsubs.push(() => client.events.off?.("playerStatsUpdated", refreshEnchIndicators));
+
+    // Portal storm — Chorizite.ACProtocol opcodes Misc_PortalStormBrewing
+    // (0x02C9), Misc_PortalStormImminent (0x02CA), Misc_PortalStorm (0x02CB),
+    // Misc_PortalStormSubsided (0x02CC) are parsed in
+    // crates/holtburger-protocol but NOT surfaced to JS as bus events yet
+    // (see plugins/api.js coverage row #8 / data/chorizite/chorizite-acprotocol-opcodes.json).
+    // When the wire surfaces, the bus name will likely be `portalStormChanged`
+    // with `{level: 0..4}` mirroring gmUIElement_PortalStormIndicator's
+    // RecvNotice_PortalStormLevel(float). Pre-emptively subscribe so the
+    // indicator lights up the moment that wire lands without another edit.
+    const onPortalStorm = (evt) => {
+      const lvl = Number(evt?.detail?.level ?? evt?.detail?.extent ?? 0);
+      setIndicatorActive("portalstorm", lvl > 0);
+    };
+    client.events.on("portalStormChanged", onPortalStorm);
+    eventUnsubs.push(() => client.events.off?.("portalStormChanged", onPortalStorm));
+
+    // Mini-game — Chorizite gmUIElement_MiniGameIndicator drives off the
+    // chess-board UI open/close. No wire event today (chess isn't wired
+    // server-side either). When chess lands, dispatch `miniGameChanged`
+    // on the client bus with `{active: bool}` and this subscription will
+    // flip the indicator. Documented hook only — no current emitter.
+    const onMiniGame = (evt) => {
+      const active = !!(evt?.detail?.active);
+      setIndicatorActive("minigame", active);
+    };
+    client.events.on("miniGameChanged", onMiniGame);
+    eventUnsubs.push(() => client.events.off?.("miniGameChanged", onMiniGame));
+
+    // Initial seed — read whatever state is already cached so the
+    // indicators are correct on a re-mount after the world has hydrated.
+    onStatsUpdated();
+    tryAttachChar();
+    refreshEnchIndicators();
+
+    return true;
+  }
+
+  if (!tryWireClient()) {
+    clientPollTimer = setInterval(() => {
+      if (tryWireClient()) {
+        clearInterval(clientPollTimer);
+        clientPollTimer = null;
+      }
+    }, 500);
+  }
+
   return () => {
     clearInterval(linkPollTimer);
+    if (clientPollTimer) clearInterval(clientPollTimer);
+    for (const fn of eventUnsubs) {
+      try { fn(); } catch (_) {}
+    }
+    eventUnsubs.length = 0;
     delete window.__setStatusIndicator;
     overlay.remove();
   };
 }
+
+// ─── Test-only helpers (Wave 1.F) ──────────────────────────────────────
+// Exposed so the test_status_indicators.mjs harness can drive the
+// pure-state-machine logic without booting a browser. Kept out of the
+// production path — `mount()` is the only consumer in the wild.
+export const __test = Object.freeze({
+  /** Classify an enchantment as buff/debuff/cooldown — mirrors the
+   *  module-private classifyEnchKind() with the same ETF flag literals. */
+  classifyEnchKind(e) {
+    const ETF_COOLDOWN = 0x1000000;
+    const ETF_BENEFICIAL = 0x2000000;
+    const ETF_ADDITIVE = 0x40000;
+    const ETF_MULTIPLICATIVE = 0x80000;
+    const t = (e?.type ?? e?.statModType ?? 0) | 0;
+    if ((t & ETF_COOLDOWN) !== 0) return "cooldown";
+    if ((t & ETF_BENEFICIAL) !== 0) return "buff";
+    const v = Number(e?.statValue ?? e?.statModValue ?? 0);
+    if ((t & ETF_ADDITIVE) !== 0) return v >= 0 ? "buff" : "debuff";
+    if ((t & ETF_MULTIPLICATIVE) !== 0) return v >= 1.0 ? "buff" : "debuff";
+    return "buff";
+  },
+  /** Burden ratio → indicator active flag. >=0.5 = active. */
+  isBurdenActive(ratio) { return Number(ratio) >= 0.5; },
+  /** Burden ratio → over-encumbered data attr. >=1.0 = over. */
+  isBurdenOver(ratio) { return Number(ratio) >= 1.0; },
+  /** Vitae ratio → indicator active flag. <1.0 = active (death penalty). */
+  isVitaeActive(vitae) { return Number(vitae) < 1.0; },
+  /** Indicator id list — used by tests to assert all 7 are present. */
+  INDICATORS,
+});
