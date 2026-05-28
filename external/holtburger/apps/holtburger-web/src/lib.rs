@@ -4845,6 +4845,29 @@ pub struct SurfacePixels {
     roughness_override: f32,
     /// Phase 1.5 — normal-scale override (same NaN sentinel).
     normal_scale_override: f32,
+    /// Wave 8 (2026-05-28) — Surface (0x08) trailing float triplet.
+    /// melt's `Source/ACE.DatLoader/FileTypes/Surface.cs:21-40` reads
+    /// `(Translucency, Luminosity, Diffuse)` as 3 f32s after the
+    /// texture/color branch; our parser at
+    /// `crates/holtburger-dat/src/file_type/surface.rs:68-70` matches.
+    /// Pre-Wave-8 these were dropped between the parser and JS so
+    /// materials.js used the bitflag presence (`Translucent` bit at
+    /// 0x10, `Luminous` at 0x40, `Diffuse` at 0x20) with hardcoded
+    /// effect strengths (opacity always full, emissive 0.6, roughness
+    /// 1.0). Carrying the floats lets the shader uniforms reflect
+    /// each surface's actual intensity.
+    ///
+    /// ACE convention (verified against `particle.js:84-96`):
+    ///   `translucency 0.0 = fully opaque, 1.0 = fully invisible`
+    ///   → JS sets `opacity = max(0, 1 - translucency)`.
+    /// `luminosity` is the emissive multiplier in [0, 1+] (some retail
+    /// surfaces push >1 for HDR-ish glow). `diffuse` is the diffuse
+    /// contribution scalar; PBR mapping leaves it informational unless
+    /// the Diffuse bit (0x20) is also set, at which point it refines
+    /// the matte intensity.
+    translucency: f32,
+    luminosity: f32,
+    diffuse: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -4892,6 +4915,24 @@ impl SurfacePixels {
     /// Phase 1.1 reads this post-resolve to author custom bump strength.
     #[wasm_bindgen(getter, js_name = normalScaleOverride)]
     pub fn normal_scale_override(&self) -> f32 { self.normal_scale_override }
+    /// Wave 8 — Surface (0x08) translucency float. ACE convention:
+    /// `0.0 = opaque`, `1.0 = fully invisible`. JS reads this as
+    /// `opacity = max(0, 1 - translucency)`. Independent of the
+    /// `Translucent (0x10)` surface_type bit — the bit gates the
+    /// alpha-blend pipeline, the float gates the value.
+    #[wasm_bindgen(getter)]
+    pub fn translucency(&self) -> f32 { self.translucency }
+    /// Wave 8 — Surface (0x08) luminosity float. Drives the
+    /// MeshStandardMaterial `emissiveIntensity` for surfaces with the
+    /// `Luminous (0x40)` bit set. Range is nominally [0, 1] but retail
+    /// occasionally pushes >1 for HDR-ish glow.
+    #[wasm_bindgen(getter)]
+    pub fn luminosity(&self) -> f32 { self.luminosity }
+    /// Wave 8 — Surface (0x08) diffuse contribution scalar. Refines
+    /// the matte intensity when the `Diffuse (0x20)` bit is set;
+    /// informational otherwise.
+    #[wasm_bindgen(getter)]
+    pub fn diffuse(&self) -> f32 { self.diffuse }
 }
 
 /// Phase 1.5 — cache the parsed `data/surface_overrides.json` for the
@@ -4958,6 +4999,9 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         height_pixels: Vec::new(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
+        translucency: 0.0,
+        luminosity: 0.0,
+        diffuse: 0.0,
     };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
@@ -4997,6 +5041,9 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             height_pixels: Vec::new(),
             roughness_override,
             normal_scale_override,
+            translucency: surface.translucency,
+            luminosity: surface.luminosity,
+            diffuse: surface.diffuse,
         };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
@@ -5046,6 +5093,9 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 height_pixels,
                 roughness_override,
                 normal_scale_override,
+                translucency: surface.translucency,
+                luminosity: surface.luminosity,
+                diffuse: surface.diffuse,
             }
         }
         Err(_) => empty,
@@ -5856,6 +5906,9 @@ pub async fn fetch_dye_preview_pixels(
         height_pixels: Vec::new(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
+        translucency: 0.0,
+        luminosity: 0.0,
+        diffuse: 0.0,
     };
     if sub_palettes.len() % 3 != 0 {
         return Err(JsValue::from_str(
@@ -5937,6 +5990,9 @@ pub async fn fetch_dye_preview_pixels(
                 height_pixels: Vec::new(),
                 roughness_override: f32::NAN,
                 normal_scale_override: f32::NAN,
+                translucency: 0.0,
+                luminosity: 0.0,
+                diffuse: 0.0,
             })
         }
         Err(_) => Ok(empty),
@@ -6141,6 +6197,9 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         height_pixels: Vec::new(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
+        translucency: 0.0,
+        luminosity: 0.0,
+        diffuse: 0.0,
     };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
@@ -6168,6 +6227,9 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             height_pixels: Vec::new(),
             roughness_override,
             normal_scale_override,
+            translucency: surface.translucency,
+            luminosity: surface.luminosity,
+            diffuse: surface.diffuse,
         };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
@@ -6232,6 +6294,9 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 height_pixels,
                 roughness_override,
                 normal_scale_override,
+                translucency: surface.translucency,
+                luminosity: surface.luminosity,
+                diffuse: surface.diffuse,
             }
         }
         Err(_) => empty,

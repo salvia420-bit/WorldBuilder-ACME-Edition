@@ -1393,8 +1393,17 @@ export class MaterialCache {
    * `surfaceTypeFlags === 0` (the empty-surface fallback) hits the
    * opaque path → standard albedo material with DoubleSide.
    */
-  _materialFromFlags(surfaceTypeFlags, texture, category, normalTexture, overrides, heightTexture) {
+  _materialFromFlags(surfaceTypeFlags, texture, category, normalTexture, overrides, heightTexture, surfaceFloats) {
     const flags = surfaceTypeFlags >>> 0;
+    // Wave 8 (2026-05-28) — Surface (0x08) trailing T/L/D triplet.
+    // Pre-Wave-8 these were silently dropped; the bit flags drove
+    // hardcoded effect strengths. Now each effect uses the actual
+    // per-surface float. `surfaceFloats` may be undefined when an
+    // older call site hasn't been migrated; treat that as 0/0/0
+    // (≡ pre-Wave-8 binary behaviour).
+    const sfTranslucency = +(surfaceFloats?.translucency ?? 0.0);
+    const sfLuminosity = +(surfaceFloats?.luminosity ?? 0.0);
+    const sfDiffuse = +(surfaceFloats?.diffuse ?? 0.0);
     // Phase 1.4 — start from the category-aware default if the wasm
     // side classified the surface; otherwise stay on the generic
     // 0.9 / 0.0 fall-through. The Diffuse flag below can still
@@ -1442,6 +1451,16 @@ export class MaterialCache {
       // (the renderer painter-sorts transparent objects automatically).
       opts.transparent = true;
       opts.depthWrite = false;
+      // Wave 8 — apply the per-surface translucency float when set
+      // (ACE convention: 0=opaque, 1=invisible). Pre-Wave-8 the flag
+      // alone meant "full alpha-blend pipeline + opacity=1.0" which
+      // was indistinguishable from opaque except for sort behaviour.
+      // Now retail's true alpha value reaches the GPU. Surfaces with
+      // the Translucent bit but T=0 (most of them) still render at
+      // full opacity — matches the pre-Wave-8 visual.
+      if (sfTranslucency > 0) {
+        opts.opacity = Math.max(0, 1 - sfTranslucency);
+      }
     } else if (isClipMap) {
       // Binary alpha mask (foliage, fences). alphaTest cuts the
       // alpha=0 fragments at rasterise time → no transparency sort.
@@ -1452,19 +1471,36 @@ export class MaterialCache {
       // Self-illuminating. emissiveMap reuses the same texture so the
       // entire surface glows according to its colour values; the white
       // multiplier on `emissive` lets the unmodulated texture pass
-      // through. emissiveIntensity=0.6 keeps it bright but doesn't
-      // saturate (1.0 looks blown-out under the default sun rig).
+      // through. emissiveIntensity 0.6 is the pre-Wave-8 hardcoded
+      // fallback (1.0 looks blown-out under the default sun rig).
       // Phase 1.4 — Lava category still sets roughness=0.4 above; the
       // Luminous flag overlays emissive on top without overriding it.
       opts.emissive = new THREE.Color(0xffffff);
       opts.emissiveMap = texture;
-      opts.emissiveIntensity = 0.6;
+      // Wave 8 — use the per-surface luminosity float when set.
+      // ACE convention is intensity in [0, 1] with occasional retail
+      // pushes >1; we clamp to (0, 2] as a sanity fence in case of
+      // bad DAT data. Surfaces with the Luminous bit but L=0 keep
+      // the pre-Wave-8 0.6 fallback (the unset value can mean either
+      // "use default" or "no glow"; choosing default preserves the
+      // pre-Wave-8 visual for the 99% case).
+      opts.emissiveIntensity = sfLuminosity > 0
+        ? Math.min(2.0, sfLuminosity)
+        : 0.6;
     }
     if (isDiffuse) {
       // Diffuse flag wins over category-default roughness — AC's
       // explicit matte hint should trump heuristic guesses.
-      opts.roughness = 1.0; // matte — no specular highlight
       opts.metalness = 0.0;
+      // Wave 8 — refine matte intensity using the per-surface diffuse
+      // float when set. AC's `diffuse` parameter is the diffuse-
+      // contribution scalar (higher = more diffuse = more matte). Map
+      // directly onto PBR roughness: D=1 → roughness 1 (full matte),
+      // D=0 → roughness 0 (mirror). The pre-Wave-8 path hardcoded
+      // roughness=1.0 (≡ D=1 fallback) which is also what surfaces
+      // with D=0 in the DAT get from this branch — preserving the
+      // existing look for the 99% case.
+      opts.roughness = sfDiffuse > 0 ? Math.min(1.0, sfDiffuse) : 1.0;
     }
     const mat = new THREE.MeshStandardMaterial(opts);
 
@@ -1648,8 +1684,19 @@ export class MaterialCache {
         roughness: typeof sp.roughnessOverride === "number" ? sp.roughnessOverride : undefined,
         normalScale: typeof sp.normalScaleOverride === "number" ? sp.normalScaleOverride : undefined,
       };
+      // Wave 8 (2026-05-28) — Surface T/L/D triplet pulled from the
+      // wasm side (pre-Wave-8 these were dropped; materials.js used
+      // only the surface_type bitflag presence with hardcoded effect
+      // strengths). Older wasm builds without the getters fall through
+      // to 0 (opaque/no-glow/no-diffuse-adj — same behaviour as the
+      // pre-Wave-8 bitflag path).
+      const surfaceFloats = {
+        translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
+        luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
+        diffuse: typeof sp.diffuse === "number" ? sp.diffuse : 0.0,
+      };
       if (typeof sp.free === "function") sp.free();
-      const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex);
+      const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex, surfaceFloats);
       mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
       mat.userData = {
         ...(mat.userData || {}),
@@ -2057,7 +2104,8 @@ export class MaterialCache {
     // here means the surface DID had no pixels — fall back to the
     // shared fallback material exactly as for the zero-dim case.
     let w, h, pixels, surfaceType, category, normalPixels, heightPixels,
-        roughnessOverride, normalScaleOverride;
+        roughnessOverride, normalScaleOverride,
+        translucencyF, luminosityF, diffuseF;
     try {
       w = sp.width;
       h = sp.height;
@@ -2100,6 +2148,10 @@ export class MaterialCache {
       // category defaults.
       roughnessOverride = typeof sp.roughnessOverride === "number" ? sp.roughnessOverride : undefined;
       normalScaleOverride = typeof sp.normalScaleOverride === "number" ? sp.normalScaleOverride : undefined;
+      // Wave 8 — Surface T/L/D triplet (see main get() path comment).
+      translucencyF = typeof sp.translucency === "number" ? sp.translucency : 0.0;
+      luminosityF = typeof sp.luminosity === "number" ? sp.luminosity : 0.0;
+      diffuseF = typeof sp.diffuse === "number" ? sp.diffuse : 0.0;
     } catch (_) {
       return this.fallbackMaterial;
     }
@@ -2116,7 +2168,12 @@ export class MaterialCache {
     const surfaceTypeFlags = surfaceType >>> 0;
     try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
     const overrides = { roughness: roughnessOverride, normalScale: normalScaleOverride };
-    const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex);
+    const surfaceFloats = {
+      translucency: translucencyF,
+      luminosity: luminosityF,
+      diffuse: diffuseF,
+    };
+    const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex, surfaceFloats);
     mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
     mat.userData = {
       ...(mat.userData || {}),
