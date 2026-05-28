@@ -790,6 +790,91 @@ const FIXTURES_LIST = [
            "back a SendClientContractTracker with DeleteContract=true. " +
            "Payload is a single u32 ContractId.",
   },
+  // ───── Wave 1.A (2026-05-27) — Qualities_Update*/Remove* coverage ─────
+  //
+  // The J3.A-E codegen already emits all 46 Qualities_Update*/Remove*
+  // opcodes (verified by qualities_update_remove_opcode_census_in_opcode_index
+  // in tests/generated_parity.rs). These 4 wire-conformance fixtures lock
+  // in the Chorizite Pack→Unpack round-trip for the core variants flagged
+  // in the agent brief: Update Int / Update Float / Remove Int / Remove
+  // Float.
+  //
+  // Cross-references (per [[feedback_three_source_cross_reference]]):
+  //   - Chorizite XML: protocol.xml lines 7974-8211.
+  //   - ACE: ~/ace-server/Source/ACE.Server/Network/GameMessages/Messages/
+  //          GameMessage{Private,Public}Update{Property,Vital,Skill,Attribute}*.cs
+  //   - Rust hand-written: messages/object/messages/properties.rs.
+  //
+  // VISIBILITY FLAG (Chorizite XML vs ACE divergence):
+  //   Chorizite XML declares `<field type="float">` for the Value field on
+  //   every UpdateFloat (lines 8082, 8088). ACE writes `Writer.Write(double
+  //   value)` (8-byte f64). The hand-written Rust parser uses `f64` matching
+  //   ACE retail (properties.rs:62). The codegen layer follows Chorizite XML
+  //   and produces `pub value: f32` — a real divergence. The synthesized
+  //   fixtures here go through Chorizite's Pack→Unpack (which agrees with
+  //   itself) so they PASS, but a live ACE byte stream would mis-decode
+  //   through the codegen path. Flagged for upstream Chorizite XML fix.
+  {
+    case: "Wave 1.A — Qualities_UpdateInt / 0x02CE (public)",
+    typeName: "Qualities_UpdateInt",
+    source: "synthesized",
+    fields: {
+      Sequence: 5,
+      ObjectId: "0x50000001",
+      Key: "EncumbranceVal",        // PropertyInt = 5
+      Value: 350,                   // Carrying capacity points
+    },
+    headerMode: "payload",
+    notes: "Wave 1.A (2026-05-27): synth pack→unpack via Chorizite. Layout " +
+           "= byte Sequence + ObjectId(u32) + PropertyInt(uint) + int Value " +
+           "= 13 bytes payload. ACE source: GameMessagePublicUpdatePropertyInt.cs.",
+  },
+  {
+    case: "Wave 1.A — Qualities_UpdateFloat / 0x02D4 (public, f32 per XML)",
+    typeName: "Qualities_UpdateFloat",
+    source: "synthesized",
+    fields: {
+      Sequence: 3,
+      ObjectId: "0x50000002",
+      Key: "AccuracyMod",           // PropertyFloat = 24
+      Value: 1.25,                  // f32 per Chorizite XML (ACE retail is f64)
+    },
+    headerMode: "payload",
+    notes: "Wave 1.A (2026-05-27): synth via Chorizite. Layout = byte Seq " +
+           "+ ObjectId + PropertyFloat + float Value = 13 bytes. VISIBILITY " +
+           "FLAG: Chorizite XML f32 vs ACE f64 retail wire (ACE writes 8 " +
+           "bytes, schema reads 4); Chorizite Pack↔Unpack is self-consistent " +
+           "so this round-trip PASSes — flag is for ACE-in / Chorizite-out " +
+           "asymmetry, not a Pack→Unpack mismatch.",
+  },
+  {
+    case: "Wave 1.A — Qualities_RemoveIntEvent / 0x01D2 (public)",
+    typeName: "Qualities_RemoveIntEvent",
+    source: "synthesized",
+    fields: {
+      Sequence: 0x13,
+      ObjectId: "0x50000003",
+      Type: "ItemUseable",          // PropertyInt = 16
+    },
+    headerMode: "payload",
+    notes: "Wave 1.A (2026-05-27): synth via Chorizite. Layout = byte Seq " +
+           "+ ObjectId + PropertyInt = 9 bytes. Sent when ACE clears a " +
+           "previously-set int property on an object.",
+  },
+  {
+    case: "Wave 1.A — Qualities_RemoveFloatEvent / 0x01D6 (public)",
+    typeName: "Qualities_RemoveFloatEvent",
+    source: "synthesized",
+    fields: {
+      Sequence: 0x23,
+      ObjectId: "0x50000004",
+      Type: "CurrentPowerMod",      // PropertyFloat = 23
+    },
+    headerMode: "payload",
+    notes: "Wave 1.A (2026-05-27): synth via Chorizite. Layout = byte Seq " +
+           "+ ObjectId + PropertyFloat = 9 bytes. Sent when ACE clears a " +
+           "previously-set float property on an object.",
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────

@@ -2016,3 +2016,345 @@ fn j3e_chain_unblock_census_types_emit() {
     let _spell_book_page: fn() -> &'static str = || std::any::type_name::<SpellBookPage>();
     let _obj_desc: fn() -> &'static str = || std::any::type_name::<ObjDesc>();
 }
+
+// ===== Wave 1.A — Qualities_Update*/Remove* codegen coverage =================
+//
+// Verifies the J3.A-E codegen already emits all 16 Qualities_Update* +
+// 8 Qualities_Remove* opcodes per protocol.xml (lines 7974-8211). These
+// tests round-trip hand-built wire payloads through the generated
+// `read_from()` to confirm the field shapes match the wire format.
+//
+// Cross-references (per [[feedback_three_source_cross_reference]]):
+//   - Chorizite XML: external/chorizite/Chorizite.ACProtocol/.../protocol.xml
+//     lines 7974-8044 (Remove*) + 8046-8211 (Update*).
+//   - ACE server: ~/ace-server/Source/ACE.Server/Network/GameMessages/
+//     Messages/GameMessage(Private)?Update(Property|Vital|Skill|Attribute)*.cs
+//   - Hand-written Rust parity: crates/holtburger-protocol/src/messages/
+//     object/messages/properties.rs (UpdatePropertyInt/Float/Bool/Int64).
+//
+// Coverage summary (all already in OPCODE_INDEX):
+//   Public Update (15): 0x02CE / D0 / D2 / D4 / D6 / D8 / DA / DC / DE /
+//                       E0 / E2 / E4 / E6 / E8 / EA
+//   Private Update (14): 0x02CD / CF / D1 / D3 / D5 / D7 / D9 / DB / DD /
+//                        DF / E1 / E3 / E5 / E7 / E9 (15 entries, one of
+//                        these — there's no 0x02C6-style PrivatePosition2 —
+//                        all listed are real)
+//   Public Remove (7): 0x01D2 / D4 / D6 / D8 / DA / DC / DE + 0x02B9 (Int64) = 8
+//   Private Remove (7): 0x01D1 / D3 / D5 / D7 / D9 / DB / DD + 0x02B8 = 8
+//
+// VISIBILITY FLAG: lib.rs's recv-loop dispatches a subset of these via
+// `GameMessage::PrivateUpdate{Vital,Attribute,Skill}` variants
+// (apps/holtburger-web/src/lib.rs:17321-17326) but does NOT yet route the
+// generated Qualities_Update* messages directly — the hand-written
+// dispatcher in src/messages/game_message/unpack.rs:189-192 owns
+// PrivateUpdatePropertyInt (0x02CD) + PublicUpdatePropertyInt (0x02CE).
+// The other 22 Update* opcodes go through the hand-written enum, NOT the
+// generated `read_from`. The generated structs exist + are unit-tested
+// here, but are not yet wired into the live recv loop. Downstream wave's
+// territory (per agent brief).
+
+/// Wave 1.A-1: `S2C_Qualities_PrivateUpdateInt` (0x02CD) round-trips
+/// against the same wire payload the hand-written
+/// `PrivateUpdatePropertyInt` consumes. Layout = `byte Sequence +
+/// PropertyInt(uint) + int Value` = 9 bytes payload.
+///
+/// Cross-checked against `test_private_update_combat_mode_parity` in
+/// `messages/game_message/tests.rs` (uses CombatMode=40, value=2/Melee).
+#[test]
+fn qualities_private_update_int_round_trips() {
+    use generated::{S2C_Qualities_PrivateUpdateInt, PropertyInt};
+    // Wire: sequence=0x0C, property=40 (CombatMode), value=2 (Melee).
+    let mut buf = Vec::new();
+    buf.push(0x0Cu8);                                  // Sequence
+    buf.extend_from_slice(&40u32.to_le_bytes());        // PropertyInt::CombatMode = 40
+    buf.extend_from_slice(&2i32.to_le_bytes());         // Value = 2 (Melee)
+
+    let mut off = 0usize;
+    let msg = S2C_Qualities_PrivateUpdateInt::read_from(&buf, &mut off)
+        .expect("decode succeeds");
+    assert_eq!(msg.sequence, 0x0C);
+    assert_eq!(msg.key, PropertyInt::CombatMode);
+    assert_eq!(msg.value, 2);
+    assert_eq!(off, 9, "9-byte payload consumed");
+    assert_eq!(S2C_Qualities_PrivateUpdateInt::OPCODE, 0x02CD);
+}
+
+/// Wave 1.A-2: `S2C_Qualities_UpdateInt` (0x02CE) round-trips with a
+/// trailing ObjectId vs the Private variant. Layout = `byte Sequence +
+/// ObjectId(u32) + PropertyInt(uint) + int Value` = 13 bytes payload.
+#[test]
+fn qualities_update_int_round_trips_with_object_id() {
+    use generated::{S2C_Qualities_UpdateInt, PropertyInt};
+    let mut buf = Vec::new();
+    buf.push(0x05u8);                                       // Sequence
+    buf.extend_from_slice(&0x5000_0001u32.to_le_bytes());    // ObjectId
+    buf.extend_from_slice(&5u32.to_le_bytes());              // PropertyInt::EncumbranceVal = 5
+    buf.extend_from_slice(&350i32.to_le_bytes());            // Value (carrying capacity points)
+
+    let mut off = 0usize;
+    let msg = S2C_Qualities_UpdateInt::read_from(&buf, &mut off)
+        .expect("decode succeeds");
+    assert_eq!(msg.sequence, 0x05);
+    assert_eq!(msg.object_id, 0x5000_0001);
+    assert_eq!(msg.key, PropertyInt::EncumbranceVal);
+    assert_eq!(msg.value, 350);
+    assert_eq!(off, 13);
+    assert_eq!(S2C_Qualities_UpdateInt::OPCODE, 0x02CE);
+}
+
+/// Wave 1.A-3: `S2C_Qualities_PrivateUpdateFloat` (0x02D3) round-trips.
+/// Layout = `byte Sequence + PropertyFloat(uint) + float Value` = 9 bytes.
+///
+/// VISIBILITY FLAG: Chorizite's XML declares `<field type="float" .../>`
+/// (4-byte f32) but ACE writes `Writer.Write(double value)` (8-byte f64
+/// per `~/ace-server/Source/ACE.Server/Network/GameMessages/Messages/
+/// GameMessagePrivateUpdatePropertyFloat.cs:13`). The hand-written
+/// Rust parser uses `f64` (matching ACE retail wire) while this
+/// generated parser uses `f32` (matching Chorizite XML). A live ACE byte
+/// stream would mis-decode through the generated path. Flag for the
+/// upstream Chorizite XML fix; for now we test the schema-as-declared.
+/// See [[reference_chorizite_acprotocol_dep_graph_2026-05-19]].
+#[test]
+fn qualities_private_update_float_round_trips_per_xml_schema() {
+    use generated::{S2C_Qualities_PrivateUpdateFloat, PropertyFloat};
+    // Wire (per Chorizite XML, NOT ACE retail):
+    //   sequence=0x07, property=23 (CurrentPowerMod), value=0.75 as f32.
+    let mut buf = Vec::new();
+    buf.push(0x07u8);                                  // Sequence
+    buf.extend_from_slice(&23u32.to_le_bytes());        // PropertyFloat::CurrentPowerMod = 23
+    buf.extend_from_slice(&0.75f32.to_le_bytes());      // Value (f32 per XML, NOT f64 per ACE)
+
+    let mut off = 0usize;
+    let msg = S2C_Qualities_PrivateUpdateFloat::read_from(&buf, &mut off)
+        .expect("decode succeeds");
+    assert_eq!(msg.sequence, 0x07);
+    assert_eq!(msg.key, PropertyFloat::CurrentPowerMod);
+    assert_eq!(msg.value, 0.75);
+    assert_eq!(off, 9, "9-byte payload per Chorizite XML schema (f32 Value)");
+    assert_eq!(S2C_Qualities_PrivateUpdateFloat::OPCODE, 0x02D3);
+}
+
+/// Wave 1.A-4: `S2C_Qualities_UpdateFloat` (0x02D4) round-trips with the
+/// trailing ObjectId. Same XML-vs-ACE divergence as A-3 applies. Layout
+/// = `byte Sequence + ObjectId(u32) + PropertyFloat(uint) + float Value`
+/// = 13 bytes per XML.
+#[test]
+fn qualities_update_float_round_trips_with_object_id() {
+    use generated::{S2C_Qualities_UpdateFloat, PropertyFloat};
+    let mut buf = Vec::new();
+    buf.push(0x03u8);                                       // Sequence
+    buf.extend_from_slice(&0x5000_0002u32.to_le_bytes());    // ObjectId
+    buf.extend_from_slice(&24u32.to_le_bytes());             // PropertyFloat::AccuracyMod = 24
+    buf.extend_from_slice(&1.25f32.to_le_bytes());           // Value (f32 per XML)
+
+    let mut off = 0usize;
+    let msg = S2C_Qualities_UpdateFloat::read_from(&buf, &mut off)
+        .expect("decode succeeds");
+    assert_eq!(msg.sequence, 0x03);
+    assert_eq!(msg.object_id, 0x5000_0002);
+    assert_eq!(msg.key, PropertyFloat::AccuracyMod);
+    assert_eq!(msg.value, 1.25);
+    assert_eq!(off, 13);
+    assert_eq!(S2C_Qualities_UpdateFloat::OPCODE, 0x02D4);
+}
+
+/// Wave 1.A-5: `S2C_Qualities_PrivateRemoveIntEvent` (0x01D1) round-trips.
+/// Layout = `byte Sequence + PropertyInt(uint)` = 5 bytes payload.
+#[test]
+fn qualities_private_remove_int_event_round_trips() {
+    use generated::{S2C_Qualities_PrivateRemoveIntEvent, PropertyInt};
+    let mut buf = Vec::new();
+    buf.push(0x11u8);                                  // Sequence
+    buf.extend_from_slice(&5u32.to_le_bytes());         // PropertyInt::EncumbranceVal = 5
+
+    let mut off = 0usize;
+    let msg = S2C_Qualities_PrivateRemoveIntEvent::read_from(&buf, &mut off)
+        .expect("decode succeeds");
+    assert_eq!(msg.sequence, 0x11);
+    assert_eq!(msg.r#type, PropertyInt::EncumbranceVal);
+    assert_eq!(off, 5);
+    assert_eq!(S2C_Qualities_PrivateRemoveIntEvent::OPCODE, 0x01D1);
+}
+
+/// Wave 1.A-6: `S2C_Qualities_RemoveIntEvent` (0x01D2) round-trips with
+/// the trailing ObjectId. Layout = `byte Sequence + ObjectId(u32) +
+/// PropertyInt(uint)` = 9 bytes.
+#[test]
+fn qualities_remove_int_event_round_trips_with_object_id() {
+    use generated::{S2C_Qualities_RemoveIntEvent, PropertyInt};
+    let mut buf = Vec::new();
+    buf.push(0x13u8);                                       // Sequence
+    buf.extend_from_slice(&0x5000_0003u32.to_le_bytes());    // ObjectId
+    buf.extend_from_slice(&16u32.to_le_bytes());             // PropertyInt::ItemUseable = 16
+
+    let mut off = 0usize;
+    let msg = S2C_Qualities_RemoveIntEvent::read_from(&buf, &mut off)
+        .expect("decode succeeds");
+    assert_eq!(msg.sequence, 0x13);
+    assert_eq!(msg.object_id, 0x5000_0003);
+    assert_eq!(msg.r#type, PropertyInt::ItemUseable);
+    assert_eq!(off, 9);
+    assert_eq!(S2C_Qualities_RemoveIntEvent::OPCODE, 0x01D2);
+}
+
+/// Wave 1.A-7: `S2C_Qualities_PrivateRemoveFloatEvent` (0x01D5) round-trips.
+/// Layout = `byte Sequence + PropertyFloat(uint)` = 5 bytes payload.
+#[test]
+fn qualities_private_remove_float_event_round_trips() {
+    use generated::{S2C_Qualities_PrivateRemoveFloatEvent, PropertyFloat};
+    let mut buf = Vec::new();
+    buf.push(0x21u8);                                  // Sequence
+    buf.extend_from_slice(&26u32.to_le_bytes());        // PropertyFloat::MaximumVelocity = 26
+
+    let mut off = 0usize;
+    let msg = S2C_Qualities_PrivateRemoveFloatEvent::read_from(&buf, &mut off)
+        .expect("decode succeeds");
+    assert_eq!(msg.sequence, 0x21);
+    assert_eq!(msg.r#type, PropertyFloat::MaximumVelocity);
+    assert_eq!(off, 5);
+    assert_eq!(S2C_Qualities_PrivateRemoveFloatEvent::OPCODE, 0x01D5);
+}
+
+/// Wave 1.A-8: `S2C_Qualities_RemoveFloatEvent` (0x01D6) round-trips with
+/// the trailing ObjectId. Layout = `byte Sequence + ObjectId(u32) +
+/// PropertyFloat(uint)` = 9 bytes.
+#[test]
+fn qualities_remove_float_event_round_trips_with_object_id() {
+    use generated::{S2C_Qualities_RemoveFloatEvent, PropertyFloat};
+    let mut buf = Vec::new();
+    buf.push(0x23u8);                                       // Sequence
+    buf.extend_from_slice(&0x5000_0004u32.to_le_bytes());    // ObjectId
+    buf.extend_from_slice(&23u32.to_le_bytes());             // PropertyFloat::CurrentPowerMod = 23
+
+    let mut off = 0usize;
+    let msg = S2C_Qualities_RemoveFloatEvent::read_from(&buf, &mut off)
+        .expect("decode succeeds");
+    assert_eq!(msg.sequence, 0x23);
+    assert_eq!(msg.object_id, 0x5000_0004);
+    assert_eq!(msg.r#type, PropertyFloat::CurrentPowerMod);
+    assert_eq!(off, 9);
+    assert_eq!(S2C_Qualities_RemoveFloatEvent::OPCODE, 0x01D6);
+}
+
+/// Wave 1.A-9: Coverage census — every Qualities_Update*/Remove* opcode
+/// from protocol.xml (lines 7974-8211) appears in OPCODE_INDEX. The 46
+/// expected opcodes are listed verbatim; one missing arm trips the panic
+/// with a precise message so a future XML revision that drops or renames
+/// a Qualities message surfaces here rather than at runtime in the live
+/// recv loop.
+#[test]
+fn qualities_update_remove_opcode_census_in_opcode_index() {
+    use std::collections::BTreeSet;
+    let index_opcodes: BTreeSet<u32> = generated::OPCODE_INDEX
+        .iter()
+        .filter(|(kind, name, _)| {
+            *kind == "messageS2C" &&
+            (name.starts_with("Qualities_Update") || name.starts_with("Qualities_PrivateUpdate") ||
+             name.starts_with("Qualities_Remove") || name.starts_with("Qualities_PrivateRemove"))
+        })
+        .map(|(_, _, op)| *op)
+        .collect();
+
+    // Expected set per protocol.xml (verified 2026-05-27):
+    //
+    // Public Update (15): 0x02CE, D0, D2, D4, D6, D8, DA, DC, DE, E0, E2,
+    //                     E4, E6, E8, EA
+    // Private Update (15): 0x02CD, CF, D1, D3, D5, D7, D9, DB, DD, DF, E1,
+    //                      E3, E5, E7, E9
+    // Public Remove (8): 0x01D2, D4, D6, D8, DA, DC, DE, 0x02B9
+    // Private Remove (8): 0x01D1, D3, D5, D7, D9, DB, DD, 0x02B8
+    //
+    // Total = 46.
+    let expected_opcodes: BTreeSet<u32> = [
+        // Public Remove (8) — 7 from 0x01Dx + Int64 from 0x02B9
+        0x01D2, 0x01D4, 0x01D6, 0x01D8, 0x01DA, 0x01DC, 0x01DE, 0x02B9,
+        // Private Remove (8) — 7 from 0x01Dx + Int64 from 0x02B8
+        0x01D1, 0x01D3, 0x01D5, 0x01D7, 0x01D9, 0x01DB, 0x01DD, 0x02B8,
+        // Public Update (15) — 0x02CE..0x02EA odd
+        0x02CE, 0x02D0, 0x02D2, 0x02D4, 0x02D6, 0x02D8, 0x02DA, 0x02DC,
+        0x02DE, 0x02E0, 0x02E2, 0x02E4, 0x02E6, 0x02E8, 0x02EA,
+        // Private Update (15) — 0x02CD..0x02E9 even
+        0x02CD, 0x02CF, 0x02D1, 0x02D3, 0x02D5, 0x02D7, 0x02D9, 0x02DB,
+        0x02DD, 0x02DF, 0x02E1, 0x02E3, 0x02E5, 0x02E7, 0x02E9,
+    ].into_iter().collect();
+
+    let missing: Vec<u32> = expected_opcodes.difference(&index_opcodes).copied().collect();
+    let extra: Vec<u32> = index_opcodes.difference(&expected_opcodes).copied().collect();
+    assert!(
+        missing.is_empty(),
+        "Qualities opcodes missing from generated OPCODE_INDEX: {:?}",
+        missing.iter().map(|o| format!("0x{:04X}", o)).collect::<Vec<_>>()
+    );
+    assert!(
+        extra.is_empty(),
+        "OPCODE_INDEX has Qualities opcodes NOT in the expected census: {:?}",
+        extra.iter().map(|o| format!("0x{:04X}", o)).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        index_opcodes.len(),
+        46,
+        "expected exactly 46 Qualities_Update*/Remove* opcodes; got {}",
+        index_opcodes.len()
+    );
+}
+
+/// Wave 1.A-10: Compile-time existence of every Qualities_Update*/Remove*
+/// generated struct. If any struct was dropped by a future codegen
+/// regression, this test fails to link with a missing-import error
+/// pointing at the dropped name — a stronger guarantee than runtime
+/// opcode-table introspection (which would just SKIP a missing entry).
+#[test]
+fn qualities_update_remove_generated_structs_link() {
+    use generated::*;
+    fn assert_opcode<T>() {}
+    // Public Update (15)
+    assert_opcode::<S2C_Qualities_UpdateInt>();
+    assert_opcode::<S2C_Qualities_UpdateInt64>();
+    assert_opcode::<S2C_Qualities_UpdateBool>();
+    assert_opcode::<S2C_Qualities_UpdateFloat>();
+    assert_opcode::<S2C_Qualities_UpdateString>();
+    assert_opcode::<S2C_Qualities_UpdateDataId>();
+    assert_opcode::<S2C_Qualities_UpdateInstanceId>();
+    assert_opcode::<S2C_Qualities_UpdatePosition>();
+    assert_opcode::<S2C_Qualities_UpdateSkill>();
+    assert_opcode::<S2C_Qualities_UpdateSkillLevel>();
+    assert_opcode::<S2C_Qualities_UpdateSkillAC>();
+    assert_opcode::<S2C_Qualities_UpdateAttribute>();
+    assert_opcode::<S2C_Qualities_UpdateAttributeLevel>();
+    assert_opcode::<S2C_Qualities_UpdateAttribute2nd>();
+    assert_opcode::<S2C_Qualities_UpdateAttribute2ndLevel>();
+    // Private Update (15)
+    assert_opcode::<S2C_Qualities_PrivateUpdateInt>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateInt64>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateBool>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateFloat>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateString>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateDataId>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateInstanceId>();
+    assert_opcode::<S2C_Qualities_PrivateUpdatePosition>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateSkill>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateSkillLevel>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateSkillAC>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateAttribute>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateAttributeLevel>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateAttribute2nd>();
+    assert_opcode::<S2C_Qualities_PrivateUpdateAttribute2ndLevel>();
+    // Public Remove (8)
+    assert_opcode::<S2C_Qualities_RemoveIntEvent>();
+    assert_opcode::<S2C_Qualities_RemoveInt64Event>();
+    assert_opcode::<S2C_Qualities_RemoveBoolEvent>();
+    assert_opcode::<S2C_Qualities_RemoveFloatEvent>();
+    assert_opcode::<S2C_Qualities_RemoveStringEvent>();
+    assert_opcode::<S2C_Qualities_RemoveDataIdEvent>();
+    assert_opcode::<S2C_Qualities_RemoveInstanceIdEvent>();
+    assert_opcode::<S2C_Qualities_RemovePositionEvent>();
+    // Private Remove (8)
+    assert_opcode::<S2C_Qualities_PrivateRemoveIntEvent>();
+    assert_opcode::<S2C_Qualities_PrivateRemoveInt64Event>();
+    assert_opcode::<S2C_Qualities_PrivateRemoveBoolEvent>();
+    assert_opcode::<S2C_Qualities_PrivateRemoveFloatEvent>();
+    assert_opcode::<S2C_Qualities_PrivateRemoveStringEvent>();
+    assert_opcode::<S2C_Qualities_PrivateRemoveDataIdEvent>();
+    assert_opcode::<S2C_Qualities_PrivateRemoveInstanceIdEvent>();
+    assert_opcode::<S2C_Qualities_PrivateRemovePositionEvent>();
+}
