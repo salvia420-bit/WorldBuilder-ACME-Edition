@@ -1036,6 +1036,52 @@ impl TerrainTexture {
     }
 }
 
+/// T7 — per-terrain-type detail textures + the LUTs the terrain shader
+/// needs to apply them. Bundled into one round-trip ([`fetch_terrain_detail_textures`])
+/// like [`TerrainAlphaMasks`].
+///
+/// `slices` are the **unique** decoded detail textures (retail ships only
+/// ~3 distinct ones across 33 terrain types — `0x050012AF` covers 29
+/// types, `0x05001786`/`0x05001787` the four rock/grass/ice outliers), so
+/// the shader binds a tiny `sampler2DArray` instead of one layer per
+/// code. Each slice's `terrain_type` field is repurposed as its slice
+/// index (0..slices.len()-1) so the JS atlas builder packs it into the
+/// right array layer.
+///
+/// `code_to_slice[c]` maps terrain code `c` (0..32) to a slice index, or
+/// `255` when the code has no detail texture. `code_tiling[c]` is retail's
+/// `detail_tex_tiling` for that code (the shader multiplies the detail UV
+/// by it). Both are 33 entries.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct TerrainDetailTextures {
+    slices: Vec<TerrainTexture>,
+    code_to_slice: Vec<u32>,
+    code_tiling: Vec<u32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl TerrainDetailTextures {
+    /// Take ownership of the unique detail textures (each `terrainType` is
+    /// its slice index). Length = number of distinct detail DIDs. JS calls
+    /// this once.
+    #[wasm_bindgen(js_name = takeSlices)]
+    pub fn take_slices(&mut self) -> Vec<TerrainTexture> {
+        std::mem::take(&mut self.slices)
+    }
+    /// 33-entry `Uint32Array`: terrain code → slice index (255 = none).
+    #[wasm_bindgen(js_name = codeToSlice)]
+    pub fn code_to_slice(&self) -> Vec<u32> {
+        self.code_to_slice.clone()
+    }
+    /// 33-entry `Uint32Array`: terrain code → `detail_tex_tiling`.
+    #[wasm_bindgen(js_name = codeTiling)]
+    pub fn code_tiling(&self) -> Vec<u32> {
+        self.code_tiling.clone()
+    }
+}
+
 /// One placed object inside a landblock — output of
 /// [`fetch_landblock_objects`]. Object positions are in world-metre
 /// coordinates relative to the landblock's NW corner (so JS adds
@@ -2885,6 +2931,191 @@ pub async fn fetch_terrain_modulation_ranges() -> Result<Vec<u32>, JsValue> {
         out[base + 5] = t.max_vert_hue;
     }
     Ok(out)
+}
+
+/// T7 — build the per-code detail-texture LUTs from `(terrain_type,
+/// detail_texture_id, detail_tex_tiling)` triples (one per `TMTerrainDesc`).
+///
+/// Returns `(code_to_slice, code_tiling, unique_dids)`:
+/// - `code_to_slice[c]` (33 entries) = index into `unique_dids` for terrain
+///   code `c`, or `255` when the code has no detail texture (`did == 0`) or
+///   isn't present in the input.
+/// - `code_tiling[c]` (33 entries) = the code's `detail_tex_tiling`
+///   (default 1 for absent codes).
+/// - `unique_dids` = distinct detail texture DIDs in first-seen order; the
+///   shader binds one `sampler2DArray` layer per entry.
+///
+/// Pure (no DAT / no wasm) so it's host-unit-testable. Mirrors acclient
+/// `TexMerge::GetDetailTex`/`GetDetailTiling` (per-`terrain_number` lookup,
+/// `acclient.c:304939,304957`) but deduplicates because retail authors only
+/// ~3 distinct detail textures across the 33 types.
+fn build_detail_texture_luts(entries: &[(u32, u32, u32)]) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+    let mut code_to_slice = vec![255u32; 33];
+    let mut code_tiling = vec![1u32; 33];
+    let mut unique: Vec<u32> = Vec::new();
+    for &(code, did, tiling) in entries {
+        let c = code as usize;
+        if c >= 33 {
+            continue;
+        }
+        code_tiling[c] = tiling;
+        if did == 0 {
+            continue;
+        }
+        let slice = match unique.iter().position(|&u| u == did) {
+            Some(i) => i,
+            None => {
+                unique.push(did);
+                unique.len() - 1
+            }
+        };
+        code_to_slice[c] = slice as u32;
+    }
+    (code_to_slice, code_tiling, unique)
+}
+
+/// T7 — fetch the retail per-terrain-type **detail textures** (the
+/// near-camera high-frequency diffuse layer retail modulates the merged
+/// base tile by) and the LUTs the terrain shader uses to apply them.
+///
+/// Pipeline:
+/// 1. Read Region `0x13000000` → `terrain_desc` (per-type `detail_tex_gid`
+///    + `detail_tex_tiling`).
+/// 2. [`build_detail_texture_luts`] dedups the detail DIDs (retail ships ~3
+///    distinct across 33 codes) and builds the `code → slice` + `code →
+///    tiling` LUTs.
+/// 3. Decode each unique detail SurfaceTexture → RGBA8 via the same
+///    SurfaceTexture → highest-res Texture → palette pipeline as
+///    [`fetch_terrain_textures`].
+///
+/// Returns a [`TerrainDetailTextures`]. Caller (`terrain.js`) builds a
+/// `sampler2DArray` from `slices` and binds the LUTs as `int[33]` uniforms.
+/// Opt-in (`?terrainDetailTex=on`) — `terrain.js` only calls this when the
+/// flag is set, so default boot pays nothing.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_terrain_detail_textures() -> Result<TerrainDetailTextures, JsValue> {
+    use holtburger_dat::file_type::{
+        Palette, Region, SurfaceTexture, Texture, TextureDecodeError,
+    };
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = global_source::global_source();
+
+    // 1. Region → per-type detail DID + tiling.
+    let region_bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", 0x1300_0000))
+        .map_err(|e| JsValue::from_str(&format!("Region 0x13000000: {e}")))?;
+    let region = Region::unpack(&mut std::io::Cursor::new(&region_bytes[..]))
+        .map_err(|e| JsValue::from_str(&format!("Region::unpack: {e}")))?;
+
+    let entries: Vec<(u32, u32, u32)> = region
+        .terrain_info
+        .land_surfaces
+        .tex_merge
+        .terrain_desc
+        .iter()
+        .map(|td| {
+            (
+                td.terrain_type,
+                td.terrain_tex.detail_texture_id,
+                td.terrain_tex.detail_tex_tiling,
+            )
+        })
+        .collect();
+    let (code_to_slice, code_tiling, unique_ids) = build_detail_texture_luts(&entries);
+
+    // 2. Prefetch the unique detail SurfaceTextures, then their highest-res
+    //    Textures, then palettes (mirrors fetch_terrain_textures levels).
+    let surf_keys: Vec<ResourceKey<'_>> = unique_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    source
+        .prefetch(&surf_keys)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("prefetch detail SurfaceTextures: {e}")))?;
+
+    let mut tex_ids: Vec<u32> = Vec::with_capacity(unique_ids.len());
+    for &surf_id in &unique_ids {
+        if let Ok(b) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_id))
+            && let Ok(s) = SurfaceTexture::unpack(&b)
+            && let Some(t) = s.highest_res()
+        {
+            tex_ids.push(t);
+        }
+    }
+    let tex_keys: Vec<ResourceKey<'_>> = tex_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    source
+        .prefetch(&tex_keys)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("prefetch detail Textures: {e}")))?;
+
+    let mut pal_ids: Vec<u32> = Vec::new();
+    for &tex_id in &tex_ids {
+        if let Ok(b) = source.get_file_by_key(ResourceKey::new("eor/portal", tex_id))
+            && let Ok(t) = Texture::unpack(&b)
+            && let Some(pid) = t.default_palette_id
+        {
+            pal_ids.push(pid);
+        }
+    }
+    if !pal_ids.is_empty() {
+        let pal_keys: Vec<ResourceKey<'_>> = pal_ids
+            .iter()
+            .map(|id| ResourceKey::new("eor/portal", *id))
+            .collect();
+        source
+            .prefetch(&pal_keys)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("prefetch detail Palettes: {e}")))?;
+    }
+
+    // 3. Decode each unique detail texture to RGBA8. slice index = position
+    //    in `unique_ids` (matches `code_to_slice`).
+    let mut slices = Vec::with_capacity(unique_ids.len());
+    for (slice_idx, surf_id) in unique_ids.iter().copied().enumerate() {
+        let surf_bytes = source
+            .get_file_by_key(ResourceKey::new("eor/portal", surf_id))
+            .map_err(|e| JsValue::from_str(&format!("detail SurfaceTexture {surf_id:#010X}: {e}")))?;
+        let surf = SurfaceTexture::unpack(&surf_bytes).map_err(|e| {
+            JsValue::from_str(&format!("detail SurfaceTexture::unpack {surf_id:#010X}: {e}"))
+        })?;
+        let tex_id = surf.highest_res().ok_or_else(|| {
+            JsValue::from_str(&format!("detail SurfaceTexture {surf_id:#010X}: empty mip list"))
+        })?;
+        let tex_bytes = source
+            .get_file_by_key(ResourceKey::new("eor/portal", tex_id))
+            .map_err(|e| JsValue::from_str(&format!("detail Texture {tex_id:#010X}: {e}")))?;
+        let tex = Texture::unpack(&tex_bytes)
+            .map_err(|e| JsValue::from_str(&format!("detail Texture::unpack {tex_id:#010X}: {e}")))?;
+        let rgba = tex
+            .to_rgba8(|pal_id| {
+                let pal_bytes = source
+                    .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
+                    .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
+                Palette::unpack(&pal_bytes).map_err(|e| {
+                    TextureDecodeError::PaletteFetch(format!("Palette::unpack {pal_id:#010X}: {e}"))
+                })
+            })
+            .map_err(|e| JsValue::from_str(&format!("detail Texture::to_rgba8 {tex_id:#010X}: {e}")))?;
+
+        slices.push(TerrainTexture {
+            terrain_type: slice_idx as u32,
+            width: tex.width as u32,
+            height: tex.height as u32,
+            pixels: rgba,
+        });
+    }
+
+    Ok(TerrainDetailTextures {
+        slices,
+        code_to_slice,
+        code_tiling,
+    })
 }
 
 /// Phase 3 step 3.6 — fetch the retail TexMerge alpha masks (corner,
@@ -35422,6 +35653,54 @@ mod tests_soa_parity {
         // correctly — that's the load-bearing flag for the validator's
         // statics-vs-buildings split.
         assert_eq!(is_building[2], 1);
+    }
+
+    /// **T7 (2026-05-28).** `build_detail_texture_luts` dedups detail
+    /// texture DIDs, maps each terrain code to its slice, carries per-code
+    /// tiling, and defaults absent codes to (slice=255, tiling=1).
+    #[test]
+    fn detail_texture_luts_dedup_and_map() {
+        // Mirror the retail shape: one shared detail tex across most codes
+        // (0x050012AF), two outliers, varying tiling.
+        let entries = [
+            (0u32, 0x05001786u32, 4u32), // outlier A
+            (1, 0x05001787, 4),          // outlier B
+            (2, 0x05001787, 4),          // outlier B again (shared)
+            (3, 0x05001786, 4),          // outlier A again (shared)
+            (9, 0x050012AF, 1),          // shared base
+            (14, 0x050012AF, 1),         // shared base
+            (22, 0x050012AF, 8),         // shared base, different tiling
+            (32, 0x050012AF, 2),         // RoadType, code 32 still mapped
+        ];
+        let (code_to_slice, code_tiling, unique) = build_detail_texture_luts(&entries);
+
+        // First-seen order: 0x05001786 -> 0, 0x05001787 -> 1, 0x050012AF -> 2.
+        assert_eq!(unique, vec![0x05001786, 0x05001787, 0x050012AF]);
+        assert_eq!(code_to_slice.len(), 33);
+        assert_eq!(code_tiling.len(), 33);
+        assert_eq!(code_to_slice[0], 0);
+        assert_eq!(code_to_slice[1], 1);
+        assert_eq!(code_to_slice[2], 1); // shares slice 1
+        assert_eq!(code_to_slice[3], 0); // shares slice 0
+        assert_eq!(code_to_slice[9], 2);
+        assert_eq!(code_to_slice[14], 2);
+        assert_eq!(code_to_slice[22], 2);
+        assert_eq!(code_to_slice[32], 2); // RoadType maps too
+
+        // Per-code tiling preserved.
+        assert_eq!(code_tiling[0], 4);
+        assert_eq!(code_tiling[22], 8);
+        assert_eq!(code_tiling[32], 2);
+
+        // Absent code: sentinel slice 255 + default tiling 1.
+        assert_eq!(code_to_slice[5], 255);
+        assert_eq!(code_tiling[5], 1);
+
+        // did == 0 → no slice but tiling still recorded.
+        let (cts, ct, uq) = build_detail_texture_luts(&[(7u32, 0u32, 3u32)]);
+        assert_eq!(cts[7], 255);
+        assert_eq!(ct[7], 3);
+        assert!(uq.is_empty());
     }
 }
 

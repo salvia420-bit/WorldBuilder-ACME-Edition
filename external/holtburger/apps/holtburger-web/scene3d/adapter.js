@@ -429,6 +429,87 @@ export function buildTerrainAtlasArrayBytes(terrainTextures) {
   };
 }
 
+// T7 — detail-texture array layer size. Retail's unique detail textures are
+// 64×64 (the shared 0x050012AF landscape detail) and 256×256 (the rock/grass
+// outliers); we normalise every slice to this uniform layer so they pack into
+// one `THREE.DataArrayTexture`. 256 keeps the 256² slices byte-exact and
+// upscales the 64² one (it's a high-frequency tile sampled at sub-metre
+// frequency, so the upscale is invisible). Far smaller GPU cost than the base
+// atlas: only ~3 slices × 256² × 4 ≈ 0.8 MiB.
+const DETAIL_TILE_PX = 256;
+
+/**
+ * T7 — build a `THREE.DataArrayTexture`-ready byte block from the unique
+ * detail textures returned by `fetch_terrain_detail_textures().takeSlices()`.
+ *
+ * Unlike `buildTerrainAtlasArrayBytes` (fixed 33 layers, indexed by terrain
+ * code), this packs a variable number of UNIQUE detail slices (retail ships
+ * ~3) indexed by `slice.terrainType` (the slice index, 0..depth-1). The
+ * terrain shader maps terrain code → slice via the `uCodeToDetailTexSlice`
+ * LUT, so the layer order here must match `fetch_terrain_detail_textures`'s
+ * `codeToSlice` indices — which it does, since both come from the same
+ * `unique_ids` first-seen order.
+ *
+ * Returns `{ detailArrayBytes, tileSize: DETAIL_TILE_PX, depth }`. Each slice
+ * is resampled (canvas) to `DETAIL_TILE_PX²` when its native size differs;
+ * byte-exact memcpy on the fast path.
+ */
+export function buildTerrainDetailArrayBytes(slices) {
+  if (!Array.isArray(slices) || slices.length === 0) {
+    throw new Error(
+      `buildTerrainDetailArrayBytes: slices must be a non-empty array (got ${typeof slices}, len ${slices?.length})`
+    );
+  }
+  const depth = slices.length;
+  const layerStride = DETAIL_TILE_PX * DETAIL_TILE_PX * 4;
+  const detailArrayBytes = new Uint8Array(layerStride * depth);
+
+  let tileCanvas = null;
+  let tctx = null;
+  let layerCanvas = null;
+  let lctx = null;
+  const ensureResizeScratch = () => {
+    if (tileCanvas) return;
+    tileCanvas = document.createElement("canvas");
+    tctx = tileCanvas.getContext("2d");
+    layerCanvas = document.createElement("canvas");
+    layerCanvas.width = DETAIL_TILE_PX;
+    layerCanvas.height = DETAIL_TILE_PX;
+    lctx = layerCanvas.getContext("2d");
+  };
+
+  for (const tex of slices) {
+    const sliceIdx = tex.terrainType; // repurposed as slice index in wasm
+    if (!Number.isInteger(sliceIdx) || sliceIdx < 0 || sliceIdx >= depth) {
+      throw new Error(
+        `buildTerrainDetailArrayBytes: slice index ${sliceIdx} out of range [0, ${depth})`
+      );
+    }
+    const w = tex.width;
+    const h = tex.height;
+    const px = tex.pixels;
+    const dstOffset = sliceIdx * layerStride;
+
+    if (w === DETAIL_TILE_PX && h === DETAIL_TILE_PX) {
+      detailArrayBytes.set(px, dstOffset);
+    } else {
+      ensureResizeScratch();
+      tileCanvas.width = w;
+      tileCanvas.height = h;
+      const clamped = new Uint8ClampedArray(px.buffer, px.byteOffset, px.byteLength);
+      tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
+      lctx.clearRect(0, 0, DETAIL_TILE_PX, DETAIL_TILE_PX);
+      lctx.drawImage(tileCanvas, 0, 0, w, h, 0, 0, DETAIL_TILE_PX, DETAIL_TILE_PX);
+      const layerImg = lctx.getImageData(0, 0, DETAIL_TILE_PX, DETAIL_TILE_PX);
+      detailArrayBytes.set(layerImg.data, dstOffset);
+    }
+
+    if (typeof tex.free === "function") tex.free();
+  }
+
+  return { detailArrayBytes, tileSize: DETAIL_TILE_PX, depth };
+}
+
 /**
  * Build a 9×9 `THREE.DataTexture` from this LB's per-vertex terrain
  * codes (Uint8Array, length 81).

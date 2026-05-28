@@ -352,3 +352,47 @@ WebGL `preserveDrawingBuffer=false`), scp'd back. Drove autoLogin → `@telepoi 
 **Still pending (implementation, now unblocked by the working eye-test loop):** T1 composite
 + atlas/shader wiring, T7 detail texture, T9 dynamic entity LOD, T11 speed-source wire — each
 can now be implemented and visually confirmed through this loop.
+
+---
+
+# T7 — terrain detail texture — DONE + eye-test-confirmed (2026-05-28, late)
+
+Shipped behind `?terrainDetailTex=on` (default off → render byte-identical).
+
+**Grounding (real retail data, `dump_detail_textures` example).** `GetDetailTex` is
+**per-terrain-type** (`terrain_desc[n].detail_tex_gid`, acclient.c:304939), NOT one global
+texture as the audit framing assumed — but retail authors only **3 distinct** detail textures
+across the 33 codes: `0x050012AF` (64×64, 29 codes — the shared landscape detail),
+`0x05001786` + `0x05001787` (256×256, the rock/grass/ice outliers codes 0/1/2/3). Per-code
+`detail_tex_tiling` is mostly 1, with 2/4/8 outliers. So the shader binds a 3-layer
+`sampler2DArray` + a `code→slice` LUT (mirrors the existing detail-NORMAL `uCodeToSlice`
+pattern), NOT 33 layers.
+
+**Implementation.**
+- **Rust** `fetch_terrain_detail_textures()` (`src/lib.rs`) → `TerrainDetailTextures`
+  {`slices` (unique decoded, terrainType = slice idx), `code_to_slice[33]` (255 = none),
+  `code_tiling[33]`}. Pure host-testable `build_detail_texture_luts()` does the dedup. Decode
+  pipeline mirrors `fetch_terrain_textures` (SurfaceTexture → highest-res Texture → palette).
+- **adapter.js** `buildTerrainDetailArrayBytes()` packs the unique slices into a
+  `DataArrayTexture` block (uniform 256² layers; byte-exact fast path, canvas resample for the
+  64² slice).
+- **terrain.js** binds the array + LUTs as `int[33]`/`sampler2DArray` uniforms; fragment does a
+  **MODULATE2X** modulation of the merged base colour by the provoking-vertex code's detail
+  slice (sampled at `vGridUv * tiling * baseScale`), with a `vViewDepth` distance fade
+  (`DEFAULT_DETAIL_TEX_*` constants: baseScale 8, strength 0.5, fade 18→75 m). Mid-grey detail
+  (0.5) → 1.0 neutral, so the base tile's mean brightness is preserved; far fragments fade to
+  neutral. Built once + cached on `scene3d.terrainDetailTexState` (reused across ring rebuilds /
+  lazy LB adds). **Plumb-through:** the export had to be added to the curated `init3D` wasmExports
+  opts object in `index.html` (the Sky-J/H2/H3 trap — without it the flag silently no-ops).
+- **Validated:** Rust host test `detail_texture_luts_dedup_and_map` (web 74/74); dat 239/239;
+  JS `test_terrain_detail_tex.mjs` 17/17 (builder placement + MODULATE2X/fade contract).
+  **1070 eye-test:** A/B at Holtburg (`t7-detail-off` vs `t7-detail-on2`, foreground crop in
+  `eyetest/t7-compare-foreground.png`) — detail-ON adds clear grass-blade-scale grain near the
+  camera, mean colour preserved, no tiling seams/aliasing, distant terrain unaffected (fade
+  works). Materials confirmed `uDetailTexEnabled=1`, `uDetailTexSliceCount=3`, texture bound.
+- **Remaining tuning (optional):** strength/baseScale/fade are JS constants (live-editable, no
+  rebuild). 0.5 is a tasteful default; could push higher for the rock/grass tiling=4 codes.
+
+**Infra note:** the no-cache dev server (`/tmp/nocache-server.py`) was a single-threaded
+`HTTPServer` and wedged when the 3.6 MB wasm was pulled over the 1070 reverse tunnel (one slow
+client stalled the only worker). Upgraded to `ThreadingHTTPServer`.

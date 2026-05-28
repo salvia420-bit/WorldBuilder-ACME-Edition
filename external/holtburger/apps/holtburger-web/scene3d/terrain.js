@@ -27,6 +27,7 @@ import {
   subdividedLandblockMeshToGeometry,
   buildVertexTypesDataTexture,
   buildTerrainAtlasArrayBytes,
+  buildTerrainDetailArrayBytes,
   getAdapterMaxAnisotropy,
 } from "./adapter.js";
 import { applyWireVertexAOPatch } from "./materials.js";
@@ -414,6 +415,34 @@ const TERRAIN_CODE_TO_DETAIL_SLICE = new Uint8Array([
 // height.
 const DEFAULT_DETAIL_SCALE = 16.0;
 
+// ----- T7 (2026-05-28) — terrain detail-diffuse texture defaults -----
+//
+// All four are eye-test-tuned (the handoff flags tiling/blend/fade as
+// "does it look right" knobs). They're shader uniforms fed from these JS
+// constants, so they can be retuned by editing here and reloading (no wasm
+// rebuild) — only the detail textures themselves come from wasm.
+//
+// BASE_SCALE: detail UV = vGridUv * (detail_tex_tiling * BASE_SCALE).
+//   vGridUv is 1.0 per 24 m. At BASE_SCALE 8 and the common tiling=1 →
+//   8 repeats per cell = one detail tile per 3 m; the rock/grass tiling=4
+//   types get 1 per 0.75 m. Mirrors the sub-metre frequency of the
+//   detail-NORMAL path (DEFAULT_DETAIL_SCALE 16) at a slightly coarser
+//   rate so the diffuse grain doesn't alias against the normal grain.
+// STRENGTH: MODULATE2X blend amount near camera (0 = off, 1 = full 2×).
+// FADE_START/END: metres of view-space depth over which the effect ramps
+//   from full to zero — a near-camera-only layer (retail's detail mips
+//   average out by ~one cell distance anyway).
+const DEFAULT_DETAIL_TEX_BASE_SCALE = 8.0;
+const DEFAULT_DETAIL_TEX_STRENGTH = 0.5;
+const DEFAULT_DETAIL_TEX_FADE_START = 18.0;
+const DEFAULT_DETAIL_TEX_FADE_END = 75.0;
+// Fallback LUTs when the detail-tex flag is off / fetch failed: every code
+// maps to slice 255 (= "none", shader skips) and tiling 1. The int[33]
+// uniforms must still be the right length even when disabled, or three.js
+// warns on a length-mismatched uniform array bind.
+const DETAIL_TEX_SLICE_FALLBACK = Object.freeze(new Array(33).fill(255));
+const DETAIL_TEX_TILING_FALLBACK = Object.freeze(new Array(33).fill(1));
+
 // ----- Phase 1.3 — triplanar mapping on terrain slopes --------------
 //
 // Slope is computed in AC-space (Z-up): `slope = 1.0 - normal.z`.
@@ -657,6 +686,23 @@ uniform int uCodeToSlice[32];         // terrain-code → slice (255 = no detail
 uniform float uDetailScale;
 uniform vec2 uWindDir;                // unit vec2 (cos, sin) — sand UV rotation
 uniform float uDetailNormalEnabled;   // 0.0 OFF / 1.0 ON (quality gate)
+// T7 (2026-05-28) — terrain DETAIL DIFFUSE texture. Retail modulates the
+// merged base tile by a per-terrain-type detail texture (acclient
+// TexMerge::GetDetailTex / GetDetailTiling) that tiles at sub-metre
+// frequency, adding near-camera high-frequency contrast (grass blades,
+// gravel, rock grain) that fades to a neutral mean at distance (the mip
+// chain averages to ~mid-grey → MODULATE2X neutral). Opt-in via the
+// ?terrainDetailTex=on URL flag; uDetailTexEnabled=0 → fragment branch
+// skipped, render byte-identical to before.
+uniform sampler2DArray uTerrainDetailTex; // unique detail slices (retail ~3)
+uniform int uCodeToDetailTexSlice[33];    // terrain-code (0..32) → detail slice (255 = none)
+uniform int uDetailTexTiling[33];         // per-code detail_tex_tiling (retail 1/2/4/8)
+uniform int uDetailTexSliceCount;         // number of valid slices (slice < count is real)
+uniform float uDetailTexBaseScale;        // UV repeats per cell-unit per tiling step (eye-test-tuned)
+uniform float uDetailTexStrength;         // 0..1 modulation strength near camera
+uniform float uDetailTexFadeStart;        // metres — full strength nearer than this
+uniform float uDetailTexFadeEnd;          // metres — zero strength beyond this
+uniform float uDetailTexEnabled;          // 0.0 OFF / 1.0 ON (URL flag gate)
 // Phase 1.3 — slope-gated triplanar sampling of the detail normal.
 // uTriplanarEnabled gates the whole block off when quality is low;
 // uTriplanarSharpness is the power applied to abs(normal) before
@@ -892,6 +938,33 @@ void main() {
     vec3 tint = mix(vec3(0.9, 0.95, 1.05), vec3(1.0, 1.0, 1.0),
                     0.5 + 0.5 * vWaveModulation.x);
     result *= tint;
+  }
+
+  // T7 — terrain detail-diffuse modulation (near-camera, MODULATE2X).
+  // Applied to the merged base colour BEFORE the road overlay (road art
+  // paints over the terrain in retail too). Uses the provoking-vertex
+  // terrain code like the detail-NORMAL path above for one sample per
+  // fragment. The detail tile tiles at (tiling * baseScale) repeats per
+  // cell-unit (vGridUv is 1.0 per 24 m), giving sub-metre grain.
+  //
+  // MODULATE2X: a detail texel of ~0.5 (the tile's mid-grey mean) yields
+  // 2*0.5 = 1.0 → no net colour change, so the base tile's average is
+  // preserved while local light/dark grain is added. Strength + distance
+  // fade keep it a near-camera effect; beyond uDetailTexFadeEnd the term
+  // collapses to 1.0 (neutral), matching how retail's detail mip averages
+  // out at distance.
+  if (uDetailTexEnabled > 0.5) {
+    int dcode = clamp(vTerrainCode, 0, 32);
+    int dslice = uCodeToDetailTexSlice[dcode];
+    if (dslice >= 0 && dslice < uDetailTexSliceCount) {
+      float tiling = float(uDetailTexTiling[dcode]);
+      vec2 dUv = vGridUv * (tiling * uDetailTexBaseScale);
+      vec3 detail = texture(uTerrainDetailTex, vec3(dUv, float(dslice))).rgb;
+      float fade = 1.0 - smoothstep(uDetailTexFadeStart, uDetailTexFadeEnd, vViewDepth);
+      float amt = clamp(uDetailTexStrength, 0.0, 1.0) * fade;
+      vec3 mod2x = clamp(detail * 2.0, 0.0, 2.0);
+      result *= mix(vec3(1.0), mod2x, amt);
+    }
   }
 
   // Retail-style road painting. Roads in retail AC are a per-vertex bit
@@ -1180,6 +1253,14 @@ async function resolveTerrainRingOpts(
       // no shader-side palette texture needed.
       terrainPaletteTexture: null,
       terrainPaletteStrength: 0,
+      // T7 — wire mode never builds the terrain ShaderMaterial; keep the
+      // detail-tex fields present + disabled for shape parity with the
+      // full return below.
+      detailTexArray: null,
+      detailTexCodeToSlice: null,
+      detailTexCodeTiling: null,
+      detailTexSliceCount: 0,
+      detailTexEnabled: false,
     };
   }
 
@@ -1340,6 +1421,64 @@ async function resolveTerrainRingOpts(
     // resilient.
   }
 
+  // T7 — terrain detail-diffuse array + per-code LUTs (opt-in
+  // `?terrainDetailTex=on`). Built once per session and cached on scene3d
+  // (like the detail-NORMAL array), so ring rebuilds and lazy LB adds
+  // re-use the same DataArrayTexture — that's why it lives OUTSIDE the
+  // `if (!atlasTexture)` block (the lazy path reuses the atlas but still
+  // wants the detail uniforms). Flag off, fetch missing, or build failure
+  // → null state → `uDetailTexEnabled` 0 → shader branch skipped (no-op).
+  const detailTexFlag = readTerrainDetailTexFlag();
+  let detailTexState = scene3d.terrainDetailTexState ?? null;
+  if (
+    detailTexFlag &&
+    !detailTexState &&
+    typeof wasmExports.fetch_terrain_detail_textures === "function"
+  ) {
+    try {
+      const bundle = await wasmExports.fetch_terrain_detail_textures();
+      const slices = bundle.takeSlices();
+      // Uint32Array(33) → plain number arrays for the GLSL int[] uniforms.
+      const codeToSlice = Array.from(bundle.codeToSlice());
+      const codeTiling = Array.from(bundle.codeTiling());
+      if (typeof bundle.free === "function") bundle.free();
+
+      const built = buildTerrainDetailArrayBytes(slices);
+      const tex = new THREE.DataArrayTexture(
+        built.detailArrayBytes,
+        built.tileSize,
+        built.tileSize,
+        built.depth
+      );
+      tex.format = THREE.RGBAFormat;
+      tex.type = THREE.UnsignedByteType;
+      // sRGB to match the base atlas colour-space contract (the detail
+      // texel is multiplied with the linearised atlas colour in-shader).
+      tex.colorSpace = THREE.SRGBColorSpace;
+      // RepeatWrapping (unlike the ClampToEdge base atlas): the detail tile
+      // is *meant* to tile at sub-metre frequency across each cell.
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.magFilter = THREE.LinearFilter;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.generateMipmaps = true;
+      tex.anisotropy = getAdapterMaxAnisotropy();
+      tex.needsUpdate = true;
+
+      detailTexState = {
+        array: tex,
+        codeToSlice, // length 33, 255 = no detail
+        codeTiling, // length 33
+        sliceCount: built.depth,
+      };
+      scene3d.terrainDetailTexState = detailTexState;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[terrain] fetch_terrain_detail_textures failed:", e);
+      detailTexState = null;
+    }
+  }
+
   return {
     centreLbX,
     centreLbY,
@@ -1375,6 +1514,15 @@ async function resolveTerrainRingOpts(
     // once per ring (not per LB) so toggling at runtime requires a
     // page reload.
     terrainModulationEnabled: readTerrainModulationFlag(),
+    // T7 — terrain detail-diffuse array + per-code LUTs (opt-in
+    // `?terrainDetailTex=on`). Null array + enabled:false when off/failed →
+    // shader branch skipped. codeToSlice/codeTiling are length-33 number
+    // arrays (255 = no detail); the material binds them as int[33] uniforms.
+    detailTexArray: detailTexState?.array ?? null,
+    detailTexCodeToSlice: detailTexState?.codeToSlice ?? null,
+    detailTexCodeTiling: detailTexState?.codeTiling ?? null,
+    detailTexSliceCount: detailTexState?.sliceCount ?? 0,
+    detailTexEnabled: !!detailTexState,
   };
 }
 
@@ -1405,6 +1553,24 @@ function readTerrainPaletteFlag() {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     const v = new URLSearchParams(window.location.search).get("terrainPalette");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * T7 (2026-05-28) — Parse `?terrainDetailTex=on`. Gates the near-camera
+ * detail-diffuse modulation (`uDetailTexEnabled` + the wasm detail-texture
+ * fetch). Default OFF — the detail layer is a visual refinement whose
+ * tiling/strength/fade are eye-test-tuned, so it ships behind a flag like
+ * T2 (`?perPolyCull`) did before defaulting on. Same try/catch shape as the
+ * sibling flag readers for the Node test harness.
+ */
+function readTerrainDetailTexFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("terrainDetailTex");
     return typeof v === "string" && v.toLowerCase() === "on";
   } catch (_) {
     return false;
@@ -1729,6 +1895,28 @@ export async function bakeTerrainForLandblock(
       uDetailNormalEnabled: {
         value: opts.detailNormalEnabled ? 1.0 : 0.0,
       },
+      // T7 — terrain detail-DIFFUSE array + per-code LUTs + tuning. All
+      // threaded from opts (built once in resolveTerrainRingOpts). When the
+      // flag is off `opts.detailTexArray` is null and uDetailTexEnabled = 0
+      // so the fragment branch is skipped; the int[33] LUTs still bind a
+      // valid 33-length fallback so three.js doesn't warn on a short array.
+      uTerrainDetailTex: { value: opts.detailTexArray ?? null },
+      uCodeToDetailTexSlice: {
+        value: opts.detailTexCodeToSlice ?? DETAIL_TEX_SLICE_FALLBACK,
+      },
+      uDetailTexTiling: {
+        value: opts.detailTexCodeTiling ?? DETAIL_TEX_TILING_FALLBACK,
+      },
+      uDetailTexSliceCount: {
+        value: Number.isInteger(opts.detailTexSliceCount)
+          ? opts.detailTexSliceCount
+          : 0,
+      },
+      uDetailTexBaseScale: { value: DEFAULT_DETAIL_TEX_BASE_SCALE },
+      uDetailTexStrength: { value: DEFAULT_DETAIL_TEX_STRENGTH },
+      uDetailTexFadeStart: { value: DEFAULT_DETAIL_TEX_FADE_START },
+      uDetailTexFadeEnd: { value: DEFAULT_DETAIL_TEX_FADE_END },
+      uDetailTexEnabled: { value: opts.detailTexEnabled ? 1.0 : 0.0 },
       // Phase 1.3 — triplanar gate + sharpness. When the gate is
       // 0.0 the fragment skips the YZ+XZ samples entirely and the
       // detail-normal falls back to the XY-only Phase 1.2 path.

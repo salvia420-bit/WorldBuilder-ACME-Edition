@@ -953,6 +953,11 @@
         fetch_subdivided_landblock,
         fetch_subdivided_landblocks,
         fetch_terrain_textures,
+        // T7 (2026-05-28) — per-terrain-type detail-diffuse textures +
+        // LUTs. Consumed by scene3d/terrain.js behind ?terrainDetailTex=on.
+        // MUST also be threaded through the init3D opts object below or
+        // terrain.js can't see it (the curated-opts plumb-through trap).
+        fetch_terrain_detail_textures,
         // fetch_terrain_alpha_masks — kept exported in pkg for a
         // future TexMerge mode; not used by the bilinear path.
         fetch_landblock_objects,
@@ -1047,7 +1052,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=fidelity-20260528";
+      } from "./pkg/holtburger_web.js?v=t7-detailtex-20260528";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -6520,6 +6525,11 @@ void main() {
             fetch_subdivided_landblock,
             fetch_subdivided_landblocks,
             fetch_terrain_textures,
+            // T7 (2026-05-28) — detail-diffuse textures. Without this line
+            // scene3d/terrain.js's `typeof wasmExports.fetch_terrain_detail_textures
+            // === "function"` guard fails and ?terrainDetailTex=on silently
+            // no-ops (same plumb-through trap as Sky-J / H2 / H3 pre-db2abfa).
+            fetch_terrain_detail_textures,
             fetch_landblock_objects,
             // Phase D.1 (2026-05-14) — ACE entity-spawn channel.
             // Without this listed in init3D opts the export is
