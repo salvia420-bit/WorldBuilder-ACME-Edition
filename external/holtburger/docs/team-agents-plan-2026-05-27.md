@@ -701,16 +701,38 @@ After Wave 5 closes, write `docs/handoff-2026-06-XX.md` summarizing all 15 oppor
 | 1 | 6 | Codegen + 5 isolated parsers/plugins/scene tweaks | ✅ closed 2026-05-28 |
 | 2 | 3 | scene3d/ shader + VFX | ✅ closed 2026-05-28 |
 | 3 | 3 | HUD plugins + per-vital wasm split | ✅ closed 2026-05-28 |
-| 4 | 2 | Train Skills (S, reduced) + Remote Buffs (M, opcode fix) | pending — use Wave 8 refreshed scope |
-| 5 | 2 | Tradeskill wire (S) + UI (XS); 5.B KILLED | pending — use Wave 8 refreshed scope |
-| 6 | 3 | Codegen wiring + Lifestone UI + Portal Storm dispatch | ✅ closed 2026-05-28 |
+| 4 | 2 | Train Skills UI + Remote-entity buffs | ✅ closed 2026-05-28 |
+| 5 | 2 | Tradeskill wire + UI (5.B killed by audit) | ✅ closed 2026-05-28 |
+| 6 | 3 + polish | Codegen wiring + Lifestone UI + Portal Storm dispatch + 3-flag polish | ✅ closed 2026-05-28 |
 | 7 | — | STRUCK by audit refresh | ✅ closed 2026-05-28 (no work) |
 | 8 | 1 | Audit refresh | ✅ closed 2026-05-28 |
-| **Total** | **20** | **6 of 8 waves closed; Waves 4+5 reduced by audit** | |
+| **Total** | **20 shipped** | **All 8 waves closed in one day** | ✅ |
 
-**Remaining after this round:**
-- **Wave 4** (2 agents, ~S+M): Train Skills UI + Remote Buffs
-- **Wave 5** (2 agents, S+XS): Tradeskill wire + UI (5.B killed)
-- **Wave 6 polish** (1 small agent): 3 sub-flags collected during Wave 3 (examine meta-read, entityAppearanceChanged emit, vitalChanged oldValue capture)
+**PLAN COMPLETE 2026-05-28.** 22 commits across 9 orchestrator rounds; 20 agents shipped + 1 audit refresh + 3 closed-without-work via refresh; the original 15-opportunity menu plus 5 surfaced follow-ons all landed.
 
-Remaining total: ~5 agent slots, all small. Full sweep can close in 1-2 more waves.
+### Final-wave closing summary
+
+| Agent | Status | Commit | Notes |
+|---|---|---|---|
+| 4.A | shipped | `d7793981` | F11 Train Skills panel with tier-grouped skill list + per-row Train/Raise buttons; raiseSkill/trainSkill/playerSkillCredits wasm exports; 17 unit tests. Canonical UI ref corrected: gmSkillUI.cs (not gmTrainSkillsUI.cs). |
+| 4.B | shipped | `d7793981` | entity_enchantments_index HashMap on SessionHandle (mirrors physics_script_table_index from CMT Wave 16); buffs-hud + nameplate badge sprite (+N/-N/*N pill at 2.7m above nameplate); CLIENT_EVENT_KIND_ENTITY_ENCHANTMENTS_UPDATED=46. 15 unit tests. |
+| 5.A | shipped | `d7793981` | useWithTarget(itemGuid, targetGuid) wasm export + SessionCommand variant + recv arm; +1 wire fixture. ACE flow correction: GameActionUseWithTarget → Player_Use → RecipeManager (not the cited DoTradeSkillAttempt which doesn't exist). |
+| 5.C | shipped | `d7793981` | New tradeskill plugin (280 LOC) consuming 5.A's wasm export; drag-end hook in inventory.js fires hb:inventory-item-on-item-drop; defensive missing-export warning. 23 unit tests. |
+| 6 polish | shipped | `d7793981` | All 3 flags closed: (1) examine-target meta?.X ?? ent.X fix; (2) entityAppearanceChanged emit at applyAppearance + hot-swap success path; (3) vitalChanged oldValue end-to-end (WorldEvent struct variant + holtburger-world snapshot + lib.rs f32_payload thread + drainEvents oldValue + api.js facade shape). +5 assertions on examine, +3 on per-vital. |
+
+**Final validation gate (2026-05-28 session close):**
+- cargo workspace: PASS (only pre-existing dead_code warnings)
+- cargo test -p holtburger-protocol: 348/348 PASS
+- cargo test -p holtburger-world: 279/279 PASS  
+- cargo test -p holtburger-core: 248/248 PASS
+- Wire conformance: **43/43 PASS** (started at 36; +7 fixtures across 8 waves)
+- All 12+ in-repo Node test files green
+
+**Visual-smoke deferred items (next 1070 session):**
+- Wave 1.E shadow gate continuity across landblock boundaries
+- Wave 2.A terrain palette biome reads (LushGrass/Snow/Water tint)
+- Wave 2.B per-category normalScale (forge stone, cottage wood, plaza cobble)
+- Wave 6.B Lifestone bind/recall popup at Holtburg lifestone
+- Wave 4.A F11 Train Skills panel + actual skill raise
+- Wave 4.B buff badge above @create drudge nameplate
+- Wave 5 tradeskill drag-end (dye onto armor in inventory)
