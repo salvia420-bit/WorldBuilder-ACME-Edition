@@ -37,6 +37,11 @@ pub enum SurfacePixelFormat {
     Index16 = 101,
     CustomLscapeR8G8B8 = 243,
     CustomLscapeAlpha = 244,
+    /// 79 records in retail `client_portal.dat` (per
+    /// `texture_format_coverage` 2026-05-28). melt's `Texture.cs:91`
+    /// handles via `Image.FromStream` on the raw `SourceData` bytes;
+    /// we port the same path through `jpeg-decoder`.
+    CustomRawJpeg = 500,
     Dxt1 = 827611204,
     Dxt3 = 861165636,
     Dxt5 = 894720068,
@@ -58,6 +63,7 @@ impl SurfacePixelFormat {
             101 => Self::Index16,
             243 => Self::CustomLscapeR8G8B8,
             244 => Self::CustomLscapeAlpha,
+            500 => Self::CustomRawJpeg,
             827611204 => Self::Dxt1,
             861165636 => Self::Dxt3,
             894720068 => Self::Dxt5,
@@ -97,6 +103,23 @@ impl Texture {
 
     pub fn format(&self) -> SurfacePixelFormat {
         SurfacePixelFormat::from_u32(self.format_raw)
+    }
+
+    /// For `CustomRawJpeg` records, peek the JPEG's SOF marker to get
+    /// the intrinsic `(width, height)` — the Texture header carries
+    /// `(0, 0)` for these records since the header was generic-DAT
+    /// metadata and the JPEG payload is self-describing. Returns
+    /// `None` for non-JPEG formats or malformed JPEG headers.
+    pub fn jpeg_dimensions(&self) -> Option<(u32, u32)> {
+        if self.format() != SurfacePixelFormat::CustomRawJpeg {
+            return None;
+        }
+        let mut decoder = jpeg_decoder::Decoder::new(&self.source_data[..]);
+        // `read_info()` parses the SOF marker without decoding the
+        // image — cheap (microseconds).
+        decoder.read_info().ok()?;
+        let info = decoder.info()?;
+        Some((info.width as u32, info.height as u32))
     }
 
     /// Decode `source_data` to a width × height RGBA8 buffer
@@ -236,6 +259,114 @@ impl Texture {
                 Ok(out)
             }
 
+            // 16-bit packed RGB565: `[rrrrrggg][ggbbbbb b]` little-endian
+            // u16 → R5 G6 B5. Bit-replicate (≡ multiply by 0xFF / max)
+            // to map 0..31 → 0..255 for R/B and 0..63 → 0..255 for G.
+            // Bit-replication is the standard expansion in D3D/OpenGL
+            // (gives smoother gradients than `<<3` zero-extend).
+            // Retail count in client_portal.dat: 3 records (rare; tiny
+            // UI/HUD textures).
+            SurfacePixelFormat::R5G6B5 => {
+                if self.source_data.len() < pixels * 2 {
+                    return Err(TextureDecodeError::ShortRead);
+                }
+                let mut out = Vec::with_capacity(pixels * 4);
+                for i in 0..pixels {
+                    let lo = self.source_data[i * 2] as u16;
+                    let hi = self.source_data[i * 2 + 1] as u16;
+                    let v = lo | (hi << 8);
+                    let r5 = ((v >> 11) & 0x1F) as u32;
+                    let g6 = ((v >> 5) & 0x3F) as u32;
+                    let b5 = (v & 0x1F) as u32;
+                    // Bit-replication: 0..31 → 0..255 (≡ (n<<3) | (n>>2));
+                    // 0..63 → 0..255 (≡ (n<<2) | (n>>4)).
+                    let r = (((r5 << 3) | (r5 >> 2)) & 0xFF) as u8;
+                    let g = (((g6 << 2) | (g6 >> 4)) & 0xFF) as u8;
+                    let b = (((b5 << 3) | (b5 >> 2)) & 0xFF) as u8;
+                    out.extend_from_slice(&[r, g, b, 0xFF]);
+                }
+                Ok(out)
+            }
+
+            // 16-bit packed ARGB4444: `[aaaarrrr][ggggbbbb]` little-endian
+            // u16 → A4 R4 G4 B4. Each nibble multiplied by 0x11 maps
+            // 0..15 → 0..255 (bit-replication). melt's `Texture.cs:212`
+            // has the right SHAPE but the wrong MATH: it does integer
+            // division `(val >> 12) / 0xF * 255` which truncates to 0/1
+            // and produces only 0 or 255, blowing intermediate alphas.
+            // We use bit-replication (≡ multiply by 0x11) instead.
+            // Retail count: 2 records.
+            SurfacePixelFormat::A4R4G4B4 => {
+                if self.source_data.len() < pixels * 2 {
+                    return Err(TextureDecodeError::ShortRead);
+                }
+                let mut out = Vec::with_capacity(pixels * 4);
+                for i in 0..pixels {
+                    let lo = self.source_data[i * 2] as u16;
+                    let hi = self.source_data[i * 2 + 1] as u16;
+                    let v = lo | (hi << 8);
+                    let a4 = ((v >> 12) & 0xF) as u8;
+                    let r4 = ((v >> 8) & 0xF) as u8;
+                    let g4 = ((v >> 4) & 0xF) as u8;
+                    let b4 = (v & 0xF) as u8;
+                    let a = a4 * 0x11; // 0..15 * 17 = 0..255
+                    let r = r4 * 0x11;
+                    let g = g4 * 0x11;
+                    let b = b4 * 0x11;
+                    out.extend_from_slice(&[r, g, b, a]);
+                }
+                Ok(out)
+            }
+
+            // Raw JPEG-encoded texture. melt's `Texture.cs:91`
+            // (`GetBitmap`) hands the bytes to `Image.FromStream` so
+            // the underlying GDI+ JPEG decoder does the work; we port
+            // the same path through `jpeg-decoder` (pure-Rust;
+            // wasm-compatible). All-opaque alpha (retail JPEGs never
+            // encode alpha — UI elements that need alpha use one of
+            // the BGRA / DXT / palette formats). Retail count: 79
+            // records (largest "unsupported" bucket pre-Wave-8).
+            SurfacePixelFormat::CustomRawJpeg => {
+                // Retail's PFID_CUSTOM_RAW_JPEG records store
+                // `width=0, height=0` in the Texture header — the
+                // actual dimensions live inside the JPEG payload's
+                // SOF marker. melt's `Texture.cs:91` doesn't validate
+                // header dims either; it just feeds `SourceData` to
+                // `Image.FromStream`. We do the same: trust the JPEG.
+                // Caller that needs the actual dimensions can pull
+                // them via `jpeg_dimensions()` below.
+                let mut decoder = jpeg_decoder::Decoder::new(&self.source_data[..]);
+                let pixels_jpeg = decoder
+                    .decode()
+                    .map_err(|e| TextureDecodeError::JpegDecode(format!("{e}")))?;
+                let info = decoder
+                    .info()
+                    .ok_or_else(|| TextureDecodeError::JpegDecode("no JPEG info after decode".to_string()))?;
+                let out = match info.pixel_format {
+                    jpeg_decoder::PixelFormat::RGB24 => {
+                        let mut buf = Vec::with_capacity(pixels * 4);
+                        for chunk in pixels_jpeg.chunks_exact(3) {
+                            buf.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 0xFF]);
+                        }
+                        buf
+                    }
+                    jpeg_decoder::PixelFormat::L8 => {
+                        // Greyscale JPEG (rare but legal). Expand to RGBA.
+                        let mut buf = Vec::with_capacity(pixels * 4);
+                        for &v in &pixels_jpeg {
+                            buf.extend_from_slice(&[v, v, v, 0xFF]);
+                        }
+                        buf
+                    }
+                    other => {
+                        return Err(TextureDecodeError::JpegDecode(format!(
+                            "unsupported JPEG pixel format: {other:?}"
+                        )));
+                    }
+                };
+                Ok(out)
+            }
+
             // S3TC / BCn block-compressed formats. Decode-only port of
             // upstream ACE `DxtUtil.cs` (Ms-PL, see file header). Used
             // by Phase 3 step 4.5b's per-model colour walk against the
@@ -264,6 +395,7 @@ pub enum TextureDecodeError {
     MissingPaletteId,
     PaletteIndexOutOfRange,
     PaletteFetch(String),
+    JpegDecode(String),
 }
 
 impl std::fmt::Display for TextureDecodeError {
@@ -275,6 +407,7 @@ impl std::fmt::Display for TextureDecodeError {
             Self::MissingPaletteId => write!(f, "palettized format but no DefaultPaletteId in header"),
             Self::PaletteIndexOutOfRange => write!(f, "pixel index out of palette range"),
             Self::PaletteFetch(msg) => write!(f, "palette fetch failed: {}", msg),
+            Self::JpegDecode(msg) => write!(f, "JPEG decode failed: {}", msg),
         }
     }
 }
@@ -355,11 +488,13 @@ mod tests {
 
     #[test]
     fn unsupported_format_errors() {
+        // Wave 8 (2026-05-28) — every format value we ENUMERATE now has
+        // a decode arm. Use a value that maps to `Other(_)` (unknown
+        // to AC; never used by retail) to exercise the catch-all.
+        // PFID_X8R8G8B8 (22) is in the upstream ACE enum but unused in
+        // retail; our parser tags it as `Other(22)`.
         let pixels = vec![0u8; 16];
-        // Pick a format we don't decode. R5G6B5 (23) was added to the
-        // enum as a curated value but to_rgba8 doesn't have a branch
-        // for it (no terrain or model surface uses it in retail).
-        let buf = make_texture_header(23, 2, 2, &pixels, None);
+        let buf = make_texture_header(22, 2, 2, &pixels, None);
         let tex = Texture::unpack(&buf).unwrap();
         let err = tex.to_rgba8(|_| panic!("no palette")).unwrap_err();
         assert!(matches!(err, TextureDecodeError::UnsupportedFormat(_)));

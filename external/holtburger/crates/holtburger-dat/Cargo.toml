@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 holtburger-common.workspace = true
 binrw.workspace = true
+jpeg-decoder.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 bitflags.workspace = true

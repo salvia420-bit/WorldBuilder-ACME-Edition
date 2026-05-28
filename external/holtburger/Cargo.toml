@@ -57,6 +57,10 @@ futures = "0.3"
 binrw = "0.15"
 zstd = "0.13"
 ruzstd = "0.8"
+# PFID_CUSTOM_RAW_JPEG (500) decoder for retail Texture records — 79
+# such records in client_portal.dat per `texture_format_coverage` test
+# (2026-05-28). Pure-Rust; works on both native and wasm32.
+jpeg-decoder = { version = "0.3", default-features = false }
 # Drop-in replacement for `std::time::Instant` that works on
 # `wasm32-unknown-unknown` (uses `performance.now()`). On native, this
 # crate re-exports `std::time` directly — zero cost.
