@@ -521,18 +521,24 @@ export async function preInit3D(canvas) {
   if (typeof window !== "undefined") {
     window.__particleSortObjects = !particleSortObjectsOff;
   }
-  // T2 (2026-05-28) — per-poly back-face culling, default OFF. When
-  // `?perPolyCull=on`, meshToGeometryGroups renders single-sided polygons
-  // (sides_type != 1) FrontSide with reversed winding (acclient
-  // D3DPolyRender @455346: only sides_type==1 is two-sided). Opt-in until a
-  // 1070 eye-test confirms object winding; objects have always been
-  // DoubleSide so this is a behaviour change to verify visually.
+  // T2 (2026-05-28) — per-poly back-face culling, default ON. Single-sided
+  // polygons (sides_type != 1) render FrontSide with reversed winding (acclient
+  // D3DPolyRender @455346: only sides_type==1 is two-sided). Was opt-in until a
+  // 1070 headless eye-test (2026-05-28) confirmed object winding: Holtburg
+  // buildings, the player character, NPCs, and the lifestone all render solid
+  // (no inside-out faces, no vanished geometry) with the reversed winding —
+  // which mirrors terrain's proven F#27 convention. Disable with
+  // `?perPolyCull=off`.
   try {
     if (typeof window !== "undefined" && window.location) {
       const v = new URLSearchParams(window.location.search).get("perPolyCull");
-      globalThis.__perPolyCull = v != null && v.toLowerCase() === "on";
+      globalThis.__perPolyCull = v == null ? true : v.toLowerCase() !== "off";
+    } else {
+      globalThis.__perPolyCull = true;
     }
-  } catch (_) {}
+  } catch (_) {
+    globalThis.__perPolyCull = true;
+  }
   if (wireframeMode) {
     // 2026-05-22 — vertical sky gradient via a 1×256 CanvasTexture in
     // equirectangular mapping. Three.js samples it for `scene.background`

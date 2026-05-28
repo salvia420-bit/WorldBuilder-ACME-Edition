@@ -320,3 +320,35 @@ point where the deterministic, logic-level fidelity gaps are exhausted and what'
 **Recommendation:** run `wasm-pack build --target web --out-dir pkg --release` and an
 eye-test pass on the 1070 to validate the shipped visual changes (T3/T4/T6 look, T8 default,
 the `?perPolyCull`/`?terrainPalette` flags) before taking on more blind visual work.
+
+---
+
+# Headless eye-test pass (2026-05-28, evening)
+
+Built a **headless GPU validation pipeline** so visual changes can be checked without
+disturbing the user's visible browser: a dedicated off-screen Chrome (own port 9333 +
+profile, `--window-position=-2400,-2400`, occlusion/throttle disabled so rAF + GPU keep
+running) launched in the interactive Session 1 via Task Scheduler (`-LogonType Interactive`)
+— SSH-launched Chrome dies in Session 0 with no GPU. Confirmed real GPU:
+`ANGLE (NVIDIA GeForce GTX 1070, D3D11)`, not SwiftShader. Captures via
+`__renderOnce()` + `canvas.toDataURL()` in one eval (plain `page.screenshot` is black —
+WebGL `preserveDrawingBuffer=false`), scp'd back. Drove autoLogin → `@telepoi Holtburg`
+(`handle.sendChat`) for a fully-baked outdoor scene (169 LBs, 69 entities).
+
+**Results — wasm rebuilt with all 10 fixes, validated at Holtburg:**
+- **T3 (sub-palette)** — character skin/hair/armor/shorts render with correct colours. ✓
+- **T6 (authored normals)** — player + NPC bodies smooth-shaded (not faceted). ✓
+- **T8 (terrain palette default-off)** — grass reads as natural green, not pushed toward the
+  garish radar hue. ✓ (default-off is the more faithful render.)
+- **T2 (per-poly cull) — WINDING CONFIRMED.** With `?perPolyCull=on`, Holtburg buildings,
+  the character, 69 NPCs, and the lifestone all render **solid and correct** — no inside-out
+  faces, no missing geometry, no see-through walls. The terrain-mirrored winding reversal is
+  right → **T2 flipped to default ON** (`scene3d/index.js`; disable with `?perPolyCull=off`).
+- Buildings, statics, terrain, Bruneton sky + clouds all render cleanly together.
+
+**Pipeline is reusable** (scripts in `/mnt/wbterminal1/tmp/claude-scratch/eyetest/` + on the
+1070 `C:\Temp\`): launch_eyetest_s1.ps1, tp3.mjs (teleport+composited shot), full-cull.mjs.
+
+**Still pending (implementation, now unblocked by the working eye-test loop):** T1 composite
++ atlas/shader wiring, T7 detail texture, T9 dynamic entity LOD, T11 speed-source wire — each
+can now be implemented and visually confirmed through this loop.
