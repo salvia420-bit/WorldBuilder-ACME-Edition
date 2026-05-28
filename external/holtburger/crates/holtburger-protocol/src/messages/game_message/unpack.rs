@@ -253,6 +253,99 @@ impl ProtocolUnpack for GameMessage {
             GameOpcode::PublicUpdateSkillLevel => Some(GameMessage::PublicUpdateSkillLevel(
                 Box::new(PublicUpdateSkillLevelData::unpack(data, offset)?),
             )),
+
+            // === Wave 6.A — Qualities codegen wiring (2026-05-28) ===
+            //
+            // Decode 20 newly-enumerated opcodes (16 `Remove*` + 4
+            // `Attribute/Skill`) via the generated `S2C_Qualities_*::read_from`
+            // codegen path. The wire bytes are validated by the generated
+            // parser (so a malformed payload returns None rather than
+            // silently passing through), but the result is wrapped as
+            // `GameMessage::Unknown` because we have NO semantic GameMessage
+            // variants for these yet (would require widening the enum + all
+            // its consumers across the workspace, deferred to a follow-on
+            // wave).
+            //
+            // The advance-then-Unknown contract is the same as the
+            // top-of-function fall-through path (line 35-36), so existing
+            // recv-loop consumers see the same behaviour. Crucially, the
+            // bytes are CONSUMED — the `read_from` Result mutates *offset —
+            // so the next message in a batched frame decodes from the
+            // correct boundary instead of mid-payload garbage.
+            //
+            // ACE source for the Remove* family: emitted by
+            // `WorldObject_Properties.cs::RemoveProperty(Property*)` paths.
+            // ACE source for the Attribute/Skill family: not emitted by ACE
+            // (Chorizite XML protocol.xml:130-135 declares them but
+            // `ACE.Server/Network/GameMessages/GameMessageOpcode.cs` has no
+            // entries for 0x02E1/0x02E2/0x02E5/0x02E6). Routed for
+            // future-host compatibility.
+            GameOpcode::PrivateRemoveIntEvent
+            | GameOpcode::RemoveIntEvent
+            | GameOpcode::PrivateRemoveBoolEvent
+            | GameOpcode::RemoveBoolEvent
+            | GameOpcode::PrivateRemoveFloatEvent
+            | GameOpcode::RemoveFloatEvent
+            | GameOpcode::PrivateRemoveStringEvent
+            | GameOpcode::RemoveStringEvent
+            | GameOpcode::PrivateRemoveDataIdEvent
+            | GameOpcode::RemoveDataIdEvent
+            | GameOpcode::PrivateRemoveInstanceIdEvent
+            | GameOpcode::RemoveInstanceIdEvent
+            | GameOpcode::PrivateRemovePositionEvent
+            | GameOpcode::RemovePositionEvent
+            | GameOpcode::PrivateRemoveInt64Event
+            | GameOpcode::RemoveInt64Event
+            | GameOpcode::PrivateUpdateSkillAC
+            | GameOpcode::PublicUpdateSkillAC
+            | GameOpcode::PrivateUpdateAttributeLevel
+            | GameOpcode::PublicUpdateAttributeLevel => {
+                // Decode through the generated codegen layer to validate
+                // the wire bytes + advance the cursor. The Ok value is
+                // discarded — we wrap as Unknown until a semantic variant
+                // is needed (see comment above). Errors fall through to a
+                // raw byte-grab so existing recv-loop consumers don't
+                // crash on malformed payloads.
+                let payload_start = *offset;
+                let consumed = match opcode_raw {
+                    // Remove* — 5 bytes private (byte Sequence + uint Key),
+                    // 9 bytes public (byte Sequence + ObjectId + uint Key)
+                    // — codegen handles per-variant.
+                    0x01D1 => crate::generated::S2C_Qualities_PrivateRemoveIntEvent::read_from(data, offset).is_ok(),
+                    0x01D2 => crate::generated::S2C_Qualities_RemoveIntEvent::read_from(data, offset).is_ok(),
+                    0x01D3 => crate::generated::S2C_Qualities_PrivateRemoveBoolEvent::read_from(data, offset).is_ok(),
+                    0x01D4 => crate::generated::S2C_Qualities_RemoveBoolEvent::read_from(data, offset).is_ok(),
+                    0x01D5 => crate::generated::S2C_Qualities_PrivateRemoveFloatEvent::read_from(data, offset).is_ok(),
+                    0x01D6 => crate::generated::S2C_Qualities_RemoveFloatEvent::read_from(data, offset).is_ok(),
+                    0x01D7 => crate::generated::S2C_Qualities_PrivateRemoveStringEvent::read_from(data, offset).is_ok(),
+                    0x01D8 => crate::generated::S2C_Qualities_RemoveStringEvent::read_from(data, offset).is_ok(),
+                    0x01D9 => crate::generated::S2C_Qualities_PrivateRemoveDataIdEvent::read_from(data, offset).is_ok(),
+                    0x01DA => crate::generated::S2C_Qualities_RemoveDataIdEvent::read_from(data, offset).is_ok(),
+                    0x01DB => crate::generated::S2C_Qualities_PrivateRemoveInstanceIdEvent::read_from(data, offset).is_ok(),
+                    0x01DC => crate::generated::S2C_Qualities_RemoveInstanceIdEvent::read_from(data, offset).is_ok(),
+                    0x01DD => crate::generated::S2C_Qualities_PrivateRemovePositionEvent::read_from(data, offset).is_ok(),
+                    0x01DE => crate::generated::S2C_Qualities_RemovePositionEvent::read_from(data, offset).is_ok(),
+                    0x02B8 => crate::generated::S2C_Qualities_PrivateRemoveInt64Event::read_from(data, offset).is_ok(),
+                    0x02B9 => crate::generated::S2C_Qualities_RemoveInt64Event::read_from(data, offset).is_ok(),
+                    0x02E1 => crate::generated::S2C_Qualities_PrivateUpdateSkillAC::read_from(data, offset).is_ok(),
+                    0x02E2 => crate::generated::S2C_Qualities_UpdateSkillAC::read_from(data, offset).is_ok(),
+                    0x02E5 => crate::generated::S2C_Qualities_PrivateUpdateAttributeLevel::read_from(data, offset).is_ok(),
+                    0x02E6 => crate::generated::S2C_Qualities_UpdateAttributeLevel::read_from(data, offset).is_ok(),
+                    _ => false,
+                };
+                if !consumed {
+                    // Bad bytes — gobble rest of buffer so we don't loop
+                    // (matches top-of-function Unknown fall-through).
+                    let remaining = data[*offset..].to_vec();
+                    *offset = data.len();
+                    return Some(GameMessage::Unknown(opcode_raw, remaining));
+                }
+                // Capture the bytes the codegen consumed for downstream
+                // diagnostic visibility (mirrors the Unknown payload
+                // contract — caller has the bytes if it wants them).
+                let consumed_bytes = data[payload_start..*offset].to_vec();
+                Some(GameMessage::Unknown(opcode_raw, consumed_bytes))
+            }
         }
     }
 }

@@ -830,7 +830,7 @@ const FIXTURES_LIST = [
            "= 13 bytes payload. ACE source: GameMessagePublicUpdatePropertyInt.cs.",
   },
   {
-    case: "Wave 1.A — Qualities_UpdateFloat / 0x02D4 (public, f32 per XML)",
+    case: "Wave 1.A — Qualities_UpdateFloat / 0x02D4 (public, f32 per XML — Chorizite self-consistency)",
     typeName: "Qualities_UpdateFloat",
     source: "synthesized",
     fields: {
@@ -843,9 +843,17 @@ const FIXTURES_LIST = [
     notes: "Wave 1.A (2026-05-27): synth via Chorizite. Layout = byte Seq " +
            "+ ObjectId + PropertyFloat + float Value = 13 bytes. VISIBILITY " +
            "FLAG: Chorizite XML f32 vs ACE f64 retail wire (ACE writes 8 " +
-           "bytes, schema reads 4); Chorizite Pack↔Unpack is self-consistent " +
-           "so this round-trip PASSes — flag is for ACE-in / Chorizite-out " +
-           "asymmetry, not a Pack→Unpack mismatch.",
+           "bytes, schema reads 4). Chorizite Pack↔Unpack is self-consistent " +
+           "so this round-trip PASSes against the WB.Terminal Chorizite oracle. " +
+           "Wave 6.A (2026-05-28) patched the holtburger-protocol Rust codegen " +
+           "(build.rs override) to override f32→f64 for THIS message type so " +
+           "the generated `S2C_Qualities_UpdateFloat::read_from` now correctly " +
+           "decodes ACE retail wire bytes (8-byte double Value). The Rust-side " +
+           "fixture covering the ACE-wire path lives at " +
+           "`crates/holtburger-protocol/tests/generated_parity.rs::" +
+           "qualities_update_float_parity_with_hand_written_path` — it " +
+           "validates byte-for-byte parity between the generated codegen " +
+           "(post-override) and the hand-written `PublicUpdatePropertyFloatData`.",
   },
   {
     case: "Wave 1.A — Qualities_RemoveIntEvent / 0x01D2 (public)",
@@ -874,6 +882,41 @@ const FIXTURES_LIST = [
     notes: "Wave 1.A (2026-05-27): synth via Chorizite. Layout = byte Seq " +
            "+ ObjectId + PropertyFloat = 9 bytes. Sent when ACE clears a " +
            "previously-set float property on an object.",
+  },
+  // ───── Wave 6.C (2026-05-28) — Portal Storm S2C dispatch ─────
+  //
+  // Lock in the Chorizite Pack→Unpack round-trip for the 4
+  // Misc_PortalStorm* opcodes. Each is a GameEvent subclass dispatched
+  // through Chorizite's Ordered_GameEvent wrapper at runtime, but the
+  // direct event-class round-trip exercises the payload contract
+  // (single f32 `Extent` for Brewing/Imminent, no payload for
+  // Storm/Subsided).
+  //
+  // Three-source cross-reference:
+  //   - Chorizite XML: external/chorizite/Chorizite.ACProtocol/
+  //                    Chorizite.ACProtocol/protocol.xml (search PortalStorm)
+  //   - ACE source:    ~/ace-server/Source/ACE.Server/Network/GameEvent/
+  //                    Events/GameEventPortalStorm*.cs — agrees on
+  //                    opcodes + payload shape (extent f32 default
+  //                    0.4 brewing / 0.6 imminent)
+  //   - Rust crate:    crates/holtburger-protocol/src/messages/misc/
+  //                    events.rs Wave 6.C structs + round-trip tests
+  //                    in misc/events.rs `test_misc_portal_storm_*`.
+  {
+    case: "Wave 6.C — Misc_PortalStormBrewing / 0x02C9 (extent=0.4 ACE default)",
+    typeName: "Misc_PortalStormBrewing",
+    source: "synthesized",
+    fields: {
+      Extent: 0.4,
+    },
+    headerMode: "payload",
+    notes: "Wave 6.C (2026-05-28): synth via Chorizite. Payload-only " +
+           "mode exercises the GameEvent subclass body — a single f32 " +
+           "Extent. ACE GameEventPortalStormBrewing.cs:8 emits default " +
+           "0.4. Wave 6.C wires this through CLIENT_EVENT_KIND_PORTAL_STORM " +
+           "(45) to the JS bus as `portalStormChanged { state: 'brewing', " +
+           "level: 1, extent: 0.4 }` which the Wave 1.F-pre-wired " +
+           "status-indicators plugin picks up.",
   },
 ];
 

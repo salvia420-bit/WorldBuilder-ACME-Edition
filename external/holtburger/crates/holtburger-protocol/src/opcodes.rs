@@ -144,15 +144,104 @@ pub enum GameOpcode {
     PrivateUpdateAttribute = 0x02E3,
     /// S2C: Update public Attribute value.
     PublicUpdateAttribute = 0x02E4,
+    /// S2C: Update private SkillAC value.
+    /// Wave 6.A (2026-05-28): Chorizite protocol.xml:130-131 declares
+    /// `Qualities_PrivateUpdateSkillAC = 0x02E1` and `Qualities_UpdateSkillAC
+    /// = 0x02E2`. ACE's `GameMessageOpcode.cs` has NO entries for these —
+    /// `0x02E1`/`0x02E2` are absent from the retail server. Decoded via the
+    /// generated `S2C_Qualities_PrivateUpdateSkillAC::read_from` for future
+    /// compatibility (e.g. emulator hosts that DO emit it) but currently
+    /// unreachable on the ACE wire. Returned as `GameMessage::Unknown` until
+    /// a semantic variant is needed.
+    PrivateUpdateSkillAC = 0x02E1,
+    /// S2C: Update public SkillAC value. See `PrivateUpdateSkillAC` for the
+    /// ACE-vs-Chorizite divergence note.
+    PublicUpdateSkillAC = 0x02E2,
+    /// S2C: Update private Attribute Level.
+    /// Wave 6.A (2026-05-28): Chorizite protocol.xml:134-135 declares
+    /// `Qualities_PrivateUpdateAttributeLevel = 0x02E5` and
+    /// `Qualities_UpdateAttributeLevel = 0x02E6`. ACE retail does NOT emit
+    /// these (no entries in `GameMessageOpcode.cs`). Same divergence pattern
+    /// as `SkillAC` — decoded but not yet semantically routed.
+    PrivateUpdateAttributeLevel = 0x02E5,
+    /// S2C: Update public Attribute Level. See `PrivateUpdateAttributeLevel`.
+    PublicUpdateAttributeLevel = 0x02E6,
     /// S2C: Update private Vital value.
     /// Updates max health, stamina, or mana.
+    /// Note: this maps to Chorizite's `Qualities_PrivateUpdateAttribute2nd`
+    /// (protocol.xml:136); ACE/our code use the friendlier "Vital" name.
     PrivateUpdateVital = 0x02E7,
     /// S2C: Update public Vital value.
+    /// Maps to Chorizite's `Qualities_UpdateAttribute2nd` (protocol.xml:137).
     PublicUpdateVital = 0x02E8,
     /// Updates current health/stamina/mana levels.
+    /// Maps to Chorizite's `Qualities_PrivateUpdateAttribute2ndLevel`
+    /// (protocol.xml:138); ACE emits this from `GameMessagePrivateUpdate
+    /// Attribute2ndLevel.cs` for vital tick deltas.
     PrivateUpdateVitalCurrent = 0x02E9,
     // /// S2C: Update public Vital current value (tick). (Note: Confirmed GHOST, 0x02EA is unused in ACE)
+    // /// Wave 6.A (2026-05-28): Chorizite XML protocol.xml:139 declares
+    // /// `Qualities_UpdateAttribute2ndLevel = 0x02EA` and the codegen emits
+    // /// `S2C_Qualities_UpdateAttribute2ndLevel` as a valid struct, but ACE
+    // /// retail (~/ace-server/Source/ACE.Server/Network/GameMessages/GameMessageOpcode.cs)
+    // /// has NO entry for 0x02EA — it stops at `PrivateUpdateAttribute2ndLevel = 0x02E9`.
+    // /// Documented divergence; kept commented to flag the Chorizite-XML-only spec.
     // PublicUpdateVitalCurrentGhost = 0x02EA,
+
+    // === Wave 6.A — Qualities codegen wiring (2026-05-28) ===
+    //
+    // The 16 `Remove*` opcodes from Chorizite protocol.xml lines 90-107 (14
+    // entries on 0x01D1-0x01DE) and 106-107 (Int64 pair on 0x02B8/0x02B9).
+    // Generated structs (`S2C_Qualities_PrivateRemoveIntEvent` etc.) already
+    // exist in `messages_generated.rs` per Wave 1.A; this enum extension is
+    // the routing pre-req so the unpack dispatcher can match a real opcode
+    // instead of falling through to `GameMessage::Unknown`.
+    //
+    // ACE source: ACE.Server emits these from `WorldObject.RemoveProperty()`
+    // call sites in `ACE.Server/WorldObjects/WorldObject_Properties.cs` —
+    // e.g. `RemoveProperty(PropertyInt.X)` enqueues a
+    // `GameMessagePublicUpdatePropertyInt(..., null)` which under the hood
+    // emits the Remove opcode. The Remove* family is the inverse of the
+    // Update* family (clears a previously-set property on an entity).
+    //
+    // These are not yet handled by `messages/game_message/unpack.rs` — the
+    // dispatcher returns `GameMessage::Unknown` for them. Adding the enum
+    // entries lets `GameOpcode::from_repr(opcode_raw)` succeed instead of
+    // logging the "Unknown Opcode" warning. Full pack/unpack wiring is
+    // deferred to a follow-on wave when a real captured ACE byte stream
+    // shows us the precise call sites that need server-side state mutation.
+    /// S2C: Remove a previously-set Int property from an object.
+    PrivateRemoveIntEvent = 0x01D1,
+    /// S2C: Remove a previously-set Int property (public broadcast).
+    RemoveIntEvent = 0x01D2,
+    /// S2C: Remove a previously-set Bool property from an object.
+    PrivateRemoveBoolEvent = 0x01D3,
+    /// S2C: Remove a previously-set Bool property (public broadcast).
+    RemoveBoolEvent = 0x01D4,
+    /// S2C: Remove a previously-set Float property from an object.
+    PrivateRemoveFloatEvent = 0x01D5,
+    /// S2C: Remove a previously-set Float property (public broadcast).
+    RemoveFloatEvent = 0x01D6,
+    /// S2C: Remove a previously-set String property from an object.
+    PrivateRemoveStringEvent = 0x01D7,
+    /// S2C: Remove a previously-set String property (public broadcast).
+    RemoveStringEvent = 0x01D8,
+    /// S2C: Remove a previously-set DataId property from an object.
+    PrivateRemoveDataIdEvent = 0x01D9,
+    /// S2C: Remove a previously-set DataId property (public broadcast).
+    RemoveDataIdEvent = 0x01DA,
+    /// S2C: Remove a previously-set InstanceId property from an object.
+    PrivateRemoveInstanceIdEvent = 0x01DB,
+    /// S2C: Remove a previously-set InstanceId property (public broadcast).
+    RemoveInstanceIdEvent = 0x01DC,
+    /// S2C: Remove a previously-set Position property from an object.
+    PrivateRemovePositionEvent = 0x01DD,
+    /// S2C: Remove a previously-set Position property (public broadcast).
+    RemovePositionEvent = 0x01DE,
+    /// S2C: Remove a previously-set Int64 property from an object.
+    PrivateRemoveInt64Event = 0x02B8,
+    /// S2C: Remove a previously-set Int64 property (public broadcast).
+    RemoveInt64Event = 0x02B9,
     /// S2C: Player was killed in combat.
     PlayerKilled = 0x019E,
 
@@ -799,14 +888,41 @@ pub enum GameEventOpcode {
     MagicUpdateSpell = 0x02C1,
     // /// S2C: Response to an item mana query.
     // QueryItemManaResponse = 0x0264,
-    // /// S2C: Alerts the client that a portal storm is starting to form due to crowding.
-    // MiscPortalStormBrewing = 0x02C9,
-    // /// S2C: Alerts that a portal storm is about to trigger.
-    // MiscPortalStormImminent = 0x02CA,
-    // /// S2C: Notification that a portal storm has occurred (teleporting players).
-    // MiscPortalStorm = 0x02CB,
-    // /// S2C: Notification that the portal storm has ended.
-    // MiscPortalstormSubsided = 0x02CC,
+
+    // === Wave 6.C — Portal Storm dispatch (2026-05-28) ===
+    //
+    // Activated the 4 Misc_PortalStorm* opcodes. The Chorizite XML
+    // (`external/chorizite/Chorizite.ACProtocol/protocol.xml`) names
+    // them `Misc_PortalStormBrewing` / `_Imminent` / `_PortalStorm` /
+    // `_Subsided` and ACE source agrees on the opcode values + payload
+    // shapes (`~/ace-server/Source/ACE.Server/Network/GameEvent/Events/
+    // GameEventPortalStorm*.cs`):
+    //
+    //   Brewing  (0x02C9)  → f32 extent (default 0.4)
+    //   Imminent (0x02CA)  → f32 extent (default 0.6)
+    //   Storm    (0x02CB)  → no payload
+    //   Subsided (0x02CC)  → no payload
+    //
+    // Note: ACE's enum (`GameEventType.cs:104`) carries a casing typo
+    // `MiscPortalstormSubsided` (lowercase `s`); Chorizite's XML uses
+    // the canonical `Misc_PortalStormSubsided`. We follow Chorizite here
+    // since it's the wire-canonical type-name source.
+    /// S2C: Alerts the client that a portal storm is starting to form
+    /// due to crowding. Wire layout: `f32 extent` (typically 0.4).
+    /// Wave 6.C surfaces this on the JS bus as
+    /// `portalStormChanged { state: "brewing", level: 1, extent }`.
+    MiscPortalStormBrewing = 0x02C9,
+    /// S2C: Alerts that a portal storm is about to trigger. Wire
+    /// layout: `f32 extent` (typically 0.6). Surfaced as
+    /// `portalStormChanged { state: "imminent", level: 2, extent }`.
+    MiscPortalStormImminent = 0x02CA,
+    /// S2C: Notification that a portal storm has occurred (teleporting
+    /// players). No payload (4-byte event header only). Surfaced as
+    /// `portalStormChanged { state: "storm", level: 3 }`.
+    MiscPortalStorm = 0x02CB,
+    /// S2C: Notification that the portal storm has ended. No payload.
+    /// Surfaced as `portalStormChanged { state: "subsided", level: 0 }`.
+    MiscPortalStormSubsided = 0x02CC,
 
     // --- Housing ---
     /// S2C: Returns detailed profile and description of a house. Per ACE

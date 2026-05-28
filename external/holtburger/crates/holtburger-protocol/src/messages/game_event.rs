@@ -120,6 +120,27 @@ pub enum GameEvent {
     /// the player has ≥1 contract. Opcode
     /// `SendClientContractTrackerTable = 0x0314`.
     SendClientContractTrackerTable(Box<SendClientContractTrackerTableEventData>),
+    // === Wave 6.C — Portal Storm dispatch (2026-05-28) ===
+    /// Wave 6.C: Brewing variant of the portal-storm UI signal —
+    /// "This area is getting too crowded — a Portal Storm is brewing"
+    /// per ACE `GameEventPortalStormBrewing.cs`. Opcode
+    /// `MiscPortalStormBrewing = 0x02C9`. Carries an `extent: f32`
+    /// payload (ACE default 0.4) — when ≤ 0 the client resets the
+    /// brewing timer per Chorizite XML annotation.
+    MiscPortalStormBrewing(Box<MiscPortalStormBrewingEventData>),
+    /// Wave 6.C: Imminent variant — final warning before the actual
+    /// storm. ACE `GameEventPortalStormImminent.cs`. Opcode
+    /// `MiscPortalStormImminent = 0x02CA`. Carries an `extent: f32`
+    /// (ACE default 0.6).
+    MiscPortalStormImminent(Box<MiscPortalStormImminentEventData>),
+    /// Wave 6.C: the actual portal storm fired — the client gets
+    /// teleported. ACE `GameEventPortalStorm.cs`. Opcode
+    /// `MiscPortalStorm = 0x02CB`. No payload.
+    MiscPortalStorm,
+    /// Wave 6.C: portal storm subsided — area is safe to re-enter.
+    /// ACE `GameEventPortalStormSubsided.cs`. Opcode
+    /// `MiscPortalStormSubsided = 0x02CC`. No payload.
+    MiscPortalStormSubsided,
     Unknown(u32, Vec<u8>),
 }
 
@@ -392,6 +413,15 @@ impl ProtocolUnpack for GameEventMessage {
                         SendClientContractTrackerTableEventData::unpack(data, offset)?,
                     ))
                 }
+                // === Wave 6.C — Portal Storm dispatch (2026-05-28) ===
+                GameEventOpcode::MiscPortalStormBrewing => GameEvent::MiscPortalStormBrewing(
+                    Box::new(MiscPortalStormBrewingEventData::unpack(data, offset)?),
+                ),
+                GameEventOpcode::MiscPortalStormImminent => GameEvent::MiscPortalStormImminent(
+                    Box::new(MiscPortalStormImminentEventData::unpack(data, offset)?),
+                ),
+                GameEventOpcode::MiscPortalStorm => GameEvent::MiscPortalStorm,
+                GameEventOpcode::MiscPortalStormSubsided => GameEvent::MiscPortalStormSubsided,
             },
             None => {
                 log::warn!(
@@ -798,6 +828,25 @@ impl ProtocolPack for GameEventMessage {
                 )
                 .unwrap();
                 data.pack(buf);
+            }
+            // === Wave 6.C — Portal Storm dispatch (2026-05-28) ===
+            GameEvent::MiscPortalStormBrewing(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::MiscPortalStormBrewing as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::MiscPortalStormImminent(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::MiscPortalStormImminent as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::MiscPortalStorm => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::MiscPortalStorm as u32)
+                    .unwrap();
+            }
+            GameEvent::MiscPortalStormSubsided => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::MiscPortalStormSubsided as u32)
+                    .unwrap();
             }
             GameEvent::Unknown(opcode, data) => {
                 buf.write_u32::<LittleEndian>(*opcode).unwrap();

@@ -19,6 +19,7 @@
     { "manifestPath": "./house-panel.manifest.json", "devPath": "./house-panel.manifest.dev.json" },
     { "manifestPath": "./inventory.manifest.json", "devPath": "./inventory.manifest.dev.json" },
     { "manifestPath": "./journal-panel.manifest.json", "devPath": "./journal-panel.manifest.dev.json" },
+    { "manifestPath": "./lifestone-popup.manifest.json", "devPath": "./lifestone-popup.manifest.dev.json" },
     { "manifestPath": "./main-panel.manifest.json", "devPath": "./main-panel.manifest.dev.json" },
     { "manifestPath": "./map-panel.manifest.json", "devPath": "./map-panel.manifest.dev.json" },
     { "manifestPath": "./options-panel.manifest.json", "devPath": "./options-panel.manifest.dev.json" },

@@ -332,6 +332,12 @@ export function createClient(sessionHandle) {
     useObject(guid) {
       sessionHandle.useObject(guid);
     },
+    // === Wave 6.B / Agent 6.B — Lifestone bind/recall UI (2026-05-28) ===
+    // Bind == `useObject(lifestoneGuid)` (server-decided by WeenieType).
+    // Recall == `recallToLifestone()` — no payload, ACE owns cooldown.
+    recallToLifestone() {
+      sessionHandle.teleToLifestone();
+    },
     toggleCombatMode() {
       sessionHandle.toggleCombatMode();
     },

@@ -1570,10 +1570,37 @@ impl<'a> CodegenCtx<'a> {
         *counter += 1;
         let snake = sanitize_rust_keyword(&snake);
 
-        let (rust_ty, field_kind) = match self.resolve_field(raw_type) {
+        let (mut rust_ty, mut field_kind) = match self.resolve_field(raw_type) {
             Some(p) => p,
             None => return Err(format!("field {raw_name}: type {raw_type:?} not in foundation tier")),
         };
+
+        // Wave 6.A (2026-05-28): Chorizite XML vs ACE retail-wire divergence
+        // override.  Some Chorizite `<field type="float">` declarations encode
+        // a value that ACE actually writes as `double` (`Writer.Write(double
+        // value)`).  When the schema and the wire disagree, ACE wins — the
+        // generated parser would mis-decode 4 of the 8 bytes ACE actually
+        // emits.  We patch the field kind in-place to `f64` so the generated
+        // `read_from` consumes the full 8 bytes.  Documented at
+        // `apps/holtburger-web/validate_wire_conformance.cjs` Wave 1.A
+        // fixtures; flagged for upstream Chorizite XML fix.
+        //
+        // Source of truth for each override (file:line):
+        //   - `Qualities_PrivateUpdateFloat::Value`
+        //     (protocol.xml:8082) → ACE
+        //     `GameMessagePrivateUpdatePropertyFloat.cs:13` writes
+        //     `double value`.
+        //   - `Qualities_UpdateFloat::Value`
+        //     (protocol.xml:8088) → ACE
+        //     `GameMessagePublicUpdatePropertyFloat.cs` writes `double value`
+        //     (same pattern as private).
+        if matches!(field_kind, FieldKind::PrimF32) && raw_name == "Value" && matches!(
+            parent_type_name,
+            "S2C_Qualities_PrivateUpdateFloat" | "S2C_Qualities_UpdateFloat"
+        ) {
+            rust_ty = "f64".to_string();
+            field_kind = FieldKind::PrimF64;
+        }
 
         // Walk nested children. Only `<subfield>` is accepted; anything else
         // (switch/if/maskmap inside a field body) trips the deferred-tier

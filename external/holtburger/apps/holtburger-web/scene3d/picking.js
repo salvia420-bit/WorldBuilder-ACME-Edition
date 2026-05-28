@@ -499,7 +499,31 @@ export function setupClickPicking({
         // `setSelectedTarget` already fired above; nothing more to do.
       } else if (typeof sessionHandle.useObject === "function") {
         cancelCharge();
-        sessionHandle.useObject(guid);
+        // Wave 6.B (2026-05-28) — typed-class click precedence for
+        // Lifestone. The Chorizite-port WorldObjectManager
+        // (window.__wom) holds typed subclasses (Lifestone extends
+        // Static); when the click target is a Lifestone, emit the
+        // typed-click event so plugins/lifestone-popup.js can render
+        // bind/recall UI INSTEAD of the silent generic
+        // useObject → ACE-decides-bind path. The popup eventually
+        // dispatches `useObject(guid)` itself on user "Bind here"
+        // confirmation (so this branch only blocks the generic
+        // fall-through, no wire packet is dropped).
+        let handledByTypedClick = false;
+        try {
+          const wo = (typeof window !== "undefined")
+            ? window.__wom?.get?.(guid >>> 0)
+            : null;
+          if (wo && wo.constructor && wo.constructor.name === "Lifestone") {
+            window.__pluginClient?.events?.emit?.("lifestoneClicked", {
+              guid: guid >>> 0,
+            });
+            handledByTypedClick = true;
+          }
+        } catch (_) { /* never block click on wom-probe faults */ }
+        if (!handledByTypedClick) {
+          sessionHandle.useObject(guid);
+        }
       }
     } catch (e) {
       console.warn(`[picking] click(0x${guid.toString(16)}): ${e?.message ?? e}`);

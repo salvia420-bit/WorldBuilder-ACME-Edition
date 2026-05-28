@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "lifestone-popup",
+  "name": "Lifestone Popup",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Bind/recall popup when a Lifestone is clicked (Wave 6.B)",
+  "icon": "💎",
+  "iconHidden": true,
+  "entry": "./lifestone-popup.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}

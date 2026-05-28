@@ -154,6 +154,13 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         // exhaustive. F.5 owns the actual recv-loop handling.
         GameEvent::SendClientContractTracker(_) => 0x0315,
         GameEvent::SendClientContractTrackerTable(_) => 0x0314,
+        // === Wave 6.C — Portal Storm dispatch (2026-05-28) ===
+        // 4 Misc_PortalStorm* opcodes catalogued for seq-gap bucketing;
+        // recv-loop dispatch lives further below (search "Wave 6.C").
+        GameEvent::MiscPortalStormBrewing(_) => 0x02C9,
+        GameEvent::MiscPortalStormImminent(_) => 0x02CA,
+        GameEvent::MiscPortalStorm => 0x02CB,
+        GameEvent::MiscPortalStormSubsided => 0x02CC,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -12824,6 +12831,43 @@ const CLIENT_EVENT_KIND_VITAL_STAMINA: u32 = 43;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_VITAL_MANA: u32 = 44;
 
+// === Wave 6.C — Portal Storm dispatch (2026-05-28) ===
+//
+// Wave 1.F (commit `b4aa4fe7`) pre-wired the Portal Storm floaty
+// indicator at `plugins/status-indicators.js:542-547` to subscribe to
+// `portalStormChanged` events. No emit site existed. The 4
+// `Misc_PortalStorm*` GameEvents (0x02C9-0x02CC) were parsed up
+// through the dispatcher this wave; this client-event kind surfaces
+// them to JS.
+//
+// Payload contract — `kind=45`:
+//   `stringPayload` = state name ("brewing" | "imminent" | "storm" |
+//                     "subsided")
+//   `u32Payload`    = level integer for the indicator state machine
+//                     (0=subsided, 1=brewing, 2=imminent, 3=storm).
+//                     Status-indicators reads `level > 0` as active.
+//   `f32Payload`    = ACE-reported `extent` for Brewing/Imminent (the
+//                     wire field), or 0.0 for Storm/Subsided which
+//                     carry no payload per
+//                     `~/ace-server/Source/ACE.Server/Network/
+//                     GameEvent/Events/GameEventPortalStorm*.cs`.
+//
+// The JS handler in `index.html drainEvents` maps `kind=45` to
+// `__pluginClient.events.emit("portalStormChanged", { state, level,
+// extent })`. The subscribe site reads `level` (preferred) or
+// `extent` (fallback) and treats either as "active when > 0".
+//
+// Refs:
+//   external/chorizite/Chorizite.ACProtocol/protocol.xml         (XML opcodes)
+//   data/chorizite/chorizite-acprotocol-opcodes.json:368-371     (catalog)
+//   crates/holtburger-protocol/src/opcodes.rs (Wave 6.C)         (enum entries)
+//   crates/holtburger-protocol/src/messages/misc/events.rs       (EventData)
+//   crates/holtburger-protocol/src/messages/game_event.rs        (dispatch)
+//   plugins/status-indicators.js:533-547                         (subscriber)
+//   apps/holtburger-web/index.html drainEvents                   (router)
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_PORTAL_STORM: u32 = 45;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -13402,6 +13446,18 @@ enum SessionCommand {
     /// `GameAction::RecallAllegianceHometown` (sub-opcode 0x02AB). No
     /// payload; ACE owns cooldown / interrupt logic.
     RecallAllegianceHometown,
+    // === Wave 6.B / Agent 6.B — Lifestone bind/recall UI (2026-05-28) ===
+    /// Lifestone: recall to the player's attuned Sanctuary position.
+    /// Maps to `GameAction::TeleToLifestone` (sub-opcode 0x0063). No
+    /// payload; ACE owns Sanctuary-set check, recall cooldown, motion-
+    /// chain animation duration, and the actual teleport (see
+    /// `~/ace-server/Source/ACE.Server/WorldObjects/Player_Location.cs:132`
+    /// `HandleActionTeleToLifestone`). Bind is the separate
+    /// `SessionCommand::UseObject { guid: lifestone_guid }` path —
+    /// `Use` (0x0036) on a Lifestone WorldObject server-side dispatches
+    /// to `ACE.Server/WorldObjects/Lifestone.cs:44` `ActOnUse` which
+    /// sets `player.Sanctuary`.
+    TeleToLifestone,
     /// Allegiance: add `target_name` to the allegiance ban list. Maps
     /// to `GameAction::AddAllegianceBan` (sub-opcode 0x02A1). Single
     /// string16 payload; ACE owns monarch/officer permission checks.
@@ -17384,6 +17440,59 @@ fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMe
             | GameMessage::PublicUpdateAttribute(_)
             | GameMessage::PrivateUpdateSkill(_)
             | GameMessage::PublicUpdateSkill(_)
+            | GameMessage::PrivateUpdateSkillLevel(_)
+            | GameMessage::PublicUpdateSkillLevel(_)
+            // === Wave 6.A — Qualities codegen wiring (2026-05-28) ===
+            //
+            // The hand-written `PrivateUpdateProperty*` / `PublicUpdate
+            // Property*` parsers (`messages/object/messages/properties.rs`)
+            // are already wired through `unpack.rs:189-242` and produce the
+            // 14 matching GameMessage variants below.  The `world::handlers::
+            // properties::handle_message` dispatcher consumes ALL of them
+            // (properties.rs:32-205) — it mutates entity state + emits
+            // `WorldEvent::PropertiesUpdated` and derived-stats events.
+            //
+            // BUT the recv-loop filter previously EXCLUDED them, so the
+            // hand-written parsers ran but the world dispatcher never got the
+            // message.  Visibility flag from Wave 1.A commit `ee254118` body:
+            // "~22 of 46 opcodes silently bypass codegen" — same
+            // root cause, different layer. The fix is the same line.
+            //
+            // ACE source: every `GameMessage{Private,Public}UpdateProperty*.cs`
+            // under `~/ace-server/Source/ACE.Server/Network/GameMessages/
+            // Messages/` is broadcast on per-property mutation
+            // (`WorldObject_Properties.cs::SetProperty(...)` paths).  Without
+            // this routing, per-property changes on remote entities never
+            // reach the entity manager or the JS event bus — only the heavy
+            // PlayerDescription rollup updates anything.
+            //
+            // Coordinates with Wave 3.C: VitalUpdated already lands in the
+            // recv-loop event scan (line ~24290) via the existing route for
+            // `Private/PublicUpdateVital{,Current}`; per-vital granular
+            // events stay on that path.  This Wave 6.A extension only adds
+            // the property-update family, which feeds the SAME world
+            // dispatcher and emits `WorldEvent::PropertiesUpdated` (kind=8
+            // coalesced player-stats update + derived-stat emits).
+            | GameMessage::PrivateUpdatePropertyInt(_)
+            | GameMessage::PublicUpdatePropertyInt(_)
+            | GameMessage::PrivateUpdatePropertyInt64(_)
+            | GameMessage::PublicUpdatePropertyInt64(_)
+            | GameMessage::PrivateUpdatePropertyBool(_)
+            | GameMessage::PublicUpdatePropertyBool(_)
+            | GameMessage::PrivateUpdatePropertyFloat(_)
+            | GameMessage::PublicUpdatePropertyFloat(_)
+            | GameMessage::PrivateUpdatePropertyString(_)
+            | GameMessage::PublicUpdatePropertyString(_)
+            | GameMessage::PrivateUpdatePropertyDataId(_)
+            | GameMessage::PublicUpdatePropertyDataId(_)
+            | GameMessage::PrivateUpdatePropertyInstanceId(_)
+            | GameMessage::PublicUpdatePropertyInstanceId(_)
+            // SetStackSize lives in `properties.rs::handle_message` as
+            // well — route it so the stack count updates on the inventory
+            // panel + ground container view propagate beyond the
+            // hand-written recv-loop arm (the inventory dispatcher already
+            // has its own update path for stack mutations of carried items).
+            | GameMessage::SetStackSize(_)
             // Phase 6 step E: SetState carries `PhysicsState`, which
             // in turn carries the ETHEREAL bit a Door uses to signal
             // open/closed. The world's `apply_set_state_update`
@@ -21400,6 +21509,31 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::RecallAllegianceHometown)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("recallAllegianceHometown: cmd channel closed ({e})"))
+            })
+    }
+
+    // === Wave 6.B / Agent 6.B — Lifestone bind/recall UI (2026-05-28) ===
+    /// Lifestone — recall to the player's attuned Sanctuary position.
+    /// Sends `GameAction::TeleToLifestone` (sub-opcode 0x0063). No
+    /// arguments; ACE owns Sanctuary-set / cooldown / interrupt /
+    /// `MotionCommand.LifestoneRecall` animation. See
+    /// `~/ace-server/Source/ACE.Server/Network/GameAction/Actions/
+    /// GameActionTeleToLifestone.cs` and `Player_Location.cs:132`
+    /// `HandleActionTeleToLifestone`.
+    ///
+    /// **Bind** is the separate `useObject(lifestone_guid)` path —
+    /// `Use` (0x0036) on a Lifestone WorldObject server-side dispatches
+    /// to `ACE.Server/WorldObjects/Lifestone.cs:44` `ActOnUse` which
+    /// sets `player.Sanctuary` after the `MotionCommand.Sanctuary`
+    /// animation. The same `useObject` wasm path covers bind because
+    /// bind is server-decided by target's WeenieType.
+    #[wasm_bindgen(js_name = teleToLifestone)]
+    pub fn tele_to_lifestone(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::TeleToLifestone)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("teleToLifestone: cmd channel closed ({e})"))
             })
     }
 
@@ -27573,6 +27707,66 @@ async fn recv_loop(
                                         f32_payload: None,
                                     });
                                 }
+                                // === Wave 6.C — Portal Storm dispatch (2026-05-28) ===
+                                //
+                                // Surface the 4 Misc_PortalStorm* events as
+                                // CLIENT_EVENT_KIND_PORTAL_STORM (= 45) so the
+                                // status-indicators plugin's pre-wired
+                                // `portalStormChanged` subscription
+                                // (`plugins/status-indicators.js:542-547`)
+                                // can flip the indicator state. Payload shape
+                                // matches the constant's doc comment: state +
+                                // level (drives indicator on/off) + extent
+                                // (ACE-reported f32 for Brewing/Imminent;
+                                // 0.0 for the payload-less Storm/Subsided).
+                                //
+                                // Level mapping (rises with severity so the
+                                // indicator's intensity scales naturally if
+                                // a future Wave swaps the sprite per-level):
+                                //   Subsided = 0  → indicator OFF
+                                //   Brewing  = 1  → indicator ON (early warn)
+                                //   Imminent = 2  → indicator ON (final warn)
+                                //   Storm    = 3  → indicator ON (active teleport)
+                                holtburger_protocol::messages::GameEvent::MiscPortalStormBrewing(
+                                    data,
+                                ) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_PORTAL_STORM,
+                                        string_payload: Some("brewing".to_string()),
+                                        u32_payload: Some(1),
+                                        u32_payload_2: None,
+                                        f32_payload: Some(data.extent),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::MiscPortalStormImminent(
+                                    data,
+                                ) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_PORTAL_STORM,
+                                        string_payload: Some("imminent".to_string()),
+                                        u32_payload: Some(2),
+                                        u32_payload_2: None,
+                                        f32_payload: Some(data.extent),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::MiscPortalStorm => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_PORTAL_STORM,
+                                        string_payload: Some("storm".to_string()),
+                                        u32_payload: Some(3),
+                                        u32_payload_2: None,
+                                        f32_payload: Some(0.0),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::MiscPortalStormSubsided => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_PORTAL_STORM,
+                                        string_payload: Some("subsided".to_string()),
+                                        u32_payload: Some(0),
+                                        u32_payload_2: None,
+                                        f32_payload: Some(0.0),
+                                    });
+                                }
                                 _ => {
                                     // Non-chat GameEvents drop through
                                     // to the no-op outer catch-all.
@@ -29374,6 +29568,31 @@ async fn recv_loop(
                             return;
                         }
                         console_log_str("[allegiance/recall]");
+                    }
+                    // === Wave 6.B / Agent 6.B — Lifestone bind/recall UI (2026-05-28) ===
+                    Some(SessionCommand::TeleToLifestone) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, TeleToLifestoneActionData,
+                        };
+                        let action = GameAction::TeleToLifestone(Box::new(
+                            TeleToLifestoneActionData,
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(TeleToLifestone): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "tele_to_lifestone: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str("[lifestone/recall]");
                     }
                     Some(SessionCommand::AddAllegianceBan { target_name }) => {
                         use holtburger_protocol::messages::{

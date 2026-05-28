@@ -8996,6 +8996,38 @@ void main() {
                     buffedMax,
                   });
                 }
+              } else if (evt.kind === 45 /* Wave 6.C PortalStorm */) {
+                // === Wave 6.C — Portal Storm dispatch (2026-05-28) ===
+                // Wave 1.F pre-wired the Portal Storm floaty indicator
+                // at `plugins/status-indicators.js:533-547` to subscribe
+                // to `portalStormChanged`. No emit site existed. Wave
+                // 6.C surfaces the 4 Misc_PortalStorm* GameEvents
+                // (0x02C9-0x02CC) through CLIENT_EVENT_KIND_PORTAL_STORM
+                // (= 45 — bumped from 42-44 owned by Wave 3.C).
+                //
+                // Payload (per `src/lib.rs::CLIENT_EVENT_KIND_PORTAL_STORM`):
+                //   stringPayload = "brewing" | "imminent" | "storm" | "subsided"
+                //   u32Payload    = level 0..3 (Subsided=0, Brewing=1,
+                //                   Imminent=2, Storm=3)
+                //   f32Payload    = ACE extent (Brewing/Imminent only,
+                //                   0.0 for Storm/Subsided which carry
+                //                   no wire payload)
+                //
+                // The subscribe site (status-indicators.js) reads
+                // `level` (preferred) or `extent` (fallback) and
+                // treats either as "active when > 0". The state name
+                // is forwarded so a future wave can swap to per-state
+                // sprites without a new event kind.
+                if (window.__pluginClient?.events) {
+                  const state = evt.stringPayload || "subsided";
+                  const level = (evt.u32Payload ?? 0) >>> 0;
+                  const extent = Number(evt.f32Payload ?? 0);
+                  window.__pluginClient.events.emit("portalStormChanged", {
+                    state,
+                    level,
+                    extent,
+                  });
+                }
               } else if (evt.kind === 32 /* ObjectAppraised */) {
                 // ACPlugin PR-2 (2026-05-27): an entity's appraisal
                 // data was just refreshed in the entity store (the

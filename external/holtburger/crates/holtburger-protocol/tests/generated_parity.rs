@@ -2102,27 +2102,37 @@ fn qualities_update_int_round_trips_with_object_id() {
     assert_eq!(S2C_Qualities_UpdateInt::OPCODE, 0x02CE);
 }
 
-/// Wave 1.A-3: `S2C_Qualities_PrivateUpdateFloat` (0x02D3) round-trips.
-/// Layout = `byte Sequence + PropertyFloat(uint) + float Value` = 9 bytes.
+/// Wave 1.A-3 (Wave 6.A-fixed): `S2C_Qualities_PrivateUpdateFloat` (0x02D3)
+/// round-trips. Layout AFTER the Wave 6.A `build.rs` override =
+/// `byte Sequence + PropertyFloat(uint) + double Value` = 13 bytes.
 ///
-/// VISIBILITY FLAG: Chorizite's XML declares `<field type="float" .../>`
-/// (4-byte f32) but ACE writes `Writer.Write(double value)` (8-byte f64
-/// per `~/ace-server/Source/ACE.Server/Network/GameMessages/Messages/
-/// GameMessagePrivateUpdatePropertyFloat.cs:13`). The hand-written
-/// Rust parser uses `f64` (matching ACE retail wire) while this
-/// generated parser uses `f32` (matching Chorizite XML). A live ACE byte
-/// stream would mis-decode through the generated path. Flag for the
-/// upstream Chorizite XML fix; for now we test the schema-as-declared.
-/// See [[reference_chorizite_acprotocol_dep_graph_2026-05-19]].
+/// === Wave 6.A — Qualities codegen wiring (2026-05-28) ===
+///
+/// The Wave 1.A version of this test used `0.75f32.to_le_bytes()` and asserted
+/// `off == 9` per the Chorizite XML schema (`<field type="float" .../>`).
+/// That decoded payload would mis-align with ACE's actual wire — ACE writes
+/// `Writer.Write(double value)` (8 bytes) per
+/// `~/ace-server/Source/ACE.Server/Network/GameMessages/Messages/
+/// GameMessagePrivateUpdatePropertyFloat.cs:13`. The hand-written Rust
+/// parser at `messages/object/messages/properties.rs:61` uses `f64` matching
+/// ACE, while the generated parser used `f32` matching the XML — a real
+/// divergence on the wire.
+///
+/// Wave 6.A patches `build.rs::build_simple_field` to override the field
+/// kind for these two specific message types (`S2C_Qualities_PrivateUpdate
+/// Float::value` and `S2C_Qualities_UpdateFloat::value`) from f32 → f64.
+/// Test updated to reflect the new 13-byte payload that now matches ACE
+/// retail wire bytes. Future upstream Chorizite XML fix (changing
+/// `type="float"` → `type="double"`) would let us remove the override.
 #[test]
-fn qualities_private_update_float_round_trips_per_xml_schema() {
+fn qualities_private_update_float_round_trips_per_ace_retail_wire() {
     use generated::{S2C_Qualities_PrivateUpdateFloat, PropertyFloat};
-    // Wire (per Chorizite XML, NOT ACE retail):
-    //   sequence=0x07, property=23 (CurrentPowerMod), value=0.75 as f32.
+    // Wire (per ACE retail, NOT Chorizite XML):
+    //   sequence=0x07, property=23 (CurrentPowerMod), value=0.75 as f64.
     let mut buf = Vec::new();
     buf.push(0x07u8);                                  // Sequence
     buf.extend_from_slice(&23u32.to_le_bytes());        // PropertyFloat::CurrentPowerMod = 23
-    buf.extend_from_slice(&0.75f32.to_le_bytes());      // Value (f32 per XML, NOT f64 per ACE)
+    buf.extend_from_slice(&0.75f64.to_le_bytes());      // Value (f64 per ACE retail, Wave 6.A override)
 
     let mut off = 0usize;
     let msg = S2C_Qualities_PrivateUpdateFloat::read_from(&buf, &mut off)
@@ -2130,14 +2140,14 @@ fn qualities_private_update_float_round_trips_per_xml_schema() {
     assert_eq!(msg.sequence, 0x07);
     assert_eq!(msg.key, PropertyFloat::CurrentPowerMod);
     assert_eq!(msg.value, 0.75);
-    assert_eq!(off, 9, "9-byte payload per Chorizite XML schema (f32 Value)");
+    assert_eq!(off, 13, "13-byte payload after Wave 6.A f32→f64 build.rs override (ACE retail wire)");
     assert_eq!(S2C_Qualities_PrivateUpdateFloat::OPCODE, 0x02D3);
 }
 
-/// Wave 1.A-4: `S2C_Qualities_UpdateFloat` (0x02D4) round-trips with the
-/// trailing ObjectId. Same XML-vs-ACE divergence as A-3 applies. Layout
-/// = `byte Sequence + ObjectId(u32) + PropertyFloat(uint) + float Value`
-/// = 13 bytes per XML.
+/// Wave 1.A-4 (Wave 6.A-fixed): `S2C_Qualities_UpdateFloat` (0x02D4)
+/// round-trips with the trailing ObjectId. Same Wave 6.A f32→f64 override
+/// applies. Layout = `byte Sequence + ObjectId(u32) + PropertyFloat(uint) +
+/// double Value` = 17 bytes (was 13 bytes pre-Wave-6.A).
 #[test]
 fn qualities_update_float_round_trips_with_object_id() {
     use generated::{S2C_Qualities_UpdateFloat, PropertyFloat};
@@ -2145,7 +2155,7 @@ fn qualities_update_float_round_trips_with_object_id() {
     buf.push(0x03u8);                                       // Sequence
     buf.extend_from_slice(&0x5000_0002u32.to_le_bytes());    // ObjectId
     buf.extend_from_slice(&24u32.to_le_bytes());             // PropertyFloat::AccuracyMod = 24
-    buf.extend_from_slice(&1.25f32.to_le_bytes());           // Value (f32 per XML)
+    buf.extend_from_slice(&1.25f64.to_le_bytes());           // Value (f64 per Wave 6.A override)
 
     let mut off = 0usize;
     let msg = S2C_Qualities_UpdateFloat::read_from(&buf, &mut off)
@@ -2154,8 +2164,57 @@ fn qualities_update_float_round_trips_with_object_id() {
     assert_eq!(msg.object_id, 0x5000_0002);
     assert_eq!(msg.key, PropertyFloat::AccuracyMod);
     assert_eq!(msg.value, 1.25);
-    assert_eq!(off, 13);
+    assert_eq!(off, 17, "17-byte payload after Wave 6.A f32→f64 build.rs override");
     assert_eq!(S2C_Qualities_UpdateFloat::OPCODE, 0x02D4);
+}
+
+/// Wave 6.A: byte-for-byte parity between the generated codegen path and
+/// the hand-written `PrivateUpdatePropertyFloatData` parser
+/// (`messages/object/messages/properties.rs:62`). Both should consume
+/// the SAME 17-byte ACE-wire payload and produce equivalent values for
+/// sequence / property / value. This locks in the no-regression contract
+/// for the f32→f64 override: any future codegen change that re-broadens
+/// the field-kind to f32 will mis-align this test against the hand-written
+/// reference.
+#[test]
+fn qualities_update_float_parity_with_hand_written_path() {
+    use generated::S2C_Qualities_UpdateFloat;
+    use holtburger_protocol::messages::object::messages::PublicUpdatePropertyFloatData;
+    use holtburger_protocol::traits::ProtocolUnpack;
+
+    let mut buf = Vec::new();
+    // Note: hand-written wire layout includes the SEQUENCE byte; both
+    // parsers consume from byte 0 onwards.
+    buf.push(0x09u8);                                       // Sequence
+    buf.extend_from_slice(&0x5000_0009u32.to_le_bytes());    // ObjectId / guid
+    buf.extend_from_slice(&63u32.to_le_bytes());             // PropertyFloat::DamageMod
+    buf.extend_from_slice(&1.5f64.to_le_bytes());            // Value f64
+
+    // Generated path.
+    let mut off_gen = 0usize;
+    let msg_gen = S2C_Qualities_UpdateFloat::read_from(&buf, &mut off_gen)
+        .expect("generated decode succeeds");
+    assert_eq!(off_gen, buf.len(), "generated cursor consumed full buffer");
+    assert_eq!(msg_gen.sequence, 0x09);
+    assert_eq!(msg_gen.object_id, 0x5000_0009);
+    assert_eq!(msg_gen.value, 1.5f64);
+
+    // Hand-written path.
+    let mut off_hand = 0usize;
+    let msg_hand = PublicUpdatePropertyFloatData::unpack(&buf, &mut off_hand)
+        .expect("hand-written decode succeeds");
+    assert_eq!(off_hand, buf.len(), "hand-written cursor consumed full buffer");
+    assert_eq!(msg_hand.value, 1.5f64);
+
+    // Cross-source consistency check.
+    assert_eq!(
+        off_gen, off_hand,
+        "both parsers must consume identical byte counts; mismatch = wire-asymmetry bug"
+    );
+    assert_eq!(
+        msg_gen.value, msg_hand.value,
+        "decoded f64 value must match across both parsers"
+    );
 }
 
 /// Wave 1.A-5: `S2C_Qualities_PrivateRemoveIntEvent` (0x01D1) round-trips.
