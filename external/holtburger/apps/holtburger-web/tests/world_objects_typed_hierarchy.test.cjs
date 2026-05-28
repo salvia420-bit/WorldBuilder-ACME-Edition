@@ -38,6 +38,8 @@ const VEND_URL = pathToFileURL(path.join(__dirname, '..', 'plugins', 'world-obje
 const ARMOR_URL = pathToFileURL(path.join(__dirname, '..', 'plugins', 'world-objects', 'armor.js')).href;
 const MELEE_URL = pathToFileURL(path.join(__dirname, '..', 'plugins', 'world-objects', 'melee_weapon.js')).href;
 const MISSILE_URL = pathToFileURL(path.join(__dirname, '..', 'plugins', 'world-objects', 'missile_weapon.js')).href;
+const WOM_URL = pathToFileURL(path.join(__dirname, '..', 'plugins', 'world-objects', 'world_object_manager.js')).href;
+const CC_URL = pathToFileURL(path.join(__dirname, '..', 'plugins', 'world-objects', 'canonical_classify.js')).href;
 
 let passed = 0;
 let failed = 0;
@@ -81,6 +83,8 @@ function silentLog() {
   const { Armor } = await import(ARMOR_URL);
   const { MeleeWeapon } = await import(MELEE_URL);
   const { MissileWeapon } = await import(MISSILE_URL);
+  const { WorldObjectManager } = await import(WOM_URL);
+  const { BITFLAGS } = await import(CC_URL);
 
   const makeItem = (id = 0xCAFE) => new Item(id, 0, null, null, null);
   const makeContainer = (id = 0xC000) => new Container(id, 0, null, null, null);
@@ -703,6 +707,147 @@ function silentLog() {
     });
     item.setInstanceValue(2, 0xF0);
     assert.deepStrictEqual(foci.items, [item]);
+  });
+
+  // ============================================================
+  // [12] WorldObjectManager dispatch — Lifestone (Wave 1.C, 2026-05-27)
+  // ============================================================
+  // The upstream Chorizite `World.CreateWorldObject` switch
+  // (`ACPlugin/API/World.cs:622-706`) has no explicit case for
+  // ObjectClass.Lifestone — falls to default → `new Item()` / `new Static()`.
+  // Our port closes that gap two ways:
+  //   1. canonical_classify.js:158 emits the 'Lifestone' string
+  //      (verified by world_object.test.cjs [6] + [10]).
+  //   2. world_object_manager.js:54 maps 'Lifestone' → the Lifestone
+  //      constructor in CONSTRUCTOR_BY_NAME (the analog of the C# switch).
+  //
+  // This section is the missing end-to-end dispatch coverage — it drives
+  // the same path that runs at runtime on a kind=10 ObjectCreated event
+  // for a real lifestone entity and asserts the typed subclass comes out.
+  // Per Wave 1.C brief: "dispatch test that creates an entity with
+  // ObjectClass::Lifestone and asserts the typed subclass is returned."
+  console.log('\n[12] WorldObjectManager dispatch — Lifestone (Wave 1.C)');
+
+  // ObjectDescriptionFlag.Lifestone = 0x00004000 per
+  // Chorizite.Common/Enums/ObjectDescriptionFlag.cs and
+  // holtburger-common::properties::object.
+  const ODF_LIFESTONE = BITFLAGS.ObjectDescriptionFlag.Lifestone;
+
+  // Build a manager and seed `loaded=true` directly (taxonomy/enums
+  // .load() calls fetch() which isn't available in Node — onObjectCreated
+  // doesn't actually consult either; only checks the loaded flag).
+  function makeLoadedManager() {
+    const wom = new WorldObjectManager();
+    wom.loaded = true;
+    return wom;
+  }
+
+  check('Lifestone wire payload dispatches to Lifestone constructor (not Item/Static)', () => {
+    const wom = makeLoadedManager();
+    const wo = wom.onObjectCreated({
+      guid: 0xA0000006,
+      classId: 509,          // wcid 509 = "Life Stone" per capture_academy_tour.cjs:25
+      itemType: 0,
+      objDescFlags: ODF_LIFESTONE,
+      weenieFlags: 0,
+      name: 'Lifestone',
+    });
+    assert.ok(wo, 'onObjectCreated should return an instance');
+    assert.ok(wo instanceof Lifestone,
+      `Expected Lifestone instance, got ${wo.constructor.name}`);
+  });
+
+  check('Dispatched Lifestone preserves Static hierarchy (not Item — handoff §3)', () => {
+    const wom = makeLoadedManager();
+    const wo = wom.onObjectCreated({
+      guid: 0xA0000006,
+      classId: 509,
+      itemType: 0,
+      objDescFlags: ODF_LIFESTONE,
+      weenieFlags: 0,
+    });
+    assert.ok(wo instanceof Static, 'Lifestone must extend Static');
+    assert.ok(!(wo instanceof Item), 'Lifestone must NOT extend Item');
+  });
+
+  check('Dispatched Lifestone tagged classificationSource="canonical"', () => {
+    const wom = makeLoadedManager();
+    const wo = wom.onObjectCreated({
+      guid: 0xA0000006,
+      classId: 509,
+      itemType: 0,
+      objDescFlags: ODF_LIFESTONE,
+      weenieFlags: 0,
+    });
+    // 'canonical' = matched the classifier output AND found a constructor;
+    // 'canonical-item-fallback' would mean the C# default-branch bug; 'unknown'
+    // would mean the classifier returned 'Unknown'.
+    assert.strictEqual(wo.classificationSource, 'canonical',
+      `Expected source 'canonical' (gap closed), got '${wo.classificationSource}'`);
+    assert.strictEqual(wo.canonicalObjectClass, 'Lifestone');
+  });
+
+  check('Dispatched Lifestone is registered in the manager map', () => {
+    const wom = makeLoadedManager();
+    const guid = 0xA0000006;
+    wom.onObjectCreated({
+      guid,
+      classId: 509,
+      itemType: 0,
+      objDescFlags: ODF_LIFESTONE,
+      weenieFlags: 0,
+    });
+    assert.strictEqual(wom.count(), 1);
+    assert.ok(wom.has(guid));
+    const fetched = wom.get(guid);
+    assert.ok(fetched instanceof Lifestone,
+      `manager.get(guid) must return the typed instance, got ${fetched?.constructor?.name}`);
+  });
+
+  check('Dispatched Lifestone exposes tie() method (Lifestone.cs subclass surface)', () => {
+    const wom = makeLoadedManager();
+    const wo = wom.onObjectCreated({
+      guid: 0xA0000006,
+      classId: 509,
+      itemType: 0,
+      objDescFlags: ODF_LIFESTONE,
+      weenieFlags: 0,
+    });
+    assert.strictEqual(typeof wo.tie, 'function',
+      'typed Lifestone instance should expose tie() (would be missing on Item/Static fallback)');
+  });
+
+  check('Lifestone + Stuck combined ODF still dispatches to Lifestone (priority order)', () => {
+    // Mirrors validate_entity_classification.cjs:125 "Lifestone (full obj-desc)"
+    // — confirms Lifestone branch wins over the Misc/Unknown + Stuck → Static
+    // fallback at canonical_classify.js:187-191.
+    const wom = makeLoadedManager();
+    const wo = wom.onObjectCreated({
+      guid: 0xA0000007,
+      classId: 509,
+      itemType: 0,
+      objDescFlags: ODF_LIFESTONE | BITFLAGS.ObjectDescriptionFlag.Stuck,
+      weenieFlags: 0,
+    });
+    assert.ok(wo instanceof Lifestone,
+      `Lifestone+Stuck should still dispatch Lifestone, got ${wo.constructor.name}`);
+  });
+
+  check('"created" event payload carries resolved="Lifestone" + source="canonical"', () => {
+    const wom = makeLoadedManager();
+    let captured = null;
+    wom.addEventListener('created', (e) => { captured = e.detail; });
+    wom.onObjectCreated({
+      guid: 0xA0000006,
+      classId: 509,
+      itemType: 0,
+      objDescFlags: ODF_LIFESTONE,
+      weenieFlags: 0,
+    });
+    assert.ok(captured, 'created event should have fired');
+    assert.strictEqual(captured.resolved, 'Lifestone');
+    assert.strictEqual(captured.source, 'canonical');
+    assert.ok(captured.object instanceof Lifestone);
   });
 
   // ============================================================
