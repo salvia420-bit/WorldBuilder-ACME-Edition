@@ -524,6 +524,55 @@ export class AnimationCache {
                         soundProbability: +h.soundProbability,
                         soundVolume: +h.soundVolume,
                         soundPriority: +h.soundPriority,
+                        // Wave 1 — particle hook decoded fields.
+                        // CreateParticle (13) / CreateBlockingParticle (26):
+                        // emitter info + Frame offset + per-script handle.
+                        // DestroyParticle (14) / StopParticle (15): reuse
+                        // `particleEmitterId` getter for the handle (it's
+                        // hookType-aware on the Rust side).
+                        // CallPES (19): pes_did + pes_pause.
+                        emitterInfoId: h.emitterInfoId >>> 0,
+                        createPartIndex: h.createPartIndex >>> 0,
+                        offsetOriginX: +h.offsetOriginX,
+                        offsetOriginY: +h.offsetOriginY,
+                        offsetOriginZ: +h.offsetOriginZ,
+                        offsetOrientationW: +h.offsetOrientationW,
+                        offsetOrientationX: +h.offsetOrientationX,
+                        offsetOrientationY: +h.offsetOrientationY,
+                        offsetOrientationZ: +h.offsetOrientationZ,
+                        particleEmitterId: h.particleEmitterId >>> 0,
+                        callPesDid: h.callPesDid >>> 0,
+                        callPesPause: +h.callPesPause,
+                        // Wave 3 — material/transform/visibility hook fields.
+                        // rampStart/End/Time cover Transparent (20),
+                        // Luminous (8), Diffuse (10), TransparentPart (7),
+                        // LuminousPart (9), DiffusePart (11), Scale (12).
+                        // Scale has only end+time (rampStart is 0); all
+                        // others have all three.
+                        rampStart: +h.rampStart,
+                        rampEnd: +h.rampEnd,
+                        rampTime: +h.rampTime,
+                        // Ethereal (6), NoDraw (16) — boolean-ish toggles.
+                        etherealValue: h.etherealValue | 0,
+                        noDrawValue: h.noDrawValue >>> 0,
+                        // SetOmega (22) — angular velocity axis (rad/s).
+                        omegaX: +h.omegaX,
+                        omegaY: +h.omegaY,
+                        omegaZ: +h.omegaZ,
+                        // TextureVelocity (23) / TextureVelocityPart (24)
+                        // — UV scroll velocity.
+                        textureUSpeed: +h.textureUSpeed,
+                        textureVSpeed: +h.textureVSpeed,
+                        // SetLight (25) — boolean: lights on/off.
+                        lightsOn: h.lightsOn | 0,
+                        // Wave 4 — per-part variants + ReplaceObject.
+                        // partIndex covers hooks 7/9/11/18/24 (sentinel
+                        // `0xFFFFFFFF` for non-part-aware hooks).
+                        // replacePartIndex + replaceNewGfxObjId cover
+                        // ReplaceObject (5).
+                        partIndex: h.partIndex >>> 0,
+                        replacePartIndex: h.replacePartIndex >>> 0,
+                        replaceNewGfxObjId: h.replaceNewGfxObjId >>> 0,
                     };
                     if (typeof h.free === "function") {
                         try { h.free(); } catch (_) {}

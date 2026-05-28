@@ -11186,6 +11186,432 @@ impl AnimationHookJs {
             _ => 0.0,
         }
     }
+
+    // === Wave 1 — Particle hook decoded fields ===========================
+    //
+    // CreateParticleHook (13) + CreateBlockingParticle (26): 40-byte payload
+    //   [0..4]   emitter_info_id  (ParticleEmitter DID 0x32xxxxxx)
+    //   [4..8]   part_index       (which SetupModel part to attach to)
+    //   [8..12]  offset.origin.x
+    //   [12..16] offset.origin.y
+    //   [16..20] offset.origin.z
+    //   [20..24] offset.orientation.w   (Frame's quaternion is wxyz)
+    //   [24..28] offset.orientation.x
+    //   [28..32] offset.orientation.y
+    //   [32..36] offset.orientation.z
+    //   [36..40] emitter_id       (per-script handle Stop/Destroy reference)
+    //
+    // DestroyParticleHook (14) / StopParticleHook (15): 4-byte payload
+    //   [0..4]   emitter_id       (same per-script handle namespace)
+    //
+    // CallPESHook (19): 8-byte payload
+    //   [0..4]   pes              (PhysicsScript DID 0x33xxxxxx)
+    //   [4..8]   pause            (seconds before invocation)
+    //
+    // Wire-format cite: melt's `CreateParticleHook.cs`, `DestroyParticleHook.cs`,
+    // `StopParticleHook.cs`, `CallPESHook.cs`. Retail cite:
+    // `acclient.c:0x005278A0` (`CreateParticleHook::UnPack`); the parser's
+    // `as_create_particle()` decoder in `setup_model.rs:164` carries the same
+    // citations for non-wasm consumers.
+
+    /// **CreateParticle (13) / CreateBlockingParticle (26)**: ParticleEmitter
+    /// DID (file_type prefix `0x32`). `0` for other hook types or malformed
+    /// payloads. Caller pipes this into `fetchParticleEmitter` to get the
+    /// `ParticleEmitterInfo` record.
+    #[wasm_bindgen(getter, js_name = emitterInfoId)]
+    pub fn emitter_info_id(&self) -> u32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            _ => 0,
+        }
+    }
+
+    /// **CreateParticle (13) / CreateBlockingParticle (26)**: which SetupModel
+    /// part the emitter attaches to. `0xFFFFFFFF` means "root" in retail
+    /// convention. `0` for other hook types (note the ambiguity — `0` is also
+    /// a valid part index; check `hookType` before consuming).
+    #[wasm_bindgen(getter, js_name = createPartIndex)]
+    pub fn create_part_index(&self) -> u32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                u32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+            }
+            _ => 0,
+        }
+    }
+
+    /// **CreateParticle (13) / CreateBlockingParticle (26)** local-space spawn
+    /// origin x (Frame.origin). `0.0` for other hook types.
+    #[wasm_bindgen(getter, js_name = offsetOriginX)]
+    pub fn offset_origin_x(&self) -> f32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// **CreateParticle (13) / CreateBlockingParticle (26)** local-space spawn
+    /// origin y (Frame.origin). `0.0` for other hook types.
+    #[wasm_bindgen(getter, js_name = offsetOriginY)]
+    pub fn offset_origin_y(&self) -> f32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                f32::from_le_bytes(self.hook_data[12..16].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// **CreateParticle (13) / CreateBlockingParticle (26)** local-space spawn
+    /// origin z (Frame.origin). `0.0` for other hook types.
+    #[wasm_bindgen(getter, js_name = offsetOriginZ)]
+    pub fn offset_origin_z(&self) -> f32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                f32::from_le_bytes(self.hook_data[16..20].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// **CreateParticle (13) / CreateBlockingParticle (26)** local-space spawn
+    /// orientation w (Frame.orientation is a quaternion stored wxyz).
+    /// `1.0` (identity) for other hook types — picked so a naive caller that
+    /// forgets to check hookType still builds a valid identity quaternion.
+    #[wasm_bindgen(getter, js_name = offsetOrientationW)]
+    pub fn offset_orientation_w(&self) -> f32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                f32::from_le_bytes(self.hook_data[20..24].try_into().unwrap())
+            }
+            _ => 1.0,
+        }
+    }
+
+    /// **CreateParticle (13) / CreateBlockingParticle (26)** orientation x.
+    /// `0.0` for other hook types.
+    #[wasm_bindgen(getter, js_name = offsetOrientationX)]
+    pub fn offset_orientation_x(&self) -> f32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                f32::from_le_bytes(self.hook_data[24..28].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// **CreateParticle (13) / CreateBlockingParticle (26)** orientation y.
+    /// `0.0` for other hook types.
+    #[wasm_bindgen(getter, js_name = offsetOrientationY)]
+    pub fn offset_orientation_y(&self) -> f32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                f32::from_le_bytes(self.hook_data[28..32].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// **CreateParticle (13) / CreateBlockingParticle (26)** orientation z.
+    /// `0.0` for other hook types.
+    #[wasm_bindgen(getter, js_name = offsetOrientationZ)]
+    pub fn offset_orientation_z(&self) -> f32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                f32::from_le_bytes(self.hook_data[32..36].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Per-script emitter handle. The stable id that CreateParticle stamps
+    /// onto the spawned emitter so DestroyParticle/StopParticle can tear it
+    /// down by id. CreateParticle (13) / CreateBlockingParticle (26) carry
+    /// it at the tail of their 40-byte payload; DestroyParticle (14) /
+    /// StopParticle (15) carry it as the only field of their 4-byte payload.
+    /// `0` for other hook types.
+    #[wasm_bindgen(getter, js_name = particleEmitterId)]
+    pub fn particle_emitter_id(&self) -> u32 {
+        match self.hook_type {
+            13 | 26 if self.hook_data.len() == 40 => {
+                u32::from_le_bytes(self.hook_data[36..40].try_into().unwrap())
+            }
+            14 | 15 if self.hook_data.len() >= 4 => {
+                u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            _ => 0,
+        }
+    }
+
+    /// **CallPES (19)**: PhysicsScript DID (file_type prefix `0x33`) to
+    /// invoke. `0` for other hook types.
+    #[wasm_bindgen(getter, js_name = callPesDid)]
+    pub fn call_pes_did(&self) -> u32 {
+        if self.hook_type == 19 && self.hook_data.len() >= 8 {
+            u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+        } else {
+            0
+        }
+    }
+
+    /// **CallPES (19)**: delay in seconds before invoking the PhysicsScript.
+    /// Retail uses this to stagger scripted effects against the animation
+    /// frame the hook is anchored to. `0.0` for other hook types.
+    #[wasm_bindgen(getter, js_name = callPesPause)]
+    pub fn call_pes_pause(&self) -> f32 {
+        if self.hook_type == 19 && self.hook_data.len() >= 8 {
+            f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+        } else {
+            0.0
+        }
+    }
+
+    // === Wave 3 — Material/transform hook decoded fields ================
+    //
+    // The "Start/End/Time" ramp triplet is shared across:
+    //   - Transparent (20), Luminous (8), Diffuse (10): 12-byte payload =
+    //     [f32 start][f32 end][f32 time]. Whole-object ramp.
+    //   - TransparentPart (7), LuminousPart (9), DiffusePart (11): 16-byte
+    //     payload = [u32 part][f32 start][f32 end][f32 time]. Per-part ramp.
+    //   - Scale (12): 8-byte payload = [f32 end][f32 time]. No `start` —
+    //     animator interpolates from the entity's CURRENT scale. Caller
+    //     should branch on hookType.
+    //
+    // Cite: melt's `TransparentHook.cs`, `LuminousHook.cs`, `DiffuseHook.cs`,
+    // `ScaleHook.cs` (+ the `*Part` variants); retail
+    // `acclient.c:0x00525190..0x005253A0` (Transparent/Luminous/Diffuse Pack/
+    // UnPack) + `0x00524F90` (Scale).
+
+    /// **Transparent (20) / Luminous (8) / Diffuse (10)**: starting ramp
+    /// value (whole-object). **TransparentPart (7) / LuminousPart (9) /
+    /// DiffusePart (11)**: starting ramp value (per-part, offset shifted
+    /// past the leading `part` u32). `0.0` for other hook types — note
+    /// Scale (12) has no `start`; callers should interpolate from the
+    /// entity's current scale.
+    #[wasm_bindgen(getter, js_name = rampStart)]
+    pub fn ramp_start(&self) -> f32 {
+        match self.hook_type {
+            8 | 10 | 20 if self.hook_data.len() == 12 => {
+                f32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            7 | 9 | 11 if self.hook_data.len() == 16 => {
+                f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Ramp end value. Same hook coverage as `rampStart` PLUS Scale (12)
+    /// at offset 0 of its 8-byte payload. `0.0` for other hook types.
+    #[wasm_bindgen(getter, js_name = rampEnd)]
+    pub fn ramp_end(&self) -> f32 {
+        match self.hook_type {
+            8 | 10 | 20 if self.hook_data.len() == 12 => {
+                f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+            }
+            7 | 9 | 11 if self.hook_data.len() == 16 => {
+                f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
+            }
+            12 if self.hook_data.len() == 8 => {
+                f32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Ramp duration (seconds). Same hook coverage as `rampEnd`. `0.0`
+    /// for other hook types — a `0` duration means "snap to end value
+    /// immediately" in retail (acclient.c:0x005252F0).
+    #[wasm_bindgen(getter, js_name = rampTime)]
+    pub fn ramp_time(&self) -> f32 {
+        match self.hook_type {
+            8 | 10 | 20 if self.hook_data.len() == 12 => {
+                f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
+            }
+            7 | 9 | 11 if self.hook_data.len() == 16 => {
+                f32::from_le_bytes(self.hook_data[12..16].try_into().unwrap())
+            }
+            12 if self.hook_data.len() == 8 => {
+                f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// **Ethereal (6)**: i32 boolean-ish (0 = solid, non-zero = phase
+    /// through collision). Server is authoritative for collision in our
+    /// model; clients use this only for visual hints.
+    #[wasm_bindgen(getter, js_name = etherealValue)]
+    pub fn ethereal_value(&self) -> i32 {
+        if self.hook_type == 6 && self.hook_data.len() >= 4 {
+            i32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+        } else {
+            0
+        }
+    }
+
+    /// **NoDraw (16)**: u32 boolean-ish (0 = visible, non-zero = hidden).
+    #[wasm_bindgen(getter, js_name = noDrawValue)]
+    pub fn no_draw_value(&self) -> u32 {
+        if self.hook_type == 16 && self.hook_data.len() >= 4 {
+            u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+        } else {
+            0
+        }
+    }
+
+    /// **SetOmega (22)**: angular-velocity axis x (radians/sec). Frame
+    /// integration: `quaternion = AxisAngle(omega.normalize(), |omega| *
+    /// dt) * quaternion`. `0.0` for other hook types.
+    #[wasm_bindgen(getter, js_name = omegaX)]
+    pub fn omega_x(&self) -> f32 {
+        if self.hook_type == 22 && self.hook_data.len() >= 12 {
+            f32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+        } else {
+            0.0
+        }
+    }
+
+    /// **SetOmega (22)**: angular-velocity axis y. `0.0` for other types.
+    #[wasm_bindgen(getter, js_name = omegaY)]
+    pub fn omega_y(&self) -> f32 {
+        if self.hook_type == 22 && self.hook_data.len() >= 12 {
+            f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+        } else {
+            0.0
+        }
+    }
+
+    /// **SetOmega (22)**: angular-velocity axis z. `0.0` for other types.
+    #[wasm_bindgen(getter, js_name = omegaZ)]
+    pub fn omega_z(&self) -> f32 {
+        if self.hook_type == 22 && self.hook_data.len() >= 12 {
+            f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
+        } else {
+            0.0
+        }
+    }
+
+    /// **TextureVelocity (23) / TextureVelocityPart (24)**: u-axis UV
+    /// scroll velocity. For hook 23 the velocity is at payload offset 0;
+    /// for hook 24 it's at offset 4 (after the `part` u32). `0.0` for
+    /// other hook types.
+    #[wasm_bindgen(getter, js_name = textureUSpeed)]
+    pub fn texture_u_speed(&self) -> f32 {
+        match self.hook_type {
+            23 if self.hook_data.len() == 8 => {
+                f32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            24 if self.hook_data.len() == 12 => {
+                f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// **TextureVelocity (23) / TextureVelocityPart (24)**: v-axis UV
+    /// scroll velocity. Offsets mirror `textureUSpeed`.
+    #[wasm_bindgen(getter, js_name = textureVSpeed)]
+    pub fn texture_v_speed(&self) -> f32 {
+        match self.hook_type {
+            23 if self.hook_data.len() == 8 => {
+                f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+            }
+            24 if self.hook_data.len() == 12 => {
+                f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// **SetLight (25)**: i32 boolean (0 = lights off, non-zero = on).
+    /// Retail toggles entity-attached light sources. `0` for other
+    /// hook types.
+    #[wasm_bindgen(getter, js_name = lightsOn)]
+    pub fn lights_on(&self) -> i32 {
+        if self.hook_type == 25 && self.hook_data.len() >= 4 {
+            i32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+        } else {
+            0
+        }
+    }
+
+    // === Wave 4 — Per-part hook decoded fields ==========================
+    // (`ramp_*` + `texture_*` getters above are already part-aware via
+    // hookType branching. The only field unique to Wave 4 is the leading
+    // `part` index, plus ReplaceObject's compact/extended GfxObjId.)
+
+    /// **TransparentPart (7) / LuminousPart (9) / DiffusePart (11) /
+    /// DefaultScriptPart (18) / TextureVelocityPart (24)**: which
+    /// SetupModel part the hook targets. For CreateParticle (13/26) use
+    /// `createPartIndex` instead — it's at a different offset in that
+    /// payload. `0xFFFFFFFF` for other hook types (a sentinel distinct
+    /// from a valid `0` part index).
+    #[wasm_bindgen(getter, js_name = partIndex)]
+    pub fn part_index(&self) -> u32 {
+        match self.hook_type {
+            7 | 9 | 11 if self.hook_data.len() == 16 => {
+                u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            18 if self.hook_data.len() >= 4 => {
+                u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            24 if self.hook_data.len() == 12 => {
+                u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            _ => 0xFFFF_FFFF,
+        }
+    }
+
+    /// **ReplaceObject (5)**: the new GfxObj DID to swap in for the
+    /// part. The wire format here is non-trivial — retail uses
+    /// `Unpack_AsDataIDOfKnownType(0x01000000)` (acclient.c:667732) which
+    /// is the "packed id" form: read a u16; if the high bit is set,
+    /// read another u16 and combine to form a 32-bit DID; else the u16
+    /// is the low half of `0x01000000 | u16` (a "compact" form for
+    /// GfxObjs in the standard range). Returns the fully expanded
+    /// 32-bit DID, or `0` for other hook types / malformed payloads.
+    ///
+    /// Note: ReplaceObject's `hook_data` starts with 1 byte `part_index`
+    /// (a u8, not u32 — different from the *Part variants), then the
+    /// packed id, then 0..3 align-pad bytes. `replacePartIndex` exposes
+    /// the byte separately.
+    #[wasm_bindgen(getter, js_name = replaceNewGfxObjId)]
+    pub fn replace_new_gfx_obj_id(&self) -> u32 {
+        if self.hook_type != 5 || self.hook_data.len() < 4 {
+            return 0;
+        }
+        // [0] = part_index u8, [1..] = packed id (2 or 4 bytes) + pad
+        let low_word = u16::from_le_bytes(self.hook_data[1..3].try_into().unwrap()) as u32;
+        if low_word & 0x8000 != 0 {
+            // Extended form: high half follows; combine.
+            if self.hook_data.len() < 5 {
+                return 0;
+            }
+            let high_word = u16::from_le_bytes(self.hook_data[3..5].try_into().unwrap()) as u32;
+            ((low_word & 0x7FFF) << 16) | high_word
+        } else {
+            // Compact form: 0x01000000 | low_word
+            0x0100_0000 | low_word
+        }
+    }
+
+    /// **ReplaceObject (5)**: which SetupModel part the new GfxObj
+    /// replaces. Single byte at the front of the payload (note: distinct
+    /// from `partIndex` which reads a u32 starting at the same offset).
+    /// `0xFF` for other hook types.
+    #[wasm_bindgen(getter, js_name = replacePartIndex)]
+    pub fn replace_part_index(&self) -> u32 {
+        if self.hook_type == 5 && !self.hook_data.is_empty() {
+            self.hook_data[0] as u32
+        } else {
+            0xFF
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

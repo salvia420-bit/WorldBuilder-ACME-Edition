@@ -532,6 +532,14 @@ const _tickGateScratch = new THREE.Vector3();
 const _particleAttachScratchVec3 = new THREE.Vector3();
 const _particleAttachScratchQuat = new THREE.Quaternion();
 
+// Wave 3 (2026-05-28) — SetOmega hook integration scratch. Avoids
+// allocating a fresh THREE.Quaternion per entity per frame during the
+// `_tickHookOmega` integration pass. Safe to share across entities
+// because `multiplyQuaternions` reads its operands fully before writing
+// the destination (we then write into `inst.root.quaternion`, never
+// back into this scratch).
+const _omegaScratchQ = new THREE.Quaternion();
+
 // Wave 1.7 (2026-05-26, post-Joe-Trevis-quote restoration) — arms-up jump
 // pose overlay. Restored after Wave 1.2's deletion was determined to be
 // directionally wrong: retail AC's "combined jumping/falling animation"
@@ -580,6 +588,16 @@ function _disposeMaterialIfOwned(mat) {
     return;
   }
   if (ud.__disposable !== true) return;
+  // Wave 5 (2026-05-28) — clone-on-write may tag a per-entity
+  // `material.map` as `__disposable` too (TextureVelocity needs an
+  // owned Texture so `.offset` doesn't bleed across entities sharing
+  // the same surface). Free it BEFORE the material dispose so the
+  // map ref is still readable. Pre-Wave-5 entities have shared
+  // (untagged) `.map` Textures so this check is a no-op for them.
+  const map = mat.map;
+  if (map && map.userData?.__disposable === true && map.userData?.__cacheOwned !== true) {
+    try { map.dispose(); } catch (_) {}
+  }
   try {
     mat.dispose();
   } catch (_) {}
@@ -4393,6 +4411,163 @@ export class EntityManager {
     }
   }
 
+  /**
+   * Lazy-construct `this._worldParticleManager` on first use. Imports
+   * the particles + adapter modules dynamically so the
+   * `test_phase7_4*` composite-source harness doesn't have to bundle
+   * them. Idempotent: returns the existing manager on subsequent calls.
+   *
+   * The `rig` parameter is used only as a `scene` fallback if
+   * `scene3d.entitiesGroup` is not attached yet (rare boot-race
+   * condition). For animation-hook callers, pass `inst.root` — the
+   * value isn't read after the manager is first created.
+   *
+   * Originally inline in `_attachParticleChainForEntity`; extracted on
+   * 2026-05-28 so animation-hook `CreateParticleHook` (Wave 1) can
+   * reuse the same manager without duplicating the boot code.
+   */
+  async _ensureWorldParticleManager(rig) {
+    if (this._worldParticleManager) return this._worldParticleManager;
+    const { ParticleManager } = await import("./particles/index.js");
+    const adapter = await import("./adapter.js");
+    const meshToGeometryGroups = adapter.meshToGeometryGroups;
+    const materialCache = this.materialCache;
+    const ents_wasm = this.wasmExports;
+    // H3-bugfix (2026-05-12): same fix as sky_dome.js — must run
+    // wasm-side mesh through meshToGeometryGroups to get a real
+    // THREE.BufferGeometry. Otherwise new THREE.Mesh crashes with
+    // "Cannot read properties of null (reading 'morphAttributes')".
+    const resolveGfxObj = async (hwGfxObjId) => {
+      if (!ents_wasm || typeof ents_wasm.fetchBuildingPlacement !== "function") {
+        return null;
+      }
+      let bundle;
+      try {
+        bundle = await ents_wasm.fetchBuildingPlacement(hwGfxObjId);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[entities/H2] fetchBuildingPlacement(0x${hwGfxObjId.toString(16)}) failed:`,
+          e
+        );
+        return null;
+      }
+      if ((bundle.partCount | 0) === 0) {
+        if (typeof bundle.free === "function") bundle.free();
+        return null;
+      }
+      const meshes = bundle.takePartMeshes();
+      if (typeof bundle.free === "function") bundle.free();
+      const wasmMesh = meshes[0];
+      if (!wasmMesh) return null;
+      const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
+      if (typeof wasmMesh.free === "function") wasmMesh.free();
+      if (!groups || groups.length === 0) return null;
+      return {
+        geometry: groups[0].geometry,
+        surfaceDid: groups[0].surfaceDid || surfaceDids[0] || 0,
+      };
+    };
+    this._worldParticleManager = new ParticleManager({
+      scene: this.scene3d?.entitiesGroup ?? rig?.parent ?? null,
+      geometryFactory: async (hwGfxObjId) => {
+        const r = await resolveGfxObj(hwGfxObjId);
+        return r?.geometry ?? null;
+      },
+      materialFactory: async (hwGfxObjId) => {
+        if (!materialCache) return null;
+        const r = await resolveGfxObj(hwGfxObjId);
+        if (!r?.surfaceDid) return null;
+        try {
+          return await materialCache.get(
+            r.surfaceDid,
+            ents_wasm.fetch_surfaces_pixels
+          );
+        } catch (_) {
+          return null;
+        }
+      },
+    });
+    return this._worldParticleManager;
+  }
+
+  /**
+   * Wave 5 (2026-05-28) — Clone-on-write helper for entity materials.
+   * Returns a material OWNED by this entity (cloned from the shared
+   * `materialCache` on first request), suitable for mutating opacity /
+   * emissive / color / `.map.offset` uniforms without bleeding into
+   * other entities that share the same surface.
+   *
+   * Re-points every Mesh in `inst.parts` that referenced the shared
+   * material to the clone. Idempotent: subsequent calls with the same
+   * `surfaceDid` return the already-owned clone.
+   *
+   * Cloned materials are tagged `userData.__disposable = true` (and
+   * NOT `__cacheOwned`) so the existing `_disposeMaterialIfOwned`
+   * policy frees them on entity release. With `opts.cloneTexture`
+   * (set by TextureVelocity hooks), the material's `.map` is also
+   * cloned so the per-entity `.offset` doesn't bleed; the underlying
+   * `Texture.image` is shared so there's no extra GPU upload.
+   *
+   * Returns `null` when the surface isn't in cache (which means we'd
+   * be cloning the fallback singleton — caller should no-op).
+   */
+  _getOrCloneEntityMaterial(inst, surfaceDid, opts = {}) {
+    const did = surfaceDid >>> 0;
+    if (!inst._entityMaterials) inst._entityMaterials = new Map();
+    const existing = inst._entityMaterials.get(did);
+    if (existing) {
+      // Already entity-owned. If the caller now wants a cloned texture
+      // and the existing clone still points at a shared `.map`, clone
+      // the texture now (lazy upgrade so plain Transparent hooks don't
+      // pay for texture cloning).
+      if (opts.cloneTexture && existing.map &&
+          existing.map.userData?.__disposable !== true) {
+        const tex = existing.map.clone();
+        tex.userData = { ...(tex.userData || {}), __disposable: true };
+        delete tex.userData.__cacheOwned;
+        tex.needsUpdate = false; // shared image, no re-upload
+        existing.map = tex;
+      }
+      return existing;
+    }
+    if (!this.materialCache) return null;
+    const shared = this.materialCache.getCached(did);
+    if (!shared) return null;
+    // Skip the fallback singleton — cloning the global fallback would
+    // both waste memory and risk dispose-policy confusion. Treat as
+    // "no usable cache hit".
+    if (shared === this.materialCache.fallbackMaterial) return null;
+    const cloned = shared.clone();
+    cloned.userData = { ...(cloned.userData || {}), __disposable: true };
+    // Strip `__cacheOwned` if it carried over via spread — the clone
+    // is per-entity, not cache-owned.
+    if (cloned.userData.__cacheOwned) delete cloned.userData.__cacheOwned;
+    if (opts.cloneTexture && cloned.map) {
+      const tex = cloned.map.clone();
+      tex.userData = { ...(tex.userData || {}), __disposable: true };
+      delete tex.userData.__cacheOwned;
+      tex.needsUpdate = false;
+      cloned.map = tex;
+    }
+    inst._entityMaterials.set(did, cloned);
+    // Re-point every Mesh under `inst.parts` that referenced the
+    // shared material. Spawn (~line 1671) stamps `userData.surfaceDid`
+    // on each Mesh so this lookup is O(parts × meshes_per_part).
+    if (Array.isArray(inst.parts)) {
+      for (const part of inst.parts) {
+        if (!part) continue;
+        for (const child of part.children) {
+          if (!child || !child.isMesh) continue;
+          if ((child.userData?.surfaceDid >>> 0) === did) {
+            child.material = cloned;
+          }
+        }
+      }
+    }
+    return cloned;
+  }
+
   async _attachParticleChainForEntity(guid, rig, pesId) {
     // F.D-fu (2026-05-20): emit a chain-walker entry log so validators
     // (and devs eyeballing console) can correlate spawn dispatch with
@@ -4428,70 +4603,7 @@ export class EntityManager {
     );
 
     // Lazy-create the world-side ParticleManager on first chain walk.
-    // Imported here (not at top of file) so the test_phase7_4* harness
-    // doesn't need the particles module in its composite source.
-    if (!this._worldParticleManager) {
-      const { ParticleManager } = await import("./particles/index.js");
-      const adapter = await import("./adapter.js");
-      const meshToGeometryGroups = adapter.meshToGeometryGroups;
-      const materialCache = this.materialCache;
-      const ents_wasm = this.wasmExports;
-      // H3-bugfix (2026-05-12): same fix as sky_dome.js — must run
-      // wasm-side mesh through meshToGeometryGroups to get a real
-      // THREE.BufferGeometry. Otherwise new THREE.Mesh crashes with
-      // "Cannot read properties of null (reading 'morphAttributes')".
-      const resolveGfxObj = async (hwGfxObjId) => {
-        if (!ents_wasm || typeof ents_wasm.fetchBuildingPlacement !== "function") {
-          return null;
-        }
-        let bundle;
-        try {
-          bundle = await ents_wasm.fetchBuildingPlacement(hwGfxObjId);
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[entities/H2] fetchBuildingPlacement(0x${hwGfxObjId.toString(16)}) failed:`,
-            e
-          );
-          return null;
-        }
-        if ((bundle.partCount | 0) === 0) {
-          if (typeof bundle.free === "function") bundle.free();
-          return null;
-        }
-        const meshes = bundle.takePartMeshes();
-        if (typeof bundle.free === "function") bundle.free();
-        const wasmMesh = meshes[0];
-        if (!wasmMesh) return null;
-        const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
-        if (typeof wasmMesh.free === "function") wasmMesh.free();
-        if (!groups || groups.length === 0) return null;
-        return {
-          geometry: groups[0].geometry,
-          surfaceDid: groups[0].surfaceDid || surfaceDids[0] || 0,
-        };
-      };
-      this._worldParticleManager = new ParticleManager({
-        scene: this.scene3d?.entitiesGroup ?? rig.parent,
-        geometryFactory: async (hwGfxObjId) => {
-          const r = await resolveGfxObj(hwGfxObjId);
-          return r?.geometry ?? null;
-        },
-        materialFactory: async (hwGfxObjId) => {
-          if (!materialCache) return null;
-          const r = await resolveGfxObj(hwGfxObjId);
-          if (!r?.surfaceDid) return null;
-          try {
-            return await materialCache.get(
-              r.surfaceDid,
-              ents_wasm.fetch_surfaces_pixels
-            );
-          } catch (_) {
-            return null;
-          }
-        },
-      });
-    }
+    await this._ensureWorldParticleManager(rig);
 
     const THREE = (await import("three")).default ?? (await import("three"));
     // B2 (perf plan 2026-05-18): the per-hook `new Vector3(...)` /
@@ -5164,6 +5276,63 @@ export class EntityManager {
           }
         }
       }
+      // Wave 3 (2026-05-28) — Scale hook tween. Ticks after the
+      // mixer + jump/swing/cast tweens so the scaled-object value wins
+      // for the tween duration. Per-tween guard (gated on
+      // `inst._scaleHookTween`) so non-scaling entities pay zero cost.
+      if (inst._scaleHookTween) {
+        try {
+          this._tickScaleHookTween(inst, performance.now());
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._scaleHookTweenWarned) {
+            this._scaleHookTweenWarned = true;
+            console.warn(
+              `[entities/scale-hook] tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+        }
+      }
+      // Wave 3 (2026-05-28) — SetOmega continuous angular velocity.
+      // Persistent state, not a tween — applies `omega * dt` to the
+      // root quaternion each frame until a SetOmega(0,0,0) clears it.
+      if (inst._omega) {
+        try {
+          this._tickHookOmega(inst, dt);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._omegaTickWarned) {
+            this._omegaTickWarned = true;
+            console.warn(
+              `[entities/omega-hook] tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+        }
+      }
+      // Wave 6 (2026-05-28) — material ramp tweens + UV scroll.
+      // Gated on either material tweens being active OR any cloned
+      // material carrying a __hookTexVel tag. The check is one
+      // truthy-Map read on the fast path; entities with no material
+      // hooks pay zero per-frame cost.
+      if (
+        (inst._materialHookTweens && inst._materialHookTweens.length > 0) ||
+        (inst._entityMaterials && inst._entityMaterials.size > 0)
+      ) {
+        try {
+          this._tickMaterialHooks(inst, dt, performance.now());
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._materialHookTickWarned) {
+            this._materialHookTickWarned = true;
+            console.warn(
+              `[entities/material-hook] tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+        }
+      }
     }
     // Wave 7 Phase 7.1 (2026-05-26): periodic prune of stale entries in
     // each entity's `_recentLocomotionTime` cache. The restore-window is
@@ -5452,23 +5621,832 @@ export class EntityManager {
       this._attackHookFires = (this._attackHookFires | 0) + 1;
       return;
     }
-    // Other hook types — debug-log + count, leave handler as TODO.
-    // The user will likely want CreateParticle (13) on entity idle
-    // animations to land particle attaches (forge embers, lantern
-    // sparks). The current path through `_attachParticleChainForEntity`
-    // walks `physicsScriptDid` — animation-anchored particle hooks are
-    // a follow-on item.
-    if (hookType === 13 || hookType === 21) {
-      // eslint-disable-next-line no-console
-      if (!inst._unhandledHookDebugged) {
-        inst._unhandledHookDebugged = true;
+    // Wave 1 (2026-05-28) — particle hooks. CreateParticle attaches an
+    // emitter anchored to the entity rig (forge embers, lantern sparks,
+    // idle-animation effects). Destroy/Stop tear down emitters by the
+    // per-script `particleEmitterId` handle. CallPES invokes a separate
+    // PhysicsScript chain after a delay.
+    if (hookType === 13 || hookType === 26) {
+      // CreateParticle / CreateBlockingParticle. Retail blocks the
+      // animation while a `CreateBlockingParticle` script is running
+      // (acclient.c:343026); we treat both the same — three.js has no
+      // frame-gating mechanism the hook could pause, and the visual
+      // result is the same.
+      this._fireCreateParticleHook(inst, hook).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[entities/hook-13] createParticle on 0x${inst.guid.toString(16)} failed:`,
+          err
+        );
+      });
+      this._createParticleHookFires = (this._createParticleHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 14) {
+      // DestroyParticle — tear down by per-script handle.
+      const emitterId = hook.particleEmitterId >>> 0;
+      if (emitterId !== 0 && this._worldParticleManager) {
+        try { this._worldParticleManager.destroyParticleEmitter(emitterId); }
+        catch (_) { /* idempotent — never error on unknown id */ }
+      }
+      this._destroyParticleHookFires = (this._destroyParticleHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 15) {
+      // StopParticle — stop emission (no teardown) by per-script handle.
+      const emitterId = hook.particleEmitterId >>> 0;
+      if (emitterId !== 0 && this._worldParticleManager) {
+        try { this._worldParticleManager.stopParticleEmitter(emitterId); }
+        catch (_) { /* idempotent */ }
+      }
+      this._stopParticleHookFires = (this._stopParticleHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 19) {
+      // CallPES — invoke a PhysicsScript on this entity after
+      // `callPesPause` seconds. Delegates to the existing chain walker
+      // which fans out into its own CreateParticleHook entries.
+      const pesId = hook.callPesDid >>> 0;
+      const pause = +hook.callPesPause;
+      if (pesId !== 0) {
+        const delayMs = Math.max(0, pause * 1000);
+        const guidU = (inst.guid >>> 0);
+        const root = inst.root;
+        setTimeout(() => {
+          // Late-fire guard: bail if the entity has been released while
+          // the timer was pending (matches the Sound-hook pattern at
+          // line ~4525). `_attachParticleChainForEntity` itself also
+          // soft-noops on unknown guids, but the explicit check keeps
+          // the per-fire log spam down.
+          if (!this.entityMap.has(guidU)) return;
+          this._attachParticleChainForEntity(guidU, root, pesId).catch(() => {});
+        }, delayMs);
+      }
+      this._callPesHookFires = (this._callPesHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 21) {
+      // Wave 2 (2026-05-28) — SoundTweaked. Same wire shape as Sound (1)
+      // (`hook.soundWaveId` is a Wave DID) but with three modifiers:
+      //   - `soundProbability` (0..1): coin-flip gate; <1.0 means the
+      //     hook fires probabilistically. Retail uses this for ambient
+      //     creature vocalizations that shouldn't fire every cycle.
+      //   - `soundVolume` (linear gain): passed as the play() `gain`
+      //     option. Retail allows per-hook gain so a creature's quiet
+      //     idle breaths and loud death roar can share the same hook
+      //     mechanism.
+      //   - `soundPriority` (linear float): retail's mix-priority hint
+      //     for the AC mixer; our AudioManager doesn't currently use
+      //     priority (HRTF panner + linear gain only) so we record it
+      //     in the event log for future use but don't gate playback on
+      //     it. Cite: acclient.c:343123 (SoundTweakedHook::UnPack).
+      const waveId = hook.soundWaveId >>> 0;
+      if (waveId === 0 || !audioMgr) return;
+      const probability = +hook.soundProbability;
+      // Coin-flip — same pattern as the PhysicsScript walker at line
+      // ~4538. `probability >= 1.0` short-circuits the RNG call so
+      // always-fire hooks don't burn `Math.random()` per swing.
+      if (!(probability >= 1.0 || Math.random() < probability)) {
+        // Rolled below probability — still count as a fire-attempt for
+        // telemetry. The diag asserts "the executor reached this hook
+        // type"; whether the coin landed heads is downstream.
+        this._soundTweakedHookFires = (this._soundTweakedHookFires | 0) + 1;
+        this._soundTweakedHookRollsMissed = (this._soundTweakedHookRollsMissed | 0) + 1;
+        return;
+      }
+      const gain = hook.soundVolume > 0 ? +hook.soundVolume : 1.0;
+      if (pushEventRecord) {
+        pushEventRecord({
+          type: "sound",
+          wave_did: waveId,
+          parent_entity_guid: (inst.guid >>> 0),
+          world_pos: [+pos.x, +pos.y, +pos.z],
+          t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+          source: "AnimationHook",
+          source_meta: {
+            entity_guid: (inst.guid >>> 0),
+            motion_command: (inst.currentActionKey ?? null),
+            hook_type: 21,
+            hook_time: +hook.time,
+            probability,
+            priority: +hook.soundPriority,
+            gain,
+          },
+        });
+      }
+      // Wave 3 / A4 parity with hookType 2 — track the entity GUID so
+      // the panner follows a moving source. Important for SoundTweaked
+      // (e.g. monster idle vocalizations on a creature that's pursuing
+      // the player).
+      audioMgr
+        .play(waveId, { x: pos.x, y: pos.y, z: pos.z }, { gain, followGuid: (inst.guid >>> 0) })
+        .catch(() => {});
+      this._soundTweakedHookFires = (this._soundTweakedHookFires | 0) + 1;
+      return;
+    }
+    // Wave 3 (2026-05-28) — whole-object visibility / transform /
+    // lifecycle hooks. These mutate `inst.root` directly. Material
+    // hooks (Transparent/Luminous/Diffuse/Ethereal/TextureVelocity/
+    // SetLight) are intentionally deferred — they need per-entity
+    // material clone-on-write infra that we don't have yet (materials
+    // are shared via `materialCache`).
+    if (hookType === 4) {
+      // AnimationDone — lifecycle signal that the cycle finished. Emit
+      // a plugin event so combat/cast/motion observers see the edge.
+      // three.js's `mixer.addEventListener('finished')` only fires for
+      // LoopOnce actions; AnimationDone hooks fire on every loop, so
+      // they're a distinct signal for LoopRepeat cycles (e.g. "idle
+      // breath" idle-cycle end frames).
+      try {
+        window.__pluginClient?.events?.emit?.("animationHookDone", {
+          guid: (inst.guid >>> 0),
+          motionCommand: (inst.currentActionKey ?? null),
+          hookTimeInClipS: +hook.time,
+        });
+      } catch (_) {}
+      this._animationDoneHookFires = (this._animationDoneHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 16) {
+      // NoDraw — toggle entity visibility. Server is authoritative for
+      // physics presence; we just hide/show the rig. `noDrawValue !== 0`
+      // means "don't draw".
+      const hidden = (hook.noDrawValue >>> 0) !== 0;
+      if (inst.root) inst.root.visible = !hidden;
+      this._noDrawHookFires = (this._noDrawHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 17) {
+      // DefaultScript — invoke the entity's default PhysicsScript chain
+      // (the same chain `_spawnImpl` walks at spawn). Used by retail to
+      // re-trigger idle particle attaches at specific animation frames.
+      const pesId = (inst.physicsScriptDid >>> 0) ||
+        ((inst.meta?.physicsScriptDid >>> 0) | 0) ||
+        0;
+      if (pesId !== 0) {
+        this._attachParticleChainForEntity(inst.guid >>> 0, inst.root, pesId)
+          .catch(() => {});
+      }
+      this._defaultScriptHookFires = (this._defaultScriptHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 12) {
+      // Scale — uniform scale tween from current → `rampEnd` over
+      // `rampTime` seconds. NOTE: this is whole-object uniform scale
+      // (X/Y/Z all set to the same value), distinct from the jump-tween
+      // convention at line ~3341 that touches only Z. If both are active
+      // concurrently, the Scale tween wins because it ticks last. In
+      // practice they shouldn't overlap (jump = airborne; Scale hooks
+      // are scripted into specific animation frames).
+      const toScale = +hook.rampEnd;
+      const durationS = +hook.rampTime;
+      inst._scaleHookTween = {
+        startMs: performance.now(),
+        durationMs: Math.max(0, durationS * 1000),
+        fromScale: inst.root?.scale?.x ?? 1.0,
+        toScale,
+      };
+      this._scaleHookFires = (this._scaleHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 22) {
+      // SetOmega — continuous angular velocity (rad/s) around an axis.
+      // Persistent state until another SetOmega arrives (zero vector =
+      // stop). Per-frame integration in `_tickHookOmega`.
+      const ox = +hook.omegaX, oy = +hook.omegaY, oz = +hook.omegaZ;
+      inst._omega = (ox === 0 && oy === 0 && oz === 0)
+        ? null  // stop — clearing the field skips the tick fast-path
+        : { x: ox, y: oy, z: oz };
+      this._setOmegaHookFires = (this._setOmegaHookFires | 0) + 1;
+      return;
+    }
+    // Wave 4 (2026-05-28) — DefaultScriptPart (18). Same chain walker
+    // as DefaultScript (17); the `partIndex` field is currently
+    // advisory — `_attachParticleChainForEntity` anchors emitters at
+    // the rig root, not per-part. Carrying the hint in telemetry so a
+    // future chain-walker extension (per-part anchor override) has the
+    // wire field captured. Retail uses this to fire a "puff of smoke"
+    // PhysicsScript at the foot part instead of the body root.
+    if (hookType === 18) {
+      const pesId = (inst.physicsScriptDid >>> 0) ||
+        ((inst.meta?.physicsScriptDid >>> 0) | 0) ||
+        0;
+      const partHint = hook.partIndex >>> 0;
+      if (pesId !== 0) {
+        this._attachParticleChainForEntity(inst.guid >>> 0, inst.root, pesId)
+          .catch(() => {});
+      }
+      if (pushEventRecord) {
+        pushEventRecord({
+          type: "default_script_part",
+          parent_entity_guid: (inst.guid >>> 0),
+          world_pos: [+pos.x, +pos.y, +pos.z],
+          t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+          source: "AnimationHook",
+          source_meta: {
+            entity_guid: (inst.guid >>> 0),
+            hook_type: 18,
+            part_index: partHint,
+            script_did: pesId,
+          },
+        });
+      }
+      this._defaultScriptPartHookFires = (this._defaultScriptPartHookFires | 0) + 1;
+      return;
+    }
+    // Wave 6 (2026-05-28) — Material/visual hooks via clone-on-write.
+    // Whole-object ramps (Transparent 20, Luminous 8, Diffuse 10) spawn
+    // a tween per surface in `inst._materialHookTweens`; per-part ramps
+    // (TransparentPart 7, LuminousPart 9, DiffusePart 11) scope to the
+    // surfaces on `inst.parts[partIdx]` only. Ethereal (6) snap-toggles
+    // opacity across the entity. TextureVelocity (23) / Part (24)
+    // installs persistent UV-scroll velocity in `inst._textureVelocities`.
+    if (hookType === 20 || hookType === 8 || hookType === 10) {
+      this._spawnMaterialRampTween(inst, hookType, -1, hook);
+      this._materialHookFires = (this._materialHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 7 || hookType === 9 || hookType === 11) {
+      const partIdx = hook.partIndex >>> 0;
+      if (partIdx === 0xFFFFFFFF) return; // sentinel — non-part-aware
+      this._spawnMaterialRampTween(inst, hookType, partIdx, hook);
+      this._materialHookFires = (this._materialHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 6) {
+      // Ethereal — instant toggle. Non-zero = phase through; clients
+      // visualize via reduced opacity (server is collision-authoritative
+      // so the visual is purely a hint). `0` restores prior opacity.
+      const wantEthereal = (hook.etherealValue | 0) !== 0;
+      this._applyEtherealToEntity(inst, wantEthereal);
+      this._etherealHookFires = (this._etherealHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 23) {
+      // TextureVelocity (whole-object) — persistent UV scroll.
+      this._setTextureVelocity(inst, -1, +hook.textureUSpeed, +hook.textureVSpeed);
+      this._textureVelocityHookFires = (this._textureVelocityHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 24) {
+      const partIdx = hook.partIndex >>> 0;
+      if (partIdx === 0xFFFFFFFF) return;
+      this._setTextureVelocity(inst, partIdx, +hook.textureUSpeed, +hook.textureVSpeed);
+      this._textureVelocityHookFires = (this._textureVelocityHookFires | 0) + 1;
+      return;
+    }
+    // SetLight (25) still deferred — no entity-attached light-source
+    // infrastructure. Many AC "lights" are emissive-textured parts
+    // rather than real Three.js lights, so a usable implementation
+    // would either (a) toggle the emissive of light-flagged parts via
+    // the SetupModel `LightInfo` block, or (b) attach + remove a
+    // PointLight per entity. Both are larger than Wave 6's scope.
+    if (hookType === 25) {
+      if (!inst._setLightHookDebugged) {
+        inst._setLightHookDebugged = true;
+        // eslint-disable-next-line no-console
         console.debug(
-          `[entities/task-E] TODO: hookType=${hookType} fired on entity ` +
-          `0x${inst.guid.toString(16)} — handler not implemented yet`
+          `[entities/setlight-defer] hookType=25 on entity ` +
+          `0x${inst.guid.toString(16)} — needs entity-light infra`
         );
       }
+      this._setLightDeferredFires = (this._setLightDeferredFires | 0) + 1;
+      return;
     }
+    // Wave 7 (2026-05-28) — ReplaceObject. Single-part mesh swap;
+    // mirrors `_applyAppearanceHotSwap` (line ~4059) but scoped to one
+    // part. Async via `_fireReplaceObjectHook` so the await on
+    // `fetchBuildingPlacement` doesn't block the hook executor.
+    if (hookType === 5) {
+      const partIdx = hook.replacePartIndex >>> 0;
+      const newGfxObjId = hook.replaceNewGfxObjId >>> 0;
+      if (newGfxObjId === 0 || partIdx === 0xFF) {
+        this._replaceObjectHookFires = (this._replaceObjectHookFires | 0) + 1;
+        return;
+      }
+      this._fireReplaceObjectHook(inst, partIdx, newGfxObjId).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[entities/hook-5] replaceObject part=${partIdx} ` +
+          `gfxObj=0x${newGfxObjId.toString(16)} on entity ` +
+          `0x${inst.guid.toString(16)} failed:`,
+          err
+        );
+      });
+      this._replaceObjectHookFires = (this._replaceObjectHookFires | 0) + 1;
+      return;
+    }
+    // Every hook type now routes to a handler or an explicit deferral.
+    // Reaching this line means a NEW hook type was added upstream (in
+    // retail or melt) that we haven't seen yet. Counted separately so
+    // diag surfaces the "unknown hook arrived" event distinctly from
+    // the known-deferred counters.
     this._unhandledHookFires = (this._unhandledHookFires | 0) + 1;
+  }
+
+  /**
+   * Wave 3 — Scale hook (hookType 12) tween advance. Lerps
+   * `inst.root.scale` uniformly from `fromScale` → `toScale` over
+   * `durationMs`. Easing matches the jump-tween convention: linear (no
+   * cubic-bezier) because retail's Scale hooks are usually short
+   * (0.1-0.5s) and the duration is already authored into the motion.
+   *
+   * Called from `tick(dt)` after `mixer.update` so the scale wins for
+   * the tween duration.
+   */
+  _tickScaleHookTween(inst, nowMs) {
+    const tw = inst._scaleHookTween;
+    if (!tw || !inst.root) return;
+    const elapsed = nowMs - tw.startMs;
+    if (tw.durationMs <= 0 || elapsed >= tw.durationMs) {
+      // Snap to end + clear the tween.
+      inst.root.scale.set(tw.toScale, tw.toScale, tw.toScale);
+      inst._scaleHookTween = null;
+      return;
+    }
+    const t = elapsed / tw.durationMs;
+    const s = tw.fromScale + (tw.toScale - tw.fromScale) * t;
+    inst.root.scale.set(s, s, s);
+  }
+
+  /**
+   * Wave 6 (2026-05-28) — Spawn ramp tweens for a Transparent (20) /
+   * Luminous (8) / Diffuse (10) / *Part (7, 9, 11) hook. Builds one
+   * tween entry per affected material (whole-object: every surface on
+   * the entity; per-part: only surfaces on `inst.parts[partIndex]`).
+   * Tweens live in `inst._materialHookTweens` and advance in
+   * `_tickMaterialHooks` each frame.
+   *
+   * `partIndex < 0` means whole-object.
+   */
+  _spawnMaterialRampTween(inst, hookType, partIndex, hook) {
+    if (!inst.root) return;
+    const rampStart = +hook.rampStart;
+    const rampEnd = +hook.rampEnd;
+    const durationMs = Math.max(0, (+hook.rampTime) * 1000);
+    const surfaceDids = this._collectEntitySurfaceDids(inst, partIndex);
+    if (!surfaceDids || surfaceDids.length === 0) return;
+    if (!inst._materialHookTweens) inst._materialHookTweens = [];
+    // Drop any prior tween for the same (hookType, surfaceDid) — the
+    // newer hook supersedes. Per-part variants and whole-object share
+    // the same per-surface address space (a part swap can clobber a
+    // whole-object Diffuse, matching retail's "last hook wins"
+    // semantics; acclient.c:0x00524F90).
+    if (inst._materialHookTweens.length > 0) {
+      const keep = [];
+      for (const tw of inst._materialHookTweens) {
+        // Diffuse/Luminous/Transparent each have whole-obj + per-part
+        // variants that target the SAME material property — collapse
+        // by property family, not literal hookType.
+        const oldFamily = this._materialHookFamily(tw.hookType);
+        const newFamily = this._materialHookFamily(hookType);
+        if (oldFamily === newFamily && surfaceDids.includes(tw.surfaceDid)) {
+          continue; // superseded — drop
+        }
+        keep.push(tw);
+      }
+      inst._materialHookTweens = keep;
+    }
+    const startMs = performance.now();
+    for (const did of surfaceDids) {
+      const mat = this._getOrCloneEntityMaterial(inst, did);
+      if (!mat) continue; // fallback / cache miss — silent no-op
+      // Snap to rampStart immediately so a 0-duration ramp lands the
+      // end value on the next tick (durationMs<=0 → tick sees elapsed
+      // >= durationMs and applies rampEnd).
+      this._applyRampValueToMaterial(hookType, mat, rampStart);
+      inst._materialHookTweens.push({
+        hookType,
+        surfaceDid: did,
+        startMs,
+        durationMs,
+        rampStart,
+        rampEnd,
+      });
+    }
+  }
+
+  /**
+   * Map a ramp hookType to its material-property family. Transparent
+   * (20) and TransparentPart (7) both target `opacity` — they're one
+   * family. Same for Luminous (8/9) → emissive; Diffuse (10/11) →
+   * color. Used by `_spawnMaterialRampTween` to collapse superseded
+   * tweens by *effect*, not literal opcode.
+   */
+  _materialHookFamily(hookType) {
+    if (hookType === 20 || hookType === 7) return "opacity";
+    if (hookType === 8 || hookType === 9) return "emissive";
+    if (hookType === 10 || hookType === 11) return "diffuse";
+    return null;
+  }
+
+  /**
+   * Walk `inst.parts` collecting unique `surfaceDid`s. With
+   * `partIndex < 0` (whole-object), returns every surface on the rig;
+   * with `partIndex >= 0`, returns only surfaces on that one part.
+   */
+  _collectEntitySurfaceDids(inst, partIndex) {
+    const out = [];
+    if (!Array.isArray(inst.parts)) return out;
+    const seen = new Set();
+    const collectFrom = (partGroup) => {
+      if (!partGroup) return;
+      for (const child of partGroup.children) {
+        if (!child || !child.isMesh) continue;
+        const did = (child.userData?.surfaceDid >>> 0);
+        if (did && !seen.has(did)) {
+          seen.add(did);
+          out.push(did);
+        }
+      }
+    };
+    if (partIndex < 0) {
+      for (const part of inst.parts) collectFrom(part);
+    } else if (partIndex < inst.parts.length) {
+      collectFrom(inst.parts[partIndex]);
+    }
+    return out;
+  }
+
+  /**
+   * Apply a ramp value to a material based on the source hookType.
+   * Transparent (20/7) → `opacity` + `transparent`. Luminous (8/9) →
+   * `emissive` (set as a uniform white at the given intensity).
+   * Diffuse (10/11) → `color` scaled to the value (multiplies the
+   * albedo texture by `v` — matches retail's "Diffuse" parameter
+   * semantic in `acclient.c:0x00523000`).
+   */
+  _applyRampValueToMaterial(hookType, material, value) {
+    if (!material) return;
+    if (hookType === 20 || hookType === 7) {
+      // Transparent — alpha in [0, 1]. `transparent: true` is
+      // required for three.js to actually blend; setting transparent
+      // back to false at value >= 1 keeps fast-path opaque rendering
+      // when the ramp completes.
+      material.opacity = value;
+      material.transparent = value < 1.0;
+      // depthWrite mirrors transparency to avoid sorting glitches on
+      // edges (matches the standard PBR-ghost convention).
+      if (material.transparent && material.depthWrite !== false) {
+        material.userData.__preTransDepthWrite = material.depthWrite;
+        material.depthWrite = false;
+      } else if (!material.transparent && material.userData.__preTransDepthWrite !== undefined) {
+        material.depthWrite = material.userData.__preTransDepthWrite;
+        delete material.userData.__preTransDepthWrite;
+      }
+    } else if (hookType === 8 || hookType === 9) {
+      // Luminous — emissive intensity. Set the emissive color to a
+      // uniform white at `value` brightness; `emissiveIntensity` stays
+      // at the material's default (usually 1.0) so the on-screen
+      // luminance equals `value`. Works on MeshStandardMaterial even
+      // when the cached material had `emissive = (0, 0, 0)`.
+      if (material.emissive) {
+        material.emissive.setRGB(value, value, value);
+      }
+    } else if (hookType === 10 || hookType === 11) {
+      // Diffuse — albedo scalar. Multiplies the texture by `value`;
+      // `value = 0` reads as black, `value = 1` is the un-tinted
+      // material. Retail's Diffuse param is in [0, 1].
+      if (material.color) {
+        material.color.setRGB(value, value, value);
+      }
+    }
+  }
+
+  /**
+   * Wave 6 — Ethereal (6) snap-toggle. Sets opacity to 0.4 (matches
+   * the retail `set_translucency_internal(0.4f)` value cited in
+   * `acclient.c::CPhysicsObj::set_ethereal`) when `ethereal === true`;
+   * restores the prior opacity when `false`.
+   *
+   * The "prior opacity" is captured once per cloned material in
+   * `userData.__preEtherealOpacity`; subsequent toggles read that
+   * snapshot so a Transparent hook that fires between Ethereal
+   * on→off transitions doesn't leak its intermediate value into the
+   * restore path.
+   */
+  _applyEtherealToEntity(inst, ethereal) {
+    inst._ethereal = !!ethereal;
+    const dids = this._collectEntitySurfaceDids(inst, -1);
+    for (const did of dids) {
+      const mat = this._getOrCloneEntityMaterial(inst, did);
+      if (!mat) continue;
+      if (ethereal) {
+        if (mat.userData.__preEtherealOpacity === undefined) {
+          mat.userData.__preEtherealOpacity = mat.opacity;
+        }
+        mat.opacity = 0.4;
+        mat.transparent = true;
+        if (mat.depthWrite !== false) {
+          mat.userData.__preEtherealDepthWrite = mat.depthWrite;
+          mat.depthWrite = false;
+        }
+      } else {
+        if (mat.userData.__preEtherealOpacity !== undefined) {
+          mat.opacity = mat.userData.__preEtherealOpacity;
+          delete mat.userData.__preEtherealOpacity;
+        }
+        mat.transparent = mat.opacity < 1.0;
+        if (mat.userData.__preEtherealDepthWrite !== undefined) {
+          mat.depthWrite = mat.userData.__preEtherealDepthWrite;
+          delete mat.userData.__preEtherealDepthWrite;
+        }
+      }
+    }
+  }
+
+  /**
+   * Wave 6 — Install a persistent UV-scroll velocity. `(us, vs)` are
+   * Δoffset per second; `(0, 0)` clears. `partIndex < 0` applies to
+   * every entity surface; `partIndex >= 0` scopes to one part. Tags
+   * each affected material with `userData.__hookTexVel = {us, vs}` so
+   * `_tickMaterialHooks` can iterate `inst._entityMaterials` once per
+   * frame without an auxiliary map.
+   *
+   * Forces `cloneTexture: true` so the per-entity material gets its
+   * own `Texture` object; the underlying `Texture.image` is shared
+   * with the cache (one GPU upload).
+   */
+  _setTextureVelocity(inst, partIndex, us, vs) {
+    const dids = this._collectEntitySurfaceDids(inst, partIndex);
+    const stop = (us === 0 && vs === 0);
+    for (const did of dids) {
+      const mat = this._getOrCloneEntityMaterial(inst, did, { cloneTexture: !stop });
+      if (!mat) continue;
+      if (stop) {
+        delete mat.userData.__hookTexVel;
+      } else {
+        mat.userData.__hookTexVel = { us, vs };
+      }
+    }
+  }
+
+  /**
+   * Wave 6 — per-frame advance of material ramp tweens + UV scroll.
+   * Ramp tweens drain when they hit `durationMs`; UV scroll is
+   * persistent until `_setTextureVelocity` clears it.
+   */
+  _tickMaterialHooks(inst, dt, nowMs) {
+    if (inst._materialHookTweens && inst._materialHookTweens.length > 0) {
+      const survivors = [];
+      for (const tw of inst._materialHookTweens) {
+        const mat = inst._entityMaterials?.get(tw.surfaceDid);
+        if (!mat) continue; // material disposed / dereferenced
+        const elapsed = nowMs - tw.startMs;
+        if (tw.durationMs <= 0 || elapsed >= tw.durationMs) {
+          this._applyRampValueToMaterial(tw.hookType, mat, tw.rampEnd);
+          continue; // tween done
+        }
+        const t = elapsed / tw.durationMs;
+        const v = tw.rampStart + (tw.rampEnd - tw.rampStart) * t;
+        this._applyRampValueToMaterial(tw.hookType, mat, v);
+        survivors.push(tw);
+      }
+      inst._materialHookTweens = survivors.length > 0 ? survivors : null;
+    }
+    if (inst._entityMaterials && inst._entityMaterials.size > 0) {
+      for (const mat of inst._entityMaterials.values()) {
+        const vel = mat.userData?.__hookTexVel;
+        if (!vel) continue;
+        if (!mat.map) continue;
+        const off = mat.map.offset;
+        // Wrap into [0, 1) to keep float precision good over long
+        // sessions; UV-wrap-aware sampling makes this safe.
+        off.x = ((off.x + vel.us * dt) % 1 + 1) % 1;
+        off.y = ((off.y + vel.vs * dt) % 1 + 1) % 1;
+        // No `needsUpdate` flag — Texture offset/repeat hot-path
+        // doesn't require re-upload, three.js uploads the offset as
+        // a uniform per draw.
+      }
+    }
+  }
+
+  /**
+   * Wave 3 — SetOmega hook (hookType 22) integration. Advances
+   * `inst.root.quaternion` by `omega * dt` per frame. Continuous; a
+   * subsequent SetOmega with a zero vector clears `inst._omega` and
+   * stops the rotation.
+   *
+   * Uses `_omegaScratch*` module-scope scratch to avoid per-frame
+   * allocations across the entity list.
+   */
+  _tickHookOmega(inst, dt) {
+    const omega = inst._omega;
+    if (!omega || !inst.root) return;
+    const ox = omega.x, oy = omega.y, oz = omega.z;
+    const magSq = ox * ox + oy * oy + oz * oz;
+    if (magSq === 0) return;
+    const mag = Math.sqrt(magSq);
+    const angle = mag * dt;
+    if (angle === 0) return;
+    // Pre-multiplied delta quaternion: q = (cos(θ/2), sin(θ/2) * axis).
+    const halfAngle = angle * 0.5;
+    const sinHalf = Math.sin(halfAngle);
+    _omegaScratchQ.set(
+      (ox / mag) * sinHalf,  // x
+      (oy / mag) * sinHalf,  // y
+      (oz / mag) * sinHalf,  // z
+      Math.cos(halfAngle),   // w
+    );
+    inst.root.quaternion.multiplyQuaternions(_omegaScratchQ, inst.root.quaternion);
+  }
+
+  /**
+   * Wave 1 — Spawn a particle emitter for a CreateParticleHook (13) /
+   * CreateBlockingParticleHook (26) fired by an entity's animation
+   * timeline.
+   *
+   * Pipeline: hook.emitterInfoId → `fetchParticleEmitter(did)` →
+   * `_worldParticleManager.addEmitter(...)`. The hook carries:
+   *   - emitterInfoId — ParticleEmitter (0x32..) DID
+   *   - createPartIndex — which SetupModel part to anchor to (`0xFFFFFFFF` = root)
+   *   - offsetOrigin{X,Y,Z} + offsetOrientation{W,X,Y,Z} — local-space spawn Frame
+   *   - particleEmitterId — per-script stable handle (Destroy/Stop reference)
+   *
+   * On success the returned emitter id is pushed into
+   * `_particleEmittersForGuid` so the entity-release path tears it down
+   * (line ~4260) — same lifecycle as PhysicsScript-walked emitters, so
+   * fireworks rockets that despawn before their hook fires don't leak
+   * floating particles.
+   *
+   * Errors are caught at the caller in `_fireHook`; this method may
+   * reject if `_ensureWorldParticleManager` or `fetchParticleEmitter`
+   * throws.
+   */
+  async _fireCreateParticleHook(inst, hook) {
+    const emitterInfoId = hook.emitterInfoId >>> 0;
+    if (emitterInfoId === 0) return;
+    if (!inst.root) return; // entity released between hook arm + fire
+    await this._ensureWorldParticleManager(inst.root);
+    let emitterInfo;
+    try {
+      emitterInfo = await this.wasmExports.fetchParticleEmitter(emitterInfoId);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[entities/hook-13] fetchParticleEmitter(0x${emitterInfoId.toString(16)}) failed:`,
+        e
+      );
+      return;
+    }
+    if (!this.entityMap.has(inst.guid >>> 0)) return; // released mid-await
+    const parentOffset = {
+      position: {
+        x: +hook.offsetOriginX,
+        y: +hook.offsetOriginY,
+        z: +hook.offsetOriginZ,
+      },
+      // Frame stores quaternion as wxyz; THREE.Quaternion is xyzw —
+      // ParticleManager.addEmitter expects the wxyz shape (matches the
+      // H2 chain walker at line ~4675 which passes the same shape).
+      quaternion: {
+        w: +hook.offsetOrientationW,
+        x: +hook.offsetOrientationX,
+        y: +hook.offsetOrientationY,
+        z: +hook.offsetOrientationZ,
+      },
+    };
+    const partIndex = hook.createPartIndex | 0;
+    const emitterIdSeed = hook.particleEmitterId >>> 0;
+    let spawnedId;
+    try {
+      spawnedId = await this._worldParticleManager.addEmitter({
+        emitterInfo,
+        parent: inst.root,
+        partIndex,
+        parentOffset,
+        emitterId: emitterIdSeed,
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[entities/hook-13] addEmitter(0x${emitterInfoId.toString(16)}) failed:`,
+        e
+      );
+      return;
+    }
+    if (!spawnedId) return;
+    // Track for release-time cleanup (same map the PhysicsScript chain
+    // walker uses at line ~4260).
+    const guidU = inst.guid >>> 0;
+    let ids = this._particleEmittersForGuid.get(guidU);
+    if (!ids) {
+      ids = [];
+      this._particleEmittersForGuid.set(guidU, ids);
+    }
+    ids.push(spawnedId);
+  }
+
+  /**
+   * Wave 7 (2026-05-28) — ReplaceObject (hookType 5) per-part mesh
+   * swap. Replaces all child Meshes of `inst.parts[partIndex]` with
+   * new Meshes built from `newGfxObjId`'s parts. Used by retail for
+   * helm-on/helm-off, weapon-draw, equipment-change animations.
+   *
+   * Pipeline (mirrors the per-part loop in `_applyAppearanceHotSwap`
+   * at line ~4166 but scoped to one part):
+   *   1. `fetchBuildingPlacement(newGfxObjId)` — wasm-side GfxObj load
+   *   2. `meshToGeometryGroups` — convert to {geometry, surfaceDid} groups
+   *   3. Detach existing children of `inst.parts[partIndex]`
+   *   4. Build new Meshes, attach to the same `partGroup`
+   *   5. Preserve mixer bindings — the `THREE.Group` itself stays;
+   *      `mixer` binds animation keyframes to `inst.parts[i].position`
+   *      / `.quaternion`, both of which survive children swaps.
+   *
+   * Errors caught at the caller (`_fireHook`); this method may reject
+   * if wasm fetch or geometry conversion throws.
+   */
+  async _fireReplaceObjectHook(inst, partIndex, newGfxObjId) {
+    if (!inst.root) return; // released
+    if (!Array.isArray(inst.parts) || partIndex >= inst.parts.length) return;
+    const partGroup = inst.parts[partIndex];
+    if (!partGroup) return;
+    const ents_wasm = this.wasmExports;
+    if (!ents_wasm || typeof ents_wasm.fetchBuildingPlacement !== "function") {
+      return;
+    }
+    let bundle;
+    try {
+      bundle = await ents_wasm.fetchBuildingPlacement(newGfxObjId);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[entities/hook-5] fetchBuildingPlacement(0x${newGfxObjId.toString(16)}) failed:`,
+        e
+      );
+      return;
+    }
+    if (!this.entityMap.has(inst.guid >>> 0)) {
+      // entity released during await
+      if (typeof bundle.free === "function") bundle.free();
+      return;
+    }
+    if ((bundle.partCount | 0) === 0) {
+      if (typeof bundle.free === "function") bundle.free();
+      return;
+    }
+    const meshes = bundle.takePartMeshes();
+    if (typeof bundle.free === "function") bundle.free();
+    const wasmMesh = meshes[0];
+    if (!wasmMesh) return;
+    const adapter = await import("./adapter.js");
+    const meshToGeometryGroups = adapter.meshToGeometryGroups;
+    const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
+    if (typeof wasmMesh.free === "function") wasmMesh.free();
+    if (!groups || groups.length === 0) return;
+
+    // Re-check liveness after the second await (adapter import).
+    if (!this.entityMap.has(inst.guid >>> 0)) return;
+
+    // Preload materials for any new surface DIDs not already in cache.
+    // Fire-and-forget — the new Meshes start with the fallback material
+    // for a few frames if the surface fetch is slow, which is a much
+    // better UX than blocking the hook executor on the wait.
+    if (surfaceDids?.length && this.materialCache &&
+        typeof ents_wasm.fetch_surfaces_pixels === "function") {
+      const newDids = surfaceDids.filter(
+        (d) => !this.materialCache.materials.has(d >>> 0)
+      );
+      if (newDids.length > 0) {
+        this.materialCache
+          .preload(newDids, ents_wasm.fetch_surfaces_pixels)
+          .catch(() => { /* fallback rendering will pick up */ });
+      }
+    }
+
+    // Detach existing children. We DON'T dispose the old geometries
+    // here — `inst.geometries` still references them, and entity
+    // release walks that list. The cost is mild VRAM bloat across the
+    // hook lifetime (a helm-swap leaks the old helm geometry until
+    // entity despawn). For Wave 7's scope this is acceptable; a
+    // future Wave 8 could unregister + dispose old geometries here.
+    const oldChildren = partGroup.children.slice();
+    for (const child of oldChildren) {
+      partGroup.remove(child);
+    }
+
+    // Attach new Meshes — same per-group pattern as spawn (~line 1671)
+    // and hot-swap (~line 4185).
+    const guid = inst.guid >>> 0;
+    for (const g of groups) {
+      const did = g.surfaceDid >>> 0;
+      let mat = null;
+      if (inst._entityMaterials && inst._entityMaterials.has(did)) {
+        mat = inst._entityMaterials.get(did);
+      } else if (this.materialCache) {
+        mat = this.materialCache.getCached(did);
+      } else {
+        mat = this._fallbackMaterial();
+      }
+      const m = new THREE.Mesh(g.geometry, mat);
+      m.name = `part_${partIndex}_surface_${did.toString(16)}_replaced`;
+      m.userData = { guid, partIndex, surfaceDid: did, replaced: true };
+      if (this.scene3d?.shadowsEnabled || this.scene3d?.csmEnabled) {
+        m.castShadow = materialCanCastShadow(mat);
+      }
+      partGroup.add(m);
+      inst.registerGeometry(g.geometry);
+    }
   }
 
   /**
