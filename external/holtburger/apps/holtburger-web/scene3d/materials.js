@@ -880,6 +880,160 @@ export function installPomShaderPatch(material, heightTexture, opts) {
   _installPomShaderPatch(material, heightTexture, opts);
 }
 
+// === Wave R2.B — per-RGB light-color clamp (retail accumulation) (2026-05-28) ===
+//
+// Parse `?lightClamp=retail` from the page URL. Default OFF (anything
+// other than the literal "retail", or the flag absent, returns false →
+// the standard THREE PBR lighting accumulation is untouched and the
+// emitted shader string is byte-identical to the shipped baseline).
+//
+// IMPORTANT (scope): callers read this flag by invoking THIS helper
+// directly at the consumption site (the install-decision point inside
+// `_makeTexturedMaterial` / the fallback path AND inside the installer
+// itself). We deliberately do NOT stash the result in a const in one
+// function and read it in another — a prior wave shipped a ReferenceError
+// that way. The reader is a pure module-level function with no closure
+// over caller-local state, so the flag and its consumer always share
+// scope.
+export function readLightClampRetailFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("lightClamp");
+    return typeof v === "string" && v.toLowerCase() === "retail";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Wave R2.B — per-RGB-channel light-color clamp in the DIRECT lighting
+// accumulation, behind `?lightClamp=retail`.
+//
+// Retail (acclient.c:454616-454627, `calc_point_light`) caps each light's
+// contribution at the light's OWN color per channel rather than the
+// standard PBR clamp toward [0,1]:
+//
+//     coeff = intensity * dot * atten           // scalar
+//     contrib_c = min(coeff * color_c, color_c) // per channel R/G/B
+//
+// i.e. a saturated red light can add AT MOST `color.r` to red and
+// (smaller) amounts to G/B, so the light keeps its tone instead of
+// washing the surface toward white once the coefficient exceeds 1.
+//
+// HOW WE INJECT IT (genuine per-light, NOT a post-accumulation
+// approximation): three.js's `<lights_fragment_begin>` chunk runs
+// `RE_Direct(directLight, ...)` once per direct light (point/spot/
+// directional). `RE_Direct_Physical` lives behind `#include
+// <lights_physical_pars_fragment>`, which three resolves AFTER
+// onBeforeCompile, so we cannot edit the BRDF function text directly.
+// Instead we expand the `lights_fragment_begin` chunk ourselves (its
+// text is available synchronously via `THREE.ShaderChunk`) and wrap
+// EACH `RE_Direct( directLight, ... )` call so that, per light, we:
+//   1. snapshot reflectedLight.directDiffuse + directSpecular,
+//   2. run the stock RE_Direct (computes this light's BRDF contribution),
+//   3. take the per-light delta (what this light just added),
+//   4. clamp the delta per channel at `directLight.color` (min(delta_c,
+//      directLight.color_c)) — the retail `min(contrib_c, color_c)` cap,
+//   5. re-add the clamped delta.
+// This is per-light and reaches `directLight.color`, so colored lights
+// keep their hue: every channel is capped at the SAME tinted color
+// vector, so the brightest channel can't outrun the others into white.
+//
+// DIVERGENCE FROM acclient (documented honestly): retail caps against
+// the light's BASE, un-attenuated `color_c`, with intensity/attenuation
+// living in the scalar `coeff`; the cap therefore only engages when
+// `coeff > 1`. three.js has already folded intensity AND distance
+// attenuation INTO `directLight.color` by the time `RE_Direct` runs
+// (directLight.color = lightColor * intensity * attenuation), and it has
+// no separate base-color uniform reachable in this chunk without forking
+// the light-uniform layout. So our cap is against the *attenuated*
+// color: the per-light diffuse/specular delta is capped at the light's
+// current (attenuated, intensity-scaled) color rather than its base
+// color. The VISIBLE behavior — colored lights retain tone instead of
+// blowing to white — matches retail's intent; the exact engage threshold
+// differs (ours engages when the BRDF*dotNL gain pushes a channel past
+// the attenuated light color, retail's when coeff>1). This is the best
+// safe per-light reachable surgery without re-authoring three's light
+// uniforms; flagged off by default so the standard PBR path is unchanged.
+//
+// We also expose `uLightColorClamp` (default 1.0) so an A/B can fade the
+// effect in the shader without recompiling the material (0.0 = stock
+// accumulation even with the chunk patched in; 1.0 = full retail cap).
+function _installLightClampShaderPatch(material) {
+  if (!material || material.userData?.__lightClampPatched) return;
+  // Read the flag at the consumption site (same scope as the install
+  // decision). If it isn't `retail`, do nothing AT ALL — the shader
+  // string is left byte-identical to the shipped baseline.
+  if (!readLightClampRetailFlag()) return;
+
+  material.userData = {
+    ...(material.userData || {}),
+    __lightClampPatched: true,
+    lightClampRetail: true,
+  };
+
+  _chainBeforeCompile(material, (shader) => {
+    shader.uniforms.uLightColorClamp = { value: 1.0 };
+
+    // Build a per-light wrapper around each stock RE_Direct call by
+    // expanding the chunk text and substituting every
+    // `RE_Direct( directLight, ... )` invocation. The replacement
+    // snapshots the accumulators, runs the stock call, clamps the
+    // per-light delta against directLight.color, and re-adds it.
+    //
+    // NOTE: no backticks appear inside this GLSL string (esbuild/Firefox
+    // reject backticks inside the literal). Comments use // only.
+    const stockBegin = THREE.ShaderChunk.lights_fragment_begin;
+
+    // The three RE_Direct invocations (point/spot/directional) all share
+    // the same argument list and the same `directLight` source variable,
+    // so one textual substitution covers all of them.
+    const reDirectCall =
+      "RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );";
+
+    const clampedCall =
+      "{\n" +
+      "  // Wave R2.B per-RGB light-color clamp (retail accumulation).\n" +
+      "  vec3 _lcDiffBefore = reflectedLight.directDiffuse;\n" +
+      "  vec3 _lcSpecBefore = reflectedLight.directSpecular;\n" +
+      "  " + reDirectCall + "\n" +
+      "  vec3 _lcDiffDelta = reflectedLight.directDiffuse - _lcDiffBefore;\n" +
+      "  vec3 _lcSpecDelta = reflectedLight.directSpecular - _lcSpecBefore;\n" +
+      "  // Cap this light's per-channel contribution at the light's own\n" +
+      "  // (attenuated) color so a colored light keeps its tone instead\n" +
+      "  // of washing toward white. min() mirrors acclient.c:454616-454627.\n" +
+      "  vec3 _lcDiffClamped = min(_lcDiffDelta, directLight.color);\n" +
+      "  vec3 _lcSpecClamped = min(_lcSpecDelta, directLight.color);\n" +
+      "  // uLightColorClamp fades between stock (0.0) and capped (1.0).\n" +
+      "  reflectedLight.directDiffuse = _lcDiffBefore + mix(_lcDiffDelta, _lcDiffClamped, uLightColorClamp);\n" +
+      "  reflectedLight.directSpecular = _lcSpecBefore + mix(_lcSpecDelta, _lcSpecClamped, uLightColorClamp);\n" +
+      "}";
+
+    // split/join replaces ALL occurrences without regex escaping concerns.
+    const patchedBegin = stockBegin.split(reDirectCall).join(clampedCall);
+
+    // Declare the uniform, then swap the stock chunk include for our
+    // expanded+wrapped version.
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "void main() {",
+        "uniform float uLightColorClamp;\nvoid main() {",
+      )
+      .replace("#include <lights_fragment_begin>", patchedBegin);
+
+    // Stash for post-compile introspection by tests / capture scripts.
+    material.userData.lightClampShaderUniforms = shader.uniforms;
+  });
+
+  material.needsUpdate = true;
+}
+
+// Public export: install the per-RGB light-color clamp on an arbitrary
+// material (no-op unless `?lightClamp=retail`). MaterialCache call sites
+// use this; tests import it directly to assert the patch wiring.
+export function installLightClampShaderPatch(material) {
+  _installLightClampShaderPatch(material);
+}
+
 export class MaterialCache {
   /**
    * @param {{
@@ -1075,6 +1229,15 @@ export class MaterialCache {
     };
     if (this.csmState && !this.wireframeMode) {
       _installCsmShaderPatch(this.fallbackMaterial, this.csmState);
+    }
+    // === Wave R2.B — per-RGB light-color clamp (2026-05-28) ===
+    // No-op unless `?lightClamp=retail`. Skip in wireframe mode — the
+    // fallback is then a MeshBasicMaterial with NO direct-lighting
+    // accumulation (no `RE_Direct`/`reflectedLight`), so the patch's
+    // `<lights_fragment_begin>` target is absent and the chunk swap would
+    // be a no-op replace at best / a broken shader at worst.
+    if (!this.wireframeMode) {
+      _installLightClampShaderPatch(this.fallbackMaterial);
     }
 
     // Diagnostic counters so capture scripts can see how many
@@ -1658,6 +1821,13 @@ export class MaterialCache {
     if (this.csmState && !isAdditive && !isTranslucent && !isAlpha) {
       _installCsmShaderPatch(mat, this.csmState);
     }
+    // === Wave R2.B — per-RGB light-color clamp (2026-05-28) ===
+    // No-op unless `?lightClamp=retail`. Composed LAST so it wraps the
+    // direct-lighting accumulation regardless of which other patches
+    // (detail/POM/CSM) ran on this material. Applies to additive/
+    // translucent too — the clamp only affects direct DIFFUSE/SPECULAR
+    // accumulation, which an additive surface still computes.
+    _installLightClampShaderPatch(mat);
     return mat;
   }
 
@@ -2140,6 +2310,11 @@ export class MaterialCache {
       // convention block in entities.js's module docstring.
       __disposable: true,
     };
+    // === Wave R2.B — per-RGB light-color clamp (2026-05-28) ===
+    // No-op unless `?lightClamp=retail`. Entity-recolour surfaces (NPCs,
+    // recoloured gear) honour the cap too so a tinted sun / R2.A lantern
+    // keeps its tone on characters, not just terrain/buildings.
+    _installLightClampShaderPatch(mat);
     return mat;
   }
 
