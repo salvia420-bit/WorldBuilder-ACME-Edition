@@ -41,6 +41,34 @@
 import * as THREE from "three";
 import { SPELL_SHAPE, SPELL_SCHOOL } from "../ui/ac_spell_shape.js";
 
+// === Wave R3.C — projectile mechanics fidelity (2026-05-29) ===
+// `?projectileArc=on` opt-in. Default OFF → the Arc preview keeps its
+// original CMT-Wave-12 cubic-Bézier curve EXACTLY (byte-identical
+// render); every other shape is unchanged regardless of the flag. ON →
+// the Arc preview is drawn as a true symmetric parabola with a
+// meaningful apex (peaks at the path midpoint, height proportional to
+// the ground distance and clamped so a far cast doesn't shoot off the
+// top of the screen), so it visibly lobs *up and over* toward the
+// target's release-time position — conveying the over-hill / hits-the-
+// hallway-ceiling behaviour of AC's server-authoritative Arc shape.
+//
+// Read ONCE here at module load into a module-const and consumed only
+// inside `_buildArc` (its sole consumer) — the URL doesn't change at
+// runtime, so a single read is correct, and keeping the read and the
+// use in the same module scope avoids the prior-wave split-declaration
+// ReferenceError trap (declare-in-one-function / use-in-another). Same
+// IIFE flag-reader shape as `entities.js`'s `VEL_SCALE_ON`.
+const PROJECTILE_ARC_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("projectileArc")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
 // 500ms hard cap on every preview's lifetime. Long enough to be
 // perceptible on the GTX 1070 cold-boot path (where the first
 // ObjectCreate for a projectile lands ~150-200ms after the click);
@@ -313,35 +341,84 @@ function _buildVolley({ attackerPos, targetPos }, color) {
   };
 }
 
+// Wave R3.C arch tuning (only consulted when `?projectileArc=on`).
+// Apex height = horizontal distance × ARC_APEX_FRACTION, floored at
+// ARC_APEX_MIN_M so a point-blank lob still visibly arches, and capped
+// at ARC_APEX_MAX_M so a long cross-courtyard cast doesn't throw the
+// arch off the top of the screen. These are tuned against AC's
+// server-authoritative Arc feel (a perceptible lob, not a mortar shot)
+// and exposed as named consts for the 1070 eye-test pass.
+const ARC_APEX_FRACTION = 0.4;
+const ARC_APEX_MIN_M = 1.5;
+const ARC_APEX_MAX_M = 8.0;
+
 function _buildArc({ attackerPos, targetPos }, color) {
   const root = new THREE.Group();
   root.name = "spell-preview-arc";
-  // Lift the control point above the mid-line by 1/3 of horizontal
-  // distance — produces a perceptible parabola without arcing off-screen
-  // for far targets.
-  const dx = targetPos.x - attackerPos.x;
-  const dy = targetPos.y - attackerPos.y;
-  const horiz = Math.hypot(dx, dy);
-  const lift = Math.max(1.0, horiz * 0.33);
-  const c1 = new THREE.Vector3(
-    attackerPos.x + dx * 0.33,
-    attackerPos.y + dy * 0.33,
-    attackerPos.z + lift,
-  );
-  const c2 = new THREE.Vector3(
-    attackerPos.x + dx * 0.66,
-    attackerPos.y + dy * 0.66,
-    targetPos.z + lift * 0.5,
-  );
-  const curve = new THREE.CubicBezierCurve3(attackerPos.clone(), c1, c2, targetPos.clone());
-  const pts = curve.getPoints(64);
-  const geom = new THREE.BufferGeometry().setFromPoints(pts);
   const mat = new THREE.LineBasicMaterial({
     color,
     transparent: true,
     opacity: 1.0,
     depthWrite: false,
   });
+
+  let pts;
+  if (PROJECTILE_ARC_ON) {
+    // Wave R3.C — true symmetric parabola with a meaningful apex.
+    //
+    // Sample the path in normalized progress s∈[0,1] from attacker to
+    // the target's CURRENT (release-time) position (Arc aims at where
+    // the target IS, not a lead point — that's the server-authoritative
+    // distinction from Bolt; see reference_ac_projectile_mechanics). The
+    // ground track is the straight attacker→target XY line; the height
+    // is the linear attacker.z→target.z baseline PLUS a parabolic bump
+    // `4·apex·s·(1−s)` that peaks at exactly `apex` at the midpoint
+    // (s=0.5) and is zero at both ends — so the curve starts at the
+    // caster, lands on the target, and lobs up-and-over between them.
+    //
+    // Apex height is proportional to the GROUND distance (not the 3D
+    // distance, so a steep up/down cast doesn't get an absurd lob) and
+    // clamped to [ARC_APEX_MIN_M, ARC_APEX_MAX_M].
+    const dx = targetPos.x - attackerPos.x;
+    const dy = targetPos.y - attackerPos.y;
+    const dz = targetPos.z - attackerPos.z;
+    const horiz = Math.hypot(dx, dy);
+    const apex = Math.min(ARC_APEX_MAX_M, Math.max(ARC_APEX_MIN_M, horiz * ARC_APEX_FRACTION));
+    const SEGMENTS = 64;
+    pts = [];
+    for (let i = 0; i <= SEGMENTS; i++) {
+      const s = i / SEGMENTS;
+      const bump = 4 * apex * s * (1 - s);
+      pts.push(new THREE.Vector3(
+        attackerPos.x + dx * s,
+        attackerPos.y + dy * s,
+        attackerPos.z + dz * s + bump,
+      ));
+    }
+  } else {
+    // Default OFF — original CMT-Wave-12 cubic-Bézier curve, unchanged
+    // (byte-identical render). Lift the control point above the mid-line
+    // by 1/3 of horizontal distance — produces a perceptible parabola
+    // without arcing off-screen for far targets.
+    const dx = targetPos.x - attackerPos.x;
+    const dy = targetPos.y - attackerPos.y;
+    const horiz = Math.hypot(dx, dy);
+    const lift = Math.max(1.0, horiz * 0.33);
+    const c1 = new THREE.Vector3(
+      attackerPos.x + dx * 0.33,
+      attackerPos.y + dy * 0.33,
+      attackerPos.z + lift,
+    );
+    const c2 = new THREE.Vector3(
+      attackerPos.x + dx * 0.66,
+      attackerPos.y + dy * 0.66,
+      targetPos.z + lift * 0.5,
+    );
+    const curve = new THREE.CubicBezierCurve3(attackerPos.clone(), c1, c2, targetPos.clone());
+    pts = curve.getPoints(64);
+  }
+
+  const geom = new THREE.BufferGeometry().setFromPoints(pts);
   const line = new THREE.Line(geom, mat);
   line.renderOrder = 960;
   root.add(line);
@@ -619,4 +696,9 @@ export const __test = Object.freeze({
   shapeBuilders: _SHAPE_BUILDERS,
   SCHOOL_COLOR,
   PREVIEW_TIMEOUT_MS,
+  // Wave R3.C — surfaced for the arch eye-test / future visual-tuning.
+  PROJECTILE_ARC_ON,
+  ARC_APEX_FRACTION,
+  ARC_APEX_MIN_M,
+  ARC_APEX_MAX_M,
 });
