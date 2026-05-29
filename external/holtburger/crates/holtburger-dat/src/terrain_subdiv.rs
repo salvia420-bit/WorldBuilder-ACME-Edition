@@ -397,6 +397,66 @@ pub fn noise_displacement_m(world_x_m: f32, world_y_m: f32, scale: f32, seed: u6
         .min(NOISE_AMPLITUDE_MAX_M)
 }
 
+/// A/B toggle for the per-cell triangulation diagonal (Wave R1.B,
+/// 2026-05-28). When `false` (default, retail-faithful), the diagonal
+/// each base cell is split along is computed per-cell by
+/// [`cell_swto_ne_cut`] — exactly mirroring the retail client. When
+/// `true`, every quad falls back to the legacy *fixed* SW↔NE diagonal
+/// the renderer shipped with. The branch-vs-master build comparison is
+/// the real A/B for the 1070 eye-test; flip this to `true` to bake the
+/// old behavior without otherwise touching the bake.
+const LEGACY_FIXED_DIAGONAL: bool = false;
+
+/// Per-cell terrain-quad triangulation diagonal — `true` ⇒ the cell is
+/// cut along the SW→NE diagonal (triangles share the SW–NE edge),
+/// `false` ⇒ cut along the SE→NW diagonal (share the SE–NW edge).
+///
+/// This is the **exact** rule retail used; it is NOT random per-bake but
+/// a deterministic 32-bit-unsigned-wrap function of the cell's GLOBAL
+/// coordinates (`landblock_byte * 8 + cell_index`).
+///
+/// Source of truth (precedence: acclient.c > ACE > DRW):
+/// - **acclient.c** `CLandBlockStruct::ConstructPolygons` @531D10
+///   (lines ~354001–354100): with
+///   `block_x = (block_id >> 21) & 0x7F8` (= `lbX_byte * 8`) and
+///   `block_y = 8 * ((block_id >> 16) & 0xFF)` (= `lbY_byte * 8`), for a
+///   cell at local `(cellX = i, cellY = v5)`:
+///   ```text
+///   gX = block_x + cellX;  gY = block_y + cellY;
+///   v8 = gY * (214614067*gX + 1813693831) - 1109124029*gX - 1369149221;  // u32 wrap
+///   SWtoNEcut = (double)(u32)v8 * 2.3283064e-10 >= 0.5;                   // 2.3283064e-10 ≈ 1/2^32
+///   ```
+///   `ConstructUVs` @5329A0 (acclient.c:354676-354759) then keys the two
+///   triangles' corner order off this same `SWtoNEcut[...]` bit.
+/// - **ACE** cross-check: `ACE.Server/Physics/Common/LandblockStruct.cs`
+///   `ConstructPolygons` (lines 182-266) uses the identical constants
+///   (`214614067 / 1813693831 / 1109124029 / 1369149221`) and the same
+///   `splitDir * 2.3283064e-10 < 0.5 ⇒ SWtoNEcut = false` test. ACE
+///   reaches the same global coords via `lcoord.X * VertexPerCell` with
+///   `VertexPerCell = 1` and `lcoord = blockid_to_lcoord(id)` already in
+///   cell units (`lbX_byte << 3`). **No divergence** between acclient and
+///   ACE on this rule.
+///
+/// `global_cell_x`/`global_cell_y` are the cell's coordinates in the
+/// world cell grid: `landblock_byte * 8 + cell_index_within_landblock`.
+#[inline]
+pub fn cell_swto_ne_cut(global_cell_x: u32, global_cell_y: u32) -> bool {
+    // 32-bit unsigned wraparound throughout — acclient is the shipped
+    // client and uses 32-bit unsigned arithmetic (ACE matches via
+    // `(uint)` casts). Do NOT widen to u64.
+    let gx = global_cell_x;
+    let gy = global_cell_y;
+    let inner = 214614067u32
+        .wrapping_mul(gx)
+        .wrapping_add(1813693831);
+    let v8 = gy
+        .wrapping_mul(inner)
+        .wrapping_sub(1109124029u32.wrapping_mul(gx))
+        .wrapping_sub(1369149221);
+    // 2.3283064e-10 ≈ 1/2^32 → normalize the u32 to [0, 1) then test ≥ 0.5.
+    (v8 as f64) * 2.3283064e-10 >= 0.5
+}
+
 /// Subdivide a 9×9 control-height grid into `(subdiv*8+1)²` vertices
 /// with Catmull-Rom bicubic interpolation + per-category noise.
 ///
@@ -564,42 +624,60 @@ pub fn subdivide_landblock(
         }
     }
 
-    // Triangle indices. Each quad → 2 triangles, CCW from AC +Z.
-    // Vertex layout (`i*n+j`) means stride along +x is `n` and stride
-    // along +y is `1`. For the quad with SW corner `(i, j)`:
-    //   v00 (SW) = i*n + j
-    //   v10 (SE) = (i+1)*n + j     — east, +x
-    //   v01 (NW) = i*n + j + 1     — north, +y
-    //   v11 (NE) = (i+1)*n + j + 1
+    // Triangle indices. Each quad → 2 triangles. The Rust output winds
+    // CW-from-+Z; the adapter's per-triangle index-reversal pass
+    // (`landblockSubdividedMeshToGeometry` in adapter.js) flips it to the
+    // conventional CCW for FrontSide rendering post-worldRoot rotation,
+    // so per-poly backface cull (default ON) keeps every cell visible.
     //
-    // CCW from +Z (top-down): v00 → v10 → v11 and v00 → v11 → v01.
-    // The legacy `build_mesh` in lib.rs uses the SW-last "flat
-    // interpolation" pattern because it's a 9×9 grid sharing terrain
-    // codes per cell. Our subdivided mesh has per-vertex codes so we
-    // can use the simpler conventional winding here. The adapter's
-    // index-reversal pass (`landblockMeshToGeometry`) handles the
-    // worldRoot rotation; our output is consumed via a parallel
-    // adapter that doesn't reverse, OR we emit the legacy SW-last
-    // form. We pick the latter for drop-in compatibility with the
-    // existing `landblockMeshToGeometry`.
+    // Per-cell diagonal (Wave R1.B). `i` indexes AC +X (east, stride
+    // `n`), `j` indexes AC +Y (north, stride `1`) — see the v00/v10/v01
+    // labels below. Each base CELL spans `factor` sub-quads per side;
+    // all sub-quads inside a base cell inherit that cell's diagonal so
+    // the silhouette matches retail's per-cell split exactly (and at
+    // `factor == 1` the sub-quad IS the cell, the retail case).
+    let lb_x_int = ((landblock_id >> 24) & 0xff) * 8; // global cell X of LB's SW corner
+    let lb_y_int = ((landblock_id >> 16) & 0xff) * 8; // global cell Y of LB's SW corner
     let mut indices = Vec::with_capacity((n - 1) * (n - 1) * 6);
     for i in 0..(n - 1) {
         for j in 0..(n - 1) {
-            let v00 = (i * n + j) as u32;
-            let v10 = ((i + 1) * n + j) as u32;
-            let v01 = (i * n + j + 1) as u32;
-            let v11 = ((i + 1) * n + j + 1) as u32;
-            // Mirror the SW-last winding used by `build_mesh`: T1 NW→NE→SW,
-            // T2 NE→SE→SW. The adapter's per-triangle reversal pass turns
-            // this into the conventional CCW winding for FrontSide rendering
-            // post-worldRoot rotation. Same convention = same culling
-            // semantics with no code changes downstream.
-            indices.push(v01);
-            indices.push(v11);
-            indices.push(v00);
-            indices.push(v11);
-            indices.push(v10);
-            indices.push(v00);
+            let v00 = (i * n + j) as u32; // SW
+            let v10 = ((i + 1) * n + j) as u32; // SE (+x / east)
+            let v01 = (i * n + j + 1) as u32; // NW (+y / north)
+            let v11 = ((i + 1) * n + j + 1) as u32; // NE
+            // Which retail cell does this sub-quad belong to?
+            let cell_x = lb_x_int + (i / factor) as u32;
+            let cell_y = lb_y_int + (j / factor) as u32;
+            let swto_ne = if LEGACY_FIXED_DIAGONAL {
+                true // legacy: every quad on the SW↔NE diagonal
+            } else {
+                cell_swto_ne_cut(cell_x, cell_y)
+            };
+            // Both branches emit the SAME CW-from-+Z winding the legacy
+            // fixed split used; the adapter's per-triangle reversal then
+            // yields conventional CCW for FrontSide rendering, so per-poly
+            // backface cull (default ON) treats both diagonals identically
+            // and no cell ever vanishes.
+            if swto_ne {
+                // SW↔NE cut — triangles share the SW–NE edge.
+                // (legacy fixed diagonal: T1 NW→NE→SW, T2 NE→SE→SW)
+                indices.push(v01);
+                indices.push(v11);
+                indices.push(v00);
+                indices.push(v11);
+                indices.push(v10);
+                indices.push(v00);
+            } else {
+                // SE↔NW cut — triangles share the SE–NW edge.
+                // CW-from-+Z: T1 SW→NW→SE, T2 SE→NW→NE (each verified to
+                // wind the same handedness as the SW↔NE case above).
+                indices.push(v00);
+                indices.push(v01);
+                indices.push(v10);
+                indices.push(v10);
+                indices.push(v01);
+                indices.push(v11);
+            }
         }
     }
 
@@ -1113,5 +1191,150 @@ mod tests {
             n * n,
             out.indices.len()
         );
+    }
+
+    /// Wave R1.B unit test — pin the per-cell diagonal rule extracted
+    /// from acclient.c `ConstructPolygons` (@531D10) and cross-checked
+    /// against ACE `LandblockStruct.ConstructPolygons`. Values are the
+    /// reference Python evaluation of the 32-bit-wrap PRNG for the SW
+    /// corner cells of Holtburg LB 0xA9B4 (lbX=0xA9, lbY=0xB4 → global
+    /// cell origin (1352, 1440)).
+    #[test]
+    fn cell_split_rule_matches_retail_prng() {
+        // (global_cell_x, global_cell_y, expected SWtoNEcut)
+        let cases = [
+            (1352u32, 1440u32, true),  // cell (0,0) — SW↔NE (legacy diag)
+            (1352, 1441, true),        // (0,1)
+            (1352, 1442, true),        // (0,2)
+            (1353, 1440, false),       // (1,0) — SE↔NW
+            (1353, 1441, false),       // (1,1)
+            (1353, 1442, true),        // (1,2)
+            (1354, 1440, false),       // (2,0)
+            (1354, 1441, false),       // (2,1)
+            (1354, 1442, false),       // (2,2)
+        ];
+        for (gx, gy, expect) in cases {
+            assert_eq!(
+                cell_swto_ne_cut(gx, gy),
+                expect,
+                "cell_swto_ne_cut({gx},{gy}) diverged from retail PRNG"
+            );
+        }
+        // cell (0,0) must stay SW↔NE so the legacy fixed-diagonal winding
+        // test (`winding_is_consistent_ccw_post_mirror`) keeps passing.
+        assert!(cell_swto_ne_cut(0xA9 * 8, 0xB4 * 8));
+    }
+
+    /// Wave R1.B reporting test — bake a real Holtburg landblock and
+    /// prove the triangulation diagonal now VARIES per cell instead of
+    /// being a constant fixed split. Uses real retail data per project
+    /// memory ("prefer real game data over synthetic"); skips if the
+    /// canonical cell dat isn't present.
+    ///
+    /// Detection: `i` indexes +X, `j` indexes +Y. The first sub-quad of
+    /// each base cell starts at sub-vertex `(i = cx*factor, j = cy*factor)`,
+    /// whose 6 indices begin the buffer slice for that quad. A SW↔NE cut
+    /// emits `[v01, v11, v00, ...]`; a SE↔NW cut emits `[v00, v01, v10, ...]`.
+    /// We classify each of the 8×8 = 64 cells and assert BOTH orientations
+    /// are present.
+    #[test]
+    fn diagonal_split_varies_across_holtburg_lb() {
+        use crate::DatDatabase;
+        use crate::landblock::CellLandblock;
+        let path =
+            std::path::PathBuf::from("/home/wbterminal/ac_base_dats/client_cell_1.dat");
+        if !path.exists() {
+            eprintln!(
+                "[diagonal_split_varies_across_holtburg_lb] SKIP — \
+                 no client_cell_1.dat at {}",
+                path.display()
+            );
+            return;
+        }
+        let dat = DatDatabase::new(&path).expect("client_cell_1.dat should open");
+        // Holtburg LB cell terrain id = 0xA9B4FFFF (lbX=0xA9, lbY=0xB4).
+        let bytes = dat
+            .get_file(0xA9B4_FFFF)
+            .expect("Holtburg 0xA9B4FFFF cell terrain in retail dat");
+        let cell = CellLandblock::unpack(&bytes).expect("CellLandblock unpack");
+
+        let mut heights = [[0.0f32; 9]; 9];
+        let mut codes = [[0u8; 9]; 9];
+        let mut roads = [[0u8; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                heights[x][y] = cell.get_height(x, y);
+                codes[x][y] = cell.terrain_type(x, y);
+                roads[x][y] = cell.road_type(x, y);
+            }
+        }
+        let adjacent = AdjacentHeights::default();
+        let factor = 4u32;
+        let landblock_id = 0xA9B4_0000u32;
+        let out = subdivide_landblock(
+            &heights, &adjacent, factor, &codes, &roads, landblock_id, 0xC0FFEE,
+        );
+        let n = out.grid_size as usize;
+        let f = factor as usize;
+
+        // Classify each of the 8×8 base cells from the emitted index
+        // buffer (quad order is row-major over i∈[0,n-1), j∈[0,n-1)).
+        let stride_quads = n - 1; // sub-quads per side
+        let mut swto_ne = 0usize;
+        let mut seto_nw = 0usize;
+        let mut grid = [[' '; 8]; 8];
+        for cx in 0..8usize {
+            for cy in 0..8usize {
+                // First sub-quad of this cell: (i = cx*f, j = cy*f).
+                let i = cx * f;
+                let j = cy * f;
+                let quad = i * stride_quads + j; // quad index in row-major order
+                let base = quad * 6;
+                let v00 = (i * n + j) as u32;
+                let v01 = (i * n + j + 1) as u32;
+                // SW↔NE cut starts with v01; SE↔NW cut starts with v00.
+                let first = out.indices[base];
+                if first == v01 {
+                    swto_ne += 1;
+                    grid[cx][cy] = '/';
+                } else if first == v00 {
+                    seto_nw += 1;
+                    grid[cx][cy] = '\\';
+                } else {
+                    panic!(
+                        "cell ({cx},{cy}) quad {quad} unexpected first index {first} \
+                         (v00={v00}, v01={v01})"
+                    );
+                }
+                // Sanity: the buffer classification must agree with the
+                // rule evaluated directly on the cell's global coords.
+                let gx = ((landblock_id >> 24) & 0xff) * 8 + cx as u32;
+                let gy = ((landblock_id >> 16) & 0xff) * 8 + cy as u32;
+                let rule = cell_swto_ne_cut(gx, gy);
+                assert_eq!(
+                    rule,
+                    first == v01,
+                    "cell ({cx},{cy}) buffer/rule mismatch"
+                );
+            }
+        }
+
+        eprintln!("[R1.B diagonal split] LB 0xA9B4 8×8 cell diagonals (/ = SW↔NE, \\ = SE↔NW):");
+        for cx in 0..8 {
+            let row: String = grid[cx].iter().collect();
+            eprintln!("  cx={cx}: {row}");
+        }
+        eprintln!(
+            "[R1.B diagonal split] LB 0xA9B4: SW↔NE={swto_ne}  SE↔NW={seto_nw}  (of 64 cells)"
+        );
+
+        // The whole point of the wave: the split is NO LONGER constant.
+        assert!(
+            swto_ne > 0 && seto_nw > 0,
+            "diagonal split should vary across LB 0xA9B4 — got SW↔NE={swto_ne}, SE↔NW={seto_nw}"
+        );
+        // Reference PRNG distribution for this LB is 40/24.
+        assert_eq!(swto_ne, 40, "expected 40 SW↔NE cells on LB 0xA9B4");
+        assert_eq!(seto_nw, 24, "expected 24 SE↔NW cells on LB 0xA9B4");
     }
 }
