@@ -19867,6 +19867,12 @@ pub struct SessionHandle {
     /// existing entity store; this cache only retains the GUID list
     /// so JS can enumerate via [`SessionHandle::get_container_contents`].
     latest_container_contents: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>>,
+    /// Icon DID cache populated at ViewContents time for each contained
+    /// item guid. Contained items have model_id=0 and are discarded by
+    /// the JS spawn gate before entityMap.set(), so icon_id must be
+    /// captured here while world.entities still holds it.
+    /// JS reads via [`SessionHandle::get_object_icon_id`].
+    latest_object_icons: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, u32>>>,
     /// Wave J3 (2026-05-26): per-object inscription text, keyed by
     /// object GUID. Populated by the recv loop on
     /// `WorldEvent::EntityIdentified` (Assess/Identify response) when
@@ -21380,6 +21386,14 @@ impl SessionHandle {
             .get(&container_guid)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Icon DID for any object by GUID, populated at container-open time
+    /// for items that don't survive the JS spawn gate (contained items
+    /// with model_id=0). Returns 0 when the GUID is unknown.
+    #[wasm_bindgen(js_name = getObjectIconId)]
+    pub fn get_object_icon_id(&self, guid: u32) -> u32 {
+        self.latest_object_icons.borrow().get(&guid).copied().unwrap_or(0)
     }
 
     /// PR-JJ 2026-05-23: the local player's active enchantments — full
@@ -24623,6 +24637,11 @@ pub async fn start_session(
     let latest_container_contents: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // Icon DID cache for contained items — populated at ViewContents time
+    // before the JS spawn gate discards icon_id from items with model_id=0.
+    let latest_object_icons: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
     // Wave J3 (2026-05-26): per-object inscription text, populated by
     // the recv loop's EntityIdentified arm when the identified entity
     // carries PropertyString::Inscription. Read on-demand by the
@@ -24843,6 +24862,7 @@ pub async fn start_session(
         let latest_inventory = latest_inventory.clone();
         let latest_vendor_state_inner = latest_vendor_state.clone();
         let latest_container_contents_inner = latest_container_contents.clone();
+        let latest_object_icons_inner = latest_object_icons.clone();
         let latest_inscriptions_inner = latest_inscriptions.clone();
         let latest_enchantments_inner = latest_enchantments.clone();
         let latest_fellowship_inner = latest_fellowship.clone();
@@ -24886,6 +24906,7 @@ pub async fn start_session(
                 latest_inventory,
                 latest_vendor_state_inner,
                 latest_container_contents_inner,
+                latest_object_icons_inner,
                 latest_inscriptions_inner,
                 latest_enchantments_inner,
                 latest_fellowship_inner,
@@ -24985,6 +25006,7 @@ pub async fn start_session(
         latest_inventory,
         latest_vendor_state,
         latest_container_contents,
+        latest_object_icons,
         latest_inscriptions,
         latest_enchantments,
         latest_fellowship,
@@ -26308,6 +26330,9 @@ async fn recv_loop(
     >,
     latest_container_contents: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<u32>>>,
+    >,
+    latest_object_icons: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     >,
     latest_inscriptions: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, String>>,
@@ -29760,6 +29785,21 @@ async fn recv_loop(
                                         .map(|i| u32::from(i.guid))
                                         .collect();
                                     let item_count = item_guids.len() as u32;
+                                    // Populate icon cache while world.entities
+                                    // still holds the contained items. Items
+                                    // have model_id=0 so the JS spawn gate
+                                    // drops them before entityMap.set() — this
+                                    // is the only reliable icon_id source for
+                                    // the container-panel.
+                                    if let Some(ref w) = world {
+                                        let mut icons = latest_object_icons.borrow_mut();
+                                        for i in data.items.iter() {
+                                            let ig = u32::from(i.guid);
+                                            if let Some(entity) = w.entities.get(i.guid) {
+                                                icons.insert(ig, entity.icon_id.unwrap_or(0));
+                                            }
+                                        }
+                                    }
                                     let container_name = world
                                         .as_ref()
                                         .and_then(|w| {

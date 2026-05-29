@@ -180,7 +180,10 @@ function resolveItemMeta(guid) {
       };
     }
   } catch (_) {}
-  return { guid: g, name: fmtGuid(g), iconId: 0, stackSize: 1 };
+  // Third channel: icon cache populated at ViewContents time before the
+  // JS spawn gate discards contained items (model_id=0 → no entityMap entry).
+  const iconFromCache = (handle?.getObjectIconId?.(g) >>> 0) || 0;
+  return { guid: g, name: fmtGuid(g), iconId: iconFromCache, stackSize: 1 };
 }
 
 function buildOverlay() {
