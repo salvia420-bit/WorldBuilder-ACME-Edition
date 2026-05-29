@@ -482,6 +482,14 @@ const DEFAULT_DETAIL_TEX_FADE_END = 75.0;
 const DETAIL_TEX_SLICE_FALLBACK = Object.freeze(new Array(33).fill(255));
 const DETAIL_TEX_TILING_FALLBACK = Object.freeze(new Array(33).fill(1));
 
+// R4.a 2026-05-28 — retail TexMerge mid-point alpha rounding sub-flag.
+// The composite already ships behind ?texMerge; this rides that flag (no
+// new top-level URL param) and is ON by default so ?texMerge now includes
+// the acclient.c:365787-365798 rounding (if 0<a<0xFF && a>0x80, a++). Flip
+// to false here for an on-GPU A/B of the composite with vs without the
+// rounding alone. Default (no ?texMerge) stays byte-identical regardless.
+const TEXMERGE_ALPHA_ROUND = true;
+
 // ----- Phase 1.3 — triplanar mapping on terrain slopes --------------
 //
 // Slope is computed in AC-space (Z-up): `slope = 1.0 - normal.z`.
@@ -772,6 +780,12 @@ uniform float uDetailTexEnabled;          // 0.0 OFF / 1.0 ON (URL flag gate)
 uniform highp sampler2D uMergeData;       // per-LB 48×8 RGBA8 (NearestFilter)
 uniform sampler2DArray uAlphaMasks;       // 8 ordered A8 masks (R = weight)
 uniform float uTexMergeEnabled;           // 0.0 OFF / 1.0 ON
+// R4.a 2026-05-28 — sub-gate for the retail mid-point alpha rounding
+// (acclient.c:365787-365798 ImgTex::MergeTexture: if 0<a<0xFF && a>0x80, a++).
+// 1.0 when ?texMerge=on so the composite includes the rounding by default;
+// can be forced 0 for an on-GPU A/B of the rounding alone. Multiplied by
+// uTexMergeEnabled, so it is a strict no-op whenever the master gate is off.
+uniform float uTexMergeAlphaRound;        // 0.0 OFF / 1.0 ON (under uTexMergeEnabled)
 // Phase 1.3 — slope-gated triplanar sampling of the detail normal.
 // uTriplanarEnabled gates the whole block off when quality is low;
 // uTriplanarSharpness is the power applied to abs(normal) before
@@ -986,6 +1000,33 @@ vec3 applyTerrainSatHue(vec3 rgb, float gate) {
   return hsv2rgb(hsv);
 }
 
+// R4.a 2026-05-28 — retail TexMerge mid-point alpha rounding.
+// ImgTex::MergeTexture (acclient.c:365787-365798) reads the A8 mask byte
+// a and, before the integer blend (a*dst + (256-a)*src) >> 8, nudges the
+// upper half UP by one: when 0 < a < 0xFF and a > 0x80, a++. This biases
+// the quantized blend toward the dominant layer at the threshold, which
+// firms up the splotchy overlay edges by ~1/256 rather than leaving them
+// dead-centre. We sample the mask as a normalized float (overlay weight,
+// the port convention -- see lib.rs:951 mix(base, overlay, mask.r)), so
+// the rounding is applied on the reconstructed 0..255 byte and re-
+// normalized. Gated by gate (uTexMergeEnabled * uTexMergeAlphaRound) so
+// it is a strict no-op when off: an unrounded float passes through
+// untouched, preserving the shipped composite when the sub-flag is 0.
+// NOTE: no backticks in this comment -- esbuild + Firefox reject a stray
+// backtick inside a GLSL string (it has bitten this file).
+float roundMergeAlpha(float alpha, float gate) {
+  if (gate < 0.5) return alpha;
+  // Reconstruct the integer mask byte the float came from.
+  int a = int(alpha * 255.0 + 0.5);
+  // Retail guard: only the strict interior (0 < a < 0xFF) is rounded; the
+  // 0x00 / 0xFF extremes are left exact so a fully-covered or fully-empty
+  // texel never shifts.
+  if (a > 0 && a < 255 && a > 128) {
+    a += 1;
+  }
+  return float(a) / 255.0;
+}
+
 void main() {
   // vGridUv is [0, 8] across the 192 m LB. Bilinear 4-corner blend.
   vec2 grid = vGridUv;
@@ -1046,16 +1087,35 @@ void main() {
     vec4 baseTexel = texelFetch(uMergeData, ivec2(colBase, iv), 0);
     int baseLayer = int(baseTexel.r * 255.0 + 0.5);
     vec3 merged = texture(uAtlas, atlasUvFor(clamp(baseLayer, 0, 32), cellUv)).rgb;
-    for (int s = 1; s < 4; s++) {
-      vec4 t = texelFetch(uMergeData, ivec2(colBase + s, iv), 0);
-      if (t.a < 0.5) continue;            // empty slot
-      int layer = int(t.r * 255.0 + 0.5);
-      int maskIdx = int(t.g * 255.0 + 0.5);
-      int rot = int(t.b * 255.0 + 0.5);
-      vec2 mUv = rotateCellUv(cellUv, rot);
-      float alpha = texture(uAlphaMasks, vec3(mUv, float(maskIdx))).r;
-      vec3 overlayCol = texture(uAtlas, atlasUvFor(clamp(layer, 0, 32), cellUv)).rgb;
-      merged = mix(merged, overlayCol, alpha);
+    // R4.a 2026-05-28 — explicit all-road corner case. Per
+    // terrain_merge.rs::road_code (mask == 0xF -> all_road = true) +
+    // texture_merge_info, an all-road cell is packed with base layer
+    // ROAD_ATLAS_LAYER (32) and ZERO terrain overlays, so the loop below
+    // already short-circuits and the cell renders as pure road. We make
+    // that intent explicit here: when the base IS the road layer the
+    // terrain-overlay loop is skipped outright (it would be a no-op
+    // anyway -- every overlay slot is invalid -- but the guard documents
+    // the Chorizite FindRoadAlpha all-road semantics and avoids three
+    // dead texelFetch / mask samples per all-road fragment).
+    if (baseLayer != 32) {
+      for (int s = 1; s < 4; s++) {
+        vec4 t = texelFetch(uMergeData, ivec2(colBase + s, iv), 0);
+        if (t.a < 0.5) continue;            // empty slot
+        int layer = int(t.r * 255.0 + 0.5);
+        int maskIdx = int(t.g * 255.0 + 0.5);
+        int rot = int(t.b * 255.0 + 0.5);
+        vec2 mUv = rotateCellUv(cellUv, rot);
+        // R4.a — retail mid-point alpha rounding (acclient.c:365787-365798),
+        // gated under uTexMergeEnabled by uTexMergeAlphaRound. No-op (returns
+        // the raw sampled weight) when the sub-flag is 0, so the shipped
+        // composite is byte-identical with rounding off.
+        float alpha = roundMergeAlpha(
+          texture(uAlphaMasks, vec3(mUv, float(maskIdx))).r,
+          uTexMergeAlphaRound
+        );
+        vec3 overlayCol = texture(uAtlas, atlasUvFor(clamp(layer, 0, 32), cellUv)).rgb;
+        merged = mix(merged, overlayCol, alpha);
+      }
     }
     result = merged;
   }
@@ -2237,6 +2297,18 @@ export async function bakeTerrainForLandblock(
       uAlphaMasks: { value: opts.texMergeAlphaArray ?? null },
       uTexMergeEnabled: {
         value: opts.texMergeEnabled && mergeDataTex ? 1.0 : 0.0,
+      },
+      // R4.a — retail mid-point alpha rounding sub-gate. Rides ?texMerge
+      // (defaults ON when the composite is active) so the refinement is
+      // part of the opt-in feature; flip TEXMERGE_ALPHA_ROUND to false for
+      // an on-GPU A/B of the composite with vs without the rounding. The
+      // shader also multiplies by uTexMergeEnabled, so this is a no-op
+      // whenever the composite itself is off.
+      uTexMergeAlphaRound: {
+        value:
+          opts.texMergeEnabled && mergeDataTex && TEXMERGE_ALPHA_ROUND
+            ? 1.0
+            : 0.0,
       },
       // Phase 1.3 — triplanar gate + sharpness. When the gate is
       // 0.0 the fragment skips the YZ+XZ samples entirely and the

@@ -559,6 +559,47 @@ mod tests {
     }
 
     #[test]
+    fn all_road_cell_is_pure_road_no_overlays() {
+        // R4.a — the explicit all-road corner case (Chorizite FindRoadAlpha /
+        // road_code mask == 0xF). When every corner carries road the cell must
+        // render as pure road: base = ROAD_TYPE, and NO terrain overlays and NO
+        // road overlays (the road IS the base, there is nothing to blend over
+        // it). The terrain.js composite relies on this contract — its all-road
+        // guard skips the overlay loop because the Rust selection emits none.
+        let t = TexMergeTables::retail();
+
+        // road_code: all_road is true iff the 4-corner road mask is exactly 0xF.
+        assert_eq!(road_code(0x0FF0_0000).1, true, "mask 0xF -> all_road");
+        for not_all in [0x0u32, 0x0C00_0000, 0x0300_0000, 0x00C0_0000, 0x0030_0000] {
+            assert_eq!(
+                road_code(not_all).1,
+                false,
+                "only mask 0xF is all_road (mask bits {not_all:#X})"
+            );
+        }
+        // Three-of-four road corners is NOT all_road (one corner short of 0xF).
+        let three = 0x0C00_0000 | 0x0300_0000 | 0x00C0_0000;
+        assert_eq!(road_code(three).1, false, "3 road corners != all_road");
+
+        // The all-road TextureMergeInfo: pure road, zero overlays, zero roads —
+        // even when the underlying corner terrain types differ (road wins).
+        let all_road = pack_pcode([3, 14, 9, 1], [1, 2, 3, 1]);
+        let info = texture_merge_info(all_road, &t).unwrap();
+        assert!(info.all_road, "every corner road -> all_road");
+        assert_eq!(info.base_terrain, ROAD_TYPE, "base is the road pseudo-type");
+        assert!(info.overlays.is_empty(), "all-road has no terrain overlays");
+        assert!(info.roads.is_empty(), "all-road has no road overlays (road is the base)");
+
+        // The packed GPU record: base slot = ROAD_ATLAS_LAYER, every other slot
+        // invalid — so the shader's overlay loop is a guaranteed no-op.
+        let slots = pack_merge_record(&info);
+        assert_eq!(slots[0][0], ROAD_TYPE, "base slot byte = ROAD_TYPE");
+        for s in &slots[1..] {
+            assert_eq!(s[3], 0, "all-road: no valid overlay/road slot");
+        }
+    }
+
+    #[test]
     fn texture_merge_info_end_to_end() {
         let t = TexMergeTables::retail();
         // A uniform grass cell: base only, no overlays, no road.
