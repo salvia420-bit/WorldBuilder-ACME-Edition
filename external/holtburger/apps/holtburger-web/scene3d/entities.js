@@ -59,6 +59,55 @@ function readDeadReckonFlag() {
   }
 }
 
+// === Wave R3.B — transparency depth-sort via AC's authored sort center
+// (2026-05-29) ===
+// `?sortCenter=on` opt-in. Default OFF → no `renderOrder` writes on entity
+// parts; THREE's default transparent sort (by object world-position Z) runs
+// exactly as before, byte-identical render. On → for entities that own MORE
+// THAN ONE transparent part, the per-frame `tick(dt)` computes each
+// transparent part's authored sort point (part Group world position + the
+// surfaced per-part `GfxObj.sort_center` offset, transformed into world
+// space), projects it to the active camera's view-space Z, and assigns a
+// stable back-to-front `renderOrder` so blend order is deterministic instead
+// of relying on THREE's per-object bounding-sphere centre (which collapses
+// for the layered parts of a single entity that all share ~one world
+// position). Read once in the constructor into `this._sortCenterOn` and
+// consumed via `this.` everywhere (no cross-function local — avoids the
+// prior-wave preInit3D/init3D ReferenceError trap). Same flag-reader shape as
+// `readDeadReckonFlag` / `readEntityLightsFlag`.
+function readSortCenterFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("sortCenter");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Wave R3.B — renderOrder band for sort-center-ordered transparent parts.
+// Existing renderOrder users (checked 2026-05-29): selection ring = 10,
+// nameplate sprite = 10, selected-item box = 11, materials wireframe fill =
+// (source.renderOrder ?? 0) - 1, play-effect VFX = 950, spell preview = 960,
+// AC moons = 800, sky/stars = -1, cloud overlay = 999. We assign each sorted
+// transparent part a SMALL value in [BASE, BASE + count) so the band sits
+// just below 0 — clear of every positive-band user above (10, 11, 800+) and
+// of the default 0 used by every untouched opaque/transparent mesh. Keeping
+// the whole band ≤ 0 means an entity's transparent parts still draw in the
+// same broad pass as before (after opaque geometry at renderOrder 0 via the
+// transparent flag), only their RELATIVE order within the entity is pinned.
+// The materials fill mesh uses `(source.renderOrder ?? 0) - 1`; entity part
+// meshes are never wireframe-fill sources, so no collision there. Offsets are
+// negative and tiny (BASE = -100, max ~64 parts) so they never reach the
+// sky/HUD negative user at -1's neighbourhood meaningfully (those live in the
+// separate sky-pass scene, not the world scene), and never touch +10/+11.
+const SORT_CENTER_RENDER_ORDER_BASE = -100;
+// Module-private scratch objects for the per-frame sort-center projection.
+// Reused across entities/parts — callers must NOT retain references.
+const _sortCenterScratchVec3 = new THREE.Vector3();
+const _sortCenterScratchView = new THREE.Vector3();
+const _sortCenterScratchQuat = new THREE.Quaternion();
+
 // Critical-damping rate for the position ease: factor = 1 - exp(-k·dt).
 // k=12 gives ~70% of the gap closed in 100 ms and ~95% in 250 ms — fast
 // enough that the rig tracks a steady walk with no perceptible lag, slow
@@ -1300,6 +1349,24 @@ export class EntityManager {
     // `setPose` runs exactly as before (byte-identical), no target stored, no
     // tick smoothing.
     this._deadReckonOn = readDeadReckonFlag();
+    // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center.
+    // Read the `?sortCenter=on` opt-in HERE (constructor) so every consumer
+    // (`_attachSortCenters` at spawn, the `tick` sort pass) reads
+    // `this._sortCenterOn` — no cross-function flag handoff. Default OFF → no
+    // renderOrder writes anywhere, THREE's default transparent sort untouched.
+    this._sortCenterOn = readSortCenterFlag();
+    // Per-setup cache of per-part sort-center offsets (Float32Array, 3 floats
+    // per part, part-index order) so the wasm fetch happens once per unique
+    // setup id. Only populated when `_sortCenterOn`. Keyed by setupId.
+    /** @type {Map<number, Float32Array>} */
+    this._sortCenterCache = new Map();
+    // GUIDs whose sort-center attach has been kicked off (idempotent guard,
+    // mirrors `_particleChainsAttached`). Cleared on remove.
+    /** @type {Set<number>} */
+    this._sortCenterAttached = new Set();
+    /** @type {Map<number, Promise<void>>} */
+    this._sortCenterInFlight = new Map();
+    this._sortCenterWarned = false;
     /** @type {Map<number, EntityInstance>} */
     this.entityMap = new Map();
     /** @type {AnimationCache} */
@@ -2034,6 +2101,31 @@ export class EntityManager {
           this._entityLightsWarned = true;
           console.warn(
             `[entities/R2.A] entity-light attach for 0x${guid.toString(16)} ` +
+            `(setup=0x${setupId.toString(16)}) failed:`,
+            e
+          );
+        }
+      });
+    }
+
+    // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center.
+    // When `?sortCenter=on`, fetch this Setup's per-part `GfxObj.sort_center`
+    // offsets (one fetch per unique setupId, cached) and stash them on the
+    // instance so the per-frame `tick(dt)` can pin transparent-part blend
+    // order. Fire-and-forget; the tick path no-ops until the offsets land.
+    // Skipped wholly when the flag is off (default) → zero allocation, zero
+    // wasm round-trips, byte-identical scene.
+    if (
+      this._sortCenterOn &&
+      this.wasmExports &&
+      typeof this.wasmExports.fetchSetupPartSortCenters === "function"
+    ) {
+      this._attachSortCenters(inst, setupId).catch((e) => {
+        // eslint-disable-next-line no-console
+        if (!this._sortCenterWarned) {
+          this._sortCenterWarned = true;
+          console.warn(
+            `[entities/R3.B] sort-center attach for 0x${guid.toString(16)} ` +
             `(setup=0x${setupId.toString(16)}) failed:`,
             e
           );
@@ -4592,6 +4684,11 @@ export class EntityManager {
       this._soundTimeoutsForGuid.delete(g);
     }
     this._particleChainsAttached.delete(g);
+    // === Wave R3.B (2026-05-29) — drop the per-guid sort-center attach guard
+    // so a re-spawn of the same guid re-attaches. The per-SETUP offset cache
+    // (`_sortCenterCache`) is intentionally NOT cleared here — it's keyed by
+    // setupId and shared across entities, so it survives individual removals.
+    this._sortCenterAttached.delete(g);
     // === Wave R2.A (2026-05-28) — release entity-attached lights.
     // `inst.dispose()` (above) already detached the rig subtree (and with
     // it the part-parented lights) from the scene graph, but the lights are
@@ -4734,6 +4831,205 @@ export class EntityManager {
       summary.created += 1;
     }
     return summary;
+  }
+
+  /**
+   * === Wave R3.B (2026-05-29) — attach per-part sort-center offsets.
+   *
+   * Gated by `?sortCenter=on` (the caller checks `this._sortCenterOn`).
+   * Fetches the entity's per-part `GfxObj.sort_center` offsets through the
+   * `fetchSetupPartSortCenters` wasm export (one fetch per UNIQUE setupId,
+   * memoised in `this._sortCenterCache`), and stashes a flat Float32Array
+   * (3 floats per part, part-index order) on `inst._partSortCenters`. The
+   * per-frame `tick(dt)` reads that array to project each transparent part's
+   * authored sort point to view-space Z and assign a stable `renderOrder`.
+   *
+   * `inst._sortablePartCount` caches how many parts carry a transparent mesh
+   * (computed lazily in the tick on first sort) — but the OFFSETS must land
+   * first, so this attach only provides the data; the tick owns the "skip
+   * unless > 1 transparent part" gate. Async; fire-and-forget at the call
+   * site so spawn return isn't blocked. Idempotent per guid.
+   */
+  async _attachSortCenters(inst, setupId) {
+    if (!inst || !inst.root || !Array.isArray(inst.parts)) return;
+    const sid = setupId >>> 0;
+    const guid = inst.guid >>> 0;
+    if (this._sortCenterAttached.has(guid)) return;
+    this._sortCenterAttached.add(guid);
+
+    // Serve from the per-setup cache when warm (the common case once a few
+    // entities of the same setup have spawned).
+    const cached = this._sortCenterCache.get(sid);
+    if (cached) {
+      inst._partSortCenters = cached;
+      return;
+    }
+    // Dedup concurrent fetches of the same setup id (two NPCs sharing a setup
+    // spawning near-simultaneously share one wasm round-trip).
+    let inflight = this._sortCenterInFlight.get(sid);
+    if (!inflight) {
+      inflight = (async () => {
+        let bundle;
+        try {
+          bundle = await this.wasmExports.fetchSetupPartSortCenters(sid);
+        } catch (_) {
+          return null; // network/IO prefetch error — treat as no sort data.
+        }
+        if (!bundle) return null;
+        const partCount = bundle.partCount | 0;
+        const centers = bundle.takeCenters();
+        if (typeof bundle.free === "function") {
+          try { bundle.free(); } catch (_) {}
+        }
+        if (partCount === 0 || !Array.isArray(centers) || centers.length === 0) {
+          for (const c of centers || []) {
+            if (typeof c.free === "function") { try { c.free(); } catch (_) {} }
+          }
+          return null;
+        }
+        // Flatten to (partIndex -> x,y,z). centers[] is part-index order from
+        // the wasm side, but key off `partIndex` defensively so a gap can't
+        // misalign the rest.
+        const flat = new Float32Array(partCount * 3);
+        for (const c of centers) {
+          const pi = c.partIndex >>> 0;
+          if (pi < partCount) {
+            flat[pi * 3 + 0] = c.x;
+            flat[pi * 3 + 1] = c.y;
+            flat[pi * 3 + 2] = c.z;
+          }
+          if (typeof c.free === "function") { try { c.free(); } catch (_) {} }
+        }
+        this._sortCenterCache.set(sid, flat);
+        return flat;
+      })();
+      this._sortCenterInFlight.set(sid, inflight);
+      // Drop the in-flight handle once it settles so a later miss re-fetches
+      // only if the cache write didn't happen (null result).
+      inflight.finally(() => {
+        if (this._sortCenterInFlight.get(sid) === inflight) {
+          this._sortCenterInFlight.delete(sid);
+        }
+      });
+    }
+    const flat = await inflight;
+    // The entity may have been removed while the fetch was in flight.
+    if (!flat || !this.entityMap.has(guid)) return;
+    inst._partSortCenters = flat;
+  }
+
+  /**
+   * === Wave R3.B (2026-05-29) — per-frame transparent-part sort.
+   *
+   * Called from `tick(dt)` ONLY when `this._sortCenterOn`. For one entity:
+   * collect its parts that carry at least one transparent mesh; if there are
+   * ≤ 1, return immediately (the overwhelmingly common case — most entities
+   * have zero transparent parts, so this is a cheap early-out). For each
+   * transparent part, take its Group world position, add the surfaced
+   * per-part `GfxObj.sort_center` offset (rotated into world space by the
+   * part's world quaternion), and project to the camera's view-space Z
+   * (`applyMatrix4(camera.matrixWorldInverse)` → smaller/more-negative z =
+   * farther). Sort parts back-to-front and assign `renderOrder` in the
+   * reserved negative band so THREE draws them in that order regardless of
+   * its own per-object bounding-sphere heuristic.
+   *
+   * @private
+   */
+  _tickSortCenters(inst, camera) {
+    if (!inst || !Array.isArray(inst.parts) || inst.parts.length < 2) return;
+    const offsets = inst._partSortCenters;
+    if (!offsets) return; // offsets haven't landed yet (or none for this setup)
+    if (!camera || !camera.matrixWorldInverse) return;
+
+    // Collect transparent parts (a part is "transparent" if any of its mesh
+    // leaves has a transparent material). Reuse a per-instance scratch array
+    // to avoid per-frame allocation.
+    let list = inst._sortCenterPartList;
+    if (!list) list = inst._sortCenterPartList = [];
+    list.length = 0;
+    for (let p = 0; p < inst.parts.length; p += 1) {
+      const part = inst.parts[p];
+      if (!part || !part.children) continue;
+      let hasTransparent = false;
+      for (const child of part.children) {
+        if (child.isMesh && child.material && child.material.transparent) {
+          hasTransparent = true;
+          break;
+        }
+      }
+      if (hasTransparent) list.push(p);
+    }
+    // ≤ 1 transparent part → nothing to disambiguate; leave renderOrder alone.
+    if (list.length <= 1) {
+      // If a previous frame set renderOrder on parts that are no longer
+      // transparent (e.g. a fade completed), reset them to the default 0 so
+      // we don't leave stale ordering behind.
+      this._clearSortRenderOrders(inst);
+      return;
+    }
+
+    // Compute view-space depth for each transparent part.
+    let keyed = inst._sortCenterKeyed;
+    if (!keyed) keyed = inst._sortCenterKeyed = [];
+    keyed.length = 0;
+    for (const p of list) {
+      const part = inst.parts[p];
+      // World position of the part Group.
+      part.getWorldPosition(_sortCenterScratchVec3);
+      // Add the authored sort-center offset, rotated by the part's world
+      // orientation so the offset tracks the animated part frame.
+      const ox = offsets[p * 3 + 0];
+      const oy = offsets[p * 3 + 1];
+      const oz = offsets[p * 3 + 2];
+      if (ox !== 0 || oy !== 0 || oz !== 0) {
+        _sortCenterScratchView.set(ox, oy, oz);
+        if (typeof part.getWorldQuaternion === "function") {
+          _sortCenterScratchView.applyQuaternion(
+            part.getWorldQuaternion(_sortCenterScratchQuat)
+          );
+        }
+        _sortCenterScratchVec3.add(_sortCenterScratchView);
+      }
+      // Project into the camera's view space; .z is the depth (more negative
+      // = farther in front of the camera, per three.js view-space convention).
+      _sortCenterScratchVec3.applyMatrix4(camera.matrixWorldInverse);
+      keyed.push({ part: p, z: _sortCenterScratchVec3.z });
+    }
+    // Back-to-front: farthest (most negative view z) first → lowest
+    // renderOrder, so it draws first and nearer parts blend over it.
+    keyed.sort((a, b) => a.z - b.z);
+    for (let i = 0; i < keyed.length; i += 1) {
+      const part = inst.parts[keyed[i].part];
+      if (!part || !part.children) continue;
+      const ro = SORT_CENTER_RENDER_ORDER_BASE + i;
+      for (const child of part.children) {
+        if (child.isMesh) child.renderOrder = ro;
+      }
+    }
+  }
+
+  /**
+   * === Wave R3.B — reset any renderOrder this manager set on an entity's
+   * meshes back to the THREE default (0). Used when a previously-multi-
+   * transparent entity drops to ≤ 1 transparent part so stale ordering
+   * doesn't linger. Only touches meshes we actually tagged (renderOrder in
+   * the reserved negative band), leaving other renderOrder users untouched.
+   * @private
+   */
+  _clearSortRenderOrders(inst) {
+    if (!inst || !Array.isArray(inst.parts)) return;
+    for (const part of inst.parts) {
+      if (!part || !part.children) continue;
+      for (const child of part.children) {
+        if (
+          child.isMesh &&
+          child.renderOrder <= SORT_CENTER_RENDER_ORDER_BASE + 64 &&
+          child.renderOrder >= SORT_CENTER_RENDER_ORDER_BASE
+        ) {
+          child.renderOrder = 0;
+        }
+      }
+    }
   }
 
   /**
@@ -5735,6 +6031,14 @@ export class EntityManager {
    */
   tick(dt) {
     if (!(dt > 0)) return;
+    // === Wave R3.B (2026-05-29) — resolve the active camera ONCE for the
+    // transparent-part sort pass. Same accessor convention as
+    // `_shouldTickEntity` (switcher first, fall back to `.camera`). Only when
+    // `?sortCenter=on`; null when off → the per-entity call below is never
+    // made, so default-off is byte-identical (no renderOrder writes).
+    const _sortCenterCamera = this._sortCenterOn
+      ? (this.scene3d?.cameraSwitcher?.activeCamera ?? this.scene3d?.camera ?? null)
+      : null;
     for (const inst of this.entityMap.values()) {
       // Perf B1 (2026-05-18) — distance + local-player + active-tween
       // gate. When false, skip mixer.update, hook execution, and the
@@ -5744,6 +6048,28 @@ export class EntityManager {
       // readable for downstream consumers. Animation snap on
       // re-entry is the documented MVP trade.
       if (!this._shouldTickEntity(inst)) continue;
+      // === Wave R3.B (2026-05-29) — transparent-part depth sort. Runs AFTER
+      // the gate (distant entities skip, like every other per-frame body) and
+      // AFTER mixer/tween updates further below would move part frames — but
+      // it reads the CURRENT frame's world transforms, which is fine: the
+      // ordering is recomputed every frame, so a one-frame lag is invisible.
+      // Self-gates to entities with > 1 transparent part; a no-op (one truthy
+      // check) for everything else. Whole block dead when the flag is off
+      // (camera is null → the call is never reached via the truthy guard).
+      if (_sortCenterCamera) {
+        try {
+          this._tickSortCenters(inst, _sortCenterCamera);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._sortCenterTickWarned) {
+            this._sortCenterTickWarned = true;
+            console.warn(
+              `[entities/R3.B] sort-center tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+        }
+      }
       // === Wave R3.A (2026-05-28) — remote-entity motion smoothing.
       // Critically-damp the rendered position toward the latest server-
       // authoritative target stashed by `setPose`. Frame-rate independent:

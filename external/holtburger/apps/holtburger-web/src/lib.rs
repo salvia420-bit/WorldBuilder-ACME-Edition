@@ -7900,6 +7900,170 @@ fn collect_setup_model_lights<S: holtburger_dat::ResourceSource + ?Sized>(
     out
 }
 
+// === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center ===
+//
+// AC authored a per-part `GfxObj.SortCenter` (melt `GfxObj.cs:25`) — a
+// model-LOCAL point retail used to order the *transparent* parts of one
+// model back-to-front against the camera. The Rust DAT loader genuinely
+// parses it from the wire at `crates/holtburger-dat/src/file_type/gfx_obj.rs:49`
+// (`let sort_center = Vector3::read_le(reader)?;`, positioned after the
+// physics BSP and before the drawing polys, exactly where melt reads it).
+// The several `sort_center: Vector3::zero()` occurrences elsewhere in this
+// file are TEST-FIXTURE / prune-default constructions — NOT the parse path.
+//
+// This surfacing mirrors the `SetupLight` / `fetch_setup_model_lights`
+// shape (a one-shot drain bundle) but is keyed by SETUP PART INDEX so the
+// JS rig — which builds one `THREE.Group` per `setup.parts[i]` in index
+// order — can address each part's sort center directly. We surface the
+// real per-part `GfxObj.sort_center` (NOT the per-SetupModel
+// `sorting_sphere.center`, which is a single point for the whole object —
+// good for inter-object ordering, useless for ordering parts WITHIN one
+// model). The walk reuses `walk_setup_parts`, so `0x01` raw GfxObjs yield a
+// single part and `0x02` SetupModels yield one entry per part, both via the
+// same substitution/pose chain the geometry bake uses.
+
+/// Wave R3.B — one per-part sort-center descriptor drained from a
+/// SetupModel's parts. `part_index` is the `setup.parts[]` slot (matches the
+/// JS rig's `inst.parts[partIndex]` Group). `x/y/z` is the part's
+/// model-LOCAL `GfxObj.sort_center` (the offset, in part-local space, that
+/// retail added to the part frame before projecting to view-space Z). JS
+/// composes it with the live part Group's world transform per frame.
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[derive(Debug, Clone, Copy)]
+pub struct PartSortCenter {
+    pub(crate) part_index: u32,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) z: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl PartSortCenter {
+    #[wasm_bindgen(getter, js_name = partIndex)]
+    pub fn part_index(&self) -> u32 { self.part_index }
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 { self.x }
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 { self.y }
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 { self.z }
+}
+
+/// Wave R3.B — per-SetupModel sort-center bundle returned from
+/// [`fetch_setup_part_sort_centers`]. Mirrors [`SetupModelLights`]: a
+/// one-shot `take_centers()` drain so JS lifts the Vec across the wasm
+/// boundary without cloning. `part_count` is the SETUP PART count (one entry
+/// per `setup.parts[]` slot, in index order).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SetupPartSortCenters {
+    setup_id: u32,
+    centers: Vec<PartSortCenter>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SetupPartSortCenters {
+    #[wasm_bindgen(getter, js_name = setupId)]
+    pub fn setup_id(&self) -> u32 { self.setup_id }
+
+    /// Part count (one entry per `setup.parts[]` slot). Equals
+    /// `take_centers().len()` on the first call.
+    #[wasm_bindgen(getter, js_name = partCount)]
+    pub fn part_count(&self) -> u32 { self.centers.len() as u32 }
+
+    /// One-shot drain. Second call returns an empty Vec — JS callers hold
+    /// the resulting array; the wasm side stops owning it.
+    #[wasm_bindgen(js_name = takeCenters)]
+    pub fn take_centers(&mut self) -> Vec<PartSortCenter> {
+        std::mem::take(&mut self.centers)
+    }
+}
+
+/// Wave R3.B — new wasm export. Walks a SetupModel (or raw `0x01` GfxObj)
+/// and returns one [`PartSortCenter`] per part carrying that part's
+/// model-LOCAL `GfxObj.sort_center`. JS calls this once per unique
+/// `setup_id` used by transparent entities and caches it.
+///
+/// Failure modes mirror [`fetch_setup_model_lights`]: the DAT fetch /
+/// SetupModel / GfxObj parse failures resolve to an empty Vec (caller tells
+/// from `part_count == 0`). Promise rejection is reserved for prefetch
+/// errors only (network / IO).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSetupPartSortCenters)]
+pub async fn fetch_setup_part_sort_centers(
+    setup_id: u32,
+) -> Result<SetupPartSortCenters, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = collect_setup_part_sort_centers(s, setup_id);
+    })
+    .await?;
+    let centers = collect_setup_part_sort_centers(source.as_ref(), setup_id);
+    Ok(SetupPartSortCenters { setup_id, centers })
+}
+
+/// Wave R3.B — pure helper drained from a `ResourceSource`. One entry per
+/// `setup.parts[]` slot, in part-index order, each carrying the part's
+/// `GfxObj.sort_center`. Mirrors [`triangulate_model_per_part_buckets`]'s
+/// `0x01` (raw GfxObj → single part) vs `0x02` (SetupModel → per-part walk
+/// via [`walk_setup_parts`]) dispatch so JS treats all model_ids uniformly.
+/// No substitutions / pose applied here — `sort_center` is a property of the
+/// default part geometry, and a layered transparent slot like hair/cloak is
+/// a default part. Any parse failure yields an empty Vec, so JS uniformly
+/// treats "no sort data" the same way.
+#[cfg(any(target_arch = "wasm32", test))]
+fn collect_setup_part_sort_centers<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Vec<PartSortCenter> {
+    use holtburger_dat::file_type::GfxObj;
+    use holtburger_dat::ResourceKey;
+    let mut out: Vec<PartSortCenter> = Vec::new();
+    match (setup_id >> 24) as u8 {
+        0x01 => {
+            // Raw GfxObj — no Setup; a single part-0 sort center.
+            let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+            else {
+                return out;
+            };
+            let Ok(gfx) = GfxObj::unpack(&mut std::io::Cursor::new(&bytes)) else {
+                return out;
+            };
+            out.push(PartSortCenter {
+                part_index: 0,
+                x: gfx.sort_center.x,
+                y: gfx.sort_center.y,
+                z: gfx.sort_center.z,
+            });
+        }
+        0x02 => {
+            walk_setup_parts(
+                source,
+                setup_id,
+                &[],
+                &[],
+                None,
+                None,
+                |pi, gfx, _offset, _rot, _tex_swaps| {
+                    out.push(PartSortCenter {
+                        part_index: pi as u32,
+                        x: gfx.sort_center.x,
+                        y: gfx.sort_center.y,
+                        z: gfx.sort_center.z,
+                    });
+                },
+            );
+        }
+        _ => {}
+    }
+    out
+}
+
 /// Top-level per-part dispatch mirroring [`triangulate_model`]: route
 /// `0x01` (raw GfxObj) to a single-part vec, `0x02` (SetupModel) to
 /// the per-part walker.
@@ -33891,6 +34055,124 @@ mod tests_substitution {
         let mut writer = Cursor::new(&mut data);
         setup.pack(&mut writer).unwrap();
         data
+    }
+
+    // Wave R3.B — GfxObj with a NON-ZERO sort_center, so the surfacing
+    // test can prove the parsed per-part value (not a zeroed placeholder)
+    // reaches the collector. Identical to `synth_gfx_obj_one_triangle`
+    // except for the authored `sort_center`.
+    fn synth_gfx_obj_with_sort_center(
+        id: u32,
+        surface_did_marker: u32,
+        sort_center: Vector3,
+    ) -> Vec<u8> {
+        let mk_vert = |x: f32, y: f32| SWVertex {
+            num_uvs: 1,
+            origin: Vector3 { x, y, z: 0.0 },
+            normal: Vector3 { x: 0.0, y: 0.0, z: 1.0 },
+            uvs: vec![Vec2Duv { u: x, v: y }],
+        };
+        let mut vertices = HashMap::new();
+        vertices.insert(0u16, mk_vert(0.0, 0.0));
+        vertices.insert(1u16, mk_vert(1.0, 0.0));
+        vertices.insert(2u16, mk_vert(0.0, 1.0));
+        let poly = Polygon {
+            num_pts: 3,
+            stippling: 0,
+            sides_type: 1,
+            pos_surface: 0,
+            neg_surface: -1,
+            vertex_ids: vec![0, 1, 2],
+            pos_uv_indices: vec![0, 0, 0],
+            neg_uv_indices: vec![],
+        };
+        let mut polygons = HashMap::new();
+        polygons.insert(0u16, poly);
+        let gfx = GfxObj {
+            id,
+            flags: GfxObjFlags::HAS_DRAWING,
+            surfaces: vec![surface_did_marker],
+            vertex_array: CVertexArray { vertex_type: 1, vertices },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center,
+            polygons,
+            drawing_bsp: Some(BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: Some(Sphere { center: Vector3::zero(), radius: 1.0 }),
+                poly_ids: vec![0],
+            })),
+            did_degrade: None,
+        };
+        let mut data = Vec::new();
+        let mut writer = Cursor::new(&mut data);
+        gfx.pack(&mut writer).unwrap();
+        data
+    }
+
+    /// Wave R3.B — the per-part `GfxObj.sort_center` round-trips from the
+    /// wire into [`collect_setup_part_sort_centers`], one entry per
+    /// `setup.parts[]` slot in index order. Proves the surfaced value is
+    /// the genuinely-parsed per-part field (NOT a zeroed placeholder): two
+    /// parts get distinct non-zero centers and both survive the
+    /// pack→unpack→walk round-trip.
+    #[test]
+    fn collect_setup_part_sort_centers_surfaces_per_part_values() {
+        let setup_id: u32 = 0x02000077;
+        let part_a: u32 = 0x0100007A;
+        let part_b: u32 = 0x0100007B;
+        let sc_a = Vector3 { x: 1.5, y: -2.0, z: 0.25 };
+        let sc_b = Vector3 { x: -3.0, y: 4.0, z: -1.0 };
+
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), setup_id),
+            synth_setup_two_parts(setup_id, part_a, part_b),
+        );
+        files.insert(
+            ("eor/portal".into(), part_a),
+            synth_gfx_obj_with_sort_center(part_a, 0xAAAAAAAA, sc_a),
+        );
+        files.insert(
+            ("eor/portal".into(), part_b),
+            synth_gfx_obj_with_sort_center(part_b, 0xBBBBBBBB, sc_b),
+        );
+        let source = MockSource { files };
+
+        let centers = collect_setup_part_sort_centers(&source, setup_id);
+        assert_eq!(centers.len(), 2, "one entry per setup part");
+
+        assert_eq!(centers[0].part_index, 0);
+        assert_eq!(centers[0].x, sc_a.x);
+        assert_eq!(centers[0].y, sc_a.y);
+        assert_eq!(centers[0].z, sc_a.z);
+
+        assert_eq!(centers[1].part_index, 1);
+        assert_eq!(centers[1].x, sc_b.x);
+        assert_eq!(centers[1].y, sc_b.y);
+        assert_eq!(centers[1].z, sc_b.z);
+    }
+
+    /// Wave R3.B — a raw `0x01` GfxObj (no Setup) surfaces a single
+    /// part-0 sort center via the same collector.
+    #[test]
+    fn collect_setup_part_sort_centers_raw_gfxobj_single_part() {
+        let gfx_id: u32 = 0x0100008C;
+        let sc = Vector3 { x: 0.5, y: 0.0, z: -0.5 };
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), gfx_id),
+            synth_gfx_obj_with_sort_center(gfx_id, 0xCCCCCCCC, sc),
+        );
+        let source = MockSource { files };
+
+        let centers = collect_setup_part_sort_centers(&source, gfx_id);
+        assert_eq!(centers.len(), 1, "raw GfxObj = single part");
+        assert_eq!(centers[0].part_index, 0);
+        assert_eq!(centers[0].x, sc.x);
+        assert_eq!(centers[0].y, sc.y);
+        assert_eq!(centers[0].z, sc.z);
     }
 
     /// Texture swap — given a per-part `(old, new)` swap, the
