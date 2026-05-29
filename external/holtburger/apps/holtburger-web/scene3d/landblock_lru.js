@@ -64,9 +64,12 @@ function lbChebyshev(a, b) {
 }
 
 export class LandblockLRU {
-  constructor({ scene3d, maxResident, getCurrentLbId, debug = false } = {}) {
+  constructor({ scene3d, maxResident, getCurrentLbId, onEvictLandblock = null, debug = false } = {}) {
     if (!scene3d) throw new Error("LandblockLRU: scene3d required");
     this.scene3d = scene3d;
+    // Phase 6 collision-leak fix (2026-05-29): optional hook fired in evict()
+    // to purge the evicted LB's wasm-side SpatialScene collision (see evict()).
+    this._onEvictLandblock = typeof onEvictLandblock === "function" ? onEvictLandblock : null;
     // No clamp: the 3×3 always-resident ring is enforced inside
     // tickEviction's candidate filter (Chebyshev distance ≤ 1 skipped),
     // so `?lbCap=1` still keeps the 9-LB floor cleanly.
@@ -259,6 +262,16 @@ export class LandblockLRU {
     if (Array.isArray(s.terrainMaterials) && entry.disposables.materials.length > 0) {
       const dropped = new Set(entry.disposables.materials);
       s.terrainMaterials = s.terrainMaterials.filter((m) => !dropped.has(m));
+    }
+
+    // Phase 6 collision-leak fix (2026-05-29): the THREE.js render objects are
+    // gone, but the wasm SpatialScene's per-LB collision (cell + building
+    // AABBs + physics triangles + portal graph + building origins) must be
+    // purged too — `insert_cell_triangle` / `insert_building_aabb` are
+    // append-only, so without this a later re-entry re-bake APPENDS duplicates
+    // and the indices grow unbounded on every LB re-load.
+    if (this._onEvictLandblock) {
+      try { this._onEvictLandblock(lbKey); } catch (_) { /* fail-soft */ }
     }
 
     this.entries.delete(lbKey);

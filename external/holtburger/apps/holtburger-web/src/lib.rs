@@ -8864,6 +8864,18 @@ thread_local! {
         std::cell::RefCell<Vec<(u32, holtburger_common::Triangle)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// Phase 6 collision-leak fix (2026-05-29): landblock-high keys queued by
+    /// `enqueueClearLandblockCollision` (called from the JS LRU `evict`) and
+    /// drained at the TOP of each `SessionCommand::TickMovement` — BEFORE the
+    /// cell/building insert-drains — so a later re-entry re-bake REPLACES
+    /// rather than appends (`insert_cell_triangle` / `insert_building_aabb` are
+    /// append-only). Without this the wasm `SpatialScene` collision indices
+    /// grew unbounded on every landblock re-entry (the `[phase6.D]/[G]/[B]`
+    /// totals climbing on every LRU re-load).
+    static LANDBLOCK_CLEAR_PENDING:
+        std::cell::RefCell<Vec<u32>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
     /// Workstream C (3D camera collision, 2026-05-11): pending
     /// building-interior physics-triangle inserts queued by the
     /// extended `populateBuildingAabbsForLandblock` and drained by
@@ -9101,6 +9113,19 @@ fn drain_pending_cell_physics_into(scene: &mut holtburger_world::SpatialScene) -
         }
         count
     })
+}
+
+/// Phase 6 collision-leak fix (2026-05-29): JS (the LRU `evict`) calls this to
+/// queue a landblock for a wasm-side collision purge. The `TickMovement` arm
+/// drains `LANDBLOCK_CLEAR_PENDING` (before the insert-drains) and calls
+/// `clear_cells_for_landblock` + `clear_building_aabbs_for_landblock` — the
+/// latter also drops building origins + building-interior physics triangles.
+/// Keyed to landblock-high; cheap (just a queue push), fail-soft on the JS
+/// side if the export is missing on a stale wasm bundle.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = enqueueClearLandblockCollision)]
+pub fn enqueue_clear_landblock_collision(lb_id: u32) {
+    LANDBLOCK_CLEAR_PENDING.with(|c| c.borrow_mut().push(lb_id & 0xFFFF_0000));
 }
 
 /// Workstream C (3D camera collision, 2026-05-11): drain the pending
@@ -32954,6 +32979,34 @@ async fn recv_loop(
                         // `PhysicsObj.GetPhysicsRadius`) instead of
                         // the PLAYER_CAPSULE_RADIUS fallback.
                         let _drained_radii = drain_pending_setup_radii_into(w);
+                        // Phase 6 collision-leak fix (2026-05-29): purge any
+                        // landblocks the JS LRU just evicted BEFORE the
+                        // insert-drains below, so an evict+re-enter in the same
+                        // window REPLACES rather than appends (the cell/building
+                        // inserts are append-only). LRU `evict` enqueues via
+                        // `enqueueClearLandblockCollision`. clear_cells_* purges
+                        // portal edges/AABBs/triangles/polygons;
+                        // clear_building_aabbs_* purges building AABBs + origins
+                        // + building-interior physics triangles.
+                        let purged_lbs = LANDBLOCK_CLEAR_PENDING.with(|c| {
+                            let mut buf = c.borrow_mut();
+                            let n = buf.len();
+                            for lb in buf.drain(..) {
+                                w.scene.clear_cells_for_landblock(lb);
+                                w.scene.clear_building_aabbs_for_landblock(lb);
+                            }
+                            n
+                        });
+                        if purged_lbs > 0 {
+                            console_log_str(&format!(
+                                "[phase6.U] purged collision for {purged_lbs} evicted \
+                                 landblock(s) (graph now {} cells, {} cell AABBs, \
+                                 {} building AABBs)",
+                                w.scene.cell_portal_graph_len(),
+                                w.scene.cell_aabb_count(),
+                                w.scene.building_aabb_count(),
+                            ));
+                        }
                         // Phase 6 step B follow-up: drain any
                         // building-AABB inserts queued by JS-side
                         // `populateBuildingAabbsForLandblock` calls.

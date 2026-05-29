@@ -3059,6 +3059,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     const landblockLru = new LandblockLRU({
       scene3d: liveScene3d,
       maxResident: lbCap,
+      // Phase 6 collision-leak fix (2026-05-29): on evict, enqueue a wasm-side
+      // purge of this LB's SpatialScene collision (cell/building AABBs +
+      // physics triangles + portal graph) so a re-entry re-bake REPLACES
+      // rather than appends. Fail-soft (`?.`) if the export is absent on a
+      // stale wasm bundle.
+      onEvictLandblock: (lbKey) => {
+        try { wasmExports.enqueueClearLandblockCollision?.(lbKey >>> 0); } catch (_) {}
+      },
       // Resolve the player's current LB from the integrator-driven rig
       // position. `applyLocalPlayerPoseFromIntegrator` writes the rig
       // position each rAF tick; reading it here is one frame stale at
