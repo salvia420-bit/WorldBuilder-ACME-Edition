@@ -39,6 +39,48 @@ function readEntityLightsFlag() {
   }
 }
 
+// === Wave R3.A — remote-entity motion SMOOTHING (2026-05-28) ===
+// `?deadReckon=on` opt-in. Default OFF → remote entities snap to each
+// server-authoritative position exactly as before (byte-identical render).
+// On → the manager-level `setPose(guid, …)` stashes the server pose as a
+// per-entity target and the per-frame `tick(dt)` critically-damps the
+// rendered `root.position` toward it, killing the inter-packet stutter on
+// other players / NPCs. SMOOTHING ONLY — no velocity prediction, no wasm
+// changes (that's the documented follow-on). Same flag-reader shape as
+// `readEntityLightsFlag`; read once in the constructor into
+// `this._deadReckonOn` and consumed via `this.` (no cross-function handoff).
+function readDeadReckonFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("deadReckon");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Critical-damping rate for the position ease: factor = 1 - exp(-k·dt).
+// k=12 gives ~70% of the gap closed in 100 ms and ~95% in 250 ms — fast
+// enough that the rig tracks a steady walk with no perceptible lag, slow
+// enough that the per-packet position jitter (server PositionUpdate cadence
+// is a handful per second) is smoothed into a continuous glide rather than a
+// staircase. Frame-rate independent by construction (the exp form), so the
+// settle time is identical at 30 / 60 / 144 fps. Exposed as a named const for
+// 1070 eye-test tuning.
+const DEAD_RECKON_DAMP_K = 12.0;
+// Teleport / landblock-transition snap threshold (world metres). Under normal
+// locomotion the gap between the rendered pose and a fresh server pose is at
+// most a metre or two (AC run speed ~5–6 m/s ÷ the few-Hz update cadence). A
+// teleport or landblock hand-off moves the entity tens-to-hundreds of metres
+// in a single update (a landblock is 192 m square); easing across that would
+// visibly slide the rig across the map. 8 m sits well above any single-packet
+// locomotion delta yet far below a landblock hop, so genuine motion smooths
+// while jumps snap. squared-distance compared against this avoids a sqrt on
+// the hot path.
+const DEAD_RECKON_TELEPORT_SNAP_M = 8.0;
+const DEAD_RECKON_TELEPORT_SNAP_SQ =
+  DEAD_RECKON_TELEPORT_SNAP_M * DEAD_RECKON_TELEPORT_SNAP_M;
+
 // === Wave R2.A — per-quality-preset cap on the TOTAL number of entity-
 // attached lights created across all entities. WebGL2 has a hard per-scene
 // light-uniform limit and MeshStandardMaterial recompiles its shader when the
@@ -1250,6 +1292,14 @@ export class EntityManager {
     // feature is off / the entity carries no lights.
     this._entityLightCount = 0;
     this._entityLightCapHitLogged = false;
+    // === Wave R3.A (2026-05-28) — remote-entity motion smoothing.
+    // Read the `?deadReckon=on` opt-in HERE (constructor) so every consumer
+    // (`setPose`, `tick`) reads `this._deadReckonOn` — no cross-function flag
+    // handoff (avoids the prior-wave ReferenceError where a flag was declared
+    // in one function and read in another). Default OFF → the snap path in
+    // `setPose` runs exactly as before (byte-identical), no target stored, no
+    // tick smoothing.
+    this._deadReckonOn = readDeadReckonFlag();
     /** @type {Map<number, EntityInstance>} */
     this.entityMap = new Map();
     /** @type {AnimationCache} */
@@ -2128,11 +2178,77 @@ export class EntityManager {
 
   /**
    * Update transform from PositionUpdate. No animation switch.
+   *
+   * This is the SERVER-AUTHORITATIVE position-update path: it's invoked from
+   * `loop.js` (the KIND_POSITION drain + the local-player integrator sync) and
+   * is distinct from the spawn / respawn / appearance-hotswap path, which
+   * calls `EntityInstance.setPose(…)` directly (so those always snap — first
+   * placement and pose-preserve respawns never glide).
+   *
+   * Wave R3.A (2026-05-28) — when `?deadReckon=on` AND the entity is a REMOTE
+   * one (NOT the local player, which owns its own client-side prediction and
+   * must not be fought), the server pose is stashed as a per-entity target and
+   * `tick(dt)` critically-damps `root.position` toward it. Default OFF, or for
+   * the local player, falls through to the byte-identical snap below.
    */
   setPose(guid, x, y, z, qw, qx, qy, qz) {
-    const inst = this.entityMap.get(guid >>> 0);
+    const g = guid >>> 0;
+    const inst = this.entityMap.get(g);
     if (!inst) return;
+    // Wave R3.A — remote-entity smoothing gate. Rotation always snaps (heading
+    // is already normalized upstream); only POSITION is eased.
+    if (this._deadReckonOn && !this._isLocalPlayerGuid(g)) {
+      // Orientation snaps as before — re-uses EntityInstance.setPose's
+      // quaternion path by writing the rotation directly, leaving position to
+      // the ease in tick(). (Calling inst.setPose here would snap position,
+      // defeating the smoothing.)
+      inst.root.quaternion.copy(acQuatToThree(qw, qx, qy, qz));
+      if (inst.airborneTilt) {
+        inst.root.quaternion.multiply(inst.airborneTilt);
+      }
+      // Lazily allocate the per-entity target vector (reused in place — no
+      // per-update allocation).
+      let tgt = inst._serverTargetPos;
+      if (!tgt) {
+        tgt = inst._serverTargetPos = new THREE.Vector3();
+      }
+      // Teleport / landblock-transition detection: compare the NEW server pose
+      // against the entity's CURRENT rendered position. A large jump (or a
+      // first server update arriving far from the spawn pose) snaps so the rig
+      // doesn't glide across the map; otherwise it eases.
+      const cur = inst.root.position;
+      const dx = x - cur.x;
+      const dy = y - cur.y;
+      const dz = z - cur.z;
+      if (dx * dx + dy * dy + dz * dz > DEAD_RECKON_TELEPORT_SNAP_SQ) {
+        // Snap: move both the rendered position AND the target so tick() has
+        // nothing left to drag toward.
+        cur.set(x, y, z);
+      }
+      tgt.set(x, y, z);
+      return;
+    }
     inst.setPose(x, y, z, qw, qx, qy, qz);
+  }
+
+  /**
+   * Wave R3.A — true when `guid` is the local player. Resolved via the same
+   * `window.getLocalPlayerGuid()` global the rest of this file uses
+   * (`getEquippedWeapon`, `getKnownSpells`, the spawn-diag at ~line 1356).
+   * Returns false outside a browser (Node harness) or when no local player is
+   * identified yet — so the smoothing path simply never excludes anyone, which
+   * is safe (the Node harness has no live local player).
+   */
+  _isLocalPlayerGuid(guid) {
+    try {
+      if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+        const lpg = window.getLocalPlayerGuid();
+        if (lpg !== null && lpg !== undefined) {
+          return (lpg >>> 0) === (guid >>> 0);
+        }
+      }
+    } catch (_) {}
+    return false;
   }
 
   /**
@@ -5628,6 +5744,26 @@ export class EntityManager {
       // readable for downstream consumers. Animation snap on
       // re-entry is the documented MVP trade.
       if (!this._shouldTickEntity(inst)) continue;
+      // === Wave R3.A (2026-05-28) — remote-entity motion smoothing.
+      // Critically-damp the rendered position toward the latest server-
+      // authoritative target stashed by `setPose`. Frame-rate independent:
+      // factor = 1 - exp(-k·dt). Runs BEFORE the velocity-scale EMA below so
+      // the anti-ice-skating gait reads the (smoothed) motion that's actually
+      // rendered. Gated on (a) the flag and (b) an active target — so when
+      // `?deadReckon` is absent NO target is ever stored and this whole block
+      // is a single truthy check then skip (byte-identical to pre-R3.A). The
+      // teleport snap + local-player exclusion both live in `setPose`; by the
+      // time a target exists here it's already a remote entity that should
+      // glide. Jump/swing/cast/scale tweens move root.quaternion + scale (NOT
+      // position) for remote entities, so easing position never fights them.
+      if (this._deadReckonOn && inst._serverTargetPos) {
+        const tgt = inst._serverTargetPos;
+        const pos = inst.root.position;
+        const factor = 1 - Math.exp(-DEAD_RECKON_DAMP_K * dt);
+        pos.x += (tgt.x - pos.x) * factor;
+        pos.y += (tgt.y - pos.y) * factor;
+        pos.z += (tgt.z - pos.z) * factor;
+      }
       // T11 — velocity-scaled locomotion playback (anti-ice-skating). Derive
       // an EMA-smoothed ground speed from the rig's horizontal (XZ) world-
       // position delta this frame, then scale the active loco cycle's
