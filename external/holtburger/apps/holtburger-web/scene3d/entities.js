@@ -1874,6 +1874,7 @@ export class EntityManager {
               surfaceType: (sp.surfaceType ?? 0) >>> 0,
               translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
               luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
+              diffuse: typeof sp.diffuse === "number" ? sp.diffuse : 0.0,
             };
             if (typeof sp.free === "function") sp.free();
             let mat;
@@ -2403,6 +2404,7 @@ export class EntityManager {
     if (flags === 0) return; // fail-soft: empty/fallback surface stays opaque
     const sfTranslucency = +(state.translucency ?? 0.0);
     const sfLuminosity = +(state.luminosity ?? 0.0);
+    const sfDiffuse = +(state.diffuse ?? 0.0);
     const isTranslucent = (flags & SURFACE_TYPE.Translucent) !== 0;
     const isClipMap = (flags & SURFACE_TYPE.Base1ClipMap) !== 0;
     const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0;
@@ -2448,6 +2450,14 @@ export class EntityManager {
       // to (0, 2] (ACE ~[0,1] with occasional HDR pushes).
       mat.emissive = new THREE.Color(0xffffff);
       mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
+    }
+    // Diffuse-reflectance albedo tint — parity with _materialFromFlags
+    // (materials.js:1839; retail acclient.c:454458). No-op at d≈1 (~96% of
+    // surfaces); dims the d≠1 minority. Multiplies with the (recolored) map.
+    // C1 originally omitted this, so paletted/dyed gear skipped the dim that
+    // the plain path applies.
+    if (sfDiffuse > 0 && Math.abs(sfDiffuse - 1.0) > 0.01) {
+      mat.color = new THREE.Color(sfDiffuse, sfDiffuse, sfDiffuse);
     }
     mat.needsUpdate = true;
   }
@@ -4981,6 +4991,7 @@ export class EntityManager {
             surfaceType: (sp.surfaceType ?? 0) >>> 0,
             translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
             luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
+            diffuse: typeof sp.diffuse === "number" ? sp.diffuse : 0.0,
           };
           if (typeof sp.free === "function") sp.free();
           const mat = new THREE.MeshStandardMaterial({
