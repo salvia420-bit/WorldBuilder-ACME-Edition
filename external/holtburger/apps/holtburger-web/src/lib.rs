@@ -4551,6 +4551,60 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     Some((frames, frame_times, duration, resolved_stance))
 }
 
+/// T11 (2026-05-28) — authored ground speed of a locomotion cycle:
+/// `|MotionData.velocity|` (m/s) for `(stance, command)`. This is the
+/// `baseSpeed` the JS `cycleTimeScale(actualSpeed, baseSpeed)` divides by to
+/// scale walk/run cycle playback so foot-speed tracks ground travel (retail
+/// `AnimData.Framerate = base * speed`). Returns `0.0` when the cycle has no
+/// velocity (`flags` lacks `HAS_VELOCITY`) or doesn't resolve — JS treats 0 as
+/// "no scaling". `stance == 0` → the MotionTable's `default_style`. Pure given
+/// a parsed table, so it's host-unit-testable.
+#[cfg(any(target_arch = "wasm32", test))]
+fn motion_cycle_base_speed(
+    mtable: &holtburger_dat::file_type::MotionTable,
+    stance: u32,
+    command: u32,
+) -> f32 {
+    let resolved_stance = if stance == 0 {
+        mtable.default_style
+    } else {
+        stance
+    };
+    match mtable.motion_data_for_cycle(resolved_stance, command) {
+        Some(md) => md
+            .velocity
+            .map(|v| (v.x * v.x + v.y * v.y + v.z * v.z).sqrt())
+            .unwrap_or(0.0),
+        None => 0.0,
+    }
+}
+
+/// T11 — wasm export: authored ground speed (`|MotionData.velocity|`) of a
+/// locomotion cycle, for the JS anti-ice-skating `cycleTimeScale`. JS already
+/// holds the resolved `mtableId` (it keys the AnimationCache by it), so this
+/// takes it directly rather than re-resolving via the SetupModel. Returns
+/// `0.0` for a non-MotionTable / unloadable id or an unresolved cycle. Cheap
+/// after first call — `global_source` caches the MotionTable.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = cycleBaseSpeed)]
+pub async fn cycle_base_speed(mtable_id: u32, stance: u32, command: u32) -> f32 {
+    use holtburger_dat::file_type::MotionTable;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    if mtable_id == 0 || (mtable_id >> 24) != 0x09 {
+        return 0.0;
+    }
+    let source = global_source::global_source();
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", mtable_id)) {
+        Ok(b) => b,
+        Err(_) => return 0.0,
+    };
+    let mtable = match MotionTable::read(&mut std::io::Cursor::new(&bytes)) {
+        Ok(m) => m,
+        Err(_) => return 0.0,
+    };
+    motion_cycle_base_speed(&mtable, stance, command)
+}
+
 /// 2026-05-18 motion-table-x-envcell experiment: resolve a transition
 /// (link) clip for `(stance, from_command) → to_command`. Same DAT-
 /// walk pattern as `try_resolve_cycle_frames` but uses
@@ -35782,6 +35836,47 @@ mod tests_soa_parity {
         assert_eq!(cts[7], 255);
         assert_eq!(ct[7], 3);
         assert!(uq.is_empty());
+    }
+
+    /// **T11 (2026-05-28).** `motion_cycle_base_speed` returns the authored
+    /// cycle ground speed (`|MotionData.velocity|`); resolves `stance == 0`
+    /// to the MotionTable's `default_style`; returns 0 for an unknown cycle.
+    #[test]
+    fn motion_cycle_base_speed_reads_velocity_magnitude() {
+        use holtburger_common::math::Vector3;
+        use holtburger_dat::file_type::motion_table::{MotionData, MotionDataFlags};
+        use holtburger_dat::file_type::MotionTable;
+        use std::collections::HashMap;
+
+        let stance = 0x8000_0001u32;
+        let command = MotionTable::WALK_FORWARD_COMMAND;
+        // Mirror the private `cycle_key`: (stance&0xFFFF)<<16 | (cmd&0x000FFFFF).
+        let key = ((stance & 0xFFFF) << 16) | (command & 0x000F_FFFF);
+
+        let md = MotionData {
+            bitfield: 0,
+            flags: MotionDataFlags::HAS_VELOCITY,
+            anims: Vec::new(),
+            velocity: Some(Vector3 { x: 3.0, y: 4.0, z: 0.0 }), // |v| = 5
+            omega: None,
+        };
+        let mut cycles = HashMap::new();
+        cycles.insert(key, md);
+        let mt = MotionTable {
+            id: 0x0900_0001,
+            default_style: stance,
+            style_defaults: HashMap::new(),
+            cycles,
+            modifiers: HashMap::new(),
+            links: HashMap::new(),
+        };
+
+        // Explicit stance → |(3,4,0)| = 5.
+        assert!((motion_cycle_base_speed(&mt, stance, command) - 5.0).abs() < 1e-4);
+        // stance == 0 → default_style (== stance) → same cycle.
+        assert!((motion_cycle_base_speed(&mt, 0, command) - 5.0).abs() < 1e-4);
+        // Unknown command → 0 (no scaling).
+        assert_eq!(motion_cycle_base_speed(&mt, stance, 0x4500_00FF), 0.0);
     }
 }
 

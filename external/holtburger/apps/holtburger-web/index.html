@@ -993,6 +993,10 @@
         fetchEntityModelRender,
         fetchEntityCycleFrames,
         fetchEntityAnimationKeyframes,
+        // T11 (2026-05-28) — authored cycle ground speed (|MotionData.velocity|)
+        // for velocity-scaled locomotion playback (?velScale=on). Consumed by
+        // scene3d/entities.js; MUST be threaded through the init3D opts below.
+        cycleBaseSpeed,
         // F.40 (2026-05-14) — batched fetchEntityAnimationKeyframes.
         // ONE wasm call walks N setups in a single prefetch loop;
         // `scene3d/spawns.js` pre-warms the AnimationCache via this
@@ -1054,7 +1058,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=t1-texmerge-20260528";
+      } from "./pkg/holtburger_web.js?v=t11-velscale-20260528";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -6549,6 +6553,10 @@ void main() {
             fetchEntityModelRender,
             fetchEntityCycleFrames,
             fetchEntityAnimationKeyframes,
+            // T11 (2026-05-28) — cycle base speed for ?velScale=on. Without
+            // this line entities.js's `this.wasmExports?.cycleBaseSpeed` guard
+            // fails and the velocity scaling silently no-ops (plumb-through trap).
+            cycleBaseSpeed,
             // Wave 7.4 (2026-05-24) — spawn-time entity LOD: read by
             // EntityManager._spawnImpl. Without this listed in init3D
             // opts the export is invisible to entities.js and every

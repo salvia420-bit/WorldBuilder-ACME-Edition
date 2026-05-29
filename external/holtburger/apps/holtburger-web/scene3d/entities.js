@@ -125,9 +125,25 @@ import {
   surfacePixelsToTexture,
   acQuatToThree,
 } from "./adapter.js";
-import { AnimationCache } from "./animation.js";
+import { AnimationCache, cycleTimeScale } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import { materialCanCastShadow } from "./materials.js";
+
+// T11 (2026-05-28) — `?velScale=on` gates velocity-scaled locomotion cycle
+// speed (anti-ice-skating): the walk/run cycle's playback rate is scaled by
+// actual ground speed / authored cycle speed (|MotionData.velocity|). Default
+// OFF (eye-test-tuned gait change); read once at module load. try/catch for
+// the Node test harness (no `window`).
+const VEL_SCALE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("velScale")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 
 // AC InterpretedMotionCommand low-16 constants — used for
@@ -1157,6 +1173,10 @@ export class EntityManager {
     this.entityMap = new Map();
     /** @type {AnimationCache} */
     this.animationCache = new AnimationCache();
+    // T11 — authored cycle ground speeds (|MotionData.velocity|) keyed by the
+    // AnimationCache cacheKey, memoised across entities sharing a cycle.
+    /** @type {Map<string, number>} */
+    this._cycleBaseSpeedCache = new Map();
     this.materialCache = scene3d?.materialCache ?? null;
     /** @type {Map<number, Promise<EntityInstance|null>>} */
     this.spawnInFlight = new Map();
@@ -3433,6 +3453,30 @@ export class EntityManager {
   }
 
   /**
+   * T11 — resolve a locomotion cycle's authored ground speed
+   * (`|MotionData.velocity|`, m/s) via the wasm `cycleBaseSpeed` export and
+   * stash it on the entity so `tick()` can scale playback to actual ground
+   * travel. Memoised by cacheKey across entities. Stores `inst._locoBaseSpeed`
+   * only if the cycle is still the entity's active loco cycle when the (async)
+   * fetch resolves. No-op without the export (older wasm).
+   */
+  async _resolveCycleBaseSpeed(inst, mtableId, stance, cmd, cacheKey) {
+    const fn = this.wasmExports?.cycleBaseSpeed;
+    if (typeof fn !== "function") return;
+    let bs = this._cycleBaseSpeedCache.get(cacheKey);
+    if (bs === undefined) {
+      try {
+        bs = await fn(mtableId >>> 0, stance >>> 0, cmd >>> 0);
+      } catch (_) {
+        bs = 0;
+      }
+      if (!Number.isFinite(bs) || bs < 0) bs = 0;
+      this._cycleBaseSpeedCache.set(cacheKey, bs);
+    }
+    if (inst._locoCycleKey === cacheKey) inst._locoBaseSpeed = bs;
+  }
+
+  /**
    * Update motion command/stance. Triggers async fetch + crossFade
    * to a new action when needed. Idempotent: already-playing
    * (cmd, stance) is a no-op.
@@ -3562,6 +3606,15 @@ export class EntityManager {
     // Locomotion. Build the cache key the same way the spawn path did
     // (resolvedStance falls back to the entity's first-bake stance).
     const cacheKey = AnimationCache.makeKey(setupId, mtableId, cmd, stance);
+    // T11 — mark this as the entity's active locomotion cycle and resolve its
+    // authored ground speed (async, memoised) so the per-frame tick can scale
+    // playback to actual ground travel. Only walk/run-family cycles (sidestep
+    // / turn-in-place / fall also classify "walk"; their |velocity| is ~0 →
+    // cycleTimeScale no-ops). Gated by ?velScale=on.
+    if (VEL_SCALE_ON && (cls === "walk" || cls === "run")) {
+      inst._locoCycleKey = cacheKey;
+      this._resolveCycleBaseSpeed(inst, mtableId, stance, cmd, cacheKey);
+    }
     if (cacheKey === inst.currentActionKey) return; // already playing
     this.motionSwitchCount += 1;
     inst.actionLastUsedMs.set(cacheKey, performance.now());
@@ -5199,6 +5252,31 @@ export class EntityManager {
       // readable for downstream consumers. Animation snap on
       // re-entry is the documented MVP trade.
       if (!this._shouldTickEntity(inst)) continue;
+      // T11 — velocity-scaled locomotion playback (anti-ice-skating). Derive
+      // an EMA-smoothed ground speed from the rig's horizontal (XZ) world-
+      // position delta this frame, then scale the active loco cycle's
+      // playback rate by (actual / authored). Set BEFORE mixer.update so the
+      // rate applies this frame. cycleTimeScale clamps [0.25, 4.0], so a
+      // server-pose snap can't freeze or hyper-spin the rig. ?velScale=on only.
+      if (VEL_SCALE_ON) {
+        const p = inst.root.position;
+        if (inst._velPrevX !== undefined) {
+          const dx = p.x - inst._velPrevX;
+          const dz = p.z - inst._velPrevZ;
+          const sp = Math.hypot(dx, dz) / dt;
+          inst._emaSpeed =
+            inst._emaSpeed === undefined ? sp : inst._emaSpeed * 0.7 + sp * 0.3;
+        }
+        inst._velPrevX = p.x;
+        inst._velPrevZ = p.z;
+        const base = inst._locoBaseSpeed;
+        if (base > 0 && inst._locoCycleKey) {
+          const locoAction = inst.actions.get(inst._locoCycleKey);
+          if (locoAction && locoAction.isRunning()) {
+            locoAction.setEffectiveTimeScale(cycleTimeScale(inst._emaSpeed ?? 0, base));
+          }
+        }
+      }
       try {
         inst.mixer.update(dt);
       } catch (e) {

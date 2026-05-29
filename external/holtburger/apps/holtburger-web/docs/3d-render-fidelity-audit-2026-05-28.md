@@ -441,3 +441,40 @@ The **selection core** (`terrain_merge.rs`, shipped earlier) is now wired throug
   tcode bit semantics) render coherently here but would be definitively pinned at a
   grass↔dirt↔water biome edge. `rotateCellUv` 90°/270° branches and the `[NW,NE,SE,SW]` corner
   order are the two knobs to flip if a dramatic edge shows misplaced overlays.
+
+---
+
+# T11 — velocity-scaled cycle speed — PREMISE FALSIFIED (2026-05-28, late)
+
+**The audit's T11 spec is wrong: retail does NOT author locomotion-cycle ground speed on
+`MotionData.velocity`.** Grounded against the real `client_portal.dat`
+(`dump_cycle_velocity` example): the player MotionTable `0x09000001` has **0 of 366 cycles**
+with `HAS_VELOCITY` (and 0 of 962 links); only **1 of 8 modifiers** carries velocity — which
+proves the parser reads velocity correctly when present, so the cycles genuinely lack it. A
+creature MT (`0x09000115`) is the same. So `baseSpeed = |MotionData.velocity|` is **always 0**
+for walk/run cycles → `cycleTimeScale` always returns 1.0 (no-op). Confirmed live on the 1070:
+a probe drove the player forward — the EMA ground-speed signal ramped correctly (0 → ~1 m/s),
+but `cycleBaseSpeed(playerMT, stance, RunForward) == 0`, so the applied timeScale stayed 1.0.
+
+**What retail actually does** (`acclient.c`): `change_cycle_speed` (@337269) scales the cyclic
+framerate by `new_speed / old_speed` via `CSequence::multiply_cyclic_animation_fr`, where
+`speed` is the character's **run-rate-adjusted movement speed** from
+`CMotionInterp::apply_run_to_command` (@343439 — multiplies the command speed by the weenie's
+run_factor, and converts WalkForward to RunForward when speed > 0). It's a RELATIVE ratio with
+no absolute authored base speed: the cycle's framerate starts at the AnimData rate at
+first-play and tracks subsequent speed changes proportionally. There is no
+`|MotionData.velocity|` baseline to divide by.
+
+**What shipped (inert + documented), behind `?velScale=on` (default off):**
+- `cycleTimeScale(actual, base)` helper (pre-existing, unit-tested) + Rust
+  `motion_cycle_base_speed` + `cycleBaseSpeed` wasm export (returns `|MotionData.velocity|` —
+  correct, but 0 for all real cycles) + a JS per-frame EMA ground-speed tick that applies
+  `setEffectiveTimeScale(cycleTimeScale(...))` to the active loco cycle. The ground-speed infra
+  + the export are a reusable foundation; the apply is a verified no-op until a real base-speed
+  source exists. Tests: web 75/75 (`motion_cycle_base_speed_reads_velocity_magnitude`), dat
+  11/11 (terrain_merge), JS contracts green.
+- **To make T11 actually work** needs one of: (a) the faithful retail relative-ratio (track
+  speed-at-play-start, scale by `current/initial`), or (b) a hardcoded per-cycle reference run
+  speed (AC's known base speeds), eye-test-tuned. Both are beyond the audit's "surface velocity
+  + apply" framing. **Recommendation: re-scope or defer T11** — the inert mechanism is harmless
+  and the finding is the deliverable.
