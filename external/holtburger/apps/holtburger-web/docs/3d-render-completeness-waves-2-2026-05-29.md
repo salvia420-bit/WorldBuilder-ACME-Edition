@@ -119,3 +119,21 @@
 4. **G1** distant foliage faces camera (toggle `?billboard=off` to A/B).
 5. **W3** rain on the default path (no `?clouds`), **W5** stops in dungeons, **W2** snow in cold DayGroups.
 6. **Flags to sweep:** `?lightClamp=retail` (L3 linear falloff), `?flatDiffuse=retail` (L4 matte metal), `?texMerge` (T2 authored road masks), `?skyWeather=on`+`?skyWeatherGain=` (W1 with atmosphere — **tune the gain here**).
+
+---
+
+## SHIPPED STATUS — WAVE 2 (2026-05-29)
+
+Grounded first against `acclient.c/h/txt` + ACE + DRW + a real `client_portal.dat` survey (2 read-only agents). Outcome: **G2 shipped; A2 + A4 surveyed and deliberately DEFERRED** (the doc pre-authorized this — "survey population first" / "diminishing returns").
+
+- **A7 TEXTURE-SAMPLER — G2 SHIPPED (default-on, fail-soft, JS-only — no wasm change; `surfaceType` already on JS at `lib.rs:5514`).** Retail `SetSurface` (`acclient.c:454437`) defaults object-surface sampler addressing to **CLAMP**, selecting **WRAP** only when `surfaceType & Stippled (0x40000000)`. `_materialFromFlags` (`materials.js`) now derives wrap from the Stippled bit and applies `ClampToEdgeWrapping` (default) / `RepeatWrapping` (stippled) to the base/normal/height object textures; `flags==0` → CLAMP. **Terrain textures (`adapter.js` detail-tile + terrain-detail-normal-array) left as `RepeatWrapping` — out of G2 scope, terrain tiles by design.** Animated frames inherit base wrap automatically.
+
+- **A8 ANIM-EXTRAS — A2 + A4 DEFERRED (grounded TODOs written into the source).**
+  - **A2 (Modifiers):** survey of `client_portal.dat` = 300/436 tables (68.8%) carry modifiers, but **all 1222 entries are anim-free** velocity/omega kinematic overlays (turn commands keeping angular velocity during a locomotion cycle; `combine_motion` `acclient.c:337477`, `re_modify` `:337286`; ACE `MotionTable.cs:381/440`). The doc's "second concurrent mixer action" framing is **wrong** — there is no second clip. The real fix is entity movement/physics integration (gated on command class `0x20000000`), which holtburger doesn't run (it renders from server positions). **No visual payoff today → deferred.** Grounded TODO at `crates/holtburger-dat/.../motion_table.rs` (`modifiers` field).
+  - **A4 (multi-hop links):** `_tryPlayLink` (actually `entities.js:5346`, doc said ~5303) is single-hop; retail synthesizes a via-default two-hop chain (`GetObjectSequence` `acclient.c:337641`, ACE `MotionTable.cs:121-188`) only when a direct link is absent. Current crossfade fallback is visually acceptable; the fix is high-effort and depends on the unbuilt A2 machinery (`re_modify`). **Diminishing returns → deferred.** Grounded TODO in `_tryPlayLink`'s doc comment. (Intra-link multi-segment chaining is already handled by `try_resolve_link_frames`, T4.)
+
+### Doc citation corrections (from Wave-2 grounding)
+- `_tryPlayLink` is `entities.js:5346` (not ~5303). `add_motion` header is `acclient.c:337431` (337465 is mid-loop). `motion_table.rs:16` (modifiers) + ACE `MotionTable.cs:234`/`60-256` confirmed correct. G2: Stippled `0x40000000` on `SurfaceType` + retail CLAMP/WRAP at `acclient.c:454437` confirmed correct.
+
+### Wave-2 validation / eye-test
+`node --check` + ESM `import()` parse clean on changed files; `cargo check -p holtburger-dat` clean (A2 TODO is a doc-comment). G2 eye-test on 1070: faint edge-bleed **seams gone** on non-stippled object surfaces (buildings/statics/items); stippled surfaces still tile; terrain unchanged.

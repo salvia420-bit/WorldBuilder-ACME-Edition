@@ -13,6 +13,23 @@ pub struct MotionTable {
     pub default_style: u32,
     pub style_defaults: HashMap<u32, u32>,
     pub cycles: HashMap<u32, MotionData>,
+    /// A2 (waves-2, surveyed + DEFERRED 2026-05-29 — parsed, NOT consumed).
+    /// Survey of real client_portal.dat: 300/436 tables (68.8%) carry
+    /// modifiers, but ALL 1222 entries are anim-free (0 anims) — they are
+    /// pure velocity/omega kinematic overlays keyed to the turn commands
+    /// (0x0D/0x0E/0x0F/0x10) under each stance, gated by the Modifier command
+    /// class 0x20000000. Retail applies them via `combine_motion`
+    /// (acclient.c:337477; ACE MotionTable.cs:381) — which adds Velocity*speed
+    /// + Omega*speed and NO animation — re-applied after every cycle/link
+    /// switch by `re_modify` (acclient.c:337286) so a turn keeps its angular
+    /// velocity through a walk→run transition. NOTE: the waves-2 doc's framing
+    /// of this as "secondary/overlay motions → a second concurrent mixer
+    /// action" is WRONG; there is no second clip. The correct fix lives in
+    /// entity movement/physics integration (gated on 0x20000000, with a
+    /// per-entity persistent modifier list mirroring MotionState.Modifiers),
+    /// NOT the Three.js animation mixer. Deferred because holtburger renders
+    /// entities from server position updates and does not integrate
+    /// motion-table velocity/omega client-side → no visual payoff today.
     pub modifiers: HashMap<u32, MotionData>,
     pub links: HashMap<u32, HashMap<u32, MotionData>>,
 }

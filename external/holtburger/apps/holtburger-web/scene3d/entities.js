@@ -5342,6 +5342,22 @@ export class EntityManager {
    * rig animates the transition before the destination cycle takes
    * over. On miss, no-op — caller's existing crossfade-to-cycle
    * path runs unchanged.
+   *
+   * A4 (waves-2, DEFERRED 2026-05-29 — grounded, not implemented). This is
+   * SINGLE-HOP: one direct `(stance, fromCmd → toCmd)` link. Retail
+   * `GetObjectSequence` (acclient.c:337641; ACE MotionTable.cs:121-188) does
+   * a VIA-DEFAULT two-hop when no direct link exists: exit-link
+   * (currentSubstate → style default) + entry-link (default → target) +
+   * dest-cycle + `re_modify`, concatenated into one Sequence (e.g. Run→Ready
+   * →Crouch when Run→Crouch is absent). We do NOT synthesize that here — on a
+   * direct-link miss the caller falls back to a plain crossfade, which is
+   * visually acceptable. Deferred as diminishing-returns: the gap only fires
+   * on exotic state-to-state transitions a viewer rarely sees framed, the
+   * fix is high-effort (multi-record Sequence concat), and `re_modify`
+   * depends on the A2 modifier machinery that is intentionally unbuilt
+   * (see [[render-completeness-waves2]] / motion_table.rs `modifiers`).
+   * Intra-link multi-segment chaining (windup→strike→recover within ONE link
+   * record) IS already handled by try_resolve_link_frames (T4, lib.rs).
    */
   async _tryPlayLink(inst, setupId, mtableId, fromCmd, toCmd, stance) {
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;

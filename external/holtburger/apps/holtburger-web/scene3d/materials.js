@@ -1935,6 +1935,34 @@ export class MaterialCache {
     // translucent too — the clamp only affects direct DIFFUSE/SPECULAR
     // accumulation, which an additive surface still computes.
     _installLightClampShaderPatch(mat);
+    // === G2 (waves-2, 2026-05-29) — object-surface texture wrap mode ======
+    // Retail `D3DPolyRender::SetSurface` (acclient.c:454437) sets the sampler
+    // address mode from the Stippled bit: `!stippled ? (v6 = 3) : (v6 = 1)`
+    // then `SetSamplerAddressMode(dev, 0, v6, v6)` for BOTH U and V, where
+    // 3 = TEXADDRESS_CLAMP (acclient.h:5261), 1 = TEXADDRESS_WRAP
+    // (acclient.h:5259). So normal object surfaces CLAMP (don't tile); only
+    // Stippled surfaces (SurfaceType 0x40000000, acclient.h:5833 / ACE
+    // SurfaceType.cs:19) WRAP. adapter.js's `surfacePixelsTo*Texture`
+    // hardcode `RepeatWrapping`; override it here per-surface now that the
+    // textures are in hand. three.js mapping: CLAMP → ClampToEdgeWrapping,
+    // WRAP → RepeatWrapping. FAIL-SOFT: `flags===0` (empty/fallback surface)
+    // → ClampToEdge (retail default = non-tiling). Cached animated frames
+    // inherit the base texture's wrapS/wrapT downstream, so fixing `texture`
+    // propagates to them. Terrain detail/atlas textures are OUT OF SCOPE
+    // (they tile by design) and never pass through this object path.
+    const isStippled = (flags & SURFACE_TYPE.Stippled) !== 0;
+    const wrapMode = isStippled
+      ? THREE.RepeatWrapping
+      : THREE.ClampToEdgeWrapping;
+    if (texture) {
+      texture.wrapS = texture.wrapT = wrapMode;
+    }
+    if (normalTexture) {
+      normalTexture.wrapS = normalTexture.wrapT = wrapMode;
+    }
+    if (heightTexture) {
+      heightTexture.wrapS = heightTexture.wrapT = wrapMode;
+    }
     return mat;
   }
 
@@ -2424,6 +2452,16 @@ export class MaterialCache {
     // recoloured gear) honour the cap too so a tinted sun / R2.A lantern
     // keeps its tone on characters, not just terrain/buildings.
     _installLightClampShaderPatch(mat);
+    // === G2 (waves-2, 2026-05-29) — object-surface texture wrap mode ======
+    // Same retail rule as `_materialFromFlags` (acclient.c:454437): entity-
+    // owned surfaces (recoloured NPCs/gear) are object surfaces too, so they
+    // CLAMP unless Stippled (SurfaceType 0x40000000). `surfacePixelsToTexture`
+    // hardcodes RepeatWrapping; override per-surface. FAIL-SOFT: surfaceType
+    // 0/missing → ClampToEdge. Only a base `tex` here (no normal/height).
+    const isStippled = ((surfaceType >>> 0) & SURFACE_TYPE.Stippled) !== 0;
+    tex.wrapS = tex.wrapT = isStippled
+      ? THREE.RepeatWrapping
+      : THREE.ClampToEdgeWrapping;
     return mat;
   }
 
