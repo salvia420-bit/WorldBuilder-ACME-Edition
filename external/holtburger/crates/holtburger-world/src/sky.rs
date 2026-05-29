@@ -193,6 +193,21 @@ pub struct SkyStateSnapshot {
     pub amb_bright: f32,
     /// Lerped world-fog color.
     pub fog_color_argb: u32,
+    /// **Wave R1.C (2026-05-28).** acclient-faithful time-of-day fog
+    /// COLOR, packed `0xAARRGGBB`. Computed by a verbatim port of
+    /// `SkyDesc::GetWorldFog` (`acclient.c:301602-301661`) +
+    /// `DayGroup::GetTimeOfDay` (`:301424-301469`): bracket the two
+    /// adjacent `SkyTimeOfDay` keyframes, derive the ratio (including
+    /// the end-of-day wraparound `(now - before.begin)/(1 - before.begin)`),
+    /// and lerp each ARGB channel of `world_fog_color` independently
+    /// (alpha forced to 0xFF, matching acclient's `color->a = -1`).
+    ///
+    /// **Isolation contract:** this is a SEPARATE field that does NOT
+    /// replace [`Self::fog_color_argb`]. The legacy field stays
+    /// byte-identical so the clouds (`cloud_volume.js uHorizonColor`)
+    /// and the `daygroup_weather.js` `fogMax` classifier are unaffected.
+    /// Only the distance-fog apply site reads this, gated `?fogLerp=on`.
+    pub fog_color_argb_lerp: u32,
     /// Lerped near-fog plane (metres).
     pub fog_min: f32,
     /// Lerped far-fog plane (metres).
@@ -614,6 +629,7 @@ fn evaluate_lighting<'a>(
                 amb_color_argb: 0,
                 amb_bright: 0.0,
                 fog_color_argb: 0,
+                fog_color_argb_lerp: 0,
                 fog_min: 0.0,
                 fog_max: 0.0,
                 world_fog: 0,
@@ -625,6 +641,13 @@ fn evaluate_lighting<'a>(
 
     let (a, b, u) = find_keyframe_pair(&day_group.sky_time, time_of_day);
     let lerped = lerp_sky_time(a, b, u);
+    // === Wave R1.C — fog color lerp (2026-05-28) ===
+    // Compute the acclient-faithful time-of-day fog COLOR as a SEPARATE
+    // value. This does NOT touch `lerped.world_fog_color` (which feeds
+    // the unchanged `fog_color_argb` the clouds + weather classifier
+    // read). See `acclient_world_fog_color` for the GetWorldFog port.
+    let fog_color_argb_lerp = acclient_world_fog_color(&day_group.sky_time, time_of_day);
+    // === end Wave R1.C ===
     let state = SkyStateSnapshot {
         dir_color_argb: lerped.dir_color,
         dir_bright: lerped.dir_bright,
@@ -633,6 +656,7 @@ fn evaluate_lighting<'a>(
         amb_color_argb: lerped.amb_color,
         amb_bright: lerped.amb_bright,
         fog_color_argb: lerped.world_fog_color,
+        fog_color_argb_lerp,
         fog_min: lerped.min_world_fog,
         fog_max: lerped.max_world_fog,
         world_fog: lerped.world_fog,
@@ -1006,6 +1030,100 @@ fn lerp_argb(a: u32, b: u32, u: f32) -> u32 {
     let lb = lerp_f32(ab, bb, u).round().clamp(0.0, 255.0) as u32;
     (la << 24) | (lr << 16) | (lg << 8) | lb
 }
+
+// === Wave R1.C — fog color lerp (2026-05-28) ===
+//
+/// Verbatim port of retail `SkyDesc::GetWorldFog` color path
+/// (`~/ac-headers/acclient.c:301602-301661`) layered on
+/// `DayGroup::GetTimeOfDay` (`:301424-301469`). Returns the
+/// time-of-day-interpolated `world_fog_color` packed as `0xAARRGGBB`.
+///
+/// **Keyframe bracketing (`GetTimeOfDay`, exact):**
+///   - Walk `sky_time[1..]`; advance the `before` index while
+///     `kf.begin <= time_of_day`. The last keyframe with `begin <= t`
+///     is `before` (`v6`); `after` is `before + 1`.
+///   - **Normal:** `ratio = (t - before.begin) / (after.begin - before.begin)`.
+///   - **End-of-day wraparound** (`before` is the LAST keyframe,
+///     `v6 == num - 1`): `after = sky_time[0]` (the FIRST keyframe) and
+///     `ratio = (t - before.begin) / (1.0 - before.begin)`. Note the
+///     denominator is `1.0 - before.begin`, NOT `(first.begin + 1.0) -
+///     before.begin` — acclient anchors the wrap span to the unit day,
+///     not to the first keyframe's begin. This is the load-bearing
+///     divergence from `find_keyframe_pair` (which the legacy
+///     `fog_color_argb` keeps using); replicating acclient here keeps
+///     this NEW field byte-faithful to retail.
+///
+/// **Color lerp (`GetWorldFog`, exact):** per ARGB channel
+/// `out_c = (after_c - before_c) * ratio + before_c`, truncated to a
+/// byte (acclient casts the `double` to `unsigned __int64` → integer
+/// truncation, NOT round-to-nearest). Alpha is forced to `0xFF`
+/// (acclient: `color->a = -1`).
+///
+/// Single-keyframe DayGroups return that keyframe's color verbatim
+/// (no pair to lerp). Empty `sky_time` returns `0` (caller guards this
+/// with the empty-keyframe branch, but defend anyway).
+fn acclient_world_fog_color(sky_time: &[SkyTimeOfDay], time_of_day: f32) -> u32 {
+    let n = sky_time.len();
+    if n == 0 {
+        return 0;
+    }
+    if n == 1 {
+        return sky_time[0].world_fog_color;
+    }
+    // GetTimeOfDay: find the last keyframe whose begin <= time_of_day.
+    // acclient iterates m_data + 1 and breaks when (*v7)->begin > t,
+    // so v6 advances while sky_time[v6 + 1].begin <= t.
+    let mut before_idx = 0usize;
+    while before_idx < n - 1 && sky_time[before_idx + 1].begin <= time_of_day {
+        before_idx += 1;
+    }
+    let before = &sky_time[before_idx];
+    let (after, ratio) = if before_idx == n - 1 {
+        // End-of-day wraparound: after = first keyframe; denominator is
+        // the remaining fraction of the unit day (1.0 - before.begin).
+        let denom = 1.0 - before.begin;
+        let r = if denom != 0.0 {
+            (time_of_day - before.begin) / denom
+        } else {
+            0.0
+        };
+        (&sky_time[0], r)
+    } else {
+        let after = &sky_time[before_idx + 1];
+        let denom = after.begin - before.begin;
+        let r = if denom != 0.0 {
+            (time_of_day - before.begin) / denom
+        } else {
+            0.0
+        };
+        (after, r)
+    };
+    lerp_argb_trunc(before.world_fog_color, after.world_fog_color, ratio)
+}
+
+/// ARGB per-channel lerp matching acclient's `GetWorldFog` exactly:
+/// `out_c = (after_c - before_c) * ratio + before_c`, cast to byte via
+/// integer TRUNCATION (acclient assigns from a `double`→`unsigned
+/// __int64` cast). Alpha forced to `0xFF`. Differs from [`lerp_argb`]
+/// (which rounds + clamps) on purpose — this mirrors the shipped client
+/// arithmetic for the new `fog_color_argb_lerp` field. `ratio` is NOT
+/// clamped because acclient doesn't clamp it (a slightly out-of-range
+/// `time_of_day` extrapolates as retail did), but each channel is
+/// clamped to `[0, 255]` to keep the byte pack well-defined.
+fn lerp_argb_trunc(before: u32, after: u32, ratio: f32) -> u32 {
+    let r = ratio as f64;
+    let ba = ((before >> 16) & 0xFF) as f64; // before.r
+    let bg = ((before >> 8) & 0xFF) as f64; // before.g
+    let bb = (before & 0xFF) as f64; // before.b
+    let aa = ((after >> 16) & 0xFF) as f64; // after.r
+    let ag = ((after >> 8) & 0xFF) as f64; // after.g
+    let ab = (after & 0xFF) as f64; // after.b
+    let lr = ((aa - ba) * r + ba).clamp(0.0, 255.0) as u32;
+    let lg = ((ag - bg) * r + bg).clamp(0.0, 255.0) as u32;
+    let lb = ((ab - bb) * r + bb).clamp(0.0, 255.0) as u32;
+    (0xFFu32 << 24) | (lr << 16) | (lg << 8) | lb
+}
+// === end Wave R1.C ===
 
 #[cfg(test)]
 mod tests {
@@ -2095,5 +2213,126 @@ mod tests {
         assert_eq!(mr, expected_channel(0x11, 0xAA));
         assert_eq!(mg, expected_channel(0x22, 0xBB));
         assert_eq!(mb, expected_channel(0x33, 0xCC));
+    }
+
+    // === Wave R1.C — fog color lerp (2026-05-28) ===
+
+    /// `acclient_world_fog_color` bracketing + per-channel lerp: at the
+    /// midpoint between two keyframes the result is component-wise
+    /// strictly between the endpoints. Mirrors `GetWorldFog`'s
+    /// `(after_c - before_c)*ratio + before_c`.
+    #[test]
+    fn fog_color_lerp_midpoint_is_between_keyframes() {
+        // before fog = 0x40_30_60 (dark), after = 0xC0_90_E0 (bright).
+        // begins 0.25 and 0.75 → t=0.5 sits exactly halfway (ratio=0.5).
+        let before_fog = 0x00_40_30_60u32;
+        let after_fog = 0x00_C0_90_E0u32;
+        let sky_time = vec![
+            make_keyframe(0.25, 0, 0.0, 0, before_fog),
+            make_keyframe(0.75, 0, 0.0, 0, after_fog),
+        ];
+        let out = acclient_world_fog_color(&sky_time, 0.5);
+        let or = (out >> 16) & 0xFF;
+        let og = (out >> 8) & 0xFF;
+        let ob = out & 0xFF;
+        // Alpha forced to 0xFF (acclient color->a = -1).
+        assert_eq!((out >> 24) & 0xFF, 0xFF, "alpha must be opaque");
+        // Each channel strictly between the two keyframe values.
+        assert!(or > 0x40 && or < 0xC0, "R={or:#04X} not between 0x40,0xC0");
+        assert!(og > 0x30 && og < 0x90, "G={og:#04X} not between 0x30,0x90");
+        assert!(ob > 0x60 && ob < 0xE0, "B={ob:#04X} not between 0x60,0xE0");
+        // ratio=0.5 with truncation: (0xC0-0x40)*0.5+0x40 = 0x80 etc.
+        assert_eq!(or, 0x80);
+        assert_eq!(og, 0x60);
+        assert_eq!(ob, 0xA0);
+    }
+
+    /// Endpoints: at ratio 0 the color is `before`, at ratio 1 it's
+    /// `after` (with alpha forced opaque).
+    #[test]
+    fn fog_color_lerp_hits_keyframe_endpoints() {
+        let before_fog = 0x00_10_20_30u32;
+        let after_fog = 0x00_C8_64_FAu32;
+        let sky_time = vec![
+            make_keyframe(0.2, 0, 0.0, 0, before_fog),
+            make_keyframe(0.8, 0, 0.0, 0, after_fog),
+        ];
+        // t == before.begin → ratio 0 → before color.
+        let at_before = acclient_world_fog_color(&sky_time, 0.2);
+        assert_eq!(at_before & 0x00_FF_FF_FF, before_fog & 0x00_FF_FF_FF);
+        // t == after.begin → handled by the wraparound branch since
+        // before advances to the LAST keyframe at t=0.8. Verify the
+        // distinct in-range value at t just under 0.8 lands near after.
+        let near_after = acclient_world_fog_color(&sky_time, 0.7999);
+        let nr = (near_after >> 16) & 0xFF;
+        assert!(nr >= 0xC0, "R={nr:#04X} should be close to after.R=0xC8");
+    }
+
+    /// End-of-day wraparound: when the current time is past the LAST
+    /// keyframe's begin, `after` is the FIRST keyframe and the ratio
+    /// denominator is `1.0 - before.begin` (NOT first.begin + 1.0).
+    /// Reference: `DayGroup::GetTimeOfDay` acclient.c:301447-301461.
+    #[test]
+    fn fog_color_lerp_end_of_day_wraparound() {
+        // 3 keyframes: night(0.0)=blue, day(0.5)=white, dusk(0.85)=red.
+        // At t=0.925 we're past the last keyframe (dusk @0.85), so
+        // before=dusk, after=night(first), ratio=(0.925-0.85)/(1-0.85)
+        // = 0.075/0.15 = 0.5 → halfway between red and blue.
+        let night = 0x00_00_00_FFu32; // blue
+        let day = 0x00_FF_FF_FFu32; // white
+        let dusk = 0x00_FF_00_00u32; // red
+        let sky_time = vec![
+            make_keyframe(0.0, 0, 0.0, 0, night),
+            make_keyframe(0.5, 0, 0.0, 0, day),
+            make_keyframe(0.85, 0, 0.0, 0, dusk),
+        ];
+        let out = acclient_world_fog_color(&sky_time, 0.925);
+        let or = (out >> 16) & 0xFF;
+        let og = (out >> 8) & 0xFF;
+        let ob = out & 0xFF;
+        // ratio 0.5 from red(0xFF,0,0) → blue(0,0,0xFF):
+        // R = (0-0xFF)*0.5 + 0xFF = 0x7F (truncated), G = 0, B = 0x7F.
+        assert_eq!(or, 0x7F, "wraparound R");
+        assert_eq!(og, 0x00, "wraparound G");
+        assert_eq!(ob, 0x7F, "wraparound B");
+        assert_eq!((out >> 24) & 0xFF, 0xFF, "alpha opaque");
+    }
+
+    /// The new `fog_color_argb_lerp` field is populated on the snapshot
+    /// and the legacy `fog_color_argb` is NOT replaced by it — the two
+    /// are computed independently. Verifies the isolation contract at
+    /// the producer boundary.
+    #[test]
+    fn snapshot_carries_independent_fog_color_lerp() {
+        // Distinct fog colors per keyframe so a mid-day t produces a
+        // lerp that differs from EITHER raw keyframe value, while the
+        // legacy field (find_keyframe_pair + lerp_argb) and the new
+        // field (acclient bracketing + lerp_argb_trunc) both update.
+        let day_group = DayGroup {
+            chance_of_occur: 1.0,
+            day_name: "Iso".into(),
+            sky_objects: Vec::new(),
+            sky_time: vec![
+                make_keyframe(0.0, 0, 0.0, 0, 0x00_20_20_20),
+                make_keyframe(1.0, 0, 0.0, 0, 0x00_E0_E0_E0),
+            ],
+        };
+        let (_a, _b, _u, state) = evaluate_lighting(&day_group, 0.5, 0);
+        // Legacy field present (rounded lerp at u=0.5 → ~0x80).
+        let legacy_r = (state.fog_color_argb >> 16) & 0xFF;
+        assert!(legacy_r > 0x20 && legacy_r < 0xE0);
+        // New field present, opaque alpha, mid value.
+        assert_eq!((state.fog_color_argb_lerp >> 24) & 0xFF, 0xFF);
+        let lerp_r = (state.fog_color_argb_lerp >> 16) & 0xFF;
+        assert!(lerp_r > 0x20 && lerp_r < 0xE0);
+    }
+
+    /// Single-keyframe DayGroup: no pair to lerp, return that keyframe's
+    /// fog color verbatim (alpha forced opaque downstream).
+    #[test]
+    fn fog_color_lerp_single_keyframe_passthrough() {
+        let sky_time = vec![make_keyframe(0.0, 0, 0.0, 0, 0x00_AB_CD_EF)];
+        let out = acclient_world_fog_color(&sky_time, 0.42);
+        assert_eq!(out, 0x00_AB_CD_EF);
     }
 }

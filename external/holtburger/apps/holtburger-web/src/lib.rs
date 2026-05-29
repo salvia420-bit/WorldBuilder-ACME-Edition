@@ -9184,6 +9184,14 @@ pub struct SkyState {
     amb_color_argb: u32,
     amb_bright: f32,
     fog_color_argb: u32,
+    // === Wave R1.C — fog color lerp (2026-05-28) ===
+    // acclient-faithful time-of-day fog COLOR (0xAARRGGBB), a SEPARATE
+    // field from `fog_color_argb` (which stays byte-identical so the
+    // clouds + weather classifier are unaffected). Consumed ONLY by the
+    // distance-fog apply site behind `?fogLerp=on`. See
+    // `crates/holtburger-world/src/sky.rs::acclient_world_fog_color`.
+    fog_color_argb_lerp: u32,
+    // === end Wave R1.C ===
     fog_min: f32,
     fog_max: f32,
     world_fog: u32,
@@ -9236,6 +9244,20 @@ impl SkyState {
     pub fn fog_color_argb(&self) -> u32 {
         self.fog_color_argb
     }
+
+    // === Wave R1.C — fog color lerp (2026-05-28) ===
+    /// acclient-faithful time-of-day-interpolated world-fog COLOR
+    /// (`0xAARRGGBB`). SEPARATE from [`Self::fog_color_argb`], which
+    /// stays byte-identical so the takram clouds (`uHorizonColor`) and
+    /// the `daygroup_weather.js` `fogMax` classifier are unaffected.
+    /// Read ONLY by the distance-fog apply site, gated `?fogLerp=on`.
+    /// Producer: `holtburger_world::sky::acclient_world_fog_color`
+    /// (port of `acclient.c:301602-301661` `SkyDesc::GetWorldFog`).
+    #[wasm_bindgen(getter, js_name = fogColorArgbLerp)]
+    pub fn fog_color_argb_lerp(&self) -> u32 {
+        self.fog_color_argb_lerp
+    }
+    // === end Wave R1.C ===
 
     /// Near-fog distance plane (metres).
     #[wasm_bindgen(getter, js_name = fogMin)]
@@ -9453,6 +9475,9 @@ fn evaluate_sky_now() -> Option<(SkyState, Vec<SkyObjectState>)> {
             amb_color_argb: state.amb_color_argb,
             amb_bright: state.amb_bright,
             fog_color_argb: state.fog_color_argb,
+            // === Wave R1.C — fog color lerp (2026-05-28) ===
+            fog_color_argb_lerp: state.fog_color_argb_lerp,
+            // === end Wave R1.C ===
             fog_min: state.fog_min,
             fog_max: state.fog_max,
             world_fog: state.world_fog,

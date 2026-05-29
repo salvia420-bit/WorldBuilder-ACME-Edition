@@ -52,6 +52,11 @@ function snapshotSkyState(state) {
       ambColorArgb: (state.ambColorArgb >>> 0),
       ambBright: +state.ambBright,
       fogColorArgb: (state.fogColorArgb >>> 0),
+      // Wave R1.C (2026-05-28) — acclient-faithful time-of-day fog color.
+      // Separate from fogColorArgb (which stays byte-identical for the
+      // clouds + weather classifier). Consumed ONLY at the distance-fog
+      // apply site behind `?fogLerp=on`.
+      fogColorArgbLerp: (state.fogColorArgbLerp >>> 0),
       fogMin: +state.fogMin,
       fogMax: +state.fogMax,
       worldFog: (state.worldFog >>> 0),

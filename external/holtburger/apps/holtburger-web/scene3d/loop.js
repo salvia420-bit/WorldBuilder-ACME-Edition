@@ -369,6 +369,90 @@ function tickTerrainSunDir(scene3d) {
   }
 }
 
+// === Wave R1.C — fog color lerp (2026-05-28) ===
+//
+// Parse `?fogLerp=on` from the page URL. Returns true only for the
+// literal value "on" (case-insensitive); missing/any other value is
+// false. Mirrors `terrain.js::readTerrainModulationFlag` exactly,
+// including the try/catch so the non-browser Node harness (which has
+// no `window`) doesn't throw. Cached once because the URL can't change
+// without a reload.
+let _fogLerpFlagCache;
+function readFogLerpFlag() {
+  if (_fogLerpFlagCache !== undefined) return _fogLerpFlagCache;
+  try {
+    if (typeof window === "undefined" || !window.location) {
+      _fogLerpFlagCache = false;
+      return false;
+    }
+    const v = new URLSearchParams(window.location.search).get("fogLerp");
+    _fogLerpFlagCache = typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    _fogLerpFlagCache = false;
+  }
+  return _fogLerpFlagCache;
+}
+
+// Apply the live SkyState fog COLOR to the THREE distance fog
+// (`scene.fog` — a FogExp2/Fog whose `.color` is a THREE.Color).
+//
+// Default OFF (`?fogLerp` absent) → uses `state.fogColorArgb`, exactly
+// the value the rest of the stack reads (no behavior change). When
+// `?fogLerp=on`, uses the acclient-faithful per-frame interpolated
+// `state.fogColorArgb` lerp field instead, so the distance-fog tint
+// glides dawn→day→dusk→night instead of stepping at DayGroup edges.
+//
+// ISOLATION: this is the ONLY consumer of `fogColorArgbLerp`. It writes
+// `scene.fog.color` ONLY (never the clouds' `uHorizonColor`, never the
+// weather `fogMax` thresholds). No-op when there is no `scene.fog`
+// (the active 3D path leaves distance fog to the Bruneton aerial
+// perspective; `scene.fog` is the wireframe-mode distance fog).
+//
+// ARGB (0xAARRGGBB) → RGB hex is `argb & 0xFFFFFF`. `scene.fog.color`
+// is a THREE.Color; `.setHex(rgb)` re-tints it in place without
+// importing THREE here. In THREE r0.184 `setHex` defaults to
+// SRGBColorSpace input → converts to the linear working space, which is
+// what the HalfFloat HDR pipeline wants (the world pass renders linear,
+// the composer tone-maps with AGX). So we feed the raw sRGB hex.
+//
+// R1.C escalation (2026-05-28): when `?fogLerp=on` the 3D gate leaves
+// `scene.fog` ALIVE as a linear THREE.Fog (index.js ~2674). On that path
+// we ALSO push the AC-authored near/far band from the snapshot's
+// `fogMin`/`fogMax` so the fog distance tracks weather + time-of-day,
+// not just the seed values. Linear THREE.Fog carries `.near`/`.far`
+// (plain numbers — no THREE import needed); FogExp2 (wireframe fallback)
+// carries `.density` and no near/far, so we feature-detect.
+function tickDistanceFogColor(scene3d) {
+  const fog = scene3d?.scene?.fog;
+  if (!fog || !fog.color || typeof fog.color.setHex !== "function") return;
+  const state = scene3d.skyLightingController?._lastState ?? null;
+  if (!state) return;
+  const useLerp = readFogLerpFlag();
+  const argb = useLerp
+    ? (state.fogColorArgbLerp >>> 0)
+    : (state.fogColorArgb >>> 0);
+  if (!Number.isFinite(argb)) return;
+  const rgb = argb & 0xffffff;
+  fog.color.setHex(rgb);
+  // Refresh the AC fog band only on the fogLerp path AND only for a
+  // linear THREE.Fog (has finite `.near`/`.far`). Leaves the wireframe
+  // FogExp2 density untouched (default-off path is unaffected — its fog
+  // is the static FogExp2 from index.js L578, no near/far to write).
+  if (useLerp && typeof fog.near === "number" && typeof fog.far === "number") {
+    const fogMin = +state.fogMin;
+    const fogMax = +state.fogMax;
+    // Only adopt sane AC values; guard against 0/NaN pre-populator
+    // snapshots and the degenerate near>=far case (which would make the
+    // whole frame fog out). Keep prior values otherwise.
+    if (Number.isFinite(fogMin) && Number.isFinite(fogMax) &&
+        fogMax > fogMin && fogMax > 0) {
+      fog.near = fogMin;
+      fog.far = fogMax;
+    }
+  }
+}
+// === end Wave R1.C ===
+
 // Wave 1.E (2026-05-28) — player-tracked dynamic shadow-receive gate.
 //
 // Replaces FU2's spawn-anchored bake-time tag (`receiveShadow` set
@@ -716,6 +800,20 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       if (!scene3d._skyLightingTickWarned) {
         scene3d._skyLightingTickWarned = true;
         console.warn("[sky-c] skyLightingController.tick threw:", e);
+      }
+    }
+    // Wave R1.C (2026-05-28) — apply the freshly-snapshotted fog color
+    // to the THREE distance fog. Runs immediately after the snapshot
+    // tick so `_lastState` is current. Reads `?fogLerp` to pick the
+    // interpolated vs the static-per-DayGroup field; no-op when there's
+    // no `scene.fog`. Wrapped so a thrown setHex never kills the tick.
+    try {
+      tickDistanceFogColor(scene3d);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._fogLerpTickWarned) {
+        scene3d._fogLerpTickWarned = true;
+        console.warn("[wave-r1.c] tickDistanceFogColor threw:", e);
       }
     }
   }

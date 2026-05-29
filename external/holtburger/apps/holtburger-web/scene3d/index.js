@@ -492,6 +492,7 @@ export async function preInit3D(canvas) {
   // wasted GPU work.
   const shadowsEnabled = !wireframeMode && shadowsParam === "on";
   const csmEnabled = !wireframeMode && !!quality?.flags?.csm && shadowsParam !== "off";
+
   if (shadowsEnabled || csmEnabled) {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -2671,8 +2672,83 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             if (liveScene3d.lighting?.ambient) {
               liveScene3d.lighting.ambient.intensity = 0;
             }
+            // Sky-K.6: by default the takram AerialPerspectiveEffect IS
+            // the distance fog, so the parametric `scene.fog` is nulled
+            // (the FogExp2 fallback from L578 would otherwise double up
+            // with — and crush — the physical scattering). DEFAULT-OFF
+            // path: byte-identical to the shipped pure-Bruneton look.
+            //
+            // Wave R1.C (2026-05-28) — `?fogLerp=on` escalation: instead
+            // of nulling, swap `scene.fog` for a LINEAR THREE.Fog whose
+            // near/far come straight from AC's authored fogMin/fogMax and
+            // whose color is the acclient-faithful time-of-day fog tint.
+            // loop.js::tickDistanceFogColor drives color + near/far per
+            // frame from the SkyState snapshot; the seed values here are
+            // placeholders until the first snapshot lands. This tints the
+            // WORLD render pass; aerial perspective then adds physical
+            // scattering on top of the tinted color.
+            // Wave R1.C (2026-05-28) — opt-in AC distance fog via
+            // `?fogLerp=on`. MUST be read here in init3D's scope: the
+            // atmosphere gate below runs in this function (preInit3D is a
+            // separate function, so a reader there is out of scope here).
+            // Default OFF (absent / any non-"on" value) → the else branch
+            // nulls `scene.fog` EXACTLY as the shipped pure-Bruneton path.
+            const fogLerpEnabled = (() => {
+              try {
+                if (typeof window === "undefined" || !window.location?.search) return false;
+                const v = new URLSearchParams(window.location.search).get("fogLerp");
+                return typeof v === "string" && v.toLowerCase() === "on";
+              } catch (_) {
+                return false;
+              }
+            })();
             if (scene.fog) {
-              scene.fog = null;
+              if (fogLerpEnabled) {
+                // Seed color = current FogExp2 horizon tint (replaced on
+                // the first tickDistanceFogColor); seed near/far = AC's
+                // default fog band. THREE.Fog is linear (matches AC's
+                // near/far fog model better than FogExp2's exponential).
+                const seedColor = scene.fog.color
+                  ? scene.fog.color.clone()
+                  : new THREE.Color(0x8aa0b4);
+                // AC default fog band (fogMax ~2500); camera far is 5000
+                // so geometry past fogMax fully fogs to the AC color.
+                scene.fog = new THREE.Fog(seedColor, 200, 2500);
+                // === Wave R1.C double-fog balance knob ===
+                // `scene.fog` tints the world pass AND the aerial
+                // perspective scatters on top → without rebalancing the
+                // distance haze reads twice as thick ("double-fogged /
+                // washed-out"). Knock the aerial perspective's blend
+                // opacity down so the two layers sum to roughly the
+                // single-layer density. EYE-TEST CONSTANT — tune on the
+                // 1070. 1.0 = no rebalance (full double-fog); lower =
+                // lean more on the AC tint. Only touched when fogLerp is
+                // ON, so the default render's aerial perspective is
+                // untouched (guardrail).
+                const FOGLERP_AERIAL_OPACITY = 0.6;
+                try {
+                  const ap = atmospherePipeline?.aerialPerspective;
+                  if (ap?.blendMode?.opacity != null) {
+                    // pmndrs blendMode.opacity is a Uniform { value }.
+                    if (typeof ap.blendMode.opacity === "object" &&
+                        "value" in ap.blendMode.opacity) {
+                      ap.blendMode.opacity.value = FOGLERP_AERIAL_OPACITY;
+                    } else {
+                      ap.blendMode.opacity = FOGLERP_AERIAL_OPACITY;
+                    }
+                  }
+                } catch (e) {
+                  // eslint-disable-next-line no-console
+                  console.warn("[wave-r1.c] aerial opacity rebalance failed:", e);
+                }
+                // eslint-disable-next-line no-console
+                console.log(
+                  "[wave-r1.c] ?fogLerp=on — AC distance fog ALIVE alongside aerial perspective " +
+                  `(aerial blend opacity → ${FOGLERP_AERIAL_OPACITY}).`
+                );
+              } else {
+                scene.fog = null;
+              }
             }
 
             // Tone mapping: takram lights emit physical radiance in
