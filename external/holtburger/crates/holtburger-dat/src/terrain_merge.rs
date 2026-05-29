@@ -365,6 +365,80 @@ pub fn texture_merge_info(pcode: u32, tables: &TexMergeTables) -> Option<Texture
     })
 }
 
+/// The atlas layer index AC reserves for the road texture (terrain code 32).
+/// Distinct from [`ROAD_TYPE`] (0x20), which is the *pseudo-terrain* code in a
+/// pcode; the renderer's atlas packs the road tile at layer 32.
+pub const ROAD_ATLAS_LAYER: u8 = 32;
+
+/// Sentinel for "no alpha mask" in a packed GPU record's mask-index byte
+/// (the base layer has full coverage; absent overlays are flagged via the
+/// validity byte). 255 because valid mask indices are 0..7.
+pub const NO_ALPHA_MASK: u8 = 255;
+
+/// Pack a cell's 4 corner terrain types + 4 corner road codes into a `pcode`,
+/// matching acclient's `GetTerrainCodes` layout (`acclient.c:305304-305309`):
+/// the 5-bit corner codes sit at bit offsets 15/10/5/0 and the 2-bit road
+/// fields at offsets 26/24/22/20. **Corners are supplied in acclient's order
+/// `[bit15, bit10, bit5, bit0]`** — i.e. the index `k` of each corner is the
+/// one whose overlay tcode is `1 << k` (`BuildTCodes`), which by the alpha-mask
+/// authoring is `[NW(1), NE(2), SE(4), SW(8)]`. `road[k]` (0..3) sits in the
+/// same corner order; any nonzero value marks that corner as road (matches
+/// `GetRoadCode`'s `pcode & mask != 0` test).
+pub fn pack_pcode(corners: [u8; 4], road: [u8; 4]) -> u32 {
+    let mut p = ((corners[0] as u32 & 0x1F) << 15)
+        | ((corners[1] as u32 & 0x1F) << 10)
+        | ((corners[2] as u32 & 0x1F) << 5)
+        | (corners[3] as u32 & 0x1F);
+    // Road 2-bit fields at offsets 26/24/22/20 (corner k → 26 - 2k), mirroring
+    // GetRoadCode's masks 0x0C000000 / 0x03000000 / 0x00C00000 / 0x00300000.
+    for (k, &r) in road.iter().enumerate() {
+        p |= ((r as u32) & 0x3) << (26 - 2 * k);
+    }
+    p
+}
+
+/// One slot of a packed GPU merge record: `[atlas_layer, alpha_mask_index,
+/// rotation, valid]`. `valid == 0` means the slot is empty (the shader skips
+/// it). For the base slot `alpha_mask_index == NO_ALPHA_MASK` (full coverage).
+pub type MergeSlot = [u8; 4];
+
+/// Number of slots in a packed per-cell GPU record: 1 base + 3 terrain
+/// overlays + 2 road overlays.
+pub const MERGE_SLOTS: usize = 6;
+
+/// Pack a [`TextureMergeInfo`] into [`MERGE_SLOTS`] fixed GPU slots for the
+/// terrain shader. Slot 0 = base; slots 1..=3 = terrain overlays (padded with
+/// empty slots); slots 4..=5 = road overlays.
+///
+/// `alpha_mask_index` is the layer into the combined alpha-mask
+/// `sampler2DArray` the JS side builds: corner masks `[0,4)`, side mask at `4`,
+/// road masks `[5,8)` — exactly the `alpha_index` values
+/// [`find_terrain_alpha`]/[`find_road_alpha`] already produce.
+pub fn pack_merge_record(info: &TextureMergeInfo) -> [MergeSlot; MERGE_SLOTS] {
+    let mut slots = [[0u8; 4]; MERGE_SLOTS];
+    // Slot 0 — base (always valid, no mask → full coverage).
+    slots[0] = [info.base_terrain, NO_ALPHA_MASK, 0, 255];
+    // Slots 1..=3 — terrain overlays.
+    for (i, ov) in info.overlays.iter().take(3).enumerate() {
+        slots[1 + i] = [ov.terrain, ov.alpha_index as u8, ov.rotation as u8, 255];
+    }
+    // Slots 4..=5 — road overlays (skip any whose alpha mask didn't match).
+    let mut ri = 0usize;
+    for road in info.roads.iter() {
+        if road.alpha_index < 0 || ri >= 2 {
+            continue;
+        }
+        slots[4 + ri] = [
+            ROAD_ATLAS_LAYER,
+            road.alpha_index as u8,
+            road.rotation as u8,
+            255,
+        ];
+        ri += 1;
+    }
+    slots
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +581,66 @@ mod tests {
         let info3 = texture_merge_info(road_cell, &t).unwrap();
         assert!(info3.all_road);
         assert_eq!(info3.base_terrain, ROAD_TYPE);
+    }
+
+    #[test]
+    fn pack_pcode_round_trips_corners_and_road() {
+        // Corners in acclient order [bit15, bit10, bit5, bit0].
+        let p = pack_pcode([3, 14, 9, 1], [0, 0, 0, 0]);
+        assert_eq!(terrain_codes(p), [3, 14, 9, 1]);
+        // No road bits set.
+        assert_eq!(road_code(p), ([0, 0], false));
+
+        // Road on corner 0 (bit15 corner) → bits 0x0C000000 → road mask 1.
+        let p_road0 = pack_pcode([3, 3, 3, 3], [1, 0, 0, 0]);
+        assert_eq!(road_code(p_road0), ([1, 0], false));
+        // Terrain codes survive the road bits.
+        assert_eq!(terrain_codes(p_road0), [3, 3, 3, 3]);
+
+        // All four corners road → all_road.
+        let p_allroad = pack_pcode([3, 3, 3, 3], [1, 2, 3, 1]);
+        assert_eq!(road_code(p_allroad), ([0, 0], true));
+
+        // Road value width clamps to 2 bits; only nonzero-ness matters to
+        // GetRoadCode but the packed bits must stay in the corner's field.
+        let p_clamp = pack_pcode([0, 0, 0, 0], [3, 0, 0, 0]);
+        assert_eq!(p_clamp & 0x0C00_0000, 0x0C00_0000);
+        assert_eq!(p_clamp & 0x0300_0000, 0); // didn't bleed into corner 1's field
+    }
+
+    #[test]
+    fn pack_merge_record_base_and_overlay_slots() {
+        let t = TexMergeTables::retail();
+
+        // Uniform cell → only the base slot is valid.
+        let uniform = texture_merge_info(pack(3, 3, 3, 3), &t).unwrap();
+        let slots = pack_merge_record(&uniform);
+        assert_eq!(slots[0], [3, NO_ALPHA_MASK, 0, 255], "base = grass, no mask, valid");
+        for s in &slots[1..] {
+            assert_eq!(s[3], 0, "no overlays/roads → slot invalid");
+        }
+
+        // Two-terrain cell → base + 1 overlay.
+        let two = texture_merge_info(pack(3, 3, 3, 14), &t).unwrap();
+        let slots2 = pack_merge_record(&two);
+        assert_eq!(slots2[0][0], 3); // base grass
+        assert_eq!(slots2[0][3], 255);
+        assert_eq!(slots2[1][0], 14, "overlay terrain = rock");
+        assert_eq!(slots2[1][3], 255, "overlay slot valid");
+        assert!(
+            (slots2[1][1] as usize) < 5,
+            "terrain overlay alpha index in corner/side range [0,5): got {}",
+            slots2[1][1]
+        );
+        assert_eq!(slots2[2][3], 0, "only one overlay → slot 2 invalid");
+
+        // All-road cell → base = road atlas layer, no overlays/roads slots.
+        let road_cell = pack_pcode([3, 3, 3, 3], [1, 1, 1, 1]);
+        let road_info = texture_merge_info(road_cell, &t).unwrap();
+        assert!(road_info.all_road);
+        let slots3 = pack_merge_record(&road_info);
+        // all_road uses ROAD_TYPE(0x20) as base_terrain; the JS atlas maps that
+        // to the road tile separately, but the packed byte is ROAD_TYPE here.
+        assert_eq!(slots3[0][0], ROAD_TYPE);
     }
 }

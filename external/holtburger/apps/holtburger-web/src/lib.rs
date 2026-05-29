@@ -424,6 +424,15 @@ pub struct LandblockMesh {
     road_codes: Vec<u8>,
     height_min: f32,
     height_max: f32,
+    /// T1 — per-cell TexMerge data, RGBA8 row-major for a `48×8`
+    /// `DataTexture`: row = NS cell index `cy` (0..7), columns
+    /// `cx*6 + slot` (8 EW cells × 6 slots). Slot 0 = base, 1..=3 =
+    /// terrain overlays, 4..=5 = roads; each texel is `[atlas_layer,
+    /// alpha_mask_index, rotation, valid]` (see
+    /// `holtburger_dat::terrain_merge::pack_merge_record`). Consumed by the
+    /// terrain shader's `?texMerge=on` path; empty when the merge can't be
+    /// computed.
+    terrain_merge_data: Vec<u8>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -469,6 +478,16 @@ impl LandblockMesh {
     #[wasm_bindgen(getter, js_name = heightMax)]
     pub fn height_max(&self) -> f32 {
         self.height_max
+    }
+
+    /// T1 — per-cell TexMerge data as RGBA8 bytes for a `48×8` `DataTexture`
+    /// (length `48*8*4 = 1536`, or empty if unavailable). See the struct
+    /// field doc for the layout. The `?texMerge=on` terrain path uploads
+    /// this and composites base + alpha-masked overlays instead of the
+    /// bilinear cross-dissolve.
+    #[wasm_bindgen(getter, js_name = terrainMergeData)]
+    pub fn terrain_merge_data(&self) -> Vec<u8> {
+        self.terrain_merge_data.clone()
     }
 
     /// `Float32Array` of just the 81 vertex Z values (drops X/Y from
@@ -536,6 +555,13 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
         }
     }
 
+    // T1 — per-cell TexMerge data for the `?texMerge=on` shader path.
+    // RGBA8 row-major for a 48×8 DataTexture: row = NS cell cy, columns
+    // cx*6 + slot. Vertex (vx,vy) → index vx*9+vy; cell (cx,cy) corners in
+    // acclient order [NW, NE, SE, SW] = [(cx,cy+1),(cx+1,cy+1),(cx+1,cy),(cx,cy)].
+    let terrain_merge_data =
+        build_terrain_merge_data(&terrain_codes, &road_codes);
+
     LandblockMesh {
         positions,
         indices,
@@ -543,7 +569,62 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
         road_codes,
         height_min,
         height_max,
+        terrain_merge_data,
     }
+}
+
+/// T1 — compute the per-cell TexMerge `DataTexture` bytes from a landblock's
+/// 9×9 per-vertex terrain + road codes. Returns RGBA8 in 48×8 row-major
+/// layout (see [`LandblockMesh::terrain_merge_data`]). Cell `(cx,cy)` corners
+/// are gathered in acclient's pcode order `[NW, NE, SE, SW]`; the road code at
+/// each corner marks that corner as road. A merge that fails to resolve
+/// (alpha mask can't rotate to match) degrades to a base-only slot using the
+/// SW corner's terrain so the cell still renders.
+#[cfg(target_arch = "wasm32")]
+fn build_terrain_merge_data(terrain_codes: &[u8], road_codes: &[u8]) -> Vec<u8> {
+    use holtburger_dat::terrain_merge::{
+        pack_merge_record, pack_pcode, texture_merge_info, TexMergeTables, MERGE_SLOTS,
+    };
+    const W: usize = 8 * MERGE_SLOTS; // 48
+    const H: usize = 8;
+    let tables = TexMergeTables::retail();
+    let at = |vx: usize, vy: usize, src: &[u8]| -> u8 {
+        src.get(vx * 9 + vy).copied().unwrap_or(0)
+    };
+    let mut out = vec![0u8; W * H * 4];
+    for cy in 0..8usize {
+        for cx in 0..8usize {
+            // [NW, NE, SE, SW]
+            let corners = [
+                at(cx, cy + 1, terrain_codes),
+                at(cx + 1, cy + 1, terrain_codes),
+                at(cx + 1, cy, terrain_codes),
+                at(cx, cy, terrain_codes),
+            ];
+            let road = [
+                at(cx, cy + 1, road_codes),
+                at(cx + 1, cy + 1, road_codes),
+                at(cx + 1, cy, road_codes),
+                at(cx, cy, road_codes),
+            ];
+            let pcode = pack_pcode(corners, road);
+            let slots = match texture_merge_info(pcode, &tables) {
+                Some(info) => pack_merge_record(&info),
+                // Degenerate fallback: base-only with the SW corner's terrain.
+                None => {
+                    let mut s = [[0u8; 4]; MERGE_SLOTS];
+                    s[0] = [corners[3], 255, 0, 255];
+                    s
+                }
+            };
+            for (slot, texel) in slots.iter().enumerate() {
+                let col = cx * MERGE_SLOTS + slot;
+                let base = (cy * W + col) * 4;
+                out[base..base + 4].copy_from_slice(texel);
+            }
+        }
+    }
+    out
 }
 
 /// Fetch an HBA from `asset_url`, look up `eor/cell:cell_id` (typically

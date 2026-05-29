@@ -396,3 +396,48 @@ pattern), NOT 33 layers.
 **Infra note:** the no-cache dev server (`/tmp/nocache-server.py`) was a single-threaded
 `HTTPServer` and wedged when the 3.6 MB wasm was pulled over the 1070 reverse tunnel (one slow
 client stalled the only worker). Upgraded to `ThreadingHTTPServer`.
+
+---
+
+# T1 composite — DONE + eye-test-confirmed (2026-05-28, late) behind `?texMerge=on`
+
+The biggest visual transform: AC's landscape does NOT bilinear-blend between cells — each 24 m
+cell picks a base terrain tile + up to 3 alpha-masked overlays (one per differing corner),
+composited with hand-authored A8 masks that are PRNG-selected + 90°-rotated per cell. That
+mask-driven compositing is the iconic AC boundary look a 4-corner cross-dissolve can't reproduce.
+The **selection core** (`terrain_merge.rs`, shipped earlier) is now wired through to the GPU.
+
+**Implementation (full pipeline).**
+- **Rust** (`terrain_merge.rs`): `pack_pcode(corners, road)` builds a cell pcode in acclient's
+  layout (corners at bits 15/10/5/0 in order `[NW,NE,SE,SW]` per the tcode-bit authoring; road
+  2-bit fields at 26/24/22/20). `pack_merge_record(info)` packs a `TextureMergeInfo` into 6 GPU
+  slots `[base, overlay×3, road×2]`, each `[atlas_layer, alpha_mask_index, rotation, valid]`.
+- **Rust** (`lib.rs`): `build_terrain_merge_data()` runs per LB in `build_mesh`, producing the
+  48×8 RGBA8 `DataTexture` bytes (8 EW cells × 6 slots, row = NS cell), exposed via
+  `LandblockMesh.terrainMergeData`. A merge that can't resolve degrades to a base-only slot.
+- **adapter.js** `buildAlphaMaskArrayBytes()` packs the ordered masks `[corner0..3, side0,
+  road0..2]` into a `DataArrayTexture` (layer index == the selection core's `alpha_index`).
+- **terrain.js**: per-LB 48×8 merge `DataTexture` (NearestFilter) + shared 8-layer mask array
+  (NoColorSpace — masks are weights, not colour). Fragment shader behind `uTexMergeEnabled`:
+  samples base atlas layer, then for each terrain overlay samples the (rotation-baked) alpha
+  mask and `mix()`es the overlay layer over the accumulator. `rotateCellUv()` does the 90°
+  steps. `index.html`: both new exports threaded through the curated `init3D` opts (the
+  plumb-through trap, again).
+- **Roads this pass:** the merge data carries road slots 4–5, but the shader stops at terrain
+  overlays — the **legacy in-shader road painter still owns roads** so the new variable (biome
+  boundaries) is isolated for eye-test. Folding roads into the merge (and water UV-scroll under
+  merge) are follow-ons.
+- **Validated:** Rust `terrain_merge` 11/11 (incl. `pack_pcode_round_trips`,
+  `pack_merge_record_*`), web 74/74, JS `test_terrain_texmerge.mjs` 19/19 (alpha-mask ordering +
+  `rotateCellUv` contract). **1070 eye-test at Holtburg** (`eyetest/t1-compare.png`: bilinear
+  top vs texMerge bottom): texMerge renders **cleanly** — buildings/character/69 NPCs/terrain
+  all intact — with sharper, more granular tile variation vs the soft diamond cross-dissolve,
+  and NO cell-grid-aligned seams or inverted patches (which would betray a wrong
+  rotation/corner convention). Probe confirms `uTexMergeEnabled=1`, merge tex 48×8, mask array
+  256²×8.
+- **Caveat / follow-on tuning:** Holtburg's terrain is nearly uniform (LushGrass / Grassland /
+  PatchyGrassland / SemiBarrenRock), so the composite reads as added variation rather than
+  dramatic biome borders — the rotation-SIGN + corner-order conventions (best-guessed from the
+  tcode bit semantics) render coherently here but would be definitively pinned at a
+  grass↔dirt↔water biome edge. `rotateCellUv` 90°/270° branches and the `[NW,NE,SE,SW]` corner
+  order are the two knobs to flip if a dramatic edge shows misplaced overlays.

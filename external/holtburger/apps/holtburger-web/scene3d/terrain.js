@@ -28,6 +28,7 @@ import {
   buildVertexTypesDataTexture,
   buildTerrainAtlasArrayBytes,
   buildTerrainDetailArrayBytes,
+  buildAlphaMaskArrayBytes,
   getAdapterMaxAnisotropy,
 } from "./adapter.js";
 import { applyWireVertexAOPatch } from "./materials.js";
@@ -703,6 +704,19 @@ uniform float uDetailTexStrength;         // 0..1 modulation strength near camer
 uniform float uDetailTexFadeStart;        // metres — full strength nearer than this
 uniform float uDetailTexFadeEnd;          // metres — zero strength beyond this
 uniform float uDetailTexEnabled;          // 0.0 OFF / 1.0 ON (URL flag gate)
+// T1 (2026-05-28) — retail TexMerge composite. AC's landscape does NOT
+// bilinear-blend between cells: each 24 m cell picks a base terrain texture
+// plus up to 3 alpha-masked overlays (one per differing corner) + up to 2
+// road overlays, composited with hand-authored A8 masks selected + rotated
+// per cell. uMergeData is a per-LB 48×8 data texture: 8 EW cells × 6 slots
+// (slot 0 base, 1..3 overlays, 4..5 roads); each texel = [atlasLayer,
+// alphaMaskIdx, rotation(0-3), valid(0/255)] (see
+// holtburger_dat::terrain_merge::pack_merge_record). uAlphaMasks is the
+// ordered mask array [corner0..3, side0, road0..2]. Opt-in via
+// ?texMerge=on; uTexMergeEnabled=0 → the bilinear path below runs unchanged.
+uniform highp sampler2D uMergeData;       // per-LB 48×8 RGBA8 (NearestFilter)
+uniform sampler2DArray uAlphaMasks;       // 8 ordered A8 masks (R = weight)
+uniform float uTexMergeEnabled;           // 0.0 OFF / 1.0 ON
 // Phase 1.3 — slope-gated triplanar sampling of the detail normal.
 // uTriplanarEnabled gates the whole block off when quality is low;
 // uTriplanarSharpness is the power applied to abs(normal) before
@@ -835,6 +849,19 @@ vec3 atlasUvFor(int code, vec2 cellUv) {
   return vec3(cellUv, float(code));
 }
 
+// T1 — rotate an intra-cell UV ([0,1]²) by 90° steps around its centre, so a
+// single authored alpha mask covers all four corner orientations (the retail
+// LandDefs::Rotation the selection core resolves per overlay). The rotation
+// SIGN is a convention to confirm by eye-test on the 1070; flip the 90°/270°
+// branches if the masked overlays land on the wrong corner.
+vec2 rotateCellUv(vec2 uv, int rot) {
+  vec2 c = uv - 0.5;
+  if (rot == 1) c = vec2(-c.y, c.x);        // 90°
+  else if (rot == 2) c = vec2(-c.x, -c.y);  // 180°
+  else if (rot == 3) c = vec2(c.y, -c.x);   // 270°
+  return c + 0.5;
+}
+
 int vertexTypeAt(int iu, int iv) {
   return int(texelFetch(uVertexTypes, ivec2(iu, iv), 0).r * 255.0 + 0.5);
 }
@@ -905,6 +932,31 @@ void main() {
   float w11 = fu * fv;
 
   vec3 result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
+
+  // T1 — retail TexMerge composite (opt-in, overrides the bilinear blend
+  // above). Per-cell merge data lives in uMergeData (48×8: 8 EW cells × 6
+  // slots, row = NS cell iv). Slot 0 is the base terrain tile; slots 1..3
+  // are alpha-masked terrain overlays. (Road slots 4..5 exist in the data
+  // but the legacy in-shader road painter still owns roads this pass, so we
+  // stop at the terrain overlays — the biome boundaries are T1's headline.)
+  if (uTexMergeEnabled > 0.5) {
+    int colBase = iu * 6;
+    vec4 baseTexel = texelFetch(uMergeData, ivec2(colBase, iv), 0);
+    int baseLayer = int(baseTexel.r * 255.0 + 0.5);
+    vec3 merged = texture(uAtlas, atlasUvFor(clamp(baseLayer, 0, 32), cellUv)).rgb;
+    for (int s = 1; s < 4; s++) {
+      vec4 t = texelFetch(uMergeData, ivec2(colBase + s, iv), 0);
+      if (t.a < 0.5) continue;            // empty slot
+      int layer = int(t.r * 255.0 + 0.5);
+      int maskIdx = int(t.g * 255.0 + 0.5);
+      int rot = int(t.b * 255.0 + 0.5);
+      vec2 mUv = rotateCellUv(cellUv, rot);
+      float alpha = texture(uAlphaMasks, vec3(mUv, float(maskIdx))).r;
+      vec3 overlayCol = texture(uAtlas, atlasUvFor(clamp(layer, 0, 32), cellUv)).rgb;
+      merged = mix(merged, overlayCol, alpha);
+    }
+    result = merged;
+  }
 
   // Wave 2.A — terrain-palette tint (OPT-IN, off by default since T8).
   // Sample the four cell-corner palette colours with the SAME bilinear
@@ -1261,6 +1313,9 @@ async function resolveTerrainRingOpts(
       detailTexCodeTiling: null,
       detailTexSliceCount: 0,
       detailTexEnabled: false,
+      // T1 — wire mode never builds the terrain ShaderMaterial.
+      texMergeAlphaArray: null,
+      texMergeEnabled: false,
     };
   }
 
@@ -1479,6 +1534,55 @@ async function resolveTerrainRingOpts(
     }
   }
 
+  // T1 — TexMerge alpha-mask array (opt-in `?texMerge=on`). Built once per
+  // session + cached on scene3d (the 8 retail masks are LB-independent). The
+  // ORDER matters: [corner0..3, side0, road0..2] so the array layer index
+  // equals the `alpha_index` the Rust selection core emits. Off / fetch
+  // failure → null → `uTexMergeEnabled` 0 → the bilinear path runs unchanged.
+  const texMergeFlag = readTexMergeFlag();
+  let texMergeState = scene3d.texMergeAlphaState ?? null;
+  if (
+    texMergeFlag &&
+    !texMergeState &&
+    typeof wasmExports.fetch_terrain_alpha_masks === "function"
+  ) {
+    try {
+      const bundle = await wasmExports.fetch_terrain_alpha_masks();
+      const corner = bundle.takeCorner();
+      const side = bundle.takeSide();
+      const road = bundle.takeRoad();
+      if (typeof bundle.free === "function") bundle.free();
+      // [corner0..3, side0, road0..2] — matches alpha_index conventions.
+      const ordered = [...corner, ...side, ...road];
+      const built = buildAlphaMaskArrayBytes(ordered);
+      const tex = new THREE.DataArrayTexture(
+        built.alphaArrayBytes,
+        built.tileSize,
+        built.tileSize,
+        built.depth
+      );
+      tex.format = THREE.RGBAFormat;
+      tex.type = THREE.UnsignedByteType;
+      // Masks are weight data, NOT colour — keep them linear (NoColorSpace)
+      // so the sRGB decode three.js applies to the atlas doesn't distort the
+      // blend weight. RepeatWrapping is irrelevant (UVs stay in-cell) but
+      // ClampToEdge avoids any wrap artefact at the rotated mask edges.
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.magFilter = THREE.LinearFilter;
+      tex.minFilter = THREE.LinearFilter; // no mips: a mask is sampled 1:1 per cell
+      tex.generateMipmaps = false;
+      tex.needsUpdate = true;
+      texMergeState = { alphaArray: tex, count: built.depth };
+      scene3d.texMergeAlphaState = texMergeState;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[terrain] fetch_terrain_alpha_masks failed:", e);
+      texMergeState = null;
+    }
+  }
+
   return {
     centreLbX,
     centreLbY,
@@ -1523,6 +1627,11 @@ async function resolveTerrainRingOpts(
     detailTexCodeTiling: detailTexState?.codeTiling ?? null,
     detailTexSliceCount: detailTexState?.sliceCount ?? 0,
     detailTexEnabled: !!detailTexState,
+    // T1 — TexMerge alpha-mask array + enable flag. Per-LB merge texture is
+    // built in bakeTerrainForLandblock (it needs wasmMesh); this provides the
+    // shared mask array + the gate. Disabled → bilinear path unchanged.
+    texMergeAlphaArray: texMergeState?.alphaArray ?? null,
+    texMergeEnabled: !!texMergeState,
   };
 }
 
@@ -1571,6 +1680,24 @@ function readTerrainDetailTexFlag() {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     const v = new URLSearchParams(window.location.search).get("terrainDetailTex");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * T1 (2026-05-28) — Parse `?texMerge=on`. Gates the retail TexMerge
+ * composite (`uTexMergeEnabled` + the per-LB merge texture + the alpha-mask
+ * array fetch). Default OFF — the mask-driven biome boundaries replace the
+ * bilinear cross-dissolve and the rotation/orientation conventions are
+ * eye-test-tuned, so it ships behind a flag. Same try/catch shape as the
+ * sibling flag readers for the Node harness.
+ */
+function readTexMergeFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("texMerge");
     return typeof v === "string" && v.toLowerCase() === "on";
   } catch (_) {
     return false;
@@ -1839,6 +1966,29 @@ export async function bakeTerrainForLandblock(
   } else {
     vertexTypesTex = buildVertexTypesDataTexture(terrainCodesCopy, roadCodesCopy);
 
+    // T1 — per-LB TexMerge data texture (48×8 RGBA8, NearestFilter). Built
+    // only when `?texMerge=on` AND the wasm mesh carries merge data. The
+    // shader reads it via texelFetch(uMergeData, ivec2(cx*6+slot, cy)). On
+    // the off path mergeDataTex stays null and uTexMergeEnabled is 0.
+    let mergeDataTex = null;
+    if (opts.texMergeEnabled) {
+      const mergeBytes = wasmMesh.terrainMergeData; // Uint8Array(1536) or empty
+      if (mergeBytes && mergeBytes.length === 48 * 8 * 4) {
+        mergeDataTex = new THREE.DataTexture(
+          Uint8Array.from(mergeBytes),
+          48,
+          8,
+          THREE.RGBAFormat,
+          THREE.UnsignedByteType
+        );
+        mergeDataTex.colorSpace = THREE.NoColorSpace; // packed data, not colour
+        mergeDataTex.magFilter = THREE.NearestFilter;
+        mergeDataTex.minFilter = THREE.NearestFilter;
+        mergeDataTex.generateMipmaps = false;
+        mergeDataTex.needsUpdate = true;
+      }
+    }
+
     // 5. ShaderMaterial — verbatim port from the prior in-loop body.
     // Per-LB uniforms (uVertexTypes, uLbOriginXy) are bound here; the
     // once-per-ring uniforms (uAtlas, uTerrainDetailNormalArray,
@@ -1917,6 +2067,15 @@ export async function bakeTerrainForLandblock(
       uDetailTexFadeStart: { value: DEFAULT_DETAIL_TEX_FADE_START },
       uDetailTexFadeEnd: { value: DEFAULT_DETAIL_TEX_FADE_END },
       uDetailTexEnabled: { value: opts.detailTexEnabled ? 1.0 : 0.0 },
+      // T1 — TexMerge composite. uMergeData is per-LB (built just above);
+      // uAlphaMasks is the shared ordered mask array from opts. Enabled only
+      // when BOTH the flag built a mask array AND this LB got a merge texture
+      // — otherwise the bilinear path runs (uTexMergeEnabled = 0).
+      uMergeData: { value: mergeDataTex },
+      uAlphaMasks: { value: opts.texMergeAlphaArray ?? null },
+      uTexMergeEnabled: {
+        value: opts.texMergeEnabled && mergeDataTex ? 1.0 : 0.0,
+      },
       // Phase 1.3 — triplanar gate + sharpness. When the gate is
       // 0.0 the fragment skips the YZ+XZ samples entirely and the
       // detail-normal falls back to the XY-only Phase 1.2 path.

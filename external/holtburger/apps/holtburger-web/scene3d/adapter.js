@@ -510,6 +510,76 @@ export function buildTerrainDetailArrayBytes(slices) {
   return { detailArrayBytes, tileSize: DETAIL_TILE_PX, depth };
 }
 
+// T1 — alpha-mask array layer size. Retail TexMerge alpha masks are A8 at
+// the Region's base_tex_size; normalise to a uniform layer for the
+// DataArrayTexture. 256 keeps the masks crisp (they're sampled with their
+// hand-authored boundaries intact, so a slightly higher res than the 64 px
+// detail tile is worth it; mips are off — see the loader).
+const ALPHA_MASK_TILE_PX = 256;
+
+/**
+ * T1 — build a `THREE.DataArrayTexture`-ready byte block from the ORDERED
+ * TexMerge alpha masks: `[corner0..3, side0, road0..2]` (8 layers in retail
+ * Dereth). Layer index = position in `orderedMasks`, which MUST match the
+ * `alpha_index` values the selection core emits (corner `[0,4)`, side `4`,
+ * road `[5,8)`).
+ *
+ * Each mask is a `TerrainAlphaMask` ({ index, code, width, height, pixels })
+ * whose `pixels` are RGBA8 with the alpha weight in the R channel (PFID_A8
+ * decode). We keep RGBA and let the shader read `.r`. Resampled to
+ * `ALPHA_MASK_TILE_PX²` when the native size differs.
+ *
+ * Returns `{ alphaArrayBytes, tileSize: ALPHA_MASK_TILE_PX, depth }`.
+ */
+export function buildAlphaMaskArrayBytes(orderedMasks) {
+  if (!Array.isArray(orderedMasks) || orderedMasks.length === 0) {
+    throw new Error(
+      `buildAlphaMaskArrayBytes: orderedMasks must be a non-empty array (got ${typeof orderedMasks}, len ${orderedMasks?.length})`
+    );
+  }
+  const depth = orderedMasks.length;
+  const layerStride = ALPHA_MASK_TILE_PX * ALPHA_MASK_TILE_PX * 4;
+  const alphaArrayBytes = new Uint8Array(layerStride * depth);
+
+  let tileCanvas = null;
+  let tctx = null;
+  let layerCanvas = null;
+  let lctx = null;
+  const ensureResizeScratch = () => {
+    if (tileCanvas) return;
+    tileCanvas = document.createElement("canvas");
+    tctx = tileCanvas.getContext("2d");
+    layerCanvas = document.createElement("canvas");
+    layerCanvas.width = ALPHA_MASK_TILE_PX;
+    layerCanvas.height = ALPHA_MASK_TILE_PX;
+    lctx = layerCanvas.getContext("2d");
+  };
+
+  for (let i = 0; i < depth; i++) {
+    const m = orderedMasks[i];
+    const w = m.width;
+    const h = m.height;
+    const px = m.pixels;
+    const dstOffset = i * layerStride;
+    if (w === ALPHA_MASK_TILE_PX && h === ALPHA_MASK_TILE_PX) {
+      alphaArrayBytes.set(px, dstOffset);
+    } else {
+      ensureResizeScratch();
+      tileCanvas.width = w;
+      tileCanvas.height = h;
+      const clamped = new Uint8ClampedArray(px.buffer, px.byteOffset, px.byteLength);
+      tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
+      lctx.clearRect(0, 0, ALPHA_MASK_TILE_PX, ALPHA_MASK_TILE_PX);
+      lctx.drawImage(tileCanvas, 0, 0, w, h, 0, 0, ALPHA_MASK_TILE_PX, ALPHA_MASK_TILE_PX);
+      const layerImg = lctx.getImageData(0, 0, ALPHA_MASK_TILE_PX, ALPHA_MASK_TILE_PX);
+      alphaArrayBytes.set(layerImg.data, dstOffset);
+    }
+    if (typeof m.free === "function") m.free();
+  }
+
+  return { alphaArrayBytes, tileSize: ALPHA_MASK_TILE_PX, depth };
+}
+
 /**
  * Build a 9×9 `THREE.DataTexture` from this LB's per-vertex terrain
  * codes (Uint8Array, length 81).

@@ -958,8 +958,10 @@
         // MUST also be threaded through the init3D opts object below or
         // terrain.js can't see it (the curated-opts plumb-through trap).
         fetch_terrain_detail_textures,
-        // fetch_terrain_alpha_masks — kept exported in pkg for a
-        // future TexMerge mode; not used by the bilinear path.
+        // T1 (2026-05-28) — TexMerge alpha masks (corner/side/road). Consumed
+        // by scene3d/terrain.js behind ?texMerge=on for the retail mask-driven
+        // biome-boundary composite. MUST be threaded through init3D opts below.
+        fetch_terrain_alpha_masks,
         fetch_landblock_objects,
         // Phase D.1 (2026-05-14) — synthetic ACE entity-spawn channel.
         // Reads pre-staged JSONL at `dist/spawns/<lb_hex>.spawns.jsonl`
@@ -1052,7 +1054,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=t7-detailtex-20260528";
+      } from "./pkg/holtburger_web.js?v=t1-texmerge-20260528";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -6530,6 +6532,10 @@ void main() {
             // === "function"` guard fails and ?terrainDetailTex=on silently
             // no-ops (same plumb-through trap as Sky-J / H2 / H3 pre-db2abfa).
             fetch_terrain_detail_textures,
+            // T1 (2026-05-28) — TexMerge alpha masks. Without this line the
+            // scene3d/terrain.js `typeof wasmExports.fetch_terrain_alpha_masks
+            // === "function"` guard fails and ?texMerge=on silently no-ops.
+            fetch_terrain_alpha_masks,
             fetch_landblock_objects,
             // Phase D.1 (2026-05-14) — ACE entity-spawn channel.
             // Without this listed in init3D opts the export is
