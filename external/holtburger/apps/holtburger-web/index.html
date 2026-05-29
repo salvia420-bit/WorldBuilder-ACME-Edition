@@ -6612,22 +6612,11 @@ void main() {
           // wired by the login/spawn flow regardless of renderer.
           for (const m of meshes) m.free();
           for (const o of objects) o.free();
-          // Phase C — wire 3D click-to-entity picking. In a melee
-          // stance, a click on a remote entity sends a melee attack;
-          // otherwise falls back to useObject (portals / NPCs / etc).
-          // ACE owns auto-repeat so one click per engagement.
-          {
-            const { setupClickPicking } = await import("./scene3d/picking.js");
-            setupClickPicking({
-              canvas,
-              liveScene3d: window.liveScene3d,
-              sessionHandle: window.__sessionHandle,
-              isInMeleeStance,
-              isInRangedStance,
-              isInMagicStance,
-              getLocalPlayerGuid,
-            });
-          }
+          // Phase C — 3D click-to-entity picking (melee attack / useObject).
+          // Bug 2/3 fix (2026-05-29): MOVED to renderHoltburg's `finally`
+          // block (end of this fn) so it survives a terrain/init3D throw
+          // above — previously a throw here skipped picking, breaking
+          // left-click selection + the combat-bar __fireAttackOnTarget wire.
           stageInfo.innerHTML = `
             <dt>Renderer</dt><dd>three.js r184 (Phase 7.0 hello-world)</dd>
             <dt>Status</dt><dd>BoxGeometry cube at AC (0, 0, 5)</dd>
@@ -6685,7 +6674,35 @@ void main() {
         renderStatus.innerHTML =
           `<span class="fail">[FAIL]</span> Render failed: <code>${msg}</code><br/><span class="hint">${hint}</span>`;
         // eslint-disable-next-line no-console
-        console.error("renderHoltburg threw — setupClickPicking will be skipped, click + __fireAttackOnTarget missing:", err);
+        console.error("renderHoltburg threw (terrain/init3D); picking still runs via finally:", err);
+       } finally {
+        // Bug 2/3 fix (2026-05-29): click-picking + the combat-bar
+        // __fireAttackOnTarget wire must survive a terrain/init3D throw in the
+        // try above (e.g. the atmosphere-load promise rejecting). Previously
+        // setupClickPicking() ran INSIDE the try after init3D, so any throw
+        // skipped it → broken left-click select + missing __fireAttackOnTarget.
+        // finally runs whether or not the body threw; gated to 3D (picking is
+        // 3D-only) and picking's own guard no-ops if liveScene3d/sessionHandle
+        // never came up.
+        try {
+          const _pick3D =
+            new URLSearchParams(window.location.search).get("renderer") === "3d";
+          if (_pick3D) {
+            const { setupClickPicking } = await import("./scene3d/picking.js");
+            setupClickPicking({
+              canvas,
+              liveScene3d: window.liveScene3d,
+              sessionHandle: window.__sessionHandle,
+              isInMeleeStance,
+              isInRangedStance,
+              isInMagicStance,
+              getLocalPlayerGuid,
+            });
+          }
+        } catch (pickErr) {
+          // eslint-disable-next-line no-console
+          console.error("[picking] setupClickPicking (finally) threw:", pickErr);
+        }
        }
       }
 
