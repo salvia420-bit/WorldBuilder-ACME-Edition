@@ -2408,9 +2408,22 @@ export class EntityManager {
     const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0;
     const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
     const isInvAlpha = (flags & SURFACE_TYPE.InvAlpha) !== 0;
-    if (isAdditive) {
-      // Additive blend (flames, sparks); depthWrite off so they don't
-      // occlude geometry behind them.
+    if (isAdditive && isAlpha) {
+      // Wave-3 M1 parity (2026-05-29): Alpha+Additive (0x10000|0x100) blends
+      // SRCALPHA/ONE, not ONE/ONE — the additive contribution is weighted by
+      // per-texel source alpha (retail acclient.c:454474). This MUST match
+      // `_materialFromFlags` (materials.js:1768) so a dyed/paletted glow
+      // blends identically to its un-dyed twin; otherwise the palette path
+      // over-brightened Alpha+Additive surfaces with hard halo edges.
+      mat.blending = THREE.CustomBlending;
+      mat.blendSrc = THREE.SrcAlphaFactor;
+      mat.blendDst = THREE.OneFactor;
+      mat.blendEquation = THREE.AddEquation;
+      mat.transparent = true;
+      mat.depthWrite = false;
+    } else if (isAdditive) {
+      // Pure-additive (no Alpha bit) → ONE/ONE (flames, sparks); depthWrite
+      // off so they don't occlude geometry behind them.
       mat.blending = THREE.AdditiveBlending;
       mat.transparent = true;
       mat.depthWrite = false;
