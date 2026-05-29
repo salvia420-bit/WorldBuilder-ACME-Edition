@@ -202,6 +202,60 @@ export class AtmosphereSky {
     this._sunDirScratch = new THREE.Vector3();
     this._tickCount = 0;
     this._lastState = null;
+
+    // === Wave R4.b — sky-object live luminosity (2026-05-29) =============
+    // Retail interpolates each sky object's luminosity/brightness/transparency
+    // between time-of-day keyframes (acclient.c:303122-303128, a plain linear
+    // lerp `(next - prev) * ratio + prev` per field). Stars fade in at dusk /
+    // out at dawn. The atmosphere stack dropped the parametric SkyObject mesh
+    // that used to consume those lerps (Sky-K.6), so the takram star field
+    // currently renders at a FIXED intensity regardless of time-of-day.
+    //
+    // Flag `?skyObjLum=on` (default OFF → byte-identical: starsMaterial.intensity
+    // is never touched). When on, tick() scales the StarsMaterial `intensity`
+    // uniform from the sun altitude (`sin(dirPitch)`) on the shared SkyState
+    // snapshot, ramping linearly across a dawn/dusk band — the same linear
+    // "between segments" interpolation intent as the acclient keyframe lerp.
+    // The flag is captured ONCE here and consumed via `this._skyObjLum` in
+    // tick(); declaration + use share `this` so there's no split-scope
+    // ReferenceError (cf. a prior wave that shipped one by reading the flag
+    // in a different function than it declared it).
+    this._skyObjLum = false;
+    try {
+      // eslint-disable-next-line no-undef
+      const sp = new URLSearchParams(window.location.search).get("skyObjLum");
+      this._skyObjLum = sp === "on" || sp === "1" || sp === "true";
+    } catch (_) { /* default off */ }
+    // Stash the material's default (constructed) intensity so the modulation
+    // scales relative to it instead of hard-coding 1.0.
+    this._starsBaseIntensity =
+      (this.starsMaterial && typeof this.starsMaterial.intensity === "number")
+        ? this.starsMaterial.intensity
+        : 1.0;
+  }
+
+  /**
+   * Wave R4.b — night-fraction from sun altitude. Returns 1.0 when the
+   * sun is well below the horizon (full night) and 0.0 once it has
+   * climbed past the dawn band (full day), with a linear ramp between —
+   * mirroring the acclient per-keyframe linear lerp intent. `dirPitch`
+   * is the AC sun pitch in DEGREES (positive = above horizon), so
+   * `sin(dirPitch)` is the sun's altitude component (-1 nadir .. +1 zenith).
+   *
+   * @param {Object} state — SkyState snapshot with `dirPitch` (deg)
+   * @returns {number} night fraction in [0, 1]
+   */
+  static nightFractionFromSunAltitude(state) {
+    const pitchDeg = +(state && state.dirPitch);
+    if (!Number.isFinite(pitchDeg)) return 0.0;
+    const sunAlt = Math.sin(pitchDeg * Math.PI / 180);
+    // Band: sun-altitude +0.10 (sun ~6deg up, full day, stars off) down to
+    // -0.10 (sun ~6deg below, full night, stars on). Linear in between so
+    // stars cross-fade smoothly through dawn/dusk rather than popping.
+    const SUN_DAY = 0.10;
+    const SUN_NIGHT = -0.10;
+    const t = (sunAlt - SUN_NIGHT) / (SUN_DAY - SUN_NIGHT);
+    return 1.0 - Math.min(1.0, Math.max(0.0, t));
   }
 
   /**
@@ -219,6 +273,16 @@ export class AtmosphereSky {
     this.skyMaterial.sunDirection.copy(this._sunDirScratch);
     if (this.starsMaterial) {
       this.starsMaterial.sunDirection.copy(this._sunDirScratch);
+
+      // Wave R4.b — sky-object live luminosity (default OFF → no-op,
+      // byte-identical). When `?skyObjLum=on`, fade the star field in at
+      // night / out by day. Linear ramp across the dawn/dusk sun-altitude
+      // band (acclient.c:303122 lerp intent). The flag is the instance
+      // field captured in the constructor — same `this` scope as here.
+      if (this._skyObjLum) {
+        const nightFrac = AtmosphereSky.nightFractionFromSunAltitude(state);
+        this.starsMaterial.intensity = this._starsBaseIntensity * nightFrac;
+      }
     }
 
     // Celestial sphere advances with AC game-time (~11.34× wall clock).

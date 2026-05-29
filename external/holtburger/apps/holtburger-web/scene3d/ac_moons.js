@@ -319,6 +319,53 @@ export class ACMoons {
       const v = parseFloat(sp ?? '');
       if (Number.isFinite(v) && v > 0) this._speedMul = v;
     } catch (_) { /* default 1 */ }
+
+    // === Wave R4.b — sky-object live luminosity (2026-05-29) =============
+    // Retail dims sky objects toward dawn — the moon fades as the sun rises
+    // (acclient.c:303122-303128, linear `(next - prev) * ratio + prev` lerp
+    // of each object's luminosity between time-of-day keyframes). The moon
+    // billboards here render at a FIXED uBrightness (2.0) regardless of
+    // time-of-day. Flag `?skyObjLum=on` (default OFF → byte-identical: the
+    // base uBrightness uniform is never re-scaled) makes tick() multiply
+    // each moon's uBrightness by a sun-altitude factor that ramps from 1.0
+    // at night down to a small daytime floor as the sun climbs. The flag is
+    // captured ONCE here and consumed via `this._skyObjLum` in tick() — same
+    // `this` scope, so no split-declaration ReferenceError.
+    this._skyObjLum = false;
+    try {
+      // eslint-disable-next-line no-undef
+      const sp = new URLSearchParams(window.location.search).get('skyObjLum');
+      this._skyObjLum = sp === 'on' || sp === '1' || sp === 'true';
+    } catch (_) { /* default off */ }
+    // Base uBrightness the meshes are constructed with (mirrors the
+    // ShaderMaterial default 2.0); the modulation scales relative to it.
+    this._moonBaseBrightness = 2.0;
+  }
+
+  /**
+   * Wave R4.b — moon brightness factor from sun altitude. Returns 1.0 at
+   * night (full brightness) ramping linearly down to `MOON_DAY_FLOOR` once
+   * the sun has climbed past the dawn band — the moon dims but doesn't fully
+   * vanish (it stays faintly visible in AC's daytime sky). `dirPitch` is the
+   * AC sun pitch in DEGREES (positive = above horizon); `sin(dirPitch)` is
+   * the sun-altitude component. Mirrors the acclient per-keyframe linear
+   * lerp intent.
+   *
+   * @param {Object} state — SkyState snapshot with `dirPitch` (deg)
+   * @returns {number} brightness factor in [MOON_DAY_FLOOR, 1]
+   */
+  static moonBrightnessFactorFromSunAltitude(state) {
+    const MOON_DAY_FLOOR = 0.35;
+    const pitchDeg = +(state && state.dirPitch);
+    if (!Number.isFinite(pitchDeg)) return 1.0;
+    const sunAlt = Math.sin(pitchDeg * Math.PI / 180);
+    // Same dawn/dusk band as the star fade: +0.10 (full day) .. -0.10
+    // (full night). nightFrac=1 at night, 0 by day.
+    const SUN_DAY = 0.10;
+    const SUN_NIGHT = -0.10;
+    const t = (sunAlt - SUN_NIGHT) / (SUN_DAY - SUN_NIGHT);
+    const nightFrac = 1.0 - Math.min(1.0, Math.max(0.0, t));
+    return MOON_DAY_FLOOR + (1.0 - MOON_DAY_FLOOR) * nightFrac;
   }
 
   /**
@@ -496,6 +543,29 @@ export class ACMoons {
     }
     if (this.rezMesh?.material?.uniforms?.uTime) {
       this.rezMesh.material.uniforms.uTime.value = tSec;
+    }
+
+    // Wave R4.b — sky-object live luminosity (default OFF → no-op,
+    // byte-identical). When `?skyObjLum=on`, dim the moons as the sun
+    // rises. Read the shared SkyState snapshot from the same global the
+    // camera lookup uses above (keeps the edit local to this file — no
+    // loop.js/index.js plumbing change). Flag is the instance field
+    // captured in the constructor (same `this` scope as here).
+    if (this._skyObjLum) {
+      // eslint-disable-next-line no-undef
+      const skyState = (typeof window !== 'undefined')
+        ? window.liveScene3d?.skyLightingController?._lastState
+        : null;
+      if (skyState) {
+        const f = ACMoons.moonBrightnessFactorFromSunAltitude(skyState);
+        const b = this._moonBaseBrightness * f;
+        if (this.albMesh?.material?.uniforms?.uBrightness) {
+          this.albMesh.material.uniforms.uBrightness.value = b;
+        }
+        if (this.rezMesh?.material?.uniforms?.uBrightness) {
+          this.rezMesh.material.uniforms.uBrightness.value = b;
+        }
+      }
     }
 
     // Alb'arel — slower period, inclined ~30° to the horizon plane.
