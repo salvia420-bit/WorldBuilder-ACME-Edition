@@ -375,11 +375,31 @@ const MAX_ACTIVE_LIGHTS = 32;
 // is wanted at the cost of more boundary pop.
 const LIGHT_SORT_INTERVAL = 4;
 
-// Clamp on per-light intensity. AC's `LightInfo.intensity` field has
-// no documented upper bound; capping at 8 keeps headroom for
-// gamma-corrected tone mapping without one rogue 9999.0 entry blowing
-// out the scene.
-const LIGHT_INTENSITY_CLAMP = 8.0;
+// === LG1 (render-completeness waves-3, 2026-05-29) — intensity clamp ===
+// Upper bound on per-light intensity. The previous cap of 8.0 guarded
+// against a feared "rogue 9999.0" entry, but a full census of all 608
+// SetupModel (0x02) light tables in client_portal.dat shows that fear
+// is unfounded: intensity min=20, p50=100, p90=100, max=100 — 608/608
+// (100%) of authored lights EXCEED 8.0. Clamping to 8 crushed every
+// lantern/brazier/torch/candelabra to <=8–40% of authored brightness,
+// turning retail's "lit-to-warm-color across the radius" into a dim
+// inverse-square pool.
+//
+// Retail (acclient.c:454615-454627, calc_point_light): the contribution
+// is `(1 - dist/range) * intensity` with the RAW intensity (20–100),
+// then per-channel-clamped at the light's own color via
+// `min(v12*color_c, color_c)`. That high intensity is precisely what
+// saturates a torch to its color across most of its radius before the
+// linear falloff — clamping to 8 made that saturation impossible (and
+// also defeated the shipped ?lightClamp=retail (R2.B) per-channel clamp
+// in materials.js:1086, which needs high intensity to reach saturation).
+//
+// Option (a): raise the cap to a safe bound that admits real data with
+// headroom (max=100 → 120) while still flooring a pathological value.
+// Simpler than passing raw + relying on R2.B, and safe on the legacy
+// (non-?lightClamp) path too. Default-on, fail-soft (a non-finite or
+// negative intensity still floors at 0 below).
+const LIGHT_INTENSITY_CLAMP = 120.0;
 
 // SpotLight penumbra (soft-edge falloff) + decay (physical inverse-
 // square falloff) constants. AC's `LightInfo.cone_angle` carries the
@@ -1165,9 +1185,17 @@ function makeThreeLightForSetupLight(sl) {
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
     return null;
   }
-  // Clamp intensity for sanity. Negative intensities are ignored —
-  // AC's LightInfo.intensity is documented unsigned-physical, so a
-  // negative is malformed data.
+  // LG1 (waves-3): floor at 0 (negative/non-finite = malformed; AC's
+  // LightInfo.intensity is unsigned-physical) and cap at LIGHT_INTENSITY_CLAMP
+  // (=120, admits the real-data max of 100 with headroom — see the constant's
+  // census note). Passing the RAW authored intensity (20–100) is what lets a
+  // torch saturate to its warm color across most of its radius per retail
+  // calc_point_light (acclient.c:454615-454627), before the linear 1-dist/range
+  // falloff; the old cap of 8 crushed that to a dim pool.
+  //
+  // TODO(LG2): the half-Lambert wrap term (acclient.c:454608) is the remaining
+  // retail-fidelity refinement; it lives in the ?lightClamp=retail SHADER in
+  // materials.js (Agent C's file) — NOT here.
   const safeIntensity = Math.max(
     0,
     Math.min(LIGHT_INTENSITY_CLAMP, Number.isFinite(intensity) ? intensity : 0)

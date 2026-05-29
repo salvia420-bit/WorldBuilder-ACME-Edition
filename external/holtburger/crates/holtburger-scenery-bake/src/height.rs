@@ -282,6 +282,33 @@ pub fn triangle_plane_height_from_grid(
 ///
 /// Returns slope in radians (0 = flat, π/2 = vertical).
 pub fn slope_at(heights: &[f32; 81], lx: f32, ly: f32) -> f32 {
+    let (dz_dx, dz_dy) = gradient_at(heights, lx, ly);
+    // Slope angle = atan(magnitude of gradient).
+    (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan()
+}
+
+/// Z component of the unit terrain-plane normal at `(lx, ly)` — i.e.
+/// `cos(slope_angle)`. **This is the value retail's
+/// `ObjectDesc::CheckSlope` tests** (`acclient.c:351355` takes
+/// `walkable->plane.N.z`): `1.0` on flat ground, `0.0` on a vertical
+/// face. The `min_slope`/`max_slope` fields on `ObjectDesc` are NOT
+/// radians despite their historic doc-comments — they are cosines
+/// (real DAT values cluster in 0.86–0.98, unmistakably cos θ), so the
+/// slope-rejection comparison must run against this normal-Z, not the
+/// `slope_at` angle.
+///
+/// For a plane with gradient `(g_x, g_y)` the unit normal is
+/// `(-g_x, -g_y, 1) / sqrt(g_x² + g_y² + 1)`, so
+/// `N.z = 1 / sqrt(g_x² + g_y² + 1)` = `cos(atan(|grad|))`.
+pub fn normal_z_at(heights: &[f32; 81], lx: f32, ly: f32) -> f32 {
+    let (dz_dx, dz_dy) = gradient_at(heights, lx, ly);
+    1.0 / (dz_dx * dz_dx + dz_dy * dz_dy + 1.0).sqrt()
+}
+
+/// Shared 4-corner plane-fit used by [`slope_at`] and [`normal_z_at`].
+/// Returns `(dz/dx, dz/dy)` — the average height gradient within the
+/// cell containing `(lx, ly)`.
+fn gradient_at(heights: &[f32; 81], lx: f32, ly: f32) -> (f32, f32) {
     let cell_x = (lx / CELL_SIZE).clamp(0.0, (VERTEX_DIM - 1) as f32);
     let cell_y = (ly / CELL_SIZE).clamp(0.0, (VERTEX_DIM - 1) as f32);
     let cx0 = (cell_x.floor() as usize).min(VERTEX_DIM - 1);
@@ -295,8 +322,7 @@ pub fn slope_at(heights: &[f32; 81], lx: f32, ly: f32) -> f32 {
     // Average slope along X and Y axes within the cell.
     let dz_dx = ((z10 - z00) + (z11 - z01)) * 0.5 / CELL_SIZE;
     let dz_dy = ((z01 - z00) + (z11 - z10)) * 0.5 / CELL_SIZE;
-    // Slope angle = atan(magnitude of gradient).
-    (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan()
+    (dz_dx, dz_dy)
 }
 
 /// `OnRoad` check from `Scenery.cs:166-172`. Returns true if the
@@ -460,6 +486,50 @@ mod tests {
         let grid = vertex_heights(&region, &lb);
         let s = slope_at(&grid, 50.0, 50.0);
         assert!(s.abs() < 1e-5, "flat slope should be ~0, got {}", s);
+    }
+
+    /// W1 (2026-05-29) — `normal_z_at` returns the slope COSINE (the
+    /// value retail `ObjectDesc::CheckSlope` tests): 1.0 on flat ground,
+    /// and `cos(π/4) ≈ 0.7071` on a 45° ramp. This is the inverse-axis
+    /// of `slope_at` (which returns the angle) and is what the
+    /// slope-rejection comparison must use.
+    #[test]
+    fn normal_z_flat_is_one_and_ramp_is_cos45() {
+        // Flat terrain → N.z == 1.0.
+        let flat_table: Vec<f32> = vec![5.0; 256];
+        let flat_lb = synth_lb(vec![0u8; 81], vec![0u16; 81]);
+        let flat_region = synth_region(flat_table);
+        let flat_grid = vertex_heights(&flat_region, &flat_lb);
+        let nz_flat = normal_z_at(&flat_grid, 50.0, 50.0);
+        assert!(
+            (nz_flat - 1.0).abs() < 1e-5,
+            "flat N.z should be ~1.0, got {nz_flat}"
+        );
+
+        // 45° ramp along X → N.z == cos(π/4) ≈ 0.7071.
+        let table: Vec<f32> = (0..256).map(|i| i as f32).collect();
+        let mut heights = vec![0u8; 81];
+        for vx in 0..9 {
+            for vy in 0..9 {
+                heights[vx * 9 + vy] = (vx * CELL_SIZE as usize) as u8;
+            }
+        }
+        let lb = synth_lb(heights, vec![0u16; 81]);
+        let region = synth_region(table);
+        let grid = vertex_heights(&region, &lb);
+        let nz = normal_z_at(&grid, 50.0, 50.0);
+        let cos45 = std::f32::consts::FRAC_PI_4.cos();
+        assert!(
+            (nz - cos45).abs() < 1e-4,
+            "expected cos(π/4)={cos45}, got {nz}"
+        );
+        // Consistency: N.z must equal cos(slope_at) for the same point.
+        let ang = slope_at(&grid, 50.0, 50.0);
+        assert!(
+            (nz - ang.cos()).abs() < 1e-5,
+            "N.z ({nz}) must equal cos(slope_at) ({})",
+            ang.cos()
+        );
     }
 
     /// Slope on a 45° linear ramp along X is ~45° = π/4.

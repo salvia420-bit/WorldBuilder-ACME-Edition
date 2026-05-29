@@ -517,15 +517,87 @@ fn load_scene(portal: &DatDatabase, scene_id: u32) -> Option<Scene> {
     Scene::unpack(&mut cursor).ok()
 }
 
+/// V1 (render-completeness Wave 3, 2026-05-29) — per-`obj_id` cache of
+/// the SetupModel's `default_script` PhysicsScript (`0x33`) DID.
+///
+/// 36% of SetupModels (2161/5935 in client_portal.dat) carry a
+/// `default_script` — a continuous ambient particle/sound chain that
+/// retail runs for EVERY physics object at creation
+/// (`acclient.c:320867` `if (setup->default_script_id.id)
+/// play_script_internal(...)`). The static-render path never ran it, so
+/// fountains/braziers/torches rendered as dead geometry. Baking the DID
+/// into the scenery JSONL lets the renderer attach the chain (see
+/// `scene3d/statics.js`'s static-particle attach).
+///
+/// Resolution is keyed on the placement `obj_id`:
+///   - `0x02xxxxxx` SetupModel → parse + read `default_script` (already
+///     decoded by `setup_model.rs:316`). `0` when absent.
+///   - `0x01xxxxxx` GfxObj → 0. `default_script` is a SetupModel field;
+///     a bare GfxObj placement has no ambient script.
+///
+/// `default_script` is a pure function of `obj_id`, so the cache is
+/// fully deterministic and the bake's `Vec<ScenicPlacement>` output is
+/// untouched — only the JSONL serialization gains the field.
+struct ScriptCache {
+    inner: HashMap<u32, u32>,
+}
+
+impl ScriptCache {
+    fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+
+    /// Resolve a placement `obj_id` to its `default_script` DID (0 when
+    /// none). Memoised per `obj_id`.
+    fn lookup(&mut self, portal: &DatDatabase, obj_id: u32) -> u32 {
+        if let Some(&cached) = self.inner.get(&obj_id) {
+            return cached;
+        }
+        let did = resolve_default_script(portal, obj_id);
+        self.inner.insert(obj_id, did);
+        did
+    }
+}
+
+/// Read the SetupModel's `default_script` DID for `obj_id`. `0x02`
+/// dispatches to the SetupModel parse; anything else (GfxObj `0x01`,
+/// unexpected prefixes) returns 0 — no ambient script.
+fn resolve_default_script(portal: &DatDatabase, obj_id: u32) -> u32 {
+    let top = (obj_id >> 24) & 0xFF;
+    if top != 0x02 {
+        return 0;
+    }
+    let Ok(bytes) = portal.get_file(obj_id) else {
+        return 0;
+    };
+    let mut cursor = Cursor::new(&bytes);
+    match SetupModel::read(&mut cursor) {
+        Ok(setup) => setup.default_script.unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
 /// Serialize one `ScenicPlacement` line in the JSONL format documented
 /// by `hypotheticalmethod.md`. All floats are formatted via
 /// `format_f32_six_sig`, which uses `{:.6}` (six digits after the
 /// decimal point — enough for cm-precision on AC's 0..192 m scale
 /// while staying short enough for diffs to read).
-fn write_placement_line<W: Write>(mut w: W, p: &ScenicPlacement) -> Result<()> {
+/// `default_script_id` (V1, 2026-05-29) is emitted as a `0x{:08X}` hex
+/// string — same convention as `obj_id` — so the wasm reader's
+/// `obj_id_hex_to_u32` helper can round-trip it. It's the LAST field so
+/// older readers (and the JSONL `#[serde(default)]` on the wasm side)
+/// stay forward/backward-compatible: a record without it parses to 0
+/// (→ renderer no-op), a record with it carries the ambient-script DID.
+fn write_placement_line<W: Write>(
+    mut w: W,
+    p: &ScenicPlacement,
+    default_script_id: u32,
+) -> Result<()> {
     writeln!(
         w,
-        "{{\"obj_id\":\"0x{:08X}\",\"x\":{},\"y\":{},\"z\":{},\"qw\":{},\"qx\":{},\"qy\":{},\"qz\":{},\"scale\":{},\"source_cell_x\":{},\"source_cell_y\":{},\"source_obj_idx\":{}}}",
+        "{{\"obj_id\":\"0x{:08X}\",\"x\":{},\"y\":{},\"z\":{},\"qw\":{},\"qx\":{},\"qy\":{},\"qz\":{},\"scale\":{},\"source_cell_x\":{},\"source_cell_y\":{},\"source_obj_idx\":{},\"default_script_id\":\"0x{:08X}\"}}",
         p.obj_id,
         format_f32_six_sig(p.x),
         format_f32_six_sig(p.y),
@@ -538,6 +610,7 @@ fn write_placement_line<W: Write>(mut w: W, p: &ScenicPlacement) -> Result<()> {
         p.source_cell_x,
         p.source_cell_y,
         p.source_obj_idx,
+        default_script_id,
     )?;
     Ok(())
 }
@@ -565,6 +638,7 @@ fn bake_one(
     cell_db: &DatDatabase,
     mesh_cache: &mut MeshCache,
     scene_cache: &mut SceneCache,
+    script_cache: &mut ScriptCache,
     lb_key: u16,
     out_dir: &Path,
     mode: BakeMode,
@@ -633,7 +707,11 @@ fn bake_one(
         .with_context(|| format!("create {}", out_path.display()))?;
     let mut w = BufWriter::new(f);
     for p in &placements {
-        write_placement_line(&mut w, p)?;
+        // V1 (2026-05-29) — resolve the placement's SetupModel
+        // `default_script` ambient-chain DID (0 for GfxObjs / scripts
+        // none) and emit it as the trailing JSONL field.
+        let default_script_id = script_cache.lookup(portal, p.obj_id);
+        write_placement_line(&mut w, p, default_script_id)?;
     }
     w.flush()?;
 
@@ -732,6 +810,9 @@ fn main() -> Result<()> {
 
     let mut mesh_cache = MeshCache::new();
     let mut scene_cache = SceneCache::new();
+    // V1 (2026-05-29) — `default_script` DID resolution, memoised per
+    // placement obj_id across the whole bake run.
+    let mut script_cache = ScriptCache::new();
     let mut counts: Vec<usize> = Vec::with_capacity(landblocks.len());
     let mut skipped: usize = 0;
 
@@ -742,6 +823,7 @@ fn main() -> Result<()> {
             &check.cell_db,
             &mut mesh_cache,
             &mut scene_cache,
+            &mut script_cache,
             lb_key,
             &cli.out,
             mode,
@@ -1013,7 +1095,7 @@ mod tests {
             source_obj_idx: 2,
         };
         let mut buf = Vec::new();
-        write_placement_line(&mut buf, &p).unwrap();
+        write_placement_line(&mut buf, &p, 0x330003EC).unwrap();
         let s = String::from_utf8(buf).unwrap();
         // One line.
         assert_eq!(s.matches('\n').count(), 1);
@@ -1021,5 +1103,32 @@ mod tests {
         assert!(s.starts_with("{\"obj_id\":\"0x02000123\""));
         // Six digits after decimal.
         assert!(s.contains("\"x\":12.340000"));
+        // V1 (2026-05-29) — trailing default_script_id, hex-string, last field.
+        assert!(s.contains("\"default_script_id\":\"0x330003EC\""));
+        assert!(s.trim_end().ends_with("\"default_script_id\":\"0x330003EC\"}"));
+    }
+
+    /// V1 (2026-05-29) — a GfxObj (`0x01`) placement emits a zero
+    /// `default_script_id` (default_script is a SetupModel-only field).
+    #[test]
+    fn write_placement_line_emits_zero_script_for_gfxobj() {
+        let p = ScenicPlacement {
+            obj_id: 0x0100_0010,
+            x: 1.0,
+            y: 2.0,
+            z: 3.0,
+            qw: 1.0,
+            qx: 0.0,
+            qy: 0.0,
+            qz: 0.0,
+            scale: 1.0,
+            source_cell_x: 0,
+            source_cell_y: 0,
+            source_obj_idx: 0,
+        };
+        let mut buf = Vec::new();
+        write_placement_line(&mut buf, &p, 0).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("\"default_script_id\":\"0x00000000\""));
     }
 }

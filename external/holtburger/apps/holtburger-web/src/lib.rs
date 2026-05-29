@@ -1369,6 +1369,12 @@ pub struct ScenicPlacementJs {
     source_cell_y: u32,
     source_obj_idx: u32,
     landblock_id: u32,
+    /// V1 (render-completeness Wave 3, 2026-05-29) — the SetupModel's
+    /// `default_script` PhysicsScript (`0x33`) DID, baked into the
+    /// JSONL. `0` when the placement's model carries no ambient script
+    /// (GfxObjs, or SetupModels without a `default_script`). The
+    /// static-render path runs this chain (fountains/braziers/torches).
+    default_script_id: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1426,6 +1432,15 @@ impl ScenicPlacementJs {
     pub fn landblock_id(&self) -> u32 {
         self.landblock_id
     }
+    /// V1 (2026-05-29) — SetupModel `default_script` ambient-chain DID
+    /// (`0x33` PhysicsScript), or `0` when none. The static-render path
+    /// (`scene3d/statics.js`) runs the chain anchored to the placement's
+    /// world position. Absent in pre-V1 bakes → deserialises to `0` →
+    /// renderer no-op (fail-soft).
+    #[wasm_bindgen(getter, js_name = defaultScriptId)]
+    pub fn default_script_id(&self) -> u32 {
+        self.default_script_id
+    }
 }
 
 /// Raw JSONL line shape. `obj_id` is emitted as a 0xXXXXXXXX hex
@@ -1451,6 +1466,14 @@ struct ScenicPlacementJsonRaw {
     source_cell_x: u32,
     source_cell_y: u32,
     source_obj_idx: u32,
+    /// V1 (2026-05-29) — SetupModel `default_script` DID, emitted by the
+    /// bake CLI as a `0x{:08X}` hex string (same convention as
+    /// `obj_id`). `#[serde(default)]` makes it OPTIONAL so a pre-V1 bake
+    /// (no field) parses cleanly to `None` → DID `0` → renderer no-op.
+    /// FAIL-SOFT contract: the field's absence must NEVER fail the line
+    /// parse — it's the whole reason V1 is safe to ship before a re-bake.
+    #[serde(default)]
+    default_script_id: Option<String>,
 }
 
 /// Parse a `0xXXXXXXXX` hex string back to u32. The bake CLI emits
@@ -1525,6 +1548,8 @@ mod scenery_fetch {
         pub source_cell_x: u32,
         pub source_cell_y: u32,
         pub source_obj_idx: u32,
+        /// V1 (2026-05-29) — SetupModel `default_script` DID, 0 when none.
+        pub default_script_id: u32,
     }
 
     /// Set the base URL for `/scenery/...` fetches. Mirrors the
@@ -1615,6 +1640,19 @@ mod scenery_fetch {
                 .map_err(|e| format!("{url} line {}: {e}", lineno + 1))?;
             let obj_id = obj_id_hex_to_u32(&raw.obj_id)
                 .map_err(|e| format!("{url} line {}: {e}", lineno + 1))?;
+            // V1 (2026-05-29) — FAIL-SOFT on `default_script_id`. Unlike
+            // `obj_id` (a hard-error on malformed hex, since a corrupt
+            // obj_id means a broken bake), the ambient-script DID is a
+            // pure visual nicety: an absent/empty/malformed value MUST
+            // degrade to `0` (no chain) rather than poison the whole LB's
+            // scenery. Pre-V1 bakes omit the field entirely (→ `None`).
+            let default_script_id = raw
+                .default_script_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| obj_id_hex_to_u32(s).ok())
+                .unwrap_or(0);
             out.push(CachedRecord {
                 obj_id,
                 x: raw.x,
@@ -1628,6 +1666,7 @@ mod scenery_fetch {
                 source_cell_x: raw.source_cell_x,
                 source_cell_y: raw.source_cell_y,
                 source_obj_idx: raw.source_obj_idx,
+                default_script_id,
             });
         }
 
@@ -1695,6 +1734,7 @@ mod scenery_fetch {
             source_cell_y: rec.source_cell_y,
             source_obj_idx: rec.source_obj_idx,
             landblock_id,
+            default_script_id: rec.default_script_id,
         }
     }
 }
@@ -2459,6 +2499,10 @@ pub struct LandblockScenerySoa {
     source_cell_x: Vec<u32>,
     source_cell_y: Vec<u32>,
     source_obj_idx: Vec<u32>,
+    /// V1 (2026-05-29) — parallel array of SetupModel `default_script`
+    /// DIDs (0 when none). Symmetry with the Vec variant's
+    /// `defaultScriptId` getter.
+    default_script_id: Vec<u32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2504,6 +2548,10 @@ impl LandblockScenerySoa {
     pub fn source_obj_idx(&self) -> Vec<u32> {
         self.source_obj_idx.clone()
     }
+    #[wasm_bindgen(getter, js_name = defaultScriptId)]
+    pub fn default_script_id(&self) -> Vec<u32> {
+        self.default_script_id.clone()
+    }
 }
 
 /// Bulk SoA fetch — same source JSONL + cache as
@@ -2532,6 +2580,7 @@ pub async fn fetch_landblock_scenery_soa(
     let mut source_cell_x: Vec<u32> = Vec::new();
     let mut source_cell_y: Vec<u32> = Vec::new();
     let mut source_obj_idx: Vec<u32> = Vec::new();
+    let mut default_script_id: Vec<u32> = Vec::new();
 
     for &cell_id in &cell_ids {
         let lb_key = cell_id & 0xFFFF_0000;
@@ -2547,6 +2596,7 @@ pub async fn fetch_landblock_scenery_soa(
             source_cell_x.push(r.source_cell_x);
             source_cell_y.push(r.source_cell_y);
             source_obj_idx.push(r.source_obj_idx);
+            default_script_id.push(r.default_script_id);
         }
     }
     Ok(LandblockScenerySoa {
@@ -2558,6 +2608,7 @@ pub async fn fetch_landblock_scenery_soa(
         source_cell_x,
         source_cell_y,
         source_obj_idx,
+        default_script_id,
     })
 }
 

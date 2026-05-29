@@ -544,28 +544,27 @@ fn bake_mode_default_and_round_trip() {
 /// only delta is Z). On a synthetic LB designed to fail the slope check
 /// for AT LEAST one placement, AceCompat ⊃ Strict — the slope-rejected
 /// placements survive in AceCompat.
+///
+/// W1 (2026-05-29): slope rejection now compares the terrain-normal Z
+/// (`cos slope`, 1.0 flat → 0.0 vertical) against `[min_slope,
+/// max_slope]` per retail `ObjectDesc::CheckSlope`. So a STEEP ramp has
+/// a LOW `N.z`, and to reject it the scene's `min_slope` must be set
+/// ABOVE that low cosine. (Pre-W1 this test compared the slope ANGLE in
+/// radians and rejected with `> max_slope`; that test would no longer
+/// trigger under the corrected semantics, so the fixture is rebuilt to
+/// reject on a `min_slope` floor.)
 #[test]
 fn ace_compat_is_strict_superset_on_steep_terrain() {
     const SCENE_DID: u32 = 0x1200_0001;
 
-    // Build a 9×9 with a steep ramp: vertex (vx, vy) → height byte
-    // 2 * vx (capped at 255). table[i] = i as f32, so the actual
-    // Z = 2 * vx → slope along X is atan(2 * CELL_SIZE / CELL_SIZE)
-    // = atan(2) ≈ 1.107 rad ≈ 63°. That's well above our test scene's
-    // 1.5 rad max_slope BUT below π/2 (1.5708). Wait, 1.107 < 1.5 so
-    // it WOULD pass — we need a steeper ramp.
-    //
-    // Solve for slope > 1.5 rad: dz/dx > tan(1.5) ≈ 14.1. So height
-    // byte step per cell ≥ 15. Use step = 16 → Z = 16*vx → dz/dx =
-    // 16/24 → wait that's < 1. The scale matters: table[i]=i*4 with
-    // height bytes = vx*8 gives Z = 32*vx, dz/dx = 32/24 = 1.33,
-    // atan(1.33) = 0.927 rad. Need much steeper.
-    //
-    // Easier: build heights so dz/dx = 30 → atan(30) ≈ 1.538 rad
-    // (just over 1.5). Use table[i]=i*4 with heights so consecutive
-    // vertices differ by enough that dz/dx ≥ 30:
-    //   vx 0 → byte 0 → Z 0
-    //   vx 1 → byte ~180 → Z 720; dz over CELL_SIZE=24 is 720/24=30
+    // Build a 9×9 with a steep ramp so the terrain-normal Z is low.
+    // table[i] = i*4 with height byte = vx*180 (capped 255) gives a
+    // per-cell Z step of ~720 over CELL_SIZE=24 → dz/dx ≈ 30, so
+    //   N.z = 1 / sqrt(30² + 1) ≈ 0.033
+    // (i.e. an almost-vertical face). With the scene's `min_slope`
+    // floor set to 0.5 (reject anything steeper than ~60°), every
+    // ramp placement's `N.z ≈ 0.033 < 0.5` and is REJECTED in Strict
+    // mode while surviving in AceCompat (which never slope-checks).
     let table: Vec<f32> = (0..256).map(|i| (i as f32) * 4.0).collect();
     let mut heights = vec![0u8; 81];
     for vx in 0..9 {
@@ -582,7 +581,14 @@ fn ace_compat_is_strict_superset_on_steep_terrain() {
         _align: (),
     };
     let region = synth_region_with_table(SCENE_DID, table);
-    let scene = synth_scene(SCENE_DID);
+    // Custom scene: identical to `synth_scene` but with a `min_slope`
+    // floor of 0.5 (cosine) so the steep ramp's `N.z ≈ 0.033` falls
+    // below it and is slope-rejected in Strict mode.
+    let mut scene = synth_scene(SCENE_DID);
+    for obj in &mut scene.objects {
+        obj.min_slope = 0.5;
+        obj.max_slope = 1.0;
+    }
 
     let bake = |mode| {
         bake_landblock(

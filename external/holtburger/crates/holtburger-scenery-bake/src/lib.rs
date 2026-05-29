@@ -57,7 +57,7 @@ pub mod noise;
 pub use aabb::{Aabb2D, LocalBounds, transform_local_aabb, transform_mesh_to_aabb};
 pub use height::{
     CELL_SIZE, LANDBLOCK_SIZE, VERTEX_DIM, bilinear_height, bilinear_height_from_grid,
-    get_split_dir, slope_at, triangle_plane_height_from_grid, vertex_heights,
+    get_split_dir, normal_z_at, slope_at, triangle_plane_height_from_grid, vertex_heights,
 };
 pub use noise::{
     NOISE_SCALE, cell_mat_scene, cell_mats_per_object, displace, object_noise, rotate_obj,
@@ -77,7 +77,7 @@ use holtburger_dat::landblock::CellLandblock;
 /// | Concern | `AceCompat` (default) | `Strict` |
 /// |---|---|---|
 /// | Z snap | Triangle-plane via [`triangle_plane_height_from_grid`] — mirrors `LandblockMesh.GetZ` per-cell triangulation. | Bilinear via [`bilinear_height_from_grid`] — matches `holtburger_world` and the live renderer. |
-/// | Slope rejection | Skipped — `Scenery.cs:69` has it as `TODO: ensure walkable slope` so ACE doesn't reject. | Implemented — rejects placements outside `[min_slope, max_slope]`. |
+/// | Slope rejection | Skipped — `Scenery.cs:69` has it as `TODO: ensure walkable slope` so ACE doesn't reject. | Implemented — rejects placements whose terrain-normal Z (cos slope) falls outside `[min_slope, max_slope]`, matching retail `ObjectDesc::CheckSlope`. |
 ///
 /// `AceCompat` is the **1:1 Coldeve compatibility** target — what the
 /// brief calls the load-bearing requirement. Even when ACE has a TODO or
@@ -358,10 +358,24 @@ fn bake_landblock_impl(
             // as "fix that someday"); `BakeMode::AceCompat` mirrors ACE
             // verbatim, including the TODO, so the rejection is OFF.
             //
-            // min_slope and max_slope are in radians per ObjectDesc.cs.
+            // W1 fix (2026-05-29): `min_slope`/`max_slope` are NOT
+            // radians — they are COSINES of the slope angle (= the
+            // terrain plane's `N.z`). Retail `ObjectDesc::CheckSlope`
+            // (`acclient.c:351355`) is literally
+            //   `z_val >= min_slope && z_val <= max_slope`
+            // called with `walkable->plane.N.z` (`acclient.c:352699`),
+            // where `N.z` is 1.0 on flat ground and 0.0 on a vertical
+            // face. Real DAT `min_slope` values cluster in 0.86–0.98
+            // (73.5% of rows), unmistakably cosines. The prior code
+            // compared the slope ANGLE (radians) with the inverted
+            // inequality (reject `< min || > max`), which is wrong on
+            // both axes. Now: compute the terrain-normal Z (cosine) and
+            // REJECT when it falls OUTSIDE `[min_slope, max_slope]` —
+            // i.e. accept iff CheckSlope would (`N.z >= min && N.z <=
+            // max`).
             if matches!(mode, BakeMode::Strict) {
-                let slope = height::slope_at(&heights, lx, ly);
-                if slope < obj.min_slope || slope > obj.max_slope {
+                let normal_z = height::normal_z_at(&heights, lx, ly);
+                if normal_z < obj.min_slope || normal_z > obj.max_slope {
                     continue;
                 }
             }

@@ -386,6 +386,16 @@ async function fetchAndDrainScenery(cellIds, wasmExports) {
     const sinyCosp = 2.0 * (qw * qz + qx * qy);
     const cosyCosp = 1.0 - 2.0 * (qy * qy + qz * qz);
     const yaw = Math.atan2(sinyCosp, cosyCosp);
+    // V1 (render-completeness Wave 3, 2026-05-29) — the SetupModel's
+    // `default_script` ambient-chain DID (0x33 PhysicsScript), baked
+    // into the scenery JSONL. `0` (or absent in a pre-V1 bake — the
+    // getter then reads 0) means "no ambient chain"; non-zero is a
+    // continuous CreateParticle/Sound emitter (fountains/braziers/
+    // torches). Carried through to the per-placement render path which
+    // anchors `runStaticDefaultScript` at the placement world position.
+    // Fail-soft: the getter is absent on older wasm bundles → 0.
+    const defaultScriptId =
+      typeof p.defaultScriptId === "number" ? p.defaultScriptId >>> 0 : 0;
     out.push({
       landblockId: p.landblockId,
       modelId: p.objId,
@@ -396,6 +406,7 @@ async function fetchAndDrainScenery(cellIds, wasmExports) {
       isBuilding: false,
       scale: p.scale && p.scale > 0 ? p.scale : 1,
       source: "scenery",
+      defaultScriptId,
     });
     if (typeof p.free === "function") p.free();
   }
@@ -1174,6 +1185,16 @@ export async function bakeStaticsForLandblock(
     else landblockInfoObjectCount += 1;
   }
 
+  // V1 (2026-05-29) — run each scenery placement's `default_script`
+  // ambient particle chain (fountains/braziers/torches). Fail-soft +
+  // zero-cost when no placement carries a script (the pre-re-bake case).
+  try {
+    await attachStaticDefaultScripts(scene3d, statics, wasmExports);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[scene3d.statics/V1] per-LB default_script attach failed:", e);
+  }
+
   // LRU wave H4 — per-LB owned BufferGeometries. The per-LB baker doesn't
   // share a cross-LB `bakeCache` (unlike buildings.js), so every entry in
   // `geomByModel` / `degradedGeomByModel` is owned by THIS bake call even
@@ -1580,6 +1601,19 @@ export async function bakeStaticsRing(
   }
   mark(`stage3: build+add ${placementsByModel.size} groups (inst=${instancedGroupCount}, single=${singletonCount})`);
 
+  // V1 (2026-05-29) — run each scenery placement's `default_script`
+  // ambient particle chain (fountains/braziers/torches). Runs over the
+  // full ring `statics` stream so an InstancedMesh-collapsed scripted
+  // model still gets one anchor PER placement. Fail-soft + zero-cost
+  // when no placement carries a script (the pre-re-bake case).
+  try {
+    await attachStaticDefaultScripts(scene3d, statics, wasmExports);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[scene3d.statics/V1] ring default_script attach failed:", e);
+  }
+  mark("stage3: attachStaticDefaultScripts (V1)");
+
   // Count placements that had no geometry (the model failed to fetch
   // OR was 0-tri AND got dropped from `geomByModel`). The
   // `skippedZeroTri` count is per-model; `skippedNoMesh` here is
@@ -1821,4 +1855,343 @@ if (typeof window !== "undefined" && _billboardEnabled()) {
     _bbRafId = window.requestAnimationFrame(_bbLoop);
   };
   _bbRafId = window.requestAnimationFrame(_bbLoop);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// V1 (render-completeness Wave 3, 2026-05-29) — static scenery
+// `default_script` ambient particle chains.
+//
+// 36% of SetupModels carry a `default_script` (a 0x33 PhysicsScript DID)
+// that retail runs for EVERY physics object at creation
+// (`acclient.c:320867` `if (setup->default_script_id.id)
+// play_script_internal(...)`; state bit 0x80000 HAS_DEFAULT_SCRIPT_PS).
+// The wire-ObjectCreate ENTITY path runs it (entities.js
+// `_attachParticleChainForEntity`), but the STATIC scenery-render path
+// never did — so fountains/braziers/torches/smokestacks rendered as
+// dead geometry.
+//
+// This re-implements the CreateParticle arm of that walker for statics.
+// We CANNOT reuse `_attachParticleChainForEntity` directly: it lives in
+// entities.js (a different agent's file) AND is keyed by entity GUID +
+// the EntityManager's `entityMap`/`_fireHook`/sound-table internals,
+// none of which a static has. Statics have no GUID, no SoundTable, no
+// _fireHook target — so we mirror ONLY the CreateParticle path (hook
+// types 13 `CreateParticle` / 26 `CreateBlockingParticle`), anchored to
+// a per-placement `THREE.Group` at the static's world position. Sound /
+// Scale / CallPES arms are entity-targeted and out of scope for static
+// ambient FX (the visual payoff — flames, fountain spray, torch smoke —
+// is entirely in CreateParticle). Reuses the SAME public wasm exports
+// the entity walker uses (`fetchPhysicsScript`, `fetchParticleEmitter`)
+// + the SAME `ParticleManager` runtime.
+//
+// FAIL-SOFT: when no placement carries a non-zero `defaultScriptId`
+// (the case for every pre-V1 bake — the field deserialises to 0), this
+// path does nothing. Kill switch: `?staticScripts=off`.
+// ─────────────────────────────────────────────────────────────────────
+
+const STATIC_SCRIPT_FLAG = "staticScripts"; // ?staticScripts=off disables V1.
+// CreateParticle hook types (mirrors entities.js `_attachParticleChainForEntity`).
+const STATIC_HOOK_CREATE_PARTICLE = 13;
+const STATIC_HOOK_CREATE_BLOCKING_PARTICLE = 26;
+
+function _staticScriptsEnabled() {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      return (
+        new URLSearchParams(globalThis.location.search).get(
+          STATIC_SCRIPT_FLAG
+        ) !== "off"
+      );
+    }
+  } catch (_) {}
+  return true;
+}
+
+/**
+ * Lazy-construct `scene3d._staticParticleManager` on first use. Mirrors
+ * `entities.js:_ensureWorldParticleManager` (the geometry/material
+ * factory resolve a hwGfxObjId → BufferGeometry + Material via
+ * `fetchBuildingPlacement` + `meshToGeometryGroups` + the shared
+ * MaterialCache). Stored on scene3d so the self-managed rAF can tick it
+ * and `disposeStaticParticles` can tear it down. Idempotent.
+ *
+ * Returns null if the prerequisites (wasm exports, scene group) are
+ * missing — the caller no-ops in that case (fail-soft).
+ */
+async function _ensureStaticParticleManager(scene3d, wasmExports) {
+  if (scene3d._staticParticleManager) return scene3d._staticParticleManager;
+  if (
+    !wasmExports ||
+    typeof wasmExports.fetchBuildingPlacement !== "function" ||
+    typeof wasmExports.fetch_surfaces_pixels !== "function"
+  ) {
+    return null;
+  }
+  const { ParticleManager } = await import("./particles/index.js");
+  const adapter = await import("./adapter.js");
+  const meshToGeometryGroups = adapter.meshToGeometryGroups;
+  const materialCache = getOrCreateMaterialCache(scene3d);
+
+  // hwGfxObjId → { geometry, surfaceDid }. Same resolve path as the
+  // entity world-particle manager (entities.js:5584). Must run the
+  // wasm-side part mesh through meshToGeometryGroups to get a real
+  // THREE.BufferGeometry (raw wasm mesh crashes new THREE.Mesh on
+  // morphAttributes).
+  const resolveGfxObj = async (hwGfxObjId) => {
+    let bundle;
+    try {
+      bundle = await wasmExports.fetchBuildingPlacement(hwGfxObjId);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[scene3d.statics/V1] fetchBuildingPlacement(0x${hwGfxObjId.toString(16)}) failed:`,
+        e
+      );
+      return null;
+    }
+    if ((bundle.partCount | 0) === 0) {
+      if (typeof bundle.free === "function") bundle.free();
+      return null;
+    }
+    const meshes = bundle.takePartMeshes();
+    if (typeof bundle.free === "function") bundle.free();
+    const wasmMesh = meshes[0];
+    if (!wasmMesh) return null;
+    const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
+    if (typeof wasmMesh.free === "function") wasmMesh.free();
+    if (!groups || groups.length === 0) return null;
+    return {
+      geometry: groups[0].geometry,
+      surfaceDid: groups[0].surfaceDid || surfaceDids[0] || 0,
+    };
+  };
+
+  scene3d._staticParticleManager = new ParticleManager({
+    scene: scene3d.staticsGroup ?? null,
+    geometryFactory: async (hwGfxObjId) => {
+      const r = await resolveGfxObj(hwGfxObjId);
+      return r?.geometry ?? null;
+    },
+    materialFactory: async (hwGfxObjId) => {
+      if (!materialCache) return null;
+      const r = await resolveGfxObj(hwGfxObjId);
+      if (!r?.surfaceDid) return null;
+      try {
+        return await materialCache.get(r.surfaceDid, wasmExports.fetch_surfaces_pixels);
+      } catch (_) {
+        return null;
+      }
+    },
+  });
+  return scene3d._staticParticleManager;
+}
+
+// Reusable scratch frame for the per-emitter parentOffset (mirrors the
+// entity walker's `_particleAttachScratch*`). The chain runs serially
+// per anchor (each `addEmitter` is awaited before the next), so reuse
+// across one anchor's hooks is safe.
+const _staticOffsetVec3 = new THREE.Vector3();
+const _staticOffsetQuat = new THREE.Quaternion();
+
+/**
+ * Run ONE static placement's `default_script` PhysicsScript chain,
+ * anchored to `anchor` (a THREE.Group at the static's world transform).
+ * Mirrors the CreateParticle arm of entities.js
+ * `_attachParticleChainForEntity` — resolves the PhysicsScript, then for
+ * each CreateParticle hook resolves the emitter and adds it to the
+ * manager parented to the anchor (so the particles track the static's
+ * world position + the hook's offset frame).
+ *
+ * Returns the count of emitters attached. Fail-soft: a fetch failure on
+ * the script or any emitter is logged + skipped, never thrown.
+ */
+async function _runStaticParticleChain(manager, anchor, pesId, wasmExports) {
+  let ps;
+  try {
+    ps = await wasmExports.fetchPhysicsScript(pesId);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[scene3d.statics/V1] fetchPhysicsScript(0x${pesId.toString(16)}) failed:`,
+      e
+    );
+    return 0;
+  }
+  const entries = ps.takeEntries();
+  if (typeof ps.free === "function") ps.free();
+  let attached = 0;
+  for (const e of entries) {
+    if (
+      e.hookType !== STATIC_HOOK_CREATE_PARTICLE &&
+      e.hookType !== STATIC_HOOK_CREATE_BLOCKING_PARTICLE
+    ) {
+      continue;
+    }
+    const emitterId = e.createParticleEmitterId >>> 0;
+    if (emitterId === 0) continue;
+    let emitterInfo;
+    try {
+      emitterInfo = await wasmExports.fetchParticleEmitter(emitterId);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[scene3d.statics/V1] fetchParticleEmitter(0x${emitterId.toString(16)}) failed:`,
+        err
+      );
+      continue;
+    }
+    _staticOffsetVec3.set(
+      e.createParticleOffsetX,
+      e.createParticleOffsetY,
+      e.createParticleOffsetZ
+    );
+    _staticOffsetQuat.set(
+      e.createParticleOffsetQX,
+      e.createParticleOffsetQY,
+      e.createParticleOffsetQZ,
+      e.createParticleOffsetQW
+    );
+    const partIndex =
+      e.createParticlePartIndex === 0xffffffff ? -1 : e.createParticlePartIndex | 0;
+    try {
+      const id = await manager.addEmitter({
+        emitterInfo,
+        parent: anchor, // THREE.Group at the static's world transform.
+        partIndex,
+        parentOffset: {
+          position: _staticOffsetVec3,
+          quaternion: _staticOffsetQuat,
+        },
+      });
+      if (id !== 0) attached += 1;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[scene3d.statics/V1] addEmitter(0x${emitterId.toString(16)}) failed:`,
+        err
+      );
+    }
+  }
+  return attached;
+}
+
+/**
+ * V1 entry point — attach `default_script` ambient particle chains for
+ * every placement in `placements` that carries a non-zero
+ * `defaultScriptId`. Called by `bakeStaticsForLandblock` /
+ * `bakeStaticsRing` AFTER the meshes are placed.
+ *
+ * For each qualifying placement we create a lightweight `THREE.Group`
+ * anchor at the placement's world position + yaw + scale, add it to
+ * `scene3d.staticsGroup`, and run the chain against it. The anchor (not
+ * the mesh node) is the particle parent so the logic is identical for
+ * singleton + instanced placements (instanced placements have no single
+ * node, but each instance still gets its own anchor here).
+ *
+ * Fail-soft + cheap default: if NO placement carries a script (the
+ * universal pre-V1-bake case, since `defaultScriptId` deserialises to 0)
+ * we return early WITHOUT importing the particle runtime or creating a
+ * manager — zero added cost on the default path. Honours
+ * `?staticScripts=off`.
+ *
+ * @returns {Promise<{anchorCount:number, emitterCount:number}>}
+ */
+export async function attachStaticDefaultScripts(scene3d, placements, wasmExports) {
+  if (!scene3d || !scene3d.staticsGroup || !Array.isArray(placements)) {
+    return { anchorCount: 0, emitterCount: 0 };
+  }
+  if (!_staticScriptsEnabled()) return { anchorCount: 0, emitterCount: 0 };
+
+  // Collect placements with a live ambient script. The vast majority of
+  // statics have `defaultScriptId === 0` — this filter is the whole
+  // default-path cost (one numeric check per placement).
+  const scripted = [];
+  for (const p of placements) {
+    const did = (p && p.defaultScriptId) >>> 0;
+    if (did !== 0) scripted.push(p);
+  }
+  if (scripted.length === 0) return { anchorCount: 0, emitterCount: 0 };
+
+  const manager = await _ensureStaticParticleManager(scene3d, wasmExports);
+  if (!manager) return { anchorCount: 0, emitterCount: 0 };
+
+  let anchorCount = 0;
+  let emitterCount = 0;
+  for (const p of scripted) {
+    const lbX = (p.landblockId >>> 24) & 0xff;
+    const lbY = (p.landblockId >>> 16) & 0xff;
+    const worldX = lbX * METERS_PER_LANDBLOCK + p.x;
+    const worldY = lbY * METERS_PER_LANDBLOCK + p.y;
+    const anchor = new THREE.Group();
+    anchor.name = `static-script-anchor-0x${(p.defaultScriptId >>> 0)
+      .toString(16)
+      .padStart(8, "0")}`;
+    anchor.position.set(worldX, worldY, p.z);
+    anchor.quaternion.setFromAxisAngle(
+      new THREE.Vector3(0, 0, 1),
+      p.rotationZ ?? 0
+    );
+    const s = typeof p.scale === "number" && p.scale > 0 ? p.scale : 1;
+    if (s !== 1) anchor.scale.set(s, s, s);
+    anchor.userData = {
+      isStaticScriptAnchor: true,
+      defaultScriptId: p.defaultScriptId >>> 0,
+      landblockId: p.landblockId,
+    };
+    scene3d.staticsGroup.add(anchor);
+    anchorCount += 1;
+    // eslint-disable-next-line no-await-in-loop
+    emitterCount += await _runStaticParticleChain(
+      manager,
+      anchor,
+      p.defaultScriptId >>> 0,
+      wasmExports
+    );
+  }
+  if (anchorCount > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[scene3d.statics/V1] attached default_script chains: ` +
+        `${anchorCount} anchors, ${emitterCount} emitters`
+    );
+  }
+  return { anchorCount, emitterCount };
+}
+
+/** Tear down the static ParticleManager + its rAF. Idempotent. */
+export function disposeStaticParticles(scene3d) {
+  _spDisposed = true;
+  if (_spRafId && typeof window !== "undefined") {
+    try {
+      window.cancelAnimationFrame(_spRafId);
+    } catch (_) {}
+  }
+  _spRafId = 0;
+  const mgr = scene3d?._staticParticleManager;
+  if (mgr && typeof mgr.particleTable?.forEach === "function") {
+    try {
+      const ids = [...mgr.particleTable.keys()];
+      for (const id of ids) mgr.destroyParticleEmitter(id);
+    } catch (_) {}
+  }
+}
+
+// Self-managed rAF to advance the static ParticleManager every frame —
+// same pattern as the billboard loop above (the render loop, loop.js,
+// is another agent's file, so we drive our own tick off
+// `window.liveScene3d`). No-op until a manager exists (i.e. until at
+// least one scripted static is placed). Browser-only.
+let _spRafId = 0;
+let _spDisposed = false;
+
+if (typeof window !== "undefined" && _staticScriptsEnabled()) {
+  const _spLoop = () => {
+    if (_spDisposed) return;
+    try {
+      const mgr = window.liveScene3d?._staticParticleManager;
+      if (mgr) mgr.tick();
+    } catch (_) {}
+    _spRafId = window.requestAnimationFrame(_spLoop);
+  };
+  _spRafId = window.requestAnimationFrame(_spLoop);
 }

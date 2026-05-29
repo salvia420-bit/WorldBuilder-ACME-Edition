@@ -296,7 +296,7 @@ import {
 } from "./adapter.js";
 import { AnimationCache, cycleTimeScale } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
-import { materialCanCastShadow } from "./materials.js";
+import { materialCanCastShadow, SURFACE_TYPE } from "./materials.js";
 // === Wave R2.A (2026-05-28) — reuse the static-light constructor so
 // entity-attached SetLight lights share identical color/intensity/falloff/
 // cone math. Only imported; constructs nothing at module load.
@@ -1867,6 +1867,14 @@ export class EntityManager {
               continue;
             }
             const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
+            // C1 — snapshot the Surface (0x08) render-state floats/flags
+            // BEFORE `sp.free()` drops the wasm object (getters are invalid
+            // afterwards). Fail-soft: missing getters → 0 (opaque).
+            const palSurfaceState = {
+              surfaceType: (sp.surfaceType ?? 0) >>> 0,
+              translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
+              luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
+            };
             if (typeof sp.free === "function") sp.free();
             let mat;
             if (WIREFRAME_MODE) {
@@ -1909,6 +1917,12 @@ export class EntityManager {
                 side: THREE.DoubleSide,
                 transparent: false,
               });
+              // C1 (render-completeness wave 3) — apply Surface (0x08)
+              // Tier-1 render-state (blend/opacity/alphaTest/emissive) +
+              // tag userData.surfaceTypeFlags, mirroring the plain path's
+              // `_materialFromFlags`. Without this, dyed luminous/translucent/
+              // clipmap gear rendered flat-opaque. Fail-soft on surfaceType=0.
+              this._applyPalettedSurfaceRenderState(mat, palSurfaceState);
               mat.name = `paletted-${did.toString(16)}-${paletteId.toString(16)}`;
               // 2026-05-28 — install into the paletted-material cache
               // so the next entity with the same (DID, paletteId,
@@ -2353,6 +2367,76 @@ export class EntityManager {
       };
     }
     return this._sharedFallback;
+  }
+
+  /**
+   * C1 (render-completeness wave 3, 2026-05-29) — apply Surface (0x08)
+   * Tier-1 render-state to a palette-path material.
+   *
+   * The plain entity path (paletteId=0) routes through
+   * `MaterialCache._materialFromFlags`, which reads `Surface.surface_type`
+   * (the bitfield) + the trailing translucency/luminosity floats and sets
+   * the blend mode, opacity, alphaTest, and emissive accordingly. The
+   * palette path (dyed armour, skin/hair-tinted players, recolored
+   * creatures — `hasPaletteSubs`) builds its `MeshStandardMaterial` inline
+   * and historically dropped ALL of that, so luminous/translucent/clipmap
+   * dyed gear rendered flat-opaque and non-emissive. This replicates the
+   * SAME render-state treatment as `_materialFromFlags` (materials.js
+   * @1743-1820) inline (Agent C owns materials.js; we may not edit it) and
+   * tags `userData.surfaceTypeFlags` so downstream AnimationHook material
+   * ramps (SetMaterial etc.) can read the bits.
+   *
+   * Fail-soft: missing/zero `surfaceType` → leaves the material at its
+   * constructed opaque state (current behaviour). `state` is a plain
+   * snapshot `{ surfaceType:u32, translucency:f32, luminosity:f32 }` taken
+   * from the wasm `SurfacePixels` object BEFORE its `free()` (getters at
+   * web/src/lib.rs:5514/5552/5558 are invalid after free).
+   *
+   * Retail mapping: blend states D3DPolyRender::SetSurface acclient.c:454470
+   * (Alpha → SRCALPHA/INVSRCALPHA), :454513 (Translucent), emissive @454688.
+   */
+  _applyPalettedSurfaceRenderState(mat, state) {
+    if (!mat || !state) return;
+    const flags = (state.surfaceType ?? 0) >>> 0;
+    // Persist the bitfield regardless — AnimationHook material ramps read it.
+    mat.userData = { ...(mat.userData || {}), surfaceTypeFlags: flags };
+    if (flags === 0) return; // fail-soft: empty/fallback surface stays opaque
+    const sfTranslucency = +(state.translucency ?? 0.0);
+    const sfLuminosity = +(state.luminosity ?? 0.0);
+    const isTranslucent = (flags & SURFACE_TYPE.Translucent) !== 0;
+    const isClipMap = (flags & SURFACE_TYPE.Base1ClipMap) !== 0;
+    const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0;
+    const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
+    const isInvAlpha = (flags & SURFACE_TYPE.InvAlpha) !== 0;
+    if (isAdditive) {
+      // Additive blend (flames, sparks); depthWrite off so they don't
+      // occlude geometry behind them.
+      mat.blending = THREE.AdditiveBlending;
+      mat.transparent = true;
+      mat.depthWrite = false;
+    } else if (isTranslucent || isAlpha || isInvAlpha) {
+      // Alpha blend (SRCALPHA/INVSRCALPHA), depthWrite off — painter-sorted.
+      mat.transparent = true;
+      mat.depthWrite = false;
+      // Translucent's alpha = 1 - T (acclient.c:454523); Alpha (0x100) takes
+      // its alpha from the texture channel, so only adjust opacity for
+      // Translucent with T>0.
+      if (isTranslucent && sfTranslucency > 0) {
+        mat.opacity = Math.max(0, 1 - sfTranslucency);
+      }
+    } else if (isClipMap) {
+      // Binary alpha mask (foliage, fences) — alphaTest cuts alpha=0 frags.
+      mat.alphaTest = 0.5;
+      mat.transparent = false;
+    }
+    if (sfLuminosity > 0) {
+      // Self-illumination driven by the luminosity FLOAT (not the 0x40 bit).
+      // Flat grayscale emissive, NO emissiveMap (acclient.c @454688). Clamp
+      // to (0, 2] (ACE ~[0,1] with occasional HDR pushes).
+      mat.emissive = new THREE.Color(0xffffff);
+      mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
+    }
+    mat.needsUpdate = true;
   }
 
   /**
@@ -4879,12 +4963,21 @@ export class EntityManager {
             continue;
           }
           const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
+          // C1 — snapshot Surface (0x08) render-state BEFORE `sp.free()`.
+          const palSurfaceState = {
+            surfaceType: (sp.surfaceType ?? 0) >>> 0,
+            translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
+            luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
+          };
           if (typeof sp.free === "function") sp.free();
           const mat = new THREE.MeshStandardMaterial({
             map: tex, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, transparent: false,
           });
           mat.name = `entity-${guid.toString(16)}-surface-${did.toString(16)}`;
           mat.userData = { ...(mat.userData || {}), __disposable: true };
+          // C1 — apply palette-path Surface Tier-1 render-state + tag
+          // surfaceTypeFlags (mirrors the plain `_materialFromFlags` path).
+          this._applyPalettedSurfaceRenderState(mat, palSurfaceState);
           newOwnedMaterials.push(mat);
           newOwnedTextures.push(tex);
           entityMaterials.set(did, mat);
@@ -6932,6 +7025,29 @@ export class EntityManager {
    * (Task E scope is Sound + SoundTable; the rest are follow-ons).
    */
   _fireHook(inst, hook, audioMgr, cache) {
+    // === A-DIR (render-completeness wave 3, 2026-05-29) — direction gate ===
+    // Retail/ACE `Sequence.execute_hooks` fires a hook iff
+    // `hook.Direction == Both(0) || hook.Direction == dir`, where `dir` is
+    // the segment's PLAYBACK direction (Forward if frametime>0 else Backward;
+    // ACE.Server/Physics/Animation/Sequence.cs:262-270). `AnimationHookDir`:
+    // Backward=-1, Both=0, Forward=1.
+    //
+    // Holtburger re-bakes negative-framerate (reverse) segments as
+    // FORWARD-ordered keyframes and always advances three.js clips forward,
+    // so `dir` is always Forward(1). The faithful ACE gate therefore reduces
+    // exactly to: fire iff `direction === 0 (Both) || direction === 1
+    // (Forward)`. Without this gate the executor fired every hook in the
+    // advance window, spuriously triggering the 200 Backward-only hooks
+    // (census 2026-05-29: 6419 hooks = 3243 Both / 2976 Forward / 200
+    // Backward) — dominated by SoundTable type-2 (wrong/double sounds on
+    // reversible props like doors/levers), plus SetMaterial/TextureVelocity.
+    //
+    // `hook.direction` is baked per-entry in animation.js:604 (`h.direction`,
+    // wasm getter web/src/lib.rs:12289). Fail-soft: synthetic hooks
+    // (PhysicsScript-sourced, e.g. the SoundTable/Luminous synthesis at
+    // ~:5955/:5968) carry no `direction` field → `undefined` → NOT === -1 →
+    // they fire (correct; they're not direction-tagged AnimationHooks).
+    if ((hook.direction | 0) === -1) return;
     const hookType = hook.hookType | 0;
     const pos = inst.root.position;
     // Phase F.C — runtime event log probe. Same no-op stub shape as

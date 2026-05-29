@@ -1765,9 +1765,30 @@ export class MaterialCache {
     // the bits (emissive @454688, diffuse @454458).
     const isLuminous = (flags & SURFACE_TYPE.Luminous) !== 0;
     const hasLum = sfLuminosity > 0;
-    if (isAdditive) {
-      // Additive blend (flames, sparks). depthWrite=false so additive
-      // surfaces don't occlude geometry behind them.
+    if (isAdditive && isAlpha) {
+      // Wave-3 M1 — Alpha+Additive (0x10000|0x100): the additive
+      // contribution is WEIGHTED by per-texel source alpha, not added at
+      // full RGB. Retail D3DPolyRender::SetSurface (acclient.c:454474) sets
+      // src=BLEND_SRCALPHA(5) and, BECAUSE Additive(0x10000) is also set,
+      // dst=BLEND_ONE(2) — i.e. SRCALPHA/ONE, not the ONE/ONE that
+      // THREE.AdditiveBlending bakes in. 183/202 additive surfaces are
+      // Alpha+Additive (spell glows / flame haloes); ONE/ONE over-brightens
+      // them (alpha ignored → hard squarish halo cutoffs). The DataTexture
+      // is RGBAFormat (adapter.js:907) so the source alpha is present.
+      // Use CustomBlending to express SRCALPHA/ONE faithfully. depthWrite
+      // off so the halo doesn't occlude geometry behind it.
+      opts.blending = THREE.CustomBlending;
+      opts.blendSrc = THREE.SrcAlphaFactor;
+      opts.blendDst = THREE.OneFactor;
+      opts.blendEquation = THREE.AddEquation;
+      opts.transparent = true;
+      opts.depthWrite = false;
+    } else if (isAdditive) {
+      // Pure-additive (Additive without the Alpha bit): retail resolves to
+      // src=BLEND_ONE(2)/dst=BLEND_ONE(2) (acclient.c:454474, the non-Alpha
+      // path), which THREE.AdditiveBlending matches exactly. 19 retail
+      // surfaces (flames, sparks). depthWrite=false so additive surfaces
+      // don't occlude geometry behind them.
       opts.blending = THREE.AdditiveBlending;
       opts.transparent = true;
       opts.depthWrite = false;

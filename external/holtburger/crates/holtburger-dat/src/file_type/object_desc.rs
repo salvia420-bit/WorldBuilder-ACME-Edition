@@ -74,9 +74,14 @@ pub struct ObjectDesc {
     pub max_scale: f32,
     /// Maximum rotation about Z applied to the placement (radians per ACE).
     pub max_rotation: f32,
-    /// Minimum terrain slope (rad) at which the placement is allowed.
+    /// Minimum walkable-slope COSINE at which the placement is allowed.
+    /// NOT radians: retail `ObjectDesc::CheckSlope` (`acclient.c:351355`)
+    /// tests the terrain plane's `N.z` (= cos θ, 1.0 flat → 0.0 vertical)
+    /// with `z_val >= min_slope && z_val <= max_slope`. Real DAT values
+    /// cluster in 0.86–0.98.
     pub min_slope: f32,
-    /// Maximum terrain slope (rad) at which the placement is allowed.
+    /// Maximum walkable-slope COSINE at which the placement is allowed.
+    /// See [`Self::min_slope`] — this is `N.z`, not radians.
     pub max_slope: f32,
     /// Alignment mode (ACE: terrain-align vs world-align). Treated as opaque
     /// at parse time; the bake interprets it.
