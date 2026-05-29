@@ -35,6 +35,40 @@ wave, ship it, eye-test it, move on.
 
 ---
 
+## SHIPPED STATUS — all of R1–R4 implemented (2026-05-29, branch `render-math/wave-r1`)
+
+All items are committed, unit-validated (cargo + wasm32 + `node --check` green), and
+**flag-gated default-off** (zero change to the shipped render until you opt in). **GPU eye-test
+is still pending** — the 1070 went offline mid-test. Rebuild wasm, then A/B each flag against an
+unflagged tab at Holtburg.
+
+| Item | Flag (default off) | What to look for |
+|---|---|---|
+| R1.A sat/hue | `?terrainMod=on` (+`?terrainModSatHue=off` to isolate brightness) | terrain tile colour variation; Ice/Road shift — sat/hue unit interpretation is a GUESS, judge it |
+| R1.B terrain diagonal | (branch default — A/B vs a master build) | ridgelines follow true slope; **no dropped/hole cells** (winding) |
+| R1.C fog | `?fogLerp=on` | distance-fog tint glides over a sunset; clouds/sky unchanged; tune `FOGLERP_AERIAL_OPACITY=0.6` if double-fogged |
+| R2.A entity lights | `?entityLights=on&quality=high` | lantern/forge entity casts a light pool when its SetLight hook fires |
+| R2.B light clamp | `?lightClamp=retail` | colored light keeps tone vs washing white (best with R2.A); may darken near-intense surfaces (attenuated-color divergence) |
+| R3.A motion smoothing | `?deadReckon=on` | remote NPC/player glides vs snaps; teleport/landblock hop must SNAP not slide |
+| R3.B transparency sort | `?sortCenter=on` | ghost/layered-hair blend order resolves; **watch inter-object regression** (fixed −100 band) |
+| R3.C arc preview | `?projectileArc=on` | Arc spell preview lobs up-and-over a hill; bolt stays straight |
+| R4.a TexMerge refine | `?texMerge=on` (existing flag) | softer cell-edge blend + clean all-road cells |
+| R4.b sky-obj luminosity | `?skyObjLum=on` | stars fade in at dusk; moon dims by day |
+
+**Before eye-testing:** `cd apps/holtburger-web && wasm-pack build --target web --out-dir pkg --release`
+(R3.B's `fetchSetupPartSortCenters` and the R1/R2/R3.A wasm changes post-date earlier builds).
+Boot stalled at `form-shown` once — if it recurs, use the login server-picker "Custom (use
+fields below)" option (`server_host=127.0.0.1:9000`) per `HANDOFF-3d-render-fidelity-2026-05-28.md` §2.
+Capture composited frames via `window.__renderOnce()` + `toDataURL` (plain `/screenshot` is black).
+
+**Deferred (NOT shipped):** R3.C **Piece 2** (real-projectile arc-path). Blocked — live projectiles
+aren't classifiable by spell shape client-side (bare-GUID `projectile_index`; `ObjectCreate`
+carries WCID not SpellId; no WCID→shape map; no entity-spawn event on the plugin bus). Unblock by
+surfacing per-projectile `spellId` from wasm, then special-case Arc GUIDs in R3.A's `tick`
+smoothing (parabola-interpolate instead of straight-line damp). See `reference_ac_projectile_mechanics`.
+
+---
+
 ## Cross-wave guidance specific to this backlog
 
 - **Flag-gate, then eye-test.** Every visual change ships behind a `?flag=on` query param
