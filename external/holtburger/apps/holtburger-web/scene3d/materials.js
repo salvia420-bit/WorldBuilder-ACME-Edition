@@ -880,7 +880,20 @@ export function installPomShaderPatch(material, heightTexture, opts) {
   _installPomShaderPatch(material, heightTexture, opts);
 }
 
-// === Wave R2.B — per-RGB light-color clamp (retail accumulation) (2026-05-28) ===
+// === "Retail light response" combined patch — R2.B + L3 (2026-05-29) ===
+//
+// One `onBeforeCompile` patch behind ONE flag (`?lightClamp=retail`) that
+// applies BOTH retail point/spot-light fidelity changes, so there is no
+// competing second onBeforeCompile chain (per the waves-2 doc's R2.B
+// fold-in coordination rule):
+//   - L3 (waves-2): point/spot LINEAR distance falloff. Retail
+//     `attenuation = clamp(1 - dist/range, 0, 1)` (acclient.c:454615,
+//     guarded by `if (dist < range)`), vs three's physical inverse-square
+//     (LIGHT_DECAY = 2.0). `range` = the three `distance` cutoff, which L2
+//     already scaled by static_light_factor 1.3 in lighting.js. Redefines
+//     `getDistanceAttenuation` (lives in <lights_pars_begin>) to the AC law.
+//   - R2.B (2026-05-28): per-RGB light-color clamp in the direct-lighting
+//     accumulation (acclient.c:454616-454627).
 //
 // Parse `?lightClamp=retail` from the page URL. Default OFF (anything
 // other than the literal "retail", or the flag absent, returns false →
@@ -904,6 +917,34 @@ export function readLightClampRetailFlag() {
     return false;
   }
 }
+
+// === L4 (render-completeness waves-2, 2026-05-29) — flat-diffuse preset ===
+// Retail's fixed-function `SetSurface` (acclient.c:454385-454561) NEVER sets
+// a specular term — lit surfaces are pure Lambertian diffuse + ambient. Our
+// PBR Metal category (metalness:0.9, roughness:0.3) therefore over-responds
+// with glossy specular highlights vs retail's flat metal. `?flatDiffuse=retail`
+// opts a surface category into a non-specular PBR look (metalness 0 /
+// roughness ~1) so metal + lava read flat like retail. Default OFF: when the
+// flag is absent we keep the classifier defaults unchanged (byte-identical).
+export function readFlatDiffuseRetailFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("flatDiffuse");
+    return typeof v === "string" && v.toLowerCase() === "retail";
+  } catch (_) {
+    return false;
+  }
+}
+
+// L4 — categories that get the flat-diffuse treatment under
+// `?flatDiffuse=retail`. Metal (the over-glossy offender) + Lava (so the
+// emissive bloom reads instead of a specular sheen). Stone/Wood/Sand/Foliage
+// are already near-matte (roughness 0.8-0.95, metalness 0) so they need no
+// override.
+const FLAT_DIFFUSE_CATEGORIES = Object.freeze({
+  [SURFACE_CATEGORY.Metal]: { roughness: 1.0, metalness: 0.0 },
+  [SURFACE_CATEGORY.Lava]: { roughness: 1.0, metalness: 0.0 },
+});
 
 // Wave R2.B — per-RGB-channel light-color clamp in the DIRECT lighting
 // accumulation, behind `?lightClamp=retail`.
@@ -973,6 +1014,47 @@ function _installLightClampShaderPatch(material) {
 
   _chainBeforeCompile(material, (shader) => {
     shader.uniforms.uLightColorClamp = { value: 1.0 };
+
+    // === L3 (waves-2, 2026-05-29) — AC LINEAR point/spot falloff =========
+    // Retail `calc_point_light` (acclient.c:454605-454615) uses a LINEAR
+    // distance attenuation `clamp(1 - dist/range, 0, 1)` (guarded by
+    // `if (dist < range)`), where `range = falloff * static_light_factor`
+    // (the 1.3× L2 already baked into three's `distance`/cutoffDistance).
+    // three's `getDistanceAttenuation` (defined inside <lights_pars_begin>)
+    // is physical inverse-square (Frostbite eq.26). We expand that chunk and
+    // replace the stock function body with the AC linear law. We keep three's
+    // exact signature so every call site (getPointLightInfo / getSpotLightInfo)
+    // is unchanged. When `cutoffDistance <= 0` (infinite-reach light) we fall
+    // back to the stock inverse-square so unbounded lights still behave.
+    // Skipped harmlessly if the chunk text ever changes shape (split/join
+    // no-ops, leaving the stock function intact).
+    const stockParsBegin = THREE.ShaderChunk.lights_pars_begin;
+    const stockAttenFn =
+      "float getDistanceAttenuation( const in float lightDistance, const in float cutoffDistance, const in float decayExponent ) {\n\n" +
+      "\t// based upon Frostbite 3 Moving to Physically-based Rendering\n" +
+      "\t// page 32, equation 26: E[window1]\n" +
+      "\t// https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf\n" +
+      "\tfloat distanceFalloff = 1.0 / max( pow( lightDistance, decayExponent ), 0.01 );\n\n" +
+      "\tif ( cutoffDistance > 0.0 ) {\n\n" +
+      "\t\tdistanceFalloff *= pow2( saturate( 1.0 - pow4( lightDistance / cutoffDistance ) ) );\n\n" +
+      "\t}\n\n" +
+      "\treturn distanceFalloff;\n\n" +
+      "}";
+    const acLinearAttenFn =
+      "float getDistanceAttenuation( const in float lightDistance, const in float cutoffDistance, const in float decayExponent ) {\n" +
+      "\t// L3 (waves-2): AC linear falloff clamp(1 - dist/range, 0, 1).\n" +
+      "\t// acclient.c:454615. range = cutoffDistance (= AC falloff * 1.3).\n" +
+      "\tif ( cutoffDistance > 0.0 ) {\n" +
+      "\t\treturn saturate( 1.0 - lightDistance / cutoffDistance );\n" +
+      "\t}\n" +
+      "\t// Infinite-reach light (cutoffDistance == 0): keep physical falloff.\n" +
+      "\treturn 1.0 / max( pow( lightDistance, decayExponent ), 0.01 );\n" +
+      "}";
+    const patchedParsBegin = stockParsBegin.split(stockAttenFn).join(acLinearAttenFn);
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <lights_pars_begin>",
+      patchedParsBegin,
+    );
 
     // Build a per-light wrapper around each stock RE_Direct call by
     // expanding the chunk text and substituting every
@@ -1625,6 +1707,19 @@ export class MaterialCache {
       if (defaults) {
         baseRoughness = defaults.roughness;
         baseMetalness = defaults.metalness;
+      }
+      // === L4 (waves-2, 2026-05-29) — `?flatDiffuse=retail` preset ======
+      // Retail FFP has no specular (acclient.c:454385-454561); only opt the
+      // glossy categories (Metal, Lava) into a flat non-specular look under
+      // the flag — never overwrite the classifier defaults unconditionally.
+      // Read at the consumption site (same pattern as readLightClampRetailFlag)
+      // so the flag and its consumer share scope.
+      if (readFlatDiffuseRetailFlag()) {
+        const flat = FLAT_DIFFUSE_CATEGORIES[category];
+        if (flat) {
+          baseRoughness = flat.roughness;
+          baseMetalness = flat.metalness;
+        }
       }
     }
     // Phase 1.5 — per-DID overrides from `data/surface_overrides.json`

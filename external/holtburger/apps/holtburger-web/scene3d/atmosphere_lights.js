@@ -29,6 +29,19 @@ import {
   AtmosphereParameters,
 } from "@takram/three-atmosphere";
 
+// === L1 (render-completeness waves-2, 2026-05-29) — AC diurnal ambient ===
+// Retail floors the per-channel ambient term at LSCAPE_LIGHT_MINIMUM = 0.2
+// (acclient.c:40344; applied in LScape::set_landscape_lighting
+// acclient.c:307024; combine at acclient.c:353860-353899). On the atmosphere
+// path the SkyLightProbe's SH irradiance is physically derived (and carries
+// its own diurnal color), so we drive the AC `ambBright` level + 0.2 floor
+// into the probe's `intensity` multiplier (THREE.LightProbe.intensity is
+// applied in the standard PBR `lights_pars_begin` lookup — no recompile).
+// This guarantees indirect sky light never crushes fully to black at night
+// (the 0.2 floor) and tracks AC's authored diurnal ambient curve. Tint stays
+// physical (Bruneton SH) to avoid double-tinting the already-colored probe.
+const LSCAPE_LIGHT_MINIMUM = 0.2;
+
 /**
  * Owns the takram SunDirectionalLight + SkyLightProbe and updates them
  * each frame from an AC SkyState snapshot.
@@ -108,6 +121,14 @@ export class AtmosphereLights {
 
     this.sun.update();
     this.skyProbe.update();
+
+    // === L1 (waves-2, 2026-05-29) — drive the probe intensity from AC's
+    // diurnal ambient level with the 0.2 floor. Fail-soft: a missing /
+    // non-finite ambBright leaves the probe at its default intensity (1.0).
+    const ambBright = +state.ambBright;
+    if (Number.isFinite(ambBright)) {
+      this.skyProbe.intensity = Math.max(LSCAPE_LIGHT_MINIMUM, ambBright);
+    }
 
     this._lastState = state;
     this._tickCount += 1;

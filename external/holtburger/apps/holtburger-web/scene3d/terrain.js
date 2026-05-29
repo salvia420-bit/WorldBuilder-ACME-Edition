@@ -482,6 +482,12 @@ const DEFAULT_DETAIL_TEX_FADE_END = 75.0;
 const DETAIL_TEX_SLICE_FALLBACK = Object.freeze(new Array(33).fill(255));
 const DETAIL_TEX_TILING_FALLBACK = Object.freeze(new Array(33).fill(1));
 
+// T1 (2026-05-29) — base tex_tiling LUT fallback (default-on path). When the
+// wasm `fetch_terrain_base_tex_tiling()` export is missing or the fetch fails,
+// every code tiles 1× → atlasUvFor is an exact no-op → fail-soft to the prior
+// (pre-T1) render. Real retail values (all 2) come from the wasm LUT.
+const BASE_TEX_TILING_FALLBACK = Object.freeze(new Array(33).fill(1));
+
 // R4.a 2026-05-28 — retail TexMerge mid-point alpha rounding sub-flag.
 // The composite already ships behind ?texMerge; this rides that flag (no
 // new top-level URL param) and is ON by default so ?texMerge now includes
@@ -720,6 +726,14 @@ precision highp int;
 precision highp sampler2DArray;
 
 uniform sampler2DArray uAtlas;        // 33 layers of 256×256 retail terrain tiles, one per code (0..32). ClampToEdge per layer eliminates the cross-tile bleed that the prior 6×6 packed atlas produced at mip levels ≥3 (the "not flush with vertices" artefact: gutter-less neighbours bled into each other along cell vertex lines).
+// T1 (2026-05-29) — per-code base texture tiling (retail TerrainTex.tex_tiling
+// == 2 for all 33). Retail's TexMerge::CopyAndTile→TileCSI replicates the
+// source NxN into the merged tile (acclient.c:304685,365513), so a UV∈[0,1]
+// sample shows N×N copies. atlasUvFor mirrors that with fract(cellUv * tiling).
+// Default 1 (no tiling) when the LUT is unavailable → fail-soft to the prior
+// 1× render. The atlas is ClampToEdge per layer (see uAtlas above), so the
+// fract() wrap is REQUIRED — a raw *tiling would clamp and cut the tile off.
+uniform int uBaseTexTiling[33];       // per-code base tex_tiling (retail 2; 1 = off/fallback)
 uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadCode*64, A = 255
 uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
 uniform float uRoadTileScale;         // road UV tile rate per LB unit
@@ -924,8 +938,16 @@ out vec4 fragColor;
 // cellUv (range [0,1]) is the intra-cell UV; the layer index is the
 // code itself -- DataArrayTexture clamps integer layer selection so no
 // neighbour-tile bleed at any mip level.
+//
+// T1 (2026-05-29): apply the retail base tex_tiling (== 2 for all 33 types)
+// as fract(cellUv * tiling) — TexMerge::TileCSI replicates the source N×N
+// into the merged tile (acclient.c:365513), so the merged texture sampled at
+// UV∈[0,1] shows N×N copies. fract() wraps WITHIN the ClampToEdge atlas layer
+// (a raw *tiling would clamp the >1 UVs and cut the extra tiles off). tiling 1
+// (the LUT fallback) makes this an exact no-op → fail-soft to the prior 1×.
 vec3 atlasUvFor(int code, vec2 cellUv) {
-  return vec3(cellUv, float(code));
+  float tiling = float(uBaseTexTiling[clamp(code, 0, 32)]);
+  return vec3(fract(cellUv * tiling), float(code));
 }
 
 // T1 — rotate an intra-cell UV ([0,1]²) by 90° steps around its centre, so a
@@ -1079,9 +1101,12 @@ void main() {
   // T1 — retail TexMerge composite (opt-in, overrides the bilinear blend
   // above). Per-cell merge data lives in uMergeData (48×8: 8 EW cells × 6
   // slots, row = NS cell iv). Slot 0 is the base terrain tile; slots 1..3
-  // are alpha-masked terrain overlays. (Road slots 4..5 exist in the data
-  // but the legacy in-shader road painter still owns roads this pass, so we
-  // stop at the terrain overlays — the biome boundaries are T1's headline.)
+  // are alpha-masked terrain overlays; slots 4..5 are alpha-masked ROAD
+  // overlays (atlas layer 32, same [layer,mask,rotation,valid] format —
+  // pack_merge_record, terrain_merge.rs:417). T2 (2026-05-29) extends the
+  // loop to s<6 so the authored road masks composite here; the legacy
+  // bilinear road painter (uRoadEnabled block below) is gated OFF whenever
+  // this path is active so roads aren't double-blended.
   if (uTexMergeEnabled > 0.5) {
     int colBase = iu * 6;
     vec4 baseTexel = texelFetch(uMergeData, ivec2(colBase, iv), 0);
@@ -1098,7 +1123,13 @@ void main() {
     // the Chorizite FindRoadAlpha all-road semantics and avoids three
     // dead texelFetch / mask samples per all-road fragment).
     if (baseLayer != 32) {
-      for (int s = 1; s < 4; s++) {
+      // T2 — slots 1..3 terrain overlays + 4..5 road overlays. Road slots
+      // carry the same [atlas_layer(=32), alpha_mask_idx, rotation, valid]
+      // packing as terrain overlays, so the existing rotate + alpha-mask +
+      // mid-point-round pipeline handles them with no special-casing. (An
+      // all-road cell short-circuits above with baseLayer==32 and no
+      // overlays, so this loop only runs for terrain/partial-road cells.)
+      for (int s = 1; s < 6; s++) {
         vec4 t = texelFetch(uMergeData, ivec2(colBase + s, iv), 0);
         if (t.a < 0.5) continue;            // empty slot
         int layer = int(t.r * 255.0 + 0.5);
@@ -1190,7 +1221,13 @@ void main() {
   // it into the terrain colour by the mask. This replaces the prior
   // separate road-overlay quad mesh — same painted appearance retail
   // had, naturally flush with the terrain surface.
-  if (uRoadEnabled > 0.5) {
+  //
+  // T3 (2026-05-29): this is the LEGACY bilinear-approximation road painter.
+  // When the TexMerge path (T2) is active it already composited the authored
+  // road alpha masks (slots 4..5) into the result color, so running this too
+  // would double-blend roads. Gate it OFF whenever uTexMergeEnabled is on, the
+  // painter stays the road source for the default (non-?texMerge) path.
+  if (uRoadEnabled > 0.5 && uTexMergeEnabled < 0.5) {
     float r00 = vertexRoadAt(iu,     iv    );
     float r10 = vertexRoadAt(iu + 1, iv    );
     float r01 = vertexRoadAt(iu,     iv + 1);
@@ -1476,6 +1513,10 @@ async function resolveTerrainRingOpts(
       atlasTexture: null,
       roadTexture: null,
       roadCanvas: null,
+      // T1 — wire mode never builds the terrain ShaderMaterial; keep the
+      // base-tiling field present + null for shape parity (binds the 1×
+      // fallback if a path ever reads it).
+      baseTexTiling: null,
       // Wave 2.A — wire-agent uses MeshBasicMaterial with vertexColors
       // (TERRAIN_CODE_TO_RGB drives the per-vertex colour attribute);
       // no shader-side palette texture needed.
@@ -1652,6 +1693,33 @@ async function resolveTerrainRingOpts(
     // resilient.
   }
 
+  // T1 (2026-05-29) — base terrain tex_tiling LUT (DEFAULT-ON, fail-soft).
+  // Retail TerrainTex.tex_tiling == 2 for all 33 types; atlasUvFor applies it
+  // as fract(cellUv * tiling) so each base tile shows the retail 2×2 spatial
+  // replication TexMerge::TileCSI bakes (acclient.c:365513) instead of one
+  // ~2×-too-large copy. LB-independent → fetched once + cached on scene3d
+  // (like the detail/palette LUTs). Missing export or fetch failure → null →
+  // the BASE_TEX_TILING_FALLBACK (all 1) binds → exact no-op (prior 1×).
+  let baseTilingLut = scene3d.terrainBaseTilingLut ?? null;
+  if (
+    !baseTilingLut &&
+    typeof wasmExports.fetch_terrain_base_tex_tiling === "function"
+  ) {
+    try {
+      const lut = await wasmExports.fetch_terrain_base_tex_tiling();
+      // Uint32Array(33) → plain number array for the GLSL int[33] uniform.
+      const arr = Array.from(lut);
+      if (arr.length === 33) {
+        baseTilingLut = arr;
+        scene3d.terrainBaseTilingLut = baseTilingLut;
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[terrain] fetch_terrain_base_tex_tiling failed:", e);
+      baseTilingLut = null; // → fallback (1×) below
+    }
+  }
+
   // T7 — terrain detail-diffuse array + per-code LUTs (opt-in
   // `?terrainDetailTex=on`). Built once per session and cached on scene3d
   // (like the detail-NORMAL array), so ring rebuilds and lazy LB adds
@@ -1777,6 +1845,10 @@ async function resolveTerrainRingOpts(
     atlasTexture,
     roadTexture,
     roadCanvas,
+    // T1 (2026-05-29) — base tex_tiling LUT (length-33 number array; retail
+    // all 2). Null when the fetch failed/export missing → the material binds
+    // BASE_TEX_TILING_FALLBACK (all 1) → atlasUvFor no-op → fail-soft 1×.
+    baseTexTiling: baseTilingLut ?? null,
     // Wave 2.A — terrain palette LUT + tint strength. Texture is the
     // 32×1 RGBA DataTexture built from data/terrain_palette.json;
     // strength is the default unless a future quality preset or
@@ -2211,6 +2283,13 @@ export async function bakeTerrainForLandblock(
     // uniforms.
     uniforms: {
       uAtlas: { value: opts.atlasTexture },
+      // T1 (2026-05-29) — per-code base tex_tiling (retail all 2). Falls back
+      // to the all-1 LUT (atlasUvFor no-op) when the wasm fetch failed, so the
+      // default-on path is fail-soft to the prior 1× render. The int[33]
+      // uniform must always be length 33 or three.js warns on the bind.
+      uBaseTexTiling: {
+        value: opts.baseTexTiling ?? BASE_TEX_TILING_FALLBACK,
+      },
       uVertexTypes: { value: vertexTypesTex },
       // Retail-style road painting (replaces the prior road-overlay
       // mesh). The road texture is the same retail-DAT road tile we

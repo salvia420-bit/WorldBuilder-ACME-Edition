@@ -293,6 +293,13 @@ const DYN_LOD_ON = (() => {
 // Throttle the dynamic-LOD recheck — distance bands are coarse, so ~2 Hz is
 // plenty and keeps the per-entity async band query off the hot path.
 const DYN_LOD_INTERVAL_S = 0.5;
+// Render-completeness Waves-2 P3 (2026-05-29) — CallPES (AnimationHook
+// type 19) is a RECURSIVE sub-script invocation: a PhysicsScript can call
+// another PhysicsScript, which can call another, etc. (354 retail scripts
+// carry CallPES). Cap the chain-walker recursion so a self-referential or
+// cyclic script graph can't blow the stack / spawn-storm. 3 levels covers
+// every retail script (none nest beyond 2); the walker bails past it.
+const MAX_CALL_PES_DEPTH = 3;
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 
 // AC InterpretedMotionCommand low-16 constants — used for
@@ -3762,11 +3769,17 @@ export class EntityManager {
     action.setLoop(THREE.LoopOnce, 1);
     action.clampWhenFinished = true;
     action.enabled = true;
+    // A3 (2026-05-29): one-shot swings/casts honor the server's per-motion
+    // speed too. The base timeScale normalizes the clip to its authored
+    // duration (`clip.duration / dur`); MULTIPLY by `inst._motionSpeed`
+    // (retail `Framerate *= speed`) so a hasted/slowed attack plays faster/
+    // slower. Identity (1.0) is the fail-soft default.
+    const swingSpeed = inst._motionSpeed ?? 1.0;
     const dur = +result.durationSec;
     if (Number.isFinite(dur) && dur > 0 && Number.isFinite(clip.duration) && clip.duration > 0) {
-      action.setEffectiveTimeScale(clip.duration / dur);
+      action.setEffectiveTimeScale((clip.duration / dur) * swingSpeed);
     } else {
-      action.setEffectiveTimeScale(1.0);
+      action.setEffectiveTimeScale(swingSpeed);
     }
     action.setEffectiveWeight(1.0);
     action.reset();
@@ -4030,10 +4043,27 @@ export class EntityManager {
    *
    * STOP / non-locomotion commands fade out the current action, leaving
    * the rig at rest pose.
+   *
+   * Render-completeness Waves-2 A1 (2026-05-29): `motionSpeed` is the
+   * server's per-motion playback speed (`UpdateMotion.forward_speed`,
+   * default `1.0`). Retail scales the active sequence's animation
+   * framerate by it (`Framerate *= speed`, ACE `AnimData.cs:17`; retail
+   * `AnimSequenceNode::multiply_framerate` `acclient.c:340978`), so
+   * hasted / slowed / quickness-modified entities animate at the
+   * server's tempo. Stored on `inst._motionSpeed` and MULTIPLIED INTO
+   * the cycle's `setEffectiveTimeScale` — composing with (not clobbering)
+   * the `?velScale=on` T11 velocity-scale path (see `tick()` ~L6343).
    */
-  async setMotion(guid, motionCommand, motionStance) {
+  async setMotion(guid, motionCommand, motionStance, motionSpeed = 1.0) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return;
+    // A1: stash the playback speed (fail-soft to 1.0 for non-finite /
+    // non-positive). Read by the locomotion timeScale composition below
+    // and by the per-frame T11 velScale tick.
+    {
+      const ms = +motionSpeed;
+      inst._motionSpeed = Number.isFinite(ms) && ms > 0 ? ms : 1.0;
+    }
     // ACE broadcasts cmd=Stop (0x0004) or cmd=Invalid (0x0000) when a
     // moving entity comes to rest. With no override we'd fall through
     // classifyMotionCommand → null → fadeOutCurrent → bare SetupModel
@@ -4331,6 +4361,19 @@ export class EntityManager {
       && stance !== prevStance;
     const crossfadeDuration = isStanceReadyChange ? 0.15 : CROSSFADE_S;
     inst.crossFadeTo(action, cacheKey, crossfadeDuration);
+    // A1 (2026-05-29): apply the server's per-motion playback speed to the
+    // locomotion cycle. When ?velScale=on, the per-frame T11 tick owns
+    // setEffectiveTimeScale (it MULTIPLIES inst._motionSpeed in there —
+    // see tick() ~L6360), so setting it here would just be overwritten next
+    // frame; skip to avoid a one-frame double-apply. When velScale is OFF,
+    // the cycle otherwise plays at native rate (1.0), so set the playback
+    // speed directly here. Identity (1.0) is a no-op, so this is fail-soft.
+    if (!VEL_SCALE_ON) {
+      const ms = inst._motionSpeed ?? 1.0;
+      if (ms !== 1.0) {
+        try { action.setEffectiveTimeScale(ms); } catch (_) {}
+      }
+    }
     try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
   }
 
@@ -5355,6 +5398,15 @@ export class EntityManager {
     }
     inst.actionLastHookTime.set(linkKey, 0);
     try {
+      // A3 (2026-05-29): attack/cast one-shots route here (from=Ready in
+      // setMotion); honor the server's per-motion speed so hasted/slowed
+      // casts play at the right tempo (retail `Framerate *= speed`). Link
+      // clips play at native rate otherwise, so identity (1.0) is a no-op
+      // and brief locomotion transition links are unaffected (fail-soft).
+      const linkSpeed = inst._motionSpeed ?? 1.0;
+      if (linkSpeed !== 1.0) {
+        try { action.setEffectiveTimeScale(linkSpeed); } catch (_) {}
+      }
       action.reset();
       action.play();
       console.log(
@@ -5542,7 +5594,7 @@ export class EntityManager {
     return cloned;
   }
 
-  async _attachParticleChainForEntity(guid, rig, pesId) {
+  async _attachParticleChainForEntity(guid, rig, pesId, depth = 0) {
     // F.D-fu (2026-05-20): emit a chain-walker entry log so validators
     // (and devs eyeballing console) can correlate spawn dispatch with
     // chain-walker firing. Critical for diagnosing "no PhysicsScriptHook
@@ -5644,6 +5696,92 @@ export class EntityManager {
           }
         }
         continue; // hook handled; don't fall through to emitter check
+      }
+
+      // === Render-completeness Waves-2 P3 (2026-05-29) ===
+      // Pre-P3 the walker handled only Sound(1)/SoundTweaked(21) and
+      // CreateParticle(13)/CreateBlockingParticle(26), `continue`-ing past
+      // every other type. That silently DROPPED three hook types that
+      // legitimately appear in PhysicsScript (0x33) chains:
+      //   SoundTable(2)  ×626 scripts — the walker's sound arm above checks
+      //                  for raw Sound(1)/SoundTweaked(21), but real scripts
+      //                  carry SoundTable(2) (a Sound-enum lookup vs the
+      //                  entity's SoundTable).
+      //   Scale(12)      ×122 scripts — uniform object scale tween.
+      //   CallPES(19)    ×354 scripts — a RECURSIVE sub-script call that was
+      //                  never followed.
+      // We DON'T blanket-route every type through `_fireHook` (that path is
+      // the animation-trigger executor; firing animation-only hooks like
+      // ReplaceObject(5)/material ramps from the spawn-walker context risks
+      // acting on the wrong target). Instead we explicitly add the three
+      // types that belong in PhysicsScripts, decoding from `e.hookData`
+      // (PhysicsScriptEntryJs exposes no soundEnum/rampEnd/callPes getters)
+      // with the SAME byte layout the animation-hook path uses
+      // (`lib.rs` AnimationHookJs::{soundEnum,rampEnd,rampTime,callPesDid,
+      // callPesPause}). SoundTable(2)/Scale(12) reuse the validated
+      // `_fireHook` arms via a small adapter object (no logic duplication);
+      // CallPES(19) recurses through this same walker with a depth guard.
+      if (e.hookType === 2 || e.hookType === 12 || e.hookType === 19) {
+        const inst = this.entityMap.get(guid >>> 0);
+        if (!inst) continue; // entity gone; drop.
+        const bytes = e.hookData; // Uint8Array view of the typeswitch body.
+        const dv = (bytes && bytes.byteLength)
+          ? new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+          : null;
+        // PhysicsScript hooks fire `start_time` seconds after script attach
+        // (same convention as the Sound arm above). Honor it via setTimeout
+        // so scripted timing isn't collapsed to t=0.
+        const startDelayMs = Math.max(0, (+e.startTime || 0) * 1000);
+        if (e.hookType === 2) {
+          // SoundTable: soundEnum = u32 LE @ hook_data[0..4] (len >= 4).
+          if (!dv || bytes.byteLength < 4) continue;
+          const soundEnum = dv.getUint32(0, true) >>> 0;
+          if (soundEnum === 0) continue;
+          const cache = this.scene3d?.soundTableCache ?? null;
+          const tid = setTimeout(() => {
+            if (!this.entityMap.has(guid >>> 0)) return;
+            // Adapter mirrors the AnimationHookJs shape `_fireHook` reads.
+            this._fireHook(inst, { hookType: 2, soundEnum, time: +e.startTime }, audioMgr, cache);
+          }, startDelayMs);
+          timeoutIds.push(tid);
+          continue;
+        }
+        if (e.hookType === 12) {
+          // Scale: rampEnd = f32 LE @[0..4], rampTime = f32 LE @[4..8]
+          // (len == 8). No `start` — `_fireHook` tweens from current scale.
+          if (!dv || bytes.byteLength < 8) continue;
+          const rampEnd = dv.getFloat32(0, true);
+          const rampTime = dv.getFloat32(4, true);
+          const tid = setTimeout(() => {
+            if (!this.entityMap.has(guid >>> 0)) return;
+            this._fireHook(inst, { hookType: 12, rampEnd, rampTime, time: +e.startTime }, null, null);
+          }, startDelayMs);
+          timeoutIds.push(tid);
+          continue;
+        }
+        // CallPES (19): callPesDid = u32 LE @[0..4], callPesPause = f32 LE
+        // @[4..8] (len >= 8). Recurse THIS walker on the sub-script, after
+        // (start_time + callPesPause). Depth-guarded so a cyclic script
+        // graph can't infinitely recurse / spawn-storm.
+        if (!dv || bytes.byteLength < 8) continue;
+        const callPesDid = dv.getUint32(0, true) >>> 0;
+        const callPesPause = dv.getFloat32(4, true);
+        if (callPesDid === 0) continue;
+        if (depth >= MAX_CALL_PES_DEPTH) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[entities/P3] CallPES depth guard hit (depth=${depth} >= ${MAX_CALL_PES_DEPTH}); ` +
+              `dropping sub-script 0x${callPesDid.toString(16)} on guid=0x${guid.toString(16)}`
+          );
+          continue;
+        }
+        const pesDelayMs = Math.max(0, ((+e.startTime || 0) + (callPesPause || 0)) * 1000);
+        const tid = setTimeout(() => {
+          if (!this.entityMap.has(guid >>> 0)) return;
+          this._attachParticleChainForEntity(guid, rig, callPesDid, depth + 1).catch(() => {});
+        }, pesDelayMs);
+        timeoutIds.push(tid);
+        continue;
       }
 
       if (e.hookType !== 13 && e.hookType !== 26) continue;
@@ -6340,7 +6478,15 @@ export class EntityManager {
         if (base > 0 && inst._locoCycleKey) {
           const locoAction = inst.actions.get(inst._locoCycleKey);
           if (locoAction && locoAction.isRunning()) {
-            locoAction.setEffectiveTimeScale(cycleTimeScale(inst._emaSpeed ?? 0, base));
+            // A1 (2026-05-29): compose the server playback speed
+            // (`inst._motionSpeed`) WITH the T11 velocity-scale factor into
+            // ONE timeScale — multiply, do not clobber. velScaleComponent is
+            // the anti-ice-skating gait (actual/authored ground speed);
+            // motionSpeed is retail's `Framerate *= speed`. Identity (1.0)
+            // motionSpeed leaves T11 untouched (fail-soft).
+            const velScaleComponent = cycleTimeScale(inst._emaSpeed ?? 0, base);
+            const motionSpeed = inst._motionSpeed ?? 1.0;
+            locoAction.setEffectiveTimeScale(velScaleComponent * motionSpeed);
           }
         }
       }

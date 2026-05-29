@@ -94,22 +94,106 @@ function classifyHeuristic(state) {
   return PROFILES[2];                              // partly-cloudy default
 }
 
+// --- W4 (2026-05-29): real is_storm from the active DayGroup's SkyObjects --
+//
+// Retail has NO storm flag in the DAT — the authoritative weather signal is
+// purely "does the active DayGroup expose a weather SkyObject that is visible
+// in the current time-window?". `crates/holtburger-world/src/sky.rs` already
+// decodes each SkyObject's `properties` bitmask + `visible` flag (begin/end
+// time-window applied Rust-side) and surfaces them via
+// `sessionHandle.getSkyObjectStates()`. Weather is keyed off:
+//   - properties & 0x04  → heavy UV-scroll "weather streak" GfxObj
+//                          (retail 0x01004C42 props 0x04, 0x01004C44 props 0x05)
+//   - 0x02xxxxxx gfxObjectId + properties & 0x08 (PhysicsScript-bound)
+//                          → SetupModel rain droplet model
+//                          (retail 0x02000588/589/0xBA6 props 0x0D)
+// Validated bit semantics: 0x01 additive, 0x02 cloud band, 0x04 weather
+// streak, 0x08 PhysicsScript-bound (see sky.rs probe + MEMORY).
+const SKY_PROP_WEATHER_STREAK = 0x04;
+const SKY_PROP_PHYSICS_SCRIPT = 0x08;
+const SKY_PROP_CLOUD_BAND = 0x02;
+
+/**
+ * Scan the active DayGroup's SkyObject snapshots for a VISIBLE weather
+ * object. Returns precip metadata so callers can drive both is_storm
+ * (W4) and rain-vs-snow precip-type selection (W2).
+ *
+ * @param {Array|null} skyObjects  result of `getSkyObjectStates()` — one
+ *   entry per SkyObject in the active DayGroup. Each must expose the
+ *   `visible` (bool), `properties` (u32), `gfxObjectId` (u32),
+ *   `pesObjectId` (u32) getters from `SkyObjectState`.
+ * @returns {{ is_storm:boolean, has_droplets:boolean,
+ *             streak_gfx_id:number }} `streak_gfx_id` is the GfxObj DID of
+ *   the first visible weather-streak object (0 if none) — W2 keys precip
+ *   type off it as a future refinement.
+ */
+export function scanWeatherSkyObjects(skyObjects) {
+  const out = { is_storm: false, has_droplets: false, streak_gfx_id: 0 };
+  if (!Array.isArray(skyObjects) || skyObjects.length === 0) return out;
+  for (const o of skyObjects) {
+    if (!o) continue;
+    let visible, props, gfxId, pesId;
+    try {
+      visible = !!o.visible;
+      props = (o.properties >>> 0) || 0;
+      gfxId = (o.gfxObjectId >>> 0) || 0;
+      pesId = (o.pesObjectId >>> 0) || 0;
+    } catch (_) {
+      continue; // defensive: malformed snapshot entry
+    }
+    if (!visible) continue;
+    const isWeatherStreak = (props & SKY_PROP_WEATHER_STREAK) !== 0;
+    const isSetupModel = (gfxId & 0xff000000) === 0x02000000;
+    const isPhysicsBound =
+      pesId !== 0 || (props & SKY_PROP_PHYSICS_SCRIPT) !== 0;
+    // A SetupModel weather object carrying a PhysicsScript = rain droplets.
+    const isDropletModel = isSetupModel && isPhysicsBound;
+    if (isWeatherStreak || isDropletModel) {
+      out.is_storm = true;
+      if (isWeatherStreak && out.streak_gfx_id === 0) out.streak_gfx_id = gfxId;
+      if (isDropletModel) out.has_droplets = true;
+    }
+  }
+  return out;
+}
+
 /**
  * Get a weather profile for the active DayGroup. Tries indexed table
  * first; falls back to heuristic on out-of-range index.
  *
+ * W4 (2026-05-29): when a SkyObject snapshot array is supplied, the
+ * fabricated table `is_storm` is REPLACED by a runtime scan of the
+ * active DayGroup's weather SkyObjects (real DAT signal). The T/Td/P
+ * triplet stays a heuristic profile (there is no DAT analogue). The
+ * scan result is also returned on `_weather` so W2 precip-type
+ * selection can read `has_droplets` / `streak_gfx_id` without a second
+ * pass.
+ *
  * @param {Object|null} state  AC SkyState (from `__sessionHandle.getSkyState()`)
  * @param {number|null} dayGroupIndex  retail DayGroup index 0-19 or null
+ * @param {Array|null} [skyObjects]  `getSkyObjectStates()` (optional)
  * @returns {{name:string, temperature_C:number, dewpoint_C:number,
- *           surface_pressure_hPa:number, is_storm:boolean}}
+ *           surface_pressure_hPa:number, is_storm:boolean,
+ *           _weather?:{is_storm:boolean,has_droplets:boolean,streak_gfx_id:number}}}
  */
-export function weatherForState(state, dayGroupIndex) {
-  if (Number.isFinite(dayGroupIndex) &&
-      dayGroupIndex >= 0 &&
-      dayGroupIndex < PROFILES.length) {
-    return PROFILES[dayGroupIndex];
+export function weatherForState(state, dayGroupIndex, skyObjects) {
+  const base =
+    Number.isFinite(dayGroupIndex) &&
+    dayGroupIndex >= 0 &&
+    dayGroupIndex < PROFILES.length
+      ? PROFILES[dayGroupIndex]
+      : classifyHeuristic(state);
+
+  // No SkyObject array → preserve legacy table/heuristic behavior
+  // (fail-soft; W4 only refines when the real signal is available).
+  if (!Array.isArray(skyObjects) || skyObjects.length === 0) {
+    return base;
   }
-  return classifyHeuristic(state);
+
+  const scan = scanWeatherSkyObjects(skyObjects);
+  // Clone so we don't mutate the shared PROFILES table; drive is_storm
+  // from the real SkyObject presence, keep the T/Td/P heuristic.
+  return { ...base, is_storm: scan.is_storm, _weather: scan };
 }
 
 /** Live-tuning hook for per-DayGroup tweaking via devtools. */

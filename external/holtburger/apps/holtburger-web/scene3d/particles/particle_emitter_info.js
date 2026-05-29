@@ -119,38 +119,53 @@ export class ParticleEmitterInfo {
     this.sortingSphere.radius = maxOff;
   }
 
-  /** Port of `GetRandomStartScale` (ParticleEmitterInfo.cs:99-105). */
+  // P1 fidelity fix (2026-05-29) — these 5 helpers target RETAIL, not ACE.
+  // Retail `ParticleEmitter::EmitParticle` (acclient.c:331054) calls all 5
+  // per spawned particle; the arithmetic at acclient.c:324328-324403 is
+  // ADDITIVE for ALL five fields: `RollDice(-1,1) * <rand> + <value>`.
+  // ACE's C# diverges (it uses `r * rand * value` for FinalScale/StartTrans/
+  // FinalTrans — only StartScale + Lifespan match retail). The 3 multiplicative
+  // helpers below were flipped to additive to match retail. The random draw
+  // `rng() * 2 - 1` is in [-1, 1), matching retail's `Random::RollDice(-1, 1)`.
+  // Fail-soft: when the corresponding *Rand field is 0, `r * 0 + value`
+  // collapses to exactly the authored value (zero jitter), so the default
+  // render is unchanged.
+
+  /** Port of `GetRandomStartScale` (retail acclient.c:324328). */
   getRandomStartScale() {
-    // ACE: result = ThreadSafeRandom.Next(-1, 1) * ScaleRand + StartScale;
-    //      Clamp(0.1, 10);
+    // retail: result = RollDice(-1,1) * scale_rand + start_scale; Clamp(0.1, 10);
     const r = rng() * 2.0 - 1.0;
     return clamp(r * this.scaleRand + this.startScale, 0.1, 10.0);
   }
 
-  /** Port of `GetRandomFinalScale` (ParticleEmitterInfo.cs:107-113). */
+  /** Port of `GetRandomFinalScale` (retail acclient.c:324343). */
   getRandomFinalScale() {
-    // ACE: result = ThreadSafeRandom.Next(-1, 1) * ScaleRand * FinalScale;
-    //      Clamp(0.1, 10);
-    // (Note the C# uses multiplication, not addition like StartScale —
-    // that is an ACE quirk; ported faithfully.)
+    // retail: result = RollDice(-1,1) * scale_rand + final_scale; Clamp(0.1, 10);
+    // (Additive — corrected from ACE's multiplicative `r * rand * value` to
+    // match retail; this is a RETAIL-fidelity client.)
     const r = rng() * 2.0 - 1.0;
-    return clamp(r * this.scaleRand * this.finalScale, 0.1, 10.0);
+    return clamp(r * this.scaleRand + this.finalScale, 0.1, 10.0);
   }
 
-  /** Port of `GetRandomStartTrans` (ParticleEmitterInfo.cs:115-121). */
+  /** Port of `GetRandomStartTrans` (retail acclient.c:324373). */
   getRandomStartTrans() {
+    // retail: result = RollDice(-1,1) * trans_rand + start_trans; Clamp(0, 1);
+    // (Additive — corrected from ACE's multiplicative form.)
     const r = rng() * 2.0 - 1.0;
-    return clamp(r * this.transRand * this.startTrans, 0.0, 1.0);
+    return clamp(r * this.transRand + this.startTrans, 0.0, 1.0);
   }
 
-  /** Port of `GetRandomFinalTrans` (ParticleEmitterInfo.cs:123-129). */
+  /** Port of `GetRandomFinalTrans` (retail acclient.c:324388). */
   getRandomFinalTrans() {
+    // retail: result = RollDice(-1,1) * trans_rand + final_trans; Clamp(0, 1);
+    // (Additive — corrected from ACE's multiplicative form.)
     const r = rng() * 2.0 - 1.0;
-    return clamp(r * this.transRand * this.finalTrans, 0.0, 1.0);
+    return clamp(r * this.transRand + this.finalTrans, 0.0, 1.0);
   }
 
-  /** Port of `GetRandomLifespan` (ParticleEmitterInfo.cs:131-137). */
+  /** Port of `GetRandomLifespan` (retail acclient.c:324403). */
   getRandomLifespan() {
+    // retail: result = RollDice(-1,1) * lifespan_rand + lifespan; floor at 0.
     const r = rng() * 2.0 - 1.0;
     return Math.max(0.0, r * this.lifespanRand + this.lifespan);
   }

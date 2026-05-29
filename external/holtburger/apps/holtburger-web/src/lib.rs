@@ -3014,6 +3014,45 @@ pub async fn fetch_terrain_modulation_ranges() -> Result<Vec<u32>, JsValue> {
     Ok(out)
 }
 
+/// T1 (2026-05-29) — fetch the per-terrain-type **base** texture tiling
+/// (`TerrainTex.tex_tiling`) as a 33-entry `Uint32Array` (terrain code →
+/// tiling). Retail `tex_tiling == 2` for all 33 types; consumed by
+/// `TexMerge::CopyAndTile`/`MergeTexture` (`acclient.c:304685,304854`) →
+/// `TileCSI` (`acclient.c:365513`), a spatial N×N replication of the source
+/// texture into the merged tile. The terrain shader mirrors that by sampling
+/// the ClampToEdge atlas layer at `fract(cellUv * tiling)` (a raw `*tiling`
+/// would clamp and cut the tile off — see `terrain.js::atlasUvFor`).
+///
+/// Mirrors [`fetch_terrain_modulation_ranges`] (same Region read, flat
+/// `Vec<u32>` so the wasm-bindgen ABI needs no new type). Default `1` for any
+/// slot the Region omits (degenerate/empty-DAT builds) so JS reads it as the
+/// current 1× behaviour — the fail-soft fallback the default-on path requires.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_terrain_base_tex_tiling() -> Result<Vec<u32>, JsValue> {
+    use holtburger_dat::file_type::Region;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = global_source::global_source();
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", 0x1300_0000))
+        .map_err(|e| JsValue::from_str(&format!("Region 0x13000000: {e}")))?;
+    let mut cursor = std::io::Cursor::new(&bytes[..]);
+    let region = Region::unpack(&mut cursor)
+        .map_err(|e| JsValue::from_str(&format!("Region::unpack: {e}")))?;
+    // 33 terrain codes. Default 1 (no tiling) for any slot the Region
+    // doesn't emit so a partial/empty Region is fail-soft to the prior
+    // 1× render rather than scaling by 0.
+    let mut out = vec![1u32; 33];
+    for td in &region.terrain_info.land_surfaces.tex_merge.terrain_desc {
+        let idx = td.terrain_type as usize;
+        if idx >= 33 {
+            continue;
+        }
+        out[idx] = td.terrain_tex.tex_tiling;
+    }
+    Ok(out)
+}
+
 /// T7 — build the per-code detail-texture LUTs from `(terrain_type,
 /// detail_texture_id, detail_tex_tiling)` triples (one per `TMTerrainDesc`).
 ///
@@ -15745,6 +15784,19 @@ pub struct EntityUpdate {
     /// 3 to the canonical classifier (Scroll discrimination needs the
     /// `Spell` bit). `0` for non-Spawn.
     weenie_flags: u32,
+    /// **Render-completeness Waves-2 A1 (2026-05-29).** Per-motion
+    /// playback speed (animation framerate multiplier) carried on the
+    /// `UpdateMotion` wire as `InterpretedMotionState.forward_speed`
+    /// (`movement/types.rs:233`). Retail scales the active sequence's
+    /// framerate by this scalar (`Framerate *= speed`, ACE
+    /// `AnimData.cs:17`; retail `AnimSequenceNode::multiply_framerate`
+    /// `acclient.c:340978`, via `operator*` `acclient.c:341061`, called
+    /// from `add_motion` `acclient.c:337465` in `GetObjectSequence`), so
+    /// hasted / slowed / quickness-modified locomotion animates at the
+    /// server's tempo instead of a fixed rate. Meaningful only for
+    /// `kind=5 MOTION`; **`1.0`** (no scaling — fail-soft) for every
+    /// other kind and when the wire carries no forward speed.
+    motion_speed: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -15950,6 +16002,18 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = weenieFlags)]
     pub fn weenie_flags(&self) -> u32 {
         self.weenie_flags
+    }
+
+    /// **Render-completeness Waves-2 A1 (2026-05-29).** Per-motion
+    /// playback speed (animation framerate multiplier) from
+    /// `UpdateMotion`'s `forward_speed`. JS multiplies this into the
+    /// active locomotion cycle's `setEffectiveTimeScale` (composing with
+    /// the `?velScale=on` T11 velocity-scale path, NOT clobbering it).
+    /// Meaningful only for `kind=5 MOTION`; **`1.0`** (no scaling)
+    /// otherwise — JS treats `1.0` as the identity / fail-soft default.
+    #[wasm_bindgen(getter, js_name = motionSpeed)]
+    pub fn motion_speed(&self) -> f32 {
+        self.motion_speed
     }
 
     /// Velocity-hint x component (m/s, world frame). Meaningful only
@@ -26784,6 +26848,9 @@ async fn recv_loop(
                                                 sound_table_did: 0,
                                                 obj_desc_flags: 0,
                                                 weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                                             });
                                         }
                                     }
@@ -27805,6 +27872,9 @@ async fn recv_loop(
                                 sound_table_did: 0,
                                 obj_desc_flags: 0,
                                 weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -27937,6 +28007,9 @@ async fn recv_loop(
                                     sound_table_did: 0,
                                     obj_desc_flags: 0,
                                     weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                                 });
                             }
                         }
@@ -27984,6 +28057,9 @@ async fn recv_loop(
                                 sound_table_did: 0,
                                 obj_desc_flags: 0,
                                 weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -28296,6 +28372,9 @@ async fn recv_loop(
                                         .public_weenie_desc
                                         .weenie_flags
                                         .bits(),
+                                    // A1 (2026-05-29): Spawn carries no
+                                    // playback speed — identity (no scaling).
+                                    motion_speed: 1.0,
                                 });
                                 if is_local_player {
                                     local_player_spawn_emitted = true;
@@ -28459,6 +28538,9 @@ async fn recv_loop(
                                 sound_table_did: 0,
                                 obj_desc_flags: 0,
                                 weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                             });
                         }
                         GameMessage::ObjDescEvent(data) => {
@@ -28534,6 +28616,9 @@ async fn recv_loop(
                                 sound_table_did: 0,
                                 obj_desc_flags: 0,
                                 weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                             });
                         }
                         GameMessage::ParentEvent(data) => {
@@ -28587,6 +28672,9 @@ async fn recv_loop(
                                 sound_table_did: 0,
                                 obj_desc_flags: 0,
                                 weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                             });
                         }
                         GameMessage::ObjectDelete(data) => {
@@ -28623,6 +28711,9 @@ async fn recv_loop(
                                 sound_table_did: 0,
                                 obj_desc_flags: 0,
                                 weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
@@ -28680,6 +28771,27 @@ async fn recv_loop(
                                 ) => InterpretedMotionCommand::RUN_FORWARD.raw(),
                                 _ => 0,
                             };
+                            // Render-completeness Waves-2 A1 (2026-05-29):
+                            // surface the per-motion playback speed
+                            // (`InterpretedMotionState.forward_speed`,
+                            // `movement/types.rs:233`) so JS can scale the
+                            // locomotion animation framerate (retail
+                            // `Framerate *= speed`). Only the interpreted
+                            // (`Invalid`) envelope carries a forward speed;
+                            // server-pathed Move/Turn variants don't, so they
+                            // fall through to the `1.0` identity (no scaling —
+                            // fail-soft, matching the field's non-MOTION
+                            // default). Non-positive / non-finite values are
+                            // clamped to `1.0` so a bad scalar can't freeze the
+                            // rig.
+                            let motion_speed_f32: f32 = match &data.data {
+                                MovementTypeData::Invalid(inv) => inv
+                                    .state
+                                    .forward_speed
+                                    .filter(|s| s.is_finite() && *s > 0.0)
+                                    .unwrap_or(1.0),
+                                _ => 1.0,
+                            };
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_MOTION,
                                 guid: u32::from(data.guid),
@@ -28713,6 +28825,9 @@ async fn recv_loop(
                                 sound_table_did: 0,
                                 obj_desc_flags: 0,
                                 weenie_flags: 0,
+                                // A1 (2026-05-29): per-motion playback speed
+                                // (`forward_speed`) → JS anim framerate scale.
+                                motion_speed: motion_speed_f32,
                             });
                         }
                         GameMessage::VectorUpdate(data) => {
@@ -28816,6 +28931,9 @@ async fn recv_loop(
                                 sound_table_did: 0,
                                 obj_desc_flags: 0,
                                 weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                             });
                         }
                         // Phase 4 step 4: chat-bearing surfaces. Each
@@ -32990,6 +33108,9 @@ async fn recv_loop(
                                     sound_table_did: 0,
                                     obj_desc_flags: 0,
                                     weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                                 });
                             }
                         }
@@ -33182,6 +33303,9 @@ async fn recv_loop(
                                         sound_table_did: 0,
                                         obj_desc_flags: 0,
                                         weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                                     });
                                 } else if !was_airborne_pre_tick
                                     && w.player.is_airborne
@@ -33246,6 +33370,9 @@ async fn recv_loop(
                                         sound_table_did: 0,
                                         obj_desc_flags: 0,
                                         weenie_flags: 0,
+                                // A1 (2026-05-29): non-MOTION updates carry no
+                                // playback speed — identity (no anim scaling).
+                                motion_speed: 1.0,
                                     });
                                 }
                                 // Phase 4 step 3.6 diagnostic — log pose

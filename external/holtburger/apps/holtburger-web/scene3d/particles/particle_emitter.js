@@ -281,6 +281,20 @@ export class ParticleEmitter {
     const randomB = this.info.getRandomB(_bScratch);
     const randomC = this.info.getRandomC(_cScratch);
 
+    // P1 fidelity fix (2026-05-29) — retail `ParticleEmitter::EmitParticle`
+    // (acclient.c:331054) draws per-particle jittered scale/translucency for
+    // EVERY spawned particle so an emitter's particles vary instead of being
+    // identical clones (flames/dust/sparks would otherwise look stamped).
+    // These 4 helpers reuse the emitter's seeded RNG (time_rng.js `rng`), so
+    // spawns stay deterministic/reproducible. (getRandomLifespan is drawn
+    // inside Particle.init for historical reasons — same seeded RNG.)
+    // Fail-soft: a 0 *Rand field makes `r * 0 + value = value` (no jitter),
+    // so the default render is byte-identical to pre-fix authored values.
+    const startScale = this.info.getRandomStartScale();
+    const finalScale = this.info.getRandomFinalScale();
+    const startTrans = this.info.getRandomStartTrans();
+    const finalTrans = this.info.getRandomFinalTrans();
+
     this.particles[idx].init(
       this.info,
       this.parent,
@@ -292,6 +306,10 @@ export class ParticleEmitter {
       randomA,
       randomB,
       randomC,
+      startScale,
+      finalScale,
+      startTrans,
+      finalTrans,
     );
 
     this.recordParticleEmission();
@@ -341,17 +359,27 @@ export class ParticleEmitter {
   }
 
   /**
-   * Port of `InitEnd` (ParticleEmitter.cs:257-263). Sets CreationTime
-   * and spawns the initial batch (`for i in 0..TotalParticles`).
+   * Port of retail `ParticleEmitter::InitEnd` (acclient.c:331278/331285).
+   * Sets CreationTime and spawns the t=0 burst by looping `initial_particles`
+   * (NOT total_particles).
    *
-   * NOTE: ACE uses `TotalParticles` here (NOT `InitialParticles`). The
-   * field name suggests "all particles for the emitter's lifetime"; ACE
-   * spawns ALL of them at t=0 then sits idle. This is a port faithfulness
-   * thing — flag for the report, do not fix.
+   * P2 fidelity fix (2026-05-29): retail loops `initial_particles` for the
+   * t=0 seed; continuous emitters then keep emitting up to total_particles
+   * over time via shouldEmitParticle/updateParticles. The prior code (and
+   * its comment) looped `totalParticles`, which made continuous emitters lose
+   * their starting seed and made one-shots over-spawn. (ACE actually uses
+   * initial_particles too — the old "do not fix" comment was wrong.)
+   *
+   * Fail-soft: if `initialParticles` is missing/0 (e.g. a record that never
+   * carried one), fall back to `totalParticles` so we don't silently emit
+   * an empty t=0 burst and regress effects that relied on the old behavior.
    */
   initEnd() {
     this.creationTime = currentTime();
-    for (let i = 0; i < this.info.totalParticles; i++) {
+    const burst = this.info.initialParticles > 0
+      ? this.info.initialParticles
+      : this.info.totalParticles;
+    for (let i = 0; i < burst; i++) {
       this.emitParticle();
     }
   }

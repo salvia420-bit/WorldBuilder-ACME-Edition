@@ -142,9 +142,17 @@ export class Particle {
    * @param {THREE.Vector3} a From info.getRandomA().
    * @param {THREE.Vector3} b From info.getRandomB().
    * @param {THREE.Vector3} c From info.getRandomC().
+   * @param {number} [startScale] Per-particle jittered start scale from
+   *        info.getRandomStartScale() (P1, 2026-05-29). When omitted (e.g.
+   *        unit tests), falls back to the authored info.startScale so the
+   *        2-point scale/translucency lerp degrades to the un-jittered form.
+   * @param {number} [finalScale] Jittered final scale (info.getRandomFinalScale()).
+   * @param {number} [startTrans] Jittered start translucency (info.getRandomStartTrans()).
+   * @param {number} [finalTrans] Jittered final translucency (info.getRandomFinalTrans()).
    * @returns {boolean} Always false (mirrors ACE return value).
    */
-  init(info, parent, partIdx, parentOffset, mesh, randomOffset, persistent, a, b, c) {
+  init(info, parent, partIdx, parentOffset, mesh, randomOffset, persistent, a, b, c,
+       startScale, finalScale, startTrans, finalTrans) {
     const now = currentTime();
 
     this.lastUpdateTime = now;
@@ -261,10 +269,18 @@ export class Particle {
         break;
     }
 
-    this.startScale = info.startScale;
-    this.finalScale = info.finalScale;
-    this.startTrans = info.startTrans;
-    this.finalTrans = info.finalTrans;
+    // P1 fidelity fix (2026-05-29) — use the per-particle jittered scale +
+    // translucency drawn by ParticleEmitter.emitParticle (retail
+    // acclient.c:331054 draws all four per spawned particle). The emitter
+    // passes them in via the optional startScale/finalScale/startTrans/
+    // finalTrans args. Fail-soft: if a caller (unit test) omits them, fall
+    // back to the authored info.* values so the lerp is un-jittered exactly
+    // as before — a 0 *Rand field also degrades the jitter to the authored
+    // value at the helper level, so the default render is unchanged.
+    this.startScale = startScale !== undefined ? startScale : info.startScale;
+    this.finalScale = finalScale !== undefined ? finalScale : info.finalScale;
+    this.startTrans = startTrans !== undefined ? startTrans : info.startTrans;
+    this.finalTrans = finalTrans !== undefined ? finalTrans : info.finalTrans;
 
     mesh.scale.setScalar(this.startScale);
     setTranslucency(mesh, this.startTrans);

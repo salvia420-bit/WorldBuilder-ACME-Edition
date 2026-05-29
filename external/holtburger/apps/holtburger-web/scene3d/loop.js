@@ -40,6 +40,8 @@ import { tickLightingForCellState } from "./lighting.js";
 import { getTerrainVisualZ } from "./terrain.js?v=phase-d-batch";
 import { SHADOW_RECEIVE_RANGE_SQ_M as BUILDINGS_SHADOW_RANGE_SQ_M } from "./buildings.js";
 import { SHADOW_RECEIVE_RANGE_SQ_M as STATICS_SHADOW_RANGE_SQ_M } from "./statics.js";
+import { weatherForState } from "./daygroup_weather.js";
+import { updateFromDayGroup as wxUpdateFromDayGroup } from "./weather_state.js";
 
 // Entity-update kind constants — mirror the wasm `ENTITY_UPDATE_KIND_*`
 // constants from `crates/holtburger-session/src/lib.rs`. Listed here
@@ -370,6 +372,86 @@ function tickTerrainSunDir(scene3d) {
     if (v && typeof v.set === "function") {
       v.set(sx, sy, sz);
     }
+  }
+}
+
+// === W3 — clouds-independent weather tick (2026-05-29) ===
+//
+// Pre-W3 the ONLY caller of `weather_state.updateFromDayGroup` was
+// `cloud_volume.js`'s tick (inside the cloud raymarch), so the weather
+// profile + is_storm only refreshed when `?clouds=on`. The synthetic
+// rain/lightning + the W1 SkyObject billboards therefore stayed inert on
+// the default path. This hook moves the weather-state update onto the
+// always-on per-frame path:
+//
+//   1. read the cached SkyState (`skyLightingController._lastState`) — the
+//      same snapshot the rest of the sky stack consumes; no extra wasm call.
+//   2. pull the active DayGroup's SkyObject snapshots
+//      (`sessionHandle.getSkyObjectStates()`) so W4 can derive is_storm from
+//      the REAL DAT weather-SkyObject presence (not the fabricated table).
+//   3. push the derived profile into `weather_state` and the SkyObject scan
+//      result (indoor flag + streak/droplet metadata) into the weather
+//      effects manager (W2 precip selection + W5 indoor gate).
+//   4. feed the same SkyObject snapshots to the W1 sky-dome billboard host.
+//
+// DOUBLE-DRIVE GUARD: `cloud_volume.js`'s `wxUpdateFromDayGroup` call was
+// removed in this wave, so this is now the sole driver whether or not
+// clouds are on. Fail-soft: any missing piece (no controller, null state,
+// no session, empty snapshot array) silently no-ops to the prior behavior.
+function tickWeatherState(scene3d, sessionHandle) {
+  const state = scene3d?.skyLightingController?._lastState ?? null;
+  if (!state) return;
+
+  // SkyObject snapshots for the active DayGroup (W4 real-signal source).
+  // Lazy-resolve the session handle the same way the sky controllers do.
+  let skyObjects = null;
+  const handle =
+    sessionHandle ??
+    (typeof window !== "undefined" ? window.__sessionHandle : null) ??
+    scene3d?.sessionHandle ??
+    null;
+  if (handle && typeof handle.getSkyObjectStates === "function") {
+    try {
+      skyObjects = handle.getSkyObjectStates();
+    } catch (_) {
+      skyObjects = null;
+    }
+  }
+
+  // W4 — profile (T/Td/P heuristic) + is_storm derived from real weather
+  // SkyObjects when the snapshot array is available.
+  try {
+    const profile = weatherForState(state, state.dayGroupIndex, skyObjects);
+    wxUpdateFromDayGroup(profile);
+
+    const scan = profile?._weather ?? null;
+    // W5 indoor flag — reuse the skyDome's freshly-read indoor state when
+    // present (it reads isCurrentCellIndoor() each tick); fall back to a
+    // direct read so the manager still gates when the dome is absent.
+    let indoor = scene3d?.skyDome?._lastIsIndoor;
+    if (typeof indoor !== "boolean" && handle &&
+        typeof handle.isCurrentCellIndoor === "function") {
+      try { indoor = !!handle.isCurrentCellIndoor(); } catch (_) { indoor = false; }
+    }
+    if (typeof indoor !== "boolean") indoor = false;
+
+    // W2/W5 — push environment to the weather manager (precip type + gate).
+    if (scene3d?.weatherEffects?.setEnvironment) {
+      scene3d.weatherEffects.setEnvironment({
+        indoor,
+        streakGfxId: scan?.streak_gfx_id ?? 0,
+        hasDroplets: scan?.has_droplets ?? false,
+      });
+    }
+
+    // W1 — drive the parametric sky-dome weather billboard host with the
+    // same snapshot array (the host gates itself on its `?skyWeather`
+    // flag + the props/window bits, and no-ops indoors).
+    if (scene3d?.skyDome?.updateWeatherSkyObjects) {
+      scene3d.skyDome.updateWeatherSkyObjects(skyObjects, indoor);
+    }
+  } catch (_) {
+    // Weather wiring must never kill the frame.
   }
 }
 
@@ -876,6 +958,21 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
+  // W3 (2026-05-29) — clouds-independent weather-state tick. Runs AFTER
+  // skyDome.tick so `skyDome._lastIsIndoor` is the freshly-read value for
+  // this frame, and after skyLightingController.tick so `_lastState` is
+  // current. Derives the DayGroup weather profile + is_storm from the real
+  // SkyObject snapshots (W4), drives weather_state, the precip manager
+  // (W2/W5), and the W1 billboard host. Fully fail-soft.
+  try {
+    tickWeatherState(scene3d, sessionHandle);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._weatherStateTickWarned) {
+      scene3d._weatherStateTickWarned = true;
+      console.warn("[w3] tickWeatherState threw:", e);
+    }
+  }
   // Phase 7.5 — camera tick BEFORE entity tick. The switcher reads
   // last-frame entity poses for follow framing AND dispatches
   // setMovementInput (which the wasm side consumes asynchronously, so
@@ -1103,10 +1200,14 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
       } else if (kind === KIND_MOTION) {
         const motionGuid = upd.guid >>> 0;
         const motionCmd = (upd.motionCommand ?? 0) >>> 0;
+        // A1 (2026-05-29): forward the server's per-motion playback speed
+        // (UpdateMotion.forward_speed) so EntityManager.setMotion scales the
+        // animation framerate. Defaults to 1.0 (no scaling) when absent.
         em.setMotion(
           motionGuid,
           motionCmd,
-          (upd.motionStance ?? 0) >>> 0
+          (upd.motionStance ?? 0) >>> 0,
+          +(upd.motionSpeed ?? 1.0)
         );
         // Wave 10 Phase 10.1 (2026-05-26) — removed the
         // Fallen→setAirborne(false) coupling here. The wasm-side
@@ -1269,10 +1370,12 @@ export function installSharedDrainHook(scene3d) {
         } else if (kind === KIND_MOTION) {
           const motionGuid = upd.guid >>> 0;
           const motionCmd = (upd.motionCommand ?? 0) >>> 0;
+          // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
           em.setMotion(
             motionGuid,
             motionCmd,
-            (upd.motionStance ?? 0) >>> 0
+            (upd.motionStance ?? 0) >>> 0,
+            +(upd.motionSpeed ?? 1.0)
           );
           // Wave 10 Phase 10.1 (2026-05-26) — removed the
           // Fallen→setAirborne(false) coupling here. See the matching

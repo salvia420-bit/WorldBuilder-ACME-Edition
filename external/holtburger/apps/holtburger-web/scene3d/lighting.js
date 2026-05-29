@@ -72,8 +72,62 @@ const AMBIENT_INTENSITY_INDOOR = 0.7;
 // Warm tint on the ambient — matches AC's pre-lit terrain textures
 // which carry a faintly warm bias. 0xfff0e0 is roughly Kelvin ~5500K
 // (afternoon sun) with the chroma pulled back so it reads as ambient,
-// not directional.
+// not directional. Used only as the fail-soft fallback when no
+// SkyState snapshot is available (L1 below drives color from the
+// snapshot once one exists).
 const AMBIENT_COLOR = 0xfff0e0;
+
+// === L1 (render-completeness waves-2, 2026-05-29) — AC diurnal ambient ===
+// Retail per-channel lit is `sun·NdotL + ambColor·ambient_level`, clamped
+// [0,1], with `ambient_level` floored at LSCAPE_LIGHT_MINIMUM = 0.2
+// (acclient.c:40344 constant; floor applied in LScape::set_landscape_lighting
+// acclient.c:307024; per-channel combine acclient.c:353860-353899). Holtburg
+// already parses + time-lerps the snapshot to SkyState.ambBright /
+// ambColorArgb (lib.rs:9645-9699; snapshot in sky_lighting.js:52), but until
+// now NOTHING consumed it — legacy ambient was a flat 0.5/0.7 constant and
+// the atmosphere SkyLightProbe had no amb term. This drives the legacy
+// AmbientLight intensity + color from the snapshot. (Atmosphere/probe path
+// is driven in atmosphere_lights.js's tick().) Default-on, fail-soft: with
+// no snapshot we keep the prior constant 0.5/0.7 + AMBIENT_COLOR.
+const LSCAPE_LIGHT_MINIMUM = 0.2;
+
+/**
+ * Unpack AC's ARGB u32 ambient color (0xAARRGGBB) into a normalized
+ * {r,g,b} triple in [0,1]. Alpha is ignored (THREE.AmbientLight.color is
+ * RGB only). Mirrors lib.rs collect_setup_model_lights ARGB unpack +
+ * sky_lighting.js decodeArgb. Returns null on a non-finite / zero input
+ * so the caller can fail-soft to the constant tint.
+ */
+function ambColorFromArgb(argb) {
+  const u = argb >>> 0;
+  if (!Number.isFinite(u) || u === 0) return null;
+  return {
+    r: ((u >>> 16) & 0xff) / 255,
+    g: ((u >>> 8) & 0xff) / 255,
+    b: (u & 0xff) / 255,
+  };
+}
+
+/**
+ * L1 — resolve the AC-faithful ambient (intensity floored at 0.2, color
+ * from the ARGB snapshot) for the OUTDOOR case. Indoor keeps the legacy
+ * 0.7 boost (the sun goes off indoors, so the snapshot ambient alone
+ * would crush dungeon corridors — the indoor boost is a deliberate
+ * legibility lever, not a retail value). Returns null when no usable
+ * snapshot exists so the caller leaves the constant behavior intact.
+ *
+ * @param {Object|null} skyState - the cached SkyState snapshot
+ *   (`skyLightingController._lastState`); camelCase ambBright/ambColorArgb.
+ * @returns {{intensity:number, color:{r,g,b}|null}|null}
+ */
+function resolveDiurnalAmbient(skyState) {
+  if (!skyState) return null;
+  const ambBright = +skyState.ambBright;
+  if (!Number.isFinite(ambBright)) return null;
+  const intensity = Math.max(LSCAPE_LIGHT_MINIMUM, ambBright);
+  const color = ambColorFromArgb(skyState.ambColorArgb);
+  return { intensity, color };
+}
 
 // Sun colour — slightly cooler than the ambient so the directional
 // vs. ambient contrast doesn't read as "two warm lights stacked".
@@ -334,6 +388,15 @@ const LIGHT_INTENSITY_CLAMP = 8.0;
 const SPOTLIGHT_PENUMBRA = 0.3;
 const LIGHT_DECAY = 2.0;
 
+// === L2 (render-completeness waves-2, 2026-05-29) — static_light_factor ===
+// Retail `range = falloff * static_light_factor`, static_light_factor = 1.3
+// (constant acclient.c:45774; applied in calc_point_light acclient.c:454605).
+// Module-level so capture scripts can assert it via LIGHTING_CONSTANTS; the
+// SINGLE multiply happens at the `safeFalloff` site in
+// makeThreeLightForSetupLight below (no double-multiply: lib.rs surfaces RAW
+// falloff and the C7 template path reads back the already-multiplied .distance).
+const STATIC_LIGHT_FACTOR = 1.3;
+
 /**
  * Per-frame: read the wasm cell BFS to decide whether the player is
  * indoors, and toggle `sun.visible` + adjust `ambient.intensity`
@@ -378,15 +441,45 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
         if (sun.visible !== wantSunVisible) {
           sun.visible = wantSunVisible;
         }
-        // ambient intensity. Compare against the canonical thresholds so
-        // a third-party override (e.g. capture script poking
-        // ambient.intensity = 0.42 for a screenshot) doesn't trigger
-        // ping-ponging in the next tick if the cell state hasn't changed.
-        const wantIntensity = isIndoor
-          ? AMBIENT_INTENSITY_INDOOR
-          : AMBIENT_INTENSITY_OUTDOOR;
-        if (Math.abs(ambient.intensity - wantIntensity) > 1e-4) {
-          ambient.intensity = wantIntensity;
+        // === L1 (waves-2, 2026-05-29) — AC diurnal ambient on the legacy
+        // path ==========================================================
+        // When the takram/Bruneton atmosphere is active, `atmosphereLights`
+        // owns ambient (the SkyLightProbe — driven with the L1 amb term in
+        // atmosphere_lights.js's tick) and the legacy AmbientLight is zeroed
+        // at boot (index.js:2702). Leave it zeroed here so we don't double-
+        // count with the probe. Only drive the legacy AmbientLight on the
+        // non-atmosphere path.
+        const atmosphereActive = !!scene3d.atmosphereLights;
+        if (!atmosphereActive) {
+          // Outdoor: drive ambient.intensity (floored at 0.2) + ambient.color
+          // from the SkyState snapshot so dawn/dusk tint the scene the way
+          // retail's ambColor·ambient_level term does. Indoor: keep the legacy
+          // 0.7 legibility boost (sun is off indoors, so the diurnal ambient
+          // alone would crush corridors) and leave the warm-tint color alone.
+          // Fail-soft: no/garbage snapshot ⇒ resolveDiurnalAmbient() returns
+          // null and we fall back to the prior 0.5/0.7 constants + AMBIENT_COLOR.
+          // Compare against thresholds so a third-party override (e.g. capture
+          // script poking ambient.intensity = 0.42) doesn't ping-pong.
+          const skyState = scene3d.skyLightingController?._lastState ?? null;
+          const diurnal = isIndoor ? null : resolveDiurnalAmbient(skyState);
+          const wantIntensity = diurnal
+            ? diurnal.intensity
+            : isIndoor
+              ? AMBIENT_INTENSITY_INDOOR
+              : AMBIENT_INTENSITY_OUTDOOR;
+          if (Math.abs(ambient.intensity - wantIntensity) > 1e-4) {
+            ambient.intensity = wantIntensity;
+          }
+          if (diurnal && diurnal.color && ambient.color) {
+            const c = diurnal.color;
+            if (
+              Math.abs(ambient.color.r - c.r) > 1e-4 ||
+              Math.abs(ambient.color.g - c.g) > 1e-4 ||
+              Math.abs(ambient.color.b - c.b) > 1e-4
+            ) {
+              ambient.color.setRGB(c.r, c.g, c.b);
+            }
+          }
         }
       }
     }
@@ -1082,8 +1175,21 @@ function makeThreeLightForSetupLight(sl) {
   // Distance attenuation — falloff IS the distance metric in AC.
   // three.js PointLight / SpotLight use `distance` for max reach;
   // 0 means infinite. Negative/NaN → 0 (infinite) for safety.
+  //
+  // === L2 (render-completeness waves-2, 2026-05-29) — static_light_factor ===
+  // Retail `range = falloff * static_light_factor`, where
+  // static_light_factor = 1.3 (constant acclient.c:45774; applied in
+  // calc_point_light acclient.c:454605). Without it every lantern/brazier/
+  // torch reaches ~30% short. Applied here EXACTLY ONCE (the SINGLE site):
+  // `safeFalloff` is what we pass to three's PointLight/SpotLight `distance`,
+  // and the C7 template path reads back this already-multiplied `.distance`,
+  // so all placements inherit it with no double-multiply. lib.rs's
+  // `collect_setup_model_lights` deliberately surfaces RAW `falloff` (it does
+  // NOT pre-multiply), so this is the only 1.3× in the chain (STATIC_LIGHT_FACTOR
+  // is the module-level const). Default-on, fail-soft (0/NaN falloff ⇒ 0 =
+  // infinite reach, unchanged).
   const safeFalloff =
-    Number.isFinite(falloff) && falloff > 0 ? falloff : 0;
+    Number.isFinite(falloff) && falloff > 0 ? falloff * STATIC_LIGHT_FACTOR : 0;
   const color = new THREE.Color(
     Number.isFinite(r) ? r : 1,
     Number.isFinite(g) ? g : 1,
@@ -1141,4 +1247,7 @@ export const LIGHTING_CONSTANTS = Object.freeze({
   LIGHT_INTENSITY_CLAMP,
   SPOTLIGHT_PENUMBRA,
   LIGHT_DECAY,
+  // waves-2 (2026-05-29): L1 ambient floor + L2 light-range factor.
+  LSCAPE_LIGHT_MINIMUM,
+  STATIC_LIGHT_FACTOR,
 });

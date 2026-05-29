@@ -132,6 +132,55 @@ function staticsReceiveShadowForPlacement(
 // mesh, anything farther gets the lower-detail variant.
 const LOD_DISTANCE_M = 100.0;
 
+// ── G1 (waves-2 2026-05-29) — degrade-band billboard orientation ──────
+//
+// `degrade_mode` is the per-LOD-band billboard-orientation flag from
+// retail `CPhysicsPart::calc_draw_frame` (acclient.c:315074-315090),
+// applied to the degraded LOD leaf each frame:
+//   1 = fixed              — no transform (original orientation).
+//   2 = full billboard     — `Frame::set_vector_heading` (:357668):
+//                            orient the part's facing axis at the viewer
+//                            (yaw + pitch from the viewer-direction vec).
+//   3 = axis-0 (X) constrained — `rotate_around_axis_to_vector(0)` (:357520)
+//   4 = axis-1 (Y) constrained — the common "foliage faces camera but
+//                                stays upright" mode (yaw-only billboard).
+//   5 = axis-2 (Z) constrained.
+//
+// AC→three coord convention (adapter.js:1299 `acToThree`): statics live
+// under `worldRoot` (rotation.x = -π/2), so each node's LOCAL frame is
+// authored in AC coords — Z is up, +Y is north, +X is east. We compute
+// the viewer direction IN THAT LOCAL AC FRAME and rotate the degraded
+// leaf there, so no worldRoot round-trip is needed.
+//
+// Axis mapping for modes 3/4/5: AC axis 0→local X, 1→local Y, 2→local Z.
+// The grounding identifies mode 4 (axis-1 = Y) as the dominant
+// upright-foliage case. AC's vertical in world space is Z, but the
+// degrade billboard constrains rotation about the named axis IN THE
+// PART'S LOCAL FRAME; for an upright billboard card the constrained
+// axis is the one that must stay fixed (the world-up the card stands
+// on). We treat the constrained-axis modes as "yaw about the world-up
+// (local Z) to face the camera, keep the card upright" because that is
+// the observable retail behaviour the grounding describes, and it is
+// the only mode that visibly affects Holtburg foliage. Modes 3/5 fall
+// back to the same yaw-only billboard (their visible effect on the
+// near-vertical foliage cards in Dereth is indistinguishable, and a
+// full per-axis pivot risks laying cards flat) — see the TODO in
+// `_orientBillboardLeaf` for the exact-axis refinement.
+const STATICS_BILLBOARD_FLAG = "billboard"; // ?billboard=off disables G1.
+
+// Tag an LOD node so `tickStaticsBillboards` will orient its degraded
+// leaf. No-op unless the degraded band carried a billboard mode (>=2);
+// mode 0/1 leave the leaf at its authored orientation (current
+// behaviour) so this can only add facing, never regress.
+function tagBillboardLod(lod, degradedGeom) {
+  const mode = (degradedGeom?.userData?.degradeMode ?? 0) >>> 0;
+  if (mode < 2) return;
+  lod.userData = lod.userData || {};
+  lod.userData.billboardMode = mode;
+  // Degraded leaf is the second level added (full=0, degraded=1).
+  lod.userData.billboardLevel = 1;
+}
+
 // Phase C.3 — base URL for the baked scenery JSONL files. Mirrors
 // index.html's `MANIFEST_URL = "../../dist/manifest.json"`; scenery
 // files live at `../../dist/scenery/0xXXXX.scenery.jsonl`. Init is
@@ -487,7 +536,15 @@ async function fetchDegradedGeometries(
         if (!gfxId) return null;
         const dist =
           typeof b.min_dist === "number" && b.min_dist > 0 ? b.min_dist : null;
-        return { modelId, gfxId, dist };
+        // G1 (waves-2 2026-05-29) — `degrade_mode` is the per-LOD-band
+        // billboard-orientation flag from `CPhysicsPart::calc_draw_frame`
+        // (acclient.c:315074): 1=fixed (no transform), 2=full billboard,
+        // 3/4/5=axis-0/1/2 constrained. Carry it alongside so the per-frame
+        // billboard tick can orient the degraded leaf to face the viewer.
+        // Default 0 ("no billboard") when the band omits it → tick no-ops.
+        const degradeMode =
+          typeof b.degrade_mode === "number" ? b.degrade_mode >>> 0 : 0;
+        return { modelId, gfxId, dist, degradeMode };
       } catch (_) {
         return null;
       }
@@ -495,7 +552,12 @@ async function fetchDegradedGeometries(
   );
   const perModel = new Map();
   for (const r of resolved) {
-    if (r) perModel.set(r.modelId, { gfxId: r.gfxId, dist: r.dist });
+    if (r)
+      perModel.set(r.modelId, {
+        gfxId: r.gfxId,
+        dist: r.dist,
+        degradeMode: r.degradeMode,
+      });
   }
   if (perModel.size === 0) return degradedGeomByModel;
 
@@ -523,7 +585,7 @@ async function fetchDegradedGeometries(
     return degradedGeomByModel;
   }
 
-  for (const [modelId, { gfxId, dist }] of perModel) {
+  for (const [modelId, { gfxId, dist, degradeMode }] of perModel) {
     const geom = geomByGfxId.get(gfxId);
     if (!geom) continue;
     // Stash the authored swap distance on the geometry so the node
@@ -531,6 +593,16 @@ async function fetchDegradedGeometries(
     if (dist != null) {
       geom.userData = geom.userData || {};
       geom.userData.lodDist = dist;
+    }
+    // G1 — carry the band's billboard mode the same way. The node
+    // builders copy it onto the LOD node so `tickStaticsBillboards`
+    // can orient the degraded leaf each frame. `geom` is shared across
+    // every placement of this modelId, so the value is identical for
+    // all of that model's LOD nodes (correct — degrade_mode is per-band,
+    // not per-placement).
+    if (degradeMode) {
+      geom.userData = geom.userData || {};
+      geom.userData.degradeMode = degradeMode;
     }
     degradedGeomByModel.set(modelId, geom);
   }
@@ -723,6 +795,15 @@ function buildSingletonNode({
   // authored `min_dist` (stashed on the degraded geometry's userData by
   // fetchDegradedGeometries) rather than the fixed 100m guess. Falls back
   // to LOD_DISTANCE_M when no authored distance was resolved.
+  // G3 (waves-2 2026-05-29, LOW — left as TODO): retail
+  // `GfxObjDegradeInfo::get_degrade` (acclient.c:332374) walks ALL bands
+  // by ideal_dist/max_dist with a bias multiplier and builds a multi-level
+  // chain. We consume only bands[0]'s gfx_obj_id + min_dist (one degraded
+  // leaf, swapped at this single authored distance). The grounding agent
+  // judged the single-band path acceptable for the current phase, so this
+  // stays a 2-level THREE.LOD; a full multi-level + bias-aware walk is the
+  // future refinement (build one addLevel per band, swap at the bias-scaled
+  // ideal_dist).
   const swapDist =
     (degradedGeom.userData && degradedGeom.userData.lodDist) || LOD_DISTANCE_M;
   lod.addLevel(degradedMesh, swapDist);
@@ -733,6 +814,13 @@ function buildSingletonNode({
     isBuilding: false,
     source,
   };
+  // G1 (waves-2 2026-05-29) — tag the LOD for the per-frame billboard
+  // tick when the degraded band carries a billboard mode (>=2). Mode 1
+  // (fixed) and absent/0 leave the leaf at its authored orientation
+  // (current behaviour). `billboardLevel = 1` is the degraded leaf's
+  // index in `lod.levels` (full=0, degraded=1) so the tick only orients
+  // the leaf that's the billboard band, never the full-detail mesh.
+  tagBillboardLod(lod, degradedGeom);
   return { node: lod, isLod: true };
 }
 
@@ -841,6 +929,9 @@ function buildInstancedNode({
   const lod = new THREE.LOD();
   lod.name = `static-lod-${modelKey}`;
   lod.addLevel(instanced, 0);
+  // G3 note: the instanced path still uses the fixed LOD_DISTANCE_M
+  // guess rather than the band's authored distance — see the
+  // `degradedGeom.userData.lodDist` G3 TODO in `buildSingletonNode`.
   lod.addLevel(degradedInstanced, LOD_DISTANCE_M);
   lod.userData = {
     modelId,
@@ -850,6 +941,19 @@ function buildInstancedNode({
     sceneryCount,
     landblockInfoCount,
   };
+  // G1 (waves-2 2026-05-29) — billboard orientation is NOT applied to
+  // the InstancedMesh degraded leaf. Each instance sits at a distinct
+  // world position so a single shared mesh-level rotation can't face
+  // all of them at the camera; correct per-instance billboarding would
+  // require rewriting the whole instanceMatrix buffer every frame (the
+  // exact GPU re-upload cost the InstancedMesh collapse exists to
+  // avoid). The plain-Mesh singleton path (`buildSingletonNode`) gets
+  // the billboard tick. We record the band's mode for diag visibility
+  // only — `tickStaticsBillboards` skips `isInstancedLod` nodes.
+  if (degradedGeom?.userData?.degradeMode >= 2) {
+    lod.userData.billboardModeInstancedSkipped =
+      degradedGeom.userData.degradeMode;
+  }
   return { node: lod, isLod: true };
 }
 
@@ -1559,4 +1663,162 @@ export async function bakeStaticsRing(
  */
 export async function buildHoltburgStatics(scene3d, wasmExports) {
   return bakeStaticsRing(scene3d, HOLTBURG_X, HOLTBURG_Y, 1, wasmExports);
+}
+
+// ── G1 — per-frame billboard tick ────────────────────────────────────
+//
+// Orients the degraded LOD leaf of billboard-tagged statics toward the
+// viewer each frame, mirroring retail `CPhysicsPart::calc_draw_frame`.
+// Bounded cost: we touch ONLY nodes that are (a) `THREE.LOD`, (b) tagged
+// `billboardMode >= 2`, and (c) currently rendering their degraded
+// (billboard) band. Everything else pays one `userData` read and a
+// `continue`. The camera position is transformed into each node's LOCAL
+// AC frame (Z-up) so the orientation math needs no worldRoot round-trip.
+
+// Reused scratch — no per-frame allocation in the hot path.
+const _bbCamWorld = new THREE.Vector3();
+const _bbCamLocal = new THREE.Vector3();
+const _bbInvMat = new THREE.Matrix4();
+const _bbEuler = new THREE.Euler();
+const _bbQuatFull = new THREE.Quaternion();
+const _bbDir = new THREE.Vector3();
+
+/**
+ * Orient one degraded leaf mesh toward `camLocal` (camera position in
+ * the leaf's parent LOD-node LOCAL frame, AC Z-up coords). `mode` is the
+ * band's degrade_mode (2 = full billboard, 3/4/5 = axis-constrained).
+ * Writes `leaf.quaternion`.
+ */
+function _orientBillboardLeaf(leaf, camLocal, mode) {
+  // Vector from the leaf (at local origin) to the camera, in the AC
+  // local frame (X east, Y north, Z up).
+  _bbDir.copy(camLocal);
+  const lenSq = _bbDir.lengthSq();
+  if (lenSq < 1e-8) return; // camera coincident — leave as-is.
+
+  if (mode === 2) {
+    // Full billboard — `Frame::set_vector_heading`: the part's facing
+    // axis (+X in AC) points straight at the viewer, yaw AND pitch.
+    // yaw about Z from atan2(dy, dx); pitch about the post-yaw Y from
+    // the height delta. Build via an Euler in AC's ZYX-ish order using
+    // the standard heading/pitch decomposition.
+    const yaw = Math.atan2(_bbDir.y, _bbDir.x);
+    const horiz = Math.sqrt(_bbDir.x * _bbDir.x + _bbDir.y * _bbDir.y);
+    const pitch = Math.atan2(_bbDir.z, horiz);
+    // Rotation that maps local +X onto the camera direction: first yaw
+    // about Z (+yaw), then pitch up about the local Y after yaw. Compose
+    // as Z-yaw * Y-(-pitch) (negative because +pitch raises +X toward +Z
+    // which is a negative rotation about +Y in a right-handed frame).
+    _bbEuler.set(0, -pitch, yaw, "ZYX");
+    leaf.quaternion.setFromEuler(_bbEuler);
+    return;
+  }
+
+  // Modes 3/4/5 — axis-constrained. The grounded dominant case (mode 4,
+  // foliage) is "yaw to face the camera, stay upright": rotate about the
+  // world-up (local Z) only, dropping pitch. Modes 3/5 fall back to the
+  // same yaw-only billboard — on Dereth's near-vertical foliage cards the
+  // visible difference from an exact per-axis pivot is nil, and a true
+  // X/Z-axis pivot risks laying the card flat. TODO(waves-3): exact
+  // per-axis `rotate_around_axis_to_vector` (acclient.c:357520) keyed to
+  // axis = mode-3 when a model is found that visibly needs X/Z pivots.
+  const yaw = Math.atan2(_bbDir.y, _bbDir.x);
+  _bbEuler.set(0, 0, yaw, "ZYX");
+  leaf.quaternion.setFromEuler(_bbEuler);
+}
+
+/**
+ * Per-frame billboard update for degrade-band statics. Walks
+ * `scene3d.staticsGroup.children`; for each billboard-tagged `THREE.LOD`
+ * whose active level is the degraded (billboard) leaf, orients that leaf
+ * toward the active camera. Fail-soft: missing camera / group / flag →
+ * no-op. Returns the count of leaves oriented (for diag / tests).
+ */
+export function tickStaticsBillboards(scene3d) {
+  if (!scene3d || !scene3d.staticsGroup) return 0;
+  const group = scene3d.staticsGroup;
+  const children = group.children;
+  if (!children || children.length === 0) return 0;
+  // No module-level "has billboards" latch: lazy-LB walks can add new
+  // tagged LOD nodes at any time, so a sticky false flag would silently
+  // freeze them. The per-child cost for a non-billboard node is one
+  // `isLOD` check + one `userData` read + `continue`, which is what the
+  // discipline budget ("non-billboard instances pay ~nothing") allows.
+
+  const camera =
+    scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+  if (!camera) return 0;
+  // Camera world position (three.js world coords).
+  camera.getWorldPosition(_bbCamWorld);
+
+  let oriented = 0;
+  for (const child of children) {
+    if (!child || !child.isLOD) continue;
+    const mode = child.userData?.billboardMode ?? 0;
+    if (mode < 2) continue;
+    // Only orient when the degraded billboard leaf is the active level.
+    // `THREE.LOD.update()` (run by the renderer each frame) toggles
+    // `levels[i].object.visible`; we read the leaf's `.visible` rather
+    // than the private `_currentLevel`. It's at worst one frame stale
+    // (our rAF runs alongside, not inside, the render walk) which is
+    // fine for a distance band. If the LOD has never been rendered
+    // (`visible` still default true on both leaves) we orient anyway —
+    // harmless, since a non-rendered leaf's orientation is invisible.
+    const level = child.userData.billboardLevel ?? 1;
+    const lvls = child.levels;
+    const leaf = lvls && lvls[level] ? lvls[level].object : null;
+    if (!leaf) continue;
+    if (leaf.visible === false) continue; // full-detail band showing.
+    // Camera position in the LOD node's LOCAL frame (AC Z-up coords).
+    // `child.matrixWorld` is current — the renderer updates world
+    // matrices before render; statics never move so it's stable anyway.
+    _bbInvMat.copy(child.matrixWorld).invert();
+    _bbCamLocal.copy(_bbCamWorld).applyMatrix4(_bbInvMat);
+    _orientBillboardLeaf(leaf, _bbCamLocal, mode);
+    oriented += 1;
+  }
+  return oriented;
+}
+
+// Self-managed rAF — same pattern as `nameplate_sprite.js`'s LOD loop.
+// Ticks every frame once `window.liveScene3d` is live. Browser-only
+// (no-op under Node unit tests where `window` is undefined). Honours
+// `?billboard=off` to disable G1 entirely (fail-soft kill switch).
+let _bbRafId = 0;
+let _bbDisposed = false;
+
+function _billboardEnabled() {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      return (
+        new URLSearchParams(globalThis.location.search).get(
+          STATICS_BILLBOARD_FLAG
+        ) !== "off"
+      );
+    }
+  } catch (_) {}
+  return true;
+}
+
+/** Stop the billboard rAF loop. Idempotent. For HMR / flag-change. */
+export function disposeStaticsBillboards() {
+  _bbDisposed = true;
+  if (_bbRafId && typeof window !== "undefined") {
+    try {
+      window.cancelAnimationFrame(_bbRafId);
+    } catch (_) {}
+  }
+  _bbRafId = 0;
+}
+
+if (typeof window !== "undefined" && _billboardEnabled()) {
+  const _bbLoop = () => {
+    if (_bbDisposed) return;
+    try {
+      const live = window.liveScene3d;
+      if (live) tickStaticsBillboards(live);
+    } catch (_) {}
+    _bbRafId = window.requestAnimationFrame(_bbLoop);
+  };
+  _bbRafId = window.requestAnimationFrame(_bbLoop);
 }

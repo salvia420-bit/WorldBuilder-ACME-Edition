@@ -1,45 +1,52 @@
-// scene3d/weather/rain.js — InstancedMesh rain streaks around the camera.
+// scene3d/weather/snow.js — InstancedMesh snow flakes around the camera.
 //
-// Particles live inside a moving cylinder of radius R and height H anchored
-// to the camera. Each tick we advance positions by velocity*dt and toroidal-
-// wrap any particle that exits the cylinder (below ground OR outside the
-// horizontal disc) back to a fresh position at the top of the cylinder.
-// `setIntensity(t)` clamps `instance.count = floor(MAX*t)` so a fade-out is
-// free — unused particles simply aren't drawn.
+// W2 (2026-05-29). Mirrors RainSystem's camera-anchored cylinder + toroidal
+// wrap, but tuned for snow: small quad flakes (not thin streaks), a much
+// slower fall, and a per-particle horizontal SWAY (phase-offset sine) so
+// flakes drift instead of falling dead-straight. `setIntensity(t)` clamps
+// `instance.count` so a fade is free, identical to rain.
+//
+// Selection (W2): the WeatherEffectsManager picks snow over rain when the
+// active weather profile's `temperature_C` is at/below freezing (cold →
+// snow). Retail has no clean rain-vs-snow flag — precip type is encoded in
+// which streak-mesh GfxObj / PhysicsScript the DayGroup references — so the
+// temperature heuristic is the first cut (the manager can upgrade to a
+// streak-GfxObj-id keyed selection once W1's SkyObject lookup is wired).
 
 import * as THREE from "three";
 
-const MAX_PARTICLES = 6000;
-const CYL_RADIUS = 25.0;
+const MAX_PARTICLES = 4000;
+const CYL_RADIUS = 22.0;
 const CYL_HEIGHT = 30.0;
-const FALL_SPEED_BASE = 12.0;       // m/s straight down at intensity 1.0
-const FALL_SPEED_JITTER = 2.5;      // ± per-particle randomization
-const WIND_DRIFT_X = 0.8;           // small horizontal drift, m/s
-const WIND_DRIFT_Z = 0.3;
-const STREAK_LEN = 0.6;             // meters
-const STREAK_WIDTH = 0.012;         // meters
-const STREAK_COLOR = 0xb8c8dc;
-const STREAK_ALPHA = 0.45;
+const FALL_SPEED_BASE = 1.6;        // m/s — snow falls far slower than rain
+const FALL_SPEED_JITTER = 0.8;      // ± per-particle randomization
+const WIND_DRIFT_X = 0.5;           // mean horizontal drift, m/s
+const WIND_DRIFT_Z = 0.25;
+const SWAY_AMP = 0.7;               // m/s peak sway velocity
+const SWAY_FREQ = 0.6;              // Hz-ish base; per-particle jittered
+const FLAKE_SIZE = 0.05;            // meters (square quad)
+const FLAKE_COLOR = 0xf2f6ff;
+const FLAKE_ALPHA = 0.7;
 
 const _tmpObj = new THREE.Object3D();
 
-export class RainSystem {
+export class SnowSystem {
   constructor({ scene, camera }) {
     if (!scene || !camera) {
-      throw new Error("RainSystem: scene + camera required");
+      throw new Error("SnowSystem: scene + camera required");
     }
     this._scene = scene;
     this._camera = camera;
     this._intensity = 0.0;
+    this._elapsed = 0.0;
 
-    const geom = new THREE.PlaneGeometry(STREAK_WIDTH, STREAK_LEN);
-    // Translate so the streak hangs DOWNWARD from its position (anchor at top).
-    geom.translate(0, -STREAK_LEN * 0.5, 0);
+    // A small square quad reads as a flake; rain uses a thin tall plane.
+    const geom = new THREE.PlaneGeometry(FLAKE_SIZE, FLAKE_SIZE);
 
     const mat = new THREE.MeshBasicMaterial({
-      color: STREAK_COLOR,
+      color: FLAKE_COLOR,
       transparent: true,
-      opacity: STREAK_ALPHA,
+      opacity: FLAKE_ALPHA,
       depthWrite: false,
       side: THREE.DoubleSide,
       fog: false,
@@ -49,19 +56,18 @@ export class RainSystem {
     this._mat = mat;
 
     const mesh = new THREE.InstancedMesh(geom, mat, MAX_PARTICLES);
-    mesh.name = "rain-streaks";
+    mesh.name = "snow-flakes";
     mesh.frustumCulled = false;
-    mesh.renderOrder = 950;
+    mesh.renderOrder = 951; // just after rain
     mesh.count = 0;
     mesh.visible = false;
     this._mesh = mesh;
 
-    // Per-particle state arrays (CPU-side; we push only the matrix to GPU).
+    // Per-particle state arrays (CPU-side; we push only the matrix).
     this._pos = new Float32Array(MAX_PARTICLES * 3);
-    this._vel = new Float32Array(MAX_PARTICLES * 3);
+    this._vel = new Float32Array(MAX_PARTICLES * 3); // base fall velocity
+    this._sway = new Float32Array(MAX_PARTICLES * 2); // [phase, freq]
 
-    // Seed positions inside the cylinder so the very first visible frame is
-    // already saturated (no spawn-in fade).
     const cam = this._camera.position;
     for (let i = 0; i < MAX_PARTICLES; i++) {
       this._seedParticle(i, cam.x, cam.y, cam.z, /*atTop=*/ false);
@@ -71,7 +77,6 @@ export class RainSystem {
   }
 
   _seedParticle(i, cx, cy, cz, atTop) {
-    // Uniform-area sample inside the disc: r = R*sqrt(u), θ = 2π*v.
     const r = CYL_RADIUS * Math.sqrt(Math.random());
     const th = Math.random() * Math.PI * 2;
     const yOff = atTop
@@ -85,6 +90,9 @@ export class RainSystem {
     this._vel[idx + 0] = WIND_DRIFT_X;
     this._vel[idx + 1] = -speed;
     this._vel[idx + 2] = WIND_DRIFT_Z;
+    const s = i * 2;
+    this._sway[s + 0] = Math.random() * Math.PI * 2;       // phase
+    this._sway[s + 1] = SWAY_FREQ * (0.6 + Math.random());  // freq jitter
   }
 
   setIntensity(t) {
@@ -96,10 +104,8 @@ export class RainSystem {
   }
 
   /**
-   * W5 (2026-05-29) — scale horizontal wind drift. 1.0 = nominal,
-   * 0 = no drift (vertical rain). The manager drives this from storm
-   * intensity so wind isn't a hardcoded constant. Defaults to 1.0 when
-   * never called.
+   * Scale horizontal wind drift (W5). 1.0 = nominal; 0 = calm. Called by
+   * the manager each tick so wind tracks storm intensity.
    */
   setWindScale(s) {
     this._windScale = Math.max(0, +s || 0);
@@ -108,32 +114,38 @@ export class RainSystem {
   tick(dt) {
     if (this._intensity <= 0 || this._mesh.count <= 0) return;
     if (!Number.isFinite(dt) || dt <= 0) return;
+    this._elapsed += dt;
     const cam = this._camera.position;
     const cx = cam.x, cy = cam.y, cz = cam.z;
     const yTop = cy + CYL_HEIGHT * 0.5;
     const yBot = cy - CYL_HEIGHT * 0.5;
     const r2 = CYL_RADIUS * CYL_RADIUS;
-    const speedScale = 0.7 + 0.6 * this._intensity; // light drizzle → heavy
+    const speedScale = 0.7 + 0.6 * this._intensity;
     const windScale = Number.isFinite(this._windScale) ? this._windScale : 1.0;
     const count = this._mesh.count;
+    const t = this._elapsed;
 
     for (let i = 0; i < count; i++) {
       const p = i * 3;
-      this._pos[p + 0] += this._vel[p + 0] * dt * windScale;
+      const s = i * 2;
+      // Per-particle horizontal sway (sine on x, cosine on z so flakes
+      // trace little ellipses) layered on the mean wind drift.
+      const phase = this._sway[s + 0] + t * this._sway[s + 1] * Math.PI * 2;
+      const swayX = Math.sin(phase) * SWAY_AMP;
+      const swayZ = Math.cos(phase * 0.7) * SWAY_AMP * 0.6;
+
+      this._pos[p + 0] += (this._vel[p + 0] * windScale + swayX) * dt;
       this._pos[p + 1] += this._vel[p + 1] * dt * speedScale;
-      this._pos[p + 2] += this._vel[p + 2] * dt * windScale;
+      this._pos[p + 2] += (this._vel[p + 2] * windScale + swayZ) * dt;
 
       const dx = this._pos[p + 0] - cx;
       const dz = this._pos[p + 2] - cz;
       const horiz2 = dx * dx + dz * dz;
 
-      // Wrap if below ground-of-cylinder OR drifted past the disc edge OR
-      // the camera moved far enough that the particle is now stranded.
       if (this._pos[p + 1] < yBot || horiz2 > r2) {
         this._seedParticle(i, cx, cy, cz, /*atTop=*/ true);
         continue;
       }
-      // Re-anchor vertically if the camera moved UP faster than rain falls.
       if (this._pos[p + 1] > yTop) {
         this._pos[p + 1] = yTop;
       }
@@ -143,7 +155,9 @@ export class RainSystem {
         this._pos[p + 1],
         this._pos[p + 2]
       );
-      _tmpObj.rotation.set(0, 0, 0);
+      // Billboard the flake toward the camera so the quad always shows
+      // its face (cheap: copy the camera quaternion).
+      _tmpObj.quaternion.copy(this._camera.quaternion);
       _tmpObj.scale.set(1, 1, 1);
       _tmpObj.updateMatrix();
       this._mesh.setMatrixAt(i, _tmpObj.matrix);
@@ -160,6 +174,7 @@ export class RainSystem {
     this._mat.dispose();
     this._pos = null;
     this._vel = null;
+    this._sway = null;
     this._mesh = null;
   }
 }

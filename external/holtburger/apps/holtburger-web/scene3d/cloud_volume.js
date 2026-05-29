@@ -34,11 +34,10 @@ import * as THREE from 'three';
 import { sunDirFromHeadingPitch } from './sun_direction.js';
 import { CloudsEffect, CloudLayers } from '@takram/three-clouds';
 import { AtmosphereParameters } from '@takram/three-atmosphere';
-import {
-  getWeatherState as wxGetState,
-  updateFromDayGroup as wxUpdateFromDayGroup,
-} from './weather_state.js';
-import { weatherForState } from './daygroup_weather.js';
+// W3 (2026-05-29): the weather-state UPDATE (updateFromDayGroup /
+// weatherForState) moved to loop.js::tickWeatherState (clouds-independent).
+// This module only READS the shared state for the opt-in cloud-layer config.
+import { getWeatherState as wxGetState } from './weather_state.js';
 
 /**
  * @typedef {Object} SkyState
@@ -196,21 +195,14 @@ export class CloudVolume {
 
     this._lastState = state;
 
-    // Clouds-E.3 — WMO-anchored weather state is updated from the
-    // active DayGroup so downstream readers (weather_state.getState,
-    // future weather HUD) see live values. We do NOT auto-call
-    // `_applyWeatherToCloudLayers()` from the tick — rewriting takram
-    // CloudLayer channel/altitude/density per frame appears to break
-    // the cloud-shadow → terrain pipeline (terrain reads invisible).
-    // The state update alone is cheap and side-effect-free; the layer
-    // apply stays opt-in via `window.__applyCloudWeather()` until the
-    // per-frame regression is root-caused.
-    try {
-      const profile = weatherForState(state, state.dayGroupIndex);
-      wxUpdateFromDayGroup(profile);
-    } catch (_) {
-      // Weather wiring must not block the cloud raymarch.
-    }
+    // Clouds-E.3 / W3 (2026-05-29) — the WMO-anchored weather-state update
+    // (`weatherForState` → `updateFromDayGroup`) MOVED to the clouds-
+    // independent per-frame hook `loop.js::tickWeatherState` so weather
+    // refreshes on the DEFAULT path (not only when `?clouds=on`). Calling
+    // it here too would double-drive the state every frame clouds are on,
+    // so this tick no longer touches weather_state. The cloud LAYER config
+    // (`_applyWeatherToCloudLayers`) stays opt-in via
+    // `window.__applyCloudWeather()` and still reads the shared state.
 
     // Cloud-shadow push to terrain moved to CloudOverlay.preRender so
     // it runs AFTER composer.render fills the cascade matrices for

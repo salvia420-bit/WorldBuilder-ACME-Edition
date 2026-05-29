@@ -26,6 +26,145 @@ import * as THREE from "three";
 const SKY_CAMERA_NEAR = 0.1;
 const SKY_CAMERA_FAR = 50000.0;
 
+// === W1 — parametric weather SkyObject billboard host (2026-05-29) ======
+//
+// Retail weather is per-DayGroup SkyObjects (streak GfxObjs 0x01004C42/44,
+// SetupModel rain 0x02000588/... carrying PhysicsScript droplets) gated by
+// a begin/end time-window + a `properties` bitmask. The parametric renderer
+// that drew these was gutted in K.6, leaving `setParametricSkyObjectsVisible`
+// a no-op. This host re-adds a MINIMAL version: for the weather/cloud
+// SkyObjects in the active DayGroup that are visible in the current window,
+// it draws a UV-scrolling billboard on the sky dome (texOffsetX/Y from the
+// already-decoded tex_velocity drives the texture scroll; 0x01 → additive
+// blend, else alpha). It is conservatively flag-gated (`?skyWeather=on`) and
+// fully fail-soft — any missing piece silently no-ops to current behavior.
+//
+// Properties bits (validated in sky.rs probe vs real client_portal.dat):
+//   0x01 = additive blend, 0x02 = scrolling cloud band, 0x04 = weather
+//   streak, 0x08 = PhysicsScript-bound.
+const SKY_PROP_ADDITIVE = 0x01;
+const SKY_PROP_CLOUD_BAND = 0x02;
+const SKY_PROP_WEATHER_STREAK = 0x04;
+// A billboard is a "weather/cloud" object iff it carries the cloud-band OR
+// weather-streak bit. (PhysicsScript droplets — 0x08 / 0x02xxxxxx — are NOT
+// drawn here; see the TODO in `_ensureWeatherPool`.)
+const SKY_WEATHER_MASK = SKY_PROP_CLOUD_BAND | SKY_PROP_WEATHER_STREAK;
+
+// Max distinct weather billboards we'll host. Retail Dereth DayGroups carry
+// a single cloud band + at most a couple of weather streaks, so a small
+// fixed pool covers it; extras silently overflow (no-op).
+const WEATHER_POOL_SIZE = 4;
+// Billboard placement on the dome: a large quad parked high above the
+// camera, tilted to face down toward the player. Sized to fill a wide swath
+// of sky without clipping the SkyMaterial backdrop.
+const WEATHER_BILLBOARD_SIZE = 9000.0;
+const WEATHER_BILLBOARD_ALTITUDE = 3500.0;
+
+// --- Takram-environment radiance compensation -----------------------------
+// The weather billboards live in `skyScene`, which renders one of TWO ways
+// depending on whether the takram atmosphere stack has loaded:
+//   • atmosphere OFF / not-yet-loaded → SkyDome.renderSkyPass does a direct
+//     `renderer.render(skyScene)` in LDR. A MeshBasicMaterial streak at its
+//     authored ~0.8 grey reads correctly.
+//   • atmosphere ON → `skyScene` is a RenderPass INSIDE the EffectComposer
+//     (atmosphere_pipeline.js:163-166), so it flows through a HalfFloat HDR
+//     buffer and the final AGX `ToneMappingEffect` (renderer itself is
+//     NoToneMapping + exposure 5). Against the physically-scaled HDR sky
+//     radiance, an LDR ~0.8 streak gets crushed to near-invisible by AGX —
+//     unlike the cloud overlay, which composites AFTER the composer and so
+//     dodges the tonemap entirely.
+// Fix: when the atmosphere pipeline is live we boost the billboard color
+// into HDR so AGX maps it back up into the visible range. `atmospherePipeline`
+// is null until the Bruneton bake completes, so reading it per-frame also
+// rides the lazy-load transition (LDR → HDR) cleanly. The exact HDR gain is
+// an eye-test tuning knob on the 1070 (atmosphere is offline here): default
+// is conservative; override with `?skyWeatherGain=<float>`.
+const WEATHER_GAIN_LDR = 1.0;
+const WEATHER_GAIN_HDR_DEFAULT = 3.5;
+
+/**
+ * Parse `?skyWeather=on` once. Returns true only for the literal value
+ * "on" (case-insensitive). Mirrors the URL-flag pattern used across the
+ * scene (try/catch so the Node harness without `window` doesn't throw).
+ */
+let _skyWeatherFlagCache;
+function readSkyWeatherFlag() {
+  if (_skyWeatherFlagCache !== undefined) return _skyWeatherFlagCache;
+  try {
+    if (typeof window === "undefined" || !window.location) {
+      _skyWeatherFlagCache = false;
+      return false;
+    }
+    const v = new URLSearchParams(window.location.search).get("skyWeather");
+    _skyWeatherFlagCache = typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    _skyWeatherFlagCache = false;
+  }
+  return _skyWeatherFlagCache;
+}
+
+/**
+ * Parse `?skyWeatherGain=<float>` once — the HDR radiance boost applied to
+ * weather billboards when the takram atmosphere composer is driving the sky
+ * pass (so AGX tonemapping doesn't crush them). Falls back to the
+ * conservative default; ignored (1.0) on the legacy LDR path.
+ */
+let _skyWeatherGainCache;
+function readSkyWeatherHdrGain() {
+  if (_skyWeatherGainCache !== undefined) return _skyWeatherGainCache;
+  let g = WEATHER_GAIN_HDR_DEFAULT;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("skyWeatherGain");
+      const n = v == null ? NaN : parseFloat(v);
+      if (Number.isFinite(n) && n > 0) g = n;
+    }
+  } catch (_) { /* Node harness / no window → default */ }
+  _skyWeatherGainCache = g;
+  return g;
+}
+
+/**
+ * Build a small procedural streak texture (vertical translucent streaks on
+ * a transparent ground) used for the UV-scrolling weather billboards. The
+ * real DAT GfxObj texture-resolution pipeline (Sky-Assets) was removed in
+ * K.6, so we synthesize a streak field that reads as a weather band when
+ * scrolled. Returns null if no DOM canvas is available (Node harness).
+ */
+function buildStreakTexture() {
+  if (typeof document === "undefined" || !document.createElement) return null;
+  const W = 128, H = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, W, H);
+  // Scatter ~70 vertical streaks of varying length/alpha.
+  for (let i = 0; i < 70; i++) {
+    const x = Math.random() * W;
+    const len = 8 + Math.random() * 40;
+    const y = Math.random() * H;
+    const a = 0.15 + Math.random() * 0.45;
+    const grad = ctx.createLinearGradient(x, y, x, y + len);
+    grad.addColorStop(0, `rgba(200,214,230,0)`);
+    grad.addColorStop(0.5, `rgba(200,214,230,${a})`);
+    grad.addColorStop(1, `rgba(200,214,230,0)`);
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 0.6 + Math.random() * 0.9;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y + len);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 6); // tile so scrolling reads as a dense field
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /**
  * Minimal sky-pass host. Owns the scene + camera that atmosphere_sky
  * (takram SkyMaterial + stars), ac_moons (AC moon billboards),
@@ -94,6 +233,21 @@ export class SkyDome {
     // Cloud overlay handle, attached lazily via setCloudOverlay().
     this.cloudOverlay = null;
 
+    // === W1 — weather billboard host state ============================
+    // Flag-gated (`?skyWeather=on`); pool + shared texture built lazily on
+    // the first weather update so the default path pays nothing.
+    this._skyWeatherEnabled = readSkyWeatherFlag();
+    this._weatherPool = null;     // THREE.Mesh[] or null until built
+    this._weatherTex = null;      // shared CanvasTexture (cloned per-mesh)
+    this._weatherTexBuilt = false;
+    this._weatherVisibleCount = 0; // introspection for capture scripts
+    // Takram-environment radiance gain (see WEATHER_GAIN_* above): boosts
+    // billboard color into HDR when the atmosphere composer (AGX tonemap)
+    // drives the sky pass, so streaks survive the tonemap. Default-soft on
+    // the legacy LDR path. Per-frame re-evaluated from atmospherePipeline.
+    this._weatherHdrGain = readSkyWeatherHdrGain();
+    this._weatherAtmosActive = false; // last-seen atmosphere-pipeline state
+
     // Indoor short-circuit state. Read by renderSkyPass +
     // atmosphere_pipeline.preFrameSkySync.
     this._lastIsIndoor = false;
@@ -119,15 +273,184 @@ export class SkyDome {
   }
 
   /**
-   * No-op stub. Pre-K.6 this toggled the visibility of every
-   * parametric SkyObject rotator. The parametric meshes are gone
-   * post-K.6 so there's nothing to toggle. Kept for backward
-   * compatibility with any caller (atmosphere_sky.js cleared this
-   * call in K.6; left here so a stale call from another path
-   * doesn't throw).
+   * Master toggle for the W1 weather billboard host. Pre-K.6 this hid
+   * every parametric SkyObject rotator; the rotators are gone, but W1
+   * re-introduces a small weather-billboard pool, so this now hides /
+   * shows that pool (and is the back-compat entry point any stale caller
+   * may still hit). No-op when the pool hasn't been built or when the
+   * `?skyWeather` flag is off.
    */
-  setParametricSkyObjectsVisible(_visible) {
-    // intentionally empty
+  setParametricSkyObjectsVisible(visible) {
+    if (!this._weatherPool) return;
+    const v = !!visible;
+    for (const m of this._weatherPool) {
+      if (m) m.visible = v && m.userData._weatherActive === true;
+    }
+  }
+
+  /**
+   * Lazily build the weather billboard pool the first time we have a
+   * weather SkyObject to draw. Each entry is a large camera-facing quad
+   * parked high on the dome with its own scrollable texture clone. Built
+   * into `skyScene` so it renders in the pre-world sky pass alongside the
+   * atmosphere + clouds. Returns false if the pool can't be built (no
+   * canvas / no texture) so callers fail soft.
+   *
+   * TODO (W1 droplets): SetupModel rain (0x02xxxxxx + PhysicsScript
+   * 0x33xxxxxx) carries near-camera droplet particles. Wiring those needs
+   * the PhysicsScript → CreateParticleHook → ParticleEmitter chain walker
+   * (reachable via the entities/play_effect_vfx executor) anchored to the
+   * camera. Out of scope for W1's first cut — the near-camera synthetic
+   * RainSystem already covers ground-level precipitation; this host draws
+   * only the celestial-dome streak/cloud bands.
+   */
+  _ensureWeatherPool() {
+    if (this._weatherPool) return true;
+    if (!this._weatherTexBuilt) {
+      this._weatherTexBuilt = true;
+      this._weatherTex = buildStreakTexture();
+    }
+    if (!this._weatherTex) return false; // Node harness / no canvas
+    const pool = [];
+    for (let i = 0; i < WEATHER_POOL_SIZE; i++) {
+      const tex = this._weatherTex.clone();
+      tex.needsUpdate = true;
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+        fog: false,
+      });
+      const geom = new THREE.PlaneGeometry(
+        WEATHER_BILLBOARD_SIZE,
+        WEATHER_BILLBOARD_SIZE
+      );
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.name = `weather-skyobj-${i}`;
+      mesh.frustumCulled = false;
+      // Park high above the camera (sky pass camera tracks the main camera
+      // each frame; sky scene is small so altitude in scene units is fine).
+      mesh.position.set(0, WEATHER_BILLBOARD_ALTITUDE, 0);
+      // Lay flat-ish so it reads as an overhead band rather than a wall.
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.renderOrder = 980; // after sky material, before cloud overlay (999)
+      mesh.visible = false;
+      mesh.userData._weatherActive = false;
+      mesh.userData._ownTex = tex;
+      this.skyScene.add(mesh);
+      pool.push(mesh);
+    }
+    this._weatherPool = pool;
+    return true;
+  }
+
+  /**
+   * W1 per-frame weather update. Driven from `loop.js::tickWeatherState`
+   * with the active DayGroup's SkyObject snapshots
+   * (`sessionHandle.getSkyObjectStates()`). For each weather/cloud
+   * SkyObject that is visible in its time-window (the Rust `visible`
+   * flag already applies the begin/end gate), bind a billboard, set its
+   * blend mode from the additive bit, and scroll its texture by the
+   * decoded `texOffsetX/Y` (which the Rust evaluator accumulates from
+   * tex_velocity). Hidden entirely indoors and when `?skyWeather` is off.
+   *
+   * @param {Array|null} skyObjects  `getSkyObjectStates()` snapshot array
+   * @param {boolean} indoor
+   */
+  updateWeatherSkyObjects(skyObjects, indoor) {
+    if (!this._skyWeatherEnabled) return; // flag-gated (W1 conservative)
+    // Indoor → hide everything (no weather through ceilings).
+    if (indoor) {
+      this._weatherVisibleCount = 0;
+      if (this._weatherPool) {
+        for (const m of this._weatherPool) {
+          if (m) { m.visible = false; m.userData._weatherActive = false; }
+        }
+      }
+      return;
+    }
+    if (!Array.isArray(skyObjects) || skyObjects.length === 0) {
+      // No snapshot → leave whatever state we had; hide to fail soft.
+      this._weatherVisibleCount = 0;
+      if (this._weatherPool) {
+        for (const m of this._weatherPool) {
+          if (m) { m.visible = false; m.userData._weatherActive = false; }
+        }
+      }
+      return;
+    }
+
+    // Takram radiance compensation: when the atmosphere composer is live the
+    // sky pass is AGX-tonemapped, so boost billboard color into HDR; on the
+    // legacy LDR direct-render path leave it at the authored value. Reading
+    // `atmospherePipeline` here also rides the lazy-load LDR→HDR transition.
+    const atmosActive = !!this.liveScene3dRef?.atmospherePipeline;
+    this._weatherAtmosActive = atmosActive;
+    const colorGain = atmosActive ? this._weatherHdrGain : WEATHER_GAIN_LDR;
+
+    // Collect the visible weather/cloud SkyObjects for this frame.
+    let slot = 0;
+    let built = false;
+    for (const o of skyObjects) {
+      if (!o || slot >= WEATHER_POOL_SIZE) break;
+      let visible, props, ox, oy;
+      try {
+        visible = !!o.visible;
+        props = (o.properties >>> 0) || 0;
+        ox = +o.texOffsetX;
+        oy = +o.texOffsetY;
+      } catch (_) {
+        continue;
+      }
+      if (!visible) continue;
+      if ((props & SKY_WEATHER_MASK) === 0) continue; // not weather/cloud
+
+      if (!built) {
+        if (!this._ensureWeatherPool()) return; // can't build → no-op
+        built = true;
+      }
+      const mesh = this._weatherPool[slot];
+      if (!mesh) break;
+      const mat = mesh.material;
+      const tex = mesh.userData._ownTex;
+      // UV scroll from the accumulated tex_velocity offset ([0,1)).
+      if (tex && tex.offset) {
+        tex.offset.set(
+          Number.isFinite(ox) ? ox : 0,
+          Number.isFinite(oy) ? oy : 0
+        );
+      }
+      // Blend mode: additive (0x01) for glow-y streaks, else normal alpha.
+      const wantAdditive = (props & SKY_PROP_ADDITIVE) !== 0;
+      const wantBlend = wantAdditive
+        ? THREE.AdditiveBlending
+        : THREE.NormalBlending;
+      if (mat.blending !== wantBlend) {
+        mat.blending = wantBlend;
+        mat.needsUpdate = true;
+      }
+      // HDR/LDR radiance gain (takram AGX-aware). color is a plain uniform,
+      // so no needsUpdate; guard only to skip the redundant setScalar.
+      if (mesh.userData._appliedGain !== colorGain) {
+        mat.color.setScalar(colorGain);
+        mesh.userData._appliedGain = colorGain;
+      }
+      mesh.visible = true;
+      mesh.userData._weatherActive = true;
+      slot += 1;
+    }
+
+    // Hide any leftover pool entries not bound this frame.
+    if (this._weatherPool) {
+      for (let i = slot; i < this._weatherPool.length; i++) {
+        const m = this._weatherPool[i];
+        if (m) { m.visible = false; m.userData._weatherActive = false; }
+      }
+    }
+    this._weatherVisibleCount = slot;
   }
 
   /**
@@ -233,7 +556,20 @@ export class SkyDome {
     if (this.cloudOverlay && typeof this.cloudOverlay.dispose === "function") {
       try { this.cloudOverlay.dispose(); } catch (_) { /* tear-down */ }
     }
-    this.skyScene.fog = null;
+    // W1 — free the weather billboard pool + its textures.
+    if (this._weatherPool) {
+      for (const m of this._weatherPool) {
+        if (!m) continue;
+        if (m.parent) m.parent.remove(m);
+        m.geometry?.dispose?.();
+        m.userData?._ownTex?.dispose?.();
+        m.material?.dispose?.();
+      }
+      this._weatherPool = null;
+    }
+    this._weatherTex?.dispose?.();
+    this._weatherTex = null;
+    if (this.skyScene) this.skyScene.fog = null;
     this.cloudOverlay = null;
     this.skyScene = null;
     this.skyCamera = null;
