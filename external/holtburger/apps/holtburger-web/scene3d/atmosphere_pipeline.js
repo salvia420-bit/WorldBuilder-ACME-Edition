@@ -377,26 +377,39 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         }
       }
 
-      // World pass clear flags (existing behaviour).
-      if (isIndoor || !skyRenderPass) {
-        worldRenderPass.clear = isIndoor || !skyRenderPass;
-        worldRenderPass.clearDepth = false;
+      // World pass clear flags. The world pass is the first GEOMETRY pass, so
+      // it always starts from a FRESH depth buffer; it keeps the COLOR the sky
+      // pass drew (outdoor) or clears color too (indoor / no sky pass). Note
+      // `clearDepth` must be true even indoors now — the old code relied on the
+      // (now-removed) depthClearPass to reset depth, so leaving it false would
+      // render the world pass against stale depth.
+      if (skyRenderPass && skyRenderPass.enabled) {
+        worldRenderPass.clear = false;      // sky drew the background
+        worldRenderPass.clearDepth = true;  // …but depth starts fresh
       } else {
-        worldRenderPass.clear = false;
+        worldRenderPass.clear = true;       // no sky → clear color + depth
         worldRenderPass.clearDepth = true;
       }
 
-      // Phase 5 PView render-order fix (2026-05-25). Mirrors WB
-      // GameScene.cs:1610. When indoor:
-      //   1. World pass renders layer 0 (terrain/buildings/statics).
-      //   2. Depth-clear wipes terrain Z so cottage floors don't fight.
-      //   3. Cells pass renders layer 1 (EnvCells + entities) on top.
-      // When outdoor: single world pass renders both layers in one shot,
-      // matching the pre-fix behaviour (no perf cost outdoors).
-      worldMaskPass.mask = isIndoor ? CAM_LAYER_MASK_WORLD_ONLY : CAM_LAYER_MASK_BOTH;
-      depthClearPass.enabled = isIndoor;
-      cellsMaskPass.enabled = isIndoor;
-      cellsRenderPass.enabled = isIndoor;
+      // 2026-05-29 see-through rectification — DROP the indoor depth-clear
+      // split (the Phase-5 layer split that wiped terrain Z and redrew layer 1
+      // on top). That clear made EVERY frustum-visible EnvCell render OVER the
+      // terrain whenever the player's current cell was classified indoor —
+      // and Holtburg building plots/basements ARE EnvCells, so it fired even
+      // standing "outside", drawing building interiors/basements and down-hill
+      // cottages THROUGH the terrain (the reported see-through). Render ALL
+      // layers in the single shared-depth world pass so the GPU depth buffer
+      // occludes EnvCells behind/below terrain — its actual job — and so the
+      // depth buffer the cloud overlay samples (same composer DepthTexture) is
+      // MORE complete, not less (clouds occlude behind terrain+buildings+cells,
+      // never reintroducing the clouds-over-everything regression).
+      //   Trade-off given back: the cottage-floor-vs-terrain Z-fight the clear
+      //   masked. If it resurfaces it gets a TARGETED polygon-offset on the
+      //   cell floor — never a destructive global depth wipe again.
+      worldMaskPass.mask = CAM_LAYER_MASK_BOTH;
+      depthClearPass.enabled = false;
+      cellsMaskPass.enabled = false;
+      cellsRenderPass.enabled = false;
       // cellsPostMaskPass is always enabled — mask=BOTH no matter what,
       // so steady-state outdoor consumers observe the unsplit mask. The
       // single mask write is ~free.
