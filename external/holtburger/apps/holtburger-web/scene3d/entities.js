@@ -144,6 +144,27 @@ const VEL_SCALE_ON = (() => {
     return false;
   }
 })();
+
+// T9 (2026-05-28) — `?dynLod=on` gates DYNAMIC entity LOD. Spawn already picks
+// a degrade band once (frozen); this re-queries the band at the live distance
+// (throttled) and despawn+respawns the entity at the new band when it crosses
+// — the simplest correct way to "rebind the mixer" (the spawn path rebuilds
+// rig + mixer + actions). Default OFF (respawn flicker + a behaviour change at
+// distance). The spawn LOD distance frame-fix ships unconditionally; only the
+// dynamic re-pick is gated.
+const DYN_LOD_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("dynLod")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+// Throttle the dynamic-LOD recheck — distance bands are coarse, so ~2 Hz is
+// plenty and keeps the per-entity async band query off the hot path.
+const DYN_LOD_INTERVAL_S = 0.5;
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 
 // AC InterpretedMotionCommand low-16 constants — used for
@@ -1177,6 +1198,8 @@ export class EntityManager {
     // AnimationCache cacheKey, memoised across entities sharing a cycle.
     /** @type {Map<string, number>} */
     this._cycleBaseSpeedCache = new Map();
+    // T9 — dynamic-LOD recheck throttle accumulator (seconds).
+    this._dynLodAccum = 0;
     this.materialCache = scene3d?.materialCache ?? null;
     /** @type {Map<number, Promise<EntityInstance|null>>} */
     this.spawnInFlight = new Map();
@@ -1323,6 +1346,10 @@ export class EntityManager {
     // we fall through to the original full-detail setup. The wasm
     // helper is fire-and-forget at the worst — failure to substitute
     // never breaks spawn, only foregoes the LOD optimization.
+    // T9 (2026-05-28): record the original (full-detail) setup + the chosen
+    // band so the dynamic-LOD recheck (tick) can detect band crossings.
+    const lodOriginalSetup = setupId;
+    let lodSubstitute = 0;
     const lodFetch = this.wasmExports?.fetch_entity_degrade_for_distance;
     if (typeof lodFetch === "function") {
       try {
@@ -1333,9 +1360,15 @@ export class EntityManager {
           const lbY = (lbId >>> 16) & 0xff;
           const wx = lbX * 192 + (meta.x ?? 0);
           const wy = lbY * 192 + (meta.y ?? 0);
+          // T9 fix (2026-05-28): TRUE horizontal distance in the THREE frame.
+          // acToThree maps AC (ax,ay,az) → (ax, az, -ay), so the entity's
+          // THREE x = wx and THREE z = -wy. The old calc used `cameraPos.y -
+          // wy` — comparing the camera's HEIGHT (THREE y) to the entity's
+          // NORTH coord (AC y), a frame mismatch that scrambled the LOD
+          // distance. Correct: hypot(cam.x - wx, cam.z - (-wy)).
           const dx = cameraPos.x - wx;
-          const dy = cameraPos.y - wy;
-          const distance = Math.hypot(dx, dy);
+          const dz = cameraPos.z - -wy;
+          const distance = Math.hypot(dx, dz);
           if (distance > 0) {
             const substitute = (await lodFetch(setupId, distance)) >>> 0;
             try {
@@ -1356,6 +1389,7 @@ export class EntityManager {
                 });
               } catch (_) {}
               setupId = substitute;
+              lodSubstitute = substitute; // T9 — remember the chosen band
             }
           }
         }
@@ -1471,6 +1505,13 @@ export class EntityManager {
     }
 
     const inst = new EntityInstance(guid, root, parts, null, meta);
+    // T9 — dynamic-LOD bookkeeping: the full-detail setup this entity spawned
+    // from + the degrade band it currently renders (0 = full detail). The
+    // tick recheck re-queries the band at the live distance and respawns when
+    // it crosses. `lodOriginalSetup` is captured BEFORE the spawn-time
+    // substitution so the recheck always asks the band table from full detail.
+    inst._lodOriginalSetup = lodOriginalSetup;
+    inst._lodSub = lodSubstitute;
 
     // Material resolution. Two paths:
     //   1. Plain (no palette substitutions) — share the scene
@@ -5238,6 +5279,103 @@ export class EntityManager {
   }
 
   /**
+   * T9 — dynamic-LOD recheck. For each non-local, settled entity with a
+   * degrade chain, re-query the band at the live camera distance and respawn
+   * at the new band when it crosses. The spawn path rebuilds rig + mixer +
+   * actions (the "mixer rebind"), so a despawn+respawn is the simplest correct
+   * swap. Loop-safe: the recheck distance uses the same world transform the
+   * spawn re-queries with, so a fresh spawn lands on the same band that
+   * triggered it (no thrash). Skips the local player, in-flight spawns, and
+   * entities mid-tween. Throttled by the caller (`DYN_LOD_INTERVAL_S`).
+   * @private
+   */
+  _tickDynamicLod() {
+    const lodFetch = this.wasmExports?.fetch_entity_degrade_for_distance;
+    if (typeof lodFetch !== "function") return;
+    const cam = window.liveScene3d?.camera?.position;
+    if (!cam) return;
+    let localGuid = null;
+    try {
+      const lpg = window.getLocalPlayerGuid?.();
+      if (lpg != null) localGuid = lpg >>> 0;
+    } catch (_) {}
+    for (const inst of this.entityMap.values()) {
+      const g = inst.guid >>> 0;
+      if (g === localGuid) continue; // local player is always full detail
+      if (!inst._lodOriginalSetup) continue; // no degrade chain captured
+      if (inst._lodRespawning) continue; // a band query / respawn is in flight
+      if (this.spawnInFlight.has(g)) continue;
+      if (inst._jumpPoseTween || inst._swingTween || inst._castTween) continue;
+      const p = inst.root?.position;
+      if (!p) continue;
+      // Entity WORLD horizontal distance. entitiesGroup is under worldRoot
+      // (rotation.x = -π/2), so the local AC position (east, north, height) =
+      // (p.x, p.y, p.z) maps to THREE world (east, height, -north) =
+      // (p.x, p.z, -p.y). Horizontal plane is XZ → dz = cam.z - (-p.y).
+      const dx = cam.x - p.x;
+      const dz = cam.z + p.y;
+      const distance = Math.hypot(dx, dz);
+      if (!(distance > 0)) continue;
+      inst._lodRespawning = true;
+      Promise.resolve(lodFetch(inst._lodOriginalSetup, distance))
+        .then((sub) => {
+          sub = sub >>> 0;
+          if (this.entityMap.get(g) !== inst) return; // despawned meanwhile
+          if (sub !== ((inst._lodSub ?? 0) >>> 0)) {
+            this._respawnForLod(inst, g).catch(() => {});
+          } else {
+            inst._lodRespawning = false;
+          }
+        })
+        .catch(() => {
+          inst._lodRespawning = false;
+        });
+    }
+  }
+
+  /**
+   * T9 — despawn + respawn an entity so the spawn path re-picks its LOD band
+   * at the current distance. Preserves world pose (the AC-frame local position
+   * + quaternion are copied verbatim — entity positions ARE AC LB-local under
+   * worldRoot, so this matches applyAppearance) plus the live motion + stance
+   * so the swapped rig resumes its gait instead of snapping to spawn idle (the
+   * next UpdateMotion re-syncs regardless). Never throws out of the tick path.
+   * @private
+   */
+  async _respawnForLod(inst, g) {
+    try {
+      const oldMeta = inst.meta || {};
+      const newMeta = { ...oldMeta };
+      const root = inst.root;
+      if (root?.position) {
+        const lbId = (oldMeta.landblockId ?? 0) >>> 0;
+        const lbX = (lbId >>> 24) & 0xff;
+        const lbY = (lbId >>> 16) & 0xff;
+        newMeta.x = root.position.x - lbX * 192;
+        newMeta.y = root.position.y - lbY * 192;
+        newMeta.z = root.position.z;
+      }
+      if (root?.quaternion) {
+        newMeta.qw = root.quaternion.w;
+        newMeta.qx = root.quaternion.x;
+        newMeta.qy = root.quaternion.y;
+        newMeta.qz = root.quaternion.z;
+      }
+      newMeta.motionCommand =
+        (inst.lastMotionCommand ?? inst.currentMotion ?? oldMeta.motionCommand ?? 0) >>> 0;
+      newMeta.motionStance =
+        (inst.currentStance ?? inst.lastStance ?? oldMeta.motionStance ?? 0) >>> 0;
+      try {
+        window.__diag?.lod?.onDynamicSwap?.({ guid: g, motion: newMeta.motionCommand });
+      } catch (_) {}
+      this.remove(g);
+      await this.spawn(newMeta);
+    } catch (_) {
+      // Dynamic LOD must never break the tick / entity state.
+    }
+  }
+
+  /**
    * Per-rAF tick. Advances every entity's mixer by dt seconds.
    * Called from loop.js#tickPerFrame.
    */
@@ -5411,6 +5549,16 @@ export class EntityManager {
             );
           }
         }
+      }
+    }
+    // T9 (2026-05-28) — dynamic-LOD recheck (throttled). Re-queries each
+    // entity's degrade band at the live camera distance and respawns it when
+    // it crosses a band. Gated by ?dynLod=on.
+    if (DYN_LOD_ON) {
+      this._dynLodAccum += dt;
+      if (this._dynLodAccum >= DYN_LOD_INTERVAL_S) {
+        this._dynLodAccum = 0;
+        this._tickDynamicLod();
       }
     }
     // Wave 7 Phase 7.1 (2026-05-26): periodic prune of stale entries in

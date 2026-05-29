@@ -478,3 +478,38 @@ first-play and tracks subsequent speed changes proportionally. There is no
   speed (AC's known base speeds), eye-test-tuned. Both are beyond the audit's "surface velocity
   + apply" framing. **Recommendation: re-scope or defer T11** — the inert mechanism is harmless
   and the finding is the deliverable.
+
+---
+
+# T9 — dynamic entity LOD — DONE + eye-test-confirmed (2026-05-28, late)
+
+Entity LOD was frozen at spawn (`entities.js` picked the degrade band once). The handoff
+flagged the hard part as "rebinding the AnimationMixer on a band swap." Solved by **despawn +
+respawn**: the spawn path already rebuilds rig + mixer + actions AND re-picks the band at the
+current distance, so a respawn IS the mixer rebind. Plus a bonus correctness fix.
+
+**Bonus fix (unconditional): spawn LOD distance frame-mismatch.** The spawn band pick used
+`hypot(cam.x - wx, cam.y - wy)` — but entities live under `worldRoot` (`rotation.x = -π/2`), so
+the local AC position `(east, north, height)` maps to THREE world `(east, height, -north)`, and
+`cam` is THREE-world. Comparing `cam.y` (height) to `wy` (north) was a frame bug that scrambled
+the LOD distance. Fixed to the true horizontal distance `hypot(cam.x - wx, cam.z + wy)`.
+
+**Dynamic LOD (behind `?dynLod=on`, default off):**
+- `EntityInstance` captures `_lodOriginalSetup` (pre-substitution full detail) + `_lodSub` (the
+  band actually rendered) at spawn.
+- `_tickDynamicLod()` (throttled ~2 Hz) re-queries `fetch_entity_degrade_for_distance` at the
+  live world distance `hypot(cam.x - p.x, cam.z + p.y)` for each non-local, settled,
+  non-tweening entity; if the band changed, `_respawnForLod()` despawn+respawns preserving world
+  pose + quaternion (verbatim AC-local copy, matches the corrected applyAppearance) + live motion
+  + stance.
+- **Loop-safe by construction:** the recheck distance uses the same world transform the spawn
+  re-queries with, so a fresh spawn lands on the band that triggered it. Verified: at steady
+  state `swapCandidates == 0` (no entity wants a swap → no thrash).
+- **1070 eye-test (`eyetest/t9-dynlod-on.jpg`, `t9-postwalk.jpg`):** at Holtburg, 40 of 70
+  entities have degrade chains; 12 spawned correctly distance-degraded (the frame-fix working).
+  Driving the player forward 6 s fired **30 live LOD respawn-swaps** (degraded 12→27 as distances
+  changed, total 70→94 as new LBs loaded) with NO thrash and NO broken rigs — the despawn+respawn
+  mixer rebind renders clean. Local player is never LOD-swapped.
+- **Follow-on:** despawn+respawn has a 1-frame flicker + brief motion restart (next UpdateMotion
+  re-syncs); fine for far/degraded entities. A true hot-swap (rebind mixer onto new band meshes
+  without rebuild) would remove the flicker but is a bigger change — deferred.
