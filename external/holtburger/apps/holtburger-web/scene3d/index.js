@@ -896,6 +896,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // Construct a stub scene3d shape early so the per-phase builders
   // can share state (`materialCache`, `buildingMap3d`).
   const scene3dForBuilders = {
+    // Render-completeness audit (2026-05-29): expose wasm exports on the
+    // scene3d object so getOrCreateMaterialCache can hand the MaterialCache
+    // the `fetchSurfaceAnimFrames` getter for animated-SurfaceTexture cycling.
+    wasmExports,
     // Wire-agent flag — propagates into getOrCreateMaterialCache so
     // the MaterialCache returns wireframe MeshBasicMaterial bundles
     // instead of standard textured materials.
@@ -2027,6 +2031,25 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     _pushEventRecord: pushEventRecord,
     // Stop hook — future phases use this for renderer hot-swap.
     stop() { running = false; },
+    // Render-completeness audit (2026-05-29) — GAP 2: re-attach SetupModel
+    // lights for geometry that streamed in after the initial boot scan
+    // (interior cell lanterns via GAP 1, plus newly-baked buildings/statics).
+    // `attachSetupModelLights` is idempotent (per-object `__setupLightScanned`
+    // tag), so each re-run only processes fresh geometry. Serialize re-runs
+    // onto one chain so two concurrent LB streams can't race the tags.
+    _rescanSetupLights() {
+      if (!this.wasmExports) return Promise.resolve(null);
+      const self = this;
+      this._setupLightsRescanChain = Promise.resolve(this._setupLightsRescanChain)
+        .catch(() => {})
+        .then(() => attachSetupModelLights(self, self.wasmExports))
+        .catch((e) => {
+          // eslint-disable-next-line no-console
+          console.warn("[lighting] _rescanSetupLights failed:", e);
+          return null;
+        });
+      return this._setupLightsRescanChain;
+    },
     loadEnvCellsForLandblock(landblockId) {
       const p = buildEnvCellsForLandblock(this, landblockId, this.wasmExports);
       const lbKeyForLru = (landblockId & 0xffff_0000) >>> 0;
@@ -2048,6 +2071,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             self.landblockLru?.track(lbKeyForLru);
           }
         } catch (_) {}
+        // Render-completeness audit (2026-05-29) GAP 1+2 — light the interior
+        // cell props (lanterns/braziers) that just streamed in for this LB.
+        self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.cellsGroup) {
           self.materialCache.addFillCompanions(self.cellsGroup);
           // Phase 5 PView render-order fix (2026-05-25): re-stamp layer 1
@@ -2148,6 +2174,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             self.landblockLru?.track(lbKeyForLru);
           }
         } catch (_) {}
+        // GAP 2 (2026-05-29) — light newly-streamed building geometry.
+        self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.buildingsGroup) {
           self.materialCache.addFillCompanions(self.buildingsGroup);
         }
@@ -2177,6 +2205,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             self.landblockLru?.track(lbKeyForLru);
           }
         } catch (_) {}
+        // GAP 2 (2026-05-29) — light newly-streamed static geometry.
+        self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.staticsGroup) {
           self.materialCache.addFillCompanions(self.staticsGroup);
         }

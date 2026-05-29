@@ -51,6 +51,10 @@ const KIND_META_REFRESH = 3;
 const KIND_VELOCITY = 4;
 const KIND_MOTION = 5;
 const KIND_APPEARANCE = 6;
+// Render-completeness audit (2026-05-29) — wielded-item attach/detach.
+// Reuses EntityUpdate fields: model_id = parent (wielder) guid (0 = detach),
+// motionCommand = ParentEvent.location, motionStance = ParentEvent.placement.
+const KIND_ATTACH = 7;
 
 // A2 (perf plan 2026-05-18) — module-scratch object passed to
 // `em.setVelocity` so we don't allocate a fresh `{guid,vx,vy,vz,omegaZ}`
@@ -887,6 +891,9 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
+  // Render-completeness audit (2026-05-29) — advance animated SurfaceTextures
+  // (water/lava/effect frame cycling). No-op until an animated surface loads.
+  scene3d?.materialCache?.tickAnimatedSurfaces?.(dt);
   if (scene3d?.entityManager) {
     scene3d.entityManager.tick(dt);
     drainEntityEvents3D(scene3d, sessionHandle);
@@ -1123,6 +1130,21 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
           subPalettes: _sliceFromScratch(upd.subPalettes, 2),
           paletteId: (upd.paletteId ?? 0) >>> 0,
         });
+      } else if (kind === KIND_ATTACH) {
+        // Render-completeness audit (2026-05-29) — wielded item equipped
+        // or unequipped. model_id is the wielder guid (0 = detach back to
+        // world / hide). motionCommand = holding-location key (RightHand=1,
+        // …); motionStance = the child's grip placement key. EntityManager
+        // parents the child rig under the wielder's part node at the
+        // resolved holding-location frame.
+        const childGuid = upd.guid >>> 0;
+        const parentGuid = (upd.modelId ?? 0) >>> 0;
+        em.attachChildToParent?.(
+          childGuid,
+          parentGuid,
+          (upd.motionCommand ?? 0) >>> 0,
+          (upd.motionStance ?? 0) >>> 0
+        );
       } else if (kind === KIND_META_REFRESH) {
         // Not yet consumed — Phase 7.5 will wire portal-destination
         // updates to nameplate / chip overlays.

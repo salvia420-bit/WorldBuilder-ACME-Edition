@@ -1089,6 +1089,18 @@ export class MaterialCache {
   constructor(opts = {}) {
     /** @type {Map<number, THREE.MeshStandardMaterial>} */
     this.materials = new Map();
+    // Render-completeness audit (2026-05-29) — animated SurfaceTextures.
+    // `_animFramesFetch` is the wasm `fetchSurfaceAnimFrames(did)` getter
+    // (null on legacy builds → animation silently disabled). `_animatedMaterials`
+    // maps surfaceDid → { mat, frames:[DataTexture], idx, accumS }. Cycled by
+    // `tickAnimatedSurfaces(dt)` from the render loop. Animating the SHARED
+    // cache material's `.map` is correct: every instance of a water/lava
+    // surface should cycle in sync.
+    this._animFramesFetch = opts.animFramesFetch || null;
+    /** @type {Map<number, {mat: any, frames: any[], idx: number, accumS: number}>} */
+    this._animatedMaterials = new Map();
+    /** Set of DIDs already checked for animation (avoid re-fetching). */
+    this._animChecked = new Set();
     /**
      * T2 (2026-05-28): FrontSide (single-sided) variants, keyed by surfaceDid.
      * Built lazily by `getCached(did, false)` for `?perPolyCull=on`. Each is a
@@ -1930,6 +1942,8 @@ export class MaterialCache {
       if (normalTex) this.normalTextures.set(did, normalTex);
       if (heightTex) this.heightTextures.set(did, heightTex);
       this.materials.set(did, mat);
+      // Render-completeness audit (2026-05-29) — kick animated-frame setup.
+      this._maybeSetupSurfaceAnimation(did, mat, tex);
       return mat;
     })();
     this.pendingFetches.set(did, p);
@@ -2413,7 +2427,90 @@ export class MaterialCache {
     if (normalTex) this.normalTextures.set(did, normalTex);
     if (heightTex) this.heightTextures.set(did, heightTex);
     this.materials.set(did, mat);
+    // Render-completeness audit (2026-05-29) — kick animated-frame setup.
+    this._maybeSetupSurfaceAnimation(did, mat, tex);
     return mat;
+  }
+
+  /**
+   * Render-completeness audit (2026-05-29) — set up frame cycling for an
+   * animated SurfaceTexture (water / lava / effects). Fire-and-forget: the
+   * base material already renders the highest-res frame, so this only adds
+   * motion once frames load. No-op when the wasm getter is absent, the
+   * surface isn't animated (frameCount < 2), already checked, or anything
+   * fails — the surface simply stays static (zero regression risk).
+   */
+  _maybeSetupSurfaceAnimation(did, mat, baseTex) {
+    const d = did >>> 0;
+    if (!this._animFramesFetch || this._animChecked.has(d)) return;
+    this._animChecked.add(d);
+    Promise.resolve()
+      .then(() => this._animFramesFetch(d))
+      .then((bundle) => {
+        if (!bundle) return;
+        const frameCount = (bundle.frameCount ?? 0) >>> 0;
+        const w = (bundle.width ?? 0) >>> 0;
+        const h = (bundle.height ?? 0) >>> 0;
+        if (frameCount < 2 || w === 0 || h === 0) {
+          if (typeof bundle.free === "function") { try { bundle.free(); } catch (_) {} }
+          return;
+        }
+        const all =
+          typeof bundle.takePixels === "function" ? bundle.takePixels() : null;
+        if (typeof bundle.free === "function") { try { bundle.free(); } catch (_) {} }
+        const per = w * h * 4;
+        if (!all || all.length < per * frameCount) return;
+        // Material may have been evicted/disposed between build and now.
+        if (this.materials.get(d) !== mat) return;
+        const frames = [];
+        for (let i = 0; i < frameCount; i += 1) {
+          // subarray() shares the big backing buffer; DataTexture wants to
+          // own its data, so copy each frame into a fresh Uint8Array.
+          const buf = new Uint8Array(per);
+          buf.set(all.subarray(i * per, (i + 1) * per));
+          const t = surfacePixelsToTexture(buf, w, h);
+          // Match the base map's sampler settings so only the image cycles.
+          if (baseTex) {
+            t.wrapS = baseTex.wrapS;
+            t.wrapT = baseTex.wrapT;
+            t.magFilter = baseTex.magFilter;
+            t.minFilter = baseTex.minFilter;
+            t.anisotropy = baseTex.anisotropy;
+            if ("colorSpace" in baseTex) t.colorSpace = baseTex.colorSpace;
+            t.flipY = baseTex.flipY;
+            t.needsUpdate = true;
+          }
+          frames.push(t);
+        }
+        mat.map = frames[0];
+        this._animatedMaterials.set(d, { mat, frames, idx: 0, accumS: 0 });
+      })
+      .catch(() => {
+        // Fail-soft: surface stays static on its highest-res frame.
+      });
+  }
+
+  /**
+   * Advance every animated surface's frame on its shared material `.map`.
+   * Called once per frame from the render loop. AC stores no per-surface
+   * frame rate, so we use a gentle fixed cadence — the eye-test is the
+   * source of truth for "does the water shimmer at the right speed"; this
+   * is the one tunable knob.
+   */
+  tickAnimatedSurfaces(dt) {
+    if (this._animatedMaterials.size === 0) return;
+    const ANIM_SURFACE_FPS = 4;
+    const step = 1 / ANIM_SURFACE_FPS;
+    const d = typeof dt === "number" && dt > 0 ? dt : 0;
+    for (const entry of this._animatedMaterials.values()) {
+      entry.accumS += d;
+      if (entry.accumS < step) continue;
+      // One frame per elapsed step; reset accumulator (drop overflow so a
+      // stall doesn't cause a catch-up burst).
+      entry.accumS = 0;
+      entry.idx = (entry.idx + 1) % entry.frames.length;
+      entry.mat.map = entry.frames[entry.idx];
+    }
   }
 
   /**

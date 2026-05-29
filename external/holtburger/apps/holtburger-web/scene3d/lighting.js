@@ -681,6 +681,14 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       const ud = placementGroup.userData || {};
       const modelId = (ud.modelId >>> 0);
       if (!modelId) continue;
+      // Render-completeness audit (2026-05-29): idempotency tag so this
+      // function is safe to re-run as landblocks stream in (GAP 2). A
+      // placement already scanned at boot or on a prior LB load keeps its
+      // attached lights and is skipped here; only freshly-baked geometry is
+      // processed. Without this, each per-LB re-run would re-attach a fresh
+      // light to every existing placement and pile up duplicates.
+      if (ud.__setupLightScanned) continue;
+      ud.__setupLightScanned = true;
       // partGroups is an array of hingeWrappers (Phase 7.2 stash);
       // their `.userData.partIndex` is dense from 0.
       const partGroups =
@@ -710,6 +718,9 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       const ud = mesh.userData || {};
       const modelId = (ud.modelId >>> 0);
       if (!modelId) continue;
+      // Idempotency tag (GAP 2) — see recordBuildingTree.
+      if (ud.__setupLightScanned) continue;
+      ud.__setupLightScanned = true;
       // Fused mesh — treat as part 0. Capture-script side asserts
       // `light.parent === mesh` for statics with lights.
       let entry = partsBySetupId.get(modelId);
@@ -730,6 +741,10 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       const setupId =
         ((inst?.meta?.modelId ?? inst?.meta?.setupId ?? 0) >>> 0);
       if (!setupId) return;
+      // Idempotency tag (GAP 2) — see recordBuildingTree. Entities that
+      // spawn after a rescan are caught by the next per-LB rescan.
+      if (inst._setupLightScanned) return;
+      inst._setupLightScanned = true;
       const parts = inst.parts || [];
       let entry = partsBySetupId.get(setupId);
       if (!entry) {
@@ -748,9 +763,42 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
     });
   }
 
+  // Render-completeness audit (2026-05-29) — GAP 1: EnvCell interior static
+  // props (lanterns / braziers / candelabra) carry SetupModel LightInfo just
+  // like outdoor statics, but were never scanned ("skip them for the first
+  // cut" — the comment block above). That left every dungeon and building
+  // interior lit only by the flat indoor AmbientLight, with no local torch
+  // glow. Cell statics are fused meshes added directly to each cellContainer
+  // under `cellsGroup`, tagged `userData.isCellStatic` with `modelId = so.did`
+  // (cells.js). Walk two levels deep and record each as part 0 (same as
+  // outdoor statics). `0x01` raw-GfxObj modelIds yield no lights (the wasm
+  // getter early-returns), so only genuine `0x02` Setups with a light table
+  // contribute — exactly the lanterns we want.
+  function recordCellStatics(cellsGroup) {
+    if (!cellsGroup || !Array.isArray(cellsGroup.children)) return;
+    for (const cellContainer of cellsGroup.children) {
+      if (!cellContainer || !Array.isArray(cellContainer.children)) continue;
+      for (const mesh of cellContainer.children) {
+        const ud = mesh.userData || {};
+        if (!ud.isCellStatic) continue;
+        const modelId = (ud.modelId >>> 0);
+        if (!modelId) continue;
+        if (ud.__setupLightScanned) continue;
+        ud.__setupLightScanned = true;
+        let entry = partsBySetupId.get(modelId);
+        if (!entry) {
+          entry = [];
+          partsBySetupId.set(modelId, entry);
+        }
+        entry.push({ partIndex: 0, object3D: mesh });
+      }
+    }
+  }
+
   recordBuildingTree(scene3d.buildingsGroup);
   recordStatics(scene3d.staticsGroup);
   recordEntities(scene3d.entityManager);
+  recordCellStatics(scene3d.cellsGroup);
 
   if (partsBySetupId.size === 0) {
     return summary;

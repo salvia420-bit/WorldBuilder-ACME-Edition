@@ -989,6 +989,15 @@ class EntityInstance {
     this.currentAction = null;
     this.currentActionKey = null;
     this.meta = meta;
+    // Render-completeness audit (2026-05-29) — wielded-item attach state.
+    // When this entity is a held child (weapon/shield/bow), `_attachedParentGuid`
+    // is its wielder's guid and `root` is parented under the wielder's part
+    // node (so it tracks the hand animation). When this entity is a wielder,
+    // `_attachedChildren` is the Set of child guids hanging off it. Both null
+    // until an attach happens. See `EntityManager.attachChildToParent`.
+    this._attachedParentGuid = null;
+    this._attachedChildren = null;
+    this._attachedPlacement = 0;
     // Ownership of geometries + materials so dispose() can free them.
     // Materials are shared via materialCache; only geometries are
     // disposable per-entity.
@@ -1422,6 +1431,16 @@ export class EntityManager {
     // _spawnImpl() which naturally re-indexes).
     /** @type {Map<string, Set<number>>} */
     this._nameToGuid = new Map();
+    // Render-completeness audit (2026-05-29) — wielded-item attach.
+    // `_pendingAttach`: childGuid → {parentGuid, location, placement} for
+    // ParentEvents that arrived before both rigs existed (ObjectCreate /
+    // ParentEvent ordering is not guaranteed). Flushed on every spawn.
+    // `_holdingLocCache`: wielder setupId → Map<locationKey, {partId, ox..qz}>
+    // so we fetch each wielder's holding table from wasm at most once.
+    /** @type {Map<number, {parentGuid:number, location:number, placement:number}>} */
+    this._pendingAttach = new Map();
+    /** @type {Map<number, Map<number, object>>} */
+    this._holdingLocCache = new Map();
     // Wave 7 Phase 7.1 (2026-05-26): rate-limit the per-entity
     // `_recentLocomotionTime` prune to once per second. Each entry is
     // single-shot (deleted on consume), but if a player walks then
@@ -1989,11 +2008,17 @@ export class EntityManager {
         inst.hookTimelines.set(cacheKey, animEntry.hooks);
         inst.actionLastHookTime.set(cacheKey, 0);
       }
-      // Only auto-play if the spawned motion is a locomotion command.
-      // Spawning an entity in idle (motion=0) leaves the rig at rest
-      // pose; the first kind=5 walk/run will start the clip.
+      // Auto-play locomotion (walk/run) AND the Ready idle cycle at spawn.
+      // Render-completeness audit (2026-05-29): lib.rs now defaults
+      // animatable spawns (mtable_id != 0) to Ready (0x41000003), which
+      // classifyMotionCommand maps to "idle". The action above is already
+      // configured LoopRepeat, so idle just needs to start — this is what
+      // makes standing NPCs/vendors/players breathe and sway instead of
+      // standing frozen at the rest pose. One-shot attack/cast commands are
+      // never the spawn-initial motion and stay gated out. Entities with no
+      // MotionTable spawn with motion=0 → cls === null → no idle attempt.
       const cls = classifyMotionCommand(initialMotion);
-      if (cls === "walk" || cls === "run") {
+      if (cls === "walk" || cls === "run" || cls === "idle") {
         action.play();
         inst.currentAction = action;
         inst.currentActionKey = cacheKey;
@@ -2028,6 +2053,11 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // Render-completeness audit (2026-05-29) — flush any wielded-item attach
+    // that arrived before this rig (or its counterpart) existed. Covers both
+    // roles: this entity may be a child waiting for its wielder, or a wielder
+    // whose children are queued. Fire-and-forget (resolves holding frame async).
+    this._flushPendingAttach(guid);
     // Diagnostic hook (always-on; cheap when __diag not installed). Fires
     // AFTER the entity is committed to the live scene graph so observed
     // position is the final post-bake value, not the spawn-time meta.
@@ -2362,7 +2392,188 @@ export class EntityManager {
   setVisibility(guid, visible) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst || !inst.root) return;
+    // Render-completeness audit (2026-05-29): a wielded child's own PVS
+    // visibility is governed by its wielder (it's parented under the
+    // wielder's part node, so three.js already hides it when the wielder
+    // is hidden). Its own ObjectCreate often carries a NULL landblock once
+    // equipped, which would otherwise drive a spurious visible=false here
+    // and blank the in-hand weapon. Skip — the parent hierarchy decides.
+    if (inst._attachedParentGuid != null) return;
     inst.root.visible = !!visible;
+  }
+
+  /**
+   * Render-completeness audit (2026-05-29) — attach a wielded child
+   * (weapon/shield/bow) to its wielder, or detach it.
+   *
+   * AC sends the child its own ObjectCreate (so its rig exists in
+   * `entityMap`) plus a `ParentEvent` linking it to the wielder at a
+   * holding `location` (RightHand=1, LeftHand=2, Shield=3, …) with a grip
+   * `placement`. We parent the child's `root` under the wielder's
+   * `parts[partId]` Group at the holding-location frame from the wielder's
+   * SetupModel. three.js then propagates the part's per-frame animation to
+   * the child for free (no per-frame follow code).
+   *
+   * `parentGuid === 0` means DETACH (item unequipped to a pack — ACE will
+   * usually ObjectDelete it right after; we hide + unparent defensively).
+   *
+   * Ordering-safe: if either rig isn't spawned yet the request is queued in
+   * `_pendingAttach` and retried from `spawn()` via `_flushPendingAttach`.
+   */
+  async attachChildToParent(childGuid, parentGuid, location, placement) {
+    const cGuid = childGuid >>> 0;
+    const pGuid = parentGuid >>> 0;
+    if (pGuid === 0) {
+      this._detachChild(cGuid);
+      return;
+    }
+    const childInst = this.entityMap.get(cGuid);
+    const parentInst = this.entityMap.get(pGuid);
+    if (!childInst || !parentInst) {
+      // One (or both) rigs not built yet — remember and retry on spawn.
+      this._pendingAttach.set(cGuid, {
+        parentGuid: pGuid,
+        location: location >>> 0,
+        placement: placement >>> 0,
+      });
+      return;
+    }
+    const setupId =
+      (parentInst.meta?.setupId ?? parentInst.meta?.modelId ?? 0) >>> 0;
+    let loc = null;
+    try {
+      loc = await this._resolveHoldingLocation(setupId, location >>> 0);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[attach] holding-location resolve failed:", e);
+    }
+    // Re-check liveness after the await — either rig may have despawned.
+    const c = this.entityMap.get(cGuid);
+    const p = this.entityMap.get(pGuid);
+    if (!c || !c.root || !p || !p.root) return;
+    // Mount point: the wielder part the holding location names, else root.
+    let mount = p.root;
+    if (loc && p.parts && loc.partId >= 0 && loc.partId < p.parts.length) {
+      mount = p.parts[loc.partId];
+    }
+    if (c.root.parent) c.root.parent.remove(c.root);
+    mount.add(c.root);
+    if (loc) {
+      c.root.position.set(loc.ox, loc.oy, loc.oz);
+      c.root.quaternion.copy(acQuatToThree(loc.qw, loc.qx, loc.qy, loc.qz));
+    } else {
+      // No holding entry for this location key — best-effort mount at the
+      // part origin so the weapon at least tracks the hand (tunable).
+      c.root.position.set(0, 0, 0);
+      c.root.quaternion.identity();
+    }
+    // The wielder root may carry obj_scale; the child inherits it through
+    // the part node (a juvenile creature holds a proportionally-placed
+    // weapon — matches retail). Keep the child's own scale untouched.
+    c.root.visible = true;
+    c._attachedParentGuid = pGuid;
+    c._attachedPlacement = placement >>> 0;
+    if (!p._attachedChildren) p._attachedChildren = new Set();
+    p._attachedChildren.add(cGuid);
+    this._pendingAttach.delete(cGuid);
+    // Keep the child subtree on the indoor render layer (matches spawn).
+    try {
+      c.root.traverse((o) => o.layers.set(1));
+    } catch (_) {}
+  }
+
+  /**
+   * Detach a previously-attached child: unparent back to entitiesGroup and
+   * hide (the item is leaving view — ACE typically ObjectDeletes it next).
+   * Idempotent; safe for unknown / already-detached guids.
+   */
+  _detachChild(childGuid) {
+    const cGuid = childGuid >>> 0;
+    this._pendingAttach.delete(cGuid);
+    const c = this.entityMap.get(cGuid);
+    if (!c || !c.root) return;
+    const parentGuid = c._attachedParentGuid;
+    if (parentGuid != null) {
+      const p = this.entityMap.get(parentGuid >>> 0);
+      if (p && p._attachedChildren) p._attachedChildren.delete(cGuid);
+    }
+    if (c.root.parent) c.root.parent.remove(c.root);
+    if (this.scene3d?.entitiesGroup) this.scene3d.entitiesGroup.add(c.root);
+    c.root.visible = false;
+    c._attachedParentGuid = null;
+  }
+
+  /**
+   * Resolve (and cache) a wielder SetupModel's holding-location table, then
+   * return the entry for `locationKey` ({partId, ox..oz, qw..qz}) or null.
+   */
+  async _resolveHoldingLocation(setupId, locationKey) {
+    const sid = setupId >>> 0;
+    if (sid === 0) return null;
+    let table = this._holdingLocCache.get(sid);
+    if (!table) {
+      table = new Map();
+      const fetchFn = this.wasmExports?.fetchSetupHoldingLocations;
+      if (typeof fetchFn === "function") {
+        const bundle = await fetchFn(sid);
+        if (bundle) {
+          const arr =
+            typeof bundle.takeLocations === "function"
+              ? bundle.takeLocations()
+              : [];
+          for (const e of arr) {
+            table.set(e.locationKey >>> 0, {
+              partId: e.partId | 0,
+              ox: e.ox,
+              oy: e.oy,
+              oz: e.oz,
+              qw: e.qw,
+              qx: e.qx,
+              qy: e.qy,
+              qz: e.qz,
+            });
+            if (typeof e.free === "function") {
+              try { e.free(); } catch (_) {}
+            }
+          }
+          if (typeof bundle.free === "function") {
+            try { bundle.free(); } catch (_) {}
+          }
+        }
+      }
+      this._holdingLocCache.set(sid, table);
+    }
+    return table.get(locationKey >>> 0) ?? null;
+  }
+
+  /**
+   * Retry queued attaches that involve `guid` (as child or as wielder),
+   * now that its rig has been built. Called from `spawn()`.
+   */
+  _flushPendingAttach(guid) {
+    const g = guid >>> 0;
+    if (this._pendingAttach.size === 0) return;
+    // This entity might be the awaited CHILD…
+    const asChild = this._pendingAttach.get(g);
+    if (asChild) {
+      this.attachChildToParent(
+        g,
+        asChild.parentGuid,
+        asChild.location,
+        asChild.placement
+      );
+    }
+    // …or the awaited WIELDER of one or more queued children.
+    for (const [childGuid, req] of this._pendingAttach) {
+      if (req.parentGuid === g) {
+        this.attachChildToParent(
+          childGuid,
+          req.parentGuid,
+          req.location,
+          req.placement
+        );
+      }
+    }
   }
 
   /**
@@ -4639,6 +4850,24 @@ export class EntityManager {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
+    // Render-completeness audit (2026-05-29) — wielded-item lifecycle.
+    // If this entity is a WIELDER with attached children, detach them first
+    // so they aren't dragged out of the scene (and left tracked-but-orphaned)
+    // when the wielder's `dispose()` removes its subtree. Detach hides them;
+    // ACE normally ObjectDeletes wielded items alongside their wielder.
+    if (inst._attachedChildren && inst._attachedChildren.size > 0) {
+      for (const childGuid of [...inst._attachedChildren]) {
+        this._detachChild(childGuid);
+      }
+      inst._attachedChildren.clear();
+    }
+    // If this entity is itself an attached CHILD, unlink it from its wielder
+    // and drop any pending request so we don't leak a stale reference.
+    if (inst._attachedParentGuid != null) {
+      const p = this.entityMap.get(inst._attachedParentGuid >>> 0);
+      if (p && p._attachedChildren) p._attachedChildren.delete(g);
+    }
+    this._pendingAttach.delete(g);
     // B4 (2026-05-18): drop the name→guid index entry BEFORE dispose
     // so we still have access to `inst.meta.name`. Removes the bucket
     // entirely once empty to avoid a long-session leak of empty Sets.

@@ -4496,6 +4496,7 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
 ) -> Option<(
     Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
     Vec<f32>,
+    Vec<f32>,
     f32,
     u32,
 )> {
@@ -4546,9 +4547,9 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // T4 (2026-05-28): concatenate ALL AnimData segments (was `anims.first()`
     // only) with per-segment timing + reverse playback. See
     // `build_concatenated_motion_frames`.
-    let (frames, frame_times, duration) =
+    let (frames, frame_times, pos_frames, duration) =
         build_concatenated_motion_frames(source, motion_data)?;
-    Some((frames, frame_times, duration, resolved_stance))
+    Some((frames, frame_times, pos_frames, duration, resolved_stance))
 }
 
 /// T11 (2026-05-28) — authored ground speed of a locomotion cycle:
@@ -4634,6 +4635,7 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
 ) -> Option<(
     Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
     Vec<f32>,
+    Vec<f32>,
     f32,
     u32,
 )> {
@@ -4658,9 +4660,9 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // timing + reverse playback (was `anims.first()`). Links are commonly
     // multi-segment (windup → strike → recover → settle) and ~22% of retail
     // AnimData are reverse-framerate, which previously produced a null clip.
-    let (frames, frame_times, duration) =
+    let (frames, frame_times, pos_frames, duration) =
         build_concatenated_motion_frames(source, motion_data)?;
-    Some((frames, frame_times, duration, resolved_stance))
+    Some((frames, frame_times, pos_frames, duration, resolved_stance))
 }
 
 /// T4 (2026-05-28) — concatenate ALL `AnimData` segments of a `MotionData`
@@ -4691,6 +4693,7 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
 ) -> Option<(
     Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
     Vec<f32>,
+    Vec<f32>,
     f32,
 )> {
     use holtburger_dat::file_type::Animation;
@@ -4698,6 +4701,15 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
 
     let mut frames: Vec<holtburger_dat::file_type::setup_model::AnimationFrame> = Vec::new();
     let mut times: Vec<f32> = Vec::new();
+    // Render-completeness audit (2026-05-29) — root motion. Parallel to
+    // `frames`: 3 f32 (ox,oy,oz) per concatenated keyframe from the
+    // Animation's `pos_frames` (AnimationFlags::POS_FRAMES). Most cycles
+    // (idle, walk/run locomotion) carry NO pos_frames — verified human idle
+    // 0x03000001 has pos_frames_len==0 — so this is all-zero for them and a
+    // no-op. Non-empty only for one-shot anims that translate the object
+    // (lunge attacks, stepping emotes, door/lever swings, knockbacks). Held
+    // in lockstep with `frames` (same slice + same reverse).
+    let mut pos: Vec<f32> = Vec::new();
     let mut t = 0.0f32;
 
     for anim_data in &motion_data.anims {
@@ -4734,17 +4746,37 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         }
         let dt = 1.0 / fr;
 
-        let slice = &anim.part_frames[low..high];
-        if anim_data.framerate < 0.0 {
+        // pos_frames is parallel to part_frames ONLY when the POS_FRAMES
+        // flag was set (len == total); otherwise it's empty → push zeros.
+        let has_pos = anim.pos_frames.len() == total;
+        // Iterate by index so part_frames + pos_frames stay aligned across
+        // the same forward/reverse slice.
+        let reverse = anim_data.framerate < 0.0;
+        let push_frame = |idx: usize,
+                          frames: &mut Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
+                          pos: &mut Vec<f32>| {
+            frames.push(anim.part_frames[idx].clone());
+            if has_pos {
+                let o = &anim.pos_frames[idx].origin;
+                pos.push(o.x);
+                pos.push(o.y);
+                pos.push(o.z);
+            } else {
+                pos.push(0.0);
+                pos.push(0.0);
+                pos.push(0.0);
+            }
+        };
+        if reverse {
             // Reverse playback: HighFrame → LowFrame (AnimSequenceNode).
-            for af in slice.iter().rev() {
-                frames.push(af.clone());
+            for idx in (low..high).rev() {
+                push_frame(idx, &mut frames, &mut pos);
                 times.push(t);
                 t += dt;
             }
         } else {
-            for af in slice.iter() {
-                frames.push(af.clone());
+            for idx in low..high {
+                push_frame(idx, &mut frames, &mut pos);
                 times.push(t);
                 t += dt;
             }
@@ -4757,7 +4789,7 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // `t` after the final increment == last_frame_time + last_dt == the time
     // the last frame holds until (== clip duration; matches the legacy
     // single-anim `num_frames / framerate`).
-    Some((frames, times, t))
+    Some((frames, times, pos, t))
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -5657,6 +5689,132 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         }
         Err(_) => empty,
     }
+}
+
+// === Render-completeness audit (2026-05-29) — animated SurfaceTextures ===
+//
+// A SurfaceTexture (0x05) holds a LIST of RenderSurface (0x06) ids. The
+// hot decode path (`fetch_surface_pixels_impl`) takes only `highest_res()`
+// (the last entry), so animated surfaces render frozen on one frame. In
+// ToD ~2284 SurfaceTextures hold 2 DISTINCT, same-dimension consecutive
+// frames (the classic AC water/lava/effect cycle); ~740 are `[id, id]`
+// duplicate no-ops, and any with differing dimensions are a mip stack (use
+// highest_res, NOT animation). This is an ADDITIVE second path — it does
+// NOT touch the hot single-frame decode, so non-animated surfaces (all
+// terrain/static/UI materials) are completely unaffected (zero blast
+// radius). JS cycles the decoded frames on the shared material's `.map`
+// (correct: all instances of an animated surface animate in sync).
+
+/// Decoded frames of one animated surface. `pixels` is `frame_count`
+/// concatenated RGBA8 buffers, each `width*height*4` bytes. `frame_count
+/// == 0` ⇒ the surface is NOT animated (single frame, duplicate frames, or
+/// a mip stack) — JS leaves it static.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SurfaceAnimFrames {
+    width: u32,
+    height: u32,
+    frame_count: u32,
+    pixels: Vec<u8>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SurfaceAnimFrames {
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> u32 { self.width }
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> u32 { self.height }
+    #[wasm_bindgen(getter, js_name = frameCount)]
+    pub fn frame_count(&self) -> u32 { self.frame_count }
+    /// One-shot drain of the concatenated RGBA8 frame buffer.
+    #[wasm_bindgen(js_name = takePixels)]
+    pub fn take_pixels(&mut self) -> Vec<u8> { std::mem::take(&mut self.pixels) }
+}
+
+/// Pure helper (native+test reachable): decode every frame of an animated
+/// surface. Returns `(width, height, Vec<rgba_per_frame>)`; an empty frame
+/// vec means "not animated" — single/duplicate frames, decode failure, or a
+/// dimension mismatch (mip stack, not animation). Fail-soft throughout.
+#[cfg(any(target_arch = "wasm32", test))]
+fn collect_surface_anim_frames<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    surface_did: u32,
+) -> (u32, u32, Vec<Vec<u8>>) {
+    use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
+    use holtburger_dat::ResourceKey;
+    let none = (0u32, 0u32, Vec::new());
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
+        return none;
+    };
+    let Ok(surface) = Surface::unpack(&bytes) else { return none; };
+    let Some((surf_tex_id, _)) = surface.textured() else { return none; };
+    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else {
+        return none;
+    };
+    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return none; };
+    let ids = &surf_tex.textures;
+    // Animated ⇒ ≥2 frames, not all identical. (`[id,id]` is a no-op cycle.)
+    if ids.len() < 2 || ids.iter().all(|&x| x == ids[0]) {
+        return none;
+    }
+    let mut frames: Vec<Vec<u8>> = Vec::with_capacity(ids.len());
+    let mut dims: Option<(u32, u32)> = None;
+    for &rs_id in ids.iter() {
+        let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else {
+            return none;
+        };
+        let Ok(tex) = Texture::unpack(&tb) else { return none; };
+        let (w, h) = (tex.width as u32, tex.height as u32);
+        match dims {
+            None => dims = Some((w, h)),
+            // Differing dimensions ⇒ a mip stack, not an animation. Bail to
+            // static (the hot path's highest_res handles those correctly).
+            Some((dw, dh)) => {
+                if dw != w || dh != h {
+                    return none;
+                }
+            }
+        }
+        let rgba = tex.to_rgba8(|pal_id| {
+            let pb = source
+                .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
+                .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
+            Palette::unpack(&pb)
+                .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))
+        });
+        match rgba {
+            Ok(px) => frames.push(px),
+            Err(_) => return none,
+        }
+    }
+    let (w, h) = dims.unwrap_or((0, 0));
+    (w, h, frames)
+}
+
+/// Wasm export: decode all animation frames of a surface (or report
+/// `frameCount == 0` when it isn't animated). JS calls this once per unique
+/// surface DID; on `frameCount >= 2` it slices `takePixels()` into N
+/// DataTextures and cycles them on the shared material's `.map`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSurfaceAnimFrames)]
+pub async fn fetch_surface_anim_frames(surface_did: u32) -> Result<SurfaceAnimFrames, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", surface_did)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let (width, height, frames) = collect_surface_anim_frames(source.as_ref(), surface_did);
+    let frame_count = frames.len() as u32;
+    let mut pixels = Vec::with_capacity(frames.iter().map(|f| f.len()).sum());
+    for f in &frames {
+        pixels.extend_from_slice(f);
+    }
+    Ok(SurfaceAnimFrames {
+        width,
+        height,
+        frame_count,
+        pixels,
+    })
 }
 
 /// Phase 3 step 6: fetch decoded RGBA8 pixels for one surface DID.
@@ -7898,6 +8056,145 @@ fn collect_setup_model_lights<S: holtburger_dat::ResourceSource + ?Sized>(
         });
     }
     out
+}
+
+// === Render-completeness audit (2026-05-29) — wielded-item holding locations ===
+//
+// AC attaches a wielded child object (weapon / shield / bow) to its wielder by
+// hanging the child off one of the wielder SetupModel's `HoldingLocations`
+// entries, keyed by the `ParentEvent.location` value (RightHand=1, LeftHand=2,
+// Shield=3, …). Each entry is a `LocationType { part_id, frame }`: the parent
+// body part the child mounts on, plus the part-LOCAL frame (origin + quat) the
+// child is placed at. Retail `CSetup::GetHoldingLocation` (acclient.c:316746)
+// → `CHILDLIST::add_child(obj, holdingLocation.Frame, holdingLocation.PartId)`.
+// ACE mirror: `Setup.GetHoldingLocation` (Setup.cs:96) + `PhysicsObj.add_child`
+// (PhysicsObj.cs:1922). The DAT loader already parses this dict
+// (`setup_model.rs:357`) but every prior wasm consumer discarded it
+// (`holding_locations: HashMap::new()`). This getter surfaces it so the JS rig
+// can parent the child's Group under the wielder's `part_${part_id}` node at
+// the holding frame — the child then tracks the part's animation for free.
+
+/// One holding-location entry drained from a SetupModel's `holding_locations`
+/// dict. `location_key` is the `ParentEvent.location` value that selects it.
+/// `part_id` is the wielder part the child mounts on. `(ox,oy,oz)` +
+/// `(qw,qx,qy,qz)` is the part-LOCAL frame (AC wire quat order w,x,y,z — the JS
+/// side reorders to three.js x,y,z,w at apply, same as the rest-pose path).
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[derive(Debug, Clone, Copy)]
+pub struct HoldingLocation {
+    pub(crate) location_key: i32,
+    pub(crate) part_id: i32,
+    pub(crate) ox: f32,
+    pub(crate) oy: f32,
+    pub(crate) oz: f32,
+    pub(crate) qw: f32,
+    pub(crate) qx: f32,
+    pub(crate) qy: f32,
+    pub(crate) qz: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl HoldingLocation {
+    #[wasm_bindgen(getter, js_name = locationKey)]
+    pub fn location_key(&self) -> i32 { self.location_key }
+    #[wasm_bindgen(getter, js_name = partId)]
+    pub fn part_id(&self) -> i32 { self.part_id }
+    #[wasm_bindgen(getter)] pub fn ox(&self) -> f32 { self.ox }
+    #[wasm_bindgen(getter)] pub fn oy(&self) -> f32 { self.oy }
+    #[wasm_bindgen(getter)] pub fn oz(&self) -> f32 { self.oz }
+    #[wasm_bindgen(getter)] pub fn qw(&self) -> f32 { self.qw }
+    #[wasm_bindgen(getter)] pub fn qx(&self) -> f32 { self.qx }
+    #[wasm_bindgen(getter)] pub fn qy(&self) -> f32 { self.qy }
+    #[wasm_bindgen(getter)] pub fn qz(&self) -> f32 { self.qz }
+}
+
+/// Per-SetupModel holding-location bundle returned from
+/// [`fetch_setup_holding_locations`]. Mirrors [`SetupModelLights`] /
+/// [`SetupPartSortCenters`]: a one-shot `take_locations()` drain so JS lifts
+/// the Vec across the wasm boundary without cloning, then caches per setup id.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SetupHoldingLocations {
+    setup_id: u32,
+    locations: Vec<HoldingLocation>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SetupHoldingLocations {
+    #[wasm_bindgen(getter, js_name = setupId)]
+    pub fn setup_id(&self) -> u32 { self.setup_id }
+    #[wasm_bindgen(getter, js_name = locationCount)]
+    pub fn location_count(&self) -> u32 { self.locations.len() as u32 }
+    /// One-shot drain. Second call returns an empty Vec.
+    #[wasm_bindgen(js_name = takeLocations)]
+    pub fn take_locations(&mut self) -> Vec<HoldingLocation> {
+        std::mem::take(&mut self.locations)
+    }
+}
+
+/// Pure helper drained from a `ResourceSource`. Empty Vec for `0x01` raw
+/// GfxObjs (no Setup → no holding table) and for any parse failure, so JS
+/// uniformly treats "no holding locations" the same regardless of cause.
+/// HashMap order is non-deterministic; sorted by key for stable output.
+#[cfg(any(target_arch = "wasm32", test))]
+fn collect_setup_holding_locations<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Vec<HoldingLocation> {
+    use holtburger_dat::ResourceKey;
+    use holtburger_dat::file_type::SetupModel;
+    if (setup_id >> 24) as u8 != 0x02 {
+        return Vec::new();
+    }
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) else {
+        return Vec::new();
+    };
+    let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+        return Vec::new();
+    };
+    if setup.holding_locations.is_empty() {
+        return Vec::new();
+    }
+    let mut entries: Vec<(i32, &holtburger_dat::file_type::setup_model::LocationType)> =
+        setup.holding_locations.iter().map(|(k, v)| (*k, v)).collect();
+    entries.sort_by_key(|(k, _)| *k);
+    entries
+        .into_iter()
+        .map(|(key, loc)| HoldingLocation {
+            location_key: key,
+            part_id: loc.part_id,
+            ox: loc.frame.origin.x,
+            oy: loc.frame.origin.y,
+            oz: loc.frame.origin.z,
+            qw: loc.frame.orientation.w,
+            qx: loc.frame.orientation.x,
+            qy: loc.frame.orientation.y,
+            qz: loc.frame.orientation.z,
+        })
+        .collect()
+}
+
+/// Wasm export: walk a wielder SetupModel and return its holding-location
+/// table. JS calls this once per unique wielder setup id (cached) when a
+/// `ParentEvent` attaches a child, then looks up the entry whose
+/// `location_key` matches the event's `location`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSetupHoldingLocations)]
+pub async fn fetch_setup_holding_locations(
+    setup_id: u32,
+) -> Result<SetupHoldingLocations, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id));
+    })
+    .await?;
+    let locations = collect_setup_holding_locations(source.as_ref(), setup_id);
+    Ok(SetupHoldingLocations { setup_id, locations })
 }
 
 // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center ===
@@ -11765,7 +12062,7 @@ pub async fn fetch_entity_cycle_frames(
                     MotionTable::WALK_FORWARD_COMMAND,
                     MotionTable::RUN_FORWARD_COMMAND,
                 ] {
-                    if let Some((frames, _, _, _)) =
+                    if let Some((frames, _, _, _, _)) =
                         try_resolve_cycle_frames(s, &setup, mt_override, stance, command)
                     {
                         for f in frames.iter() {
@@ -11801,7 +12098,7 @@ pub async fn fetch_entity_cycle_frames(
     // dispatches stance once at the top).
     let bake_cycle = |command: u32| -> (Vec<ModelMesh>, f32, u32) {
         match try_resolve_cycle_frames(source.as_ref(), &setup, mt_override, stance, command) {
-            Some((frames, _frame_times, duration, resolved_stance)) => {
+            Some((frames, _frame_times, _pos_frames, duration, resolved_stance)) => {
                 let mut out = Vec::with_capacity(frames.len());
                 for f in &frames {
                     let mut tris = Vec::new();
@@ -12466,6 +12763,11 @@ pub struct EntityAnimationData {
     /// num_frames. Lets JS lay down KeyframeTrack times that honour per-segment
     /// (per-AnimData) framerate + reverse playback. Empty when no cycle resolved.
     frame_times: Vec<f32>,
+    /// Render-completeness audit (2026-05-29) — root motion. Per-frame
+    /// whole-object translation offset, 3 f32 (x,y,z) per keyframe (length ==
+    /// num_frames * 3). All-zero for cycles without `AnimationFlags::POS_FRAMES`.
+    /// `buildAnimationClip` adds it to every part's position track.
+    pos_frames: Vec<f32>,
     /// T4: total clip duration in seconds (== last frame time + its segment dt).
     duration: f32,
     /// **Task E (2026-05-12).** Sorted-by-`time_in_clip_s` list of
@@ -12563,6 +12865,16 @@ impl EntityAnimationData {
         self.frame_times.clone()
     }
 
+    /// Render-completeness audit (2026-05-29) — root motion. Per-frame
+    /// whole-object translation offset (x,y,z per keyframe; length
+    /// `numFrames * 3`). Empty / all-zero for cycles without pos_frames.
+    /// `buildAnimationClip` adds `[posFrames[3i], posFrames[3i+1],
+    /// posFrames[3i+2]]` to every part's position keyframe at frame `i`.
+    #[wasm_bindgen(getter, js_name = posFrames)]
+    pub fn pos_frames(&self) -> Vec<f32> {
+        self.pos_frames.clone()
+    }
+
     /// T4: total clip duration in seconds. `0.0` when no cycle resolved.
     #[wasm_bindgen(getter)]
     pub fn duration(&self) -> f32 {
@@ -12629,6 +12941,7 @@ impl EntityAnimationData {
             resolved_stance,
             part_frames: Vec::new(),
             frame_times: Vec::new(),
+            pos_frames: Vec::new(),
             duration: 0.0,
             rest_origins,
             rest_orientations,
@@ -12685,6 +12998,13 @@ pub(crate) struct EntityAnimationKeyframesInner {
     /// num_frames. Honours per-AnimData framerate + reverse playback across
     /// concatenated segments. JS uses this for KeyframeTrack times.
     pub frame_times: Vec<f32>,
+    /// Render-completeness audit (2026-05-29) — root motion. Per-frame
+    /// whole-object translation offset, 3 f32 (x,y,z) per keyframe (length ==
+    /// num_frames * 3). All-zero for anims without `AnimationFlags::POS_FRAMES`
+    /// (idle, walk/run cycles). Non-zero for one-shot anims that move the
+    /// object (lunges, stepping emotes, door/lever swings). JS adds this to
+    /// each part's position keyframe so the whole rig translates.
+    pub pos_frames: Vec<f32>,
     /// T4: total clip duration (seconds) == last frame time + its segment dt.
     pub duration: f32,
     pub rest_origins: Vec<f32>,
@@ -12768,6 +13088,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             resolved_stance: 0,
             part_frames: Vec::new(),
             frame_times: Vec::new(),
+            pos_frames: Vec::new(),
             duration: 0.0,
             rest_origins,
             rest_orientations,
@@ -12821,7 +13142,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
     } else {
         None
     };
-    let (frames, frame_times, duration, resolved_stance) = match link_result {
+    let (frames, frame_times, pos_frames, duration, resolved_stance) = match link_result {
         Some(t) => t,
         None => match try_resolve_cycle_frames(source, &setup, mt_override, stance, motion_command) {
             Some(t) => t,
@@ -12835,6 +13156,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
                     resolved_stance: fallback_stance,
                     part_frames: Vec::new(),
                     frame_times: Vec::new(),
+                    pos_frames: Vec::new(),
                     duration: 0.0,
                     rest_origins,
                     rest_orientations,
@@ -12897,6 +13219,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
         resolved_stance,
         part_frames,
         frame_times,
+        pos_frames,
         duration,
         rest_origins,
         rest_orientations,
@@ -13112,6 +13435,7 @@ fn inner_to_wasm_animation_data(inner: EntityAnimationKeyframesInner) -> EntityA
         resolved_stance: inner.resolved_stance,
         part_frames: inner.part_frames,
         frame_times: inner.frame_times,
+        pos_frames: inner.pos_frames,
         duration: inner.duration,
         rest_origins: inner.rest_origins,
         rest_orientations: inner.rest_orientations,
@@ -15186,6 +15510,17 @@ const ENTITY_UPDATE_KIND_MOTION: u32 = 5;
 /// cache with the new substitutions.
 #[cfg(target_arch = "wasm32")]
 const ENTITY_UPDATE_KIND_APPEARANCE: u32 = 6;
+/// Render-completeness audit (2026-05-29) — wielded-item attach. Emitted by the
+/// recv-loop `GameMessage::ParentEvent` arm. Tells the JS rig to parent the
+/// child entity's Group under the wielder's `part_${part_id}` node at the
+/// wielder's holding-location frame (so a weapon/shield/bow renders in-hand and
+/// tracks the hand's animation). Field reuse on `EntityUpdate` for this kind:
+///   `guid`           = child (item) GUID
+///   `model_id`       = parent (wielder) GUID — `0` means DETACH
+///   `motion_command` = `ParentEvent.location` (RightHand=1, LeftHand=2, …)
+///   `motion_stance`  = `ParentEvent.placement` (the child's own grip pose key)
+/// All other fields are zeroed; JS resolves geometry from the cached rigs.
+const ENTITY_UPDATE_KIND_ATTACH: u32 = 7;
 /// Phase 4 step 6f: ItemType bit 0x10000 = Portal. We auto-fire
 /// `GameAction::IdentifyObject(guid)` on every ObjectCreate that
 /// matches this bit so ACE pushes back the portal's
@@ -27909,7 +28244,29 @@ async fn recv_loop(
                                     vy: 0.0,
                                     vz: 0.0,
                                     omega_z: 0.0,
-                                    motion_command: 0,
+                                    // Render-completeness audit (2026-05-29):
+                                    // default animatable entities (those with a
+                                    // MotionTable) to the looping Ready idle
+                                    // cycle at spawn. The CreateObject wire
+                                    // payload carries no current-motion state,
+                                    // so pre-fix every entity spawned with
+                                    // motion_command=0 → classifyMotionCommand
+                                    // returned null → the rig sat frozen at the
+                                    // rest pose ("statue NPCs"). Ready
+                                    // (0x41000003) is ACE's default
+                                    // ForwardCommand for an idle creature
+                                    // (RawMotionState.cs:124). Entities with no
+                                    // MotionTable (items, doors, scenery) keep 0
+                                    // so they never attempt an idle clip (the
+                                    // Ready fetch would cache-miss → rest pose).
+                                    // If the server later broadcasts an explicit
+                                    // motion (combat, sit, dead), the kind=5
+                                    // UpdateMotion arm overrides this.
+                                    motion_command: if mtable_id != 0 {
+                                        0x4100_0003
+                                    } else {
+                                        0
+                                    },
                                     motion_stance: 0,
                                     // H2 (2026-05-12): plumb the entity's
                                     // PhysicsScript DID through to JS so
@@ -28098,6 +28455,134 @@ async fn recv_loop(
                                 omega_z: 0.0,
                                 motion_command: 0,
                                 motion_stance: 0,
+                                physics_script_did: 0,
+                                sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
+                            });
+                        }
+                        GameMessage::ObjDescEvent(data) => {
+                            // Render-completeness audit (2026-05-29): the
+                            // *dedicated* "character changed clothes" message
+                            // is ObjDescEvent (0xF625), which ACE broadcasts on
+                            // every common in-world appearance change — equip
+                            // (`Creature_Equipment.cs:365`), dequip (`:438`),
+                            // dye/tinker recolor (`RecipeManager.cs:403`),
+                            // death (`Creature_Death.cs:482`), and char-option
+                            // changes. The UpdateObject (0xF7DB) arm above only
+                            // fires for full-object resends (hooks/aetheria/
+                            // tailoring), so without this arm the everyday
+                            // equip/dye/death cases were silently dropped and
+                            // every NPC / remote player kept its spawn-time
+                            // appearance forever. ObjDescEventData carries only
+                            // guid + model_data + sequences (no
+                            // PublicWeenieDescription), so we feed model_data
+                            // straight into a kind=6 EntityUpdate exactly like
+                            // the UpdateObject arm; JS-side `applyAppearance`
+                            // reuses the cached spawn meta for the rest.
+                            let mut model_changes: Vec<u32> =
+                                Vec::with_capacity(data.model_data.model_changes.len() * 2);
+                            for mc in &data.model_data.model_changes {
+                                model_changes.push(mc.index as u32);
+                                model_changes.push(mc.animation_id);
+                            }
+                            let mut texture_changes: Vec<u32> =
+                                Vec::with_capacity(data.model_data.texture_changes.len() * 3);
+                            for tc in &data.model_data.texture_changes {
+                                texture_changes.push(tc.part_index as u32);
+                                texture_changes.push(tc.old_id);
+                                texture_changes.push(tc.new_id);
+                            }
+                            let mut sub_palettes: Vec<u32> =
+                                Vec::with_capacity(data.model_data.sub_palettes.len() * 3);
+                            for sp in &data.model_data.sub_palettes {
+                                sub_palettes.push(sp.id);
+                                sub_palettes.push(sp.offset as u32);
+                                sub_palettes.push(sp.length as u32);
+                            }
+                            let palette_id = data.model_data.palette_id.unwrap_or(0);
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_APPEARANCE,
+                                guid: u32::from(data.guid),
+                                model_id: 0,
+                                landblock_id: 0,
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                qw: 1.0,
+                                qx: 0.0,
+                                qy: 0.0,
+                                qz: 0.0,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 1.0,
+                                icon_id: 0,
+                                palette_id,
+                                mtable_id: 0,
+                                model_changes,
+                                texture_changes,
+                                sub_palettes,
+                                portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
+                                motion_command: 0,
+                                motion_stance: 0,
+                                physics_script_did: 0,
+                                sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
+                            });
+                        }
+                        GameMessage::ParentEvent(data) => {
+                            // Render-completeness audit (2026-05-29): a wielded
+                            // child (weapon/shield/bow) was equipped (or, when
+                            // parent_guid == NULL, unequipped). ACE sends the
+                            // child its own ObjectCreate (so the 3D rig already
+                            // exists) plus this ParentEvent linking it to the
+                            // wielder at `location` (RightHand=1, …) with a grip
+                            // `placement`. Pre-fix this was consumed only by the
+                            // world-state inventory handler (which removes the
+                            // child from the Rust spatial scene — correct — but
+                            // never re-attaches the rig), leaving wielders with
+                            // empty hands. We push a kind=7 ATTACH EntityUpdate
+                            // so the JS rig parents the child Group under the
+                            // wielder's part node at the holding-location frame
+                            // (resolved via fetchSetupHoldingLocations). Field
+                            // reuse documented on ENTITY_UPDATE_KIND_ATTACH:
+                            // model_id=parent guid (0 = detach), motion_command=
+                            // location, motion_stance=placement.
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_ATTACH,
+                                guid: u32::from(data.child_guid),
+                                model_id: u32::from(data.parent_guid),
+                                landblock_id: 0,
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                qw: 1.0,
+                                qx: 0.0,
+                                qy: 0.0,
+                                qz: 0.0,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 1.0,
+                                icon_id: 0,
+                                palette_id: 0,
+                                mtable_id: 0,
+                                model_changes: Vec::new(),
+                                texture_changes: Vec::new(),
+                                sub_palettes: Vec::new(),
+                                portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
+                                motion_command: data.location,
+                                motion_stance: data.placement,
                                 physics_script_did: 0,
                                 sound_table_did: 0,
                                 obj_desc_flags: 0,

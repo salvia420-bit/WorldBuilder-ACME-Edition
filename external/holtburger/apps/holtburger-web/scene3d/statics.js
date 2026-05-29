@@ -213,6 +213,8 @@ export function getOrCreateMaterialCache(scene3d) {
     csmState: scene3d.csmState ?? null,
     pomEnabled: !!scene3d.pomEnabled,
     forcePom: !!scene3d.forcePom,
+    // Render-completeness audit (2026-05-29) — animated SurfaceTextures.
+    animFramesFetch: scene3d.wasmExports?.fetchSurfaceAnimFrames ?? null,
     // === Wave 2.B — procedural normals (2026-05-28) ===
     // Quality-preset gate for Phase 1.1 procedural normal maps. Set on
     // scene3d in index.js from `quality.flags.normalMaps`. Undefined
@@ -442,31 +444,95 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
  * all. Failures (degraded DID not in DAT) silently drop to "no LOD"
  * and the model uses a plain Mesh / InstancedMesh.
  */
-async function fetchDegradedGeometries(didDegradeByModel, fetchModelMeshes) {
+async function fetchDegradedGeometries(
+  didDegradeByModel,
+  fetchModelMeshes,
+  fetchDegradeInfo
+) {
   const degradedGeomByModel = new Map();
-  const degradedIds = [...didDegradeByModel.values()];
-  if (degradedIds.length === 0) return degradedGeomByModel;
+  if (!didDegradeByModel || didDegradeByModel.size === 0) {
+    return degradedGeomByModel;
+  }
 
+  // Render-completeness audit (2026-05-29): `GfxObj.did_degrade` is a
+  // `0x11` GfxObjDegradeInfo CHAIN id (verified on real portal.dat —
+  // GfxObj `0x0100376A`.did_degrade = `0x11000001`), NOT a directly
+  // fetchable mesh. The prior code passed these `0x11` ids straight to
+  // `fetch_model_meshes` (which only accepts `0x01`/`0x02`), so every
+  // degraded fetch silently returned nothing and NO static LOD was ever
+  // built — the hardcoded-100m swap never fired. Resolve the chain via the
+  // existing `fetch_gfx_obj_degrade_info` getter, take the first
+  // (most-detailed) degrade band's `0x01` gfx_obj_id as the degraded leaf,
+  // and stash that band's authored `min_dist` on `geom.userData.lodDist`
+  // so `buildSingletonNode` swaps at the real distance instead of 100m.
+  // Fail-soft per model: any parse / fetch error drops to "no LOD" (plain
+  // mesh), exactly the prior (dead-path) behaviour — so this can only add
+  // working LOD, never regress.
+  if (typeof fetchDegradeInfo !== "function") {
+    return degradedGeomByModel;
+  }
+
+  // Resolve each model's chain → { gfxId (0x01), dist } in parallel.
+  const entries = [...didDegradeByModel.entries()];
+  const resolved = await Promise.all(
+    entries.map(async ([modelId, chainId]) => {
+      try {
+        const json = await fetchDegradeInfo(chainId >>> 0);
+        if (!json || json === "null") return null;
+        const info = JSON.parse(json);
+        const bands = Array.isArray(info?.degrades) ? info.degrades : [];
+        if (bands.length === 0) return null;
+        const b = bands[0];
+        const gfxId = (b.gfx_obj_id ?? 0) >>> 0;
+        if (!gfxId) return null;
+        const dist =
+          typeof b.min_dist === "number" && b.min_dist > 0 ? b.min_dist : null;
+        return { modelId, gfxId, dist };
+      } catch (_) {
+        return null;
+      }
+    })
+  );
+  const perModel = new Map();
+  for (const r of resolved) {
+    if (r) perModel.set(r.modelId, { gfxId: r.gfxId, dist: r.dist });
+  }
+  if (perModel.size === 0) return degradedGeomByModel;
+
+  // Batch-fetch the unique band geometries (0x01 GfxObjs).
+  const uniqueGfxIds = [...new Set([...perModel.values()].map((v) => v.gfxId))];
+  const geomByGfxId = new Map();
   try {
-    const degradedMeshes = await fetchModelMeshes(new Uint32Array(degradedIds));
-    let didx = 0;
-    for (const [modelId, _degradeId] of didDegradeByModel) {
-      const m = degradedMeshes[didx];
-      didx += 1;
+    const meshes = await fetchModelMeshes(new Uint32Array(uniqueGfxIds));
+    for (let i = 0; i < uniqueGfxIds.length; i += 1) {
+      const m = meshes[i];
       if (!m || m.triCount === 0) {
         if (m && typeof m.free === "function") m.free();
         continue;
       }
       const geom = meshToFusedGeometry(m);
-      if (geom) degradedGeomByModel.set(modelId, geom);
+      if (geom) geomByGfxId.set(uniqueGfxIds[i], geom);
       if (typeof m.free === "function") m.free();
     }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn(
-      "[scene3d.statics] degraded variant fetch failed (LOD will be no-op):",
+      "[scene3d.statics] degrade band geom fetch failed (LOD no-op):",
       e
     );
+    return degradedGeomByModel;
+  }
+
+  for (const [modelId, { gfxId, dist }] of perModel) {
+    const geom = geomByGfxId.get(gfxId);
+    if (!geom) continue;
+    // Stash the authored swap distance on the geometry so the node
+    // builders can read it without changing their (Map-shaped) interface.
+    if (dist != null) {
+      geom.userData = geom.userData || {};
+      geom.userData.lodDist = dist;
+    }
+    degradedGeomByModel.set(modelId, geom);
   }
   return degradedGeomByModel;
 }
@@ -653,7 +719,13 @@ function buildSingletonNode({
   degradedMesh.quaternion.identity();
   degradedMesh.scale.set(1, 1, 1);
   lod.addLevel(mesh, 0);
-  lod.addLevel(degradedMesh, LOD_DISTANCE_M);
+  // Render-completeness audit (2026-05-29): swap at the DegradeInfo band's
+  // authored `min_dist` (stashed on the degraded geometry's userData by
+  // fetchDegradedGeometries) rather than the fixed 100m guess. Falls back
+  // to LOD_DISTANCE_M when no authored distance was resolved.
+  const swapDist =
+    (degradedGeom.userData && degradedGeom.userData.lodDist) || LOD_DISTANCE_M;
+  lod.addLevel(degradedMesh, swapDist);
   lod.userData = {
     modelId,
     landblockId: placement.landblockId,
@@ -915,7 +987,8 @@ export async function bakeStaticsForLandblock(
   }
   const degradedGeomByModel = await fetchDegradedGeometries(
     primary.didDegradeByModel,
-    wasmExports.fetch_model_meshes
+    wasmExports.fetch_model_meshes,
+    wasmExports.fetch_gfx_obj_degrade_info
   );
 
   // Per-LB surface preload. The ring driver preloads ALL ring DIDs in
@@ -1267,7 +1340,8 @@ export async function bakeStaticsRing(
     ? new Map()
     : await fetchDegradedGeometries(
         primary.didDegradeByModel,
-        wasmExports.fetch_model_meshes
+        wasmExports.fetch_model_meshes,
+        wasmExports.fetch_gfx_obj_degrade_info
       );
   mark(`stage2: fetchDegradedGeometries (${primary.didDegradeByModel?.size ?? 0} degraded${scene3d.wireframeMode ? " — SKIPPED in wire" : ""})`);
 

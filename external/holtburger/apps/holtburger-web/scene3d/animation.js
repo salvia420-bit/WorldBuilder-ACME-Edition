@@ -61,8 +61,15 @@ const FLOATS_PER_PART_PER_FRAME = 7;
  * for debugger ergonomics).
  */
 export function buildAnimationClip(animData, partNames) {
-    const { partCount, numFrames, framerate, partFrames, frameTimes, duration } =
-        animData;
+    const {
+        partCount,
+        numFrames,
+        framerate,
+        partFrames,
+        frameTimes,
+        duration,
+        posFrames,
+    } = animData;
 
     if (
         typeof partCount !== "number" ||
@@ -126,6 +133,18 @@ export function buildAnimationClip(animData, partNames) {
         }
     }
 
+    // Render-completeness audit (2026-05-29) — root motion. `posFrames` (if
+    // present) carries a per-frame whole-object translation (x,y,z per frame,
+    // length numFrames*3) from the Animation's pos_frames. We add it to EVERY
+    // part's position keyframe so the whole rig translates together (a lunge
+    // steps forward, a door swings open). All-zero / absent for idle + walk/run
+    // cycles (verified pos_frames_len==0 on the human idle), so this is a no-op
+    // for the common case. Fail-soft: wrong length → no offset.
+    const hasPos =
+        posFrames &&
+        typeof posFrames.length === "number" &&
+        posFrames.length === numFrames * 3;
+
     const tracks = [];
     for (let p = 0; p < partCount; p += 1) {
         const posValues = new Float32Array(numFrames * 3);
@@ -133,10 +152,13 @@ export function buildAnimationClip(animData, partNames) {
         for (let f = 0; f < numFrames; f += 1) {
             const base =
                 (f * partCount + p) * FLOATS_PER_PART_PER_FRAME;
-            // (x, y, z) — copied straight through.
-            posValues[f * 3 + 0] = flat[base + 0];
-            posValues[f * 3 + 1] = flat[base + 1];
-            posValues[f * 3 + 2] = flat[base + 2];
+            // (x, y, z) — part-local origin + (optional) whole-object root motion.
+            const rx = hasPos ? posFrames[f * 3 + 0] : 0;
+            const ry = hasPos ? posFrames[f * 3 + 1] : 0;
+            const rz = hasPos ? posFrames[f * 3 + 2] : 0;
+            posValues[f * 3 + 0] = flat[base + 0] + rx;
+            posValues[f * 3 + 1] = flat[base + 1] + ry;
+            posValues[f * 3 + 2] = flat[base + 2] + rz;
             // (qw, qx, qy, qz) → (qx, qy, qz, qw) for three.js's
             // QuaternionKeyframeTrack value layout.
             const qw = flat[base + 3];
@@ -517,6 +539,17 @@ export class AnimationCache {
                     ? animData.partFrames
                     : (animData.partFrames ?? new Float32Array(0));
 
+            // Render-completeness audit (2026-05-29) — root motion offset
+            // track (clones from wasm). Empty / all-zero for cycles without
+            // pos_frames (idle, walk/run); non-zero for one-shot translating
+            // anims. Empty fallback handles older wasm bundles without the
+            // `posFrames` getter (buildAnimationClip then applies no offset).
+            const posFrames =
+                typeof animData.posFrames === "object" &&
+                animData.posFrames !== null
+                    ? animData.posFrames
+                    : new Float32Array(0);
+
             // Cohere-B (2026-05-12): clone the per-part rest pose
             // alongside partFrames. Cached together because rest pose
             // is a function of (setupId, mtableId, stance) — same
@@ -537,7 +570,7 @@ export class AnimationCache {
             let clip = null;
             if (numFrames > 0 && framerate > 0) {
                 clip = buildAnimationClip(
-                    { partCount, numFrames, framerate, partFrames },
+                    { partCount, numFrames, framerate, partFrames, posFrames },
                     partNames,
                 );
                 if (clip) {
