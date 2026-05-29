@@ -29,7 +29,18 @@ pub struct MotionTable {
     /// per-entity persistent modifier list mirroring MotionState.Modifiers),
     /// NOT the Three.js animation mixer. Deferred because holtburger renders
     /// entities from server position updates and does not integrate
-    /// motion-table velocity/omega client-side → no visual payoff today.
+    /// motion-table velocity/omega client-side.
+    /// UPDATE 2026-05-29 — the VISUAL goal these modifiers serve (a creature
+    /// sweeping smoothly through a turn instead of stepping its facing) shipped
+    /// as "Path A": bounded heading interpolation on remote entities in
+    /// `entities.js` (`setPose`/`tick`, default-on, `?headingSnap=on` to revert,
+    /// `?headingEaseK=` to tune). That smooths the rendered heading toward the
+    /// server-authoritative quaternion WITHOUT consuming this field — server
+    /// stays authoritative, no prediction/reconciliation. FULL kinematic
+    /// integration of these modifiers (per-entity MotionState + `combine_motion`
+    /// + `re_modify` + dual-source reconciliation = "Path B") remains deferred:
+    /// high upheaval, rubberband risk, and low marginal payoff over Path A
+    /// because the server already transmits heading ~30 Hz.
     pub modifiers: HashMap<u32, MotionData>,
     pub links: HashMap<u32, HashMap<u32, MotionData>>,
 }

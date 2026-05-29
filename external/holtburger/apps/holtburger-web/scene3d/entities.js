@@ -59,6 +59,34 @@ function readDeadReckonFlag() {
   }
 }
 
+// A2 Path A — heading ease is DEFAULT-ON in the browser; `?headingSnap=on`
+// forces the legacy per-update rotation snap (A/B + instant revert). Returns
+// false outside a browser (Node harness) so unit tests see the byte-identical
+// snap path (no per-frame tick to advance an ease). Read once in the
+// constructor into `this._headingEaseOn`.
+function readHeadingEaseEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("headingSnap");
+    return !(typeof v === "string" && v.toLowerCase() === "on");
+  } catch (_) {
+    return false;
+  }
+}
+
+// `?headingEaseK=<float>` tunes the heading damp rate at eye-test (1070);
+// falls back to the conservative default.
+function readHeadingEaseK() {
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("headingEaseK");
+      const n = v == null ? NaN : parseFloat(v);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch (_) { /* Node / no window → default */ }
+  return HEADING_EASE_DAMP_K_DEFAULT;
+}
+
 // === Wave R3.B — transparency depth-sort via AC's authored sort center
 // (2026-05-29) ===
 // `?sortCenter=on` opt-in. Default OFF → no `renderOrder` writes on entity
@@ -129,6 +157,23 @@ const DEAD_RECKON_DAMP_K = 12.0;
 const DEAD_RECKON_TELEPORT_SNAP_M = 8.0;
 const DEAD_RECKON_TELEPORT_SNAP_SQ =
   DEAD_RECKON_TELEPORT_SNAP_M * DEAD_RECKON_TELEPORT_SNAP_M;
+
+// === A2 Path A (2026-05-29) — remote-entity HEADING easing (DEFAULT-ON).
+// Remote entities used to SNAP their quaternion to each server heading
+// (~30 Hz), so a turning creature stepped through its facing. AC's MotionTable
+// turn modifiers (0x0D/0E/0F/10) are pure omega — they exist precisely so a
+// run/walk sweeps through a turn. Rather than build the full per-entity
+// kinematic+reconciliation subsystem (Path B), we just SMOOTH the visible
+// rotation: slerp the rendered quaternion toward the server target with the
+// same frame-rate-independent exponential damp the position ease uses
+// (factor = 1 - exp(-k·dt)). The server remains authoritative — the target is
+// re-anchored every update, so the heading is bounded smoothing, NOT
+// prediction (no drift, no rubberband). k = damp rate (1/k ≈ time constant).
+// A large single-update delta (re-target / teleport / respawn discontinuity,
+// not a physical turn at 30 Hz) snaps instead of spinning slowly.
+const HEADING_EASE_DAMP_K_DEFAULT = 14.0;
+const HEADING_EASE_SNAP_RAD = 2.5; // ~143°: only true discontinuities snap
+const HEADING_EASE_EPSILON = 0.01; // settle (~0.6°) to avoid endless micro-slerp
 
 // === Wave R2.A — per-quality-preset cap on the TOTAL number of entity-
 // attached lights created across all entities. WebGL2 has a hard per-scene
@@ -1365,6 +1410,11 @@ export class EntityManager {
     // `setPose` runs exactly as before (byte-identical), no target stored, no
     // tick smoothing.
     this._deadReckonOn = readDeadReckonFlag();
+    // A2 Path A (2026-05-29) — remote-entity heading ease. Default-on (browser);
+    // `?headingSnap=on` reverts to the legacy snap, `?headingEaseK=` tunes rate.
+    // Consumed in `setPose` (stash target / discontinuity-snap) + `tick` (slerp).
+    this._headingEaseOn = readHeadingEaseEnabled();
+    this._headingEaseK = readHeadingEaseK();
     // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center.
     // Read the `?sortCenter=on` opt-in HERE (constructor) so every consumer
     // (`_attachSortCenters` at spawn, the `tick` sort pass) reads
@@ -2324,9 +2374,61 @@ export class EntityManager {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
+    const isRemote = !this._isLocalPlayerGuid(g);
+
+    // === A2 Path A (2026-05-29) — remote-entity HEADING ease.
+    // Eligible only for a plain remote entity whose rotation isn't already
+    // owned this frame by SetOmega spin (`_omega`) or a jump (`_isAirborne` /
+    // `airborneTilt`) — those write `root.quaternion` in `tick`, so easing the
+    // same channel would fight them. When eligible, stash the server heading as
+    // a target the per-frame `tick` slerps toward; position keeps its existing
+    // behavior (R3.A ease under `?deadReckon`, else snap). When NOT eligible we
+    // fall through to the exact pre-Path-A code (byte-identical snap paths).
+    const easeHeading =
+      this._headingEaseOn &&
+      isRemote &&
+      !inst._omega &&
+      !inst._isAirborne &&
+      !inst.airborneTilt;
+    if (easeHeading) {
+      const tq = acQuatToThree(qw, qx, qy, qz); // plain remote → no tilt mult
+      let tgtQ = inst._serverTargetQuat;
+      if (!tgtQ) tgtQ = inst._serverTargetQuat = new THREE.Quaternion();
+      // First heading for this entity, or a large single-update delta (a
+      // re-target / teleport / respawn discontinuity, not a physical turn at
+      // ~30 Hz) → snap so the rig doesn't spin slowly across the gap.
+      if (
+        !inst._headingEaseInit ||
+        inst.root.quaternion.angleTo(tq) > HEADING_EASE_SNAP_RAD
+      ) {
+        inst.root.quaternion.copy(tq);
+      }
+      inst._headingEaseInit = true;
+      tgtQ.copy(tq);
+      // Position — unchanged from R3.A: ease under ?deadReckon, else snap.
+      if (this._deadReckonOn) {
+        let tgt = inst._serverTargetPos;
+        if (!tgt) tgt = inst._serverTargetPos = new THREE.Vector3();
+        const cur = inst.root.position;
+        const dx = x - cur.x;
+        const dy = y - cur.y;
+        const dz = z - cur.z;
+        if (dx * dx + dy * dy + dz * dz > DEAD_RECKON_TELEPORT_SNAP_SQ) {
+          cur.set(x, y, z);
+        }
+        tgt.set(x, y, z);
+      } else {
+        inst.root.position.set(x, y, z);
+      }
+      return;
+    }
+    // Not eased (local player, omega/jump owns rotation, or `?headingSnap=on`):
+    // reset the init flag so the ease re-snaps cleanly the moment it resumes.
+    inst._headingEaseInit = false;
+
     // Wave R3.A — remote-entity smoothing gate. Rotation always snaps (heading
     // is already normalized upstream); only POSITION is eased.
-    if (this._deadReckonOn && !this._isLocalPlayerGuid(g)) {
+    if (this._deadReckonOn && isRemote) {
       // Orientation snaps as before — re-uses EntityInstance.setPose's
       // quaternion path by writing the rotation directly, leaving position to
       // the ease in tick(). (Calling inst.setPose here would snap position,
@@ -6472,6 +6574,33 @@ export class EntityManager {
         pos.x += (tgt.x - pos.x) * factor;
         pos.y += (tgt.y - pos.y) * factor;
         pos.z += (tgt.z - pos.z) * factor;
+      }
+      // === A2 Path A (2026-05-29) — remote-entity HEADING ease. Exponentially
+      // slerp the rendered quaternion toward the server target stashed by
+      // setPose (same frame-rate-independent damp shape as the position ease
+      // above). Whole block dead unless heading easing armed a target for this
+      // entity (`_headingEaseInit`), so when `?headingSnap=on` / local player /
+      // Node, no target is stored and this is a single falsy check then skip
+      // (byte-identical to pre-Path-A). Re-checks the omega/jump gate so a
+      // SetOmega or jump that started since the last setPose takes the wheel
+      // this frame instead of being fought; the discontinuity snap lives in
+      // setPose. Runs after the position ease + before mixer.update so the
+      // velocity-scale gait reads the heading actually rendered.
+      if (
+        inst._headingEaseInit &&
+        inst._serverTargetQuat &&
+        !inst._omega &&
+        !inst._isAirborne &&
+        !inst.airborneTilt
+      ) {
+        const q = inst.root.quaternion;
+        const tgtQ = inst._serverTargetQuat;
+        const ang = q.angleTo(tgtQ);
+        if (ang > HEADING_EASE_EPSILON) {
+          q.slerp(tgtQ, 1 - Math.exp(-this._headingEaseK * dt));
+        } else if (ang > 0) {
+          q.copy(tgtQ); // settle within epsilon — stop micro-slerping
+        }
       }
       // T11 — velocity-scaled locomotion playback (anti-ice-skating). Derive
       // an EMA-smoothed ground speed from the rig's horizontal (XZ) world-

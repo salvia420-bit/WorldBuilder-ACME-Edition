@@ -137,3 +137,11 @@ Grounded first against `acclient.c/h/txt` + ACE + DRW + a real `client_portal.da
 
 ### Wave-2 validation / eye-test
 `node --check` + ESM `import()` parse clean on changed files; `cargo check -p holtburger-dat` clean (A2 TODO is a doc-comment). G2 eye-test on 1070: faint edge-bleed **seams gone** on non-stippled object surfaces (buildings/statics/items); stippled surfaces still tile; terrain unchanged.
+
+---
+
+## A2 follow-up — "Path A" heading easing SHIPPED (2026-05-29)
+
+After the A2 survey (Modifiers are anim-free velocity/omega overlays — see above), we took the **visible win without the full subsystem**. Two paths were scoped:
+- **Path A (shipped):** the only reason remote creatures turned in hard steps is that `setPose` *snapped* the quaternion to each ~30 Hz server heading. Replaced the snap with a **bounded exponential slerp** toward the server target (`entities.js` `setPose` stashes a target + discontinuity-snap; `tick` slerps with the same `1-exp(-k·dt)` damp as the R3.A position ease). **Server stays authoritative — the target is re-anchored every update, so this is bounded smoothing, not prediction → no drift/rubberband.** Default-on (browser); `?headingSnap=on` reverts to the legacy snap (A/B), `?headingEaseK=<float>` tunes the rate. Gated off when `_omega` (SetOmega spin) or `_isAirborne`/`airborneTilt` (jump) owns `root.quaternion`, so it never fights those tweens. Large single-update deltas (re-target/teleport/respawn, not a physical 30 Hz turn) snap (`HEADING_EASE_SNAP_RAD ≈ 143°`). JS-only — no wasm change. Math verified 7/7 against real three (snap-first / ease / discontinuity-snap / settle / omega-gate / frame-rate independence); GPU eye-test on 1070 pending.
+- **Path B (still deferred):** faithful kinematic-model A2 — per-entity `MotionState` + persistent Modifiers + `combine_motion` + `re_modify` + dual-source reconciliation for remotes. High upheaval + Academy-class rubberband risk, low marginal payoff over Path A (server already transmits heading). Revisit only if 1:1 kinematic parity (not just the look) becomes the goal.
