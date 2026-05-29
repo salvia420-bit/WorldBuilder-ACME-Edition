@@ -23,6 +23,39 @@ const SPAWN_TRACE = (() => {
   } catch (_) { return false; }
 })();
 
+// === Wave R2.A — entity-attached dynamic lights (SetLight hook 25) (2026-05-28) ===
+// `?entityLights=on` opt-in. Default OFF → no entity lights are created and
+// the SetLight (25) hook stays a logged no-op, so the rendered output is
+// byte-identical to pre-R2.A. Mirrors `terrain.js::readTerrainModulationFlag`'s
+// shape (any value other than the literal "on" is off; wrapped in try/catch
+// for the non-browser Node harness).
+function readEntityLightsFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("entityLights");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+// === Wave R2.A — per-quality-preset cap on the TOTAL number of entity-
+// attached lights created across all entities. WebGL2 has a hard per-scene
+// light-uniform limit and MeshStandardMaterial recompiles its shader when the
+// active light count changes, so an unbounded torch-mob would both error and
+// thrash shader variants. The static-light path already caps the per-frame
+// *rendered* set at MAX_ACTIVE_LIGHTS (32) via the distance sort in
+// `lighting.js::capActiveLightsByDistance`; this cap limits how many entity
+// lights we ever *create* so we don't bury static lights under transient
+// entity ones. Tiers mirror the headroom of `quality.js`'s PRESETS table.
+const ENTITY_LIGHT_CAP_BY_PRESET = Object.freeze({
+  low: 0,    // low GPUs: no entity lights at all (zero shader-variant churn).
+  mid: 8,
+  high: 16,
+  ultra: 24,
+});
+const ENTITY_LIGHT_CAP_DEFAULT = 8;
+
 // Phase 7.4b — EntityManager: per-entity Object3D rig + AnimationMixer.
 //
 // Sister to the 2D path's `entityMap` + `tickEntityAnimations`
@@ -128,6 +161,10 @@ import {
 import { AnimationCache, cycleTimeScale } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import { materialCanCastShadow } from "./materials.js";
+// === Wave R2.A (2026-05-28) — reuse the static-light constructor so
+// entity-attached SetLight lights share identical color/intensity/falloff/
+// cone math. Only imported; constructs nothing at module load.
+import { buildLightForSetupLight } from "./lighting.js";
 
 // T11 (2026-05-28) — `?velScale=on` gates velocity-scaled locomotion cycle
 // speed (anti-ice-skating): the walk/run cycle's playback rate is scaled by
@@ -1190,6 +1227,29 @@ export class EntityManager {
         this._hotSwapAppearance = (flag === "1");
       }
     } catch (_) {}
+    // === Wave R2.A (2026-05-28) — entity-attached dynamic lights.
+    // Read the `?entityLights=on` opt-in HERE (constructor) — the same
+    // scope as every consumer (`_attachEntityLights`, `_fireHook` SetLight
+    // branch, `dispose`/`remove`), all of which read `this._entityLightsOn`.
+    // No cross-function flag handoff (avoids the prior ReferenceError where
+    // a flag was declared in one function and read in another).
+    this._entityLightsOn = readEntityLightsFlag();
+    // Per-preset cap on the TOTAL entity lights created across all entities.
+    // `scene3d.quality.preset` is one of "low"|"mid"|"high"|"ultra".
+    const presetName = scene3d?.quality?.preset;
+    this._entityLightCap = Object.prototype.hasOwnProperty.call(
+      ENTITY_LIGHT_CAP_BY_PRESET,
+      presetName
+    )
+      ? ENTITY_LIGHT_CAP_BY_PRESET[presetName]
+      : ENTITY_LIGHT_CAP_DEFAULT;
+    // Running total of entity lights currently attached to the scene graph
+    // (decremented on entity remove). Telemetry: `_entityLightHookFires`
+    // counts SetLight (25) hook dispatches that actually toggled a light,
+    // `_setLightDeferredFires` (kept for parity) counts no-op fires when the
+    // feature is off / the entity carries no lights.
+    this._entityLightCount = 0;
+    this._entityLightCapHitLogged = false;
     /** @type {Map<number, EntityInstance>} */
     this.entityMap = new Map();
     /** @type {AnimationCache} */
@@ -1901,6 +1961,33 @@ export class EntityManager {
           `for entity 0x${guid.toString(16)} failed:`,
           e
         );
+      });
+    }
+
+    // === Wave R2.A (2026-05-28) — entity-attached dynamic lights.
+    // When `?entityLights=on`, fetch this Setup's LightInfo descriptors via
+    // the SAME wasm export the static path uses (`fetchSetupModelLights`),
+    // build THREE PointLight/SpotLight(s) with `lighting.js`'s constructor,
+    // parent each under its matching per-part Group (`inst.parts[partIndex]`,
+    // mirroring `attachSetupModelLights`), and start them OFF (visible=false,
+    // intensity 0). The SetLight (25) hook later toggles them on/off. Fire-
+    // and-forget so the wasm fetch doesn't block spawn return. Skipped wholly
+    // when the flag is off (default) → zero allocation, byte-identical scene.
+    if (
+      this._entityLightsOn &&
+      this.wasmExports &&
+      typeof this.wasmExports.fetchSetupModelLights === "function"
+    ) {
+      this._attachEntityLights(inst, setupId).catch((e) => {
+        // eslint-disable-next-line no-console
+        if (!this._entityLightsWarned) {
+          this._entityLightsWarned = true;
+          console.warn(
+            `[entities/R2.A] entity-light attach for 0x${guid.toString(16)} ` +
+            `(setup=0x${setupId.toString(16)}) failed:`,
+            e
+          );
+        }
       });
     }
 
@@ -4389,12 +4476,163 @@ export class EntityManager {
       this._soundTimeoutsForGuid.delete(g);
     }
     this._particleChainsAttached.delete(g);
+    // === Wave R2.A (2026-05-28) — release entity-attached lights.
+    // `inst.dispose()` (above) already detached the rig subtree (and with
+    // it the part-parented lights) from the scene graph, but the lights are
+    // also referenced in `scene3d.activeLights` for the per-frame distance
+    // cap. Splice them out so the sort doesn't keep stale handles, and
+    // decrement the global entity-light count so freed slots are reclaimable
+    // by later spawns under the per-preset cap.
+    if (Array.isArray(inst._setupLights) && inst._setupLights.length > 0) {
+      const active = this.scene3d?.activeLights;
+      for (const light of inst._setupLights) {
+        if (Array.isArray(active)) {
+          const idx = active.indexOf(light);
+          if (idx !== -1) active.splice(idx, 1);
+        }
+        if (light.parent) light.parent.remove(light);
+        if (typeof light.dispose === "function") {
+          try { light.dispose(); } catch (_) {}
+        }
+      }
+      this._entityLightCount = Math.max(
+        0,
+        (this._entityLightCount | 0) - inst._setupLights.length
+      );
+      inst._setupLights = null;
+    }
     // F.D-fu3: also drop the resolve-promise entry so a re-spawn
     // with the same GUID gets a fresh promise. The old promise has
     // already resolved by now in the common case (chain walks are
     // fast vs entity lifetime); we don't need to await it before
     // dropping the reference.
     this._particleChainResolveForGuid.delete(g);
+  }
+
+  /**
+   * === Wave R2.A (2026-05-28) — attach entity-local dynamic lights.
+   *
+   * Gated by `?entityLights=on` (checked by the caller via
+   * `this._entityLightsOn`). Fetches the entity's SetupModel LightInfo
+   * descriptors through the SAME wasm export the static path uses
+   * (`fetchSetupModelLights`), constructs one `THREE.PointLight`
+   * (`cone_angle == 0`) or `THREE.SpotLight` (`cone_angle > 0`) per
+   * descriptor via `lighting.js::buildLightForSetupLight`, and parents each
+   * under its matching per-part Group (`inst.parts[partIndex]`) so the light
+   * rides the rig — exactly mirroring `attachSetupModelLights`'s static path.
+   *
+   * Lights start OFF: `visible = false` and `intensity = 0`. The decoded
+   * intensity is stashed on `light.userData.__setupIntensity` so the
+   * SetLight (25) hook can toggle it back on without re-reading the DAT.
+   * They're pushed onto `scene3d.activeLights` so the existing per-frame
+   * distance cap (`lighting.js`, MAX_ACTIVE_LIGHTS=32) governs which render.
+   *
+   * Count-capped at `this._entityLightCap` (per quality preset). When the
+   * cap is hit we log ONCE (no silent caps, per the team-agents-plan rule)
+   * and stop creating further entity lights.
+   *
+   * Async (the wasm fetch is awaited); fire-and-forget at the call site so
+   * spawn return isn't blocked. Returns a small descriptor for harnesses.
+   */
+  async _attachEntityLights(inst, setupId) {
+    const summary = { created: 0, capped: false };
+    if (!inst || !inst.root || !Array.isArray(inst.parts)) return summary;
+    const sid = setupId >>> 0;
+    // Raw 0x01 GfxObjs (setup_id >> 24 != 0x02) carry no Setup → no lights.
+    // The wasm helper returns empty for these too, but short-circuiting here
+    // saves a boundary round-trip on the common case (most entities).
+    if ((sid >>> 24) !== 0x02) return summary;
+    // Already at the cap before we even fetch — nothing to do.
+    if ((this._entityLightCount | 0) >= (this._entityLightCap | 0)) {
+      this._maybeLogEntityLightCap();
+      summary.capped = true;
+      return summary;
+    }
+
+    let bundle;
+    try {
+      bundle = await this.wasmExports.fetchSetupModelLights(sid);
+    } catch (_) {
+      return summary; // network/IO prefetch error — treat as no lights.
+    }
+    if (!bundle) return summary;
+    const lightCount = bundle.partCount | 0;
+    if (lightCount === 0) {
+      if (typeof bundle.free === "function") {
+        try { bundle.free(); } catch (_) {}
+      }
+      return summary;
+    }
+    const setupLights = bundle.takeLights();
+    if (typeof bundle.free === "function") {
+      try { bundle.free(); } catch (_) {}
+    }
+
+    // The entity may have been removed while the fetch was in flight.
+    if (!this.entityMap.has(inst.guid >>> 0)) {
+      for (const sl of setupLights) {
+        if (typeof sl.free === "function") { try { sl.free(); } catch (_) {} }
+      }
+      return summary;
+    }
+
+    if (!Array.isArray(this.scene3d?.activeLights)) {
+      if (this.scene3d) this.scene3d.activeLights = [];
+    }
+    const active = this.scene3d?.activeLights;
+
+    for (const sl of setupLights) {
+      // Honour the per-preset cap mid-loop — a single Setup can carry more
+      // light descriptors than the remaining budget allows.
+      if ((this._entityLightCount | 0) >= (this._entityLightCap | 0)) {
+        this._maybeLogEntityLightCap();
+        summary.capped = true;
+        if (typeof sl.free === "function") { try { sl.free(); } catch (_) {} }
+        continue;
+      }
+      const targetPartIndex = sl.partIndex >>> 0;
+      const partGroup = inst.parts[targetPartIndex];
+      if (!partGroup) {
+        // Light references a part index this rig didn't build — skip.
+        if (typeof sl.free === "function") { try { sl.free(); } catch (_) {} }
+        continue;
+      }
+      // Reuse the static-light constructor for identical color/intensity/
+      // falloff/cone math (PointLight vs SpotLight selection included).
+      const light = buildLightForSetupLight(sl);
+      if (typeof sl.free === "function") { try { sl.free(); } catch (_) {} }
+      if (light === null) continue;
+      // Start OFF. Remember the authored intensity so the SetLight hook can
+      // restore it; the static path leaves lights ON, but entity SetLight
+      // lights default dark until the animation's lightsOn hook fires.
+      light.userData = light.userData || {};
+      light.userData.__setupIntensity = light.intensity;
+      light.userData.__entityLight = true;
+      light.intensity = 0;
+      light.visible = false;
+      partGroup.add(light);
+      if (Array.isArray(active)) active.push(light);
+      if (!Array.isArray(inst._setupLights)) inst._setupLights = [];
+      inst._setupLights.push(light);
+      this._entityLightCount = (this._entityLightCount | 0) + 1;
+      summary.created += 1;
+    }
+    return summary;
+  }
+
+  /**
+   * === Wave R2.A — log the entity-light cap exactly once (no-silent-caps).
+   */
+  _maybeLogEntityLightCap() {
+    if (this._entityLightCapHitLogged) return;
+    this._entityLightCapHitLogged = true;
+    const presetName = this.scene3d?.quality?.preset ?? "(default)";
+    // eslint-disable-next-line no-console
+    console.info(
+      `[entities/R2.A] entity-light cap reached: ${this._entityLightCount}/` +
+      `${this._entityLightCap} (quality=${presetName}). Further entity ` +
+      `SetLight lights will not be created this session.`
+    );
   }
 
   /**
@@ -6122,19 +6360,47 @@ export class EntityManager {
       this._textureVelocityHookFires = (this._textureVelocityHookFires | 0) + 1;
       return;
     }
-    // SetLight (25) still deferred — no entity-attached light-source
-    // infrastructure. Many AC "lights" are emissive-textured parts
-    // rather than real Three.js lights, so a usable implementation
-    // would either (a) toggle the emissive of light-flagged parts via
-    // the SetupModel `LightInfo` block, or (b) attach + remove a
-    // PointLight per entity. Both are larger than Wave 6's scope.
+    // === Wave R2.A (2026-05-28) — SetLight (25). Toggles the entity's
+    // attached dynamic lights (built at spawn by `_attachEntityLights`, path
+    // (b): real THREE PointLight/SpotLight). `hook.lightsOn` (i32 bool) drives
+    // on/off: on → restore each light's authored intensity + visible=true;
+    // off → intensity 0 + visible=false. The per-frame distance cap in
+    // lighting.js still governs which of the (now-on) lights actually render.
+    //
+    // DEFAULT-OFF (`?entityLights` absent): `inst._setupLights` is never
+    // populated (the spawn-time attach is skipped), so this branch falls
+    // through to the unchanged logged-no-op + counter below — byte-identical
+    // to pre-R2.A behaviour.
     if (hookType === 25) {
+      const lights = inst._setupLights;
+      if (this._entityLightsOn && Array.isArray(lights) && lights.length > 0) {
+        const wantOn = (hook.lightsOn | 0) !== 0;
+        for (const light of lights) {
+          if (wantOn) {
+            const authored =
+              light.userData && Number.isFinite(light.userData.__setupIntensity)
+                ? light.userData.__setupIntensity
+                : light.intensity;
+            light.intensity = authored;
+            light.visible = true;
+          } else {
+            light.intensity = 0;
+            light.visible = false;
+          }
+        }
+        this._entityLightHookFires = (this._entityLightHookFires | 0) + 1;
+        return;
+      }
+      // No entity lights on this rig (feature off, or Setup carries none).
+      // Keep the original logged-no-op + deferral counter for telemetry
+      // parity with the other hooks.
       if (!inst._setLightHookDebugged) {
         inst._setLightHookDebugged = true;
         // eslint-disable-next-line no-console
         console.debug(
-          `[entities/setlight-defer] hookType=25 on entity ` +
-          `0x${inst.guid.toString(16)} — needs entity-light infra`
+          `[entities/setlight] hookType=25 on entity ` +
+          `0x${inst.guid.toString(16)} — no attached entity lights ` +
+          `(entityLights=${this._entityLightsOn ? "on" : "off"})`
         );
       }
       this._setLightDeferredFires = (this._setLightDeferredFires | 0) + 1;

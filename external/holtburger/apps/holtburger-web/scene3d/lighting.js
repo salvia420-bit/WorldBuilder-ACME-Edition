@@ -986,6 +986,22 @@ function createLightFromTemplate(template, transform) {
  * rotation).
  *
  * Returns `null` if the input doesn't have the minimum field shape.
+ *
+ * === Wave R2.A divergence (linear vs inverse-square falloff) ===
+ * Retail's `calc_point_light` (`~/ac-headers/acclient.c:454579`) uses a
+ * LINEAR distance falloff `attenuation = clamp(1 - dist/range, 0, 1)` (with
+ * `range = falloff * static_light_factor`) plus a per-RGB clamp
+ * `contrib_c = min(intensity·dot·atten·color_c, color_c)`
+ * (`acclient.c:454616-454627`). three.js PointLight/SpotLight instead use a
+ * PHYSICAL inverse-square falloff (`LIGHT_DECAY = 2.0`), and standard PBR
+ * clamps the accumulated contribution to `[0,1]` (not per-channel against the
+ * light's own color). Matching retail exactly needs an `onBeforeCompile`
+ * shader patch in `materials.js`, which is owned by the SIBLING wave R2.B
+ * (`?lightClamp=retail`). For R2.A we accept three.js's decay/penumbra and
+ * the standard clamp; the visual delta is a slightly tighter falloff and
+ * colored lights that can wash toward white at high intensity until R2.B
+ * lands. `falloff` maps to three.js `distance` (max reach), which IS a
+ * faithful proxy for AC's `range` cutoff.
  */
 function makeThreeLightForSetupLight(sl) {
   if (!sl) return null;
@@ -1055,6 +1071,17 @@ function makeThreeLightForSetupLight(sl) {
     falloff: safeFalloff,
   };
   return lightObj;
+}
+
+// === Wave R2.A (2026-05-28) — public entry point onto the same
+// `makeThreeLightForSetupLight` constructor the static-light path uses, so
+// `entities.js` builds entity-attached SetLight lights with IDENTICAL color/
+// intensity/falloff/cone math (PointLight when `cone_angle == 0`, SpotLight
+// when `> 0`; the LIGHT_INTENSITY_CLAMP, SPOTLIGHT_PENUMBRA, and LIGHT_DECAY
+// constants apply uniformly). Additive — the private helper is unchanged and
+// still drives `attachSetupModelLights`. Returns `null` on malformed input.
+export function buildLightForSetupLight(sl) {
+  return makeThreeLightForSetupLight(sl);
 }
 
 // Expose canonical intensities + the per-light cap so capture

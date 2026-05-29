@@ -123,7 +123,7 @@ const lightingSrc = loadModule("scene3d/lighting.js");
 const composite =
     "// === csm.js ===\n" + stripExports(csmSrc) + "\n" +
     "// === lighting.js ===\n" + stripExports(lightingSrc) + "\n" +
-    "; return { setupSceneLighting, tickLightingForCellState, attachSetupModelLights, LIGHTING_CONSTANTS };";
+    "; return { setupSceneLighting, tickLightingForCellState, attachSetupModelLights, buildLightForSetupLight, LIGHTING_CONSTANTS };";
 
 const factory = new Function("THREE", composite);
 const lightingMod = factory(THREE);
@@ -131,6 +131,7 @@ const {
     setupSceneLighting,
     tickLightingForCellState,
     attachSetupModelLights,
+    buildLightForSetupLight,
     LIGHTING_CONSTANTS,
 } = lightingMod;
 
@@ -357,6 +358,65 @@ check(
     "Phase 7.6: dispose() removes lightsGroup from scene.children",
     !scene.children.includes(lightsGroup),
     `still includes? ${scene.children.includes(lightsGroup)}`
+);
+
+// ---- Wave R2.A (2026-05-28) — entity-light constructor + toggle -----
+// buildLightForSetupLight is the public entry point entities.js reuses for
+// SetLight (hook 25) entity-attached lights. It must share the static path's
+// PointLight/SpotLight selection + intensity/falloff/color math.
+
+// Assert R2.A-1: cone_angle == 0 → PointLight.
+const ptLight = buildLightForSetupLight({
+    partIndex: 0, x: 1, y: 2, z: 3,
+    colorR: 1, colorG: 0.6, colorB: 0.2,
+    intensity: 3, falloff: 12, coneAngle: 0,
+});
+check(
+    "R2.A: buildLightForSetupLight(cone_angle=0) → PointLight at the SetupLight origin",
+    ptLight && ptLight.isPointLight === true &&
+        ptLight.position.x === 1 && ptLight.position.y === 2 && ptLight.position.z === 3 &&
+        Math.abs(ptLight.intensity - 3) < 1e-6 && ptLight.distance === 12,
+    `isPointLight=${ptLight?.isPointLight}, pos=(${ptLight?.position.x},${ptLight?.position.y},${ptLight?.position.z}), intensity=${ptLight?.intensity}, distance=${ptLight?.distance}`
+);
+
+// Assert R2.A-2: cone_angle > 0 → SpotLight.
+const spotLight = buildLightForSetupLight({
+    partIndex: 1, x: 0, y: 0, z: 0,
+    colorR: 0.2, colorG: 0.4, colorB: 1,
+    intensity: 2, falloff: 20, coneAngle: 0.7,
+});
+check(
+    "R2.A: buildLightForSetupLight(cone_angle>0) → SpotLight with that half-angle",
+    spotLight && spotLight.isSpotLight === true && Math.abs(spotLight.angle - 0.7) < 1e-6,
+    `isSpotLight=${spotLight?.isSpotLight}, angle=${spotLight?.angle}`
+);
+
+// Assert R2.A-3: off→on toggle. entities.js starts entity lights OFF
+// (intensity 0 / visible false) with the authored intensity stashed on
+// `userData.__setupIntensity`, then the SetLight hook restores it. Mirror
+// that exact dance here to lock the toggle contract.
+const authoredIntensity = ptLight.intensity;
+ptLight.userData = ptLight.userData || {};
+ptLight.userData.__setupIntensity = authoredIntensity;
+ptLight.intensity = 0;
+ptLight.visible = false;
+// SetLight lightsOn=1 → restore.
+{
+    const authored = Number.isFinite(ptLight.userData.__setupIntensity)
+        ? ptLight.userData.__setupIntensity
+        : ptLight.intensity;
+    ptLight.intensity = authored;
+    ptLight.visible = true;
+}
+const onOk = ptLight.intensity === authoredIntensity && ptLight.visible === true;
+// SetLight lightsOn=0 → off.
+ptLight.intensity = 0;
+ptLight.visible = false;
+const offOk = ptLight.intensity === 0 && ptLight.visible === false;
+check(
+    "R2.A: SetLight toggle restores authored intensity on, zeroes it off",
+    onOk && offOk,
+    `onOk=${onOk}, offOk=${offOk}, restored=${authoredIntensity}`
 );
 
 // ---- Summary --------------------------------------------------------
