@@ -145,51 +145,89 @@ function buildWireTerrainColors(terrainCodes) {
  * vertices on the seam between two adjacent landblocks resolve to the
  * same random value — no visible discontinuity at LB boundaries.
  *
- * Saturation + hue ranges are NOT applied today; only brightness.
- * Adding them is straightforward — a follow-on, gated behind the
- * same URL flag — once a visual eye-test shows the brightness pass
- * looks plausible.
+ * Saturation + hue ranges (R1.A, 2026-05-28) are now emitted alongside
+ * brightness as two more per-vertex factors. The fragment shader still
+ * gates them behind `uTerrainModulationEnabled` (master) AND a
+ * `uTerrainModSatHue` sub-gate so brightness-only vs full sat/hue can
+ * be A/B'd on the GPU. Like brightness, the unit interpretation is a
+ * best-guess (percent: factor = value/100) — the 1070 eye-test is
+ * load-bearing because retail ships no apply-path.
+ *
+ * To keep the three channels decorrelated (so a vertex isn't dim AND
+ * desaturated AND hue-shifted in lockstep) each channel hashes the same
+ * world-XY with a different additive salt before the sin() — same
+ * deterministic, seam-continuous hash, three independent draws.
  *
  * @param {Float32Array} positions  flat [x0,y0,z0,x1,y1,z1,...] in LB-local metres
  * @param {Uint8Array}   terrainCodes per-vertex terrain type byte
  * @param {Uint32Array}  modRanges  flat [33×6] (min_b,max_b,min_s,max_s,min_h,max_h)
  * @param {number}       lbX        landblock X (0..255)
  * @param {number}       lbY        landblock Y (0..255)
- * @returns {Float32Array} length = vertexCount; each value in [min/100, max/100]
+ * @returns {{brightness: Float32Array, saturate: Float32Array, hue: Float32Array}}
+ *   three arrays of length = vertexCount; each value in [min/100, max/100]
+ *   for its channel (1.0 fallback = no-op when the type/range is missing).
  */
-function buildTerrainVertexBrightness(positions, terrainCodes, modRanges, lbX, lbY) {
+function buildTerrainVertexModulation(positions, terrainCodes, modRanges, lbX, lbY) {
   const vertexCount = (positions.length / 3) | 0;
-  const out = new Float32Array(vertexCount);
+  const brightness = new Float32Array(vertexCount);
+  const saturate = new Float32Array(vertexCount);
+  const hue = new Float32Array(vertexCount);
   const lbOriginX = lbX * 192;
   const lbOriginY = lbY * 192;
+  // Mirrors the GLSL `hash21` (world-frame, deterministic). The salts
+  // decorrelate the three channels: each adds a distinct offset before
+  // the sin() so brightness/sat/hue draw independent fracts from the
+  // same world-XY. Pure arithmetic → stable across reloads + LB seams.
+  const hashChannel = (worldX, worldY, salt) => {
+    const t = Math.sin(worldX * 127.1 + worldY * 311.7 + salt) * 43758.5453;
+    return t - Math.floor(t); // fract — in [0, 1)
+  };
   for (let i = 0; i < vertexCount; i += 1) {
     const type = terrainCodes[i] | 0;
     if (type >= 33) {
-      out[i] = 1.0; // unknown type → no modulation
+      // unknown type → no modulation on any channel
+      brightness[i] = 1.0;
+      saturate[i] = 1.0;
+      hue[i] = 1.0;
       continue;
     }
     const base = type * 6;
     const minB = modRanges[base] | 0;
     const maxB = modRanges[base + 1] | 0;
-    // No range → no modulation. Defensive: zero-filled modRanges
-    // from a fetch-failure produces (0, 0) → out=0 which would render
-    // black. Clamp to 1.0 instead so a missing table is a no-op.
-    if (minB === 0 && maxB === 0) {
-      out[i] = 1.0;
-      continue;
-    }
+    const minS = modRanges[base + 2] | 0;
+    const maxS = modRanges[base + 3] | 0;
+    const minH = modRanges[base + 4] | 0;
+    const maxH = modRanges[base + 5] | 0;
     // World-frame hash input — see docstring re: LB-seam continuity.
     const worldX = lbOriginX + positions[i * 3 + 0];
     const worldY = lbOriginY + positions[i * 3 + 1];
-    // Mirrors the GLSL `hash21` already used in this file's vertex
-    // shader for water-wave noise (line ~440). Stable across reloads
-    // because it's pure-arithmetic with no time/random dependency.
-    const t = Math.sin(worldX * 127.1 + worldY * 311.7) * 43758.5453;
-    const rand01 = t - Math.floor(t); // fract — in [0, 1)
-    const valuePct = minB + (maxB - minB) * rand01; // in [minB, maxB]
-    out[i] = valuePct * 0.01; // percentage → multiplier
+    // Brightness — indices 0,1. No range → no modulation. Defensive:
+    // zero-filled modRanges from a fetch-failure produces (0, 0) → 0
+    // which would render black. Clamp to 1.0 so a missing table is a
+    // no-op. Salt 0.0 keeps brightness bit-identical to the pre-R1.A
+    // hash (no behaviour change for the already-shipped channel).
+    if (minB === 0 && maxB === 0) {
+      brightness[i] = 1.0;
+    } else {
+      const r = hashChannel(worldX, worldY, 0.0);
+      brightness[i] = (minB + (maxB - minB) * r) * 0.01;
+    }
+    // Saturation — indices 2,3. Same fallback contract; distinct salt.
+    if (minS === 0 && maxS === 0) {
+      saturate[i] = 1.0;
+    } else {
+      const r = hashChannel(worldX, worldY, 13.37);
+      saturate[i] = (minS + (maxS - minS) * r) * 0.01;
+    }
+    // Hue — indices 4,5. Same fallback contract; distinct salt.
+    if (minH === 0 && maxH === 0) {
+      hue[i] = 1.0;
+    } else {
+      const r = hashChannel(worldX, worldY, 71.9);
+      hue[i] = (minH + (maxH - minH) * r) * 0.01;
+    }
   }
-  return out;
+  return { brightness, saturate, hue };
 }
 
 // === Wave 2.A / Agent 2.A — terrain palette LUT (2026-05-28) ===
@@ -512,8 +550,17 @@ in float terrainCode;                 // Phase 1.2 — per-vertex (uint8→float
 // (defaults to 1.0 when the modulation ranges table is unavailable);
 // the fragment shader gates the multiply behind
 // uTerrainModulationEnabled so an attribute of all-1.0s with the gate
-// off is also a no-op. See buildTerrainVertexBrightness for math.
+// off is also a no-op. See buildTerrainVertexModulation for math.
 in float vertexBrightness;
+// R1.A 2026-05-28 — companion per-vertex saturation + hue factors from
+// TerrainTex's (min/max_vert_saturate) + (min/max_vert_hue) ranges.
+// Same world-XY hash as vertexBrightness, decorrelated by a per-channel
+// salt. Always supplied (default 1.0 when the table is missing); the
+// fragment shader gates them behind uTerrainModulationEnabled *
+// uTerrainModSatHue so all-1.0 attributes with either gate off are a
+// no-op. See buildTerrainVertexModulation for math.
+in float vertexSaturate;
+in float vertexHue;
 
 uniform float uTime;                  // Phase 2.2 — shared wall-clock seconds
 uniform int uWaterCodeMask;           // Phase 2.2 — bitmask of water terrain codes (bit i = code i)
@@ -526,6 +573,8 @@ out vec3 vWorldPos;  // Clouds-L: terrain world-space position for cloud-shadow 
 out float vViewDepth; // CSM-on-terrain: view-space depth (positive = in front of camera) for cascade selection
 flat out int vTerrainCode;            // Phase 1.2 — passed flat-int to FS
 out float vBrightness;                // 2026-05-28 — TerrainTex brightness modulation (interpolated, applies in FS)
+out float vSaturate;                  // R1.A 2026-05-28 — TerrainTex saturation modulation (interpolated, applies in FS)
+out float vHue;                       // R1.A 2026-05-28 — TerrainTex hue modulation (interpolated, applies in FS)
 // Phase 1.3 — AC-space LB-local position + interpolated geometry
 // normal, used by the fragment shader for slope-gated triplanar
 // sampling. Both are in AC coords (Z-up); the worldRoot Y-up rotation
@@ -636,6 +685,12 @@ void main() {
   // position so neighbours differ slightly). Fragment shader applies
   // the multiply at the end of color composition, gated by uniform.
   vBrightness = vertexBrightness;
+  // R1.A 2026-05-28 — pass per-vertex saturation + hue factors through.
+  // Same linear-interpolation rationale as brightness; the fragment
+  // shader applies the HSL adjust just before the brightness multiply,
+  // gated by uTerrainModulationEnabled * uTerrainModSatHue.
+  vSaturate = vertexSaturate;
+  vHue = vertexHue;
   // vAcPos passes the UNDISPLACED position so the Phase 1.3 triplanar
   // sampler reads consistent values across frames (displacement is
   // visual-only; collision math + detail-normal projections stay
@@ -819,6 +874,8 @@ in vec3 vAcPos;                       // Phase 1.3 — LB-local AC pos (z=up)
 in vec3 vAcNormal;                    // Phase 1.3 — geometry normal (AC z-up)
 flat in int vIsWater;                 // Phase 2.2 — 1 if water, 0 otherwise
 in float vBrightness;                 // 2026-05-28 — TerrainTex per-vertex brightness modulation factor
+in float vSaturate;                   // R1.A 2026-05-28 — TerrainTex per-vertex saturation modulation factor
+in float vHue;                        // R1.A 2026-05-28 — TerrainTex per-vertex hue modulation factor
 
 // 2026-05-28 — gate for the TerrainTex modulation multiply. 0.0 = no
 // modulation (final color unchanged), 1.0 = full multiply by
@@ -828,6 +885,14 @@ in float vBrightness;                 // 2026-05-28 — TerrainTex per-vertex br
 // so it's opt-in until visual verification confirms the
 // best-guess unit interpretation looks right on real hardware).
 uniform float uTerrainModulationEnabled;
+// R1.A 2026-05-28 — sub-gate for the saturation + hue adjust. 0.0 =
+// brightness-only (the shipped behaviour); 1.0 = also apply sat/hue.
+// The full sat/hue block is gated by uTerrainModulationEnabled *
+// uTerrainModSatHue, so it is a strict no-op whenever the master gate
+// is off — and when the master is on it can be forced off for an
+// on-GPU A/B of brightness-only vs full. Default 1.0 when
+// ?terrainMod=on so the full effect shows by default (see wiring).
+uniform float uTerrainModSatHue;
 // Perf D1 — water-modulation sines folded to vertex rate.
 //   .x = sin(uTime * 0.3)   tint breath (constant per draw, so this is
 //                           literally the same value at every vertex
@@ -882,6 +947,43 @@ float vertexRoadAt(int iu, int iv) {
 vec3 paletteFor(int code) {
   if (code < 0 || code > 31) return vec3(1.0);
   return texelFetch(uTerrainPalette, ivec2(code, 0), 0).rgb;
+}
+
+// R1.A 2026-05-28 — RGB <-> HSV conversion for the TerrainTex
+// saturation + hue modulation. Branch-free formulation (Sam Hocevar
+// style) so it stays cheap on the per-pixel terrain path. H is in
+// [0,1) (circular), S and V in [0,1]. NOTE: no backticks anywhere in
+// these comments -- the esbuild template-string path + Firefox reject
+// a stray backtick inside a GLSL string (it has bitten this file).
+vec3 rgb2hsv(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+vec3 hsv2rgb(vec3 c) {
+  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+// R1.A 2026-05-28 — apply the per-vertex saturation + hue factors to a
+// lit RGB colour. INTERPRETATION (best-guess, retail ships no
+// apply-path -- this is the ONE spot to retune after the 1070
+// eye-test): treat S as a multiplier (S *= vSaturate) and H as a
+// circular multiplier (H = fract(H * vHue)). gate is the product
+// uTerrainModulationEnabled * uTerrainModSatHue, so this is a strict
+// no-op whenever either gate is 0.0 (we early-out so RGB stays
+// bit-identical -- HSV round-trip is not perfectly lossless, so the
+// branch is load-bearing for the default-off guarantee).
+vec3 applyTerrainSatHue(vec3 rgb, float gate) {
+  if (gate < 0.5) return rgb;
+  vec3 hsv = rgb2hsv(rgb);
+  hsv.x = fract(hsv.x * vHue);   // hue: circular multiplier, wrapped
+  hsv.y = clamp(hsv.y * vSaturate, 0.0, 1.0); // saturation: multiplier
+  return hsv2rgb(hsv);
 }
 
 void main() {
@@ -1180,6 +1282,20 @@ void main() {
     csmShadow = mix(0.45, 1.0, s);
   }
 
+  // R1.A 2026-05-28 — TerrainTex saturation + hue adjust, applied to
+  // the lit color BEFORE the brightness multiply so the channel order
+  // is: sat/hue adjust -> brightness multiply -> cloud-shadow/CSM
+  // (downstream). Gated by uTerrainModulationEnabled * uTerrainModSatHue:
+  //  - master off (uTerrainModulationEnabled==0) -> gate=0 -> early-out,
+  //    result unchanged (bit-exact no-op, preserves shipped retail look)
+  //  - master on, sub off (uTerrainModSatHue==0) -> gate=0 -> brightness
+  //    only (the previously-shipped ?terrainMod behaviour)
+  //  - both on -> gate=1 -> full HSV adjust by the per-vertex factors
+  // The early-out inside applyTerrainSatHue (not a mix()) is deliberate:
+  // an RGB->HSV->RGB round-trip is NOT perfectly lossless, so we must
+  // return the untouched RGB to guarantee a bit-exact no-op.
+  float satHueGate = uTerrainModulationEnabled * uTerrainModSatHue;
+  result = applyTerrainSatHue(result, satHueGate);
   // 2026-05-28 — TerrainTex modulation multiply. vBrightness is the
   // per-vertex factor in [min_bright/100, max_bright/100] (most natural
   // terrain 0.9..1.0, Ice + RoadType 0.3..0.6). mix(1.0, vBrightness, gate)
@@ -1618,6 +1734,13 @@ async function resolveTerrainRingOpts(
     // once per ring (not per LB) so toggling at runtime requires a
     // page reload.
     terrainModulationEnabled: readTerrainModulationFlag(),
+    // R1.A 2026-05-28 — sat/hue sub-gate. Rides the master `?terrainMod`
+    // flag (on -> full sat/hue + brightness by default). Can be forced
+    // off for an on-GPU A/B of brightness-only via `?terrainModSatHue=off`.
+    // Only meaningful when terrainModulationEnabled is true (the fragment
+    // multiplies the two gates, so master-off is always a no-op).
+    terrainModSatHueEnabled:
+      readTerrainModulationFlag() && readTerrainModSatHueFlag(),
     // T7 — terrain detail-diffuse array + per-code LUTs (opt-in
     // `?terrainDetailTex=on`). Null array + enabled:false when off/failed →
     // shader branch skipped. codeToSlice/codeTiling are length-33 number
@@ -1649,6 +1772,26 @@ function readTerrainModulationFlag() {
     return typeof v === "string" && v.toLowerCase() === "on";
   } catch (_) {
     return false;
+  }
+}
+
+/**
+ * R1.A (2026-05-28) — Parse `?terrainModSatHue` from the page URL. This
+ * is the sat/hue SUB-gate that rides on top of `?terrainMod=on`. It
+ * defaults to ON (full sat/hue + brightness) so the master flag shows
+ * the complete effect; set `?terrainModSatHue=off` to A/B brightness-only
+ * on the GPU. Any value other than the literal `"off"` (case-insensitive)
+ * — including missing — is treated as on. Wrapped in try/catch for the
+ * non-browser Node harness, same as `readTerrainModulationFlag`.
+ */
+function readTerrainModSatHueFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("terrainModSatHue");
+    // Default on (full effect); only the explicit "off" disables it.
+    return !(typeof v === "string" && v.toLowerCase() === "off");
+  } catch (_) {
+    return true;
   }
 }
 
@@ -1892,11 +2035,12 @@ export async function bakeTerrainForLandblock(
   } else {
     geom = landblockMeshToGeometry(wasmMesh);
   }
-  // 2026-05-28 — per-vertex brightness attribute for the TerrainTex
-  // modulation. Always built; the fragment-shader application is
-  // gated by `uTerrainModulationEnabled` so the attribute being
-  // present is a no-op when modulation is off. See
-  // `buildTerrainVertexBrightness` for the math + the
+  // 2026-05-28 — per-vertex brightness + (R1.A) saturation + hue
+  // attributes for the TerrainTex modulation. Always built; the
+  // fragment-shader application is gated by `uTerrainModulationEnabled`
+  // (master) and `uTerrainModSatHue` (sat/hue sub-gate) so the
+  // attributes being present is a no-op when modulation is off. See
+  // `buildTerrainVertexModulation` for the math + the
   // `project_terrain_vertex_modulation_gap_2026-05-28.md` memo for
   // the audit trail. Skipped on a missing ranges table (defensive —
   // shouldn't happen post-2026-05-28 wasm).
@@ -1904,7 +2048,7 @@ export async function bakeTerrainForLandblock(
     const positions = geom.getAttribute("position");
     const terrainCodesAttr = geom.getAttribute("terrainCode");
     if (positions && terrainCodesAttr) {
-      const vertexBrightness = buildTerrainVertexBrightness(
+      const mod = buildTerrainVertexModulation(
         positions.array,
         terrainCodesAttr.array,
         scene3d.terrainModulationRanges,
@@ -1912,7 +2056,15 @@ export async function bakeTerrainForLandblock(
       );
       geom.setAttribute(
         "vertexBrightness",
-        new THREE.BufferAttribute(vertexBrightness, 1, false),
+        new THREE.BufferAttribute(mod.brightness, 1, false),
+      );
+      geom.setAttribute(
+        "vertexSaturate",
+        new THREE.BufferAttribute(mod.saturate, 1, false),
+      );
+      geom.setAttribute(
+        "vertexHue",
+        new THREE.BufferAttribute(mod.hue, 1, false),
       );
     }
   }
@@ -2032,6 +2184,16 @@ export async function bakeTerrainForLandblock(
       // sets from the URL flag `?terrainMod=on`.
       uTerrainModulationEnabled: {
         value: opts.terrainModulationEnabled ? 1.0 : 0.0,
+      },
+      // R1.A 2026-05-28 — sat/hue sub-gate. Defaults to 1.0 (full
+      // effect) when `?terrainMod=on`, so the master flag turns on
+      // brightness + sat/hue together; force it to 0.0 to A/B
+      // brightness-only on the GPU (see `terrainModSatHueEnabled` in
+      // resolveTerrainRingOpts, driven by `?terrainModSatHue=off`).
+      // Multiplied with uTerrainModulationEnabled in the fragment so
+      // the master gate being off is always a strict no-op.
+      uTerrainModSatHue: {
+        value: opts.terrainModSatHueEnabled ? 1.0 : 0.0,
       },
       // Phase 1.2 — terrain detail-normal array + per-code slice
       // table + per-frame wind direction + quality gate. When
