@@ -234,20 +234,60 @@ function-local.
   wrong blend stacking should resolve.
 - **Commit:** `feat(holtburger-web): wave R3.B — transparency depth-sort via GfxObj SortCenter`.
 
-### R3.C — **Ballistic projectile arc** (quartic lead solver) *(optional / lowest priority)*
+### R3.C — **Projectile mechanics fidelity** (bolt vs arc vs streak/blast/wall) *(optional)*
 
-- **Surface:** the projectile/missile vfx path (`scene3d/play_effect_vfx.js` / `picking.js`
-  spawn) + a `src/lib.rs` Trajectory port.
-- **Current status:** war-magic bolts / arrows likely render as straight shots. Note the server
-  owns the authoritative path, so this is **cosmetic arc only** — lowest priority of R3.
-- **The math:** port ACE's quartic solver
-  (`ace-server/Source/ACE.Server/Physics/Trajectory.cs:368-456`, `SolveQuartic`, Cardano /
-  Graphics Gems) to compute the launch velocity that intercepts a moving target under gravity;
-  drive the projectile mesh along the resulting arc.
+**Revised 2026-05-29 with user-supplied retail mechanics — supersedes the original
+"one quartic solver" framing.** AC war/void magic (and missile) has distinct projectile
+behaviors, each needing its own handling:
+
+- **Bolt** — aims at where the target *will be* (lead/prediction), travels in a **straight
+  line** toward that predicted point. **Bolt speed depends on the target's trajectory**: release
+  a bolt the instant the target moves *toward* you and the bolt crawls; otherwise it can be very
+  fast. (Emergent from the intercept solve — relative velocity sets the apparent speed.) Heavily
+  felt in PvP.
+- **Arc** — aims at where the target is **at the moment of release** (a *stationary* point, so
+  target velocity does NOT affect it), travels in an **arch**. Helps in some environments
+  (lobbing over a hill crest) and hurts in others (down a long narrow hall — the arch hits the
+  ceiling). Players commonly believe arcs travel slightly faster (at least for war magic).
+- **Streak** — rapid-fire repeating same-projectile, target-locked.
+- **Volley** — multi-projectile fan converging on target (incl. "rains N down" sky-rain).
+- **Wall** — multi-projectile slow-advancing wall / forward wave-cone.
+- **Ring** — caster-centered AoE, N projectiles radiating outward.
+- **Blast** — AoE explosion at the target point.
+
+**What already exists (this is NOT greenfield):**
+- `ui/ac_spell_shape.js` — `classifySpell(spellId) → {school, shape, level}` over all 7 shapes +
+  `Self`, backed by `data/spell-shapes.json` (LSD-derived). Shape vocabulary is complete.
+- `scene3d/spell_shape_preview.js` (CMT Wave 12 / Phase 38) — a **500ms predictive overlay** on
+  `spellCastInitiated` that already dispatches Bolt→line, Arc→parabola, Volley→fan, Ring→torus,
+  etc. It resolves attacker+target world positions and is cosmetic-only (the server's
+  `ObjectCreate` projectile entity is authoritative).
+
+**Honest architectural reality (read before scoping):** the lead-prediction, the
+target-trajectory-dependent bolt speed, and the arch path are all **server-authoritative** —
+ACE computes them (`Trajectory.cs` `CalculateTrajectory`/`SolveQuartic`) and the client renders
+the resulting projectile *entity* by following its position updates. So the client can't "add"
+the real mechanics; it can only (a) make the **predictive preview** match them, and (b) render
+the **real projectile's path** faithfully. The original doc's plan to port the quartic
+client-side only makes sense for the preview, and bolt-lead needs target velocity the client
+doesn't cleanly have (see R3.A — velocity isn't surfaced).
+
+**Client-side scope that's actually faithful + valuable:**
+1. **Preview fidelity** (`spell_shape_preview.js`): give the Arc preview a real apex so it visibly
+   lobs *up and over* (conveys the over-hill/under-ceiling behavior) toward the release-time
+   point; keep Bolt straight toward the target (lead-hint only if velocity ever gets surfaced).
+   Distinguish Streak (fast repeat) / Blast (AoE at point) / Wall (advancing) visually.
+2. **Real-projectile arc path** (interacts with **R3.A**): R3.A's straight-line damp would
+   *flatten* an arc projectile's path (chord instead of arch) between sparse server positions.
+   For Arc-classified live projectiles, interpolate a parabola through the server samples so the
+   real projectile visibly arches. Requires classifying the live projectile entity by its source
+   spell. This is the genuinely client-side, somewhat-mathy piece.
+3. The **variable bolt speed** is nothing for the client to compute — it just shows the server's
+   projectile at the server's speed; document it, don't fake it.
 - **Flag:** `?projectileArc=on` (default off).
-- **Eye-test:** cast a targeted bolt at a moving creature — visible arc + lead instead of a
-  straight line. Only pursue if R3.A/R3.B land with budget to spare.
-- **Commit:** `feat(holtburger-web): wave R3.C — ballistic projectile arc (quartic lead)`.
+- **Eye-test:** arc spell lobbing over a Holtburg hill vs down a corridor; bolt straight.
+- **Durable knowledge:** see memory `reference_ac_projectile_mechanics`.
+- **Commit:** `feat(holtburger-web): wave R3.C — projectile mechanics fidelity`.
 
 ---
 
