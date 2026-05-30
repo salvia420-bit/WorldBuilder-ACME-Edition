@@ -39,13 +39,20 @@ export async function fetchIconDataUrl(iconId, label = "ac-icon-cache") {
     return cached;
   }
   const wasm = window.__hbWasm ?? window.__wasm ?? null;
-  if (!wasm?.fetch_surface_pixels) {
+  // Icons are RenderSurface (0x06xxxxxx) records — they need the icon
+  // entry point, NOT `fetch_surface_pixels` (which expects Surface
+  // 0x08xxxxxx + walks Surface→SurfaceTexture→RenderSurface for 3D
+  // materials). Feeding a 0x06 DID into the Surface walker mis-parses
+  // it as a Surface record and returns garbage / empty — the original
+  // symptom that left every inventory slot blank.
+  const fetchIcon = wasm?.fetch_icon_pixels ?? wasm?.fetch_surface_pixels;
+  if (!fetchIcon) {
     iconCache.set(iconId, false);
     return false;
   }
   const promise = (async () => {
     try {
-      const r = await wasm.fetch_surface_pixels(iconId >>> 0);
+      const r = await fetchIcon(iconId >>> 0);
       if (!r || !r.width || !r.height || !r.pixels?.length) return false;
       const canvas = document.createElement("canvas");
       canvas.width = r.width; canvas.height = r.height;

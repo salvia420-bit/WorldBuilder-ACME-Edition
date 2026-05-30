@@ -122,6 +122,20 @@ impl Texture {
         Some((info.width as u32, info.height as u32))
     }
 
+    /// Authoritative `(width, height)` for the record. For JPEG, falls
+    /// back to the header pair when the SOF peek fails (defensive only —
+    /// retail JPEGs are well-formed). For every other format the header
+    /// pair is canonical. Use this anywhere the caller will allocate or
+    /// report dimensions; the raw `width`/`height` fields are a lie for
+    /// `CustomRawJpeg` (Trevis #worldbuilder:253 — dims live in the JPEG
+    /// payload, not the DAT header).
+    pub fn actual_dimensions(&self) -> (u32, u32) {
+        if let Some(dims) = self.jpeg_dimensions() {
+            return dims;
+        }
+        (self.width.max(0) as u32, self.height.max(0) as u32)
+    }
+
     /// Decode `source_data` to a width × height RGBA8 buffer
     /// (`length = width * height * 4`).
     ///

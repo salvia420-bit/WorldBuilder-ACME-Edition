@@ -5923,6 +5923,86 @@ pub async fn fetch_surface_pixels(surface_did: u32) -> Result<SurfacePixels, JsV
     Ok(fetch_surface_pixels_impl(source.as_ref(), surface_did))
 }
 
+/// One icon's decoded pixels — output of [`fetch_icon_pixels`].
+/// Distinct from [`SurfacePixels`] because icons skip the entire
+/// Surface→SurfaceTexture chain: the inventory wire (ACE
+/// `WorldObject_Networking.cs:79`) ships RenderSurface DIDs
+/// (`0x06xxxxxx`) directly, so the JS icon cache just needs raw RGBA
+/// at intrinsic dimensions. `width`/`height` come from
+/// [`Texture::actual_dimensions`] (JPEG SOF for `CustomRawJpeg`,
+/// header pair otherwise — Trevis #worldbuilder:253).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct IconPixels {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn fetch_icon_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    icon_did: u32,
+) -> IconPixels {
+    use holtburger_dat::file_type::{Palette, Texture, TextureDecodeError};
+    use holtburger_dat::ResourceKey;
+    let empty = IconPixels { width: 0, height: 0, pixels: Vec::new() };
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", icon_did)) else {
+        return empty;
+    };
+    let Ok(tex) = Texture::unpack(&bytes) else { return empty; };
+    let (w, h) = tex.actual_dimensions();
+    let rgba = tex.to_rgba8(|pal_id| {
+        let pb = source
+            .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
+            .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
+        Palette::unpack(&pb).map_err(|e| {
+            TextureDecodeError::PaletteFetch(format!("Palette::unpack {pal_id:#010X}: {e}"))
+        })
+    });
+    match rgba {
+        Ok(pixels) => IconPixels { width: w, height: h, pixels },
+        Err(_) => empty,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl IconPixels {
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> u32 { self.width }
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> u32 { self.height }
+    #[wasm_bindgen(getter)]
+    pub fn pixels(&self) -> Vec<u8> { self.pixels.clone() }
+}
+
+/// Decode one RenderSurface (`0x06xxxxxx`) DID directly to RGBA8.
+///
+/// Use this for icon DIDs sourced from `weenie.IconId` /
+/// `data/icon-manifest.json` — NOT [`fetch_surface_pixels`], which
+/// walks the Surface (`0x08`) → SurfaceTexture (`0x05`) → RenderSurface
+/// (`0x06`) chain used by 3D model materials. Feeding a `0x06` DID
+/// into `fetch_surface_pixels` mis-parses it as a Surface record and
+/// returns garbage / empty (the original symptom that left every
+/// inventory icon blank).
+///
+/// Returns an empty [`IconPixels`] (`width=0, height=0`) when the
+/// fetch or decode fails — JS treats that as "no icon, fall back to
+/// type-colour swatch".
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_icon_pixels(icon_did: u32) -> Result<IconPixels, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", icon_did)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = fetch_icon_pixels_impl(s, icon_did);
+    })
+    .await?;
+    Ok(fetch_icon_pixels_impl(source.as_ref(), icon_did))
+}
+
 /// Batch form: fetch decoded pixels for many surfaces in one HTTP
 /// fetch. Returns `Vec<SurfacePixels>` in input order; per-id
 /// failures yield empty entries (no batch fail).

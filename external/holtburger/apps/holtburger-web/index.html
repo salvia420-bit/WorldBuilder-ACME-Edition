@@ -982,6 +982,7 @@
         fetch_model_meshes,
         fetch_surface_pixels,
         fetch_surfaces_pixels,
+        fetch_icon_pixels,
         fetch_font,
         fetch_string_table,
         fetch_language_string,
@@ -1063,7 +1064,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=phase6-collision-leak-fix-20260529";
+      } from "./pkg/holtburger_web.js?v=icon-pixels-wiring-fix-20260530";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -1595,6 +1596,14 @@
         window.__hbWasm = {
           fetch_surface_pixels: (id) => fetch_surface_pixels(id >>> 0),
           fetch_surfaces_pixels,
+          // Inventory icon decode — RenderSurface (0x06xxxxxx) DIDs go
+          // here, NOT through `fetch_surface_pixels` which expects a
+          // Surface (0x08) DID. See `crates/holtburger-dat/src/file_type/
+          // texture.rs::actual_dimensions` for the JPEG-dims-in-payload
+          // handling (Trevis #worldbuilder:253). `ui/ac_icon_cache.js`
+          // prefers this entry, falling back to fetch_surface_pixels
+          // when the curated surface is older than this wasm build.
+          fetch_icon_pixels: (id) => fetch_icon_pixels(id >>> 0),
           fetch_font: (id) => fetch_font(id >>> 0),
           fetch_string_table: (id) => fetch_string_table(id >>> 0),
           fetch_language_string: (id) => fetch_language_string(id >>> 0),
