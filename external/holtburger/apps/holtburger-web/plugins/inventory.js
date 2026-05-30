@@ -97,12 +97,17 @@ const INV_ELEM_ITEMS_GRID    = 0x100001CF;
 
 const OVERLAY_ID = "hb-inventory";
 // Title bar is now owned by main-panel (see plugins/main-panel.js).
-// All vertical offsets in the inventory CSS use TITLE_H = 0 since
-// the view mounts inside main-panel's body slot.
+// TITLE_H = 0 hides the inline title-bar element since main-panel
+// provides chrome; the other vertical offsets in the inventory CSS
+// are inlined to retail values from LayoutDesc 0x21000023 (see
+// data/retail-layouts/0x21000023.json — PaperDollField y=23,
+// ThreeDItemsField y=237, BackpackField y=23 / h=339) so the cold
+// open renders at retail proportions without a snap when
+// loadLayout resolves and applyBox re-applies the same values.
 const TITLE_H = 0;
 const PAPERDOLL_W = 224;
 const PAPERDOLL_H = 214;
-const BAG_COL_W = 60;
+const BAG_COL_W = 61;
 const SLOT_SIZE = 32;
 const GRID_COLS = 7;
 
@@ -144,9 +149,23 @@ const TYPE_COLOR = {
 // 224×214 paperdoll body anatomy (kept verbatim where the original
 // 22 slots stayed); the 3 new ready-slot entries (WeaponReady /
 // AmmoReady / ShieldReady) land in a bottom hand-row alongside Boots.
-// retail layout 0x21000037 itself does NOT carry XY for these
-// elements (IncorporationFlags 0x1E = Y/Width/Height/ZLevel only —
-// X is null), so the hand-tuned coords here remain authoritative.
+// retail layout 0x21000037 carries NO useful XY for these elements
+// (IncorporationFlags 0x1E = X|Y|Width|Height, all values are
+// 0,0,32,32 — template-only — and the canonical per-slot screen
+// positions are computed at runtime in C++ by
+// gmPaperDollUI::PaperDollLocation_GetPosFromLocationCode at
+// acclient.c:219835-219952, not stored in the DAT). The hand-tuned
+// coords below remain authoritative. (Earlier wave wording read the
+// flags as "Y|W|H|ZLevel" — that was the pre-2026-05-30 buggy
+// off-by-one bit gate in chorizite-dump-layout-tree; with the fix,
+// 0x1E correctly resolves to X|Y|W|H but the practical conclusion
+// — DAT has no positions — is unchanged.)
+//
+// Cross-validation 2026-05-30 vs retail-layouts/0x21000037.json:
+// 24/24 PASS — every entry's elemId resolves to the expected
+// ItemSlot_Equip_<role>, and every hintIconDid is reachable in the
+// element's subtree. To re-verify, dump 0x21000037 with resolveSymbols
+// and walk the elements/children for each (elemId, hintIconDid).
 //
 // The Aetheria slots (SigilOne/Two/Three) and TrinketOne are hidden
 // by retail until the player completes the Aetheria Quest (per
@@ -210,6 +229,35 @@ const PAPERDOLL_SLOTS = [
   { elemId: "0x100005BD", equipMask: 0x00000100, hintIconDid: 0x06006D85, x: 120, y: 172, name: "Boots" },
   { elemId: "0x1000044C", equipMask: 0x00800000, hintIconDid: 0x06000F5E, x: 156, y: 172, name: "Ammo" },
 ];
+
+// The 9 body-armor slots that retail's "Slots" checkbox SWAPS with
+// the 3D ragdoll figure (acclient.c:221700-221728). The two are
+// mutually exclusive: when the checkbox is UNchecked (the default)
+// retail shows the 3D paperdoll figure and hides these slot icons —
+// the equipped armor renders directly on the figure ("ragdoll" view),
+// so the player sees their character wearing the gear. When the
+// checkbox is checked, the figure disappears and these icons take
+// over so the player can interact with each armor slot directly
+// (drag, swap, inspect) unimpeded by the figure. The 15 always-
+// visible slots (jewelry, ready slots, shirt, pants, cloak, trinket,
+// aetheria) stay shown in both modes — those don't render on the
+// figure even in retail.
+//
+// CSS uses these via `.hb-inv-doll-slot.armor` (added in the slot
+// creation loop): default `display: none`, overridden to visible
+// when overlay has `.slots-view`. Same `.slots-view` selector also
+// hides `.hb-inv-paperdoll-viewport` so the figure goes away.
+const ARMOR_SLOT_ELEMIDS = new Set([
+  "0x100005B4", // Head
+  "0x100005B5", // Chest
+  "0x100005B6", // Abdomen
+  "0x100005B7", // Upper arm
+  "0x100005B8", // Lower arm
+  "0x100005B9", // Hand (Gloves)
+  "0x100005BA", // Upper leg
+  "0x100005BB", // Lower leg
+  "0x100005BD", // Foot (Boots)
+]);
 
 // Wave D.1 follow-on (2026-05-27) — pure helpers (aetheriaSlotIsLocked,
 // formatBurdenText, computeInventoryTitle) live in inventory_helpers.js
@@ -278,11 +326,12 @@ function ensureStyles() {
       user-select: none;
     }
     #${OVERLAY_ID} .hb-inv-close:hover { background: var(--hb-text-gold); }
-    /* Paperdoll area — equipped items positioned at body-slot positions. */
+    /* Paperdoll area — equipped items positioned at body-slot positions.
+       Retail PaperDollField (LayoutDesc 0x21000023): x=0, y=23, w=224, h=214. */
     #${OVERLAY_ID} .hb-inv-paperdoll {
       position: absolute;
-      top: ${TITLE_H + 4}px;
-      left: 6px;
+      top: 23px;
+      left: 0;
       width: ${PAPERDOLL_W}px;
       height: ${PAPERDOLL_H}px;
       pointer-events: auto;
@@ -376,12 +425,14 @@ function ensureStyles() {
        to fit 8 tabs (main + 7 side packs) plus future Mule-aug 9th.
        Retail's LayoutDesc 0x21000023 sets this to 61×339; the CSS
        fallback uses a similar height in case the layout doesn't load. */
+    /* Retail BackpackField (LayoutDesc 0x21000023): x=239 (flush-right
+       in 300-wide frame), y=23, w=61, h=339. */
     #${OVERLAY_ID} .hb-inv-bagcol {
       position: absolute;
-      top: ${TITLE_H + 4}px;
-      right: 6px;
+      top: 23px;
+      right: 0;
       width: ${BAG_COL_W}px;
-      height: 308px;
+      height: 339px;
       display: flex;
       flex-direction: column;
       gap: 2px;
@@ -423,30 +474,70 @@ function ensureStyles() {
       pointer-events: none;
       image-rendering: pixelated;
     }
-    /* Burden meter (the icon/bar) lives in plugins/status-indicators.js
-       (real retail indicator 0x100000F7 in gmFloatyIndicatorsUI
-       0x21000071). The numeric burden label below mirrors retail's
-       m_burdenText field in gmBackpackUI (ACBindings
-       gmBackpackUI.cs:101) which is always-visible text on the
-       inventory window — distinct from the meter icon. We park it in
-       the 28px gap between the paperdoll and the items grid. */
+    /* Burden meter + label — retail gmBackpackUI's m_burdenMeter
+       (UIElement_Meter, ACBindings gmBackpackUI.cs:102) and m_burdenText
+       (UIElement_Text, gmBackpackUI.cs:101), updated in unison by
+       SetLoadLevel(fNewLoad) (cs:151-156). Retail positions these at
+       RUNTIME in C++ (not in LayoutDesc 0x21000023), so we follow the
+       user's eye-witness retail anatomy: the meter sits at the right
+       of the first pack tab — a thin vertical fill strip, ~6px wide
+       (matching the dark inter-pack margin), aligned with the first
+       pack's 28px height. The fill color ramps green→red as the
+       playerBurden ratio rises from 0.0 to 3.0 (300% = full red);
+       refreshBurdenText() writes the --burden-fill (0-100%) and
+       --burden-color (hsl) custom properties. The numeric percent
+       label sits below the bag tabs in the empty lower band of the
+       bag column. Both are children of .hb-inv-bagcol so their
+       absolute positions resolve inside that 61×339 box. */
+    #${OVERLAY_ID} .hb-inv-burden-meter {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 6px;
+      height: 28px;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 2;
+    }
+    #${OVERLAY_ID} .hb-inv-burden-meter::after {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: var(--burden-fill, 0%);
+      background: var(--burden-color, hsl(120, 70%, 45%));
+      transition: height 0.18s ease-out, background 0.18s ease-out;
+    }
+    /* Numeric burden label — positioned ABOVE the bag column (in the
+       empty y=0..22 band of the inventory overlay above where the
+       bag column starts at y=23), aligned with the bag column's
+       horizontal extent on the right edge of the panel. The user's
+       retail anatomy says the text sits "on top of" (above) the top
+       bag, not overlaid on it; the meter strip handles the visual
+       fill cue on the right edge of the first pack. Appended to
+       overlay, not bagCol, since it lives outside the bag column's
+       300×362 box. */
     #${OVERLAY_ID} .hb-inv-burden-text {
       position: absolute;
-      top: ${TITLE_H + PAPERDOLL_H + 8}px;
-      left: 6px;
-      right: 6px;
+      top: 4px;
+      right: 0;
+      width: 61px;
       height: 16px;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
-      font-size: 10px;
+      gap: 3px;
+      font-size: 9px;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.8);
       pointer-events: auto;
       user-select: none;
       letter-spacing: 0.02em;
+      z-index: 2;
     }
     #${OVERLAY_ID} .hb-inv-burden-text .pct {
       color: var(--hb-text-gold);
@@ -483,22 +574,33 @@ function ensureStyles() {
       color: rgba(255, 255, 255, 0.6);
       pointer-events: none;
     }
-    /* Wave D.1 follow-on (2026-05-27) — m_SlotCheckbox port. "Slots"
-       toggle button. When checked the paperdoll body view is hidden
-       and the equipped items collapse into a flat grid in place of the
-       paperdoll. Port of retail gmPaperDollUI::m_SlotCheckbox
+    /* "Slots" toggle button — port of retail gmPaperDollUI::m_SlotCheckbox
        (ACBindings gmPaperDollUI.cs:134 + acclient.c:221636,221667,
        221698-221728 — retail element 0x100005BE, default unchecked).
+       SWAPS between the 3D ragdoll figure and the 9 body-armor slot
+       icons (see ARMOR_SLOT_ELEMIDS). Default (unchecked): viewport
+       visible + armor icons hidden, ragdoll figure shows equipped
+       armor visually. Checked: viewport hidden + armor icons visible,
+       so each armor slot is clean and interactive. The 15
+       always-visible slots (jewelry / ready / shirt / pants / cloak
+       / trinket / aetheria) stay anchored in their anatomical
+       positions in both modes.
 
        Anchored to the inventory overlay (NOT the paperdoll) so it sits
-       on the burden-text row in the 28px gap between paperdoll bottom
-       and items grid top, left of the bag column. Doesn't overlap any
-       paperdoll body slot — the top row of slots at y=8 ends at x=222
-       (Aetheria Red), and the paperdoll itself is 224 wide, so any
-       on-paperdoll placement risks clipping. */
+       on the burden-text row at y=222 (which retail-prop fix made
+       overlap the empty bottom of paperdoll body — no slot conflict
+       because the bottom Boots row ends at paperdoll-y=204), left of
+       the bag column. Earlier wording mentioned a "28px gap between
+       paperdoll bottom and items grid top" — retail has no such gap
+       (both flush at y=237); the y=222 spot still works because the
+       paperdoll has 15px of empty body area below the lowest slot row.
+       Horizontal anchor is unchanged: clear of the bag column on the
+       right, and the slots-toggle's 50px width starts at x=177 (=300 -
+       BAG_COL_W - 12 - 50), well clear of the Aetheria Red top-row
+       slot which ends at x=222. */
     #${OVERLAY_ID} .hb-inv-slots-toggle {
       position: absolute;
-      top: ${TITLE_H + PAPERDOLL_H + 8}px;
+      top: 222px;
       right: ${BAG_COL_W + 12}px;
       width: 50px;
       height: 16px;
@@ -533,48 +635,46 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-inv-slots-toggle.checked .check {
       background: var(--hb-text-gold);
     }
-    /* Slots view — hide the paperdoll 3D viewport + paperdoll bg
-       chrome AND drop the hand-tuned (x, y) anatomy positioning on
-       the doll slots so they reflow as a flat grid. Equipped slots
-       stay visible so the player can drag items off; empty slots
-       collapse (display:none) so the grid only shows what's actually
-       worn. Mirrors retail's hide-paperdoll-show-list pattern at
-       acclient.c:221700-221728 (the 9-slot toggle block). */
-    #${OVERLAY_ID}.slots-view .hb-inv-paperdoll-bg,
-    #${OVERLAY_ID}.slots-view .hb-inv-paperdoll-viewport {
+    /* Slots view — retail's m_SlotCheckbox at acclient.c:221700-221728
+       SWAPS between the 3D ragdoll figure and the 9 body-armor slot
+       icons (Head, Chest, Abdomen, Upper/Lower arm, Hand, Upper/Lower
+       leg, Foot). They're mutually exclusive: the figure carries the
+       armor visual when it's there, and the armor icons take over
+       (unimpeded by the figure) when the player wants to interact
+       with each slot directly.
+
+       Default (unchecked, "ragdoll" mode): viewport visible + armor
+       icons hidden — equipped armor renders on the figure.
+       Checked: viewport hidden + armor icons visible — the figure
+       disappears so the slot icons are clean.
+
+       In both modes the 15 always-visible slots (jewelry, ready,
+       shirt, pants, cloak, trinket, aetheria) stay anchored at their
+       anatomical positions around the paperdoll area, and the
+       paperdoll-bg dark gradient frame stays as the container so the
+       slot icons have a defined backdrop in slots-view. */
+    #${OVERLAY_ID} .hb-inv-doll-slot.armor {
       display: none;
     }
-    #${OVERLAY_ID}.slots-view .hb-inv-paperdoll {
-      display: grid;
-      grid-template-columns: repeat(6, ${SLOT_SIZE}px);
-      gap: 2px;
-      padding: 4px;
-      align-content: start;
-      justify-content: start;
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid var(--hb-border-brass-dim);
+    #${OVERLAY_ID}.slots-view .hb-inv-doll-slot.armor {
+      display: block;
     }
-    #${OVERLAY_ID}.slots-view .hb-inv-doll-slot {
-      position: relative;
-      top: auto !important;
-      left: auto !important;
-      width: ${SLOT_SIZE}px;
-      height: ${SLOT_SIZE}px;
-    }
-    /* Empty doll slots collapse in Slots view so only worn gear shows
-       (matches the retail "list of equipped items" affordance). */
-    #${OVERLAY_ID}.slots-view .hb-inv-doll-slot:not(.equipped) {
+    #${OVERLAY_ID}.slots-view .hb-inv-paperdoll-viewport {
       display: none;
     }
     /* Items grid — pack contents below the paperdoll. Retail LayoutDesc
        0x100001CF is 120px tall (gmInventoryUI 0x21000023). Wave 12 used
        top/bottom anchors which computed to 114px; Wave 13 switches to a
        fixed 120px height to match retail. */
+    /* Retail ThreeDItemsField (LayoutDesc 0x21000023): x=0, y=237,
+       w=234, h=120. Flush against paperdoll bottom (paperdoll ends at
+       y=23+214=237). The 5px gap to the right of the items grid
+       (234→239) is intentional retail breathing room before bagcol. */
     #${OVERLAY_ID} .hb-inv-items {
       position: absolute;
-      top: ${TITLE_H + PAPERDOLL_H + 28}px;
-      left: 6px;
-      right: 6px;
+      top: 237px;
+      left: 0;
+      width: 234px;
       height: 120px;
       overflow-y: auto;
       pointer-events: auto;
@@ -644,12 +744,15 @@ function ensureStyles() {
        docs/examine-architecture-2026-05-22.md). Hidden by default;
        toggled via data-view="examine" on the parent #hb-inventory. */
     #${OVERLAY_ID}[data-view="examine"] .hb-inv-items { display: none; }
+    /* Examine pane occupies the same slot as the items grid (retail
+       ThreeDItemsField x=0, y=237, w=234, h=120) — when toggled on
+       via data-view="examine", items hides and examine takes over. */
     #${OVERLAY_ID} .hb-inv-examine {
       position: absolute;
-      top: ${TITLE_H + PAPERDOLL_H + 28}px;
-      left: 6px;
-      right: 6px;
-      bottom: 6px;
+      top: 237px;
+      left: 0;
+      width: 234px;
+      height: 120px;
       pointer-events: auto;
       padding: 6px;
       display: none;
@@ -885,6 +988,11 @@ function doMount(parentEl, _ctx) {
     el.dataset.equipMask = String(s.equipMask);
     el.dataset.name = s.name;
     el.dataset.elemId = s.elemId;
+    if (ARMOR_SLOT_ELEMIDS.has(s.elemId)) {
+      // Hidden by default ("ragdoll" view = unchecked m_SlotCheckbox);
+      // CSS reveals (and hides the 3D viewport) when .slots-view is on.
+      el.classList.add("armor");
+    }
     if (s.aetheriaBit) {
       el.dataset.aetheriaBit = String(s.aetheriaBit);
       aetheriaSlotEls.push({ el, bit: s.aetheriaBit >>> 0 });
@@ -974,22 +1082,25 @@ function doMount(parentEl, _ctx) {
 
   overlay.appendChild(paperdoll);
 
-  // Wave D.1 follow-on (2026-05-27) — m_SlotCheckbox port. "Slots"
-  // toggle button anchored to the inventory overlay (NOT the paperdoll —
-  // see the CSS comment for why) in the 28px gap row between paperdoll
-  // bottom and items grid top, to the left of the bag column. Toggles
-  // between paperdoll view (default — checked=false) and a flat
-  // list-of-equipped-items view (checked=true). State persists across
-  // mounts via localStorage so the player's preference survives view
-  // swaps + page reloads.
+  // m_SlotCheckbox port — "Slots" toggle button anchored to the
+  // inventory overlay (NOT the paperdoll) in the y=222 band left of
+  // the bag column. SWAPS between the 3D ragdoll figure and the 9
+  // body-armor slot icons (ARMOR_SLOT_ELEMIDS): default-unchecked =
+  // ragdoll visible + armor icons hidden; checked = ragdoll viewport
+  // hidden + armor icons visible (unimpeded by the figure). The 15
+  // always-visible slots (jewelry, ready, shirt, pants, cloak,
+  // trinket, aetheria) stay shown in both modes; the paperdoll-bg
+  // frame stays in both modes so slots have a defined backdrop.
+  // State persists across mounts via localStorage so the player's
+  // preference survives view swaps + page reloads.
   //
   // Mirrors retail gmPaperDollUI::m_SlotCheckbox (ACBindings
   // gmPaperDollUI.cs:134, retail wiring at acclient.c:221636 — child
   // 0x100005BE; default-unchecked via SetAttribute_Bool at :221667;
   // toggle dispatch at :221698-221728 hiding/showing 9 paperdoll
-  // child elements). Our DOM-side equivalent toggles the .slots-view
-  // class on the overlay; CSS reflows the doll slots into a flat grid
-  // and hides the 3D viewport + paperdoll bg.
+  // child elements — the same 9 armor slots). Our DOM-side equivalent
+  // toggles the .slots-view class on the overlay; CSS hides the
+  // viewport AND shows .hb-inv-doll-slot.armor accordingly.
   //
   // Reading-guide compliance (ACBindings/READING_GUIDE.md §5
   // anti-pattern #1): no retail element-ID constants are ported —
@@ -1007,7 +1118,7 @@ function doMount(parentEl, _ctx) {
 
   const slotsToggle = document.createElement("div");
   slotsToggle.className = "hb-inv-slots-toggle";
-  slotsToggle.title = "Toggle Slots view (flat list of equipped items)";
+  slotsToggle.title = "Toggle armor slot icons (default off — ragdoll shows armor visually)";
   const slotsCheckBox = document.createElement("span");
   slotsCheckBox.className = "check";
   const slotsLabel = document.createElement("span");
@@ -1096,14 +1207,22 @@ function doMount(parentEl, _ctx) {
   // Wave 12 had mistaken paperdoll element 0x100005BE for the burden
   // indicator; audit caught the mislabel.
   //
-  // Wave D.1 follow-on (2026-05-27) — the *numeric* burden label
-  // (retail's `m_burdenText` in gmBackpackUI, ACBindings
-  // `gmBackpackUI.cs:101`) is always-visible text on the inventory
-  // window, distinct from the meter icon. Adds a one-line readout
-  // between the paperdoll and the items grid; reads from
+  // Burden meter + numeric label — retail gmBackpackUI's
+  // m_burdenMeter (UIElement_Meter) + m_burdenText (UIElement_Text)
+  // pair, updated together by SetLoadLevel(fNewLoad) in
+  // ACBindings gmBackpackUI.cs:151-156. The meter is a thin vertical
+  // fill strip positioned at the right of the first pack tab (size
+  // matches the dark margin between pack tabs); fill color ramps
+  // green → red across the 0..3.0 ratio (300% = max burden = full
+  // red). The text shows the precise percentage. Both are children
+  // of bagCol so absolute positions resolve inside the 61×339 box;
+  // refreshBurdenText() below writes both. Reads from
   // `handle.playerBurden` (0.0..N float, encumbrance / capacity per
-  // ACE `EncumbranceSystem.GetBurden`). Refreshed on every
+  // ACE EncumbranceSystem.GetBurden); refreshed on every
   // `playerStatsUpdated` event AND every rebuild() pass.
+  const burdenMeter = document.createElement("div");
+  burdenMeter.className = "hb-inv-burden-meter";
+  bagCol.appendChild(burdenMeter);
   const burdenText = document.createElement("div");
   burdenText.className = "hb-inv-burden-text";
   const burdenLabel = document.createElement("span");
@@ -1114,6 +1233,9 @@ function doMount(parentEl, _ctx) {
   setAcText(burdenPct, "—", { color: "#f0c060" });
   burdenText.appendChild(burdenLabel);
   burdenText.appendChild(burdenPct);
+  // burdenText lives outside the bag column (above it, in the empty
+  // top-right strip of the inventory overlay). The meter stays
+  // inside bagCol since it's anchored to the first pack tab.
   overlay.appendChild(burdenText);
 
   // Items grid (pack contents)
@@ -1536,6 +1658,22 @@ function doMount(parentEl, _ctx) {
     const { text, over } = formatBurdenText(burden);
     setAcText(burdenPct, text, { color: over ? "#ff8060" : "#f0c060" });
     burdenText.classList.toggle("over", over);
+
+    // Burden meter — vertical fill 0..100% across the 0..3.0 ratio
+    // (300% burden = full red, per retail anatomy). Hue interpolates
+    // from 120 (green) at 0% to 0 (red) at 300%. Clamps to [0, 3.0]
+    // so over-300% (theoretically impossible per ACE encumbrance
+    // caps, but defensive) stays fully red.
+    if (Number.isFinite(burden) && burden > 0) {
+      const clamped = Math.min(burden, 3.0);
+      const fillPct = (clamped / 3.0) * 100;
+      const hue = Math.max(120 - clamped * 40, 0);
+      burdenMeter.style.setProperty("--burden-fill", `${fillPct}%`);
+      burdenMeter.style.setProperty("--burden-color", `hsl(${hue}, 75%, 45%)`);
+    } else {
+      burdenMeter.style.setProperty("--burden-fill", `0%`);
+      burdenMeter.style.setProperty("--burden-color", `hsl(120, 70%, 45%)`);
+    }
   }
 
   // Wave D.1 follow-on (2026-05-27) — port of retail
