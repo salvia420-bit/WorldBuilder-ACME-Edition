@@ -1815,17 +1815,25 @@ export class MaterialCache {
     }
     if (hasLum) {
       // Self-illumination, driven by the per-surface luminosity FLOAT
-      // (not the never-set 0x40 bit). Retail writes a flat GRAYSCALE
-      // emissive: D3DMATERIAL9.Emissive.rgb = luminosity (acclient.c
-      // D3DPolyRender::SetSurface @454688) — it is NOT modulated by the
-      // surface texture, so we set emissive=white scaled by intensity and
-      // deliberately attach NO emissiveMap. Clamp to (0, 2] as a sanity
-      // fence (ACE convention ~[0,1] with occasional HDR-ish pushes >1).
-      // NOTE (eye-test): a texture-modulated "richer glow" variant
-      // (emissiveMap=texture) is a possible future flag; flat grayscale
-      // is the retail-faithful default. 762 retail surfaces have lum>0.
+      // (not the never-set 0x40 bit). Retail's grayscale D3D emissive
+      // (D3DMATERIAL9.Emissive.rgb = luminosity, acclient.c
+      // D3DPolyRender::SetSurface @454688) MULTIPLIES the surface texture
+      // in the fixed-function combiner — final ≈ texture × (lighting +
+      // emissive) — so a COLOURED luminous surface (e.g. the blue lifestone
+      // crystal) glows in its own colour, just brighter. three.js'
+      // `emissive` is ADDED, and is texture-modulated ONLY when an
+      // `emissiveMap` is set; without one a flat-white emissive ADD washes
+      // the texture out to pure white (the reported white lifestone / chest
+      // / door — the old code deliberately attached no emissiveMap on a
+      // mistaken "retail isn't texture-modulated" reading). Fix: keep
+      // emissive=white scaled by luminosity AND attach the diffuse texture
+      // as emissiveMap, which reproduces retail's texture×emissive. The
+      // emissiveMap shares uv0 + sRGB decode with `map`. Untextured luminous
+      // surfaces keep the flat-white glow. Clamp to (0, 2] (ACE ~[0,1] with
+      // occasional HDR-ish pushes >1). 762 retail surfaces have lum>0.
       opts.emissive = new THREE.Color(0xffffff);
       opts.emissiveIntensity = Math.min(2.0, sfLuminosity);
+      if (texture) opts.emissiveMap = texture;
     }
     // Diffuse reflectance, driven by the per-surface diffuse FLOAT (not the
     // never-set 0x20 bit). Retail uses `diffuse` as a diffuse-reflectance
