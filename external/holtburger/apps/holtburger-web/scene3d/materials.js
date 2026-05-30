@@ -2094,6 +2094,12 @@ export class MaterialCache {
       if (normalTex) this.normalTextures.set(did, normalTex);
       if (heightTex) this.heightTextures.set(did, heightTex);
       this.materials.set(did, mat);
+      // 2026-05-30 — a real (textured) material just landed for this surface;
+      // drop any stale FrontSide clone that getCached(did,false) minted from
+      // the mapless fallback during a spawn-race, so the next getCached
+      // re-clones from THIS base. Without this, single-sided (?perPolyCull)
+      // meshes keep the fallback clone forever even after the texture arrives.
+      this.frontSideMaterials.delete(did);
       // Render-completeness audit (2026-05-29) — kick animated-frame setup.
       this._maybeSetupSurfaceAnimation(did, mat, tex);
       return mat;
@@ -2589,6 +2595,10 @@ export class MaterialCache {
     if (normalTex) this.normalTextures.set(did, normalTex);
     if (heightTex) this.heightTextures.set(did, heightTex);
     this.materials.set(did, mat);
+    // 2026-05-30 — invalidate the stale fallback-derived FrontSide clone (see
+    // the 6-space twin in get()) so getCached(did,false) re-clones from this
+    // textured base after a spawn-race fallback.
+    this.frontSideMaterials.delete(did);
     // Render-completeness audit (2026-05-29) — kick animated-frame setup.
     this._maybeSetupSurfaceAnimation(did, mat, tex);
     return mat;

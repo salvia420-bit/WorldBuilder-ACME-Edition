@@ -1300,6 +1300,14 @@ class EntityInstance {
   }
 
   dispose() {
+    // 2026-05-30 — mark disposed + cancel any pending spawn-race surface
+    // refresh (see EntityManager._scheduleEntitySurfaceRefresh) so a late
+    // re-decode can't touch a torn-down rig.
+    this._disposed = true;
+    if (this._surfaceRefreshTimer) {
+      try { clearTimeout(this._surfaceRefreshTimer); } catch (_) {}
+      this._surfaceRefreshTimer = null;
+    }
     try {
       this.mixer.stopAllAction();
       this.mixer.uncacheRoot(this.root);
@@ -2125,6 +2133,35 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // Spawn-race recovery (2026-05-30): if a surface's DAT resources had not
+    // yet streamed from the server when this entity spawned, its decode
+    // returned empty and the mesh got the shared flat-grey fallback material
+    // — the reported "white door / chest" (WB.Terminal confirmed the surface
+    // DATA is correct; the decode just lost the spawn race and the material
+    // was never refreshed). Detect any mesh still on the fallback and schedule
+    // a deferred re-decode + material swap once the resources arrive. Gated to
+    // NON-dyed entities (paletteId/subPalettes empty) so the plain re-decode
+    // can't strip a dye; dyed entities are rarer and left as-is.
+    if (
+      !hasPaletteSubs &&
+      !WIREFRAME_MODE &&
+      this.materialCache &&
+      typeof this.wasmExports?.fetch_surfaces_pixels === "function"
+    ) {
+      // A mesh with no `.map` is on the fallback — either the shared
+      // DoubleSide fallbackMaterial OR a FrontSide *clone* of it that
+      // getCached() mints for `?perPolyCull` single-sided faces. Both mean
+      // the surface decode lost the spawn race; real surfaces always carry a
+      // map (solid-colour surfaces get a 1×1 DataTexture).
+      let needsRefresh = false;
+      root.traverse((o) => {
+        if (!needsRefresh && o.isMesh && o.material && !o.material.map &&
+            o.userData && o.userData.surfaceDid != null) {
+          needsRefresh = true;
+        }
+      });
+      if (needsRefresh) this._scheduleEntitySurfaceRefresh(inst, 0);
+    }
     // Render-completeness audit (2026-05-29) — flush any wielded-item attach
     // that arrived before this rig (or its counterpart) existed. Covers both
     // roles: this entity may be a child waiting for its wielder, or a wielder
@@ -2368,6 +2405,61 @@ export class EntityManager {
       };
     }
     return this._sharedFallback;
+  }
+
+  /**
+   * 2026-05-30 — spawn-race surface recovery. When an entity spawns before
+   * its surface DAT resources have streamed from the server, the synchronous
+   * decode returns empty and the mesh is painted with the shared flat-grey
+   * fallback material; the resources then arrive but the material is never
+   * refreshed — the permanent "white door / chest" (WB.Terminal confirmed the
+   * surface DATA is intact; only the spawn-time decode lost the race). This
+   * re-decodes the still-fallback surfaces and swaps the real material onto
+   * the mesh once they resolve, retrying with backoff. Plain (non-dyed) path
+   * only — the caller gates on `!hasPaletteSubs` so a plain re-decode can
+   * never strip a dye.
+   */
+  _scheduleEntitySurfaceRefresh(inst, attempt = 0) {
+    // Backoff covering the slow tail of resource streaming: some entity
+    // surfaces don't arrive until tens of seconds into the heavy initial
+    // load (and setTimeout is starved while the atmosphere bake blocks the
+    // main thread, so early ticks bunch up after it). Stops the instant
+    // every surface has a textured material.
+    const DELAYS_MS = [600, 1500, 3500, 8000, 16000, 32000, 60000, 90000];
+    if (!inst || !inst.root || attempt >= DELAYS_MS.length) return;
+    const cache = this.materialCache;
+    if (!cache || typeof this.wasmExports?.fetch_surfaces_pixels !== "function") return;
+    // "Needs a texture" = the current material has no `.map` — the shared
+    // DoubleSide fallback OR a FrontSide clone of it. Real surfaces (incl.
+    // solid colours, which get a 1×1 DataTexture) always carry a map.
+    const needsTex = (mat) => !!mat && !mat.map;
+    inst._surfaceRefreshTimer = setTimeout(async () => {
+      inst._surfaceRefreshTimer = null;
+      // Bail if the rig was disposed or replaced (e.g. LOD respawn) meanwhile.
+      if (inst._disposed || this.entityMap.get(inst.guid) !== inst) return;
+      const pending = [];
+      inst.root.traverse((o) => {
+        if (o.isMesh && needsTex(o.material) && o.userData && o.userData.surfaceDid != null) {
+          pending.push(o);
+        }
+      });
+      if (pending.length === 0) return; // every surface resolved
+      const dids = [...new Set(pending.map((m) => m.userData.surfaceDid >>> 0))];
+      try {
+        await cache.preload(dids, this.wasmExports.fetch_surfaces_pixels);
+      } catch (_) { /* transient — covered by the retry below */ }
+      if (inst._disposed || this.entityMap.get(inst.guid) !== inst) return;
+      for (const m of pending) {
+        // Preserve the mesh's sidedness (FrontSide for per-poly-culled faces).
+        const doubleSided = !m.material || m.material.side !== THREE.FrontSide;
+        const real = cache.getCached(m.userData.surfaceDid >>> 0, doubleSided);
+        if (real && real.map) m.material = real; // only swap to a textured material
+      }
+      // Anything still untextured? the resource hasn't arrived — back off + retry.
+      if (pending.some((m) => needsTex(m.material))) {
+        this._scheduleEntitySurfaceRefresh(inst, attempt + 1);
+      }
+    }, DELAYS_MS[attempt]);
   }
 
   /**
