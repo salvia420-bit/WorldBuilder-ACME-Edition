@@ -613,6 +613,25 @@ flat out int vIsWater;
 // interpolation across the cell looks identical to a half-pixel eye).
 out vec2 vWaveModulation;
 
+// 2026-05-30 — logarithmic depth buffer participation. The renderer runs
+// with logarithmicDepthBuffer:true (index.js); three.js injects the
+// USE_LOGARITHMIC_DEPTH_BUFFER define (renamed from USE_LOGDEPTHBUF circa
+// r163; we guard both) + the logDepthBufFC uniform into EVERY program, and
+// its built-in materials (buildings/cells/statics = MeshStandardMaterial)
+// write a LOGARITHMIC gl_FragDepth. This raw ShaderMaterial omitted the
+// chunk, so terrain wrote ordinary HARDWARE depth — a different encoding —
+// and could not occlude buildings/EnvCells in the shared depth buffer. That
+// (not the indoor depth-clear pass) is the real "buildings through terrain"
+// see-through; the regression dates to eda27718 (2026-05-25) which turned
+// log-depth on without updating this shader. Inlined rather than
+// #include <logdepthbuf_*> to avoid the chunk's isPerspectiveMatrix()
+// dependency on <common>. Guarded by the log-depth define so a non-log
+// renderer (none today) stays correct.
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+out float vFragDepth;
+out float vIsPerspective;
+#endif
+
 // Phase 2.2 — 2D value-noise (Perlin-fade interp). Tiny port from
 // Phase 2.1's Rust impl at terrain_subdiv.rs::value_noise_2d. Reserved
 // for the lava displacement branch (Region 0x13 has no lava terrain
@@ -681,6 +700,13 @@ void main() {
   vec4 mvPos = modelViewMatrix * vec4(displacedPos, 1.0);
   vViewDepth = -mvPos.z;
   gl_Position = projectionMatrix * mvPos;
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+  // Standard three.js logarithmic-depth vertex term (matches the built-in
+  // logdepthbuf_vertex chunk). vIsPerspective folds isPerspectiveMatrix()
+  // inline: a perspective projection has m[2][3] == -1.0.
+  vFragDepth = 1.0 + gl_Position.w;
+  vIsPerspective = float( projectionMatrix[2][3] == -1.0 );
+#endif
   // Per-vertex grid coordinate in [0, 8] across the 192 m landblock
   // (8 cells × 24 m each). Fragment splits into integer cell index
   // + intra-cell UV, looks up the cell's 4 corner terrain types
@@ -933,6 +959,19 @@ in vec2 vWaveModulation;
 
 out vec4 fragColor;
 
+// 2026-05-30 — logarithmic depth buffer participation (see the matching
+// block in TERRAIN_VERTEX_GLSL for the full rationale). Writing gl_FragDepth
+// with the SAME log encoding three.js' built-in materials use is what lets
+// terrain correctly occlude buildings/EnvCells in the shared depth buffer.
+// logDepthBufFC is a renderer-supplied built-in uniform (set every frame
+// from camera.far), present on this program because the log-depth define
+// is set — no entry needed in the material uniforms map.
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+uniform float logDepthBufFC;
+in float vFragDepth;
+in float vIsPerspective;
+#endif
+
 // Map terrain code (0..32) → atlas UV at the given cell-local UV.
 // Retail terrain codes 0..32 are individual layers of a sampler2DArray.
 // cellUv (range [0,1]) is the intra-cell UV; the layer index is the
@@ -1050,6 +1089,12 @@ float roundMergeAlpha(float alpha, float gate) {
 }
 
 void main() {
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+  // Matches the built-in logdepthbuf_fragment chunk. Placed first so the
+  // depth write is unconditional for every drawn fragment. Perspective
+  // camera → log2 encoding; ortho (radar) → pass through gl_FragCoord.z.
+  gl_FragDepth = vIsPerspective == 0.0 ? gl_FragCoord.z : log2( vFragDepth ) * logDepthBufFC * 0.5;
+#endif
   // vGridUv is [0, 8] across the 192 m LB. Bilinear 4-corner blend.
   vec2 grid = vGridUv;
   int iu = int(floor(grid.x));

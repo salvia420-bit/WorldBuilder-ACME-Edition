@@ -73,6 +73,7 @@ import { LandblockLRU, lbKeyFromXY } from "./landblock_lru.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
 import { ACMoons } from "./ac_moons.js";
 import { installDiag } from "./diag.js";
+import { installWebglContextRecovery } from "./webgl_context_recovery.js";
 // Wave 15 — opt-in bulk icon preload (?preloadIcons=1). Default OFF.
 // Populates the shared `ui/ac_icon_cache.js` cache so subsequent icon
 // fetches in inventory/vendor/container/trade/buffs/spell-research
@@ -1642,61 +1643,38 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
       }
     }
-    // Phase 5 PView render-order fix (2026-05-25): when the camera is
-    // inside an EnvCell, split the world render into:
-    //   1. Layer-0 pass (terrain + buildings + outdoor statics)
-    //   2. Depth-clear
-    //   3. Layer-1 pass (EnvCells + entities)
-    // Mirrors WB.GameScene.cs:1610. Outdoor: single autoClear render.
-    // Reads the same `_lastIsIndoor` flag the atmosphere composer uses
-    // (see atmosphere_pipeline.preFrameSkySync) so the two paths stay
-    // in lockstep. This branch is the fallback for the ~8s atmosphere
-    // bake window, `?atmosphere=off`, and atmosphere init failures.
-    const isIndoorRender = !!liveScene3dRef?.skyDome?._lastIsIndoor;
+    // 2026-05-30 see-through rectification (fallback render path).
+    // Mirrors the composer fix (a575df28 / atmosphere_pipeline
+    // .preFrameSkySync): DROP the indoor depth-clear split that wiped
+    // terrain depth and redrew layer 1 (EnvCells + entities) on top.
+    // That split painted Holtburg building interiors/basements and
+    // down-hill cottages THROUGH the terrain whenever the current cell
+    // classified indoor — and Holtburg plots/basements ARE EnvCells, so
+    // it fired even standing "outside". Render BOTH layers in ONE
+    // shared-depth pass so the GPU depth buffer occludes cells behind/
+    // below terrain — its actual job. This fallback is the path wire
+    // mode, the ~8s atmosphere bake window, and ?atmosphere=off all use,
+    // so the earlier composer-only fix never reached it (still the
+    // see-through the user saw). Trade-off given back: the cottage-floor-
+    // vs-terrain Z-fight the clear masked — to be fixed with a targeted
+    // cell-floor polygonOffset if it resurfaces, never a global wipe.
     const camLayersBefore = activeCam.layers.mask;
+    activeCam.layers.mask = (1 << 0) | (1 << 1); // both layers, shared depth
     if (skyRendered) {
-      // Preserve sky color paint across the world render. Clear ONLY
-      // the depth buffer so the world's depth-test starts fresh; the
-      // sky's color stays in the color buffer where the world doesn't
-      // overpaint it.
+      // Preserve the sky's color paint; reset ONLY depth so the world
+      // depth-test starts fresh against a clean buffer.
       const prevAutoClear = renderer.autoClear;
       renderer.autoClear = false;
       renderer.clearDepth();
-      if (isIndoorRender) {
-        // World pass: terrain + buildings + statics (layer 0).
-        activeCam.layers.mask = (1 << 0);
-        renderer.render(scene, activeCam);
-        // Mid-frame depth clear (color buffer stays — sky + outdoor
-        // colour both preserved).
-        renderer.clearDepth();
-        // Cells pass: EnvCells + entities (layer 1) with fresh depth.
-        activeCam.layers.mask = (1 << 1);
-        renderer.render(scene, activeCam);
-      } else {
-        renderer.render(scene, activeCam);
-      }
+      renderer.render(scene, activeCam);
       renderer.autoClear = prevAutoClear;
     } else {
-      // No sky pass this frame (pre-bake / pre-construction).
-      if (isIndoorRender) {
-        // First pass — autoClear writes color+depth from clear color.
-        // Layer 0 only.
-        activeCam.layers.mask = (1 << 0);
-        renderer.render(scene, activeCam);
-        // Depth clear, then layer-1 pass on top.
-        const prevAutoClear = renderer.autoClear;
-        renderer.autoClear = false;
-        renderer.clearDepth();
-        activeCam.layers.mask = (1 << 1);
-        renderer.render(scene, activeCam);
-        renderer.autoClear = prevAutoClear;
-      } else {
-        renderer.render(scene, activeCam);
-      }
+      // No sky pass (pre-bake / pre-construction) — autoClear writes
+      // color + depth from the clear color in a single shared-depth pass.
+      renderer.render(scene, activeCam);
     }
-    // Restore the camera's layer mask to its pre-split value so
-    // downstream consumers (raycasters, CSM matrices) observe the
-    // outdoor-equivalent state.
+    // Restore the camera's layer mask so downstream consumers
+    // (raycasters, CSM matrices) observe the outdoor-equivalent state.
     activeCam.layers.mask = camLayersBefore;
     scheduleNext();
   }
@@ -2242,6 +2220,33 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // the latest fields (sessionHandle, cellContainers3d) — capture
   // scripts can replace these post-init without restarting init3D.
   liveScene3dRef = liveScene3d;
+
+  // WebGL context loss/restore recovery. Without preventDefault on the
+  // canvas `webglcontextlost` event, Three's renderer fails permanently
+  // when the browser revokes the context under VRAM pressure (observed
+  // 7× on 1070 with ultra+clouds+CSM during vendor/wield/motion bursts).
+  // The recovery module pauses the rAF tick on loss + rebuilds composer
+  // RTs + invalidates the CSM skip-cache on restore, then resumes.
+  // `liveScene3d.atmospherePipeline`/`cloudOverlay` are attached later
+  // (lines ~2454/~2614) so the restore path looks them up lazily via
+  // `getLiveScene3d`. Exposes `window.__loseContext()` /
+  // `window.__restoreContext()` for verification.
+  installWebglContextRecovery({
+    renderer,
+    canvas,
+    getLiveScene3d: () => liveScene3d,
+    onPause: () => { running = false; },
+    onResume: () => {
+      running = true;
+      // Reset the dt baseline so the first frame post-restore doesn't
+      // trip the >500ms recovery-freeze path and stall sim for 10 frames.
+      lastFrameTs = null;
+      scheduleNext();
+    },
+    pushEventRecord: (rec) => {
+      try { pushEventRecord(rec); } catch (_) { /* eventLog full / not ready */ }
+    },
+  });
 
   // Workstream Sky-C — instantiate the dynamic sky-lighting controller.
   // Takes over the existing Phase 7.6 sun + ambient handles + assigns
