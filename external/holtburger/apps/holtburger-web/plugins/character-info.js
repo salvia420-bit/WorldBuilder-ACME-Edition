@@ -660,25 +660,64 @@ function renderSkills(bodyEl, stats, skillTable) {
   }
 }
 
+// Top-30 entries of ACE's CharacterTitle enum (Source/ACE.Entity/Enum/
+// CharacterTitle.cs). Used to label the current title and earned-list
+// rows by name when the id is in range; falls back to "Title N" otherwise.
+// Full enum has 1000+ entries — porting the whole thing would warrant
+// a generated string table.
+const TITLE_NAMES = {
+  0: "Invalid",   1: "Adventurer",  2: "Archer",        3: "Blademaster",
+  4: "Enchanter", 5: "LifeMage",    6: "Sorcerer",      7: "Vagabond",
+  8: "Warrior",   9: "BowHunter",  10: "LifeCaster",   11: "Soldier",
+  12: "Swashbuckler", 13: "WarMage", 14: "Wayfarer",   15: "AbhorrentWarrior",
+  16: "Alchemist",17: "Annihilator",18: "Apothecary",  19: "ArcticAdventurer",
+  20: "ArcticMattekarAnnihilator",  21: "Artifex",     22: "AxeWarrior",
+  23: "Ballisteer",24: "BaneoftheRemoran",25: "BloodShrethButcher",
+  26: "Bookbinder",27: "Brawler",   28: "ButcheroftheNorth",29: "Cabalist",
+  30: "Carpenter",
+};
+
 // Title tab — uses the gmCharacterTitleUI 0x2100005E structured layout.
 // Three header rows (display info / counts / column heading), 2
-// separators, a scrollable list area, and a bottom action button. The
-// list contents are not yet wired (server doesn't expose titleList()
-// yet); we render an empty-list placeholder for now and keep the
-// structured frame from the layout in place.
+// separators, a scrollable list area, and a bottom action button.
+//
+// 2026-05-30 — wired to the real server snapshot via
+// `__sessionHandle.playerTitle()` (TitleSnapshotJs at src/lib.rs:23960
+// with `currentTitleId` + `titleIds` map). Refreshed on every recv-loop
+// `kind=28 titleUpdated` drain.
 function renderTitles(bodyEl, _stats, titleRefs) {
   bodyEl.innerHTML = "";
   const wrap = document.createElement("div");
   wrap.className = "hb-ci-titles";
 
+  // Pull the snapshot once for this render. Wasm-bindgen exposes the two
+  // fields as getters so the snapshot has to be live-read.
+  let currentId = 0;
+  const earnedIds = [];
+  try {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    const snap = handle?.playerTitle?.();
+    if (snap) {
+      currentId = snap.currentTitleId >>> 0;
+      const ids = snap.titleIds;
+      if (ids && typeof ids === "object") {
+        for (const k of Object.keys(ids)) {
+          const v = (ids[k] >>> 0);
+          if (v) earnedIds.push(v);
+        }
+      }
+    }
+  } catch (_) { /* pre-snapshot: render the empty-state */ }
+  const currentName = TITLE_NAMES[currentId] || (currentId ? `Title ${currentId}` : "—");
+
   const header1 = document.createElement("div");
   header1.className = "hb-ci-titles-header";
-  setAcText(header1, "Display Title:", { color: "#f0d8a0" });
+  setAcText(header1, `Display Title: ${currentName}`, { color: "#f0d8a0" });
   wrap.appendChild(header1);
 
   const header2 = document.createElement("div");
   header2.className = "hb-ci-titles-header";
-  setAcText(header2, "Earned: 0", { color: "#f0d8a0" });
+  setAcText(header2, `Earned: ${earnedIds.length}`, { color: "#f0d8a0" });
   wrap.appendChild(header2);
 
   const header3 = document.createElement("div");
@@ -698,10 +737,22 @@ function renderTitles(bodyEl, _stats, titleRefs) {
 
   const list = document.createElement("div");
   list.className = "hb-ci-titles-list";
-  const listEmpty = document.createElement("div");
-  listEmpty.className = "hb-ci-titles-list-empty";
-  setAcText(listEmpty, "No titles yet — server needs to expose titleList()", { color: "#a8a090" });
-  list.appendChild(listEmpty);
+  if (earnedIds.length === 0) {
+    const listEmpty = document.createElement("div");
+    listEmpty.className = "hb-ci-titles-list-empty";
+    setAcText(listEmpty, "No titles earned yet.", { color: "#a8a090" });
+    list.appendChild(listEmpty);
+  } else {
+    // One row per earned title id, current title highlighted gold.
+    for (const id of earnedIds.sort((a, b) => a - b)) {
+      const r = document.createElement("div");
+      r.className = "hb-ci-titles-row" + (id === currentId ? " current" : "");
+      r.dataset.titleId = String(id);
+      const name = TITLE_NAMES[id] || `Title ${id}`;
+      setAcText(r, name, { color: id === currentId ? "#f0c87c" : "#f0d8a0" });
+      list.appendChild(r);
+    }
+  }
   wrap.appendChild(list);
 
   // Invisible phantom for the layout-derived scrollbar geometry.

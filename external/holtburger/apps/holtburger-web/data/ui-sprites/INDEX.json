@@ -1,32 +1,77 @@
 {
   "generatedBy": "WorldBuilder.Terminal chorizite-extract-ui-textures",
   "datPath": "/home/wbterminal/ac_base_dats/client_portal.dat",
-  "count": 3,
-  "passCount": 3,
-  "failCount": 0,
+  "count": 8,
+  "passCount": 2,
+  "failCount": 6,
   "records": {
-    "0x06004D1C": {
-      "width": 72,
-      "height": 19,
-      "sha256": "cd350b9be77e130d77618f7cbc9897afb492981aa452041d77138c231f45f426",
+    "0x06000144": {
+      "width": 0,
+      "height": 0,
+      "sha256": null,
+      "source": "client_portal.dat",
+      "status": "FAIL",
+      "pixelFormat": null,
+      "failureReason": "RenderSurface 0x06000144 not present in client_portal.dat"
+    },
+    "0x06000145": {
+      "width": 0,
+      "height": 0,
+      "sha256": null,
+      "source": "client_portal.dat",
+      "status": "FAIL",
+      "pixelFormat": null,
+      "failureReason": "RenderSurface 0x06000145 not present in client_portal.dat"
+    },
+    "0x06000146": {
+      "width": 0,
+      "height": 0,
+      "sha256": null,
+      "source": "client_portal.dat",
+      "status": "FAIL",
+      "pixelFormat": null,
+      "failureReason": "RenderSurface 0x06000146 not present in client_portal.dat"
+    },
+    "0x06000147": {
+      "width": 0,
+      "height": 0,
+      "sha256": null,
+      "source": "client_portal.dat",
+      "status": "FAIL",
+      "pixelFormat": null,
+      "failureReason": "RenderSurface 0x06000147 not present in client_portal.dat"
+    },
+    "0x06000148": {
+      "width": 0,
+      "height": 0,
+      "sha256": null,
+      "source": "client_portal.dat",
+      "status": "FAIL",
+      "pixelFormat": null,
+      "failureReason": "RenderSurface 0x06000148 not present in client_portal.dat"
+    },
+    "0x06000149": {
+      "width": 0,
+      "height": 0,
+      "sha256": null,
+      "source": "client_portal.dat",
+      "status": "FAIL",
+      "pixelFormat": null,
+      "failureReason": "RenderSurface 0x06000149 not present in client_portal.dat"
+    },
+    "0x06004CFB": {
+      "width": 32,
+      "height": 32,
+      "sha256": "4d248bad3f1028166a3a531d2afe8f641ffa533c442fc619f57d7df763070c66",
       "source": "client_portal.dat",
       "status": "PASS",
-      "pixelFormat": "PFID_A8R8G8B8",
+      "pixelFormat": "PFID_R8G8B8",
       "failureReason": null
     },
-    "0x06004D1D": {
-      "width": 72,
-      "height": 19,
-      "sha256": "e6e03b754eff4a4a9b8d7ba71beadebe6a4473cae727e9989c0b3d27c604a849",
-      "source": "client_portal.dat",
-      "status": "PASS",
-      "pixelFormat": "PFID_A8R8G8B8",
-      "failureReason": null
-    },
-    "0x06004D1E": {
-      "width": 72,
-      "height": 19,
-      "sha256": "939a7019fe841d5328587d410cd5e049ec4d11c6008e24601f428b4017efb247",
+    "0x06004CFD": {
+      "width": 32,
+      "height": 32,
+      "sha256": "f36337050a6e1480bbc59c26dc2f6934194833ca462f9e8c5153ae8c582eb9fb",
       "source": "client_portal.dat",
       "status": "PASS",
       "pixelFormat": "PFID_A8R8G8B8",
