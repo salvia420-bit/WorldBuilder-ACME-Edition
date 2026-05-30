@@ -261,6 +261,27 @@ function ensureStyles() {
       min-width: 30px;
       text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
     }
+    /* Raise controls — DAT sprites 0x06001282/83 (UP button) and
+       0x06004D17/19 (green/red eligibility dot) from gmStatManagementUI
+       layout 0x2100002B. The dot shows the can/can't-raise state; the
+       button dispatches RaiseAttribute / RaiseVital to the server. */
+    .hb-ci-dot {
+      width: 13px; height: 13px;
+      flex: 0 0 13px;
+      background: center/contain no-repeat;
+      image-rendering: pixelated;
+    }
+    .hb-ci-raise {
+      width: 24px; height: 25px;
+      flex: 0 0 24px;
+      padding: 0;
+      border: 0;
+      background: center/contain no-repeat;
+      image-rendering: pixelated;
+      cursor: pointer;
+    }
+    .hb-ci-raise[disabled] { opacity: 0.45; cursor: not-allowed; }
+    .hb-ci-raise:hover:not([disabled]) { filter: brightness(1.2); }
     /* Title-tab specific structure — uses absolute layout from
        gmCharacterTitleUI 0x2100005E (compressed to fit our body).
        Mounted in the .hb-ci-body when the Titles tab is active. */
@@ -405,6 +426,37 @@ const ATTR_ICON_URL = (id) =>
   ATTR_ICONS[id] ? `./data/ui-sprites/${ATTR_ICONS[id]}.png` : null;
 const VITAL_ICON_URL = (id) =>
   VITAL_ICONS[id] ? `./data/ui-sprites/${VITAL_ICONS[id]}.png` : null;
+
+// 2026-05-30 — ExperienceTable (DAT 0x0E000018) lazy-loaded once.
+// `attributes[N]` is the cumulative XP to reach rank N (191 ranks);
+// `vitals[N]` likewise (197 ranks). Cost from current → next rank is
+// `arr[r+1] - arr[r]`. The same table that
+// `ACE.Server.WorldObjects.Player.HandleActionRaiseAttribute` consults
+// via `DatManager.PortalDat.XpTable.AttributeXpList` (so the JS preview
+// matches what the server will accept).
+let _xpTablesPromise = null;
+function loadXpTables() {
+  if (_xpTablesPromise) return _xpTablesPromise;
+  _xpTablesPromise = fetch("./data/xp-tables.json").then((r) => r.json()).catch(() => null);
+  return _xpTablesPromise;
+}
+function nextRankCost(table, ranks) {
+  if (!Array.isArray(table)) return null;
+  if (ranks == null || ranks < 0) ranks = 0;
+  if (ranks >= table.length - 1) return null; // max
+  return (table[ranks + 1] >>> 0) - (table[ranks] >>> 0);
+}
+
+// Pull the player's unspent XP from levelInfo[3,4] (the lo/hi pair of
+// `holtburger_world::context::WorldContextExt::player_unspent_xp`). Safe
+// up to 2^53 — AC caps well below that.
+function getAvailableXp(stats) {
+  const lv = stats?.levelInfo;
+  if (!lv) return 0;
+  const lo = tupleArrayAt(lv, 3) ?? 0;
+  const hi = tupleArrayAt(lv, 4) ?? 0;
+  return (hi >>> 0) * 0x1_0000_0000 + (lo >>> 0);
+}
 
 function tupleArrayAt(arr, i) {
   // Wasm flat-array stat tuples are exposed as `{ "0": v, "1": v, ... }`
@@ -611,15 +663,31 @@ function renderAttributes(bodyEl, stats, _skillTable) {
   // every attribute (the diag char has ranks=0). Show `current` alone,
   // and if `current` ≠ `base` (e.g. a debuff or item bonus is active)
   // also show the base in parentheses.
+  const availableXp = getAvailableXp(stats);
+  const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+  // Cached XP tables (lazy-loaded). The render runs before fetch resolves
+  // on first open, so we may pass null cost on initial paint and refresh
+  // on the next playerStatsUpdated drain.
+  const xpTables = _xpTablesPromise?._cached ?? null;
+  if (!xpTables) loadXpTables().then((t) => { if (t) _xpTablesPromise._cached = t; });
   for (let i = 0; i < 24; i += 4) {
     const id = tupleArrayAt(a, i);
     if (id == null) break;
     const cur = tupleArrayAt(a, i + 1);
     const base = tupleArrayAt(a, i + 2);
+    const ranks = tupleArrayAt(a, i + 3) ?? 0;
     const display = (cur != null && base != null && cur !== base)
       ? `${cur} (${base})`
       : `${cur ?? "—"}`;
-    bodyEl.appendChild(row(ATTR_ICON_URL(id), ATTR_NAMES[id] || `Attr ${id}`, display));
+    const cost = xpTables ? nextRankCost(xpTables.attributes, ranks) : null;
+    const raise = (cost != null && handle?.raiseAttribute) ? {
+      cost,
+      canAfford: cost <= availableXp,
+      isMax: false,
+      availableXp,
+      onClick: () => { try { handle.raiseAttribute(id >>> 0, cost >>> 0); } catch (e) { console.warn("[raiseAttribute]", e); } },
+    } : (xpTables ? { cost: 0, canAfford: false, isMax: true, availableXp, onClick: () => {} } : null);
+    bodyEl.appendChild(row(ATTR_ICON_URL(id), ATTR_NAMES[id] || `Attr ${id}`, display, raise));
   }
   const v = stats?.vitals;
   if (v) {
@@ -629,8 +697,20 @@ function renderAttributes(bodyEl, stats, _skillTable) {
       const id = tupleArrayAt(v, i);
       if (id == null) break;
       const cur = tupleArrayAt(v, i + 1);
+      const base = tupleArrayAt(v, i + 2);
       const max = tupleArrayAt(v, i + 3);
-      bodyEl.appendChild(row(VITAL_ICON_URL(id), VITAL_NAMES[id] || `Vital ${id}`, `${cur}/${max}`));
+      // Vitals carry current/buffed_max instead of ranks; ranks is
+      // (base - intrinsic_start) — fall back to base for the lookup.
+      const ranks = base ?? 0;
+      const cost = xpTables ? nextRankCost(xpTables.vitals, ranks) : null;
+      const raise = (cost != null && handle?.raiseVital) ? {
+        cost,
+        canAfford: cost <= availableXp,
+        isMax: false,
+        availableXp,
+        onClick: () => { try { handle.raiseVital(id >>> 0, cost >>> 0); } catch (e) { console.warn("[raiseVital]", e); } },
+      } : null;
+      bodyEl.appendChild(row(VITAL_ICON_URL(id), VITAL_NAMES[id] || `Vital ${id}`, `${cur}/${max}`, raise));
     }
   }
 }
@@ -817,7 +897,7 @@ function emptyMsg(text) {
   setAcText(el, text, { color: "#a8a090" });
   return el;
 }
-function row(iconUrl, name, value) {
+function row(iconUrl, name, value, raise) {
   const el = document.createElement("div");
   el.className = "hb-ci-row";
   const ic = document.createElement("div");
@@ -832,6 +912,38 @@ function row(iconUrl, name, value) {
   v.className = "hb-ci-value";
   setAcText(v, String(value), { color: "#8aef6d" });
   el.appendChild(v);
+  // 2026-05-30 — optional raise control. `raise` is
+  // `{ cost: number, canAfford: boolean, isMax: boolean, onClick: fn }`.
+  // gmStatManagementUI 0x2100002B element 0x10000210 — Normal sprite
+  // 0x06001282, Pressed 0x06001283 + green/red eligibility dots
+  // 0x06004D17 / 0x06004D19.
+  if (raise) {
+    const dot = document.createElement("div");
+    dot.className = "hb-ci-dot";
+    dot.style.backgroundImage = `url("./data/ui-sprites/${raise.canAfford ? "0x06004D17" : "0x06004D19"}.png")`;
+    el.appendChild(dot);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hb-ci-raise";
+    btn.disabled = raise.isMax || !raise.canAfford;
+    btn.title = raise.isMax
+      ? "Already at max rank"
+      : raise.canAfford
+        ? `Spend ${raise.cost} XP to raise this rank`
+        : `Needs ${raise.cost} XP (you have ${raise.availableXp ?? 0})`;
+    btn.style.backgroundImage = `url("./data/ui-sprites/0x06001282.png")`;
+    btn.addEventListener("pointerdown", () => {
+      btn.style.backgroundImage = `url("./data/ui-sprites/0x06001283.png")`;
+    });
+    btn.addEventListener("pointerup", () => {
+      btn.style.backgroundImage = `url("./data/ui-sprites/0x06001282.png")`;
+    });
+    btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      try { raise.onClick?.(); } catch (e) { console.warn("[raise]", e); }
+    });
+    el.appendChild(btn);
+  }
   return el;
 }
 
@@ -946,8 +1058,13 @@ export const view = {
       setAcText(footR, lv ? `Next: ${tupleArrayAt(lv, 2) ?? 0}` : "", { color: "#a8a090" });
     }
 
-    // Load skill table then render.
+    // Load skill table + XP-rank tables, then render. Both async — the
+    // initial rerender paints without raise costs; the .then() triggers
+    // a second paint once tables resolve.
     loadSkillTable().then((st) => { skillTable = st; rerender(); });
+    loadXpTables().then((t) => {
+      if (t) { _xpTablesPromise._cached = t; rerender(); }
+    });
     rerender();
 
     // Subscribe to player stats updates so live skill changes reflect.

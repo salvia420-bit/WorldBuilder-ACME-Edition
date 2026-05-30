@@ -15410,6 +15410,25 @@ enum SessionCommand {
         skill_type: u32,
         credits: u32,
     },
+    /// 2026-05-30: JS-side progression action — spend unspent experience
+    /// to raise an attribute rank. Sends
+    /// `GameAction::RaiseAttribute(RaiseAttributeActionData)` (sub-opcode
+    /// 0x0045). ACE `Player.HandleActionRaiseAttribute` validates the XP
+    /// cost against `AvailableExperience` and broadcasts a
+    /// `PrivateUpdateAttribute` reflecting the new ranks.
+    RaiseAttribute {
+        attribute_type: u32,
+        xp_spent: u32,
+    },
+    /// 2026-05-30: JS-side progression action — spend unspent experience
+    /// to raise a vital (Max_Health / Max_Stamina / Max_Mana) rank.
+    /// Sends `GameAction::RaiseVital(RaiseVitalActionData)` (sub-opcode
+    /// 0x0044). ACE `Player.HandleActionRaiseAttribute2nd` validates the
+    /// XP cost and broadcasts a `PrivateUpdateAttribute2nd`.
+    RaiseVital {
+        vital_type: u32,
+        xp_spent: u32,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -31308,6 +31327,61 @@ async fn recv_loop(
                             "[train_skill] skill_type={skill_type} credits={credits}",
                         ));
                     }
+                    // 2026-05-30 — RaiseAttribute / RaiseVital (parallel to
+                    // RaiseSkill above). ACE owns validation; result lands
+                    // back as a PrivateUpdateAttribute / Attribute2nd echo.
+                    Some(SessionCommand::RaiseAttribute { attribute_type, xp_spent }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, RaiseAttributeActionData,
+                        };
+                        let action = GameAction::RaiseAttribute(Box::new(
+                            RaiseAttributeActionData { attribute_type, xp_spent },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(RaiseAttribute): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "raise_attribute: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[raise_attribute] attribute_type={attribute_type} xp_spent={xp_spent}",
+                        ));
+                    }
+                    Some(SessionCommand::RaiseVital { vital_type, xp_spent }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, RaiseVitalActionData,
+                        };
+                        let action = GameAction::RaiseVital(Box::new(
+                            RaiseVitalActionData { vital_type, xp_spent },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(RaiseVital): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "raise_vital: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[raise_vital] vital_type={vital_type} xp_spent={xp_spent}",
+                        ));
+                    }
                     Some(SessionCommand::SetCharacterOption { option, value }) => {
                         // Wave 11 Phase 33 (2026-05-26): mirror
                         // ClientCommand::SetCharacterOption from
@@ -39034,6 +39108,41 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("trainSkill: cmd channel closed ({e})"))
+            })
+    }
+
+    /// 2026-05-30: spend `xp_spent` experience to raise `attribute_id`'s
+    /// rank by one (Str=1, End=2, Quick=3, Coord=4, Focus=5, Self=6).
+    /// Sends `GameAction::RaiseAttribute` (sub-opcode 0x0045). ACE
+    /// validates against `AvailableExperience`; the next-rank cost lives
+    /// in the client-side AttributeXpTable.
+    #[wasm_bindgen(js_name = raiseAttribute)]
+    pub fn raise_attribute(&self, attribute_id: u32, xp_spent: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RaiseAttribute {
+                attribute_type: attribute_id,
+                xp_spent,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("raiseAttribute: cmd channel closed ({e})"))
+            })
+    }
+
+    /// 2026-05-30: spend `xp_spent` experience to raise a vital
+    /// (Max_Health=1, Max_Stamina=3, Max_Mana=5). Sends
+    /// `GameAction::RaiseVital` (sub-opcode 0x0044). ACE validates
+    /// against `AvailableExperience`.
+    #[wasm_bindgen(js_name = raiseVital)]
+    pub fn raise_vital(&self, vital_id: u32, xp_spent: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RaiseVital {
+                vital_type: vital_id,
+                xp_spent,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("raiseVital: cmd channel closed ({e})"))
             })
     }
 

@@ -347,6 +347,12 @@ function ensureStyles() {
         rgba(55, 40, 22, 0.95) 100%);
       color: var(--hb-text-gold, #d4af37);
     }
+    .hb-ts-dot {
+      width: 13px; height: 13px;
+      flex: 0 0 13px;
+      background: center/contain no-repeat;
+      image-rendering: pixelated;
+    }
     .hb-ts-btn[disabled], .hb-ts-btn[disabled]:hover {
       opacity: 0.4;
       cursor: not-allowed;
@@ -427,6 +433,22 @@ function renderRow(opts) {
   // retail skill-list rendering.
   setAcText(value, String(snap.base ?? "—"), { color: "#8aef6d" });
   row.appendChild(value);
+
+  // Eligibility dot (gmStatManagementUI 0x06004D17 green / 0x06004D19 red)
+  // — visualizes "can afford" status alongside the existing Train/Raise
+  // text button. Same convention as the Attributes raise rows so the two
+  // tabs read the same way.
+  const dot = document.createElement("div");
+  dot.className = "hb-ts-dot";
+  let canAfford = false;
+  if (snap.training === TRAINING.UNTRAINED) {
+    canAfford = (skill.trainedCost ?? 0) > 0 && (skill.trainedCost ?? 0) <= availableCredits;
+  } else if (snap.training === TRAINING.TRAINED || snap.training === TRAINING.SPECIALIZED) {
+    const xc = computeNextRaiseCost(snap);
+    canAfford = xc != null && xc <= availableXp;
+  }
+  dot.style.backgroundImage = `url("./data/ui-sprites/${canAfford ? "0x06004D17" : "0x06004D19"}.png")`;
+  row.appendChild(dot);
 
   const action = document.createElement("button");
   action.type = "button";
