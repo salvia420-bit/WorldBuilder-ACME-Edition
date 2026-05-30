@@ -5731,6 +5731,14 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     let Some(rs_id) = surf_tex.highest_res() else { return empty; };
     let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else { return empty; };
     let Ok(tex) = Texture::unpack(&tb) else { return empty; };
+    // CustomRawJpeg (PFID 500) records carry width=height=0 in the Texture
+    // header — the real size lives in the JPEG SOF marker. `actual_dimensions()`
+    // resolves it (no-op for every other format, returning width/height as-is) —
+    // same call the icon path already uses (fetch_icon_pixels_impl). Using
+    // tex.width/tex.height directly here uploaded every JPEG-textured object at
+    // 0x0 → empty DataTexture → white default material (the "white door / chest
+    // / furniture" class). 2026-05-30.
+    let (tex_w, tex_h) = tex.actual_dimensions();
     let rgba = tex
         .to_rgba8(|pal_id| {
             let pb = source
@@ -5746,7 +5754,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // (per §11 open question #1 — decode-time, not bake-time).
             // Phase 1.5 — consult `data/surface_overrides.json` first;
             // fall through to the heuristic when no override applies.
-            let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
+            let stats = compute_stats(&pixels, tex_w, tex_h);
             let (category, roughness_override, normal_scale_override) =
                 classify_with_overrides(&stats, surface_type, surface_did);
             // Phase 1.1 — Sobel normal map from luminance. Skip Luminous
@@ -5758,13 +5766,13 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 (Vec::new(), Vec::new())
             } else {
                 (
-                    normal_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0),
-                    height_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0),
+                    normal_from_luminance(&pixels, tex_w, tex_h, 1.0),
+                    height_from_luminance(&pixels, tex_w, tex_h, 1.0),
                 )
             };
             SurfacePixels {
-                width: tex.width as u32,
-                height: tex.height as u32,
+                width: tex_w,
+                height: tex_h,
                 pixels,
                 surface_type,
                 category,
@@ -5855,7 +5863,7 @@ fn collect_surface_anim_frames<S: holtburger_dat::ResourceSource + ?Sized>(
             return none;
         };
         let Ok(tex) = Texture::unpack(&tb) else { return none; };
-        let (w, h) = (tex.width as u32, tex.height as u32);
+        let (w, h) = tex.actual_dimensions();
         match dims {
             None => dims = Some((w, h)),
             // Differing dimensions ⇒ a mip stack, not an animation. Bail to
@@ -6846,6 +6854,10 @@ pub async fn fetch_dye_preview_pixels(
         return Ok(empty);
     };
     let Ok(tex) = Texture::unpack(&tb) else { return Ok(empty); };
+    // CustomRawJpeg (PFID 500) carries width=height=0 in the header — the real
+    // size lives in the JPEG SOF marker. `actual_dimensions()` resolves it
+    // (no-op for other formats). See fetch_surface_pixels_impl note. 2026-05-30.
+    let (tex_w, tex_h) = tex.actual_dimensions();
     let rgba = tex.to_rgba8(|tex_palette_id| {
         let pb = source
             .get_file_by_key(ResourceKey::new("eor/portal", tex_palette_id))
@@ -6868,11 +6880,11 @@ pub async fn fetch_dye_preview_pixels(
     });
     match rgba {
         Ok(pixels) => {
-            let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
+            let stats = compute_stats(&pixels, tex_w, tex_h);
             let (category, _, _) = classify_with_overrides(&stats, 0, surface_texture_did);
             Ok(SurfacePixels {
-                width: tex.width as u32,
-                height: tex.height as u32,
+                width: tex_w,
+                height: tex_h,
                 pixels,
                 surface_type: 0,
                 category,
@@ -7128,6 +7140,10 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     let Some(rs_id) = surf_tex.highest_res() else { return empty; };
     let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else { return empty; };
     let Ok(tex) = Texture::unpack(&tb) else { return empty; };
+    // CustomRawJpeg (PFID 500) carries width=height=0 in the header — the real
+    // size lives in the JPEG SOF marker. `actual_dimensions()` resolves it
+    // (no-op for other formats). See fetch_surface_pixels_impl note. 2026-05-30.
+    let (tex_w, tex_h) = tex.actual_dimensions();
 
     // Compose the palette inside `to_rgba8`'s callback — receives
     // the texture's intrinsic palette id but we may override with
@@ -7163,7 +7179,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     match rgba {
         Ok(pixels) => {
             // Phase 1.5 — overrides applied via classify_with_overrides.
-            let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
+            let stats = compute_stats(&pixels, tex_w, tex_h);
             let (category, roughness_override, normal_scale_override) =
                 classify_with_overrides(&stats, surface_type, surface_did);
             // Phase 1.1 — Sobel normal map; skip Luminous (emissive).
@@ -7172,13 +7188,13 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 (Vec::new(), Vec::new())
             } else {
                 (
-                    normal_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0),
-                    height_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0),
+                    normal_from_luminance(&pixels, tex_w, tex_h, 1.0),
+                    height_from_luminance(&pixels, tex_w, tex_h, 1.0),
                 )
             };
             SurfacePixels {
-                width: tex.width as u32,
-                height: tex.height as u32,
+                width: tex_w,
+                height: tex_h,
                 pixels,
                 surface_type,
                 category,
