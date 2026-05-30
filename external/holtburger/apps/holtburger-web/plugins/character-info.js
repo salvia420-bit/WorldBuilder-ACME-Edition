@@ -372,12 +372,39 @@ function loadSkillTable() {
 //   2 = Trained
 //   3 = Specialized
 
-// Attribute name table — mirrors retail AttributeId enum.
+// Attribute name table — matches ACE's PropertyAttribute enum
+// (Source/ACE.Entity/Enum/Properties/PropertyAttribute.cs) and the
+// retail DBObj.EnumIDMap UIAttributeIcons table (0x25000006). Pre-fix
+// the table had Coordination=3 / Quickness=4 swapped — diag char's
+// values for those two are both 100 so the bug was invisible until the
+// hex DID extraction matched up.
 const ATTR_NAMES = {
-  1: "Strength", 2: "Endurance", 3: "Coordination",
-  4: "Quickness", 5: "Focus", 6: "Self",
+  1: "Strength", 2: "Endurance", 3: "Quickness",
+  4: "Coordination", 5: "Focus", 6: "Self",
 };
 const VITAL_NAMES = { 1: "Health", 3: "Stamina", 5: "Mana" };
+
+// Canonical retail attribute icon DIDs, sourced from DAT DBObj.EnumIDMap
+// `UIAttributeIcons` (0x25000006) + `UIAttribute2ndIcons` (0x25000007),
+// dumped via WB.Terminal chorizite-parse-dat-record. Extracted to
+// data/ui-sprites/ as 25×25 PFID_R8G8B8 PNGs.
+const ATTR_ICONS = {
+  1: "0x060002C8", // Strength    — flexed arm
+  2: "0x060002C4", // Endurance   — armored fighter
+  3: "0x060002C6", // Quickness
+  4: "0x060002C9", // Coordination
+  5: "0x060002C5", // Focus
+  6: "0x060002C7", // Self
+};
+const VITAL_ICONS = {
+  1: "0x06004C3B", // Health   — red heart
+  3: "0x06004C3C", // Stamina  — yellow leaf
+  5: "0x06004C3D", // Mana
+};
+const ATTR_ICON_URL = (id) =>
+  ATTR_ICONS[id] ? `./data/ui-sprites/${ATTR_ICONS[id]}.png` : null;
+const VITAL_ICON_URL = (id) =>
+  VITAL_ICONS[id] ? `./data/ui-sprites/${VITAL_ICONS[id]}.png` : null;
 
 function tupleArrayAt(arr, i) {
   // Wasm flat-array stat tuples are exposed as `{ "0": v, "1": v, ... }`
@@ -592,7 +619,7 @@ function renderAttributes(bodyEl, stats, _skillTable) {
     const display = (cur != null && base != null && cur !== base)
       ? `${cur} (${base})`
       : `${cur ?? "—"}`;
-    bodyEl.appendChild(row(null, ATTR_NAMES[id] || `Attr ${id}`, display));
+    bodyEl.appendChild(row(ATTR_ICON_URL(id), ATTR_NAMES[id] || `Attr ${id}`, display));
   }
   const v = stats?.vitals;
   if (v) {
@@ -603,7 +630,7 @@ function renderAttributes(bodyEl, stats, _skillTable) {
       if (id == null) break;
       const cur = tupleArrayAt(v, i + 1);
       const max = tupleArrayAt(v, i + 3);
-      bodyEl.appendChild(row(null, VITAL_NAMES[id] || `Vital ${id}`, `${cur}/${max}`));
+      bodyEl.appendChild(row(VITAL_ICON_URL(id), VITAL_NAMES[id] || `Vital ${id}`, `${cur}/${max}`));
     }
   }
 }
