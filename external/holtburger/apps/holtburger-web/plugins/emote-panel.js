@@ -364,6 +364,10 @@ export const manifest = {
   id: "emote-panel",
   name: "Emote Palette",
   icon: "☺",
+  // No dedicated retail "emote" button sprite exists (chat triggers emotes
+  // via slash). Falling back to the spellbook-style scroll sprite as a
+  // neutral DAT-themed placeholder; the emoji remains the load-fallback.
+  iconSprite: "0x06001AAF",
   version: "0.1.0",
   description:
     "Categorized emote action picker (Wave F.6, CEmoteTable taxonomy). " +

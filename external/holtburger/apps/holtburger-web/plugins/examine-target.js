@@ -558,6 +558,16 @@ function populateFromEntity(body, ctx, nameEl, guidEl) {
   const meta = ent?.meta || null;
   const v = (key) => meta?.[key] ?? ent?.[key];
   const entName = ent?.name ?? meta?.name;
+  // No-target empty state: blank the identity strip and show a friendly
+  // prompt instead of "(unnamed) 0x00000000" — the panel often opens via
+  // the target-bar Examine button when nothing is selected.
+  if (!guid) {
+    nameEl.textContent = "—";
+    guidEl.textContent = "";
+    section(body, "Status");
+    r(body, "Selection", "Click an entity or item to examine");
+    return;
+  }
   nameEl.textContent = entName || ctx.name || "(unnamed)";
   guidEl.textContent = `0x${guid.toString(16).toUpperCase().padStart(8, "0")}`;
   if (!ent) {

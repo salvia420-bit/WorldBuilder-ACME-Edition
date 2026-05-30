@@ -578,18 +578,26 @@ function renderAttributes(bodyEl, stats, _skillTable) {
     return;
   }
   bodyEl.appendChild(section("Attributes"));
-  // Attributes are stored as 4-tuples — [id, cur, base, buffed_max].
-  // 6 attributes total. Walk in id order.
+  // Rust src/lib.rs:16183 — attributes layout is
+  // `[type, current, base, ranks]` (4-tuple × 6). NO `buffed_max` field;
+  // pre-2026-05-29 the JS read index 3 as `max` and rendered "40/0" for
+  // every attribute (the diag char has ranks=0). Show `current` alone,
+  // and if `current` ≠ `base` (e.g. a debuff or item bonus is active)
+  // also show the base in parentheses.
   for (let i = 0; i < 24; i += 4) {
     const id = tupleArrayAt(a, i);
     if (id == null) break;
     const cur = tupleArrayAt(a, i + 1);
-    const max = tupleArrayAt(a, i + 3);
-    bodyEl.appendChild(row(null, ATTR_NAMES[id] || `Attr ${id}`, `${cur}/${max}`));
+    const base = tupleArrayAt(a, i + 2);
+    const display = (cur != null && base != null && cur !== base)
+      ? `${cur} (${base})`
+      : `${cur ?? "—"}`;
+    bodyEl.appendChild(row(null, ATTR_NAMES[id] || `Attr ${id}`, display));
   }
   const v = stats?.vitals;
   if (v) {
     bodyEl.appendChild(section("Vitals"));
+    // Vitals (src/lib.rs:16174) DO have `buffed_max` at index 3.
     for (let i = 0; i + 3 < (v.length ?? 12); i += 4) {
       const id = tupleArrayAt(v, i);
       if (id == null) break;
@@ -606,7 +614,12 @@ function renderSkills(bodyEl, stats, skillTable) {
     bodyEl.appendChild(emptyMsg("Skill table not loaded."));
     return;
   }
-  // Player skills: 5-tuple per entry — [id, current, base, trained_state, xp].
+  // Player skills: 5-tuple per entry — `[type, current, base, ranks, training]`
+  // (Rust src/lib.rs:16191). Pre-2026-05-29 the JS read index 3 as
+  // `trained` and ignored index 4, so the diag character's skills (which
+  // have ranks=0 + training=Untrained=1) all bucketed into Unusable.
+  // ACE's `SkillAdvancementClass`: Inactive=0, Untrained=1, Trained=2,
+  // Specialized=3 — matches the TRAINING enum in train-skills.js.
   const playerSkills = stats?.skills;
   const valueByLine = new Map();   // skillId → "cur/base"
   const stateByLine = new Map();
@@ -616,7 +629,7 @@ function renderSkills(bodyEl, stats, skillTable) {
       const id = tupleArrayAt(playerSkills, i);
       const cur = tupleArrayAt(playerSkills, i + 1);
       const base = tupleArrayAt(playerSkills, i + 2);
-      const trained = tupleArrayAt(playerSkills, i + 3);
+      const trained = tupleArrayAt(playerSkills, i + 4);
       valueByLine.set(id, base != null && cur != null ? `${base}` : "—");
       stateByLine.set(id, trained ?? 0);
     }

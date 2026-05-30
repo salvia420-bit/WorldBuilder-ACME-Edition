@@ -578,25 +578,69 @@ function applyFellowshipLayout(refs) {
     }
 
     // ── Alone-state subtree ──────────────────────────────────────────
-    // Compressed via scaleY — y=298 (Create button) lands at ~167 in
-    // our 337-tall body.
+    // Compressed via scaleY for the section anchors (empty/divider/name),
+    // but OPT rows + Create button get stacked at native 14px stride to
+    // keep label text readable — compressed row height would collapse to
+    // ~8 px and stack four 10 px-font labels into ~32 px of vertical space,
+    // which is the overlap users saw before.
     if (refs.aloneRefs) {
-      const alonePairs = [
-        [FE_ALONE_EMPTY,     refs.aloneRefs.emptyEl],
-        [FE_ALONE_DIVIDER,   refs.aloneRefs.dividerEl],
-        [FE_ALONE_NAME_LBL,  refs.aloneRefs.nameLblEl],
-        [FE_ALONE_NAME_INP,  refs.aloneRefs.inputEl],
-        [FE_ALONE_OPT_ROW_1, refs.aloneRefs.optEls?.[0]],
-        [FE_ALONE_OPT_ROW_2, refs.aloneRefs.optEls?.[1]],
-        [FE_ALONE_OPT_ROW_3, refs.aloneRefs.optEls?.[2]],
-        [FE_ALONE_OPT_ROW_4, refs.aloneRefs.optEls?.[3]],
-        [FE_ALONE_CREATE,    refs.aloneRefs.createBtnEl],
+      const nonStackPairs = [
+        [FE_ALONE_EMPTY,    refs.aloneRefs.emptyEl],
+        [FE_ALONE_DIVIDER,  refs.aloneRefs.dividerEl],
+        [FE_ALONE_NAME_LBL, refs.aloneRefs.nameLblEl],
+        [FE_ALONE_NAME_INP, refs.aloneRefs.inputEl],
       ];
-      for (const [id, el] of alonePairs) {
+      for (const [id, el] of nonStackPairs) {
         if (!el) continue;
         const desc = findElementById(layout, id);
         if (!desc) continue;
         if (applyBox(el, desc, true)) applied += 1;
+      }
+      // OPT rows: place row 1 at retail Y compressed, then stack 2/3/4
+      // at +14 px (native height) so labels don't visually overlap.
+      const OPT_NATIVE_ROW_H = 14;
+      const row1Desc = findElementById(layout, FE_ALONE_OPT_ROW_1);
+      const row1El   = refs.aloneRefs.optEls?.[0];
+      let row1TopPx = null;
+      if (row1Desc && row1El) {
+        // Inline override — applyBox would compress height; here we keep H=14.
+        row1El.style.right = "";
+        row1El.style.bottom = "";
+        if (typeof row1Desc.x === "number")     row1El.style.left   = `${row1Desc.x}px`;
+        if (typeof row1Desc.width === "number") row1El.style.width  = `${row1Desc.width}px`;
+        row1TopPx = typeof row1Desc.y === "number" ? Math.round(row1Desc.y * scaleY) : null;
+        if (row1TopPx != null) row1El.style.top = `${row1TopPx}px`;
+        row1El.style.height = `${OPT_NATIVE_ROW_H}px`;
+        applied += 1;
+      }
+      // Rows 2/3/4 inherit row 1's left/width/height, stack at +14 stride.
+      for (let i = 1; i < 4; i += 1) {
+        const el = refs.aloneRefs.optEls?.[i];
+        if (!el) continue;
+        const rowDesc = findElementById(layout, [FE_ALONE_OPT_ROW_2, FE_ALONE_OPT_ROW_3, FE_ALONE_OPT_ROW_4][i - 1]);
+        if (!rowDesc || row1TopPx == null) continue;
+        el.style.right = "";
+        el.style.bottom = "";
+        if (typeof rowDesc.x === "number")     el.style.left  = `${rowDesc.x}px`;
+        if (typeof rowDesc.width === "number") el.style.width = `${rowDesc.width}px`;
+        el.style.top    = `${row1TopPx + i * OPT_NATIVE_ROW_H}px`;
+        el.style.height = `${OPT_NATIVE_ROW_H}px`;
+        applied += 1;
+      }
+      // Create button: anchor below OPT row 4 (+8 px gap) instead of using
+      // compressed retail Y (167), which would land *behind* the rows.
+      const createDesc = findElementById(layout, FE_ALONE_CREATE);
+      const createEl   = refs.aloneRefs.createBtnEl;
+      if (createDesc && createEl && row1TopPx != null) {
+        createEl.style.right = "";
+        createEl.style.bottom = "";
+        if (typeof createDesc.x === "number")     createEl.style.left   = `${createDesc.x}px`;
+        if (typeof createDesc.width === "number") createEl.style.width  = `${createDesc.width}px`;
+        const stackedBottom = row1TopPx + 4 * OPT_NATIVE_ROW_H;
+        createEl.style.top    = `${stackedBottom + 8}px`;
+        // Keep native height (33) so the button is tappable.
+        if (typeof createDesc.height === "number") createEl.style.height = `${createDesc.height}px`;
+        applied += 1;
       }
     }
 

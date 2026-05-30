@@ -1440,7 +1440,15 @@ function doMount(parentEl, _ctx) {
         (meta.mtableId ?? 0) >>> 0,
         (meta.paletteId ?? 0) >>> 0,
         meta.subPalettes ?? new Uint32Array(0),
-      ).catch(() => {});
+      ).then((ok) => {
+        // 2026-05-29 — loadPlayer's "single render" can hit an empty
+        // back-buffer when the panel was display:none at load time
+        // (Three.js WebGLRenderer needs the canvas attached + sized).
+        // Enable the rAF loop so the rig keeps re-rendering after the
+        // panel becomes visible. Cost is negligible (224×214 transparent
+        // canvas, 34 part-groups, no animation mixer).
+        if (ok) paperdollViewport.start?.();
+      }).catch(() => {});
     } catch (_) { /* viewport is best-effort */ }
   }
 

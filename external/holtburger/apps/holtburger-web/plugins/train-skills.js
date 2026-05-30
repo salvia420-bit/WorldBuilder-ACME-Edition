@@ -173,8 +173,9 @@ function getStats() {
   try {
     return {
       name: s.name,
-      attributes: s.attributes,   // [id, cur, base, ranks] × 6
-      skills: s.skills,           // [id, cur, base, trained_state, xp] × N
+      // Rust src/lib.rs:16183 / 16191 — actual 4/5-tuple layouts:
+      attributes: s.attributes,   // [type, current, base, ranks] × 6
+      skills: s.skills,           // [type, current, base, ranks, training] × N
       levelInfo: s.levelInfo,     // [level, xp_lo, xp_hi, unspent_lo, unspent_hi, lum_lo, lum_hi]
     };
   } catch (_) { return null; }
@@ -227,17 +228,27 @@ function mergeSkillRows(stats, skillTable) {
   if (playerSkills) {
     const len = playerSkills.length ?? 0;
     for (let i = 0; i + 4 < len; i += 5) {
+      // Rust src/lib.rs:16191 layout is `[type, current, base, ranks, training]`.
+      // Pre-2026-05-29 the JS read i+3 as training and i+4 as xp, which is
+      // why every skill rendered as Unusable for fresh characters (their
+      // `ranks` field was 0 → mapped to TRAINING.UNUSABLE). `ranks` is the
+      // XP-derived rank counter (1..10); `training` is the
+      // `SkillAdvancementClass` enum (Inactive=0..Specialized=3).
       const id = tupleArrayAt(playerSkills, i);
       const cur = tupleArrayAt(playerSkills, i + 1);
       const base = tupleArrayAt(playerSkills, i + 2);
-      const trained = tupleArrayAt(playerSkills, i + 3);
-      const xp = tupleArrayAt(playerSkills, i + 4);
+      const ranks = tupleArrayAt(playerSkills, i + 3);
+      const trained = tupleArrayAt(playerSkills, i + 4);
       const entry = out.get(id);
       if (!entry) continue;
       entry.training = trained ?? 0;
       entry.base = base ?? 0;
       entry.current = cur ?? 0;
-      entry.xp = xp ?? 0;
+      entry.ranks = ranks ?? 0;
+      // `xp` is not in the per-skill 5-tuple; spendable XP comes from
+      // `levelInfo.unspent_xp`. Retain a 0 default so older callers don't
+      // hit `undefined.toLocaleString()`.
+      entry.xp = 0;
     }
   }
   return out;

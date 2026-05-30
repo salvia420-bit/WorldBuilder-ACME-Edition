@@ -52,6 +52,7 @@
 
 import { setAcText, CHAT_FONT_ID } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { installDragPersistence } from "./main-panel.js";
 
 const OVERLAY_ID = "hb-chat-panel";
 const WIDTH = 410;
@@ -707,6 +708,12 @@ export function mount(_ctx) {
   // user direction 2026-05-22. Resize is on the bottom-right corner.
 
   document.body.appendChild(overlay);
+
+  // Drag-by-tab-strip + localStorage position persistence (Improvement C,
+  // 2026-05-29). The tab strip is the natural "grip" — chat-panel has no
+  // dedicated titlebar. Drag suppressed on clicks targeting the tab
+  // buttons themselves so a single click still selects a channel.
+  installDragPersistence(overlay, tabStrip, "chat-panel");
 
   // Apply retail layout positions for sub-elements. The CSS values
   // above already match retail; this re-asserts from the DAT so the

@@ -37,7 +37,12 @@ export class PaperdollViewport {
     this.renderer = new THREE.WebGLRenderer({
       alpha: true,
       antialias: true,
-      preserveDrawingBuffer: false,
+      // 2026-05-29 — preserveDrawingBuffer:true so the single render
+      // inside `loadPlayer()` stays composited after the next browser
+      // paint cycle. Without it, the back-buffer gets swapped/cleared
+      // and the canvas reads as transparent until start() is called.
+      // The doll is small (224×214) so the extra memory cost is trivial.
+      preserveDrawingBuffer: true,
     });
     this.renderer.setSize(width, height);
     this.renderer.setPixelRatio(window.devicePixelRatio || 1);

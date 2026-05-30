@@ -531,31 +531,46 @@ function applyContractsLayout(refs) {
       applied += 1;
     }
 
-    // Top header labels.
+    // Top header labels. Retail places these at (8,8) and (160,8) where
+    // y=8 overlaps the tab strip (0,0)–20. We re-anchor them just below
+    // the tab strip (y=22) so "Active" / "N / 7" read as list captions
+    // instead of stamping over the Journal/Contracts tabs.
+    const HDR_TOP = 22;
+    const HDR_HEIGHT = 12;
     const hdrLeftDesc = findElementById(layout, CONTRACTS_ELEMS.hdrLeftLbl);
     if (hdrLeftDesc && refs.hdrLeftEl) {
       applyBox(refs.hdrLeftEl, hdrLeftDesc);
+      refs.hdrLeftEl.style.top = `${HDR_TOP}px`;
+      refs.hdrLeftEl.style.height = `${HDR_HEIGHT}px`;
+      refs.hdrLeftEl.style.lineHeight = `${HDR_HEIGHT}px`;
       applied += 1;
     }
     const hdrRightDesc = findElementById(layout, CONTRACTS_ELEMS.hdrRightLbl);
     if (hdrRightDesc && refs.hdrRightEl) {
       applyBox(refs.hdrRightEl, hdrRightDesc);
+      refs.hdrRightEl.style.top = `${HDR_TOP}px`;
+      refs.hdrRightEl.style.height = `${HDR_HEIGHT}px`;
+      refs.hdrRightEl.style.lineHeight = `${HDR_HEIGHT}px`;
       applied += 1;
     }
 
     // List — squeeze the height so the detail block fits inside the
     // 337px body. Retail says (8,30) 270×298 (bottom edge at y=328);
     // we cap at y=DETAIL_BLOCK_START_FIT-4=165 so a 4px gap separates
-    // the list from the detail rows.
+    // the list from the detail rows. Also bump the list top by +6px so
+    // the re-anchored "Active" / "N / 7" caption row at y=22–34 doesn't
+    // get covered.
+    const LIST_TOP_PUSH = 6;
     const listDesc = findElementById(layout, CONTRACTS_ELEMS.list);
     if (listDesc && refs.listEl) {
       refs.listEl.style.right = "";
       refs.listEl.style.bottom = "";
       if (typeof listDesc.x === "number") refs.listEl.style.left = `${listDesc.x}px`;
-      if (typeof listDesc.y === "number") refs.listEl.style.top = `${listDesc.y}px`;
+      const listTop = typeof listDesc.y === "number" ? listDesc.y + LIST_TOP_PUSH : null;
+      if (listTop != null) refs.listEl.style.top = `${listTop}px`;
       if (typeof listDesc.width === "number") refs.listEl.style.width = `${listDesc.width}px`;
       // Override height: shrink to fit between top (y=30) and detail block.
-      const listMaxH = DETAIL_BLOCK_START_FIT - listDesc.y - 4;
+      const listMaxH = DETAIL_BLOCK_START_FIT - (listTop ?? listDesc.y) - 4;
       refs.listEl.style.height = `${listMaxH}px`;
       applied += 1;
     }
@@ -564,9 +579,10 @@ function applyContractsLayout(refs) {
       refs.scrollbarEl.style.right = "";
       refs.scrollbarEl.style.bottom = "";
       if (typeof sbDesc.x === "number") refs.scrollbarEl.style.left = `${sbDesc.x}px`;
-      if (typeof sbDesc.y === "number") refs.scrollbarEl.style.top = `${sbDesc.y}px`;
+      const sbTop = typeof sbDesc.y === "number" ? sbDesc.y + LIST_TOP_PUSH : null;
+      if (sbTop != null) refs.scrollbarEl.style.top = `${sbTop}px`;
       if (typeof sbDesc.width === "number") refs.scrollbarEl.style.width = `${sbDesc.width}px`;
-      const sbMaxH = DETAIL_BLOCK_START_FIT - sbDesc.y - 4;
+      const sbMaxH = DETAIL_BLOCK_START_FIT - (sbTop ?? sbDesc.y) - 4;
       refs.scrollbarEl.style.height = `${sbMaxH}px`;
       applied += 1;
     }
@@ -935,6 +951,7 @@ export const manifest = {
   id: "contracts-panel",
   name: "Contracts",
   icon: "📋",
+  iconSprite: "0x06004CCA", // gmContractsUI clipboard (per chorizite layout map)
   iconHidden: true,
   version: "0.3.0",
   description: "Contracts (gmContractsUI 0x21000069 — Wave F.5 wire data + Abandon round-trip)",

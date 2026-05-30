@@ -405,7 +405,30 @@ function makeIcon(slot) {
   btn.className = "hb-bar-icon";
   btn.dataset.pluginId = slot.id;
   btn.setAttribute("aria-label", slot.name);
-  btn.textContent = slot.icon;
+
+  // Prefer a retail DAT sprite extract (data/ui-sprites/0x06xxxxxx.png)
+  // when the plugin exposes `iconSprite` (a 0x06* DID string). Fall back
+  // to the emoji `icon` string so plugins without a mapped sprite still
+  // render. The <img> uses pixelated rendering to keep the 32×32 retail
+  // sprite crisp at any DPR.
+  if (slot.iconSprite) {
+    const img = document.createElement("img");
+    img.src = `./data/ui-sprites/${slot.iconSprite}.png`;
+    img.alt = slot.name;
+    img.draggable = false;
+    img.style.cssText = "width:100%;height:100%;image-rendering:pixelated;pointer-events:none;";
+    img.addEventListener("error", () => {
+      // Sprite missing — drop back to the emoji.
+      img.remove();
+      const t = document.createElement("span");
+      t.className = "hb-bar-icon-emoji";
+      t.textContent = slot.icon;
+      btn.insertBefore(t, btn.firstChild);
+    });
+    btn.appendChild(img);
+  } else {
+    btn.textContent = slot.icon;
+  }
 
   const tip = document.createElement("span");
   tip.className = "hb-bar-tooltip";

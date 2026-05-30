@@ -59,6 +59,11 @@ export const manifest = {
   id: "stance-toggle",
   name: "Combat Stance",
   icon: "⚐",
+  // Retail dove (peace) sprite. activate() can flip to the combat-state
+  // sprite by re-rendering the icon when CombatMode changes — bar.js's
+  // makeIcon picks up `slot.iconSprite` once on mount; for cross-mode
+  // swap we'll wire a `setIconSprite()` call in a follow-on.
+  iconSprite: "0x0600111E",
   version: "0.0.1",
   description: "Peace ↔ Combat toggle (retail dove icon equivalent)",
 };

@@ -1406,6 +1406,10 @@ export const manifest = {
   id: "combat-bar",
   name: "Combat",
   icon: "⚔",
+  // Retail gmCombatUI button sprite (combat-state normal). bar.js prefers
+  // iconSprite over the emoji when the PNG resolves; the emoji stays as a
+  // load-error fallback.
+  iconSprite: "0x06004D1C",
   version: "0.1.0",
   description: "Stance toggle + attack settings + spell picker",
 };
