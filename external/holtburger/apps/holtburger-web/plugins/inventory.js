@@ -464,7 +464,25 @@ function ensureStyles() {
        display:none keeps the slot fully invisible AND ineligible for
        drag-targeting (vs visibility:hidden which would still intercept
        events). */
-    #${OVERLAY_ID} .hb-inv-doll-slot.aetheria-locked { display: none; }
+    /* Locked aetheria slots — keep visible as gray placeholders (user
+       feedback 2026-05-29: "there should be three"). Retail hid them
+       until quest unlock, but we render them as faded slot frames so the
+       player understands they exist and where they'll appear once
+       unlocked. Lock icon overlay via :after. */
+    #${OVERLAY_ID} .hb-inv-doll-slot.aetheria-locked {
+      opacity: 0.25;
+      filter: grayscale(1);
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-inv-doll-slot.aetheria-locked::after {
+      content: "🔒";
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.6);
+      pointer-events: none;
+    }
     /* Wave D.1 follow-on (2026-05-27) — m_SlotCheckbox port. "Slots"
        toggle button. When checked the paperdoll body view is hidden
        and the equipped items collapse into a flat grid in place of the
@@ -1166,7 +1184,21 @@ function doMount(parentEl, _ctx) {
     // symmetric with the paperdoll slot at L974-981.
     icon.style.background = TYPE_COLOR[tb] || "#444";
     const item = guidStr ? getItemByGuid(guidStr) : null;
-    const iconId = (item?.iconId >>> 0) || 0;
+    // Resolution chain mirrors container-panel resolveItemMeta (commit
+    // caf9d445): inventory snapshot → entityManager (PVS) → wasm icon
+    // cache populated at ViewContents time. Helps when iconId is missing
+    // from playerInventory() but cached separately.
+    let iconId = (item?.iconId >>> 0) || 0;
+    if (!iconId && guidStr) {
+      const g = (parseInt(guidStr, 10) >>> 0);
+      const em = window.liveScene3d?.entityManager;
+      const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
+      iconId = ((ent?.meta?.iconId ?? ent?.iconId) >>> 0) || 0;
+      if (!iconId) {
+        const handle = window.__sessionHandle;
+        iconId = (handle?.getObjectIconId?.(g) >>> 0) || 0;
+      }
+    }
     if (iconId) {
       fetchPaperdollIconDataUrl(iconId).then((url) => {
         // Skip if the slot has been swapped out or replaced mid-fetch

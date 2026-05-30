@@ -78,6 +78,13 @@ export class PaperdollViewport {
     this.scene.add(fill);
 
     this.rigRoot = new THREE.Group();
+    // AC body-local space is Z-up (X east, Y north, Z up). Three.js is
+    // Y-up. The world entity rig handles this via its outer
+    // `acQuatToThree` root rotation (entities.js:1131); here we apply the
+    // equivalent fixed rotation on rigRoot so the partGroup positions
+    // (raw AC `restOrigins`) render upright instead of lying on their
+    // back. Rotating −π/2 around X maps AC.z → Three.y (up).
+    this.rigRoot.rotation.x = -Math.PI / 2;
     this.scene.add(this.rigRoot);
 
     this._ownedMaterials = [];
@@ -193,7 +200,6 @@ export class PaperdollViewport {
     // Build per-part Group + child meshes. Mirrors entities.js's rig-build
     // loop (simplified — no restPose extras, no mixer, no shadows; this
     // is a static UI render, not a live scene entity).
-    let bounds = new THREE.Box3();
     for (let p = 0; p < animEntry.partGroups.length; p += 1) {
       const partGroup = new THREE.Group();
       partGroup.name = `paperdoll-part-${p}`;
@@ -209,6 +215,12 @@ export class PaperdollViewport {
         // AC wire order (qw, qx, qy, qz) → three.js (qx, qy, qz, qw)
         partGroup.quaternion.set(rq[p*4+1], rq[p*4+2], rq[p*4+3], rq[p*4+0]);
       }
+      // Add to rigRoot FIRST so subsequent mesh world-matrix computations
+      // pick up the rigRoot's AC→Three rotation (rotation.x = -π/2 set in
+      // the ctor). Pre-2026-05-30 the order was reversed and bounds were
+      // computed in AC body-local space → camera framing was misaligned
+      // after the rotation was added.
+      this.rigRoot.add(partGroup);
       const conv = animEntry.partGroups[p];
       if (conv) {
         for (const grp of (conv.groups ?? [])) {
@@ -218,13 +230,14 @@ export class PaperdollViewport {
             ?? this._fallbackMaterial();
           const mesh = new THREE.Mesh(grp.geometry, mat);
           partGroup.add(mesh);
-          mesh.updateMatrixWorld();
-          const meshBox = new THREE.Box3().setFromObject(mesh);
-          bounds = bounds.isEmpty() ? meshBox : bounds.union(meshBox);
         }
       }
-      this.rigRoot.add(partGroup);
     }
+
+    // Compute bounds in post-rotation world space once the whole rig is
+    // assembled. setFromObject walks updateMatrixWorld() internally.
+    this.rigRoot.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(this.rigRoot);
 
     this._frameRig(bounds);
     this._lastLoadKey = key;
