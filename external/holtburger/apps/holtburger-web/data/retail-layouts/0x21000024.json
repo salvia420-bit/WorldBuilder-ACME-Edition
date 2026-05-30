@@ -1,0 +1,1820 @@
+{
+  "layoutIdHex": "0x21000024",
+  "layoutId": 553648164,
+  "width": 800,
+  "height": 600,
+  "elementCount": 30,
+  "imageDidCount": 0,
+  "allImageDids": [],
+  "elements": [
+    {
+      "elementIdHex": "0x100001D4",
+      "elementId": 268435924,
+      "elementIdName": "RootPaperDoll_Field",
+      "readOrder": 0,
+      "type": 268435492,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000001E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 224,
+        "height": 214,
+        "zLevel": null,
+        "leftEdge": 0,
+        "topEdge": 0,
+        "rightEdge": 0,
+        "bottomEdge": 0,
+        "properties": [],
+        "media": []
+      },
+      "states": {},
+      "imageDids": [],
+      "children": [
+        {
+          "elementIdHex": "0x100001D5",
+          "elementId": 268435925,
+          "elementIdName": "PaperDoll",
+          "readOrder": 1,
+          "type": 13,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 0,
+            "width": 224,
+            "height": 214,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x000000CD",
+                "key": 205,
+                "type": "Enum",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001D6",
+          "elementId": 268435926,
+          "elementIdName": "PaperDollDragMask",
+          "readOrder": 2,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 51,
+            "y": 0,
+            "width": 100,
+            "height": 214,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x00000036",
+                "key": 54,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000047",
+                "key": 71,
+                "type": "Enum",
+                "value": 268436373,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000048",
+                "key": 72,
+                "type": "DataId",
+                "value": 553648193,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000049",
+                "key": 73,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 145646981,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000004B",
+                "key": 75,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": [
+            {
+              "elementIdHex": "0x1000046D",
+              "elementId": 268436589,
+              "elementIdName": "Paperdoll_Icon_DragAccept",
+              "readOrder": 1,
+              "type": 0,
+              "parentElementIdHex": "0x100001D6",
+              "defaultState": "Undef",
+              "stateDesc": {
+                "stateId": 0,
+                "stateIdName": "Undef",
+                "passToChildren": false,
+                "incorporationFlagsHex": "0x0000001E",
+                "incorporationFlags": [
+                  {
+                    "bitHex": "0x02",
+                    "name": "X"
+                  },
+                  {
+                    "bitHex": "0x04",
+                    "name": "Y"
+                  },
+                  {
+                    "bitHex": "0x08",
+                    "name": "Width"
+                  },
+                  {
+                    "bitHex": "0x10",
+                    "name": "Height"
+                  }
+                ],
+                "x": 33,
+                "y": 68,
+                "width": 32,
+                "height": 32,
+                "zLevel": null,
+                "leftEdge": 0,
+                "topEdge": 0,
+                "rightEdge": 0,
+                "bottomEdge": 0,
+                "properties": [
+                  {
+                    "keyHex": "0x00000051",
+                    "key": 81,
+                    "type": "Bool",
+                    "value": true,
+                    "isImageDid": false,
+                    "fieldName": null
+                  },
+                  {
+                    "keyHex": "0x000000CD",
+                    "key": 205,
+                    "type": "Enum",
+                    "value": 3,
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "media": []
+              },
+              "states": {},
+              "imageDids": [],
+              "children": []
+            }
+          ]
+        },
+        {
+          "elementIdHex": "0x100005BE",
+          "elementId": 268436926,
+          "elementIdName": "Paperdoll_Slots_Checkbox",
+          "readOrder": 3,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 42,
+            "y": 190,
+            "width": 120,
+            "height": 14,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 226400956,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000047",
+                "key": 71,
+                "type": "Enum",
+                "value": 268436375,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000048",
+                "key": 72,
+                "type": "DataId",
+                "value": 553648193,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000049",
+                "key": 73,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 130562064,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000004B",
+                "key": 75,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001DA",
+          "elementId": 268435930,
+          "elementIdName": "Inv_NeckSlot",
+          "readOrder": 4,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 8,
+            "y": 8,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436550,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000058E",
+          "elementId": 268436878,
+          "elementIdName": "Inv_TrinketOneSlot",
+          "readOrder": 5,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 8,
+            "y": 44,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436879,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005E9",
+          "elementId": 268436969,
+          "elementIdName": "Inv_CloakSlot",
+          "readOrder": 6,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 192,
+            "y": 44,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436970,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000595",
+          "elementId": 268436885,
+          "elementIdName": "Inv_SigilOneSlot",
+          "readOrder": 7,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 126,
+            "y": 8,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436882,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000596",
+          "elementId": 268436886,
+          "elementIdName": "Inv_SigilTwoSlot",
+          "readOrder": 8,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 158,
+            "y": 8,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436883,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000597",
+          "elementId": 268436887,
+          "elementIdName": "Inv_SigilThreeSlot",
+          "readOrder": 9,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 190,
+            "y": 8,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436884,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001DB",
+          "elementId": 268435931,
+          "elementIdName": "Inv_LeftWristSlot",
+          "readOrder": 10,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 156,
+            "y": 80,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436551,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001DC",
+          "elementId": 268435932,
+          "elementIdName": "Inv_LeftRingSlot",
+          "readOrder": 11,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 156,
+            "y": 116,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436552,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001DD",
+          "elementId": 268435933,
+          "elementIdName": "Inv_RightWristSlot",
+          "readOrder": 12,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 8,
+            "y": 80,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436553,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001DE",
+          "elementId": 268435934,
+          "elementIdName": "Inv_RightRingSlot",
+          "readOrder": 13,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 8,
+            "y": 116,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436554,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001DF",
+          "elementId": 268435935,
+          "elementIdName": "Inv_WeaponReadySlot",
+          "readOrder": 14,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 156,
+            "y": 172,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436555,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001E0",
+          "elementId": 268435936,
+          "elementIdName": "Inv_AmmoReadySlot",
+          "readOrder": 15,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 190,
+            "y": 172,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436556,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001E1",
+          "elementId": 268435937,
+          "elementIdName": "Inv_ShieldReadySlot",
+          "readOrder": 16,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 8,
+            "y": 172,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436557,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001E2",
+          "elementId": 268435938,
+          "elementIdName": "Inv_ClothesShirtSlot",
+          "readOrder": 17,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 192,
+            "y": 80,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436558,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100001E3",
+          "elementId": 268435939,
+          "elementIdName": "Inv_ClothesPantsSlot",
+          "readOrder": 18,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 192,
+            "y": 116,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436559,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005AB",
+          "elementId": 268436907,
+          "elementIdName": "Inv_HeadSlot",
+          "readOrder": 19,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 84,
+            "y": 28,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436916,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005AC",
+          "elementId": 268436908,
+          "elementIdName": "Inv_ChestSlot",
+          "readOrder": 20,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 84,
+            "y": 64,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436917,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005AD",
+          "elementId": 268436909,
+          "elementIdName": "Inv_AbdomenSlot",
+          "readOrder": 21,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 84,
+            "y": 100,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436918,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005AE",
+          "elementId": 268436910,
+          "elementIdName": "Inv_UpperArmSlot",
+          "readOrder": 22,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 48,
+            "y": 64,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436919,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005AF",
+          "elementId": 268436911,
+          "elementIdName": "Inv_LowerArmSlot",
+          "readOrder": 23,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 48,
+            "y": 100,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436920,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005B0",
+          "elementId": 268436912,
+          "elementIdName": "Inv_HandSlot",
+          "readOrder": 24,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 48,
+            "y": 136,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436921,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005B1",
+          "elementId": 268436913,
+          "elementIdName": "Inv_UpperLegSlot",
+          "readOrder": 25,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 120,
+            "y": 100,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436922,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005B2",
+          "elementId": 268436914,
+          "elementIdName": "Inv_LowerLegSlot",
+          "readOrder": 26,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 120,
+            "y": 136,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436923,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100005B3",
+          "elementId": 268436915,
+          "elementIdName": "Inv_FootSlot",
+          "readOrder": 27,
+          "type": 0,
+          "parentElementIdHex": "0x100001D4",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 120,
+            "y": 172,
+            "width": 32,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x1000000E",
+                "key": 268435470,
+                "type": "Enum",
+                "value": 268436925,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementIdHex": "0x100001E4",
+      "elementId": 268435940,
+      "elementIdName": "EquipSlot_Template",
+      "readOrder": 1,
+      "type": 0,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000001E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 32,
+        "height": 32,
+        "zLevel": null,
+        "leftEdge": 0,
+        "topEdge": 0,
+        "rightEdge": 0,
+        "bottomEdge": 0,
+        "properties": [
+          {
+            "keyHex": "0x00000036",
+            "key": 54,
+            "type": "Bool",
+            "value": true,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x0000005F",
+            "key": 95,
+            "type": "Integer",
+            "value": 1,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000060",
+            "key": 96,
+            "type": "Integer",
+            "value": 1,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x1000000E",
+            "key": 268435470,
+            "type": "Enum",
+            "value": 268436282,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x10000015",
+            "key": 268435477,
+            "type": "Integer",
+            "value": 1,
+            "isImageDid": false,
+            "fieldName": null
+          }
+        ],
+        "media": []
+      },
+      "states": {},
+      "imageDids": [],
+      "children": []
+    }
+  ],
+  "datPath": "/home/wbterminal/ac_base_dats/client_local_English.dat",
+  "outPath": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/data/retail-layouts/0x21000024.json"
+}

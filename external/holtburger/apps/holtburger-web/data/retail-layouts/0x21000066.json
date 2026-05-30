@@ -1,0 +1,3444 @@
+{
+  "layoutIdHex": "0x21000066",
+  "layoutId": 553648230,
+  "width": 800,
+  "height": 500,
+  "elementCount": 34,
+  "imageDidCount": 7,
+  "allImageDids": [
+    "0x0600126F",
+    "0x06001270",
+    "0x06001271",
+    "0x06001272",
+    "0x06001273",
+    "0x060022BA",
+    "0x06004CCA"
+  ],
+  "elements": [
+    {
+      "elementIdHex": "0x1000055B",
+      "elementId": 268436827,
+      "elementIdName": "RootJournal_Field",
+      "readOrder": 0,
+      "type": 268435528,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000001E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 500,
+        "zLevel": null,
+        "leftEdge": 0,
+        "topEdge": 0,
+        "rightEdge": 0,
+        "bottomEdge": 0,
+        "properties": [
+          {
+            "keyHex": "0x00000057",
+            "key": 87,
+            "type": "Enum",
+            "value": 268435752,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000058",
+            "key": 88,
+            "type": "Enum",
+            "value": 1,
+            "isImageDid": false,
+            "fieldName": null
+          }
+        ],
+        "media": [
+          {
+            "mediaType": "Image",
+            "fields": {
+              "File": 100672186,
+              "DrawMode": {
+                "name": "Normal",
+                "value": 1
+              }
+            },
+            "imageDids": [
+              "0x060022BA"
+            ]
+          }
+        ]
+      },
+      "states": {},
+      "imageDids": [
+        "0x060022BA"
+      ],
+      "children": [
+        {
+          "elementIdHex": "0x10000110",
+          "elementId": 268435728,
+          "elementIdName": "BookPage_Background",
+          "readOrder": 1,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 0,
+            "width": 300,
+            "height": 500,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 1,
+            "bottomEdge": 1,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100668015,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x0600126F"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x0600126F"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000565",
+          "elementId": 268436837,
+          "elementIdName": "JournalPreviousButton",
+          "readOrder": 2,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 0,
+            "width": 54,
+            "height": 33,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 1,
+            "bottomEdge": 2,
+            "properties": [],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000566",
+          "elementId": 268436838,
+          "elementIdName": "JournalNextButton",
+          "readOrder": 3,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 235,
+            "y": 468,
+            "width": 65,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 2,
+            "topEdge": 2,
+            "rightEdge": 1,
+            "bottomEdge": 1,
+            "properties": [],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000567",
+          "elementId": 268436839,
+          "elementIdName": "NewPageButton",
+          "readOrder": 4,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Normal",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 50,
+            "y": 14,
+            "width": 60,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 98424830,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000568",
+          "elementId": 268436840,
+          "elementIdName": "PageLabelLabel",
+          "readOrder": 5,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 126,
+            "y": 14,
+            "width": 44,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 189550044,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000569",
+          "elementId": 268436841,
+          "elementIdName": "PageLabelEntryBox",
+          "readOrder": 6,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 164,
+            "y": 14,
+            "width": 120,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000016",
+                "key": 22,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001E",
+                "key": 30,
+                "type": "Integer",
+                "value": 16,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000020",
+                "key": 32,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000023",
+                "key": 35,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000027",
+                "key": 39,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x000000CB",
+                "key": 203,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100682954,
+                  "DrawMode": {
+                    "name": "Alphablend",
+                    "value": 3
+                  }
+                },
+                "imageDids": [
+                  "0x06004CCA"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06004CCA"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000056A",
+          "elementId": 268436842,
+          "elementIdName": "PageTitleLabel",
+          "readOrder": 7,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 16,
+            "y": 40,
+            "width": 40,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 62700268,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000056B",
+          "elementId": 268436843,
+          "elementIdName": "PageTitleEntryBox",
+          "readOrder": 8,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 50,
+            "y": 40,
+            "width": 234,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000016",
+                "key": 22,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001E",
+                "key": 30,
+                "type": "Integer",
+                "value": 32,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000020",
+                "key": 32,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000023",
+                "key": 35,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000027",
+                "key": 39,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x000000CB",
+                "key": 203,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100682954,
+                  "DrawMode": {
+                    "name": "Alphablend",
+                    "value": 3
+                  }
+                },
+                "imageDids": [
+                  "0x06004CCA"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06004CCA"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000056C",
+          "elementId": 268436844,
+          "elementIdName": "NotesLabel",
+          "readOrder": 9,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 16,
+            "y": 66,
+            "width": 50,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 141863164,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000056D",
+          "elementId": 268436845,
+          "elementIdName": "NotesEntryBox",
+          "readOrder": 10,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 16,
+            "y": 84,
+            "width": 256,
+            "height": 330,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000015",
+                "key": 21,
+                "type": "Enum",
+                "value": 4,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000016",
+                "key": 22,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001E",
+                "key": 30,
+                "type": "Integer",
+                "value": 2048,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000020",
+                "key": 32,
+                "type": "Bool",
+                "value": false,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000023",
+                "key": 35,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000027",
+                "key": 39,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000072",
+                "key": 114,
+                "type": "Enum",
+                "value": 268436846,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x000000CB",
+                "key": 203,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100682954,
+                  "DrawMode": {
+                    "name": "Alphablend",
+                    "value": 3
+                  }
+                },
+                "imageDids": [
+                  "0x06004CCA"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06004CCA"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000056E",
+          "elementId": 268436846,
+          "elementIdName": "NotesScrollbar",
+          "readOrder": 11,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 272,
+            "y": 84,
+            "width": 16,
+            "height": 330,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000079",
+                "key": 121,
+                "type": "Bool",
+                "value": false,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000056F",
+          "elementId": 268436847,
+          "elementIdName": "FirstPageButton",
+          "readOrder": 12,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Normal",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 20,
+            "y": 464,
+            "width": 60,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 164224702,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000570",
+          "elementId": 268436848,
+          "elementIdName": "PageNumberLabel",
+          "readOrder": 13,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 100,
+            "y": 464,
+            "width": 100,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 1,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 261543212,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000571",
+          "elementId": 268436849,
+          "elementIdName": "LastPageButton",
+          "readOrder": 14,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Normal",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 200,
+            "y": 464,
+            "width": 60,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 210375966,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000572",
+          "elementId": 268436850,
+          "elementIdName": "LocationLabel",
+          "readOrder": 15,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 16,
+            "y": 420,
+            "width": 64,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 53381444,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000573",
+          "elementId": 268436851,
+          "elementIdName": "LocationText",
+          "readOrder": 16,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 84,
+            "y": 420,
+            "width": 150,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000016",
+                "key": 22,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 183554116,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001E",
+                "key": 30,
+                "type": "Integer",
+                "value": 16,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000020",
+                "key": 32,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000027",
+                "key": 39,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x000000CB",
+                "key": 203,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100682954,
+                  "DrawMode": {
+                    "name": "Alphablend",
+                    "value": 3
+                  }
+                },
+                "imageDids": [
+                  "0x06004CCA"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06004CCA"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000574",
+          "elementId": 268436852,
+          "elementIdName": "AddLocationButton",
+          "readOrder": 17,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Normal",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 240,
+            "y": 420,
+            "width": 52,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 106681454,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000575",
+          "elementId": 268436853,
+          "elementIdName": "TimerLabel",
+          "readOrder": 18,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 16,
+            "y": 442,
+            "width": 64,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 41495716,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000576",
+          "elementId": 268436854,
+          "elementIdName": "DaysEntryBox",
+          "readOrder": 19,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 84,
+            "y": 442,
+            "width": 20,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000016",
+                "key": 22,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001E",
+                "key": 30,
+                "type": "Integer",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000020",
+                "key": 32,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000023",
+                "key": 35,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000027",
+                "key": 39,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x000000CB",
+                "key": 203,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100682954,
+                  "DrawMode": {
+                    "name": "Alphablend",
+                    "value": 3
+                  }
+                },
+                "imageDids": [
+                  "0x06004CCA"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06004CCA"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000577",
+          "elementId": 268436855,
+          "elementIdName": "DaysLabel",
+          "readOrder": 20,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 106,
+            "y": 442,
+            "width": 10,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 174059476,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000578",
+          "elementId": 268436856,
+          "elementIdName": "HoursEntryBox",
+          "readOrder": 21,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 120,
+            "y": 442,
+            "width": 20,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000016",
+                "key": 22,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001E",
+                "key": 30,
+                "type": "Integer",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000020",
+                "key": 32,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000023",
+                "key": 35,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000027",
+                "key": 39,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x000000CB",
+                "key": 203,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100682954,
+                  "DrawMode": {
+                    "name": "Alphablend",
+                    "value": 3
+                  }
+                },
+                "imageDids": [
+                  "0x06004CCA"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06004CCA"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000579",
+          "elementId": 268436857,
+          "elementIdName": "HoursLabel",
+          "readOrder": 22,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 142,
+            "y": 442,
+            "width": 10,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 145546228,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000057A",
+          "elementId": 268436858,
+          "elementIdName": "MinutesEntryBox",
+          "readOrder": 23,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 156,
+            "y": 442,
+            "width": 20,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000016",
+                "key": 22,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001E",
+                "key": 30,
+                "type": "Integer",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000020",
+                "key": 32,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000023",
+                "key": 35,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 3,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000027",
+                "key": 39,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x000000CB",
+                "key": 203,
+                "type": "Bool",
+                "value": true,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100682954,
+                  "DrawMode": {
+                    "name": "Alphablend",
+                    "value": 3
+                  }
+                },
+                "imageDids": [
+                  "0x06004CCA"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06004CCA"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000057B",
+          "elementId": 268436859,
+          "elementIdName": "MinutesLabel",
+          "readOrder": 24,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 178,
+            "y": 442,
+            "width": 10,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 1799220,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000057C",
+          "elementId": 268436860,
+          "elementIdName": "TimerText",
+          "readOrder": 25,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 84,
+            "y": 442,
+            "width": 120,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 226922068,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x0000001B",
+                "key": 27,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Color",
+                    "value": {
+                      "a": 255,
+                      "r": 0,
+                      "g": 0,
+                      "b": 0,
+                      "hex": "#000000FF"
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000024",
+                "key": 36,
+                "type": "Integer",
+                "value": 5,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000057D",
+          "elementId": 268436861,
+          "elementIdName": "StartTimerButton",
+          "readOrder": 26,
+          "type": 0,
+          "parentElementIdHex": "0x1000055B",
+          "defaultState": "Normal",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 240,
+            "y": 442,
+            "width": 40,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x00000014",
+                "key": 20,
+                "type": "Enum",
+                "value": 2,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              {
+                "keyHex": "0x00000017",
+                "key": 23,
+                "type": "StringInfo",
+                "value": {
+                  "Token": 0,
+                  "StringId": 185882366,
+                  "TableId": {},
+                  "Override": {
+                    "name": "None",
+                    "value": 0
+                  },
+                  "English": 1,
+                  "Comment": 0
+                },
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementIdHex": "0x10000116",
+      "elementId": 268435734,
+      "elementIdName": "PaperBackgroundTemplate",
+      "readOrder": 1,
+      "type": 3,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000001E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 600,
+        "zLevel": null,
+        "leftEdge": 0,
+        "topEdge": 0,
+        "rightEdge": 0,
+        "bottomEdge": 0,
+        "properties": [],
+        "media": []
+      },
+      "states": {},
+      "imageDids": [],
+      "children": [
+        {
+          "elementIdHex": "0x10000117",
+          "elementId": 268435735,
+          "elementIdName": "BookPaper_Top",
+          "readOrder": 1,
+          "type": 3,
+          "parentElementIdHex": "0x10000116",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 0,
+            "width": 300,
+            "height": 33,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 1,
+            "bottomEdge": 2,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100668019,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x06001273"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06001273"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000118",
+          "elementId": 268435736,
+          "elementIdName": "BookPaper_Left",
+          "readOrder": 2,
+          "type": 3,
+          "parentElementIdHex": "0x10000116",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 33,
+            "width": 22,
+            "height": 535,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 2,
+            "bottomEdge": 1,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100668017,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x06001271"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06001271"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000110",
+          "elementId": 268435728,
+          "elementIdName": "BookPage_Background",
+          "readOrder": 3,
+          "type": 3,
+          "parentElementIdHex": "0x10000116",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 22,
+            "y": 33,
+            "width": 257,
+            "height": 535,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 1,
+            "bottomEdge": 1,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100668015,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x0600126F"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x0600126F"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000119",
+          "elementId": 268435737,
+          "elementIdName": "BookPaper_Right",
+          "readOrder": 4,
+          "type": 3,
+          "parentElementIdHex": "0x10000116",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 279,
+            "y": 33,
+            "width": 21,
+            "height": 535,
+            "zLevel": null,
+            "leftEdge": 2,
+            "topEdge": 1,
+            "rightEdge": 1,
+            "bottomEdge": 1,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100668018,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x06001272"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06001272"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000011A",
+          "elementId": 268435738,
+          "elementIdName": "BookPaper_Bottom",
+          "readOrder": 5,
+          "type": 3,
+          "parentElementIdHex": "0x10000116",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 568,
+            "width": 300,
+            "height": 32,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 2,
+            "rightEdge": 1,
+            "bottomEdge": 1,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100668016,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x06001270"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06001270"
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementIdHex": "0x1000057E",
+      "elementId": 268436862,
+      "elementIdName": "button_blank_3state_Gulim14Green",
+      "readOrder": 2,
+      "type": 0,
+      "parentElementIdHex": null,
+      "defaultState": "Normal",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x00000000",
+        "incorporationFlags": [],
+        "x": null,
+        "y": null,
+        "width": null,
+        "height": null,
+        "zLevel": null,
+        "leftEdge": 0,
+        "topEdge": 0,
+        "rightEdge": 0,
+        "bottomEdge": 0,
+        "properties": [
+          {
+            "keyHex": "0x0000000D",
+            "key": 13,
+            "type": "Bool",
+            "value": true,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000013",
+            "key": 19,
+            "type": "Bool",
+            "value": true,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000014",
+            "key": 20,
+            "type": "Enum",
+            "value": 1,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000015",
+            "key": 21,
+            "type": "Enum",
+            "value": 1,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x0000001A",
+            "key": 26,
+            "type": "Array",
+            "value": [
+              {
+                "keyHex": "0x00000000",
+                "key": 0,
+                "type": "DataId",
+                "value": 1073741825,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000021",
+            "key": 33,
+            "type": "Bool",
+            "value": true,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000022",
+            "key": 34,
+            "type": "Color",
+            "value": {
+              "a": 255,
+              "r": 0,
+              "g": 102,
+              "b": 0,
+              "hex": "#006600FF"
+            },
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000023",
+            "key": 35,
+            "type": "Integer",
+            "value": 0,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000025",
+            "key": 37,
+            "type": "Integer",
+            "value": 0,
+            "isImageDid": false,
+            "fieldName": null
+          }
+        ],
+        "media": []
+      },
+      "states": {
+        "Normal": {
+          "stateId": 1,
+          "stateIdName": "Normal",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "properties": [
+            {
+              "keyHex": "0x0000001B",
+              "key": 27,
+              "type": "Array",
+              "value": [
+                {
+                  "keyHex": "0x00000000",
+                  "key": 0,
+                  "type": "Color",
+                  "value": {
+                    "a": 255,
+                    "r": 0,
+                    "g": 255,
+                    "b": 127,
+                    "hex": "#00FF7FFF"
+                  },
+                  "isImageDid": false,
+                  "fieldName": null
+                }
+              ],
+              "isImageDid": false,
+              "fieldName": null
+            }
+          ],
+          "media": []
+        },
+        "Normal_rollover": {
+          "stateId": 2,
+          "stateIdName": "Normal_rollover",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "properties": [
+            {
+              "keyHex": "0x0000001B",
+              "key": 27,
+              "type": "Array",
+              "value": [
+                {
+                  "keyHex": "0x00000000",
+                  "key": 0,
+                  "type": "Color",
+                  "value": {
+                    "a": 255,
+                    "r": 255,
+                    "g": 242,
+                    "b": 135,
+                    "hex": "#FFF287FF"
+                  },
+                  "isImageDid": false,
+                  "fieldName": null
+                }
+              ],
+              "isImageDid": false,
+              "fieldName": null
+            }
+          ],
+          "media": []
+        },
+        "Normal_pressed": {
+          "stateId": 3,
+          "stateIdName": "Normal_pressed",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "properties": [
+            {
+              "keyHex": "0x0000001B",
+              "key": 27,
+              "type": "Array",
+              "value": [
+                {
+                  "keyHex": "0x00000000",
+                  "key": 0,
+                  "type": "Color",
+                  "value": {
+                    "a": 255,
+                    "r": 255,
+                    "g": 0,
+                    "b": 0,
+                    "hex": "#FF0000FF"
+                  },
+                  "isImageDid": false,
+                  "fieldName": null
+                }
+              ],
+              "isImageDid": false,
+              "fieldName": null
+            }
+          ],
+          "media": []
+        },
+        "Ghosted": {
+          "stateId": 13,
+          "stateIdName": "Ghosted",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "properties": [
+            {
+              "keyHex": "0x0000001B",
+              "key": 27,
+              "type": "Array",
+              "value": [
+                {
+                  "keyHex": "0x00000000",
+                  "key": 0,
+                  "type": "Color",
+                  "value": {
+                    "a": 255,
+                    "r": 255,
+                    "g": 255,
+                    "b": 255,
+                    "hex": "#FFFFFFFF"
+                  },
+                  "isImageDid": false,
+                  "fieldName": null
+                }
+              ],
+              "isImageDid": false,
+              "fieldName": null
+            }
+          ],
+          "media": []
+        }
+      },
+      "imageDids": [],
+      "children": []
+    }
+  ],
+  "datPath": "/home/wbterminal/ac_base_dats/client_local_English.dat",
+  "outPath": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/data/retail-layouts/0x21000066.json"
+}

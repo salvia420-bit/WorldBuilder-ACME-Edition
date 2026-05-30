@@ -1,0 +1,805 @@
+{
+  "layoutIdHex": "0x21000074",
+  "layoutId": 553648244,
+  "width": 800,
+  "height": 600,
+  "elementCount": 9,
+  "imageDidCount": 10,
+  "allImageDids": [
+    "0x060011FB",
+    "0x06001938",
+    "0x0600193A",
+    "0x0600193C",
+    "0x06004CC0",
+    "0x06004CC1",
+    "0x06006119",
+    "0x060074B7",
+    "0x060074B8",
+    "0x060074C9"
+  ],
+  "elements": [
+    {
+      "elementIdHex": "0x100006D3",
+      "elementId": 268437203,
+      "elementIdName": "RootFloatyRadar_Field",
+      "readOrder": 0,
+      "type": 268435472,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": true,
+        "incorporationFlagsHex": "0x0000001F",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x01",
+            "name": "PassToChildren"
+          },
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 120,
+        "height": 140,
+        "zLevel": null,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [
+          {
+            "keyHex": "0x00000047",
+            "key": 71,
+            "type": "Enum",
+            "value": 268436373,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000048",
+            "key": 72,
+            "type": "DataId",
+            "value": 553648193,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000051",
+            "key": 81,
+            "type": "Bool",
+            "value": true,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x000000CD",
+            "key": 205,
+            "type": "Enum",
+            "value": 3,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x1000002D",
+            "key": 268435501,
+            "type": "Integer",
+            "value": 50,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x1000002E",
+            "key": 268435502,
+            "type": "Struct",
+            "value": {
+              "268435503": {
+                "keyHex": "0x00000000",
+                "key": 0,
+                "type": "Integer",
+                "value": 60,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              "268435504": {
+                "keyHex": "0x00000000",
+                "key": 0,
+                "type": "Integer",
+                "value": 60,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            },
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x10000031",
+            "key": 268435505,
+            "type": "Enum",
+            "value": 268435520,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x10000032",
+            "key": 268435506,
+            "type": "Enum",
+            "value": 268435522,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x10000033",
+            "key": 268435507,
+            "type": "Enum",
+            "value": 268435521,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x10000034",
+            "key": 268435508,
+            "type": "Enum",
+            "value": 268435523,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x10000036",
+            "key": 268435510,
+            "type": "Enum",
+            "value": 268435518,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x1000007E",
+            "key": 268435582,
+            "type": "Enum",
+            "value": 14,
+            "isImageDid": false,
+            "fieldName": null
+          }
+        ],
+        "media": []
+      },
+      "states": {
+        "HideDetail": {
+          "stateId": 268435462,
+          "stateIdName": "HideDetail",
+          "passToChildren": true,
+          "incorporationFlagsHex": "0x00000001",
+          "incorporationFlags": [
+            {
+              "bitHex": "0x01",
+              "name": "PassToChildren"
+            }
+          ],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": []
+        },
+        "ShowDetail": {
+          "stateId": 268435463,
+          "stateIdName": "ShowDetail",
+          "passToChildren": true,
+          "incorporationFlagsHex": "0x00000001",
+          "incorporationFlags": [
+            {
+              "bitHex": "0x01",
+              "name": "PassToChildren"
+            }
+          ],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": []
+        }
+      },
+      "imageDids": [],
+      "children": [
+        {
+          "elementIdHex": "0x1000003E",
+          "elementId": 268435518,
+          "elementIdName": "RadarCoords",
+          "readOrder": 1,
+          "type": 0,
+          "parentElementIdHex": "0x100006D3",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 120,
+            "width": 120,
+            "height": 18,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100682944,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x06004CC0"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06004CC0"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x1000003F",
+          "elementId": 268435519,
+          "elementIdName": "RadarImage",
+          "readOrder": 2,
+          "type": 3,
+          "parentElementIdHex": "0x100006D3",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 0,
+            "width": 120,
+            "height": 120,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100682945,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x06004CC1"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06004CC1"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000619",
+          "elementId": 268437017,
+          "elementIdName": "LockUI",
+          "readOrder": 3,
+          "type": 0,
+          "parentElementIdHex": "0x100006D3",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 6,
+            "y": 6,
+            "width": 27,
+            "height": 27,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [],
+            "media": []
+          },
+          "states": {
+            "LockedUI": {
+              "stateId": 268435555,
+              "stateIdName": "LockedUI",
+              "passToChildren": false,
+              "incorporationFlagsHex": "0x00000000",
+              "incorporationFlags": [],
+              "x": null,
+              "y": null,
+              "width": null,
+              "height": null,
+              "zLevel": null,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "properties": [],
+              "media": [
+                {
+                  "mediaType": "Image",
+                  "fields": {
+                    "File": 100693175,
+                    "DrawMode": {
+                      "name": "Alphablend",
+                      "value": 3
+                    }
+                  },
+                  "imageDids": [
+                    "0x060074B7"
+                  ]
+                }
+              ]
+            },
+            "UnlockedUI": {
+              "stateId": 268435556,
+              "stateIdName": "UnlockedUI",
+              "passToChildren": false,
+              "incorporationFlagsHex": "0x00000000",
+              "incorporationFlags": [],
+              "x": null,
+              "y": null,
+              "width": null,
+              "height": null,
+              "zLevel": null,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "properties": [],
+              "media": [
+                {
+                  "mediaType": "Image",
+                  "fields": {
+                    "File": 100693176,
+                    "DrawMode": {
+                      "name": "Alphablend",
+                      "value": 3
+                    }
+                  },
+                  "imageDids": [
+                    "0x060074B8"
+                  ]
+                }
+              ]
+            }
+          },
+          "imageDids": [
+            "0x060074B7",
+            "0x060074B8"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100006A3",
+          "elementId": 268437155,
+          "elementIdName": "RadarDrag",
+          "readOrder": 4,
+          "type": 2,
+          "parentElementIdHex": "0x100006D3",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 87,
+            "y": 6,
+            "width": 27,
+            "height": 27,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100693193,
+                  "DrawMode": {
+                    "name": "Alphablend",
+                    "value": 3
+                  }
+                },
+                "imageDids": [
+                  "0x060074C9"
+                ]
+              },
+              {
+                "mediaType": "Cursor",
+                "fields": {
+                  "File": 100688153,
+                  "XHotspot": 16,
+                  "YHotspot": 16
+                },
+                "imageDids": [
+                  "0x06006119"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06006119",
+            "0x060074C9"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000040",
+          "elementId": 268435520,
+          "elementIdName": "RadarNorth",
+          "readOrder": 5,
+          "type": 3,
+          "parentElementIdHex": "0x100006D3",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 55,
+            "y": 1,
+            "width": 10,
+            "height": 9,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100667899,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x060011FB"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x060011FB"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000041",
+          "elementId": 268435521,
+          "elementIdName": "RadarEast",
+          "readOrder": 6,
+          "type": 3,
+          "parentElementIdHex": "0x100006D3",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 110,
+            "y": 55,
+            "width": 10,
+            "height": 9,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100669752,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x06001938"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06001938"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000042",
+          "elementId": 268435522,
+          "elementIdName": "RadarSouth",
+          "readOrder": 7,
+          "type": 3,
+          "parentElementIdHex": "0x100006D3",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 55,
+            "y": 110,
+            "width": 10,
+            "height": 9,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100669754,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x0600193A"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x0600193A"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x10000043",
+          "elementId": 268435523,
+          "elementIdName": "RadarWest",
+          "readOrder": 8,
+          "type": 3,
+          "parentElementIdHex": "0x100006D3",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 55,
+            "width": 10,
+            "height": 9,
+            "zLevel": null,
+            "leftEdge": 0,
+            "topEdge": 0,
+            "rightEdge": 0,
+            "bottomEdge": 0,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100669756,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x0600193C"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x0600193C"
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "datPath": "/home/wbterminal/ac_base_dats/client_local_English.dat",
+  "outPath": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/data/retail-layouts/0x21000074.json"
+}

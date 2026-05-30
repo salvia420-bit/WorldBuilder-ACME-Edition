@@ -1,0 +1,195 @@
+{
+  "layoutIdHex": "0x2100002D",
+  "layoutId": 553648173,
+  "width": 800,
+  "height": 600,
+  "elementCount": 2,
+  "imageDidCount": 0,
+  "allImageDids": [],
+  "elements": [
+    {
+      "elementIdHex": "0x1000022E",
+      "elementId": 268436014,
+      "elementIdName": "RootSkill_Field",
+      "readOrder": 0,
+      "type": 268435499,
+      "parentElementIdHex": null,
+      "defaultState": "StatManagement_Footer_Default",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000001E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 337,
+        "zLevel": null,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [
+          {
+            "keyHex": "0x00000057",
+            "key": 87,
+            "type": "Enum",
+            "value": 268435477,
+            "isImageDid": false,
+            "fieldName": null
+          },
+          {
+            "keyHex": "0x00000058",
+            "key": 88,
+            "type": "Enum",
+            "value": 1,
+            "isImageDid": false,
+            "fieldName": null
+          }
+        ],
+        "media": []
+      },
+      "states": {
+        "StatManagement_Footer_Default": {
+          "stateId": 268435473,
+          "stateIdName": "StatManagement_Footer_Default",
+          "passToChildren": true,
+          "incorporationFlagsHex": "0x00000001",
+          "incorporationFlags": [
+            {
+              "bitHex": "0x01",
+              "name": "PassToChildren"
+            }
+          ],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": []
+        },
+        "StatManagement_Footer_Text": {
+          "stateId": 268435474,
+          "stateIdName": "StatManagement_Footer_Text",
+          "passToChildren": true,
+          "incorporationFlagsHex": "0x00000001",
+          "incorporationFlags": [
+            {
+              "bitHex": "0x01",
+              "name": "PassToChildren"
+            }
+          ],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": []
+        },
+        "StatManagement_Footer_Meter": {
+          "stateId": 268435475,
+          "stateIdName": "StatManagement_Footer_Meter",
+          "passToChildren": true,
+          "incorporationFlagsHex": "0x00000001",
+          "incorporationFlags": [
+            {
+              "bitHex": "0x01",
+              "name": "PassToChildren"
+            }
+          ],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": []
+        }
+      },
+      "imageDids": [],
+      "children": [
+        {
+          "elementIdHex": "0x10000226",
+          "elementId": 268436006,
+          "elementIdName": "SkillManagement_Attribute_Field",
+          "readOrder": 1,
+          "type": 0,
+          "parentElementIdHex": "0x1000022E",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 0,
+            "width": 300,
+            "height": 337,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 1,
+            "bottomEdge": 1,
+            "properties": [],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "datPath": "/home/wbterminal/ac_base_dats/client_local_English.dat",
+  "outPath": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/data/retail-layouts/0x2100002D.json"
+}

@@ -1,0 +1,3356 @@
+{
+  "layoutIdHex": "0x21000012",
+  "layoutId": 553648146,
+  "width": 800,
+  "height": 600,
+  "elementCount": 42,
+  "imageDidCount": 14,
+  "allImageDids": [
+    "0x060012A9",
+    "0x060012AA",
+    "0x060012B8",
+    "0x060012B9",
+    "0x060012BA",
+    "0x06001927",
+    "0x06001928",
+    "0x06004C4C",
+    "0x06004C4D",
+    "0x06004C4E",
+    "0x06004CC2",
+    "0x06005F10",
+    "0x06005F11",
+    "0x06005F12"
+  ],
+  "elements": [
+    {
+      "elementIdHex": "0x100000B7",
+      "elementId": 268435639,
+      "elementIdName": "RootVendor_Field",
+      "readOrder": 0,
+      "type": 268435479,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000001E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 500,
+        "width": 800,
+        "height": 110,
+        "zLevel": null,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 2,
+        "properties": [],
+        "media": []
+      },
+      "states": {},
+      "imageDids": [],
+      "children": [
+        {
+          "elementIdHex": "0x100000B8",
+          "elementId": 268435640,
+          "elementIdName": "VendorPanel",
+          "readOrder": 1,
+          "type": 8,
+          "parentElementIdHex": "0x100000B7",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000001E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              }
+            ],
+            "x": 0,
+            "y": 0,
+            "width": 800,
+            "height": 110,
+            "zLevel": null,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 1,
+            "bottomEdge": 1,
+            "properties": [
+              {
+                "keyHex": "0x0000002E",
+                "key": 46,
+                "type": "Array",
+                "value": [
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Struct",
+                    "value": {
+                      "48": {
+                        "keyHex": "0x00000000",
+                        "key": 0,
+                        "type": "Enum",
+                        "value": 268435641,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      "49": {
+                        "keyHex": "0x00000000",
+                        "key": 0,
+                        "type": "Enum",
+                        "value": 268435644,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      "50": {
+                        "keyHex": "0x00000000",
+                        "key": 0,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  },
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Struct",
+                    "value": {
+                      "48": {
+                        "keyHex": "0x00000000",
+                        "key": 0,
+                        "type": "Enum",
+                        "value": 268435642,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      "49": {
+                        "keyHex": "0x00000000",
+                        "key": 0,
+                        "type": "Enum",
+                        "value": 268435652,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      "50": {
+                        "keyHex": "0x00000000",
+                        "key": 0,
+                        "type": "Bool",
+                        "value": false,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  },
+                  {
+                    "keyHex": "0x00000000",
+                    "key": 0,
+                    "type": "Struct",
+                    "value": {
+                      "48": {
+                        "keyHex": "0x00000000",
+                        "key": 0,
+                        "type": "Enum",
+                        "value": 268435643,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      "49": {
+                        "keyHex": "0x00000000",
+                        "key": 0,
+                        "type": "Enum",
+                        "value": 268435661,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      "50": {
+                        "keyHex": "0x00000000",
+                        "key": 0,
+                        "type": "Bool",
+                        "value": false,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "isImageDid": false,
+                "fieldName": null
+              }
+            ],
+            "media": []
+          },
+          "states": {},
+          "imageDids": [],
+          "children": [
+            {
+              "elementIdHex": "0x100000B9",
+              "elementId": 268435641,
+              "elementIdName": "VendorItemsTab",
+              "readOrder": 1,
+              "type": 0,
+              "parentElementIdHex": "0x100000B8",
+              "defaultState": "Undef",
+              "stateDesc": {
+                "stateId": 0,
+                "stateIdName": "Undef",
+                "passToChildren": false,
+                "incorporationFlagsHex": "0x0000001E",
+                "incorporationFlags": [
+                  {
+                    "bitHex": "0x02",
+                    "name": "X"
+                  },
+                  {
+                    "bitHex": "0x04",
+                    "name": "Y"
+                  },
+                  {
+                    "bitHex": "0x08",
+                    "name": "Width"
+                  },
+                  {
+                    "bitHex": "0x10",
+                    "name": "Height"
+                  }
+                ],
+                "x": 0,
+                "y": 0,
+                "width": 92,
+                "height": 20,
+                "zLevel": null,
+                "leftEdge": 1,
+                "topEdge": 1,
+                "rightEdge": 2,
+                "bottomEdge": 2,
+                "properties": [
+                  {
+                    "keyHex": "0x00000017",
+                    "key": 23,
+                    "type": "StringInfo",
+                    "value": {
+                      "Token": 0,
+                      "StringId": 84714627,
+                      "TableId": {},
+                      "Override": {
+                        "name": "None",
+                        "value": 0
+                      },
+                      "English": 1,
+                      "Comment": 0
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "media": []
+              },
+              "states": {},
+              "imageDids": [],
+              "children": []
+            },
+            {
+              "elementIdHex": "0x100000BA",
+              "elementId": 268435642,
+              "elementIdName": "VendorBuyTab",
+              "readOrder": 2,
+              "type": 0,
+              "parentElementIdHex": "0x100000B8",
+              "defaultState": "Undef",
+              "stateDesc": {
+                "stateId": 0,
+                "stateIdName": "Undef",
+                "passToChildren": false,
+                "incorporationFlagsHex": "0x0000001E",
+                "incorporationFlags": [
+                  {
+                    "bitHex": "0x02",
+                    "name": "X"
+                  },
+                  {
+                    "bitHex": "0x04",
+                    "name": "Y"
+                  },
+                  {
+                    "bitHex": "0x08",
+                    "name": "Width"
+                  },
+                  {
+                    "bitHex": "0x10",
+                    "name": "Height"
+                  }
+                ],
+                "x": 92,
+                "y": 0,
+                "width": 92,
+                "height": 20,
+                "zLevel": null,
+                "leftEdge": 1,
+                "topEdge": 1,
+                "rightEdge": 2,
+                "bottomEdge": 2,
+                "properties": [
+                  {
+                    "keyHex": "0x00000017",
+                    "key": 23,
+                    "type": "StringInfo",
+                    "value": {
+                      "Token": 0,
+                      "StringId": 257717255,
+                      "TableId": {},
+                      "Override": {
+                        "name": "None",
+                        "value": 0
+                      },
+                      "English": 1,
+                      "Comment": 0
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "media": []
+              },
+              "states": {},
+              "imageDids": [],
+              "children": []
+            },
+            {
+              "elementIdHex": "0x100000BB",
+              "elementId": 268435643,
+              "elementIdName": "VendorSellTab",
+              "readOrder": 3,
+              "type": 0,
+              "parentElementIdHex": "0x100000B8",
+              "defaultState": "Undef",
+              "stateDesc": {
+                "stateId": 0,
+                "stateIdName": "Undef",
+                "passToChildren": false,
+                "incorporationFlagsHex": "0x0000001E",
+                "incorporationFlags": [
+                  {
+                    "bitHex": "0x02",
+                    "name": "X"
+                  },
+                  {
+                    "bitHex": "0x04",
+                    "name": "Y"
+                  },
+                  {
+                    "bitHex": "0x08",
+                    "name": "Width"
+                  },
+                  {
+                    "bitHex": "0x10",
+                    "name": "Height"
+                  }
+                ],
+                "x": 184,
+                "y": 0,
+                "width": 92,
+                "height": 20,
+                "zLevel": null,
+                "leftEdge": 1,
+                "topEdge": 1,
+                "rightEdge": 2,
+                "bottomEdge": 2,
+                "properties": [
+                  {
+                    "keyHex": "0x00000017",
+                    "key": 23,
+                    "type": "StringInfo",
+                    "value": {
+                      "Token": 0,
+                      "StringId": 97250503,
+                      "TableId": {},
+                      "Override": {
+                        "name": "None",
+                        "value": 0
+                      },
+                      "English": 1,
+                      "Comment": 0
+                    },
+                    "isImageDid": false,
+                    "fieldName": null
+                  }
+                ],
+                "media": []
+              },
+              "states": {},
+              "imageDids": [],
+              "children": []
+            },
+            {
+              "elementIdHex": "0x100000BC",
+              "elementId": 268435644,
+              "elementIdName": "VendorItemsPage",
+              "readOrder": 4,
+              "type": 0,
+              "parentElementIdHex": "0x100000B8",
+              "defaultState": "Undef",
+              "stateDesc": {
+                "stateId": 0,
+                "stateIdName": "Undef",
+                "passToChildren": false,
+                "incorporationFlagsHex": "0x0000001E",
+                "incorporationFlags": [
+                  {
+                    "bitHex": "0x02",
+                    "name": "X"
+                  },
+                  {
+                    "bitHex": "0x04",
+                    "name": "Y"
+                  },
+                  {
+                    "bitHex": "0x08",
+                    "name": "Width"
+                  },
+                  {
+                    "bitHex": "0x10",
+                    "name": "Height"
+                  }
+                ],
+                "x": 0,
+                "y": 20,
+                "width": 800,
+                "height": 90,
+                "zLevel": null,
+                "leftEdge": 1,
+                "topEdge": 1,
+                "rightEdge": 1,
+                "bottomEdge": 1,
+                "properties": [],
+                "media": []
+              },
+              "states": {},
+              "imageDids": [],
+              "children": [
+                {
+                  "elementIdHex": "0x100000BD",
+                  "elementId": 268435645,
+                  "elementIdName": "VendorItemsList",
+                  "readOrder": 1,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000BC",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 10,
+                    "y": 30,
+                    "width": 710,
+                    "height": 32,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x0000005C",
+                        "key": 92,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x0000005F",
+                        "key": 95,
+                        "type": "Integer",
+                        "value": -1,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x00000071",
+                        "key": 113,
+                        "type": "Enum",
+                        "value": 268435646,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x1000000E",
+                        "key": 268435470,
+                        "type": "Enum",
+                        "value": 268436282,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x10000013",
+                        "key": 268435475,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x10000016",
+                        "key": 268435478,
+                        "type": "Bool",
+                        "value": false,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000BE",
+                  "elementId": 268435646,
+                  "elementIdName": "Vendor_ItemListScroll",
+                  "readOrder": 2,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000BC",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 10,
+                    "y": 63,
+                    "width": 710,
+                    "height": 16,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 2,
+                    "rightEdge": 1,
+                    "bottomEdge": 1,
+                    "properties": [],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000BF",
+                  "elementId": 268435647,
+                  "elementIdName": "VendorItemTypeList",
+                  "readOrder": 3,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000BC",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 4,
+                    "y": 4,
+                    "width": 117,
+                    "height": 18,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 2,
+                    "bottomEdge": 2,
+                    "properties": [],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000C0",
+                  "elementId": 268435648,
+                  "elementIdName": "VendorItemName_Text",
+                  "readOrder": 4,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000BC",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 125,
+                    "y": 0,
+                    "width": 590,
+                    "height": 15,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000C1",
+                  "elementId": 268435649,
+                  "elementIdName": "VendorItemCost_Text",
+                  "readOrder": 5,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000BC",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 125,
+                    "y": 15,
+                    "width": 590,
+                    "height": 15,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000C2",
+                  "elementId": 268435650,
+                  "elementIdName": "VendorItemBuy_Button",
+                  "readOrder": 6,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000BC",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 732,
+                    "y": 4,
+                    "width": 64,
+                    "height": 22,
+                    "zLevel": null,
+                    "leftEdge": 2,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 147125705,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000C3",
+                  "elementId": 268435651,
+                  "elementIdName": "VendorItemAdd_Button",
+                  "readOrder": 7,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000BC",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 732,
+                    "y": 30,
+                    "width": 64,
+                    "height": 22,
+                    "zLevel": null,
+                    "leftEdge": 2,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 24701700,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "elementIdHex": "0x100000C4",
+              "elementId": 268435652,
+              "elementIdName": "VendorBuyPage",
+              "readOrder": 5,
+              "type": 0,
+              "parentElementIdHex": "0x100000B8",
+              "defaultState": "Undef",
+              "stateDesc": {
+                "stateId": 0,
+                "stateIdName": "Undef",
+                "passToChildren": false,
+                "incorporationFlagsHex": "0x0000001E",
+                "incorporationFlags": [
+                  {
+                    "bitHex": "0x02",
+                    "name": "X"
+                  },
+                  {
+                    "bitHex": "0x04",
+                    "name": "Y"
+                  },
+                  {
+                    "bitHex": "0x08",
+                    "name": "Width"
+                  },
+                  {
+                    "bitHex": "0x10",
+                    "name": "Height"
+                  }
+                ],
+                "x": 0,
+                "y": 20,
+                "width": 800,
+                "height": 90,
+                "zLevel": null,
+                "leftEdge": 1,
+                "topEdge": 1,
+                "rightEdge": 1,
+                "bottomEdge": 1,
+                "properties": [],
+                "media": []
+              },
+              "states": {},
+              "imageDids": [],
+              "children": [
+                {
+                  "elementIdHex": "0x100000C5",
+                  "elementId": 268435653,
+                  "elementIdName": "VendorBuyList",
+                  "readOrder": 1,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000C4",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 10,
+                    "y": 30,
+                    "width": 710,
+                    "height": 32,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x0000005C",
+                        "key": 92,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x0000005F",
+                        "key": 95,
+                        "type": "Integer",
+                        "value": -1,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x00000071",
+                        "key": 113,
+                        "type": "Enum",
+                        "value": 268435654,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x1000000E",
+                        "key": 268435470,
+                        "type": "Enum",
+                        "value": 268436282,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x10000013",
+                        "key": 268435475,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x10000016",
+                        "key": 268435478,
+                        "type": "Bool",
+                        "value": false,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x10000052",
+                        "key": 268435538,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000C6",
+                  "elementId": 268435654,
+                  "elementIdName": "Vendor_BuyListScroll",
+                  "readOrder": 2,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000C4",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 10,
+                    "y": 63,
+                    "width": 710,
+                    "height": 16,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 2,
+                    "rightEdge": 1,
+                    "bottomEdge": 1,
+                    "properties": [],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000C7",
+                  "elementId": 268435655,
+                  "elementIdName": "VendorBuyCost_Text",
+                  "readOrder": 3,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000C4",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 125,
+                    "y": 0,
+                    "width": 590,
+                    "height": 15,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000014",
+                        "key": 20,
+                        "type": "Enum",
+                        "value": 3,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000C8",
+                  "elementId": 268435656,
+                  "elementIdName": "VendorBuyPurse_Text",
+                  "readOrder": 4,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000C4",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 125,
+                    "y": 15,
+                    "width": 590,
+                    "height": 15,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000014",
+                        "key": 20,
+                        "type": "Enum",
+                        "value": 3,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000C9",
+                  "elementId": 268435657,
+                  "elementIdName": "VendorBuyBuyItem_Button",
+                  "readOrder": 5,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000C4",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 732,
+                    "y": 4,
+                    "width": 64,
+                    "height": 22,
+                    "zLevel": null,
+                    "leftEdge": 2,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 96915021,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000CA",
+                  "elementId": 268435658,
+                  "elementIdName": "VendorBuyBuyAll_Button",
+                  "readOrder": 6,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000C4",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 732,
+                    "y": 30,
+                    "width": 64,
+                    "height": 22,
+                    "zLevel": null,
+                    "leftEdge": 2,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 257711212,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000CB",
+                  "elementId": 268435659,
+                  "elementIdName": "VendorBuyClearItem_Button",
+                  "readOrder": 7,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000C4",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 4,
+                    "y": 1,
+                    "width": 65,
+                    "height": 14,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 2,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 54787229,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000CC",
+                  "elementId": 268435660,
+                  "elementIdName": "VendorBuyClearAll_Button",
+                  "readOrder": 8,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000C4",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 4,
+                    "y": 15,
+                    "width": 65,
+                    "height": 14,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 2,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 54781572,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                }
+              ]
+            },
+            {
+              "elementIdHex": "0x100000CD",
+              "elementId": 268435661,
+              "elementIdName": "VendorSellPage",
+              "readOrder": 6,
+              "type": 0,
+              "parentElementIdHex": "0x100000B8",
+              "defaultState": "Undef",
+              "stateDesc": {
+                "stateId": 0,
+                "stateIdName": "Undef",
+                "passToChildren": false,
+                "incorporationFlagsHex": "0x0000001E",
+                "incorporationFlags": [
+                  {
+                    "bitHex": "0x02",
+                    "name": "X"
+                  },
+                  {
+                    "bitHex": "0x04",
+                    "name": "Y"
+                  },
+                  {
+                    "bitHex": "0x08",
+                    "name": "Width"
+                  },
+                  {
+                    "bitHex": "0x10",
+                    "name": "Height"
+                  }
+                ],
+                "x": 0,
+                "y": 20,
+                "width": 800,
+                "height": 90,
+                "zLevel": null,
+                "leftEdge": 1,
+                "topEdge": 1,
+                "rightEdge": 1,
+                "bottomEdge": 1,
+                "properties": [],
+                "media": []
+              },
+              "states": {},
+              "imageDids": [],
+              "children": [
+                {
+                  "elementIdHex": "0x100000CE",
+                  "elementId": 268435662,
+                  "elementIdName": "VendorSellList",
+                  "readOrder": 1,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000CD",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 10,
+                    "y": 30,
+                    "width": 710,
+                    "height": 32,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000036",
+                        "key": 54,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x0000005C",
+                        "key": 92,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x0000005F",
+                        "key": 95,
+                        "type": "Integer",
+                        "value": -1,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x00000071",
+                        "key": 113,
+                        "type": "Enum",
+                        "value": 268435663,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x1000000E",
+                        "key": 268435470,
+                        "type": "Enum",
+                        "value": 268436282,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x10000013",
+                        "key": 268435475,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      },
+                      {
+                        "keyHex": "0x10000017",
+                        "key": 268435479,
+                        "type": "Bool",
+                        "value": true,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000CF",
+                  "elementId": 268435663,
+                  "elementIdName": "Vendor_SellListScroll",
+                  "readOrder": 2,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000CD",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 10,
+                    "y": 63,
+                    "width": 710,
+                    "height": 16,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 2,
+                    "rightEdge": 1,
+                    "bottomEdge": 1,
+                    "properties": [],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000D0",
+                  "elementId": 268435664,
+                  "elementIdName": "VendorSellCost_Text",
+                  "readOrder": 3,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000CD",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 125,
+                    "y": 0,
+                    "width": 590,
+                    "height": 15,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000014",
+                        "key": 20,
+                        "type": "Enum",
+                        "value": 3,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000D1",
+                  "elementId": 268435665,
+                  "elementIdName": "VendorSellPurse_Text",
+                  "readOrder": 4,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000CD",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 125,
+                    "y": 15,
+                    "width": 590,
+                    "height": 15,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000014",
+                        "key": 20,
+                        "type": "Enum",
+                        "value": 3,
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000D2",
+                  "elementId": 268435666,
+                  "elementIdName": "VendorSellSellItem_Button",
+                  "readOrder": 5,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000CD",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 732,
+                    "y": 4,
+                    "width": 64,
+                    "height": 22,
+                    "zLevel": null,
+                    "leftEdge": 2,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 213730029,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000D3",
+                  "elementId": 268435667,
+                  "elementIdName": "VendorSellSellAll_Button",
+                  "readOrder": 6,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000CD",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 732,
+                    "y": 30,
+                    "width": 64,
+                    "height": 22,
+                    "zLevel": null,
+                    "leftEdge": 2,
+                    "topEdge": 1,
+                    "rightEdge": 1,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 97240236,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000D4",
+                  "elementId": 268435668,
+                  "elementIdName": "VendorSellClearItem_Button",
+                  "readOrder": 7,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000CD",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 4,
+                    "y": 1,
+                    "width": 65,
+                    "height": 14,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 2,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 54787229,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                },
+                {
+                  "elementIdHex": "0x100000D5",
+                  "elementId": 268435669,
+                  "elementIdName": "VendorSellClearAll_Button",
+                  "readOrder": 8,
+                  "type": 0,
+                  "parentElementIdHex": "0x100000CD",
+                  "defaultState": "Undef",
+                  "stateDesc": {
+                    "stateId": 0,
+                    "stateIdName": "Undef",
+                    "passToChildren": false,
+                    "incorporationFlagsHex": "0x0000001E",
+                    "incorporationFlags": [
+                      {
+                        "bitHex": "0x02",
+                        "name": "X"
+                      },
+                      {
+                        "bitHex": "0x04",
+                        "name": "Y"
+                      },
+                      {
+                        "bitHex": "0x08",
+                        "name": "Width"
+                      },
+                      {
+                        "bitHex": "0x10",
+                        "name": "Height"
+                      }
+                    ],
+                    "x": 4,
+                    "y": 15,
+                    "width": 65,
+                    "height": 14,
+                    "zLevel": null,
+                    "leftEdge": 1,
+                    "topEdge": 1,
+                    "rightEdge": 2,
+                    "bottomEdge": 2,
+                    "properties": [
+                      {
+                        "keyHex": "0x00000017",
+                        "key": 23,
+                        "type": "StringInfo",
+                        "value": {
+                          "Token": 0,
+                          "StringId": 54781572,
+                          "TableId": {},
+                          "Override": {
+                            "name": "None",
+                            "value": 0
+                          },
+                          "English": 1,
+                          "Comment": 0
+                        },
+                        "isImageDid": false,
+                        "fieldName": null
+                      }
+                    ],
+                    "media": []
+                  },
+                  "states": {},
+                  "imageDids": [],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "elementIdHex": "0x1000008D",
+          "elementId": 268435597,
+          "elementIdName": "TabBackground",
+          "readOrder": 2,
+          "type": 8,
+          "parentElementIdHex": "0x100000B7",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000003E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              },
+              {
+                "bitHex": "0x20",
+                "name": "ZLevel"
+              }
+            ],
+            "x": 0,
+            "y": 0,
+            "width": 800,
+            "height": 20,
+            "zLevel": 100,
+            "leftEdge": 1,
+            "topEdge": 1,
+            "rightEdge": 1,
+            "bottomEdge": 2,
+            "properties": [],
+            "media": [
+              {
+                "mediaType": "Image",
+                "fields": {
+                  "File": 100687632,
+                  "DrawMode": {
+                    "name": "Normal",
+                    "value": 1
+                  }
+                },
+                "imageDids": [
+                  "0x06005F10"
+                ]
+              }
+            ]
+          },
+          "states": {},
+          "imageDids": [
+            "0x06005F10"
+          ],
+          "children": []
+        },
+        {
+          "elementIdHex": "0x100000D6",
+          "elementId": 268435670,
+          "elementIdName": "CloseVendorPanelButton",
+          "readOrder": 3,
+          "type": 0,
+          "parentElementIdHex": "0x100000B7",
+          "defaultState": "Undef",
+          "stateDesc": {
+            "stateId": 0,
+            "stateIdName": "Undef",
+            "passToChildren": false,
+            "incorporationFlagsHex": "0x0000003E",
+            "incorporationFlags": [
+              {
+                "bitHex": "0x02",
+                "name": "X"
+              },
+              {
+                "bitHex": "0x04",
+                "name": "Y"
+              },
+              {
+                "bitHex": "0x08",
+                "name": "Width"
+              },
+              {
+                "bitHex": "0x10",
+                "name": "Height"
+              },
+              {
+                "bitHex": "0x20",
+                "name": "ZLevel"
+              }
+            ],
+            "x": 776,
+            "y": 0,
+            "width": 22,
+            "height": 20,
+            "zLevel": 10,
+            "leftEdge": 2,
+            "topEdge": 1,
+            "rightEdge": 1,
+            "bottomEdge": 2,
+            "properties": [],
+            "media": []
+          },
+          "states": {
+            "Normal": {
+              "stateId": 1,
+              "stateIdName": "Normal",
+              "passToChildren": false,
+              "incorporationFlagsHex": "0x00000000",
+              "incorporationFlags": [],
+              "x": null,
+              "y": null,
+              "width": null,
+              "height": null,
+              "zLevel": null,
+              "leftEdge": 2,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 2,
+              "properties": [],
+              "media": [
+                {
+                  "mediaType": "Image",
+                  "fields": {
+                    "File": 100668074,
+                    "DrawMode": {
+                      "name": "Normal",
+                      "value": 1
+                    }
+                  },
+                  "imageDids": [
+                    "0x060012AA"
+                  ]
+                }
+              ]
+            },
+            "Normal_pressed": {
+              "stateId": 3,
+              "stateIdName": "Normal_pressed",
+              "passToChildren": false,
+              "incorporationFlagsHex": "0x00000000",
+              "incorporationFlags": [],
+              "x": null,
+              "y": null,
+              "width": null,
+              "height": null,
+              "zLevel": null,
+              "leftEdge": 2,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 2,
+              "properties": [],
+              "media": [
+                {
+                  "mediaType": "Image",
+                  "fields": {
+                    "File": 100668073,
+                    "DrawMode": {
+                      "name": "Normal",
+                      "value": 1
+                    }
+                  },
+                  "imageDids": [
+                    "0x060012A9"
+                  ]
+                }
+              ]
+            }
+          },
+          "imageDids": [
+            "0x060012A9",
+            "0x060012AA"
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementIdHex": "0x1000048E",
+      "elementId": 268436622,
+      "elementIdName": "GenericShopTab",
+      "readOrder": 1,
+      "type": 0,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x00000000",
+        "incorporationFlags": [],
+        "x": null,
+        "y": null,
+        "width": null,
+        "height": null,
+        "zLevel": null,
+        "leftEdge": 0,
+        "topEdge": 0,
+        "rightEdge": 0,
+        "bottomEdge": 0,
+        "properties": [],
+        "media": []
+      },
+      "states": {
+        "Closed": {
+          "stateId": 11,
+          "stateIdName": "Closed",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100687634,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06005F12"
+              ]
+            }
+          ]
+        },
+        "Open": {
+          "stateId": 12,
+          "stateIdName": "Open",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100687633,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06005F11"
+              ]
+            }
+          ]
+        }
+      },
+      "imageDids": [
+        "0x06005F11",
+        "0x06005F12"
+      ],
+      "children": []
+    },
+    {
+      "elementIdHex": "0x100000DA",
+      "elementId": 268435674,
+      "elementIdName": "VendorItemsPageTemplate",
+      "readOrder": 2,
+      "type": 3,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000001E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 800,
+        "height": 90,
+        "zLevel": null,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [
+          {
+            "keyHex": "0x00000056",
+            "key": 86,
+            "type": "Struct",
+            "value": {
+              "84": {
+                "keyHex": "0x00000000",
+                "key": 0,
+                "type": "Integer",
+                "value": 0,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              "85": {
+                "keyHex": "0x00000000",
+                "key": 0,
+                "type": "Integer",
+                "value": 23,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            },
+            "isImageDid": false,
+            "fieldName": null
+          }
+        ],
+        "media": [
+          {
+            "mediaType": "Image",
+            "fields": {
+              "File": 100682946,
+              "DrawMode": {
+                "name": "Normal",
+                "value": 1
+              }
+            },
+            "imageDids": [
+              "0x06004CC2"
+            ]
+          }
+        ]
+      },
+      "states": {},
+      "imageDids": [
+        "0x06004CC2"
+      ],
+      "children": []
+    },
+    {
+      "elementIdHex": "0x100000DB",
+      "elementId": 268435675,
+      "elementIdName": "VendorBuyPageTemplate",
+      "readOrder": 3,
+      "type": 3,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000001E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 800,
+        "height": 90,
+        "zLevel": null,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [
+          {
+            "keyHex": "0x00000056",
+            "key": 86,
+            "type": "Struct",
+            "value": {
+              "84": {
+                "keyHex": "0x00000000",
+                "key": 0,
+                "type": "Integer",
+                "value": 0,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              "85": {
+                "keyHex": "0x00000000",
+                "key": 0,
+                "type": "Integer",
+                "value": 23,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            },
+            "isImageDid": false,
+            "fieldName": null
+          }
+        ],
+        "media": [
+          {
+            "mediaType": "Image",
+            "fields": {
+              "File": 100682946,
+              "DrawMode": {
+                "name": "Normal",
+                "value": 1
+              }
+            },
+            "imageDids": [
+              "0x06004CC2"
+            ]
+          }
+        ]
+      },
+      "states": {},
+      "imageDids": [
+        "0x06004CC2"
+      ],
+      "children": []
+    },
+    {
+      "elementIdHex": "0x100000DC",
+      "elementId": 268435676,
+      "elementIdName": "VendorSellPageTemplate",
+      "readOrder": 4,
+      "type": 3,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000001E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 800,
+        "height": 90,
+        "zLevel": null,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [
+          {
+            "keyHex": "0x00000056",
+            "key": 86,
+            "type": "Struct",
+            "value": {
+              "84": {
+                "keyHex": "0x00000000",
+                "key": 0,
+                "type": "Integer",
+                "value": 0,
+                "isImageDid": false,
+                "fieldName": null
+              },
+              "85": {
+                "keyHex": "0x00000000",
+                "key": 0,
+                "type": "Integer",
+                "value": 23,
+                "isImageDid": false,
+                "fieldName": null
+              }
+            },
+            "isImageDid": false,
+            "fieldName": null
+          }
+        ],
+        "media": [
+          {
+            "mediaType": "Image",
+            "fields": {
+              "File": 100682946,
+              "DrawMode": {
+                "name": "Normal",
+                "value": 1
+              }
+            },
+            "imageDids": [
+              "0x06004CC2"
+            ]
+          }
+        ]
+      },
+      "states": {},
+      "imageDids": [
+        "0x06004CC2"
+      ],
+      "children": []
+    },
+    {
+      "elementIdHex": "0x100000DD",
+      "elementId": 268435677,
+      "elementIdName": "VendorItemButton",
+      "readOrder": 5,
+      "type": 0,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000003E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          },
+          {
+            "bitHex": "0x20",
+            "name": "ZLevel"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 64,
+        "height": 22,
+        "zLevel": 10,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [],
+        "media": []
+      },
+      "states": {
+        "Normal": {
+          "stateId": 1,
+          "stateIdName": "Normal",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100682828,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06004C4C"
+              ]
+            }
+          ]
+        },
+        "Normal_pressed": {
+          "stateId": 3,
+          "stateIdName": "Normal_pressed",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100682829,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06004C4D"
+              ]
+            }
+          ]
+        },
+        "Ghosted": {
+          "stateId": 13,
+          "stateIdName": "Ghosted",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100682830,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06004C4E"
+              ]
+            }
+          ]
+        }
+      },
+      "imageDids": [
+        "0x06004C4C",
+        "0x06004C4D",
+        "0x06004C4E"
+      ],
+      "children": []
+    },
+    {
+      "elementIdHex": "0x100000DE",
+      "elementId": 268435678,
+      "elementIdName": "VendorBuyButton",
+      "readOrder": 6,
+      "type": 0,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000003E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          },
+          {
+            "bitHex": "0x20",
+            "name": "ZLevel"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 64,
+        "height": 22,
+        "zLevel": 10,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [],
+        "media": []
+      },
+      "states": {
+        "Normal": {
+          "stateId": 1,
+          "stateIdName": "Normal",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100682828,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06004C4C"
+              ]
+            }
+          ]
+        },
+        "Normal_pressed": {
+          "stateId": 3,
+          "stateIdName": "Normal_pressed",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100682829,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06004C4D"
+              ]
+            }
+          ]
+        },
+        "Ghosted": {
+          "stateId": 13,
+          "stateIdName": "Ghosted",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100682830,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06004C4E"
+              ]
+            }
+          ]
+        }
+      },
+      "imageDids": [
+        "0x06004C4C",
+        "0x06004C4D",
+        "0x06004C4E"
+      ],
+      "children": []
+    },
+    {
+      "elementIdHex": "0x100000DF",
+      "elementId": 268435679,
+      "elementIdName": "VendorBuyButtonSmall",
+      "readOrder": 7,
+      "type": 0,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000003E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          },
+          {
+            "bitHex": "0x20",
+            "name": "ZLevel"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 65,
+        "height": 14,
+        "zLevel": 10,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [],
+        "media": []
+      },
+      "states": {
+        "Normal": {
+          "stateId": 1,
+          "stateIdName": "Normal",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100668090,
+                "DrawMode": {
+                  "name": "Normal",
+                  "value": 1
+                }
+              },
+              "imageDids": [
+                "0x060012BA"
+              ]
+            }
+          ]
+        },
+        "Normal_pressed": {
+          "stateId": 3,
+          "stateIdName": "Normal_pressed",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100668089,
+                "DrawMode": {
+                  "name": "Normal",
+                  "value": 1
+                }
+              },
+              "imageDids": [
+                "0x060012B9"
+              ]
+            }
+          ]
+        },
+        "Ghosted": {
+          "stateId": 13,
+          "stateIdName": "Ghosted",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100668088,
+                "DrawMode": {
+                  "name": "Normal",
+                  "value": 1
+                }
+              },
+              "imageDids": [
+                "0x060012B8"
+              ]
+            }
+          ]
+        }
+      },
+      "imageDids": [
+        "0x060012B8",
+        "0x060012B9",
+        "0x060012BA"
+      ],
+      "children": []
+    },
+    {
+      "elementIdHex": "0x100000E0",
+      "elementId": 268435680,
+      "elementIdName": "VendorSellButton",
+      "readOrder": 8,
+      "type": 0,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000003E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          },
+          {
+            "bitHex": "0x20",
+            "name": "ZLevel"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 64,
+        "height": 22,
+        "zLevel": 10,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [],
+        "media": []
+      },
+      "states": {
+        "Normal": {
+          "stateId": 1,
+          "stateIdName": "Normal",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100682828,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06004C4C"
+              ]
+            }
+          ]
+        },
+        "Normal_pressed": {
+          "stateId": 3,
+          "stateIdName": "Normal_pressed",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100682829,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06004C4D"
+              ]
+            }
+          ]
+        },
+        "Ghosted": {
+          "stateId": 13,
+          "stateIdName": "Ghosted",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100682830,
+                "DrawMode": {
+                  "name": "Alphablend",
+                  "value": 3
+                }
+              },
+              "imageDids": [
+                "0x06004C4E"
+              ]
+            }
+          ]
+        }
+      },
+      "imageDids": [
+        "0x06004C4C",
+        "0x06004C4D",
+        "0x06004C4E"
+      ],
+      "children": []
+    },
+    {
+      "elementIdHex": "0x100000E1",
+      "elementId": 268435681,
+      "elementIdName": "VendorSellButtonSmall",
+      "readOrder": 9,
+      "type": 0,
+      "parentElementIdHex": null,
+      "defaultState": "Undef",
+      "stateDesc": {
+        "stateId": 0,
+        "stateIdName": "Undef",
+        "passToChildren": false,
+        "incorporationFlagsHex": "0x0000003E",
+        "incorporationFlags": [
+          {
+            "bitHex": "0x02",
+            "name": "X"
+          },
+          {
+            "bitHex": "0x04",
+            "name": "Y"
+          },
+          {
+            "bitHex": "0x08",
+            "name": "Width"
+          },
+          {
+            "bitHex": "0x10",
+            "name": "Height"
+          },
+          {
+            "bitHex": "0x20",
+            "name": "ZLevel"
+          }
+        ],
+        "x": 0,
+        "y": 0,
+        "width": 65,
+        "height": 14,
+        "zLevel": 10,
+        "leftEdge": 1,
+        "topEdge": 1,
+        "rightEdge": 1,
+        "bottomEdge": 1,
+        "properties": [],
+        "media": []
+      },
+      "states": {
+        "Normal": {
+          "stateId": 1,
+          "stateIdName": "Normal",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100669735,
+                "DrawMode": {
+                  "name": "Normal",
+                  "value": 1
+                }
+              },
+              "imageDids": [
+                "0x06001927"
+              ]
+            }
+          ]
+        },
+        "Normal_pressed": {
+          "stateId": 3,
+          "stateIdName": "Normal_pressed",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100669736,
+                "DrawMode": {
+                  "name": "Normal",
+                  "value": 1
+                }
+              },
+              "imageDids": [
+                "0x06001928"
+              ]
+            }
+          ]
+        },
+        "Ghosted": {
+          "stateId": 13,
+          "stateIdName": "Ghosted",
+          "passToChildren": false,
+          "incorporationFlagsHex": "0x00000000",
+          "incorporationFlags": [],
+          "x": null,
+          "y": null,
+          "width": null,
+          "height": null,
+          "zLevel": null,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "properties": [],
+          "media": [
+            {
+              "mediaType": "Image",
+              "fields": {
+                "File": 100668088,
+                "DrawMode": {
+                  "name": "Normal",
+                  "value": 1
+                }
+              },
+              "imageDids": [
+                "0x060012B8"
+              ]
+            }
+          ]
+        }
+      },
+      "imageDids": [
+        "0x060012B8",
+        "0x06001927",
+        "0x06001928"
+      ],
+      "children": []
+    }
+  ],
+  "datPath": "/home/wbterminal/ac_base_dats/client_local_English.dat",
+  "outPath": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/data/retail-layouts/0x21000012.json"
+}
