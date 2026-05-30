@@ -1,6 +1,6 @@
 // Hand-run smoke test for Phase C.2 `fetch_landblock_scenery` wasm
 // export. Spins up a tiny static HTTP server in front of the staged
-// bake at `/mnt/wbterminal1/holtburger-dist-v2/scenery/`, calls
+// bake at `/mnt/wbterminal2/holtburger-dist/scenery/`, calls
 // `init_scenery_base_url(...)` + `fetch_landblock_scenery([...])`
 // against the freshly built nodejs wasm bundle, and asserts at least
 // one placement comes back for an LB known to have scenery.
@@ -18,7 +18,7 @@ const PKG_DIR =
     process.env.PKG_DIR ||
     "/mnt/wbterminal1/tmp/claude-scratch/scenery-bake/c12/pkg-nodejs";
 const SCENERY_DIR =
-    process.env.SCENERY_DIR || "/mnt/wbterminal1/holtburger-dist-v2/scenery";
+    process.env.SCENERY_DIR || "/mnt/wbterminal2/holtburger-dist/scenery";
 
 let failed = 0;
 function check(name, ok, detail) {

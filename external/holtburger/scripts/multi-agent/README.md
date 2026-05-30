@@ -26,8 +26,8 @@ Empirically ~30-40% less RSS per agent than N independent browsers.
 The wire-agent companion flag stack on the laptop:
 
 ```bash
-ps -ef | grep -E '(ACE.Server|wsbridge|nocache)' | grep -v grep
-# expect: dotnet ACE.Server.dll | holtburger-wsbridge | python3 nocache-server.py 8765
+ps -ef | grep -E '(ACE.Server|wsbridge|serve\.py)' | grep -v grep
+# expect: dotnet ACE.Server.dll | holtburger-wsbridge | python3 scripts/serve.py
 ```
 
 Playwright + chromium-headless-shell-1223 from the Playwright cache must

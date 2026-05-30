@@ -69,7 +69,7 @@ try {
 // =====================================================================
 
 const APP_ROOT = "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger";
-const DIST_V2 = "/mnt/wbterminal1/holtburger-dist-v2";
+const DIST_V2 = process.env.HOLTBURGER_DIST || process.env.HOLTBURGER_DIST_V2 || "/mnt/wbterminal2/holtburger-dist";
 
 if (!fs.existsSync(path.join(APP_ROOT, "apps/holtburger-web/index.html"))) {
   console.error(`FAIL: index.html missing at ${APP_ROOT}/apps/holtburger-web/index.html`);

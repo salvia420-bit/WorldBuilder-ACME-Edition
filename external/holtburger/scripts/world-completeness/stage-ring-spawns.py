@@ -46,7 +46,15 @@ RING_X_RANGE = range(163, 176)   # inclusive 163..=175
 RING_Y_RANGE = range(174, 187)   # inclusive 174..=186
 
 DEFAULT_SOURCE = "/home/wbterminal/projects/RetailSmoke/ace_spawn_records.jsonl"
-DEFAULT_OUT = "/mnt/wbterminal1/holtburger-dist-v2/spawns"
+
+# Single canonical baked-data root (see scripts/serve.py). All layers stage as
+# real subdirs of it; the legacy HOLTBURGER_DIST_V2 is honoured as a fallback.
+HOLTBURGER_DIST = (
+    os.environ.get("HOLTBURGER_DIST")
+    or os.environ.get("HOLTBURGER_DIST_V2")
+    or "/mnt/wbterminal2/holtburger-dist"
+)
+DEFAULT_OUT = os.path.join(HOLTBURGER_DIST, "spawns")
 DEFAULT_WEENIE_INDEX = "/home/wbterminal/projects/RetailSmoke/weenie_index.jsonl"
 
 

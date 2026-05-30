@@ -45,7 +45,7 @@ const wasm = require('../pkg-node/holtburger_web.js');
 const DIST_MANIFEST_ENV = process.env.HOLTBURGER_DIST_V2_MANIFEST;
 const DIST_DIR = DIST_MANIFEST_ENV
   ? path.dirname(DIST_MANIFEST_ENV)
-  : '/mnt/wbterminal1/holtburger-dist-v2';
+  : (process.env.HOLTBURGER_DIST || '/mnt/wbterminal2/holtburger-dist');
 
 const RING_MIN_X = 0xA3;
 const RING_MAX_X = 0xAF;

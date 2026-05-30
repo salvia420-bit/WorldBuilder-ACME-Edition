@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -46,7 +47,14 @@ DEFAULT_SOURCE = (
     "/mnt/wbterminal1/tmp/claude-scratch/"
     "event-completeness/b/holtburg-ring"
 )
-DEFAULT_OUT = "/mnt/wbterminal1/holtburger-dist-v2/events"
+# Single canonical baked-data root (see scripts/serve.py). All layers stage as
+# real subdirs of it; the legacy HOLTBURGER_DIST_V2 is honoured as a fallback.
+HOLTBURGER_DIST = (
+    os.environ.get("HOLTBURGER_DIST")
+    or os.environ.get("HOLTBURGER_DIST_V2")
+    or "/mnt/wbterminal2/holtburger-dist"
+)
+DEFAULT_OUT = Path(HOLTBURGER_DIST) / "events"
 
 
 def lb_hex(landblock_id: int) -> str:

@@ -174,6 +174,7 @@ Live stack (confirm before captures):
 - wsbridge: TCP `0.0.0.0:8080`
 - cloudflared tunnel: `drainage-eden-ahead-herbal.trycloudflare.com` → `127.0.0.1:7080`
 - Web proxy: `127.0.0.1:7080` — run with `node scripts/proxy.cjs` (canonical source in repo; was previously `/tmp/holtburger_proxy.cjs` which didn't survive reboot)
+- Page server: `127.0.0.1:8765` — run with `python3 scripts/serve.py` (committed; validates baked layers + auto-binds `dist` + threads. Replaces the old uncommitted `/tmp/nocache-server.py` that didn't survive reboot)
 
 ## Skybox feature-level checklist
 

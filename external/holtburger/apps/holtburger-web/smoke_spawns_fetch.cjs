@@ -1,7 +1,7 @@
 // Hand-run smoke test for Phase D.1 `fetch_landblock_spawns` wasm
 // export. Mirrors `smoke_scenery_fetch.cjs`'s shape. Spins up a
 // tiny static HTTP server in front of the staged spawn dir at
-// `/mnt/wbterminal1/holtburger-dist-v2/spawns/`, calls
+// `/mnt/wbterminal2/holtburger-dist/spawns/`, calls
 // `init_spawns_base_url(...)` + `fetch_landblock_spawns([...])`
 // against the freshly built nodejs wasm bundle, and asserts at
 // least one record comes back for Holtburg (LB 0xA9B4 has 106
@@ -20,7 +20,7 @@ const PKG_DIR =
     process.env.PKG_DIR ||
     path.join(__dirname, "pkg-node");
 const SPAWNS_DIR =
-    process.env.SPAWNS_DIR || "/mnt/wbterminal1/holtburger-dist-v2/spawns";
+    process.env.SPAWNS_DIR || "/mnt/wbterminal2/holtburger-dist/spawns";
 
 let failed = 0;
 function check(name, ok, detail) {

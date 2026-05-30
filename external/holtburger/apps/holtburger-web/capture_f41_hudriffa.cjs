@@ -43,7 +43,7 @@ try {
 }
 
 const APP_ROOT = "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger";
-const DIST_V2 = "/mnt/wbterminal1/holtburger-dist-v2";
+const DIST_V2 = process.env.HOLTBURGER_DIST || process.env.HOLTBURGER_DIST_V2 || "/mnt/wbterminal2/holtburger-dist";
 
 function contentTypeFor(filePath) {
   if (filePath.endsWith(".html")) return "text/html; charset=utf-8";

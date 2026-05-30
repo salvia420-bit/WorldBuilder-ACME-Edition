@@ -2148,7 +2148,7 @@ try {
 // `events/` dir under `dist/` (without updating the validator's
 // path), this gate surfaces the regression at smoke time.
 try {
-    const DIST_V2 = "/mnt/wbterminal1/holtburger-dist-v2";
+    const DIST_V2 = process.env.HOLTBURGER_DIST || process.env.HOLTBURGER_DIST_V2 || "/mnt/wbterminal2/holtburger-dist";
     const stagedManifest = path.join(DIST_V2, "events", "0xA9B4.events.jsonl");
     const stagedSha = path.join(DIST_V2, "events", "event-bake-source.sha256");
     const manifestOk = fs.existsSync(stagedManifest);
@@ -4362,7 +4362,7 @@ try {
         const fs = require("fs");
         const path = require("path");
         const SCENERY_DIR =
-            "/mnt/wbterminal1/holtburger-dist-v2/scenery";
+            (process.env.HOLTBURGER_DIST || "/mnt/wbterminal2/holtburger-dist") + "/scenery";
         const sceneryStaged = fs.existsSync(
             path.join(SCENERY_DIR, "bake-source.sha256")
         );

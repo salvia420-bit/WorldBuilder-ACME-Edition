@@ -409,16 +409,22 @@ through Holtburg's center as diagonal lines.
 > `/tmp` knocked SSH offline mid-development on 2026-05-04 and
 > forced the 2026-05-05 → 2026-05-06 commit gap.
 >
-> **Set up `dist/` as a symlink to a roomy drive before baking.**
-> This host has 6.9 TB free on `/mnt/wbterminal1` (and another
-> 6.9 TB on `/mnt/wbterminal2`); aim there. The HTTP server
-> serves `external/holtburger/`, so the symlink keeps the
-> browser-visible URL `dist/manifest.json` working unchanged.
+> **All baked data lives under ONE canonical root — `$HOLTBURGER_DIST`**
+> (default `/mnt/wbterminal2/holtburger-dist`, 6.9 TB free). Keep it off
+> the 117 GB system disk. `external/holtburger/dist` is a *single* symlink
+> to that root, and `scripts/serve.py` creates/repairs it automatically at
+> startup — so a fresh checkout or git worktree just works, and a missing
+> binding fails loud instead of silently emptying the world.
+>
+> The old per-layer `dist/{scenery,spawns,events}` symlinks (which pointed
+> at a *second* drive and broke repeatedly) are **gone** — those layers now
+> stage as REAL subdirs of the same root (consolidated 2026-05-30). The
+> root holds `manifest/ shards/ boot.hba scenery/ spawns/ events/`.
 >
 > ```bash
-> rm -f external/holtburger/dist  # in case a stale symlink exists
-> mkdir -p /mnt/wbterminal1/holtburger-dist
-> ln -s /mnt/wbterminal1/holtburger-dist external/holtburger/dist
+> # serve.py auto-creates the default symlink; only set this to relocate.
+> export HOLTBURGER_DIST=/mnt/wbterminal2/holtburger-dist
+> mkdir -p "$HOLTBURGER_DIST"
 > ```
 >
 > Phase 5.2 obj 5 made v2 the default (`--manifest-version=2`).
@@ -439,11 +445,20 @@ cargo build -p holtburger-tools --bin dat-shard --release
 #   dist/shards/{namespace_slug}/0x{file_id}.bin → convention symlinks
 ```
 
+The per-landblock layers come from separate bakes and stage into the same
+root: `scenery-bake --out $HOLTBURGER_DIST/scenery`,
+`scripts/world-completeness/stage-ring-spawns.py` (→ `$HOLTBURGER_DIST/spawns`),
+`scripts/event-completeness/stage-ring-events.py` (→ `$HOLTBURGER_DIST/events`).
+All three default to `$HOLTBURGER_DIST`.
+
 **Live-server stack** (the user keeps this running for
 on-device validation; recipe in
 [`phase-5-thorough.md`](phase-5-thorough.md) §"Live test info"):
 
-- Python `http.server` on `:8765` from `external/holtburger/`.
+- `scripts/serve.py` on `:8765` from `external/holtburger/` — validates every
+  baked layer is present (fail-loud) + auto-creates the `dist` symlink. (Plain
+  `python3 -m http.server 8765` still works since the tree is now all real dirs,
+  but skips the validation + health checks.)
 - `holtburger-wsbridge` on `:8080` fronting ACE.
 - ACE on UDP `127.0.0.1:9000` / `:9001` (built from
   `~/ace-server/`; recipe in

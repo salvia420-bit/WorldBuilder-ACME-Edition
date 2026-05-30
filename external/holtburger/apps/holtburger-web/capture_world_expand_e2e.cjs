@@ -194,7 +194,7 @@ const EXPECTED_TOTAL_PLACEMENTS = 766;
 // resolves relative to the page path to `http://127.0.0.1:PORT/dist/manifest.json`.
 
 const APP_ROOT = "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger";
-const DIST_V2 = "/mnt/wbterminal1/holtburger-dist-v2";
+const DIST_V2 = process.env.HOLTBURGER_DIST || process.env.HOLTBURGER_DIST_V2 || "/mnt/wbterminal2/holtburger-dist";
 
 // Sanity: ensure both paths exist.
 if (!fs.existsSync(path.join(APP_ROOT, "apps/holtburger-web/index.html"))) {

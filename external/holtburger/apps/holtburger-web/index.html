@@ -1711,6 +1711,70 @@
             "[Phase 5.0/5.2] manifest-mode source initialized from",
             MANIFEST_URL
           );
+
+          // Data-layer health gate (single-root consolidation, 2026-05-30).
+          // The baked scenery/spawns layers used to silently vanish whenever
+          // their dist symlink broke: the wasm client reads a per-LB 404 as
+          // "0 placements here", which is indistinguishable from a WHOLE layer
+          // being unbound — so an empty world rendered with zero error signal.
+          // `scripts/serve.py` now writes `dist/_health.json` with per-layer
+          // file counts; if a renderer-consumed layer reports 0 files we raise a
+          // LOUD, dismissible banner instead of quietly dropping the layer.
+          // Fire-and-forget (never blocks boot). Skip with `?nohealth=1`
+          // (mirrors `?nosw=1`). A missing `_health.json` (someone ran a bare
+          // `python3 -m http.server` instead of serve.py) is a console-warn,
+          // never a false banner.
+          if (
+            new URLSearchParams(window.location.search).get("nohealth") !== "1"
+          ) {
+            fetch("../../dist/_health.json", { cache: "no-store" })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((health) => {
+                if (!health || !health.layers) {
+                  console.warn(
+                    "[health] dist/_health.json unavailable — skipping data-layer " +
+                      "health check (run external/holtburger/scripts/serve.py to get it)"
+                  );
+                  return;
+                }
+                const NEEDED = ["scenery", "spawns"];
+                const empty = NEEDED.filter(
+                  (k) =>
+                    !health.layers[k] ||
+                    !health.layers[k].present ||
+                    health.layers[k].files === 0
+                );
+                if (!empty.length) {
+                  console.log(
+                    "[health] baked data layers OK:",
+                    NEEDED.map((k) => `${k}=${health.layers[k].files}`).join(" ")
+                  );
+                  return;
+                }
+                console.error("[health] UNBOUND BAKED DATA LAYER(S):", empty, health);
+                const bar = document.createElement("div");
+                bar.id = "data-layer-banner";
+                bar.style.cssText =
+                  "position:fixed;top:0;left:0;right:0;z-index:99999;" +
+                  "background:#7a1f1f;color:#fff;font:13px/1.5 monospace;" +
+                  "padding:8px 14px;box-shadow:0 2px 10px rgba(0,0,0,.6);";
+                bar.innerHTML =
+                  "<b>⚠ Baked data layer not served:</b> " +
+                  empty.join(", ") +
+                  " (0 files). The 3D world will render without it. Launch the dev " +
+                  "server via <code>external/holtburger/scripts/serve.py</code> " +
+                  "(it validates &amp; auto-binds the data), or check the " +
+                  "<code>HOLTBURGER_DIST</code> mount. " +
+                  '<a href="#" style="color:#ffd;margin-left:10px;">dismiss</a>';
+                bar.querySelector("a").onclick = (ev) => {
+                  ev.preventDefault();
+                  bar.remove();
+                };
+                document.body.appendChild(bar);
+              })
+              .catch((e) => console.warn("[health] health check failed:", e));
+          }
+
           // Phase B cold-boot plan (2026-05-21): eager-prefetch the
           // 5 `WorldBootstrap` game-data tables (SkillTable,
           // SpellTable, XpTable, MotionKinematics, ChatPoseTable) so

@@ -180,10 +180,16 @@ from this crate) so the `dats/assets.hba` fixture is reachable at
 `../../dats/assets.hba` from the bundle's URL:
 
 ```sh
-cd external/holtburger
-python3 -m http.server 0 --bind 127.0.0.1
-# Note the port; open
-# http://127.0.0.1:<port>/apps/holtburger-web/index.html
+# Recommended: the committed launcher validates every baked data layer is
+# present (fail-loud — no more silently-empty world), auto-creates the single
+# `dist` symlink (works on a fresh checkout / worktree), writes
+# `dist/_health.json` for the in-app health banner, and threads (the bare
+# single-thread http.server wedges on the 3.6 MB wasm). Runs from any cwd.
+python3 scripts/serve.py            # :8765 by default; --port N to override
+# open http://127.0.0.1:8765/apps/holtburger-web/index.html
+
+# Bare fallback still works (tree is all real dirs now) but skips validation:
+#   cd external/holtburger && python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
 `index.html` runs the wasm symbol-presence checks and then renders
