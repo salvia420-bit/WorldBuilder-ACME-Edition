@@ -68,4 +68,17 @@
 		<InternalsVisibleTo Include="WorldBuilder.Tests" />
 	</ItemGroup>
 
+	<!-- AcClient.UIElementId: 1,776-line retail-shipped enum mapping element IDs
+	     (e.g. 0x10000036) to symbolic names (e.g. RootRadar_Field). Lives in
+	     Chorizite's NativeClientBootstrapper, but the file has no dependencies
+	     beyond System — we pull just this one file via <Compile Include> so
+	     chorizite-dump-layout-tree's opt-in resolveSymbols path can name element
+	     IDs the way ac.yotes.fan does, without dragging in the plugin host's
+	     Autofac/Silk/Lua deps. Unknown IDs fall back to hex (preserves the
+	     "could be a custom layout post-classic-era" case). -->
+	<ItemGroup>
+		<Compile Include="..\external\chorizite\Chorizite\Chorizite.NativeClientBootstrapper\AcClient\UIElementId.cs"
+		         Link="Vendored\AcClient\UIElementId.cs" />
+	</ItemGroup>
+
 </Project>

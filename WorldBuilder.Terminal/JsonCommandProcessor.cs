@@ -508,7 +508,12 @@ public class JsonCommandProcessor {
         }
         string? outPath = node["outPath"]?.GetValue<string>();
         string? datPath = node["datPath"]?.GetValue<string>();
-        var r = _engine.ChoriziteDumpLayoutTree(layoutId, outPath, datPath);
+        // resolveSymbols (default false): when true, fills ElementIdName /
+        // StateIdName / IncorporationFlags-as-list using retail enum names
+        // (AcClient.UIElementId, DRW.Enums.UIStateId/IncorporationFlags).
+        // Hex fields stay populated either way — opt-in adds, never replaces.
+        bool resolveSymbols = node["resolveSymbols"]?.GetValue<bool>() ?? false;
+        var r = _engine.ChoriziteDumpLayoutTree(layoutId, outPath, datPath, resolveSymbols);
 
         // Wrap the dump result. We inline the full tree when no outPath
         // was given so the caller can pipe it; when outPath is set we

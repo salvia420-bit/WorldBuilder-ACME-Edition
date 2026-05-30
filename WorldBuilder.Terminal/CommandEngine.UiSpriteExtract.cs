@@ -90,6 +90,11 @@ public partial class CommandEngine {
     public sealed record UiLayoutElementRecord(
         string ElementIdHex,
         uint ElementId,
+        // Best-effort symbolic name from the retail AcClient.UIElementId enum
+        // (1,765 entries, e.g. "RootRadar_Field"). Null when resolveSymbols is
+        // off OR when the ID isn't in the retail enum (custom server layouts,
+        // post-classic-era IDs) — caller still has ElementIdHex either way.
+        string? ElementIdName,
         uint ReadOrder,
         uint Type,
         string? ParentElementIdHex,
@@ -101,14 +106,27 @@ public partial class CommandEngine {
 
     public sealed record UiLayoutStateDescRecord(
         uint StateId,
+        // Best-effort symbolic name from DRW.Enums.UIStateId (generated from
+        // dats.xml prefix 2322, ~80 entries — Normal / Highlight / Closed /
+        // Open / heritage names like Aluvian etc.). Null when resolveSymbols
+        // is off OR when the ID isn't in the enum.
+        string? StateIdName,
         bool PassToChildren,
         string IncorporationFlagsHex,
+        // Bit-expanded mirror of IncorporationFlagsHex, in the shape ac.yotes.fan
+        // shows it (one entry per set bit). Null when resolveSymbols is off so
+        // existing dumps stay byte-stable.
+        IReadOnlyList<UiIncorporationFlagRecord>? IncorporationFlags,
         uint? X, uint? Y, uint? Width, uint? Height, uint? ZLevel,
         uint? LeftEdge, uint? TopEdge, uint? RightEdge, uint? BottomEdge,
         // Flattened scalar dump of the StateDesc.Properties dict.
         // Each entry: {key:"0xKEY", type:"DataId|Integer|...", value: …, isImageDid: bool}.
         IReadOnlyList<UiPropertyRecord> Properties,
         IReadOnlyList<UiMediaRecord> Media);
+
+    public sealed record UiIncorporationFlagRecord(
+        string BitHex,    // e.g. "0x02"
+        string Name);     // e.g. "X" (canonical DRW.Enums.IncorporationFlags name)
 
     public sealed record UiPropertyRecord(
         string KeyHex,
@@ -148,7 +166,7 @@ public partial class CommandEngine {
     //  chorizite-dump-layout-tree
     // ─────────────────────────────────────────────────────────────────
 
-    public UiLayoutDumpResult ChoriziteDumpLayoutTree(uint layoutId, string? outPath, string? datPath) {
+    public UiLayoutDumpResult ChoriziteDumpLayoutTree(uint layoutId, string? outPath, string? datPath, bool resolveSymbols = false) {
         // Resolve to client_local_English.dat. We default to the LOCAL DAT
         // because LayoutDesc lives there (per dats.xml — LayoutDesc is on
         // the <dat name="local"> stanza, 0x21000000-0x21FFFFFF). The
@@ -203,7 +221,8 @@ public partial class CommandEngine {
                 element: kvp.Value,
                 parentId: null,
                 seenImageDids: seenImageDids,
-                masterPropertyNames: masterPropertyNames));
+                masterPropertyNames: masterPropertyNames,
+                resolveSymbols: resolveSymbols));
         }
 
         // Count elements transitively (sanity for the smoke test).
@@ -234,9 +253,20 @@ public partial class CommandEngine {
             if (!string.IsNullOrEmpty(outDir) && !Directory.Exists(outDir)) {
                 Directory.CreateDirectory(outDir);
             }
+            // camelCase property names so the JS plugins that consume this
+            // (inventory.js / spellbook.js / etc.) get the same shape they
+            // already use throughout the codebase. The JsonCommandProcessor
+            // wrapper around this call already serializes anonymous types in
+            // camelCase via its own options — aligning the file output here
+            // keeps the two paths consistent. Dictionary keys (e.g. the
+            // States dict keyed by UIStateId enum names like "MeleeCombat")
+            // stay as their canonical retail names because we don't set
+            // DictionaryKeyPolicy — those are domain values, not field
+            // names, and lowercasing them would drift from retail.
             File.WriteAllText(outPath,
                 JsonSerializer.Serialize(resultBody, new JsonSerializerOptions {
                     WriteIndented = true,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                     Encoder = System.Text.Encodings.Web.JavaScriptEncoder
                         .UnsafeRelaxedJsonEscaping
                 }));
@@ -253,7 +283,8 @@ public partial class CommandEngine {
         DRW.Types.ElementDesc element,
         uint? parentId,
         SortedSet<uint> seenImageDids,
-        IReadOnlyDictionary<uint, string> masterPropertyNames) {
+        IReadOnlyDictionary<uint, string> masterPropertyNames,
+        bool resolveSymbols) {
         var elementImageDids = new SortedSet<uint>();
 
         UiLayoutStateDescRecord? defaultStateRecord = null;
@@ -269,7 +300,8 @@ public partial class CommandEngine {
             stateDesc: element.StateDesc,
             elementRectFallback: element,
             elementImageDids: elementImageDids,
-            masterPropertyNames: masterPropertyNames);
+            masterPropertyNames: masterPropertyNames,
+            resolveSymbols: resolveSymbols);
 
         if (element.States != null) {
             foreach (var kvp in element.States) {
@@ -278,7 +310,8 @@ public partial class CommandEngine {
                     stateDesc: kvp.Value,
                     elementRectFallback: element,
                     elementImageDids: elementImageDids,
-                    masterPropertyNames: masterPropertyNames);
+                    masterPropertyNames: masterPropertyNames,
+                    resolveSymbols: resolveSymbols);
                 allStateRecords[name] = rec;
             }
         }
@@ -291,7 +324,8 @@ public partial class CommandEngine {
                     element: kvp.Value,
                     parentId: element.ElementId,
                     seenImageDids: seenImageDids,
-                    masterPropertyNames: masterPropertyNames));
+                    masterPropertyNames: masterPropertyNames,
+                    resolveSymbols: resolveSymbols));
             }
         }
 
@@ -301,6 +335,7 @@ public partial class CommandEngine {
         return new UiLayoutElementRecord(
             ElementIdHex: $"0x{element.ElementId:X8}",
             ElementId: element.ElementId,
+            ElementIdName: resolveSymbols ? TryResolveUiElementIdName(element.ElementId) : null,
             ReadOrder: element.ReadOrder,
             Type: element.Type,
             ParentElementIdHex: parentId.HasValue ? $"0x{parentId.Value:X8}" : null,
@@ -315,7 +350,8 @@ public partial class CommandEngine {
         DRW.Types.StateDesc stateDesc,
         DRW.Types.ElementDesc elementRectFallback,
         SortedSet<uint> elementImageDids,
-        IReadOnlyDictionary<uint, string> masterPropertyNames) {
+        IReadOnlyDictionary<uint, string> masterPropertyNames,
+        bool resolveSymbols) {
 
         // Properties — iterate the (uint → BaseProperty) dict and emit
         // a typed scalar record per entry. Detect DIDs in the
@@ -360,19 +396,27 @@ public partial class CommandEngine {
         // corresponding rect scalar on the element's mask-map output
         // (X/Y/Width/Height/ZLevel) is meaningful.
         var flagsUint = (uint)stateDesc.IncorporationFlags;
-        // IncorporationFlags is canonical Width=4 / Height=8 / X=1 / Y=2 / ZLevel=16
-        // per dats.xml ElementDesc maskmap (lines 3489-3505).
+        // IncorporationFlags canonical bit values per dats.xml enum (prefix 2298):
+        //   PassToChildren = 0x01, X = 0x02, Y = 0x04, Width = 0x08,
+        //   Height = 0x10, ZLevel = 0x20.
+        // The ElementDesc maskmap at dats.xml line 3489 only names the masks
+        // — bit values live on the enum itself, NOT the maskmap. Earlier
+        // versions of this file used 0x01..0x10 (one bit off) which silently
+        // mislabeled element.X as Y, Y as Width, etc., and never surfaced
+        // ZLevel. ac.yotes.fan uses the same bits as below.
         bool HasFlag(uint mask) => (flagsUint & mask) == mask;
 
         return new UiLayoutStateDescRecord(
             StateId: stateDesc.StateId,
+            StateIdName: resolveSymbols ? TryResolveUiStateIdName(stateDesc.StateId) : null,
             PassToChildren: stateDesc.PassToChildren,
             IncorporationFlagsHex: $"0x{flagsUint:X8}",
-            X:        HasFlag(0x01u) ? elementRectFallback.X : (uint?)null,
-            Y:        HasFlag(0x02u) ? elementRectFallback.Y : (uint?)null,
-            Width:    HasFlag(0x04u) ? elementRectFallback.Width : (uint?)null,
-            Height:   HasFlag(0x08u) ? elementRectFallback.Height : (uint?)null,
-            ZLevel:   HasFlag(0x10u) ? elementRectFallback.ZLevel : (uint?)null,
+            IncorporationFlags: resolveSymbols ? ExpandIncorporationFlags(flagsUint) : null,
+            X:        HasFlag(0x02u) ? elementRectFallback.X : (uint?)null,
+            Y:        HasFlag(0x04u) ? elementRectFallback.Y : (uint?)null,
+            Width:    HasFlag(0x08u) ? elementRectFallback.Width : (uint?)null,
+            Height:   HasFlag(0x10u) ? elementRectFallback.Height : (uint?)null,
+            ZLevel:   HasFlag(0x20u) ? elementRectFallback.ZLevel : (uint?)null,
             LeftEdge:   elementRectFallback.LeftEdge,
             TopEdge:    elementRectFallback.TopEdge,
             RightEdge:  elementRectFallback.RightEdge,
@@ -472,6 +516,69 @@ public partial class CommandEngine {
     /// boundary marker is unused, but otherwise covers the full 16M
     /// retail range.</summary>
     private static bool IsImageDid(uint v) => v >= 0x06000001u && v <= 0x06FFFFFFu;
+
+    // ─── Symbol resolvers (opt-in via resolveSymbols=true) ───────────────
+    //
+    // Lazily-built reverse maps for the three enum families
+    // chorizite-dump-layout-tree can resolve. Each map is keyed by the raw
+    // uint value and yields the canonical enum-name string; lookups
+    // miss-and-return-null for IDs not present in the retail enum, which
+    // happens for custom-server layouts and any post-classic-era content
+    // additions. The hex form is always available on the sibling field
+    // (ElementIdHex, IncorporationFlagsHex), so the dump remains accurate
+    // whether or not a symbol resolves.
+
+    private static IReadOnlyDictionary<uint, string>? _uiElementIdNames;
+    private static IReadOnlyDictionary<uint, string>? _uiStateIdNames;
+
+    private static IReadOnlyDictionary<uint, string> GetUiElementIdNames() {
+        if (_uiElementIdNames != null) return _uiElementIdNames;
+        var d = new Dictionary<uint, string>();
+        foreach (var v in Enum.GetValues<AcClient.UIElementId>()) {
+            // Duplicate underlying values would collide here — the retail
+            // enum is unique on the value side, so a last-write-wins is
+            // safe; using TryAdd documents the intent.
+            d.TryAdd((uint)v, v.ToString());
+        }
+        _uiElementIdNames = d;
+        return d;
+    }
+
+    private static IReadOnlyDictionary<uint, string> GetUiStateIdNames() {
+        if (_uiStateIdNames != null) return _uiStateIdNames;
+        var d = new Dictionary<uint, string>();
+        foreach (var v in Enum.GetValues<DRW.Enums.UIStateId>()) {
+            d.TryAdd((uint)v, v.ToString());
+        }
+        _uiStateIdNames = d;
+        return d;
+    }
+
+    private static string? TryResolveUiElementIdName(uint id) {
+        return GetUiElementIdNames().TryGetValue(id, out var n) ? n : null;
+    }
+
+    private static string? TryResolveUiStateIdName(uint id) {
+        return GetUiStateIdNames().TryGetValue(id, out var n) ? n : null;
+    }
+
+    /// <summary>Bit-expand a packed IncorporationFlags uint into one record
+    /// per set bit (yotes-fan-style). Iterates the generated DRW enum so
+    /// we stay aligned with dats.xml without hardcoding bit values here.
+    /// Returns an empty list when no bits are set (e.g. flags=0x0).</summary>
+    private static IReadOnlyList<UiIncorporationFlagRecord> ExpandIncorporationFlags(uint flags) {
+        var result = new List<UiIncorporationFlagRecord>();
+        foreach (var v in Enum.GetValues<DRW.Enums.IncorporationFlags>()) {
+            var bit = (uint)v;
+            if (bit == 0) continue;           // skip "None"
+            if ((flags & bit) == bit) {
+                result.Add(new UiIncorporationFlagRecord(
+                    BitHex: $"0x{bit:X2}",
+                    Name: v.ToString()));
+            }
+        }
+        return result;
+    }
 
     /// <summary>Extract a single uint from an arbitrary scalar value if
     /// possible. Returns null for non-numeric or composite types.</summary>
