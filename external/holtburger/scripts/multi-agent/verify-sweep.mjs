@@ -55,10 +55,26 @@ const allLbs = await loadLbList(args.lbs);
 const queue = [...allLbs]; // JS single-threaded: shift() is atomic across awaits
 const results = {};
 
+// WeenieTypes that exist in landblock_instance but ACE never sends to the
+// client as a renderable object: WeenieType.Generic (1) — generators /
+// spawn-points / shop-area markers (Cow Generator, Linkable Monster Generator,
+// "Monyra's Jewels", ...). The oracle stays COMPLETE (full DB truth); we strip
+// these only for the render VERDICT so they don't read as false "not-rendered"
+// drift. Extend this set as other non-rendering types surface.
+const NON_RENDERING_WEENIE_TYPES = new Set([1]);
+
 async function readOracle(lb) {
   const p = join(args.oracles, `${hexOf(lb)}.json`);
   if (!existsSync(p)) return null;
-  try { return JSON.parse(await readFile(p, "utf8")); } catch { return null; }
+  try {
+    const o = JSON.parse(await readFile(p, "utf8"));
+    if (Array.isArray(o.npcs)) {
+      o._npcsTotal = o.npcs.length;
+      o.npcs = o.npcs.filter((n) => !NON_RENDERING_WEENIE_TYPES.has(n.weenieType));
+      o._npcsRenderable = o.npcs.length;
+    }
+    return o;
+  } catch { return null; }
 }
 
 const browser = await chromium.launch({ headless: true, args: CHROME_ARGS });
