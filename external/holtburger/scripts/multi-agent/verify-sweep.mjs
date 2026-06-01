@@ -13,28 +13,38 @@
 // Usage:
 //   node verify-sweep.mjs --agents=1 --lbs=<file|csv> --oracles=<dir> [--label=ring] [--settle=6000]
 import { chromium } from "playwright";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 const BASE = "http://127.0.0.1:8765";
 const CHROME_ARGS = ["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox", "--disable-dev-shm-usage"];
-// accessLevel>=4 (needed for @teleloc), password == account name. acadmp1ge522
-// is confirmed to have a character; add more char-having dev accounts to widen
-// parallelism.
-const ACCOUNTS = ["acadmp1ge522", "holt", "mombonumber5", "smoketest1"];
+// accessLevel>=4 (needed for @teleloc), password == account name. Default list
+// is the original confirmed-with-char accounts; pass --accounts=<file> (one
+// name per line) to use the harvested 224-account dev pool for wide parallelism.
+// Each agent takes ACCOUNTS[idx % len], so distinct accounts avoid ghost-session
+// collisions — keep len >= agents.
+let ACCOUNTS = ["acadmp1ge522", "holt", "mombonumber5", "smoketest1"];
 const PRESET = [
-  "renderer=3d", "quality=low", "agentic=low", "eagerDungeons=on", "hud=none",
-  "plugins=none", "diag=1", "nosw=1", "renderOnDemand=1", "autoLogin=1",
+  // wire-agent mode: MeshBasicMaterial + skip atmosphere/composer/clouds/CSM/
+  // terrain-shader. The scene GRAPH (statics/buildings/entities/cellContainers3d)
+  // — all __diag reads — still fully populates (validated: 2856 statics / 24
+  // buildings / 212 entities / 561 dungeon cells), but the heavy CPU rendering
+  // is skipped. (nullRender=1 goes too far: it render-gates the surface build, so
+  // statics/buildings under-populate → false DRIFT. Do NOT add it.)
+  "renderer=3d", "wireframe=1", "quality=low", "agentic=low", "eagerDungeons=on",
+  "hud=none", "plugins=none", "diag=1", "nosw=1", "renderOnDemand=1", "autoLogin=1",
   "autoSpawn=first", "kickDance=1", "server_host=127.0.0.1", "server_port=9000",
   "bridge_url=ws://127.0.0.1:8080/",
 ].join("&");
 
 function parseArgs(argv) {
-  const a = { agents: 1, lbs: "", oracles: "", label: "", settle: 6000 };
+  const a = { agents: 1, lbs: "", oracles: "", label: "", settle: 6000, accounts: "", state: "", fresh: false };
   for (const x of argv.slice(2)) {
     const m = x.match(/^--([a-z]+)=(.*)$/);
-    if (m) a[m[1]] = /^\d+$/.test(m[2]) ? +m[2] : m[2];
+    if (m) { a[m[1]] = /^\d+$/.test(m[2]) ? +m[2] : m[2]; continue; }
+    const b = x.match(/^--([a-z]+)$/);
+    if (b) a[b[1]] = true;
   }
   return a;
 }
@@ -48,11 +58,31 @@ async function loadLbList(spec) {
 const hexOf = (lb) => "0x" + lb.toString(16).toUpperCase().padStart(4, "0");
 
 const args = parseArgs(process.argv);
+if (args.accounts && existsSync(args.accounts)) {
+  const pool = (await readFile(args.accounts, "utf8")).split("\n")
+    .map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
+  if (pool.length) ACCOUNTS = pool;
+}
+if (ACCOUNTS.length < args.agents) {
+  console.log(`[sweep] WARN: ${ACCOUNTS.length} accounts < ${args.agents} agents — accounts will be reused (ghost-session risk).`);
+}
+console.log(`[sweep] account pool: ${ACCOUNTS.length} (using first ${Math.min(args.agents, ACCOUNTS.length)})`);
 const TS = new Date().toISOString().replace(/[:.]/g, "-");
-const OUT = `/mnt/wbterminal1/tmp/claude-scratch/verify-sweep/${args.label || "sweep"}-${TS}`;
+const SWEEP_ROOT = "/mnt/wbterminal1/tmp/claude-scratch/verify-sweep";
+const OUT = `${SWEEP_ROOT}/${args.label || "sweep"}-${TS}`;
+// RESUMABLE: a STABLE per-label state dir holds one result file per verified LB.
+// These persist across runs, so a paused/killed/OOM'd sweep RESUMES — re-running
+// with the same --label skips already-verified LBs and continues. Pass --fresh to
+// ignore prior state. Kill the process any time; nothing in-flight is lost beyond
+// the single LB each agent was mid-verify on (those just get re-done on resume).
+const STATE = args.state || `${SWEEP_ROOT}/state-${args.label || "sweep"}`;
 await mkdir(OUT, { recursive: true });
+await mkdir(STATE, { recursive: true });
 const allLbs = await loadLbList(args.lbs);
-const queue = [...allLbs]; // JS single-threaded: shift() is atomic across awaits
+const done = args.fresh ? new Set()
+  : new Set((await readdir(STATE)).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")));
+const queue = allLbs.filter((lb) => !done.has(hexOf(lb))); // JS single-threaded: shift() is atomic across awaits
+console.log(`[sweep] ${allLbs.length} LBs total · ${done.size} already done · ${queue.length} to verify · state=${STATE}`);
 const results = {};
 
 // WeenieTypes that exist in landblock_instance but ACE never sends to the
@@ -69,12 +99,87 @@ async function readOracle(lb) {
   try {
     const o = JSON.parse(await readFile(p, "utf8"));
     if (Array.isArray(o.npcs)) {
+      o._allNpcs = o.npcs.slice();   // full list (incl. generators) — for interior drop-point picking
       o._npcsTotal = o.npcs.length;
       o.npcs = o.npcs.filter((n) => !NON_RENDERING_WEENIE_TYPES.has(n.weenieType));
       o._npcsRenderable = o.npcs.length;
     }
     return o;
   } catch { return null; }
+}
+
+// Interior drop point for a dungeon: any interior object's cell + cell-local
+// coords (the oracle's npc.cell + x/y/z mirror ace_world.landblock_instance
+// obj_Cell_Id[low16] + origin). @god prevents the z=-90 fall from killing us.
+function dungeonDrop(oracle, lb) {
+  const npcs = oracle?._allNpcs || oracle?.npcs || [];
+  const n = npcs.find((e) => (e.cell || 0) >= 0x100 && Number.isFinite(e.x) && Number.isFinite(e.y) && Number.isFinite(e.z));
+  if (!n) return null;
+  const cellId = "0x" + ((((lb << 16) >>> 0) | (n.cell & 0xffff)) >>> 0).toString(16).toUpperCase().padStart(8, "0");
+  return { cellId, x: n.x, y: n.y, z: n.z };
+}
+const DUNGEON_ARRIVE = 5000;   // wait for currentCell to reflect the interior teleport
+const DUNGEON_LOAD_MAX = 40000; // poll cap for the EnvCell graph to build (heavy under concurrency)
+const MAX_TP = 2;
+
+// OUTDOOR check: teleport to cell 0x0000, settle (entity streaming), diff
+// observed vs the SURFACE-only oracle (interior npcs can't render from outdoors).
+// If scenery is expected but the statics ring hasn't populated (load race under
+// contention), wait + re-diff once before trusting a scenery-not-rendered verdict.
+async function verifyOutdoor(page, lbId, cellId, targetLbHex, surfaceOracle, settle) {
+  let atCell = null, arrived = false, attempts = 0;
+  while (attempts < MAX_TP && !arrived) {
+    attempts++;
+    await page.evaluate((c) => window.__sessionHandle?.sendChat?.(`@teleloc ${c} 96.0 96.0 500.0`), cellId);
+    await page.waitForTimeout(settle);
+    atCell = await page.evaluate(() => { try { return window.__diag?.pvs?.currentCell?.()?.lbHex ?? null; } catch { return null; } });
+    arrived = !!atCell && atCell.toLowerCase() === targetLbHex.toLowerCase();
+  }
+  let summary = null, surfaces = null;
+  if (arrived && surfaceOracle) {
+    const runDiff = async () => page.evaluate(({ oracle, lbId }) => {
+      if (window.__diag?.setExpected) window.__diag.setExpected(oracle);
+      const r = window.__diag?.runAll?.(lbId);
+      const statics = window.liveScene3d?.staticsGroup?.children?.length ?? null;
+      return { summary: r?.summary ?? null, surfaces: r?.surfaces ?? null, statics };
+    }, { oracle: surfaceOracle, lbId });
+    let res = await runDiff();
+    const expScenery = (surfaceOracle.bakedScenery?.length || 0) + (surfaceOracle.sceneryCount || 0);
+    if (expScenery > 0 && (res.statics ?? 0) === 0) { await page.waitForTimeout(8000); res = await runDiff(); }
+    summary = res.summary; surfaces = res.surfaces;
+  }
+  return { arrived, atCell, attempts, summary, surfaces };
+}
+
+// INTERIOR check: teleport into an EnvCell, poll the per-LB cell-graph census
+// (cellContainers3d) until it reaches oracle.interior.cellCount. Structural —
+// entities are PVS-limited from one drop point, so we verify the graph loaded.
+async function verifyInterior(page, lb, lbId, targetLbHex, oracle) {
+  const drop = dungeonDrop(oracle, lb);
+  const expectedCells = oracle.interior?.cellCount || 0;
+  if (!drop) return { noDrop: true, arrived: false, expectedCells };
+  let arrived = false, atCell = null, cellIdx = null, attempts = 0;
+  while (attempts < MAX_TP && !arrived) {
+    attempts++;
+    await page.evaluate((d) => window.__sessionHandle?.sendChat?.(`@teleloc ${d.cellId} ${d.x} ${d.y} ${d.z}`), drop);
+    await page.waitForTimeout(DUNGEON_ARRIVE);
+    const cc = await page.evaluate(() => { try { return window.__diag?.pvs?.currentCell?.(); } catch { return null; } });
+    atCell = cc?.lbHex ?? null; cellIdx = cc?.cellIdx ?? null;
+    arrived = !!atCell && atCell.toLowerCase() === targetLbHex.toLowerCase() && (cellIdx >= 0x100);
+  }
+  const need = Math.ceil(expectedCells * 0.99);
+  let observedCells = null;
+  if (arrived) {
+    const census = () => page.evaluate((lbId) => {
+      const m = window.liveScene3d?.cellContainers3d; if (!(m instanceof Map)) return null;
+      const lbHi = (lbId >>> 16); let n = 0;
+      for (const cid of m.keys()) if (((cid >>> 0) >>> 16) === lbHi) n++; return n;
+    }, lbId);
+    const deadline = Date.now() + DUNGEON_LOAD_MAX;
+    do { observedCells = await census(); if ((observedCells ?? 0) >= need) break; await page.waitForTimeout(2000); } while (Date.now() < deadline);
+  }
+  const ok = arrived && observedCells != null && expectedCells > 0 && observedCells >= need;
+  return { arrived, atCell, cellIdx, attempts, observedCells, expectedCells, ok };
 }
 
 const browser = await chromium.launch({ headless: true, args: CHROME_ARGS });
@@ -116,29 +221,42 @@ async function agentLoop(idx) {
     const targetLbHex = "0x" + ((lb << 16) >>> 0).toString(16).padStart(8, "0");
     const t0 = Date.now();
     try {
-      await page.evaluate((c) => window.__sessionHandle?.sendChat?.(`@teleloc ${c} 96.0 96.0 500.0`), cellId);
-      await page.waitForTimeout(args.settle);
       const oracle = await readOracle(lb);
-      const res = await page.evaluate(({ oracle, lbId }) => {
-        if (oracle && window.__diag?.setExpected) window.__diag.setExpected(oracle);
-        const r = window.__diag?.runAll?.(lbId);
-        const cur = (() => { try { return window.__diag?.pvs?.currentCell?.(); } catch { return null; } })();
-        return { runAll: r, currentCell: cur, hasOracle: !!oracle };
-      }, { oracle, lbId });
-      const atCell = res.currentCell?.lbHex ?? null;
-      const arrived = !!atCell && atCell.toLowerCase() === targetLbHex.toLowerCase();
-      results[hex] = {
-        arrived,
-        summary: arrived ? (res.runAll?.summary ?? null) : null,
-        surfaces: arrived ? (res.runAll?.surfaces ?? null) : null,
-        atCell,
-        hasOracle: res.hasOracle,
-        ms: Date.now() - t0,
-      };
-      console.log(`agent[${idx}] ${hex} ${arrived ? "-> " + JSON.stringify(results[hex].summary) : "MISS (at " + atCell + ")"} (${results[hex].ms}ms)`);
+      // A landblock may have SURFACE content (buildings / scenery / surface npcs)
+      // and/or INTERIOR EnvCells. Verify each axis where present: surface from
+      // outdoors (interior npcs filtered out — they can't render from outside),
+      // interior from inside (cell-graph census). Pure dungeons skip the outdoor
+      // check; pure-outdoor skip interior; mixed (towns w/ enterable cells) do both.
+      const hasInterior = (oracle?.interior?.cellCount || 0) > 0;
+      const surfaceNpcs = (oracle?.npcs || []).filter((n) => (n.cell || 0) < 0x100);
+      const hasSurface = !!oracle && ((oracle.buildings?.length || 0) + (oracle.bakedScenery?.length || 0) + (oracle.sceneryCount || 0) + surfaceNpcs.length) > 0;
+      const doOut = !oracle || !hasInterior || hasSurface;
+      const surfaceOracle = oracle ? { ...oracle, npcs: surfaceNpcs } : null;
+
+      const outdoor = doOut ? await verifyOutdoor(page, lbId, cellId, targetLbHex, surfaceOracle, args.settle) : null;
+      const interior = hasInterior ? await verifyInterior(page, lb, lbId, targetLbHex, oracle) : null;
+
+      const cls = hasInterior ? (hasSurface ? "mixed" : "dungeon") : "outdoor";
+      const arrived = !!(outdoor?.arrived || interior?.arrived);
+      results[hex] = { class: cls, outdoor, interior, hasOracle: !!oracle, arrived, ms: Date.now() - t0 };
+      const ot = outdoor ? `out:${outdoor.arrived ? (JSON.stringify(outdoor.summary) || "ok") : "MISS"}` : "";
+      const it = interior ? `in:${interior.noDrop ? "nodrop" : interior.arrived ? `${interior.observedCells}/${interior.expectedCells}${interior.ok ? " OK" : " DRIFT"}` : "MISS"}` : "";
+      console.log(`agent[${idx}] ${hex} [${cls}] ${[ot, it].filter(Boolean).join(" ")} (${results[hex].ms}ms)`);
     } catch (e) {
       results[hex] = { err: String(e).slice(0, 160), ms: Date.now() - t0 };
       console.log(`agent[${idx}] ${hex} ERR ${results[hex].err}`);
+    }
+    // Persist ONLY trustworthy verdicts → durable progress for pause/resume.
+    // ERR (exceptions) and pure TELEPORT_MISS are transient (RAM pressure / ACE
+    // hiccup); DON'T persist them, so they retry on the next healthy run instead
+    // of poisoning the resume set (a starved run once wrote 33k ERR files).
+    const rr = results[hex];
+    // A dungeon/mixed LB that arrived inside but loaded ZERO cells = the EnvCell
+    // build never fired (CPU contention / timing), NOT a real gap (a real dungeon
+    // always loads some cells). Treat 0-cells as transient → don't persist, retry.
+    const interiorStarved = rr?.interior && rr.interior.arrived && !rr.interior.noDrop && !(rr.interior.observedCells > 0);
+    if (rr && !rr.err && (rr.arrived || rr.interior?.noDrop) && !interiorStarved) {
+      try { await writeFile(join(STATE, `${hex}.json`), JSON.stringify(rr)); } catch {}
     }
   }
   await page.close();
@@ -147,19 +265,51 @@ async function agentLoop(idx) {
 console.log(`[sweep] ${allLbs.length} LBs across ${args.agents} agent(s)`);
 await Promise.all(Array.from({ length: args.agents }, (_, i) => agentLoop(i)));
 
-const matrix = Object.entries(results).map(([lb, r]) => ({ lb, ...r })).sort((a, b) => a.lb.localeCompare(b.lb));
-const tally = { PASS: 0, DRIFT: 0, INFRA: 0, TELEPORT_MISS: 0, ERR: 0, NO_ORACLE: 0 };
-for (const r of matrix) {
-  if (r.err) { tally.ERR++; continue; }
-  if (!r.arrived) { tally.TELEPORT_MISS++; continue; }
-  if (!r.hasOracle) tally.NO_ORACLE++;
-  const vals = Object.values(r.summary || {});
-  if (vals.some((v) => v === "INFRA")) tally.INFRA++;
-  else if (vals.some((v) => v === "DRIFT")) tally.DRIFT++;
-  else if (vals.length && vals.every((v) => v === "PASS")) tally.PASS++;
+// Aggregate ALL persisted per-LB results (this run + any prior/resumed runs).
+const stateFiles = (await readdir(STATE)).filter((f) => f.endsWith(".json"));
+const matrix = [];
+for (const f of stateFiles) {
+  try { matrix.push({ lb: f.replace(/\.json$/, ""), ...JSON.parse(await readFile(join(STATE, f), "utf8")) }); } catch {}
 }
-await writeFile(join(OUT, "matrix.json"), JSON.stringify({ ts: TS, args, lbCount: allLbs.length, tally, matrix }, null, 2));
+matrix.sort((a, b) => a.lb.localeCompare(b.lb));
+// Combined per-LB status = worst-of the applicable surface + interior checks.
+function lbStatus(r) {
+  if (r.err) return "ERR";
+  const checks = [];
+  if (r.outdoor) {
+    if (!r.outdoor.arrived) checks.push("TELEPORT_MISS");
+    else if (!r.hasOracle) checks.push("NO_ORACLE");
+    else {
+      const vals = Object.values(r.outdoor.summary || {});
+      if (vals.some((v) => v === "INFRA")) checks.push("INFRA");
+      else if (vals.some((v) => v === "DRIFT")) checks.push("DRIFT");
+      else checks.push("PASS"); // empty (no surface expected) or all-PASS
+    }
+  }
+  if (r.interior) {
+    if (r.interior.noDrop) checks.push("NO_DROP");
+    else if (!r.interior.arrived) checks.push("TELEPORT_MISS");
+    else if (!r.interior.ok) checks.push("DRIFT");
+    else checks.push("PASS");
+  }
+  if (!checks.length) return "NO_ORACLE";
+  for (const s of ["INFRA", "TELEPORT_MISS", "NO_DROP", "DRIFT", "NO_ORACLE", "PASS"]) if (checks.includes(s)) return s;
+  return "PASS";
+}
+
+const tally = { PASS: 0, DRIFT: 0, INFRA: 0, TELEPORT_MISS: 0, ERR: 0, NO_ORACLE: 0, NO_DROP: 0 };
+const byClass = {};
+for (const r of matrix) {
+  const st = lbStatus(r);
+  r.status = st;
+  tally[st] = (tally[st] || 0) + 1;
+  const c = r.class || "outdoor";
+  (byClass[c] ||= { total: 0 });
+  byClass[c].total++; byClass[c][st] = (byClass[c][st] || 0) + 1;
+}
+await writeFile(join(OUT, "matrix.json"), JSON.stringify({ ts: TS, args, lbCount: allLbs.length, tally, byClass, matrix }, null, 2));
 console.log(`[sweep] tally: ${JSON.stringify(tally)}`);
+console.log(`[sweep] byClass: ${JSON.stringify(byClass)}`);
 console.log(`[sweep] matrix: ${OUT}/matrix.json`);
 await browser.close();
 process.exit(0);
