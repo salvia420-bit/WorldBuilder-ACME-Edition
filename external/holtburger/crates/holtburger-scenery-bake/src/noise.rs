@@ -182,7 +182,14 @@ pub fn scale_obj(obj: &ObjectDesc, ix: u32, iy: u32, iq: u32) -> f32 {
     // * 2.3283064e-10
     let n = displace_noise(ix, iy, iq, 32_593);
     // pow(maxScale / minScale, n) * minScale
-    let ratio = obj.max_scale as f64 / obj.min_scale as f64;
+    //
+    // The division is done in f32 FIRST, then widened — matching ACE
+    // `Scenery.cs:146` `Math.Pow(maxScale / minScale, …)` where
+    // `maxScale`/`minScale` are `float`, so `maxScale / minScale` is an f32
+    // divide whose f32-rounded result is then promoted to double for Pow.
+    // The old code divided in f64 (`as f64 / as f64`), which keeps extra
+    // precision the f32 divide drops → ~1-ULP scale drift vs ACE.
+    let ratio = (obj.max_scale / obj.min_scale) as f64;
     (ratio.powf(n) * obj.min_scale as f64) as f32
 }
 

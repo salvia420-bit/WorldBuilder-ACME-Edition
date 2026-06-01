@@ -125,3 +125,17 @@ The world-completeness method's first leg —
 The renderer wires the bake through correctly within its fetch ring (524/525 placements). The remaining 1 placement and the lazy-walker coverage for non-fetched LBs are renderer-side follow-ons, distinct from the bake-correctness gate.
 
 **Whole-Dereth `generate-world` is data-correctness-unblocked.** The bake produces what ACE would produce; the renderer renders the bake; a new server generated from this bake will agree with any ACE server on what's in each LB.
+
+---
+
+## Phase-1 bit-identity addendum (2026-06-01)
+
+The "Byte-level" section above (75/169 byte-identical, "ULP-level *formatting* differences") was **incomplete**. B.5's 16,700/16,700 match was measured at `1e-4` tolerance against the **6-decimal JSONL strings**, which are lossy — `compare.py` re-parses them, so a sub-6-decimal value difference is invisible. A new `--bits` diagnostic mode (emits each f32 as its raw `to_bits()` integer; in `scenery-bake`, `scenery-cross-check`, diffed by `tools/scenery-cross-check/compare-bits.py`) revealed the differences were **real ≤1-ULP value divergences, not formatting**: 1,688/16,700 placements differed by the last bit on `scale`/`qw`/`qz` (positions x/y/z were always bit-exact).
+
+Three fixes brought it to **position + scale bit-exact, rotation ≤1 ULP**:
+
+1. **`crates/holtburger-scenery-bake/src/noise.rs` `scale_obj`** — divided the ratio in f64 (`max as f64 / min as f64`); ACE `Scenery.cs:146` divides `maxScale / minScale` in **f32** before `Math.Pow`. Changed to `(max/min) as f64`. → scale now **bit-exact**.
+2. **`tools/scenery-cross-check/Program.cs`** — the oracle hand-rolled the quaternion with f64 `Math.Cos/Sin`; real ACE (`Scenery.cs:77`) uses `Quaternion.CreateFromYawPitchRoll(0,0,rot)` (which uses **`MathF`**, f32). Changed the oracle to call the real `CreateFromYawPitchRoll`, so it faithfully represents ACE.
+3. **`crates/holtburger-scenery-bake/src/lib.rs`** — Rust computed `qw`/`qz` with f32 `cos`/`sin` (glibc `sinf`, 420 ULP-diffs vs `MathF`); changed to `(half as f64).cos()/sin() as f32` (f64-then-narrow), which dropped it to **37/16,700 (0.22%)**.
+
+**Residual (accepted parity bar):** 37 placements differ by exactly 1 ULP on `qw`/`qz`. The rotation *angle* is bit-exact (pure noise math), so the gap is solely .NET's `MathF` f32 `sin`/`cos` vs Rust's libm — they bit-match neither as scalar `sinf` (420 diffs) nor as f64-narrow-glibc (37). Reaching literal 0 would require replicating .NET 10's internal f32 `sincos` (fragile, .NET-version-coupled); the difference is ~6×10⁻⁶ degrees. **Decision (operator, 2026-06-01): accept ≤1-ULP rotation as the f32-transcendental floor.** So the bake is a 1:1 ACE substitute on position + scale exactly, and rotation to within f32 rounding. The `--bits` mode + `compare-bits.py` are the reusable harness for re-checking parity after any bake/algorithm change.

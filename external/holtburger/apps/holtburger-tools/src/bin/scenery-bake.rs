@@ -49,6 +49,14 @@ use sha2::{Digest, Sha256};
 const SCENERY_BAKE_CLI_VERSION: &str = "scenery-bake-cli/0.1.0";
 const SCENERY_BAKE_LIB_VERSION: &str = "holtburger-scenery-bake/0.1.0";
 
+/// Phase-1 parity-hardening diagnostic. When `--bits` is set,
+/// `format_f32_six_sig` emits raw `to_bits()` (decimal u32) instead of the
+/// `{:.6}` decimal string, so a bit-identity check against
+/// `scenery-cross-check --bits` sees the exact f32 rather than a lossy
+/// 6-decimal rounding. Process-global because the formatter is called deep
+/// in the per-placement write path; a one-shot CLI sets it once at startup.
+static EMIT_BITS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// CLI surface. Per the determinism contract: NO defaults for
 /// `--dat-dir` or `--out`. Callers must spell them out so there's no
 /// "oh, that ran against my workspace iter-* by accident" failure mode.
@@ -107,6 +115,14 @@ struct Cli {
     /// downstream consumers can refuse a mode they don't expect.
     #[arg(long, value_name = "MODE", default_value = "ace-compat")]
     mode: String,
+
+    /// Diagnostic (Phase-1 parity hardening): emit each f32 field as its
+    /// raw IEEE-754 `to_bits()` value (decimal u32, -0 normalised to +0)
+    /// instead of the `{:.6}` decimal string, for exact bit-identity
+    /// comparison against `scenery-cross-check --bits`. NOT consumed by
+    /// the renderer — diagnostic output only.
+    #[arg(long)]
+    bits: bool,
 }
 
 fn parse_hex_u32(s: &str) -> Result<u32> {
@@ -625,6 +641,12 @@ fn format_f32_six_sig(v: f32) -> String {
     // through floor()). f32 IEEE-754 has two zero encodings; output
     // them identically.
     let v = if v == 0.0 { 0.0 } else { v };
+    // Phase-1 diagnostic: emit raw IEEE-754 bits (decimal u32) so the
+    // parity check sees the exact f32, not a lossy 6-decimal rounding.
+    // Valid JSON number; consumed only by `compare-bits.py`.
+    if EMIT_BITS.load(std::sync::atomic::Ordering::Relaxed) {
+        return v.to_bits().to_string();
+    }
     format!("{:.6}", v)
 }
 
@@ -760,6 +782,9 @@ fn distribution_summary(counts: &[usize]) -> Option<(usize, usize, usize, usize,
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.bits {
+        EMIT_BITS.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 
     let mut log_builder = env_logger::Builder::from_default_env();
     if cli.verbose {

@@ -400,8 +400,11 @@ fn bake_landblock_impl(
             //   CreateFromYawPitchRoll(0, 0, r)
             // = (cos(r/2), 0, 0, sin(r/2)) in (w, x, y, z) order.
             let half = rotation_rad * 0.5;
-            let qw = half.cos();
-            let qz = half.sin();
+            // Compute sin/cos in f64 then narrow, to match .NET's f32 sin/cos
+            // (CreateFromYawPitchRoll) which does not bit-match scalar glibc
+            // `sinf`/`cosf`. `half` stays f32 first (matches ACE `roll * 0.5f`).
+            let qw = (half as f64).cos() as f32;
+            let qz = (half as f64).sin() as f32;
 
             // Scenery.cs:78 — uniform scale.
             let scale = scale_obj(obj, global_cell_x, global_cell_y, j_u32);
