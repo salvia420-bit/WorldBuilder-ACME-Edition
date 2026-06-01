@@ -1,0 +1,1003 @@
+====================================================================================================
+DIMENSION: INTEGRATION-LOOP
+----------------------------------------------------------------------------------------------------
+SUMMARY: Retail/ACE integrate player physics on a fixed-quantum subdivision: each frame's delta is broken into <=0.1s
+(MaxQuantum) chunks with a 1/30s floor (MinQuantum), frames >2s (HugeQuantum) are skipped entirely, and within each
+quantum the position is advanced with a true second-order term `0.5*a*q^2 + v*q`, velocity hard-clamped at 50 m/s. Our
+authoritative Rust/wasm integrator (advance_local_pose_for_manual_drive, driven once per rAF via tickMovement) does NONE
+of this: it consumes the raw, unbounded per-frame Instant delta with no MaxQuantum subdivision, integrates gravity with
+first-order Euler (`vz -= 9.8*dt; z += vz*dt`) omitting the `0.5*a*t^2` half-step, and has no terminal-velocity clamp.
+The cli full-solve path (advance_body_kinematics) is likewise plain Euler `coords + v*dt`. The only dt safety net
+(Math.min(dt,0.1)) lives in the JS dead-reckon predictors (camera.js + 2D index.html), which are planar-only (no
+Z/gravity) and do not gate the authoritative integrator. Practical consequence: on a frame hitch the Rust integrator
+over-integrates the fall in one giant unclamped step (and the fall can exceed 50 m/s), whereas retail would either
+subdivide it into 0.1s slices or skip it past 2s — a documented source of position overshoot/desync.
+
+  [DIVERGENCE | conf=high | impact=high | VERDICT=confirmed] no-maxquantum-subdivision
+    CLAIM: Our wasm authoritative integrator consumes the full per-frame rAF delta (Instant::now() since last tick)
+    with no MaxQuantum-style subdivision, whereas ACE/retail subdivide each frame into <=0.1s quanta in a while-loop.
+    >>CORRECTION: No errors in the claim. Two additions that strengthen (not weaken) it, both missed by the finder:
+      (1) ACE's update_object has more temporal guards than just MaxQuantum subdivision — a TickRate gate `if
+      (deltaTime < TickRate) return false` with TickRate=1/30 (PhysicsObj.cs:4140,4163), a HugeQuantum=2.0f drop-the-
+      frame guard (PhysicsObj.cs:4169-4173, PhysicsGlobals.cs:43), and a MinQuantum=1/30 lower-bound gate on the
+      trailing remainder (PhysicsObj.cs:4182, PhysicsGlobals.cs:38). Our path has none of these. (2) Our handle.rs:96
+      `dt` has no upper clamp at all, so a long rAF stall (tab refocus, GC pause) produces one giant integration step
+      — exactly the case ACE's HugeQuantum guard exists to drop. This makes the divergence broader than 'just no
+      subdivision'.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] first-order-euler-gravity
+    CLAIM: Our gravity step uses first-order Euler (z += vz*dt after vz -= 9.8*dt) and omits the 0.5*a*t^2 position
+    half-step that retail/ACE apply; retail integrates `0.5*a*quantum^2 + v*quantum`.
+    >>CORRECTION: Two minor refinements that do not change the verdict: (1) Our step is more precisely
+      symplectic/semi-implicit Euler, not plain explicit Euler — velocity is updated FIRST (line 938) and position
+      then uses the NEW velocity (line 939). Retail/ACE instead update position with the OLD velocity plus the half-
+      step, then update velocity. So in addition to the missing ½·a·t² term, the velocity-update ordering also
+      differs. (2) The finder's phrasing "z += vz*dt after vz -= 9.8*dt" is accurate, but note our `vz -= 9.8*dt`
+      already bakes gravity into vz before the position step, so the per-tick error vs. the exact integral is bounded
+      and small (the code comment at 932-934 claims <1cm over a ~1s jump, which is roughly the right order of
+      magnitude). The divergence is genuine but the practical magnitude is modest at 16ms ticks.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] retail-gravity-via-acceleration
+    CLAIM: In retail, gravity is applied as m_accelerationVector.z = PhysicsGlobals.gravity (-9.8) by
+    calc_acceleration when the GRAVITY state flag is set, so it flows through the second-order 0.5*a*q^2 position
+    term; ours applies 9.8 directly to velocity (acceleration vector never carries gravity), so the half-step term is
+    structurally absent.
+    >>CORRECTION: None material. Two minor clarifications that strengthen rather than alter the claim: (1) Our
+      codebase ALREADY documents this gap — common.rs:360-364 states "The wasm-side integrator skips the explicit-
+      acceleration step" and common.rs:386-398 explicitly describes retail calc_acceleration producing (0,0,gravity)
+      airborne, so this is a known/acknowledged divergence, not a hidden one. (2) The divergence is more precisely
+      also an integration-scheme difference: retail/ACE use an explicit second-order kinematic (x = x0 + v0*q +
+      0.5*a*q^2) with OLD velocity, while ours uses semi-implicit/symplectic Euler (velocity updated first, then
+      position uses the new velocity). The finder's phrasing "the half-step term is structurally absent" captures this
+      correctly. The constant: ours uses `-= 9.8` (= -9.8) vs retail/ACE -9.8000002 — effectively identical, no
+      discrepancy.
+
+  [GAP | conf=high | impact=medium | VERDICT=confirmed] no-terminal-velocity-clamp
+    CLAIM: Our integrators (wasm advance_local_pose_for_manual_drive and cli advance_body_kinematics) have no
+    terminal-velocity clamp; retail/ACE hard-clamp velocity magnitude to MaxVelocity = 50 m/s every quantum.
+    >>CORRECTION: Minor path/scope nuance: the finder's OURS evidence line (physics.rs:1116-1118) pins only
+      advance_body_kinematics; it does not point at the wasm function it also names.
+      advance_local_pose_for_manual_drive actually lives in crates/holtburger-core/src/client/movement/system.rs:597,
+      not in holtburger-world physics.rs. The finder's wasm/cli labels and the conclusion are still correct — I
+      verified the wasm function separately and it likewise lacks the clamp. Also worth noting (does not change the
+      verdict): ACE's clamp guards a behavioral path (small-velocity zeroing, calc_friction, ballistic
+      Acceleration*0.5*q^2 term) that our integrators also do not fully replicate, so MaxVelocity is one of several
+      integration-loop divergences, but as a standalone claim it is accurate.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] no-hugequantum-skip
+    CLAIM: Retail/ACE skip integration entirely when a frame's deltaTime exceeds HugeQuantum (2.0s), merely consuming
+    the time; ours has no such guard, so a >2s frame hitch in the wasm integrator over-integrates one huge unclamped
+    step (worst with the missing terminal clamp on a fall).
+    >>CORRECTION: Two strengthening details the finder omitted (neither changes the conclusion): (1) ACE doesn't
+      merely guard against >2s frames — it also subdivides every frame above MaxQuantum=0.1s into 0.1s sub-steps via
+      the while loop at PhysicsObj.cs:4175-4180, so ACE NEVER integrates a single large step even below HugeQuantum,
+      whereas ours always integrates exactly one step at the full dt. This makes the divergence broader than just the
+      2s threshold. (2) The cited source is ACE's server-side update_object (authoritative physics), not the retail
+      acclient.c client integrator; the claim says 'Retail/ACE' and cites ACE only, which is accurate, but strictly
+      the retail-client equivalent was not cross-checked in acclient.c.
+
+  [RISK | conf=high | impact=medium | VERDICT=confirmed] js-dt-cap-predictor-only
+    CLAIM: The only dt clamp on our side (Math.min(dt, 0.1)) lives in the JS dead-reckon predictors (3D camera.js and
+    2D index.html) and is planar-only (X/Y from WASD, no Z/gravity); it does NOT gate the authoritative Rust
+    integrator, which receives raw Instant deltas via tickMovement.
+    >>CORRECTION: Minor refinement, not a contradiction: handle.rs:97 uses saturating_duration_since, which prevents
+      negative/backward-time deltas (e.g. monotonic-clock edge cases) — but this is a sign guard, not a magnitude
+      clamp, so it does not bound a large positive delta from a resumed/throttled tab and does not weaken the claim.
+      Also worth noting the finder cited camera.js as the only-clamp site but the equivalent live clamp is co-located
+      in index.html:10013 (the 2D path), which the claim text does acknowledge.
+
+  [DIVERGENCE | conf=high | impact=high | VERDICT=confirmed] tickmovement-driven-by-raf
+    CLAIM: tickMovement is invoked once per requestAnimationFrame from index.html with no fixed-timestep accumulator,
+    so the authoritative integrator's quantum equals the variable rAF frame interval rather than retail's bounded
+    [1/30s, 0.1s] quantum.
+    >>CORRECTION: Minor, non-conclusion-changing: (1) `tickMovement` does not itself integrate — it enqueues a
+      command; the actual dt computation/integration is in crates/.../movement/handle.rs:96-99 and system.rs:717-721.
+      The line ref the finder gave (index.html:9969) is the per-frame *invocation* site, which is accurate, but the
+      real "no-accumulator, raw-dt" integrator lives in the Rust crate, not in index.html. (2) There IS a dt clamp
+      `Math.min(dt, 0.1)` at index.html:10013, but it belongs to the *separate* 2D-sprite JS prediction shadow (a
+      parallel predictor), not to the wasm authoritative integrator the claim targets — so it does not rescue the
+      cited path and the claim stands. (3) Retail also has a HugeQuantum=2.0s upper guard that drops the whole step
+      (returns false) rather than integrating; the bounded-quantum range is [MinQuantum,MaxQuantum] per integration
+      step, which the finder's "[1/30s,0.1s]" correctly captures.
+
+  OPEN QUESTIONS:
+    - Does ACE's server-authoritative reconciliation (UpdatePosition broadcasts) correct the client's over-
+      integrated/unclamped position frequently enough that the missing MaxQuantum/HugeQuantum guards never produce a
+      user-visible desync in practice? The client integrator only feeds the AutonomousPosition heartbeat — the
+      magnitude of real-world overshoot depends on how aggressively ACE snaps it back, which I could not quantify
+      from source alone.
+    - Is the airborne path the only place gravity is integrated in the wasm bundle, or does the cli full-solve path
+      (advance_grounded_body_kinematics / solve_self_player_local_drive at physics.rs:1149-1153) apply any vertical
+      acceleration with a half-step? I read advance_body_kinematics (pure Euler, no Z accel) but did not fully trace
+      the grounded variant's vertical handling.
+    - Retail's UpdateObjectInternal subdivides BOTH translation and turning (Omega * quantum via GRotate) per
+      quantum; our single-step integrator applies omega*dt once per frame. For fast camera turns during a large
+      frame, does the un-subdivided rotation produce a measurably different heading than retail's stepped GRotate,
+      or is the difference negligible at typical 60Hz cadence? Not resolvable without a numeric A/B.
+    - The PLAYER_GROUND_FRICTION_PER_SEC = 0.5 vs retail DefaultFriction = 0.95 difference (system.rs:677 vs
+      PhysicsGlobals.cs:15) is acknowledged in-code as an approximation, but since friction is applied per-quantum
+      in retail (pow(1-f, quantum) summed over subdivided quanta) and per-frame in ours (pow(1-f, dt) once), the
+      effective decay over a hitched frame diverges nonlinearly — magnitude unquantified.
+====================================================================================================
+DIMENSION: COLLISION-TRANSITION
+----------------------------------------------------------------------------------------------------
+SUMMARY: Our collision solver is a flat, single-pass geometric clamp-and-slide that is structurally and behaviorally far
+simpler than retail/ACE's CTransition+SpherePath+BSP machinery. Confirmed: (a) ours uses swept-sphere-vs-inflated-AABB
+(buildings) + a one-Z-sample swept-circle-vs-triangle (cells) + 2D cylinder-vs-cylinder (entities), with NO BSP tree,
+while retail walks a per-cell PhysicsBSP polygon tree via CTransition::find_collisions with up to 2 spheres
+(NumSphere<=2) forming a cylsphere. (b) Ours has literally NO step_up/step_down/edge_slide/cliff_slide code — those four
+mechanics (which give retail stair-climbing, ledge edge-sliding, and cliff-sliding) are entirely absent; the only
+related token is an AllowEdgeSlide property bool hydrated for wire fidelity but never consumed. (c) Ours uses a cell-
+AABB rubberband net indoors that is both the safety fallback AND the sole indoor clamp before per-poly triangles bake.
+The walkable-slope threshold also diverges: ours treats normal.z>=0.5 (60deg) as floor vs retail's FloorZ=0.66417
+(48.4deg), and there is a separate stand-alone JS dead-reckon predictor (camera.js _advancePrediction) that does ZERO
+collision clamping and can briefly walk visually through walls until server reconcile. Our slide is a single-iteration
+velocity-component-removal projection vs retail's iterative contact-plane cross-product skid with CalcNumSteps
+substepping. Net gameplay-visible result: no stair climbing (player blocked by any riser taller than nothing, since
+there is no step-up at all), no smooth edge-sliding along cliff tops, coarser slope walkability, and indoor pop-to-AABB-
+floor on ramped cells.
+
+  [DIVERGENCE | conf=high | impact=high | VERDICT=confirmed] no-step-up-down
+    CLAIM: Our codebase contains NO step-up or step-down climbing logic anywhere in the world/movement crates, whereas
+    retail/ACE implements Transition.StepUp/StepDown driven by per-object StepUpHeight/StepDownHeight (default
+    0.039999999m, or Setup.dat values), so retail can auto-climb stair risers and curbs that our solver treats as
+    impassable vertical walls.
+    >>CORRECTION: Minor constant imprecision, not affecting the conclusion: the finder phrases the default as 'default
+      0.039999999m, or Setup.dat values.' The literal 0.039999999f does appear in ACE, but only as the hardcoded
+      fallback inside StepUp()/CheckWalkable when the object is NOT OnWalkable (Transition.cs:754, 850). The actual
+      engine-wide default is PhysicsGlobals.DefaultStepHeight = 0.01f (PhysicsGlobals.cs:58), used when Setup is null,
+      and the per-object value is Setup._dat.StepUpHeight/StepDownHeight * Scale.Z (PartArray.cs:240,247). So there
+      are effectively three sources (0.01f global default, the 0.039999999f non-walkable fallback, and Setup.dat per-
+      object values) rather than the single 0.039999999m default the finder implies. Also note our setup_model.rs DOES
+      parse step_up/step_down from Setup.dat — the data is read but never fed into any movement solver — so 'our
+      codebase contains NO step-up logic' is true specifically for the movement/collision path, while the underlying
+      DAT values are in fact available and ignored.
+
+  [GAP | conf=high | impact=high | VERDICT=confirmed] no-edge-cliff-slide
+    CLAIM: Retail/ACE implements EdgeSlide, CliffSlide, and PrecipiceSlide to keep a walking actor sliding along the
+    lip of a ledge/cliff instead of walking off, gated by ObjectInfoState.EdgeSlide (in the default PhysicsState). Our
+    solver has none of these; walking off a ledge just transitions to a ballistic fall once the terrain-Z delta
+    exceeds a 0.5m threshold, with no edge-slide containment.
+    >>CORRECTION: Two minor refinements that do not change the verdict: (1) The claim says 'gated by
+      ObjectInfoState.EdgeSlide' — accurate but incomplete; the early-return gate at Transition.cs:270 requires BOTH
+      ObjectInfoState.OnWalkable AND ObjectInfoState.EdgeSlide, and EdgeSlide itself is the dispatcher between
+      CliffSlide/PrecipiceSlide rather than a leaf behavior. (2) Our codebase is not blind to the concept — it DOES
+      parse PhysicsState::EDGE_SLIDE (0x00400000) and hydrate PropertyBool::AllowEdgeSlide (object.rs:78,
+      hydration.rs:286-287), it simply never consults that flag in the movement solver, which arguably strengthens the
+      gap finding.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] no-bsp-flat-triangle-scan
+    CLAIM: Retail/ACE collides the moving sphere(s) against a per-cell PhysicsBSP polygon tree
+    (CellStruct.PhysicsBSP.find_collisions / BSPTREE/BSPNODE/BSPLEAF::hits_walkable), while our indoor solver does a
+    flat linear scan over a triangle bag with an AABB pre-cull and a single mid-height capsule sample
+    (clamp_delta_against_cell_walls), explicitly NOT a BSP and not a full swept-capsule-vs-triangle test.
+    >>CORRECTION: Minor scope nuance the finder did not mention (does not change the conclusion): OURS does contain a
+      `HAS_PHYSICS_BSP` flag and a stated intent for per-polygon BSP collision, but only in
+      spatial/entity_collision.rs and only for ENTITY GfxObj collision — and even there it "currently falls through to
+      cylinder" (entity_collision.rs:27-29), so it is not wired. It is a separate path from the indoor cell-wall
+      solver the claim targets, so the claim's "our indoor solver ... explicitly NOT a BSP" remains correct for
+      clamp_delta_against_cell_walls. Also worth noting the finder's cited OURS range 388-460 is slightly short: the
+      full flat-scan body runs 393-511 and the load-bearing doc-comment admitting the single-Z-sample non-swept proxy
+      is at 313-335 — both strengthen the claim.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] walkable-slope-threshold
+    CLAIM: The walkable-slope cosine threshold diverges: our floor classifier accepts any triangle with plane normal.z
+    >= 0.5 (slopes up to 60deg) as floor, but retail/ACE treats a surface as walkable only when normal.z >= FloorZ =
+    0.66417414618662751 (acclient.c CPhysicsObj::is_valid_walkable returns normal->z >= PhysicsGlobals::floor_z), i.e.
+    slopes up to ~48.4deg. Our solver therefore lets players stand/walk on steeper inclines than retail allows.
+    >>CORRECTION: Minor: our highest_floor_z_under is a narrower indoor/EnvCell per-polygon floor-Z snap helper, not a
+      1:1 analog of retail is_valid_walkable; wording is scoped to the indoor path. Threshold divergence itself is
+      genuine.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] single-iter-slide-vs-iterative
+    CLAIM: Our sliding is a single-iteration velocity-component-removal (remaining - normal*(remaining.dot(normal)))
+    applied once for buildings and once for cell walls, with no substepping. Retail/ACE substeps the whole transition
+    (CalcNumSteps = ceil(dist/sphereRadius) steps) and slides via a contact-plane cross-product skid (SlideSphere uses
+    Cross(collisionNormal, contactPlane.Normal)), iterating insert→collide→slide per step, so retail handles concave
+    corners and fast motion that our single pass can tunnel/jitter through.
+    >>CORRECTION: One addition the finder omitted (does not change the conclusion): the OURS indoor path also applies
+      clamp_delta_to_cell_interior (physics.rs:205-255), which is NOT a velocity-component-removal slide at all — it's
+      a `.clamp()` of global X/Y into the radius-inset cell AABB. So indoors the divergence is arguably even
+      larger/cruder than "single-iteration slide" implies: a hard AABB box-clamp plus one wall-slide pass, versus
+      ACE's per-step swept transition. The finder's `remaining - normal*(remaining.dot(normal))` form accurately
+      describes the building and cell-wall slides specifically. Minor: ACE's CalcNumSteps has a separate IsViewer
+      branch (Transition.cs:130-139) using floor(step)+1, but for the player/non-viewer case the finder's
+      ceil(dist/radius) is exact.
+
+  [RISK | conf=high | impact=medium | VERDICT=partially-correct] js-predictor-no-collision
+    CLAIM: The separate JS dead-reckon predictor (camera.js _advancePrediction) advances predictedPlayerPos purely
+    from WASD intent x heading x speed x dt with ZERO geometry collision clamping; it relies entirely on the wasm
+    authoritative integrator + server reconcile to correct it. This means the visually-rendered local player can
+    momentarily walk through walls/buildings until the next reconcile snaps it back, a behavior retail's fully-
+    authoritative client never exhibits.
+    >>CORRECTION: Severity is overstated: the artifact is a bounded sub-meter transient overshoot/clipping of the
+      player rig past a wall plane, NOT walking cleanly through walls/buildings. Reason: reconcile is a continuous
+      150ms inverse-time lerp (_lerpDurationMs=150.0, camera.js:378) toward the wasm-clamped pose which is re-targeted
+      on every 30Hz server-ts change (camera.js:918-921), so JS forward drift (~4.5 m/s) is continuously opposed by
+      the lerp toward the stationary wall pose — steady-state overshoot is well under a meter, not building-traversal.
+      Also note the claim says reconcile 'snaps it back', but only the >5m delta path is an instant snap
+      (camera.js:904-911); the normal sub-5m correction is a 150ms lerp, so the visual is a brief overshoot-and-glide-
+      back, not a hard snap. Minor ref note: the finder cited camera.js:953-954 inside loop.js for the X/Y-only
+      advance; the actual advance lines are camera.js:1060-1061/1068-1069 (953-954 is a doc-comment line range), but
+      this is a stale cross-reference in OURS' own comment, not the finder's error.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] indoor-floor-pop-aabb-fallback
+    CLAIM: Indoors, when per-poly triangles are not yet baked, our solver clamps lateral motion to the cell's world-
+    space AABB (clamp_delta_to_cell_interior) and snaps Z to a single floor value (highest_floor_z_under, else
+    cell_aabb.min.z + 0.005m). On ramped/multi-level cells before triangles load this pops the player to the cell's
+    lowest floor Z rather than following the ramp, and the AABB box-clamp cannot represent non-rectangular cells until
+    triangles arrive — a coarse proxy for retail's exact per-polygon walkable/contact-plane resolution.
+    >>CORRECTION: One imprecision (does not change the verdict): the claim's umbrella phrasing "when per-poly
+      triangles are not yet baked" actually spans two distinct unbaked states. (1) When NEITHER AABB nor triangles
+      exist (indoor_unbaked = true at system.rs:746-752), the solver does the OPPOSITE of the claim: lateral motion is
+      frozen to Vector3::zero() (line 791) and the Z floor-snap is skipped entirely (lines 1022-1026), not snapped to
+      min.z. (2) The behavior the claim describes (AABB box-clamp + snap to cell_aabb.min.z + 0.005) only occurs in
+      the narrower AABB-present-but-triangles-absent window. That window is real, reachable, and explicitly documented
+      (system.rs:1031-1034: "Fall back to cell_aabb.min.z when they aren't (initial seconds after landblock entry,
+      before the lazy physics bake completes)"), and AABBs vs triangles drain from separate pending piles (lib.rs:9177
+      drain_pending_cell_graph_into for AABBs vs lib.rs:9203 drain_pending_cell_physics_into for triangles), so they
+      can land in different frames. The claim is internally consistent with the AABB-present state since it
+      presupposes an AABB exists ("the AABB box-clamp cannot represent non-rectangular cells until triangles arrive").
+      No constant, line ref, or classification is wrong.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] single-sphere-vs-cylsphere
+    CLAIM: Retail/ACE models the player as a cylinder-of-spheres with up to 2 spheres (SpherePath.NumSphere<=2, low +
+    high sphere) so collision is checked at both feet and head height; our building sweep uses ONE sphere at chest
+    height and our cell-wall sweep samples ONE mid-height circle, so half-height obstacles (railings, low ledges) and
+    head-only overhangs are modeled less faithfully.
+    >>CORRECTION: Two minor refinements, neither weakens the claim. (1) ACE/retail clamp NumSphere to at most 2, but a
+      given Setup can have fewer (e.g. NumSphere<2 branches exist in Transition.cs:220/464/861 and Sphere.cs:624); the
+      actual player human Setup count comes from Setup.NumSphere/PartArray.GetNumSphere(), and the code is written to
+      handle 0/1/2 — the "up to 2" phrasing is accurate but the player isn't guaranteed to be 2 by this code alone
+      (it's data-driven). (2) The finder says OURS "folds vertical extent into the AABBs" mitigates this for
+      buildings; in reality inflate() (physics.rs:64) expands the AABB uniformly by radius and the ray still starts at
+      chest height, so a head-only overhang whose AABB sits entirely above chest+radius would still be missed — this
+      reinforces, not weakens, the divergence. Classification could arguably be slightly understated rather than
+      overstated.
+
+  OPEN QUESTIONS:
+    - Exact human Setup (0x02000001) StepUpHeight/StepDownHeight values are not directly readable in the provided
+      sources — GetStepUpHeight reads Setup._dat.StepUpHeight*Scale.Z (ACE PartArray.cs:243-248) and the default
+      fallback when Setup==null is DefaultStepHeight=0.01m (PhysicsGlobals.cs:58); retail Transition.StepUp uses
+      0.039999999 as the un-walkable default. The precise per-human DAT value (commonly cited ~0.1m) would need a
+      DAT dump to confirm, so the magnitude of the stair-climbing gap is bounded but not pinned.
+    - Our WALL_NORMAL_MAX=0.7 (wall if |normal.z|<=0.7, i.e. >=45.6deg from horizontal) and FLOOR_NORMAL_MIN=0.5
+      (floor if normal.z>=0.5) leave a 0.5..0.7 band where a triangle is treated as floor by the Z-snap raycast but
+      NOT clamped as a wall by the lateral pass; whether this produces a real seam (a 48.4..60deg ramp the player
+      can walk up but that no wall-clamps) on actual baked Holtburg/academy cells is unverified without a live run.
+    - Whether the wasm authoritative integrator's single-iteration slide ever tunnels through thin walls at high
+      speed (run 4.5 m/s @ tick dt) was not measured; CalcNumSteps in retail substeps by ceil(dist/radius) so a 4.5
+      m/s run over a ~16ms tick = ~0.075m < radius 0.4m would be 1 step in retail too, suggesting tunneling risk is
+      low at normal speeds but unconfirmed for teleport/knockback deltas.
+    - The entity-collision pass (clamp_delta_against_entities) is 2D cylinder-vs-cylinder ignoring Z entirely
+      (entity_collision.rs:44-60 comments 'Z is ignored'); retail's CylSphere collision is height-aware. Whether any
+      AC content (e.g. stepping over a small prone creature, or a tall creature's head) exposes this Z-collapse was
+      not evaluated.
+    - The has_physics_bsp flag is plumbed on EntityCollider but the BSP-polygon branch is an unimplemented TODO
+      (entity_collision.rs:102-104); the set of world objects that actually carry HAS_PHYSICS_BSP (and thus get only
+      the cylinder fallback instead of true poly collision) was not enumerated.
+====================================================================================================
+DIMENSION: FRICTION-SMOOTHING
+----------------------------------------------------------------------------------------------------
+SUMMARY: Ours and retail share the exact friction FORM — a per-tick multiplicative decay v *= pow(1 - friction, quantum)
+gated on being grounded — and the 0.25 small-velocity snap matches retail SmallVelocity exactly. But the two systems
+diverge substantially in everything else: (1) ours uses friction coefficient 0.5 vs retail's 0.95 (a deliberate ~5x
+weaker damping, documented as compensation for ours skipping retail's explicit acceleration integration step); (2) ours
+adds an 8 m/s^2 lateral accel cap that retail has NO equivalent for (retail smooths purely via friction +
+Acceleration*quantum); (3) ours SKIPS retail's contact-plane normal-component removal entirely, doing scalar X/Y axis
+decay against a flat horizontal plane rather than projecting velocity onto the actual ground normal; and (4) ours omits
+the Sledding branches and the velocity-magnitude/normal-Z slope special cases. Net feel: ours decelerates noticeably
+slower on key-release (gentle 0.5/s decay over ~0.5s) and ramps up slower from rest (accel-cap limited), so stops and
+starts are softer than retail's snappier friction-driven settle. Crucially this entire friction model lives ONLY in the
+Rust/wasm integrator; the JS dead-reckon predictor in camera.js has no friction at all — it is a constant-velocity
+extrapolation that stops instantly on key-release and relies on server-pose lerp reconciliation.
+
+  [MATCH | conf=high | impact=high | VERDICT=partially-correct] friction-form-match
+    CLAIM: Both ours and retail apply grounded friction as a per-tick multiplicative velocity decay v *= pow(1 -
+    friction, quantum), gated on the grounded/OnWalkable transient state.
+    >>CORRECTION: The claim's mechanism is correct, but the `kind=match` classification is slightly overstated and
+      should note divergences the finder did not surface: (1) friction constant differs — OURS hardcodes 0.5, ACE uses
+      per-object Friction (~0.95 default), so steady-state decay rates differ even though the pow-form is shared; (2)
+      ACE's calc_friction contains terms absent in OURS: contact-plane velocity projection `Velocity -=
+      ContactPlane.Normal*angle` and the `if(angle>=0.25f) return` early-out (PhysicsObj.cs:2124-2127), plus Sledding-
+      state friction overrides (2132-2136). OURS is a planar X/Y approximation with no contact plane. Also note OURS
+      layers a non-retail per-axis acceleration cap (PLAYER_LATERAL_ACCELERATION_CAP=8.0, system.rs:684-692) and a
+      velocity snap (695-708) on top of the decay; retail uses friction-only smoothing. So it is a faithful match on
+      the decay form + grounded gate, but a partial/approximate match on the overall friction model.
+
+  [DIVERGENCE | conf=high | impact=high | VERDICT=partially-correct] friction-coeff-0.5-vs-0.95
+    CLAIM: Ours uses friction coefficient 0.5 (PLAYER_GROUND_FRICTION_PER_SEC) where retail uses 0.95
+    (DefaultFriction) — a deliberate ~5x weaker per-tick decay, documented as compensation for ours skipping retail's
+    explicit per-tick acceleration integration step.
+    >>CORRECTION: The ~5x figure is loose. Coefficient ratio is 1.9x (0.95 over 0.5); actual per-tick velocity-lost
+      ratio is ~4.2x (60Hz: 1.15 percent vs 4.87 percent; 30Hz: 2.28 percent vs 9.50 percent), not 5x. Minor: ACE
+      DefaultFriction is overridable per-object at PhysicsObj.cs:3557-3558 with Sledding special-cases, but 0.95
+      applies to a normal grounded player.
+
+  [DIVERGENCE | conf=high | impact=high | VERDICT=confirmed] accel-cap-not-in-retail
+    CLAIM: Ours adds an 8 m/s^2 per-axis lateral acceleration cap to ramp velocity toward the input target; retail has
+    NO lateral accel cap — retail integrates velocity via Velocity += Acceleration * quantum where grounded lateral
+    Acceleration is (0,0,0) and the input target is set directly via apply_raw_movement, smoothing only through
+    friction.
+    >>CORRECTION: No factual errors. Minor additions for completeness (not contradicting the claim): (1) The accel cap
+      is gated to the grounded branch only — when airborne, OURS passes target_velocity through directly
+      (system.rs:664-670), which actually matches retail's instant-velocity behavior in that case. (2) OURS also
+      diverges in its friction coefficient (PLAYER_GROUND_FRICTION_PER_SEC=0.5 vs retail's per-surface Friction value,
+      e.g. ACE calc_friction uses the object's Friction field) and treats the whole thing as an approximation rather
+      than a port — but the specific lateral-accel-cap claim is precisely accurate. (3) The accel cap works in concert
+      with the friction decay applied at system.rs:677-679 before the clamp, not as the sole smoother.
+
+  [MATCH | conf=high | impact=medium | VERDICT=confirmed] small-velocity-snap-match
+    CLAIM: The 0.25 m/s small-velocity snap-to-zero matches retail's SmallVelocity exactly in both value and intent
+    (zero residual drift below threshold), though ours additionally gates on the target also being below threshold to
+    avoid killing ramp-up from rest.
+    >>CORRECTION: Minor pointer imprecision (does not affect the verdict): the finder cited OURS at common.rs:382,
+      which is only the constant DEFINITION. The snap logic and the load-bearing extra target-gate actually live in a
+      different file, system.rs:693-708 (gate at line 705). The finder's prose correctly describes that gate but its
+      file:line evidence points at the constant rather than the application site, so a reader following only the cited
+      line would not see the divergence code itself.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] contact-plane-projection-skipped
+    CLAIM: Ours SKIPS retail's contact-plane normal-component removal: retail computes angle = dot(Velocity,
+    ContactPlane.Normal), returns early if angle >= 0.25, then removes the normal component (Velocity -= Normal *
+    angle) BEFORE damping, projecting onto the actual ground slope. Ours damps X and Y scalar axes against an implicit
+    flat horizontal plane with no normal projection and no 0.25 angle gate.
+    >>CORRECTION: Minor framing nuance, not an error in the claim: retail's `Velocity -= Normal * angle` removes the
+      velocity component along the contact-plane normal (preventing motion into the surface); calling this "projecting
+      onto the actual ground slope" is a reasonable shorthand but the primary effect is removing the into-surface
+      component. The 0.25f gate is an early-out for objects already moving away from / only weakly into the surface,
+      not a slope test per se. Also worth noting the same Dot(Velocity, ContactPlane.Normal) pattern recurs at
+      PhysicsObj.cs:2219 and :2692 — this reinforces (does not weaken) the divergence. None of this changes the
+      conclusion: ours genuinely skips the gate and the normal projection entirely.
+
+  [GAP | conf=high | impact=low | VERDICT=confirmed] sledding-branches-omitted
+    CLAIM: Ours omits retail's Sledding-state friction branches entirely: retail overrides friction to 1.0 when
+    velocity_mag2 < 1.5625 and to 0.2 when velocity_mag2 >= 6.25 with a near-flat slope (ContactPlane.Normal.Z >
+    0.99999536). Ours has a single fixed 0.5 coefficient with no state-dependent or speed-dependent override.
+    >>CORRECTION: Minor scope note, not a defect in the claim: OURS does not merely drop the Sledding branches from an
+      otherwise-faithful port of calc_friction — its grounded-friction model is a different approximation entirely. It
+      omits retail's surface-normal velocity projection (`Velocity -= ContactPlane.Normal * angle`) and the `angle >=
+      0.25` early-return, and adds an acceleration cap (PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ = 8.0) that
+      retail has no equivalent for. These are additional divergences in the same method, consistent with (not
+      contradicting) the Sledding-omission claim. The claim as worded is fully accurate.
+
+  [RISK | conf=high | impact=medium | VERDICT=confirmed] js-predictor-no-friction
+    CLAIM: The JS dead-reckon predictor (camera.js) has NO friction model at all — it is a constant-velocity
+    extrapolation (pos += dir * speed * dt) that advances only while WASD is held and stops instantly on key-release,
+    relying on server-pose lerp reconciliation; all friction smoothing lives exclusively in the Rust integrator.
+    >>CORRECTION: Two minor imprecisions that do NOT change the conclusion: (1) The JS lerps toward
+      `getLocalPlayerPose()`, which is the wasm/Rust CLIENT integrator's authoritative pose (where the friction-decay
+      actually runs), not directly the ACE network server pose. The finder's phrase "server-pose lerp reconciliation"
+      is loose — the smoothed pose the JS blends toward is produced by the Rust client integrator (system.rs:664-711),
+      which is itself reconciled against the ACE server. (2) The Rust integrator's own comments cite PhatSDK
+      `PhysicsObj.cpp:521-561` (not the ACE C# `PhysicsObj.cs`) as its friction reference, and it deliberately uses a
+      gentler coefficient (0.5 vs retail 0.95) plus a non-retail accel-cap — so the Rust friction is an approximation
+      of retail, not a 1:1 port. The finder's cited ACE line 1849 is the call site of `calc_friction`, not the
+      friction math itself (that is at line 2120); both are valid anchors for "where retail/ACE friction lives."
+
+  [MATCH | conf=high | impact=low | VERDICT=confirmed] airborne-gate-vs-onwalkable
+    CLAIM: Ours gates friction on the inverse of world.player.is_airborne (friction applied only when grounded), which
+    functionally mirrors retail's TransientStateFlags.OnWalkable gate (calc_friction returns early when not
+    OnWalkable); airborne in both keeps velocity un-damped.
+    >>CORRECTION: One nuance the finder understated (does not change the verdict): ACE's OnWalkable is not a pure
+      airborne/grounded boolean — it is set true only when in Contact AND ContactPlane.Normal.Z >= FloorZ
+      (PhysicsObj.cs:1234), i.e. on a non-steep surface; on a too-steep slope an object can be grounded-but-not-
+      OnWalkable and thus skip friction. OURS' !is_airborne has no slope-steepness condition, so the parity is exact
+      only for walkable/flat ground. The finder's own wording ("functionally mirrors") accommodates this, so it is at
+      most a minor omission, not an error.
+
+  OPEN QUESTIONS:
+    - The Phase 10.3 doc comment claims applying f=0.95 directly would create a 25-35% steady-state speed deficit
+      because ours skips retail's explicit acceleration step, but I could not independently verify whether retail's
+      apply_raw_movement actually re-sets m_velocityVector to the full input target each tick BEFORE friction (which
+      would make retail's effective steady-state speed = target despite friction=0.95). If retail re-sets velocity
+      to target every tick, retail's friction only ever damps the single-tick residual and 0.95 would NOT cause a
+      deficit — meaning ours' choice of 0.5 may be over-corrected. The apply_raw_movement / set_velocity path in
+      acclient.c was not traced to confirm.
+    - Whether ours' omission of the contact-plane projection causes observable behavior divergence on sloped terrain
+      (the only case where it matters) — on flat ground the projection is a near no-op since Velocity is already
+      roughly perpendicular to a vertical normal; needs an in-world slope test to quantify.
+    - Retail's effective per-tick quantum is clamped to MinQuantum=1/30 (0.0333s) and MaxQuantum=0.1s in
+      PhysicsGlobals; ours uses the raw rAF dt (capped at 0.1 in the JS path but the Rust grounded branch uses dt_s
+      directly). I did not confirm whether the Rust integrator clamps quantum to retail's [1/30, 0.1] window, which
+      would affect friction-scale parity at very high or very low frame rates.
+    - The accel-cap gates the snap (snap only fires when BOTH current and target velocity are below 0.25), so a
+      player decelerating from full run does not benefit from the snap until near-stopped — whether this produces a
+      longer visible 'drift tail' than retail (which snaps as soon as velocity_mag2 < 0.0625) was not measured.
+====================================================================================================
+DIMENSION: JUMP-FALL-STATEMACHINE
+----------------------------------------------------------------------------------------------------
+SUMMARY: Our jump-height/velocity formula and fall-damage formula are bit-faithful 1:1 ports of ACE/retail:
+compute_jump_velocity_z reproduces MovementSystem.GetJumpHeight (burdenMod * (skill/(skill+1300)*22.2 + 0.05) * power,
+0.35 floor) followed by InqJumpVelocity's vz = sqrt(h*19.6), and compute_fall_damage reproduces
+Player_Move.HandleFallingDamage's overspeed/ratio*87.293810 math exactly including the 11.25434 baseline and 4.5 leeway.
+JumpStaminaCost and GetBurdenMod also match. The state machine is sound but DIVERGES from retail's physics model in
+three ways: (1) our gravity integration is symplectic Euler (v then x) whereas ACE uses the kinematic x += a*0.5*t² +
+v*t form (sub-cm per tick, accumulates on long falls); (2) we have NO terminal-velocity clamp where ACE caps at
+MaxVelocity=50 m/s; (3) fall damage is computed nowhere in production — compute_fall_damage has zero callers and is
+documentation-only, so all fall damage is left to the authoritative server. The Jump motion clip (0x2500003B) DOES exist
+in retail player motion tables (refuting the old "0x003B absent" note), and our begin_jump/begin_fall/land +
+Falling(0x40000015)/Fallen(0x40000008) emission is an invented-but-reasonable client visual state machine layered on top
+of retail's single InterpretedState.ForwardCommand model. The JS dead-reckon predictor in camera.js is X/Y-only and
+never touches Z, so jump/fall arcs are exclusively the wasm integrator's responsibility.
+
+  [MATCH | conf=high | impact=high | VERDICT=confirmed] jump-height-formula-bit-identical
+    CLAIM: compute_jump_velocity_z reproduces ACE MovementSystem.GetJumpHeight exactly: burdenMod *
+    (skill/(skill+1300)*22.2 + 0.05) * power, with a 0.35m floor, then vz = sqrt(height*19.6) matching
+    WeenieObject.InqJumpVelocity.
+    >>CORRECTION: No material errors. Two minor notes that do not change the verdict: (1) The finder did not mention
+      ACE's `/ scaling` divisor in GetJumpHeight; OURS hardcodes the scaling=1.0 case, which is correct because every
+      live caller passes 1.0f, but the finder's claim that the formula matches "exactly" is true only modulo this
+      always-1.0 term. (2) The finder cites WeenieObject.cs:12-17 for the formula, but those lines are
+      namespace/class/log-field declarations — the actual InqJumpVelocity math lives at WeenieObject.cs:73-98
+      (GetJumpHeight call at 93, sqrt at 95), which the finder's "93-95" citation correctly covers; the 12-17 cite is
+      just header context.
+
+  [MATCH | conf=high | impact=medium | VERDICT=confirmed] burdenmod-1to1
+    CLAIM: Our burden_mod branch (1.0 for burden<1.0, 2.0-burden for 1.0..2.0, 0.0 for >=2.0) is a 1:1 port of ACE
+    EncumbranceSystem.GetBurdenMod.
+
+  [MATCH | conf=high | impact=high | VERDICT=confirmed] fall-damage-formula-sourced-from-ace
+    CLAIM: compute_fall_damage is sourced verbatim from ACE Player_Move.HandleFallingDamage: jumpVelocity=11.25434,
+    overspeed = jumpVelocity + currVz + 4.5, ratio = -overspeed/jumpVelocity, damage = ratio*87.293810 when ratio>0.
+    NOT invented.
+    >>CORRECTION: Minor: the finder cited ACE Player_Move.cs:254-272, but the matched formula logic actually spans
+      254-271 — the damage = ratio*87.293810f constant is on line 271, and line 272 is a commented-out
+      Console.WriteLine, not part of the logic. The range is still correct and inclusive of every relevant constant,
+      so this does not change the verdict. Scope note (not an error): OURS' compute_fall_damage mirrors only the raw-
+      damage formula and returns a float; it intentionally omits ACE's downstream TakeDamage_Falling
+      (Player_Move.cs:282-309) bludgeon-resistance scaling + Math.Round, and ACE's redundant if(damage>0.0f) guard
+      (line 277). The doc comment (types.rs:643-650) explicitly states the client function is documentation-only and
+      that ACE applies damage server-side, so these omissions are deliberate and outside the claimed formula match.
+      The doc's threshold of vz<-15.75 m/s is mathematically correct (overspeed crosses 0 at vz=-15.75434).
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] fall-damage-never-applied-clientside
+    CLAIM: compute_fall_damage has ZERO callers in production code (only its definition + unit tests reference it);
+    the client never predicts/applies fall damage and defers entirely to the authoritative server, which in ACE
+    applies it server-side via WeenieObject.DoCollision(EnvCollisionProfile) -> Player.HandleFallingDamage on
+    environment collision.
+
+  [DIVERGENCE | conf=high | impact=low | VERDICT=confirmed] gravity-integration-euler-vs-kinematic
+    CLAIM: Our airborne integrator uses symplectic Euler (update vertical_velocity by -9.8*dt, THEN add velocity*dt to
+    z), whereas ACE's UpdatePositionInternal uses the kinematic form movement = Acceleration*0.5*quantum^2 +
+    Velocity*quantum then Velocity += Acceleration*quantum. Both use g=9.8/Gravity=-9.8 but the position term differs
+    by 0.5*a*dt^2 per tick.
+    >>CORRECTION: Claim prose says UpdatePositionInternal but the kinematic code lives in UpdatePhysicsInternal, which
+      UpdatePositionInternal (line 1862) calls at line 1881 — so the chain is correct and line refs 1854-1858 are
+      accurate. ACE also zeros Acceleration on a walkable contact surface (lines 2075-2076), but that is the grounded
+      case, not the airborne case, so it does not affect the conclusion.</corrections> </invoke>
+
+  [DIVERGENCE | conf=high | impact=low | VERDICT=confirmed] no-terminal-velocity-clamp
+    CLAIM: Our integrator never clamps vertical_velocity, so a long fall accelerates unbounded; ACE clamps total
+    velocity magnitude to MaxVelocity=50 m/s (and zeroes below SmallVelocity=0.25) inside UpdatePositionInternal.
+    >>CORRECTION: One attribution error in the finder's evidence: the cited lines 1843-1852 are NOT inside
+      UpdatePositionInternal — they live in UpdatePhysicsInternal (definition at PhysicsObj.cs:1832).
+      UpdatePositionInternal (def line 1862) only CALLS UpdatePhysicsInternal at line 1881, so the clamp does run as
+      part of the position-update path; the conclusion is unaffected, but the function name in the finder's evidence
+      is wrong. Minor nuance: ACE's clamp also applies friction/SmallVelocity zeroing and works on total velocity
+      magnitude — it is not a vertical-axis-specific clamp — but since gravity feeds Velocity.Z, it does effectively
+      bound fall speed as the claim states.
+
+  [MATCH | conf=high | impact=medium | VERDICT=partially-correct] jump-clip-exists-in-retail
+    CLAIM: Retail player motion tables DO contain a Jump clip (MotionCommand 0x2500003B) for every player stance,
+    either as cycles[(stance,Jump)] or links[(stance,Ready)][Jump], refuting the prior note that cmd_low 0x003B is
+    absent from all motion tables. Our MotionCommandCode::JUMP = 0x2500003B matches ACE/acclient exactly.
+    >>CORRECTION: The data-presence assertion is false. Running the cited jump_clip_data_check.rs against the real
+      client_portal.dat yields OVERALL=FAIL: zero stances have a Jump clip (cycles[(stance,Jump)] or
+      links[(stance,Ready)][Jump]) and zero of all 436 motion tables contain any 0x003B Jump entry. The prior note
+      (cmd_low 0x003B absent from all motion tables) is correct and is NOT refuted. The finder cited the example as
+      proof without executing it; the example's STANCES_WITH_JUMP=12 / NEITHER_HITS=0 are expected-on-baseline targets
+      that the real DAT does not meet. The 0x2500003B Jump motion command exists as a wire/enum constant and is set
+      programmatically by begin_jump (types.rs:738), but it has no backing clip in the player motion table, so the
+      kind=match data-presence framing is wrong — it should be a gap/divergence for the data layer.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=partially-correct] falling-fallen-statemachine-invented
+    CLAIM: Our begin_jump/begin_fall/land + is_airborne/is_jumping flags + Falling(0x40000015)/Fallen(0x40000008) wire
+    emissions are a client-side visual state machine NOT present in retail/ACE, which carries only a single
+    InterpretedState.ForwardCommand and uses set_on_walkable(false)/LeaveGround with no Falling/Fallen broadcast. The
+    double-jump gate (is_airborne short-circuit) substitutes for retail's gravity-state/JumpExtent gating.
+    >>CORRECTION: Falling present in retail and ACE ours never emits Fallen our Falling is local animation only
+
+  [MATCH | conf=high | impact=low | VERDICT=confirmed] js-predictor-z-omission
+    CLAIM: The JS dead-reckon predictor in camera.js advances only X/Y from WASD input and never integrates Z,
+    gravity, or jump arcs; it reads pose.z only for camera placement. All vertical jump/fall motion is owned solely by
+    the wasm integrator, so the two layers do not duplicate or conflict on Z.
+    >>CORRECTION: Minor incompleteness (does not change the verdict): the finder's wording "reads pose.z only for
+      camera placement" understates that the JS layer also WRITES predictedPlayerPos.z — but only as
+      reconciliation/lerp toward the authoritative server (wasm) pose in _reconcilePrediction (camera.js:881,907,920)
+      and _applyPredictionLerp (camera.js:1128), never as independent integration. This actually reinforces the
+      claim's conclusion (no duplication/conflict on Z) rather than refuting it. Also worth noting the finder cited a
+      single ACE integrator line but the gravity source it depends on lives at PhysicsObj.cs:2079-2080, which is where
+      Acceleration.Z is set; the cited 1854-1858 line is correct as the integration step.
+
+  OPEN QUESTIONS:
+    - ACE's HandleFallingDamage reads PhysicsObj.Velocity.Z (world-frame, post-gravity-integration) at the moment of
+      EnvCollisionProfile collision; I could not confirm from source whether our wasm integrator's vertical_velocity
+      at landing matches that exact value ACE would see (our symplectic-Euler + no terminal clamp could diverge for
+      tall falls), but since we never apply damage client-side this only matters for predicted-HUD parity, which we
+      deliberately avoid.
+    - The 0.5m LEDGE_FALL_THRESHOLD_M used by begin_fall walk-off detection is a wasm-side heuristic tied to the 24m
+      terrain-heightmap sample spacing; retail/ACE has no equivalent threshold (it uses continuous physics
+      collision), so I could not source a retail value to validate it against — it is an admitted game-feel tuning
+      constant.
+    - Our jump dispatch defaults PK=false for stamina cost because PKTimerActive is not tracked
+      (lib.rs:33036-33038); ACE's JumpStaminaCost has a distinct PK branch ((power+1)*100). For an actual PK
+      character our client-side stamina prediction would diverge from ACE until server reconciliation, but I could
+      not confirm whether the wire Jump packet itself is affected (it carries extent, not the cost).
+    - I confirmed the Jump clip exists in retail motion tables via the jump_clip_data_check.rs audit's stated
+      assertions, but did not execute it against a real client_portal.dat in this session to observe the actual
+      STANCES_WITH_JUMP / NEITHER_HITS counts — the claim rests on the audit's documented expectations plus the
+      acclient.c/ACE enum value, not a live data run.
+====================================================================================================
+DIMENSION: DUAL-PREDICTOR
+----------------------------------------------------------------------------------------------------
+SUMMARY: Our system runs two independent forward integrators for the local player where retail/ACE has exactly one (a
+single CPhysicsObj.Position store that both predicts and absorbs server corrections). The Rust/wasm integrator is a
+faithful port of retail: it derives run speed from Run skill + burden via run_rate_from_skill_and_burden (a 1:1 port of
+acclient.c MovementSystem::GetRunRate) and scales the player MotionTable's base run velocity by it. The SEPARATE JS
+dead-reckon predictor in camera.js (3D) and index.html (2D) instead advances X/Y with a HARDCODED RUN_SPEED=4.5 (and
+WALK=1.0) constant that does NOT read the integrator's per-tick speed — and structurally cannot, because the wasm
+LocalPlayerPose export carries no velocity/speed field, only x/y/z/heading/landblockId. The render path splits axes:
+loop.js applyLocalPlayerPoseFromIntegrator writes the rig from JS-predicted X/Y but integrator Z + integrator heading.
+Because the JS reconcile lerp target is the raw server pose (stashed into __lastEntityWorldPos at the server's slower
+skill-derived speed) while _advancePrediction overruns at 4.5, the two layers genuinely fight during the 150ms lerp for
+any character whose true run speed < 4.5 (e.g. a fresh char with Run≈0 actually moves at ~1.0 m/s server-side, a 4.5x
+mismatch) — producing a forward-overrun-then-lerp-back oscillation that the single-predictor retail client never
+exhibits. The get/set_last_client_prediction exports are a Wave 3.F diagnostic shadow only (consumed by diag/physics.js
++ validators), not the render path, and are fed only by the 2D rAF loop.
+
+  [DIVERGENCE | conf=high | impact=high | VERDICT=confirmed] two-predictors-vs-one
+    CLAIM: We run two independent forward integrators for the local player (Rust/wasm authoritative + JS dead-reckon
+    in camera.js/index.html), whereas retail/ACE has a single CPhysicsObj.Position that both predicts via
+    UpdatePositionInternal and absorbs corrections via PositionManager.InterpolateTo on the same store.
+    >>CORRECTION: One nuance the finder understated (does not change the verdict): the JS integrator is independent
+      only on the X/Y (lateral) axis. loop.js:260-274 sources Z and heading from the wasm integrator's
+      `getLocalPlayerPose()`, and `_advancePrediction` (camera.js:1060-1069) only mutates `.x`/`.y`, never
+      `.z`/heading. So it is not a fully 3-DOF second integrator — it is a dual integrator specifically for the user-
+      visible lateral motion, with Z/heading shared from the wasm store. The 'JS dead-reckon in camera.js/index.html'
+      phrasing is accurate for camera.js; the live 3D code path is in camera.js + loop.js (index.html holds the
+      analogous 2D-path prediction the comments reference, ~6353-6420). The divergence-vs-ACE conclusion holds either
+      way.
+
+  [DIVERGENCE | conf=high | impact=high | VERDICT=partially-correct] js-hardcoded-4.5-vs-skill-derived
+    CLAIM: The JS predictor advances X/Y with a hardcoded RUN_SPEED=4.5 m/s
+    (window.__movementConstants.FALLBACK_RUN_RATE_SCALAR ?? 4.5), whereas the Rust integrator and retail derive run
+    speed from Run skill + burden — so for any sub-capped character the two speeds disagree (fresh char Run≈0,load≈0 →
+    1.0 m/s in Rust/retail vs 4.5 in JS, a 4.5x mismatch).
+    >>CORRECTION: Two substantive errors. (1) Magnitude: the finder says fresh-char Rust/retail speed is 1.0 m/s,
+      giving a 4.5x mismatch. Wrong — 1.0 is the run_RATE_SCALAR (a multiplier), not the speed. Final Rust/retail
+      speed = base_run_forward_velocity (player MotionTable RUN cycle, ~2.5 m/s) * run_factor(1.0) ≈ 2.5 m/s
+      (self_movement.rs:44-45; retail apply_run_to_command `*speed = v5 * *speed`). True mismatch is ~1.8x (4.5 vs
+      ~2.5), not 4.5x. (2) The finder implies 4.5 is a JS-only magic number; in fact the identical const
+      FALLBACK_RUN_RATE_SCALAR=4.5 lives in Rust at common.rs:21 and is used as the run-rate-scalar fallback
+      (common.rs:147 player_run_rate().unwrap_or(4.5)). The genuine divergence is that JS uses 4.5 directly as a final
+      m/s with no base-velocity multiply and never consults the skill/burden formula, whereas Rust/retail use the
+      skill-derived factor as a MULTIPLIER on the motion-table base velocity. Core divergence claim and
+      kind=divergence classification stand; the quantitative figures are overstated/miscategorized.
+
+  [RISK | conf=high | impact=high | VERDICT=partially-correct] predictors-fight-during-lerp
+    CLAIM: The JS predictor and the slower server pose genuinely fight during the 150ms reconcile lerp:
+    _advancePrediction overruns X/Y at 4.5 m/s each frame, then _reconcilePrediction targets the raw server pose
+    stashed in __lastEntityWorldPos (which advances at the true skill-derived speed) and lerps predicted X/Y back over
+    150ms — a forward-overrun-then-pull-back oscillation retail's single predictor cannot produce.
+    >>CORRECTION: 1) The finder's RETAIL/ACE citation (lib.rs:28058-28069) is mislabeled — that file/line is OURS (the
+      wasm emit that populates __lastEntityWorldPos), not retail or ACE source. It is the correct code to cite, but as
+      the OURS side, not the comparison side; the finder provided no actual retail/ACE evidence for the 'single
+      predictor' contrast. 2) 'oscillation' is slightly overstated: the advance(+4.5*dt)/lerp(pull-back) opposition
+      produces a sustained bounded forward offset with per-frame sawtooth, with predicted remaining AHEAD of the
+      server pose — not a sinusoidal back-and-forth crossing the target. 'Sustained fight / steady-state lag' is the
+      precise characterization. 3) The constant is a fallback (consts.FALLBACK_RUN_RATE_SCALAR ?? 4.5); if
+      window.__movementConstants supplies a skill-aware value the magnitude shrinks, but the index.html:7635 default
+      is also hardcoded 4.5, so the fight still occurs in practice.
+
+  [GAP | conf=high | impact=medium | VERDICT=confirmed] no-speed-plumbing-to-js
+    CLAIM: The JS predictor structurally cannot match the integrator's speed because the wasm getLocalPlayerPose()
+    export (LocalPlayerPose) carries only x,y,z,heading,landblock_id — no velocity or speed field — so JS reads
+    integrator heading but must guess speed from its own 4.5/1.0 constants.
+    >>CORRECTION: One label error in the finder's evidence, not affecting the conclusion: it cited common.rs
+      (crates/holtburger-core/src/client/movement/common.rs:437-445) under the "RETAIL/ACE" column. That file is OUR
+      Rust code — the holtburger-core wasm-side integrator — NOT retail/ACE source. The actual ACE physics source
+      lives at external/ACE/Source/ACE.Server/Physics and retail at ac-headers/acclient.c; neither was the cited file.
+      So the comparison is really "JS predictor vs OUR Rust integrator" (a same-codebase dual-predictor divergence),
+      which is precisely the gap dimension being tested — the mislabel does not change the verdict. Minor
+      strengthening: the claim says JS "must guess speed from its own 4.5/1.0 constants"; in reality the Rust
+      integrator can use a server-modified run_rate_scalar and motion-table-derived base speeds, so JS's flat 4.5/1.0
+      can diverge even when no guess error exists in the nominal case.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] axis-ownership-split
+    CLAIM: Rig pose is composited across BOTH predictors by axis: X/Y come from the JS predictedPlayerPos, while Z and
+    heading come from the Rust integrator's getLocalPlayerPose(); the camera's own height however reads the lagging
+    predicted.z (only updated by the 150ms reconcile lerp, never integrated), so on hills the camera Z lags the rig Z.
+    >>CORRECTION: None material. Two clarifications that strengthen rather than alter the claim: (1) The camera does
+      not read predicted.z directly — it reads it through a four-hop indirection (positionCamera -> _safePlayerPos ->
+      getPlayerWorldPos -> entityManager.getLocalPlayerWorldPos -> getPredictedPlayerWorldPos). The finder's wording
+      ("camera's own height reads the lagging predicted.z") is correct on the net effect. (2) The rendered rig Z is
+      not the raw integrator z but renderZ from getTerrainVisualZ (loop.js:285), a Catmull-Rom terrain raycast clamp
+      layered on top of the integrator z; this is still integrator-anchored (the raycast seeds from posZ = integrator
+      z and only lifts to the visual mesh if the cast hits), so it does not change the conclusion that rig Z tracks
+      the live integrator altitude while camera Z lags.
+
+  [MATCH | conf=high | impact=low | VERDICT=confirmed] walk-1.0-is-live-constant
+    CLAIM: The JS WALK_SPEED=1.0 (and RUN=4.5) is a live, shared value sourced from window.__movementConstants set in
+    index.html (FALLBACK_RUN_RATE_SCALAR=4.5, WALK_FORWARD_SPEED=1.0), with the camera.js ?? fallbacks as a no-op
+    duplicate; it is NOT a stale leftover — but it is a flat constant, not the integrator's MotionTable-derived
+    base_walk_forward_speed.
+    >>CORRECTION: Minor overstatement: the finder calls the camera.js `??` fallbacks "a no-op duplicate." They are not
+      strictly never-hit — camera.js's own doc comments (lines 944-946 and 1016-1024) explicitly state
+      `__movementConstants` can be undefined during the boot race before the login closure runs, in which case the `??
+      4.5`/`?? 1.0` fallbacks ARE used. Because the fallback literals equal the published values, the runtime behavior
+      is identical either way, so the substance of the finder's conclusion stands; "no-op duplicate" is just imprecise
+      — it's better described as a redundant-but-reachable defensive fallback. This does not change the verdict. Also
+      note the integrator's backstep/sidestep walk speed is itself hard-coded 1.0 in common.rs:443/453 (not
+      MotionTable-derived), but the claim only concerns walk-forward/run-forward, which the integrator does derive
+      from the MotionTable, so the claim remains accurate.
+
+  [RISK | conf=high | impact=low | VERDICT=confirmed] client-prediction-shadow-is-diag-only
+    CLAIM: get_last_client_prediction / set_last_client_prediction are a Wave 3.F diagnostic shadow consumed only by
+    diag/physics.js and the physics-replay validators — NOT the render path — and the setter is fed exclusively by the
+    2D rAF loop (localEntry.sprite.x/.y), so it does not couple the JS and Rust predictors at runtime.
+    >>CORRECTION: One cosmetic labeling error in the finder's evidence, not affecting the conclusion: the finder put
+      "RETAIL/ACE: apps/holtburger-web/index.html:10103-10122" in the ACE/retail slot, but index.html is OURS, not the
+      retail decomp or ACE source. There is no genuine retail/ACE counterpart for this dimension because the dual-
+      predictor comparison is between two of our own predictors (JS rAF integrator vs Rust recv-loop), both internal;
+      the index.html block cited is the JS-side setter call site, which is correct content in the wrong slot. Minor
+      citation precision: the getter body is lines 22224-22237 (doc comment begins 22196); the setter spans
+      22258-22278 — the finder's 22196-22237 range covers the getter + its doc but stops before the setter body,
+      though both functions are clearly the subject.
+
+  [RISK | conf=medium | impact=medium | VERDICT=partially-correct] preserve-gate-pins-integrator
+    CLAIM: During active WASD the wasm preserve_local_runtime_pose gate makes routine server UpdatePosition broadcasts
+    a no-op on body.pose (integrator keeps running at its own skill-derived speed), so getLocalPlayerPose()/integrator
+    does NOT snap back — meaning the only thing dragging the rendered X/Y toward the slow server pose is the JS lerp,
+    deepening the JS-vs-integrator disagreement rather than resolving it.
+    >>CORRECTION: The claim's central risk mechanism is wrong: there is no JS lerp dragging the local player's
+      rendered X/Y toward the server pose. The lerp (index.html:5972-5976) is seeded ONLY in the non-local else
+      branch; the local-player branch (5924-5970) explicitly DISABLES lerp (lerpStartMs/lerpDurationMs=undefined) and
+      applies a deliberate no-snap policy, snapping only on landblock crossing. Also, the claim conflates two distinct
+      predictors: the rendered local X/Y in the 2D path is owned by the JS step-3.5 predictor (localEntry.sprite.x/.y,
+      4.5 m/s constant), which is a SEPARATE predictor from the wasm integrator (body.pose, skill-derived). The JS
+      predictor does not consume the wasm integrator's x/y at all (only z, line 10106-10109), so "the integrator not
+      snapping back deepens the JS-vs-integrator disagreement" misdescribes the data flow. The confirmed facts (gate
+      is a no-op on body.pose during active WASD; getLocalPlayerPose returns the integrator pose; genuine 4.5 vs ~1.0
+      m/s speed mismatch) are real, but the risk as stated overstates/misattributes the convergence path. The stale
+      comment at index.html:6196-6197 ("seeded from applyEntityUpdate's isLocal branch") is itself misleading — the
+      seed is actually in the non-local branch.
+
+  OPEN QUESTIONS:
+    - Does the REAL player MotionTable (DID 0x09000001, not the synthetic 0x09000020 test table) have
+      base_run_forward_velocity.length() ≈ 1.0 so that resolved_manual_run_speed ≈ run_rate_scalar (making 4.5
+      numerically correct only for capped players)? The production motion_resolution path resolves it at runtime; I
+      could not read the baked MotionTable bytes from source to confirm base_run is normalized to 1.0 rather than
+      the 2.5 used in the unit-test fixture.
+    - In practice, what is the steady-state visible amplitude of the JS-vs-server overrun for a low-Run-skill
+      character? At 4.5 vs 1.0 m/s with a 150ms lerp and ~33ms server-emit cadence, the predicted X/Y would overrun
+      by up to ~(4.5-1.0)*0.033 ≈ 0.12m per emit and be pulled back each lerp — whether this reads as a steady
+      forward bias, a visible jitter, or is masked needs a live capture (not resolvable from source).
+    - Does ACE's server actually advance the local player's authoritative pose at the skill-derived rate, or does it
+      accept the client's faster heartbeat pose (no force_position) so __lastEntityWorldPos ends up reflecting the
+      FAST client pose anyway? index.html:5934-5946 implies ACE 'happily accepts our heartbeats' at low Run skill
+      while its authoritative pose stays near spawn — confirming the divergence — but whether the broadcast echoed
+      back is the client heartbeat or the server's own slow integration determines whether the lerp target is fast
+      or slow. Needs a wire capture to settle definitively.
+    - Is there a second, independent divergence between the 2D sprite predictor (index.html) and the 3D camera
+      predictor (camera.js) given they share constants but use different heading conventions
+      (SPRITE_HEADING_OFFSET=π/2 vs raw compass)? Out of scope for JS-vs-Rust but relevant to overall predictor
+      consistency.
+====================================================================================================
+DIMENSION: MOTION-VELOCITY-SOURCE
+----------------------------------------------------------------------------------------------------
+SUMMARY: Our Rust authoritative integrator derives base walk/run/turn speeds from the DAT MotionTable cycle velocity
+(base_run_forward_velocity.length() * run_rate_scalar), which structurally mirrors RETAIL's *actual* position-driving
+path — ACE/acclient apply `motionData.Velocity * speedMod` into the animation Sequence
+(MotionTable.add_motion/combine_motion → Sequence.apply_physics `frame.Origin += Velocity*quantum`). Retail's hardcoded
+anim constants (RunAnimSpeed=4.0, WalkAnimSpeed=3.12, SidestepAnimSpeed=1.25) live in `get_state_velocity`, which ACE
+calls ONLY from `get_leave_ground_velocity` (jump launch + a max-speed clamp), NOT for steady-state grounded locomotion.
+So the task's framing ("ours DAT-derived vs retail hardcoded") is half a red herring: BOTH systems are DAT-velocity-
+driven for grounded motion. The real, confirmable divergences are: (1) our run-rate scalar (faithful port of ACE
+GetRunRate, range ~1.0–4.5) multiplies a DAT magnitude whose equality to retail's effective speed I cannot verify from
+source (needs the real portal.dat player-MT cycle velocity); (2) we never implement retail's `get_state_velocity`
+normalize-and-clamp-to-`RunAnimSpeed*rate`, so our diagonal (geometric forward+sidestep sum, which DOES match retail's
+`CombinePhysics` additive composition) is uncapped where retail clamps the leave-ground velocity; (3) our
+`forward_axis_speed` backstep returns a bare `run_rate_scalar` (~4.5) for Run gait and `1.0` for Walk, diverging from
+retail's `WalkAnimSpeed*-BackwardsFactor` (3.12*0.65≈2.03) backstep; (4) the SEPARATE JS dead-reckon predictor and a
+dead-code wasm Rust path hardcode `RUN_SPEED=4.5`/`WALK_SPEED=1.0` — neither DAT-derived nor retail's 4.0/3.12 — so the
+visual predictor is a third, inconsistent speed source. FALLBACK_RUN_RATE_SCALAR=4.5 fires whenever player_run_rate() is
+None (Run skill not loaded), independent of MotionTable presence; the JS/dead-code paths use 4.5 unconditionally.
+
+  [MATCH | conf=high | impact=high | VERDICT=partially-correct] retail-grounded-speed-is-dat-derived-not-hardcoded
+    CLAIM: Retail/ACE grounded steady-state locomotion velocity is driven by `motionData.Velocity * speedMod` (DAT
+    cycle velocity scaled by the wire speed scalar), NOT by the hardcoded RunAnimSpeed=4.0/WalkAnimSpeed=3.12
+    constants; those constants live only in get_state_velocity which ACE calls solely from get_leave_ground_velocity
+    (jump launch).
+    >>CORRECTION: The clause 'those constants live only in get_state_velocity' is false. RunAnimSpeed/WalkAnimSpeed
+      also appear in apply_current_movement (MotionInterp.cs:421, sidestep factor on the live grounded movement path)
+      and in get_max_speed (MotionInterp.cs:675), which is called by InterpolationManager.cs:221 and
+      StickyManager.cs:112 as a speed clamp. So they are not solely a jump-launch construct. The narrower statement
+      'get_state_velocity is called solely from get_leave_ground_velocity' IS correct (only caller at
+      MotionInterp.cs:656). Also note the constants are defined in MotionInterp.cs:28/32 (WalkAnimSpeed=3.1199999f,
+      not literally 3.12), in a different class than the cited MotionTable.cs — the finder cited
+      MotionTable.cs:358-385 only for the motionData.Velocity*speedMod path, which is correct, but did not cite where
+      the constants actually live, leaving the scoping claim unverified-by-the-finder and as it turns out partly
+      wrong.
+
+  [MATCH | conf=high | impact=high | VERDICT=confirmed] get-state-velocity-is-jump-launch-only
+    CLAIM: In ACE the hardcoded anim constants (1.25 sidestep, 3.12 walk, 4.0 run, maxSpeed=RunAnimSpeed*rate clamp)
+    in get_state_velocity are invoked ONLY by get_leave_ground_velocity (MotionInterp.cs:200,656) — i.e. they set jump
+    take-off velocity and a max-speed clamp, not the per-tick grounded run/walk speed; acclient.c:343821 confirms the
+    same single call site.
+    >>CORRECTION: Minor scoping nuance, not an error in the claim as worded: the claim says the constants are "invoked
+      ONLY by get_leave_ground_velocity." That is exactly true of get_state_velocity (single call site). But the
+      underlying constants are not exclusively a jump concept in ACE overall — RunAnimSpeed=4.0 is also used by
+      get_max_speed (MotionInterp.cs:675), which feeds the clamp in StickyManager.cs:112 (get_max_speed*5.0) and
+      InterpolationManager.cs:221 (get_max_speed*2.0), and WalkAnimSpeed/SidestepAnimSpeed are referenced in
+      adjust_motion (MotionInterp.cs:421: speed *= SidestepFactor * (WalkAnimSpeed/SidestepAnimSpeed)). These are
+      separate references to the same named constants, outside get_state_velocity, so they do not contradict the
+      claim, but a reader should not infer these constants are touched only on the jump path. Also worth noting OURS'
+      SIDESTEP_RUN_SPEED_CAP_M_PER_SEC=3.0 (common.rs:417) mirrors ACE's MaxSidestepAnimRate=3.0 (and retail's
+      fabs>3.0 sidestep clamp), not the RunAnimSpeed*rate clamp — i.e. OURS' grounded sidestep cap corresponds to a
+      different ACE constant than the get_state_velocity clamp the claim discusses.
+
+  [MATCH | conf=high | impact=medium | VERDICT=confirmed] run-rate-scalar-faithful-port
+    CLAIM: Our run_rate_scalar is a faithful 1:1 port of ACE MovementSystem.GetRunRate: returns 18/4=4.5 for
+    run_skill>=800 else (loadMod*(runSkill/(runSkill+200)*11)+4)/4, with identical burden_load_modifier thresholds;
+    this scalar (range ~1.0–4.5) is the `speedMod`/run_factor retail multiplies into both apply_run_to_command and the
+    Sequence velocity.
+    >>CORRECTION: Named run_rate_from_skill_and_burden not run_rate_scalar. OURS omits ACE divide-by-scaling but all
+      live callers pass 1.0 so it is a no-op. Walk uses fixed 1.5 not run_factor. None change verdict.
+
+  [DIVERGENCE | conf=medium | impact=medium | VERDICT=confirmed] no-get-state-velocity-maxspeed-clamp
+    CLAIM: Our local integrator has NO equivalent of retail get_state_velocity's normalize-and-clamp-
+    to-(RunAnimSpeed*rate) step: only sidestep is capped (±3.0 in sidestep_axis_speed), the forward axis is uncapped,
+    and the geometric forward+sidestep diagonal can exceed retail's clamped magnitude. Retail's clamp only applies on
+    the leave-ground/jump path, so this primarily affects jump take-off fidelity, but the composed diagonal speed is
+    structurally uncapped on our side.
+    >>CORRECTION: No factual errors. Two sharpenings, neither weakens the claim: (a) On the GROUND path ACE/retail
+      integrate no composed velocity at all — movement is animation-driven (apply_interpreted_movement ->
+      DoInterpretedMotion, MotionInterp.cs:440-504) — so our ground integrator is itself a divergent design and there
+      is no retail clamp to compare against there; the finder's narrower phrasing 'primarily affects jump take-off
+      fidelity' plus 'structurally uncapped on our side' captures this correctly. (b) Our ±3.0 sidestep cap
+      (common.rs:452, SIDESTEP_RUN_SPEED_CAP_M_PER_SEC) mirrors a DIFFERENT retail clamp (apply_run_to_command's run-
+      scaled sidestep input clamp), not get_state_velocity's composed-magnitude clamp — consistent with the finder's
+      point that we have nothing equivalent to the get_state_velocity step.
+
+  [DIVERGENCE | conf=medium | impact=medium | VERDICT=partially-correct] backstep-speed-divergence
+    CLAIM: Our backstep speed diverges from retail: forward_axis_speed returns a bare run_rate_scalar (~4.5 at cap)
+    for (Run, Backstep) and 1.0 for (Walk, Backstep), whereas retail computes backstep as WalkAnimSpeed *
+    -BackwardsFactor (3.12 * 0.65 ≈ 2.03 m/s) via adjust_motion converting WalkBackwards→WalkForward with speed *=
+    -0.65, and backstep is NOT run-scaled in retail (no RunBackward clip).
+    >>CORRECTION: 1. False statement: 'backstep is NOT run-scaled in retail (no RunBackward clip).' Retail DOES run-
+      scale backstep speed. acclient.c:343466 / MotionInterp.cs:543 multiply speed by run_factor unconditionally for
+      the WalkForward case; only the clip-swap to RunForward is gated on speed>0. There is no RunBackward CLIP (true),
+      but the speed magnitude IS run-scaled (the conclusion's premise is wrong). 2. The '3.12*0.65 ~= 2.03 m/s' retail
+      target is the WALK backstep only. Retail Run+Backstep = 2.028*run_factor m/s (up to ~9.1 before the 4*run_factor
+      magnitude clamp in get_state_velocity, acclient.c:343586-343593). 3. Minor framing: run_rate_scalar is a
+      dimensionless multiplier (~1.0 at skill 0, capped 4.5 at skill>=800), not 'a speed ~4.5 at cap' -- OURS misuses
+      this multiplier as a raw m/s magnitude, which is the actual mechanism of the bug.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] js-predictor-third-speed-source
+    CLAIM: The separate JS dead-reckon predictor (camera.js) and a dead-code wasm Rust path (lib.rs
+    build_raw_motion_state_for_input) hardcode RUN_SPEED=FALLBACK_RUN_RATE_SCALAR=4.5 and WALK_SPEED=1.0 m/s — neither
+    DAT-derived (like the authoritative integrator) nor retail's 4.0/3.12 constants — making the visual predictor a
+    third, inconsistent speed source that ignores per-player run_rate and the MotionTable entirely.
+    >>CORRECTION: Minor framing only, verdict unchanged: (a) the walk divergence is larger than the headline implies
+      (predictor 1.0 vs retail 3.12), while run is 4.5 vs 4.0. (b) 4.5 is specifically the MAX-capped run-rate
+      fallback per common.rs:14-21, used unconditionally by the predictor even though it is a last-resort fallback.
+      (c) impact is bounded: predictor early-returns with no WASD held (camera.js:1008-1014) and the server reconcile
+      drags predicted pose back each tick — this scopes the symptom but does not change that three inconsistent speed
+      sources exist.
+
+  [MATCH | conf=medium | impact=medium | VERDICT=confirmed] diagonal-geometric-sum-matches-combine-physics
+    CLAIM: Our diagonal composition (local_velocity_for_state geometrically sums the forward and sidestep velocity
+    vectors) matches retail's additive composition: Sequence.CombinePhysics does `Velocity += velocity`, so forward
+    and sidestep contribute independently to one velocity vector that drives `frame.Origin += Velocity*quantum`. The
+    combined magnitude can exceed each axis cap (e.g. √2 for walk+strafe) in both systems.
+    >>CORRECTION: Two things the finder missed, neither of which changes the verdict: (1) ACE DOES have a velocity-
+      magnitude clamp — PhysicsObj.cs:1843-1846 clamps to PhysicsGlobals.MaxVelocity (=50.0 m/s, PhysicsGlobals.cs:30)
+      — but it operates on a DIFFERENT field (PhysicsObj.Velocity / m_velocityVector, the gravity/acceleration layer
+      in UpdatePhysicsInternal), NOT Sequence.Velocity (the motion layer that CombinePhysics accumulates). At walking
+      speed √2≈1.41 ≪ 50, so the clamp is a fallback never hit for this scenario; the claim's "magnitude can exceed
+      each axis cap" stands. (2) ACE actually has two velocity layers (Sequence motion velocity +
+      PhysicsObj.Velocity), so "one velocity vector" is precise only for the Sequence/animation layer where the
+      diagonal composition lives; the world-space transform happens via AFrame.Combine(Position.Frame, offsetFrame) in
+      UpdatePositionInternal (PhysicsObj.cs:1862-1881), since motion velocity is authored in object-local space. (3)
+      Minor: the finder's evidence pointer to our integrator was imprecise — the actual consume site is system.rs:616
+      (local_velocity_for_state → target_velocity) and system.rs:717 (raw_delta = smoothed_planar * dt), not the line
+      range implied by the surrounding comment.
+
+  [MATCH | conf=high | impact=high | VERDICT=confirmed] walk-run-motion-code-swap-matches
+    CLAIM: Our walk→run code swap matches retail exactly: forward_command_for_state emits RUN_FORWARD (0x44000007) for
+    (Run,Forward) and WALK_FORWARD (0x45000005) for (Walk,Forward), mirroring acclient.c apply_run_to_command which
+    rewrites case 0x45000005 → 1140850695 (0x44000007) when speed>0 and HoldKey=Run; these are distinct DAT clips (run
+    cycle vs walk cycle), not speed variants of one clip.
+
+  [MATCH | conf=high | impact=low | VERDICT=confirmed] sidestep-cap-matches-retail
+    CLAIM: Our run-scaled sidestep ±3.0 m/s cap matches retail exactly: sidestep_axis_speed clamps run_rate_scalar to
+    SIDESTEP_RUN_SPEED_CAP=3.0, mirroring acclient.c apply_run_to_command case 0x6500000F which sets *speed=±3.0 when
+    fabs(run_factor*speed)>3.0 (sign-preserving), and ACE MotionInterp.cs:550-560 (MaxSidestepAnimRate=3.0).
+    >>CORRECTION: Only a cosmetic nit that does not affect the conclusion: the Rust constant is named
+      SIDESTEP_RUN_SPEED_CAP_M_PER_SEC and a doc comment (common.rs:403) loosely calls the value 4.5 a "run-speed
+      (~4.5 m/s)". In retail this 3.0 cap and the 4.5 run_factor are unitless anim-rate quantities (get_max_speed
+      multiplies run_rate by 4.0 to reach m/s), not literally m/s. Since the sidestep input anim rate is exactly 1.0,
+      the numbers and clamp behavior coincide 1:1, so the comparison verdict is unaffected — the naming/comment is
+      just imprecise about units.
+
+  OPEN QUESTIONS:
+    - EMPIRICAL DAT MAGNITUDE: I could not read the real portal.dat player MotionTable (DID 0x09000001) cycle
+      velocity magnitudes from source — the test fixtures use synthetic (1.0, 1.5) values. The whole equality
+      question ('does ours' DAT-derived speed equal retail's effective m/s') hinges on whether
+      |base_run_forward_velocity| ≈ 4.0 (matching RunAnimSpeed) or some other value (~1.0–1.5). If DAT velocity ≈
+      4.0 AND retail grounded speedMod ≈ 1.0, they match; if DAT velocity ≈ 1.0 and our run_rate ≈ 2.65 is
+      multiplied in, we'd be ~2.65 m/s vs retail's 4.0*~1.0 = 4.0 m/s. Needs a dump of the actual cycle velocity
+      (WB.Terminal dump-lb / motion-table oracle).
+    - RETAIL GROUNDED speedMod: What value does retail actually pass as `speed` into add_motion/Sequence.SetVelocity
+      for a steady-state grounded RunForward? apply_run_to_command multiplies the input speed (1.0) by run_factor,
+      yielding ForwardSpeed ≈ run_rate (~2.65). If that same ForwardSpeed is then multiplied by DAT velocity in the
+      Sequence, the effective grounded speed = DAT_velocity * run_rate — which is exactly our model. But I could not
+      trace from acclient.c whether the grounded position update uses the Sequence velocity directly or re-derives
+      via get_state_velocity. ACE clearly uses Sequence for grounded and get_state_velocity only for leave-ground;
+      whether retail acclient.c does the same for the GROUNDED path (vs a different UpdatePositionInternal path) is
+      unconfirmed.
+    - FORWARD+SIDESTEP SEQUENCE INTERACTION: In ACE apply_interpreted_movement, forward and sidestep are applied via
+      SEPARATE DoInterpretedMotion→set_motion calls, and set_motion calls sequence.clear_physics() first
+      (MotionTable.cs:152). It is unclear whether the sidestep's set_motion clears the forward velocity (so only one
+      axis survives) or whether they accumulate via combine_motion into one diagonal. Our model assumes a clean
+      geometric sum; CombinePhysics is additive but SetVelocity overwrites. If retail's per-axis set_motion
+      overwrites, retail might NOT produce a true diagonal the way we do — this could be a divergence rather than
+      the match I rated medium-confidence.
+    - DEAD-CODE STATUS: build_raw_motion_state_for_input (lib.rs:25462, RUN_SPEED=4.5) is marked #[allow(dead_code)]
+      and the live wasm path routes through motion_state_for_input → the cli's build_motion_state_raw_motion_state
+      (DAT-aware). But the JS predictor in camera.js (RUN_SPEED=4.5) is LIVE for the 3D visual. Confirming the JS
+      predictor is purely cosmetic (server pose reconciles it) vs. ever authoritative for emitted position would
+      clarify the real-world impact of its non-DAT 4.5 m/s.
+====================================================================================================
+DIMENSION: SERVER-RECONCILIATION
+----------------------------------------------------------------------------------------------------
+SUMMARY: Our autonomous-position contract is structurally faithful to retail: the 1-second heartbeat cadence, the four
+sequence stamps (instance / server-control / teleport / force-position), and the client-authoritative (autonomy-level-2)
+"I report my own position, server vetoes" design all match retail's CommandInterpreter and ACE's UpdatePlayerPosition.
+The sequence-gating logic (teleport-then-force-position newer-wins) is a correct port of retail's
+SmartBox::HandleReceivedPosition / ACE's should-accept logic. Where we diverge is the RECONCILIATION mechanism: retail
+smoothly InterpolateTo/ConstrainTo the local player toward a forced position (with 25 m indoor / 100 m outdoor blip
+thresholds for a hard snap), whereas our Rust integrator does NOT correct its working pose on an inbound force-position
+(it preserves the runtime pose via Snapshot mode), and the actual visual correction lives entirely in a separate JS
+predictor with a single 5 m hard-snap-or-150 ms-lerp rule. Two real risks follow: (1) a force-position under ~5 m never
+visually corrects and the wasm keeps re-sending the un-corrected drifted pose on the next heartbeat (the heartbeat is
+unconditional, lacking retail's position-changed gate), and (2) the indoor-rubberband history is plausible but the snap
+thresholds (our 5 m vs retail's 25 m indoor) are not matched, and the wasm authoritative pose is never reset by a sub-
+snap force-position.
+
+  [MATCH | conf=high | impact=high | VERDICT=partially-correct] heartbeat-cadence-1s-match
+    CLAIM: Our autonomous-position heartbeat interval (1 second) exactly matches both retail's CommandInterpreter
+    time_between_position_events (IEEE754 0x3FF0000000000000 = 1.0 s) and ACE's MoveToState_UpdatePosition_Threshold
+    (1 second).
+    >>CORRECTION: The claim's framing that our 1s "exactly matches both retail's time_between_position_events AND
+      ACE's MoveToState_UpdatePosition_Threshold" conflates two different ACE constants. (a) ACE's literal port of
+      retail's time_between_position_events is CommandInterpreter.TimeBetweenPositionEvents = 1.875
+      (CommandInterpreter.cs:32) — it diverges from retail's 1.0, and is dead code (ShouldSendPositionEvent at
+      CommandInterpreter.cs:793 is a `return true;` stub that never reads it). The finder did not surface this and it
+      directly contradicts the "exact match" framing for the same mechanism. (b) MoveToState_UpdatePosition_Threshold
+      (Player_Tick.cs:403) does equal 1s, but its doc comment (lines 395-396) states it governs MoveToState broadcasts
+      and explicitly EXCLUDES AutonomousPosition ("AutonomousPosition still always broadcasts UpdatePosition"); it is
+      a server-side broadcast throttle in UpdatePlayerPosition (line 513), not the client-emit autonomous cadence our
+      constant represents. The OURS↔retail match is solid; the ACE leg is a same-value-different-mechanism
+      coincidence, so the overall match classification is overstated.
+
+  [MATCH | conf=high | impact=high | VERDICT=confirmed] client-authoritative-veto-design
+    CLAIM: Our model is client-authoritative-with-server-veto (we send our own runtime pose as AutonomousPosition and
+    only accept newer server force/teleport corrections), matching retail's autonomy_level==2 design where the client
+    reports position and ACE validates/force-corrects via UpdatePlayerPosition.
+    >>CORRECTION: Minor citation-locality nit, not a factual error: the finder named ACE's UpdatePlayerPosition but
+      its only concrete ACE/retail line refs were acclient.c (the retail decomp) and the path ACE/.../Physics. The
+      actual ACE UpdatePlayerPosition / ValidateMovement / ObjectForcePosition force-correction lives in
+      ACE.Server/WorldObjects/Player_Tick.cs:411-491 and SetRequestedLocation in Player_Networking.cs:300, not under
+      the Physics dir. The function is real and behaves exactly as the claim states; only the cited directory for it
+      was imprecise. Also worth noting: the same veto helper backs the non-autonomous UpdatePosition path too
+      (apply_position_from_server, player/mutations.rs:246), so the mechanism is broader than just AutonomousPosition
+      — this strengthens rather than weakens the claim.
+
+  [MATCH | conf=high | impact=medium | VERDICT=partially-correct] sequence-gating-port-correct
+    CLAIM: Our inbound position-acceptance gate (reject if our teleport_sequence is newer; within same teleport epoch
+    reject if our force_position_sequence is newer) is a faithful port of retail's SmartBox::HandleReceivedPosition
+    gating (newer_event FORCE_POSITION_TS + teleport-timestamp compare) and ACE's sequence ordering.
+    >>CORRECTION: Three things missed. One, the boolean composition differs structurally. Two, retail outer
+      newer_event on FORCE_POSITION_TS has a side effect that advances the stored fp slot even when the body is
+      skipped, whereas our predicate is pure and slots advance only on accept. Three, retail teleport-vs-interpolate
+      decision lives in inner newer_event calls at 145167 and 145196, not the outer gate, while ours collapses to one
+      outer accept-reject. The ACE part adds nothing since ACE is the server and only emits sequences monotonically
+      with no client-side gate.
+
+  [DIVERGENCE | conf=high | impact=high | VERDICT=confirmed] forced-reposition-no-smooth-reconcile
+    CLAIM: Retail smoothly reconciles the local player toward a forced position via PositionManager
+    InterpolateTo/ConstrainTo (only teleport zeroes velocity and hard-sets; a force-position under the blip distance
+    interpolates), whereas our wasm integrator does NOT smoothly reconcile or even correct its working pose on a
+    force-position — set_player_position uses Snapshot mode which preserves the runtime pose while mid-simulation.
+    >>CORRECTION: Two clarifications that strengthen the claim. (1) The finder cites OURS at scene.rs:1230-1246 (the
+      preserve_local_runtime_pose block), correct downstream evidence, but the entry that selects Snapshot is
+      set_player_position at mutations.rs:606, called from handlers/player.rs:42 for the UpdatePosition message. (2)
+      Snapshot is not unconditionally pose-preserving: when the local body is NOT mid-simulation (mode
+      AuthoritativeOnly), scene.rs:1243 DOES hard-set body.pose = pose (a snap, not a smooth lerp). So OURS hard-snaps
+      in the idle case and preserves-without-correction in the simulating case; in neither case does it InterpolateTo
+      like retail, which is exactly the asserted divergence.
+
+  [DIVERGENCE | conf=high | impact=medium | VERDICT=confirmed] snap-threshold-mismatch
+    CLAIM: Our only visual force-position correction is a JS-side single 5 m hard-snap (else a 150 ms lerp), but
+    retail's snap/interpolate decision uses autonomy blip distances of 25 m indoor / 100 m outdoor for the player and
+    constraint start distances of 5 m indoor / 10 m outdoor — so our 5 m snap threshold is far tighter than retail's
+    and not landblock/indoor-aware.
+    >>CORRECTION: Minor imprecision, not enough to downgrade: retail's autonomy-blip and start/max-constraint
+      distances are not literally one unified "snap-vs-interpolate threshold." The autonomy blip (144717) decides
+      whether to refresh the viewer/cell-visibility ("blip") and gates InterpolationManager::InterpolateTo (389055);
+      the start/max constraint distances (145199-145227) define a ConstrainTo leash region; InterpolationManager
+      additionally uses a 0.05 m dead-band (389057). They are the retail force-position correction machinery and are
+      indoor/outdoor-aware, which is the load-bearing part of the claim, but mapping our single 5 m snap directly onto
+      "the" retail threshold is a simplification. Also note ACE inverts the start-constraint indoor/outdoor mapping
+      relative to the decomp comment framing (ACE returns 5.0 for <0x100 i.e. outdoor, 10.0 indoor; decomp returns 5.0
+      for >=0x100 i.e. indoor) — but the finder cited the decomp values (5 indoor / 10 outdoor), which match the
+      decomp text exactly.
+
+  [RISK | conf=high | impact=medium | VERDICT=confirmed] heartbeat-unconditional-no-changed-gate
+    CLAIM: Our 1 s heartbeat fires unconditionally whenever a sync target exists, re-sending the (possibly un-
+    corrected, drifted) runtime pose; retail only sends a position event when the position actually changed since
+    last_sent_position (Frame::is_equal / contact-plane gate), so a stationary or force-corrected-but-not-locally-
+    applied player keeps re-asserting a stale pose to ACE in our model.
+    >>CORRECTION: Minor, non-conclusion-changing nuances the finder did not state: (1) Our heartbeat does snap pose Z
+      to the cached terrain heightmap before write-back (documented comment at system.rs:1419-1435), so the re-sent
+      pose is not arbitrary garbage on Z — but it is still the local runtime pose, which can be un-corrected/drifted
+      relative to a server force-correction the client hasn't applied, so the "stale pose" risk stands. (2) Retail's
+      gate has two sub-branches (timer-elapsed full Frame::is_equal check vs. not-yet-elapsed contact-plane-only
+      check); the finder's one-line summary collapses these but does not misstate them. (3) The retail caller wiring
+      ShouldSendPositionEvent -> SendPositionEvent is dispatched via vtable in the decomp so no direct textual call
+      site is greppable; this does not affect the gate semantics, which are self-evident in the function bodies.
+
+  [RISK | conf=medium | impact=high | VERDICT=confirmed] local-vs-remote-reposition-asymmetry
+    CLAIM: Remote entities get a hard authoritative reset on force-position (EntityPositionSyncOutcome::Reset →
+    SpatialBodyEvent::ForcedReposition snaps body.pose), but the local player's force-position only updates
+    authoritative_pose and emits a ForcedReposition WorldEvent without snapping the integrator's working pose, so the
+    wasm authoritative state is never corrected by a sub-snap rubberband — convergence depends solely on the JS layer.
+    >>CORRECTION: One mechanistic imprecision (does not change the conclusion): the remote-entity body.pose snap
+      happens via reconcile_authoritative_body(AuthoritativeBodySync::Reset) at scene.rs:1244, NOT via
+      SpatialBodyEvent::ForcedReposition. SpatialBodyEvent::ForcedReposition is a SEPARATE channel handled at
+      state/mutations.rs:254 (calls apply_forced_reposition_reset, also snapping body.pose) and in production has no
+      emitter today — its only emitter (simulation.rs:399) is a test, and even there it targets a remote Entity. So
+      the finder conflated two distinct remote-snap mechanisms under one arrow; the operative remote path is the
+      EntityPositionSyncOutcome::Reset → reconcile(Reset) one. Also a nuance on the retail side worth flagging:
+      retail's local-player correction is usually a SOFT ConstrainTo/InterpolateTo (server pulls you back over time),
+      with the hard SetPositionSimple Blip reserved for the stale/equal-force-position else branch — so 'hard
+      authoritative reset' overstates the common retail local-player case, though retail does still apply the
+      correction to the live physics object whereas ours does not touch the wasm working pose at all.
+
+  [MATCH | conf=high | impact=medium | VERDICT=partially-correct] teleport-suspends-bodies-match
+    CLAIM: Our PlayerTeleport handling (advance teleport_sequence, suspend runtime bodies, emit TeleportStarted)
+    mirrors retail's teleport path which zeroes velocity and hard-SetPositionSimple via TeleportPlayer, and our JS
+    predictor's >5 m snap covers the post-teleport pose jump.
+    >>CORRECTION: (1) The ">5 m snap" in the JS predictor is fabricated — there is no 5-meter distance threshold
+      anywhere in the repo. The actual JS local-player teleport snap (index.html:5960-5968) triggers on landblock-ID
+      crossing (high 16 bits of upd.landblockId != entry.lastLocalLbId), and the wasm-side reconciliation is purely
+      sequence-gated (teleport_sequence / force_position_sequence, is_newer_u16), not distance-gated. (2) Minor:
+      TeleportPlayer itself does NOT zero velocity — it only does SetPositionSimple + PlayerPositionUpdated; the
+      velocity-zero (set_velocity 0,0,0) lives in the caller SmartBox::HandleReceivedPosition at 145203-145206 (the
+      finder's cited range, so substance is fine). (3) The finder omitted retail's ConstrainTo call (145199-145201)
+      which is part of the teleport path, though not central to the match.
+
+  OPEN QUESTIONS:
+    - Does the wasm authoritative pose ever get corrected after a sub-5 m force-position rubberband? The Snapshot-
+      mode preserve_local_runtime_pose path means body.pose is untouched and the next heartbeat re-sends the drifted
+      pose; I could not find any code path that snaps the local integrator's working pose back to a sub-snap forced
+      position, so persistent small-drift rubberbands may oscillate. Needs a live capture to confirm.
+    - Retail's ConstrainTo/InterpolateTo go through PositionManager which I did not fully read (acclient.c:388317
+      InterpolateTo / 388367 ConstrainTo) — the exact blend rate / constraint spring behavior is unquantified, so
+      the claim that our 150 ms JS lerp is 'retail-plausible' is directionally right but not numerically validated
+      against PositionManager's actual smoothing.
+    - The ACE checkout here is partial (Physics + WorldObjects only; no Network/GameAction handlers), so I confirmed
+      ACE's server-side UpdatePlayerPosition/SendUpdatePosition/ObjectForcePosition cadence but could NOT read ACE's
+      inbound AutonomousPosition message handler that calls SetRequestedLocation — the client→server
+      RequestedLocation plumbing was inferred from SetRequestedLocation's doc-comment, not observed at its call
+      site.
+    - Whether our JS predictor reliably sees local-player force-positions: loop.js writes __lastEntityWorldPos for
+      ALL guids (the isLocalPlayerGuid check only gates em.setPose), but I did not trace that an inbound
+      UpdatePosition for the local player actually produces a KIND_POSITION drain event (vs being suppressed like
+      KIND_SPAWN) — if it is suppressed, the JS 5 m snap would never fire for the local player and rubberbands would
+      never correct visually.
+    - Retail's ShouldSendPositionEvent has a second branch (when within the 1 s window) that still sends if the
+      contact_plane changed — our heartbeat has no contact-plane-change trigger, only the fixed interval; unclear
+      whether this matters for landing/contact-transition fidelity.
