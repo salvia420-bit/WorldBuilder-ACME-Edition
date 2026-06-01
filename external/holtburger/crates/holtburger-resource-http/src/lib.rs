@@ -36,6 +36,7 @@
 // (F.35) is target-agnostic so its unit tests can run natively under
 // `cargo test`. Everything else is gated below.
 
+pub(crate) mod concurrency;
 pub(crate) mod inflight;
 
 #[cfg(target_arch = "wasm32")]

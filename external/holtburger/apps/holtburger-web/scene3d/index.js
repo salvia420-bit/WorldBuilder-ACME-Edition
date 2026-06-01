@@ -3053,7 +3053,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // (the always-resident floor) — even at `?lbCap=1` the LRU keeps
   // those 9 LBs.
   try {
-    let lbCap = 169;
+    // F2 (2026-06-01): the default was a hardcoded 169 (the full 13×13 ring), so
+    // eviction NEVER fired under agentic=low (3×3 ring) — the scene grew
+    // monotonically (the stutter diagnostic measured meshes 390→5746 over a
+    // ~4-LB roam with no plateau). Derive the default from the ACTIVE bake ring
+    // instead: a full ring still resolves to 169 (unchanged), while a reduced
+    // ring (agentic=low → radius 1) gets a generous floor of 32 — comfortably
+    // above the live PVS working set (3×3 bake ≈9 + PVS expansion ≲25) so growth
+    // is bounded WITHOUT evict↔re-bake thrash. The 3×3 always-resident floor in
+    // LandblockLRU.tickEviction is the hard thrash guard regardless of this cap.
+    const ringMax = Math.max(HOLTBURG_RING_RADIUS, STATICS_RING_RADIUS, BUILDINGS_RING_RADIUS);
+    let lbCap = Math.max((2 * ringMax + 1) ** 2, 32);
     let lbLruDebug = false;
     if (typeof window !== "undefined" && window.location?.search) {
       const ps = new URLSearchParams(window.location.search);

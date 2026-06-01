@@ -1157,6 +1157,27 @@ export async function bakeStaticsForLandblock(
   let skippedNoMesh = 0;
   let sceneryObjectCount = 0;
   let landblockInfoObjectCount = 0;
+  // F3 (2026-06-01): time-slice the per-placement instantiation in ~6ms chunks
+  // so a static-dense LB doesn't build all singleton nodes in one synchronous
+  // burst (the run-around hitch when crossing into a new landblock). Nodes are
+  // accumulated and attached AFTER the loop (rather than added in-loop) so an
+  // eviction mid-build — the LB dropping out of the LRU while we yield across
+  // frames — can be cancelled cleanly. Default ON; `?noStaticsTimeSlice=1`
+  // disables. setTimeout (NOT rIC — `_ric_shim` poisons it; NOT rAF — dies
+  // under renderOnDemand). Wasm placements were already drained in
+  // drainPlacements/fetchAndDrainScenery above, so no wasm memory is held here.
+  let staticsTimeSlice = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      staticsTimeSlice =
+        new URLSearchParams(globalThis.location.search).get("noStaticsTimeSlice") !== "1";
+    }
+  } catch (_) {
+    staticsTimeSlice = true;
+  }
+  const STATICS_BUILD_BUDGET_MS = 6;
+  const addedNodes = [];
+  let _chunkStart = performance.now();
   for (const placement of statics) {
     const geom = primary.geomByModel.get(placement.modelId);
     if (!geom) {
@@ -1177,13 +1198,35 @@ export async function bakeStaticsForLandblock(
       staticsMatCastsShadow,
       staticsReceiveShadow,
     });
-    scene3d.staticsGroup.add(node);
+    addedNodes.push(node);
     objectCount += 1;
     singletonCount += 1;
     if (isLod) lodCount += 1;
     if (placement.source === "scenery") sceneryObjectCount += 1;
     else landblockInfoObjectCount += 1;
+
+    // F3 time-slice: yield once the chunk has spent its frame budget.
+    if (staticsTimeSlice && (performance.now() - _chunkStart) > STATICS_BUILD_BUDGET_MS) {
+      await new Promise((r) => setTimeout(r, 0));
+      _chunkStart = performance.now();
+    }
   }
+
+  // F3 cancellation guard: if this LB was evicted while we time-sliced the
+  // build, do NOT attach — evict() already cleared staticsBakedLbs[lbKey], so
+  // attaching now would orphan these nodes and let a re-approach rebuild
+  // duplicates. Dispose the per-LB geometries and bail. The nodes were never
+  // added to the scene graph, so nothing is GPU-resident to leak.
+  if (staticsTimeSlice && !scene3d.staticsBakedLbs.has(lbKey)) {
+    for (const geom of primary.geomByModel.values()) { try { geom?.dispose?.(); } catch (_) {} }
+    for (const geom of degradedGeomByModel.values()) { try { geom?.dispose?.(); } catch (_) {} }
+    return {
+      ...makeEmptySummary(),
+      evictedDuringBuild: true,
+      disposables: { geometries: [], materials: [], textures: [] },
+    };
+  }
+  for (const node of addedNodes) scene3d.staticsGroup.add(node);
 
   // V1 (2026-05-29) — run each scenery placement's `default_script`
   // ambient particle chain (fountains/braziers/torches). Fail-soft +

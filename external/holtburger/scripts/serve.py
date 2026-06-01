@@ -193,10 +193,29 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HOLT_ROOT), **kwargs)
 
+    def send_response_only(self, code, message=None):
+        # Stash the status so end_headers() can gate immutable caching on a 2xx
+        # (a 304/404 for a convention-URL shard miss must NOT be cached forever).
+        self._hb_status = int(code)
+        super().send_response_only(code, message)
+
     def end_headers(self):
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
+        # F5 (2026-06-01): content-addressed shards (/dist/shards/XX/<hash>.bin)
+        # are immutable by construction — serve them cache-forever so reloads /
+        # new sessions don't re-stream them (severe over a real network). Gated
+        # on a 2xx so 404 convention-URL misses + 304s stay uncached. Everything
+        # else (app JS, index.html, manifest.json, boot.hba, scenery + manifest
+        # catalogs — all STABLE filenames that re-point per bake) keeps the dev
+        # no-cache so hot-reload + bake freshness are preserved. Mirrors the
+        # production proxy.cjs precedent (shards-only, 200-gated, same header).
+        path = self.path.split("?", 1)[0]
+        status = getattr(self, "_hb_status", 0)
+        if path.startswith("/dist/shards/") and 200 <= status < 300:
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
         super().end_headers()
 
     def log_message(self, fmt, *args):

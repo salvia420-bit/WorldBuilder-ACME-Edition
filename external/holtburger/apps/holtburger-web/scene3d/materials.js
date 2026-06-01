@@ -2166,9 +2166,8 @@ export class MaterialCache {
       this.pendingStartTimes.set(d, _batchStart);
     }
 
-    let results;
     try {
-      results = await sharedFetch;
+      await sharedFetch;
     } catch (e) {
       // Bulk fetch failed entirely — clear all pending so subsequent
       // calls can retry. Caller's await of `preload()` will reject.
@@ -2180,11 +2179,23 @@ export class MaterialCache {
       throw e;
     }
 
+    // F4 (2026-06-01) — the per-DID `pendingFetches` chains registered above are
+    // the SOLE consumers of each SurfacePixels: each installs + `sp.free()`s
+    // exactly once. This loop USED to ALSO call `_installFromPixels(d,
+    // results[i])` on the SAME (now-freed) handles, whose `sp.width` getter threw
+    // "null pointer passed to rust" (caught + recorded as source:"surface" — the
+    // 100-error burst in the stutter diagnostic). Await the pending promises here
+    // to count resolutions without double-consuming. The `.then()` chains do NOT
+    // clear the pending maps, so we still delete them per-DID.
     let resolved = 0;
-    for (let i = 0; i < need.length; i += 1) {
-      const d = need[i];
-      const sp = results[i];
-      const installed = this._installFromPixels(d, sp);
+    for (const d of need) {
+      let installed = this.fallbackMaterial;
+      try {
+        const p = this.pendingFetches.get(d);
+        installed = p ? await p : (this.materials.get(d) || this.fallbackMaterial);
+      } catch (_) {
+        installed = this.fallbackMaterial;
+      }
       if (installed !== this.fallbackMaterial) resolved += 1;
       this.pendingFetches.delete(d);
       this.pendingStartTimes.delete(d);
@@ -2502,6 +2513,16 @@ export class MaterialCache {
 
   _installFromPixels(did, sp) {
     if (!sp) return this.fallbackMaterial;
+    // Idempotency / free-once guard (F4, 2026-06-01): if this DID is already
+    // installed, a second consumer reached us with the SAME (already-freed)
+    // SurfacePixels handle. Reading any getter below would throw "null pointer
+    // passed to rust"; instead free-if-live (once, no-op on an already-freed
+    // handle) and return the cached material. Defends preloadBatch + any future
+    // double-consume; preload() itself no longer double-consumes (see below).
+    if (this.materials.has(did)) {
+      try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
+      return this.materials.get(did);
+    }
     // wasm-bindgen wrappers around a null Rust pointer throw on every
     // getter (`.width` / `.height` / `.pixels`), so read them once under
     // a try/catch instead of an inline `sp.width === 0` check. A throw

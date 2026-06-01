@@ -21,10 +21,12 @@ use holtburger_dat::{
 };
 use holtburger_manifest::{Manifest, key_for_resource, sha256_hex};
 
+use crate::concurrency::Semaphore;
 use crate::http::{HttpError, fetch_bytes, join_url};
 use crate::inflight::InflightMap;
 use crate::manifest_source::{
-    ManifestConnectError, OwnedKey, PrefetchError, arc_to_http_error, owned, url_dirname,
+    ManifestConnectError, OwnedKey, PrefetchError, arc_to_http_error, configured_fetch_concurrency,
+    owned, url_dirname,
 };
 
 /// v1 manifest source. Reads the full `shards` map at connect time
@@ -41,6 +43,8 @@ pub struct ManifestResourceSourceV1 {
     /// even though v1 is deprecated, to keep behaviour consistent
     /// across the one-release-cycle drain window.
     inflight: Arc<InflightMap<HttpError>>,
+    /// F1 (2026-06-01): global concurrent-shard-fetch cap (see V2Source).
+    fetch_sem: Semaphore,
 }
 
 impl ManifestResourceSourceV1 {
@@ -72,6 +76,7 @@ impl ManifestResourceSourceV1 {
             shards: Arc::new(Mutex::new(HashMap::new())),
             base_url,
             inflight: Arc::new(InflightMap::new()),
+            fetch_sem: Semaphore::new(configured_fetch_concurrency()),
         })
     }
 
@@ -108,12 +113,17 @@ impl ManifestResourceSourceV1 {
         let fetches = to_fetch.iter().map(|(_, _, url)| {
             let url = url.clone();
             let inflight = self.inflight.clone();
+            let fetch_sem = self.fetch_sem.clone();
             async move {
                 let url_for_fetch = url.clone();
                 let result = inflight
                     .get_or_fetch(&url, move || {
                         let u = url_for_fetch.clone();
-                        async move { fetch_bytes(&u).await }
+                        async move {
+                            // F1: bound global concurrent shard fetches.
+                            let _permit = fetch_sem.acquire().await;
+                            fetch_bytes(&u).await
+                        }
                     })
                     .await;
                 result.map_err(arc_to_http_error)

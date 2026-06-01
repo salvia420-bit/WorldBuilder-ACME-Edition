@@ -55,9 +55,29 @@ use holtburger_manifest::{
     v2::{MANIFEST_V2_VERSION, ManifestV2, ManifestVersionProbe, render_shard_url_full},
 };
 
+use crate::concurrency::{DEFAULT_FETCH_CONCURRENCY, Semaphore};
 use crate::http::{HttpError, fetch_bytes, join_url};
 use crate::inflight::InflightMap;
 use crate::manifest_source_v1::ManifestResourceSourceV1;
+
+/// F1 tuning hook: a JS global `globalThis.__hbFetchConcurrency` (a positive
+/// number set before boot) overrides [`DEFAULT_FETCH_CONCURRENCY`] for the
+/// per-source shard-fetch cap, so the value can be A/B-tuned without a wasm
+/// rebuild. Absent / non-numeric / < 1 → the compiled default. Reads the
+/// global via `js_sys::global()` so it works in both window + worker contexts.
+pub(crate) fn configured_fetch_concurrency() -> usize {
+    let g = js_sys::global();
+    let v = js_sys::Reflect::get(
+        g.as_ref(),
+        &wasm_bindgen::JsValue::from_str("__hbFetchConcurrency"),
+    )
+    .ok()
+    .and_then(|val| val.as_f64());
+    match v {
+        Some(n) if n >= 1.0 => n as usize,
+        _ => DEFAULT_FETCH_CONCURRENCY,
+    }
+}
 
 /// Failure surfaces for [`ManifestResourceSource::connect`].
 #[derive(Debug)]
@@ -207,6 +227,12 @@ pub struct V2Source {
     /// `prefetch` call (multiple concurrent `prefetch` invocations
     /// can be in flight simultaneously, each holding a reference).
     inflight: Arc<InflightMap<HttpError>>,
+    /// F1 (2026-06-01): global cap on concurrent shard `fetch_bytes`
+    /// calls. Shared across all overlapping `prefetch()` invocations
+    /// (one source instance per page), so the 8+ per-LB bakers can no
+    /// longer stack to a 218-deep fetch burst against the browser's
+    /// 6-connection/origin HTTP/1.1 limit.
+    fetch_sem: Semaphore,
 }
 
 impl ManifestResourceSource {
@@ -335,6 +361,7 @@ impl V2Source {
             shards: Arc::new(Mutex::new(HashMap::new())),
             base_url,
             inflight: Arc::new(InflightMap::new()),
+            fetch_sem: Semaphore::new(configured_fetch_concurrency()),
         })
     }
 
@@ -518,13 +545,20 @@ impl V2Source {
             let url = task.url.clone();
             let tolerate_404 = task.tolerate_404;
             let inflight = self.inflight.clone();
+            let fetch_sem = self.fetch_sem.clone();
             async move {
                 let result = {
                     let url_for_fetch = url.clone();
                     inflight
                         .get_or_fetch(&url, move || {
                             let u = url_for_fetch.clone();
-                            async move { fetch_bytes(&u).await }
+                            async move {
+                                // F1: hold a global permit only for the
+                                // actual network fetch; deduped waiters
+                                // latch on the Shared future permit-free.
+                                let _permit = fetch_sem.acquire().await;
+                                fetch_bytes(&u).await
+                            }
                         })
                         .await
                 };

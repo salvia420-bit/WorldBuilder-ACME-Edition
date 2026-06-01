@@ -136,6 +136,28 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     envcellFusion = false;
   }
 
+  // F3 (2026-06-01): time-slice the Step-D per-cell instantiation loop so a
+  // landblock with hundreds of EnvCells (Academy = 568) doesn't build them all
+  // in one synchronous burst — the documented ~567ms first-sight hitch. (The
+  // compileAsync prewarm below handles the GPU upload/compile; THIS handles the
+  // synchronous JS geometry construction, which is what still hitches on a real
+  // GPU.) Builds in ~6ms chunks, yielding to the event loop between chunks.
+  // Default ON; disable with `?noEnvcellTimeSlice=1`. Safe to yield here: Pass 1
+  // already drained+freed every wasm handle, so no wasm linear memory is held
+  // across the await. Uses setTimeout — NOT requestIdleCallback (the `_ric_shim`
+  // replaces rIC with a microtask) and NOT rAF (never re-arms under
+  // `?renderOnDemand=1`).
+  let envcellTimeSlice = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      envcellTimeSlice =
+        new URLSearchParams(globalThis.location.search).get("noEnvcellTimeSlice") !== "1";
+    }
+  } catch (_) {
+    envcellTimeSlice = true;
+  }
+  const ENVCELL_BUILD_BUDGET_MS = 6;
+
   const lbKey = (landblockId & 0xffff_0000) >>> 0;
   if (scene3d.envCellLoadedLbs.has(lbKey)) {
     return {
@@ -347,6 +369,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // thread on real GPUs; on SwiftShader/llvmpipe it falls back to
   // sync compile but the code shape is the same.
   const newCells = [];
+  let _chunkStart = performance.now();
   for (const snap of snapshots) {
     const cellContainer = new THREE.Group();
     cellContainer.name = `envcell-${snap.cellId.toString(16).padStart(8, "0")}`;
@@ -561,6 +584,13 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
 
     newCells.push({ container: cellContainer, cellId: snap.cellId });
     cellCount += 1;
+
+    // F3 time-slice: once this chunk has spent its frame budget, yield to the
+    // event loop so the build spreads across frames instead of one long hitch.
+    if (envcellTimeSlice && (performance.now() - _chunkStart) > ENVCELL_BUILD_BUDGET_MS) {
+      await new Promise((r) => setTimeout(r, 0));
+      _chunkStart = performance.now();
+    }
   }
 
   // Pre-warm GPU programs + texture uploads for all new cells before
@@ -595,6 +625,28 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // mask. Without this, EnvCell meshes render on layer 0 (alongside terrain)
   // and the depth-clear split in atmosphere_pipeline.js can't isolate them.
   // Recursive traverse covers cellContainer, meshGroup, and every Mesh.
+  // F3 cancellation guard: if this LB was evicted while we time-sliced the
+  // build across frames, do NOT attach — evict() already removed lbKey from
+  // envCellLoadedLbs, so attaching now would orphan these cells and let a later
+  // re-approach rebuild duplicates. Dispose the per-LB geometries we built
+  // (materials are cache-shared, never disposed here) and bail. Only possible
+  // when time-slicing is on (the sync path can't interleave with evict()).
+  if (envcellTimeSlice && !scene3d.envCellLoadedLbs.has(lbKey)) {
+    for (const g of lbDisposableGeometries) {
+      try { if (g && typeof g.dispose === "function") g.dispose(); } catch (_) {}
+    }
+    return {
+      landblockId: lbKey,
+      cellCount: 0,
+      surfaceCount: allCellSurfaceDids.size,
+      staticObjectCount: 0,
+      skippedZeroTri,
+      skippedNoMesh,
+      evictedDuringBuild: true,
+      disposables: { geometries: [], materials: [], textures: [] },
+    };
+  }
+
   for (const { container, cellId } of newCells) {
     container.traverse((o) => o.layers.set(1));
     scene3d.cellsGroup.add(container);
