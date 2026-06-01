@@ -978,6 +978,14 @@
         // three-stream merge contract.
         fetch_landblock_spawns,
         init_spawns_base_url,
+        // Scenery (2026-06-01) — DAT-baked procedural scenery channel, the
+        // sibling of the spawns pair above. Reads `dist/scenery/<lb>.scenery.jsonl`
+        // and returns `ScenicPlacementJs[]`. Must be imported here AND threaded
+        // through the init3D opts below, or scene3d/statics.js's
+        // `fetch_landblock_scenery` guard fails and ALL outdoor scenery silently
+        // drops in-world (the curated-opts plumb-through trap).
+        fetch_landblock_scenery,
+        init_scenery_base_url,
         fetch_object_colours,
         fetch_model_meshes,
         fetch_surface_pixels,
@@ -6626,6 +6634,12 @@ void main() {
             // H2 / H3 plumb-through bug had before db2abfa).
             fetch_landblock_spawns,
             init_spawns_base_url,
+            // Scenery (2026-06-01) — thread the DAT-baked scenery channel through
+            // to scene3d/statics.js (fetchAndDrainScenery). Sibling of the spawns
+            // pair; without it `wasmExports.fetch_landblock_scenery` is undefined
+            // and outdoor scenery silently no-ops in-world.
+            fetch_landblock_scenery,
+            init_scenery_base_url,
             fetch_model_meshes,
             fetch_surfaces_pixels,
             fetchEntityModelRender,
