@@ -336,12 +336,33 @@ export function attachPlacements(diag) {
             sClaimed.add(m.observedIdx);
           }
         }
-        let extraSceneryReported = 0;
+        // Reconcile LandblockInfo loose objects. The renderer renders them
+        // into staticsGroup too (fetch_landblock_objects), but the oracle
+        // carries only their COUNT (sceneryCount = expScenery), not positions,
+        // so they can't be position-matched the way bakedScenery/buildings are.
+        // The first `expScenery` UNCLAIMED observed statics are those
+        // LandblockInfo objects (count-reconciled — they come through the same
+        // DAT-exact pipeline as buildings, which we DO position-match and which
+        // pass); only unclaimed beyond that are true "extra". Fewer unclaimed
+        // than expScenery ⇒ some LandblockInfo objects didn't render (a real
+        // shortfall). (Position-matching these too would need the oracle to
+        // emit the LandblockInfo object list, not just sceneryCount.)
+        const unclaimedStatics = [];
         for (let i = 0; i < obStatics.length; i++) {
-          if (sClaimed.has(i)) continue;
-          if (extraSceneryReported++ >= 25) break;
+          if (!sClaimed.has(i)) unclaimedStatics.push(i);
+        }
+        const lbiReconciled = Math.min(unclaimedStatics.length, expScenery);
+        for (let k = lbiReconciled; k < unclaimedStatics.length && (k - lbiReconciled) < 25; k++) {
+          const i = unclaimedStatics[k];
           extra.push({ kind: "scenery", modelId: obStatics[i].modelId,
                        position: obStatics[i].position });
+        }
+        if (unclaimedStatics.length < expScenery) {
+          missing.push({ kind: "scenery",
+            expected: { landblockInfoObjects: expScenery },
+            classification: "scenery-not-rendered",
+            detail: { reconciledStatics: unclaimedStatics.length,
+                      shortfall: expScenery - unclaimedStatics.length } });
         }
       } else if (obStatics.length !== expScenery) {
         // Legacy count-only fallback.
