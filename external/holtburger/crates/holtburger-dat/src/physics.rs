@@ -303,6 +303,148 @@ impl BspNode {
         }
     }
 
+    /// BSP resolver M2 (2026-06-02). Faithful port of ACE
+    /// `BSPNode.sphere_intersects_solid_poly` (`BSPNode.cs:295-325`) + the
+    /// `BSPLeaf` override (`BSPLeaf.cs:93-112`). Like
+    /// [`Self::sphere_intersects_solid`], but also reports WHICH solid
+    /// polygon the sphere's boundary first crosses (`hit_poly`) and whether
+    /// the sphere center sits inside solid space (`center_solid`) — the two
+    /// outputs ACE's `BSPTree.placement_insert` resolver consumes to push a
+    /// placement sphere out of solid geometry. Returns ACE's bool result:
+    /// once a polygon is surfaced the recursion short-circuits and reports
+    /// `center_solid`; otherwise the running solid state.
+    ///
+    /// This is the per-polygon query that upgrades the coarse solid GATE
+    /// (spatial-side `cell_physics_bsp_solid`) toward polygon-level
+    /// avoidance. Not yet wired into a placement loop (that is M3); this is
+    /// the faithful primitive + its tests, exercised only under
+    /// `USE_PHYSICS_BSP` (DEFAULT-OFF) so the shipped solver is unchanged.
+    pub fn sphere_intersects_solid_poly(
+        &self,
+        check_pos: &Sphere,
+        center_check: bool,
+        polys: &HashMap<u16, ResolvedPolygon>,
+        center_solid: &mut bool,
+        hit_poly: &mut Option<u16>,
+    ) -> bool {
+        match self {
+            BspNode::Leaf(l) => {
+                // BSPLeaf.cs:93-112
+                if l.poly_ids.is_empty() {
+                    return false;
+                }
+                if center_check && l.solid == 1 {
+                    *center_solid = true;
+                }
+                if let Some(s) = &l.sphere
+                    && !s.intersects(&check_pos.center, check_pos.radius)
+                {
+                    return *center_solid;
+                }
+                for &pid in &l.poly_ids {
+                    if let Some(poly) = polys.get(&pid)
+                        && poly.hits_sphere(check_pos)
+                    {
+                        *hit_poly = Some(pid);
+                        return true;
+                    }
+                }
+                *center_solid
+            }
+            BspNode::Internal(i) => {
+                if let Some(s) = &i.sphere
+                    && !s.intersects(&check_pos.center, check_pos.radius)
+                {
+                    return false;
+                }
+                Self::node_sphere_intersects_solid_poly(
+                    &i.plane, &i.pos, &i.neg, check_pos, center_check, polys, center_solid,
+                    hit_poly,
+                )
+            }
+            BspNode::Port(p) => {
+                if let Some(s) = &p.sphere
+                    && !s.intersects(&check_pos.center, check_pos.radius)
+                {
+                    return false;
+                }
+                Self::node_sphere_intersects_solid_poly(
+                    &p.plane,
+                    &Some(p.pos.clone()),
+                    &Some(p.neg.clone()),
+                    check_pos,
+                    center_check,
+                    polys,
+                    center_solid,
+                    hit_poly,
+                )
+            }
+        }
+    }
+
+    /// Shared internal-node recursion for
+    /// [`Self::sphere_intersects_solid_poly`] (`BSPNode.cs:300-325`). The
+    /// near child is descended first; once it sets `hit_poly`, ACE
+    /// short-circuits and returns `center_solid`, else the far child is
+    /// descended with `center_check` forced false.
+    #[allow(clippy::too_many_arguments)]
+    fn node_sphere_intersects_solid_poly(
+        plane: &Plane,
+        pos: &Option<Box<BspNode>>,
+        neg: &Option<Box<BspNode>>,
+        check_pos: &Sphere,
+        center_check: bool,
+        polys: &HashMap<u16, ResolvedPolygon>,
+        center_solid: &mut bool,
+        hit_poly: &mut Option<u16>,
+    ) -> bool {
+        let dist = plane.normal.dot(&check_pos.center) + plane.d;
+        let reach = check_pos.radius - PHYSICS_EPSILON;
+
+        if dist >= reach {
+            return match pos.as_ref() {
+                Some(n) => {
+                    n.sphere_intersects_solid_poly(check_pos, center_check, polys, center_solid, hit_poly)
+                }
+                None => false,
+            };
+        }
+        if dist <= -reach {
+            return match neg.as_ref() {
+                Some(n) => {
+                    n.sphere_intersects_solid_poly(check_pos, center_check, polys, center_solid, hit_poly)
+                }
+                None => false,
+            };
+        }
+        // Straddle: descend the near side first (BSPNode.cs:309-324). If it
+        // surfaced a polygon, stop and report `center_solid`; else descend
+        // the far side with `center_check` forced false.
+        if dist <= 0.0 {
+            if let Some(n) = neg.as_ref() {
+                n.sphere_intersects_solid_poly(check_pos, center_check, polys, center_solid, hit_poly);
+            }
+            if hit_poly.is_some() {
+                return *center_solid;
+            }
+            match pos.as_ref() {
+                Some(n) => n.sphere_intersects_solid_poly(check_pos, false, polys, center_solid, hit_poly),
+                None => *center_solid,
+            }
+        } else {
+            if let Some(n) = pos.as_ref() {
+                n.sphere_intersects_solid_poly(check_pos, center_check, polys, center_solid, hit_poly);
+            }
+            if hit_poly.is_some() {
+                return *center_solid;
+            }
+            match neg.as_ref() {
+                Some(n) => n.sphere_intersects_solid_poly(check_pos, false, polys, center_solid, hit_poly),
+                None => *center_solid,
+            }
+        }
+    }
+
     /// Faithful port of ACE `BSPNode.sphere_intersects_poly`
     /// (`BSPNode.cs:242-263`) + the `BSPLeaf` override
     /// (`BSPLeaf.cs:67-78`). Walks to the leaf containing `check_pos`
@@ -1022,6 +1164,60 @@ mod tests {
             radius: 0.5,
         };
         assert!(tree.sphere_intersects_solid(&straddle, true, &polys));
+    }
+
+    // ---- BSP resolver M2: sphere_intersects_solid_poly ----
+
+    #[test]
+    fn solid_poly_straddle_reports_hit_polygon() {
+        let (tree, polys) = floor_tree();
+        // Same straddle geometry as the solid test: center just above z=0,
+        // radius reaching through to the floor polygon.
+        let straddle = Sphere {
+            center: v(0.0, 0.0, 0.1),
+            radius: 0.5,
+        };
+        let mut center_solid = false;
+        let mut hit_poly = None;
+        let hit =
+            tree.sphere_intersects_solid_poly(&straddle, true, &polys, &mut center_solid, &mut hit_poly);
+        assert_eq!(hit_poly, Some(7), "straddle should surface the floor polygon");
+        assert!(!center_solid, "center is above the floor, not inside solid space");
+        assert!(hit, "a surfaced polygon is an intersection");
+    }
+
+    #[test]
+    fn solid_poly_center_below_is_center_solid_without_polygon() {
+        let (tree, polys) = floor_tree();
+        // Center inside the solid leaf, but too far below to touch the
+        // floor polygon's boundary band.
+        let below = Sphere {
+            center: v(0.0, 0.0, -0.5),
+            radius: 0.4,
+        };
+        let mut center_solid = false;
+        let mut hit_poly = None;
+        let hit =
+            tree.sphere_intersects_solid_poly(&below, true, &polys, &mut center_solid, &mut hit_poly);
+        assert!(center_solid, "center below the floor is inside solid space");
+        assert_eq!(hit_poly, None, "no boundary polygon within reach");
+        assert!(hit, "center_solid is reported as the intersect result");
+    }
+
+    #[test]
+    fn solid_poly_well_above_is_free() {
+        let (tree, polys) = floor_tree();
+        let above = Sphere {
+            center: v(0.0, 0.0, 5.0),
+            radius: 0.4,
+        };
+        let mut center_solid = false;
+        let mut hit_poly = None;
+        let hit =
+            tree.sphere_intersects_solid_poly(&above, true, &polys, &mut center_solid, &mut hit_poly);
+        assert!(!hit);
+        assert!(!center_solid);
+        assert_eq!(hit_poly, None);
     }
 
     #[test]
