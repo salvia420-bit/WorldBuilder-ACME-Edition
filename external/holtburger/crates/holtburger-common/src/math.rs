@@ -211,7 +211,7 @@ impl Quaternion {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, BinRead, BinWrite)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, BinRead, BinWrite, PartialEq)]
 #[br(little)]
 #[bw(little)]
 pub struct Plane {

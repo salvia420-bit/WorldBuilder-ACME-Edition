@@ -705,6 +705,218 @@ impl ResolvedPolygon {
     }
 }
 
+/// BSP resolver M3 (2026-06-02, INERT). The 3-variant outcome of ACE
+/// `BSPTree.placement_insert` (`BSPTree.cs:242-292`). ACE returns a full
+/// `TransitionState`, but `placement_insert` can only ever produce these
+/// three (`OK` / `Adjusted` / `Collided`) — never `Invalid` / `Slid`. We
+/// keep a `holtburger-dat`-local enum here rather than depending on
+/// `holtburger-world::TransitionState` (`collision.rs:13`): the crate
+/// dependency direction is dat → (nothing world), so the M4 caller (in
+/// `holtburger-world`) maps `PlacementState` → `TransitionState` at the
+/// seam with a trivial 3-arm match. Not wired into a live solver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum PlacementState {
+    /// `BSPTree.cs:296-297`: first query (i == 0) was clean — never moved.
+    Ok,
+    /// `BSPTree.cs:299,302`: had to displace ≥1×, then a clean query.
+    Adjusted,
+    /// `BSPTree.cs:291`: 20 iterations exhausted without a clean query.
+    Collided,
+}
+
+/// BSP resolver M3 (2026-06-02, INERT). Result of
+/// [`BspNode::placement_insert_bsp`] — the faithful port of ACE
+/// `BSPTree.placement_insert` (`BSPTree.cs:242-292`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacementProbe {
+    /// ACE return of `placement_insert`: `Ok` (clean / never moved),
+    /// `Adjusted` (had to displace — see `local_displacement`), or
+    /// `Collided` (could not free within 20 iterations).
+    pub state: PlacementState,
+    /// Net CELL-LOCAL displacement of sphere-0 across the whole loop:
+    /// ACE `adjust = validPos.Center - LocalSpaceSphere[0].Center`
+    /// (`BSPTree.cs:299`). `Vector3::zero()` unless `state == Adjusted`.
+    /// The caller rotates this into global + applies it (NOT M3's job).
+    pub local_displacement: Vector3,
+}
+
+impl BspNode {
+    /// BSP resolver M3 (2026-06-02, INERT). Faithful port of ACE
+    /// `BSPTree.placement_insert` + `placement_insert_inner`
+    /// (`BSPTree.cs:242-303`). Drives the already-landed M2 query
+    /// [`Self::sphere_intersects_solid_poly`] (`physics.rs:322`) and M2b
+    /// nudge [`ResolvedPolygon::adjust_to_placement_poly`] (`physics.rs:686`)
+    /// in ACE's up-to-20-iteration `query → adjust → widen` loop to push a
+    /// placement cylinder out of solid BSP geometry within ONE cell.
+    ///
+    /// ALL coordinates are CELL-LOCAL (the same frame the M2 primitives and
+    /// [`resolve_cell_physics_polygons`] operate in). The caller (the future
+    /// M4/M5 `CellCollisionFn`) is responsible for transforming the body's
+    /// spheres into this frame (ACE `CacheLocalSpaceSphere`,
+    /// `SpherePath.cs:181-207`) and, on `Adjusted`, for rotating the returned
+    /// `local_displacement` into global via `LocalSpacePos.LocalToGlobalVec`
+    /// (`BSPTree.cs:300`) and applying it with `AddOffsetToCheckPos`.
+    ///
+    /// `local_spheres` is the body's cell-local cylinder: `[0]` (low/sphere-0)
+    /// is always present; `[1]` (high) is consulted iff `num_sphere > 1`
+    /// (ACE `LocalSpaceSphere[0..NumSphere]`). `clear_cell` is ACE's
+    /// `clearCell` / `centerCheck` (`BSPTree.cs:253-255`): `true` unless the
+    /// building-check found an interior cell. `polys` is the cell's resolved
+    /// physics polygons ([`resolve_cell_physics_polygons`]).
+    ///
+    /// Not wired into a live solver. Pure geometry over the BSP + polys;
+    /// exercised only by the M3 unit tests under `USE_PHYSICS_BSP`
+    /// (DEFAULT-OFF), mirroring M2/M2b.
+    pub fn placement_insert_bsp(
+        &self,
+        local_spheres: &[Sphere],
+        num_sphere: u8,
+        clear_cell: bool,
+        polys: &HashMap<u16, ResolvedPolygon>,
+    ) -> PlacementProbe {
+        // BSPTree.cs:246-247 — validPos = LocalSpaceSphere[0]; rad = validPos.Radius
+        let mut valid_pos = local_spheres[0]; // Sphere is Copy
+        let origin0 = valid_pos.center; // for placement_insert_inner adjust
+        let mut rad = valid_pos.radius;
+
+        // BSPTree.cs:250-251 — second cylinder sphere only when NumSphere > 1
+        let two = num_sphere > 1;
+        let mut valid_pos_ = if two {
+            local_spheres[1]
+        } else {
+            Sphere {
+                center: Vector3::zero(),
+                radius: 0.0,
+            }
+        };
+
+        // BSPTree.cs:259 — hardcoded
+        const MAX_ITERATIONS: usize = 20;
+
+        for i in 0..MAX_ITERATIONS {
+            // ACE keeps `rad` separate and passes it explicitly to both calls.
+            // Our M2 query reads `check_pos.radius`, so sync both probe
+            // spheres' radius to `rad` before querying (see spec §1.1 fact 1).
+            valid_pos.radius = rad;
+            if two {
+                valid_pos_.radius = rad;
+            }
+
+            // ----- probe sphere-0 (BSPTree.cs:262-263) -----
+            let mut center_solid = false;
+            let mut hit_poly: Option<u16> = None;
+            let hit = self.sphere_intersects_solid_poly(
+                &valid_pos,
+                clear_cell,
+                polys,
+                &mut center_solid,
+                &mut hit_poly,
+            );
+
+            if hit {
+                // BSPTree.cs:265-269 — found a boundary poly → nudge & RE-QUERY.
+                if let Some(pid) = hit_poly {
+                    let poly = polys.get(&pid).expect("hit_poly id present in polys map");
+                    // M2b: adjust BOTH spheres along the poly plane (validPos
+                    // primary, validPos_ the "other"). radius = rad,
+                    // solid_check = clear_cell.
+                    if two {
+                        let mut other = valid_pos_; // copy out to satisfy borrow rules
+                        poly.adjust_to_placement_poly(
+                            &mut valid_pos,
+                            Some(&mut other),
+                            rad,
+                            center_solid,
+                            clear_cell,
+                        );
+                        valid_pos_ = other;
+                    } else {
+                        poly.adjust_to_placement_poly(
+                            &mut valid_pos,
+                            None,
+                            rad,
+                            center_solid,
+                            clear_cell,
+                        );
+                    }
+                    continue; // re-query at SAME rad
+                }
+                // hit==true but hit_poly==None → fall through to widen
+                // (BSPTree.cs:289).
+            } else {
+                // ----- sphere-0 missed (BSPTree.cs:271-288) -----
+                if two {
+                    // probe sphere-1 (BSPTree.cs:275).
+                    let mut center_solid2 = false;
+                    let mut hit_poly2: Option<u16> = None;
+                    let hit2 = self.sphere_intersects_solid_poly(
+                        &valid_pos_,
+                        clear_cell,
+                        polys,
+                        &mut center_solid2,
+                        &mut hit_poly2,
+                    );
+                    if hit2 {
+                        if let Some(pid) = hit_poly2 {
+                            let poly =
+                                polys.get(&pid).expect("hit_poly2 id present in polys map");
+                            // BSPTree.cs:279 — adjust(validPos_, validPos):
+                            // sphere-1 primary, sphere-0 the "other".
+                            let mut other = valid_pos;
+                            poly.adjust_to_placement_poly(
+                                &mut valid_pos_,
+                                Some(&mut other),
+                                rad,
+                                center_solid2,
+                                clear_cell,
+                            );
+                            valid_pos = other;
+                            continue; // re-query at SAME rad
+                        }
+                        // hit2==true but no poly → widen (fall through)
+                    } else {
+                        // both spheres clean → done (BSPTree.cs:283-284)
+                        return Self::placement_insert_inner(valid_pos.center, origin0, i);
+                    }
+                } else {
+                    // single sphere, clean → done (BSPTree.cs:286-287)
+                    return Self::placement_insert_inner(valid_pos.center, origin0, i);
+                }
+            }
+
+            // BSPTree.cs:289 — reached ONLY on (intersect==true && hitPoly==None),
+            // for whichever sphere probe set that condition. Widen the probe.
+            rad *= 2.0;
+        }
+
+        // BSPTree.cs:291 — ran out of iterations.
+        PlacementProbe {
+            state: PlacementState::Collided,
+            local_displacement: Vector3::zero(),
+        }
+    }
+
+    /// ACE `BSPTree.placement_insert_inner` (`BSPTree.cs:294-303`). On the
+    /// FIRST iteration with no displacement (`i == 0`) the placement is
+    /// clean → `Ok`, zero offset. Otherwise the net cell-local displacement
+    /// of sphere-0 is `valid_center - origin0` (ACE
+    /// `validPos.Center - LocalSpaceSphere[0].Center`) → `Adjusted`. The
+    /// rotate-into-global + `AddOffsetToCheckPos` (`BSPTree.cs:300-301`) is
+    /// the caller's responsibility (it owns `LocalSpacePos`).
+    fn placement_insert_inner(valid_center: Vector3, origin0: Vector3, i: usize) -> PlacementProbe {
+        if i == 0 {
+            return PlacementProbe {
+                state: PlacementState::Ok,
+                local_displacement: Vector3::zero(),
+            };
+        }
+        PlacementProbe {
+            state: PlacementState::Adjusted,
+            local_displacement: valid_center - origin0,
+        }
+    }
+}
+
 /// Resolve a cell's physics polygons into [`ResolvedPolygon`]s keyed by
 /// poly-id, ready for the faithful BSP predicates. `polys` is the
 /// `CellStruct.physics_polygons` map; `vertices` is the cell's
@@ -1435,5 +1647,210 @@ mod tests {
         // log rather than hard-fail to keep the smoke robust across
         // whichever record the DAT ships.)
         let _ = (solid_hits, poly_hits);
+    }
+
+    // ---- BSP resolver M3: placement_insert_bsp ----
+
+    /// i == 0, single sphere comfortably in free space (well above the floor):
+    /// first query is clean → Ok, zero displacement. (BSPTree.cs:286-287,296-297)
+    #[test]
+    fn placement_insert_clean_free_space_is_ok_zero_offset() {
+        let (tree, polys) = floor_tree();
+        let spheres = [Sphere {
+            center: v(0.0, 0.0, 5.0),
+            radius: 0.4,
+        }];
+        let probe = tree.placement_insert_bsp(&spheres, 1, true, &polys);
+        assert_eq!(probe.state, PlacementState::Ok);
+        assert!(
+            probe.local_displacement.length() < 1e-6,
+            "no move expected: {:?}",
+            probe.local_displacement
+        );
+    }
+
+    /// Single sphere straddling the floor (center just above z=0, radius reaches
+    /// through): iter 0 surfaces poly 7, adjust_to_placement_poly pushes it up to
+    /// sit `rad` off the +Z face, iter 1 is clean → Adjusted with +Z displacement.
+    /// (BSPTree.cs:262-269 then 286-287,299)
+    #[test]
+    fn placement_insert_straddle_pushes_up_and_reports_adjusted() {
+        let (tree, polys) = floor_tree();
+        // Same straddle geometry as solid_poly_straddle_reports_hit_polygon.
+        let spheres = [Sphere {
+            center: v(0.0, 0.0, 0.1),
+            radius: 0.5,
+        }];
+        let probe = tree.placement_insert_bsp(&spheres, 1, true, &polys);
+        assert_eq!(probe.state, PlacementState::Adjusted);
+        // Pushed along +Z by adjust_to_placement_poly: net displacement is +Z.
+        assert!(
+            probe.local_displacement.z > 0.0,
+            "should push up off the floor: {:?}",
+            probe.local_displacement
+        );
+        assert!(
+            probe.local_displacement.x.abs() < 1e-5 && probe.local_displacement.y.abs() < 1e-5
+        );
+        // After the push the sphere center is rad off the plane (dp == rad):
+        // origin z=0.1 → final z = origin.z + displacement.z; assert it cleared
+        // the face (z ~= radius off the z=0 plane).
+        let final_z = 0.1 + probe.local_displacement.z;
+        assert!(
+            (final_z - spheres[0].radius).abs() < 1e-3,
+            "final z should be ~radius off face: {final_z}"
+        );
+    }
+
+    /// Sphere center buried BELOW the floor (inside solid) with clear_cell=true.
+    /// FAITHFUL outcome on this fixture is `Collided`, NOT a clean -Z push:
+    /// in the straddle the leaf sets `centerSolid=true` and the M2 node returns
+    /// `centerSolid` (true) with `hit_poly=Some(7)` (ACE `BSPNode.cs:312` /
+    /// `BSPLeaf.cs:96-97,108`), so M3 enters the adjust branch. With
+    /// `solid_check && (center_solid || dp<=0)` the radius is NEGATED
+    /// (`Polygon.cs:119-120`), so `adjust_to_placement_poly` pushes the sphere
+    /// DEEPER into the solid each iteration (z: -0.1 → -0.5 → out of reach →
+    /// `rad *= 2` widen → poly back in reach → -1.0 → …). The probe never
+    /// reaches free space within 20 iterations → `Collided`, zero offset. This
+    /// is the byte-faithful ACE result for "center buried below a floor with the
+    /// solid-side reverse-push": the single floor poly cannot free it. (The
+    /// spec §8 draft expected `Adjusted -Z`; the verified primitive behavior is
+    /// `Collided`, which is what a faithful transcription produces.)
+    #[test]
+    fn placement_insert_center_below_floor_reverses_push() {
+        let (tree, polys) = floor_tree();
+        // Center below z=0 (in the solid leaf) but the floor poly within radius.
+        let spheres = [Sphere {
+            center: v(0.0, 0.0, -0.1),
+            radius: 0.5,
+        }];
+        let probe = tree.placement_insert_bsp(&spheres, 1, true, &polys);
+        assert_eq!(probe.state, PlacementState::Collided);
+        assert!(
+            probe.local_displacement.length() < 1e-6,
+            "Collided leaves no offset: {:?}",
+            probe.local_displacement
+        );
+    }
+
+    /// Two-sphere cylinder: low sphere straddles the floor, high sphere is clear.
+    /// The low sphere is displaced and BOTH spheres receive the same plane delta
+    /// (adjust_to_placement_poly other_sphere arm); loop converges → Adjusted.
+    /// (BSPTree.cs:250-251,267 with validPos_ as `other`)
+    #[test]
+    fn placement_insert_two_sphere_low_hit_displaces_both() {
+        let (tree, polys) = floor_tree();
+        let spheres = [
+            Sphere {
+                center: v(0.0, 0.0, 0.1),
+                radius: 0.5,
+            }, // low, straddles
+            Sphere {
+                center: v(0.0, 0.0, 2.0),
+                radius: 0.5,
+            }, // high, clear of floor
+        ];
+        let probe = tree.placement_insert_bsp(&spheres, 2, true, &polys);
+        assert_eq!(probe.state, PlacementState::Adjusted);
+        assert!(probe.local_displacement.z > 0.0);
+        // Regression guard: the reported displacement is sphere-0's net move
+        // (BSPTree.cs:299 uses validPos / LocalSpaceSphere[0]), NOT sphere-1's.
+    }
+
+    /// Two-sphere cylinder fully in free space: both queries clean on iter 0 →
+    /// Ok, zero offset. (BSPTree.cs:283-284,296-297)
+    #[test]
+    fn placement_insert_two_sphere_free_is_ok() {
+        let (tree, polys) = floor_tree();
+        let spheres = [
+            Sphere {
+                center: v(0.0, 0.0, 5.0),
+                radius: 0.3,
+            },
+            Sphere {
+                center: v(0.0, 0.0, 6.0),
+                radius: 0.3,
+            },
+        ];
+        let probe = tree.placement_insert_bsp(&spheres, 2, true, &polys);
+        assert_eq!(probe.state, PlacementState::Ok);
+        assert!(probe.local_displacement.length() < 1e-6);
+    }
+
+    /// clear_cell threading (building-check). The `clear_cell` / `centerCheck`
+    /// bool flows into the M2 query as `center_check`, which gates whether the
+    /// solid leaf sets `centerSolid` (`BSPLeaf.cs:96-97`). For a center buried
+    /// below the floor this bool flips the WHOLE outcome — proving it is
+    /// threaded, not dropped:
+    ///
+    /// * clear_cell=TRUE  → leaf sets centerSolid → node returns `true` with the
+    ///   surfaced poly → M3 enters the (reverse) adjust branch and diverges →
+    ///   `Collided` (see `placement_insert_center_below_floor_reverses_push`).
+    /// * clear_cell=FALSE → leaf leaves centerSolid=false → node returns
+    ///   `centerSolid` (false) even though `hit_poly=Some(7)` is set
+    ///   (ACE `BSPNode.cs:312` returns the bool, NOT the poly flag) → M3's
+    ///   `if hit` is false → single-sphere clean-miss at i=0 → `Ok`, zero
+    ///   offset. The surfaced poly is gated off by the false bool exactly as
+    ///   ACE `BSPTree.cs:262` (`if (...sphere_intersects_solid_poly(...))`).
+    ///
+    /// (The spec §8 draft expected `Adjusted +Z`; the verified bool-vs-hit_poly
+    /// gate yields `Ok` here, which a faithful transcription produces.)
+    #[test]
+    fn placement_insert_clear_cell_false_threads_solid_check() {
+        let (tree, polys) = floor_tree();
+        let spheres = [Sphere {
+            center: v(0.0, 0.0, -0.1),
+            radius: 0.5,
+        }];
+        let probe_false = tree.placement_insert_bsp(&spheres, 1, false, &polys);
+        assert_eq!(
+            probe_false.state,
+            PlacementState::Ok,
+            "clear_cell=false gates the surfaced poly off the bool result"
+        );
+        assert!(probe_false.local_displacement.length() < 1e-6);
+
+        // Same geometry with clear_cell=true takes the divergent reverse-push.
+        let probe_true = tree.placement_insert_bsp(&spheres, 1, true, &polys);
+        assert_eq!(
+            probe_true.state,
+            PlacementState::Collided,
+            "clear_cell=true sets centerSolid → reverse-push diverges"
+        );
+        assert_ne!(
+            probe_false.state, probe_true.state,
+            "the clear_cell bool must change the outcome (it is threaded)"
+        );
+    }
+
+    /// Iteration cap: a degenerate solid leaf whose bounding sphere always
+    /// intersects but whose poly id is ABSENT from `polys`, so the M2 leaf arm
+    /// only reaches `if let Some(poly) = polys.get(&pid)` and never sets
+    /// `hit_poly` (physics.rs:344-350). Result: center_solid=true,
+    /// hit_poly=None every iteration → the `rad *= 2` widen branch fires all 20
+    /// iterations and never converges → Collided, zero offset.
+    /// (BSPTree.cs:288-291)
+    #[test]
+    fn placement_insert_runs_out_of_iterations_is_collided() {
+        let solid = BspNode::Leaf(BspLeaf {
+            index: 1,
+            solid: 1,
+            sphere: Some(Sphere {
+                center: v(0.0, 0.0, 0.0),
+                radius: 1.0e6,
+            }),
+            poly_ids: vec![999], // id intentionally ABSENT from polys
+        });
+        let polys: HashMap<u16, ResolvedPolygon> = HashMap::new();
+        let spheres = [Sphere {
+            center: v(0.0, 0.0, 0.0),
+            radius: 0.4,
+        }];
+        let probe = solid.placement_insert_bsp(&spheres, 1, true, &polys);
+        assert_eq!(probe.state, PlacementState::Collided);
+        assert!(
+            probe.local_displacement.length() < 1e-6,
+            "Collided leaves no offset"
+        );
     }
 }
