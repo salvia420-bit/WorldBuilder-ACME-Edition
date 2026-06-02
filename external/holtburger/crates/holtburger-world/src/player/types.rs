@@ -571,6 +571,26 @@ pub struct PlayerState {
     ///
     /// Default: zero (player starts stationary).
     pub current_planar_velocity: Vector3,
+    /// Physics deep-dive 2026-06-01 (gap 1): leftover frame time
+    /// (seconds) below `MIN_QUANTUM` carried forward to the next
+    /// integration frame. Mirrors ACE's `update_object` advancing
+    /// `UpdateTime` only by the *consumed* time and leaving the
+    /// sub-`MinQuantum` tail in the timer
+    /// (`external/ACE/Source/ACE.Server/Physics/PhysicsObj.cs:4159-4188`):
+    /// a stream of sub-`MinQuantum` rAF frames (e.g. 16 ms @ 60 Hz)
+    /// accumulates here until it crosses `MIN_QUANTUM` and a slice is
+    /// integrated, matching retail's 30 Hz physics gate. Without this
+    /// accumulator, gating each frame on `MIN_QUANTUM` independently
+    /// would drop every 60 Hz frame and freeze movement.
+    ///
+    /// Reset to 0.0 when a `HugeQuantum` hitch consumes the frame
+    /// without integrating (mirrors ACE setting `UpdateTime =
+    /// CurrentTime`). Bounded to `< MIN_QUANTUM` (≈33 ms) at all other
+    /// times, so a position correction can at worst replay one
+    /// sub-`MinQuantum` slice — self-correcting and negligible.
+    ///
+    /// Default: zero.
+    pub physics_time_accumulator: f32,
 }
 
 impl Default for PlayerState {
@@ -618,6 +638,9 @@ impl PlayerState {
             // Wave 10 Phase 10.3 (2026-05-26) — player spawns
             // stationary; the integrator ramps from zero.
             current_planar_velocity: Vector3::zero(),
+            // Physics deep-dive 2026-06-01 (gap 1) — no carried
+            // frame time at spawn.
+            physics_time_accumulator: 0.0,
         }
     }
 

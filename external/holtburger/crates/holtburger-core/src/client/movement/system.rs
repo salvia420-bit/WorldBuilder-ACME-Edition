@@ -1,7 +1,8 @@
 use super::common::{
-    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, PLAYER_GROUND_FRICTION_PER_SEC,
-    PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC,
-    build_autonomous_position, build_motion_state_raw_motion_state, encode_contact_long_jump,
+    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY, MIN_QUANTUM,
+    PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ,
+    PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC, build_autonomous_position,
+    build_motion_state_raw_motion_state, encode_contact_long_jump,
     has_autonomous_position_sync_target, local_omega_for_state, local_velocity_for_state,
     normalize_heading, raw_motion_state_with_motion_style, signed_heading_delta,
 };
@@ -21,6 +22,105 @@ use holtburger_world::spatial::{LocalDriveControl, LocalDriveGait};
 use holtburger_world::{SpatialBodyId, WorldEvent, WorldState};
 use std::time::Duration;
 use web_time::Instant;
+
+/// Physics deep-dive 2026-06-01 (gaps 1 + 7) — gate for the
+/// clamp-and-subdivide integration loop in
+/// [`MovementSystem::advance_local_pose_for_manual_drive`].
+///
+/// `true` (default): bound the raw per-frame `dt`, drop a
+/// `HUGE_QUANTUM`-or-larger hitch, and integrate the frame as a
+/// sequence of `<= MAX_QUANTUM` slices with a terminal-velocity clamp
+/// and 2nd-order airborne integration — mirroring ACE's
+/// `update_object` (`PhysicsObj.cs:4140-4190`).
+///
+/// `false`: the legacy single-step path that consumes the raw,
+/// unbounded `dt` in one symplectic-Euler integration. Retained for
+/// A/B comparison; flip to `false` to reproduce the pre-2026-06-01
+/// "frame-hitch over-integrates a fall" behaviour.
+const USE_QUANTUM_SUBDIVIDED_INTEGRATION: bool = true;
+
+/// Physics deep-dive 2026-06-01 (gap 3) — gate for step-up / step-down
+/// in the lateral-clamp + floor-snap path of
+/// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
+///
+/// `true` (default): when a grounded lateral move is blocked by a
+/// riser within
+/// [`holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT`], raise the
+/// player onto it and let the move continue (curb / stair step); and
+/// when the player walks off a drop, follow the surface down for drops
+/// within [`holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT`] instead
+/// of falling at the legacy `LEDGE_FALL_THRESHOLD_M = 0.5` heuristic.
+/// Mirrors ACE's `Transition.StepUp`/`StepDown` walkable path
+/// (`Transition.cs:746-777,852-870`) capped at
+/// `ObjectInfo.StepUpHeight`/`StepDownHeight`.
+///
+/// `false`: the pre-2026-06-01 behaviour — any riser blocks the move
+/// (no step-up at all) and a descent beyond `0.5 m` falls. Retained
+/// for A/B comparison.
+const USE_STEP_UP_DOWN: bool = true;
+
+/// Physics deep-dive 2026-06-01 (gap 4) — gate the AutonomousPosition
+/// heartbeat on a position change instead of firing unconditionally.
+///
+/// `true` (default): the 1 s heartbeat (and the arrival sync) only
+/// emit a packet when the pose has meaningfully changed since the last
+/// one we sent — cell changed, origin/heading moved beyond
+/// [`AUTONOMOUS_POSE_EPSILON_M`]/[`AUTONOMOUS_POSE_HEADING_EPSILON_RAD`],
+/// or the contact byte flipped. Mirrors retail
+/// `CommandInterpreter::ShouldSendPositionEvent`
+/// (`acclient.c:718107-718141`): after the interval elapses it sends on
+/// `objcell_id != last || !Frame::is_equal(...)`, and within the
+/// interval on a cell or contact-plane change. Stops the heartbeat
+/// re-asserting a stale/drifted pose every second.
+///
+/// `false`: the pre-2026-06-01 behaviour — fire every interval whenever
+/// a sync target exists. Retained for A/B comparison.
+const USE_AUTONOMOUS_POSITION_CHANGE_GATE: bool = true;
+
+/// Physics deep-dive 2026-06-01 (gap 4) — "meaningfully changed"
+/// thresholds for the heartbeat position-change gate. Retail's
+/// `Frame::is_equal` is a bit-exact compare; we use small epsilons so
+/// integrator round-off (and the per-tick terrain-Z snap) doesn't read
+/// as a change and keep the heartbeat alive on a stationary player.
+const AUTONOMOUS_POSE_EPSILON_M: f32 = 0.05;
+const AUTONOMOUS_POSE_HEADING_EPSILON_RAD: f32 = 0.0035;
+
+/// Physics deep-dive 2026-06-01 (gap 1) — bound + subdivide a raw
+/// per-frame `dt` (seconds) into the integration-slice schedule,
+/// mirroring ACE's `update_object` timestep gate
+/// (`external/ACE/Source/ACE.Server/Physics/PhysicsObj.cs:4140-4190`).
+///
+/// Returns:
+/// - `None` when `dt > HUGE_QUANTUM` — the whole frame is dropped (no
+///   integration), so a multi-second hitch can't teleport a falling
+///   player. (`PhysicsObj.cs:4169-4173`.)
+/// - `Some(slices)` otherwise — a list of slice durations, each
+///   `<= MAX_QUANTUM`, summing to (almost) `dt`: the frame is split
+///   into `MAX_QUANTUM` slices with the sub-`MAX_QUANTUM` remainder
+///   appended only when it exceeds `MIN_QUANTUM` (ACE floors the
+///   remainder at 1/30 s and drops anything smaller —
+///   `PhysicsObj.cs:4175-4186`). A frame shorter than `MIN_QUANTUM`
+///   yields an empty schedule (nothing integrated this frame),
+///   matching retail's 30 Hz physics gate.
+///
+/// Single source of truth for both the production loop in
+/// [`MovementSystem::advance_local_pose_for_manual_drive`] and the
+/// subdivision-count unit tests.
+fn quantum_slices(dt_secs: f32) -> Option<Vec<f32>> {
+    if dt_secs > HUGE_QUANTUM {
+        return None;
+    }
+    let mut slices = Vec::new();
+    let mut remaining = dt_secs;
+    while remaining > MAX_QUANTUM {
+        slices.push(MAX_QUANTUM);
+        remaining -= MAX_QUANTUM;
+    }
+    if remaining > MIN_QUANTUM {
+        slices.push(remaining);
+    }
+    Some(slices)
+}
 
 #[derive(Debug, Default)]
 struct MovementSequenceDiagnostics {
@@ -132,6 +232,12 @@ pub(crate) struct MovementSystem {
     suppress_frontend_autonomous_once: bool,
     server_controlled_projection: Option<ServerControlledProjection>,
     next_autonomous_position_heartbeat_at: Option<Instant>,
+    /// Physics deep-dive 2026-06-01 (gap 4) — the pose + contact byte of
+    /// the last AutonomousPosition packet we actually sent, used by the
+    /// position-change gate (retail `last_sent_position` /
+    /// `last_sent_contact_plane`). `None` until the first send.
+    last_sent_autonomous_pose: Option<holtburger_common::position::WorldPosition>,
+    last_sent_autonomous_contact: Option<u8>,
     /// Phase 4 step 3.6 diagnostic — incremented every time the
     /// autonomous-position heartbeat or arrival sync fires. The wasm
     /// bundle reads this via [`MovementSystemHandle::heartbeats_sent`]
@@ -226,6 +332,8 @@ impl MovementSystem {
             suppress_frontend_autonomous_once: false,
             server_controlled_projection: None,
             next_autonomous_position_heartbeat_at: None,
+            last_sent_autonomous_pose: None,
+            last_sent_autonomous_contact: None,
             heartbeats_sent: 0,
         }
     }
@@ -594,7 +702,73 @@ impl MovementSystem {
     /// `AutonomousPosition` heartbeats carry a current position.
     /// No-op when active drive is None / Autonomous (Autonomous
     /// already gets its delta via `current_local_drive_control`).
+    ///
+    /// Physics deep-dive 2026-06-01 (gaps 1 + 7): this is the
+    /// clamp-and-subdivide entry point. The raw per-frame `dt` is
+    /// bounded and split into `<= MAX_QUANTUM` slices before being
+    /// fed to [`advance_local_pose_for_manual_drive_slice`], mirroring
+    /// ACE's `update_object` timestep gate
+    /// (`external/ACE/Source/ACE.Server/Physics/PhysicsObj.cs:4140-4190`).
+    /// Gravity, friction (`pow(1-f, q)` composes correctly per-slice),
+    /// the terminal-velocity clamp, and collision all run per slice,
+    /// so a frame-hitch can no longer over-integrate a fall in one
+    /// giant step. Gated behind
+    /// [`USE_QUANTUM_SUBDIVIDED_INTEGRATION`] (default on); when off,
+    /// the old single-step path is preserved for A/B.
     pub(crate) fn advance_local_pose_for_manual_drive(
+        &self,
+        world: &mut WorldState,
+        dt: Duration,
+    ) {
+        if !USE_QUANTUM_SUBDIVIDED_INTEGRATION {
+            // Legacy single-step path (pre-2026-06-01). Retained
+            // behind the flag for A/B comparison of the subdivided
+            // loop. Consumes the raw, unbounded `dt` in one step.
+            self.advance_local_pose_for_manual_drive_slice(world, dt);
+            return;
+        }
+
+        // Accumulate the incoming frame time with any sub-MIN_QUANTUM
+        // tail carried from prior frames. Mirrors ACE's `update_object`
+        // measuring `deltaTime = CurrentTime - UpdateTime` and only
+        // advancing `UpdateTime` by the *consumed* time
+        // (`PhysicsObj.cs:4159-4188`) — so a stream of 60 Hz (16 ms)
+        // frames accumulates here until it crosses MIN_QUANTUM and a
+        // slice is integrated, matching retail's 30 Hz physics gate.
+        let total = world.player.physics_time_accumulator + dt.as_secs_f32();
+
+        // `quantum_slices` returns `None` when the accumulated time is
+        // a HugeQuantum hitch (dropped, no integration; the consumed
+        // time is reset below so a multi-second stall can't replay) and
+        // otherwise the bounded `<= MAX_QUANTUM` slice schedule. Each
+        // slice runs the full gravity / friction / collision
+        // integration so the per-slice motion is bounded and a
+        // frame-hitch can no longer over-integrate a fall in one step.
+        let Some(slices) = quantum_slices(total) else {
+            // HugeQuantum: consume the time without integrating
+            // (`PhysicsObj.cs:4169-4173` sets `UpdateTime = CurrentTime`).
+            world.player.physics_time_accumulator = 0.0;
+            return;
+        };
+        let consumed: f32 = slices.iter().sum();
+        for quantum in slices {
+            self.advance_local_pose_for_manual_drive_slice(world, Duration::from_secs_f32(quantum));
+        }
+        // Carry the sub-MIN_QUANTUM tail to the next frame. ACE leaves
+        // this remainder in the timer (`UpdateTime` advanced only by
+        // the integrated slices).
+        world.player.physics_time_accumulator = (total - consumed).max(0.0);
+    }
+
+    /// One bounded integration slice (`quantum <= MAX_QUANTUM`).
+    /// Factored out of [`advance_local_pose_for_manual_drive`] by the
+    /// physics deep-dive 2026-06-01 quantum-subdivision work; the
+    /// caller bounds and subdivides the incoming frame `dt` and feeds
+    /// each slice here. The body is the original per-frame integrator
+    /// (friction smoothing, lateral collision clamp, airborne gravity
+    /// arc, floor-Z snap, rotation prediction) advanced by exactly one
+    /// quantum.
+    fn advance_local_pose_for_manual_drive_slice(
         &self,
         world: &mut WorldState,
         dt: Duration,
@@ -913,8 +1087,109 @@ impl MovementSystem {
                 )
             }
         };
-        pose.coords.x += lateral_clamped.x;
-        pose.coords.y += lateral_clamped.y;
+        // Physics deep-dive 2026-06-01 (gap 3) — step-UP. When the
+        // lateral clamp shortened the requested move (a wall/riser
+        // blocked us) and we're grounded, probe the floor at the
+        // *intended* (un-clamped) destination. If a walkable floor
+        // sits there within `PLAYER_STEP_UP_HEIGHT` of the feet, climb
+        // onto it (raise Z) and take the full lateral move instead of
+        // stopping dead — retail's `Transition.StepUp`
+        // (`Transition.cs:746-777`, capped at `ObjectInfo.StepUpHeight`).
+        // Risers taller than the step-up height stay blocked.
+        //
+        // Skipped while airborne (climbing is a ground action; the
+        // jump/fall arc owns Z), while the indoor cell is unbaked (no
+        // floor source), and when the gate is off.
+        if USE_STEP_UP_DOWN
+            && !world.player.is_airborne
+            && !indoor_unbaked
+            && lateral.length_squared() > 1e-10
+        {
+            // "Blocked": the clamp removed a meaningful slice of the
+            // requested lateral travel. A tiny shortfall is just the
+            // slide/backoff jitter, not a wall, so require a clear gap
+            // (10% of the requested length, floor 1 cm) before we
+            // treat it as a step-up candidate.
+            let requested_len = lateral.length();
+            let clamped_len = lateral_clamped.length();
+            let blocked_gap = requested_len - clamped_len;
+            let blocked = blocked_gap > (requested_len * 0.1).max(0.01);
+            if blocked {
+                // Intended (un-clamped) destination pose for the floor
+                // probe — where the player WANTED to be this tick.
+                let intended = holtburger_common::position::WorldPosition {
+                    landblock_id: pose.landblock_id,
+                    coords: Vector3::new(
+                        pose.coords.x - lateral_clamped.x + lateral.x,
+                        pose.coords.y - lateral_clamped.y + lateral.y,
+                        pose.coords.z,
+                    ),
+                    rotation: pose.rotation,
+                };
+                let dest_global = intended.global_coords();
+                let feet_z = pose.coords.z;
+                // Floor at the intended destination, indoor vs outdoor.
+                let dest_floor_z: Option<f32> = if intended.is_indoors() {
+                    let cell_id = world.scene.current_cell(&intended);
+                    let triangles = world.scene.cell_triangles(cell_id);
+                    let cell_aabb = world.scene.cell_aabb(cell_id);
+                    // Cap the floor query a step-up above the feet so a
+                    // distant high floor (e.g. an upper landing reached
+                    // by a separate ramp) doesn't masquerade as a step.
+                    let ceiling = feet_z + holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT;
+                    if !triangles.is_empty() {
+                        holtburger_world::spatial::highest_floor_z_under(
+                            triangles,
+                            dest_global.x,
+                            dest_global.y,
+                            ceiling,
+                        )
+                    } else {
+                        // No triangles yet — the AABB floor is the only
+                        // source, and it's flat, so there's no riser to
+                        // step onto. Leave step-up to the per-poly path.
+                        let _ = cell_aabb;
+                        None
+                    }
+                } else {
+                    world.terrain_height_at(dest_global.x, dest_global.y)
+                };
+                if let Some(new_feet_z) = holtburger_world::spatial::step_up_decision(
+                    blocked,
+                    feet_z,
+                    dest_floor_z,
+                    holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT,
+                ) {
+                    // Climb: take the full intended lateral move and
+                    // raise the feet onto the riser top. The floor-Z
+                    // snap below keeps us seated once we're up there.
+                    pose.coords.x = intended.coords.x;
+                    pose.coords.y = intended.coords.y;
+                    pose.coords.z = new_feet_z;
+                } else {
+                    pose.coords.x += lateral_clamped.x;
+                    pose.coords.y += lateral_clamped.y;
+                }
+            } else {
+                pose.coords.x += lateral_clamped.x;
+                pose.coords.y += lateral_clamped.y;
+            }
+        } else {
+            pose.coords.x += lateral_clamped.x;
+            pose.coords.y += lateral_clamped.y;
+        }
+        // TODO (physics deep-dive 2026-06-01, gap 3 follow-up):
+        // edge_slide / cliff_slide. When a step-up is refused (the
+        // riser is too tall) or the player walks off a non-walkable
+        // cliff edge, retail slides along the contact-plane via a
+        // cross-product skid rather than stopping dead
+        // (`Transition.StepUpSlide` + the `AllowEdgeSlide` /
+        // `PhysicsState::EDGE_SLIDE` 0x00400000 gate, parsed at
+        // `object.rs:78` and never consulted). Deferred here — it needs
+        // the contact-plane cross-product skid, which is a larger
+        // change to the single-iteration slide. Not implemented in this
+        // pass.
+        //
         // Pre-bake gate: zero Z delta when the indoor cell is
         // unbaked, same rationale as the lateral zero above —
         // sending an uncorrected Z drift would let ACE force-
@@ -922,21 +1197,58 @@ impl MovementSystem {
         //
         // Airborne integration. When `world.player.is_airborne`,
         // the player is in mid-jump or mid-fall: integrate gravity
-        // into the vertical velocity, then add velocity * dt to
-        // pose.z. Mirrors ACE's airborne Player_Move handling.
+        // into the vertical velocity and add the displacement to
+        // pose.z. Mirrors ACE's airborne `UpdatePhysicsInternal`.
         // While airborne the per-tick floor snap below treats the
         // floor as a *landing trigger* rather than a clamp, so the
         // jump arc plays out cleanly.
         //
+        // Physics deep-dive 2026-06-01 (gap 7): 2nd-order integration.
+        // Gravity is carried as an acceleration (`az = -9.8`,
+        // consistent with ACE `calc_acceleration` setting
+        // `Acceleration.z = -9.8` under the GRAVITY state flag,
+        // `PhysicsObj.cs:2079-2080`). The position uses the OLD
+        // velocity plus the half-step `0.5 * az * q^2`, THEN the
+        // velocity is updated by `az * q` — matching ACE's
+        // `movement = Acceleration*0.5*q*q + Velocity*q;
+        // Velocity += Acceleration*q` (`PhysicsObj.cs:1854-1858`).
+        // This restores the missing `0.5*a*t^2` term the old
+        // first-order symplectic-Euler step dropped.
+        //
         // `9.8 m/s²` matches ACE's `MovementSystem.GetJumpHeight`
-        // kinematic (`v = sqrt(h * 19.6)` ⇒ `g = 9.8`). Step is
-        // first-order Euler — fine at 60Hz / 16ms ticks, the
-        // accumulated error over a typical 1-sec jump is < 1 cm.
+        // kinematic (`v = sqrt(h * 19.6)` ⇒ `g = 9.8`).
         if !indoor_unbaked {
             if world.player.is_airborne {
-                let dt_s = dt.as_secs_f32();
-                world.player.vertical_velocity -= 9.8 * dt_s;
-                pose.coords.z += world.player.vertical_velocity * dt_s;
+                // Acceleration-carried gravity (downward).
+                let az = -9.8_f32;
+                let v_old = world.player.vertical_velocity;
+                // Position from OLD velocity + half-step.
+                pose.coords.z += v_old * dt_s + 0.5 * az * dt_s * dt_s;
+                // Then advance velocity by a*q.
+                let v_new = v_old + az * dt_s;
+                // Terminal-velocity clamp (gap 1 / gap 7): bound the
+                // total velocity magnitude to MAX_VELOCITY so a long
+                // fall does not accelerate unbounded. Mirrors ACE's
+                // per-quantum clamp inside `UpdatePhysicsInternal`
+                // (`Velocity = Normalize(Velocity) * MaxVelocity`,
+                // `PhysicsObj.cs:1843-1846`). Retail clamps the WHOLE
+                // velocity vector, so we scale the airborne planar
+                // store and the vertical velocity by the same factor
+                // — keeping the resulting magnitude exactly
+                // MAX_VELOCITY and the direction unchanged.
+                let mut vx = world.player.current_planar_velocity.x;
+                let mut vy = world.player.current_planar_velocity.y;
+                let mut vz = v_new;
+                let speed_sq = vx * vx + vy * vy + vz * vz;
+                if speed_sq > MAX_VELOCITY * MAX_VELOCITY {
+                    let scale = MAX_VELOCITY / speed_sq.sqrt();
+                    vx *= scale;
+                    vy *= scale;
+                    vz *= scale;
+                    world.player.current_planar_velocity.x = vx;
+                    world.player.current_planar_velocity.y = vy;
+                }
+                world.player.vertical_velocity = vz;
             } else {
                 pose.coords.z += raw_delta.z;
             }
@@ -989,9 +1301,9 @@ impl MovementSystem {
                     // for falling, so a walk-off now produces a
                     // T-pose-into-teleport-down.
                     //
-                    // Fix: if the step down exceeds `LEDGE_FALL_THRESHOLD_M`
-                    // (treats a normal slope walk as not a fall),
-                    // transition the player to airborne via
+                    // Fix: if the step down exceeds the ledge-fall
+                    // threshold (treats a normal slope walk / curb as
+                    // not a fall), transition the player to airborne via
                     // [`PlayerState::begin_fall`] and DON'T snap Z this
                     // tick — let the gravity integrator on the next
                     // tick handle the drop. The recv loop's
@@ -1000,17 +1312,41 @@ impl MovementSystem {
                     // below produce the right wire-side motion
                     // emissions (`Falling` → `Land`/`Fallen`).
                     //
-                    // Threshold tuned for AC terrain: heightmap
+                    // Physics deep-dive 2026-06-01 (gap 3) — step-DOWN.
+                    // When `USE_STEP_UP_DOWN` is set, the threshold is
+                    // the per-object `PLAYER_STEP_DOWN_HEIGHT` (1.5 m
+                    // for the human body, from Setup `0x0200_0001`):
+                    // drops within it snap the feet down to follow the
+                    // surface (curbs, short steps), drops beyond it are
+                    // real ledges and fall — mirroring ACE's
+                    // `Transition` `StepDown` path capped at
+                    // `ObjectInfo.StepDownHeight` (`Transition.cs:855`).
+                    //
+                    // When the gate is off, fall back to the legacy
+                    // `LEDGE_FALL_THRESHOLD_M = 0.5` heuristic. That
+                    // value was tuned for AC terrain: the heightmap
                     // resolution is 24 m sample spacing with bilinear
-                    // interp; the largest legitimate single-step
+                    // interp, so the largest legitimate single-step
                     // descent is ≈0.5 m for the steepest 26° slope
-                    // walking forward at 4 m/s @ 60 Hz (≈0.067 m
-                    // horizontal delta × tan(26°) ≈ 0.032 m). A 0.5 m
-                    // floor still flags any genuine ledge while
-                    // accommodating slope walks. Outdoor cliff edges
-                    // in Holtburg surrounds typically drop 2-10 m.
+                    // walking forward at 4 m/s @ 60 Hz. Outdoor cliff
+                    // edges in Holtburg surrounds typically drop 2-10 m,
+                    // so either threshold flags a genuine ledge.
                     const LEDGE_FALL_THRESHOLD_M: f32 = 0.5;
-                    if pose.coords.z - z > LEDGE_FALL_THRESHOLD_M {
+                    if USE_STEP_UP_DOWN {
+                        match holtburger_world::spatial::step_down_decision(
+                            pose.coords.z,
+                            z,
+                            holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT,
+                        ) {
+                            holtburger_world::spatial::StepDownOutcome::Snap(snap_z) => {
+                                pose.coords.z = snap_z;
+                            }
+                            holtburger_world::spatial::StepDownOutcome::Fall => {
+                                world.player.begin_fall();
+                                // Leave Z alone — gravity drops us next tick.
+                            }
+                        }
+                    } else if pose.coords.z - z > LEDGE_FALL_THRESHOLD_M {
                         world.player.begin_fall();
                         // Leave Z alone — let the gravity integrator
                         // drop us next tick.
@@ -1397,6 +1733,60 @@ impl MovementSystem {
         Ok(world_events)
     }
 
+    /// Physics deep-dive 2026-06-01 (gap 4) — retail
+    /// `CommandInterpreter::ShouldSendPositionEvent`
+    /// (`acclient.c:718107-718141`) port for the heartbeat gate. Returns
+    /// `true` when the pulse differs from the last one we sent: cell
+    /// (landblock/objcell) changed, origin/heading moved beyond the pose
+    /// epsilons, or the contact byte flipped (the contact-plane-change
+    /// sub-branch). The first send (no prior pose) always passes.
+    fn autonomous_pose_changed(&self, pulse: &AutonomousPositionActionData) -> bool {
+        if !USE_AUTONOMOUS_POSITION_CHANGE_GATE {
+            return true;
+        }
+
+        let Some(last_pose) = self.last_sent_autonomous_pose else {
+            return true;
+        };
+
+        // Cell / landblock change (`objcell_id != last`).
+        if pulse.position.landblock_id != last_pose.landblock_id {
+            return true;
+        }
+
+        // Origin change (`!Frame::is_equal` — origin component). Same
+        // landblock here, so a plain coords distance is the offset.
+        if pulse.position.coords.distance(&last_pose.coords) > AUTONOMOUS_POSE_EPSILON_M {
+            return true;
+        }
+
+        // Heading change (`!Frame::is_equal` — orientation component).
+        let heading_delta = signed_heading_delta(
+            last_pose.rotation.to_heading(),
+            pulse.position.rotation.to_heading(),
+        );
+        if heading_delta.abs() > AUTONOMOUS_POSE_HEADING_EPSILON_RAD {
+            return true;
+        }
+
+        // Contact-plane change (the sub-interval branch). We don't carry
+        // a full plane, but the wire `last_contact` byte (grounded vs
+        // airborne) is the contact signal the server consumes; re-send
+        // when it flips even if the pose is otherwise unchanged.
+        if self.last_sent_autonomous_contact != Some(pulse.last_contact) {
+            return true;
+        }
+
+        false
+    }
+
+    /// Record the pose + contact we just put on the wire so the next
+    /// [`Self::autonomous_pose_changed`] compares against it.
+    fn note_autonomous_position_sent(&mut self, pulse: &AutonomousPositionActionData) {
+        self.last_sent_autonomous_pose = Some(pulse.position);
+        self.last_sent_autonomous_contact = Some(pulse.last_contact);
+    }
+
     async fn maybe_send_autonomous_position_heartbeat(
         &mut self,
         now: Instant,
@@ -1439,10 +1829,26 @@ impl MovementSystem {
             return Ok(false);
         };
 
+        // Physics deep-dive 2026-06-01 (gap 4): position-change gate.
+        // Skip the send when the pose hasn't meaningfully changed since
+        // the last packet (retail `ShouldSendPositionEvent`) so we don't
+        // re-assert a stale/drifted pose every second. The heartbeat
+        // schedule still advances — we just stay quiet until movement
+        // (or a contact flip) produces something worth sending.
+        if !self.autonomous_pose_changed(&pulse) {
+            if has_autonomous_position_sync_target(world) {
+                self.refresh_autonomous_position_heartbeat_schedule(now, world);
+            } else {
+                self.clear_autonomous_position_heartbeat_schedule();
+            }
+            return Ok(false);
+        }
+
         session
-            .send_action(GameAction::AutonomousPosition(Box::new(pulse)))
+            .send_action(GameAction::AutonomousPosition(Box::new(pulse.clone())))
             .await?;
         self.heartbeats_sent = self.heartbeats_sent.wrapping_add(1);
+        self.note_autonomous_position_sent(&pulse);
 
         if has_autonomous_position_sync_target(world) {
             self.refresh_autonomous_position_heartbeat_schedule(now, world);
@@ -1465,9 +1871,13 @@ impl MovementSystem {
             return Ok(false);
         };
 
+        // This is an explicit flush (arrival / drive sync), not the
+        // throttled heartbeat — always send. Record the sent pose so
+        // the next heartbeat's position-change gate compares against it.
         session
-            .send_action(GameAction::AutonomousPosition(Box::new(pulse)))
+            .send_action(GameAction::AutonomousPosition(Box::new(pulse.clone())))
             .await?;
+        self.note_autonomous_position_sent(&pulse);
 
         self.refresh_autonomous_position_heartbeat_schedule(now, world);
 

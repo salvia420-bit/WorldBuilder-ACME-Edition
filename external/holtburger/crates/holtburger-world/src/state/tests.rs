@@ -732,7 +732,29 @@ fn authoritative_player_snapshots_do_not_clobber_active_local_runtime_motion() {
         .scene
         .body(SpatialBodyId::LocalPlayer(player_guid))
         .expect("local player runtime body should exist");
-    assert_eq!(body.pose, runtime_pose);
+    // Physics deep-dive 2026-06-01 (gap 4): the working pose is no
+    // longer CLOBBERED to the authoritative update (the old snap-back
+    // rubberband) — but it is also no longer fully preserved forever.
+    // The ~18.79 m sub-blip drift is constrained one leash (10 m
+    // outdoor) toward the authoritative pose, so the next heartbeat
+    // reports a converging pose instead of re-asserting the drift. The
+    // integrator keeps driving (mode unchanged) and the move is gentle
+    // (no clobber): the working pose stays strictly between the drifted
+    // runtime pose and the authoritative target.
+    let start_gap = runtime_pose.distance_to(&authoritative_update);
+    let new_gap = body.pose.distance_to(&authoritative_update);
+    assert!(
+        new_gap < start_gap,
+        "working pose should be pulled toward the authoritative pose ({new_gap} < {start_gap})"
+    );
+    assert!(
+        new_gap > 0.0,
+        "a sub-blip-but-over-leash drift should NOT clobber/snap to the authoritative pose"
+    );
+    assert!(
+        body.pose.distance_to(&runtime_pose) > 0.0,
+        "the working pose should have moved off the drifted runtime pose"
+    );
     assert_eq!(body.authoritative_pose, Some(authoritative_update));
     assert_eq!(body.sampling.mode, SpatialSampleMode::SimulatingMotionState);
 }

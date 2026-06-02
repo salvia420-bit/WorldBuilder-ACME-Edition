@@ -580,6 +580,146 @@ fn spatial_scene_forced_reposition_reset_clears_runtime_motion_and_suspends_body
     assert_eq!(body.sampling.mode, SpatialSampleMode::Suspended);
 }
 
+/// Physics deep-dive 2026-06-01 (gap 4): a small sub-blip server
+/// force-position on the LOCAL player while mid-simulation should pull
+/// the integrator working pose (`body.pose`) toward the forced pose by
+/// a capped per-tick correction over a few reconciles — not preserve
+/// the drifted working pose forever (the old Snapshot behaviour), and
+/// not hard-snap it in one tick. Authoritative pose tracks the forced
+/// pose immediately; the simulating mode is retained so the integrator
+/// keeps driving.
+#[test]
+fn reconcile_local_force_position_pulls_working_pose_toward_target_over_ticks() {
+    let mut scene = SpatialScene::new();
+    let now = Instant::now();
+    let player_guid = Guid(0x5000_0001);
+    let body_id = SpatialBodyId::LocalPlayer(player_guid);
+
+    // Outdoor landblock (cell < 0x100) so the constraint leash is 10 m
+    // and the blip distance is 100 m.
+    let lb = Guid(0x00A9_B400 & 0xFFFF_0000 | 0x0000_0000);
+    let authoritative = WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+
+    // Seed the body, then mutate it into a mid-simulation working pose
+    // that has drifted ~3 m ahead of the last authoritative pose.
+    scene.register_body(SpatialBody::new(body_id, authoritative, now));
+    let mut working = scene.body(body_id).expect("seeded body").clone();
+    working.pose = WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(53.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    working.sampling.mode = SpatialSampleMode::SimulatingVelocity;
+    scene.update_body(working);
+
+    // Server force-positions us back to a sub-blip (3 m) target. The
+    // working pose is 3 m away from it — above the 0.05 m dead-band,
+    // below the 10 m leash, so we should converge toward the target.
+    let forced = WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+
+    let start_dist = scene
+        .body(body_id)
+        .unwrap()
+        .pose
+        .distance_to(&forced);
+    assert!((start_dist - 3.0).abs() < 1e-3, "precondition: ~3 m drift");
+
+    scene.reconcile_authoritative_body(
+        body_id,
+        forced,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+
+    let body = scene.body(body_id).expect("body should still exist");
+    // Authoritative pose adopts the forced pose immediately.
+    assert_eq!(body.authoritative_pose, Some(forced));
+    // The simulating mode is retained — the integrator keeps driving.
+    assert_eq!(body.sampling.mode, SpatialSampleMode::SimulatingVelocity);
+    // The working pose was pulled toward the target. With a 3 m gap and
+    // a 10 m leash the gap collapses (we land on the target this tick),
+    // but never overshoots away from it.
+    let after_dist = body.pose.distance_to(&forced);
+    assert!(
+        after_dist < start_dist,
+        "working pose should move toward target: {after_dist} < {start_dist}"
+    );
+    assert!(after_dist <= 1e-3, "3 m gap is within the 10 m leash → converges");
+    assert_eq!(body.pose.landblock_id, lb, "stays in the forced landblock");
+}
+
+/// Physics deep-dive 2026-06-01 (gap 4): a force-position beyond the
+/// autonomy-blip radius leaves the working pose untouched (too large to
+/// be a small rubberband — a routine far broadcast / teleport-class
+/// correction, which takes the Reset path; preserving here keeps the
+/// academy-rubberband invariant), and a force-position inside the
+/// 0.05 m dead-band also leaves the working pose untouched (no jitter).
+#[test]
+fn reconcile_local_force_position_preserves_far_and_holds_within_deadband() {
+    let mut scene = SpatialScene::new();
+    let now = Instant::now();
+    let body_id = SpatialBodyId::LocalPlayer(Guid(0x5000_0002));
+    let lb = Guid(0x00A9_B400 & 0xFFFF_0000);
+
+    let make = |x: f32, y: f32| WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(x, y, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+
+    // --- far drift (> 100 m outdoor blip) ---
+    scene.register_body(SpatialBody::new(body_id, make(0.0, 0.0), now));
+    let far_working = make(150.0, 0.0);
+    let mut working = scene.body(body_id).unwrap().clone();
+    working.pose = far_working;
+    working.sampling.mode = SpatialSampleMode::SimulatingMotionState;
+    scene.update_body(working);
+
+    let forced = make(0.0, 0.0);
+    scene.reconcile_authoritative_body(
+        body_id,
+        forced,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+    // 150 m drift > 100 m blip → working pose preserved (not snapped),
+    // authoritative pose still tracks the forced pose.
+    assert_eq!(scene.body(body_id).unwrap().pose, far_working);
+    assert_eq!(scene.body(body_id).unwrap().authoritative_pose, Some(forced));
+
+    // --- inside the dead-band (< 0.05 m) ---
+    let body_id2 = SpatialBodyId::LocalPlayer(Guid(0x5000_0003));
+    scene.register_body(SpatialBody::new(body_id2, make(10.0, 10.0), now));
+    let mut working2 = scene.body(body_id2).unwrap().clone();
+    let drifted = make(10.0, 10.02); // 2 cm < 0.05 m dead-band
+    working2.pose = drifted;
+    working2.sampling.mode = SpatialSampleMode::SimulatingVelocity;
+    scene.update_body(working2);
+
+    scene.reconcile_authoritative_body(
+        body_id2,
+        make(10.0, 10.0),
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+    // Within the dead-band → working pose untouched (no jitter pull).
+    assert_eq!(scene.body(body_id2).unwrap().pose, drifted);
+}
+
 mod collision {
     use super::*;
     use holtburger_common::Aabb;

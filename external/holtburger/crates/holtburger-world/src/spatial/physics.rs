@@ -19,6 +19,31 @@ const EPSILON: f32 = 1e-4;
 pub const PLAYER_CAPSULE_RADIUS: f32 = 0.4;
 pub const PLAYER_CAPSULE_HEIGHT: f32 = 1.8;
 
+/// Physics deep-dive 2026-06-01 (gap 3) — per-object step heights.
+/// ACE reads these from `Setup._dat.StepUpHeight`/`StepDownHeight`
+/// scaled by `Scale.Z`
+/// (`external/ACE/Source/ACE.Server/Physics/PartArray.cs:236-248`:
+/// `GetStepUpHeight`/`GetStepDownHeight` return
+/// `Setup._dat.StepUpHeight * Scale.Z`, falling back to
+/// `PhysicsGlobals.DefaultStepHeight = 0.01` when `Setup == null`).
+/// `ObjectInfo` caches them (`ObjectInfo.cs:46-47`) and `Transition`
+/// consumes them in the `StepUp`/`StepDown` walkable path
+/// (`Transition.cs:761,855`).
+///
+/// Holtburger parses `SetupModel.step_up`/`step_down`
+/// (`crates/holtburger-dat/src/file_type/setup_model.rs:310-311`) but
+/// the movement solver never read them — gap 3 in the deep-dive
+/// handoff. Like [`PLAYER_CAPSULE_RADIUS`]/[`PLAYER_CAPSULE_HEIGHT`]
+/// above, the values are hard-coded here from the real human-body
+/// Setup `0x0200_0001` (dumped from the base `client_portal.dat`:
+/// `StepUpHeight = 0.6`, `StepDownHeight = 1.5`, with `Scale.Z = 1.0`
+/// for the player so the effective heights are unscaled) rather than
+/// fetched per collision tick. Wiring the per-setup read for non-player
+/// objects is a follow-up — see the module-level step-up/step-down
+/// helpers below.
+pub const PLAYER_STEP_UP_HEIGHT: f32 = 0.6;
+pub const PLAYER_STEP_DOWN_HEIGHT: f32 = 1.5;
+
 /// Phase 6 step B: result of a single swept-sphere-vs-AABB query.
 /// `t` is the parametric time of first contact in `[0.0, 1.0]`
 /// (where 0.0 = start, 1.0 = full delta), `normal` is the
@@ -256,6 +281,17 @@ pub fn clamp_delta_to_cell_interior(
 
 use holtburger_common::Triangle;
 
+/// Retail walkable-slope threshold: a contact plane counts as floor
+/// (you can stand/walk on it) iff `Normal.Z >= FLOOR_Z`. This is the
+/// ACE/retail `PhysicsGlobals.FloorZ` constant verbatim
+/// (`external/ACE/Source/ACE.Server/Physics/PhysicsGlobals.cs:50`),
+/// consumed by `PhysicsObj.set_on_walkable` (`PhysicsObj.cs:1232-1237`
+/// — `Normal.Z < FloorZ ? set_on_walkable(false) : set_on_walkable(true)`).
+/// `0.66417414618662751` corresponds to ~48.4° from horizontal —
+/// anything steeper is treated as a wall, not a floor. Stored at full
+/// f64 source precision and narrowed to `f32` for our normals.
+const FLOOR_Z: f32 = 0.664_174_15;
+
 /// 2026-05-10 indoor collision (Phase 6 step G follow-on): return the
 /// highest "floor" Z below `(x, y)` from the given triangles, or
 /// `None` when no triangle qualifies. A triangle qualifies as a floor
@@ -277,10 +313,13 @@ pub fn highest_floor_z_under(
     y: f32,
     ceiling_z: f32,
 ) -> Option<f32> {
-    // 0.5 corresponds to a 60° slope (normal angle from vertical) —
-    // anything steeper is a wall, not a floor. AC dungeon stairs
-    // sit well below this threshold so they still register as floor.
-    const FLOOR_NORMAL_MIN: f32 = 0.5;
+    // Retail-parity walkable-slope cutoff: a triangle is floor iff its
+    // normal points upward at least as much as `FLOOR_Z` (~48.4° from
+    // horizontal). Raised from the legacy `0.5` (60°) to match ACE
+    // `set_on_walkable` (`Normal.Z >= PhysicsGlobals.FloorZ`); steeper
+    // inclines are walls. AC dungeon stairs are individual treads with
+    // near-flat tops, so they remain well above this threshold.
+    const FLOOR_NORMAL_MIN: f32 = FLOOR_Z;
     let mut best: Option<f32> = None;
     for tri in triangles {
         if !tri.contains_xy(x, y) {
@@ -308,6 +347,98 @@ pub fn highest_floor_z_under(
         }
     }
     best
+}
+
+/// Physics deep-dive 2026-06-01 (gap 3) — step-UP decision.
+///
+/// When a grounded lateral move is *blocked* by a wall/riser, retail
+/// tries to climb onto it instead of stopping dead, provided the
+/// obstacle's walkable top is within `step_up_height` of the feet
+/// (`Transition.StepUp`, `Transition.cs:746-777`, gated on
+/// `OnWalkable` so the rise is capped at `ObjectInfo.StepUpHeight` —
+/// `Transition.cs:761`). This is what gives retail curb-/stair-step.
+///
+/// This helper isolates the *threshold* decision so it is unit-testable
+/// without the full integrator: the caller detects that the lateral was
+/// blocked and probes the floor height at the *intended* (un-clamped)
+/// destination, then asks here whether to climb.
+///
+/// Returns `Some(destination_floor_z)` (the feet Z to rise to) when the
+/// move should step up; `None` when it should stay blocked. We climb
+/// iff the destination floor is **above** the current feet (a riser,
+/// not a descent — descents are handled by [`step_down_decision`]) by
+/// at most `step_up_height`. A riser taller than `step_up_height` is a
+/// real wall and stays blocked.
+///
+/// `blocked` is the caller's "the lateral clamp shortened the move
+/// enough that we hit something" predicate; when `false` (clean lateral
+/// move) we never step up. `destination_floor_z` is `None` when no
+/// walkable floor exists at the intended destination (e.g. a gap), in
+/// which case there is nothing to climb onto.
+pub fn step_up_decision(
+    blocked: bool,
+    feet_z: f32,
+    destination_floor_z: Option<f32>,
+    step_up_height: f32,
+) -> Option<f32> {
+    if !blocked {
+        return None;
+    }
+    let floor = destination_floor_z?;
+    let rise = floor - feet_z;
+    // Only climb a positive riser within step-up height. A small
+    // EPSILON keeps a floor at (or a hair below) the feet from
+    // registering as a climb — that's flat ground, not a step.
+    if rise > EPSILON && rise <= step_up_height {
+        Some(floor)
+    } else {
+        None
+    }
+}
+
+/// Physics deep-dive 2026-06-01 (gap 3) — step-DOWN decision.
+///
+/// When a grounded player walks off a small drop, retail snaps the feet
+/// down to follow the surface (within `step_down_height`) instead of
+/// going ballistic; a drop *beyond* that is a real ledge and the player
+/// falls (`Transition`'s `StepDown` path, capped at
+/// `ObjectInfo.StepDownHeight` — `Transition.cs:855`).
+///
+/// Ours previously snapped any outdoor descent up to a fixed
+/// `LEDGE_FALL_THRESHOLD_M = 0.5` heuristic and fell beyond it
+/// (`holtburger-core .../system.rs`). This helper replaces that magic
+/// number with the per-object `step_down_height` (1.5 m for the player
+/// body, vs the 0.5 m heuristic) so curbs/short drops follow the
+/// ground and only genuine ledges fall. The heuristic and the
+/// step-down height are reconciled by passing the step-down height as
+/// the threshold here.
+///
+/// `drop = feet_z - floor_z_below` (positive when the floor is below
+/// the feet). Returns:
+/// - [`StepDownOutcome::Snap`]`(floor_z_below)` when `0 <= drop <=
+///   step_down_height` — snap the feet down to follow the surface.
+/// - [`StepDownOutcome::Fall`] when `drop > step_down_height` — a real
+///   ledge; let gravity take over.
+/// - [`StepDownOutcome::Snap`]`(floor_z_below)` when `drop < 0` (the
+///   floor is at or above the feet — flat ground or a tiny rise the
+///   floor snap already handles); the caller's existing flat-ground
+///   snap is preserved.
+pub fn step_down_decision(feet_z: f32, floor_z_below: f32, step_down_height: f32) -> StepDownOutcome {
+    let drop = feet_z - floor_z_below;
+    if drop > step_down_height {
+        StepDownOutcome::Fall
+    } else {
+        StepDownOutcome::Snap(floor_z_below)
+    }
+}
+
+/// Result of [`step_down_decision`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StepDownOutcome {
+    /// Snap the player's feet to this Z, following the surface.
+    Snap(f32),
+    /// The drop exceeds the step-down height — a real ledge; fall.
+    Fall,
 }
 
 /// 2026-05-10 indoor collision: clamp a proposed lateral delta
@@ -373,10 +504,18 @@ pub fn clamp_delta_against_cell_walls_with_exclusions(
     height: f32,
     exclusion_aabbs: &[Aabb],
 ) -> Vector3 {
-    // 0.7 corresponds to a 45° slope from horizontal — anything more
-    // upward-facing is a floor, anything more downward is a ceiling;
-    // both are skipped here so the floor raycast doesn't double-clamp.
-    const WALL_NORMAL_MAX: f32 = 0.7;
+    // Aligned to `FLOOR_Z` so the wall classifier and the floor
+    // classifier (`highest_floor_z_under`) partition the normal-Z axis
+    // at exactly one retail boundary: a triangle whose `|normal.z|`
+    // exceeds `FLOOR_Z` is floor (or ceiling) and is handled by the
+    // floor raycast, so we skip it here; everything at or below
+    // `FLOOR_Z` is a wall and gets laterally clamped. Previously this
+    // sat at `0.7` while the floor cutoff was `0.5`, leaving a
+    // `0.5..0.7` band that was simultaneously floor (for Z-snap) and
+    // wall (laterally clamped). Raising `FLOOR_NORMAL_MIN` to `FLOOR_Z`
+    // and matching the wall cutoff to the same value closes that seam:
+    // no triangle is now both walkable floor and clamping wall.
+    const WALL_NORMAL_MAX: f32 = FLOOR_Z;
     let lateral_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
     if lateral_len < 1e-6 {
         return delta;
@@ -1182,5 +1321,176 @@ impl SpatialPhysics for NoopSpatialPhysics {
             solved: Vec::new(),
             events: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use holtburger_common::{Triangle, Vector3};
+
+    /// Build a single ramp triangle inclined `degrees` from horizontal.
+    /// The surface rises along +Y; its plane normal is `(0, -sin θ,
+    /// cos θ)` (verified via `Plane::from_triangle`), so `normal.z =
+    /// cos(θ)` — exactly the quantity ACE's `set_on_walkable` compares
+    /// against `FloorZ`. The XY footprint spans well past the query
+    /// point `(0.2, 0.1)` used by the tests below.
+    fn ramp_triangle(degrees: f32) -> Triangle {
+        let theta = degrees.to_radians();
+        Triangle::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, theta.cos(), theta.sin()),
+        )
+    }
+
+    /// Retail-parity (GAP 6, 2026-06-01): the walkable-slope cutoff is
+    /// `FloorZ = 0.66417` (~48.4°), not the legacy `0.5` (60°). A 50°
+    /// ramp has `normal.z = cos(50°) ≈ 0.643 < FloorZ`, so it is NOT a
+    /// floor — `highest_floor_z_under` must reject it and return `None`.
+    #[test]
+    fn fifty_degree_ramp_is_not_walkable() {
+        // Sanity: this ramp WAS accepted under the old 0.5 threshold
+        // (cos(50°) ≈ 0.643 > 0.5) and must now be rejected.
+        assert!(50.0_f32.to_radians().cos() > 0.5);
+        assert!(50.0_f32.to_radians().cos() < FLOOR_Z);
+
+        let tris = [ramp_triangle(50.0)];
+        let floor = highest_floor_z_under(&tris, 0.2, 0.1, 100.0);
+        assert_eq!(
+            floor, None,
+            "50° ramp (normal.z {:.4}) must be steeper than FloorZ {:.4} and not register as floor",
+            50.0_f32.to_radians().cos(),
+            FLOOR_Z,
+        );
+    }
+
+    /// Retail-parity (GAP 6): a 45° ramp has `normal.z = cos(45°) ≈
+    /// 0.707 >= FloorZ`, so it IS walkable and `highest_floor_z_under`
+    /// must return the interpolated floor Z at the query point.
+    #[test]
+    fn forty_five_degree_ramp_is_walkable() {
+        assert!(45.0_f32.to_radians().cos() >= FLOOR_Z);
+
+        let tris = [ramp_triangle(45.0)];
+        let floor = highest_floor_z_under(&tris, 0.2, 0.1, 100.0);
+        assert!(
+            floor.is_some(),
+            "45° ramp (normal.z {:.4}) is shallower than FloorZ {:.4} and must register as floor",
+            45.0_f32.to_radians().cos(),
+            FLOOR_Z,
+        );
+        // Floor Z at (0.2, 0.1) on a 45° ramp rising in +Y: z = y = 0.1.
+        let z = floor.unwrap();
+        assert!(
+            (z - 0.1).abs() < 1e-4,
+            "expected floor Z ≈ 0.1 at (0.2, 0.1), got {z}",
+        );
+    }
+
+    // ---- Physics deep-dive 2026-06-01 (gap 3): step-up / step-down ----
+
+    /// A riser no taller than `PLAYER_STEP_UP_HEIGHT` is climbable: when
+    /// the lateral move is blocked and a walkable floor sits within the
+    /// step-up height at the destination, `step_up_decision` returns the
+    /// floor Z to rise onto. Mirrors retail `Transition.StepUp` capped
+    /// at `ObjectInfo.StepUpHeight` (`Transition.cs:761`).
+    #[test]
+    fn riser_within_step_up_height_is_climbable() {
+        // Feet at z=10, a 0.3 m riser (well under the 0.6 m player
+        // step-up). Blocked by the riser wall.
+        let feet_z = 10.0_f32;
+        let riser_top = feet_z + 0.3;
+        let decision = step_up_decision(true, feet_z, Some(riser_top), PLAYER_STEP_UP_HEIGHT);
+        assert_eq!(
+            decision,
+            Some(riser_top),
+            "a {:.2} m riser is within the {:.2} m step-up and must be climbable",
+            riser_top - feet_z,
+            PLAYER_STEP_UP_HEIGHT,
+        );
+    }
+
+    /// A riser taller than `PLAYER_STEP_UP_HEIGHT` stays blocked:
+    /// `step_up_decision` returns `None` so the lateral clamp holds and
+    /// the player is stopped by the wall (no climbing onto a real wall).
+    #[test]
+    fn riser_above_step_up_height_still_blocks() {
+        let feet_z = 10.0_f32;
+        // 1.0 m riser — above the 0.6 m player step-up.
+        let riser_top = feet_z + 1.0;
+        assert!(riser_top - feet_z > PLAYER_STEP_UP_HEIGHT);
+        let decision = step_up_decision(true, feet_z, Some(riser_top), PLAYER_STEP_UP_HEIGHT);
+        assert_eq!(
+            decision, None,
+            "a {:.2} m riser exceeds the {:.2} m step-up and must stay blocked",
+            riser_top - feet_z,
+            PLAYER_STEP_UP_HEIGHT,
+        );
+    }
+
+    /// A clean (un-blocked) lateral move never steps up, and a floor at
+    /// or below the feet is a descent (handled by step-down), not a
+    /// climb — both yield `None`.
+    #[test]
+    fn step_up_no_op_when_not_blocked_or_not_a_riser() {
+        let feet_z = 10.0_f32;
+        // Not blocked: clean move, even with a reachable riser ahead.
+        assert_eq!(
+            step_up_decision(false, feet_z, Some(feet_z + 0.3), PLAYER_STEP_UP_HEIGHT),
+            None,
+            "an un-blocked move must never step up",
+        );
+        // Blocked, but the floor is a drop, not a riser → step-down's job.
+        assert_eq!(
+            step_up_decision(true, feet_z, Some(feet_z - 0.3), PLAYER_STEP_UP_HEIGHT),
+            None,
+            "a descent must not register as a step-up",
+        );
+        // Blocked, but no walkable floor at the destination (a gap).
+        assert_eq!(
+            step_up_decision(true, feet_z, None, PLAYER_STEP_UP_HEIGHT),
+            None,
+            "no floor at the destination → nothing to climb onto",
+        );
+    }
+
+    /// A drop no deeper than `PLAYER_STEP_DOWN_HEIGHT` snaps the feet
+    /// down to follow the surface (curb / short step), rather than
+    /// going ballistic. Mirrors retail `Transition` step-down capped at
+    /// `ObjectInfo.StepDownHeight` (`Transition.cs:855`).
+    #[test]
+    fn drop_within_step_down_height_snaps_down() {
+        let feet_z = 10.0_f32;
+        // 1.0 m drop — under the 1.5 m player step-down.
+        let floor_below = feet_z - 1.0;
+        assert!(feet_z - floor_below <= PLAYER_STEP_DOWN_HEIGHT);
+        let outcome = step_down_decision(feet_z, floor_below, PLAYER_STEP_DOWN_HEIGHT);
+        assert_eq!(
+            outcome,
+            StepDownOutcome::Snap(floor_below),
+            "a {:.2} m drop is within the {:.2} m step-down and must snap to the surface",
+            feet_z - floor_below,
+            PLAYER_STEP_DOWN_HEIGHT,
+        );
+    }
+
+    /// A drop deeper than `PLAYER_STEP_DOWN_HEIGHT` is a real ledge:
+    /// `step_down_decision` returns `Fall` so the gravity integrator
+    /// takes over and the player drops with a proper arc.
+    #[test]
+    fn drop_beyond_step_down_height_falls() {
+        let feet_z = 10.0_f32;
+        // 2.0 m drop — beyond the 1.5 m player step-down (a ledge).
+        let floor_below = feet_z - 2.0;
+        assert!(feet_z - floor_below > PLAYER_STEP_DOWN_HEIGHT);
+        let outcome = step_down_decision(feet_z, floor_below, PLAYER_STEP_DOWN_HEIGHT);
+        assert_eq!(
+            outcome,
+            StepDownOutcome::Fall,
+            "a {:.2} m drop exceeds the {:.2} m step-down and must fall",
+            feet_z - floor_below,
+            PLAYER_STEP_DOWN_HEIGHT,
+        );
     }
 }

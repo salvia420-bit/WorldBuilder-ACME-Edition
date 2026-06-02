@@ -1,9 +1,9 @@
 use super::super::common::{
-    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, PLAYER_GROUND_FRICTION_PER_SEC,
-    PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, RUN_FORWARD_MOTION_COMMAND,
-    RUN_HELD_TURN_SPEED_RAD_PER_SEC, TURN_RIGHT_MOTION_COMMAND, WALK_FORWARD_MOTION_COMMAND,
-    build_autonomous_position, build_motion_state_raw_motion_state, player_run_rate_scalar,
-    raw_motion_state_with_motion_style,
+    AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY,
+    PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ,
+    RUN_FORWARD_MOTION_COMMAND, RUN_HELD_TURN_SPEED_RAD_PER_SEC, TURN_RIGHT_MOTION_COMMAND,
+    WALK_FORWARD_MOTION_COMMAND, build_autonomous_position, build_motion_state_raw_motion_state,
+    player_run_rate_scalar, raw_motion_state_with_motion_style,
 };
 use super::*;
 use crate::client::movement_types::Gait;
@@ -765,6 +765,76 @@ fn autonomous_position_can_be_built_for_stationary_player() {
     assert_eq!(position_action.server_control_sequence, 22);
     assert_eq!(position_action.teleport_sequence, 33);
     assert_eq!(position_action.force_position_sequence, 44);
+}
+
+/// Physics deep-dive 2026-06-01 (gap 4): the heartbeat position-change
+/// gate. The first send always passes (no prior pose). After a send,
+/// an unchanged pose is skipped; a pose that moved beyond the epsilon,
+/// turned beyond the heading epsilon, crossed a landblock, or flipped
+/// the contact byte is re-sent. Mirrors retail `ShouldSendPositionEvent`.
+#[test]
+fn autonomous_pose_change_gate_skips_unchanged_and_sends_changed() {
+    let movement = MovementSystem::new();
+    let base_pose = WorldPosition {
+        landblock_id: Guid(0x1000_0001),
+        coords: Vector3::new(12.0, -4.0, 1.5),
+        rotation: Quaternion::from_heading(0.5),
+    };
+    let pulse = |pose: WorldPosition, contact: u8| AutonomousPositionActionData {
+        position: pose,
+        instance_sequence: 1,
+        server_control_sequence: 2,
+        teleport_sequence: 3,
+        force_position_sequence: 4,
+        last_contact: contact,
+    };
+
+    // First send: no prior pose recorded → always changed.
+    let first = pulse(base_pose, 1);
+    assert!(movement.autonomous_pose_changed(&first));
+
+    let mut movement = movement;
+    movement.note_autonomous_position_sent(&first);
+
+    // Identical pose + contact → skip.
+    assert!(!movement.autonomous_pose_changed(&pulse(base_pose, 1)));
+
+    // Sub-epsilon jitter (1 cm < 0.05 m) → still skipped.
+    let jitter = WorldPosition {
+        coords: Vector3::new(12.01, -4.0, 1.5),
+        ..base_pose
+    };
+    assert!(!movement.autonomous_pose_changed(&pulse(jitter, 1)));
+
+    // Meaningful translation (0.5 m > 0.05 m) → send.
+    let moved = WorldPosition {
+        coords: Vector3::new(12.5, -4.0, 1.5),
+        ..base_pose
+    };
+    assert!(movement.autonomous_pose_changed(&pulse(moved, 1)));
+
+    // Heading turn beyond the heading epsilon → send.
+    let turned = WorldPosition {
+        rotation: Quaternion::from_heading(1.0),
+        ..base_pose
+    };
+    assert!(movement.autonomous_pose_changed(&pulse(turned, 1)));
+
+    // Landblock crossing → send.
+    let crossed = WorldPosition {
+        landblock_id: Guid(0x1000_0002),
+        ..base_pose
+    };
+    assert!(movement.autonomous_pose_changed(&pulse(crossed, 1)));
+
+    // Same pose but contact byte flipped (grounded → airborne) → send.
+    assert!(movement.autonomous_pose_changed(&pulse(base_pose, 0)));
+
+    // After re-sending the moved pose, the moved pose is the new
+    // baseline and is itself skipped on repeat.
+    let moved_pulse = pulse(moved, 1);
+    movement.note_autonomous_position_sent(&moved_pulse);
+    assert!(!movement.autonomous_pose_changed(&pulse(moved, 1)));
 }
 
 #[tokio::test]
@@ -1855,20 +1925,24 @@ fn advance_local_pose_for_manual_drive_ramps_velocity_through_zero_on_direction_
     // matches run speed; direction is OPPOSITE the input target.
     world.player.current_planar_velocity = Vector3::new(0.0, -4.5, 0.0);
 
-    // One typical 60Hz tick.
-    let dt = Duration::from_millis(16);
+    // Physics deep-dive 2026-06-01 (gap 1): the integrator now gates
+    // on MIN_QUANTUM (1/30 s) — a sub-MIN_QUANTUM frame (e.g. 16 ms)
+    // accumulates time but integrates nothing this call. Drive a
+    // single MAX_QUANTUM (0.1 s) slice so exactly one friction +
+    // accel-cap step runs and the per-tick arithmetic below is exact.
+    let dt = Duration::from_secs_f32(MAX_QUANTUM);
     let dt_s = dt.as_secs_f32();
     movement.advance_local_pose_for_manual_drive(&mut world, dt);
 
     let v_after = world.player.current_planar_velocity;
 
-    // Per-axis accel cap step: `MAX_ACCEL * dt = 8 * 0.016 = 0.128 m/s`.
-    // Friction decay over 16ms: scale = `(1 - 0.5)^0.016 ≈ 0.989`,
+    // Per-axis accel cap step: `MAX_ACCEL * dt = 8 * 0.1 = 0.8 m/s`.
+    // Friction decay over 100ms: scale = `(1 - 0.5)^0.1 ≈ 0.933`,
     // so the residual velocity after friction is
-    // `-4.5 * 0.989 ≈ -4.45`. Then the accel cap adds `+0.128`
+    // `-4.5 * 0.933 ≈ -4.20`. Then the accel cap adds `+0.8`
     // toward the target (the cap saturates because
-    // `target - v = 4.5 - (-4.45) = 8.95` is far above the cap).
-    // Final velocity: `-4.45 + 0.128 ≈ -4.32`.
+    // `target - v = 4.5 - (-4.20) = 8.7` is far above the cap).
+    // Final velocity: `-4.20 + 0.8 ≈ -3.40`.
     //
     // The key assertion is that velocity has moved TOWARD zero
     // by approximately the accel cap step, and is still pointing
@@ -1876,7 +1950,7 @@ fn advance_local_pose_for_manual_drive_ramps_velocity_through_zero_on_direction_
     // teleported through zero to +4.5.
     assert!(
         v_after.y < 0.0,
-        "velocity should still be backward (negative Y) after one 16ms tick — got y={:.4}",
+        "velocity should still be backward (negative Y) after one 100ms slice — got y={:.4}",
         v_after.y,
     );
     assert!(
@@ -1894,19 +1968,19 @@ fn advance_local_pose_for_manual_drive_ramps_velocity_through_zero_on_direction_
         v_after.y,
     );
 
-    // Now run enough ticks to cross through zero. The total
-    // backward velocity to dissipate is 4.5 m/s; the per-tick
-    // toward-target push is ~0.128 m/s (capped) + the friction
-    // squeeze. Expect zero-crossing within ~35 ticks (~0.6 s).
-    for _ in 0..40 {
+    // Now run enough slices to cross through zero. The total
+    // backward velocity to dissipate is 4.5 m/s; the per-slice
+    // toward-target push is ~0.8 m/s (capped) + the friction
+    // squeeze. Expect a zero-crossing within ~10 slices (~1 s).
+    for _ in 0..10 {
         movement.advance_local_pose_for_manual_drive(&mut world, dt);
     }
-    let v_after_40 = world.player.current_planar_velocity;
+    let v_after_10 = world.player.current_planar_velocity;
     assert!(
-        v_after_40.y > 0.0,
-        "after 40 more ticks (~0.65 s total), velocity should have crossed through zero \
+        v_after_10.y > 0.0,
+        "after 10 more 100ms slices (~1.1 s total), velocity should have crossed through zero \
          and be positive (forward) — got y={:.4}",
-        v_after_40.y,
+        v_after_10.y,
     );
 }
 
@@ -1943,22 +2017,27 @@ fn advance_local_pose_for_manual_drive_decays_velocity_when_input_released() {
     // running North.
     world.player.current_planar_velocity = Vector3::new(0.0, 4.5, 0.0);
 
-    let dt = Duration::from_millis(16);
+    // Physics deep-dive 2026-06-01 (gap 1): drive a single
+    // MAX_QUANTUM (0.1 s) slice — a 16 ms frame is now below
+    // MIN_QUANTUM and integrates nothing this call (accumulated for
+    // the next frame). One 0.1 s slice runs exactly one decay step.
+    let dt = Duration::from_secs_f32(MAX_QUANTUM);
     movement.advance_local_pose_for_manual_drive(&mut world, dt);
     let v_after_1 = world.player.current_planar_velocity;
-    // One tick: friction = 0.989, accel toward zero capped at -0.128.
-    // Predicted: `4.5*0.989 - 0.128 ≈ 4.32`.
+    // One 0.1 s slice: friction = (1-0.5)^0.1 ≈ 0.933, accel toward
+    // zero capped at -0.8. Predicted: `4.5*0.933 - 0.8 ≈ 3.40`.
     assert!(
-        v_after_1.y < 4.5 && v_after_1.y > 4.0,
-        "after one 16ms tick of decay, velocity should be in (4.0, 4.5) — got y={:.4}",
+        v_after_1.y < 4.5 && v_after_1.y > 3.0,
+        "after one 100ms slice of decay, velocity should be in (3.0, 4.5) — got y={:.4}",
         v_after_1.y,
     );
 
-    // Run enough ticks for the velocity to fall below the snap
+    // Run enough slices for the velocity to fall below the snap
     // threshold (0.25 m/s) and zero out. Worst-case estimate: at
     // `f = 0.5`, velocity halves per second; with accel-cap pushing
-    // toward zero we get there faster. Expect zero by 5 seconds.
-    for _ in 0..(5 * 60) {
+    // toward zero we get there faster. Expect zero by 5 seconds
+    // (50 slices of 0.1 s).
+    for _ in 0..50 {
         movement.advance_local_pose_for_manual_drive(&mut world, dt);
     }
     let v_final = world.player.current_planar_velocity;
@@ -2195,6 +2274,371 @@ fn advance_local_pose_for_manual_drive_indoor_floor_snap_lifts_from_below() {
     assert!(
         (after.coords.z - 1.005).abs() < 1e-3,
         "first-tick floor snap: Z should be 1.005 (cell floor + 5 mm), got {:.4}",
+        after.coords.z
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Physics deep-dive 2026-06-01 — quantum-subdivided integration loop
+// (handoff gaps 1 + 7). The raw per-frame `dt` is bounded + subdivided
+// before the gravity/friction/collision step, gravity carries as
+// acceleration with a 2nd-order position term, and the total velocity
+// magnitude is terminal-clamped to MAX_VELOCITY. These tests pin the
+// loop's contract against ACE's `update_object`
+// (`external/ACE/Source/ACE.Server/Physics/PhysicsObj.cs:4140-4190`).
+// ---------------------------------------------------------------------------
+
+/// Seed an outdoor airborne player on a `synthetic()` world (no
+/// terrain heightmap → `terrain_height_at` returns `None`, so the
+/// floor-Z landing snap never fires and the gravity arc integrates
+/// uninterrupted). Returns the movement system primed with a held-run
+/// manual drive and the start pose.
+fn seed_airborne_player(
+    world: &mut WorldState,
+    guid: Guid,
+    start_z: f32,
+) -> (MovementSystem, WorldPosition) {
+    world.player.guid = guid;
+    let _capabilities = seed_self_movement_capabilities_override(world, 1.0, 1.0, 4.5, 1.5);
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(100.0, 100.0, start_z),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    // No terrain seeded → no floor under the player → pure free-fall.
+    world.player.begin_fall();
+    assert!(world.player.is_airborne, "begin_fall should set airborne");
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    (movement, start_pose)
+}
+
+/// Gap 1 — `quantum_slices` is the single source of truth for the
+/// subdivision schedule. A 0.25 s frame splits into two `MAX_QUANTUM`
+/// (0.1 s) slices plus the 0.05 s remainder (> `MIN_QUANTUM` 0.0333 s)
+/// = THREE slices, mirroring ACE's
+/// `while (dt > MaxQuantum) … ; if (dt > MinQuantum) …`
+/// (`PhysicsObj.cs:4175-4186`).
+#[test]
+fn quantum_slices_subdivides_quarter_second_into_three_slices() {
+    let slices = quantum_slices(0.25).expect("0.25 s is under HugeQuantum, not dropped");
+    assert_eq!(
+        slices.len(),
+        3,
+        "0.25 s ⇒ 0.1 + 0.1 + 0.05 = 3 slices, got {slices:?}"
+    );
+    assert!(
+        (slices[0] - MAX_QUANTUM).abs() < 1e-6 && (slices[1] - MAX_QUANTUM).abs() < 1e-6,
+        "first two slices should be MAX_QUANTUM, got {slices:?}"
+    );
+    assert!(
+        (slices[2] - 0.05).abs() < 1e-6,
+        "remainder slice should be 0.05 s, got {:.6}",
+        slices[2]
+    );
+    // The schedule sums to the input frame (no time lost when the
+    // remainder clears MinQuantum).
+    let total: f32 = slices.iter().sum();
+    assert!((total - 0.25).abs() < 1e-6, "slices should sum to 0.25, got {total:.6}");
+}
+
+/// Gap 1 — a sub-`MIN_QUANTUM` frame (a normal 16 ms rAF tick) yields
+/// an EMPTY schedule: nothing is integrated until enough time
+/// accumulates, matching retail's 30 Hz physics gate
+/// (`deltaTime < TickRate` early-return at `PhysicsObj.cs:4163`).
+#[test]
+fn quantum_slices_drops_sub_min_quantum_frame() {
+    let slices = quantum_slices(0.016).expect("16 ms is under HugeQuantum");
+    assert!(
+        slices.is_empty(),
+        "16 ms (< MinQuantum 0.0333 s) should integrate nothing, got {slices:?}"
+    );
+}
+
+/// Gap 1 — a `HUGE_QUANTUM`-or-larger hitch is DROPPED entirely
+/// (`quantum_slices` returns `None`) so a falling player can't be
+/// teleported by a multi-second stall. Mirrors ACE's
+/// `if (deltaTime > HugeQuantum) { … return false; }`
+/// (`PhysicsObj.cs:4169-4173`). A 2.0 s frame (== HugeQuantum, not
+/// strictly greater) is the boundary case that is still integrated.
+#[test]
+fn quantum_slices_drops_huge_quantum_hitch() {
+    assert!(
+        quantum_slices(HUGE_QUANTUM + 0.001).is_none(),
+        "a frame just over HugeQuantum (2.0 s) must be dropped"
+    );
+    assert!(
+        quantum_slices(2.5).is_none(),
+        "a 2.5 s hitch must be dropped"
+    );
+    // The boundary itself is NOT dropped — 2.0 s subdivides into 20
+    // MAX_QUANTUM slices.
+    let boundary = quantum_slices(HUGE_QUANTUM)
+        .expect("exactly HugeQuantum is the boundary, still integrated");
+    assert_eq!(
+        boundary.len(),
+        20,
+        "2.0 s ⇒ twenty 0.1 s slices, got {} slices",
+        boundary.len()
+    );
+}
+
+/// Gaps 1 + 7 — a 2.0 s simulated hitch produces a BOUNDED fall, not a
+/// teleport. The subdivided + terminal-clamped loop must drop the
+/// player far LESS than the unclamped 1st-order single step the
+/// legacy path would produce (`z += (-9.8·dt)·dt` ≈ -39 m for a 2 s
+/// step from rest). Distance is bounded by the terminal velocity:
+/// even at the 50 m/s cap, 2 s of fall is at most ~100 m, and the
+/// real subdivided fall is well under that.
+#[test]
+fn two_second_hitch_produces_bounded_fall_not_teleport() {
+    let mut world = WorldState::synthetic();
+    let (mut movement, start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AA0), 500.0);
+
+    // 2.0 s == HugeQuantum: NOT dropped, subdivided into 20 slices.
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(2.0));
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    let drop = start_pose.coords.z - after.coords.z;
+
+    // The fall must be DOWNWARD and bounded. Closed-form free fall over
+    // 2 s with no clamp would be 0.5·9.8·4 ≈ 19.6 m; the terminal-
+    // velocity clamp keeps per-slice speed within 50 m/s so the drop
+    // can never exceed ~100 m. Assert it's a sane, bounded value.
+    assert!(drop > 0.0, "player should fall downward, got drop={drop:.3} m");
+    assert!(
+        drop < 100.0,
+        "a 2 s hitch must NOT teleport the player; drop should be bounded \
+         (< 100 m), got {drop:.3} m"
+    );
+    // Velocity must be clamped to terminal (50 m/s) — never the
+    // unbounded -19.6 m/s a single unclamped step would also produce,
+    // but for a long fall the clamp is what matters.
+    assert!(
+        world.player.vertical_velocity.abs() <= MAX_VELOCITY + 1e-3,
+        "vertical velocity must be terminal-clamped to <= {MAX_VELOCITY} m/s, got {:.3}",
+        world.player.vertical_velocity
+    );
+}
+
+/// Gaps 1 + 7 — terminal-velocity clamp. A very long subdivided fall
+/// must clamp the total velocity magnitude to MAX_VELOCITY (50 m/s),
+/// mirroring ACE's per-quantum `Velocity = Normalize(Velocity)·MaxVelocity`
+/// (`PhysicsObj.cs:1843-1846`). Without the clamp, ~10 s of free fall
+/// reaches ~98 m/s.
+#[test]
+fn terminal_velocity_clamps_vertical_speed_at_fifty() {
+    let mut world = WorldState::synthetic();
+    // Start very high so the (terrain-less) free fall never lands.
+    let (mut movement, _start_pose) =
+        seed_airborne_player(&mut world, Guid(0x5000_0AB0), 100_000.0);
+
+    // Drive ~10 s of fall in 0.1 s frames (each a single MAX_QUANTUM
+    // slice). Unclamped this would reach 9.8·10 = 98 m/s.
+    for _ in 0..100 {
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(0.1));
+    }
+
+    let vz = world.player.vertical_velocity;
+    assert!(vz < 0.0, "player should be falling (negative vz), got {vz:.3}");
+    assert!(
+        vz.abs() <= MAX_VELOCITY + 1e-3,
+        "fall speed must be clamped to terminal velocity {MAX_VELOCITY} m/s, got {:.4}",
+        vz.abs()
+    );
+    // And it should have actually REACHED terminal (the planar run
+    // component is small, so |vz| ≈ MAX_VELOCITY after the clamp
+    // engages).
+    assert!(
+        vz.abs() > MAX_VELOCITY - 1.0,
+        "after ~10 s the fall should be at (near) terminal velocity, got {:.4}",
+        vz.abs()
+    );
+}
+
+/// Gap 7 — 2nd-order airborne integration. With gravity carried as an
+/// acceleration and the `0.5·a·t²` position term restored, a free
+/// fall integrated as `n` slices of equal quantum must match the
+/// closed form `z(t) = z0 - 0.5·9.8·t²` exactly (no clamp engaged at
+/// these speeds), confirming the position uses the OLD velocity plus
+/// the half-step before the velocity update. Mirrors ACE's
+/// `movement = Acceleration*0.5*q*q + Velocity*q; Velocity += Acceleration*q`
+/// (`PhysicsObj.cs:1854-1858`).
+#[test]
+fn second_order_airborne_matches_closed_form_half_a_t_squared() {
+    let mut world = WorldState::synthetic();
+    let start_z = 500.0_f32;
+    let (mut movement, _start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AC0), start_z);
+
+    // Integrate 1.0 s as ten MAX_QUANTUM (0.1 s) slices. At these
+    // speeds (peak ~9.8 m/s) the terminal clamp never engages, so the
+    // result is the pure 2nd-order free-fall arc.
+    let n = 10;
+    let q = 0.1_f32;
+    for _ in 0..n {
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(q));
+    }
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    let t = n as f32 * q; // 1.0 s
+    let g = 9.8_f32;
+    // Closed form for a 2nd-order (exact for constant acceleration,
+    // independent of slice count) free fall from rest:
+    //   z(t) = z0 - 0.5·g·t²
+    let expected_z = start_z - 0.5 * g * t * t;
+    assert!(
+        (after.coords.z - expected_z).abs() < 1e-2,
+        "2nd-order fall over {t:.2}s should land at z = z0 - 0.5·g·t² = {expected_z:.4}, \
+         got {:.4} (Δ={:.5})",
+        after.coords.z,
+        (after.coords.z - expected_z).abs()
+    );
+    // Velocity should be exactly -g·t (1st-order in velocity).
+    let expected_vz = -g * t;
+    assert!(
+        (world.player.vertical_velocity - expected_vz).abs() < 1e-3,
+        "vertical velocity after {t:.2}s should be -g·t = {expected_vz:.4}, got {:.4}",
+        world.player.vertical_velocity
+    );
+}
+
+/// Gap 7 regression guard — the 2nd-order position term is what
+/// distinguishes the new integrator from the old 1st-order symplectic
+/// Euler. A single 0.1 s slice from rest must drop by the 2nd-order
+/// amount `0.5·g·q²` (≈ 0.049 m), NOT the old symplectic-Euler amount
+/// `(g·q)·q` = `g·q²` (≈ 0.098 m, since the old code updated velocity
+/// first then used the NEW velocity for position).
+#[test]
+fn second_order_single_slice_uses_half_step_not_full_step() {
+    let mut world = WorldState::synthetic();
+    let start_z = 500.0_f32;
+    let (mut movement, _start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AD0), start_z);
+
+    let q = 0.1_f32;
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(q));
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    let g = 9.8_f32;
+    let drop = start_z - after.coords.z;
+    let second_order = 0.5 * g * q * q; // ~0.049 m
+    let first_order = g * q * q; // ~0.098 m (old behaviour)
+    assert!(
+        (drop - second_order).abs() < 1e-4,
+        "single-slice drop should be the 2nd-order 0.5·g·q² = {second_order:.5} m, \
+         got {drop:.5} m (1st-order symplectic Euler would be {first_order:.5} m)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Physics deep-dive 2026-06-01 — step-up / step-down (handoff gap 3).
+// The grounded floor-snap path now follows small drops down within the
+// per-object step-down height (1.5 m for the player body) and only falls
+// off genuine ledges beyond it, replacing the legacy 0.5 m
+// `LEDGE_FALL_THRESHOLD_M` heuristic when `USE_STEP_UP_DOWN` is set.
+// These tests exercise the WIRED outdoor terrain path through
+// `advance_local_pose_for_manual_drive`; the pure threshold decisions
+// are unit-tested in `holtburger-world` `spatial::physics::tests`.
+// ---------------------------------------------------------------------------
+
+/// Seed a grounded outdoor player whose retained Z sits `drop` metres
+/// above a uniform terrain plane, then run one grounded run-forward
+/// tick. Returns the post-tick pose plus the airborne flag so the
+/// caller can assert snap-down vs. fall. The heightmap is uniform so
+/// the move direction is irrelevant — only the retained-Z-vs-terrain
+/// delta drives the step-down decision.
+fn run_grounded_step_down_tick(guid: Guid, retained_z: f32, terrain_z: f32) -> (WorldPosition, bool) {
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    // Landblock 0xA9B4 is outdoor (low 16 bits 0x0001 < 0x0100); place
+    // the player mid-LB so the move doesn't rebucket. Retained Z is set
+    // ABOVE the terrain so the floor snap sees a descent this tick.
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(100.0, 100.0, retained_z),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    // Uniform terrain plane under the whole landblock (0xA9B4_0000 is
+    // the LB key used by `terrain_height_at`, derived from the high
+    // word of the landblock id).
+    world.populate_terrain_heights(0xA9B4_0000, [terrain_z; 81]);
+    // Grounded forward run (a freshly seeded player is not airborne).
+    assert!(
+        !world.player.is_airborne,
+        "freshly seeded player should be grounded for the step-down path"
+    );
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    (after, world.player.is_airborne)
+}
+
+/// Gap 3 — a drop within `PLAYER_STEP_DOWN_HEIGHT` (1.5 m) snaps the
+/// feet down to follow the surface and keeps the player grounded,
+/// rather than going ballistic at the legacy 0.5 m threshold. A 1.2 m
+/// drop is beyond the old 0.5 m fall threshold but within the player's
+/// 1.5 m step-down, so it must SNAP (not fall).
+#[test]
+fn step_down_within_step_height_snaps_and_stays_grounded() {
+    let retained_z = 10.0_f32;
+    let terrain_z = 8.8_f32; // 1.2 m drop: > 0.5 (old) but <= 1.5 (step-down)
+    let (after, airborne) = run_grounded_step_down_tick(Guid(0x5000_03D0), retained_z, terrain_z);
+    assert!(
+        !airborne,
+        "a {:.1} m drop is within the 1.5 m step-down and must NOT trigger a fall",
+        retained_z - terrain_z
+    );
+    assert!(
+        (after.coords.z - terrain_z).abs() < 1e-3,
+        "step-down must snap Z to the terrain ({terrain_z:.3}), got {:.3}",
+        after.coords.z
+    );
+}
+
+/// Gap 3 — a drop beyond `PLAYER_STEP_DOWN_HEIGHT` (1.5 m) is a real
+/// ledge: the player begins a fall and Z is left for the gravity
+/// integrator (not snapped to the distant terrain). A 2.5 m drop must
+/// FALL.
+#[test]
+fn step_down_beyond_step_height_falls_off_ledge() {
+    let retained_z = 10.0_f32;
+    let terrain_z = 7.5_f32; // 2.5 m drop: > 1.5 step-down → ledge
+    let (after, airborne) = run_grounded_step_down_tick(Guid(0x5000_03D1), retained_z, terrain_z);
+    assert!(
+        airborne,
+        "a {:.1} m drop exceeds the 1.5 m step-down and must trigger a fall",
+        retained_z - terrain_z
+    );
+    // Z must NOT have been snapped down to the far terrain — the
+    // gravity integrator owns the drop from here. The first airborne
+    // slice applies a tiny 2nd-order drop (~sub-cm at 100 ms), so the
+    // pose stays near the retained Z, far above the 7.5 m terrain.
+    assert!(
+        after.coords.z > terrain_z + 1.0,
+        "ledge fall must leave Z near the retained height ({retained_z:.1}), not snap to \
+         the {terrain_z:.1} m terrain; got {:.3}",
         after.coords.z
     );
 }

@@ -5,12 +5,131 @@ use super::{
     physics::sample_mode_for_projection_state,
 };
 use crate::entity::EntityMotionSnapshot;
-use holtburger_common::position::WorldPosition;
+use holtburger_common::position::{METERS_PER_LANDBLOCK, WorldPosition};
 use holtburger_common::{Aabb, Frustum, Guid, Triangle, Vector3};
 use holtburger_dat::file_type::SkyDesc;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use web_time::Instant;
+
+/// Physics deep-dive 2026-06-01 (gap 4) — constrain the local player's
+/// integrator working pose toward a sub-snap server force-position
+/// instead of fully preserving it.
+///
+/// `true` (default): on an inbound LOCAL-player force-position in
+/// Snapshot mode while mid-simulation, [`SpatialScene::reconcile_
+/// authoritative_body`] pulls `body.pose` toward the forced pose by a
+/// per-tick capped correction (a single-step constraint pull standing
+/// in for retail's `PositionManager::InterpolateTo`/`ConstrainTo`).
+/// The next AutonomousPosition heartbeat therefore reports a pose that
+/// has converged toward the server, killing the small persistent
+/// rubberband instead of re-asserting the drifted pose forever.
+///
+/// `false`: the pre-2026-06-01 behaviour — the working pose is fully
+/// preserved on every Snapshot reconcile and only the JS dead-reckon
+/// layer ever converges the avatar. Retained for A/B comparison.
+const USE_LOCAL_FORCE_POSITION_CONSTRAINT: bool = true;
+
+/// Physics deep-dive 2026-06-01 (gap 4) — retail autonomy-blip /
+/// constraint-leash distances for the local-player force-position
+/// reconcile. Mirrors the decompiled client:
+///
+/// - **Blip (snap) distance** — `CPhysicsObj::GetAutonomyBlipDistance`
+///   (`acclient.c:315...`, ACE `PhysicsObj.cs:545-550`): `100.0` outdoor
+///   (cell `< 0x100`), `25.0` indoor for the player. Beyond this the
+///   gap is too large to be a small rubberband — it's a routine
+///   far-LB UpdatePosition broadcast or a teleport-class correction. We
+///   leave the working pose untouched there (the academy-rubberband fix
+///   invariant; teleport-class corrections come through the
+///   `Reset`/`Suspended` path, not this Snapshot path).
+/// - **Constraint-leash start distance** —
+///   `CPhysicsObj::GetStartConstraintDistance` (`acclient.c:315885`):
+///   `5.0` indoor / `10.0` outdoor for the player. A sub-leash gap is
+///   pulled fully to the target this tick (`ConstrainTo` collapsing a
+///   small offset); a gap between the leash and the blip is pulled in
+///   by at most one leash per reconcile, so it converges over several
+///   heartbeats instead of snapping.
+/// - **Deadband** — `InterpolationManager` early-outs (and
+///   `adjust_offset` calls `NodeCompleted`) once the object is within
+///   `0.05 m` of the target (`InterpolationManager.cs:48,209,244`); we
+///   leave the working pose untouched inside this band so heartbeats go
+///   quiet instead of jittering around the target.
+const BLIP_SNAP_DISTANCE_INDOOR_M: f32 = 25.0;
+const BLIP_SNAP_DISTANCE_OUTDOOR_M: f32 = 100.0;
+const CONSTRAINT_LEASH_INDOOR_M: f32 = 5.0;
+const CONSTRAINT_LEASH_OUTDOOR_M: f32 = 10.0;
+const RECONCILE_DEADBAND_M: f32 = 0.05;
+
+/// Constraint-pull the integrator working pose `current` toward the
+/// server-forced `target`, returning the corrected pose. Indoor/outdoor
+/// awareness comes from `target` (the cell the server is forcing us
+/// into):
+/// - distance `<= deadband` → leave `current` untouched (already there).
+/// - distance `> blip` → leave `current` untouched: too large to be a
+///   small rubberband, so this is a routine far-LB broadcast (academy
+///   fix) — teleport-class corrections take the `Reset`/`Suspended` hard
+///   path, not this one.
+/// - otherwise → move toward `target` by at most one constraint-leash;
+///   a sub-leash gap collapses onto `target` this tick. Only the origin
+///   is pulled — the integrator owns heading, and the forced rotation is
+///   still recorded as the authoritative pose by the caller.
+fn constrain_local_pose_toward(current: WorldPosition, target: WorldPosition) -> WorldPosition {
+    let indoor = target.is_indoors();
+    let blip = if indoor {
+        BLIP_SNAP_DISTANCE_INDOOR_M
+    } else {
+        BLIP_SNAP_DISTANCE_OUTDOOR_M
+    };
+    let leash = if indoor {
+        CONSTRAINT_LEASH_INDOOR_M
+    } else {
+        CONSTRAINT_LEASH_OUTDOOR_M
+    };
+
+    let distance = current.distance_to(&target);
+    if distance <= RECONCILE_DEADBAND_M || distance > blip {
+        // Within the InterpolationManager dead-band (no meaningful
+        // drift) or beyond the autonomy-blip radius (not a small
+        // rubberband — preserve the working pose): keep `current`.
+        return current;
+    }
+
+    // Sub-blip, above the dead-band: pull toward the target along the
+    // global-space offset, capped at one constraint-leash. When the gap
+    // is already within the leash we land exactly on the target this
+    // tick (matching ConstrainTo collapsing a small offset).
+    let from = current.global_coords();
+    let to = target.global_coords();
+    let offset = to - from;
+    let length = offset.length();
+    if length <= leash || length <= EPSILON {
+        // Adopt the target origin (+ rotation) wholesale — the leash
+        // doesn't bind, so we converge this tick.
+        return target;
+    }
+
+    let step = offset * (leash / length);
+    let stepped_global = from + step;
+    // Re-express the stepped global position in `target`'s landblock so
+    // the pull doesn't change which landblock the working pose reports
+    // mid-correction; the server already told us the destination block.
+    let (target_lb_x, target_lb_y) = target.landblock_coords();
+    let local = Vector3::new(
+        stepped_global.x - (target_lb_x as f32 * METERS_PER_LANDBLOCK),
+        stepped_global.y - (target_lb_y as f32 * METERS_PER_LANDBLOCK),
+        stepped_global.z,
+    );
+    WorldPosition {
+        landblock_id: target.landblock_id,
+        coords: local,
+        // Keep the integrator's working heading; the forced rotation is
+        // captured in `authoritative_pose` by the caller. (Retail's
+        // InterpolateTo keeps heading when the cmdinterp asks it to.)
+        rotation: current.rotation,
+    }
+}
+
+const EPSILON: f32 = 1e-4;
 
 #[derive(Debug, Clone)]
 pub(crate) struct BodySamplingStore {
@@ -1240,7 +1359,21 @@ impl SpatialScene {
         body.motion_state = None;
         body.sampling.last_authoritative_update = now;
         body.sampling.last_derived_at = now;
-        if !preserve_local_runtime_pose {
+        if preserve_local_runtime_pose {
+            // Physics deep-dive 2026-06-01 (gap 4): the local player is
+            // mid-simulation and the server force-positioned us. Rather
+            // than fully preserve the (possibly drifted) integrator
+            // working pose — which left the next heartbeat re-asserting
+            // the drift forever — pull `body.pose` toward the forced
+            // pose by a capped per-tick correction so the rubberband
+            // converges over a few heartbeats. The sampling mode stays
+            // on the simulating value so the integrator keeps driving;
+            // only the working origin is nudged. (Far-enough corrections
+            // still hard-blip; see `constrain_local_pose_toward`.)
+            if USE_LOCAL_FORCE_POSITION_CONSTRAINT {
+                body.pose = constrain_local_pose_toward(body.pose, pose);
+            }
+        } else {
             body.pose = pose;
             body.sampling.mode = mode;
         }

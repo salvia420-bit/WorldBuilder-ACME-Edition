@@ -404,6 +404,54 @@ pub(super) const PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC: f32 = 0.25;
 /// visible, fast enough to not feel sluggish.
 pub(super) const PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ: f32 = 8.0;
 
+// ---------------------------------------------------------------------------
+// Quantum-subdivided integration loop constants (physics deep-dive
+// 2026-06-01, gaps 1 + 7).
+//
+// These mirror ACE's `PhysicsGlobals` 1:1 — the readable 1:1 port of
+// retail's `update_object` timestep gate (`external/ACE/Source/
+// ACE.Server/Physics/PhysicsObj.cs:4140-4190`,
+// `PhysicsGlobals.cs:13,30,38,41,43`). The wasm-side authoritative
+// integrator previously consumed the raw, unbounded per-frame rAF
+// `dt` and integrated exactly once, so a tab-refocus / GC / driver
+// throttle hitch over-integrated a fall in one giant step (the
+// documented "~25 m/s overshoot"). Wrapping the per-frame step in
+// the clamp-and-subdivide loop below bounds the per-slice motion to
+// `MAX_QUANTUM`, terminal-clamps velocity to `MAX_VELOCITY`, and
+// drops a `HUGE_QUANTUM`-or-larger hitch entirely — matching retail.
+//
+// We intentionally do NOT reach into ACE for these values; they are
+// defined here so the crate is self-contained.
+
+/// Minimum integration slice in seconds. ACE floors the per-frame
+/// remainder at this value and skips integrating a slice smaller than
+/// it (`PhysicsGlobals.MinQuantum = 1.0f / 30.0f`,
+/// `PhysicsObj.cs:4182`). 1/30 s ≈ 0.0333 s (30 fps).
+pub(super) const MIN_QUANTUM: f32 = 1.0 / 30.0;
+
+/// Maximum integration slice in seconds. ACE subdivides every frame
+/// into `<= MAX_QUANTUM` slices (`PhysicsGlobals.MaxQuantum = 0.1f`,
+/// `PhysicsObj.cs:4175-4180`). 0.1 s = 10 fps; any frame longer than
+/// this is integrated as a sequence of 0.1 s slices so a single long
+/// frame cannot over-integrate gravity in one step.
+pub(super) const MAX_QUANTUM: f32 = 0.1;
+
+/// Frame duration above which the whole frame is dropped (no
+/// integration). ACE returns early and consumes the time without
+/// advancing the object (`PhysicsGlobals.HugeQuantum = 2.0f`,
+/// `PhysicsObj.cs:4169-4173`). A hitch this large (>= 2 s — tab
+/// backgrounded, long GC, debugger pause) would otherwise teleport a
+/// falling player; retail simply skips it and lets the next frame /
+/// server correction resync.
+pub(super) const HUGE_QUANTUM: f32 = 2.0;
+
+/// Terminal velocity clamp in m/s. ACE clamps the total velocity
+/// magnitude to this every quantum inside `UpdatePhysicsInternal`
+/// (`PhysicsGlobals.MaxVelocity = 50.0f`,
+/// `PhysicsObj.cs:1843-1846`). A long fall would otherwise accelerate
+/// unbounded; retail caps it at 50 m/s.
+pub(super) const MAX_VELOCITY: f32 = 50.0;
+
 /// Cap for run-scaled sidestep speed in m/s, per retail
 /// `CMotionInterp::apply_run_to_command` case `SideStepRight`
 /// (`~/ac-headers/acclient.c:343471-343481`) and ACE's
@@ -415,6 +463,23 @@ pub(super) const PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ: f32 = 8.0;
 /// only SideStepLeft/Right exist), so retail handles "shift+strafe"
 /// purely through speed scaling on the existing motion code.
 const SIDESTEP_RUN_SPEED_CAP_M_PER_SEC: f32 = 3.0;
+
+/// Backstep magnitude factor relative to the walk-forward base speed,
+/// per retail. ACE's `MotionInterp.adjust_motion` rewrites
+/// `WalkBackwards` to `WalkForward` with `speed *= -BackwardsFactor`
+/// (`external/ACE/Source/ACE.Server/Physics/Animation/MotionInterp.cs:404-406`,
+/// `BackwardsFactor = 6.4999998e-1f` at line 26; decomp cross-check
+/// `~/ac-headers/acclient.c:343466`). `get_state_velocity` then computes
+/// `velocity.Y = WalkAnimSpeed * ForwardSpeed` for a `WalkForward`
+/// command (`MotionInterp.cs:684-685`), so the backstep magnitude is
+/// `WalkAnimSpeed * BackwardsFactor` (3.12 * 0.65 ≈ 2.03 m/s) — i.e. the
+/// walk-forward base speed scaled by this factor. There is no
+/// `RunBackward*` MotionCommand (`MotionCommand.cs:13-23`); the Run gait
+/// instead applies the `run_factor` on top via `apply_run_to_command`'s
+/// `WalkForward` arm (`MotionInterp.cs:539-543`, which leaves the command
+/// `WalkForward` because the rewritten speed is negative and only
+/// `speed > 0` promotes to `RunForward`).
+const BACKWARDS_FACTOR: f32 = 0.649_999_98;
 
 /// Wave 2 Phase 2.1 (2026-05-26) + Phase 2.2 (2026-05-26): per-axis speed
 /// magnitude used by `local_velocity_for_state` to compose forward +
@@ -432,6 +497,17 @@ const SIDESTEP_RUN_SPEED_CAP_M_PER_SEC: f32 = 3.0;
 /// independent slot lookups so W+D can return non-zero speeds on BOTH
 /// axes simultaneously and the integrator composes the diagonal.
 ///
+/// GAP 5 (2026-06-01) — backstep magnitude correction. The pre-fix arms
+/// returned the bare `run_rate_scalar` (~4.5) for `(Run, Backstep)` and
+/// `1.0` for `(Walk, Backstep)` — misusing a dimensionless run-rate
+/// multiplier as a raw m/s magnitude. Retail backstep is the walk-forward
+/// base speed scaled by `BackwardsFactor` (`WalkAnimSpeed * 0.65 ≈ 2.03`
+/// m/s for the canonical walk base), and the Run gait additionally applies
+/// the `run_factor` (`run_rate_scalar`) on top — see `BACKWARDS_FACTOR`.
+/// We derive the magnitude from `base_walk_forward_speed()` so backstep
+/// stays consistent with however the walk-forward base is sourced (the
+/// separate walk-forward-magnitude question is out of scope here).
+///
 /// Sidestep additionally clamps at ±3.0 m/s per retail
 /// (`acclient.c:343474-343480` + `MotionInterp.cs:550-560`).
 fn forward_axis_speed(state: MotionState, capabilities: &SelfMovementCapabilities) -> f32 {
@@ -439,8 +515,12 @@ fn forward_axis_speed(state: MotionState, capabilities: &SelfMovementCapabilitie
         (_, None) => 0.0,
         (Gait::Run, Some(ForwardLocomotion::Forward)) => capabilities.resolved_manual_run_speed(),
         (Gait::Walk, Some(ForwardLocomotion::Forward)) => capabilities.base_walk_forward_speed(),
-        (Gait::Run, Some(ForwardLocomotion::Backstep)) => capabilities.run_rate_scalar,
-        (Gait::Walk, Some(ForwardLocomotion::Backstep)) => 1.0,
+        (Gait::Run, Some(ForwardLocomotion::Backstep)) => {
+            capabilities.base_walk_forward_speed() * BACKWARDS_FACTOR * capabilities.run_rate_scalar
+        }
+        (Gait::Walk, Some(ForwardLocomotion::Backstep)) => {
+            capabilities.base_walk_forward_speed() * BACKWARDS_FACTOR
+        }
     }
 }
 
@@ -482,9 +562,10 @@ pub(super) fn local_velocity_for_state(
             ForwardLocomotion::Forward => current_heading,
             ForwardLocomotion::Backstep => normalize_heading(current_heading + PI),
         };
-        // Backstep uses 1.0 magnitude pre-Phase-2.1; the scaling lives in
-        // `forward_axis_speed`. For the forward case the magnitude is the
-        // resolved walk/run speed.
+        // Backstep magnitude (walk-base × BackwardsFactor, run-scaled
+        // for the Run gait) is computed in `forward_axis_speed`; here we
+        // only flip the heading 180°. For the forward case the magnitude
+        // is the resolved walk/run speed.
         let magnitude = match forward {
             ForwardLocomotion::Forward => forward_speed,
             ForwardLocomotion::Backstep => forward_speed,
@@ -761,5 +842,65 @@ mod tests {
         assert!(raw.flags.contains(RawMotionFlags::SIDE_STEP_COMMAND));
         assert_eq!(raw.sidestep_command, Some(SIDESTEP_RIGHT_MOTION_COMMAND));
         assert_eq!(raw.sidestep_speed, Some(1.0));
+    }
+
+    /// GAP 5 (2026-06-01) — backstep speed parity. Capabilities whose
+    /// walk-forward base is the retail `WalkAnimSpeed = 3.12` m/s, so the
+    /// backstep magnitude lands on the retail target `3.12 * 0.65 ≈ 2.03`
+    /// m/s. (The shared `test_capabilities()` uses a walk base of `1.0`,
+    /// which the other tests rely on; this helper isolates the retail
+    /// number without disturbing them.)
+    fn retail_walk_base_capabilities(run_rate_scalar: f32) -> SelfMovementCapabilities {
+        SelfMovementCapabilities {
+            kinematics: SelfMovementKinematics {
+                source: PlayerMotionTableSource::DirectProperty {
+                    motion_table_id: 0x0900_0001,
+                },
+                motion_table_id: 0x0900_0001,
+                stance: MotionStance::NonCombat as u32,
+                // Retail WalkAnimSpeed = 3.1199999 m/s.
+                base_walk_forward_velocity: Vector3::new(0.0, 3.12, 0.0),
+                base_run_forward_velocity: Vector3::new(0.0, 4.0, 0.0),
+                base_turn_left_omega: Vector3::new(0.0, 0.0, -1.5),
+                base_turn_right_omega: Vector3::new(0.0, 0.0, 1.5),
+            },
+            run_rate_scalar,
+        }
+    }
+
+    /// GAP 5 — walk backstep is `WalkAnimSpeed * BackwardsFactor`
+    /// (`3.12 * 0.65 ≈ 2.03` m/s), NOT the dimensionless `1.0` the
+    /// pre-fix arm returned as raw m/s. Walk backstep is not run-scaled.
+    #[test]
+    fn walk_backstep_magnitude_is_walk_base_times_backwards_factor() {
+        let capabilities = retail_walk_base_capabilities(1.0);
+        let state = MotionState::builder().walk().backstep().build();
+
+        let velocity = local_velocity_for_state(0.0, state, &capabilities);
+        let expected = 3.12 * BACKWARDS_FACTOR; // ≈ 2.028
+        assert!(
+            (velocity.length() - expected).abs() < 1e-4,
+            "walk backstep speed expected ≈ {expected:.4} m/s (3.12 * 0.65), got {:.4}",
+            velocity.length(),
+        );
+    }
+
+    /// GAP 5 — run backstep is the walk backstep magnitude additionally
+    /// scaled by the `run_rate_scalar` (run_factor): `3.12 * 0.65 *
+    /// run_factor`. The pre-fix arm returned the bare `run_rate_scalar`
+    /// (~4.5) as raw m/s — both the constant and the scaling were wrong.
+    #[test]
+    fn run_backstep_magnitude_is_walk_backstep_times_run_factor() {
+        let run_factor = 2.0;
+        let capabilities = retail_walk_base_capabilities(run_factor);
+        let state = MotionState::builder().run().backstep().build();
+
+        let velocity = local_velocity_for_state(0.0, state, &capabilities);
+        let expected = 3.12 * BACKWARDS_FACTOR * run_factor; // ≈ 2.028 * 2.0
+        assert!(
+            (velocity.length() - expected).abs() < 1e-4,
+            "run backstep speed expected ≈ {expected:.4} m/s (3.12 * 0.65 * {run_factor}), got {:.4}",
+            velocity.length(),
+        );
     }
 }
