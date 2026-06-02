@@ -223,8 +223,25 @@ pub fn clamp_delta_against_buildings(
     delta: Vector3,
     radius: f32,
 ) -> Vector3 {
+    let (clamped, _) = clamp_delta_against_buildings_with_normal(candidates, pose, delta, radius);
+    clamped
+}
+
+/// 2026-06-02 outdoor edge/cliff-slide (Phase 6 follow-on): apply
+/// swept-sphere clamp + single-iteration slide and ALSO return the XY
+/// contact-plane normal of the AABB face the sweep hit (pointing away
+/// from the wall), or `None` when no wall blocked the move. Mirrors the
+/// indoor per-poly clamp's `(delta, Option<normal>)` shape so the
+/// integrator's edge_slide / cliff_slide stages can fire outdoors when
+/// `USE_OUTDOOR_WALL_NORMALS` is enabled.
+pub fn clamp_delta_against_buildings_with_normal(
+    candidates: &[BuildingAabbEntry],
+    pose: &WorldPosition,
+    delta: Vector3,
+    radius: f32,
+) -> (Vector3, Option<Vector3>) {
     let Some(hit) = sweep_sphere_against_aabbs(candidates, pose, delta, radius) else {
-        return delta;
+        return (delta, None);
     };
     let backoff = 1e-3;
     let safe_t = (hit.t - backoff / delta.length().max(1e-6)).max(0.0);
@@ -232,8 +249,9 @@ pub fn clamp_delta_against_buildings(
     let remaining = delta * (1.0 - safe_t);
     let into_normal = remaining.dot(&hit.normal);
     let slide = remaining - hit.normal * into_normal;
+    let wall_normal = hit.normal; // Surface the hit normal for edge/cliff-slide.
     if slide.length_squared() <= 1e-10 {
-        return stopped_delta;
+        return (stopped_delta, Some(wall_normal));
     }
     let slide_pose = WorldPosition {
         landblock_id: pose.landblock_id,
@@ -248,7 +266,7 @@ pub fn clamp_delta_against_buildings(
         Some(slide_hit) => slide * (slide_hit.t - backoff / slide.length().max(1e-6)).max(0.0),
         None => slide,
     };
-    stopped_delta + slide_clamped
+    (stopped_delta + slide_clamped, Some(wall_normal))
 }
 
 /// Phase 6 follow-on (academy rubberband, 2026-05-10): clamp a

@@ -244,6 +244,17 @@ const USE_RAMP_FLOOR_SNAP_FIX: bool = true;
 /// the flat-tri slide. See the module-doc DEFERRED block.
 const USE_PHYSICS_BSP: bool = false;
 
+/// 2026-06-02 outdoor building-wall edge/cliff-slide (Phase 6 follow-on):
+/// gate for enabling edge-slide / cliff-slide on outdoor building AABB
+/// walls, not just indoor cell polygon walls. When OFF (DEFAULT) the
+/// outdoor building clamp returns no wall normal and both stages stay
+/// indoor-only, preserving the shipped solver's byte-identical behaviour.
+/// When ON, the outdoor sweep's AABB face normal is captured into
+/// `cell_wall_normal` (then `last_known_wall_normal`) so the refused
+/// step-up slide and seam-skid fire outdoors too. See
+/// `clamp_delta_against_buildings_with_normal`.
+const USE_OUTDOOR_WALL_NORMALS: bool = false;
+
 /// Physics deep-dive 2026-06-01 (gap 1) — bound + subdivide a raw
 /// per-frame `dt` (seconds) into the integration-slice schedule,
 /// mirroring ACE's `update_object` timestep gate
@@ -1355,6 +1366,18 @@ impl MovementSystem {
             let candidates = world.scene.building_aabbs_near_pose(&pose);
             if candidates.is_empty() {
                 lateral
+            } else if USE_OUTDOOR_WALL_NORMALS {
+                let (clamped, normal) =
+                    holtburger_world::spatial::clamp_delta_against_buildings_with_normal(
+                        &candidates,
+                        &pose,
+                        lateral,
+                        holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                    );
+                // Surface the wall normal for the edge_slide / cliff_slide
+                // stages, mirroring the indoor polygon-clamp path above.
+                cell_wall_normal = normal;
+                clamped
             } else {
                 holtburger_world::spatial::clamp_delta_against_buildings(
                     &candidates,
