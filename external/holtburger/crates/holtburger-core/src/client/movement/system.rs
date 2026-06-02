@@ -149,6 +149,30 @@ const AUTONOMOUS_POSE_HEADING_EPSILON_RAD: f32 = 0.0035;
 /// low-risk fidelity without touching the contested knob.
 const USE_RETAIL_GROUND_FRICTION: bool = false;
 
+/// 2026-06-02 indoor floor-pop fix — gate the ramped/multi-level
+/// floor-Z resolution in the `else` arm of
+/// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
+///
+/// `true` (default): split the floor-Z snap into two sources. The
+/// up-snap fires only on a *real* per-poly triangle floor
+/// ([`holtburger_world::spatial::highest_floor_z_under`]); the cell
+/// AABB's `min.z` is demoted to a last-resort *lower bound* that only
+/// catches a player whose retained Z has dropped below the whole cell
+/// (true fall-through). On a ramp/stair cell where
+/// `highest_floor_z_under` returns `None` (XY in a tread seam, sparse
+/// poly set, or an unbaked segment), the retained Z is preserved
+/// instead of being yanked down to the cell minimum. Symmetric with the
+/// friction contact-plane projection, which already treats "no per-poly
+/// floor under me" (`floor_normal_under == None`) as "keep what I have"
+/// via the `(0,0,1)` no-op fallback.
+///
+/// `false`: the pre-2026-06-02 behaviour — `highest_floor_z_under(...)
+/// .or_else(|| aabb.min.z)` feeds a single combined `floor_z` into the
+/// unconditional `pose.coords.z < floor + 0.005` up-snap, popping the
+/// player to the cell's lowest floor whenever the per-poly query misses.
+/// Retained for A/B comparison.
+const USE_RAMP_FLOOR_SNAP_FIX: bool = true;
+
 /// Physics deep-dive 2026-06-01 (gap 1) — bound + subdivide a raw
 /// per-frame `dt` (seconds) into the integration-slice schedule,
 /// mirroring ACE's `update_object` timestep gate
@@ -1599,10 +1623,14 @@ impl MovementSystem {
             // 2026-05-10 indoor floor-Z: prefer per-polygon raycast
             // (`highest_floor_z_under`) when the cell's
             // `physics_polygons` are loaded — handles stairs and
-            // ramps accurately. Fall back to `cell_aabb.min.z` when
-            // they aren't (initial seconds after landblock entry,
-            // before the lazy physics bake completes), so the
-            // player still has a floor to stand on.
+            // ramps accurately. The cell AABB's `min.z` is the
+            // last-resort lower bound (initial seconds after landblock
+            // entry, before the lazy physics bake completes; or the XY
+            // off the floor footprint) so the player still doesn't
+            // fall through the world — but, under
+            // `USE_RAMP_FLOOR_SNAP_FIX`, it is never used as an up-snap
+            // target (which would pop the player to the cell minimum on
+            // a ramp); see the flag doc.
             let cell_id = world.scene.current_cell(&pose);
             let global = pose.global_coords();
             let triangles = world.scene.cell_triangles(cell_id);
@@ -1615,26 +1643,72 @@ impl MovementSystem {
             let ceiling_for_floor_query = cell_aabb
                 .map(|a| a.max.z + 1.0)
                 .unwrap_or(pose.coords.z + 100.0);
-            let floor_z = if !triangles.is_empty() {
+            // 2026-06-02 indoor floor-pop fix: a *real* per-poly
+            // triangle floor is the only valid up-snap source. On a
+            // ramped/multi-level cell `highest_floor_z_under` returns
+            // `None` whenever the XY lands in a gap between floor
+            // triangles (tread seams, a sparse poly set, an unbaked
+            // segment). The pre-fix code `.or_else(|| aabb.min.z)`'d
+            // that into the up-snap, collapsing the player to the
+            // cell's LOWEST floor (`aabb.min.z` is the whole-cell
+            // minimum, not the floor under the player). `aabb.min.z`
+            // is now a last-resort *lower bound* only — it can catch a
+            // player who has fallen through, but it never pushes the
+            // player DOWN to the cell minimum on a ramp.
+            let poly_floor_z = if !triangles.is_empty() {
                 holtburger_world::spatial::highest_floor_z_under(
                     triangles,
                     global.x,
                     global.y,
                     ceiling_for_floor_query,
                 )
-                .or_else(|| cell_aabb.map(|a| a.min.z))
             } else {
-                cell_aabb.map(|a| a.min.z)
+                None
             };
-            if let Some(floor) = floor_z {
-                let snap_z = floor + 0.005; // 5 mm headroom; matches AC
-                if pose.coords.z < snap_z {
-                    pose.coords.z = snap_z;
-                    // Indoor landing: snap-up triggered while airborne
-                    // → touchdown. Outdoor analog above uses
-                    // `world.player.land()` likewise.
-                    if world.player.is_airborne {
-                        world.player.land();
+            // Lower bound used both by the fall-through guard and the
+            // ceiling clamp's `floor_min`. With the fix on, the AABB
+            // minimum is purely a floor (never an up-snap target);
+            // with it off we reproduce the legacy combined-Option.
+            let aabb_floor_z = cell_aabb.map(|a| a.min.z);
+            if USE_RAMP_FLOOR_SNAP_FIX {
+                // Snap UP only to a real per-poly floor.
+                if let Some(floor) = poly_floor_z {
+                    let snap_z = floor + 0.005; // 5 mm headroom; matches AC
+                    if pose.coords.z < snap_z {
+                        pose.coords.z = snap_z;
+                        // Indoor landing: snap-up triggered while
+                        // airborne → touchdown. Outdoor analog above
+                        // uses `world.player.land()` likewise.
+                        if world.player.is_airborne {
+                            world.player.land();
+                        }
+                    }
+                }
+                // Fall-through guard: `aabb.min.z` is the last-resort
+                // *lower bound* only. Never pushes the player DOWN — it
+                // only catches a retained Z that has dropped below the
+                // entire cell floor (true fall-through), which also
+                // covers the bake window where only the AABB is baked.
+                if let Some(aabb_min) = aabb_floor_z {
+                    let cell_floor = aabb_min + 0.005;
+                    if pose.coords.z < cell_floor {
+                        pose.coords.z = cell_floor;
+                        if world.player.is_airborne {
+                            world.player.land();
+                        }
+                    }
+                }
+            } else {
+                // Legacy: combined per-poly-or-AABB up-snap (pops to the
+                // cell minimum when the per-poly query misses).
+                let floor_z = poly_floor_z.or(aabb_floor_z);
+                if let Some(floor) = floor_z {
+                    let snap_z = floor + 0.005; // 5 mm headroom; matches AC
+                    if pose.coords.z < snap_z {
+                        pose.coords.z = snap_z;
+                        if world.player.is_airborne {
+                            world.player.land();
+                        }
                     }
                 }
             }
@@ -1647,7 +1721,14 @@ impl MovementSystem {
             if let Some(aabb) = cell_aabb {
                 let ceiling_z =
                     aabb.max.z - holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT;
-                let floor_min = floor_z.unwrap_or(aabb.min.z + 0.005);
+                // `floor_min` keeps the ceiling clamp from shoving the
+                // player below the floor. Prefer the real per-poly
+                // floor; otherwise the AABB lower bound. Matches the
+                // legacy `floor_z.unwrap_or(aabb.min.z + 0.005)` (the
+                // raw floor value, no headroom, exactly as before).
+                let floor_min = poly_floor_z
+                    .or(aabb_floor_z)
+                    .unwrap_or(aabb.min.z + 0.005);
                 if pose.coords.z > ceiling_z {
                     pose.coords.z = ceiling_z.max(floor_min);
                 }

@@ -2278,6 +2278,168 @@ fn advance_local_pose_for_manual_drive_indoor_floor_snap_lifts_from_below() {
     );
 }
 
+/// 2026-06-02 indoor floor-pop fix (`USE_RAMP_FLOOR_SNAP_FIX`) — on a
+/// ramped/multi-level cell where only the AABB is baked (no per-poly
+/// floor triangle under the player's XY, the tread-seam / sparse-poly
+/// case `highest_floor_z_under` returns `None` for), a player whose
+/// RETAINED Z is well above `aabb.min.z` must NOT be yanked down to the
+/// cell minimum. The pre-fix `.or_else(|| aabb.min.z)` collapsed the
+/// up-snap onto the cell's lowest floor; the fix keeps the retained Z.
+///
+/// Then, once a real per-poly floor triangle arrives under the player,
+/// the normal floor-snap resumes (lifts a below-floor Z up to
+/// `floor + 0.005`).
+///
+/// Finally, a genuine fall-through (retained Z below the entire cell)
+/// still gets the AABB lower-bound safety snap so the player can't fall
+/// through the world during the bake window.
+#[test]
+fn indoor_ramp_floor_snap_keeps_retained_z_until_triangles_arrive() {
+    assert!(
+        USE_RAMP_FLOOR_SNAP_FIX,
+        "this test pins the default-on ramp floor-pop fix"
+    );
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_088B);
+    world.player.guid = player_guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+
+    let cell_landblock = Guid(0x8602_0100);
+    let cell_id = u32::from(cell_landblock);
+
+    // Player is standing on a RAMP, partway up: retained Z = 5.0 m,
+    // well above the cell's lowest floor. The cell AABB bottom is the
+    // foot of the ramp at z = 1.0 (so the pre-fix code would pop the
+    // player from 5.0 down to 1.005).
+    let start_pose = WorldPosition {
+        landblock_id: cell_landblock,
+        coords: Vector3::new(50.0, 50.0, 5.0),
+        rotation: Quaternion::identity(),
+    };
+    let global = start_pose.global_coords();
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    // AABB only — no per-poly triangles yet (lazy bake not complete, or
+    // the XY lands in a gap between sparse ramp polys). Tall cell so the
+    // ceiling clamp never engages on the retained Z.
+    let cell_aabb = holtburger_common::Aabb {
+        min: holtburger_common::Vector3::new(global.x - 5.0, global.y - 5.0, 1.0),
+        max: holtburger_common::Vector3::new(global.x + 5.0, global.y + 5.0, 40.0),
+    };
+    world.scene.insert_cell_aabb(cell_id, cell_aabb);
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    // THE FIX: retained Z (5.0) preserved — NOT popped to aabb.min.z +
+    // 0.005 (1.005). Grounded with vz = 0, no per-poly floor → keep Z.
+    assert!(
+        after.coords.z > 4.99,
+        "ramp floor-pop fix: AABB-only cell must KEEP retained Z (~5.0), \
+         not yank it down to aabb.min.z + 0.005 (1.005); got {:.4}",
+        after.coords.z
+    );
+
+    // --- Triangles arrive: normal floor-snap resumes ---
+    // Bake a real, near-flat floor triangle under the player at z = 5.2
+    // (a tread). Drop the player's retained Z just below it so the
+    // per-poly up-snap fires.
+    let floor_z = 5.2_f32;
+    // Big enough to cover the player's XY (and the ~0.45 m of forward
+    // travel in one 100 ms run tick).
+    let tri = holtburger_common::Triangle::new(
+        holtburger_common::Vector3::new(global.x - 5.0, global.y - 5.0, floor_z),
+        holtburger_common::Vector3::new(global.x + 5.0, global.y - 5.0, floor_z),
+        holtburger_common::Vector3::new(global.x, global.y + 5.0, floor_z),
+    );
+    world.scene.insert_cell_triangle(cell_id, tri);
+
+    // Seed the retained Z just below the new floor so the snap-up has
+    // work to do.
+    let below_floor = WorldPosition {
+        landblock_id: cell_landblock,
+        coords: Vector3::new(50.0, 50.0, floor_z - 0.3),
+        rotation: Quaternion::identity(),
+    };
+    let _ = world.set_player_position(below_floor);
+
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+    let after_tri = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    assert!(
+        (after_tri.coords.z - (floor_z + 0.005)).abs() < 1e-3,
+        "with a per-poly floor present, the snap must resume: Z should be \
+         floor + 5 mm ({:.4}), got {:.4}",
+        floor_z + 0.005,
+        after_tri.coords.z
+    );
+}
+
+/// 2026-06-02 indoor floor-pop fix — the AABB lower-bound safety snap
+/// still catches a GENUINE fall-through: an AABB-only cell where the
+/// retained Z has dropped BELOW the whole cell floor must be lifted to
+/// `aabb.min.z + 0.005` (the bake-window protection the legacy fallback
+/// provided). The fix demotes `aabb.min.z` from an up-snap target to a
+/// lower bound, but the lower bound still fires when the player is below
+/// it.
+#[test]
+fn indoor_aabb_only_below_cell_floor_still_gets_safety_snap() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_088C);
+    world.player.guid = player_guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+
+    let cell_landblock = Guid(0x8602_0100);
+    let cell_id = u32::from(cell_landblock);
+    // Retained Z is BELOW the cell floor (post-relocate z≈0 vs floor at
+    // 1.0) — a real fall-through the lower-bound guard must catch.
+    let start_pose = WorldPosition {
+        landblock_id: cell_landblock,
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    let global = start_pose.global_coords();
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    let cell_aabb = holtburger_common::Aabb {
+        min: holtburger_common::Vector3::new(global.x - 5.0, global.y - 5.0, 1.0),
+        max: holtburger_common::Vector3::new(global.x + 5.0, global.y + 5.0, 4.0),
+    };
+    world.scene.insert_cell_aabb(cell_id, cell_aabb);
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    assert!(
+        (after.coords.z - 1.005).abs() < 1e-3,
+        "fall-through safety snap: a below-cell-floor Z must lift to \
+         aabb.min.z + 5 mm (1.005), got {:.4}",
+        after.coords.z
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Physics deep-dive 2026-06-01 — quantum-subdivided integration loop
 // (handoff gaps 1 + 7). The raw per-frame `dt` is bounded + subdivided
@@ -2699,5 +2861,210 @@ fn edge_slide_no_normal_stops_dead() {
     assert_eq!(
         slid, lateral_clamped,
         "without a wall normal there is no tangent to slide along"
+    );
+}
+
+// ---- step-UP (gap 3, WIRED) ----------------------------------------------
+//
+// The pure `step_up_decision` threshold is unit-tested in `holtburger-world`
+// `spatial::physics::tests`, and the WIRED step-DOWN path is covered above
+// (`step_down_*`). These two tests close the remaining gap: the WIRED step-UP
+// path through `advance_local_pose_for_manual_drive`, where a blocked grounded
+// run probes the floor at the intended (un-clamped) destination and either
+// climbs onto a short riser (rise <= `PLAYER_STEP_UP_HEIGHT`) or stays blocked
+// against a tall one.
+//
+// Harness note: the capsule radius (0.4) is essentially the per-tick run move
+// (~0.43 m at steady state), so a HARD lateral block makes the buggy/fixed
+// intended-destination converge — there is no clean differential off the
+// blocked clamp alone. Instead we build a ROBUST setup: the lateral block
+// comes from the cell-AABB inset (the player starts pinned to the +Y inset
+// edge so a forward +Y run is fully clamped), and a SEPARATE near-flat riser
+// floor triangle sits ONLY over the +Y intended destination (never under the
+// start XY, so the start floor-snap can't pre-lift the player). The riser top
+// is the only thing that distinguishes a climb from a stay-blocked, so the
+// assertions key off Z rising AND the full lateral being taken vs. the
+// zero-lateral blocked clamp.
+
+/// Build an indoor cell where a grounded forward run is laterally blocked by
+/// the cell-AABB inset, with a near-flat riser floor triangle whose top sits
+/// `rise` metres above the player's feet over the intended (un-clamped)
+/// destination. Seeds the local player at steady-state forward velocity, drives
+/// ONE grounded 100 ms run tick, and returns `(start_pose, after_pose,
+/// airborne)`.
+///
+/// Geometry. The identity rotation reads as heading 90° (North) via
+/// `Quaternion::to_heading`, so the forward run drives world +Y, per
+/// `planar_velocity_for_heading(π/2, v) = (-cos 90·v, sin 90·v, 0) = (0, v, 0)`:
+///   - Player local `(50, 50, 2.0)` in cell `0x86020100` (indoor: low word
+///     `0x0100`). `global = (0x86*192+50, 0x02*192+50, 2.0)`.
+///   - Cell AABB `max.y = global.y + radius` so the inset max.y lands exactly
+///     on the player's Y: any +Y move clamps to zero (full block ⇒ `blocked`).
+///   - Riser triangle: a flat horizontal floor at `z = feet + rise` whose XY
+///     footprint covers only `[global.y + 0.2, global.y + 2.0]` (strictly +Y of
+///     the start), so it is the floor at the intended destination but NOT under
+///     the start — the start keeps its retained Z.
+fn run_grounded_step_up_tick(guid: Guid, rise: f32) -> (WorldPosition, WorldPosition, bool) {
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+
+    // Indoor cell (low word 0x0100 ⇒ `is_indoors()`); `current_cell` falls
+    // back to `landblock_id.0` when 3D-AABB containment misses, so keying the
+    // AABB + triangles under this same id keeps the floor probe robust even
+    // after the climb lifts the player's Z above the cell box.
+    let cell_landblock = Guid(0x8602_0100);
+    let cell_id = u32::from(cell_landblock);
+
+    let feet_z = 2.0_f32;
+    let start_pose = WorldPosition {
+        landblock_id: cell_landblock,
+        coords: Vector3::new(50.0, 50.0, feet_z),
+        rotation: Quaternion::identity(),
+    };
+    let global = start_pose.global_coords();
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    let radius = holtburger_world::spatial::PLAYER_CAPSULE_RADIUS; // 0.4
+    // AABB whose inset max.y (= max.y - radius) lands on the player's Y, so a
+    // forward +Y run is clamped to zero. min.z well below feet (so the
+    // lower-bound safety snap never fires); max.z tall (no ceiling clamp).
+    let cell_aabb = holtburger_common::Aabb {
+        min: holtburger_common::Vector3::new(global.x - 5.0, global.y - 5.0, 0.0),
+        max: holtburger_common::Vector3::new(global.x + 5.0, global.y + radius, 10.0),
+    };
+    world.scene.insert_cell_aabb(cell_id, cell_aabb);
+
+    // Near-flat riser: a horizontal floor (normal ≈ (0,0,1), so the wall clamp
+    // skips it and the floor probe accepts it) at z = feet + rise, covering
+    // only the +Y destination strip. Two triangles make a rectangle spanning
+    // global.y ∈ [global.y + 0.2, global.y + 2.0], global.x ∈ [global.x - 2,
+    // global.x + 2] — the intended dest (global.x, ~global.y + 0.43) lands
+    // inside, the start (global.x, global.y) does not.
+    let riser_z = feet_z + rise;
+    let y_near = global.y + 0.2;
+    let y_far = global.y + 2.0;
+    let x_lo = global.x - 2.0;
+    let x_hi = global.x + 2.0;
+    let v00 = holtburger_common::Vector3::new(x_lo, y_near, riser_z);
+    let v10 = holtburger_common::Vector3::new(x_hi, y_near, riser_z);
+    let v11 = holtburger_common::Vector3::new(x_hi, y_far, riser_z);
+    let v01 = holtburger_common::Vector3::new(x_lo, y_far, riser_z);
+    world
+        .scene
+        .insert_cell_triangle(cell_id, holtburger_common::Triangle::new(v00, v10, v11));
+    world
+        .scene
+        .insert_cell_triangle(cell_id, holtburger_common::Triangle::new(v00, v11, v01));
+
+    // Steady-state forward velocity so the requested lateral move is a healthy
+    // ~0.43 m (not the ~0.08 m of a cold-start ramp tick) — the blocked gap is
+    // then unambiguously a wall, not slide jitter. Forward run ⇒ +Y.
+    world.player.current_planar_velocity = holtburger_common::Vector3::new(0.0, 4.5, 0.0);
+    assert!(
+        !world.player.is_airborne,
+        "freshly seeded player must be grounded for the step-up path"
+    );
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    (start_pose, after, world.player.is_airborne)
+}
+
+/// Gap 3 (WIRED step-UP) — a grounded run blocked laterally by a riser whose
+/// walkable top is within `PLAYER_STEP_UP_HEIGHT` (0.6 m) of the feet CLIMBS:
+/// the player's Z rises onto the riser AND the full intended lateral move is
+/// taken (more than the zero-lateral blocked clamp alone would allow). Mirrors
+/// retail `Transition.StepUp`.
+#[test]
+fn step_up_within_step_height_climbs_riser_through_integrator() {
+    assert!(
+        USE_STEP_UP_DOWN,
+        "this test pins the default-on step-up/step-down path"
+    );
+    let rise = 0.5_f32; // <= PLAYER_STEP_UP_HEIGHT (0.6) ⇒ climb
+    assert!(
+        rise <= holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT,
+        "test riser must be within the step-up height"
+    );
+    let (start, after, airborne) = run_grounded_step_up_tick(Guid(0x5000_03E0), rise);
+
+    // Climbing is a ground action — the player stays grounded.
+    assert!(!airborne, "step-up must not go airborne; got airborne={airborne}");
+
+    // Z rose onto the riser top (feet + rise), within the 5 mm floor-snap
+    // headroom the indoor snap adds after the climb.
+    let expected_z = start.coords.z + rise;
+    assert!(
+        (after.coords.z - (expected_z + 0.005)).abs() < 5e-3,
+        "step-up must raise Z onto the riser top (~{:.3}); got {:.3}",
+        expected_z + 0.005,
+        after.coords.z
+    );
+
+    // Lateral: the player took the FULL intended +Y move, not the zero-lateral
+    // blocked clamp. Steady-state run ⇒ ~0.43 m of +Y travel; require a clear,
+    // unambiguous slice (well above the slide-jitter floor) so this can't pass
+    // on a stopped-dead block.
+    let lateral_moved = after.coords.y - start.coords.y; // forward run is +Y
+    assert!(
+        lateral_moved > 0.2,
+        "climb must take the full intended lateral move (~0.43 m +Y), not the \
+         zero-lateral blocked clamp; Δy = {lateral_moved:.4}"
+    );
+
+    // X is unchanged (pure forward run, no strafe).
+    assert!(
+        (after.coords.x - start.coords.x).abs() < 1e-3,
+        "forward-only run must not drift X; got Δx = {:.4}",
+        after.coords.x - start.coords.x
+    );
+}
+
+/// Gap 3 (WIRED step-UP) — a riser TALLER than `PLAYER_STEP_UP_HEIGHT` (0.6 m)
+/// is a real wall: the step-up is refused, and with the lateral block coming
+/// from the AABB (which surfaces no wall normal) the refused move stops dead.
+/// The player neither climbs (Z stays at the feet) nor advances laterally (the
+/// blocked clamp is zero), mirroring retail's `Transition.StepUp` cap at
+/// `ObjectInfo.StepUpHeight`.
+#[test]
+fn step_up_beyond_step_height_stays_blocked_through_integrator() {
+    let rise = 0.9_f32; // > PLAYER_STEP_UP_HEIGHT (0.6) ⇒ refused
+    assert!(
+        rise > holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT,
+        "test riser must exceed the step-up height"
+    );
+    let (start, after, airborne) = run_grounded_step_up_tick(Guid(0x5000_03E1), rise);
+
+    // Refused step-up is a ground interaction, not a fall.
+    assert!(!airborne, "refused step-up must not go airborne; got airborne={airborne}");
+
+    // Z did NOT climb onto the tall riser — the riser top (feet + 0.9) is
+    // above the step-up ceiling, so the floor probe rejects it and Z stays at
+    // the feet (no per-poly floor under the start to snap to either).
+    assert!(
+        (after.coords.z - start.coords.z).abs() < 1e-3,
+        "a riser taller than the step-up height must NOT climb: Z should stay \
+         at the feet ({:.3}); got {:.3}",
+        start.coords.z,
+        after.coords.z
+    );
+
+    // Lateral stayed blocked: the AABB clamp zeroed the +Y move and, with no
+    // wall normal, the refused step-up stopped dead (no tangent recovery).
+    let lateral_moved = (after.coords.y - start.coords.y).abs();
+    assert!(
+        lateral_moved < 0.05,
+        "a refused step-up against the AABB block must stop dead laterally; \
+         |Δy| = {lateral_moved:.4}"
     );
 }

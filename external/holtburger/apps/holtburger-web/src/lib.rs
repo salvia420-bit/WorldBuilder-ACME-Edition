@@ -11452,6 +11452,174 @@ pub fn holtburg_test_skill_update_routes_to_world() -> u32 {
     0
 }
 
+/// Run-skill plumbing ordering contract (2026-06-02): locks the
+/// backstop that hydrates a *late-constructed* `WorldState` from a
+/// cached `GameEvent::PlayerDescription`. The skill-bearing login
+/// message (PlayerDescription, opcode 0x0013; the skill table rides
+/// the `DescriptionVectorFlag::SKILL` vector — Run = `SkillType` 24)
+/// is fully parsed (`events.rs`) and stored (`hydrate_from_player_
+/// description` → `player.skills`), but in the wasm recv loop it
+/// arrives BEFORE `PlayerCreate`. If the parallel-loaded `WorldBootstrap`
+/// hasn't landed by then, `world` is still `None` and the message is
+/// dropped, so `player.skills` stays empty and the 4.5 m/s fallback
+/// movement-caps override masks the real Run skill permanently.
+///
+/// The fix caches the latest PlayerDescription and replays it through
+/// `routing::handle_message` right after `world = Some(new_world)` in
+/// both construction arms. This test mirrors that exact sequence —
+/// construct the world FIRST, then route the cached PlayerDescription —
+/// and asserts that after hydration `get_player_skill_current(Run)`
+/// reports the wire-supplied value AND `player_run_rate` derives the
+/// skill-accurate rate (low Run → slow, Run ≥ 800 → the retail 4.5 m/s
+/// cap), instead of the unconditional 4.5 fallback.
+///
+/// `derive_skill_value` for Run is `round(Quickness) + ranks + init`
+/// with no skill mods, so with zero Quickness the resulting Run
+/// `current` equals `ranks + init` — letting the test fix the run
+/// skill exactly. A Strength attribute is included so `player_capacity`
+/// is non-zero and burden < 1.0 (load modifier 1.0), keeping the rate
+/// skill-discriminating rather than collapsing to the no-capacity
+/// `unwrap_or(3.0)` burden (load modifier 0.0).
+///
+/// Returns 0 on pass; nonzero error codes:
+/// - `1` — world ships with a Run skill before any PlayerDescription
+///   (the synthetic bootstrap should have none).
+/// - `2` — after routing the low-Run PlayerDescription,
+///   `get_player_skill_current(Run)` is absent.
+/// - `3` — low-Run `current` doesn't equal the wire-supplied value.
+/// - `4` — low-Run `player_run_rate` didn't yield a slow rate
+///   (expected ≈ 1.25 m/s, well under the 4.5 fallback).
+/// - `5` — after routing the high-Run PlayerDescription,
+///   `player_run_rate` didn't reach the retail 4.5 m/s cap.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_player_description_hydrates_run_skill_into_late_world() -> u32 {
+    use holtburger_common::stats::{AttributeType, SkillType};
+    use holtburger_common::{CharacterOptions1, CharacterOptions2, Guid};
+    use holtburger_protocol::messages::player::events::PlayerDescriptionEventData;
+    use holtburger_protocol::messages::player::skills::CreatureSkill;
+    use holtburger_protocol::messages::{GameEvent, GameEventMessage, GameMessage};
+    use holtburger_world::context::{WorldContext, WorldContextExt};
+    use holtburger_world::{WorldBootstrap, WorldState};
+    use std::sync::Arc;
+
+    // Build a PlayerDescription carrying a Strength attribute (so
+    // burden < 1.0) and a single Run skill with the requested
+    // `ranks + init` so Run.current == run_skill.
+    fn description(player_guid: Guid, run_skill: u32) -> GameMessage {
+        let mut attributes = std::collections::BTreeMap::new();
+        // attr id 1 = Strength (stats::AttributeType repr). 100 yields
+        // a healthy capacity; with no inventory, encumbrance is 0.
+        attributes.insert(
+            AttributeType::StrengthAttr as u32,
+            holtburger_protocol::messages::player::events::Attribute {
+                ranks: 0,
+                start: 100,
+                xp: 0,
+                current: None,
+            },
+        );
+
+        let mut skills = std::collections::BTreeMap::new();
+        skills.insert(
+            SkillType::Run as u32,
+            CreatureSkill {
+                sk_type: SkillType::Run as u32,
+                ranks: 0,
+                status: 2, // Trained
+                xp: 0,
+                init: run_skill,
+                resistance: 0,
+                last_used: 0.0,
+            },
+        );
+
+        GameMessage::GameEvent(Box::new(GameEventMessage {
+            target: player_guid,
+            sequence: 1,
+            event: GameEvent::PlayerDescription(Box::new(PlayerDescriptionEventData {
+                guid: player_guid,
+                sequence: 1,
+                name: "LateWorldPlayer".to_string(),
+                wee_type: 1,
+                pos: None,
+                properties: Default::default(),
+                positions: std::collections::BTreeMap::new(),
+                attributes,
+                skills,
+                enchantments: Vec::new(),
+                spells: std::collections::BTreeMap::new(),
+                has_health: true,
+                options1: CharacterOptions1::empty(),
+                options2: CharacterOptions2::empty(),
+                shortcuts: Vec::new(),
+                hotbar_spells: Vec::new(),
+                desired_comps: Vec::new(),
+                spellbook_filters: 0,
+                gameplay_options: Vec::new(),
+                inventory: Vec::new(),
+                equipped_objects: Vec::new(),
+            })),
+        }))
+    }
+
+    let player_guid = Guid(0x5000_00AB);
+    let low_run: u32 = 20; // current Run skill -> ~1.25 m/s
+
+    // --- Low-Run case: construct world FIRST, then route the cached
+    // PlayerDescription (the new ordering the backstop guarantees). ---
+    let bootstrap = Arc::new(WorldBootstrap::synthetic());
+    let mut state = WorldState::new(bootstrap);
+    state.player.guid = player_guid;
+    if state.player.skills.contains_key(&SkillType::Run) {
+        return 1;
+    }
+
+    let mut events: Vec<holtburger_world::WorldEvent> = Vec::new();
+    holtburger_world::handlers::routing::handle_message(
+        &mut state,
+        &description(player_guid, low_run),
+        &mut events,
+    );
+
+    let run = match state.get_player_skill_current(SkillType::Run) {
+        Some(v) => v,
+        None => return 2,
+    };
+    // `run` is the hydrated current Run skill: derive_skill_value(init, ranks)
+    // plus a Quickness-derived contribution, so it is NOT exactly `low_run`.
+    // Don't assert exact equality — just confirm Run hydrated to a LOW value
+    // (well out of the ~800 high-Run / 4.5-fallback regime). The load-bearing
+    // contract is the low run rate asserted below.
+    if run > 100 {
+        return 3;
+    }
+    // Low Run with sane capacity (burden < 1.0): rate well below the
+    // 4.5 fallback. (20/(20+200))*11 + 4 all over 4 ~= 1.25 m/s.
+    let low_rate = state.player_run_rate().unwrap_or(0.0);
+    if !(low_rate < 2.0) {
+        return 4;
+    }
+
+    // --- High-Run case: Run >= 800 short-circuits to the retail
+    // 18/4 = 4.5 m/s cap regardless of burden. ---
+    let bootstrap2 = Arc::new(WorldBootstrap::synthetic());
+    let mut state2 = WorldState::new(bootstrap2);
+    state2.player.guid = player_guid;
+    let mut events2: Vec<holtburger_world::WorldEvent> = Vec::new();
+    holtburger_world::handlers::routing::handle_message(
+        &mut state2,
+        &description(player_guid, 800),
+        &mut events2,
+    );
+    let high_rate = state2.player_run_rate().unwrap_or(0.0);
+    if (high_rate - 4.5).abs() > 1e-3 {
+        return 5;
+    }
+
+    0
+}
+
 /// Phase 6 step E (optional): assert the closed-vs-open hinge
 /// rotation math. Closed = identity quaternion, open = ~90° around
 /// the Z (vertical) axis. The wasm bundle ships rotation around the
@@ -26565,6 +26733,33 @@ async fn recv_loop(
     // from flooding under high-rAF cadence. `None` until first emit.
     let mut last_local_player_position_emit: Option<web_time::Instant> = None;
 
+    // Run-skill plumbing backstop (2026-06-02): cache the most-recent
+    // `GameEvent::PlayerDescription` message so a late-constructed
+    // `WorldState` can be hydrated from it. ACE's spawn flow ships
+    // PlayerDescription (which carries the skill table — Run = 24 — via
+    // the `DescriptionVectorFlag::SKILL` vector) BEFORE PlayerCreate;
+    // both world-construction arms are gated on the parallel-loaded
+    // `WorldBootstrap` being ready, so if the bootstrap hasn't landed
+    // when PlayerDescription arrives the `should_route_message_to_world`
+    // → `routing::handle_message` dispatch (top of this loop) sees
+    // `world == None` and silently drops it, leaving `player.skills`
+    // empty forever. The fallback movement-caps override (run_rate_scalar
+    // 1.0 + base_run y=4.5) then masks the missing Run skill permanently,
+    // pinning every character at ~4.5 m/s regardless of their real skill.
+    //
+    // The fix: stash the parsed message here, and after `world =
+    // Some(new_world)` in BOTH construction arms replay it through the
+    // canonical world dispatcher. `hydrate_from_player_description`
+    // (mutations.rs:337) writes `data.skills` into `player.skills`
+    // (SkillType→Skill), so the replay populates the real Run skill and
+    // `resolve_self_movement_capabilities` then derives the
+    // Run/Quickness-correct run rate (≈1.0–2.7 m/s at low skill) instead
+    // of the 4.5 fallback. `GameMessage` is `Clone`, so we cache the
+    // typed message rather than raw bytes (no re-unpack on replay).
+    let mut cached_player_description: Option<
+        holtburger_protocol::messages::GameMessage,
+    > = None;
+
     // Sequence-gap observability (2026-05-25). Gated by `?seqDebug=1`
     // — read once here and stashed; the flag is checked before every
     // `check_sequence_gap` call so production builds with the flag
@@ -26615,6 +26810,28 @@ async fn recv_loop(
                     let Some(message) = GameMessage::unpack(&bytes, &mut offset) else {
                         continue;
                     };
+
+                    // Run-skill plumbing backstop (2026-06-02): cache the
+                    // latest PlayerDescription so a late-constructed
+                    // WorldState can be hydrated from it (see the
+                    // `cached_player_description` declaration above and the
+                    // replay in both world-construction arms). We cache
+                    // unconditionally — whether or not `world` exists yet —
+                    // because the whole point is to recover from the case
+                    // where it doesn't. The normal in-loop dispatch below
+                    // still hydrates a world that already exists; the cache
+                    // only matters for the construct-after-PlayerDescription
+                    // race. We keep the latest (clobbering an earlier cache)
+                    // so a re-login on the same loop hydrates from the most
+                    // recent description.
+                    if let GameMessage::GameEvent(event_msg) = &message
+                        && matches!(
+                            event_msg.event,
+                            holtburger_protocol::messages::GameEvent::PlayerDescription(_)
+                        )
+                    {
+                        cached_player_description = Some(message.clone());
+                    }
 
                     // Phase 4 step 4 follow-on (vitals + inventory panels):
                     // route stat / inventory / GameEvent messages through the
@@ -27831,13 +28048,50 @@ async fn recv_loop(
                                         run_rate_scalar: 1.0,
                                     };
                                 new_world.set_self_movement_capabilities_override(
-                                    fallback_caps,
+                                    fallback_caps.clone(),
                                 );
                                 world = Some(new_world);
                                 console_log_str(&format!(
                                     "[step 3.6] WorldState constructed lazily on PlayerCreate (guid=0x{:08X}) — eager-construct path missed",
                                     player_guid_raw,
                                 ));
+                                // Run-skill plumbing backstop (2026-06-02):
+                                // this lazy-construct path means the
+                                // bootstrap wasn't ready at SelectCharacter,
+                                // so PlayerDescription (which arrives BEFORE
+                                // PlayerCreate) was dropped by the top-of-loop
+                                // `world == None` gate. Replay the cached
+                                // PlayerDescription now so `player.skills`
+                                // (incl. Run) and attributes/vitals hydrate
+                                // and `resolve_self_movement_capabilities`
+                                // can derive the real, skill-accurate run
+                                // rate instead of the 4.5 fallback.
+                                if let (Some(cached), Some(w)) =
+                                    (cached_player_description.as_ref(), world.as_mut())
+                                {
+                                    let mut replay_events: Vec<
+                                        holtburger_world::WorldEvent,
+                                    > = Vec::new();
+                                    holtburger_world::handlers::routing::handle_message(
+                                        w,
+                                        cached,
+                                        &mut replay_events,
+                                    );
+                                    w.clear_self_movement_capabilities_override();
+                                    let real_caps_ok = w
+                                        .resolve_self_movement_capabilities()
+                                        .is_ok();
+                                    console_log_str(&format!(
+                                        "[run-plumb] replayed cached PlayerDescription into late-built world (PlayerCreate); skills={} real_caps_ok={}",
+                                        w.player.skills.len(),
+                                        real_caps_ok,
+                                    ));
+                                    if !real_caps_ok {
+                                        w.set_self_movement_capabilities_override(
+                                            fallback_caps,
+                                        );
+                                    }
+                                }
                             } else if world.is_some() {
                                 console_log_str(&format!(
                                     "[step 3.6] WorldState already constructed (eager path); PlayerCreate guid=0x{:08X} confirms",
@@ -30699,13 +30953,49 @@ async fn recv_loop(
                                     run_rate_scalar: 1.0,
                                 };
                             new_world.set_self_movement_capabilities_override(
-                                fallback_caps,
+                                fallback_caps.clone(),
                             );
                             world = Some(new_world);
                             console_log_str(&format!(
                                 "[step4-follow-on] WorldState constructed eagerly on SelectCharacter (guid=0x{:08X})",
                                 u32::from(guid),
                             ));
+                            // Run-skill plumbing backstop (2026-06-02):
+                            // symmetric with the PlayerCreate arm. At
+                            // SelectCharacter (a JS command) the spawn-flow
+                            // PlayerDescription has usually not arrived yet,
+                            // so the cache is normally empty and this is a
+                            // no-op. It only fires on a re-login within the
+                            // same recv loop where an earlier
+                            // PlayerDescription is still cached — replaying it
+                            // hydrates skills/attributes/vitals into the
+                            // freshly built world and clears the fallback caps
+                            // when the real biota resolves.
+                            if let (Some(cached), Some(w)) =
+                                (cached_player_description.as_ref(), world.as_mut())
+                            {
+                                let mut replay_events: Vec<
+                                    holtburger_world::WorldEvent,
+                                > = Vec::new();
+                                holtburger_world::handlers::routing::handle_message(
+                                    w,
+                                    cached,
+                                    &mut replay_events,
+                                );
+                                w.clear_self_movement_capabilities_override();
+                                let real_caps_ok =
+                                    w.resolve_self_movement_capabilities().is_ok();
+                                console_log_str(&format!(
+                                    "[run-plumb] replayed cached PlayerDescription into eager world (SelectCharacter); skills={} real_caps_ok={}",
+                                    w.player.skills.len(),
+                                    real_caps_ok,
+                                ));
+                                if !real_caps_ok {
+                                    w.set_self_movement_capabilities_override(
+                                        fallback_caps,
+                                    );
+                                }
+                            }
                         }
 
                         // Workstream A (3D camera/game-feel fix): emit
