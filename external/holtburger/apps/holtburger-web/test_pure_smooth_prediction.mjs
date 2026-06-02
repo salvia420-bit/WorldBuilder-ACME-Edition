@@ -163,9 +163,9 @@ const { CameraSwitcher, createOrthoCamera } = factoryEnv;
 // advances `localY` each tick (simulating the authoritative Rust
 // integrator stepping forward). Pure-smoothing converts (localX, localY,
 // landblockId) → world coords identically to loop.js. -----------------
+// LB id high bytes (0xa9, 0xb4) are the landblock X/Y the camera decodes
+// into world coords (lbX*192 + localX); the test drives via lbId directly.
 const LB_ID = 0xa9b40000;
-const lbX = (LB_ID >>> 24) & 0xff; // 0xa9
-const lbY = (LB_ID >>> 16) & 0xff; // 0xb4
 let localX = 100.0;
 let localY = 50.0;
 let lbId = LB_ID;

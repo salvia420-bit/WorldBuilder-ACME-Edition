@@ -2399,7 +2399,7 @@ fn quantum_slices_drops_huge_quantum_hitch() {
 #[test]
 fn two_second_hitch_produces_bounded_fall_not_teleport() {
     let mut world = WorldState::synthetic();
-    let (mut movement, start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AA0), 500.0);
+    let (movement, start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AA0), 500.0);
 
     // 2.0 s == HugeQuantum: NOT dropped, subdivided into 20 slices.
     movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(2.0));
@@ -2438,7 +2438,7 @@ fn two_second_hitch_produces_bounded_fall_not_teleport() {
 fn terminal_velocity_clamps_vertical_speed_at_fifty() {
     let mut world = WorldState::synthetic();
     // Start very high so the (terrain-less) free fall never lands.
-    let (mut movement, _start_pose) =
+    let (movement, _start_pose) =
         seed_airborne_player(&mut world, Guid(0x5000_0AB0), 100_000.0);
 
     // Drive ~10 s of fall in 0.1 s frames (each a single MAX_QUANTUM
@@ -2476,7 +2476,7 @@ fn terminal_velocity_clamps_vertical_speed_at_fifty() {
 fn second_order_airborne_matches_closed_form_half_a_t_squared() {
     let mut world = WorldState::synthetic();
     let start_z = 500.0_f32;
-    let (mut movement, _start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AC0), start_z);
+    let (movement, _start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AC0), start_z);
 
     // Integrate 1.0 s as ten MAX_QUANTUM (0.1 s) slices. At these
     // speeds (peak ~9.8 m/s) the terminal clamp never engages, so the
@@ -2522,7 +2522,7 @@ fn second_order_airborne_matches_closed_form_half_a_t_squared() {
 fn second_order_single_slice_uses_half_step_not_full_step() {
     let mut world = WorldState::synthetic();
     let start_z = 500.0_f32;
-    let (mut movement, _start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AD0), start_z);
+    let (movement, _start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AD0), start_z);
 
     let q = 0.1_f32;
     movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(q));

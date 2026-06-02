@@ -169,6 +169,14 @@ const TOPDOWN_HEIGHT_M = 300.0;
 const TOPDOWN_ZOOM_MIN = 0.2;
 const TOPDOWN_ZOOM_MAX = 8.0;
 
+/**
+ * Pure-smoothing reconcile: hard-snap the predicted pose to the integrator
+ * when they diverge by more than this (metres) within a single landblock —
+ * a server force-position rubberband. Matches the legacy `> 5 m` reconcile
+ * snap so a large correction teleports instead of oozing over ~tau ms.
+ */
+const PRED_SMOOTH_SNAP_DIST_M = 5.0;
+
 /** Round a real to its sign-clamped int8. */
 function clampSign(v) {
   if (v > 1e-3) return 1;
@@ -1272,6 +1280,24 @@ export class CameraSwitcher {
       return;
     }
     this._predPrevLandblockId = target.landblockId;
+
+    // Large within-landblock correction (server force-position rubberband,
+    // or the very first ease after a snap) — hard-snap instead of easing.
+    // An exponential ease across several metres would visibly slide the
+    // avatar over ~tau ms. Mirrors the legacy `> 5 m` reconcile branch
+    // (the LB-crossing check above only catches teleports that change the
+    // landblock id; a big same-landblock correction would otherwise ooze).
+    {
+      const dx = target.x - this.predictedPlayerPos.x;
+      const dy = target.y - this.predictedPlayerPos.y;
+      const dz = target.z - this.predictedPlayerPos.z;
+      if (dx * dx + dy * dy + dz * dz > PRED_SMOOTH_SNAP_DIST_M * PRED_SMOOTH_SNAP_DIST_M) {
+        this.predictedPlayerPos.x = target.x;
+        this.predictedPlayerPos.y = target.y;
+        this.predictedPlayerPos.z = target.z;
+        return;
+      }
+    }
 
     // Framerate-independent exponential ease toward the integrator pose.
     // dt is clamped (matches the legacy advance path's 100 ms cap) so a

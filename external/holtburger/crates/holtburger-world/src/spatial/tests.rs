@@ -1182,31 +1182,11 @@ mod collision {
     #[test]
     fn clamp_delta_against_cell_walls_stops_at_wall_and_slides() {
         use holtburger_common::Triangle;
-        // Vertical wall at y=2, spanning x ∈ [0, 4], z ∈ [0, 4].
-        // Two triangles to fill the rectangle.
-        let wall_a = Triangle::new(
-            Vector3::new(0.0, 2.0, 0.0),
-            Vector3::new(4.0, 2.0, 0.0),
-            Vector3::new(0.0, 2.0, 4.0),
-        );
-        let wall_b = Triangle::new(
-            Vector3::new(4.0, 2.0, 0.0),
-            Vector3::new(4.0, 2.0, 4.0),
-            Vector3::new(0.0, 2.0, 4.0),
-        );
-        let walls = [wall_a, wall_b];
-        // LB 0x0102 → world origin (192, 384). Player at local
-        // (1, 0, 1) → world (193, 384, 1). Pushing toward +Y at
-        // y=2 wall.
-        let pose = WorldPosition {
-            landblock_id: Guid(0x0102_0000),
-            coords: Vector3::new(193.0 - 192.0, 0.0, 1.0),
-            rotation: Quaternion::identity(),
-        };
-        // Walk +Y by 5 m. Wall is at world.y=2 (NOT the local 2 +
-        // 384 — let me redo).
-        // Re-pick coords so the wall is in world space:
-        // Adjust the walls to world coords compatible with this LB.
+        // Vertical wall in WORLD space at y = 384.5, spanning
+        // x ∈ [192, 196], z ∈ [0, 4]. LB 0x0102 → world origin
+        // (192, 384); player at local (2, 0, 1) → world (194, 384, 1)
+        // sits 0.5 m on the -Y side, walking +Y into the wall. Two
+        // triangles fill the rectangle.
         let wall_y_world = 384.5_f32;
         let wall_a = Triangle::new(
             Vector3::new(192.0, wall_y_world, 0.0),

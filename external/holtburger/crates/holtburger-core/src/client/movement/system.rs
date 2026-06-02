@@ -1120,8 +1120,14 @@ impl MovementSystem {
                 let intended = holtburger_common::position::WorldPosition {
                     landblock_id: pose.landblock_id,
                     coords: Vector3::new(
-                        pose.coords.x - lateral_clamped.x + lateral.x,
-                        pose.coords.y - lateral_clamped.y + lateral.y,
+                        // `pose.coords` is still THIS tick's start position
+                        // here (lateral_clamped/lateral are only applied to
+                        // it below), so the un-clamped intended destination
+                        // is start + the full requested lateral move. The
+                        // earlier `- lateral_clamped` terms wrongly probed
+                        // start + the *blocked* portion instead.
+                        pose.coords.x + lateral.x,
+                        pose.coords.y + lateral.y,
                         pose.coords.z,
                     ),
                     rotation: pose.rotation,
