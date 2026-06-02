@@ -19,7 +19,7 @@ use holtburger_protocol::messages::game_message::RawMotionState;
 use holtburger_protocol::messages::movement::{InterpretedMotionCommand, MotionItem};
 use holtburger_session::Session;
 use holtburger_world::SolveBodyInput;
-use holtburger_world::spatial::{LocalDriveControl, LocalDriveGait};
+use holtburger_world::spatial::{InterpStep, LocalDriveControl, LocalDriveGait};
 use holtburger_world::{SpatialBodyId, WorldEvent, WorldState};
 use std::time::Duration;
 use web_time::Instant;
@@ -2002,6 +2002,25 @@ impl MovementSystem {
         // landblock_id when the player has actually walked into the
         // adjacent landblock — ACE rubber-bands or silently rejects.
         let pose = pose.rebucket_outdoor_landblock();
+
+        // Physics deep-dive 2026-06-02 (retail-interpolate-wire) — step the
+        // retail force-position interpolator. No-op unless USE_RETAIL_INTERPOLATE
+        // is on (the dispatch early-returns InterpStep::Idle when off, so this is
+        // byte-identical by default). When enabled, it eases the local player's
+        // pose toward a server-forced target per frame (ACE InterpolationManager
+        // + ConstraintManager adjust_offset); the Progressed/Completed outcomes
+        // carry the stepped pose, applied here before the runtime write-back.
+        let body_id = SpatialBodyId::LocalPlayer(world.player.guid);
+        let on_contact = !world.player.is_airborne;
+        let max_speed = capabilities.resolved_manual_run_speed() * 2.0;
+        let pose = match world
+            .scene
+            .step_force_position_interpolation(body_id, dt_s, max_speed, on_contact)
+        {
+            InterpStep::Progressed { pose } | InterpStep::Completed { pose } => pose,
+            _ => pose,
+        };
+
         let _ = world.set_local_player_runtime_pose(pose);
     }
 
