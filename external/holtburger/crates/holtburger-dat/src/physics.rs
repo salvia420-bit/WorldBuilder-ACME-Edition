@@ -671,6 +671,38 @@ impl ResolvedPolygon {
         }
         Some(contact)
     }
+
+    /// BSP resolver M2 (2026-06-02). Faithful port of ACE
+    /// `Polygon.adjust_to_placement_poly` (`Polygon.cs:116-126`). Displaces
+    /// `hit_sphere`'s center along this polygon's plane normal so the sphere
+    /// is pushed to sit `radius` off the face — the per-polygon nudge the
+    /// `BSPTree.placement_insert` loop applies each time
+    /// [`BspNode::sphere_intersects_solid_poly`] surfaces this polygon.
+    /// `other_sphere` (the cylinder's second sphere) gets the same
+    /// displacement. When `solid_check` and the center is on/behind the face
+    /// (`center_solid || dp <= 0`), the push direction is reversed (radius
+    /// negated), matching ACE. Pure geometry; consumed only by the future
+    /// placement loop under `USE_PHYSICS_BSP` (DEFAULT-OFF).
+    pub fn adjust_to_placement_poly(
+        &self,
+        hit_sphere: &mut Sphere,
+        other_sphere: Option<&mut Sphere>,
+        radius: f32,
+        center_solid: bool,
+        solid_check: bool,
+    ) {
+        let dp = hit_sphere.center.dot(&self.plane.normal) + self.plane.d;
+        let radius = if solid_check && (center_solid || dp <= 0.0) {
+            -radius
+        } else {
+            radius
+        };
+        let adjusted = self.plane.normal * (radius - dp);
+        hit_sphere.center = hit_sphere.center + adjusted;
+        if let Some(other) = other_sphere {
+            other.center = other.center + adjusted;
+        }
+    }
 }
 
 /// Resolve a cell's physics polygons into [`ResolvedPolygon`]s keyed by
@@ -1218,6 +1250,52 @@ mod tests {
         assert!(!hit);
         assert!(!center_solid);
         assert_eq!(hit_poly, None);
+    }
+
+    // ---- BSP resolver M2: adjust_to_placement_poly ----
+
+    #[test]
+    fn adjust_to_placement_poly_pushes_sphere_off_face() {
+        let poly = ResolvedPolygon {
+            num_points: 0,
+            vertices: vec![],
+            plane: Plane { normal: v(0.0, 0.0, 1.0), d: 0.0 },
+        };
+        let mut s = Sphere { center: v(0.0, 0.0, 0.1), radius: 0.5 };
+        // dp=0.1, no solid_check => diff = 0.5-0.1 = 0.4 along +Z => z=0.5.
+        poly.adjust_to_placement_poly(&mut s, None, 0.5, false, false);
+        assert!((s.center.z - 0.5).abs() < 1e-5, "got {:?}", s.center);
+        assert!(s.center.x.abs() < 1e-6 && s.center.y.abs() < 1e-6);
+    }
+
+    #[test]
+    fn adjust_to_placement_poly_solid_check_reverses_push() {
+        let poly = ResolvedPolygon {
+            num_points: 0,
+            vertices: vec![],
+            plane: Plane { normal: v(0.0, 0.0, 1.0), d: 0.0 },
+        };
+        let mut s = Sphere { center: v(0.0, 0.0, -0.1), radius: 0.5 };
+        // solid_check && dp(-0.1)<=0 => radius negated to -0.5;
+        // diff = -0.5 - (-0.1) = -0.4 along +Z => z=-0.5.
+        poly.adjust_to_placement_poly(&mut s, None, 0.5, false, true);
+        assert!((s.center.z + 0.5).abs() < 1e-5, "got {:?}", s.center);
+    }
+
+    #[test]
+    fn adjust_to_placement_poly_displaces_other_sphere_equally() {
+        let poly = ResolvedPolygon {
+            num_points: 0,
+            vertices: vec![],
+            plane: Plane { normal: v(0.0, 0.0, 1.0), d: 0.0 },
+        };
+        let mut a = Sphere { center: v(0.0, 0.0, 0.1), radius: 0.5 };
+        let mut b = Sphere { center: v(1.0, 0.0, 0.1), radius: 0.5 };
+        poly.adjust_to_placement_poly(&mut a, Some(&mut b), 0.5, false, false);
+        assert!((a.center.z - 0.5).abs() < 1e-5);
+        // `b` receives the identical (0,0,0.4) displacement.
+        assert!((b.center.z - 0.5).abs() < 1e-5);
+        assert!((b.center.x - 1.0).abs() < 1e-6);
     }
 
     #[test]
