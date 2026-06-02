@@ -1082,6 +1082,14 @@ impl WorldState {
         use holtburger_common::properties::{ObjectDescriptionFlag, PhysicsState};
         if data.guid == self.player.guid {
             self.player.instance_sequence = data.instance_sequence;
+            // Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide).
+            // A runtime physics-state announcement for the local player
+            // can flip `EdgeSlide`; mirror it into `PlayerState` so the
+            // local-prediction edge_slide path stays in sync (same flag
+            // also hydrated into `PropertyBool::AllowEdgeSlide` below via
+            // `hydrate_from_set_state`).
+            self.player.allow_edge_slide =
+                data.physics_state.contains(PhysicsState::EDGE_SLIDE);
         }
 
         if let Some(entity) = self.entities.get_mut(data.guid) {

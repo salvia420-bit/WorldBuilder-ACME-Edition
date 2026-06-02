@@ -349,6 +349,51 @@ pub fn highest_floor_z_under(
     best
 }
 
+/// Physics deep-dive 2026-06-01 (Dimension 3) — the unit plane normal of
+/// the highest walkable floor below `(x, y)`, the contact-plane normal the
+/// grounded friction step projects against (retail
+/// `PhysicsObj.ContactPlane.Normal`, set by `set_current_pos`/`set_on_walkable`
+/// from the walkable's `Plane`, `PhysicsObj.cs:1218,3480`).
+///
+/// Same floor-pick rule as [`highest_floor_z_under`] (max-Z qualifying floor
+/// at or below `ceiling_z`, walkable iff `normal.z >= FLOOR_Z`), but returns
+/// the chosen triangle's plane normal instead of its Z. `None` when no floor
+/// triangle qualifies — the caller then falls back to a flat `(0,0,1)` normal
+/// (a no-op projection), which is also the correct contact normal for the
+/// outdoor heightmap path (locally flat per terrain sample).
+pub fn floor_normal_under(
+    triangles: &[Triangle],
+    x: f32,
+    y: f32,
+    ceiling_z: f32,
+) -> Option<Vector3> {
+    const FLOOR_NORMAL_MIN: f32 = FLOOR_Z;
+    let mut best: Option<(f32, Vector3)> = None;
+    for tri in triangles {
+        if !tri.contains_xy(x, y) {
+            continue;
+        }
+        let Some(plane) = tri.plane() else {
+            continue;
+        };
+        if plane.normal.z < FLOOR_NORMAL_MIN {
+            continue;
+        }
+        let Some(z) = tri.z_at_xy(x, y) else {
+            continue;
+        };
+        if z > ceiling_z + 1e-3 {
+            continue;
+        }
+        match best {
+            None => best = Some((z, plane.normal)),
+            Some((prev_z, _)) if z > prev_z => best = Some((z, plane.normal)),
+            _ => {}
+        }
+    }
+    best.map(|(_, normal)| normal)
+}
+
 /// Physics deep-dive 2026-06-01 (gap 3) — step-UP decision.
 ///
 /// When a grounded lateral move is *blocked* by a wall/riser, retail
@@ -504,6 +549,52 @@ pub fn clamp_delta_against_cell_walls_with_exclusions(
     height: f32,
     exclusion_aabbs: &[Aabb],
 ) -> Vector3 {
+    clamp_delta_against_cell_walls_with_normal(
+        triangles,
+        pose,
+        delta,
+        radius,
+        height,
+        exclusion_aabbs,
+    )
+    .0
+}
+
+/// Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide). Same
+/// swept-circle wall clamp as
+/// [`clamp_delta_against_cell_walls_with_exclusions`], but ALSO returns
+/// the XY contact-plane normal of the earliest wall hit (pointing away
+/// from the wall, back toward where the capsule came from), or `None`
+/// when no wall blocked the move.
+///
+/// The two existing public wrappers above
+/// ([`clamp_delta_against_cell_walls`] +
+/// [`clamp_delta_against_cell_walls_with_exclusions`]) delegate here and
+/// drop the normal, preserving their `Vector3`-only signatures. The
+/// edge_slide path in
+/// `crates/holtburger-core/src/client/movement/system.rs` consults the
+/// returned normal so that when a step-up is *refused* (riser too tall),
+/// the blocked residual can be slid along the wall tangent instead of
+/// stopping dead — mirroring ACE's `SpherePath.StepUpSlide`
+/// (`Physics/SpherePath.cs:309-317`) → `Sphere.SlideSphere`
+/// (`Physics/Sphere.cs`), whose no-contact-plane branch projects the
+/// residual onto the wall tangent (`offset = -N * dot(N, gDelta)`,
+/// i.e. removes the into-wall component) exactly as the single-iteration
+/// slide here already does.
+///
+/// The returned normal's `Z` is always zero (the lateral clamp never
+/// moves Z); the full retail `cliff_slide` cross-product skid
+/// (`N_new × N_last`) needs a SECOND contact plane tracked across
+/// CTransition substeps, which our single-iteration solver does not
+/// maintain — see the TODO at the system.rs edge_slide site.
+pub fn clamp_delta_against_cell_walls_with_normal(
+    triangles: &[Triangle],
+    pose: &WorldPosition,
+    delta: Vector3,
+    radius: f32,
+    height: f32,
+    exclusion_aabbs: &[Aabb],
+) -> (Vector3, Option<Vector3>) {
     // Aligned to `FLOOR_Z` so the wall classifier and the floor
     // classifier (`highest_floor_z_under`) partition the normal-Z axis
     // at exactly one retail boundary: a triangle whose `|normal.z|`
@@ -518,7 +609,7 @@ pub fn clamp_delta_against_cell_walls_with_exclusions(
     const WALL_NORMAL_MAX: f32 = FLOOR_Z;
     let lateral_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
     if lateral_len < 1e-6 {
-        return delta;
+        return (delta, None);
     }
 
     let global = pose.global_coords();
@@ -650,10 +741,14 @@ pub fn clamp_delta_against_cell_walls_with_exclusions(
     }
 
     let Some(normal) = earliest_normal else {
-        return delta;
+        return (delta, None);
     };
     if earliest_t >= 0.999 {
-        return delta;
+        // A hit was registered but so late in the sweep it's effectively
+        // a graze — return the delta unchanged AND surface the normal so
+        // the step-up-refused edge_slide path can still skid the residual
+        // along this wall tangent if the move is otherwise blocked.
+        return (delta, Some(normal));
     }
 
     // Backoff so the capsule sits a hair short of the wall (matches
@@ -664,7 +759,34 @@ pub fn clamp_delta_against_cell_walls_with_exclusions(
     let remaining = delta * (1.0 - safe_t);
     let into_normal = remaining.dot(&normal);
     let slide = remaining - normal * into_normal;
-    stopped + slide
+    (stopped + slide, Some(normal))
+}
+
+/// Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide).
+/// Project a (blocked) residual lateral delta onto the wall tangent so
+/// it slides ALONG the wall instead of stopping dead against it: returns
+/// `residual - normal * dot(residual, normal)` — the residual with its
+/// into-wall (normal-direction) component removed.
+///
+/// This is the single-plane slide retail performs in
+/// `Sphere.SlideSphere` (`Physics/Sphere.cs`) when there is no live
+/// contact plane to cross with (`offset = -N * dot(N, gDelta)` removing
+/// the into-wall component), which is the case
+/// `SpherePath.StepUpSlide` (`Physics/SpherePath.cs:309-317`) hits after
+/// it invalidates the contact plane on a refused step-up. The full
+/// `cliff_slide` cross-product skid (`N_new × N_last`) needs a SECOND
+/// tracked plane and is deferred — see the system.rs edge_slide TODO.
+///
+/// `normal` is expected to be the unit XY wall normal returned by
+/// [`clamp_delta_against_cell_walls_with_normal`]. A degenerate
+/// (near-zero) normal leaves the residual unchanged.
+pub fn slide_residual_along_wall_tangent(residual: Vector3, normal: Vector3) -> Vector3 {
+    let n_len_sq = normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
+    if n_len_sq < 1e-12 {
+        return residual;
+    }
+    let into_normal = residual.dot(&normal);
+    residual - normal * into_normal
 }
 
 /// Workstream C (3D camera collision, 2026-05-11): result of a sweep
@@ -1388,6 +1510,47 @@ mod tests {
         );
     }
 
+    // ---- Physics deep-dive 2026-06-01 (Dimension 3): contact normal ----
+
+    /// `floor_normal_under` returns a flat `(0,0,1)` normal for a
+    /// horizontal floor triangle — the contact-plane normal the grounded
+    /// friction step projects against on level ground (a no-op).
+    #[test]
+    fn floor_normal_under_flat_floor_is_up() {
+        // A large flat floor at z = 5 spanning the query point.
+        let tris = [Triangle::new(
+            Vector3::new(-1.0, -1.0, 5.0),
+            Vector3::new(2.0, -1.0, 5.0),
+            Vector3::new(-1.0, 2.0, 5.0),
+        )];
+        let n = floor_normal_under(&tris, 0.2, 0.1, 100.0).expect("flat floor qualifies");
+        assert!(n.x.abs() < 1e-6 && n.y.abs() < 1e-6, "flat normal: {n:?}");
+        assert!((n.z.abs() - 1.0).abs() < 1e-6, "flat normal.z magnitude: {}", n.z);
+    }
+
+    /// `floor_normal_under` returns the tilted plane normal of a walkable
+    /// ramp — the slope contact-plane normal the friction projection
+    /// keys on. A 45° ramp rising in +Y has `normal = (0, ∓sin45,
+    /// cos45)` (matching `Plane::from_triangle`'s winding), `|normal.z|
+    /// ≈ 0.707`.
+    #[test]
+    fn floor_normal_under_ramp_is_tilted() {
+        let tris = [ramp_triangle(45.0)];
+        let n = floor_normal_under(&tris, 0.2, 0.1, 100.0).expect("45° ramp is walkable");
+        let c = 45.0_f32.to_radians().cos();
+        assert!((n.z - c).abs() < 1e-4, "ramp normal.z ≈ cos45: {}", n.z);
+        assert!(n.y.abs() > 0.1, "ramp normal must tilt in Y: {n:?}");
+    }
+
+    /// `floor_normal_under` returns `None` when no walkable floor is
+    /// under the query point (a too-steep ramp) — the caller then falls
+    /// back to the flat `(0,0,1)` no-op normal.
+    #[test]
+    fn floor_normal_under_steep_ramp_is_none() {
+        let tris = [ramp_triangle(50.0)]; // cos50 < FloorZ → wall
+        assert_eq!(floor_normal_under(&tris, 0.2, 0.1, 100.0), None);
+    }
+
     // ---- Physics deep-dive 2026-06-01 (gap 3): step-up / step-down ----
 
     /// A riser no taller than `PLAYER_STEP_UP_HEIGHT` is climbable: when
@@ -1492,5 +1655,121 @@ mod tests {
             feet_z - floor_below,
             PLAYER_STEP_DOWN_HEIGHT,
         );
+    }
+
+    // ---- edge_slide (gap 3 follow-up, 2026-06-01) ----
+    // `WorldPosition`, `Guid`, `Quaternion` are in scope via `super::*`.
+
+    /// A floor-to-ceiling wall whose plane is +X-facing: it occupies the
+    /// plane `x = wall_x` and spans a tall Z range + wide Y footprint so
+    /// a capsule sweeping in +X gets clamped. Plane normal is `±X`
+    /// (`normal.z = 0 <= FLOOR_Z`), so it classifies as a wall.
+    fn x_facing_wall(wall_x: f32) -> Triangle {
+        // Two-point spread in Y and Z; winding gives a normal in the XY
+        // plane (X component dominant).
+        Triangle::new(
+            Vector3::new(wall_x, -2.0, -1.0),
+            Vector3::new(wall_x, 2.0, -1.0),
+            Vector3::new(wall_x, -2.0, 3.0),
+        )
+    }
+
+    fn wall_test_pose(x: f32, y: f32) -> WorldPosition {
+        // Landblock 0x0000 so `global_coords()` == local coords — the
+        // wall triangles below are authored in the same near-origin
+        // frame the sweep compares against.
+        WorldPosition {
+            landblock_id: Guid(0x0000_0000),
+            coords: Vector3::new(x, y, 0.0),
+            rotation: Quaternion::from_heading(0.0),
+        }
+    }
+
+    /// `slide_residual_along_wall_tangent` removes the into-wall
+    /// component: a residual heading straight into an +X-facing wall
+    /// (normal `(-1,0,0)`) is fully cancelled in X but any Y component is
+    /// preserved. Mirrors the no-contact-plane branch of retail
+    /// `Sphere.SlideSphere` (`offset = -N * dot(N, residual)`).
+    #[test]
+    fn slide_residual_drops_into_wall_component() {
+        // Wall normal points back toward the player along -X.
+        let normal = Vector3::new(-1.0, 0.0, 0.0);
+        // Residual pushes into the wall (+X) and along it (+Y).
+        let residual = Vector3::new(0.4, 0.3, 0.0);
+        let slid = slide_residual_along_wall_tangent(residual, normal);
+        assert!(slid.x.abs() < 1e-6, "into-wall X must be removed, got {}", slid.x);
+        assert!((slid.y - 0.3).abs() < 1e-6, "tangent Y must be preserved, got {}", slid.y);
+    }
+
+    /// A degenerate (zero) normal leaves the residual untouched — the
+    /// caller has no wall tangent to slide along.
+    #[test]
+    fn slide_residual_zero_normal_is_identity() {
+        let residual = Vector3::new(0.4, 0.3, 0.0);
+        let slid = slide_residual_along_wall_tangent(residual, Vector3::zero());
+        assert!((slid.x - 0.4).abs() < 1e-6 && (slid.y - 0.3).abs() < 1e-6);
+    }
+
+    /// A residual already parallel to the wall (no into-wall component)
+    /// passes through unchanged.
+    #[test]
+    fn slide_residual_parallel_is_unchanged() {
+        let normal = Vector3::new(-1.0, 0.0, 0.0);
+        let residual = Vector3::new(0.0, 0.5, 0.0); // pure +Y, along the wall
+        let slid = slide_residual_along_wall_tangent(residual, normal);
+        assert!(slid.x.abs() < 1e-6 && (slid.y - 0.5).abs() < 1e-6);
+    }
+
+    /// `clamp_delta_against_cell_walls_with_normal` surfaces the XY wall
+    /// normal of the blocking wall: a capsule pushing +X into an
+    /// +X-facing wall is clamped AND the returned normal points back
+    /// toward the player (`-X`, `normal.z == 0`).
+    #[test]
+    fn clamp_with_normal_surfaces_wall_normal() {
+        let tris = [x_facing_wall(0.5)];
+        // Player just short of the wall, moving +X into it.
+        let pose = wall_test_pose(0.0, 0.0);
+        let delta = Vector3::new(1.0, 0.0, 0.0);
+        let (clamped, normal) = clamp_delta_against_cell_walls_with_normal(
+            &tris,
+            &pose,
+            delta,
+            PLAYER_CAPSULE_RADIUS,
+            PLAYER_CAPSULE_HEIGHT,
+            &[],
+        );
+        // Move was shortened (blocked by the wall).
+        assert!(
+            clamped.x < delta.x - 1e-3,
+            "expected the +X move to be clamped short of the wall, got {clamped:?}"
+        );
+        let normal = normal.expect("a blocking wall must surface a normal");
+        assert!(normal.z.abs() < 1e-6, "wall normal Z must be flattened, got {}", normal.z);
+        assert!(
+            normal.x < 0.0,
+            "wall normal must point back toward the player (-X), got {normal:?}"
+        );
+        // Unit length in XY.
+        let len = (normal.x * normal.x + normal.y * normal.y).sqrt();
+        assert!((len - 1.0).abs() < 1e-4, "wall normal must be unit length, got {len}");
+    }
+
+    /// No wall in range → `clamp_delta_against_cell_walls_with_normal`
+    /// returns the delta unchanged and a `None` normal.
+    #[test]
+    fn clamp_with_normal_no_wall_returns_none() {
+        let tris: [Triangle; 0] = [];
+        let pose = wall_test_pose(0.0, 0.0);
+        let delta = Vector3::new(1.0, 0.0, 0.0);
+        let (clamped, normal) = clamp_delta_against_cell_walls_with_normal(
+            &tris,
+            &pose,
+            delta,
+            PLAYER_CAPSULE_RADIUS,
+            PLAYER_CAPSULE_HEIGHT,
+            &[],
+        );
+        assert_eq!(clamped, delta);
+        assert!(normal.is_none());
     }
 }

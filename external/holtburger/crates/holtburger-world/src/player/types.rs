@@ -500,6 +500,26 @@ pub struct PlayerState {
     /// kinematic — `v = sqrt(h * 19.6)` → `g = 9.8 m/s²`). Reset to
     /// 0.0 on landing or teleport.
     pub vertical_velocity: f32,
+    /// Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide).
+    /// The local player's `AllowEdgeSlide` physics flag — retail's
+    /// `ObjectInfoState.EdgeSlide` (acclient `OBJECT_INFO_STATE`
+    /// `EDGE_SLIDE 0x2`; ACE `PhysicsState.EdgeSlide 0x00400000`,
+    /// hydrated into [`PropertyBool::AllowEdgeSlide`] at
+    /// `hydration.rs:285-288`). When set, retail's
+    /// `Transition.EdgeSlide` (`Physics/Transition.cs:268-320`) skids the
+    /// blocked motion along the contact-plane tangent instead of stopping
+    /// dead; when clear it just stops. The local-prediction edge_slide
+    /// path in `crates/holtburger-core/.../movement/system.rs` consults
+    /// this flag before sliding a refused step-up's residual along the
+    /// wall tangent.
+    ///
+    /// Default: `true` — matches the retail player default (the human
+    /// body Setup ships with `EdgeSlide` set), and is the safe value
+    /// before any `ObjectCreate`/`SetState` for the local player has
+    /// hydrated the real flag. Refreshed from the local player's physics
+    /// state in the `ObjectCreate` + `SetState` handlers
+    /// (`handlers/player.rs`, `state/mutations.rs`).
+    pub allow_edge_slide: bool,
     /// Wave 10 Phase 10.2 (movement-animation overhaul, 2026-05-26):
     /// the player's last-known full 32-bit `MotionCommand` substate.
     /// Mirrors PhatSDK's `CMotionInterp::interpreted_state.forward_command`
@@ -631,6 +651,10 @@ impl PlayerState {
             is_airborne: false,
             is_jumping: false,
             vertical_velocity: 0.0,
+            // Physics deep-dive 2026-06-01 (gap 3 follow-up) — default
+            // to the retail player value (EdgeSlide set) until the local
+            // player's physics state hydrates the real flag.
+            allow_edge_slide: true,
             // Wave 10 Phase 10.2 (2026-05-26) — default to Ready
             // (the at-rest pose) so a fresh character can jump
             // before any UpdateMotion has arrived from the server.

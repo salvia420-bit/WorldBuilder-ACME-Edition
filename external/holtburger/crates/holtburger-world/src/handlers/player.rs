@@ -27,6 +27,19 @@ pub(crate) fn handle_message(
                         .player
                         .update_last_server_motion_style(current_style.interpreted());
                 }
+
+                // Physics deep-dive 2026-06-01 (gap 3 follow-up:
+                // edge_slide). Consume the local player's `EdgeSlide`
+                // physics flag into `PlayerState` so the local-prediction
+                // edge_slide path can gate on it. Retail's
+                // `Transition.EdgeSlide` is a no-op (just stop) when the
+                // object lacks `ObjectInfoState.EdgeSlide`. The flag is
+                // hydrated into `PropertyBool::AllowEdgeSlide` for the
+                // entity, but `PlayerState` is the movement-system view,
+                // so mirror it here on object create.
+                state.player.allow_edge_slide = data
+                    .physics_state
+                    .contains(holtburger_common::properties::PhysicsState::EDGE_SLIDE);
             }
             false
         }

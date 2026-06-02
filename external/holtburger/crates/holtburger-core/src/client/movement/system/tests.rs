@@ -2642,3 +2642,62 @@ fn step_down_beyond_step_height_falls_off_ledge() {
         after.coords.z
     );
 }
+
+// ---- edge_slide (gap 3 follow-up, 2026-06-01) ----
+
+/// Gap 3 follow-up — `edge_slide_refused_step_up` slides the blocked
+/// residual along the wall tangent when the player allows edge-slide and
+/// a wall normal is available. The full requested move was +X (into an
+/// +X-facing wall, normal `-X`) plus +Y (along the wall); the clamp
+/// stopped the +X portion. edge_slide must recover the +Y travel the
+/// step-up refusal would otherwise have dropped, while keeping the X at
+/// the clamped value.
+#[test]
+fn edge_slide_recovers_tangent_travel_on_refused_step_up() {
+    assert!(USE_EDGE_SLIDE, "this test assumes the default-on flag");
+    // Player wants to move (0.4 into wall, 0.3 along wall).
+    let lateral = Vector3::new(0.4, 0.3, 0.0);
+    // The wall clamp stopped all +X and (since the wall is X-facing,
+    // the single-iteration slide already kept Y) — model the worst case
+    // where the step-up path only has the stopped-dead clamp to work
+    // with: clamped to (0.05, 0.0) say, as if blocked early.
+    let lateral_clamped = Vector3::new(0.05, 0.0, 0.0);
+    let normal = Vector3::new(-1.0, 0.0, 0.0); // points back toward player
+    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, Some(normal), true);
+    // Residual = lateral - clamped = (0.35, 0.3, 0); slid along tangent
+    // drops the X (into-wall) component, keeping +Y. So slid = clamped +
+    // (0, 0.3, 0) = (0.05, 0.3, 0).
+    assert!((slid.x - 0.05).abs() < 1e-6, "X must stay clamped, got {}", slid.x);
+    assert!((slid.y - 0.3).abs() < 1e-6, "tangent +Y must be recovered, got {}", slid.y);
+}
+
+/// Gap 3 follow-up — when the player does NOT allow edge-slide
+/// (`allow_edge_slide == false`, retail's missing `EdgeSlide` flag), the
+/// refused step-up just stops dead at the clamped delta (no tangent
+/// recovery).
+#[test]
+fn edge_slide_disabled_when_flag_clear_stops_dead() {
+    let lateral = Vector3::new(0.4, 0.3, 0.0);
+    let lateral_clamped = Vector3::new(0.05, 0.0, 0.0);
+    let normal = Vector3::new(-1.0, 0.0, 0.0);
+    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, Some(normal), false);
+    assert_eq!(
+        slid, lateral_clamped,
+        "with AllowEdgeSlide clear the refused step-up must stop dead"
+    );
+}
+
+/// Gap 3 follow-up — with no wall normal available (the move was blocked
+/// by entity collision or the AABB safety net, neither of which exposes
+/// a normal yet) edge_slide has no tangent to slide along, so it falls
+/// back to the clamped delta even when the flag is set.
+#[test]
+fn edge_slide_no_normal_stops_dead() {
+    let lateral = Vector3::new(0.4, 0.3, 0.0);
+    let lateral_clamped = Vector3::new(0.05, 0.0, 0.0);
+    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, None, true);
+    assert_eq!(
+        slid, lateral_clamped,
+        "without a wall normal there is no tangent to slide along"
+    );
+}

@@ -9,7 +9,8 @@ pub use physics::{
     PLAYER_CAPSULE_RADIUS, PLAYER_STEP_DOWN_HEIGHT, PLAYER_STEP_UP_HEIGHT, SpatialPhysics,
     StepDownOutcome, SweptSphereHit, advance_body_kinematics, clamp_delta_against_buildings,
     clamp_delta_against_cell_walls, clamp_delta_against_cell_walls_with_exclusions,
-    clamp_delta_to_cell_interior, highest_floor_z_under, project_pose_forward_distance,
+    clamp_delta_against_cell_walls_with_normal, clamp_delta_to_cell_interior, floor_normal_under,
+    highest_floor_z_under, project_pose_forward_distance, slide_residual_along_wall_tangent,
     step_down_decision, step_up_decision, sweep_sphere_against_aabbs,
     sweep_sphere_against_static_aabbs, sweep_sphere_against_triangles,
 };

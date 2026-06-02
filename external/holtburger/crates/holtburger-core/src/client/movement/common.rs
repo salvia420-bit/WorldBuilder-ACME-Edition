@@ -405,6 +405,112 @@ pub(super) const PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC: f32 = 0.25;
 pub(super) const PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ: f32 = 8.0;
 
 // ---------------------------------------------------------------------------
+// Grounded friction model (physics deep-dive 2026-06-01, gap — Dimension 3).
+//
+// The decay *form* `v *= pow(1 - friction, quantum)` (gated on grounded +
+// the `0.25` small-velocity snap) already matched retail. What we omitted was
+// (a) the contact-plane projection that strips the into-surface velocity
+// component before damping, and (b) the SLEDDING overrides on a near-flat
+// slope. [`calc_friction`] ports both, 1:1 with ACE
+// `PhysicsObj.calc_friction` (`external/ACE/Source/ACE.Server/Physics/
+// PhysicsObj.cs:2120-2141`) — the readable proxy for retail
+// `CPhysicsObj::calc_friction` (`~/ac-headers/acclient.c`).
+
+/// Retail object-level ground friction coefficient, `PhysicsGlobals
+/// .DefaultFriction = 0.95f` (`external/ACE/Source/ACE.Server/Physics/
+/// PhysicsGlobals.cs:15`; retail `CPhysicsObj` ctor sets `m_friction =
+/// DEFAULT_FRICTION`). Used by the retail friction path
+/// ([`super::system::USE_RETAIL_GROUND_FRICTION`]) in place of the gentler
+/// hand-tuned [`PLAYER_GROUND_FRICTION_PER_SEC`] (`0.5`).
+///
+/// Why this is *not* the default: the Phase-1 grounding for the deep-dive
+/// confirmed (high confidence) that retail does **not** re-set the
+/// friction-decayed velocity to the input target each tick — friction
+/// *compounds* — but it also found that *grounded walking never uses that
+/// re-set channel*. So the open question the in-code `0.5` rationale raised
+/// (does applying `0.95` directly cause a 25-35% steady-state deficit *in our
+/// architecture*?) is **not** resolved in favour of `0.95`: our pipeline
+/// smooths a stored velocity toward the input target with an accel cap and no
+/// explicit `Acceleration*quantum` step, so the steady-state interaction of
+/// `0.95` with that cap is a feel-affecting unknown that needs live eyes on
+/// the 1070. The coefficient is therefore gated behind a default-OFF A/B flag;
+/// the *projection* and *sledding* fidelity ride along regardless (low risk —
+/// a no-op on flat ground).
+pub(super) const PLAYER_GROUND_FRICTION_RETAIL: f32 = 0.95;
+
+/// SLEDDING low-speed override: when sledding and `velocity_mag^2` is below
+/// this, friction is forced to `1.0` (full stop within the quantum). Retail
+/// `calc_friction` (`PhysicsObj.cs:2132-2133`): `velocity_mag2 < 1.5625f`.
+/// `1.5625 = 1.25^2` (1.25 m/s).
+pub(super) const SLEDDING_LOW_VELOCITY_SQ: f32 = 1.5625;
+
+/// SLEDDING high-speed override: when sledding *and* on a near-flat slope
+/// (`ContactPlane.Normal.Z > SLEDDING_FLAT_NORMAL_Z`) and `velocity_mag^2` is
+/// at/above this, friction is forced to `0.2` (near-frictionless glide).
+/// Retail `calc_friction` (`PhysicsObj.cs:2135-2136`): `velocity_mag2 >=
+/// 6.25f`. `6.25 = 2.5^2` (2.5 m/s).
+pub(super) const SLEDDING_HIGH_VELOCITY_SQ: f32 = 6.25;
+
+/// Near-flat-slope cutoff gating the SLEDDING high-speed override. Retail
+/// `calc_friction` (`PhysicsObj.cs:2135`): `ContactPlane.Normal.Z >
+/// 0.99999536f` (≈0.17° from horizontal). Verbatim.
+pub(super) const SLEDDING_FLAT_NORMAL_Z: f32 = 0.99999536;
+
+/// Into-surface early-return cutoff. Retail `calc_friction`
+/// (`PhysicsObj.cs:2125`): if `dot(Velocity, ContactPlane.Normal) >= 0.25f`
+/// the object is moving *away* from the surface fast enough that no friction
+/// applies this quantum. `0.25` is the same magnitude as
+/// [`PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC`] (retail `SmallVelocity`),
+/// reused here as the surface-separation gate.
+pub(super) const FRICTION_AWAY_FROM_SURFACE_CUTOFF: f32 = 0.25;
+
+/// Port of ACE `PhysicsObj.calc_friction` (`external/ACE/Source/ACE.Server/
+/// Physics/PhysicsObj.cs:2120-2141`) — the 1:1 readable proxy for retail
+/// `CPhysicsObj::calc_friction`.
+///
+/// Mutates `velocity` in place (full 3D, like retail's `m_velocityVector`):
+/// 1. `angle = dot(velocity, normal)` (the into/out-of-surface component).
+/// 2. Early-return if `angle >= FRICTION_AWAY_FROM_SURFACE_CUTOFF` — the
+///    object is separating from the surface; no friction this quantum.
+/// 3. `velocity -= normal * angle` — strip the into-surface component
+///    *before* damping (on flat ground `angle ≈ 0`, so this is a no-op).
+/// 4. SLEDDING overrides (only when `sledding`): force friction to `1.0`
+///    below [`SLEDDING_LOW_VELOCITY_SQ`], or to `0.2` at/above
+///    [`SLEDDING_HIGH_VELOCITY_SQ`] on a near-flat slope.
+/// 5. `velocity *= pow(1 - friction, quantum)`.
+///
+/// `normal` must be unit length (the contact-plane normal). `velocity_mag2`
+/// is the caller's pre-projection `velocity.length_squared()` — matches ACE,
+/// which passes `Velocity.LengthSquared()` (post-`MaxVelocity` clamp) from
+/// `UpdatePhysicsInternal` (`PhysicsObj.cs:1834,1849`).
+pub(super) fn calc_friction(
+    velocity: &mut Vector3,
+    normal: Vector3,
+    velocity_mag2: f32,
+    friction: f32,
+    sledding: bool,
+    quantum: f32,
+) {
+    let angle = velocity.dot(&normal);
+    if angle >= FRICTION_AWAY_FROM_SURFACE_CUTOFF {
+        return;
+    }
+    *velocity = *velocity - normal * angle;
+
+    let mut friction = friction;
+    if sledding {
+        if velocity_mag2 < SLEDDING_LOW_VELOCITY_SQ {
+            friction = 1.0;
+        } else if velocity_mag2 >= SLEDDING_HIGH_VELOCITY_SQ && normal.z > SLEDDING_FLAT_NORMAL_Z {
+            friction = 0.2;
+        }
+    }
+
+    let scalar = (1.0 - friction).powf(quantum);
+    *velocity = *velocity * scalar;
+}
+
+// ---------------------------------------------------------------------------
 // Quantum-subdivided integration loop constants (physics deep-dive
 // 2026-06-01, gaps 1 + 7).
 //
@@ -902,5 +1008,164 @@ mod tests {
             "run backstep speed expected ≈ {expected:.4} m/s (3.12 * 0.65 * {run_factor}), got {:.4}",
             velocity.length(),
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Dimension 3 — grounded friction model (physics deep-dive
+    // 2026-06-01). Unit-validation of `calc_friction` against ACE
+    // `PhysicsObj.calc_friction` (`PhysicsObj.cs:2120-2141`).
+    // -----------------------------------------------------------------
+
+    const FLAT_NORMAL: Vector3 = Vector3 {
+        x: 0.0,
+        y: 0.0,
+        z: 1.0,
+    };
+
+    /// On FLAT ground (`normal = (0,0,1)`) with the default `0.5`
+    /// coefficient and sledding off, `calc_friction` must reproduce the
+    /// prior scalar decay exactly: `v *= pow(1 - 0.5, quantum)` on X/Y,
+    /// no Z introduced. This is the contract that the projection +
+    /// sledding fidelity is a no-op on flat ground when the coefficient
+    /// flag is off.
+    #[test]
+    fn calc_friction_flat_ground_matches_legacy_scalar_decay() {
+        let quantum = 1.0 / 60.0;
+        let mut v = Vector3::new(3.0, 1.0, 0.0);
+        let mag2 = v.x * v.x + v.y * v.y;
+        // velocity_mag2 = 10.0 — above SLEDDING_HIGH so if sledding were
+        // (wrongly) on, friction would drop to 0.2 and this would fail.
+        calc_friction(
+            &mut v,
+            FLAT_NORMAL,
+            mag2,
+            PLAYER_GROUND_FRICTION_PER_SEC,
+            false,
+            quantum,
+        );
+        let expected_scale = (1.0_f32 - PLAYER_GROUND_FRICTION_PER_SEC).powf(quantum);
+        assert!((v.x - 3.0 * expected_scale).abs() < 1e-6, "x: {}", v.x);
+        assert!((v.y - 1.0 * expected_scale).abs() < 1e-6, "y: {}", v.y);
+        // Flat normal: no into-surface component, so no Z introduced.
+        assert!(v.z.abs() < 1e-6, "z should stay 0 on flat ground, got {}", v.z);
+    }
+
+    /// The contact-plane projection must remove the into-surface velocity
+    /// component on a SLOPE *before* damping. With a velocity that has a
+    /// component pointing into the slope, the post-call velocity dotted
+    /// with the normal must be ~0 up to the friction scale — i.e. the
+    /// into-surface part is stripped, the in-plane part is only damped.
+    #[test]
+    fn calc_friction_projection_removes_into_surface_component_on_slope() {
+        // A 30° slope facing +X: normal tilts toward +X.
+        let normal = Vector3::new(0.5, 0.0, 0.866_025_4).normalize();
+        // Velocity straight along +X (horizontal) has a component into
+        // the slope: dot(v, normal) = 3.0 * 0.5 = 1.5 (> 0.25 cutoff?).
+        // 1.5 >= 0.25 would early-return (moving away). Flip sign so the
+        // velocity drives INTO the surface: -X moves down-into the slope.
+        let mut v = Vector3::new(-3.0, 0.0, 0.0);
+        let angle = v.dot(&normal); // = -1.5 (into surface, < 0.25)
+        assert!(angle < FRICTION_AWAY_FROM_SURFACE_CUTOFF);
+        let mag2 = v.length_squared();
+        // Use friction = 0 so we can read the projection in isolation
+        // (scale = pow(1,quantum) = 1).
+        calc_friction(&mut v, normal, mag2, 0.0, false, 1.0 / 60.0);
+        // After projection the velocity lies in the slope plane:
+        // dot(v_proj, normal) == 0. Friction = 0 leaves it unscaled.
+        let residual = v.dot(&normal);
+        assert!(
+            residual.abs() < 1e-5,
+            "into-surface component should be removed: dot(v, n) = {residual}"
+        );
+    }
+
+    /// `calc_friction` must EARLY-RETURN (no projection, no damping) when
+    /// the velocity is separating from the surface faster than the
+    /// `0.25` cutoff — `dot(v, normal) >= 0.25`. This mirrors ACE's
+    /// `if (angle >= 0.25f) return;`.
+    #[test]
+    fn calc_friction_early_returns_when_moving_away_from_surface() {
+        let normal = FLAT_NORMAL;
+        // Upward velocity (away from a flat floor): dot = 0.5 >= 0.25.
+        let mut v = Vector3::new(2.0, 0.0, 0.5);
+        let before = v;
+        let mag2 = v.length_squared();
+        calc_friction(&mut v, normal, mag2, PLAYER_GROUND_FRICTION_PER_SEC, false, 1.0 / 60.0);
+        assert_eq!(v.x, before.x, "no damping when separating");
+        assert_eq!(v.y, before.y);
+        assert_eq!(v.z, before.z);
+    }
+
+    /// SLEDDING low-speed override: on a near-flat slope with sledding
+    /// engaged and `velocity_mag2 < 1.5625`, friction is forced to `1.0`
+    /// → `scale = pow(0, quantum) = 0` → velocity stopped this quantum.
+    #[test]
+    fn calc_friction_sledding_low_velocity_forces_full_stop() {
+        // velocity_mag2 = 1.0 < 1.5625.
+        let mut v = Vector3::new(1.0, 0.0, 0.0);
+        let mag2 = v.length_squared();
+        assert!(mag2 < SLEDDING_LOW_VELOCITY_SQ);
+        calc_friction(&mut v, FLAT_NORMAL, mag2, 0.5, true, 1.0 / 60.0);
+        // friction := 1.0, scale = pow(0, q) = 0.
+        assert!(v.x.abs() < 1e-6 && v.y.abs() < 1e-6, "sledding low: {v:?}");
+    }
+
+    /// SLEDDING high-speed override: on a near-flat slope
+    /// (`normal.z > 0.99999536`) with sledding engaged and
+    /// `velocity_mag2 >= 6.25`, friction is forced to `0.2` (glide),
+    /// NOT the passed-in coefficient.
+    #[test]
+    fn calc_friction_sledding_high_velocity_glides_at_0_2() {
+        // velocity_mag2 = 9.0 >= 6.25; near-flat normal.
+        let normal = Vector3::new(0.0, 0.0, 1.0);
+        assert!(normal.z > SLEDDING_FLAT_NORMAL_Z);
+        let mut v = Vector3::new(3.0, 0.0, 0.0);
+        let mag2 = v.length_squared();
+        assert!(mag2 >= SLEDDING_HIGH_VELOCITY_SQ);
+        // Pass coefficient 0.5; sledding must override to 0.2.
+        calc_friction(&mut v, normal, mag2, 0.5, true, 1.0 / 60.0);
+        let expected_scale = (1.0_f32 - 0.2).powf(1.0 / 60.0);
+        assert!(
+            (v.x - 3.0 * expected_scale).abs() < 1e-6,
+            "sledding high should scale by pow(0.8, q): got {}",
+            v.x
+        );
+    }
+
+    /// SLEDDING high-speed override must NOT fire on a real incline:
+    /// even at high speed, if `normal.z <= 0.99999536` the high-speed
+    /// branch is gated off and the passed-in coefficient applies. (The
+    /// low-speed branch has no normal gate in retail, so it could still
+    /// fire — but at high velocity it doesn't.)
+    #[test]
+    fn calc_friction_sledding_high_velocity_inactive_on_steep_slope() {
+        // A real ramp normal (well below the near-flat cutoff).
+        let normal = Vector3::new(0.4, 0.0, 0.916_515_1).normalize();
+        assert!(normal.z <= SLEDDING_FLAT_NORMAL_Z);
+        // Velocity in the slope plane, high speed (mag2 >= 6.25), moving
+        // up-slope-ish but with into-surface dot < 0.25.
+        let mut v = Vector3::new(0.0, 3.0, 0.0); // along +Y, in-plane (n has no Y)
+        let mag2 = v.length_squared();
+        assert!(mag2 >= SLEDDING_HIGH_VELOCITY_SQ);
+        let angle = v.dot(&normal);
+        assert!(angle < FRICTION_AWAY_FROM_SURFACE_CUTOFF);
+        calc_friction(&mut v, normal, mag2, 0.5, true, 1.0 / 60.0);
+        // High-speed glide gated off → coefficient 0.5 applies (NOT 0.2).
+        let expected_scale = (1.0_f32 - 0.5).powf(1.0 / 60.0);
+        assert!(
+            (v.y - 3.0 * expected_scale).abs() < 1e-5,
+            "steep slope: should damp at 0.5 not 0.2, got {}",
+            v.y
+        );
+    }
+
+    /// The retail coefficient constant is exactly ACE's
+    /// `PhysicsGlobals.DefaultFriction = 0.95f`, and the default
+    /// (flag-off) coefficient stays the hand-tuned `0.5`. Guards against
+    /// an accidental constant swap.
+    #[test]
+    fn ground_friction_coefficients_are_pinned() {
+        assert_eq!(PLAYER_GROUND_FRICTION_RETAIL, 0.95);
+        assert_eq!(PLAYER_GROUND_FRICTION_PER_SEC, 0.5);
     }
 }

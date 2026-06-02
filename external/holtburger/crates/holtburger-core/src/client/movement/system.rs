@@ -1,10 +1,11 @@
 use super::common::{
     AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY, MIN_QUANTUM,
-    PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ,
-    PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC, build_autonomous_position,
-    build_motion_state_raw_motion_state, encode_contact_long_jump,
-    has_autonomous_position_sync_target, local_omega_for_state, local_velocity_for_state,
-    normalize_heading, raw_motion_state_with_motion_style, signed_heading_delta,
+    PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_GROUND_FRICTION_RETAIL,
+    PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC,
+    build_autonomous_position, build_motion_state_raw_motion_state, calc_friction,
+    encode_contact_long_jump, has_autonomous_position_sync_target, local_omega_for_state,
+    local_velocity_for_state, normalize_heading, raw_motion_state_with_motion_style,
+    signed_heading_delta,
 };
 use crate::client::movement_types::{
     AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
@@ -59,6 +60,38 @@ const USE_QUANTUM_SUBDIVIDED_INTEGRATION: bool = true;
 /// for A/B comparison.
 const USE_STEP_UP_DOWN: bool = true;
 
+/// Physics deep-dive 2026-06-01 (gap 3 follow-up) — gate for the
+/// edge_slide tangent-slide in the lateral-clamp + step-up path of
+/// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
+///
+/// `true` (default): when an indoor lateral move is blocked by a wall
+/// AND a step-up onto it is REFUSED (the riser is taller than
+/// [`holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT`]), don't stop
+/// dead against the wall — slide the blocked residual along the wall
+/// tangent (`residual - N·(residual·N)`), gated on the player's
+/// hydrated `AllowEdgeSlide` flag
+/// ([`holtburger_world::PlayerState::allow_edge_slide`]). Mirrors the
+/// retail `Stage-1` single-plane case of `Transition.EdgeSlide` →
+/// `SpherePath.StepUpSlide` → `Sphere.SlideSphere`
+/// (`Physics/{Transition,SpherePath,Sphere}.cs`), whose
+/// no-contact-plane branch removes the into-wall component exactly like
+/// the wall clamp's own single-iteration slide.
+///
+/// `false`: the pre-2026-06-01 behaviour — a refused step-up stops the
+/// player dead at the clamped delta. Retained for A/B comparison.
+///
+/// DEFERRED (needs the CTransition multi-substep loop, NOT in this
+/// pass): the Stage-2 retail `cliff_slide` cross-product skid
+/// (`N_new × N_last`, `Transition.CliffSlide`
+/// `Physics/Transition.cs:242-266`), which slides along the SEAM where
+/// two non-coplanar walls meet and requires a SECOND
+/// `last_known_contact_plane` tracked across substeps — our
+/// single-iteration solver maintains only one. The walkable-edge
+/// `precipice_slide` + `step_down` re-entry + `save/restore_check_pos`
+/// backup-pose machinery are likewise CTransition substep state we do
+/// not have. See the TODO at the edge_slide site below.
+const USE_EDGE_SLIDE: bool = true;
+
 /// Physics deep-dive 2026-06-01 (gap 4) — gate the AutonomousPosition
 /// heartbeat on a position change instead of firing unconditionally.
 ///
@@ -84,6 +117,37 @@ const USE_AUTONOMOUS_POSITION_CHANGE_GATE: bool = true;
 /// as a change and keep the heartbeat alive on a stationary player.
 const AUTONOMOUS_POSE_EPSILON_M: f32 = 0.05;
 const AUTONOMOUS_POSE_HEADING_EPSILON_RAD: f32 = 0.0035;
+
+/// Physics deep-dive 2026-06-01 (Dimension 3, the contested friction
+/// *coefficient*) — A/B knob for the grounded ground-friction value.
+///
+/// `false` (DEFAULT): keep the gentler hand-tuned
+/// [`holtburger_world::movement_common`-side]
+/// [`super::common::PLAYER_GROUND_FRICTION_PER_SEC`] (`0.5`). This is the
+/// feel-affecting coefficient the wasm integrator has always used; the
+/// accel-cap pipeline was tuned around it.
+///
+/// `true`: use the retail object-level coefficient
+/// [`super::common::PLAYER_GROUND_FRICTION_RETAIL`] (`0.95`, ACE
+/// `PhysicsGlobals.DefaultFriction`).
+///
+/// Default-OFF rationale: the Phase-1 grounding for this deep-dive confirmed
+/// (high confidence) that retail's friction *compounds* (it does NOT re-set
+/// the decayed velocity to the input target each tick) — but it also found
+/// that grounded walking never uses that re-set channel, so it did NOT
+/// resolve whether `0.95` is correct for *our* architecture (which smooths a
+/// stored velocity toward the target with an accel cap and no explicit
+/// `Acceleration*quantum` step). The interaction of `0.95` with that cap at
+/// steady state is feel-affecting and needs live eyes on the 1070; flipping
+/// it on by default would risk a steady-state speed deficit the grounding
+/// could not rule out. So: A/B only, default-OFF, awaiting a live capture.
+///
+/// Independent of this flag, the contact-plane *projection* + SLEDDING
+/// overrides (the geometric fidelity in [`super::common::calc_friction`])
+/// are always applied to the grounded friction step — they are a no-op on
+/// flat ground and only correct behaviour on slopes, so they carry the
+/// low-risk fidelity without touching the contested knob.
+const USE_RETAIL_GROUND_FRICTION: bool = false;
 
 /// Physics deep-dive 2026-06-01 (gap 1) — bound + subdivide a raw
 /// per-frame `dt` (seconds) into the integration-slice schedule,
@@ -120,6 +184,48 @@ fn quantum_slices(dt_secs: f32) -> Option<Vec<f32>> {
         slices.push(remaining);
     }
     Some(slices)
+}
+
+/// Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide Stage-1).
+/// Resolve the lateral delta to apply when a grounded step-up was
+/// REFUSED (the riser blocking the move was taller than the step-up
+/// height).
+///
+/// - `lateral`: the full requested lateral move (un-clamped).
+/// - `lateral_clamped`: the wall-clamped lateral move (what we'd apply
+///   if we just stopped dead against the wall).
+/// - `wall_normal`: the XY contact-plane normal surfaced by the wall
+///   clamp (`None` when the clamp had no hit — e.g. the move was
+///   blocked by entity collision or the AABB safety net, neither of
+///   which exposes a wall normal yet).
+/// - `allow_edge_slide`: the player's hydrated `AllowEdgeSlide` flag.
+///
+/// When [`USE_EDGE_SLIDE`] is on, `allow_edge_slide` is set, and a wall
+/// normal is available, the blocked residual (`lateral -
+/// lateral_clamped`) is projected onto the wall tangent and added back
+/// to the clamped delta so the player skids along the wall instead of
+/// stopping dead. Mirrors retail `SpherePath.StepUpSlide` →
+/// `Sphere.SlideSphere` no-contact-plane branch (removes the into-wall
+/// component). Otherwise returns `lateral_clamped` unchanged (retail's
+/// "no EdgeSlide flag ⇒ just stop").
+fn edge_slide_refused_step_up(
+    lateral: Vector3,
+    lateral_clamped: Vector3,
+    wall_normal: Option<Vector3>,
+    allow_edge_slide: bool,
+) -> Vector3 {
+    if !USE_EDGE_SLIDE || !allow_edge_slide {
+        return lateral_clamped;
+    }
+    let Some(normal) = wall_normal else {
+        return lateral_clamped;
+    };
+    // Residual = the portion of the requested move the wall clamp
+    // removed. Slide it along the wall tangent (drop the into-wall
+    // component) and add it onto the clamped delta.
+    let residual = lateral - lateral_clamped;
+    let slide = holtburger_world::spatial::slide_residual_along_wall_tangent(residual, normal);
+    lateral_clamped + slide
 }
 
 #[derive(Debug, Default)]
@@ -846,11 +952,80 @@ impl MovementSystem {
             // Grounded: apply friction decay + accel cap, then snap to
             // zero below the small-velocity threshold.
             let mut v = world.player.current_planar_velocity;
-            // Per-tick friction scale = `(1 - F)^dt`. Matches PhatSDK
-            // `pow(1.0 - the_friction, quantum)` exactly.
-            let scale = (1.0 - PLAYER_GROUND_FRICTION_PER_SEC).powf(dt_s);
-            v.x *= scale;
-            v.y *= scale;
+
+            // Physics deep-dive 2026-06-01 (Dimension 3) — contact-plane
+            // projection + SLEDDING overrides, faithful to ACE
+            // `PhysicsObj.calc_friction` (`PhysicsObj.cs:2120-2141`).
+            //
+            // Resolve the contact-plane normal under the feet (retail's
+            // `ContactPlane.Normal`). Indoors with baked triangles we use
+            // the real floor-triangle normal so the projection strips the
+            // into-surface velocity component on a ramp; everywhere else
+            // (outdoor heightmap — locally flat per terrain sample — or a
+            // not-yet-baked / off-floor cell) we fall back to the flat
+            // `(0,0,1)` normal, which makes the projection a no-op (the
+            // velocity store is already planar, `v.z == 0`). On flat
+            // ground this is identical to the prior scalar decay.
+            let contact_normal = if pose.is_indoors() {
+                let cell_id = world.scene.current_cell(&pose);
+                let triangles = world.scene.cell_triangles(cell_id);
+                let global = pose.global_coords();
+                let ceiling = world
+                    .scene
+                    .cell_aabb(cell_id)
+                    .map(|a| a.max.z + 1.0)
+                    .unwrap_or(pose.coords.z + 100.0);
+                holtburger_world::spatial::floor_normal_under(
+                    triangles, global.x, global.y, ceiling,
+                )
+                .unwrap_or(Vector3::new(0.0, 0.0, 1.0))
+            } else {
+                Vector3::new(0.0, 0.0, 1.0)
+            };
+
+            // The coefficient is the contested knob. The projection /
+            // SLEDDING fidelity rides along regardless (see
+            // `USE_RETAIL_GROUND_FRICTION` — default-OFF means keep `0.5`).
+            let friction = if USE_RETAIL_GROUND_FRICTION {
+                PLAYER_GROUND_FRICTION_RETAIL
+            } else {
+                PLAYER_GROUND_FRICTION_PER_SEC
+            };
+
+            // SLEDDING gate: retail's `calc_friction` only consults the
+            // SLEDDING branches when `State.HasFlag(PhysicsState.Sledding)`
+            // (`PhysicsObj.cs:2130`). That is a discrete object state — set
+            // for ice/sled physics objects, NOT for a normally-walking
+            // player. We don't carry the Sledding state bit on the local
+            // player and a walking player is never sledding, so this is
+            // `false` (matching retail: the sledding branches are dead for
+            // a non-sledding object). The branches are nonetheless fully
+            // ported + unit-tested in `calc_friction` so a future
+            // sled/ice-physics object can drive them faithfully.
+            //
+            // Keeping this `false` is also what preserves flat-ground
+            // walking exactly: with `normal = (0,0,1)` a geometric-only
+            // sledding gate would (wrongly) fire the near-flat high-speed
+            // glide on every level-ground run.
+            let sledding = false;
+
+            // `velocity_mag2` is the pre-projection magnitude, matching ACE
+            // (`UpdatePhysicsInternal` passes `Velocity.LengthSquared()`).
+            // The planar store keeps `v.z == 0` so this is the true 3D
+            // magnitude on flat ground; on a ramp the small into-surface
+            // component the projection then removes is what reduces the
+            // horizontal speed.
+            let velocity_mag2 = v.x * v.x + v.y * v.y;
+            calc_friction(&mut v, contact_normal, velocity_mag2, friction, sledding, dt_s);
+            // Our velocity store is planar by contract — Z is owned by the
+            // jump/fall arc + floor-Z snap below, not by this lateral
+            // smoother. On a sloped contact normal the projection above
+            // introduces a vertical component (`v.z = -normal.z * angle`);
+            // keep its *horizontal* effect (the reduced `v.x`/`v.y`) and
+            // discard the Z so it can't leak into the planar store or the
+            // world-space delta. On flat ground `v.z` is already 0.
+            v.z = 0.0;
+
             // Move toward target with per-axis accel cap. Retail has no
             // explicit cap (uses friction-only smoothing); this is a
             // game-feel addition to make direction changes ramp through
@@ -925,6 +1100,15 @@ impl MovementSystem {
             false
         };
         let lateral = Vector3::new(raw_delta.x, raw_delta.y, 0.0);
+        // Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide).
+        // The indoor per-poly wall clamp also surfaces the XY contact-
+        // plane normal of the earliest wall it hit (or `None`). The
+        // step-up-refused branch below consults it to slide the blocked
+        // residual along the wall tangent instead of stopping dead. The
+        // outdoor building clamp does not expose a normal yet, so
+        // edge_slide is indoor-only this pass (the common case — risers
+        // taller than the step-up height live in dungeons / buildings).
+        let mut cell_wall_normal: Option<Vector3> = None;
         let lateral_clamped = if pose.is_indoors() {
             // 2026-05-10 indoor collision: prefer per-polygon
             // wall-clamp against the cell's `physics_polygons`
@@ -965,14 +1149,18 @@ impl MovementSystem {
                 Vector3::zero()
             } else {
                 let pre_clamped = if !triangles.is_empty() {
-                    holtburger_world::spatial::clamp_delta_against_cell_walls_with_exclusions(
-                        triangles,
-                        &pose,
-                        lateral,
-                        holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
-                        holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT,
-                        &exclusion_aabbs,
-                    )
+                    let (clamped, normal) =
+                        holtburger_world::spatial::clamp_delta_against_cell_walls_with_normal(
+                            triangles,
+                            &pose,
+                            lateral,
+                            holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                            holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT,
+                            &exclusion_aabbs,
+                        );
+                    // Surface the wall normal for the edge_slide path.
+                    cell_wall_normal = normal;
+                    clamped
                 } else {
                     lateral
                 };
@@ -1173,8 +1361,23 @@ impl MovementSystem {
                     pose.coords.y = intended.coords.y;
                     pose.coords.z = new_feet_z;
                 } else {
-                    pose.coords.x += lateral_clamped.x;
-                    pose.coords.y += lateral_clamped.y;
+                    // Step-up REFUSED (riser too tall). edge_slide
+                    // Stage-1: instead of stopping dead at the clamped
+                    // delta, slide the blocked residual along the wall
+                    // tangent — gated on the player's `AllowEdgeSlide`
+                    // flag and the availability of the wall normal the
+                    // clamp surfaced. Mirrors retail
+                    // `SpherePath.StepUpSlide` → `Sphere.SlideSphere`
+                    // no-contact-plane branch (removes the into-wall
+                    // component). See [`USE_EDGE_SLIDE`].
+                    let slid = edge_slide_refused_step_up(
+                        lateral,
+                        lateral_clamped,
+                        cell_wall_normal,
+                        world.player.allow_edge_slide,
+                    );
+                    pose.coords.x += slid.x;
+                    pose.coords.y += slid.y;
                 }
             } else {
                 pose.coords.x += lateral_clamped.x;
@@ -1185,16 +1388,42 @@ impl MovementSystem {
             pose.coords.y += lateral_clamped.y;
         }
         // TODO (physics deep-dive 2026-06-01, gap 3 follow-up):
-        // edge_slide / cliff_slide. When a step-up is refused (the
-        // riser is too tall) or the player walks off a non-walkable
-        // cliff edge, retail slides along the contact-plane via a
-        // cross-product skid rather than stopping dead
-        // (`Transition.StepUpSlide` + the `AllowEdgeSlide` /
-        // `PhysicsState::EDGE_SLIDE` 0x00400000 gate, parsed at
-        // `object.rs:78` and never consulted). Deferred here — it needs
-        // the contact-plane cross-product skid, which is a larger
-        // change to the single-iteration slide. Not implemented in this
-        // pass.
+        // edge_slide / cliff_slide — STATUS.
+        //
+        // Stage-1 SHIPPED (gated behind [`USE_EDGE_SLIDE`], default-on):
+        // when an indoor step-up is REFUSED (riser too tall) the blocked
+        // residual is slid along the wall tangent via
+        // [`edge_slide_refused_step_up`] instead of stopping dead,
+        // consulting the hydrated `AllowEdgeSlide` flag
+        // (`PlayerState::allow_edge_slide`, from
+        // `PhysicsState::EDGE_SLIDE` / `object.rs:78`). This is the
+        // single-plane case of retail's `Transition.EdgeSlide` →
+        // `SpherePath.StepUpSlide` → `Sphere.SlideSphere`
+        // (`Physics/{Transition,SpherePath,Sphere}.cs`), whose
+        // no-contact-plane branch removes the into-wall component
+        // exactly as our wall clamp's own single-iteration slide does.
+        //
+        // Stage-2 DEFERRED (needs the full CTransition multi-substep
+        // loop — out of scope for the single-iteration solver):
+        //   - The retail `cliff_slide` cross-product skid
+        //     (`N_new × N_last`, `Transition.CliffSlide`
+        //     `Physics/Transition.cs:242-266`) that slides along the
+        //     seam where two non-coplanar walls meet. It needs a SECOND
+        //     `last_known_contact_plane` tracked across substeps; our
+        //     solver does ONE sweep + ONE slide per tick and keeps only
+        //     one plane.
+        //   - The walkable-edge `precipice_slide` + `step_down` re-entry
+        //     and `save/restore_check_pos` backup-pose machinery
+        //     (`Transition.EdgeSlide` walkable branch,
+        //     `Physics/Transition.cs:282-319`). Faking these in the
+        //     single-pass solver would diverge from ACE's server
+        //     reconciliation and risk the indoor-rubberband class the
+        //     pre-bake gate guards against — so the outdoor walk-off a
+        //     non-walkable cliff edge still uses the abrupt
+        //     LEDGE_FALL_THRESHOLD_M / step-down path below.
+        //
+        // The outdoor building clamp does not expose a wall normal yet,
+        // so Stage-1 edge_slide is indoor-only this pass.
         //
         // Pre-bake gate: zero Z delta when the indoor cell is
         // unbaked, same rationale as the lateral zero above —
