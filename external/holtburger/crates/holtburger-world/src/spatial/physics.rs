@@ -48,6 +48,21 @@ const EPSILON: f32 = 1e-4;
 /// the TODO in [`clamp_delta_against_cell_walls_substepped`].
 pub const USE_SUBSTEP_TRANSITION: bool = false;
 
+/// Physics deep-dive 2026-06-01 (CalcNumSteps refinements) — A/B gate
+/// for 3D-distance-aware substep counting, DEFAULT-OFF so existing
+/// behaviour stays bit-for-bit identical until validated.
+///
+/// `false` (DEFAULT): `clamp_delta_against_cell_walls_substepped` keys the
+/// substep count on lateral (XY) distance only — the wall sweep is a swept
+/// circle in XY, so Z-motion does not subdivide.
+///
+/// `true`: include the Z component (`dist = sqrt(dx²+dy²+dz²)`), matching
+/// the non-viewer arm of `Transition.CalcNumSteps` (ACE
+/// `Physics/Transition.cs:97-140`, `offset.Length()` is full 3D), adding
+/// substeps for combined vertical+lateral moves (risers, jumps). No effect
+/// on pure lateral moves.
+pub const USE_CALCNUMSTEPS_3D_DIST: bool = false;
+
 /// Phase 6 step B player-capsule dimensions. ACE derives these from
 /// `Setup._dat.Height` / `Setup._dat.Radius` per
 /// `external/ACE/Source/ACE.Server/Physics/PartArray.cs:189-206`.
@@ -941,22 +956,27 @@ pub fn clamp_delta_against_cell_walls_substepped(
     height: f32,
     exclusion_aabbs: &[Aabb],
 ) -> (Vector3, Option<Vector3>) {
-    // Retail non-viewer CalcNumSteps on the lateral (XY) length. The
-    // wall sweep is a swept circle, so the subdivision count keys on the
-    // lateral distance vs. the capsule radius — exactly
-    // `LocalSphere[0].Radius` in retail.
+    // Retail non-viewer CalcNumSteps. When `USE_CALCNUMSTEPS_3D_DIST` is
+    // `false` (DEFAULT), key the substep count on lateral (XY) distance only
+    // (the wall sweep is a swept circle in XY, so Z does not subdivide).
+    // When `true`, use the full 3D distance matching `Transition.CalcNumSteps`
+    // (`offset.Length()`).
     let lateral_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
+    let dist_for_steps = if USE_CALCNUMSTEPS_3D_DIST {
+        (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt()
+    } else {
+        lateral_len
+    };
 
-    // `dist <= EPS` ⇒ no lateral motion to subdivide; nothing for the
-    // wall clamp to do. Mirrors the `numSteps = 0` / `offset == Zero`
-    // arm of CalcNumSteps (and the early-out the single-pass clamp
-    // already takes for a sub-`1e-6` lateral). Return the delta
-    // untouched (Z passes through) with no normal.
-    if lateral_len <= EPSILON {
+    // `dist <= EPS` ⇒ no motion to subdivide; nothing for the wall clamp to
+    // do. Mirrors the `numSteps = 0` / `offset == Zero` arm of CalcNumSteps
+    // (and the early-out the single-pass clamp already takes). Return the
+    // delta untouched (Z passes through) with no normal.
+    if dist_for_steps <= EPSILON {
         return (delta, None);
     }
 
-    let num_steps = cell_wall_substep_count(lateral_len, radius);
+    let num_steps = cell_wall_substep_count(dist_for_steps, radius);
 
     // `num_steps == 1` is the single-pass solver verbatim — keep it a
     // straight delegate (no loop overhead, provably behaviour-identical
