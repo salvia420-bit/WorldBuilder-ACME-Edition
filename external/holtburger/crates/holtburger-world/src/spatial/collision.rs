@@ -103,8 +103,10 @@ pub mod physics_globals {
 // (the same gate M2/M2b's BSP primitives use in `holtburger-dat`).
 // ===================================================================
 
+use crate::spatial::scene::SpatialScene;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Plane, Vector3};
+use holtburger_dat::physics::PlacementState;
 
 /// BSP M4 (INERT). Faithful port of ACE `SpherePath.InsertType`
 /// (`Physics/SpherePath.cs:8-13`). Selects the collision query mode in the
@@ -282,6 +284,47 @@ pub struct PlacementContext {
 /// (`holtburger-dat physics.rs`) + `intersects_sphere_placement`. Signature
 /// mirrors ACE `ObjCell.FindCollisions(this)` (`Transition.cs:669`).
 pub type CellCollisionFn<'a> = dyn FnMut(&mut PlacementContext, u32) -> TransitionState + 'a;
+
+/// M5 (2026-06-02): the real, BSP-backed [`CellCollisionFn`] — the bridge that
+/// lets `placement_insert` (and the other M4 entry points) run against the live
+/// per-cell physics BSP held by [`SpatialScene`]. For each candidate cell it
+/// reads the context's cached GLOBAL sphere centers and calls
+/// [`SpatialScene::cell_physics_bsp_placement`] (ACE `BSPTree.placement_insert`),
+/// mapping the result back onto the context:
+///   * `Ok`       → `OK`
+///   * `Collided` → `Collided`
+///   * `Adjusted` → apply the WORLD-space displacement via
+///     [`PlacementContext::add_offset_to_check_pos`], return `Adjusted`
+///
+/// A cell with no registered physics BSP yields `OK` (it cannot block) — same
+/// fallback as `cell_physics_bsp_solid`.
+///
+/// INERT — returned for callers/tests; the live integrator does not invoke it
+/// (the BSP placement path stays behind `USE_PHYSICS_BSP`, DEFAULT-OFF).
+pub fn bsp_cell_collision_fn(
+    scene: &SpatialScene,
+) -> impl FnMut(&mut PlacementContext, u32) -> TransitionState + '_ {
+    move |ctx, cell_id| {
+        let num = ctx.path.num_sphere;
+        if num == 0 {
+            return TransitionState::OK;
+        }
+        let k = (num as usize).min(2);
+        let mut centers = [Vector3::zero(); 2];
+        for (i, c) in centers.iter_mut().enumerate().take(k) {
+            *c = ctx.path.global_sphere[i].center;
+        }
+        let radius = ctx.path.global_sphere[0].radius;
+        match scene.cell_physics_bsp_placement(cell_id, &centers[..k], radius, num, true) {
+            None | Some((PlacementState::Ok, _)) => TransitionState::OK,
+            Some((PlacementState::Collided, _)) => TransitionState::Collided,
+            Some((PlacementState::Adjusted, world_disp)) => {
+                ctx.add_offset_to_check_pos(world_disp);
+                TransitionState::Adjusted
+            }
+        }
+    }
+}
 
 impl PlacementContext {
     /// ACE `Transition.Init()` (`Transition.cs:604-611`) + `MakeTransition`
@@ -679,6 +722,105 @@ mod tests {
             coords: Vector3::new(x, y, z),
             rotation: Default::default(),
         }
+    }
+
+    // ---- M5: BSP-backed CellCollisionFn bridge into SpatialScene (inert) ----
+    use crate::spatial::scene::{CellPhysicsBsp, SpatialScene};
+    use holtburger_dat::physics::{BspLeaf, BspNode};
+
+    /// A one-leaf cell at identity orientation. `solid != 0` makes the whole
+    /// cell solid (→ Collided); `solid == 0` makes it empty (→ OK).
+    /// `poly_ids` must be NON-empty for the leaf's `center_check && solid==1`
+    /// solid early-out to fire (`physics.rs:333-337`); the id is absent from
+    /// the empty `polys` map, so the query short-circuits on `center_solid`
+    /// (`hit_poly` stays None → placement loop widens → Collided) without
+    /// needing real boundary geometry. (Boundary-poly displacement / Adjusted
+    /// is covered by the dat-side `placement_insert_*` tests.)
+    fn leaf_cell(solid: i32) -> CellPhysicsBsp {
+        CellPhysicsBsp {
+            tree: BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid,
+                sphere: None,
+                poly_ids: vec![1],
+            }),
+            polys: std::collections::HashMap::new(),
+            origin: Vector3::zero(),
+            orientation: Default::default(),
+        }
+    }
+
+    /// A two-sphere PLACEMENT context whose CheckPos+CheckCell are seeded at
+    /// landblock 0 (so `global_coords() == coords`).
+    fn placement_ctx(cell: u32, radius: f32) -> PlacementContext {
+        let mut ctx = PlacementContext::init();
+        ctx.init_sphere(
+            2,
+            &[
+                SphereLs {
+                    center: Vector3::new(0.0, 0.0, 0.0),
+                    radius,
+                },
+                SphereLs {
+                    center: Vector3::new(0.0, 0.0, 1.0),
+                    radius,
+                },
+            ],
+            1.0,
+        );
+        let pos = wp(10.0, 10.0, 0.0);
+        ctx.init_path(Some(cell), None, pos);
+        ctx.set_check_pos(pos, Some(cell));
+        ctx
+    }
+
+    #[test]
+    fn bsp_bridge_unregistered_cell_is_ok() {
+        let scene = SpatialScene::new();
+        let cell = 0x1234_0001;
+        let mut ctx = placement_ctx(cell, 0.5);
+        let mut collide = bsp_cell_collision_fn(&scene);
+        assert_eq!(collide(&mut ctx, cell), TransitionState::OK);
+    }
+
+    #[test]
+    fn bsp_bridge_clean_cell_is_ok() {
+        let mut scene = SpatialScene::new();
+        let cell = 0x1234_0001;
+        scene.insert_cell_physics_bsp(cell, leaf_cell(0));
+        let mut ctx = placement_ctx(cell, 0.5);
+        let mut collide = bsp_cell_collision_fn(&scene);
+        assert_eq!(collide(&mut ctx, cell), TransitionState::OK);
+    }
+
+    #[test]
+    fn bsp_bridge_solid_cell_collides() {
+        let mut scene = SpatialScene::new();
+        let cell = 0x1234_0001;
+        scene.insert_cell_physics_bsp(cell, leaf_cell(1));
+        let mut ctx = placement_ctx(cell, 0.5);
+        let mut collide = bsp_cell_collision_fn(&scene);
+        assert_eq!(collide(&mut ctx, cell), TransitionState::Collided);
+    }
+
+    #[test]
+    fn placement_insert_drives_bsp_bridge_end_to_end() {
+        // The M4 placement_insert ENTRY POINT, driven by the real M5 BSP
+        // bridge, reports Collided against a fully-solid cell and OK against
+        // a clean one — proving the M4 loop ↔ M3 dat geometry are wired.
+        let cell = 0x1234_0001;
+
+        let mut solid_scene = SpatialScene::new();
+        solid_scene.insert_cell_physics_bsp(cell, leaf_cell(1));
+        let mut ctx = placement_ctx(cell, 0.5);
+        let mut collide = bsp_cell_collision_fn(&solid_scene);
+        assert_eq!(ctx.placement_insert(&mut collide), TransitionState::Collided);
+
+        let mut clean_scene = SpatialScene::new();
+        clean_scene.insert_cell_physics_bsp(cell, leaf_cell(0));
+        let mut ctx2 = placement_ctx(cell, 0.5);
+        let mut collide2 = bsp_cell_collision_fn(&clean_scene);
+        assert_eq!(ctx2.placement_insert(&mut collide2), TransitionState::OK);
     }
 
     #[test]

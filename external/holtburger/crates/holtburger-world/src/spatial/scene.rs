@@ -967,6 +967,54 @@ impl SpatialScene {
         false
     }
 
+    /// BSP collision (M5, 2026-06-02): the PLACEMENT query against a cell's
+    /// physics BSP — the adjust/widen variant of [`Self::cell_physics_bsp_solid`].
+    /// Runs ACE `BSPTree.placement_insert` (holtburger-dat `placement_insert_bsp`)
+    /// for the body's two-sphere cylinder, transformed into the cell-local frame.
+    ///
+    /// `world_sphere_centers[0..num_sphere]` are GLOBAL-meter sphere centers
+    /// (same frame `cell_physics_bsp_solid` takes); `radius` the shared cylinder
+    /// radius; `clear_cell` ACE's `centerCheck` (`true` for an ordinary
+    /// solid-side query). Returns the placement state plus, on `Adjusted`, the
+    /// net WORLD-space displacement to apply to the body (the cell-local result
+    /// rotated back out by the cell orientation; `zero` otherwise). `None` when
+    /// the cell has no registered physics BSP (mirrors `cell_physics_bsp_solid`
+    /// returning `false` — an unbaked / BSP-less cell never blocks).
+    ///
+    /// INERT — not invoked by the live integrator; exercised by M5 unit tests
+    /// and the M4 `placement_insert` bridge (`collision::bsp_cell_collision_fn`).
+    pub fn cell_physics_bsp_placement(
+        &self,
+        cell_id: u32,
+        world_sphere_centers: &[Vector3],
+        radius: f32,
+        num_sphere: u8,
+        clear_cell: bool,
+    ) -> Option<(holtburger_dat::physics::PlacementState, Vector3)> {
+        let bsp = self.cell_physics_bsp.get(&cell_id)?;
+        let n = (num_sphere as usize).min(2).min(world_sphere_centers.len());
+        let mut local = [holtburger_common::Sphere {
+            center: Vector3::zero(),
+            radius: 0.0,
+        }; 2];
+        for i in 0..n {
+            local[i] = holtburger_common::Sphere {
+                center: bsp.world_to_local(world_sphere_centers[i]),
+                radius,
+            };
+        }
+        let probe = bsp
+            .tree
+            .placement_insert_bsp(&local, num_sphere, clear_cell, &bsp.polys);
+        let world_disp = match probe.state {
+            holtburger_dat::physics::PlacementState::Adjusted => {
+                bsp.orientation.rotate_vector(probe.local_displacement)
+            }
+            _ => Vector3::zero(),
+        };
+        Some((probe.state, world_disp))
+    }
+
     /// Phase 6 step D: portal neighbours of `cell_id`. Empty slice if
     /// the cell isn't in the graph (no EnvCell loaded yet, or an
     /// outdoor cell). Phase E may want an iterator; today the slice
