@@ -1,7 +1,7 @@
 use super::{
     AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, CellPortalPolygon,
-    ContactState, RuntimeSpatialBodyView, SolvedBodyKinematics, SpatialBody, SpatialBodyId,
-    SpatialPhysics, SpatialSampleMode, SpatialSamplingConfig, StaticAabbEntry,
+    ContactState, InterpStep, RuntimeSpatialBodyView, SolvedBodyKinematics, SpatialBody,
+    SpatialBodyId, SpatialPhysics, SpatialSampleMode, SpatialSamplingConfig, StaticAabbEntry,
     physics::sample_mode_for_projection_state,
 };
 use crate::entity::EntityMotionSnapshot;
@@ -29,6 +29,40 @@ use web_time::Instant;
 /// preserved on every Snapshot reconcile and only the JS dead-reckon
 /// layer ever converges the avatar. Retained for A/B comparison.
 const USE_LOCAL_FORCE_POSITION_CONSTRAINT: bool = true;
+
+/// Physics deep-dive 2026-06-01 (gap 4, multi-pass) — opt-in faithful
+/// retail `PositionManager::InterpolateTo` / `ConstrainTo` reconciliation
+/// easing curve, DEFAULT-OFF.
+///
+/// `false` (default, **shipped behaviour unchanged**): on an inbound
+/// LOCAL-player force-position the reconcile applies the single-step
+/// linear constraint-pull [`constrain_local_pose_toward`] — one capped
+/// correction per message. This is the validated, shipped solver path.
+///
+/// `true` (opt-in, for later validation): the reconcile instead
+/// *installs* a stateful per-body interpolator
+/// ([`super::RetailForcePositionInterpolator`]) — the 1:1 port of
+/// retail's `ConstrainTo` + `InterpolateTo` pair
+/// (acclient.c 145210-145218). The integrator then eases `body.pose`
+/// toward the forced pose every physics frame via
+/// [`SpatialScene::step_force_position_interpolation`], using the retail
+/// velocity / duration model (`maxSpeed = get_adjusted_max_speed()*2`,
+/// per-frame step capped at `maxSpeed * quantum`, 0.05 m deadband,
+/// 5-frame progress window, constraint-leash down-scaling). The single
+/// per-message pull is NOT applied in this mode — the per-frame stepper
+/// owns convergence.
+///
+/// NOTE: when this flag is `true`, callers must drive
+/// [`SpatialScene::step_force_position_interpolation`] each physics frame
+/// for the LOCAL player. That per-frame wiring into the live local-drive
+/// integrator (`MovementSystem::advance_local_pose_for_manual_drive`,
+/// `crates/holtburger-core/.../movement/system.rs`) is the deferred
+/// slice (see this file's header notes / the deep-dive handoff) and is
+/// intentionally NOT enabled by default so the shipped solver behaviour
+/// stays byte-for-byte identical. The easing curve, the install path and
+/// the per-frame stepper are all implemented + unit-tested here so the
+/// remaining work is purely the integrator call-site.
+const USE_RETAIL_INTERPOLATE: bool = false;
 
 /// Physics deep-dive 2026-06-01 (gap 4) — retail autonomy-blip /
 /// constraint-leash distances for the local-player force-position
@@ -204,6 +238,51 @@ impl BodySamplingStore {
     }
 }
 
+/// BSP collision narrow-phase data (PASS 1, 2026-06-02) for one
+/// EnvCell, kept in CELL-LOCAL space alongside the cell's `position`
+/// frame. This is the parallel to [`SpatialScene::cell_physics_index`]'s
+/// flat triangle bag — same source `CellStruct`, but it preserves the
+/// ALREADY-PARSED physics BSP tree + the resolved physics polygons
+/// instead of fan-triangulating and discarding the tree.
+///
+/// The query sphere is transformed INTO this cell-local frame at query
+/// time (`world → orientation^-1 · (world − origin)`), matching ACE's
+/// `SpherePath.LocalSpacePos` — we never transform the tree into world
+/// space. Lifetime tracks `cell_physics_index` (cleared on landblock
+/// unload).
+#[derive(Clone)]
+pub struct CellPhysicsBsp {
+    /// The parsed physics BSP tree (cell-local planes + bounding
+    /// spheres), straight from `CellStruct.physics_bsp`.
+    pub tree: holtburger_dat::physics::BspNode,
+    /// Physics polygons resolved to cell-local vertices + computed
+    /// planes, keyed by the `u16` poly-id the BSP leaves reference.
+    pub polys: HashMap<u16, holtburger_dat::physics::ResolvedPolygon>,
+    /// Cell origin in WORLD space (landblock origin + EnvCell
+    /// `position.origin`).
+    pub origin: Vector3,
+    /// Cell orientation (EnvCell `position.orientation`). Unit
+    /// quaternion; its conjugate maps world→cell-local.
+    pub orientation: holtburger_common::Quaternion,
+}
+
+impl CellPhysicsBsp {
+    /// Transform a WORLD-space point into this cell's local frame:
+    /// `local = orientation^-1 · (world − origin)`. The orientation is
+    /// a unit quaternion so the inverse is its conjugate
+    /// `(w, −x, −y, −z)`.
+    pub fn world_to_local(&self, world: Vector3) -> Vector3 {
+        let q = self.orientation;
+        let inv = holtburger_common::Quaternion {
+            w: q.w,
+            x: -q.x,
+            y: -q.y,
+            z: -q.z,
+        };
+        inv.rotate_vector(world - self.origin)
+    }
+}
+
 #[derive(Clone)]
 pub struct SpatialScene {
     landblock_map: HashMap<Guid, HashSet<Guid>>,
@@ -245,6 +324,18 @@ pub struct SpatialScene {
     /// kernel doesn't have to redo the cell-frame rotation each
     /// frame. Cleared on landblock unload alongside `cell_aabbs`.
     cell_physics_index: HashMap<u32, Vec<Triangle>>,
+    /// BSP collision (PASS 1, 2026-06-02): per-cell physics BSP tree +
+    /// resolved physics polygons + cell frame, keyed by full 32-bit
+    /// cell id (parallel to `cell_physics_index`). Populated by
+    /// `fetchEnvCellsInLandblock`'s collision walk when the
+    /// `USE_PHYSICS_BSP` path is built — the data is preserved
+    /// regardless of the integrator flag so flipping the flag on is a
+    /// pure runtime switch. Read by [`Self::cell_physics_bsp_solid`]
+    /// (the low+high two-sphere query) when the flag is on. Cell-local
+    /// geometry; the query sphere is transformed into the cell frame
+    /// (see [`CellPhysicsBsp::world_to_local`]). Cleared on landblock
+    /// unload alongside `cell_physics_index`.
+    cell_physics_bsp: HashMap<u32, CellPhysicsBsp>,
     /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
     /// world space, for screen-space portal-frustum clipping. Keyed by
     /// the EnvCell's full 32-bit cell id; each entry is a list of
@@ -365,6 +456,7 @@ impl SpatialScene {
             cell_portal_graph: HashMap::new(),
             cell_aabbs: HashMap::new(),
             cell_physics_index: HashMap::new(),
+            cell_physics_bsp: HashMap::new(),
             cell_portal_polygons: HashMap::new(),
             door_part_index: HashMap::new(),
             open_door_exclusion_aabbs: HashMap::new(),
@@ -688,6 +780,9 @@ impl SpatialScene {
         // out if a gauge is needed.
         self.cell_physics_index
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
+        // BSP collision (PASS 1): same lifetime as cell_physics_index.
+        self.cell_physics_bsp
+            .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         // Phase 5 PView port: same lifetime as cell_aabbs.
         self.cell_portal_polygons
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
@@ -800,6 +895,76 @@ impl SpatialScene {
     /// log uses this to confirm the populator wired up.
     pub fn cell_physics_count(&self) -> usize {
         self.cell_physics_index.len()
+    }
+
+    /// BSP collision (PASS 1, 2026-06-02): register the physics BSP
+    /// tree + resolved polygons + cell frame for `cell_id`. Called by
+    /// the wasm bundle's `fetchEnvCellsInLandblock` collision walk
+    /// alongside `insert_cell_triangle` — the BSP path REUSES the
+    /// already-parsed tree (it does not re-parse) and keeps it
+    /// cell-local. Idempotent overwrite per cell (a re-bake after LRU
+    /// eviction replaces).
+    pub fn insert_cell_physics_bsp(&mut self, cell_id: u32, bsp: CellPhysicsBsp) {
+        self.cell_physics_bsp.insert(cell_id, bsp);
+    }
+
+    /// BSP collision (PASS 1): read access to the physics BSP for
+    /// `cell_id` (or `None` if not registered / not yet baked).
+    pub fn cell_physics_bsp(&self, cell_id: u32) -> Option<&CellPhysicsBsp> {
+        self.cell_physics_bsp.get(&cell_id)
+    }
+
+    /// BSP collision (PASS 1): count of cells with a registered physics
+    /// BSP. Diagnostic only.
+    pub fn cell_physics_bsp_count(&self) -> usize {
+        self.cell_physics_bsp.len()
+    }
+
+    /// BSP collision (PASS 1, 2026-06-02): the authoritative "is the
+    /// player capsule solid at this world pose" test, using the
+    /// faithful ACE `BSPNode.sphere_intersects_solid` walk.
+    ///
+    /// Lowers the player capsule to ACE's two collision spheres
+    /// (`NumSphere == 2`, `PartArray.cs`): a LOW sphere at
+    /// `feet + radius` and a HIGH sphere at `head − radius`, both of
+    /// `radius`. (`feet_world_z` is the bottom of the capsule;
+    /// `height` its full extent.) Each sphere center is transformed
+    /// into the cell-local frame and tested against the BSP. Returns
+    /// `true` if EITHER sphere is solid.
+    ///
+    /// Returns `false` when the cell has no registered physics BSP —
+    /// the integrator falls back to the flat-triangle solver in that
+    /// case, so an unbaked / BSP-less cell never blocks spuriously.
+    pub fn cell_physics_bsp_solid(
+        &self,
+        cell_id: u32,
+        center_world_xy: (f32, f32),
+        feet_world_z: f32,
+        radius: f32,
+        height: f32,
+    ) -> bool {
+        let Some(bsp) = self.cell_physics_bsp.get(&cell_id) else {
+            return false;
+        };
+        // ACE two-sphere cylinder (low + high). The low sphere sits one
+        // radius above the feet; the high sphere one radius below the
+        // head. For a capsule shorter than 2·radius these collapse
+        // toward the middle — still a valid (degenerate) two-sphere
+        // probe.
+        let low_z = feet_world_z + radius;
+        let high_z = feet_world_z + (height - radius).max(radius);
+        for cz in [low_z, high_z] {
+            let world_center = Vector3::new(center_world_xy.0, center_world_xy.1, cz);
+            let local_center = bsp.world_to_local(world_center);
+            let sphere = holtburger_common::Sphere {
+                center: local_center,
+                radius,
+            };
+            if bsp.tree.sphere_intersects_solid(&sphere, true, &bsp.polys) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Phase 6 step D: portal neighbours of `cell_id`. Empty slice if
@@ -1370,7 +1535,41 @@ impl SpatialScene {
             // on the simulating value so the integrator keeps driving;
             // only the working origin is nudged. (Far-enough corrections
             // still hard-blip; see `constrain_local_pose_toward`.)
-            if USE_LOCAL_FORCE_POSITION_CONSTRAINT {
+            if USE_RETAIL_INTERPOLATE {
+                // Opt-in faithful path: install the retail
+                // `ConstrainTo` + `InterpolateTo` managers and let the
+                // per-frame integrator ease `body.pose` toward the forced
+                // pose (see `step_force_position_interpolation`). Only
+                // install for a sub-blip gap — beyond the autonomy-blip
+                // radius this is a routine far broadcast / teleport-class
+                // correction (the academy-rubberband invariant), so we
+                // leave the working pose untouched and clear any pending
+                // interpolation.
+                let indoor = pose.is_indoors();
+                let blip = if indoor {
+                    BLIP_SNAP_DISTANCE_INDOOR_M
+                } else {
+                    BLIP_SNAP_DISTANCE_OUTDOOR_M
+                };
+                let leash_start = if indoor {
+                    CONSTRAINT_LEASH_INDOOR_M
+                } else {
+                    CONSTRAINT_LEASH_OUTDOOR_M
+                };
+                let distance = body.pose.distance_to(&pose);
+                if distance > blip {
+                    body.force_position_interp.stop();
+                } else {
+                    // `keep_heading = true`: the integrator owns heading
+                    // and the forced rotation is recorded in
+                    // `authoritative_pose` above. `start = leash`,
+                    // `max = blip` mirror `GetStartConstraintDistance` /
+                    // `GetMaxConstraintDistance` for the player.
+                    body.force_position_interp.install(
+                        body.pose, pose, leash_start, blip, true,
+                    );
+                }
+            } else if USE_LOCAL_FORCE_POSITION_CONSTRAINT {
                 body.pose = constrain_local_pose_toward(body.pose, pose);
             }
         } else {
@@ -1379,6 +1578,56 @@ impl SpatialScene {
         }
 
         self.body_store.register_body(body);
+    }
+
+    /// Physics deep-dive 2026-06-01 (gap 4, opt-in) — advance the faithful
+    /// retail force-position interpolator for one physics frame, mutating
+    /// `body.pose` toward the installed forced target via the retail
+    /// `adjust_offset` easing curve (see
+    /// [`super::RetailForcePositionInterpolator::step`]).
+    ///
+    /// This is the per-frame half of the [`USE_RETAIL_INTERPOLATE`] path.
+    /// It is a NO-OP when:
+    /// - the flag is `false` (shipped single-step path is in effect), or
+    /// - no interpolation target is installed on the body, or
+    /// - the body does not exist.
+    ///
+    /// `quantum` is the frame `dt` in seconds. `max_speed` should be the
+    /// player's `get_adjusted_max_speed() * 2.0`
+    /// (`run_rate * 4.0 * 2.0`); pass `0.0` to let the interpolator floor
+    /// to `MAX_INTERPOLATED_VELOCITY` (7.5 m/s). `on_contact` mirrors
+    /// `TransientStateFlags.Contact`.
+    ///
+    /// Returns the per-frame [`InterpStep`] outcome (`Idle` when nothing
+    /// happened), so the caller can observe completion/failure.
+    pub fn step_force_position_interpolation(
+        &mut self,
+        body_id: SpatialBodyId,
+        quantum: f32,
+        max_speed: f32,
+        on_contact: bool,
+    ) -> InterpStep {
+        if !USE_RETAIL_INTERPOLATE {
+            return InterpStep::Idle;
+        }
+        let Some(body) = self.body_store.body_mut(body_id) else {
+            return InterpStep::Idle;
+        };
+        if !body.force_position_interp.is_interpolating() {
+            return InterpStep::Idle;
+        }
+        let outcome =
+            body.force_position_interp
+                .step(body.pose, quantum, max_speed, on_contact);
+        match outcome {
+            InterpStep::Progressed { pose } | InterpStep::Completed { pose } => {
+                body.pose = pose;
+            }
+            // Failed leaves the working pose where it was; Idle is unreachable
+            // here (we checked is_interpolating above).
+            InterpStep::Failed { .. } | InterpStep::Idle => {}
+        }
+        outcome
     }
 
     pub fn retire_authoritative_body(&mut self, body_id: SpatialBodyId) -> Option<SpatialBody> {

@@ -36,9 +36,10 @@ pub use sky::{
     calc_present_day_group,
 };
 pub use spatial::{
-    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, CellPortalPolygon,
-    ContactState, GenericSweptHit, LocalDriveControl, LocalDriveGait, NoopSpatialPhysics,
-    PLAYER_CAPSULE_HEIGHT, PLAYER_CAPSULE_RADIUS, RuntimeBodyResetCause, RuntimeSpatialBodyView,
+    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, CellPhysicsBsp,
+    CellPortalPolygon, ContactState, GenericSweptHit, LocalDriveControl, LocalDriveGait,
+    NoopSpatialPhysics, PLAYER_CAPSULE_HEIGHT, PLAYER_CAPSULE_RADIUS, RuntimeBodyResetCause,
+    RuntimeSpatialBodyView,
     SelfPlayerDriveProjectionState, SolveBodyInput, SolveProjectionBasis, SolvedBodyKinematics,
     SpatialBody, SpatialBodyEvent, SpatialBodyId, SpatialEntitySample, SpatialPhysics,
     SpatialSampleMode, SpatialSamplingConfig, SpatialSamplingState, SpatialScene,

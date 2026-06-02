@@ -10,6 +10,44 @@ use std::time::Duration;
 
 const EPSILON: f32 = 1e-4;
 
+/// Physics deep-dive 2026-06-01 (gap: CalcNumSteps substepping) — A/B
+/// gate for the cell-wall collision sweep's substep ("collide + slide
+/// each sub-segment") loop, DEFAULT-OFF so the shipped single-iteration
+/// solver behaviour is bit-for-bit unchanged until this path is
+/// validated.
+///
+/// `false` (DEFAULT): the public wrappers
+/// ([`clamp_delta_against_cell_walls`] et al.) call the single-pass
+/// [`clamp_delta_against_cell_walls_with_normal`] directly — exactly the
+/// pre-2026-06-01 behaviour.
+///
+/// `true`: the wrappers route through
+/// [`clamp_delta_against_cell_walls_substepped`], which subdivides the
+/// requested delta into `ceil(dist/radius)` equal sub-segments
+/// (retail's non-viewer `Transition.CalcNumSteps`, ACE
+/// `Physics/Transition.cs:97-140`) and runs the existing per-step
+/// collide+slide on each, advancing a working pose between steps and
+/// recomputing the global sweep origin each step. This catches a fast
+/// lateral move that the single iteration would let *tunnel* past a
+/// thin wall (the sweep mid-point sample can miss), and it lets a long
+/// diagonal into a concave (L-shaped) corner slide along the SECOND wall
+/// after the first wall clamps the first sub-segment — the single pass
+/// stops dead at the first wall.
+///
+/// `num_steps == 1` (the common case: a per-tick run move ≈ 0.43 m <
+/// radius 0.4 m → `dist/radius ≈ 1.07`, so usually 2 steps for a full
+/// run tick, 1 step for a slower move) routes through the same per-step
+/// call as today and is behaviour-identical, so flipping this on is a
+/// pure superset for short moves and only diverges on fast / concave
+/// motion — the cases it is meant to fix.
+///
+/// This is the foundation for the deferred retail `cliff_slide`
+/// cross-product skid (`Transition.CliffSlide`,
+/// `Physics/Transition.cs:242-266`), which needs the per-step
+/// `last_known_contact_plane` this loop now carries across substeps. See
+/// the TODO in [`clamp_delta_against_cell_walls_substepped`].
+pub const USE_SUBSTEP_TRANSITION: bool = false;
+
 /// Phase 6 step B player-capsule dimensions. ACE derives these from
 /// `Setup._dat.Height` / `Setup._dat.Radius` per
 /// `external/ACE/Source/ACE.Server/Physics/PartArray.cs:189-206`.
@@ -290,7 +328,12 @@ use holtburger_common::Triangle;
 /// `0.66417414618662751` corresponds to ~48.4° from horizontal —
 /// anything steeper is treated as a wall, not a floor. Stored at full
 /// f64 source precision and narrowed to `f32` for our normals.
-const FLOOR_Z: f32 = 0.664_174_15;
+///
+/// Public so the cliff_slide caller can reproduce retail's
+/// `CollisionInfo.ContactPlane.Normal.Z < zval` WALL test
+/// (`Transition.EdgeSlide`, `Transition.cs:276`) on the surfaced
+/// `cell_wall_normal` before invoking the seam-skid.
+pub const FLOOR_Z: f32 = 0.664_174_15;
 
 /// 2026-05-10 indoor collision (Phase 6 step G follow-on): return the
 /// highest "floor" Z below `(x, y)` from the given triangles, or
@@ -549,7 +592,10 @@ pub fn clamp_delta_against_cell_walls_with_exclusions(
     height: f32,
     exclusion_aabbs: &[Aabb],
 ) -> Vector3 {
-    clamp_delta_against_cell_walls_with_normal(
+    // Route through the substep dispatcher so this wrapper picks up the
+    // CalcNumSteps loop when `USE_SUBSTEP_TRANSITION` is on; flag-OFF it
+    // calls the single-pass `_with_normal` and is behaviour-identical.
+    clamp_delta_against_cell_walls_dispatch(
         triangles,
         pose,
         delta,
@@ -558,6 +604,46 @@ pub fn clamp_delta_against_cell_walls_with_exclusions(
         exclusion_aabbs,
     )
     .0
+}
+
+/// Dispatch shared by the public cell-wall wrappers and the
+/// `holtburger-core` integrator call site: routes to the CalcNumSteps
+/// substep loop when [`USE_SUBSTEP_TRANSITION`] is on, else to the
+/// single-pass [`clamp_delta_against_cell_walls_with_normal`]. Keeping
+/// the flag check in ONE place means the three wrappers + the integrator
+/// stay in lock-step on which solver they use, and the shipped behaviour
+/// is provably unchanged while the flag is OFF (every consumer takes the
+/// single-pass branch). Returns the same `(clamped, Option<normal>)`
+/// shape as `_with_normal` so it drops in at the integrator site where
+/// the wall normal feeds the edge_slide path.
+#[inline]
+pub fn clamp_delta_against_cell_walls_dispatch(
+    triangles: &[Triangle],
+    pose: &WorldPosition,
+    delta: Vector3,
+    radius: f32,
+    height: f32,
+    exclusion_aabbs: &[Aabb],
+) -> (Vector3, Option<Vector3>) {
+    if USE_SUBSTEP_TRANSITION {
+        clamp_delta_against_cell_walls_substepped(
+            triangles,
+            pose,
+            delta,
+            radius,
+            height,
+            exclusion_aabbs,
+        )
+    } else {
+        clamp_delta_against_cell_walls_with_normal(
+            triangles,
+            pose,
+            delta,
+            radius,
+            height,
+            exclusion_aabbs,
+        )
+    }
 }
 
 /// Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide). Same
@@ -762,6 +848,177 @@ pub fn clamp_delta_against_cell_walls_with_normal(
     (stopped + slide, Some(normal))
 }
 
+/// Physics deep-dive 2026-06-01 (gap: CalcNumSteps substepping). Wrap
+/// the single-iteration cell-wall clamp
+/// ([`clamp_delta_against_cell_walls_with_normal`]) in a retail-faithful
+/// substep loop so a fast lateral move is subdivided into
+/// `ceil(dist/radius)` equal sub-segments that each collide + slide,
+/// instead of one mid-point-sampled sweep that can tunnel a thin wall or
+/// stop dead at the first wall of a concave (L-shaped) corner.
+///
+/// This is a faithful port of ACE's **non-viewer**
+/// `Transition.CalcNumSteps` (`Physics/Transition.cs:97-140`, re-grep —
+/// lines drift): for a non-viewer object retail computes
+/// `step = dist / LocalSphere[0].Radius`; if `step > 1` then
+/// `numSteps = ceil(step)` with `offsetPerStep = offset / numSteps` (an
+/// EQUAL subdivision of the full delta), else if the offset is non-zero
+/// `numSteps = 1`, else `numSteps = 0`. We compute the same on the
+/// **lateral** length (the wall clamp is a 2D/XY swept circle; Z is
+/// carried along each sub-segment but does not drive subdivision — the
+/// retail viewer branch keys on the full `dist` instead, which we do NOT
+/// use here, matching the non-viewer player path).
+///
+/// Loop semantics (mirrors retail's `step_sphere`/`collide_and_slide`
+/// over `CTransition` substeps, but reusing OUR per-step collision — no
+/// BSP rewrite):
+/// - Clone `pose` into a mutable `working` pose.
+/// - For each step, delegate the per-step CLAMPED-and-slid segment to
+///   [`clamp_delta_against_cell_walls_with_normal`] from the working
+///   pose with that step's slice of the delta (`offset_per_step`).
+/// - Advance `working.coords` by the **clamped** segment (not the raw
+///   `offset_per_step`), so the next step's sweep origin
+///   (`working.global_coords()`, recomputed each step) reflects where we
+///   actually ended up after the slide.
+/// - Accumulate `total_clamped` (the sum of clamped segments — what the
+///   caller applies) and carry `last_normal` across steps (the most
+///   recent wall hit, for the edge_slide path + the deferred
+///   `cliff_slide` hook below).
+/// - Early-break when a step's clamped segment is ~zero-length (a fully
+///   blocked sub-segment): the remaining steps would push the same
+///   stuck origin into the same wall, so there is nothing more to gain
+///   and we avoid burning the rest of the loop on a no-op.
+///
+/// Returns `(total_clamped, last_normal)` with the SAME shape +
+/// semantics as [`clamp_delta_against_cell_walls_with_normal`] so it
+/// drops in at every call site. With `num_steps <= 1` it is exactly one
+/// delegated single-pass call ⇒ behaviour-identical to the shipped
+/// solver (used for the A/B straight-wall parity test).
+///
+/// cliff_slide Stage-2 SHIPPED (retail `cliff_slide`,
+/// `Transition.CliffSlide` `Physics/Transition.cs:242-266`): the
+/// cross-product SEAM-skid `Vector3.Cross(contactPlane.Normal,
+/// LastKnownContactPlane.Normal)` (Z-zeroed) is implemented in
+/// [`cliff_slide_residual_along_seam`] and consumed by the integrator's
+/// `edge_slide_refused_step_up` path behind the DEFAULT-OFF
+/// `USE_CLIFF_SLIDE` flag. The integrator carries the
+/// `LastKnownContactPlane` across integration slices via
+/// `PlayerState::last_known_wall_normal` (the persistent analogue of the
+/// per-substep `last_normal` accumulated below); this substep loop's
+/// `last_normal` is the within-tick equivalent for callers that consume
+/// the substepped result directly. Wiring the seam-skid INSIDE this
+/// per-substep loop (so a single fast tick that crosses two walls skids
+/// the seam mid-tick, not just across ticks) remains a localized
+/// follow-up off this same accumulation point.
+/// Retail non-viewer `Transition.CalcNumSteps` substep count, isolated
+/// for unit testing (`Physics/Transition.cs:97-140`). Given the lateral
+/// distance of the requested move and the swept-circle `radius`
+/// (retail's `LocalSphere[0].Radius`):
+/// - `dist <= EPSILON` ⇒ `0` (no motion to subdivide).
+/// - `step = dist / radius`; if `step > 1.0` ⇒ `ceil(step)` (>= 2).
+/// - otherwise ⇒ `1` (a single sub-segment for a non-zero short move).
+///
+/// Examples (radius 0.4, the player capsule): a 0.3 m move ⇒
+/// `0.3/0.4 = 0.75 <= 1` ⇒ 1 step; a 1.0 m move ⇒ `1.0/0.4 = 2.5 > 1` ⇒
+/// `ceil(2.5) = 3` steps.
+pub fn cell_wall_substep_count(lateral_len: f32, radius: f32) -> usize {
+    if lateral_len <= EPSILON {
+        return 0;
+    }
+    let step = lateral_len / radius.max(1e-6);
+    if step > 1.0 {
+        // `step > 1.0` guarantees `ceil(step) >= 2`.
+        step.ceil() as usize
+    } else {
+        1
+    }
+}
+
+pub fn clamp_delta_against_cell_walls_substepped(
+    triangles: &[Triangle],
+    pose: &WorldPosition,
+    delta: Vector3,
+    radius: f32,
+    height: f32,
+    exclusion_aabbs: &[Aabb],
+) -> (Vector3, Option<Vector3>) {
+    // Retail non-viewer CalcNumSteps on the lateral (XY) length. The
+    // wall sweep is a swept circle, so the subdivision count keys on the
+    // lateral distance vs. the capsule radius — exactly
+    // `LocalSphere[0].Radius` in retail.
+    let lateral_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
+
+    // `dist <= EPS` ⇒ no lateral motion to subdivide; nothing for the
+    // wall clamp to do. Mirrors the `numSteps = 0` / `offset == Zero`
+    // arm of CalcNumSteps (and the early-out the single-pass clamp
+    // already takes for a sub-`1e-6` lateral). Return the delta
+    // untouched (Z passes through) with no normal.
+    if lateral_len <= EPSILON {
+        return (delta, None);
+    }
+
+    let num_steps = cell_wall_substep_count(lateral_len, radius);
+
+    // `num_steps == 1` is the single-pass solver verbatim — keep it a
+    // straight delegate (no loop overhead, provably behaviour-identical
+    // to the shipped path; this is the A/B parity anchor).
+    if num_steps <= 1 {
+        return clamp_delta_against_cell_walls_with_normal(
+            triangles,
+            pose,
+            delta,
+            radius,
+            height,
+            exclusion_aabbs,
+        );
+    }
+
+    let inv = 1.0 / num_steps as f32;
+    let offset_per_step = delta * inv;
+
+    let mut working = *pose;
+    let mut total_clamped = Vector3::zero();
+    let mut last_normal: Option<Vector3> = None;
+
+    for _ in 0..num_steps {
+        // Per-step collide + slide from the CURRENT working pose. The
+        // sweep recomputes its global origin from `working.global_coords()`
+        // internally, so advancing `working.coords` below is all that is
+        // needed to march the origin forward between steps.
+        let (clamped_step, step_normal) = clamp_delta_against_cell_walls_with_normal(
+            triangles,
+            &working,
+            offset_per_step,
+            radius,
+            height,
+            exclusion_aabbs,
+        );
+
+        total_clamped = total_clamped + clamped_step;
+        // Carry the most-recent wall normal across steps. This is the
+        // `LastKnownContactPlane` accumulation hook for the deferred
+        // cliff_slide cross-product (see the TODO above): a later step
+        // that hits a DIFFERENT wall has both planes available here.
+        if step_normal.is_some() {
+            last_normal = step_normal;
+        }
+
+        // Advance the working pose by the CLAMPED (slid) segment so the
+        // next step sweeps from where we actually ended up.
+        working.coords = working.coords + clamped_step;
+
+        // Early-break on a fully-blocked sub-segment: if this step's
+        // lateral travel collapsed to ~0 (wall dead-ahead, no tangent to
+        // slide along), the remaining steps would re-push the same stuck
+        // origin into the same wall. Nothing more to accumulate.
+        let step_lat = (clamped_step.x * clamped_step.x + clamped_step.y * clamped_step.y).sqrt();
+        if step_lat <= EPSILON {
+            break;
+        }
+    }
+
+    (total_clamped, last_normal)
+}
+
 /// Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide).
 /// Project a (blocked) residual lateral delta onto the wall tangent so
 /// it slides ALONG the wall instead of stopping dead against it: returns
@@ -787,6 +1044,85 @@ pub fn slide_residual_along_wall_tangent(residual: Vector3, normal: Vector3) -> 
     }
     let into_normal = residual.dot(&normal);
     residual - normal * into_normal
+}
+
+/// Physics deep-dive 2026-06-01 (cliff_slide Stage-2). Faithful port of
+/// retail's `Transition.CliffSlide` (ACE
+/// `external/ACE/Source/ACE.Server/Physics/Transition.cs:242-266`,
+/// `acclient.c:312005`): the SEAM-skid that fires when a moving sphere is
+/// wedged between TWO non-coplanar contact planes. Where the single-plane
+/// [`slide_residual_along_wall_tangent`] removes the into-wall component
+/// of a residual against ONE wall, this slides the residual along the
+/// *line where two walls meet* — so a diagonal jammed into a concave
+/// (L-shaped) corner rides the seam instead of stopping dead or popping
+/// through.
+///
+/// Inputs:
+/// - `residual`: the blocked residual move (retail's
+///   `GlobalSphere.Center - GlobalCurrCenter.Center`, the offset the
+///   sweep could not consume). We use the lateral residual the caller is
+///   trying to redistribute.
+/// - `n_new`: the CURRENT contact-plane normal (retail's
+///   `contactPlane.Normal`, our `cell_wall_normal` for this slice).
+/// - `n_last`: the PREVIOUSLY-tracked contact-plane normal (retail's
+///   `CollisionInfo.LastKnownContactPlane.Normal`, our
+///   `PlayerState::last_known_wall_normal`).
+///
+/// Math (1:1 with retail, re-grep `Transition.cs:244-265`):
+/// ```text
+/// cross  = n_new × n_last;  cross.z = 0          // seam DIRECTION (3D)
+/// seam   = (-cross.y, cross.x, 0)                // perpendicular in XY
+/// if NormalizeCheckSmall(seam) -> return None    // degenerate: planes
+///                                                //   ~parallel, no seam
+/// angle  = dot(seam, residual)
+/// return Some(seam * (angle <= 0 ? angle : -angle))
+/// ```
+/// (Retail's `collideNormal = (contactNormal.Z - contactNormal.Y,
+/// contactNormal.X - contactNormal.Z, 0)` reduces to `(-cross.y,
+/// cross.x, 0)` because `contactNormal.Z` is zeroed on the prior line.)
+///
+/// Returns `None` whenever the caller should fall back to the Stage-1
+/// single-plane slide: this happens when `NormalizeCheckSmall` reports
+/// the seam degenerate — i.e. the two planes are near-parallel
+/// (coplanar/anti-parallel normals ⇒ a near-zero cross product), so
+/// there is no well-defined seam to ride. Mirrors retail returning
+/// `TransitionState.OK` (no adjustment) from that branch, after which
+/// `EdgeSlide` proceeds without a cliff adjustment.
+///
+/// `EPSILON` here is retail's `PhysicsGlobals.EPSILON = 0.0002`
+/// (`PhysicsGlobals.cs:9`), the same threshold `NormalizeCheckSmall`
+/// uses, so the degenerate bail fires at the identical magnitude.
+pub fn cliff_slide_residual_along_seam(
+    residual: Vector3,
+    n_new: Vector3,
+    n_last: Vector3,
+) -> Option<Vector3> {
+    // Retail PhysicsGlobals.EPSILON, the NormalizeCheckSmall threshold.
+    const RETAIL_EPSILON: f32 = 0.0002;
+
+    // Seam direction = N_new × N_last, projected into the XY plane.
+    let mut cross = n_new.cross(&n_last);
+    cross.z = 0.0;
+
+    // Perpendicular-in-XY of the (Z-zeroed) cross product. With
+    // cross.z == 0 this is retail's `collideNormal` after the
+    // `contactNormal.Z - ...` terms drop their zero Z component.
+    let mut seam = Vector3::new(-cross.y, cross.x, 0.0);
+
+    // NormalizeCheckSmall: bail (no seam) when degenerate — the two
+    // planes are near-parallel, so the cross product (hence the seam) is
+    // ~zero-length and there is nothing meaningful to slide along.
+    let len = seam.length();
+    if len < RETAIL_EPSILON {
+        return None;
+    }
+    seam = seam * (1.0 / len);
+
+    // Project the residual onto the seam; retail flips the sign so the
+    // adjustment always points back along (not past) the seam tangent.
+    let angle = seam.dot(&residual);
+    let signed = if angle <= 0.0 { angle } else { -angle };
+    Some(seam * signed)
 }
 
 /// Workstream C (3D camera collision, 2026-05-11): result of a sweep
@@ -1771,5 +2107,120 @@ mod tests {
         );
         assert_eq!(clamped, delta);
         assert!(normal.is_none());
+    }
+
+    // ---- cliff_slide Stage-2 (cross-product seam-skid, 2026-06-01) ----
+
+    /// Two PERPENDICULAR walls meeting in a concave corner, each tilted
+    /// back (normals carry a +Z component — the inside of a pyramid
+    /// corner / two ramp faces). `N_new` is the +X-facing wall
+    /// `(-1,0,0.5)`-normalized; `N_last` the +Y-facing wall
+    /// `(0,-1,0.5)`-normalized. The retail cross product
+    /// `N_new × N_last` (Z-zeroed) yields a seam running along the
+    /// corner; its XY direction is the 45-degree diagonal. A residual
+    /// pushing diagonally into the corner is redistributed along that
+    /// 45-degree seam instead of stopping at the first wall.
+    ///
+    /// (Two AXIS-vertical perpendicular walls are a documented retail
+    /// degenerate — see `cliff_slide_axis_vertical_perp_walls_bail` —
+    /// because their cross is purely vertical and the Z-zero kills it.)
+    #[test]
+    fn cliff_slide_perpendicular_walls_ride_45_deg_seam() {
+        let n_new = Vector3::new(-1.0, 0.0, 0.5).normalize();
+        let n_last = Vector3::new(0.0, -1.0, 0.5).normalize();
+        let residual = Vector3::new(0.3, 0.4, 0.0);
+        let out = cliff_slide_residual_along_seam(residual, n_new, n_last)
+            .expect("a non-degenerate corner seam must yield a skid");
+
+        // Reconstruct the seam direction exactly as the helper does.
+        let mut cross = n_new.cross(&n_last);
+        cross.z = 0.0;
+        let seam = Vector3::new(-cross.y, cross.x, 0.0).normalize();
+        // The seam is the 45-degree diagonal (|x| == |y|).
+        assert!(
+            (seam.x.abs() - seam.y.abs()).abs() < 1e-5,
+            "perpendicular tilted walls must give a 45-deg seam, got {seam:?}"
+        );
+        // The skid rides that seam (collinear in XY, non-zero length).
+        let collinear_z = seam.x * out.y - seam.y * out.x;
+        assert!(
+            collinear_z.abs() < 1e-5,
+            "skid must be collinear with the 45-deg seam, got skid {out:?} seam {seam:?}"
+        );
+        assert!(
+            out.length() > 1e-4,
+            "a diagonal residual into the corner must produce a non-zero seam skid, got {out:?}"
+        );
+    }
+
+    /// Two AXIS-vertical perpendicular walls (`(-1,0,0)` and `(0,-1,0)`):
+    /// the cross product is purely ±Z, so the retail `contactNormal.Z=0`
+    /// step zeroes it to a degenerate vector and `NormalizeCheckSmall`
+    /// bails ⇒ `None`. The caller then falls back to the Stage-1
+    /// single-plane slide. Documents the exact retail edge case.
+    #[test]
+    fn cliff_slide_axis_vertical_perp_walls_bail() {
+        let n_new = Vector3::new(-1.0, 0.0, 0.0);
+        let n_last = Vector3::new(0.0, -1.0, 0.0);
+        let residual = Vector3::new(0.3, 0.3, 0.0);
+        assert!(
+            cliff_slide_residual_along_seam(residual, n_new, n_last).is_none(),
+            "axis-vertical perpendicular walls cross to a pure-Z (degenerate) seam ⇒ None"
+        );
+    }
+
+    /// Degenerate case: near-PARALLEL walls (almost-coplanar normals).
+    /// `N_new == N_last` (identical planes) ⇒ `cross = 0` ⇒ seam is
+    /// degenerate ⇒ `None` (caller falls back to the Stage-1
+    /// single-plane slide). Mirrors retail `NormalizeCheckSmall`
+    /// returning `true` and `CliffSlide` returning `OK` (no adjustment).
+    #[test]
+    fn cliff_slide_parallel_walls_returns_none() {
+        let n = Vector3::new(-1.0, 0.0, 0.0);
+        let residual = Vector3::new(0.3, 0.2, 0.0);
+        // Identical normals.
+        assert!(cliff_slide_residual_along_seam(residual, n, n).is_none());
+        // Anti-parallel normals (the same plane, opposite winding) —
+        // cross is still ~zero ⇒ None.
+        let anti = Vector3::new(1.0, 0.0, 0.0);
+        assert!(cliff_slide_residual_along_seam(residual, n, anti).is_none());
+        // A tiny perturbation off-parallel: still below the seam EPSILON
+        // ⇒ None. `(-1,0,0)` vs `(-1, 1e-5, 0)` normalized.
+        let nearly = Vector3::new(-1.0, 1e-5, 0.0).normalize();
+        assert!(
+            cliff_slide_residual_along_seam(residual, n, nearly).is_none(),
+            "near-parallel vertical walls cross to a sub-EPSILON pure-Z seam ⇒ None"
+        );
+    }
+
+    /// The skid is signed so it always points back along (never past)
+    /// the seam: for a positive `angle = dot(seam, residual)` the helper
+    /// returns `seam * -angle`, for a non-positive angle `seam * angle`.
+    /// Either way the result projected onto the seam is `<= 0`.
+    #[test]
+    fn cliff_slide_skid_is_non_advancing_along_seam() {
+        let n_new = Vector3::new(-1.0, 0.0, 0.5).normalize();
+        let n_last = Vector3::new(0.0, -1.0, 0.5).normalize();
+        let mut cross = n_new.cross(&n_last);
+        cross.z = 0.0;
+        let seam = Vector3::new(-cross.y, cross.x, 0.0).normalize();
+
+        // residual with a +seam component.
+        let residual_pos = seam * 0.5;
+        let out_pos = cliff_slide_residual_along_seam(residual_pos, n_new, n_last).unwrap();
+        assert!(
+            seam.dot(&out_pos) <= 1e-6,
+            "positive-angle skid must not advance along the seam, got proj {}",
+            seam.dot(&out_pos)
+        );
+
+        // residual with a -seam component.
+        let residual_neg = seam * -0.5;
+        let out_neg = cliff_slide_residual_along_seam(residual_neg, n_new, n_last).unwrap();
+        assert!(
+            seam.dot(&out_neg) <= 1e-6,
+            "negative-angle skid stays non-advancing, got proj {}",
+            seam.dot(&out_neg)
+        );
     }
 }

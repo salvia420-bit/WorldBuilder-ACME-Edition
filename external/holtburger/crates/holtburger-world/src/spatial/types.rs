@@ -1,4 +1,5 @@
 use crate::entity::EntityMotionSnapshot;
+use crate::spatial::force_position_interp::RetailForcePositionInterpolator;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Aabb, Guid, Vector3};
 use std::time::Duration;
@@ -233,6 +234,14 @@ pub struct SpatialBody {
     pub motion_state: Option<EntityMotionSnapshot>,
     pub contact: ContactState,
     pub sampling: SpatialSamplingState,
+    /// Physics deep-dive 2026-06-01 (gap 4) — the faithful retail
+    /// `InterpolateTo` / `ConstrainTo` reconciliation easing state for a
+    /// LOCAL-player force-position. Only populated when the
+    /// [`crate::spatial::scene`] `USE_RETAIL_INTERPOLATE` flag is on; the
+    /// default single-step constraint-pull path never touches it. The
+    /// per-frame integrator advances it via
+    /// [`crate::spatial::SpatialScene::step_force_position_interpolation`].
+    pub force_position_interp: RetailForcePositionInterpolator,
 }
 
 impl SpatialBody {
@@ -246,6 +255,7 @@ impl SpatialBody {
             motion_state: None,
             contact: ContactState::Unknown,
             sampling: SpatialSamplingState::authoritative(now),
+            force_position_interp: RetailForcePositionInterpolator::default(),
         }
     }
 
@@ -259,6 +269,7 @@ impl SpatialBody {
             motion_state: None,
             contact: ContactState::Unknown,
             sampling: SpatialSamplingState::authoritative(now),
+            force_position_interp: RetailForcePositionInterpolator::default(),
         }
     }
 

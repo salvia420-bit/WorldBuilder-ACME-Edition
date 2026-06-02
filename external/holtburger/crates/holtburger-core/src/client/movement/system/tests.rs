@@ -2825,7 +2825,10 @@ fn edge_slide_recovers_tangent_travel_on_refused_step_up() {
     // with: clamped to (0.05, 0.0) say, as if blocked early.
     let lateral_clamped = Vector3::new(0.05, 0.0, 0.0);
     let normal = Vector3::new(-1.0, 0.0, 0.0); // points back toward player
-    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, Some(normal), true);
+    // `None` N_last ⇒ the cliff_slide path can't engage; this exercises
+    // the Stage-1 single-plane tangent slide (also default since
+    // `USE_CLIFF_SLIDE` is off).
+    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, Some(normal), None, true);
     // Residual = lateral - clamped = (0.35, 0.3, 0); slid along tangent
     // drops the X (into-wall) component, keeping +Y. So slid = clamped +
     // (0, 0.3, 0) = (0.05, 0.3, 0).
@@ -2842,7 +2845,7 @@ fn edge_slide_disabled_when_flag_clear_stops_dead() {
     let lateral = Vector3::new(0.4, 0.3, 0.0);
     let lateral_clamped = Vector3::new(0.05, 0.0, 0.0);
     let normal = Vector3::new(-1.0, 0.0, 0.0);
-    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, Some(normal), false);
+    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, Some(normal), None, false);
     assert_eq!(
         slid, lateral_clamped,
         "with AllowEdgeSlide clear the refused step-up must stop dead"
@@ -2857,10 +2860,295 @@ fn edge_slide_disabled_when_flag_clear_stops_dead() {
 fn edge_slide_no_normal_stops_dead() {
     let lateral = Vector3::new(0.4, 0.3, 0.0);
     let lateral_clamped = Vector3::new(0.05, 0.0, 0.0);
-    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, None, true);
+    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, None, None, true);
     assert_eq!(
         slid, lateral_clamped,
         "without a wall normal there is no tangent to slide along"
+    );
+}
+
+// ---- cliff_slide Stage-2 (seam-skid, USE_CLIFF_SLIDE, 2026-06-01) ----
+//
+// `edge_slide_refused_step_up` is the integration point: with
+// `USE_CLIFF_SLIDE` ON and BOTH a current wall normal (N_new) and a
+// previously-tracked one (N_last) present, a refused step-up rides the
+// SEAM between the two non-coplanar walls instead of the single wall.
+// These tests gate on `USE_CLIFF_SLIDE` so they assert the right thing
+// whether the flag is default-off (the shipped state) or flipped on for
+// validation.
+
+/// Stage-2 — with the flag ON, two PERPENDICULAR tilted walls meeting in
+/// a concave corner make the refused step-up ride the 45-degree seam.
+/// `N_new` is the +X-facing tilted wall, `N_last` (from the prior slice)
+/// the +Y-facing tilted wall. The blocked residual is redistributed
+/// along the corner seam (a 45-degree XY direction). When the flag is
+/// OFF (the default) the SAME call falls through to the Stage-1
+/// single-plane slide — so we assert the flag-appropriate outcome.
+#[test]
+fn cliff_slide_rides_seam_when_flag_on() {
+    let lateral = Vector3::new(0.4, 0.4, 0.0);
+    // Clamp stopped most of the move at the first (X) wall.
+    let lateral_clamped = Vector3::new(0.05, 0.05, 0.0);
+    // N_new: this slice's +X-facing wall, tilted back (carries +Z).
+    let n_new = Vector3::new(-1.0, 0.0, 0.5).normalize();
+    // N_last: prior slice's +Y-facing wall, tilted back.
+    let n_last = Vector3::new(0.0, -1.0, 0.5).normalize();
+
+    let slid =
+        edge_slide_refused_step_up(lateral, lateral_clamped, Some(n_new), Some(n_last), true);
+    let residual = lateral - lateral_clamped;
+
+    if USE_CLIFF_SLIDE {
+        // The seam-skid result must equal clamped + the seam projection.
+        let seam_skid =
+            holtburger_world::spatial::cliff_slide_residual_along_seam(residual, n_new, n_last)
+                .expect("non-degenerate corner seam");
+        let expected = lateral_clamped + seam_skid;
+        assert!(
+            (slid.x - expected.x).abs() < 1e-6 && (slid.y - expected.y).abs() < 1e-6,
+            "flag-on must ride the seam: got {slid:?} expected {expected:?}"
+        );
+    } else {
+        // Flag off ⇒ Stage-1 single-plane tangent slide on N_new.
+        let stage1 = lateral_clamped
+            + holtburger_world::spatial::slide_residual_along_wall_tangent(residual, n_new);
+        assert!(
+            (slid.x - stage1.x).abs() < 1e-6 && (slid.y - stage1.y).abs() < 1e-6,
+            "flag-off must use Stage-1 slide: got {slid:?} expected {stage1:?}"
+        );
+    }
+}
+
+/// Stage-2 — NEAR-PARALLEL walls (degenerate seam): even with the flag
+/// ON, `cliff_slide_residual_along_seam` returns `None`, so
+/// `edge_slide_refused_step_up` falls back to the Stage-1 single-plane
+/// slide on `N_new`. The two normals are identical (same plane), so the
+/// cross product is zero ⇒ no seam.
+#[test]
+fn cliff_slide_falls_back_to_stage1_on_parallel_walls() {
+    let lateral = Vector3::new(0.4, 0.3, 0.0);
+    let lateral_clamped = Vector3::new(0.05, 0.0, 0.0);
+    let normal = Vector3::new(-1.0, 0.0, 0.0);
+    // N_last identical to N_new ⇒ degenerate seam.
+    let slid = edge_slide_refused_step_up(
+        lateral,
+        lateral_clamped,
+        Some(normal),
+        Some(normal),
+        true,
+    );
+    // Regardless of the flag, the outcome is the Stage-1 tangent slide:
+    // flag-off skips cliff_slide entirely; flag-on tries it, gets None,
+    // and falls back to the same Stage-1 path.
+    let residual = lateral - lateral_clamped;
+    let stage1 = lateral_clamped
+        + holtburger_world::spatial::slide_residual_along_wall_tangent(residual, normal);
+    assert!(
+        (slid.x - stage1.x).abs() < 1e-6 && (slid.y - stage1.y).abs() < 1e-6,
+        "near-parallel walls must fall back to Stage-1: got {slid:?} expected {stage1:?}"
+    );
+}
+
+/// Stage-2 — N_last ABSENT (first wall this run): with no previously-
+/// tracked plane the cliff_slide path can't engage even with the flag
+/// ON, so `edge_slide_refused_step_up` uses the Stage-1 single-plane
+/// slide. Mirrors retail before `InitLastKnownContactPlane` has stamped
+/// a first plane.
+#[test]
+fn cliff_slide_no_last_normal_uses_stage1() {
+    let lateral = Vector3::new(0.4, 0.3, 0.0);
+    let lateral_clamped = Vector3::new(0.05, 0.0, 0.0);
+    let n_new = Vector3::new(-1.0, 0.0, 0.5).normalize();
+    // N_last absent.
+    let slid = edge_slide_refused_step_up(lateral, lateral_clamped, Some(n_new), None, true);
+    let residual = lateral - lateral_clamped;
+    let stage1 = lateral_clamped
+        + holtburger_world::spatial::slide_residual_along_wall_tangent(residual, n_new);
+    assert!(
+        (slid.x - stage1.x).abs() < 1e-6 && (slid.y - stage1.y).abs() < 1e-6,
+        "absent N_last must use Stage-1: got {slid:?} expected {stage1:?}"
+    );
+}
+
+// ---- CalcNumSteps substepping (cell-wall sweep, 2026-06-01) ----
+//
+// These exercise `clamp_delta_against_cell_walls_substepped` DIRECTLY
+// (independent of the `USE_SUBSTEP_TRANSITION` dispatch flag, which only
+// chooses whether the public wrappers + the integrator route through it).
+// They validate (a) straight-wall parity, (b) concave-corner two-wall
+// slide, (c) the `CalcNumSteps` math.
+
+/// A floor-to-ceiling wall in the plane `x = wall_x`, +X-facing, tall Z
+/// range + wide Y footprint. `normal.z == 0` ⇒ classifies as a wall.
+fn substep_x_wall(wall_x: f32) -> holtburger_common::Triangle {
+    holtburger_common::Triangle::new(
+        Vector3::new(wall_x, -10.0, -1.0),
+        Vector3::new(wall_x, 10.0, -1.0),
+        Vector3::new(wall_x, -10.0, 3.0),
+    )
+}
+
+/// A floor-to-ceiling wall in the plane `y = wall_y`, +Y-facing.
+fn substep_y_wall(wall_y: f32) -> holtburger_common::Triangle {
+    holtburger_common::Triangle::new(
+        Vector3::new(-10.0, wall_y, -1.0),
+        Vector3::new(10.0, wall_y, -1.0),
+        Vector3::new(-10.0, wall_y, 3.0),
+    )
+}
+
+/// Landblock `0x0000` so `global_coords() == local coords` — the wall
+/// triangles above are authored in the same near-origin frame.
+fn substep_pose(x: f32, y: f32) -> WorldPosition {
+    WorldPosition {
+        landblock_id: Guid(0x0000_0000),
+        coords: Vector3::new(x, y, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    }
+}
+
+/// (a) Straight-wall parity — sub-segmenting a move that runs PARALLEL to
+/// a single flat wall (so each sub-segment slides along the same tangent)
+/// lands at the SAME place as one single-pass clamp. A long +Y move that
+/// grazes an +X-facing wall it is already touching: the wall removes the
+/// (zero) into-wall component each step, so substepped == single-pass.
+#[test]
+fn substep_straight_wall_matches_single_pass() {
+    let r = holtburger_world::spatial::PLAYER_CAPSULE_RADIUS; // 0.4
+    let h = holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT;
+    let tris = [substep_x_wall(0.4)]; // wall at x = radius
+    // Start with the capsule centre at x=0, exactly `radius` from the
+    // wall (just touching its shell), moving a long +Y (1.2 m ⇒ 3 steps)
+    // with a tiny +X bias into the wall.
+    let pose = substep_pose(0.0, 0.0);
+    let delta = Vector3::new(0.05, 1.2, 0.0);
+    let (multi, _n_multi) =
+        holtburger_world::spatial::clamp_delta_against_cell_walls_substepped(
+            &tris, &pose, delta, r, h, &[],
+        );
+    let (single, _n_single) =
+        holtburger_world::spatial::clamp_delta_against_cell_walls_with_normal(
+            &tris, &pose, delta, r, h, &[],
+        );
+    // Sanity: this delta really is subdivided (>1 step), so we are
+    // comparing the LOOP against the single pass, not a 1-step delegate.
+    let lateral_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
+    assert!(
+        holtburger_world::spatial::cell_wall_substep_count(lateral_len, r) > 1,
+        "straight-wall parity test must actually subdivide"
+    );
+    assert!(
+        (multi.x - single.x).abs() < 1e-3 && (multi.y - single.y).abs() < 1e-3,
+        "substepped slide along a single flat wall must match single-pass: \
+         multi={multi:?} single={single:?}"
+    );
+}
+
+/// (b) Concave (L-shaped) corner — a long diagonal into the inside corner
+/// of two perpendicular walls.
+///
+/// A single iteration of the swept-circle clamp only registers a wall hit
+/// when the capsule centre STARTS within the radius shell or CROSSES the
+/// wall plane during the sweep — a diagonal that merely *approaches* both
+/// walls from the same side without crossing either plane registers no
+/// hit at all, so the single pass marches STRAIGHT INTO the corner
+/// (penetrating both walls). Substepping advances a working pose between
+/// equal sub-segments, so by the time a sub-segment STARTS inside wall
+/// A's shell it clamps + slides along wall A — recovering the slide the
+/// single pass misses entirely. The substepped result therefore ends up
+/// clamped on the first wall it reaches (sliding along it) where the
+/// single pass tunnels through to the corner.
+///
+/// NOTE (honest scope): driving the residual cleanly along the SECOND
+/// wall of the corner too (so the final centre respects BOTH walls to
+/// `2 - radius`) needs the cross-product two-plane `cliff_slide` skid
+/// — that is the explicitly DEFERRED follow-up wired off the
+/// `last_normal` accumulation hook (see the TODO in
+/// `clamp_delta_against_cell_walls_substepped`). This test pins the slice
+/// that IS landed: substepping engages a wall the single pass misses.
+#[test]
+fn substep_concave_corner_slides_along_both_walls() {
+    let r = holtburger_world::spatial::PLAYER_CAPSULE_RADIUS; // 0.4
+    let h = holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT;
+    // Corner at (x=2, y=2): +X-facing wall at x=2 and +Y-facing wall at
+    // y=2 enclose the +X/+Y quadrant's inside corner. The capsule lives
+    // at small (x,y) and drives a long diagonal toward the corner.
+    let tris = [substep_x_wall(2.0), substep_y_wall(2.0)];
+    let pose = substep_pose(0.0, 0.0);
+    // Long diagonal into the corner (≈2.83 m ⇒ ceil(2.83/0.4)=8 steps).
+    let delta = Vector3::new(2.0, 2.0, 0.0);
+    let lateral_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
+    assert!(
+        holtburger_world::spatial::cell_wall_substep_count(lateral_len, r) > 1,
+        "concave-corner test must subdivide"
+    );
+
+    let (single, _ns) =
+        holtburger_world::spatial::clamp_delta_against_cell_walls_with_normal(
+            &tris, &pose, delta, r, h, &[],
+        );
+    let (multi, n_multi) =
+        holtburger_world::spatial::clamp_delta_against_cell_walls_substepped(
+            &tris, &pose, delta, r, h, &[],
+        );
+
+    let single_end_x = pose.coords.x + single.x;
+    let single_end_y = pose.coords.y + single.y;
+    let multi_end_x = pose.coords.x + multi.x;
+    let multi_end_y = pose.coords.y + multi.y;
+    let limit = 2.0 - r + 1e-2; // centre must stay this side of each wall
+
+    // The single pass tunnels straight into the corner: it never engages
+    // either wall (no plane crossing, no start-inside-shell) and lands at
+    // ~(2,2), penetrating BOTH walls. This is the gap the substep loop
+    // closes.
+    assert!(
+        single_end_x > limit && single_end_y > limit,
+        "single-pass should tunnel into the concave corner (penetrate both \
+         walls): end=({single_end_x:.3},{single_end_y:.3}) limit={limit:.3}"
+    );
+
+    // Substepping engages wall A (the X-facing wall): a sub-segment that
+    // starts inside its radius shell clamps + slides, so the substepped
+    // X ends meaningfully SHORT of the single-pass X (which tunnelled to
+    // the corner). I.e. the substep slid along a wall the single pass
+    // missed entirely.
+    assert!(
+        multi_end_x < single_end_x - 0.1,
+        "substepping must engage + slide along the first wall (X) the single \
+         pass tunnels through: multi=({multi_end_x:.3},{multi_end_y:.3}) \
+         single=({single_end_x:.3},{single_end_y:.3})"
+    );
+    // And it surfaces that wall's normal (the LastKnownContactPlane hook
+    // for the deferred cliff_slide skid).
+    let n = n_multi.expect("substepping into the corner must surface a wall normal");
+    assert!(
+        n.z.abs() < 1e-6,
+        "wall normal must be flattened to XY, got {n:?}"
+    );
+}
+
+/// (c) `CalcNumSteps` math (retail non-viewer rule, radius 0.4): a 0.3 m
+/// lateral move is `0.3/0.4 = 0.75 <= 1` ⇒ 1 step; a 1.0 m lateral move
+/// is `1.0/0.4 = 2.5 > 1` ⇒ `ceil(2.5) = 3` steps. A sub-EPSILON move ⇒
+/// 0 steps.
+#[test]
+fn substep_calc_num_steps_math() {
+    let r = holtburger_world::spatial::PLAYER_CAPSULE_RADIUS; // 0.4
+    assert_eq!(
+        holtburger_world::spatial::cell_wall_substep_count(0.3, r),
+        1,
+        "0.3 m / 0.4 = 0.75 <= 1 ⇒ a single sub-segment"
+    );
+    assert_eq!(
+        holtburger_world::spatial::cell_wall_substep_count(1.0, r),
+        3,
+        "1.0 m / 0.4 = 2.5 > 1 ⇒ ceil(2.5) = 3 sub-segments"
+    );
+    assert_eq!(
+        holtburger_world::spatial::cell_wall_substep_count(1e-6, r),
+        0,
+        "a sub-EPSILON move has no lateral motion to subdivide ⇒ 0 steps"
     );
 }
 

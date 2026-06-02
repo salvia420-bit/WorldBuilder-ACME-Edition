@@ -584,6 +584,18 @@ impl WorldState {
                 .unwrap_or_default();
         }
 
+        // Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — any
+        // server-driven reposition (teleport, force-position resync,
+        // autonomous-position sync) is a discontinuous pose change, so
+        // the wall the local-drive solver was tracking
+        // (`PlayerState::last_known_wall_normal`, the cliff_slide
+        // `N_last` carrier) is meaningless afterwards. Invalidate it,
+        // mirroring retail clearing `CollisionInfo.LastKnownContactPlane`
+        // on a contact reset. The Stage-2 seam-skid only consumes this
+        // when `USE_CLIFF_SLIDE` is on; clearing it unconditionally keeps
+        // the carrier correct regardless of the flag.
+        self.player.last_known_wall_normal = None;
+
         let old_lb = self.player_landblock().unwrap_or(Guid::NULL);
         if let Some(entity) = self.player_entity_mut() {
             entity.position = pos;

@@ -92,6 +92,38 @@ const USE_STEP_UP_DOWN: bool = true;
 /// not have. See the TODO at the edge_slide site below.
 const USE_EDGE_SLIDE: bool = true;
 
+/// Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — gate for the
+/// retail SEAM-skid (`Transition.CliffSlide`,
+/// `external/ACE/Source/ACE.Server/Physics/Transition.cs:242-266`,
+/// `acclient.c:312005`). DEFAULT-OFF: the shipped Stage-1 single-plane
+/// edge_slide behaviour is bit-for-bit unchanged until this path is
+/// validated on the 1070.
+///
+/// `false` (DEFAULT): a refused step-up that needs to slide always uses
+/// the Stage-1 single-plane [`edge_slide_refused_step_up`] tangent slide
+/// (`residual - N·(residual·N)`), exactly the pre-2026-06-02 behaviour.
+/// `world.player.last_known_wall_normal` is still MAINTAINED (so flipping
+/// this on later sees a valid `N_last`) but is never read.
+///
+/// `true`: when an indoor refused step-up has BOTH a current wall normal
+/// `N_new` (this slice's `cell_wall_normal`) and a previously-tracked
+/// `N_last` (`world.player.last_known_wall_normal`, carried across slices
+/// by the InitLastKnownContactPlane equivalent below), and the current
+/// contact plane is a WALL (`N_new.z < FLOOR_Z`), the residual is skidded
+/// along the SEAM where the two non-coplanar walls meet via
+/// [`holtburger_world::spatial::cliff_slide_residual_along_seam`]
+/// (`Cross(N_new, N_last)` → seam → projected residual). If that helper
+/// returns `None` (near-parallel planes ⇒ degenerate seam) OR `N_last`
+/// is absent (first wall this run), we fall back to the Stage-1
+/// single-plane slide. Outdoor exposes no wall normal, so it stays
+/// Stage-1-absent (unchanged) regardless of this flag.
+///
+/// Gated additionally on [`USE_EDGE_SLIDE`] + the hydrated
+/// `AllowEdgeSlide` flag (retail reaches `CliffSlide` only through
+/// `EdgeSlide`, which requires the `EdgeSlide` ObjectInfo state —
+/// `Transition.cs:270`).
+const USE_CLIFF_SLIDE: bool = false;
+
 /// Physics deep-dive 2026-06-01 (gap 4) — gate the AutonomousPosition
 /// heartbeat on a position change instead of firing unconditionally.
 ///
@@ -173,6 +205,45 @@ const USE_RETAIL_GROUND_FRICTION: bool = false;
 /// Retained for A/B comparison.
 const USE_RAMP_FLOOR_SNAP_FIX: bool = true;
 
+/// BSP collision PASS 1 (2026-06-02, DATA LA) — gate the faithful
+/// physics-BSP narrow-phase blocking test in the indoor lateral-clamp
+/// path of
+/// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
+/// DEFAULT-OFF so the shipped flat-triangle-bag solver
+/// ([`holtburger_world::spatial::clamp_delta_against_cell_walls_dispatch`])
+/// is the unchanged default; this is the opt-in `?bspCollide=on` path
+/// for later 1070 validation.
+///
+/// `false` (DEFAULT): the indoor clamp is exactly the pre-2026-06-02
+/// behaviour — per-poly flat-triangle wall clamp + cell-AABB
+/// containment net. The physics BSP is parsed + plumbed into
+/// `SpatialScene.cell_physics_bsp` regardless, but never consulted, so
+/// flipping this on is a pure runtime switch with no re-bake.
+///
+/// `true`: AFTER the flat-tri clamp computes its `lateral_clamped`
+/// (which already carries the slide/back-off the integrator needs as
+/// the fallback), probe the AUTHORITATIVE physics BSP. Lower the player
+/// capsule to ACE's two collision spheres (`NumSphere == 2`: low at
+/// `feet + radius`, high at `head − radius`) at the FULLY-REQUESTED
+/// (un-clamped) end pose and run the faithful
+/// `BSPNode.sphere_intersects_solid` walk
+/// (`external/ACE/Source/ACE.Server/Physics/BSP/BSPNode.cs:265-293` +
+/// `BSPLeaf.cs:80-91`). If the BSP says the requested target is NOT
+/// solid, take the full requested lateral move (the flat-tri bag was
+/// over-clamping a passable opening); if it IS solid, keep the flat-tri
+/// `lateral_clamped` slide result (the working solver's back-off /
+/// slide stays the resolution mechanism — PASS 1 does not reimplement
+/// the retail `Transition` slide/step state machine, see the DEFERRED
+/// notes below). When the cell has no parsed BSP the probe no-ops and
+/// the flat-tri result stands.
+///
+/// DEFERRED (NOT in this pass — needs the multi-pass Transition
+/// stack): a faithful `BSPTree.find_collisions` that resolves the
+/// final pose THROUGH the BSP (StepUp / SlideSphere / CollideObject
+/// orchestration) rather than using the BSP only as a solid gate over
+/// the flat-tri slide. See the module-doc DEFERRED block.
+const USE_PHYSICS_BSP: bool = false;
+
 /// Physics deep-dive 2026-06-01 (gap 1) — bound + subdivide a raw
 /// per-frame `dt` (seconds) into the integration-slice schedule,
 /// mirroring ACE's `update_object` timestep gate
@@ -232,10 +303,26 @@ fn quantum_slices(dt_secs: f32) -> Option<Vec<f32>> {
 /// `Sphere.SlideSphere` no-contact-plane branch (removes the into-wall
 /// component). Otherwise returns `lateral_clamped` unchanged (retail's
 /// "no EdgeSlide flag ⇒ just stop").
+///
+/// Cliff_slide Stage-2 (`USE_CLIFF_SLIDE`, DEFAULT-OFF): before the
+/// Stage-1 single-plane slide, attempt the retail SEAM-skid when this
+/// slice's wall (`wall_normal` = `N_new`) is a genuine WALL
+/// (`N_new.z < FLOOR_Z`) AND a previously-tracked wall
+/// (`last_known_wall_normal` = `N_last`) exists. The seam
+/// [`holtburger_world::spatial::cliff_slide_residual_along_seam`]
+/// (`Cross(N_new, N_last)`) redistributes the residual along the line
+/// where the two non-coplanar walls meet — riding a concave corner
+/// instead of stopping at the first wall. A degenerate seam
+/// (near-parallel planes ⇒ `None`) or an absent `N_last` (first wall
+/// this run) falls straight through to the Stage-1 single-plane slide,
+/// so the Stage-2 path is a strict superset that only engages in the
+/// two-wall wedge case. Mirrors retail `Transition.EdgeSlide` →
+/// `CliffSlide` (`Transition.cs:276-279`).
 fn edge_slide_refused_step_up(
     lateral: Vector3,
     lateral_clamped: Vector3,
     wall_normal: Option<Vector3>,
+    last_known_wall_normal: Option<Vector3>,
     allow_edge_slide: bool,
 ) -> Vector3 {
     if !USE_EDGE_SLIDE || !allow_edge_slide {
@@ -245,9 +332,37 @@ fn edge_slide_refused_step_up(
         return lateral_clamped;
     };
     // Residual = the portion of the requested move the wall clamp
-    // removed. Slide it along the wall tangent (drop the into-wall
-    // component) and add it onto the clamped delta.
+    // removed.
     let residual = lateral - lateral_clamped;
+
+    // Cliff_slide Stage-2 (opt-in): when a second non-coplanar wall is
+    // tracked and this slice's contact plane is a WALL (not a steep
+    // floor), skid the residual along the seam the two walls form. This
+    // is the retail two-plane case; it shadows the Stage-1 single-plane
+    // slide below and falls back to it on a degenerate/absent seam.
+    if USE_CLIFF_SLIDE {
+        if let Some(n_last) = last_known_wall_normal {
+            // Retail's `EdgeSlide` only reaches `CliffSlide` when the
+            // contact plane is a WALL (`ContactPlane.Normal.Z < zval`);
+            // a steep-but-walkable floor takes the precipice/step-down
+            // branch instead, which we do NOT implement here.
+            let is_wall = normal.z < holtburger_world::spatial::FLOOR_Z;
+            if is_wall {
+                if let Some(seam_slide) =
+                    holtburger_world::spatial::cliff_slide_residual_along_seam(
+                        residual, normal, n_last,
+                    )
+                {
+                    return lateral_clamped + seam_slide;
+                }
+                // `None` ⇒ near-parallel planes (degenerate seam):
+                // fall through to the Stage-1 single-plane slide.
+            }
+        }
+    }
+
+    // Stage-1: slide the residual along the wall tangent (drop the
+    // into-wall component) and add it onto the clamped delta.
     let slide = holtburger_world::spatial::slide_residual_along_wall_tangent(residual, normal);
     lateral_clamped + slide
 }
@@ -1173,8 +1288,20 @@ impl MovementSystem {
                 Vector3::zero()
             } else {
                 let pre_clamped = if !triangles.is_empty() {
+                    // CalcNumSteps substepping (2026-06-01): route the
+                    // cell-wall sweep through the flag-gated dispatch.
+                    // With `USE_SUBSTEP_TRANSITION` OFF (DEFAULT) the
+                    // dispatch takes the single-pass `_with_normal`
+                    // branch, so the shipped solver behaviour is
+                    // bit-for-bit unchanged; ON it subdivides a fast
+                    // lateral move into `ceil(dist/radius)` collide+slide
+                    // sub-segments (retail non-viewer
+                    // `Transition.CalcNumSteps`) so fast motion can't
+                    // tunnel a thin wall and a diagonal into an L-corner
+                    // engages a wall the single pass misses. Either way
+                    // it returns the same `(clamped, normal)` shape.
                     let (clamped, normal) =
-                        holtburger_world::spatial::clamp_delta_against_cell_walls_with_normal(
+                        holtburger_world::spatial::clamp_delta_against_cell_walls_dispatch(
                             triangles,
                             &pose,
                             lateral,
@@ -1183,6 +1310,10 @@ impl MovementSystem {
                             &exclusion_aabbs,
                         );
                     // Surface the wall normal for the edge_slide path.
+                    // Under substepping this is the LAST sub-segment's
+                    // wall normal (the `LastKnownContactPlane` hook for
+                    // the deferred cliff_slide cross-product — see the
+                    // TODO in `clamp_delta_against_cell_walls_substepped`).
                     cell_wall_normal = normal;
                     clamped
                 } else {
@@ -1232,6 +1363,57 @@ impl MovementSystem {
                     holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
                 )
             }
+        };
+        // BSP collision PASS 1 (2026-06-02, DATA LA) — DEFAULT-OFF.
+        // Use the faithful physics-BSP `sphere_intersects_solid` walk as
+        // the AUTHORITATIVE "is the requested target solid" test,
+        // replacing the flat-triangle-bag verdict for the static
+        // blocking case. The flat-tri `lateral_clamped` above already
+        // carries the slide/back-off the integrator falls back to when
+        // the target IS solid; here we only OVERRIDE it to the full
+        // requested move when the BSP confirms the un-clamped target is
+        // clear (the triangle bag was over-clamping a passable opening,
+        // e.g. a doorway whose panel triangles cross the swept circle).
+        // Indoor-only (the BSP is per-EnvCell); a cell with no parsed
+        // BSP no-ops and the flat-tri result stands. See `USE_PHYSICS_BSP`.
+        let lateral_clamped = if USE_PHYSICS_BSP
+            && pose.is_indoors()
+            && !indoor_unbaked
+            && lateral.length_squared() > 1e-10
+        {
+            let cell_id = world.scene.current_cell(&pose);
+            if world.scene.cell_physics_bsp(cell_id).is_some() {
+                // Probe the player capsule at the FULLY-REQUESTED
+                // (un-clamped) end pose with the low+high two-sphere
+                // cylinder. `feet_world_z` is the bottom of the capsule
+                // at the current Z (the lateral move doesn't change Z).
+                let global = pose.global_coords();
+                let target_xy = (global.x + lateral.x, global.y + lateral.y);
+                let feet_world_z = global.z;
+                let target_solid = world.scene.cell_physics_bsp_solid(
+                    cell_id,
+                    target_xy,
+                    feet_world_z,
+                    holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                    holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT,
+                );
+                if target_solid {
+                    // BSP confirms a wall at the target — keep the
+                    // flat-tri slide/back-off (the working solver owns
+                    // the resolution; PASS 1 does not reimplement the
+                    // retail Transition slide state machine).
+                    lateral_clamped
+                } else {
+                    // BSP says the target is clear — take the full
+                    // requested move (the triangle bag over-clamped).
+                    cell_wall_normal = None;
+                    lateral
+                }
+            } else {
+                lateral_clamped
+            }
+        } else {
+            lateral_clamped
         };
         // Entity collision pass. Mirrors ACE's
         // `PhysicsObj.find_object_collisions`
@@ -1398,6 +1580,14 @@ impl MovementSystem {
                         lateral,
                         lateral_clamped,
                         cell_wall_normal,
+                        // Cliff_slide Stage-2 `N_last` (DEFAULT-OFF behind
+                        // `USE_CLIFF_SLIDE`): the wall normal carried from
+                        // the PRIOR slice. The InitLastKnownContactPlane
+                        // equivalent below stamps this slice's `N_new`
+                        // into the carrier AFTER this consume, so the
+                        // NEXT slice sees the current wall as its
+                        // `N_last`.
+                        world.player.last_known_wall_normal,
                         world.player.allow_edge_slide,
                     );
                     pose.coords.x += slid.x;
@@ -1410,6 +1600,27 @@ impl MovementSystem {
         } else {
             pose.coords.x += lateral_clamped.x;
             pose.coords.y += lateral_clamped.y;
+        }
+        // Cliff_slide Stage-2 — InitLastKnownContactPlane equivalent
+        // (retail `Transition.InitLastKnownContactPlane` /
+        // `acclient.c:312005`). The lateral clamp + edge_slide path above
+        // has finished CONSUMING this slice's `N_last`
+        // (`world.player.last_known_wall_normal` as it was on entry), so
+        // now stamp THIS slice's surfaced wall normal `N_new`
+        // (`cell_wall_normal`) into the carrier — the NEXT slice will see
+        // the current wall as its `N_last` and can cross it with its own
+        // new wall for the seam-skid. Only updated when a wall was
+        // actually hit this slice (`cell_wall_normal == Some`); a slice
+        // with no wall leaves the prior tracked plane intact so a brief
+        // gap between two wall segments still wedges correctly. The
+        // carrier is invalidated to `None` on touchdown
+        // (`PlayerState::land`) and on any server reposition
+        // (`update_player_position`). This stamp runs regardless of
+        // `USE_CLIFF_SLIDE` (cheap, keeps the carrier valid for when the
+        // flag flips on); the carrier is only READ inside
+        // `edge_slide_refused_step_up` under the flag.
+        if let Some(n_new) = cell_wall_normal {
+            world.player.last_known_wall_normal = Some(n_new);
         }
         // TODO (physics deep-dive 2026-06-01, gap 3 follow-up):
         // edge_slide / cliff_slide — STATUS.
@@ -1427,15 +1638,26 @@ impl MovementSystem {
         // no-contact-plane branch removes the into-wall component
         // exactly as our wall clamp's own single-iteration slide does.
         //
-        // Stage-2 DEFERRED (needs the full CTransition multi-substep
-        // loop — out of scope for the single-iteration solver):
+        // Stage-2 cliff_slide cross-product skid SHIPPED (gated behind
+        // [`USE_CLIFF_SLIDE`], DEFAULT-OFF):
         //   - The retail `cliff_slide` cross-product skid
         //     (`N_new × N_last`, `Transition.CliffSlide`
         //     `Physics/Transition.cs:242-266`) that slides along the
-        //     seam where two non-coplanar walls meet. It needs a SECOND
-        //     `last_known_contact_plane` tracked across substeps; our
-        //     solver does ONE sweep + ONE slide per tick and keeps only
-        //     one plane.
+        //     seam where two non-coplanar walls meet is implemented in
+        //     [`holtburger_world::spatial::cliff_slide_residual_along_seam`]
+        //     and wired into [`edge_slide_refused_step_up`]. It needs a
+        //     SECOND `last_known_contact_plane`, which this solver now
+        //     carries across integration slices via
+        //     `world.player.last_known_wall_normal` (stamped just above —
+        //     the InitLastKnownContactPlane equivalent — and invalidated
+        //     on touchdown / server reposition). With the flag OFF the
+        //     Stage-1 single-plane slide is unchanged; with it ON a
+        //     refused step-up against a fresh wall, while a prior
+        //     non-coplanar wall is still tracked, rides the seam instead
+        //     of stopping at the first wall.
+        //
+        // Stage-2 STILL DEFERRED (needs the full CTransition substep
+        // backup-pose machinery — explicitly NOT part of this Stage-2):
         //   - The walkable-edge `precipice_slide` + `step_down` re-entry
         //     and `save/restore_check_pos` backup-pose machinery
         //     (`Transition.EdgeSlide` walkable branch,
@@ -1447,7 +1669,8 @@ impl MovementSystem {
         //     LEDGE_FALL_THRESHOLD_M / step-down path below.
         //
         // The outdoor building clamp does not expose a wall normal yet,
-        // so Stage-1 edge_slide is indoor-only this pass.
+        // so both Stage-1 edge_slide AND Stage-2 cliff_slide are
+        // indoor-only this pass.
         //
         // Pre-bake gate: zero Z delta when the indoor cell is
         // unbaked, same rationale as the lateral zero above —

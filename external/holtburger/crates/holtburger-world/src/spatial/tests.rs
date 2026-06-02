@@ -720,6 +720,98 @@ fn reconcile_local_force_position_preserves_far_and_holds_within_deadband() {
     assert_eq!(scene.body(body_id2).unwrap().pose, drifted);
 }
 
+/// Physics deep-dive 2026-06-01 (gap 4, opt-in `USE_RETAIL_INTERPOLATE`):
+/// with the faithful-interpolate flag DEFAULT-OFF, the shipped solver
+/// behaviour is unchanged — the per-frame stepper is a NO-OP and the
+/// per-message single-step constraint-pull still runs. This guards that
+/// the opt-in path does not leak into the shipped path. (When the flag is
+/// flipped on the curve itself is exercised by the
+/// `force_position_interp` unit tests.)
+#[test]
+fn force_position_interpolation_stepper_is_noop_while_flag_default_off() {
+    let mut scene = SpatialScene::new();
+    let now = Instant::now();
+    let body_id = SpatialBodyId::LocalPlayer(Guid(0x5000_00AA));
+    let lb = Guid(0x00A9_B400 & 0xFFFF_0000);
+
+    let make = |x: f32, y: f32| WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(x, y, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+
+    scene.register_body(SpatialBody::new(body_id, make(50.0, 50.0), now));
+    let mut working = scene.body(body_id).unwrap().clone();
+    working.pose = make(53.0, 50.0); // 3 m drift
+    working.sampling.mode = SpatialSampleMode::SimulatingVelocity;
+    scene.update_body(working);
+
+    // Reconcile a sub-blip forced pose. With the flag default-off this
+    // runs the shipped single-step constraint-pull (3 m < 10 m leash →
+    // collapses to target) and installs NOTHING on the interpolator.
+    let forced = make(50.0, 50.0);
+    scene.reconcile_authoritative_body(
+        body_id,
+        forced,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+
+    let body = scene.body(body_id).unwrap();
+    // Shipped path collapsed the 3 m gap this tick.
+    assert!(body.pose.distance_to(&forced) <= 1e-3);
+    // No retail interpolation installed (flag off).
+    assert!(!body.force_position_interp.is_interpolating());
+
+    // The per-frame stepper is a no-op while the flag is off: returns
+    // Idle and leaves the pose untouched.
+    let before = scene.body(body_id).unwrap().pose;
+    let out = scene.step_force_position_interpolation(body_id, 0.016, 36.0, true);
+    assert_eq!(out, InterpStep::Idle);
+    assert_eq!(scene.body(body_id).unwrap().pose, before);
+}
+
+/// The standalone retail interpolator can be installed and stepped
+/// directly regardless of the scene flag — this exercises the full
+/// `InterpolateTo` (install) → per-frame `adjust_offset` (step) →
+/// `NodeCompleted` (deadband) round-trip so the easing curve is covered
+/// even while the scene-level flag stays default-off.
+#[test]
+fn retail_interpolator_install_then_step_converges_to_target() {
+    let lb = Guid(0x00A9_B400 & 0xFFFF_0000);
+    let make = |x: f32, y: f32| WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(x, y, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+
+    let mut interp = RetailForcePositionInterpolator::default();
+    let target = make(50.0, 50.0);
+    let mut cur = make(53.0, 50.0); // 3 m gap
+
+    assert!(interp.install(cur, target, 10.0, 100.0, true));
+    assert!(interp.is_interpolating());
+
+    // 36 m/s eased in 16 ms frames; converges within a handful of frames.
+    let mut completed = false;
+    for _ in 0..40 {
+        match interp.step(cur, 0.016, 36.0, true) {
+            InterpStep::Progressed { pose } => cur = pose,
+            InterpStep::Completed { pose } => {
+                cur = pose;
+                completed = true;
+                break;
+            }
+            other => panic!("unexpected interp outcome {other:?}"),
+        }
+    }
+    assert!(completed, "should ease into the 0.05 m deadband and complete");
+    assert!(cur.distance_to(&target) < 0.05);
+    assert!(!interp.is_interpolating());
+}
+
 mod collision {
     use super::*;
     use holtburger_common::Aabb;
@@ -2269,5 +2361,170 @@ mod pview_near_plane {
             Vector3::new(1.0, 0.0, 0.5),
         ];
         assert!(pview_project_polygon(&two, &mvp).is_empty());
+    }
+}
+
+// BSP collision (PASS 1, 2026-06-02) — the world-crate side: the
+// world→cell-local transform + the low+high two-sphere
+// `cell_physics_bsp_solid` query wired onto `SpatialScene`. The node /
+// polygon predicates themselves are unit-tested in
+// `holtburger-dat` `physics::tests`; these tests exercise the scene
+// plumbing + the frame transform.
+#[cfg(test)]
+mod bsp_collision {
+    use super::*;
+    use holtburger_dat::physics::{BspLeaf, BspNode, InternalNode, ResolvedPolygon};
+    use holtburger_common::{Plane, Sphere};
+    use std::collections::HashMap;
+
+    fn v(x: f32, y: f32, z: f32) -> Vector3 {
+        Vector3::new(x, y, z)
+    }
+
+    /// Cell-local floor square in z=0, normal +Z, x,y ∈ [-2, 2].
+    fn floor_poly() -> ResolvedPolygon {
+        let verts = vec![
+            v(-2.0, -2.0, 0.0),
+            v(2.0, -2.0, 0.0),
+            v(2.0, 2.0, 0.0),
+            v(-2.0, 2.0, 0.0),
+        ];
+        let plane = ResolvedPolygon::make_plane(&verts).unwrap();
+        ResolvedPolygon {
+            num_points: verts.len(),
+            vertices: verts,
+            plane,
+        }
+    }
+
+    /// Physics BSP: split on z=0, solid below (carrying the floor poly),
+    /// air above.
+    fn floor_bsp(origin: Vector3, orientation: Quaternion) -> CellPhysicsBsp {
+        let mut polys = HashMap::new();
+        polys.insert(3u16, floor_poly());
+        let air = BspNode::Leaf(BspLeaf {
+            index: 0,
+            solid: 0,
+            sphere: Some(Sphere {
+                center: v(0.0, 0.0, 5.0),
+                radius: 50.0,
+            }),
+            poly_ids: vec![],
+        });
+        let solid = BspNode::Leaf(BspLeaf {
+            index: 1,
+            solid: 1,
+            sphere: Some(Sphere {
+                center: v(0.0, 0.0, -5.0),
+                radius: 50.0,
+            }),
+            poly_ids: vec![3],
+        });
+        let tree = BspNode::Internal(InternalNode {
+            tag: *b"BPIN",
+            plane: Plane {
+                normal: v(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+            pos: Some(Box::new(air)),
+            neg: Some(Box::new(solid)),
+            sphere: Some(Sphere {
+                center: v(0.0, 0.0, 0.0),
+                radius: 500.0,
+            }),
+            poly_ids: vec![],
+        });
+        CellPhysicsBsp {
+            tree,
+            polys,
+            origin,
+            orientation,
+        }
+    }
+
+    #[test]
+    fn world_to_local_inverts_cell_frame() {
+        // Cell origin offset + 90° heading rotation. A world point at
+        // the cell origin maps to local (0,0,0); a point one unit along
+        // world +X maps back through the inverse rotation.
+        let origin = v(100.0, 200.0, 10.0);
+        let orientation = Quaternion::from_heading(std::f32::consts::FRAC_PI_2);
+        let bsp = floor_bsp(origin, orientation);
+        let at_origin = bsp.world_to_local(origin);
+        assert!(at_origin.length() < 1e-4, "origin maps to local zero");
+        // Round-trip: local -> world -> local is identity.
+        let local_pt = v(1.5, -0.5, 0.25);
+        let world_pt = origin + orientation.rotate_vector(local_pt);
+        let back = bsp.world_to_local(world_pt);
+        assert!((back - local_pt).length() < 1e-4, "world->local round-trips");
+    }
+
+    #[test]
+    fn cell_physics_bsp_solid_detects_floor_through_frame() {
+        let mut scene = SpatialScene::new();
+        let cell_id = 0xA9B4_0100u32;
+        // Translated + rotated cell frame to prove the query transforms
+        // INTO local space rather than assuming identity.
+        let origin = v(50.0, -30.0, 7.0);
+        let orientation = Quaternion::from_heading(0.7);
+        scene.insert_cell_physics_bsp(cell_id, floor_bsp(origin, orientation));
+        assert_eq!(scene.cell_physics_bsp_count(), 1);
+
+        // World-space player standing ON the cell floor: the cell floor
+        // is local z=0, which in world space is `origin.z` after the
+        // (heading-only, Z-preserving) rotation. Feet at world z =
+        // origin.z; the low sphere sits at feet + radius = origin.z +
+        // 0.4, whose local z is +0.4 (air), and the capsule straddles
+        // the floor plane within the sphere radius => solid.
+        let radius = PLAYER_CAPSULE_RADIUS;
+        let height = PLAYER_CAPSULE_HEIGHT;
+        // Place feet just below the floor so the low sphere center is
+        // within `radius` of (or below) z=0 => solid hit.
+        let feet_below = origin.z - 0.1;
+        // The XY must map inside the floor footprint after the inverse
+        // rotation; the cell origin's XY is safely inside [-2,2].
+        assert!(
+            scene.cell_physics_bsp_solid(
+                cell_id,
+                (origin.x, origin.y),
+                feet_below,
+                radius,
+                height,
+            ),
+            "capsule straddling the floor reads solid"
+        );
+
+        // Player well ABOVE the floor (feet 5 m up): both spheres are in
+        // the air leaf => not solid.
+        let feet_high = origin.z + 5.0;
+        assert!(
+            !scene.cell_physics_bsp_solid(
+                cell_id,
+                (origin.x, origin.y),
+                feet_high,
+                radius,
+                height,
+            ),
+            "capsule high above the floor reads free"
+        );
+
+        // Unknown cell => no BSP => never blocks (flat-tri fallback).
+        assert!(!scene.cell_physics_bsp_solid(
+            0xDEAD_0000,
+            (origin.x, origin.y),
+            feet_below,
+            radius,
+            height,
+        ));
+    }
+
+    #[test]
+    fn clear_cells_for_landblock_drops_bsp() {
+        let mut scene = SpatialScene::new();
+        let cell_id = 0xA9B4_0100u32;
+        scene.insert_cell_physics_bsp(cell_id, floor_bsp(Vector3::zero(), Quaternion::identity()));
+        assert_eq!(scene.cell_physics_bsp_count(), 1);
+        scene.clear_cells_for_landblock(0xA9B4_0000);
+        assert_eq!(scene.cell_physics_bsp_count(), 0, "BSP cleared on unload");
     }
 }

@@ -611,6 +611,31 @@ pub struct PlayerState {
     ///
     /// Default: zero.
     pub physics_time_accumulator: f32,
+    /// Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — the XY wall
+    /// normal of the most-recent wall the local-drive solver clamped
+    /// against, carried ACROSS integration slices so the NEXT slice can
+    /// treat it as `N_last` and cross it with the slice's own
+    /// `N_new` (`Vector3::Cross(N_new, N_last)`, Z-zeroed) to skid the
+    /// residual along the SEAM where two non-coplanar walls meet.
+    ///
+    /// This is the persistent carrier for retail's
+    /// `CollisionInfo.LastKnownContactPlane` (ACE
+    /// `Physics/Transition.cs` `CliffSlide` / `InitLastKnownContactPlane`,
+    /// `acclient.c:312005`). Retail INVALIDATES that plane on a contact
+    /// reset; we mirror that by setting this to `None` on touchdown
+    /// ([`PlayerState::land`]) and on any server-driven reposition
+    /// (teleport / force-position resync / autonomous sync, via
+    /// `WorldState::update_player_position`) — after a discontinuous
+    /// pose change the previously-tracked wall is meaningless and a
+    /// stale cross-product would skid along a phantom seam.
+    ///
+    /// Consumed only when the [`crate::spatial::cliff_slide_residual_along_seam`]
+    /// Stage-2 path is enabled behind the `USE_CLIFF_SLIDE` flag; when
+    /// that flag is off this field is still maintained but never read,
+    /// so the shipped solver behaviour is unchanged.
+    ///
+    /// Default: `None` (no wall tracked at spawn).
+    pub last_known_wall_normal: Option<Vector3>,
 }
 
 impl Default for PlayerState {
@@ -665,6 +690,10 @@ impl PlayerState {
             // Physics deep-dive 2026-06-01 (gap 1) — no carried
             // frame time at spawn.
             physics_time_accumulator: 0.0,
+            // Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — no
+            // wall tracked at spawn (mirrors retail's null
+            // LastKnownContactPlane before the first contact).
+            last_known_wall_normal: None,
         }
     }
 
@@ -813,6 +842,12 @@ impl PlayerState {
         self.is_airborne = false;
         self.is_jumping = false;
         self.vertical_velocity = 0.0;
+        // Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — touchdown
+        // is a contact reset, so the wall tracked while airborne (if any)
+        // is no longer the `LastKnownContactPlane` for the next grounded
+        // slice. Mirrors retail invalidating
+        // `CollisionInfo.LastKnownContactPlane` on a contact change.
+        self.last_known_wall_normal = None;
         // Wave 10 Phase 10.2 (2026-05-26) — fall back to Ready on
         // touchdown. Mirrors PhatSDK `apply_interpreted_movement` →
         // `DoInterpretedMotion(0x41000003)` when no forward command

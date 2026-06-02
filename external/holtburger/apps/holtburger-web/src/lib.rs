@@ -8960,6 +8960,22 @@ thread_local! {
         std::cell::RefCell<Vec<(u32, holtburger_common::Triangle)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// BSP collision (PASS 1, 2026-06-02): pending physics-BSP inserts
+    /// queued by `fetchEnvCellsInLandblock` alongside
+    /// `CELL_PHYSICS_PENDING` and drained by the recv loop on each
+    /// `SessionCommand::TickMovement`. One entry per EnvCell that has a
+    /// parsed `physics_bsp`. The BSP path REUSES the already-parsed
+    /// tree (the flat-tri path fan-triangulates `physics_polygons` and
+    /// throws the tree away; this preserves it) and keeps it
+    /// cell-local + carries the cell frame for the world→local query
+    /// transform. Drained into `scene.cell_physics_bsp`; the integrator
+    /// consults it only when `USE_PHYSICS_BSP` is on, so the data lands
+    /// regardless of the flag and flipping the flag is a pure runtime
+    /// switch. Cleared together with `cell_physics_index`.
+    static CELL_BSP_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_world::CellPhysicsBsp)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
     /// Phase 6 collision-leak fix (2026-05-29): landblock-high keys queued by
     /// `enqueueClearLandblockCollision` (called from the JS LRU `evict`) and
     /// drained at the TOP of each `SessionCommand::TickMovement` — BEFORE the
@@ -9206,6 +9222,23 @@ fn drain_pending_cell_physics_into(scene: &mut holtburger_world::SpatialScene) -
         let count = buf.len();
         for (cell_id, tri) in buf.drain(..) {
             scene.insert_cell_triangle(cell_id, tri);
+        }
+        count
+    })
+}
+
+/// BSP collision (PASS 1, 2026-06-02): drain the pending physics-BSP
+/// pile into the live scene's `cell_physics_bsp`. Returns the number of
+/// cells registered. Drained in the same `TickMovement` arm as the
+/// flat-tri cell-physics drain so the BSP path (when `USE_PHYSICS_BSP`
+/// is on) sees the tree the same tick the EnvCell AABBs land.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_cell_bsp_into(scene: &mut holtburger_world::SpatialScene) -> usize {
+    CELL_BSP_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (cell_id, bsp) in buf.drain(..) {
+            scene.insert_cell_physics_bsp(cell_id, bsp);
         }
         count
     })
@@ -11969,6 +12002,54 @@ pub async fn fetch_env_cells_in_landblock(
                                         ),
                                     ));
                                 }
+                            });
+                        }
+
+                        // BSP collision (PASS 1, 2026-06-02): preserve
+                        // the ALREADY-PARSED physics BSP tree (the
+                        // flat-tri walk above fan-triangulates the
+                        // polygons and discards `cell_struct.physics_bsp`
+                        // — this keeps it) for the faithful
+                        // `sphere_intersects_solid` narrow-phase. Kept
+                        // CELL-LOCAL: the tree's planes + the resolved
+                        // polygon vertices stay in cell space, and the
+                        // cell frame (`cell_origin` + `cell_orientation`)
+                        // travels with them so the integrator transforms
+                        // its query sphere INTO this frame (ACE
+                        // `SpherePath.LocalSpacePos`) rather than baking
+                        // the geometry to world space. Pushed into
+                        // `CELL_BSP_PENDING`; drained into
+                        // `scene.cell_physics_bsp` next TickMovement.
+                        if let Some(tree) = &cell_struct.physics_bsp {
+                            // Resolve physics polygons to cell-local
+                            // vertices + planes. The closure borrows the
+                            // cell's vertex array; mirrors the flat-tri
+                            // vertex resolution above but stays local.
+                            let resolved =
+                                holtburger_dat::physics::resolve_cell_physics_polygons(
+                                    &cell_struct.physics_polygons,
+                                    |vid| {
+                                        cell_struct
+                                            .vertex_array
+                                            .vertices
+                                            .get(&vid)
+                                            .map(|sw| {
+                                                holtburger_common::Vector3::new(
+                                                    sw.origin.x,
+                                                    sw.origin.y,
+                                                    sw.origin.z,
+                                                )
+                                            })
+                                    },
+                                );
+                            let bsp = holtburger_world::CellPhysicsBsp {
+                                tree: tree.clone(),
+                                polys: resolved,
+                                origin: cell_origin,
+                                orientation: cell_orientation,
+                            };
+                            CELL_BSP_PENDING.with(|pending| {
+                                pending.borrow_mut().push((envcell.cell_id, bsp));
                             });
                         }
 
@@ -33564,6 +33645,22 @@ async fn recv_loop(
                             console_log_str(&format!(
                                 "[phase6.G] drained {drained_tris} cell physics triangles into scene ({} cells with physics)",
                                 w.scene.cell_physics_count(),
+                            ));
+                        }
+                        // BSP collision (PASS 1, 2026-06-02): drain the
+                        // parsed physics-BSP trees into
+                        // `scene.cell_physics_bsp`. Same cadence as the
+                        // flat-tri drain above; the integrator reads
+                        // them only when `USE_PHYSICS_BSP` is on
+                        // (DEFAULT-OFF), but the data lands regardless so
+                        // the `?bspCollide=on` path is a pure runtime
+                        // switch.
+                        let drained_bsp =
+                            drain_pending_cell_bsp_into(&mut w.scene);
+                        if drained_bsp > 0 {
+                            console_log_str(&format!(
+                                "[bsp] drained {drained_bsp} cell physics BSP trees into scene ({} cells with BSP)",
+                                w.scene.cell_physics_bsp_count(),
                             ));
                         }
                         // Workstream C (3D camera collision,
