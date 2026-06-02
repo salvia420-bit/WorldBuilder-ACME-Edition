@@ -3356,3 +3356,61 @@ fn step_up_beyond_step_height_stays_blocked_through_integrator() {
          |Δy| = {lateral_moved:.4}"
     );
 }
+
+// ---- precipice_slide re-entry backup-pose (USE_PRECIPICE_SLIDE_REENTRY,
+//      2026-06-02) ----
+//
+// This slice lands the save/clear backup-pose bookkeeping only (the
+// restore -> precipice-slide re-attempt consumer is a documented
+// follow-on). These tests verify (1) the new flag ships default-OFF so
+// the shipped solver is byte-identical, (2) the new PlayerState field
+// defaults to None at spawn, and (3) the field round-trips a saved pose.
+
+#[test]
+fn test_precipice_slide_reentry_flag_is_default_off() {
+    // The shipped solver must be byte-identical: the backup-pose
+    // save/clear machinery is fully gated behind this const, which must
+    // remain false until the restore consumer lands and is validated.
+    assert!(
+        !USE_PRECIPICE_SLIDE_REENTRY,
+        "USE_PRECIPICE_SLIDE_REENTRY must ship default-OFF (byte-identical \
+         solver); flip it on only with the restore consumer wired"
+    );
+}
+
+#[test]
+fn test_backup_pose_for_step_down_defaults_to_none() {
+    let player = holtburger_world::player::PlayerState::new();
+    assert!(
+        player.backup_pose_for_step_down.is_none(),
+        "backup_pose_for_step_down must default to None at spawn"
+    );
+    // Default::default() must match new() for this field.
+    let player_default = holtburger_world::player::PlayerState::default();
+    assert!(player_default.backup_pose_for_step_down.is_none());
+}
+
+#[test]
+fn test_backup_pose_for_step_down_set_and_clear_round_trip() {
+    let mut player = holtburger_world::player::PlayerState::new();
+    let pose = WorldPosition {
+        landblock_id: Guid::NULL,
+        coords: Vector3::new(12.0, 34.0, 56.0),
+        rotation: Quaternion::identity(),
+    };
+
+    // Save-before-descend.
+    player.backup_pose_for_step_down = Some(pose);
+    assert_eq!(
+        player.backup_pose_for_step_down,
+        Some(pose),
+        "the saved backup pose must round-trip unchanged"
+    );
+
+    // Clear-on-resolution.
+    player.backup_pose_for_step_down = None;
+    assert!(
+        player.backup_pose_for_step_down.is_none(),
+        "clearing the backup pose must restore None"
+    );
+}

@@ -92,6 +92,30 @@ const USE_STEP_UP_DOWN: bool = true;
 /// not have. See the TODO at the edge_slide site below.
 const USE_EDGE_SLIDE: bool = true;
 
+/// Physics deep-dive 2026-06-02 (precipice_slide re-entry) — gate for the
+/// walkable-edge re-entry backup-pose machinery in the floor-Z step-down
+/// snap path of [`advance_local_pose_for_manual_drive_slice`]. Mirrors
+/// ACE `Transition.EdgeSlide → StepDown → precipice_slide`
+/// (`external/ACE/Source/ACE.Server/Physics/Transition.cs:282-319`) and
+/// retail `CTransition::save_check_pos` / `restore_check_pos`
+/// (`acclient.c:312499-312501`, `312685-312762`).
+///
+/// `false` (DEFAULT): the pre-2026-06-02 behaviour — the step-down
+/// decision is applied directly with no backup pose maintained, so the
+/// shipped solver is byte-identical. `world.player.backup_pose_for_step_down`
+/// is never written or read.
+///
+/// `true`: the pre-descent pose is saved into
+/// `world.player.backup_pose_for_step_down` before the step-down
+/// walkability check and cleared once the descent resolves (snap / fall /
+/// legacy fallback). NOTE: this slice lands the SAVE/CLEAR bookkeeping
+/// ONLY — the restore → precipice-slide re-attempt consumer is a
+/// documented follow-on that requires the CTransition substep / contact-
+/// plane state we do not yet have (see `USE_CLIFF_SLIDE` Stage-2). Until
+/// that consumer lands, flipping this flag on only populates and clears a
+/// field nobody reads (still behaviourally inert).
+const USE_PRECIPICE_SLIDE_REENTRY: bool = false;
+
 /// Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — gate for the
 /// retail SEAM-skid (`Transition.CliffSlide`,
 /// `external/ACE/Source/ACE.Server/Physics/Transition.cs:242-266`,
@@ -1838,6 +1862,17 @@ impl MovementSystem {
                     // so either threshold flags a genuine ledge.
                     const LEDGE_FALL_THRESHOLD_M: f32 = 0.5;
                     if USE_STEP_UP_DOWN {
+                        // Physics deep-dive 2026-06-02 (precipice_slide
+                        // re-entry) — save the pre-descent pose before
+                        // the step-down walkability check so a non-walkable
+                        // landing can later be restored and re-attempted
+                        // as a precipice slide (CTransition::save_check_pos,
+                        // acclient.c:312499-312501). Flag-gated default-off:
+                        // when off, nothing is written and the solver is
+                        // byte-identical.
+                        if USE_PRECIPICE_SLIDE_REENTRY {
+                            world.player.backup_pose_for_step_down = Some(pose);
+                        }
                         match holtburger_world::spatial::step_down_decision(
                             pose.coords.z,
                             z,
@@ -1845,10 +1880,20 @@ impl MovementSystem {
                         ) {
                             holtburger_world::spatial::StepDownOutcome::Snap(snap_z) => {
                                 pose.coords.z = snap_z;
+                                // Walkable step-down resolved — clear the
+                                // backup pose (no re-entry needed).
+                                if USE_PRECIPICE_SLIDE_REENTRY {
+                                    world.player.backup_pose_for_step_down = None;
+                                }
                             }
                             holtburger_world::spatial::StepDownOutcome::Fall => {
                                 world.player.begin_fall();
                                 // Leave Z alone — gravity drops us next tick.
+                                // Genuine ledge fall resolved — clear the
+                                // backup pose.
+                                if USE_PRECIPICE_SLIDE_REENTRY {
+                                    world.player.backup_pose_for_step_down = None;
+                                }
                             }
                         }
                     } else if pose.coords.z - z > LEDGE_FALL_THRESHOLD_M {
@@ -1857,6 +1902,14 @@ impl MovementSystem {
                         // drop us next tick.
                     } else {
                         pose.coords.z = z;
+                    }
+                    // Physics deep-dive 2026-06-02 (precipice_slide
+                    // re-entry) — clear the backup pose on the legacy
+                    // fallback path (when USE_STEP_UP_DOWN is off, nothing
+                    // was ever saved, so this is a defensive no-op). Behind
+                    // the default-off flag, so byte-identical when off.
+                    if USE_PRECIPICE_SLIDE_REENTRY {
+                        world.player.backup_pose_for_step_down = None;
                     }
                 }
             }

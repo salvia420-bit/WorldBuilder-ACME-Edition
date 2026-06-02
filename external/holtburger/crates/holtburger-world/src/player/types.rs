@@ -636,6 +636,26 @@ pub struct PlayerState {
     ///
     /// Default: `None` (no wall tracked at spawn).
     pub last_known_wall_normal: Option<Vector3>,
+
+    /// Physics deep-dive 2026-06-02 (precipice_slide re-entry) — backup
+    /// pose captured BEFORE a step-down walkability check, mirroring
+    /// ACE/retail `CTransition::save_check_pos` /
+    /// `restore_check_pos` (`acclient.c:312499-312501`) and the
+    /// `Transition.EdgeSlide → StepDown → precipice_slide` re-entry
+    /// (`Transition.cs:282-319`). When the player walks off a ledge
+    /// within `PLAYER_STEP_DOWN_HEIGHT`, the pre-descent pose is saved
+    /// here so a step-down that lands on a non-walkable surface can be
+    /// restored and re-attempted as a precipice slide.
+    ///
+    /// Maintained (saved-before-descend / cleared-on-resolution) ONLY
+    /// when the `USE_PRECIPICE_SLIDE_REENTRY` flag in
+    /// `holtburger-core`'s movement system is enabled; when that flag is
+    /// off this field is never written or read, so the shipped solver
+    /// behaviour is unchanged (same pattern as
+    /// [`last_known_wall_normal`] under `USE_CLIFF_SLIDE`).
+    ///
+    /// Default: `None` (no backup pose at spawn).
+    pub backup_pose_for_step_down: Option<holtburger_common::position::WorldPosition>,
 }
 
 impl Default for PlayerState {
@@ -694,6 +714,9 @@ impl PlayerState {
             // wall tracked at spawn (mirrors retail's null
             // LastKnownContactPlane before the first contact).
             last_known_wall_normal: None,
+            // Physics deep-dive 2026-06-02 (precipice_slide re-entry) —
+            // no backup pose at spawn.
+            backup_pose_for_step_down: None,
         }
     }
 
