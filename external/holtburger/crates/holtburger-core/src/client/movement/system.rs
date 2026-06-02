@@ -268,6 +268,20 @@ const USE_RAMP_FLOOR_SNAP_FIX: bool = true;
 /// the flat-tri slide. See the module-doc DEFERRED block.
 const USE_PHYSICS_BSP: bool = false;
 
+/// Terrain→EnvCell entry (2026-06-02): when ON (DEFAULT), the manual-
+/// drive integrator flips the local player indoors the tick its capsule
+/// enters a loaded EnvCell, instead of waiting for the server's
+/// authoritative cell id — mirroring retail's client-local
+/// `check_building_transit` (acclient.c:348110). Fixes walking through
+/// cottage / dungeon shells from outdoors: cottages are EnvCells with no
+/// outdoor building AABB, so the outdoor branch had nothing to clamp
+/// against, and indoor collision is gated on `is_indoors()` (which keyed
+/// off the server-stamped cell id). The membership data (`cell_bsp`) is
+/// plumbed into `scene.cell_membership` regardless, so this is a pure
+/// runtime gate. Kill-switch: set `false` to restore the pre-2026-06-02
+/// server-only transition.
+const USE_LOCAL_ENVCELL_ENTRY: bool = true;
+
 /// 2026-06-02 outdoor building-wall edge/cliff-slide (Phase 6 follow-on):
 /// gate for enabling edge-slide / cliff-slide on outdoor building AABB
 /// walls, not just indoor cell polygon walls. When OFF (DEFAULT) the
@@ -1266,6 +1280,33 @@ impl MovementSystem {
         // agree to leave `pose` exactly where the server seeded
         // it. The first frame after `[phase6.G] drained …` flips
         // this false and full prediction engages.
+        // Terrain→EnvCell entry (2026-06-02): retail/ACE write the new
+        // ObjCellID CLIENT-LOCALLY on every transition (find_cell_list /
+        // check_building_transit, acclient.c:318229/348110) — the server
+        // never participates in the entry decision. holtburger previously
+        // left `pose.landblock_id` server-authoritative and never
+        // re-derived it locally, so a player walking into a cottage — an
+        // EnvCell with no outdoor building AABB — passed through the shell
+        // until the next server UpdatePosition flipped them indoors (the
+        // clip-through window). Mirror retail: when the predicted pose is
+        // still outdoor but the capsule has reached a loaded EnvCell hull,
+        // flip `landblock_id` to that cell NOW so `is_indoors()` selects
+        // the per-poly cell-wall clamp below THIS tick. The server's
+        // authoritative id confirms it (identical) or gently corrects it
+        // (constrain_local_pose_toward) on the next packet; a hard
+        // AuthoritativeBodySync::Reset still overrides. Runs BEFORE
+        // `indoor_unbaked` and the `is_indoors()` branch so they all see
+        // the flipped pose this tick.
+        if USE_LOCAL_ENVCELL_ENTRY
+            && !pose.is_indoors()
+            && let Some(entered) = world.scene.entered_envcell_for_outdoor_pose(
+                &pose,
+                holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+            )
+        {
+            pose.landblock_id = Guid(entered);
+        }
+
         let indoor_unbaked = if pose.is_indoors() {
             let cell_id = world.scene.current_cell(&pose);
             world.scene.cell_triangles(cell_id).is_empty()
