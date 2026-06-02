@@ -299,6 +299,41 @@ fn resolve_player_motion_table_profile_reads_run_speed_from_required_motion_kine
 }
 
 #[test]
+fn normalize_run_speed_to_scalar_unit_normalizes_run_velocity() {
+    // Calibration fix: flag OFF keeps the baked run-forward magnitude (2.5 from
+    // the test asset); flag ON normalizes it to unit length so the downstream
+    // resolved_manual_run_speed equals run_rate_scalar (~4.5) rather than
+    // base(1.73-on-real-data) × scalar.
+    let motion_table_id = 0x0900_0023;
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0044);
+    state.set_motion_kinematics(test_motion_kinematics_asset(motion_table_id));
+    state.player.guid = player_guid;
+
+    let mut player = Entity::new(player_guid, "Player".to_string(), WorldPosition::default());
+    player.properties.set_did_prop(
+        holtburger_common::properties::PropertyDataId::MotionTable,
+        Guid(motion_table_id),
+    );
+    state.entities.insert(player);
+
+    let k_off = state
+        .resolve_self_movement_kinematics()
+        .expect("kinematics should resolve (flag off)");
+    assert_eq!(k_off.base_run_forward_speed(), 2.5);
+
+    state.set_normalize_run_speed_to_scalar(true);
+    let k_on = state
+        .resolve_self_movement_kinematics()
+        .expect("kinematics should resolve (flag on)");
+    assert!(
+        (k_on.base_run_forward_speed() - 1.0).abs() < 1e-6,
+        "expected unit run base, got {}",
+        k_on.base_run_forward_speed()
+    );
+}
+
+#[test]
 fn resolve_player_motion_table_profile_reports_missing_setup_default_motion_table() {
     let setup_model_id = 0x0200_0011;
 

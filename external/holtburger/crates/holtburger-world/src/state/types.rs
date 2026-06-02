@@ -90,6 +90,13 @@ pub struct WorldState {
     pub(crate) setup_radii: std::collections::HashMap<u32, f32>,
     pub(crate) entity_lifecycle: EntityLifecycleStore,
     pub(crate) self_movement_capabilities_override: Option<SelfMovementCapabilities>,
+    /// Calibration fix (2026-06-02, DEFAULT-OFF): when true, normalize
+    /// `base_run_forward_velocity` to unit length in
+    /// `resolve_self_movement_kinematics`, so `resolved_manual_run_speed`
+    /// returns `run_rate_scalar` directly (~4.5 m/s retail cap) instead of the
+    /// baked frame-displacement artifact (~1.73) × scalar (= ~7.79, too fast).
+    /// Byte-identical when false. Runtime fix — no asset re-bake needed.
+    pub(crate) normalize_run_speed_to_scalar: bool,
 }
 
 impl WorldState {
@@ -429,6 +436,7 @@ impl WorldState {
             setup_radii: std::collections::HashMap::new(),
             entity_lifecycle: EntityLifecycleStore::default(),
             self_movement_capabilities_override: None,
+            normalize_run_speed_to_scalar: false,
         }
     }
 
@@ -564,6 +572,11 @@ impl WorldState {
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_motion_kinematics(&mut self, motion_kinematics: MotionKinematics) {
         self.motion_kinematics = Arc::new(motion_kinematics);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_normalize_run_speed_to_scalar(&mut self, enabled: bool) {
+        self.normalize_run_speed_to_scalar = enabled;
     }
 
     pub fn current_server_time(&self) -> f64 {
