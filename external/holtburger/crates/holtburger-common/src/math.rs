@@ -416,7 +416,9 @@ impl Sphere {
         let diff = self.center - *point;
         let dist_sq = diff.length_squared();
         let r_sum = self.radius + radius;
-        dist_sq <= r_sum * r_sum
+        // ACE `Sphere.Intersects` (Sphere.cs:258) uses strict `<` (exact-touch
+        // is NOT an intersection). Faithful for every BSP bounding reject.
+        dist_sq < r_sum * r_sum
     }
 }
 

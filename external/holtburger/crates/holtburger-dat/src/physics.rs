@@ -322,6 +322,7 @@ impl BspNode {
     pub fn sphere_intersects_solid_poly(
         &self,
         check_pos: &Sphere,
+        radius: f32,
         center_check: bool,
         polys: &HashMap<u16, ResolvedPolygon>,
         center_solid: &mut bool,
@@ -329,7 +330,10 @@ impl BspNode {
     ) -> bool {
         match self {
             BspNode::Leaf(l) => {
-                // BSPLeaf.cs:93-112
+                // BSPLeaf.cs:93-112. The leaf IGNORES `radius`: its bounding
+                // reject + poly tests use `check_pos` (ACE `checkPos`, the
+                // ORIGINAL sphere radius). Only the node `reach` uses the
+                // doubled `radius` (ACE BSPNode.cs:301).
                 if l.poly_ids.is_empty() {
                     return false;
                 }
@@ -358,7 +362,7 @@ impl BspNode {
                     return false;
                 }
                 Self::node_sphere_intersects_solid_poly(
-                    &i.plane, &i.pos, &i.neg, check_pos, center_check, polys, center_solid,
+                    &i.plane, &i.pos, &i.neg, check_pos, radius, center_check, polys, center_solid,
                     hit_poly,
                 )
             }
@@ -373,6 +377,7 @@ impl BspNode {
                     &Some(p.pos.clone()),
                     &Some(p.neg.clone()),
                     check_pos,
+                    radius,
                     center_check,
                     polys,
                     center_solid,
@@ -393,18 +398,22 @@ impl BspNode {
         pos: &Option<Box<BspNode>>,
         neg: &Option<Box<BspNode>>,
         check_pos: &Sphere,
+        radius: f32,
         center_check: bool,
         polys: &HashMap<u16, ResolvedPolygon>,
         center_solid: &mut bool,
         hit_poly: &mut Option<u16>,
     ) -> bool {
         let dist = plane.normal.dot(&check_pos.center) + plane.d;
-        let reach = check_pos.radius - PHYSICS_EPSILON;
+        // ACE BSPNode.cs:301 — `reach` uses the placement `radius` (which the
+        // caller doubles each widen iteration), NOT `check_pos.radius` (the
+        // original sphere radius, used only by the bounding rejects above).
+        let reach = radius - PHYSICS_EPSILON;
 
         if dist >= reach {
             return match pos.as_ref() {
                 Some(n) => {
-                    n.sphere_intersects_solid_poly(check_pos, center_check, polys, center_solid, hit_poly)
+                    n.sphere_intersects_solid_poly(check_pos, radius, center_check, polys, center_solid, hit_poly)
                 }
                 None => false,
             };
@@ -412,34 +421,35 @@ impl BspNode {
         if dist <= -reach {
             return match neg.as_ref() {
                 Some(n) => {
-                    n.sphere_intersects_solid_poly(check_pos, center_check, polys, center_solid, hit_poly)
+                    n.sphere_intersects_solid_poly(check_pos, radius, center_check, polys, center_solid, hit_poly)
                 }
                 None => false,
             };
         }
         // Straddle: descend the near side first (BSPNode.cs:309-324). If it
-        // surfaced a polygon, stop and report `center_solid`; else descend
-        // the far side with `center_check` forced false.
+        // surfaced a polygon (incl. a STICKY hit_poly from a prior placement
+        // iteration), stop and report `center_solid`; else descend the far
+        // side with `center_check` forced false.
         if dist <= 0.0 {
             if let Some(n) = neg.as_ref() {
-                n.sphere_intersects_solid_poly(check_pos, center_check, polys, center_solid, hit_poly);
+                n.sphere_intersects_solid_poly(check_pos, radius, center_check, polys, center_solid, hit_poly);
             }
             if hit_poly.is_some() {
                 return *center_solid;
             }
             match pos.as_ref() {
-                Some(n) => n.sphere_intersects_solid_poly(check_pos, false, polys, center_solid, hit_poly),
+                Some(n) => n.sphere_intersects_solid_poly(check_pos, radius, false, polys, center_solid, hit_poly),
                 None => *center_solid,
             }
         } else {
             if let Some(n) = pos.as_ref() {
-                n.sphere_intersects_solid_poly(check_pos, center_check, polys, center_solid, hit_poly);
+                n.sphere_intersects_solid_poly(check_pos, radius, center_check, polys, center_solid, hit_poly);
             }
             if hit_poly.is_some() {
                 return *center_solid;
             }
             match neg.as_ref() {
-                Some(n) => n.sphere_intersects_solid_poly(check_pos, false, polys, center_solid, hit_poly),
+                Some(n) => n.sphere_intersects_solid_poly(check_pos, radius, false, polys, center_solid, hit_poly),
                 None => *center_solid,
             }
         }
@@ -793,20 +803,21 @@ impl BspNode {
         // BSPTree.cs:259 — hardcoded
         const MAX_ITERATIONS: usize = 20;
 
-        for i in 0..MAX_ITERATIONS {
-            // ACE keeps `rad` separate and passes it explicitly to both calls.
-            // Our M2 query reads `check_pos.radius`, so sync both probe
-            // spheres' radius to `rad` before querying (see spec §1.1 fact 1).
-            valid_pos.radius = rad;
-            if two {
-                valid_pos_.radius = rad;
-            }
+        // ACE BSPTree.cs:257 — `hitPoly` is declared ONCE and is STICKY across
+        // iterations (it is never reset; the node recursion short-circuits the
+        // far child on a non-null incoming hit_poly — BSPNode.cs:313/321). Only
+        // `centerSolid` is reset per iteration (BSPTree.cs:262). `rad` is kept
+        // SEPARATE from the sphere radius and passed explicitly (used only for
+        // node `reach`); the probe spheres' `.radius` stays at the original
+        // `local_sphere` value, which the bounding rejects read.
+        let mut hit_poly: Option<u16> = None;
 
+        for i in 0..MAX_ITERATIONS {
             // ----- probe sphere-0 (BSPTree.cs:262-263) -----
             let mut center_solid = false;
-            let mut hit_poly: Option<u16> = None;
             let hit = self.sphere_intersects_solid_poly(
                 &valid_pos,
+                rad,
                 clear_cell,
                 polys,
                 &mut center_solid,
@@ -843,45 +854,41 @@ impl BspNode {
                 }
                 // hit==true but hit_poly==None → fall through to widen
                 // (BSPTree.cs:289).
-            } else {
-                // ----- sphere-0 missed (BSPTree.cs:271-288) -----
-                if two {
-                    // probe sphere-1 (BSPTree.cs:275).
-                    let mut center_solid2 = false;
-                    let mut hit_poly2: Option<u16> = None;
-                    let hit2 = self.sphere_intersects_solid_poly(
-                        &valid_pos_,
-                        clear_cell,
-                        polys,
-                        &mut center_solid2,
-                        &mut hit_poly2,
-                    );
-                    if hit2 {
-                        if let Some(pid) = hit_poly2 {
-                            let poly =
-                                polys.get(&pid).expect("hit_poly2 id present in polys map");
-                            // BSPTree.cs:279 — adjust(validPos_, validPos):
-                            // sphere-1 primary, sphere-0 the "other".
-                            let mut other = valid_pos;
-                            poly.adjust_to_placement_poly(
-                                &mut valid_pos_,
-                                Some(&mut other),
-                                rad,
-                                center_solid2,
-                                clear_cell,
-                            );
-                            valid_pos = other;
-                            continue; // re-query at SAME rad
-                        }
-                        // hit2==true but no poly → widen (fall through)
-                    } else {
-                        // both spheres clean → done (BSPTree.cs:283-284)
-                        return Self::placement_insert_inner(valid_pos.center, origin0, i);
+            } else if two {
+                // ----- sphere-0 missed; probe sphere-1 (BSPTree.cs:271-279).
+                // ACE reuses the SAME `centerSolid` + `hitPoly` refs for both.
+                let hit2 = self.sphere_intersects_solid_poly(
+                    &valid_pos_,
+                    rad,
+                    clear_cell,
+                    polys,
+                    &mut center_solid,
+                    &mut hit_poly,
+                );
+                if hit2 {
+                    if let Some(pid) = hit_poly {
+                        let poly = polys.get(&pid).expect("hit_poly id present in polys map");
+                        // BSPTree.cs:279 — adjust(validPos_, validPos):
+                        // sphere-1 primary, sphere-0 the "other".
+                        let mut other = valid_pos;
+                        poly.adjust_to_placement_poly(
+                            &mut valid_pos_,
+                            Some(&mut other),
+                            rad,
+                            center_solid,
+                            clear_cell,
+                        );
+                        valid_pos = other;
+                        continue; // re-query at SAME rad
                     }
+                    // hit2==true but no poly → widen (fall through)
                 } else {
-                    // single sphere, clean → done (BSPTree.cs:286-287)
+                    // both spheres clean → done (BSPTree.cs:283-284)
                     return Self::placement_insert_inner(valid_pos.center, origin0, i);
                 }
+            } else {
+                // single sphere, clean → done (BSPTree.cs:286-287)
+                return Self::placement_insert_inner(valid_pos.center, origin0, i);
             }
 
             // BSPTree.cs:289 — reached ONLY on (intersect==true && hitPoly==None),
@@ -1424,7 +1431,7 @@ mod tests {
         let mut center_solid = false;
         let mut hit_poly = None;
         let hit =
-            tree.sphere_intersects_solid_poly(&straddle, true, &polys, &mut center_solid, &mut hit_poly);
+            tree.sphere_intersects_solid_poly(&straddle, straddle.radius, true, &polys, &mut center_solid, &mut hit_poly);
         assert_eq!(hit_poly, Some(7), "straddle should surface the floor polygon");
         assert!(!center_solid, "center is above the floor, not inside solid space");
         assert!(hit, "a surfaced polygon is an intersection");
@@ -1442,7 +1449,7 @@ mod tests {
         let mut center_solid = false;
         let mut hit_poly = None;
         let hit =
-            tree.sphere_intersects_solid_poly(&below, true, &polys, &mut center_solid, &mut hit_poly);
+            tree.sphere_intersects_solid_poly(&below, below.radius, true, &polys, &mut center_solid, &mut hit_poly);
         assert!(center_solid, "center below the floor is inside solid space");
         assert_eq!(hit_poly, None, "no boundary polygon within reach");
         assert!(hit, "center_solid is reported as the intersect result");
@@ -1458,7 +1465,7 @@ mod tests {
         let mut center_solid = false;
         let mut hit_poly = None;
         let hit =
-            tree.sphere_intersects_solid_poly(&above, true, &polys, &mut center_solid, &mut hit_poly);
+            tree.sphere_intersects_solid_poly(&above, above.radius, true, &polys, &mut center_solid, &mut hit_poly);
         assert!(!hit);
         assert!(!center_solid);
         assert_eq!(hit_poly, None);
