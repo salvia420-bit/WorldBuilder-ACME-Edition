@@ -166,21 +166,12 @@ impl WorldState {
         }
 
         let resolution = self.resolve_player_motion_table_profile()?;
-        let mut base_run_forward_velocity = required_velocity(
+        let base_run_forward_velocity = required_velocity(
             &resolution,
             RequiredSelfMovementKinematics::RunForwardVelocity,
         )?;
         let (base_turn_left_omega, base_turn_right_omega) = resolved_turn_omegas(&resolution)?;
         let movement_profile = &resolution.movement_profile;
-
-        // Calibration fix (DEFAULT-OFF): the baked run-forward velocity carries a
-        // ~1.73 frame-displacement magnitude (the raw DAT cycle velocity is zero),
-        // so `base × run_rate_scalar` overshoots retail (~7.79 vs ~4.5 m/s cap).
-        // Normalizing to unit length makes `resolved_manual_run_speed` return
-        // `run_rate_scalar` directly while preserving the forward direction.
-        if self.normalize_run_speed_to_scalar {
-            base_run_forward_velocity = base_run_forward_velocity.normalize();
-        }
 
         Ok(SelfMovementKinematics {
             source: resolution.source,
