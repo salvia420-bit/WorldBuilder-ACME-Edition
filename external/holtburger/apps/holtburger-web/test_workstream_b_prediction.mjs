@@ -135,6 +135,13 @@ const factory = new Function(
 const TEST_GUID = 0x50000007;
 const lastMap = new Map();
 const fakeWindow = {
+    // GAP 2 (2026-06-02): these bullets validate the LEGACY Workstream-B
+    // independent-advance predictor (flat RUN_SPEED * dt). That path is
+    // now off by default — pure-smoothing-toward-integrator is the
+    // default that collapses the dual-predictor sawtooth. Opt this test
+    // back into the legacy path explicitly; the pure-smoothing path has
+    // its own coverage in test_pure_smooth_prediction.mjs.
+    __predPureSmooth: false,
     __lastEntityWorldPos: lastMap,
     getLocalPlayerGuid: () => TEST_GUID,
     liveScene3d: null, // set after switcher constructs

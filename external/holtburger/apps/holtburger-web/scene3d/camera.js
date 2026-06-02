@@ -378,6 +378,44 @@ export class CameraSwitcher {
     this._lerpDurationMs = 150.0; // middle of the 100-300 ms band from
     // the spec; tuned by eye-test if drift is visible.
     this._predLastTickMs = null;
+
+    // GAP 2 (2026-06-02) — pure-smoothing mode. The legacy Workstream-B
+    // path (`_advancePrediction`) is a SECOND forward integrator: it
+    // independently advances rendered X/Y at a flat `RUN_SPEED = 4.5`
+    // m/s while the authoritative Rust integrator advances at the real
+    // skill-derived speed (and `getLocalPlayerPose()` carries no
+    // velocity field for JS to read). Three speed sources (JS flat-rate,
+    // Rust integrator, dead wasm path) produce a sustained forward-bias
+    // sawtooth that retail's single CPhysicsObj cannot — JS predicts
+    // ahead, the 150 ms lerp fights it back, repeat. See
+    // `newprompts/physics-deep-dive-2026-06-01/verified-comparison-report.md`
+    // Dimension 5.
+    //
+    // Pure-smoothing collapses the three sources to ONE by construction:
+    // the JS layer stops independently advancing X/Y and instead, every
+    // frame, exponentially eases `predictedPlayerPos` toward the
+    // integrator's authoritative world-space pose (`getLocalPlayerPose()`
+    // converted landblock-local → world). The integrator already ticks
+    // every frame, so there is no extrapolation to mismatch — the
+    // rendered pose simply lags the authoritative pose by the smoothing
+    // time-constant and converges, never overruns. The 150 ms feel and
+    // the landblock-crossing snap are preserved.
+    //
+    // A/B lever: `window.__predPureSmooth` overrides the default at
+    // runtime (read each tick, so it can be toggled live in the console).
+    //   - `true`/undefined → pure-smoothing (default; sawtooth-free).
+    //   - `false`          → legacy independent-advance predictor.
+    // Default-on because the legacy path is the verified bug; the lever
+    // exists so an off-screen 1070 A/B capture can compare both without
+    // a rebuild.
+    this._pureSmoothDefault = true;
+    // Last integrator landblockId seen by `_smoothToIntegrator`. A
+    // change between frames means a teleport / LB transition (world
+    // coords jump by a multiple of 192 m), so we hard-snap instead of
+    // easing. `null` until the first authoritative pose. The exponential
+    // ease itself reuses `_lerpDurationMs` (150 ms) as its time-constant
+    // so the perceived smoothness matches the legacy reconcile lerp.
+    this._predPrevLandblockId = null;
     this._predictionWarned = false;
     this._predictionTrace = [];
     this._predictionTraceCapacity = 256;
@@ -586,9 +624,22 @@ export class CameraSwitcher {
    *   5. Dispatch movement input.
    */
   tick(dt) {
-    this._reconcilePrediction();
-    this._advancePrediction(dt);
-    this._applyPredictionLerp(dt);
+    // GAP 2 — pure-smoothing collapses the dual-predictor sawtooth. When
+    // on (default), the JS layer does NOT independently advance X/Y; it
+    // only eases the rendered pose toward the authoritative integrator
+    // pose. The legacy three-step predictor stays available behind the
+    // `window.__predPureSmooth === false` A/B lever.
+    const pureSmooth = (typeof window !== "undefined"
+      && window.__predPureSmooth !== undefined)
+      ? window.__predPureSmooth !== false
+      : this._pureSmoothDefault;
+    if (pureSmooth) {
+      this._smoothToIntegrator(dt);
+    } else {
+      this._reconcilePrediction();
+      this._advancePrediction(dt);
+      this._applyPredictionLerp(dt);
+    }
     this.positionCamera(dt);
     if (this.controls && typeof this.controls.update === "function") {
       try {
@@ -1129,6 +1180,112 @@ export class CameraSwitcher {
       (this._lerpTargetZ - this.predictedPlayerPos.z) * frac;
     this._lerpRemainingMs -= step;
     if (this._lerpRemainingMs < 1e-3) this._lerpRemainingMs = 0.0;
+  }
+
+  /**
+   * GAP 2 (2026-06-02) — read the authoritative integrator pose and
+   * convert it from landblock-local (x,y ∈ 0..192) to world coords,
+   * matching the convention `loop.js` uses to fill
+   * `__lastEntityWorldPos` (`wx = ((lbId>>>24)&0xff)*192 + localX`).
+   * The wasm `getLocalPlayerPose()` is the single source of truth: the
+   * Rust integrator advances it every TickMovement and reconciliation
+   * snaps it against ACE force/teleport sequences. Returns `null` when
+   * the handle/pose isn't ready (pre-spawn) so the caller no-ops.
+   */
+  _integratorWorldPose() {
+    const handle = this._getSessionHandle?.();
+    if (!handle || typeof handle.getLocalPlayerPose !== "function") return null;
+    let pose;
+    try {
+      pose = handle.getLocalPlayerPose();
+    } catch (_) {
+      return null;
+    }
+    if (!pose) return null;
+    const lx = pose.x;
+    const ly = pose.y;
+    const lz = pose.z;
+    if (!Number.isFinite(lx) || !Number.isFinite(ly) || !Number.isFinite(lz)) {
+      return null;
+    }
+    const lbId = (pose.landblockId >>> 0);
+    const lbX = (lbId >>> 24) & 0xff;
+    const lbY = (lbId >>> 16) & 0xff;
+    return {
+      x: lbX * 192.0 + lx,
+      y: lbY * 192.0 + ly,
+      z: lz,
+      landblockId: lbId,
+    };
+  }
+
+  /**
+   * GAP 2 (2026-06-02) — pure-smoothing step (replaces the legacy
+   * `_reconcile`/`_advance`/`_applyLerp` trio when
+   * `window.__predPureSmooth !== false`). The JS layer no longer
+   * predicts speed; it just eases `predictedPlayerPos` toward the
+   * integrator's authoritative world pose each frame. This collapses
+   * the dual-predictor speed mismatch (Dimension 5) to a single source
+   * by construction — the rendered pose lags the integrator by the
+   * smoothing time-constant and converges, it never extrapolates ahead,
+   * so the forward-bias sawtooth cannot form.
+   *
+   * Smoothing math: a framerate-independent exponential ease,
+   * `frac = 1 - exp(-dt_ms / tau)`, with `tau = _lerpDurationMs` (150 ms)
+   * so the perceived smoothness matches the legacy reconcile lerp. At a
+   * steady 60 Hz this eases ~10.5% of the gap per frame; the gap to a
+   * monotonically-advancing integrator settles to a small fixed lag
+   * rather than a sawtooth.
+   *
+   * Landblock-crossing snap: when the integrator's `landblockId`
+   * changes (teleport / LB transition) the world-coord delta jumps by a
+   * multiple of 192 m, so we hard-snap instead of easing — preserving
+   * the teleport feel the legacy `> 5 m` reconcile branch gave (and
+   * matching the local-player teleport snap which is LB-crossing-gated
+   * per `index.html:5960-5968`).
+   */
+  _smoothToIntegrator(dt) {
+    if (typeof window === "undefined") return;
+    const target = this._integratorWorldPose();
+    if (!target) return; // pre-spawn — leave predicted pose / fallback as-is
+
+    // First authoritative pose — plant the predicted pose directly (no
+    // ease; matches the legacy first-time seed in `_reconcilePrediction`).
+    if (!this.predictedPlayerPos) {
+      this.predictedPlayerPos = {
+        x: target.x, y: target.y, z: target.z,
+        lastReconcileTs: 0,
+      };
+      this._predPrevLandblockId = target.landblockId;
+      return;
+    }
+
+    // Landblock crossing (teleport / LB transition) — hard-snap; an
+    // exponential ease across a ±192 m jump would slide the avatar
+    // across the world.
+    if (this._predPrevLandblockId !== null
+        && target.landblockId !== this._predPrevLandblockId) {
+      this.predictedPlayerPos.x = target.x;
+      this.predictedPlayerPos.y = target.y;
+      this.predictedPlayerPos.z = target.z;
+      this._predPrevLandblockId = target.landblockId;
+      return;
+    }
+    this._predPrevLandblockId = target.landblockId;
+
+    // Framerate-independent exponential ease toward the integrator pose.
+    // dt is clamped (matches the legacy advance path's 100 ms cap) so a
+    // resumed hidden tab doesn't ease in one giant step.
+    const dtMs = Math.min(dt, 0.1) * 1000.0;
+    if (!(dtMs > 0)) return;
+    const tau = this._lerpDurationMs > 0 ? this._lerpDurationMs : 150.0;
+    const frac = 1.0 - Math.exp(-dtMs / tau);
+    this.predictedPlayerPos.x +=
+      (target.x - this.predictedPlayerPos.x) * frac;
+    this.predictedPlayerPos.y +=
+      (target.y - this.predictedPlayerPos.y) * frac;
+    this.predictedPlayerPos.z +=
+      (target.z - this.predictedPlayerPos.z) * frac;
   }
 
   /**
