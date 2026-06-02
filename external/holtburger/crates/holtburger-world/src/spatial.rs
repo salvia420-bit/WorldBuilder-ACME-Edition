@@ -1,3 +1,4 @@
+pub mod collision;
 mod entity_collision;
 mod force_position_interp;
 mod physics;
