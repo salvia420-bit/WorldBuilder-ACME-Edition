@@ -15,6 +15,7 @@ pub use physics::{
     StepDownOutcome, SweptSphereHit, USE_SUBSTEP_TRANSITION, advance_body_kinematics,
     cell_wall_substep_count, clamp_delta_against_buildings,
     clamp_delta_against_buildings_with_normal, clamp_delta_against_cell_walls,
+    collides_with_sphere, find_time_of_collision,
     clamp_delta_against_cell_walls_dispatch, clamp_delta_against_cell_walls_substepped,
     clamp_delta_against_cell_walls_with_exclusions,
     clamp_delta_against_cell_walls_with_normal, clamp_delta_to_cell_interior,

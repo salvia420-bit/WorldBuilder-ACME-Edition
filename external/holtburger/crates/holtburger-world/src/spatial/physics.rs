@@ -214,6 +214,91 @@ fn ray_aabb_entry(
     Some((t_enter, normal))
 }
 
+/// BSP M1 (pure sphere math, no solver wiring yet). Faithful ports of ACE
+/// `Physics/Sphere.cs` / acclient `CSphere`, for the future collision resolver.
+
+/// Parametric time of collision between a moving sphere (at origin, moving along
+/// `movement`) and a static sphere at relative position `sphere_pos` with combined
+/// radii `radsum`. Returns t in [0,1] on hit, or -1.0 (no hit / degenerate ray /
+/// starting overlapped). Port of `Sphere.FindTimeOfCollision`
+/// (Physics/Sphere.cs:232-249) / acclient.c:358481-358506.
+pub fn find_time_of_collision(movement: Vector3, sphere_pos: Vector3, radsum: f32) -> f32 {
+    // Solve |t*movement - sphere_pos| = radsum for the earliest t.
+    //   a*t² - 2*B*t + C = 0,  a = movement·movement,
+    //   B = sphere_pos·movement (>0 when the sphere is ahead),
+    //   C = sphere_pos·sphere_pos - radsum².
+    // Earliest root = (B - sqrt(B² - a*C)) / a. Returns -1.0 for a degenerate
+    // ray, an already-overlapping start, or a miss.
+    let a = movement.dot(&movement);
+    if a < EPSILON {
+        return -1.0;
+    }
+    let bb = sphere_pos.dot(&movement);
+    let c = sphere_pos.dot(&sphere_pos) - radsum * radsum;
+    if c < EPSILON {
+        return -1.0;
+    }
+    let discriminant = bb * bb - a * c;
+    if discriminant < 0.0 {
+        return -1.0;
+    }
+    (bb - discriminant.sqrt()) / a
+}
+
+/// Static (at-rest) two-sphere overlap test: true if the spheres touch or overlap.
+/// Port of `Sphere.CollidesWithSphere` (Physics/Sphere.cs:215-221) /
+/// acclient.c:358509-358516.
+pub fn collides_with_sphere(sphere_pos: Vector3, radsum: f32) -> bool {
+    sphere_pos.length_squared() <= radsum * radsum
+}
+
+#[cfg(test)]
+mod m1_sphere_tests {
+    use super::*;
+
+    #[test]
+    fn find_time_of_collision_head_on_hit() {
+        let t = find_time_of_collision(Vector3::new(1.0, 0.0, 0.0), Vector3::new(1.5, 0.0, 0.0), 0.5);
+        assert!(t >= 0.0 && t <= 1.0, "expected hit in [0,1], got t={}", t);
+    }
+    #[test]
+    fn find_time_of_collision_miss() {
+        let t = find_time_of_collision(Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 2.0, 0.0), 0.5);
+        assert!(t < 0.0, "expected miss (t=-1), got t={}", t);
+    }
+    #[test]
+    fn find_time_of_collision_tangent() {
+        let t = find_time_of_collision(Vector3::new(1.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.5), 0.5);
+        assert!(t >= 0.0 && t <= 1.0, "expected tangent hit in [0,1], got t={}", t);
+    }
+    #[test]
+    fn find_time_of_collision_degenerate_ray() {
+        let t = find_time_of_collision(Vector3::zero(), Vector3::new(0.5, 0.0, 0.0), 0.5);
+        assert!(t < 0.0, "degenerate ray must return -1, got t={}", t);
+    }
+    #[test]
+    fn find_time_of_collision_starts_overlapped() {
+        let t = find_time_of_collision(Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.1, 0.0, 0.0), 0.5);
+        assert!(t < 0.0, "already overlapping must return -1, got t={}", t);
+    }
+    #[test]
+    fn collides_with_sphere_overlap() {
+        assert!(collides_with_sphere(Vector3::new(0.8, 0.0, 0.0), 1.0));
+    }
+    #[test]
+    fn collides_with_sphere_miss() {
+        assert!(!collides_with_sphere(Vector3::new(2.0, 0.0, 0.0), 1.0));
+    }
+    #[test]
+    fn collides_with_sphere_tangent() {
+        assert!(collides_with_sphere(Vector3::new(1.0, 0.0, 0.0), 1.0));
+    }
+    #[test]
+    fn collides_with_sphere_concentric() {
+        assert!(collides_with_sphere(Vector3::zero(), 0.5));
+    }
+}
+
 /// Apply swept-sphere clamp + single-iteration slide. Returns the
 /// new `delta` the integrator should consume (in place of the raw
 /// `velocity * dt`). Does not mutate input.
