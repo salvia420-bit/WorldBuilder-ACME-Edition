@@ -220,6 +220,19 @@ function isLocalPlayerGuid(g) {
 // Heading is still sourced from the integrator's `getLocalPlayerPose`:
 // turn rate is small (~1.5 rad/s × dt = 0.025 rad/frame) and doesn't
 // oscillate visibly, so we don't need a prediction layer for it.
+//
+// Rig-Z smoothing (parkinsons-bob fix, 2026-06-02): X/Y use the smoothed
+// `predicted` pose, but Z was sourced straight from the raw integrator
+// (`getLocalPlayerPose().z`) to dodge the predicted.z hill-lag — and raw Z
+// carries the SAME ~5-10 Hz server-reconcile oscillation the X/Y smoothing
+// was added to remove, so the avatar visibly bobs vertically (worse on
+// slopes, where Z actually moves). Exponential-ease the rendered rig Z
+// toward the raw target: a short tau low-passes the bob with negligible
+// altitude lag (still tracks the integrator's authoritative Z, no sinking
+// below terrain), and deltas over the snap distance (teleport / landblock
+// cross / fall landing) bypass the ease so big vertical moves stay crisp.
+const RIG_Z_TAU_MS = 70.0;
+const RIG_Z_SNAP_M = 1.0;
 function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   if (!scene3d?.entityManager) return;
   if (!scene3d?.cameraSwitcher) return;
@@ -282,7 +295,26 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   // the rendered terrain at the player's XY and use the visual Z if
   // the cast hits — physics/server pose stays untouched (see
   // `getTerrainVisualZ` doc in terrain.js).
-  const renderZ = getTerrainVisualZ(scene3d, predicted.x, predicted.y, posZ);
+  let renderZ = getTerrainVisualZ(scene3d, predicted.x, predicted.y, posZ);
+
+  // Low-pass the rig Z to kill the ~5-10 Hz vertical reconcile bob (see
+  // the note atop this fn). Ease a persisted rig-Z toward `renderZ`; snap
+  // through on big jumps. Framerate-independent (eases by wall-clock dt).
+  {
+    const now = (typeof performance !== "undefined" && performance.now)
+      ? performance.now()
+      : Date.now();
+    const st = scene3d._rigZSmooth;
+    if (st && Number.isFinite(st.z) && Math.abs(renderZ - st.z) <= RIG_Z_SNAP_M) {
+      const dtMs = Math.max(0, Math.min(now - st.ts, 100));
+      st.z += (renderZ - st.z) * (1.0 - Math.exp(-dtMs / RIG_Z_TAU_MS));
+      st.ts = now;
+      renderZ = st.z;
+    } else {
+      scene3d._rigZSmooth = { z: renderZ, ts: now };
+    }
+  }
+
   scene3d.entityManager.setPose(
     guid,
     predicted.x, predicted.y, renderZ,
