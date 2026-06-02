@@ -63,6 +63,15 @@ pub const USE_SUBSTEP_TRANSITION: bool = false;
 /// on pure lateral moves.
 pub const USE_CALCNUMSTEPS_3D_DIST: bool = false;
 
+/// Physics deep-dive 2026-06-01 (cliff_slide Stage-2, intra-substep). Gate
+/// for applying the seam-skid (`cliff_slide_residual_along_seam`) WITHIN the
+/// [`clamp_delta_against_cell_walls_substepped`] loop, DEFAULT-OFF. When false
+/// the loop accumulates `last_normal` and advances the pose exactly as today
+/// (the cliff_slide block is skipped, so `final_clamped == clamped_step`).
+/// When true, a fast tick crossing two walls skids the seam mid-tick using the
+/// previous step's wall (N_last) and the current step's wall (N_new).
+pub const USE_CLIFF_SLIDE_INTRA_SUBSTEP: bool = false;
+
 /// Phase 6 step B player-capsule dimensions. ACE derives these from
 /// `Setup._dat.Height` / `Setup._dat.Radius` per
 /// `external/ACE/Source/ACE.Server/Physics/PartArray.cs:189-206`.
@@ -1125,9 +1134,23 @@ pub fn clamp_delta_against_cell_walls_substepped(
             last_normal = step_normal;
         }
 
-        // Advance the working pose by the CLAMPED (slid) segment so the
-        // next step sweeps from where we actually ended up.
-        working.coords = working.coords + clamped_step;
+        // Intra-substep cliff_slide (Stage-2 seam-skid), DEFAULT-OFF. When
+        // enabled, if this step hit a wall (N_new) AND a previous step's wall
+        // is known (N_last), replace the clamped residual with the seam-skid
+        // (cross-product of the two normals) before advancing. Purely additive:
+        // when off, `final_clamped == clamped_step` and the pose advances
+        // identically to shipped behaviour.
+        let mut final_clamped = clamped_step;
+        if USE_CLIFF_SLIDE_INTRA_SUBSTEP
+            && let (Some(n_new), Some(n_last)) = (step_normal, last_normal)
+            && let Some(seam_skid) = cliff_slide_residual_along_seam(clamped_step, n_new, n_last)
+        {
+            final_clamped = seam_skid;
+        }
+
+        // Advance the working pose by the (possibly seam-skidded) segment so
+        // the next step sweeps from where we actually ended up.
+        working.coords = working.coords + final_clamped;
 
         // Early-break on a fully-blocked sub-segment: if this step's
         // lateral travel collapsed to ~0 (wall dead-ahead, no tangent to
