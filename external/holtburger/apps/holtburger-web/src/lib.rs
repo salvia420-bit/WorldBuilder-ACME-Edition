@@ -28664,11 +28664,27 @@ async fn recv_loop(
                                 && w.player.guid != holtburger_common::Guid::NULL
                                 && let Some(pos) = data.pos
                             {
-                                let entity = holtburger_world::entity::Entity::new(
+                                let mut entity = holtburger_world::entity::Entity::new(
                                     data.public_weenie_desc.guid,
                                     String::from("LocalPlayer"),
                                     pos,
                                 );
+                                // Run-4.5 root-cause fix (2026-06-02): hydrate the
+                                // local player's full description (MotionTable +
+                                // Setup → mtable_id/csetup_id, flags, wcid, …) from
+                                // the self-CreateObject ODD. The prior bare
+                                // `Entity::new` seed left the player entity with no
+                                // motion-table source, so
+                                // `resolve_player_motion_table_profile` returned
+                                // `MotionTableSourceUnavailable`, the movement
+                                // watchdog pinned the 4.5 fallback override forever,
+                                // and run speed was a flat ~4.5 m/s for EVERY char
+                                // (live-confirmed). Mirrors the non-local entity
+                                // path (`handlers/inventory.rs:32`). ACE ships the
+                                // PhysicsDesc here (`Player_Networking.cs:224`
+                                // CreateObject(this); MTable/CSetup flags set in
+                                // `WorldObject_Networking.cs:473-477`).
+                                entity.apply_description(&data);
                                 w.add_entity(entity);
                                 let _ = w.set_local_player_runtime_pose(pos);
                                 entity_seeded = true;
