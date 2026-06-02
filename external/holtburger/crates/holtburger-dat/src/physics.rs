@@ -64,7 +64,83 @@ pub struct PortalPoly {
     pub poly_id: i16,
 }
 
+/// Result of testing a sphere against a CELL bsp (`BspType::Cell`),
+/// mirroring ACE `BoundingType`. The cell tree partitions an EnvCell's
+/// (convex) interior with splitting planes whose POSITIVE half-space is
+/// "inside"; only the positive child is ever followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellBound {
+    Outside,
+    PartiallyInside,
+    EntirelyInside,
+}
+
 impl BspNode {
+    /// Faithful port of ACE `BSPNode::point_inside_cell_bsp`
+    /// (BSPNode.cs:191): walk the CELL bsp following the POSITIVE side of
+    /// each splitting plane. On the negative side the point is outside
+    /// the cell; running off the positive end (no further child) — or
+    /// reaching a leaf — means inside. Pure plane walk: the cell tree
+    /// carries no polygons, so `NegNode` is never traversed.
+    pub fn point_inside_cell(&self, point: &Vector3) -> bool {
+        match self {
+            BspNode::Internal(i) => {
+                if i.plane.distance_to_point(point) >= -PHYSICS_EPSILON {
+                    match &i.pos {
+                        Some(pos) => pos.point_inside_cell(point),
+                        None => true,
+                    }
+                } else {
+                    false
+                }
+            }
+            BspNode::Port(p) => {
+                if p.plane.distance_to_point(point) >= -PHYSICS_EPSILON {
+                    p.pos.point_inside_cell(point)
+                } else {
+                    false
+                }
+            }
+            BspNode::Leaf(_) => true,
+        }
+    }
+
+    /// Faithful port of ACE `BSPNode::sphere_intersects_cell_bsp`
+    /// (BSPNode.cs:219): the same positive-side walk as
+    /// [`Self::point_inside_cell`] but with a `radius + 0.01` straddle
+    /// band (ACE's literal `0.0099999998`), classifying the sphere as
+    /// fully inside, straddling, or outside the cell hull. Used to
+    /// detect the moment a moving player capsule reaches an EnvCell so
+    /// the client can flip indoors locally (cf. `check_building_transit`).
+    pub fn sphere_intersects_cell(&self, center: &Vector3, radius: f32) -> CellBound {
+        let (plane, pos) = match self {
+            BspNode::Internal(i) => (&i.plane, i.pos.as_deref()),
+            BspNode::Port(p) => (&p.plane, Some(&*p.pos)),
+            BspNode::Leaf(_) => return CellBound::EntirelyInside,
+        };
+        let dist = plane.distance_to_point(center);
+        let check_rad = radius + 0.01;
+        if dist <= -check_rad {
+            return CellBound::Outside;
+        }
+        if dist >= check_rad {
+            return match pos {
+                Some(p) => p.sphere_intersects_cell(center, radius),
+                None => CellBound::EntirelyInside,
+            };
+        }
+        match pos {
+            Some(p) => {
+                if p.sphere_intersects_cell(center, radius) != CellBound::Outside {
+                    CellBound::PartiallyInside
+                } else {
+                    CellBound::Outside
+                }
+            }
+            None => CellBound::PartiallyInside,
+        }
+    }
+
     pub fn read<R: Read + Seek>(reader: &mut R, tree_type: BspType) -> BinResult<Self> {
         let mut tag = [0u8; 4];
         reader.read_exact(&mut tag)?;
@@ -1515,6 +1591,55 @@ mod tests {
         // `b` receives the identical (0,0,0.4) displacement.
         assert!((b.center.z - 0.5).abs() < 1e-5);
         assert!((b.center.x - 1.0).abs() < 1e-6);
+    }
+
+    // ---- CELL bsp membership (point/sphere inside cell) ----
+
+    fn half_space_cell() -> BspNode {
+        // One splitting plane (normal +Z, d=0): positive half-space
+        // (z >= 0) is "inside the cell", negative is outside. `pos`/`neg`
+        // are null so the walk terminates immediately past the plane.
+        BspNode::Internal(InternalNode {
+            tag: *b"BPnn",
+            plane: Plane {
+                normal: v(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+            pos: None,
+            neg: None,
+            sphere: None,
+            poly_ids: vec![],
+        })
+    }
+
+    #[test]
+    fn point_inside_cell_follows_positive_side() {
+        let cell = half_space_cell();
+        // On / above the plane => inside (falls off the positive end).
+        assert!(cell.point_inside_cell(&v(0.0, 0.0, 1.0)));
+        assert!(cell.point_inside_cell(&v(5.0, -3.0, 0.0)));
+        // Below the plane => outside (negative side is never traversed).
+        assert!(!cell.point_inside_cell(&v(0.0, 0.0, -1.0)));
+    }
+
+    #[test]
+    fn sphere_intersects_cell_classifies_band() {
+        let cell = half_space_cell();
+        // Wholly on the positive side, clear of the band => inside.
+        assert_eq!(
+            cell.sphere_intersects_cell(&v(0.0, 0.0, 0.5), 0.1),
+            CellBound::EntirelyInside
+        );
+        // Wholly on the negative side, clear of the band => outside.
+        assert_eq!(
+            cell.sphere_intersects_cell(&v(0.0, 0.0, -1.0), 0.1),
+            CellBound::Outside
+        );
+        // Straddling the plane within radius+0.01 => partially inside.
+        assert_eq!(
+            cell.sphere_intersects_cell(&v(0.0, 0.0, 0.0), 0.2),
+            CellBound::PartiallyInside
+        );
     }
 
     #[test]

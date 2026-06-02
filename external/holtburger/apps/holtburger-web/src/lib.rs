@@ -8976,6 +8976,17 @@ thread_local! {
         std::cell::RefCell<Vec<(u32, holtburger_world::CellPhysicsBsp)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// Terrain→EnvCell entry (2026-06-02): per-EnvCell MEMBERSHIP tree
+    /// (`CellStruct.cell_bsp`) + frame, queued by `fetchEnvCellsInLand-
+    /// block` alongside `CELL_BSP_PENDING` and drained into
+    /// `scene.cell_membership` each `TickMovement`. Lets the integrator
+    /// flip the player indoors locally the tick the capsule enters a
+    /// cell (cf. retail `check_building_transit`), instead of waiting
+    /// for the server. Cleared together with `cell_physics_index`.
+    static CELL_MEMBERSHIP_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_world::CellMembership)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
     /// Phase 6 collision-leak fix (2026-05-29): landblock-high keys queued by
     /// `enqueueClearLandblockCollision` (called from the JS LRU `evict`) and
     /// drained at the TOP of each `SessionCommand::TickMovement` — BEFORE the
@@ -9239,6 +9250,23 @@ fn drain_pending_cell_bsp_into(scene: &mut holtburger_world::SpatialScene) -> us
         let count = buf.len();
         for (cell_id, bsp) in buf.drain(..) {
             scene.insert_cell_physics_bsp(cell_id, bsp);
+        }
+        count
+    })
+}
+
+/// Terrain→EnvCell entry (2026-06-02): drain the pending cell-membership
+/// trees into `scene.cell_membership`. Same `TickMovement` cadence as
+/// the physics-BSP drain so the membership data lands the same tick the
+/// EnvCell AABBs do — the integrator's local indoor-flip probe
+/// (`entered_envcell_for_outdoor_pose`) can then engage immediately.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_cell_membership_into(scene: &mut holtburger_world::SpatialScene) -> usize {
+    CELL_MEMBERSHIP_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (cell_id, membership) in buf.drain(..) {
+            scene.insert_cell_membership(cell_id, membership);
         }
         count
     })
@@ -12050,6 +12078,27 @@ pub async fn fetch_env_cells_in_landblock(
                             };
                             CELL_BSP_PENDING.with(|pending| {
                                 pending.borrow_mut().push((envcell.cell_id, bsp));
+                            });
+                        }
+
+                        // Terrain→EnvCell entry (2026-06-02): preserve the
+                        // ALREADY-PARSED cell MEMBERSHIP tree (`cell_bsp`,
+                        // distinct from the physics BSP above — plane-only,
+                        // no polygons) so the integrator can answer "is the
+                        // player capsule inside this EnvCell?" locally and
+                        // flip indoors the tick of entry. Kept CELL-LOCAL
+                        // with the cell frame travelling alongside (same
+                        // world→local transform as the physics BSP). Pushed
+                        // into `CELL_MEMBERSHIP_PENDING`; drained into
+                        // `scene.cell_membership` next TickMovement.
+                        if let Some(cell_tree) = &cell_struct.cell_bsp {
+                            let membership = holtburger_world::CellMembership {
+                                tree: cell_tree.clone(),
+                                origin: cell_origin,
+                                orientation: cell_orientation,
+                            };
+                            CELL_MEMBERSHIP_PENDING.with(|pending| {
+                                pending.borrow_mut().push((envcell.cell_id, membership));
                             });
                         }
 
@@ -33677,6 +33726,17 @@ async fn recv_loop(
                             console_log_str(&format!(
                                 "[bsp] drained {drained_bsp} cell physics BSP trees into scene ({} cells with BSP)",
                                 w.scene.cell_physics_bsp_count(),
+                            ));
+                        }
+                        // Terrain→EnvCell entry (2026-06-02): drain the
+                        // cell-membership trees so the local indoor-flip
+                        // probe sees them the same tick.
+                        let drained_membership =
+                            drain_pending_cell_membership_into(&mut w.scene);
+                        if drained_membership > 0 {
+                            console_log_str(&format!(
+                                "[envcell-entry] drained {drained_membership} cell membership trees into scene ({} cells with membership)",
+                                w.scene.cell_membership_count(),
                             ));
                         }
                         // Workstream C (3D camera collision,

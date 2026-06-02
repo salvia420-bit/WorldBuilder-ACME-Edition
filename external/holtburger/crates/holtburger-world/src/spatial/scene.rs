@@ -283,6 +283,41 @@ impl CellPhysicsBsp {
     }
 }
 
+/// Cell MEMBERSHIP tree (`CellStruct.cell_bsp`) + cell frame. Answers
+/// "is this world point / capsule inside this EnvCell?" purely from
+/// geometry — the client-local analogue of ACE `check_building_transit`
+/// / `point_in_cell`. Distinct from [`CellPhysicsBsp`] (collision): the
+/// cell tree is plane-only (no polygons), so this carries just the tree
+/// + the cell frame for the world→local query transform. Lifetime
+/// tracks `cell_aabbs` (cleared on landblock unload).
+#[derive(Clone)]
+pub struct CellMembership {
+    /// The parsed cell-membership BSP tree (cell-local splitting
+    /// planes), straight from `CellStruct.cell_bsp`.
+    pub tree: holtburger_dat::physics::BspNode,
+    /// Cell origin in WORLD space (landblock origin + EnvCell
+    /// `position.origin`).
+    pub origin: Vector3,
+    /// Cell orientation (EnvCell `position.orientation`); unit
+    /// quaternion, conjugate maps world→cell-local.
+    pub orientation: holtburger_common::Quaternion,
+}
+
+impl CellMembership {
+    /// `local = orientation^-1 · (world − origin)` — identical to
+    /// [`CellPhysicsBsp::world_to_local`].
+    pub fn world_to_local(&self, world: Vector3) -> Vector3 {
+        let q = self.orientation;
+        let inv = holtburger_common::Quaternion {
+            w: q.w,
+            x: -q.x,
+            y: -q.y,
+            z: -q.z,
+        };
+        inv.rotate_vector(world - self.origin)
+    }
+}
+
 #[derive(Clone)]
 pub struct SpatialScene {
     landblock_map: HashMap<Guid, HashSet<Guid>>,
@@ -336,6 +371,17 @@ pub struct SpatialScene {
     /// (see [`CellPhysicsBsp::world_to_local`]). Cleared on landblock
     /// unload alongside `cell_physics_index`.
     cell_physics_bsp: HashMap<u32, CellPhysicsBsp>,
+    /// Terrain→EnvCell entry (2026-06-02): per-cell MEMBERSHIP bsp
+    /// (`CellStruct.cell_bsp`) + cell frame, keyed by full 32-bit cell
+    /// id (parallel to `cell_physics_bsp`). Populated by
+    /// `fetchEnvCellsInLandblock`'s cell walk regardless of any flag.
+    /// Read by [`Self::entered_envcell_for_outdoor_pose`] so the
+    /// integrator can flip the player indoors locally the tick the
+    /// capsule enters a cell — mirroring retail's client-local
+    /// `check_building_transit` — instead of waiting for the server
+    /// `UpdatePosition`. Cleared on landblock unload alongside
+    /// `cell_aabbs` / `cell_physics_bsp`.
+    cell_membership: HashMap<u32, CellMembership>,
     /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
     /// world space, for screen-space portal-frustum clipping. Keyed by
     /// the EnvCell's full 32-bit cell id; each entry is a list of
@@ -457,6 +503,7 @@ impl SpatialScene {
             cell_aabbs: HashMap::new(),
             cell_physics_index: HashMap::new(),
             cell_physics_bsp: HashMap::new(),
+            cell_membership: HashMap::new(),
             cell_portal_polygons: HashMap::new(),
             door_part_index: HashMap::new(),
             open_door_exclusion_aabbs: HashMap::new(),
@@ -783,6 +830,10 @@ impl SpatialScene {
         // BSP collision (PASS 1): same lifetime as cell_physics_index.
         self.cell_physics_bsp
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
+        // Terrain→EnvCell entry: cell-membership trees share the
+        // EnvCell lifetime like the physics BSP.
+        self.cell_membership
+            .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         // Phase 5 PView port: same lifetime as cell_aabbs.
         self.cell_portal_polygons
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
@@ -918,6 +969,19 @@ impl SpatialScene {
     /// BSP. Diagnostic only.
     pub fn cell_physics_bsp_count(&self) -> usize {
         self.cell_physics_bsp.len()
+    }
+
+    /// Terrain→EnvCell entry (2026-06-02): register a cell-membership
+    /// tree (`CellStruct.cell_bsp` + frame) for `cell_id`. Drained from
+    /// the wasm bundle's `CELL_MEMBERSHIP_PENDING` pile each TickMovement,
+    /// the same cadence as the physics-BSP drain.
+    pub fn insert_cell_membership(&mut self, cell_id: u32, membership: CellMembership) {
+        self.cell_membership.insert(cell_id, membership);
+    }
+
+    /// Count of cells with a registered membership tree. Diagnostic only.
+    pub fn cell_membership_count(&self) -> usize {
+        self.cell_membership.len()
     }
 
     /// BSP collision (PASS 1, 2026-06-02): the authoritative "is the
@@ -1072,6 +1136,78 @@ impl SpatialScene {
             }
         }
         pos.landblock_id.0
+    }
+
+    /// Terrain→EnvCell entry (2026-06-02): when the player's predicted
+    /// pose is still flagged OUTDOOR but the capsule has reached a
+    /// loaded EnvCell's hull, return that cell's full 32-bit id so the
+    /// caller can flip `landblock_id` locally and engage indoor
+    /// collision THIS tick — the client-local analogue of ACE
+    /// `check_building_transit` (which sets `HitsInteriorCell` the moment
+    /// a sphere intersects the cell, acclient.c:348139). Mirrors retail:
+    /// the client decides cell membership from geometry every tick, not
+    /// from a server packet.
+    ///
+    /// Broad-phase: the radius-padded `cell_aabbs` of the player's
+    /// landblock (same scan + landblock-high filter as `current_cell`).
+    /// Narrow-phase: the cell's `cell_bsp` membership tree (plane-only
+    /// [`BspNode::sphere_intersects_cell`]). Cells with no parsed
+    /// `cell_bsp` fall back to plain (unpadded) AABB containment. First
+    /// match wins, matching `current_cell`'s ordering once indoors.
+    /// Returns `None` when the pose is indoors/null or no cell is
+    /// entered. `radius` MUST be the same capsule radius the indoor
+    /// wall-clamp uses, so the flip distance matches where collision
+    /// engages.
+    pub fn entered_envcell_for_outdoor_pose(
+        &self,
+        pos: &WorldPosition,
+        radius: f32,
+    ) -> Option<u32> {
+        if pos.landblock_id == Guid::NULL || pos.is_indoors() {
+            return None;
+        }
+        let global = pos.global_coords();
+        let lb_high = pos.landblock_id.0 & 0xFFFF_0000;
+        for (&cell_id, aabb) in &self.cell_aabbs {
+            if (cell_id & 0xFFFF_0000) != lb_high || aabb.is_empty() {
+                continue;
+            }
+            // Broad-phase: capsule centre within the AABB padded by the
+            // capsule radius (so we test cells the swept sphere reaches).
+            if global.x < aabb.min.x - radius
+                || global.x > aabb.max.x + radius
+                || global.y < aabb.min.y - radius
+                || global.y > aabb.max.y + radius
+                || global.z < aabb.min.z - radius
+                || global.z > aabb.max.z + radius
+            {
+                continue;
+            }
+            match self.cell_membership.get(&cell_id) {
+                Some(m) => {
+                    let local = m.world_to_local(global);
+                    if m.tree.sphere_intersects_cell(&local, radius)
+                        != holtburger_dat::physics::CellBound::Outside
+                    {
+                        return Some(cell_id);
+                    }
+                }
+                None => {
+                    // Fallback (no parsed cell_bsp): unpadded AABB
+                    // containment is the membership verdict.
+                    if global.x >= aabb.min.x
+                        && global.x <= aabb.max.x
+                        && global.y >= aabb.min.y
+                        && global.y <= aabb.max.y
+                        && global.z >= aabb.min.z
+                        && global.z <= aabb.max.z
+                    {
+                        return Some(cell_id);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Phase 6 step D: compute the visible cell set rooted at
