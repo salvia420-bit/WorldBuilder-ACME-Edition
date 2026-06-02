@@ -264,6 +264,32 @@ export function applyWireVertexAOPatch(material) {
   material.userData.__aoPatched = true;
 }
 
+// 2026-06-02 — wire-fill z-fight fix. The renderer runs
+// `logarithmicDepthBuffer: true`, so every material writes `gl_FragDepth`,
+// which makes `polygonOffset` a NO-OP (the fixed-function offset is discarded
+// once a fragment shader writes depth). The wire fills relied on polygonOffset
+// to sit just behind their own coplanar outline lines; under log-depth the
+// lines z-fight the fill — worst in wall-dense indoor corners (the Academy).
+// Replace the dead offset with a tiny log-depth-space bias: nudge the FILL a
+// hair deeper so the wire (drawn on top, unbiased) always wins the depth test,
+// while the fill still writes depth to occlude geometry behind it. Tunable via
+// the constant below — raise if a corner still flickers, lower if the fill
+// detaches at silhouettes.
+export function applyFillDepthBias(material) {
+  if (!material || material.userData?.__depthBiased) return;
+  _chainBeforeCompile(material, (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <logdepthbuf_fragment>",
+      `#include <logdepthbuf_fragment>
+      #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+        gl_FragDepth += 2.0e-4;
+      #endif`,
+    );
+  });
+  material.userData = material.userData ?? {};
+  material.userData.__depthBiased = true;
+}
+
 function _installDetailShaderPatch(material, detailTexture, opts = {}) {
   const detailScale = opts.scale ?? DETAIL_UNIFORM_DEFAULTS.scale;
   const detailBlend = opts.blend ?? DETAIL_UNIFORM_DEFAULTS.blend;
@@ -1484,6 +1510,7 @@ export class MaterialCache {
         // AO shading on both — floors brighter, walls/ceilings darker.
         applyWireVertexAOPatch(wireMat);
         applyWireVertexAOPatch(fillMat);
+        applyFillDepthBias(fillMat);
         this.didMaterials.set(did >>> 0, { wire: wireMat, fill: fillMat });
         this.wireMatToFill.set(wireMat, fillMat);
         return wireMat;
@@ -1526,6 +1553,7 @@ export class MaterialCache {
     fillM.name = `wire-fill-bucket-${bucket}`;
     fillM.userData = { __cacheOwned: true, wireFillFor: bucket };
     applyWireVertexAOPatch(fillM);
+    applyFillDepthBias(fillM);
     this.wireframeFillBuckets.set(bucket, fillM);
     this.wireMatToFill.set(m, fillM);
     return m;

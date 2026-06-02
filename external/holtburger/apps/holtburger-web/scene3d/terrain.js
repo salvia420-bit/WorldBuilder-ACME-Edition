@@ -31,7 +31,7 @@ import {
   buildAlphaMaskArrayBytes,
   getAdapterMaxAnisotropy,
 } from "./adapter.js";
-import { applyWireVertexAOPatch } from "./materials.js";
+import { applyWireVertexAOPatch, applyFillDepthBias } from "./materials.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -2279,6 +2279,7 @@ export async function bakeTerrainForLandblock(
       scene3d._wireTerrainFillMaterial.name = "wire-terrain-fill";
       scene3d._wireTerrainFillMaterial.userData = { __cacheOwned: true };
       applyWireVertexAOPatch(scene3d._wireTerrainFillMaterial);
+      applyFillDepthBias(scene3d._wireTerrainFillMaterial);
     }
     if (!scene3d._wireTerrainMaterial) {
       scene3d._wireTerrainMaterial = new THREE.MeshBasicMaterial({
