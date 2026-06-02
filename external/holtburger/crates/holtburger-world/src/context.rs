@@ -198,7 +198,18 @@ pub trait WorldContextExt: WorldContext {
     }
 
     fn player_run_rate(&self) -> Option<f32> {
-        let run_skill = self.get_player_skill_current(SkillType::Run)? as f32;
+        // Run is ALWAYS trained and derived from Quickness: a fresh trained
+        // character's Run skill == Quickness (specializing adds +10; ranks
+        // accrue from xp). If the wire hasn't populated the Run skill yet,
+        // derive the trained baseline (Run = Quickness) instead of letting the
+        // caller fall back to the flat run-rate cap (FALLBACK_RUN_RATE_SCALAR
+        // = 4.5), which masked low-Quickness characters as full speed. Returns
+        // None only when Quickness is also unknown (stats not loaded yet), in
+        // which case the caller's cap fallback still applies.
+        let run_skill = match self.get_player_skill_current(SkillType::Run) {
+            Some(v) => v,
+            None => self.get_player_attribute_current(AttributeType::QuicknessAttr)?,
+        } as f32;
         let burden = self.player_burden().unwrap_or(3.0);
         Some(run_rate_from_skill_and_burden(run_skill, burden))
     }
