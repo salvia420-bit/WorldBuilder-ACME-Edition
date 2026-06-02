@@ -324,17 +324,53 @@ impl RetailForcePositionInterpolator {
 
         let stepped_global = from + offset;
         let pose = reproject_global_into(stepped_global, target);
-        // KeepHeading zeroes the heading offset → the integrator keeps its
-        // working heading (ACE InterpolationManager.cs:250-251). When not
-        // keeping heading, retail still drives heading separately; the
-        // caller records the forced rotation as the authoritative pose, so
-        // here we always preserve the working heading and let the caller
-        // own the rotation channel.
-        let pose = WorldPosition {
-            rotation: current.rotation,
-            ..pose
+        // KeepHeading keeps the integrator's working heading (ACE
+        // InterpolationManager.cs:250-251); otherwise the rotation eases
+        // toward the target heading by this frame's progress fraction.
+        let rotation = if self.keep_heading {
+            current.rotation
+        } else {
+            let progress = (max_speed * quantum) / distance.max(1e-6);
+            slerp_rotation(current.rotation, target.rotation, progress.min(1.0))
         };
+        let pose = WorldPosition { rotation, ..pose };
         InterpStep::Progressed { pose }
+    }
+}
+
+/// Shortest-path spherical linear interpolation between two quaternions by
+/// fraction `t` in [0,1]. Used by `step` to ease heading toward the target
+/// when `keep_heading` is false.
+fn slerp_rotation(
+    from: holtburger_common::math::Quaternion,
+    to: holtburger_common::math::Quaternion,
+    t: f32,
+) -> holtburger_common::math::Quaternion {
+    use holtburger_common::math::Quaternion;
+    let mut dot = from.w * to.w + from.x * to.x + from.y * to.y + from.z * to.z;
+    let mut to = to;
+    if dot < 0.0 {
+        to = Quaternion { w: -to.w, x: -to.x, y: -to.y, z: -to.z };
+        dot = -dot;
+    }
+    dot = dot.clamp(-1.0, 1.0);
+    let theta = dot.acos();
+    let sin_theta = theta.sin();
+    if sin_theta < 1e-6 {
+        return Quaternion {
+            w: from.w + t * (to.w - from.w),
+            x: from.x + t * (to.x - from.x),
+            y: from.y + t * (to.y - from.y),
+            z: from.z + t * (to.z - from.z),
+        };
+    }
+    let w0 = ((1.0 - t) * theta).sin() / sin_theta;
+    let w1 = (t * theta).sin() / sin_theta;
+    Quaternion {
+        w: from.w * w0 + to.w * w1,
+        x: from.x * w0 + to.x * w1,
+        y: from.y * w0 + to.y * w1,
+        z: from.z * w0 + to.z * w1,
     }
 }
 
@@ -486,6 +522,32 @@ mod tests {
             panic!("expected progress");
         }
         let _ = cur;
+    }
+
+    #[test]
+    fn step_interpolates_heading_when_keep_heading_false() {
+        let mut interp = RetailForcePositionInterpolator::default();
+        let working_heading = 0.0_f32;
+        let target_heading = std::f32::consts::FRAC_PI_2; // 90°
+        let cur = WorldPosition {
+            rotation: Quaternion::from_heading(working_heading),
+            ..pose(53.0, 50.0, 0.0)
+        };
+        let target = WorldPosition {
+            rotation: Quaternion::from_heading(target_heading),
+            ..pose(50.0, 50.0, 0.0)
+        };
+        // keep_heading=false → rotation eases toward the target.
+        interp.install(cur, target, START, MAX, false);
+        if let InterpStep::Progressed { pose } = interp.step(cur, 0.016, MAX_SPEED, true) {
+            let h = pose.rotation.to_heading();
+            assert!(
+                h > working_heading && h < target_heading,
+                "expected heading interpolated in (0, PI/2), got {h}"
+            );
+        } else {
+            panic!("expected progress");
+        }
     }
 
     #[test]
