@@ -225,6 +225,10 @@ export class SoundTableCache {
       // NOT weight selection by `probability_` — that field gates a separate roll
       // at playback, it is not a selection weight. The previous probability-
       // weighted prefix-sum was a divergence; match retail's uniform pick.
+      // NOTE: `this._rng()` is JS [0,1) where retail RollDice is inclusive (0,1].
+      // This only negligibly under-weights the last entry (within retail's own
+      // quirk territory) and is intentionally left bit-faithful to GetSound — do
+      // NOT "fix" the half-open vs inclusive range here.
       const idx = Math.floor((entries.length - 1) * this._rng());
       picked = entries[Math.min(Math.max(idx, 0), entries.length - 1)];
     }

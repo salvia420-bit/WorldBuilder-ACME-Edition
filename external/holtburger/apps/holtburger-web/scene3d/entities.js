@@ -4421,6 +4421,19 @@ export class EntityManager {
     const sideCmd = inst._sidestepCommand >>> 0;
     // Nothing to scale from until a forward or sidestep command has been
     // stashed — let the EMA cover the gap (e.g. just-spawned, idle).
+    //
+    // Issue 4 (2026-06-03): _sidestepCommand is populated ONLY by
+    // setSidestepLayer (the additive 0.5-weight sidestep blend). The local
+    // player rig's camera-driven dispatch (scene3d/camera.js
+    // _dispatchLocalRigMotion) routes a PURE strafe through setMotion as the
+    // FORWARD command and never calls setSidestepLayer, so for a camera-
+    // dispatched pure strafe both fwdCmd (a SideStep* code, not a Run/Walk
+    // forward code) and sideCmd land here without a forward run/walk speed to
+    // scale, and this returns null → tick() falls back to the rig-XZ EMA. That
+    // fallback is intentional and HARMLESS: sidestep |velocity|≈0, so the
+    // EMA-derived cycleTimeScale no-ops. Routing strafe through setSidestepLayer
+    // would change the visible clip (additive blend vs. full swap) and is
+    // deliberately NOT done here.
     if (fwdCmd === 0 && sideCmd === 0) return null;
     const fwdSpeed = Number.isFinite(inst._forwardSpeed) ? inst._forwardSpeed : 0;
     const sideSpeed = Number.isFinite(inst._sidestepSpeed) ? inst._sidestepSpeed : 0;

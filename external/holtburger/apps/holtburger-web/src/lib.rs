@@ -6081,7 +6081,11 @@ pub struct IconPixels {
     pixels: Vec<u8>,
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+// Icon decode is a wasm-only path (decodes a DAT icon to RGBA for JS). The
+// `test` cfg arm here was vestigial: it referenced the wasm-only `IconPixels`
+// return type (above) with no host test behind it, so `cargo test` on the host
+// target failed to compile. Gate it to wasm32 only (2026-06-03).
+#[cfg(target_arch = "wasm32")]
 fn fetch_icon_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     icon_did: u32,
@@ -36721,6 +36725,109 @@ mod tests_substitution {
         );
         assert_eq!(tris[0].surface_did, 0xCCDD0001);
     }
+
+    // followup (2026-06-03) — minimal GfxObj that carries ONLY a
+    // `did_degrade` ref (no drawing / physics / surfaces). Round-trips
+    // through `GfxObj::pack`/`unpack` so `resolve_did_degrade` walks the
+    // same binrw path live data flows through. `CVertexArray` with zero
+    // vertices is valid (see gfx_obj::tests::test_gfx_obj_roundtrip).
+    fn synth_gfx_obj_with_degrade(id: u32, degrade_did: u32) -> Vec<u8> {
+        let gfx = GfxObj {
+            id,
+            flags: GfxObjFlags::empty(),
+            surfaces: vec![],
+            vertex_array: CVertexArray { vertex_type: 1, vertices: HashMap::new() },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons: HashMap::new(),
+            drawing_bsp: None,
+            did_degrade: Some(degrade_did),
+        };
+        let mut data = Vec::new();
+        gfx.pack(&mut Cursor::new(&mut data)).unwrap();
+        data
+    }
+
+    // followup (2026-06-03) — single-part SetupModel bytes. Mirrors
+    // `synth_setup_two_parts` but with one entry in `parts`.
+    fn synth_setup_one_part(setup_id: u32, part: u32) -> Vec<u8> {
+        let setup = SetupModel {
+            id: setup_id,
+            flags: 0,
+            parts: vec![part],
+            parent_index: vec![],
+            default_scale: vec![],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames: HashMap::new(),
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 1.0,
+            radius: 1.0,
+            step_up: 0.1,
+            step_down: 0.1,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            lights: HashMap::new(),
+            default_animation: None,
+            default_script: None,
+            default_motion_table: None,
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut data = Vec::new();
+        setup.pack(&mut Cursor::new(&mut data)).unwrap();
+        data
+    }
+
+    // ISSUE 3 (followup 2026-06-03) — guard the multi-part LOD bail in
+    // `resolve_did_degrade`. Entity LOD substitution collapses the whole
+    // setup to ONE degrade GfxObj resolved from parts[0]; that drops the
+    // AnimationFrame.frames[i] <-> parts[i] invariant for multi-part rigs,
+    // so the resolver must return 0 (no substitute) for any setup whose
+    // part count != 1. A single-part setup still resolves its part's
+    // degrade DID as before.
+    #[test]
+    fn resolve_did_degrade_skips_multi_part_setups() {
+        let setup_id: u32 = 0x0200_00C0;
+        let part_a: u32 = 0x0100_00C1;
+        let part_b: u32 = 0x0100_00C2;
+        let degrade_a: u32 = 0x0100_0DA1;
+        let degrade_b: u32 = 0x0100_0DA2;
+
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), synth_setup_two_parts(setup_id, part_a, part_b));
+        // Both parts DO carry a degrade DID — if the guard regressed and
+        // resolved parts[0], we'd see `degrade_a` instead of 0.
+        files.insert(("eor/portal".into(), part_a), synth_gfx_obj_with_degrade(part_a, degrade_a));
+        files.insert(("eor/portal".into(), part_b), synth_gfx_obj_with_degrade(part_b, degrade_b));
+        let source = MockSource { files };
+
+        assert_eq!(
+            resolve_did_degrade(&source, setup_id),
+            0,
+            "multi-part setup must NOT substitute a single collapsed degrade GfxObj"
+        );
+    }
+
+    #[test]
+    fn resolve_did_degrade_single_part_returns_part_degrade() {
+        let setup_id: u32 = 0x0200_00D0;
+        let part: u32 = 0x0100_00D1;
+        let degrade_did: u32 = 0x0100_0DB1;
+
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), synth_setup_one_part(setup_id, part));
+        files.insert(("eor/portal".into(), part), synth_gfx_obj_with_degrade(part, degrade_did));
+        let source = MockSource { files };
+
+        assert_eq!(
+            resolve_did_degrade(&source, setup_id),
+            degrade_did,
+            "single-part setup must resolve its part's degrade DID"
+        );
+    }
 }
 
 // =====================================================================
@@ -37020,7 +37127,7 @@ mod tests_animation_keyframes_batch {
             velocity: None,
             omega: None,
         };
-        let (frames, times, duration) =
+        let (frames, times, _pos_frames, duration) =
             build_concatenated_motion_frames(&source, &md).expect("concatenated frames");
         let xs: Vec<f32> = frames.iter().map(|f| f.frames[0].origin.x).collect();
         // Pre-T4 this returned only segment A's 2 frames (anims.first()).
@@ -37050,7 +37157,7 @@ mod tests_animation_keyframes_batch {
             velocity: None,
             omega: None,
         };
-        let (rframes, rtimes, rduration) =
+        let (rframes, rtimes, _rpos_frames, rduration) =
             build_concatenated_motion_frames(&source, &md_rev).expect("reverse frames");
         let rxs: Vec<f32> = rframes.iter().map(|f| f.frames[0].origin.x).collect();
         assert_eq!(rxs, vec![2.0, 1.0, 0.0], "reverse segment plays frames high→low");

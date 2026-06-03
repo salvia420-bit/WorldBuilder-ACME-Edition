@@ -336,6 +336,13 @@ export class CameraSwitcher {
     // on change, matching the 2D path's pattern at index.html:6219).
     this.lastInputSig = "0,0,0,false";
     this.setMovementInputCount = 0;
+    // Issue 6 (2026-06-03): dedicated sig for the LOCAL player rig's locomotion
+    // dispatch, gated independently of lastInputSig (which only advances on
+    // setMovementInput success). null forces the first dispatch to fire.
+    this.lastRigMotionSig = null;
+    // Issue 5 (2026-06-03): one-shot latch so entering orbit dispatches Ready to
+    // the rig exactly once (not every frame) instead of freezing on the last clip.
+    this._orbitRigStopped = false;
 
     // Workstream B (2026-05-11) — client-side prediction state for the
     // 3D follow camera. ACE-side simulation runs at the integrator's
@@ -1457,7 +1464,23 @@ export class CameraSwitcher {
       return;
     }
     const m = this.computeMovementFromKeys();
-    if (!m) return; // orbit suppression
+    if (!m) {
+      // Orbit suppression. Issue 5 (2026-06-03): the rig must not freeze on
+      // the last locomotion clip when the user toggles into orbit mid-stride.
+      // Dispatch Ready ONCE on the transition into orbit (guarded by
+      // _orbitRigStopped so it does not re-fire every frame), then bail.
+      if (!this._orbitRigStopped) {
+        this._orbitRigStopped = true;
+        // 0x41000003 = Ready (stop → idle), same constant as the idle branch
+        // in _dispatchLocalRigMotion below.
+        this._dispatchLocalRigMotion({ forward: 0, strafe: 0, turn: 0, run: true });
+        // Force the next non-orbit dispatch to re-fire even if the keystate
+        // signature is unchanged, since the rig is now parked on Ready.
+        this.lastRigMotionSig = null;
+      }
+      return;
+    }
+    this._orbitRigStopped = false;
     const sig = `${m.forward},${m.strafe},${m.turn},${m.run}`;
     if (sig === this.lastInputSig) return;
     try {
@@ -1478,9 +1501,16 @@ export class CameraSwitcher {
     // own motion), so without this the local rig sits on the idle/Ready clip
     // (cmd 0x0) while running. Mirror the jump dispatch (index.html:~8389): map
     // the movement intent to a MotionCommand and feed the rig via
-    // entityManager.setMotion. Fires on the same sig-change gate as
-    // setMovementInput above; setMotion is idempotent on (cmd, stance).
-    this._dispatchLocalRigMotion(m);
+    // entityManager.setMotion. Issue 6 (2026-06-03): gate the rig dispatch on its
+    // OWN signature (lastRigMotionSig) rather than lastInputSig — lastInputSig
+    // only advances on setMovementInput SUCCESS, so coupling the rig path to it
+    // would let the rig re-dispatch every frame in the pre-EnteredWorld window
+    // where setMovementInput throws. setMotion is idempotent on (cmd, stance), so
+    // this is behaviorally identical once in-world.
+    if (sig !== this.lastRigMotionSig) {
+      this.lastRigMotionSig = sig;
+      this._dispatchLocalRigMotion(m);
+    }
   }
 
   /**
@@ -1499,14 +1529,38 @@ export class CameraSwitcher {
     let cmd;
     if (m.forward > 0) cmd = m.run ? 0x44000007 : 0x45000005;   // Run / Walk Forward
     else if (m.forward < 0) cmd = 0x45000006;                   // WalkBackwards
+    // Issue 4 (2026-06-03): pure sidestep is dispatched here as the FORWARD
+    // command via setMotion (a full-weight clip swap), NOT via
+    // entityManager.setSidestepLayer (a 0.5-weight additive blend layered over
+    // a forward base clip). As a result _resolveStateGroundSpeed reads sidestep
+    // from inst._sidestepCommand (entities.js:~4421), which only setSidestepLayer
+    // populates — so the velScale getter returns null for a camera-dispatched
+    // pure strafe and the cycleTimeScale falls back to the (no-op) rig-XZ EMA.
+    // This is HARMLESS: sidestep |velocity|≈0, so the EMA-derived cycleTimeScale
+    // no-ops anyway. We deliberately do NOT route through setSidestepLayer: that
+    // is a visible-animation change (additive blend vs. full clip swap) that
+    // cannot be validated without a GPU eye-test.
     else if (m.strafe > 0) cmd = 0x6500000f;                    // SideStepRight
     else if (m.strafe < 0) cmd = 0x65000010;                    // SideStepLeft
     else if (m.turn > 0) cmd = 0x6500000d;                      // TurnRight
     else if (m.turn < 0) cmd = 0x6500000e;                      // TurnLeft
     else cmd = 0x41000003;                                      // Ready (stop → idle)
     let stance = 0x8000003d;                                    // NonCombat fallback
+    // getStance failure is benign — fall through to the NonCombat default.
     try { if (typeof em.getStance === "function") { const s = (em.getStance(g) >>> 0); if (s) stance = s; } } catch (_) {}
-    try { em.setMotion(g, cmd, stance); } catch (_) {}
+    try {
+      em.setMotion(g, cmd, stance);
+    } catch (e) {
+      // Issue 8 (2026-06-03): surface a real setMotion failure ONCE (the jump
+      // path logs its dispatch errors; this path previously swallowed them).
+      // Mirror the _dispatchWarned latch above so a genuine fault is visible
+      // without per-frame console spam.
+      // eslint-disable-next-line no-console
+      if (!this._rigDispatchWarned) {
+        this._rigDispatchWarned = true;
+        console.warn("[cameraSwitcher] local-rig setMotion failed:", String(e?.message ?? e));
+      }
+    }
   }
 
   // ---- listeners ----------------------------------------------------
