@@ -330,7 +330,18 @@ export class ParticleEmitter {
         if (mesh === null) continue;
         let frame;
         if (this.info.isParentLocal) {
-          if (this.partIndex === -1) {
+          // T4: anchor to the named part's WORLD frame via the `partFrames`
+          // per-part accessor that entities.js attaches to inst.root (the
+          // emitter `parent`). partFrames[partIndex] -> {position, quaternion}
+          // in world space (entities.js composes inst.parts[partIndex] up via
+          // getWorldPosition/getWorldQuaternion). The static `parentOffset`
+          // composition is preserved — it is applied separately in
+          // particle.js:init (parentOffset.position rotated by startFrame) and
+          // is NOT touched here. Root sentinels (-1 and the raw unsigned
+          // 0xFFFFFFFF from the wire/wasm boundary) and any missing/out-of-range
+          // `partFrames` entry fall back to the root `parent` frame, matching
+          // the pre-T4 behavior for root-anchored emitters.
+          if (this.partIndex === -1 || (this.partIndex >>> 0) === 0xffffffff) {
             frame = this.parent;
           } else {
             frame = (this.parent.partFrames && this.parent.partFrames[this.partIndex])

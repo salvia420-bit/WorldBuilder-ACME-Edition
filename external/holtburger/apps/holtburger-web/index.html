@@ -1011,6 +1011,17 @@
         // for velocity-scaled locomotion playback (?velScale=on). Consumed by
         // scene3d/entities.js; MUST be threaded through the init3D opts below.
         cycleBaseSpeed,
+        // T1 (2026-06-02) — player CURRENT ground anim-speed (retail
+        // get_state_velocity mirror, run_rate applied internally). The
+        // 'actual' input to cycleTimeScale in tick(); without this import +
+        // the opts thread-through below, entities.js's
+        // `this.wasmExports?.stateGroundSpeed` is undefined and T1 silently
+        // falls back to the XZ-delta EMA (the plumb-through trap).
+        stateGroundSpeed,
+        // T1 (2026-06-03) — free player run-rate export (thread_local-backed);
+        // entities.js passes it into stateGroundSpeed as the run_rate arg. Same
+        // plumb-through requirement (import here AND the init3D opts below).
+        playerRunRate,
         // F.40 (2026-05-14) — batched fetchEntityAnimationKeyframes.
         // ONE wasm call walks N setups in a single prefetch loop;
         // `scene3d/spawns.js` pre-warms the AnimationCache via this
@@ -6649,6 +6660,14 @@ void main() {
             // this line entities.js's `this.wasmExports?.cycleBaseSpeed` guard
             // fails and the velocity scaling silently no-ops (plumb-through trap).
             cycleBaseSpeed,
+            // T1 (2026-06-02) — player current ground anim-speed getter; same
+            // plumb-through requirement as cycleBaseSpeed (entities.js reads
+            // this.wasmExports.stateGroundSpeed in _resolveStateGroundSpeed).
+            stateGroundSpeed,
+            // T1 (2026-06-03) — free player run-rate export; entities.js reads
+            // wasmExports.playerRunRate() in _resolveStateGroundSpeed. Same
+            // plumb-through requirement as stateGroundSpeed above.
+            playerRunRate,
             // Wave 7.4 (2026-05-24) — spawn-time entity LOD: read by
             // EntityManager._spawnImpl. Without this listed in init3D
             // opts the export is invisible to entities.js and every

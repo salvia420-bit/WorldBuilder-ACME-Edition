@@ -4693,7 +4693,129 @@ pub async fn cycle_base_speed(mtable_id: u32, stance: u32, command: u32) -> f32 
         Ok(m) => m,
         Err(_) => return 0.0,
     };
-    motion_cycle_base_speed(&mtable, stance, command)
+    // T1 base-speed fallback chain (2026-06-03): velocity -> MotionKinematics ->
+    // (GetAnimDist, deferred). Each step degrades to the next, so a cycle whose
+    // `MotionData.velocity` is empty (the T11 player-RunForward case) still
+    // yields an authored ground speed from the separate MotionKinematics asset.
+    // step 1 — MotionData.velocity (sync helper; >1e-4 means present).
+    let velocity_speed = motion_cycle_base_speed(&mtable, stance, command);
+    if velocity_speed > 1e-4 {
+        return velocity_speed;
+    }
+    // step 2 — the standalone MotionKinematics (holtburger/core) per-(stance,
+    // command) velocity asset. Any fetch/parse miss degrades to step 3 / 0.0.
+    let resolved_stance = mtable.resolve_stance(stance);
+    if let Some(s) = motion_kinematics_cycle_base_speed(&source, resolved_stance, command) {
+        return s;
+    }
+    // step 3 — ACE GetAnimDist over the cycle's concatenated PosFrames
+    // (`MotionTable::cycle_anim_dist_base_speed` exists in holtburger-dat) is
+    // DEFERRED: it needs an async PosFrame fetch and is only reached when BOTH
+    // velocity sources are empty (rare). 0.0 -> JS cycleTimeScale no-ops.
+    0.0
+}
+
+/// T1 step 2 (2026-06-03): `|velocity|` from the standalone MotionKinematics
+/// asset for a `(resolved_stance, command)` cycle. Reads + parses the single
+/// `holtburger/core` MotionKinematics file from the cached global source; any
+/// fetch/parse miss or absent entry returns `None` so the caller falls through.
+/// Re-parsed per call — cheap relative to the JS-side `_cycleBaseSpeedCache`.
+#[cfg(target_arch = "wasm32")]
+fn motion_kinematics_cycle_base_speed<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    stance: u32,
+    command: u32,
+) -> Option<f32> {
+    use holtburger_dat::file_type::MotionKinematics;
+    use holtburger_dat::{HOLTBURGER_CORE_NAMESPACE, ResourceKey, ResourceSource};
+    let bytes = source
+        .get_file_by_key(ResourceKey::new(
+            HOLTBURGER_CORE_NAMESPACE,
+            MotionKinematics::FILE_ID,
+        ))
+        .ok()?;
+    let kinematics = MotionKinematics::read(&mut std::io::Cursor::new(&bytes)).ok()?;
+    let entry = kinematics.cycle_kinematics(stance, command)?;
+    let v = entry.velocity?;
+    let mag = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
+    if mag > 1e-4 { Some(mag) } else { None }
+}
+
+/// T1 — pure-math mirror of retail `CMotionInterp::get_state_velocity`
+/// (`acclient.c:343539-343594` / ACE `MotionInterp.cs:678-700`). Computes the
+/// interpreted-state world velocity from the live motion scalars and returns
+/// its magnitude (the "actual ground speed" the JS `cycleTimeScale(actual,
+/// base)` divides by to keep feet planted — replacing the rendered-XZ-delta
+/// EMA that reads garbage on server-pose snaps/teleports/rubber-banding).
+///
+/// `X = SideStepRight ? 1.25*sidestep_speed : 0` (SidestepAnimSpeed),
+/// `Y = WalkForward ? 3.1199999*forward_speed : RunForward ? 4.0*forward_speed
+/// : 0` (Walk/Run), `Z = 0`. `mag = sqrt(X²+Y²)`, then clamp to
+/// `run_rate * 4.0` (RunAnimSpeed). Retail normalizes the vector and rescales
+/// to `max_speed`; for the scalar magnitude that is exactly the clamp.
+///
+/// run_rate is applied INTERNALLY (via the `run_rate*4.0` clamp) so JS gets the
+/// FINAL m/s and must NOT re-scale. Backstep stays `forward_command ==
+/// WalkForward` with `forward_speed` negated upstream (× -0.65), so it produces
+/// a positive magnitude via the Walk const — there is no RunBackward branch.
+/// Commands are FULL u32 motion commands compared against the full constant.
+/// Pure (constants hardcoded, no DAT fetch) → host-unit-testable.
+#[cfg(any(target_arch = "wasm32", test))]
+fn state_ground_speed_inner(
+    forward_command: u32,
+    forward_speed: f32,
+    sidestep_command: u32,
+    sidestep_speed: f32,
+    run_rate: f32,
+) -> f32 {
+    let x = if sidestep_command == 0x6500_000f {
+        // SIDESTEP_RIGHT_MOTION_COMMAND
+        SIDESTEP_ANIM_SPEED * sidestep_speed
+    } else {
+        0.0
+    };
+    let y = if forward_command == 0x4500_0005 {
+        // WALK_FORWARD_MOTION_COMMAND
+        WALK_ANIM_SPEED * forward_speed
+    } else if forward_command == 0x4400_0007 {
+        // MotionTable::RUN_FORWARD_COMMAND
+        RUN_ANIM_SPEED * forward_speed
+    } else {
+        0.0
+    };
+    // Z = 0 → magnitude is just the XY hypotenuse.
+    let mut mag = (x * x + y * y).sqrt();
+    let max_speed = run_rate * RUN_ANIM_SPEED;
+    if mag > max_speed {
+        mag = max_speed;
+    }
+    mag
+}
+
+/// T1 — wasm export of the [`state_ground_speed_inner`] mirror of retail
+/// `get_state_velocity`. SYNCHRONOUS pure-math (no DAT fetch, no mtable_id) —
+/// unlike the async `cycleBaseSpeed`. Consumes the live `InterpretedMotionState`
+/// scalars (forward_command/forward_speed/sidestep_command/sidestep_speed from
+/// the `motion_state_for_input` build path) plus a `run_rate` supplied by JS
+/// (from the `playerRunRate` getter). Returns the FINAL ground anim-speed in
+/// m/s with run_rate already applied (clamp `run_rate*4.0`); JS feeds this as
+/// the `actualSpeed` arg to `cycleTimeScale`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = stateGroundSpeed)]
+pub fn state_ground_speed(
+    forward_command: u32,
+    forward_speed: f32,
+    sidestep_command: u32,
+    sidestep_speed: f32,
+    run_rate: f32,
+) -> f32 {
+    state_ground_speed_inner(
+        forward_command,
+        forward_speed,
+        sidestep_command,
+        sidestep_speed,
+        run_rate,
+    )
 }
 
 /// 2026-05-18 motion-table-x-envcell experiment: resolve a transition
@@ -21030,6 +21152,16 @@ struct LatestStats {
     // player_unspent_skill_points` (`crates/holtburger-world/src/state/
     // types.rs:171-174`). `0` pre-spawn / before the property has landed.
     skill_credits: u32,
+    // T1 (2026-06-02): cached `WorldContextExt::player_run_rate()` — the
+    // ACE GetRunRate factor (run-skill + burden, 18/4 cap) that the render
+    // velScale path passes into `stateGroundSpeed` (it clamps the ground
+    // anim-speed to `run_rate * 4.0`). Recomputed on the same triggers as
+    // burden (UpdateAttribute / equip / inventory delta change run-skill &
+    // encumbrance). Falls back to `FALLBACK_RUN_RATE_SCALAR` (4.5) pre-spawn
+    // / before stats hydrate — the same flat cap the movement-caps path
+    // uses when `player_run_rate()` is `None`. JS reads via `playerRunRate`
+    // on each `kind=8 playerStatsUpdated` drain.
+    run_rate: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -21110,6 +21242,31 @@ impl SessionHandle {
             .as_ref()
             .map(|s| s.burden)
             .unwrap_or(0.0)
+    }
+
+    /// T1 (2026-06-02): the player's current run-rate factor (ACE
+    /// `GetRunRate` — run-skill + burden, 18/4 cap; ported in
+    /// `holtburger-world::context::run_rate_from_skill_and_burden` and
+    /// surfaced via `WorldContextExt::player_run_rate`). JS passes this
+    /// into the `stateGroundSpeed` getter as the `run_rate` arg — and must
+    /// NOT re-apply it, because `stateGroundSpeed` already clamps the ground
+    /// anim-speed to `run_rate * 4.0` internally. Refreshed by the recv loop
+    /// on each `publish_player_stats_snapshot` call (same trigger as
+    /// `playerBurden`). Returns `FALLBACK_RUN_RATE_SCALAR` (4.5) pre-spawn /
+    /// before stats hydrate. JS reads via `playerRunRate` on each `kind=8
+    /// playerStatsUpdated` drain so encumbrance/run-skill modulate gait.
+    // T1 (2026-06-03): JS now reads run-rate via the FREE `playerRunRate` export
+    // (thread_local-backed, threaded into init3D opts) — NOT this per-instance
+    // struct getter, which isn't a member of the free-export bag. Kept as a plain
+    // accessor for potential Rust use; no longer wasm-exported (avoids a duplicate
+    // `playerRunRate` js_name).
+    #[allow(dead_code)]
+    pub fn player_run_rate(&self) -> f32 {
+        self.latest_stats
+            .borrow()
+            .as_ref()
+            .map(|s| s.run_rate)
+            .unwrap_or(FALLBACK_RUN_RATE_SCALAR)
     }
 
     /// Wave D.1 follow-on (2026-05-27): `PropertyInt::AetheriaBitfield`
@@ -25659,8 +25816,44 @@ const TURN_LEFT_MOTION_COMMAND: u32 = 0x6500_000e;
 const SIDESTEP_RIGHT_MOTION_COMMAND: u32 = 0x6500_000f;
 #[cfg(target_arch = "wasm32")]
 const SIDESTEP_LEFT_MOTION_COMMAND: u32 = 0x6500_0010;
+// T1: retail get_state_velocity hardcoded anim-speed constants
+// (ACE MotionInterp.cs:28-32 / acclient.c:343553-343565). Float
+// precision is load-bearing for A/B — WalkAnimSpeed is 3.1199999,
+// NOT 3.12. Gated for both wasm (the live getter) and test (the
+// pure-math unit test below) since the pure fn is reachable from
+// both. RUN_FORWARD uses MotionTable::RUN_FORWARD_COMMAND (0x4400_0007).
+#[cfg(any(target_arch = "wasm32", test))]
+const WALK_ANIM_SPEED: f32 = 3.1199999;
+#[cfg(any(target_arch = "wasm32", test))]
+const RUN_ANIM_SPEED: f32 = 4.0;
+#[cfg(any(target_arch = "wasm32", test))]
+const SIDESTEP_ANIM_SPEED: f32 = 1.25;
+
 #[cfg(target_arch = "wasm32")]
 const FALLBACK_RUN_RATE_SCALAR: f32 = 4.5;
+
+// T1 (2026-06-03): single-thread mirror of the latest player run-rate so the JS
+// velScale path can read it as a FREE wasm export (entities.js calls
+// `wasmExports.playerRunRate()`). The per-instance struct getter isn't a member
+// of the free-export bag threaded into init3D, so a free fn + thread_local is the
+// shape JS already consumes. Written by `publish_player_stats_snapshot` on each
+// stats delta; seeded to the pre-spawn fallback cap.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static LATEST_RUN_RATE: std::cell::Cell<f32> =
+        const { std::cell::Cell::new(FALLBACK_RUN_RATE_SCALAR) };
+}
+
+/// T1 (2026-06-03) — free wasm export of the cached player run-rate (ACE
+/// `GetRunRate`: run-skill + burden, 18/4 cap). JS feeds it into the
+/// `stateGroundSpeed` getter's `run_rate` arg (which clamps the ground
+/// anim-speed to `run_rate * 4.0`). Returns the `FALLBACK_RUN_RATE_SCALAR`
+/// (4.5) seed until the first stats snapshot hydrates it.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = playerRunRate)]
+pub fn player_run_rate_export() -> f32 {
+    LATEST_RUN_RATE.with(|c| c.get())
+}
 #[cfg(target_arch = "wasm32")]
 const RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.5;
 #[cfg(target_arch = "wasm32")]
@@ -25971,6 +26164,19 @@ fn publish_player_stats_snapshot(
     // (encumbrance / capacity from PropertyInt + Strength).
     use holtburger_world::context::WorldContextExt;
     let burden = world.player_burden().unwrap_or(0.0);
+    // T1 (2026-06-02): recompute the run-rate factor on the same trigger as
+    // burden (run-skill + encumbrance both change on these wire deltas).
+    // `player_run_rate()` ports ACE GetRunRate (18/4 cap + burden modifier);
+    // `None` only when Quickness is also unknown (stats not loaded), in
+    // which case fall back to the flat `FALLBACK_RUN_RATE_SCALAR` cap (4.5)
+    // — same fallback the movement-caps `run_rate_scalar` path uses.
+    let run_rate = world
+        .player_run_rate()
+        .unwrap_or(FALLBACK_RUN_RATE_SCALAR);
+    // T1 (2026-06-03): mirror into the thread_local read by the free
+    // `playerRunRate` wasm export (the JS velScale path consumes it there).
+    #[cfg(target_arch = "wasm32")]
+    LATEST_RUN_RATE.with(|c| c.set(run_rate));
     // Wave D.1 follow-on (2026-05-27): pull `PropertyInt::AetheriaBitfield`
     // (322) straight off the player Entity for the JS paperdoll's
     // `UpdateAetheria` gating (ACBindings `gmPaperDollUI.cs:217-222`,
@@ -26010,6 +26216,7 @@ fn publish_player_stats_snapshot(
         current_power_mod,
         accuracy_mod,
         skill_credits,
+        run_rate,
     });
 }
 
@@ -37573,6 +37780,54 @@ mod tests_soa_parity {
         assert!((motion_cycle_base_speed(&mt, 0, command) - 5.0).abs() < 1e-4);
         // Unknown command → 0 (no scaling).
         assert_eq!(motion_cycle_base_speed(&mt, stance, 0x4500_00FF), 0.0);
+    }
+
+    /// **T1 (2026-06-02).** `state_ground_speed_inner` mirrors retail
+    /// `get_state_velocity`: Walk/Run/Sidestep anim-speed constants × the
+    /// interpreted-state scalars, magnitude, clamped to `run_rate*4.0`. Walk
+    /// uses 3.1199999, Run 4.0, Sidestep 1.25. run_rate is applied INTERNALLY
+    /// via the clamp, so the returned m/s is final.
+    #[test]
+    fn state_ground_speed_walk_run_sidestep() {
+        const WALK: u32 = 0x4500_0005;
+        const RUN: u32 = 0x4400_0007;
+        const SIDESTEP_RIGHT: u32 = 0x6500_000f;
+        // run_rate high enough that the clamp never bites in these cases.
+        let rate = 4.5_f32;
+
+        // Walk forward at full speed → 3.1199999 * 1.0.
+        let walk = state_ground_speed_inner(WALK, 1.0, 0, 0.0, rate);
+        assert!((walk - 3.1199999).abs() < 1e-5, "walk = {walk}");
+
+        // Run forward at full speed → 4.0 * 1.0.
+        let run = state_ground_speed_inner(RUN, 1.0, 0, 0.0, rate);
+        assert!((run - 4.0).abs() < 1e-5, "run = {run}");
+
+        // Sidestep right (no forward) → X = 1.25 * 1.0, Y = 0 → mag 1.25.
+        let side = state_ground_speed_inner(0, 0.0, SIDESTEP_RIGHT, 1.0, rate);
+        assert!((side - 1.25).abs() < 1e-5, "sidestep = {side}");
+
+        // Combined walk + sidestep → sqrt(3.1199999² + 1.25²).
+        let combo = state_ground_speed_inner(WALK, 1.0, SIDESTEP_RIGHT, 1.0, rate);
+        let expected = (3.1199999_f32 * 3.1199999 + 1.25 * 1.25).sqrt();
+        assert!((combo - expected).abs() < 1e-5, "combo = {combo}");
+
+        // Backstep: WalkForward with negated forward_speed (× -0.65 upstream)
+        // → 3.1199999 * 0.65 (positive magnitude, no RunBackward branch).
+        let back = state_ground_speed_inner(WALK, -0.65, 0, 0.0, rate);
+        assert!((back - 3.1199999 * 0.65).abs() < 1e-5, "back = {back}");
+
+        // Clamp: a low run_rate caps the magnitude at run_rate*4.0. A run at
+        // forward_speed 2.0 would be 8.0, but run_rate 1.0 → max 4.0.
+        let clamped = state_ground_speed_inner(RUN, 2.0, 0, 0.0, 1.0);
+        assert!((clamped - 4.0).abs() < 1e-5, "clamped = {clamped}");
+
+        // SideStepLeft is NOT SideStepRight → X = 0 (no sidestep contribution).
+        let left = state_ground_speed_inner(0, 0.0, 0x6500_0010, 1.0, rate);
+        assert_eq!(left, 0.0);
+
+        // Idle (no forward, no sidestep) → 0.
+        assert_eq!(state_ground_speed_inner(0, 0.0, 0, 0.0, rate), 0.0);
     }
 }
 

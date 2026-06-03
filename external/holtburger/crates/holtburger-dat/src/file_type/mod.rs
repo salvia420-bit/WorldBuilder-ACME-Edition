@@ -70,7 +70,12 @@ pub use master_property::{
 };
 pub use media_desc::{MediaDesc, MediaType};
 pub use motion_kinematics::{MotionKinematics, MotionKinematicsTable};
-pub use motion_table::{MotionCommandKinematics, MotionTable, MotionTableMovementProfile};
+// T1-base-speed/T7: re-export MotionData so the wasm crate (lib.rs) can name
+// the type when resolving the authored-speed fallback chain (velocity ->
+// kinematics -> get_anim_dist) and read the T7 bitfield accessors.
+pub use motion_table::{
+    AnimData, MotionCommandKinematics, MotionData, MotionTable, MotionTableMovementProfile,
+};
 pub use object_desc::ObjectDesc;
 pub use palette::Palette;
 pub use palette_set::PaletteSet;

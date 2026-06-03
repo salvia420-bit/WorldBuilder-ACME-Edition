@@ -54,6 +54,16 @@ pub fn burden_load_modifier(burden: f32) -> f32 {
     }
 }
 
+// T1 (2026-06-02): this is the run-rate source the render velScale path
+// consumes. `player_run_rate()` (below) calls it; the wasm
+// `playerRunRate` getter caches that result and JS feeds it into
+// `stateGroundSpeed`, which clamps the ground anim-speed to `run_rate *
+// 4.0`. Mirrors ACE `GetRunRate`: the `/4.0` at the end is the unit
+// divisor (raw run factor → rate). NOTE: the inner expression does NOT
+// re-apply any extra scaling divisor — the `* 11.0 + 4.0` then single
+// `/4.0` is the whole formula; any "scaling divisor omitted" worry is
+// because the `4.0` cap (18/4 and the trailing `/4.0`) is the only
+// divisor and it is present.
 pub fn run_rate_from_skill_and_burden(run_skill: f32, burden: f32) -> f32 {
     if run_skill >= 800.0 {
         18.0 / 4.0
@@ -744,6 +754,27 @@ mod tests {
         assert_eq!(burden_load_modifier(0.5), 1.0);
         assert_eq!(burden_load_modifier(1.25), 0.75);
         assert_eq!(burden_load_modifier(2.0), 0.0);
+    }
+
+    /// T1 (2026-06-02): `run_rate_from_skill_and_burden` is the run-rate
+    /// source the velScale path feeds into the `stateGroundSpeed` getter
+    /// (which clamps to `run_rate * 4.0`). Lock the ACE `GetRunRate` math:
+    /// the `>= 800` skill cap and the burden-modulated formula.
+    #[test]
+    fn run_rate_from_skill_and_burden_matches_ace_getrunrate() {
+        // run_skill >= 800 → flat 18/4 = 4.5 cap regardless of burden.
+        assert!((run_rate_from_skill_and_burden(800.0, 0.0) - 4.5).abs() < 1e-6);
+        assert!((run_rate_from_skill_and_burden(1500.0, 0.5) - 4.5).abs() < 1e-6);
+
+        // Unencumbered (burden < 1 → load_mod 1.0), run_skill 300:
+        // (1.0 * (300/500 * 11) + 4) / 4 = (6.6 + 4) / 4 = 2.65.
+        let r300 = run_rate_from_skill_and_burden(300.0, 0.0);
+        assert!((r300 - 2.65).abs() < 1e-5, "r300 = {r300}");
+
+        // Over-encumbered (burden >= 2 → load_mod 0.0): only the +4 base
+        // survives → 4/4 = 1.0 (the slowest non-zero rate).
+        let r_heavy = run_rate_from_skill_and_burden(300.0, 2.5);
+        assert!((r_heavy - 1.0).abs() < 1e-6, "r_heavy = {r_heavy}");
     }
 
     #[test]

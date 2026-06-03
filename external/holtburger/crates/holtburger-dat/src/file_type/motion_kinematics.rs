@@ -7,7 +7,11 @@ use binrw::{
 use holtburger_common::Vector3;
 use std::collections::HashMap;
 
-const MOTION_KEY_MASK: u32 = 0x000F_FFFF;
+// T8: 24-bit substate/cycle mask matching retail/ACE + motion_table.rs. Was
+// 0x000F_FFFF (20-bit). The cycle_key here uses the SAME (stance,command)
+// encoding as MotionTable, so the same fix is required to keep the
+// MotionKinematics baseSpeed fallback (lib.rs) from inheriting the footgun.
+const MOTION_KEY_MASK: u32 = 0x00FF_FFFF;
 const KINEMATICS_HAS_VELOCITY: u8 = 0x01;
 const KINEMATICS_HAS_OMEGA: u8 = 0x02;
 
@@ -325,6 +329,61 @@ mod tests {
             decoded.cycle_kinematics(0x0900_0011, 0x8000_0003, 0x4400_0007),
             None
         );
+    }
+
+    /// T8: with the 24-bit `MOTION_KEY_MASK`, two commands differing only in
+    /// the 0x00F0_0000 nibble produce DISTINCT cycle keys and must not collide
+    /// in the kinematics lookup. Under the old 20-bit mask `high_cmd` and
+    /// `low_cmd` would alias to the same key, and the second insert would
+    /// clobber the first.
+    #[test]
+    fn t8_kinematics_high_low24_substate_does_not_alias() {
+        let stance = 0x8000_003Du32;
+        let high_cmd = 0x0010_0001u32; // low-24 = 0x100001 > 0x0F_FFFF
+        let low_cmd = 0x0000_0001u32;
+
+        assert_ne!(
+            cycle_key(stance, high_cmd),
+            cycle_key(stance, low_cmd),
+            "24-bit mask must keep the 0x00F0_0000 nibble — keys must not collide"
+        );
+        assert_eq!(MOTION_KEY_MASK, 0x00FF_FFFF, "mask must be 24-bit");
+
+        let mut table = MotionKinematicsTable::new(0x0900_0099, stance);
+        table.insert_cycle_kinematics(
+            stance,
+            high_cmd,
+            MotionCommandKinematics {
+                velocity: Some(Vector3::new(2.0, 0.0, 0.0)),
+                omega: None,
+            },
+        );
+        table.insert_cycle_kinematics(
+            stance,
+            low_cmd,
+            MotionCommandKinematics {
+                velocity: Some(Vector3::new(9.0, 0.0, 0.0)),
+                omega: None,
+            },
+        );
+
+        // Both entries coexist (no aliasing clobber) and resolve to their own
+        // velocities.
+        assert_eq!(
+            table
+                .cycle_kinematics(stance, high_cmd)
+                .and_then(|k| k.velocity),
+            Some(Vector3::new(2.0, 0.0, 0.0)),
+            "high-nibble command must keep its own kinematics"
+        );
+        assert_eq!(
+            table
+                .cycle_kinematics(stance, low_cmd)
+                .and_then(|k| k.velocity),
+            Some(Vector3::new(9.0, 0.0, 0.0)),
+            "low-nibble sibling must keep its own kinematics"
+        );
+        assert_eq!(table.cycle_kinematics_by_key.len(), 2, "no key collision");
     }
 
     #[test]
