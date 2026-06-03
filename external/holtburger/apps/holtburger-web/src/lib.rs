@@ -4705,7 +4705,8 @@ pub async fn cycle_base_speed(mtable_id: u32, stance: u32, command: u32) -> f32 
     // step 2 — the standalone MotionKinematics (holtburger/core) per-(stance,
     // command) velocity asset. Any fetch/parse miss degrades to step 3 / 0.0.
     let resolved_stance = mtable.resolve_stance(stance);
-    if let Some(s) = motion_kinematics_cycle_base_speed(&source, resolved_stance, command) {
+    if let Some(s) = motion_kinematics_cycle_base_speed(&*source, mtable_id, resolved_stance, command)
+    {
         return s;
     }
     // step 3 — ACE GetAnimDist over the cycle's concatenated PosFrames
@@ -4723,11 +4724,12 @@ pub async fn cycle_base_speed(mtable_id: u32, stance: u32, command: u32) -> f32 
 #[cfg(target_arch = "wasm32")]
 fn motion_kinematics_cycle_base_speed<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
+    motion_table_id: u32,
     stance: u32,
     command: u32,
 ) -> Option<f32> {
     use holtburger_dat::file_type::MotionKinematics;
-    use holtburger_dat::{HOLTBURGER_CORE_NAMESPACE, ResourceKey, ResourceSource};
+    use holtburger_dat::{HOLTBURGER_CORE_NAMESPACE, ResourceKey};
     let bytes = source
         .get_file_by_key(ResourceKey::new(
             HOLTBURGER_CORE_NAMESPACE,
@@ -4735,7 +4737,7 @@ fn motion_kinematics_cycle_base_speed<S: holtburger_dat::ResourceSource + ?Sized
         ))
         .ok()?;
     let kinematics = MotionKinematics::read(&mut std::io::Cursor::new(&bytes)).ok()?;
-    let entry = kinematics.cycle_kinematics(stance, command)?;
+    let entry = kinematics.cycle_kinematics(motion_table_id, stance, command)?;
     let v = entry.velocity?;
     let mag = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
     if mag > 1e-4 { Some(mag) } else { None }
