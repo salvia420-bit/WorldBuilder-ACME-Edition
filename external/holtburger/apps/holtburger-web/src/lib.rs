@@ -4628,11 +4628,11 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // Use MotionTable::motion_data_for_cycle which builds the key
     // via the canonical `cycle_key(stance, command)` helper —
     // (stance & 0xFFFF) << 16 | (command & MOTION_KEY_MASK).
-    // MOTION_KEY_MASK = 0x000F_FFFF, so the high bits of e.g.
-    // WALK_FORWARD_COMMAND (0x4500_0000) are stripped before the
-    // lookup. The wrong mask width is a footgun — Phase C's idle
-    // path got away with it because style_defaults stores the
-    // pre-masked substate, not the full command.
+    // MOTION_KEY_MASK = 0x00FF_FFFF (24-bit; motion_table.rs:16, asserted
+    // at :542), so the 0x__ classifier high byte of e.g.
+    // WALK_FORWARD_COMMAND (0x4500_0000) is stripped before the lookup,
+    // leaving the command substate. Phase C's idle path also works because
+    // style_defaults stores the pre-masked substate, not the full command.
     let motion_data = mtable.motion_data_for_cycle(resolved_stance, command)?;
     // T4 (2026-05-28): concatenate ALL AnimData segments (was `anims.first()`
     // only) with per-segment timing + reverse playback. See
@@ -4667,6 +4667,53 @@ fn motion_cycle_base_speed(
             .map(|v| (v.x * v.x + v.y * v.y + v.z * v.z).sqrt())
             .unwrap_or(0.0),
         None => 0.0,
+    }
+}
+
+/// C1 (2026-06-03) — animation-gate hint: which forward locomotion cycle a
+/// `MoveToObject`/`MoveToPosition` envelope should play, derived from the
+/// `MoveToParameters.movement_parameters` (MovementParams) bitfield.
+///
+/// Retail `MovementParameters::get_command` (acclient.c:346175) sets the base
+/// `*command = WalkForward (0x45000005)` and then a HoldKey promotes it to
+/// RunForward when:
+///   `can_charge | (can_run & (!can_walk | curr_distance - distance_to_object
+///    > walk_run_threshold))`
+/// (`apply_run_to_command`/`adjust_motion`). The MovementParams bits are
+/// (acclient.h:31425): bit0 `can_walk`, bit1 `can_run`, bit4 `can_charge`.
+///
+/// The live `curr_distance` lives in the per-tick mover, NOT on the
+/// UpdateMotion wire packet, so we cannot evaluate the distance branch here.
+/// We collapse to the static decision: **Run** when the creature can run or
+/// charge, else **Walk**. (Previously this was an unconditional RunForward,
+/// which played the run cycle for walk-only creatures.) The walk-when-close
+/// refinement is deferred to a runtime gate that knows `curr_distance`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn moveto_locomotion_hint(movement_parameters: u32) -> u16 {
+    use holtburger_protocol::messages::movement::InterpretedMotionCommand;
+    const CAN_RUN: u32 = 0x2;
+    const CAN_CHARGE: u32 = 0x10;
+    if movement_parameters & (CAN_RUN | CAN_CHARGE) != 0 {
+        InterpretedMotionCommand::RUN_FORWARD.raw()
+    } else {
+        InterpretedMotionCommand::WALK_FORWARD.raw()
+    }
+}
+
+#[cfg(test)]
+mod moveto_hint_tests {
+    use super::moveto_locomotion_hint;
+    use holtburger_protocol::messages::movement::InterpretedMotionCommand;
+
+    #[test]
+    fn moveto_hint_runs_when_can_run_or_charge_else_walks() {
+        let run = InterpretedMotionCommand::RUN_FORWARD.raw();
+        let walk = InterpretedMotionCommand::WALK_FORWARD.raw();
+        assert_eq!(moveto_locomotion_hint(0x2), run, "can_run -> run");
+        assert_eq!(moveto_locomotion_hint(0x10), run, "can_charge -> run");
+        assert_eq!(moveto_locomotion_hint(0x1 | 0x2), run, "can_walk+can_run -> run (chase default)");
+        assert_eq!(moveto_locomotion_hint(0x1), walk, "walk-only -> walk");
+        assert_eq!(moveto_locomotion_hint(0x0), walk, "no flags -> walk");
     }
 }
 
@@ -4985,6 +5032,20 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
             // Reverse playback: HighFrame → LowFrame (AnimSequenceNode).
             for idx in (low..high).rev() {
                 push_frame(idx, &mut frames, &mut pos);
+                // Hook direction flip (2026-06-03). In retail this segment runs
+                // Backward, so `Sequence.execute_hooks` fires Both(0)+Backward(-1)
+                // and skips Forward(1). We bake it as FORWARD-ordered frames and
+                // the JS executor always advances forward + drops direction==-1
+                // (entities.js `_fireHook`), which would fire the inverted set.
+                // Negate each hook's direction here (Forward<->Backward, Both
+                // unchanged; direction is i32 with Forward=1/Both=0/Backward=-1)
+                // so the downstream always-forward gate fires the retail-correct
+                // hooks for the reverse segment.
+                if let Some(f) = frames.last_mut() {
+                    for h in &mut f.hooks {
+                        h.direction = -h.direction;
+                    }
+                }
                 times.push(t);
                 t += dt;
             }
@@ -5453,13 +5514,14 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
 ///
 ///   - `0x01XXXXXX` raw GfxObj: returns the GfxObj's own `did_degrade`
 ///     (or 0 if `HAS_DID_DEGRADE` is unset).
-///   - `0x02XXXXXX` SetupModel: returns the first part GfxObj's
-///     `did_degrade`. Multi-part SetupModels share one "level of
-///     detail" decision per-model in retail AC (you don't degrade
-///     individual parts independently — that would risk parts falling
-///     out of alignment), so the first part's chain is sufficient.
-///     Holtburg statics are almost all single-part SetupModels so this
-///     simplification covers the realistic case.
+///   - `0x02XXXXXX` SetupModel: SINGLE-part setups return that part
+///     GfxObj's `did_degrade`. MULTI-part setups return 0 (no
+///     substitution): an LOD swap collapses the whole setup to one
+///     degrade GfxObj resolved from `parts[0]`, which drops the
+///     `AnimationFrame.frames[i]` <-> `parts[i]` invariant for a
+///     multi-part rig, so we skip LOD for them (the `parts.len() != 1`
+///     guard below; 4453d5a5). Holtburg statics are almost all
+///     single-part SetupModels so this still covers the realistic case.
 ///   - Any other prefix: returns 0 (not a model — environments, etc.).
 ///
 /// Returns 0 on any I/O / parse failure — JS treats 0 as "no LOD chain
@@ -29186,7 +29248,25 @@ async fn recv_loop(
                                     // H2 (2026-05-12): plumb the entity's
                                     // PhysicsScript DID through to JS so
                                     // entities.js can walk the chain.
-                                    physics_script_did: data.default_script_id.unwrap_or(0),
+                                    //
+                                    // C2 (2026-06-03): the wire PhysicsDesc
+                                    // `DefaultScript` (data.default_script_id) is
+                                    // a `PScriptType` ENUM (+ intensity), NOT a
+                                    // 0x33 DID — feeding it raw to JS
+                                    // fetchPhysicsScript (which guards
+                                    // `did >> 24 == 0x33`) silently no-ops. Only
+                                    // forward an actual 0x33 PhysicsScript DID
+                                    // here; the PScriptType -> DID resolution (via
+                                    // the entity's PhysicsScriptTable / GetScript —
+                                    // the Wave-17 GameMessageScript path — with
+                                    // default_script_intensity) is a runtime
+                                    // resolver, deferred. The SetupModel
+                                    // .default_script 0x33 static path already
+                                    // covers the common ambient case.
+                                    physics_script_did: data
+                                        .default_script_id
+                                        .filter(|d| (d >> 24) == 0x33)
+                                        .unwrap_or(0),
                                     // Task E (2026-05-12): plumb the entity's
                                     // SoundTable DID. The wire field is
                                     // `stable_id` (PhysicsDescriptionFlag::STABLE),
@@ -29606,8 +29686,25 @@ async fn recv_loop(
                                     .unwrap_or(0),
                                 (
                                     MovementType::MoveToObject | MovementType::MoveToPosition,
-                                    _,
-                                ) => InterpretedMotionCommand::RUN_FORWARD.raw(),
+                                    mtd,
+                                ) => {
+                                    // C1 (2026-06-03): gate the walk/run cycle on
+                                    // the MoveToParameters MovementParams flags
+                                    // instead of hardcoding RunForward — a
+                                    // walk-only creature now hints Walk. See
+                                    // `moveto_locomotion_hint`. (curr_distance is
+                                    // not on the wire, so the distance-dependent
+                                    // walk-when-close branch is deferred.)
+                                    let params = match mtd {
+                                        MovementTypeData::MoveToObject(m) => Some(m.params.movement_parameters),
+                                        MovementTypeData::MoveToPosition(m) => Some(m.params.movement_parameters),
+                                        _ => None,
+                                    };
+                                    match params {
+                                        Some(mp) => moveto_locomotion_hint(mp),
+                                        None => InterpretedMotionCommand::RUN_FORWARD.raw(),
+                                    }
+                                }
                                 _ => 0,
                             };
                             // Render-completeness Waves-2 A1 (2026-05-29):
@@ -37098,6 +37195,75 @@ mod tests_animation_keyframes_batch {
             b.extend_from_slice(&0u32.to_le_bytes()); // num_hooks = 0
         }
         b
+    }
+
+    // ISSUE B (2026-06-03) — like `synth_animation` but bakes exactly one
+    // SoundTable (hook_type 2) hook onto each frame with the given
+    // `direction` (Forward=1 / Both=0 / Backward=-1). Byte layout per frame:
+    // [part0: 7 f32][num_hooks=1 u32][hook: type u32, direction i32, 4-byte
+    // SoundTable payload] — payload ends on a 4-byte boundary so no pad.
+    fn synth_animation_one_hook_per_frame(anim_id: u32, dirs: &[i32]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&anim_id.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes()); // flags: no POS_FRAMES
+        b.extend_from_slice(&1u32.to_le_bytes()); // num_parts
+        b.extend_from_slice(&(dirs.len() as u32).to_le_bytes()); // num_frames
+        for (i, &dir) in dirs.iter().enumerate() {
+            // part 0: origin (i,0,0) + identity quat (w,x,y,z = 1,0,0,0).
+            b.extend_from_slice(&(i as f32).to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            b.extend_from_slice(&1.0f32.to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            b.extend_from_slice(&0.0f32.to_le_bytes());
+            // num_hooks = 1, then one SoundTable hook with this direction.
+            b.extend_from_slice(&1u32.to_le_bytes());
+            b.extend_from_slice(&2u32.to_le_bytes()); // hook_type = SoundTable
+            b.extend_from_slice(&dir.to_le_bytes()); // direction (i32)
+            b.extend_from_slice(&(i as u32).to_le_bytes()); // payload: sound_type u32
+        }
+        b
+    }
+
+    // ISSUE B (2026-06-03) — reverse-baked segments must flip each hook's
+    // direction (Forward<->Backward, Both unchanged) so the always-forward JS
+    // executor (which drops direction==-1) fires the retail-correct set;
+    // forward segments keep authored directions.
+    #[test]
+    fn reverse_segment_flips_hook_direction_forward_keeps() {
+        use holtburger_dat::file_type::motion_table::{AnimData, MotionData, MotionDataFlags};
+        let anim: u32 = 0x0300_AA01;
+        // frame 0 = Forward(1), frame 1 = Backward(-1), frame 2 = Both(0).
+        let dirs = [1i32, -1, 0];
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), anim), synth_animation_one_hook_per_frame(anim, &dirs));
+        let source = MockSource { files };
+
+        // Forward playback (framerate > 0): frame order + directions unchanged.
+        let md_fwd = MotionData {
+            bitfield: 0,
+            flags: MotionDataFlags::empty(),
+            anims: vec![AnimData { anim_id: anim, low_frame: 0, high_frame: -1, framerate: 10.0 }],
+            velocity: None,
+            omega: None,
+        };
+        let (ff, _t, _p, _d) = build_concatenated_motion_frames(&source, &md_fwd).expect("fwd");
+        let fdirs: Vec<i32> = ff.iter().map(|f| f.hooks[0].direction).collect();
+        assert_eq!(fdirs, vec![1, -1, 0], "forward segment keeps authored hook directions");
+
+        // Reverse playback (framerate < 0): frame order reversed [f2,f1,f0] AND
+        // each hook direction negated → Both(0), -(-1)=1, -(1)=-1.
+        let md_rev = MotionData {
+            bitfield: 0,
+            flags: MotionDataFlags::empty(),
+            anims: vec![AnimData { anim_id: anim, low_frame: 0, high_frame: -1, framerate: -10.0 }],
+            velocity: None,
+            omega: None,
+        };
+        let (rf, _t, _p, _d) = build_concatenated_motion_frames(&source, &md_rev).expect("rev");
+        let rdirs: Vec<i32> = rf.iter().map(|f| f.hooks[0].direction).collect();
+        assert_eq!(rdirs, vec![0, 1, -1], "reverse segment flips Forward<->Backward, Both unchanged");
     }
 
     /// **T4 (2026-05-28).** `build_concatenated_motion_frames` chains ALL

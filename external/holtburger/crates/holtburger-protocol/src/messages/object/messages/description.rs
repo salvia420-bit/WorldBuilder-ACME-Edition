@@ -841,6 +841,11 @@ pub struct ObjectDescriptionData {
     pub velocity: Option<Vector3>,
     pub acceleration: Option<Vector3>,
     pub omega: Option<Vector3>,
+    /// PhysicsDesc `DefaultScript` — a `PScriptType` ENUM value (small int),
+    /// NOT a `0x33` PhysicsScript DID, paired with `default_script_intensity`.
+    /// Resolving it to a concrete `0x33` script is the entity-specific
+    /// `PScriptType -> PhysicsScriptTable` GetScript lookup (the Wave-17
+    /// GameMessageScript path), not a direct DID. Stored as the raw wire u32.
     pub default_script_id: Option<u32>,
     pub default_script_intensity: Option<f32>,
     pub sequences: [u16; 9],
@@ -1335,7 +1340,8 @@ mod tests {
                 y: 8.0,
                 z: 7.0,
             }),
-            default_script_id: Some(0x33000001),
+            // PScriptType enum value (NOT a 0x33 DID) — see field doc above.
+            default_script_id: Some(0x53),
             default_script_intensity: Some(0.75),
             sequences: [1, 2, 3, 4, 5, 6, 7, 8, 9],
             public_weenie_desc: PublicWeenieDescription {

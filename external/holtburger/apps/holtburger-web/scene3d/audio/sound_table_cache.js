@@ -178,12 +178,13 @@ export class SoundTableCache {
    * (the common case — most tables only carry a handful of enums) or
    * if the fetch failed.
    *
-   * Algorithm:
+   * Algorithm (retail GetSound — UNIFORM pick; `probability` is NOT a
+   * selection weight: it gates a separate playback roll at the call site):
    *   - 0 entries → null
    *   - 1 entry → return it directly (skip RNG)
-   *   - N entries, sum of `probability` > 0 → weighted pick
-   *   - N entries, sum == 0 → uniform pick (probabilities all zero is
-   *     legal wire data; we don't want to silently drop the call)
+   *   - N entries → uniform pick `floor((N-1) * rng())`, bit-faithful to
+   *     retail GetSound (see the selection site below). The previous
+   *     probability-weighted prefix-sum was a divergence.
    *
    * The returned object is a PLAIN POJO snapshot (NOT the wasm-bindgen
    * `SoundEntryJs` handle) — callers can hold a reference indefinitely

@@ -7328,9 +7328,14 @@ export class EntityManager {
     //
     // Holtburger re-bakes negative-framerate (reverse) segments as
     // FORWARD-ordered keyframes and always advances three.js clips forward,
-    // so `dir` is always Forward(1). The faithful ACE gate therefore reduces
+    // so playback `dir` is always Forward(1). To keep reverse segments
+    // retail-correct under that always-forward executor, the Rust baker
+    // (web/src/lib.rs build_concatenated_motion_frames) NEGATES each hook's
+    // direction on reverse segments (Forward<->Backward, Both unchanged) —
+    // Issue B (2026-06-03). After that pre-flip the faithful ACE gate reduces
     // exactly to: fire iff `direction === 0 (Both) || direction === 1
-    // (Forward)`. Without this gate the executor fired every hook in the
+    // (Forward)` — i.e. drop direction === -1 — for BOTH forward and reverse
+    // segments. Without this gate the executor fired every hook in the
     // advance window, spuriously triggering the 200 Backward-only hooks
     // (census 2026-05-29: 6419 hooks = 3243 Both / 2976 Forward / 200
     // Backward) — dominated by SoundTable type-2 (wrong/double sounds on
