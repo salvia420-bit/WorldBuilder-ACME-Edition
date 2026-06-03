@@ -180,6 +180,10 @@ async function captureMockSessionView(view, preset, outRoot) {
   const browser = await chromium.launch({
     args: ["--use-gl=swiftshader"],
   });
+  // Ensure the browser is ALWAYS torn down even if a step below throws, so a
+  // failed capture never orphans a ~1.5GiB chrome-headless-shell (the cgroup +
+  // reaper backstop this; finally is the clean in-process path).
+  try {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 1024 },
   });
@@ -297,8 +301,10 @@ async function captureMockSessionView(view, preset, outRoot) {
   }
 
   console.log(`  screenshot -> ${fpath} (errors=${consoleErrors})`);
-  await browser.close();
   return { ok: true, fpath, consoleErrors, qualityPreset: probe.qualityPreset };
+  } finally {
+    await browser.close().catch(() => {});
+  }
 }
 
 async function captureLiveAceView(view, preset, outRoot, args) {

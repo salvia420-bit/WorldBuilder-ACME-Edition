@@ -17,3 +17,12 @@
 # in wasm linear memory and is allocated lazily by the engine.
 [target.wasm32-unknown-unknown]
 rustflags = ["-C", "link-arg=-zstack-size=8388608"]
+
+# Cap parallel codegen on this 8GB laptop. cargo defaults to jobs = nproc (4
+# here); each rustc + its LLVM codegen threads is multi-hundred-MB to >1GB on
+# this graph (tokio "full", reqwest/hyper, web-sys, the 40k-line lib.rs), so 4
+# concurrent froze the box. jobs=2 keeps peak build RAM to ~2-3G, leaving room
+# for the wasm-opt fork and one headless chrome. Override per-invocation with
+# `cargo build -j N` or CARGO_BUILD_JOBS when you know there's headroom.
+[build]
+jobs = 2

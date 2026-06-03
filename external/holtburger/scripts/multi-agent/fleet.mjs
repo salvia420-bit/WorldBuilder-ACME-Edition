@@ -29,6 +29,7 @@
 import { chromium } from "playwright";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { totalmem } from "node:os";
 
 // --- args ------------------------------------------------------------
 function parseArgs(argv) {
@@ -45,6 +46,18 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv);
+
+// Clamp agent count to what this box's RAM can hold. Each wire-agent page + its
+// swiftshader renderer is ~1-1.5GiB; on an 8GB laptop >3 over-commits swap and
+// froze the box (2026-06-03 OOM). Big boxes (1070/cloud) are left untouched.
+// Run inside the wireagent cgroup (capped-wireagent) for the hard backstop.
+const _totalGiB = totalmem() / 1024 ** 3;
+const _agentCap = _totalGiB <= 9 ? 3 : args.agents;
+if (args.agents > _agentCap) {
+  console.warn(`[fleet] clamping agents ${args.agents} -> ${_agentCap} (only ${_totalGiB.toFixed(1)}GiB RAM; >${_agentCap} over-commits here)`);
+  args.agents = _agentCap;
+}
+
 const TS = new Date().toISOString().replace(/[:.]/g, "-");
 const OUT = `/mnt/wbterminal1/tmp/claude-scratch/multi-agent/${args.label || "run"}-${TS}`;
 await mkdir(OUT, { recursive: true });
@@ -79,6 +92,20 @@ const browser = await chromium.launch({
 });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
 console.log(`[fleet] chromium launched in ${Date.now() - t_launch}ms`);
+
+// Always tear down the headless chromium — on Ctrl-C, `kill`/earlyoom SIGTERM,
+// or an uncaught error — so a killed fleet run never orphans ~1.5GiB
+// chrome-headless-shell processes that accumulate across runs.
+let _closing = false;
+const _teardown = async (code) => {
+  if (_closing) return;
+  _closing = true;
+  try { await browser.close(); } catch { /* already gone */ }
+  if (code !== undefined) process.exit(code);
+};
+process.on("SIGINT", () => _teardown(130));
+process.on("SIGTERM", () => _teardown(143));
+process.on("uncaughtException", (e) => { console.error("[fleet] uncaught:", e); _teardown(1); });
 
 const agents = [];
 for (let i = 0; i < args.agents; i++) {

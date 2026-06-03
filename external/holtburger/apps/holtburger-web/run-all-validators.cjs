@@ -662,7 +662,19 @@ async function main() {
   // Execute.
   let perSurface;
   if (cli.parallel) {
-    perSurface = await Promise.all(todo.map((v) => runValidator(v, logDir)));
+    // Bounded pool of 2 instead of unbounded Promise.all: 6+ validators each
+    // launch their own browser, and running all at once OOM-froze the 8GB box.
+    // Preserves result order. Run the whole command under capped-wireagent too.
+    const POOL = 2;
+    perSurface = new Array(todo.length);
+    let _next = 0;
+    const _worker = async () => {
+      while (_next < todo.length) {
+        const _i = _next++;
+        perSurface[_i] = await runValidator(todo[_i], logDir);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(POOL, todo.length) }, _worker));
   } else {
     perSurface = [];
     for (const v of todo) {

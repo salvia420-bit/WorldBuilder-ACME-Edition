@@ -16,6 +16,7 @@ import { chromium } from "playwright";
 import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { totalmem } from "node:os";
 
 const BASE = "http://127.0.0.1:8765";
 const CHROME_ARGS = ["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox", "--disable-dev-shm-usage"];
@@ -58,6 +59,16 @@ async function loadLbList(spec) {
 const hexOf = (lb) => "0x" + lb.toString(16).toUpperCase().padStart(4, "0");
 
 const args = parseArgs(process.argv);
+// Clamp agents to what this box's RAM holds (~1-1.5GiB per agent page+renderer).
+// On the 8GB laptop >3 over-commits swap and froze the box (2026-06-03 OOM);
+// bigger boxes (1070/cloud) are untouched. Run under capped-wireagent for the
+// hard cgroup backstop.
+const _totalGiB = totalmem() / 1024 ** 3;
+const _agentCap = _totalGiB <= 9 ? 3 : args.agents;
+if (args.agents > _agentCap) {
+  console.log(`[sweep] clamping agents ${args.agents} -> ${_agentCap} (only ${_totalGiB.toFixed(1)}GiB RAM; >${_agentCap} over-commits here)`);
+  args.agents = _agentCap;
+}
 if (args.accounts && existsSync(args.accounts)) {
   const pool = (await readFile(args.accounts, "utf8")).split("\n")
     .map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
@@ -184,6 +195,21 @@ async function verifyInterior(page, lb, lbId, targetLbHex, oracle) {
 
 const browser = await chromium.launch({ headless: true, args: CHROME_ARGS });
 const ctx = await browser.newContext({ viewport: { width: 1024, height: 768 } });
+
+// Always tear down chromium — on Ctrl-C, kill/earlyoom SIGTERM, or an uncaught
+// error — so a killed sweep never orphans ~1.5GiB chrome-headless-shell procs
+// (a starved run once left strays accumulating). The cgroup + reaper backstop;
+// this is the clean in-process path.
+let _closing = false;
+const _teardown = async (code) => {
+  if (_closing) return;
+  _closing = true;
+  try { await browser.close(); } catch { /* already gone */ }
+  if (code !== undefined) process.exit(code);
+};
+process.on("SIGINT", () => _teardown(130));
+process.on("SIGTERM", () => _teardown(143));
+process.on("uncaughtException", (e) => { console.error("[sweep] uncaught:", e); _teardown(1); });
 
 async function agentLoop(idx) {
   const acct = ACCOUNTS[idx % ACCOUNTS.length];
