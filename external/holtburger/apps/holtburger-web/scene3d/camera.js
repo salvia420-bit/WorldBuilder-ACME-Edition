@@ -1473,6 +1473,40 @@ export class CameraSwitcher {
         console.warn("[cameraSwitcher] setMovementInput rejected:", String(e?.message ?? e));
       }
     }
+    // 2026-06-03 — drive the LOCAL player rig's locomotion ANIMATION. ACE does
+    // not echo the local player's own UpdateMotion back (the client predicts its
+    // own motion), so without this the local rig sits on the idle/Ready clip
+    // (cmd 0x0) while running. Mirror the jump dispatch (index.html:~8389): map
+    // the movement intent to a MotionCommand and feed the rig via
+    // entityManager.setMotion. Fires on the same sig-change gate as
+    // setMovementInput above; setMotion is idempotent on (cmd, stance).
+    this._dispatchLocalRigMotion(m);
+  }
+
+  /**
+   * Map player-local movement intent → primary locomotion MotionCommand and
+   * dispatch it to the local player's rig. Forward dominates (a diagonal
+   * run+strafe plays the run cycle); then strafe; then turn-in-place; else
+   * Ready (stop → idle). Constants per the motion-interp deep dive.
+   */
+  _dispatchLocalRigMotion(m) {
+    const em = this.scene3d && this.scene3d.entityManager;
+    if (!em || typeof em.setMotion !== "function") return;
+    const lpgFn = (typeof window !== "undefined") ? window.getLocalPlayerGuid : null;
+    const localGuid = typeof lpgFn === "function" ? lpgFn() : null;
+    if (localGuid == null) return;
+    const g = localGuid >>> 0;
+    let cmd;
+    if (m.forward > 0) cmd = m.run ? 0x44000007 : 0x45000005;   // Run / Walk Forward
+    else if (m.forward < 0) cmd = 0x45000006;                   // WalkBackwards
+    else if (m.strafe > 0) cmd = 0x6500000f;                    // SideStepRight
+    else if (m.strafe < 0) cmd = 0x65000010;                    // SideStepLeft
+    else if (m.turn > 0) cmd = 0x6500000d;                      // TurnRight
+    else if (m.turn < 0) cmd = 0x6500000e;                      // TurnLeft
+    else cmd = 0x41000003;                                      // Ready (stop → idle)
+    let stance = 0x8000003d;                                    // NonCombat fallback
+    try { if (typeof em.getStance === "function") { const s = (em.getStance(g) >>> 0); if (s) stance = s; } } catch (_) {}
+    try { em.setMotion(g, cmd, stance); } catch (_) {}
   }
 
   // ---- listeners ----------------------------------------------------
