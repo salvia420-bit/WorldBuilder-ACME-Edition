@@ -307,6 +307,10 @@ import { buildLightForSetupLight } from "./lighting.js";
 // actual ground speed / authored cycle speed (|MotionData.velocity|). Default
 // OFF (eye-test-tuned gait change); read once at module load. try/catch for
 // the Node test harness (no `window`).
+// T1: flip to default-on only after a GPU eye-test validates gait. The
+// 'actual' speed input now comes from the wasm `stateGroundSpeed` getter
+// (see tick() / _resolveStateGroundSpeed) instead of the XZ-delta EMA, but
+// the default stays OFF until the gait is eye-test-confirmed on the 1070.
 const VEL_SCALE_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -346,6 +350,10 @@ const DYN_LOD_INTERVAL_S = 0.5;
 // every retail script (none nest beyond 2); the walker bails past it.
 const MAX_CALL_PES_DEPTH = 3;
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
+// T6: reuse the particle runtime's shared RNG hook so the CallPES delay
+// jitter is the same mockable uniform[0,1) the rest of scene3d/particles
+// draws from (Math.random by default, deterministic under setRng in tests).
+import { rng as timeRng } from "./particles/time_rng.js";
 
 // AC InterpretedMotionCommand low-16 constants — used for
 // category-agnostic classification. The wasm export returns the full
@@ -2035,6 +2043,55 @@ export class EntityManager {
       }
       parts.push(partGroup);
       root.add(partGroup);
+    }
+
+    // T4: per-part particle anchoring. CreateParticle hooks carry a
+    // `part_index`; the particle runtime resolves a non-root index via
+    // `this.parent.partFrames[partIndex]` (particle_emitter.js:336, and
+    // particle.js:179 / setParenting:180 read its {position, quaternion}).
+    // The entity rig is a bare THREE.Group with no `partFrames`, so every
+    // non-root index silently root-fell-back to the model origin. Attach a
+    // LIVE, lazily-evaluated accessor on `root` (= the `parent` passed to
+    // addEmitter) that returns the CURRENT WORLD-space frame of
+    // `parts[partIndex]` per read — the part Groups carry only LOCAL
+    // rest-pose / mixer-driven transforms relative to root, so we must
+    // compose up to world via getWorldPosition/getWorldQuaternion. The
+    // consumer treats `partFrames[i]` as a drop-in for `parent.position`/
+    // `parent.quaternion` (which are world), so the frames must be world too.
+    // 0xFFFFFFFF / -1 still anchors to root (handled upstream, never indexes
+    // this); out-of-range / undefined falls back to root anchoring.
+    // Reusable per-index frame objects so repeated reads don't allocate.
+    {
+      const partFrameCache = [];
+      root.partFrames = new Proxy([], {
+        get(_target, prop) {
+          if (prop === "length") return parts.length;
+          // Only intercept integer-index reads; anything else (Symbol,
+          // string method names) returns undefined so `&&` guards short out.
+          const idx = typeof prop === "string" ? Number(prop) : NaN;
+          if (!Number.isInteger(idx) || idx < 0 || idx >= parts.length) {
+            return undefined;
+          }
+          const part = parts[idx];
+          if (!part) return undefined;
+          let frame = partFrameCache[idx];
+          if (!frame) {
+            frame = { position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
+            partFrameCache[idx] = frame;
+          }
+          // World-space (composes root ⊗ local). updateWorldMatrix(true,…)
+          // ensures the part's world matrix reflects this frame's mixer pose
+          // even if the renderer hasn't flushed the scene graph yet.
+          part.updateWorldMatrix(true, false);
+          part.getWorldPosition(frame.position);
+          part.getWorldQuaternion(frame.quaternion);
+          return frame;
+        },
+        has(_target, prop) {
+          const idx = typeof prop === "string" ? Number(prop) : NaN;
+          return Number.isInteger(idx) && idx >= 0 && idx < parts.length;
+        },
+      });
     }
 
     // Step C: world-frame transform. Wire format gives us
@@ -4338,6 +4395,53 @@ export class EntityManager {
   }
 
   /**
+   * T1: resolve the entity's current 'actual' ground anim-speed (m/s) from
+   * the wasm `stateGroundSpeed` getter — a synchronous pure-math mirror of
+   * retail `CMotionInterp::get_state_velocity` (acclient.c:343539). It consumes
+   * the interpreted motion-state scalars stashed by `setMotion` /
+   * `setSidestepLayer` (forward_command/forward_speed + sidestep_command/
+   * sidestep_speed) plus a player run_rate, and returns the FINAL m/s with
+   * run_rate ALREADY applied internally (clamped to run_rate*4.0). The caller
+   * feeds the result directly into `cycleTimeScale(actual, base)` and must NOT
+   * re-scale by run_rate.
+   *
+   * Returns a finite positive number on success, or `null` when the getter is
+   * absent (older wasm bundle) or no motion command is stashed — letting tick()
+   * fall back to the legacy XZ-position-delta EMA.
+   *
+   * run_rate comes from the optional `playerRunRate` getter (holtburger-world
+   * `run_rate_from_skill_and_burden` surfaced to wasm); defaults to 1.0 (the
+   * retail no-weenie seed) when that getter isn't present so encumbrance/
+   * run-skill simply don't modulate the gait yet rather than breaking it.
+   */
+  _resolveStateGroundSpeed(inst) {
+    const fn = this.wasmExports?.stateGroundSpeed;
+    if (typeof fn !== "function") return null;
+    const fwdCmd = inst._forwardCommand >>> 0;
+    const sideCmd = inst._sidestepCommand >>> 0;
+    // Nothing to scale from until a forward or sidestep command has been
+    // stashed — let the EMA cover the gap (e.g. just-spawned, idle).
+    if (fwdCmd === 0 && sideCmd === 0) return null;
+    const fwdSpeed = Number.isFinite(inst._forwardSpeed) ? inst._forwardSpeed : 0;
+    const sideSpeed = Number.isFinite(inst._sidestepSpeed) ? inst._sidestepSpeed : 0;
+    let runRate = 1.0;
+    const rrFn = this.wasmExports?.playerRunRate;
+    if (typeof rrFn === "function") {
+      try {
+        const rr = +rrFn();
+        if (Number.isFinite(rr) && rr > 0) runRate = rr;
+      } catch (_) { /* keep the 1.0 seed */ }
+    }
+    let v;
+    try {
+      v = +fn(fwdCmd, fwdSpeed, sideCmd, sideSpeed, runRate);
+    } catch (_) {
+      return null;
+    }
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+
+  /**
    * Update motion command/stance. Triggers async fetch + crossFade
    * to a new action when needed. Idempotent: already-playing
    * (cmd, stance) is a no-op.
@@ -4492,6 +4596,16 @@ export class EntityManager {
     if (VEL_SCALE_ON && (cls === "walk" || cls === "run")) {
       inst._locoCycleKey = cacheKey;
       this._resolveCycleBaseSpeed(inst, mtableId, stance, cmd, cacheKey);
+      // T1: stash the interpreted forward motion state (full u32 command +
+      // forward_speed scalar) so tick() can feed the new wasm `stateGroundSpeed`
+      // getter (retail CMotionInterp::get_state_velocity) as the 'actual'
+      // ground anim-speed, instead of the rig XZ-position-delta EMA. `cmd` here
+      // is the already-interpreted forward command (WalkForward/RunForward —
+      // backstep arrives as WalkForward with a negated forward_speed upstream);
+      // `inst._motionSpeed` is the broadcast forward_speed (set above). The
+      // sidestep axis is driven separately (setSidestepLayer stashes its scalars).
+      inst._forwardCommand = cmd >>> 0;
+      inst._forwardSpeed = inst._motionSpeed ?? 1.0;
     }
     if (cacheKey === inst.currentActionKey) return; // already playing
     this.motionSwitchCount += 1;
@@ -4755,9 +4869,21 @@ export class EntityManager {
     };
 
     if (cmd === 0 || (cmdLow !== 0x000F && cmdLow !== 0x0010)) {
+      // T1: clear the stashed sidestep state so the per-frame stateGroundSpeed
+      // getter drops the X term once sidestep is released.
+      inst._sidestepCommand = 0;
+      inst._sidestepSpeed = 0;
       clearLayer(cmd === 0 ? "cleared" : `unsupported-cmd=0x${cmdLow.toString(16)}`);
       return;
     }
+    // T1: stash the interpreted sidestep command (full u32, already collapsed
+    // to SideStepRight 0x6500000F above) for the stateGroundSpeed getter's X
+    // term. The wire `sidestep_speed` magnitude isn't carried into this layer
+    // dispatch (the rig only needs one clip per direction), so use 1.0 — retail
+    // get_state_velocity keys the X term on `command == SideStepRight` and
+    // scales by sidestep_speed; 1.0 yields the un-modulated sidestep anim speed.
+    inst._sidestepCommand = cmd >>> 0;
+    inst._sidestepSpeed = 1.0;
 
     let stance = (motionStance >>> 0);
     if (stance === 0 && inst.lastStance) {
@@ -6102,7 +6228,18 @@ export class EntityManager {
           );
           continue;
         }
-        const pesDelayMs = Math.max(0, ((+e.startTime || 0) + (callPesPause || 0)) * 1000);
+        // T6: retail CallPES rolls a UNIFORM RANDOM duration in [0, pause]
+        // (`Random::RollDice(0, pause)`, acclient.c:318987) driving a 0→1
+        // FPHook that fires the sub-script only on interp completion — so
+        // `pause` is a MAX window, not a fixed wait. If `delta < 0.0002`
+        // retail fires immediately (acclient.c:318973). Replace the old
+        // fixed `(start_time + pause)*1000` with that jitter. start_time is
+        // the hook's own schedule offset within this chain (additive,
+        // unchanged); only the pause window is now randomized. Accepts
+        // non-determinism (timeRng = Math.random by default).
+        const pauseW = +callPesPause || 0;
+        const randPause = pauseW < 0.0002 ? 0 : timeRng() * pauseW;
+        const pesDelayMs = Math.max(0, ((+e.startTime || 0) + randPause) * 1000);
         const tid = setTimeout(() => {
           if (!this.entityMap.has(guid >>> 0)) return;
           this._attachParticleChainForEntity(guid, rig, callPesDid, depth + 1).catch(() => {});
@@ -6832,15 +6969,43 @@ export class EntityManager {
         if (base > 0 && inst._locoCycleKey) {
           const locoAction = inst.actions.get(inst._locoCycleKey);
           if (locoAction && locoAction.isRunning()) {
+            // T1: prefer the wasm `stateGroundSpeed` getter (a mirror of retail
+            // CMotionInterp::get_state_velocity) for the 'actual' ground anim-
+            // speed instead of the rig XZ-position-delta EMA. The getter is pure
+            // math over the interpreted motion state (forward_command/_speed +
+            // sidestep_command/_speed) and a JS-supplied run_rate, returning the
+            // FINAL m/s with run_rate ALREADY applied internally (it clamps to
+            // run_rate*4.0) — so we feed the result straight into cycleTimeScale
+            // and DO NOT re-scale by run_rate. The EMA stays only as a fallback
+            // when the getter is absent (older wasm) or returns null/0 — e.g.
+            // when no forward/sidestep command is stashed yet — so server-pose
+            // snaps / teleports / rubber-banding (which the EMA reads as garbage)
+            // can't poison the gait once the getter is live.
+            // T1 fix (2026-06-03): track whether the speed came from the wasm
+            // getter. The getter's value ALREADY encodes UpdateMotion.forward_speed
+            // (== inst._motionSpeed) and run_rate, so velScaleComponent below is the
+            // COMPLETE framerate scale — re-multiplying by motionSpeed would
+            // double-count forward_speed (0.5 -> 0.25 at half speed).
+            let actualSpeed = this._resolveStateGroundSpeed(inst);
+            const speedFromGetter = Number.isFinite(actualSpeed) && actualSpeed > 0;
+            if (!speedFromGetter) {
+              actualSpeed = inst._emaSpeed ?? 0;
+            }
             // A1 (2026-05-29): compose the server playback speed
             // (`inst._motionSpeed`) WITH the T11 velocity-scale factor into
             // ONE timeScale — multiply, do not clobber. velScaleComponent is
             // the anti-ice-skating gait (actual/authored ground speed);
             // motionSpeed is retail's `Framerate *= speed`. Identity (1.0)
             // motionSpeed leaves T11 untouched (fail-soft).
-            const velScaleComponent = cycleTimeScale(inst._emaSpeed ?? 0, base);
+            const velScaleComponent = cycleTimeScale(actualSpeed, base);
             const motionSpeed = inst._motionSpeed ?? 1.0;
-            locoAction.setEffectiveTimeScale(velScaleComponent * motionSpeed);
+            // Getter path: velScaleComponent is the single, complete scale (retail
+            // applies the speed scalar ONCE). EMA-fallback path keeps the legacy
+            // compose-with-motionSpeed behavior unchanged. (Eye-test TODO: the EMA
+            // path likely double-counts too; revisit when flipping VEL_SCALE_ON on.)
+            locoAction.setEffectiveTimeScale(
+              speedFromGetter ? velScaleComponent : velScaleComponent * motionSpeed,
+            );
           }
         }
       }
@@ -7348,7 +7513,12 @@ export class EntityManager {
       const pesId = hook.callPesDid >>> 0;
       const pause = +hook.callPesPause;
       if (pesId !== 0) {
-        const delayMs = Math.max(0, pause * 1000);
+        // T6: same retail jitter as the chain walker (~L6105) — `pause` is a
+        // MAX window; roll `RollDice(0, pause)` (fire immediately when the
+        // window < 0.0002). acclient.c:318987.
+        const pauseW = pause || 0;
+        const randPause = pauseW < 0.0002 ? 0 : timeRng() * pauseW;
+        const delayMs = Math.max(0, randPause * 1000);
         const guidU = (inst.guid >>> 0);
         const root = inst.root;
         setTimeout(() => {
@@ -7786,12 +7956,16 @@ export class EntityManager {
   _applyRampValueToMaterial(hookType, material, value) {
     if (!material) return;
     if (hookType === 20 || hookType === 7) {
-      // Transparent — alpha in [0, 1]. `transparent: true` is
-      // required for three.js to actually blend; setting transparent
-      // back to false at value >= 1 keeps fast-path opaque rendering
-      // when the ramp completes.
-      material.opacity = value;
-      material.transparent = value < 1.0;
+      // T2: the Transparent(20)/TransparentPart(7) hook VALUE is
+      // TRANSLUCENCY, not alpha. Retail `CMaterial::SetTranslucencySimple`
+      // (acclient.c:360598) computes `alpha = 1.0 - trans`, so 0=opaque,
+      // 1=invisible. The previous `opacity = value` faded the material IN
+      // as translucency ramped 0→1 — backwards. Invert to match retail and
+      // the static-surface path (materials.js:1836 `opacity = 1 - translucency`).
+      // `transparent: true` is required for three.js to actually blend;
+      // value <= 0 (fully opaque) restores the fast opaque path.
+      material.opacity = 1 - value;
+      material.transparent = value > 0;
       // depthWrite mirrors transparency to avoid sorting glitches on
       // edges (matches the standard PBR-ghost convention).
       if (material.transparent && material.depthWrite !== false) {
@@ -7821,10 +7995,16 @@ export class EntityManager {
   }
 
   /**
-   * Wave 6 — Ethereal (6) snap-toggle. Sets opacity to 0.4 (matches
-   * the retail `set_translucency_internal(0.4f)` value cited in
-   * `acclient.c::CPhysicsObj::set_ethereal`) when `ethereal === true`;
-   * restores the prior opacity when `false`.
+   * Wave 6 — Ethereal (6) snap-toggle. Sets opacity to 0.4 when
+   * `ethereal === true`; restores the prior opacity when `false`.
+   *
+   * T5: the 0.4 ghost opacity is a DELIBERATE CLIENT INVENTION, NOT retail.
+   * Retail `CPhysicsObj::set_ethereal` (acclient.c:319047) only flips the
+   * collision-state bit 0x4 (ETHEREAL_PS) + transient_state bit 0x100 — it
+   * NEVER touches opacity/translucency/material (and there is no retail
+   * `set_translucency_internal` symbol at all). Any visual for ethereal is
+   * a holtburger affordance so ethereal objects read as ghostly; keep it
+   * only as long as that reads well in an eye-test.
    *
    * The "prior opacity" is captured once per cloned material in
    * `userData.__preEtherealOpacity`; subsequent toggles read that
@@ -7842,7 +8022,7 @@ export class EntityManager {
         if (mat.userData.__preEtherealOpacity === undefined) {
           mat.userData.__preEtherealOpacity = mat.opacity;
         }
-        mat.opacity = 0.4;
+        mat.opacity = 0.4; // T5: client-invented ghost hint, NOT retail (see method doc)
         mat.transparent = true;
         if (mat.depthWrite !== false) {
           mat.userData.__preEtherealDepthWrite = mat.depthWrite;

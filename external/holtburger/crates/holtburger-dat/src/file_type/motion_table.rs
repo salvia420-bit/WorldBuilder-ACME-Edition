@@ -1,3 +1,4 @@
+use crate::graphics::Frame;
 use binrw::{
     BinRead, BinResult,
     io::{Read, Seek},
@@ -5,7 +6,14 @@ use binrw::{
 use holtburger_common::Vector3;
 use std::collections::HashMap;
 
-const MOTION_KEY_MASK: u32 = 0x000F_FFFF;
+// T8: 24-bit substate/cycle mask matching retail/ACE (MotionTable.cs:71,134)
+// and holtburger's own idle path (lib.rs:5225). Was 0x000F_FFFF (20-bit), a
+// latent footgun — harmless on retail data (max low-24 command = 0x19b) but
+// inconsistent within the codebase and unsafe for new/private-server data.
+// NOTE: this mask applies ONLY to the cycles/modifiers/links OUTER key
+// (style<<16 | command). The Links INNER key is the FULL 32-bit MotionCommand
+// and is never masked (see motion_data_for_link).
+const MOTION_KEY_MASK: u32 = 0x00FF_FFFF;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct MotionTable {
@@ -71,6 +79,53 @@ impl MotionTable {
 
     pub fn motion_data_for_cycle(&self, stance: u32, command: u32) -> Option<&MotionData> {
         self.cycles.get(&cycle_key(stance, command))
+    }
+
+    /// T1-base-speed: resolve `stance == 0` to the table's `default_style`,
+    /// mirroring `motion_cycle_base_speed`'s stance handling so callers don't
+    /// duplicate it.
+    pub fn resolve_stance(&self, stance: u32) -> u32 {
+        if stance == 0 {
+            self.default_style
+        } else {
+            stance
+        }
+    }
+
+    /// T1-base-speed: the *velocity-source* half of the authored-speed fallback
+    /// chain for a `(stance, command)` cycle. Returns `Some(|velocity|)` when
+    /// the cycle has `HAS_VELOCITY` and `|v| > 1e-4` (chain step 1), else
+    /// `None` so the caller can try the next source. `stance == 0` →
+    /// `default_style`.
+    ///
+    /// Step 2 of the chain (the separate `MotionKinematics.cycle_kinematics`
+    /// asset) lives in a different DAT catalog, so it is interleaved by the
+    /// wasm caller (lib.rs) between this and `cycle_anim_dist_base_speed`.
+    pub fn cycle_velocity_base_speed(&self, stance: u32, command: u32) -> Option<f32> {
+        let resolved_stance = self.resolve_stance(stance);
+        let md = self.motion_data_for_cycle(resolved_stance, command)?;
+        let v = md.velocity?;
+        let mag = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
+        if mag > 1e-4 { Some(mag) } else { None }
+    }
+
+    /// T1-base-speed: the *GetAnimDist* half of the authored-speed fallback
+    /// chain (chain step 3 — last resort). Resolves the `(stance, command)`
+    /// cycle and runs ACE `GetAnimDist` over `pos_frames` (the cycle's PosFrames
+    /// concatenated across all of its anims, in order — resolved by the caller
+    /// because the Animation assets live in a different catalog). Returns
+    /// `Some(speed)` when the cycle resolves and yields a positive distance,
+    /// else `None`. `stance == 0` → `default_style`.
+    pub fn cycle_anim_dist_base_speed(
+        &self,
+        stance: u32,
+        command: u32,
+        pos_frames: &[Frame],
+    ) -> Option<f32> {
+        let resolved_stance = self.resolve_stance(stance);
+        let md = self.motion_data_for_cycle(resolved_stance, command)?;
+        let dist = md.get_anim_dist(pos_frames);
+        if dist > 1e-4 { Some(dist) } else { None }
     }
 
     /// Lookup the transition (link) clip for `(stance, from_cmd) →
@@ -167,6 +222,69 @@ pub struct MotionData {
 }
 
 impl MotionData {
+    /// T7: bit0 (`bitfield & 1`) — a cycle that *clears modifiers on entry*.
+    /// Retail `set_cycle`/`do_motion` consult this to drop the persistent
+    /// modifier list when entering the cycle (`acclient.c:337763-337841`;
+    /// ACE `MotionTable.cs:238`). 50/436 retail tables (11.5%) set it.
+    /// A clears-modifiers cycle also *refuses* new modifiers in the modifier
+    /// branch (`acclient.c:337876`).
+    pub fn clears_modifiers(&self) -> bool {
+        self.bitfield & 0x01 != 0
+    }
+
+    /// T7: bit1 (`bitfield & 2`) — the `is_allowed` style-restriction gate.
+    /// When set, the cycle is only enterable from the style's default substate
+    /// (or by re-entering itself): retail `is_allowed` returns true iff
+    /// `(bitfield & 2) == 0 || motion == Substate ||
+    /// StyleDefaults[Style] == Substate` (`acclient.c:337560-337582`;
+    /// ACE `MotionTable.cs:428-438`). This accessor exposes *only* the raw bit;
+    /// the full gate (which also depends on live MotionState) lives where the
+    /// state machine consumes it.
+    pub fn is_allowed_gate(&self) -> bool {
+        self.bitfield & 0x02 != 0
+    }
+
+    /// T1-base-speed: ACE `MotionTable.GetAnimDist` (`MotionTable.cs:572-589`)
+    /// — the authored ground speed (m/s) of this cycle derived from root-motion
+    /// PosFrame travel, used as the last-resort `baseSpeed` source when neither
+    /// `MotionData.velocity` nor `MotionKinematics.cycle_kinematics` is
+    /// populated (the T11 blocker: a player RunForward cycle may carry
+    /// `|velocity| == 0`).
+    ///
+    /// `pos_frames` is the cycle's PosFrames **concatenated across ALL of this
+    /// MotionData's anims, in order** (each `AnimData.anim_id` → that
+    /// Animation's `pos_frames`). The caller resolves the Animation assets and
+    /// concatenates because those assets live in a different catalog than this
+    /// crate parses; here we only do the (pure) math.
+    ///
+    /// CRITICAL — vector-sum-then-magnitude, NOT sum-of-per-frame-magnitudes:
+    /// accumulate `offset += frame.origin` over EVERY PosFrame while counting
+    /// `total_frames`, and take `offset.length()` **after** the loop
+    /// (`MotionTable.cs:582` sum, `:586` `.Length()`). For a curved root-motion
+    /// path these differ; the vector-sum form is load-bearing for A/B parity.
+    /// Returns `dist / total_frames * anims[0].framerate`, or `0.0` if the
+    /// cycle has no anims / no PosFrames.
+    pub fn get_anim_dist(&self, pos_frames: &[Frame]) -> f32 {
+        if self.anims.is_empty() || pos_frames.is_empty() {
+            return 0.0;
+        }
+
+        let mut offset = Vector3::zero();
+        let mut total_frames: u32 = 0;
+        for frame in pos_frames {
+            // += frame.Origin (vector sum; magnitude taken AFTER the loop)
+            offset = offset + frame.origin;
+            total_frames += 1;
+        }
+
+        if total_frames == 0 {
+            return 0.0;
+        }
+
+        let dist = offset.length();
+        dist / (total_frames as f32) * self.anims[0].framerate
+    }
+
     fn read<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
         let num_anims = u8::read(reader)? as usize;
         let bitfield = u8::read(reader)?;
@@ -366,6 +484,277 @@ mod tests {
         assert_eq!(
             profile.turn_right.and_then(|entry| entry.omega),
             Some(Vector3::new(0.0, 0.0, 1.5))
+        );
+    }
+
+    // ---- T8: mask is 24-bit, not 20-bit ----
+
+    /// T8: a synthetic command whose low-24 bits exceed `0x0F_FFFF` (i.e. a bit
+    /// is set in the 0x00F0_0000 nibble that the OLD 20-bit mask would have
+    /// stripped) must still round-trip through `cycle_key` and resolve. Under
+    /// the old `0x000F_FFFF` mask the insert key and the lookup key would BOTH
+    /// be masked identically, so a naive round-trip would *falsely* pass — the
+    /// real regression is that two DISTINCT low-24 commands differing only in
+    /// the 0x00F0_0000 nibble must NOT collide. We assert both: the high-nibble
+    /// command resolves, and it does not alias a low-nibble sibling.
+    #[test]
+    fn t8_high_low24_substate_resolves_and_does_not_alias() {
+        let stance = 0x8000_003Du32;
+        // command with a bit set in the 0x00F0_0000 nibble — masked away by the
+        // old 20-bit mask, preserved by the new 24-bit mask.
+        let high_cmd = 0x0010_0001u32; // low-24 = 0x100001 > 0x0F_FFFF
+        let low_cmd = 0x0000_0001u32; // low-24 = 0x000001 (differs only in nibble)
+
+        // With a 24-bit mask these two produce DIFFERENT cycle keys.
+        assert_ne!(
+            cycle_key(stance, high_cmd),
+            cycle_key(stance, low_cmd),
+            "24-bit mask must keep the 0x00F0_0000 nibble — keys must not collide"
+        );
+
+        // Build a MotionTable carrying only the high-nibble command and assert
+        // it resolves via the normal accessor.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0900_0099u32.to_le_bytes()); // id
+        bytes.extend_from_slice(&stance.to_le_bytes()); // default_style
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // style_defaults count
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // cycles count
+        bytes.extend_from_slice(&cycle_key(stance, high_cmd).to_le_bytes());
+        push_motion_data(
+            &mut bytes,
+            MotionDataFlags::HAS_VELOCITY.bits(),
+            Some(Vector3::new(3.0, 0.0, 0.0)),
+            None,
+        );
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // modifiers count
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // links count
+
+        let table = MotionTable::read(&mut Cursor::new(bytes)).expect("table parses");
+        assert!(
+            table.motion_data_for_cycle(stance, high_cmd).is_some(),
+            "high-nibble low-24 command (0x{:06X}) must resolve under 24-bit mask",
+            high_cmd & 0x00FF_FFFF
+        );
+        assert!(
+            table.motion_data_for_cycle(stance, low_cmd).is_none(),
+            "the high-nibble command must NOT alias the low-nibble sibling"
+        );
+        assert_eq!(MOTION_KEY_MASK, 0x00FF_FFFF, "mask must be 24-bit");
+    }
+
+    // ---- T7: MotionData bitfield accessors ----
+
+    /// T7: `clears_modifiers()` reads bit0, `is_allowed_gate()` reads bit1, and
+    /// the two bits are independent within one `u8`. (We assert the accessor
+    /// LOGIC against synthetic bitfields, not the DAT distribution — the
+    /// "50/436 tables set bit0" figure needs a build/sweep to verify and is
+    /// covered by `sweep_all_retail_motion_tables`'s `tables_with_bitfield_bit_0`
+    /// stat.)
+    #[test]
+    fn t7_bitfield_accessors_decode_independent_bits() {
+        let make = |bitfield: u8| MotionData {
+            bitfield,
+            flags: MotionDataFlags::empty(),
+            anims: Vec::new(),
+            velocity: None,
+            omega: None,
+        };
+
+        // bit0 only
+        let md = make(0x01);
+        assert!(md.clears_modifiers());
+        assert!(!md.is_allowed_gate());
+
+        // bit1 only
+        let md = make(0x02);
+        assert!(!md.clears_modifiers());
+        assert!(md.is_allowed_gate());
+
+        // both bits
+        let md = make(0x03);
+        assert!(md.clears_modifiers());
+        assert!(md.is_allowed_gate());
+
+        // neither bit (other high bits set must not leak into either accessor)
+        let md = make(0xFC);
+        assert!(!md.clears_modifiers());
+        assert!(!md.is_allowed_gate());
+    }
+
+    // ---- T1-base-speed: GetAnimDist (vector-sum-then-magnitude) ----
+
+    fn anim_with_framerate(framerate: f32) -> AnimData {
+        AnimData {
+            anim_id: 0x0300_0001,
+            low_frame: 0,
+            high_frame: 0,
+            framerate,
+        }
+    }
+
+    fn motion_data_with_anim(framerate: f32) -> MotionData {
+        MotionData {
+            bitfield: 0,
+            flags: MotionDataFlags::empty(),
+            anims: vec![anim_with_framerate(framerate)],
+            velocity: None,
+            omega: None,
+        }
+    }
+
+    fn frame_at(x: f32, y: f32, z: f32) -> Frame {
+        Frame {
+            origin: Vector3::new(x, y, z),
+            orientation: holtburger_common::Quaternion {
+                w: 1.0,
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        }
+    }
+
+    /// T1-base-speed: straight-line root motion. Four PosFrames each advancing
+    /// +0.5 on X → summed offset = (2.0, 0, 0), |offset| = 2.0, total_frames =
+    /// 4, framerate = 30 → 2.0 / 4 * 30 = 15.0 m/s. Hand-computed.
+    #[test]
+    fn t1_get_anim_dist_straight_line() {
+        let md = motion_data_with_anim(30.0);
+        let frames = [
+            frame_at(0.5, 0.0, 0.0),
+            frame_at(0.5, 0.0, 0.0),
+            frame_at(0.5, 0.0, 0.0),
+            frame_at(0.5, 0.0, 0.0),
+        ];
+        let dist = md.get_anim_dist(&frames);
+        assert!(
+            (dist - 15.0).abs() < 1e-5,
+            "expected 15.0, got {dist} (|sum|/n*framerate = 2.0/4*30)"
+        );
+    }
+
+    /// T1-base-speed: the load-bearing distinction — vector-sum-then-magnitude,
+    /// NOT sum-of-per-frame-magnitudes. A curved/back-and-forth path: frames
+    /// (+1,0,0) then (-1,0,0). Sum-of-magnitudes would be 2.0; the correct
+    /// magnitude-of-the-vector-sum is |(0,0,0)| = 0.0. With framerate 30 the
+    /// result MUST be 0.0, proving we sum first then take the length.
+    #[test]
+    fn t1_get_anim_dist_is_vector_sum_then_magnitude_not_sum_of_magnitudes() {
+        let md = motion_data_with_anim(30.0);
+        let frames = [frame_at(1.0, 0.0, 0.0), frame_at(-1.0, 0.0, 0.0)];
+        let dist = md.get_anim_dist(&frames);
+        assert!(
+            dist.abs() < 1e-6,
+            "vector-sum-then-magnitude of (+1,0,0)+(-1,0,0) is 0.0, not 2.0; got {dist}"
+        );
+    }
+
+    /// T1-base-speed: a genuinely curved path where the two measures differ by
+    /// a known amount. Frames (3,0,0) and (0,4,0): sum = (3,4,0), |sum| = 5.0
+    /// (3-4-5 triangle), total_frames = 2, framerate = 20 → 5.0 / 2 * 20 =
+    /// 50.0. Sum-of-magnitudes would be (3+4)/2*20 = 70.0 — wrong.
+    #[test]
+    fn t1_get_anim_dist_curved_three_four_five() {
+        let md = motion_data_with_anim(20.0);
+        let frames = [frame_at(3.0, 0.0, 0.0), frame_at(0.0, 4.0, 0.0)];
+        let dist = md.get_anim_dist(&frames);
+        assert!(
+            (dist - 50.0).abs() < 1e-4,
+            "expected 50.0 (|(3,4,0)|/2*20), got {dist}"
+        );
+    }
+
+    /// T1-base-speed: empty anims OR empty pos_frames → 0.0 (the fallback chain
+    /// treats this as "no authored speed from this source").
+    #[test]
+    fn t1_get_anim_dist_empty_returns_zero() {
+        let md = motion_data_with_anim(30.0);
+        assert_eq!(md.get_anim_dist(&[]), 0.0, "no pos_frames → 0.0");
+
+        let md_no_anims = MotionData {
+            bitfield: 0,
+            flags: MotionDataFlags::empty(),
+            anims: Vec::new(),
+            velocity: None,
+            omega: None,
+        };
+        assert_eq!(
+            md_no_anims.get_anim_dist(&[frame_at(1.0, 0.0, 0.0)]),
+            0.0,
+            "no anims → 0.0 (no framerate)"
+        );
+    }
+
+    /// T1-base-speed: the MotionTable-level resolver halves of the fallback
+    /// chain. `cycle_velocity_base_speed` returns `Some(|velocity|)` only when
+    /// `|v| > 1e-4`, and `cycle_anim_dist_base_speed` falls back to GetAnimDist.
+    #[test]
+    fn t1_cycle_base_speed_resolver_halves() {
+        let stance = 0x8000_003Du32;
+        let walk = MotionTable::WALK_FORWARD_COMMAND;
+        let run = MotionTable::RUN_FORWARD_COMMAND;
+
+        // Build a table: walk cycle carries a real velocity (3.12 m/s), run
+        // cycle carries a near-zero velocity (the T11 player-RunForward case).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0900_00AAu32.to_le_bytes()); // id
+        bytes.extend_from_slice(&stance.to_le_bytes()); // default_style
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // style_defaults
+        bytes.extend_from_slice(&2u32.to_le_bytes()); // cycles count
+
+        bytes.extend_from_slice(&cycle_key(stance, walk).to_le_bytes());
+        push_motion_data(
+            &mut bytes,
+            MotionDataFlags::HAS_VELOCITY.bits(),
+            Some(Vector3::new(3.12, 0.0, 0.0)),
+            None,
+        );
+        bytes.extend_from_slice(&cycle_key(stance, run).to_le_bytes());
+        push_motion_data(
+            &mut bytes,
+            MotionDataFlags::HAS_VELOCITY.bits(),
+            Some(Vector3::new(0.0, 0.0, 0.0)), // |v| == 0 → must NOT win
+            None,
+        );
+
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // modifiers
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // links
+
+        let table = MotionTable::read(&mut Cursor::new(bytes)).expect("table parses");
+
+        // walk: velocity source wins.
+        let walk_v = table.cycle_velocity_base_speed(stance, walk);
+        assert!(
+            walk_v.map(|s| (s - 3.12).abs() < 1e-4).unwrap_or(false),
+            "walk |velocity| should resolve to 3.12, got {walk_v:?}"
+        );
+
+        // run: velocity is ~0 → resolver returns None so the caller falls
+        // through to MotionKinematics / GetAnimDist.
+        assert_eq!(
+            table.cycle_velocity_base_speed(stance, run),
+            None,
+            "near-zero run velocity must NOT win the chain (|v| <= 1e-4)"
+        );
+
+        // GetAnimDist fallback for the run cycle: the run MotionData has anims?
+        // No — push_motion_data writes 0 anims, so get_anim_dist returns 0.0 and
+        // the resolver returns None (no authored speed from this source either).
+        let run_anim = table.cycle_anim_dist_base_speed(
+            stance,
+            run,
+            &[frame_at(1.0, 0.0, 0.0), frame_at(1.0, 0.0, 0.0)],
+        );
+        assert_eq!(
+            run_anim, None,
+            "run cycle has 0 anims → GetAnimDist 0.0 → None"
+        );
+
+        // stance == 0 resolves to default_style (which IS `stance` here).
+        assert_eq!(
+            table.resolve_stance(0),
+            stance,
+            "stance 0 must resolve to default_style"
         );
     }
 

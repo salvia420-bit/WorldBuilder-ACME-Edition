@@ -181,6 +181,17 @@ export function buildAnimationClip(animData, partNames) {
         // authored — visible as rig decoherence in motion. See
         // PhatSDK PartArray.cpp:56-59 (`(long)floor(frame_number)`)
         // for the retail snap path.
+        //
+        // T3 GUARD (2026-06-02): this discrete flag is now LOAD-BEARING for
+        // the non-uniform `times` array. When `frameTimes` is supplied, the
+        // per-segment gaps between keys are uneven (each AnimData segment has
+        // its own framerate + sign). InterpolateDiscrete still snaps to the
+        // last-passed key regardless of spacing, which is exactly retail's
+        // `floor(frame_number)` behavior. DO NOT switch either track to
+        // Interpolate{Linear,Smooth}: with non-uniform times that would
+        // SLERP/LERP across segment boundaries (windup→strike) at a
+        // mismatched rate, re-introducing the very decoherence this fix
+        // removes. Both tracks below MUST stay InterpolateDiscrete.
         tracks.push(
             new THREE.VectorKeyframeTrack(
                 `${partName}.position`,
@@ -228,17 +239,36 @@ export function buildAnimationClip(animData, partNames) {
  * (no-op), and the result is clamped to [0.25, 4.0] so a bad/zero authored
  * velocity can't freeze or hyper-spin the rig.
  *
- * NOT YET WIRED: applying it needs (1) `MotionData.velocity` surfaced to JS as
- * the cycle's `baseSpeed` and (2) a per-entity actual ground speed at the
- * animation tick (entities.js exposes angular velocity / projectile speed but
- * no linear ground speed today). Both, plus a 1070 eye-test of the resulting
- * gait, are the remaining T11 work — see docs/3d-render-fidelity-audit.
+ * T1 (2026-06-02): now WIRED. The two inputs come from the motion-state
+ * model rather than the old XZ-position-delta heuristic:
+ *   - `actualSpeed` ← the new synchronous wasm getter `stateGroundSpeed`
+ *     (rust `state_ground_speed`), the FINAL ground anim-speed in m/s with
+ *     `run_rate` already applied internally (clamp `run_rate*4.0`). JS must
+ *     NOT re-scale it by run_rate — it is the retail `get_state_velocity`
+ *     magnitude. entities.js feeds it as this arg at entities.js:6841,
+ *     replacing the EMA-on-XZ-position-delta reading (which read garbage
+ *     during server-pose snaps / teleports / rubber-banding).
+ *   - `baseSpeed` ← the existing async wasm getter `cycleBaseSpeed`, now a
+ *     robust authored-speed resolver (|MotionData.velocity| →
+ *     MotionKinematics.cycle_kinematics → GetAnimDist → 0.0). A returned
+ *     `0.0` ("no scaling") lands in the `baseSpeed <= 1e-4` no-op below.
  *
- * @param {number} actualSpeed - entity ground speed (m/s); sign ignored.
- * @param {number} baseSpeed   - authored cycle speed (|MotionData.velocity|).
+ * This function is PURE and UNCHANGED — it consumes whatever scalars it is
+ * handed, so the robust base + state-velocity actual flow straight through.
+ * The clamp [0.25, 4.0] and the `base <= 1e-4 -> 1.0` no-op are load-bearing
+ * (a bad/empty authored velocity can't freeze or hyper-spin the rig). Do NOT
+ * touch the discrete-interpolation behavior in buildAnimationClip — this is
+ * a playback-RATE factor (setEffectiveTimeScale), orthogonal to per-key snap.
+ *
+ * @param {number} actualSpeed - entity ground speed (m/s, final, run_rate
+ *   already applied by `stateGroundSpeed`); sign ignored.
+ * @param {number} baseSpeed   - authored cycle speed from `cycleBaseSpeed`
+ *   (|MotionData.velocity| or its GetAnimDist/MotionKinematics fallback).
  * @returns {number} timeScale to pass to `action.setEffectiveTimeScale`.
  */
 export function cycleTimeScale(actualSpeed, baseSpeed) {
+    // T1: base<=1e-4 (including the cycleBaseSpeed "0.0 = no scaling"
+    // sentinel) and any non-finite input → 1.0 no-op. Clamp stays [0.25, 4.0].
     if (
         !Number.isFinite(actualSpeed) ||
         !Number.isFinite(baseSpeed) ||
@@ -567,10 +597,43 @@ export class AnimationCache {
                     ? animData.restOrientations
                     : new Float32Array(0);
 
+            // T3 (2026-06-02): forward the wasm-provided per-frame
+            // `frameTimes` + total `duration` to the clip builder. Previously
+            // this call site DROPPED both, so every clip fell through to the
+            // uniform `t = i/framerate` fallback using the AVERAGED framerate
+            // (numFrames/duration). Single-segment cycles (idle/walk/run/Ready)
+            // are identical either way, but a MotionData that chains multiple
+            // AnimData (~23% of retail: swing windup→strike→recover→settle,
+            // casts) has per-segment framerates AND signs — the averaged rate
+            // plays every segment at the wrong relative speed. The wasm bake
+            // (`build_concatenated_motion_frames`) already emits correct
+            // cumulative per-frame times + total_duration; buildAnimationClip
+            // already consumes them (animation.js:114-134, :204-212) and snaps
+            // each non-uniform key via InterpolateDiscrete — we just stop
+            // discarding the data. NOTE: non-uniform `frameTimes` REQUIRE the
+            // discrete-interpolation path (animation.js:189/197) — a linear/
+            // SLERP track over uneven times would interpolate poses across
+            // segment boundaries the animators never authored.
+            const frameTimes =
+                typeof animData.frameTimes === "object" &&
+                animData.frameTimes !== null
+                    ? animData.frameTimes
+                    : (animData.frameTimes ?? undefined);
+            const duration = +animData.duration;
             let clip = null;
             if (numFrames > 0 && framerate > 0) {
                 clip = buildAnimationClip(
-                    { partCount, numFrames, framerate, partFrames, posFrames },
+                    {
+                        partCount,
+                        numFrames,
+                        framerate,
+                        partFrames,
+                        posFrames,
+                        // T3: stop dropping these two — the per-segment timing
+                        // path keyed on them already exists in the builder.
+                        frameTimes,
+                        duration: Number.isFinite(duration) ? duration : undefined,
+                    },
                     partNames,
                 );
                 if (clip) {
