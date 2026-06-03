@@ -1,0 +1,35 @@
+# Animation Handoff — code-based review (2026-06-03)
+
+**For a Claude workflow. CODE-BASED review/analysis only — do NOT drive the 1070** (the firefox-driver loop is infrastructure-painful: ghost-session races, driver wedges on heavy evals, OOM on the wbterminal headless box, reboots). Everything below is verifiable by *reading the code* and (optionally) per-crate `cargo`/unit tests.
+
+## State of the branch
+- `master`: deep-dive fixes T1–T8 (PR #50, merged). Reference doc: `docs/animation-deep-dive-2026-06-02.md` (146 KB, bit-exact). Research: `docs/animation-followup-research-2026-06-03.md`. Impl handoff: `docs/animation-impl-t1-t8-handoff-2026-06-03.md`.
+- This branch (`feat/animation-followup-fixes`, being merged to master):
+  - `c18c158e` — **local-player locomotion animation** (camera.js) — THE current fix.
+  - `4453d5a5` — #1 LOD multi-part guard (lib.rs `resolve_did_degrade`) + #2 SoundTable uniform selection (sound_table_cache.js).
+- `pkg/` (wasm) is gitignored; rebuild with `wasm-pack build --target web --out-dir pkg --release` (cargo lives in `~/.cargo/bin`, not on the non-interactive PATH).
+
+## The CURRENT open problem ("still not working")
+The local player rig was **frozen on the idle/Ready clip while moving** (cmd `0x0`) because ACE does not echo the local player's own `UpdateMotion` (the client predicts self-motion) and only *jump* was locally dispatched. **Fix shipped** (`camera.js _dispatchMovement` → `_dispatchLocalRigMotion`): on movement-input change, map WASD intent → MotionCommand → `entityManager.setMotion(localGuid, cmd, stance)`. **Validated live**: holding W dispatches `RunForward` (0x44000007), the loco action runs and loops (`run:true, ts:1.0`, time advancing); release → Ready/idle. That part WORKS.
+
+**BUT the run "looks like walking when running."** This is the **velScale (T1) layer**, only visible because the test URL forced `velScale=on` (it is **default-OFF**). Mechanism (verified live):
+- `velScale=on` scales the run clip framerate by `cycleTimeScale(actual, base)` where `base = cycleBaseSpeed(playerMT, RunForward)`.
+- `base` resolves to **4.0** (RunAnimSpeed) — GOOD, so the kinematics/velocity data IS present (the rebake is likely NOT the blocker after all).
+- The **`actual` ground speed reads ~0** because it comes from the unreliable client rig-XZ-position-delta EMA (`entities.js` tick ~6984, `inst._emaSpeed`). With actual≈0 and base=4.0, `cycleTimeScale = clamp(0/4, 0.25, 4.0) = 0.25` → the run clip plays at 0.25× → **looks like a slow walk**.
+- With default `velScale` OFF, the velScale block is skipped → run plays at `ts=1.0` (authored cadence) → should look correct. **UNVERIFIED visually** (the 1070 driving never confirmed it cleanly).
+
+## Code-based next steps (ranked)
+1. **Review the locomotion-dispatch fix** (`camera.js _dispatchLocalRigMotion`, c18c158e): mapping (forward→Run/Walk by shift, back→WalkBackwards, strafe→SideStep, turn→Turn, idle→Ready), the sig-change gate in `_dispatchMovement`, `setMotion` idempotency, stance via `em.getStance(g) || 0x8000003D`. Confirm correct + no regression. Constants: RunForward 0x44000007, WalkForward 0x45000005, WalkBackwards 0x45000006, SideStepR/L 0x6500000F/0x65000010, TurnR/L 0x6500000D/0x6500000E, Ready 0x41000003.
+2. **Fix velScale's "actual speed" (the real T1 item)**: in `entities.js` tick (~6984, the `?velScale=on` block), feed the velScale `actual` from the wasm **`stateGroundSpeed`** getter (already wired in `lib.rs`, exported, threaded into init3D opts) instead of the rig-XZ EMA. The getter mirrors retail `get_state_velocity` (forward_command/forward_speed × {3.1199999/4.0/1.25} × run_rate). **VERIFY** the local player's `_forwardCommand` is stashed by `setMotion` (the camera.js fix calls `setMotion(localGuid, RunForward, …)` — confirm setMotion sets `inst._forwardCommand`/`_forwardSpeed` for the local guid so the getter returns non-zero). Without this, velScale stays default-OFF.
+3. **Verify the run-vs-walk clip**: confirm `setMotion(RunForward)` resolves the player MT's actual RUN Animation (0x03) DID, not a walk-speed clip. Clip-name format is `setupId:mtableId:motionCmd:...` (cmd 1140850695=RunForward, 1090519043=Ready). Read the player MotionTable's RunForward vs WalkForward cycle.
+4. **Deferred from the research** (`docs/animation-followup-research-2026-06-03.md`): #3 MoveTo walk/run gate (lib.rs ~29594 hardcodes MoveTo→RunForward; port `get_command`), #4 PhysicsScript wire DefaultScript PScriptType (lib.rs ~29175), backward(-1) hooks dropped on reverse-baked segments (entities.js ~7166 / lib.rs build_concatenated_motion_frames), T9 MotionState machine (scope-gate first).
+
+## Key facts/gotchas (don't re-derive)
+- **Local player guid in entityMap = `window.getLocalPlayerGuid()` → `0x50000007`**, NOT `0x50000127` (that's the PlayerCreate guid; a `map.has(0x50000127)` probe returns false). The local player IS in entityMap and IS driven by `setMotion`.
+- Local player POSITION is integrator-driven; `KIND_POSITION` is skipped for the local guid (loop.js:1211/1378). Local MOTION via `KIND_MOTION` is NOT skipped (loop.js:1232/1402) but ACE doesn't echo the player's own motion → hence the camera.js local dispatch.
+- A server teleport (`@telepoi Holtburg`, needs Developer — tailnet1 IS accessLevel 4) moves the player server-side but the client's integrator doesn't reflect it (local KIND_POSITION skip) → client-server desync; relogin resyncs. (Not a code bug to fix unless desync recovery is wanted.)
+- velScale default-OFF: `entities.js` ~310 `VEL_SCALE_ON` (needs `?velScale=on`). Tick velScale block ~6968 requires `base>0 && _locoCycleKey`.
+- ACE DB: user `ace` on 127.0.0.1:3306 (pw in `~/ace-server/.../Config.js`; root/acedockeruser fail socket-auth). `ace_auth.account` accessLevel: 0=Player 4=Developer 5=Admin.
+
+## Validation: code-based, NOT live
+Trace the three code paths by reading: (a) `camera.js` dispatch, (b) `entities.js` `setMotion` + the velScale tick, (c) `lib.rs` `stateGroundSpeed`/`cycleBaseSpeed`. Add Rust/JS unit tests for the pure logic (the speed-mapping constants, cycleTimeScale clamp, the get_command mapping). The deep-dive doc has the bit-exact retail reference for every constant. Do not depend on the 1070 driver.
