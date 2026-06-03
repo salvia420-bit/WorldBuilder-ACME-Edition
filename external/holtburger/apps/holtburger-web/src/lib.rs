@@ -5492,6 +5492,16 @@ fn resolve_did_degrade<S: holtburger_dat::ResourceSource + ?Sized>(
             let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
                 return 0;
             };
+            // followup (2026-06-03): entity LOD substitution collapses the WHOLE
+            // setup to ONE degrade GfxObj resolved from parts[0] only. That is
+            // correct for a single-part setup, but for a MULTI-PART rig it drops
+            // every other part and breaks the animation (the AnimationFrame.frames
+            // [i] <-> parts[i] invariant). Retail degrades PER-PART. Until per-part
+            // degrade exists, only substitute for single-part setups; multi-part
+            // rigs render at full detail (return 0 = no substitute).
+            if setup.parts.len() != 1 {
+                return 0;
+            }
             let Some(&first_part) = setup.parts.first() else {
                 return 0;
             };

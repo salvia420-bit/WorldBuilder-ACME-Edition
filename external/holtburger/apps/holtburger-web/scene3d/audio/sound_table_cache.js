@@ -220,30 +220,13 @@ export class SoundTableCache {
     if (entries.length === 1) {
       picked = entries[0];
     } else {
-      let sum = 0;
-      for (let i = 0; i < entries.length; i += 1) {
-        const p = entries[i].probability;
-        // Negative probabilities aren't a thing in wire data; clamp
-        // defensively so a bogus row doesn't poison the sum.
-        if (p > 0) sum += p;
-      }
-      if (sum > 0) {
-        let r = this._rng() * sum;
-        picked = entries[entries.length - 1];
-        for (let i = 0; i < entries.length; i += 1) {
-          const p = entries[i].probability;
-          if (p <= 0) continue;
-          r -= p;
-          if (r < 0) {
-            picked = entries[i];
-            break;
-          }
-        }
-      } else {
-        // All-zero probabilities — fall back to uniform random.
-        const idx = Math.floor(this._rng() * entries.length);
-        picked = entries[Math.min(idx, entries.length - 1)];
-      }
+      // followup (2026-06-03): retail GetSound (acclient.c:383446-383450) picks a
+      // UNIFORM index `(uint64)((num-1) * RollDice(0,1))` over the entries and does
+      // NOT weight selection by `probability_` — that field gates a separate roll
+      // at playback, it is not a selection weight. The previous probability-
+      // weighted prefix-sum was a divergence; match retail's uniform pick.
+      const idx = Math.floor((entries.length - 1) * this._rng());
+      picked = entries[Math.min(Math.max(idx, 0), entries.length - 1)];
     }
     // Snapshot to a plain object BEFORE freeing the wasm handles.
     const out = {
