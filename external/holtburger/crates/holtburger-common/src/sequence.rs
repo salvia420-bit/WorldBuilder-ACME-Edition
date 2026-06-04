@@ -1,11 +1,17 @@
 /// Returns `true` if `candidate` is newer than `current` for a wrapping `u16` sequence.
 ///
 /// Uses half-range ordering semantics: differences in `(0, 0x8000)` are considered forward,
-/// and differences in `[0x8000, 0xFFFF]` are considered older/ambiguous.
+/// and differences in `(0x8000, 0xFFFF]` are considered older. At exactly `delta == 0x8000`
+/// the result is directional (`candidate < current`), matching retail `CPhysicsObj::is_newer`.
 #[inline]
 pub fn is_newer_u16(candidate: u16, current: u16) -> bool {
+    // Retail-exact half-range ordering (acclient.c:143002-143013
+    // CPhysicsObj::is_newer): `abs(new - old) > 0x7FFF` selects the
+    // `new < old` branch, otherwise `old < new`. At exactly delta==0x8000
+    // (abs > 0x7FFF) the result is therefore base-dependent (directional),
+    // not unconditionally "not newer".
     let delta = candidate.wrapping_sub(current);
-    delta != 0 && delta < 0x8000
+    delta != 0 && (delta < 0x8000 || (delta == 0x8000 && candidate < current))
 }
 
 /// Returns `true` if `candidate` is newer than `current` for a wrapping `u32` sequence.
@@ -37,9 +43,11 @@ mod tests {
     }
 
     #[test]
-    fn u16_half_range_is_not_newer() {
+    fn u16_half_range_is_directional() {
+        // Retail boundary (acclient.c:143002-143013): at exactly delta==0x8000
+        // (abs(new-old) > 0x7FFF) the result is `candidate < current`.
+        assert!(is_newer_u16(0, 0x8000));
         assert!(!is_newer_u16(0x8000, 0));
-        assert!(!is_newer_u16(0, 0x8000));
     }
 
     #[test]
