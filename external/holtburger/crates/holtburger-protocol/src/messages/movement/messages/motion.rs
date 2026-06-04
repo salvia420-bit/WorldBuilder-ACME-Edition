@@ -83,14 +83,22 @@ impl ProtocolUnpack for MovementEventData {
             MovementType::TurnToHeading => {
                 MovementTypeData::TurnToHeading(TurnToHeading::unpack(data, offset)?)
             }
-            MovementType::Invalid
-            | MovementType::RawCommand
+            // Retail `MovementManager::unpack_movement` (acclient.c:339491) reads
+            // the InterpretedMotionState body ONLY for type 0 (`case 0:`). Types
+            // 1-5 (RawCommand / InterpretedCommand / Stop*) hit the `default:` arm
+            // (acclient.c:339618) which reads NO body bytes (result = 0). They are
+            // never emitted by retail/ACE/chorizite, so this is latent-only — but
+            // unpack_ext would over-read >=4 bytes for them. Default to an empty
+            // MovementInvalid (consumes nothing); downstream consumers read its
+            // fields via Option and fail-soft on None.
+            MovementType::Invalid => {
+                MovementTypeData::Invalid(MovementInvalid::unpack_ext(data, offset, motion_flags)?)
+            }
+            MovementType::RawCommand
             | MovementType::InterpretedCommand
             | MovementType::StopRawCommand
             | MovementType::StopInterpretedCommand
-            | MovementType::StopCompletely => {
-                MovementTypeData::Invalid(MovementInvalid::unpack_ext(data, offset, motion_flags)?)
-            }
+            | MovementType::StopCompletely => MovementTypeData::Invalid(MovementInvalid::default()),
         };
 
         Some(MovementEventData {
@@ -123,7 +131,14 @@ impl ProtocolPack for MovementEventData {
         buf.extend_from_slice(&self.current_style.to_le_bytes());
 
         match &self.data {
-            MovementTypeData::Invalid(d) => d.pack(buf),
+            // Mirror unpack: only type 0 (`Invalid`) carries an InterpretedMotionState
+            // body on the wire. Types 1-5 also use the `Invalid` data variant but
+            // retail writes/reads no body for them, so pack nothing (byte-parity).
+            MovementTypeData::Invalid(d) => {
+                if self.movement_type == MovementType::Invalid {
+                    d.pack(buf);
+                }
+            }
             MovementTypeData::MoveToObject(d) => d.pack(buf),
             MovementTypeData::MoveToPosition(d) => d.pack(buf),
             MovementTypeData::TurnToObject(d) => d.pack(buf),

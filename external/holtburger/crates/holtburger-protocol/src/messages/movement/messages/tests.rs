@@ -152,6 +152,47 @@ fn test_movement_event_move_to_pos_fixture() {
 }
 
 #[test]
+fn test_movement_event_stop_completely_has_no_body() {
+    // A5 / MOVEDATA-1: retail `MovementManager::unpack_movement` (acclient.c:339491)
+    // reads the InterpretedMotionState body ONLY for movement_type 0; types 1-5
+    // (here StopCompletely=5) hit the `default:` arm and read NO body bytes.
+    // The 16-byte frame ends exactly at `current_style`; unpack must consume all
+    // 16 bytes and produce an empty MovementInvalid, and pack must reproduce them.
+    use crate::messages::movement::types::MovementType;
+
+    // guid=0x50000001 | inst=1 | mvmt_seq=2 | ctrl_seq=3 | autonomous=0 | pad |
+    // type=5 (StopCompletely) | motion_flags=0 | current_style=0 | <no body>
+    let hex = "01000050010002000300000005000000";
+    let bytes = hex::decode(hex).unwrap();
+
+    let expected = MovementEventData {
+        guid: Guid(0x50000001),
+        object_instance_sequence: 1,
+        movement_sequence: 2,
+        server_control_sequence: 3,
+        is_autonomous: false,
+        movement_type: MovementType::StopCompletely,
+        motion_flags: 0,
+        current_style: 0,
+        data: MovementTypeData::Invalid(MovementInvalid::default()),
+    };
+
+    // unpack consumes exactly 16 bytes (no over-read), matches, and re-packs 1:1.
+    let mut offset = 0;
+    let unpacked = MovementEventData::unpack(&bytes, &mut offset).expect("unpack StopCompletely");
+    assert_eq!(
+        offset,
+        bytes.len(),
+        "must consume exactly the header, no body over-read"
+    );
+    assert_eq!(unpacked, expected);
+
+    let mut packed = Vec::new();
+    unpacked.pack(&mut packed);
+    assert_eq!(packed, bytes, "StopCompletely must pack with no body bytes");
+}
+
+#[test]
 fn test_gamemessage_routing_update_position() {
     let pos_hex = "48F7000015000000000000005C8F1E120000000000000000000000000000803F0000000000000000000000000100020003000400";
     let pos_data = hex::decode(pos_hex).unwrap();
