@@ -1,3 +1,4 @@
+use crate::messages::movement::messages::position::PositionPack;
 use crate::messages::movement::types::*;
 use crate::messages::utils::{align_offset, pad_to_4};
 use crate::traits::{ProtocolPack, ProtocolUnpack};
@@ -420,5 +421,160 @@ impl ProtocolPack for TurnToParameters {
         buf.extend_from_slice(&self.movement_parameters.to_le_bytes());
         buf.extend_from_slice(&self.speed.to_le_bytes());
         buf.extend_from_slice(&self.desired_heading.to_le_bytes());
+    }
+}
+
+/// Reads the guid-less `MovementData` body (chorizite protocol.xml:6498-6534):
+/// `movement_sequence(u16) + server_control_sequence(u16) + is_autonomous(u8) +
+/// align(4) + movement_type(u8) + motion_flags(u8) + current_style(u16) + switch`.
+/// This is the inner body shared by 0xF74C (after guid + instance_seq) and
+/// 0xF619 (after ObjectId + PositionPack). `guid` + `object_instance_sequence`
+/// are supplied by the caller (0xF619 has no per-object instance seq → pass 0).
+pub fn unpack_movement_data_body(
+    data: &[u8],
+    offset: &mut usize,
+    guid: Guid,
+    object_instance_sequence: u16,
+) -> Option<MovementEventData> {
+    if *offset + 2 > data.len() {
+        return None;
+    }
+    let movement_sequence = LittleEndian::read_u16(&data[*offset..*offset + 2]);
+    *offset += 2;
+
+    if *offset + 2 > data.len() {
+        return None;
+    }
+    let server_control_sequence = LittleEndian::read_u16(&data[*offset..*offset + 2]);
+    *offset += 2;
+
+    if *offset + 1 > data.len() {
+        return None;
+    }
+    let is_autonomous = data[*offset] != 0;
+    *offset += 1;
+
+    // Alignment (ACE uses Writer.Align() which aligns to 4 bytes)
+    align_offset(offset, 4);
+
+    if *offset + 1 > data.len() {
+        return None;
+    }
+    let movement_type_raw = data[*offset];
+    let movement_type = MovementType::from_repr(movement_type_raw).unwrap_or(MovementType::Invalid);
+    *offset += 1;
+
+    if *offset + 1 > data.len() {
+        return None;
+    }
+    let motion_flags = data[*offset];
+    *offset += 1;
+
+    if *offset + 2 > data.len() {
+        return None;
+    }
+    let current_style = LittleEndian::read_u16(&data[*offset..*offset + 2]);
+    *offset += 2;
+
+    let data_payload = match movement_type {
+        MovementType::MoveToObject => {
+            MovementTypeData::MoveToObject(MoveToObject::unpack(data, offset)?)
+        }
+        MovementType::MoveToPosition => {
+            MovementTypeData::MoveToPosition(MoveToPosition::unpack(data, offset)?)
+        }
+        MovementType::TurnToObject => {
+            MovementTypeData::TurnToObject(TurnToObject::unpack(data, offset)?)
+        }
+        MovementType::TurnToHeading => {
+            MovementTypeData::TurnToHeading(TurnToHeading::unpack(data, offset)?)
+        }
+        // Mirror MovementEventData::unpack (A5): only type 0 reads a body.
+        MovementType::Invalid => {
+            MovementTypeData::Invalid(MovementInvalid::unpack_ext(data, offset, motion_flags)?)
+        }
+        MovementType::RawCommand
+        | MovementType::InterpretedCommand
+        | MovementType::StopRawCommand
+        | MovementType::StopInterpretedCommand
+        | MovementType::StopCompletely => MovementTypeData::Invalid(MovementInvalid::default()),
+    };
+
+    Some(MovementEventData {
+        guid,
+        object_instance_sequence,
+        movement_sequence,
+        server_control_sequence,
+        is_autonomous,
+        movement_type,
+        motion_flags,
+        current_style,
+        data: data_payload,
+    })
+}
+
+/// Writes the guid-less `MovementData` body (inverse of `unpack_movement_data_body`).
+/// The caller is responsible for writing any leading guid / object_instance_sequence
+/// (or, for 0xF619, the PositionPack) BEFORE calling this.
+pub fn pack_movement_data_body(ev: &MovementEventData, buf: &mut Vec<u8>) {
+    buf.extend_from_slice(&ev.movement_sequence.to_le_bytes());
+    buf.extend_from_slice(&ev.server_control_sequence.to_le_bytes());
+    buf.push(ev.is_autonomous as u8);
+
+    // Alignment
+    pad_to_4(buf);
+
+    buf.push(ev.movement_type as u8);
+    buf.push(ev.motion_flags);
+    buf.extend_from_slice(&ev.current_style.to_le_bytes());
+
+    match &ev.data {
+        // Mirror unpack (A5): only type 0 (`Invalid`) carries a body on the wire.
+        MovementTypeData::Invalid(d) => {
+            if ev.movement_type == MovementType::Invalid {
+                d.pack(buf);
+            }
+        }
+        MovementTypeData::MoveToObject(d) => d.pack(buf),
+        MovementTypeData::MoveToPosition(d) => d.pack(buf),
+        MovementTypeData::TurnToObject(d) => d.pack(buf),
+        MovementTypeData::TurnToHeading(d) => d.pack(buf),
+    }
+}
+
+/// S2C `Movement_PositionAndMovementEvent` (0xF619). Combined materialize frame
+/// (lifestone / portal recall). chorizite protocol.xml:8239-8243 layout:
+/// `ObjectId(u32) + PositionPack + MovementData` (the MovementData body is
+/// guid-less — the ObjectId is the separate leading field). Retail dispatch:
+/// acclient.c:392762 `UnpackPositionEvent` (== 0xF748) → `SetObjectMovement`
+/// (== 0xF74C). ACE never emits this → purely additive forward-compat.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PositionAndMovementEventData {
+    pub guid: Guid,
+    pub pos: PositionPack,
+    /// The guid-less MovementData body, materialized as a `MovementEventData`
+    /// (guid mirrors the leading ObjectId; `object_instance_sequence` is 0 —
+    /// 0xF619 carries none) so the world handler can reuse the 0xF74C path.
+    pub movement: MovementEventData,
+}
+
+impl ProtocolUnpack for PositionAndMovementEventData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let guid = Guid::unpack(data, offset)?;
+        let pos = PositionPack::unpack(data, offset)?;
+        let movement = unpack_movement_data_body(data, offset, guid, 0)?;
+        Some(PositionAndMovementEventData {
+            guid,
+            pos,
+            movement,
+        })
+    }
+}
+
+impl ProtocolPack for PositionAndMovementEventData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        self.guid.pack(buf);
+        self.pos.pack(buf);
+        pack_movement_data_body(&self.movement, buf);
     }
 }

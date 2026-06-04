@@ -338,3 +338,90 @@ fn test_dispatch_parent_event_with_full_payload() {
     msg.pack(&mut packed);
     assert_eq!(packed, fixture);
 }
+
+#[test]
+fn test_dispatch_position_and_movement_event() {
+    // A4: 0xF619 Movement_PositionAndMovementEvent codec. Layout (protocol.xml:8239)
+    // = opcode(u32) + ObjectId(u32) + PositionPack + guid-less MovementData body.
+    use crate::messages::movement::messages::motion::{
+        MovementEventData, MovementInvalid, MovementTypeData, PositionAndMovementEventData,
+    };
+    use crate::messages::movement::messages::position::{
+        PositionPack, UpdatePositionFlag, WorldPosition,
+    };
+    use crate::messages::movement::types::MovementType;
+    use crate::opcodes::GameOpcode;
+    use holtburger_common::Guid;
+
+    let guid = Guid(0x5000_1234);
+
+    // Minimal grounded PositionPack: full quaternion, no velocity / no placement.
+    let pos = PositionPack {
+        flags: UpdatePositionFlag::IS_GROUNDED,
+        pos: WorldPosition {
+            landblock_id: Guid(0x00A9_0001),
+            coords: holtburger_common::math::Vector3::new(60.0, 70.0, 12.5),
+            rotation: holtburger_common::math::Quaternion {
+                w: 1.0,
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        },
+        velocity: None,
+        placement_id: None,
+        instance_sequence: 1,
+        position_sequence: 2,
+        teleport_sequence: 3,
+        force_position_sequence: 4,
+    };
+
+    // A `MovementType::Invalid` (0) frame exercises the body + align(4) pad.
+    let movement = MovementEventData {
+        guid,
+        object_instance_sequence: 0, // 0xF619 carries no per-object instance seq
+        movement_sequence: 7,
+        server_control_sequence: 9,
+        is_autonomous: false,
+        movement_type: MovementType::Invalid,
+        motion_flags: 0,
+        current_style: 0,
+        data: MovementTypeData::Invalid(MovementInvalid::default()),
+    };
+
+    let payload = PositionAndMovementEventData {
+        guid,
+        pos,
+        movement,
+    };
+
+    // Pack opcode + payload to form the on-wire frame.
+    let msg = GameMessage::PositionAndMovementEvent(Box::new(payload.clone()));
+    let mut wire = Vec::new();
+    msg.pack(&mut wire);
+
+    // Sanity: leading opcode is 0xF619 LE.
+    assert_eq!(
+        &wire[0..4],
+        &(GameOpcode::PositionAndMovement as u32).to_le_bytes(),
+        "opcode prefix must be 0xF619"
+    );
+
+    // Dispatch + byte-exact pack-parity round-trip.
+    assert_dispatch_match(&wire, |m| {
+        matches!(m, GameMessage::PositionAndMovementEvent(_))
+    });
+
+    // Structural round-trip: decoded fields equal what we packed.
+    let mut off = 0;
+    let decoded = GameMessage::unpack(&wire, &mut off).expect("unpack PositionAndMovementEvent");
+    match decoded {
+        GameMessage::PositionAndMovementEvent(d) => {
+            assert_eq!(d.guid, payload.guid);
+            assert_eq!(d.pos, payload.pos);
+            assert_eq!(d.movement, payload.movement);
+        }
+        other => panic!("wrong variant: {:?}", other),
+    }
+    assert_eq!(off, wire.len(), "decode must consume the whole frame");
+}

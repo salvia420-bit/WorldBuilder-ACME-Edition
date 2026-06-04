@@ -56,9 +56,11 @@ pub enum GameOpcode {
     /// S2C: Update object properties.
     /// A heavy update that re-sends the visual description and physics state of an object.
     UpdateObject = 0xF7DB,
-    // /// S2C: Position and movement update (all-in-one packet).
-    // /// This is a "ghost" opcode—defined in headers but not implemented or used in modern emulators.
-    // PositionAndMovement = 0xF619,
+    /// S2C: Combined position + movement materialize frame (lifestone / portal
+    /// recall). chorizite protocol.xml:8239 `Movement_PositionAndMovementEvent`;
+    /// retail dispatch acclient.c:392762 (`UnpackPositionEvent` → `SetObjectMovement`).
+    /// ACE never emits it → forward-compat. Wired with complete unit tests (A4).
+    PositionAndMovement = 0xF619,
     /// S2C: Object description event.
     ObjDescEvent = 0xF625,
     /// S2C: Force object description send.

@@ -182,6 +182,11 @@ impl ProtocolPack for GameMessage {
                     .unwrap();
                 data.pack(buf);
             }
+            GameMessage::PositionAndMovementEvent(data) => {
+                buf.write_u32::<LittleEndian>(GameOpcode::PositionAndMovement as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
             GameMessage::PrivateUpdatePosition(data) => {
                 buf.write_u32::<LittleEndian>(GameOpcode::PrivateUpdatePosition as u32)
                     .unwrap();

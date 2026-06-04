@@ -62,6 +62,7 @@ pub enum GameMessage {
     ObjDescEvent(Box<ObjDescEventData>),
     ForceObjectDescSend(Box<ForceObjectDescSendData>),
     UpdatePosition(Box<UpdatePositionData>),
+    PositionAndMovementEvent(Box<PositionAndMovementEventData>),
     PrivateUpdatePosition(Box<PrivateUpdatePositionData>),
     PublicUpdatePosition(Box<PublicUpdatePositionData>),
     VectorUpdate(Box<VectorUpdateData>),
