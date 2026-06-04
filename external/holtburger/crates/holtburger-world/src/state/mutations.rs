@@ -9,10 +9,22 @@ use crate::spatial::{
 use holtburger_common::math::Quaternion;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::properties::WorldObjectExt as _;
+use holtburger_common::sequence::is_newer_u16;
 use holtburger_protocol::messages::movement::{
     PositionPack, PositionType, ServerAutonomousPositionData, UpdatePositionFlag,
 };
 use web_time::Instant;
+
+/// Movement-protocol parity (2026-06-04, item A3 / OQ-1): when `true`,
+/// authoritative `VectorUpdate` (velocity/omega) frames are gated on a
+/// newer-than-stored `vector_sequence` (retail
+/// `SmartBox::DoVectorUpdate` → `CPhysicsObj::update_times[3]`,
+/// acclient.c:143459-143480) before being applied, and the stamp is
+/// advanced on accept. **Default-off**: OPEN-QUESTIONS OQ-1 requires a
+/// 1070 capture to confirm ACE increments `ObjectVector` per broadcast
+/// before this can ship enabled. When `false`, VectorUpdate is applied
+/// unconditionally (the prior, ship-tested behaviour).
+const USE_VECTOR_SEQUENCE_GATE: bool = false;
 
 impl WorldState {
     pub(crate) fn authoritative_body_id_for_guid(&self, guid: Guid) -> Option<SpatialBodyId> {
@@ -666,6 +678,35 @@ impl WorldState {
         events
     }
 
+    /// Self `VectorUpdate` application with the optional `vector_sequence`
+    /// newer-than gate (item A3). When [`USE_VECTOR_SEQUENCE_GATE`] is
+    /// off this is exactly [`Self::set_player_vector`]; when on it
+    /// mirrors retail `SmartBox::DoVectorUpdate` (acclient.c:143459-143480):
+    /// apply velocity/omega ONLY if `incoming_vector_sequence` is newer
+    /// than the stored `player.vector_sequence`, and advance the stored
+    /// stamp on accept.
+    ///
+    /// NOTE: the caller records the raw frame's `instance_sequence` via
+    /// `PlayerState::record_vector_update_sequences` BEFORE calling this;
+    /// it intentionally does NOT touch `player.vector_sequence`, so with
+    /// the gate on this function performs the accept decision against the
+    /// true PRE-record stored value and owns the stamp advance on accept.
+    pub fn set_player_vector_gated(
+        &mut self,
+        velocity: Vector3,
+        omega: Vector3,
+        incoming_vector_sequence: u16,
+    ) -> Vec<WorldEvent> {
+        if USE_VECTOR_SEQUENCE_GATE {
+            let stored = self.player.vector_sequence;
+            if !is_newer_u16(incoming_vector_sequence, stored) {
+                return Vec::new();
+            }
+            self.player.vector_sequence = incoming_vector_sequence;
+        }
+        self.set_player_vector(velocity, omega)
+    }
+
     /// Applies an authoritative server-side movement sync to the player.
     pub fn apply_player_autonomous_position(
         &mut self,
@@ -761,9 +802,18 @@ impl WorldState {
         guid: Guid,
         velocity: Vector3,
         omega: Vector3,
+        incoming_vector_sequence: u16,
         events: &mut Vec<WorldEvent>,
     ) -> bool {
         if let Some(entity) = self.entities.get_mut(guid) {
+            if USE_VECTOR_SEQUENCE_GATE {
+                // Retail SmartBox::DoVectorUpdate gates remote velocity
+                // on update_times[3] (ObjectVector) — acclient.c:143459-143480.
+                if !is_newer_u16(incoming_vector_sequence, entity.vector_sequence()) {
+                    return false;
+                }
+                entity.set_vector_sequence(incoming_vector_sequence);
+            }
             entity.velocity = velocity;
             entity.omega = omega;
             let pose = entity.position;
@@ -1100,8 +1150,7 @@ impl WorldState {
             // local-prediction edge_slide path stays in sync (same flag
             // also hydrated into `PropertyBool::AllowEdgeSlide` below via
             // `hydrate_from_set_state`).
-            self.player.allow_edge_slide =
-                data.physics_state.contains(PhysicsState::EDGE_SLIDE);
+            self.player.allow_edge_slide = data.physics_state.contains(PhysicsState::EDGE_SLIDE);
         }
 
         if let Some(entity) = self.entities.get_mut(data.guid) {

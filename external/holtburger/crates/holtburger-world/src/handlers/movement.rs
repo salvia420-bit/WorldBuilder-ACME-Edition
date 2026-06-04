@@ -108,10 +108,23 @@ pub(crate) fn handle_message(
         }
         GameMessage::VectorUpdate(data) => {
             if data.guid == state.player.guid {
-                events.extend(state.set_player_vector(data.velocity, data.omega));
+                state
+                    .player
+                    .record_vector_update_sequences(data.instance_sequence);
+                events.extend(state.set_player_vector_gated(
+                    data.velocity,
+                    data.omega,
+                    data.vector_sequence,
+                ));
                 true
             } else {
-                state.update_entity_velocity(data.guid, data.velocity, data.omega, events)
+                state.update_entity_velocity(
+                    data.guid,
+                    data.velocity,
+                    data.omega,
+                    data.vector_sequence,
+                    events,
+                )
             }
         }
         _ => false,

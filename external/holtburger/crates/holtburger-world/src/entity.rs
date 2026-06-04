@@ -311,6 +311,11 @@ pub struct Entity {
 }
 
 const OBJECT_POSITION_SEQUENCE_INDEX: usize = 0;
+/// `ObjectVector` stamp — retail `CPhysicsObj::update_times[3]`, the
+/// VectorUpdate (velocity/omega) sequence gated by
+/// `SmartBox::DoVectorUpdate` (acclient.c:143459-143480). Lives in
+/// `sequences[3]` per the RETAIL-MODEL ordering.
+const OBJECT_VECTOR_SEQUENCE_INDEX: usize = 3;
 const OBJECT_TELEPORT_SEQUENCE_INDEX: usize = 4;
 const OBJECT_SERVER_CONTROL_SEQUENCE_INDEX: usize = 5;
 const OBJECT_FORCE_POSITION_SEQUENCE_INDEX: usize = 6;
@@ -339,6 +344,19 @@ impl Entity {
     pub fn motion_command(&self) -> Option<InterpretedMotionCommand> {
         self.motion_snapshot
             .and_then(EntityMotionSnapshot::motion_command)
+    }
+
+    /// The entity's last-applied `ObjectVector` (VectorUpdate) stamp —
+    /// retail `CPhysicsObj::update_times[3]`.
+    pub(crate) fn vector_sequence(&self) -> u16 {
+        self.sequences[OBJECT_VECTOR_SEQUENCE_INDEX]
+    }
+
+    /// Advance the `ObjectVector` stamp after an accepted VectorUpdate
+    /// (mirrors `SmartBox::DoVectorUpdate` writing `update_times[3]`,
+    /// acclient.c:143471).
+    pub(crate) fn set_vector_sequence(&mut self, vector_sequence: u16) {
+        self.sequences[OBJECT_VECTOR_SEQUENCE_INDEX] = vector_sequence;
     }
 
     pub fn should_accept_server_position_sequences(
@@ -480,9 +498,9 @@ impl Entity {
     /// `PhysicsState` and ACE's draw-gate checks (e.g. 17 references
     /// to `Hidden` and 11 to `NoDraw` across `ACE.Server/Physics/`).
     pub fn should_draw(&self) -> bool {
-        !self.physics_state.intersects(
-            PhysicsState::HIDDEN | PhysicsState::NO_DRAW | PhysicsState::CLOAKED,
-        )
+        !self
+            .physics_state
+            .intersects(PhysicsState::HIDDEN | PhysicsState::NO_DRAW | PhysicsState::CLOAKED)
     }
 
     /// Whether this entity contributes a BSP tree to collision queries.
@@ -502,9 +520,9 @@ impl Entity {
     /// physics interaction. ACE's `Door.cs` flips `Ethereal` on
     /// open/close.
     pub fn is_collidable(&self) -> bool {
-        !self.physics_state.intersects(
-            PhysicsState::ETHEREAL | PhysicsState::IGNORE_COLLISIONS,
-        )
+        !self
+            .physics_state
+            .intersects(PhysicsState::ETHEREAL | PhysicsState::IGNORE_COLLISIONS)
     }
 
     /// Whether this is a static (non-moving) entity.
@@ -671,7 +689,11 @@ mod physics_state_predicates_tests {
     use super::*;
 
     fn fixture(state: PhysicsState) -> Entity {
-        let mut e = Entity::new(Guid::from(0x5000_0001u32), "test".into(), WorldPosition::default());
+        let mut e = Entity::new(
+            Guid::from(0x5000_0001u32),
+            "test".into(),
+            WorldPosition::default(),
+        );
         e.physics_state = state;
         e
     }

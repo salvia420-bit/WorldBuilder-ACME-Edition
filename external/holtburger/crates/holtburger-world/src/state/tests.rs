@@ -628,6 +628,63 @@ fn test_set_player_vector_updates_authoritative_player_entity() {
     )));
 }
 
+/// Item A3 (OQ-1): with `USE_VECTOR_SEQUENCE_GATE` at its shipped
+/// default (`false`), `set_player_vector_gated` is behaviorally
+/// identical to `set_player_vector` — a stale (older) `vector_sequence`
+/// is STILL applied. This pins the default-off contract so the gate
+/// cannot silently change live behaviour.
+#[test]
+fn vector_sequence_gate_default_off_applies_even_stale() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0124);
+    state.player.guid = player_guid;
+    state.player.vector_sequence = 100;
+
+    let player_entity = Entity::new(player_guid, "Player".to_string(), WorldPosition::default());
+    state.entities.insert(player_entity);
+
+    // incoming stamp 50 is OLDER than stored 100; with the gate off it
+    // must still be applied (unconditional, ship-tested behaviour).
+    let stale_vel = Vector3::new(7.0, 8.0, 9.0);
+    let stale_omega = Vector3::new(0.0, 0.0, 1.0);
+    let events = state.set_player_vector_gated(stale_vel, stale_omega, 50);
+
+    assert_eq!(
+        state.entities.get(player_guid).unwrap().velocity,
+        stale_vel,
+        "default-off gate must apply velocity unconditionally"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        WorldEvent::EntityVectorUpdated { guid, .. } if *guid == player_guid
+    )));
+}
+
+/// Item A3 (OQ-1): manually exercise the gate predicate so the gated
+/// path is covered regardless of the compile-time flag's default. The
+/// gate accepts a strictly-newer stamp and rejects an older/equal one,
+/// mirroring retail `SmartBox::DoVectorUpdate`
+/// (acclient.c:143459-143480 → `is_newer_u16`).
+#[test]
+fn vector_sequence_gate_predicate_matches_retail() {
+    use holtburger_common::sequence::is_newer_u16;
+
+    // Stored 100: a newer stamp (101) is accepted; equal (100) and
+    // older (50) are rejected — the exact accept/reject the gated
+    // VectorUpdate path applies when USE_VECTOR_SEQUENCE_GATE is on.
+    assert!(
+        is_newer_u16(101, 100),
+        "strictly-newer vector_sequence accepted"
+    );
+    assert!(!is_newer_u16(100, 100), "equal vector_sequence rejected");
+    assert!(!is_newer_u16(50, 100), "stale vector_sequence rejected");
+    // Wrap boundary: 0 is newer than u16::MAX.
+    assert!(
+        is_newer_u16(0, u16::MAX),
+        "wrapped vector_sequence accepted"
+    );
+}
+
 #[test]
 fn set_local_player_runtime_pose_only_emits_runtime_body_change() {
     let mut state = WorldState::synthetic();

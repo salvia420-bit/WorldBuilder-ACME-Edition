@@ -150,10 +150,7 @@ impl PlayerState {
             // hydrate) so JS subscribers can compute the delta. ACE's
             // `UpdateVital` arrives on (re-)hydrate AND on rank-up; the
             // pre-existing value is the right oldValue in both cases.
-            let prev_current = self
-                .vitals
-                .get(&vital_type)
-                .map(|prev| prev.current);
+            let prev_current = self.vitals.get(&vital_type).map(|prev| prev.current);
             self.vitals.insert(vital_type, vital_obj.clone());
             events.push(WorldEvent::VitalUpdated {
                 vital: vital_obj,
@@ -326,7 +323,17 @@ impl PlayerState {
         }
     }
 
-    pub fn update_vector_sequence(&mut self, instance_sequence: u16) {
+    /// Record the `instance_sequence` carried by an authoritative
+    /// `VectorUpdate` (0xF74C) frame. The frame ALSO carries a
+    /// `vector_sequence` (`VectorUpdateData`, vector.rs:13-14), but that
+    /// stamp is owned by the velocity-apply gate
+    /// (`WorldState::set_player_vector_gated`, retail
+    /// `SmartBox::DoVectorUpdate` → `update_times[3]`,
+    /// acclient.c:143459-143480) so the newer-than comparison reads the
+    /// true prior value. (The prior `update_vector_sequence` misfiled
+    /// the frame's `instance_sequence` and never recorded the vector
+    /// stamp at all — see OQ-1.)
+    pub fn record_vector_update_sequences(&mut self, instance_sequence: u16) {
         self.instance_sequence = instance_sequence;
     }
 

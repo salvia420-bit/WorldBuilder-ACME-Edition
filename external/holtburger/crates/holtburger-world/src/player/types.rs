@@ -166,33 +166,60 @@ mod motion_allows_jump_tests {
     /// MagicPowerUp01..MagicPowerUp10 (cast windups).
     #[test]
     fn magic_powerup_windups_blocked() {
-        assert!(!motion_allows_jump(0x1000_006F), "MagicPowerUp01 must block");
-        assert!(!motion_allows_jump(0x1000_0074), "MagicPowerUp06 must block");
-        assert!(!motion_allows_jump(0x1000_0078), "MagicPowerUp10 must block");
+        assert!(
+            !motion_allows_jump(0x1000_006F),
+            "MagicPowerUp01 must block"
+        );
+        assert!(
+            !motion_allows_jump(0x1000_0074),
+            "MagicPowerUp06 must block"
+        );
+        assert!(
+            !motion_allows_jump(0x1000_0078),
+            "MagicPowerUp10 must block"
+        );
     }
 
     /// PhatSDK `MovementManager.cpp:430` — `0x10000128..0x10000131` =
     /// TripleThrustLow..MagicPowerUp07Purple.
     #[test]
     fn triple_thrust_and_purple_powerups_blocked() {
-        assert!(!motion_allows_jump(0x1000_0128), "TripleThrustLow must block");
-        assert!(!motion_allows_jump(0x1000_012B), "MagicPowerUp01Purple must block");
-        assert!(!motion_allows_jump(0x1000_0131), "MagicPowerUp07Purple must block");
+        assert!(
+            !motion_allows_jump(0x1000_0128),
+            "TripleThrustLow must block"
+        );
+        assert!(
+            !motion_allows_jump(0x1000_012B),
+            "MagicPowerUp01Purple must block"
+        );
+        assert!(
+            !motion_allows_jump(0x1000_0131),
+            "MagicPowerUp07Purple must block"
+        );
     }
 
     /// Allowed substates outside the PhatSDK ranges.
     #[test]
     fn ready_and_walk_allow_jump() {
         assert!(motion_allows_jump(0x4100_0003), "Ready must allow jump");
-        assert!(motion_allows_jump(0x4500_0005), "WalkForward must allow jump");
-        assert!(motion_allows_jump(0x4400_0007), "RunForward must allow jump");
+        assert!(
+            motion_allows_jump(0x4500_0005),
+            "WalkForward must allow jump"
+        );
+        assert!(
+            motion_allows_jump(0x4400_0007),
+            "RunForward must allow jump"
+        );
     }
 
     /// Falling (0x40000015) is NOT in the PhatSDK blocked set — the
     /// `is_airborne` flag gates double-jumps separately.
     #[test]
     fn falling_substate_alone_does_not_block() {
-        assert!(motion_allows_jump(0x4000_0015), "Falling itself is not blocked by motion_allows_jump");
+        assert!(
+            motion_allows_jump(0x4000_0015),
+            "Falling itself is not blocked by motion_allows_jump"
+        );
     }
 
     /// Boundary values around the blocked ranges — verify the ranges
@@ -200,9 +227,15 @@ mod motion_allows_jump_tests {
     #[test]
     fn range_boundaries_match_phatsdk() {
         // Just below Reload range
-        assert!(motion_allows_jump(0x4000_0015), "Falling sits below the Reload range and is allowed");
+        assert!(
+            motion_allows_jump(0x4000_0015),
+            "Falling sits below the Reload range and is allowed"
+        );
         // Just past Pickup
-        assert!(motion_allows_jump(0x4000_0019), "0x40000019 = StoreInBackpack is allowed");
+        assert!(
+            motion_allows_jump(0x4000_0019),
+            "0x40000019 = StoreInBackpack is allowed"
+        );
         // Just below MagicPowerUp01
         assert!(motion_allows_jump(0x1000_006E), "SpinAttack is allowed");
         // Just past MagicPowerUp10
@@ -210,7 +243,10 @@ mod motion_allows_jump_tests {
         // Just past MagicPray
         assert!(motion_allows_jump(0x2000_003A), "StopTurning is allowed");
         // Just past TripleThrust range
-        assert!(motion_allows_jump(0x1000_0132), "MagicPowerUp08Purple is allowed");
+        assert!(
+            motion_allows_jump(0x1000_0132),
+            "MagicPowerUp08Purple is allowed"
+        );
     }
 }
 
@@ -443,6 +479,18 @@ pub struct PlayerState {
     pub force_position_sequence: u16,
     /// Sequence for client-initiated position updates.
     pub position_sequence: u16,
+    /// Sequence for authoritative VectorUpdate (velocity/omega) frames.
+    ///
+    /// Retail's `SmartBox::DoVectorUpdate` gates velocity/omega
+    /// application on `CPhysicsObj::update_times[3]` (the `ObjectVector`
+    /// stamp, acclient.c:143459-143480) — distinct from
+    /// `instance_sequence`. Previously the self VectorUpdate handler
+    /// misfiled the VectorUpdate's `instance_sequence` onto
+    /// `instance_sequence` and never stored `vector_sequence` at all;
+    /// this field is the correctly-named home for the latter. Read by
+    /// the (default-off) `USE_VECTOR_SEQUENCE_GATE` newer-than gate in
+    /// `state/mutations.rs::set_player_vector`.
+    pub vector_sequence: u16,
     /// Last grounded bit reported by authoritative self movement updates.
     pub last_server_grounded: Option<bool>,
     /// Monotonically increasing sequence for autonomous movement steps.
@@ -679,6 +727,7 @@ impl PlayerState {
             teleport_sequence: 0,
             force_position_sequence: 0,
             position_sequence: 0,
+            vector_sequence: 0,
             last_server_grounded: None,
             movement_sequence: 0,
             local_position_overlays: HashMap::new(),
@@ -1059,7 +1108,10 @@ mod jump_tests {
         p.begin_fall();
         assert!(p.is_airborne, "begin_fall must set is_airborne");
         assert!(!p.is_jumping, "begin_fall must NOT set is_jumping");
-        assert_eq!(p.vertical_velocity, 0.0, "ledge walk-off starts with zero vz");
+        assert_eq!(
+            p.vertical_velocity, 0.0,
+            "ledge walk-off starts with zero vz"
+        );
     }
 
     /// Wave 5 Phase 5.1 (2026-05-26).

@@ -62,8 +62,14 @@ pub(crate) fn handle_message(
         GameMessage::VectorUpdate(data) => {
             if data.guid == state.player.guid && state.player.guid != holtburger_common::Guid::NULL
             {
-                state.player.update_vector_sequence(data.instance_sequence);
-                events.extend(state.set_player_vector(data.velocity, data.omega));
+                state
+                    .player
+                    .record_vector_update_sequences(data.instance_sequence);
+                events.extend(state.set_player_vector_gated(
+                    data.velocity,
+                    data.omega,
+                    data.vector_sequence,
+                ));
                 return true;
             }
             false
