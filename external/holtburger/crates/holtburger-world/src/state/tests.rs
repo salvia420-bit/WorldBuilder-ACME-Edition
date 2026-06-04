@@ -685,6 +685,73 @@ fn vector_sequence_gate_predicate_matches_retail() {
     );
 }
 
+/// Item A4: the 0xF619 `PositionAndMovementEvent` handler arm applies
+/// BOTH halves of the combined materialize frame — the `PositionPack`
+/// (UpdatePosition path) AND the motion snapshot (UpdateMotion path) —
+/// for a remote entity, and is `handled` (does not fall through to the
+/// `_ => false` catch-all). Mirrors the existing UpdatePosition/
+/// UpdateMotion remote-entity handler tests.
+#[test]
+fn position_and_movement_event_applies_position_and_motion() {
+    let mut state = WorldState::synthetic();
+    let guid = Guid(0x6000_0A19);
+    let initial_pos = WorldPosition {
+        landblock_id: Guid(0x00A9_0001),
+        coords: Vector3::new(1.0, 2.0, 3.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state
+        .entities
+        .insert(Entity::new(guid, "Target".to_string(), initial_pos));
+
+    let pos = PositionPack {
+        flags: UpdatePositionFlag::IS_GROUNDED,
+        pos: WorldPosition {
+            landblock_id: Guid(0x00A9_0001),
+            coords: Vector3::new(61.0, 71.0, 12.5),
+            rotation: holtburger_common::math::Quaternion::identity(),
+        },
+        velocity: None,
+        placement_id: None,
+        instance_sequence: 1,
+        position_sequence: 2,
+        teleport_sequence: 3,
+        force_position_sequence: 4,
+    };
+    let movement = MovementEventData {
+        guid,
+        object_instance_sequence: 0,
+        movement_sequence: 1,
+        server_control_sequence: 1,
+        is_autonomous: false,
+        movement_type: MovementType::Invalid,
+        motion_flags: 0,
+        current_style: 0,
+        data: MovementTypeData::Invalid(MovementInvalid::default()),
+    };
+    let msg = GameMessage::PositionAndMovementEvent(Box::new(PositionAndMovementEventData {
+        guid,
+        pos,
+        movement,
+    }));
+
+    let events = state.handle_message(&msg);
+
+    // Position half applied:
+    assert_eq!(state.entities.get(guid).unwrap().position.coords.x, 61.0);
+    // Motion half applied (a snapshot was materialized + an event emitted):
+    assert!(
+        state.entities.get(guid).unwrap().motion_snapshot.is_some(),
+        "motion snapshot must be set from the 0xF619 movement body"
+    );
+    assert!(
+        events.iter().any(
+            |event| matches!(event, WorldEvent::EntityMotionUpdated { guid: g, .. } if *g == guid)
+        ),
+        "0xF619 must emit EntityMotionUpdated (not fall through to _ => false)"
+    );
+}
+
 #[test]
 fn set_local_player_runtime_pose_only_emits_runtime_body_change() {
     let mut state = WorldState::synthetic();
