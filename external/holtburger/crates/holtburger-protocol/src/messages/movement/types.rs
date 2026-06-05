@@ -245,7 +245,10 @@ impl ProtocolUnpack for InterpretedMotionState {
         *offset += 4;
 
         let flags = MovementStateFlags::from_bits_truncate(raw_flags & 0x7F);
-        let num_commands = (raw_flags >> 7) as usize;
+        // acclient.c:333542 masks `(v4 >> 7) & 0x1F` — a 5-bit count. Mask
+        // source is acclient (&0x1F), NOT chorizite (&0x7F, non-canonical).
+        // Defensive against malformed flags; inert for valid frames.
+        let num_commands = ((raw_flags >> 7) & 0x1F) as usize;
 
         let mut current_style = None;
         if flags.contains(MovementStateFlags::CURRENT_STYLE) {
@@ -464,7 +467,10 @@ impl ProtocolUnpack for RawMotionState {
         *offset += 4;
 
         let flags = RawMotionFlags::from_bits_truncate(packed_flags & 0x7FF);
-        let command_list_length = (packed_flags >> 11) as u16;
+        // acclient.c:333240 casts to u16 BEFORE >>11, yielding a 5-bit count
+        // from bits 11-15 only. Defensive against malformed/oversized flags;
+        // inert for valid frames (which set bits 0-15 only).
+        let command_list_length = ((packed_flags & 0xFFFF) >> 11) as u16;
 
         let mut state = RawMotionState {
             flags,

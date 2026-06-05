@@ -151,14 +151,20 @@ impl EntityMotionSnapshot {
             MovementType::TurnToHeading => {
                 MovementTypeData::TurnToHeading(TurnToHeading::unpack(movement_data, &mut offset)?)
             }
-            MovementType::Invalid
-            | MovementType::RawCommand
+            // Only MovementType::Invalid (0) carries an InterpretedMotionState body;
+            // unpack_ext would over-read >=4 bytes for the stop/raw types (1-5),
+            // which use the same `Invalid` data variant but an empty MovementInvalid
+            // (consumes nothing). Mirrors the A5 fix in movement/messages/motion.rs.
+            MovementType::Invalid => MovementTypeData::Invalid(
+                MovementInvalid::unpack_ext(movement_data, &mut offset, motion_flags)?,
+            ),
+            MovementType::RawCommand
             | MovementType::InterpretedCommand
             | MovementType::StopRawCommand
             | MovementType::StopInterpretedCommand
-            | MovementType::StopCompletely => MovementTypeData::Invalid(
-                MovementInvalid::unpack_ext(movement_data, &mut offset, motion_flags)?,
-            ),
+            | MovementType::StopCompletely => {
+                MovementTypeData::Invalid(MovementInvalid::default())
+            }
         };
 
         Self::from_movement_event(&MovementEventData {
@@ -240,6 +246,27 @@ mod tests {
         assert_eq!(snapshot.current_style, Some(MotionStance::NonCombat));
         assert_eq!(snapshot.directive, None);
     }
+
+    #[test]
+    fn object_description_stop_completely_does_not_over_read_absent_body() {
+        use holtburger_protocol::messages::object::messages::description::ObjectDescriptionData;
+        // movement_data is exactly the 4-byte header: type=5 (StopCompletely),
+        // motion_flags=0, current_style=NonCombat — and NO body. Pre-fix, types
+        // 1-5 routed through MovementInvalid::unpack_ext, which over-reads >=4
+        // absent body bytes and makes from_object_description return None. Post-fix
+        // they use an empty MovementInvalid (consumes nothing), so the header parses.
+        let style = MotionStance::NonCombat.interpreted();
+        let mut movement_data = vec![MovementType::StopCompletely as u8, 0x00];
+        movement_data.extend_from_slice(&style.to_le_bytes());
+        let desc = ObjectDescriptionData {
+            movement_data: Some(movement_data),
+            ..ObjectDescriptionData::default()
+        };
+
+        let snapshot = EntityMotionSnapshot::from_object_description(&desc)
+            .expect("StopCompletely header (no body) must parse without over-reading");
+        assert_eq!(snapshot.current_style, Some(MotionStance::NonCombat));
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -311,6 +338,11 @@ pub struct Entity {
 }
 
 const OBJECT_POSITION_SEQUENCE_INDEX: usize = 0;
+/// `ObjectVector` stamp — retail `CPhysicsObj::update_times[3]`, the
+/// VectorUpdate (velocity/omega) sequence gated by
+/// `SmartBox::DoVectorUpdate` (acclient.c:143459-143480). Lives in
+/// `sequences[3]` per the RETAIL-MODEL ordering.
+const OBJECT_VECTOR_SEQUENCE_INDEX: usize = 3;
 const OBJECT_TELEPORT_SEQUENCE_INDEX: usize = 4;
 const OBJECT_SERVER_CONTROL_SEQUENCE_INDEX: usize = 5;
 const OBJECT_FORCE_POSITION_SEQUENCE_INDEX: usize = 6;
@@ -339,6 +371,19 @@ impl Entity {
     pub fn motion_command(&self) -> Option<InterpretedMotionCommand> {
         self.motion_snapshot
             .and_then(EntityMotionSnapshot::motion_command)
+    }
+
+    /// The entity's last-applied `ObjectVector` (VectorUpdate) stamp —
+    /// retail `CPhysicsObj::update_times[3]`.
+    pub(crate) fn vector_sequence(&self) -> u16 {
+        self.sequences[OBJECT_VECTOR_SEQUENCE_INDEX]
+    }
+
+    /// Advance the `ObjectVector` stamp after an accepted VectorUpdate
+    /// (mirrors `SmartBox::DoVectorUpdate` writing `update_times[3]`,
+    /// acclient.c:143471).
+    pub(crate) fn set_vector_sequence(&mut self, vector_sequence: u16) {
+        self.sequences[OBJECT_VECTOR_SEQUENCE_INDEX] = vector_sequence;
     }
 
     pub fn should_accept_server_position_sequences(
@@ -378,6 +423,24 @@ impl Entity {
 
         let old_teleport_sequence = self.sequences[OBJECT_TELEPORT_SEQUENCE_INDEX];
         let old_force_position_sequence = self.sequences[OBJECT_FORCE_POSITION_SEQUENCE_INDEX];
+        let old_position_sequence = self.sequences[OBJECT_POSITION_SEQUENCE_INDEX];
+
+        let teleport_advanced = is_newer_u16(teleport_sequence, old_teleport_sequence);
+        let force_advanced = is_newer_u16(force_position_sequence, old_force_position_sequence);
+
+        // Position-only update (no newer teleport/force): retail gates the apply on
+        // newer_event(object, 0, position_ts) (acclient.c:145167) — reject a stale or
+        // reordered position-only frame. A newer teleport/force is an authoritative
+        // snap that applies regardless; a `None` position_sequence is a forced snap.
+        // OQ-9 settled by ACE source: PositionPack.cs:47 bumps ObjectPosition per
+        // broadcast (GetNextSequence), so a legitimate newer frame is never dropped.
+        if !teleport_advanced && !force_advanced {
+            if let Some(incoming_position_sequence) = position_sequence {
+                if !is_newer_u16(incoming_position_sequence, old_position_sequence) {
+                    return EntityPositionSyncOutcome::Rejected;
+                }
+            }
+        }
 
         self.position = position;
         self.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX] = instance_sequence;
@@ -390,9 +453,7 @@ impl Entity {
             self.sequences[OBJECT_SERVER_CONTROL_SEQUENCE_INDEX] = server_control_sequence;
         }
 
-        let reset_required = position_sequence.is_none()
-            || is_newer_u16(teleport_sequence, old_teleport_sequence)
-            || is_newer_u16(force_position_sequence, old_force_position_sequence);
+        let reset_required = position_sequence.is_none() || teleport_advanced || force_advanced;
 
         if reset_required {
             EntityPositionSyncOutcome::Reset {
@@ -480,9 +541,9 @@ impl Entity {
     /// `PhysicsState` and ACE's draw-gate checks (e.g. 17 references
     /// to `Hidden` and 11 to `NoDraw` across `ACE.Server/Physics/`).
     pub fn should_draw(&self) -> bool {
-        !self.physics_state.intersects(
-            PhysicsState::HIDDEN | PhysicsState::NO_DRAW | PhysicsState::CLOAKED,
-        )
+        !self
+            .physics_state
+            .intersects(PhysicsState::HIDDEN | PhysicsState::NO_DRAW | PhysicsState::CLOAKED)
     }
 
     /// Whether this entity contributes a BSP tree to collision queries.
@@ -502,9 +563,9 @@ impl Entity {
     /// physics interaction. ACE's `Door.cs` flips `Ethereal` on
     /// open/close.
     pub fn is_collidable(&self) -> bool {
-        !self.physics_state.intersects(
-            PhysicsState::ETHEREAL | PhysicsState::IGNORE_COLLISIONS,
-        )
+        !self
+            .physics_state
+            .intersects(PhysicsState::ETHEREAL | PhysicsState::IGNORE_COLLISIONS)
     }
 
     /// Whether this is a static (non-moving) entity.
@@ -671,7 +732,11 @@ mod physics_state_predicates_tests {
     use super::*;
 
     fn fixture(state: PhysicsState) -> Entity {
-        let mut e = Entity::new(Guid::from(0x5000_0001u32), "test".into(), WorldPosition::default());
+        let mut e = Entity::new(
+            Guid::from(0x5000_0001u32),
+            "test".into(),
+            WorldPosition::default(),
+        );
         e.physics_state = state;
         e
     }

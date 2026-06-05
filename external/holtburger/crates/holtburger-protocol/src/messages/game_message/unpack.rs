@@ -147,6 +147,9 @@ impl ProtocolUnpack for GameMessage {
             GameOpcode::UpdatePosition => Some(GameMessage::UpdatePosition(Box::new(
                 UpdatePositionData::unpack(data, offset)?,
             ))),
+            GameOpcode::PositionAndMovement => Some(GameMessage::PositionAndMovementEvent(
+                Box::new(PositionAndMovementEventData::unpack(data, offset)?),
+            )),
             GameOpcode::PrivateUpdatePosition => Some(GameMessage::PrivateUpdatePosition(
                 Box::new(PrivateUpdatePositionData::unpack(data, offset)?),
             )),

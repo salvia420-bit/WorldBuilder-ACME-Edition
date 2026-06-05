@@ -628,6 +628,204 @@ fn test_set_player_vector_updates_authoritative_player_entity() {
     )));
 }
 
+/// Item A3 (OQ-1): with `USE_VECTOR_SEQUENCE_GATE` enabled (its shipped
+/// default since 2026-06-04, after `~/ace-server` source confirmed ACE
+/// bumps `ObjectVector` per broadcast via `GetNextSequence`),
+/// `set_player_vector_gated` mirrors retail `SmartBox::DoVectorUpdate`:
+/// a stale (older/equal) `vector_sequence` is REJECTED (velocity
+/// untouched, no event, stored stamp unchanged) and a strictly-newer
+/// stamp is applied and advances the stored stamp.
+#[test]
+fn vector_sequence_gate_rejects_stale_applies_newer() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0124);
+    state.player.guid = player_guid;
+    state.player.vector_sequence = 100;
+
+    let player_entity = Entity::new(player_guid, "Player".to_string(), WorldPosition::default());
+    state.entities.insert(player_entity);
+    let before_vel = state.entities.get(player_guid).unwrap().velocity;
+
+    // Stale: incoming 50 is OLDER than stored 100 -> rejected.
+    let stale_vel = Vector3::new(7.0, 8.0, 9.0);
+    let events = state.set_player_vector_gated(stale_vel, Vector3::new(0.0, 0.0, 1.0), 50);
+    assert_eq!(
+        state.entities.get(player_guid).unwrap().velocity,
+        before_vel,
+        "stale vector_sequence must be rejected (velocity unchanged)"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, WorldEvent::EntityVectorUpdated { .. })),
+        "a rejected stale update emits no EntityVectorUpdated"
+    );
+    assert_eq!(
+        state.player.vector_sequence, 100,
+        "stored stamp is unchanged on reject"
+    );
+
+    // Newer: incoming 150 is NEWER than stored 100 -> applied + advances.
+    let fresh_vel = Vector3::new(1.0, 2.0, 3.0);
+    let events = state.set_player_vector_gated(fresh_vel, Vector3::new(0.0, 0.0, 2.0), 150);
+    assert_eq!(
+        state.entities.get(player_guid).unwrap().velocity,
+        fresh_vel,
+        "newer vector_sequence is applied"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            WorldEvent::EntityVectorUpdated { guid, .. } if *guid == player_guid
+        )),
+        "an accepted update emits EntityVectorUpdated"
+    );
+    assert_eq!(
+        state.player.vector_sequence, 150,
+        "stored stamp advances to the accepted value"
+    );
+}
+
+/// Item A3 (OQ-1): manually exercise the gate predicate so the gated
+/// path is covered regardless of the compile-time flag's default. The
+/// gate accepts a strictly-newer stamp and rejects an older/equal one,
+/// mirroring retail `SmartBox::DoVectorUpdate`
+/// (acclient.c:143459-143480 → `is_newer_u16`).
+#[test]
+fn vector_sequence_gate_predicate_matches_retail() {
+    use holtburger_common::sequence::is_newer_u16;
+
+    // Stored 100: a newer stamp (101) is accepted; equal (100) and
+    // older (50) are rejected — the exact accept/reject the gated
+    // VectorUpdate path applies when USE_VECTOR_SEQUENCE_GATE is on.
+    assert!(
+        is_newer_u16(101, 100),
+        "strictly-newer vector_sequence accepted"
+    );
+    assert!(!is_newer_u16(100, 100), "equal vector_sequence rejected");
+    assert!(!is_newer_u16(50, 100), "stale vector_sequence rejected");
+    // Wrap boundary: 0 is newer than u16::MAX.
+    assert!(
+        is_newer_u16(0, u16::MAX),
+        "wrapped vector_sequence accepted"
+    );
+}
+
+/// Item B6 (SEQ-5): the position-only newer-gate is layered UNDER teleport
+/// and force. With teleport+force unchanged a stale/equal `position_sequence`
+/// is rejected and a strictly-newer one accepted (retail acclient.c:145167
+/// `newer_event(object, 0, position_ts)`); a newer teleport/force is an
+/// authoritative snap that bypasses the position gate; the autonomous frame
+/// (no position stamp -> `None`) skips it entirely.
+#[test]
+fn position_sequence_gate_is_layered_under_teleport_and_force() {
+    let mut state = WorldState::synthetic();
+    state.player.teleport_sequence = 5;
+    state.player.force_position_sequence = 3;
+    state.player.position_sequence = 100;
+
+    // Position-only (teleport+force unchanged): stale/equal rejected, newer accepted.
+    assert!(
+        !state
+            .player
+            .should_accept_server_position_sequences(5, 3, Some(50)),
+        "stale position-only update is rejected"
+    );
+    assert!(
+        !state
+            .player
+            .should_accept_server_position_sequences(5, 3, Some(100)),
+        "equal position-only update is rejected"
+    );
+    assert!(
+        state
+            .player
+            .should_accept_server_position_sequences(5, 3, Some(150)),
+        "newer position-only update is accepted"
+    );
+    // A newer teleport is an authoritative snap -> bypasses the position gate.
+    assert!(
+        state
+            .player
+            .should_accept_server_position_sequences(6, 3, Some(50)),
+        "newer teleport bypasses the position gate despite a stale position_sequence"
+    );
+    // Autonomous frames carry no position stamp -> the gate is skipped.
+    assert!(
+        state
+            .player
+            .should_accept_server_position_sequences(5, 3, None),
+        "autonomous frame (None) skips the position gate"
+    );
+}
+
+/// Item A4: the 0xF619 `PositionAndMovementEvent` handler arm applies
+/// BOTH halves of the combined materialize frame — the `PositionPack`
+/// (UpdatePosition path) AND the motion snapshot (UpdateMotion path) —
+/// for a remote entity, and is `handled` (does not fall through to the
+/// `_ => false` catch-all). Mirrors the existing UpdatePosition/
+/// UpdateMotion remote-entity handler tests.
+#[test]
+fn position_and_movement_event_applies_position_and_motion() {
+    let mut state = WorldState::synthetic();
+    let guid = Guid(0x6000_0A19);
+    let initial_pos = WorldPosition {
+        landblock_id: Guid(0x00A9_0001),
+        coords: Vector3::new(1.0, 2.0, 3.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state
+        .entities
+        .insert(Entity::new(guid, "Target".to_string(), initial_pos));
+
+    let pos = PositionPack {
+        flags: UpdatePositionFlag::IS_GROUNDED,
+        pos: WorldPosition {
+            landblock_id: Guid(0x00A9_0001),
+            coords: Vector3::new(61.0, 71.0, 12.5),
+            rotation: holtburger_common::math::Quaternion::identity(),
+        },
+        velocity: None,
+        placement_id: None,
+        instance_sequence: 1,
+        position_sequence: 2,
+        teleport_sequence: 3,
+        force_position_sequence: 4,
+    };
+    let movement = MovementEventData {
+        guid,
+        object_instance_sequence: 0,
+        movement_sequence: 1,
+        server_control_sequence: 1,
+        is_autonomous: false,
+        movement_type: MovementType::Invalid,
+        motion_flags: 0,
+        current_style: 0,
+        data: MovementTypeData::Invalid(MovementInvalid::default()),
+    };
+    let msg = GameMessage::PositionAndMovementEvent(Box::new(PositionAndMovementEventData {
+        guid,
+        pos,
+        movement,
+    }));
+
+    let events = state.handle_message(&msg);
+
+    // Position half applied:
+    assert_eq!(state.entities.get(guid).unwrap().position.coords.x, 61.0);
+    // Motion half applied (a snapshot was materialized + an event emitted):
+    assert!(
+        state.entities.get(guid).unwrap().motion_snapshot.is_some(),
+        "motion snapshot must be set from the 0xF619 movement body"
+    );
+    assert!(
+        events.iter().any(
+            |event| matches!(event, WorldEvent::EntityMotionUpdated { guid: g, .. } if *g == guid)
+        ),
+        "0xF619 must emit EntityMotionUpdated (not fall through to _ => false)"
+    );
+}
+
 #[test]
 fn set_local_player_runtime_pose_only_emits_runtime_body_change() {
     let mut state = WorldState::synthetic();

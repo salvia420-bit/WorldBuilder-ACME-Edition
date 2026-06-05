@@ -9,10 +9,29 @@ use crate::spatial::{
 use holtburger_common::math::Quaternion;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::properties::WorldObjectExt as _;
+use holtburger_common::sequence::is_newer_u16;
 use holtburger_protocol::messages::movement::{
     PositionPack, PositionType, ServerAutonomousPositionData, UpdatePositionFlag,
 };
 use web_time::Instant;
+
+/// Movement-protocol parity (2026-06-04, item A3 / OQ-1): when `true`,
+/// authoritative `VectorUpdate` (velocity/omega) frames are gated on a
+/// newer-than-stored `vector_sequence` (retail
+/// `SmartBox::DoVectorUpdate` → `CPhysicsObj::update_times[3]`,
+/// acclient.c:143459-143480) before being applied, and the stamp is
+/// advanced on accept. When `false`, VectorUpdate is applied
+/// unconditionally (the prior behaviour).
+///
+/// **Enabled (2026-06-04).** OQ-1 was settled by the running server's own
+/// source (`~/ace-server`): `GameMessageVectorUpdate` writes
+/// `GetNextSequence(SequenceType.ObjectVector)` on every broadcast, so the
+/// stamp is strictly monotonic per object — the gate accepts in-order
+/// frames and drops only genuinely reordered/stale UDP, matching retail.
+/// Remote baselines are seeded from ObjectCreate (`hydrate_from_odd` copies
+/// all 9 sequences incl. `ObjectVector`); the self player's baseline (0)
+/// matches a fresh-login server `ObjectVector`, so no first-update drop.
+const USE_VECTOR_SEQUENCE_GATE: bool = true;
 
 impl WorldState {
     pub(crate) fn authoritative_body_id_for_guid(&self, guid: Guid) -> Option<SpatialBodyId> {
@@ -614,9 +633,27 @@ impl WorldState {
     }
 
     pub fn set_player_position(&mut self, pos: WorldPosition) -> Vec<WorldEvent> {
+        self.set_player_position_with_sync(pos, AuthoritativeBodySync::Snapshot)
+    }
+
+    /// Applies a server-authored player position with an explicit reconcile
+    /// discriminant (B1/D3-SNAP). `Reset` hard-snaps the working pose — retail
+    /// BlipPlayer / TeleportPlayer on a force_position OR teleport sequence
+    /// advance (acclient.c:145196-145253); `Snapshot` blends/constrains toward
+    /// it (a position-only update). The local player's snap is keyed on a
+    /// sequence-class ADVANCE, never on every UpdatePosition — ACE bumps
+    /// ObjectForcePosition only on the z-hack (Player_Tick.cs:488) and PKLite
+    /// (Player.cs:1148), so routine play cannot rubberband to spawn. Does NOT
+    /// zero velocity on the force path (ACE-VELZERO-1: retail's force reconcile
+    /// is BlipPlayer/SetPositionSimple with no velocity zero; only the teleport
+    /// path zeroes, and that is handled by the PlayerTeleport suspend).
+    pub fn set_player_position_with_sync(
+        &mut self,
+        pos: WorldPosition,
+        sync: AuthoritativeBodySync,
+    ) -> Vec<WorldEvent> {
         let mut events = Vec::new();
-        let Some((guid, pos)) = self.update_player_position(pos, AuthoritativeBodySync::Snapshot)
-        else {
+        let Some((guid, pos)) = self.update_player_position(pos, sync) else {
             return events;
         };
 
@@ -666,14 +703,46 @@ impl WorldState {
         events
     }
 
+    /// Self `VectorUpdate` application with the optional `vector_sequence`
+    /// newer-than gate (item A3). When [`USE_VECTOR_SEQUENCE_GATE`] is
+    /// off this is exactly [`Self::set_player_vector`]; when on it
+    /// mirrors retail `SmartBox::DoVectorUpdate` (acclient.c:143459-143480):
+    /// apply velocity/omega ONLY if `incoming_vector_sequence` is newer
+    /// than the stored `player.vector_sequence`, and advance the stored
+    /// stamp on accept.
+    ///
+    /// NOTE: the caller records the raw frame's `instance_sequence` via
+    /// `PlayerState::record_vector_update_sequences` BEFORE calling this;
+    /// it intentionally does NOT touch `player.vector_sequence`, so with
+    /// the gate on this function performs the accept decision against the
+    /// true PRE-record stored value and owns the stamp advance on accept.
+    pub fn set_player_vector_gated(
+        &mut self,
+        velocity: Vector3,
+        omega: Vector3,
+        incoming_vector_sequence: u16,
+    ) -> Vec<WorldEvent> {
+        if USE_VECTOR_SEQUENCE_GATE {
+            let stored = self.player.vector_sequence;
+            if !is_newer_u16(incoming_vector_sequence, stored) {
+                return Vec::new();
+            }
+            self.player.vector_sequence = incoming_vector_sequence;
+        }
+        self.set_player_vector(velocity, omega)
+    }
+
     /// Applies an authoritative server-side movement sync to the player.
     pub fn apply_player_autonomous_position(
         &mut self,
         data: &ServerAutonomousPositionData,
     ) -> Vec<WorldEvent> {
+        // Autonomous frames carry no position stamp (server_control occupies that
+        // slot in AutonomousPositionPack), so the position-only gate does not apply.
         let accepted = self.player.should_accept_server_position_sequences(
             data.teleport_sequence,
             data.force_position_sequence,
+            None,
         );
 
         let runtime_delta_m = self
@@ -761,9 +830,18 @@ impl WorldState {
         guid: Guid,
         velocity: Vector3,
         omega: Vector3,
+        incoming_vector_sequence: u16,
         events: &mut Vec<WorldEvent>,
     ) -> bool {
         if let Some(entity) = self.entities.get_mut(guid) {
+            if USE_VECTOR_SEQUENCE_GATE {
+                // Retail SmartBox::DoVectorUpdate gates remote velocity
+                // on update_times[3] (ObjectVector) — acclient.c:143459-143480.
+                if !is_newer_u16(incoming_vector_sequence, entity.vector_sequence()) {
+                    return false;
+                }
+                entity.set_vector_sequence(incoming_vector_sequence);
+            }
             entity.velocity = velocity;
             entity.omega = omega;
             let pose = entity.position;
@@ -1100,8 +1178,7 @@ impl WorldState {
             // local-prediction edge_slide path stays in sync (same flag
             // also hydrated into `PropertyBool::AllowEdgeSlide` below via
             // `hydrate_from_set_state`).
-            self.player.allow_edge_slide =
-                data.physics_state.contains(PhysicsState::EDGE_SLIDE);
+            self.player.allow_edge_slide = data.physics_state.contains(PhysicsState::EDGE_SLIDE);
         }
 
         if let Some(entity) = self.entities.get_mut(data.guid) {

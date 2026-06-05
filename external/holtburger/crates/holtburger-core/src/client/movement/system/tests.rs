@@ -791,50 +791,51 @@ fn autonomous_pose_change_gate_skips_unchanged_and_sends_changed() {
 
     // First send: no prior pose recorded → always changed.
     let first = pulse(base_pose, 1);
-    assert!(movement.autonomous_pose_changed(&first));
+    assert!(movement.autonomous_pose_changed(&first, true));
 
     let mut movement = movement;
     movement.note_autonomous_position_sent(&first);
 
     // Identical pose + contact → skip.
-    assert!(!movement.autonomous_pose_changed(&pulse(base_pose, 1)));
+    assert!(!movement.autonomous_pose_changed(&pulse(base_pose, 1), true));
 
     // Sub-epsilon jitter (1 cm < 0.05 m) → still skipped.
     let jitter = WorldPosition {
         coords: Vector3::new(12.01, -4.0, 1.5),
         ..base_pose
     };
-    assert!(!movement.autonomous_pose_changed(&pulse(jitter, 1)));
+    assert!(!movement.autonomous_pose_changed(&pulse(jitter, 1), true));
 
     // Meaningful translation (0.5 m > 0.05 m) → send.
     let moved = WorldPosition {
         coords: Vector3::new(12.5, -4.0, 1.5),
         ..base_pose
     };
-    assert!(movement.autonomous_pose_changed(&pulse(moved, 1)));
+    assert!(movement.autonomous_pose_changed(&pulse(moved, 1), true));
 
     // Heading turn beyond the heading epsilon → send.
     let turned = WorldPosition {
         rotation: Quaternion::from_heading(1.0),
         ..base_pose
     };
-    assert!(movement.autonomous_pose_changed(&pulse(turned, 1)));
+    assert!(movement.autonomous_pose_changed(&pulse(turned, 1), true));
 
     // Landblock crossing → send.
     let crossed = WorldPosition {
         landblock_id: Guid(0x1000_0002),
         ..base_pose
     };
-    assert!(movement.autonomous_pose_changed(&pulse(crossed, 1)));
+    assert!(movement.autonomous_pose_changed(&pulse(crossed, 1), true));
 
-    // Same pose but contact byte flipped (grounded → airborne) → send.
-    assert!(movement.autonomous_pose_changed(&pulse(base_pose, 0)));
+    // Within the 1s window, same pose but contact byte flipped (grounded →
+    // airborne) → send via the in-window contact-plane branch.
+    assert!(movement.autonomous_pose_changed(&pulse(base_pose, 0), false));
 
     // After re-sending the moved pose, the moved pose is the new
     // baseline and is itself skipped on repeat.
     let moved_pulse = pulse(moved, 1);
     movement.note_autonomous_position_sent(&moved_pulse);
-    assert!(!movement.autonomous_pose_changed(&pulse(moved, 1)));
+    assert!(!movement.autonomous_pose_changed(&pulse(moved, 1), true));
 }
 
 #[tokio::test]

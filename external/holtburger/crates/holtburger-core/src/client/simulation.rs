@@ -1,4 +1,4 @@
-use super::movement::{MovementSystem, ServerControlledProjection};
+use super::movement::{HUGE_QUANTUM, MAX_QUANTUM, MovementSystem, ServerControlledProjection};
 use anyhow::Result;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::properties::WorldObjectExt;
@@ -75,13 +75,48 @@ impl ClientSimulationSystem {
             return Vec::new();
         }
 
-        let Some(request) = self.build_solve_request(now, dt, world, movement) else {
+        // Retail update_object quantum loop (acclient.c:323120-323154 / ACE
+        // PhysicsObj.cs:4169-4186), brought to the authoritative solver path
+        // (D8/PRED-2). The manual-drive integrator already subdivides
+        // (system.rs); the solver previously took a single Euler step over the
+        // raw inter-tick dt, so a tab stall / GC pause / debugger pause could
+        // over-integrate into a resume-teleport. Now a HugeQuantum hitch
+        // (> 2.0s) is dropped entirely (the next frame / server correction
+        // resyncs), a frame longer than MAX_QUANTUM is integrated as a
+        // sequence of <= MAX_QUANTUM slices so one long frame cannot over-step
+        // gravity/collision, and a normal 30ms steady-state frame (<
+        // MAX_QUANTUM) passes through as one solve with the real dt ->
+        // byte-identical to before. (Slice = ACE PhysicsGlobals.MaxQuantum
+        // 0.1s; acclient.c MAX_QUANTUM_97 is 0.2s — kept consistent with the
+        // manual-drive path's shipped value. No MIN_QUANTUM accumulator: small
+        // frames pass through rather than floor-to-empty, which would stall
+        // the solver at the 30ms cadence.)
+        let dt_secs = dt.as_secs_f32();
+        if dt_secs > HUGE_QUANTUM {
             return Vec::new();
-        };
+        }
 
-        let physics = Arc::clone(world.scene.physics());
-        let solved = physics.solve(&request, &mut world.scene);
-        self.apply_solve_batch(world, solved)
+        let mut slices = Vec::new();
+        let mut remaining = dt_secs;
+        while remaining > MAX_QUANTUM {
+            slices.push(MAX_QUANTUM);
+            remaining -= MAX_QUANTUM;
+        }
+        if remaining > 0.0 {
+            slices.push(remaining);
+        }
+
+        let mut events = Vec::new();
+        for slice in slices {
+            let slice_dt = Duration::from_secs_f32(slice);
+            let Some(request) = self.build_solve_request(now, slice_dt, world, movement) else {
+                continue;
+            };
+            let physics = Arc::clone(world.scene.physics());
+            let solved = physics.solve(&request, &mut world.scene);
+            events.extend(self.apply_solve_batch(world, solved));
+        }
+        events
     }
 
     pub(super) fn build_solve_request(

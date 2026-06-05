@@ -540,7 +540,7 @@ pub(super) const MIN_QUANTUM: f32 = 1.0 / 30.0;
 /// `PhysicsObj.cs:4175-4180`). 0.1 s = 10 fps; any frame longer than
 /// this is integrated as a sequence of 0.1 s slices so a single long
 /// frame cannot over-integrate gravity in one step.
-pub(super) const MAX_QUANTUM: f32 = 0.1;
+pub(crate) const MAX_QUANTUM: f32 = 0.1;
 
 /// Frame duration above which the whole frame is dropped (no
 /// integration). ACE returns early and consumes the time without
@@ -549,7 +549,7 @@ pub(super) const MAX_QUANTUM: f32 = 0.1;
 /// backgrounded, long GC, debugger pause) would otherwise teleport a
 /// falling player; retail simply skips it and lets the next frame /
 /// server correction resync.
-pub(super) const HUGE_QUANTUM: f32 = 2.0;
+pub(crate) const HUGE_QUANTUM: f32 = 2.0;
 
 /// Terminal velocity clamp in m/s. ACE clamps the total velocity
 /// magnitude to this every quantum inside `UpdatePhysicsInternal`

@@ -150,10 +150,7 @@ impl PlayerState {
             // hydrate) so JS subscribers can compute the delta. ACE's
             // `UpdateVital` arrives on (re-)hydrate AND on rank-up; the
             // pre-existing value is the right oldValue in both cases.
-            let prev_current = self
-                .vitals
-                .get(&vital_type)
-                .map(|prev| prev.current);
+            let prev_current = self.vitals.get(&vital_type).map(|prev| prev.current);
             self.vitals.insert(vital_type, vital_obj.clone());
             events.push(WorldEvent::VitalUpdated {
                 vital: vital_obj,
@@ -227,6 +224,7 @@ impl PlayerState {
         &self,
         teleport_sequence: u16,
         force_position_sequence: u16,
+        position_sequence: Option<u16>,
     ) -> bool {
         if is_newer_u16(self.teleport_sequence, teleport_sequence) {
             return false;
@@ -236,6 +234,24 @@ impl PlayerState {
             && is_newer_u16(self.force_position_sequence, force_position_sequence)
         {
             return false;
+        }
+
+        // Position-only update (no newer teleport/force): retail gates the apply on
+        // newer_event(object, 0, position_ts) (acclient.c:145167). A newer teleport or
+        // force is an authoritative snap and applies regardless. The autonomous frame
+        // carries no position stamp (server_control occupies that slot) -> `None`
+        // skips this gate. OQ-9 settled by ACE source (PositionPack.cs:47 bumps
+        // ObjectPosition per broadcast), so a legitimate newer frame is never dropped.
+        if let Some(position_sequence) = position_sequence {
+            let teleport_advanced = is_newer_u16(teleport_sequence, self.teleport_sequence);
+            let force_advanced = teleport_sequence == self.teleport_sequence
+                && is_newer_u16(force_position_sequence, self.force_position_sequence);
+            if !teleport_advanced
+                && !force_advanced
+                && !is_newer_u16(position_sequence, self.position_sequence)
+            {
+                return false;
+            }
         }
 
         true
@@ -251,6 +267,7 @@ impl PlayerState {
         if !self.should_accept_server_position_sequences(
             pos_pack.teleport_sequence,
             pos_pack.force_position_sequence,
+            Some(pos_pack.position_sequence),
         ) {
             return false;
         }
@@ -326,7 +343,17 @@ impl PlayerState {
         }
     }
 
-    pub fn update_vector_sequence(&mut self, instance_sequence: u16) {
+    /// Record the `instance_sequence` carried by an authoritative
+    /// `VectorUpdate` (0xF74C) frame. The frame ALSO carries a
+    /// `vector_sequence` (`VectorUpdateData`, vector.rs:13-14), but that
+    /// stamp is owned by the velocity-apply gate
+    /// (`WorldState::set_player_vector_gated`, retail
+    /// `SmartBox::DoVectorUpdate` → `update_times[3]`,
+    /// acclient.c:143459-143480) so the newer-than comparison reads the
+    /// true prior value. (The prior `update_vector_sequence` misfiled
+    /// the frame's `instance_sequence` and never recorded the vector
+    /// stamp at all — see OQ-1.)
+    pub fn record_vector_update_sequences(&mut self, instance_sequence: u16) {
         self.instance_sequence = instance_sequence;
     }
 
