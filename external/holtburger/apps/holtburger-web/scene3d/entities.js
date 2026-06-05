@@ -53,7 +53,11 @@ function readDeadReckonFlag() {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     const v = new URLSearchParams(window.location.search).get("deadReckon");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    // B5/QW2/REMOTE-1: remote dead-reckon (position smoothing + the
+    // VectorUpdate velocity extrapolation in tick) is DEFAULT-ON in the
+    // browser now; `?deadReckon=off` disables it. Was default-off (REMOTE-1:
+    // remotes hard-snapped each ~1Hz packet with no between-packet motion).
+    return v == null || v.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }
@@ -157,6 +161,14 @@ const DEAD_RECKON_DAMP_K = 12.0;
 const DEAD_RECKON_TELEPORT_SNAP_M = 8.0;
 const DEAD_RECKON_TELEPORT_SNAP_SQ =
   DEAD_RECKON_TELEPORT_SNAP_M * DEAD_RECKON_TELEPORT_SNAP_M;
+// B5/QW2/REMOTE-3: max age (ms) of a VectorUpdate velocity before we stop
+// extrapolating with it. Retail dead-reckons remote motion from set_velocity
+// (acclient.c:143476) between the few-Hz position packets; we extrapolate the
+// stashed _serverTargetPos by lastVel*dt while the velocity is this fresh, and
+// each new KIND_POSITION snap-corrects it. Mirrors the 2D path's 500ms gate so
+// a stopped entity (no fresh velocity) doesn't overshoot. Same units as
+// performance.now() deltas.
+const ENTITY_VELOCITY_STALE_MS = 500;
 
 // === A2 Path A (2026-05-29) — remote-entity HEADING easing (DEFAULT-ON).
 // Remote entities used to SNAP their quaternion to each server heading
@@ -5008,11 +5020,12 @@ export class EntityManager {
   }
 
   /**
-   * Optional VectorUpdate (kind=4) handler. The 2D path stamps
-   * vel/omega for extrapolation; the 3D path doesn't extrapolate yet
-   * (pose updates are server-authoritative). Surfaced here so
-   * loop.js's drainEntityEvents3D has somewhere to call without an
-   * undefined-method crash.
+   * VectorUpdate (kind=4) handler. Stashes the remote entity's last server
+   * velocity + a timestamp; tick() extrapolates _serverTargetPos by lastVel*dt
+   * while it's fresh (B5/QW2/REMOTE-3 — retail set_velocity dead-reckon,
+   * acclient.c:143476). vx/vy/vz arrive in AC world coords, the same frame as
+   * _serverTargetPos (loop.js sets both from lbX*192+x), so no transform is
+   * needed. Each new KIND_POSITION snap-corrects via setPose.
    */
   setVelocity(upd) {
     const inst = this.entityMap.get((upd.guid >>> 0));
@@ -5023,6 +5036,7 @@ export class EntityManager {
       vz: upd.vz ?? 0,
       omegaZ: upd.omegaZ ?? 0,
     };
+    inst.lastVelMs = typeof performance !== "undefined" ? performance.now() : 0;
   }
 
   /**
@@ -6928,6 +6942,25 @@ export class EntityManager {
       // position) for remote entities, so easing position never fights them.
       if (this._deadReckonOn && inst._serverTargetPos) {
         const tgt = inst._serverTargetPos;
+        // B5/QW2/REMOTE-3: extrapolate the server target forward by the last
+        // VectorUpdate velocity while it's fresh — retail integrates
+        // set_velocity between the few-Hz position packets (acclient.c:143476)
+        // instead of holding the last discrete pose. Same AC-world frame as
+        // tgt (loop.js sets both from lbX*192+x), so add directly. Each new
+        // KIND_POSITION overwrites _serverTargetPos in setPose (snap-correct),
+        // and the staleness gate stops a stopped entity from overshooting.
+        const lv = inst.lastVel;
+        if (
+          lv &&
+          inst.lastVelMs !== undefined &&
+          (typeof performance !== "undefined" ? performance.now() : 0) -
+            inst.lastVelMs <
+            ENTITY_VELOCITY_STALE_MS
+        ) {
+          tgt.x += lv.vx * dt;
+          tgt.y += lv.vy * dt;
+          tgt.z += lv.vz * dt;
+        }
         const pos = inst.root.position;
         const factor = 1 - Math.exp(-DEAD_RECKON_DAMP_K * dt);
         pos.x += (tgt.x - pos.x) * factor;
