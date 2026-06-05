@@ -2,8 +2,9 @@ use crate::WorldEvent;
 use crate::context::{WorldContext, WorldContextExt};
 use crate::entity::EntityMotionSnapshot;
 use crate::player::mutations::{SkillUpdateParams, VitalUpdateParams};
-use crate::spatial::RuntimeBodyResetCause;
+use crate::spatial::{AuthoritativeBodySync, RuntimeBodyResetCause};
 use crate::state::WorldState;
+use holtburger_common::sequence::is_newer_u16;
 use holtburger_protocol::messages::*;
 
 pub(crate) fn handle_message(
@@ -46,13 +47,31 @@ pub(crate) fn handle_message(
         GameMessage::UpdatePosition(data) => {
             if data.guid == state.player.guid && state.player.guid != holtburger_common::Guid::NULL
             {
+                let old_teleport_sequence = state.player.teleport_sequence;
+                let old_force_position_sequence = state.player.force_position_sequence;
                 let accepted = state.player.apply_position_from_server(&data.pos, events);
                 if accepted {
                     events.push(WorldEvent::SelfUpdatePosition {
                         teleport_sequence: data.pos.teleport_sequence,
                         force_position_sequence: data.pos.force_position_sequence,
                     });
-                    events.extend(state.set_player_position(data.pos.pos));
+                    // B1/D3-SNAP: a force_position OR teleport sequence advance is an
+                    // authoritative reposition (retail BlipPlayer/TeleportPlayer,
+                    // acclient.c:145196-145253) -> hard-snap the working pose. A
+                    // position-only update blends/constrains. ACE bumps
+                    // ObjectForcePosition only on the z-hack/PKLite paths, so routine
+                    // play never trips the snap.
+                    let snap = is_newer_u16(data.pos.teleport_sequence, old_teleport_sequence)
+                        || is_newer_u16(
+                            data.pos.force_position_sequence,
+                            old_force_position_sequence,
+                        );
+                    let sync = if snap {
+                        AuthoritativeBodySync::Reset
+                    } else {
+                        AuthoritativeBodySync::Snapshot
+                    };
+                    events.extend(state.set_player_position_with_sync(data.pos.pos, sync));
                 }
                 return true;
             }

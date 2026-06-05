@@ -28702,7 +28702,47 @@ async fn recv_loop(
                                                 pose.coords.z,
                                             ));
                                         }
-                                        let _ = w.set_player_position(pose);
+                                        // B1/D3-SNAP: choose the reconcile
+                                        // discriminant by sequence class. This
+                                        // is NOT the removed call-gating
+                                        // footgun discussed above —
+                                        // set_player_position_with_sync is
+                                        // ALWAYS called; we only pick Reset
+                                        // (hard-snap: retail BlipPlayer /
+                                        // TeleportPlayer, acclient.c:145196-
+                                        // 145253) vs Snapshot (blend behind the
+                                        // Simulating* preserve gate). A missed
+                                        // teleport advance (stamp already
+                                        // mirrored by PlayerTeleport) just falls
+                                        // back to Snapshot, which the Suspended
+                                        // mode PlayerTeleport set still
+                                        // hard-snaps — cross-LB teleports are
+                                        // unaffected. The genuinely new case is
+                                        // a force_position advance WITHOUT a
+                                        // PlayerTeleport (the z-hack /PKLite
+                                        // snapback, ACE Player_Tick.cs:488 /
+                                        // Player.cs:1148): force_position_-
+                                        // sequence is strictly newer here, so
+                                        // the predicted body hard-snaps to
+                                        // LastGroundPos instead of preserving
+                                        // the drifted pose beyond the blip
+                                        // radius (RECON-1). Compared BEFORE the
+                                        // sequence mirror below, so w.player
+                                        // still holds the previous stamps.
+                                        let force_or_teleport_advanced =
+                                            holtburger_common::sequence::is_newer_u16(
+                                                data.pos.teleport_sequence,
+                                                w.player.teleport_sequence,
+                                            ) || holtburger_common::sequence::is_newer_u16(
+                                                data.pos.force_position_sequence,
+                                                w.player.force_position_sequence,
+                                            );
+                                        let sync = if force_or_teleport_advanced {
+                                            holtburger_world::AuthoritativeBodySync::Reset
+                                        } else {
+                                            holtburger_world::AuthoritativeBodySync::Snapshot
+                                        };
+                                        let _ = w.set_player_position_with_sync(pose, sync);
                                     }
                                     // Mirror the four sequences onto the
                                     // WorldState player so outbound

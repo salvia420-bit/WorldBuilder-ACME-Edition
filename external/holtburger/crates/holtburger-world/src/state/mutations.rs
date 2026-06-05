@@ -633,9 +633,27 @@ impl WorldState {
     }
 
     pub fn set_player_position(&mut self, pos: WorldPosition) -> Vec<WorldEvent> {
+        self.set_player_position_with_sync(pos, AuthoritativeBodySync::Snapshot)
+    }
+
+    /// Applies a server-authored player position with an explicit reconcile
+    /// discriminant (B1/D3-SNAP). `Reset` hard-snaps the working pose — retail
+    /// BlipPlayer / TeleportPlayer on a force_position OR teleport sequence
+    /// advance (acclient.c:145196-145253); `Snapshot` blends/constrains toward
+    /// it (a position-only update). The local player's snap is keyed on a
+    /// sequence-class ADVANCE, never on every UpdatePosition — ACE bumps
+    /// ObjectForcePosition only on the z-hack (Player_Tick.cs:488) and PKLite
+    /// (Player.cs:1148), so routine play cannot rubberband to spawn. Does NOT
+    /// zero velocity on the force path (ACE-VELZERO-1: retail's force reconcile
+    /// is BlipPlayer/SetPositionSimple with no velocity zero; only the teleport
+    /// path zeroes, and that is handled by the PlayerTeleport suspend).
+    pub fn set_player_position_with_sync(
+        &mut self,
+        pos: WorldPosition,
+        sync: AuthoritativeBodySync,
+    ) -> Vec<WorldEvent> {
         let mut events = Vec::new();
-        let Some((guid, pos)) = self.update_player_position(pos, AuthoritativeBodySync::Snapshot)
-        else {
+        let Some((guid, pos)) = self.update_player_position(pos, sync) else {
             return events;
         };
 
