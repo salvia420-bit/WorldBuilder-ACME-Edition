@@ -711,6 +711,54 @@ fn vector_sequence_gate_predicate_matches_retail() {
     );
 }
 
+/// Item B6 (SEQ-5): the position-only newer-gate is layered UNDER teleport
+/// and force. With teleport+force unchanged a stale/equal `position_sequence`
+/// is rejected and a strictly-newer one accepted (retail acclient.c:145167
+/// `newer_event(object, 0, position_ts)`); a newer teleport/force is an
+/// authoritative snap that bypasses the position gate; the autonomous frame
+/// (no position stamp -> `None`) skips it entirely.
+#[test]
+fn position_sequence_gate_is_layered_under_teleport_and_force() {
+    let mut state = WorldState::synthetic();
+    state.player.teleport_sequence = 5;
+    state.player.force_position_sequence = 3;
+    state.player.position_sequence = 100;
+
+    // Position-only (teleport+force unchanged): stale/equal rejected, newer accepted.
+    assert!(
+        !state
+            .player
+            .should_accept_server_position_sequences(5, 3, Some(50)),
+        "stale position-only update is rejected"
+    );
+    assert!(
+        !state
+            .player
+            .should_accept_server_position_sequences(5, 3, Some(100)),
+        "equal position-only update is rejected"
+    );
+    assert!(
+        state
+            .player
+            .should_accept_server_position_sequences(5, 3, Some(150)),
+        "newer position-only update is accepted"
+    );
+    // A newer teleport is an authoritative snap -> bypasses the position gate.
+    assert!(
+        state
+            .player
+            .should_accept_server_position_sequences(6, 3, Some(50)),
+        "newer teleport bypasses the position gate despite a stale position_sequence"
+    );
+    // Autonomous frames carry no position stamp -> the gate is skipped.
+    assert!(
+        state
+            .player
+            .should_accept_server_position_sequences(5, 3, None),
+        "autonomous frame (None) skips the position gate"
+    );
+}
+
 /// Item A4: the 0xF619 `PositionAndMovementEvent` handler arm applies
 /// BOTH halves of the combined materialize frame — the `PositionPack`
 /// (UpdatePosition path) AND the motion snapshot (UpdateMotion path) —

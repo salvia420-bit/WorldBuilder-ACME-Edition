@@ -719,9 +719,12 @@ impl WorldState {
         &mut self,
         data: &ServerAutonomousPositionData,
     ) -> Vec<WorldEvent> {
+        // Autonomous frames carry no position stamp (server_control occupies that
+        // slot in AutonomousPositionPack), so the position-only gate does not apply.
         let accepted = self.player.should_accept_server_position_sequences(
             data.teleport_sequence,
             data.force_position_sequence,
+            None,
         );
 
         let runtime_delta_m = self

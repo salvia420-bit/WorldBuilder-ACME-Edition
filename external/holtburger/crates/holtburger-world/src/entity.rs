@@ -423,6 +423,24 @@ impl Entity {
 
         let old_teleport_sequence = self.sequences[OBJECT_TELEPORT_SEQUENCE_INDEX];
         let old_force_position_sequence = self.sequences[OBJECT_FORCE_POSITION_SEQUENCE_INDEX];
+        let old_position_sequence = self.sequences[OBJECT_POSITION_SEQUENCE_INDEX];
+
+        let teleport_advanced = is_newer_u16(teleport_sequence, old_teleport_sequence);
+        let force_advanced = is_newer_u16(force_position_sequence, old_force_position_sequence);
+
+        // Position-only update (no newer teleport/force): retail gates the apply on
+        // newer_event(object, 0, position_ts) (acclient.c:145167) — reject a stale or
+        // reordered position-only frame. A newer teleport/force is an authoritative
+        // snap that applies regardless; a `None` position_sequence is a forced snap.
+        // OQ-9 settled by ACE source: PositionPack.cs:47 bumps ObjectPosition per
+        // broadcast (GetNextSequence), so a legitimate newer frame is never dropped.
+        if !teleport_advanced && !force_advanced {
+            if let Some(incoming_position_sequence) = position_sequence {
+                if !is_newer_u16(incoming_position_sequence, old_position_sequence) {
+                    return EntityPositionSyncOutcome::Rejected;
+                }
+            }
+        }
 
         self.position = position;
         self.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX] = instance_sequence;
@@ -435,9 +453,7 @@ impl Entity {
             self.sequences[OBJECT_SERVER_CONTROL_SEQUENCE_INDEX] = server_control_sequence;
         }
 
-        let reset_required = position_sequence.is_none()
-            || is_newer_u16(teleport_sequence, old_teleport_sequence)
-            || is_newer_u16(force_position_sequence, old_force_position_sequence);
+        let reset_required = position_sequence.is_none() || teleport_advanced || force_advanced;
 
         if reset_required {
             EntityPositionSyncOutcome::Reset {
