@@ -2415,41 +2415,60 @@ impl MovementSystem {
     /// (landblock/objcell) changed, origin/heading moved beyond the pose
     /// epsilons, or the contact byte flipped (the contact-plane-change
     /// sub-branch). The first send (no prior pose) always passes.
-    fn autonomous_pose_changed(&self, pulse: &AutonomousPositionActionData) -> bool {
+    /// Retail `ShouldSendPositionEvent` change test, window-split
+    /// (acclient.c:718121-718132). A cell/landblock change triggers in BOTH
+    /// branches. PAST the 1s window (`past_window = true`) it tests
+    /// `!Frame::is_equal` — origin + orientation; WITHIN the window it tests
+    /// only the contact-plane (the wire `last_contact` byte, grounded vs
+    /// airborne). This is the SEND-3/D1-POLL refinement: retail polls every
+    /// tick and can emit a mid-window contact-plane-only re-send, where the
+    /// prior boundary-only gate folded both branches together.
+    fn autonomous_pose_changed(
+        &self,
+        pulse: &AutonomousPositionActionData,
+        past_window: bool,
+    ) -> bool {
         if !USE_AUTONOMOUS_POSITION_CHANGE_GATE {
             return true;
         }
 
         let Some(last_pose) = self.last_sent_autonomous_pose else {
-            return true;
+            // No prior send to compare against: only the past-window (Frame)
+            // branch establishes the first baseline send; the in-window
+            // (contact-plane) branch stays quiet until that baseline exists,
+            // so a steady held-run within the first interval doesn't emit a
+            // spurious heartbeat before the window elapses.
+            return past_window;
         };
 
-        // Cell / landblock change (`objcell_id != last`).
+        // Cell / landblock change (`objcell_id != last`) — both branches.
         if pulse.position.landblock_id != last_pose.landblock_id {
             return true;
         }
 
-        // Origin change (`!Frame::is_equal` — origin component). Same
-        // landblock here, so a plain coords distance is the offset.
-        if pulse.position.coords.distance(&last_pose.coords) > AUTONOMOUS_POSE_EPSILON_M {
-            return true;
-        }
+        if past_window {
+            // Past the window: `!Frame::is_equal` — origin component. Same
+            // landblock here, so a plain coords distance is the offset.
+            if pulse.position.coords.distance(&last_pose.coords) > AUTONOMOUS_POSE_EPSILON_M {
+                return true;
+            }
 
-        // Heading change (`!Frame::is_equal` — orientation component).
-        let heading_delta = signed_heading_delta(
-            last_pose.rotation.to_heading(),
-            pulse.position.rotation.to_heading(),
-        );
-        if heading_delta.abs() > AUTONOMOUS_POSE_HEADING_EPSILON_RAD {
-            return true;
-        }
-
-        // Contact-plane change (the sub-interval branch). We don't carry
-        // a full plane, but the wire `last_contact` byte (grounded vs
-        // airborne) is the contact signal the server consumes; re-send
-        // when it flips even if the pose is otherwise unchanged.
-        if self.last_sent_autonomous_contact != Some(pulse.last_contact) {
-            return true;
+            // `!Frame::is_equal` — orientation component.
+            let heading_delta = signed_heading_delta(
+                last_pose.rotation.to_heading(),
+                pulse.position.rotation.to_heading(),
+            );
+            if heading_delta.abs() > AUTONOMOUS_POSE_HEADING_EPSILON_RAD {
+                return true;
+            }
+        } else {
+            // Within the window: contact-plane only. We don't carry a full
+            // plane, but the wire `last_contact` byte (grounded vs airborne)
+            // is the contact signal the server consumes; re-send when it
+            // flips even if origin/orientation are otherwise unchanged.
+            if self.last_sent_autonomous_contact != Some(pulse.last_contact) {
+                return true;
+            }
         }
 
         false
@@ -2469,17 +2488,31 @@ impl MovementSystem {
         session: &mut Session,
         metadata: MovementPacketMetadata,
     ) -> Result<bool> {
-        let Some(next_heartbeat_at) = self.next_autonomous_position_heartbeat_at else {
-            if has_autonomous_position_sync_target(world) {
-                self.next_autonomous_position_heartbeat_at =
-                    Some(now + AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL);
-            }
-            return Ok(false);
-        };
-
-        if now < next_heartbeat_at {
+        if !has_autonomous_position_sync_target(world) {
+            self.clear_autonomous_position_heartbeat_schedule();
             return Ok(false);
         }
+
+        // D1-POLL / SEND-3: retail polls ShouldSendPositionEvent EVERY tick
+        // (acclient_2013 UseTime:699567) and branches on the 1s window. We poll
+        // every movement tick too (the prior code early-returned until the 1s
+        // boundary, collapsing retail's two branches and unable to emit a
+        // mid-window contact-plane-only re-send). `past_window` is true once
+        // the interval since the last send has elapsed; the window resets on
+        // each send (refresh_..._schedule == retail last_sent_position_time).
+        // MUST come after B1/D3-SNAP: continuous-poll re-asserts a drifted pose
+        // more often, which the force-position snap (now shipped) converges.
+        // ACE tolerates this cadence (ACE-CADENCE-1: no inbound anti-flood).
+        //
+        // On the first tick after acquiring a sync target, arm the window and
+        // don't send yet: the first interval is a settle window (retail's
+        // last_sent_position_time starts unset). Continuous-poll engages from
+        // the next tick.
+        let Some(next_heartbeat_at) = self.next_autonomous_position_heartbeat_at else {
+            self.refresh_autonomous_position_heartbeat_schedule(now, world);
+            return Ok(false);
+        };
+        let past_window = now >= next_heartbeat_at;
 
         // The heartbeat used to be gated on `IsPKType` (FastTick) because
         // our integrator emitted constant-Z poses that ACE physics
@@ -2504,18 +2537,14 @@ impl MovementSystem {
             return Ok(false);
         };
 
-        // Physics deep-dive 2026-06-01 (gap 4): position-change gate.
-        // Skip the send when the pose hasn't meaningfully changed since
-        // the last packet (retail `ShouldSendPositionEvent`) so we don't
-        // re-assert a stale/drifted pose every second. The heartbeat
-        // schedule still advances — we just stay quiet until movement
-        // (or a contact flip) produces something worth sending.
-        if !self.autonomous_pose_changed(&pulse) {
-            if has_autonomous_position_sync_target(world) {
-                self.refresh_autonomous_position_heartbeat_schedule(now, world);
-            } else {
-                self.clear_autonomous_position_heartbeat_schedule();
-            }
+        // Physics deep-dive 2026-06-01 (gap 4) + D1-POLL: window-split
+        // position-change gate (retail `ShouldSendPositionEvent`). Skip the
+        // send when nothing meaningful changed for this window branch so we
+        // don't re-assert a stale/drifted pose. On a skip we do NOT advance the
+        // schedule — we keep polling every tick so the moment the pose
+        // (past-window) or contact byte (in-window) changes, the next tick
+        // sends, instead of waiting for the next 1s boundary.
+        if !self.autonomous_pose_changed(&pulse, past_window) {
             return Ok(false);
         }
 
@@ -2524,12 +2553,10 @@ impl MovementSystem {
             .await?;
         self.heartbeats_sent = self.heartbeats_sent.wrapping_add(1);
         self.note_autonomous_position_sent(&pulse);
-
-        if has_autonomous_position_sync_target(world) {
-            self.refresh_autonomous_position_heartbeat_schedule(now, world);
-        } else {
-            self.clear_autonomous_position_heartbeat_schedule();
-        }
+        // Reset the 1s window from this send (retail last_sent_position_time):
+        // the next interval is in-window (contact-plane only) before the
+        // past-window (Frame) branch re-engages.
+        self.refresh_autonomous_position_heartbeat_schedule(now, world);
 
         Ok(true)
     }
