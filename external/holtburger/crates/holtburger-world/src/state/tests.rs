@@ -628,13 +628,15 @@ fn test_set_player_vector_updates_authoritative_player_entity() {
     )));
 }
 
-/// Item A3 (OQ-1): with `USE_VECTOR_SEQUENCE_GATE` at its shipped
-/// default (`false`), `set_player_vector_gated` is behaviorally
-/// identical to `set_player_vector` — a stale (older) `vector_sequence`
-/// is STILL applied. This pins the default-off contract so the gate
-/// cannot silently change live behaviour.
+/// Item A3 (OQ-1): with `USE_VECTOR_SEQUENCE_GATE` enabled (its shipped
+/// default since 2026-06-04, after `~/ace-server` source confirmed ACE
+/// bumps `ObjectVector` per broadcast via `GetNextSequence`),
+/// `set_player_vector_gated` mirrors retail `SmartBox::DoVectorUpdate`:
+/// a stale (older/equal) `vector_sequence` is REJECTED (velocity
+/// untouched, no event, stored stamp unchanged) and a strictly-newer
+/// stamp is applied and advances the stored stamp.
 #[test]
-fn vector_sequence_gate_default_off_applies_even_stale() {
+fn vector_sequence_gate_rejects_stale_applies_newer() {
     let mut state = WorldState::synthetic();
     let player_guid = Guid(0x5000_0124);
     state.player.guid = player_guid;
@@ -642,22 +644,46 @@ fn vector_sequence_gate_default_off_applies_even_stale() {
 
     let player_entity = Entity::new(player_guid, "Player".to_string(), WorldPosition::default());
     state.entities.insert(player_entity);
+    let before_vel = state.entities.get(player_guid).unwrap().velocity;
 
-    // incoming stamp 50 is OLDER than stored 100; with the gate off it
-    // must still be applied (unconditional, ship-tested behaviour).
+    // Stale: incoming 50 is OLDER than stored 100 -> rejected.
     let stale_vel = Vector3::new(7.0, 8.0, 9.0);
-    let stale_omega = Vector3::new(0.0, 0.0, 1.0);
-    let events = state.set_player_vector_gated(stale_vel, stale_omega, 50);
-
+    let events = state.set_player_vector_gated(stale_vel, Vector3::new(0.0, 0.0, 1.0), 50);
     assert_eq!(
         state.entities.get(player_guid).unwrap().velocity,
-        stale_vel,
-        "default-off gate must apply velocity unconditionally"
+        before_vel,
+        "stale vector_sequence must be rejected (velocity unchanged)"
     );
-    assert!(events.iter().any(|event| matches!(
-        event,
-        WorldEvent::EntityVectorUpdated { guid, .. } if *guid == player_guid
-    )));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, WorldEvent::EntityVectorUpdated { .. })),
+        "a rejected stale update emits no EntityVectorUpdated"
+    );
+    assert_eq!(
+        state.player.vector_sequence, 100,
+        "stored stamp is unchanged on reject"
+    );
+
+    // Newer: incoming 150 is NEWER than stored 100 -> applied + advances.
+    let fresh_vel = Vector3::new(1.0, 2.0, 3.0);
+    let events = state.set_player_vector_gated(fresh_vel, Vector3::new(0.0, 0.0, 2.0), 150);
+    assert_eq!(
+        state.entities.get(player_guid).unwrap().velocity,
+        fresh_vel,
+        "newer vector_sequence is applied"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            WorldEvent::EntityVectorUpdated { guid, .. } if *guid == player_guid
+        )),
+        "an accepted update emits EntityVectorUpdated"
+    );
+    assert_eq!(
+        state.player.vector_sequence, 150,
+        "stored stamp advances to the accepted value"
+    );
 }
 
 /// Item A3 (OQ-1): manually exercise the gate predicate so the gated

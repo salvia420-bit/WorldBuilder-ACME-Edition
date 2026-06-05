@@ -488,8 +488,8 @@ pub struct PlayerState {
     /// misfiled the VectorUpdate's `instance_sequence` onto
     /// `instance_sequence` and never stored `vector_sequence` at all;
     /// this field is the correctly-named home for the latter. Read by
-    /// the (default-off) `USE_VECTOR_SEQUENCE_GATE` newer-than gate in
-    /// `state/mutations.rs::set_player_vector`.
+    /// the `USE_VECTOR_SEQUENCE_GATE` (enabled 2026-06-04) newer-than gate
+    /// in `state/mutations.rs::set_player_vector_gated`.
     pub vector_sequence: u16,
     /// Last grounded bit reported by authoritative self movement updates.
     pub last_server_grounded: Option<bool>,

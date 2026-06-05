@@ -20,11 +20,18 @@ use web_time::Instant;
 /// newer-than-stored `vector_sequence` (retail
 /// `SmartBox::DoVectorUpdate` → `CPhysicsObj::update_times[3]`,
 /// acclient.c:143459-143480) before being applied, and the stamp is
-/// advanced on accept. **Default-off**: OPEN-QUESTIONS OQ-1 requires a
-/// 1070 capture to confirm ACE increments `ObjectVector` per broadcast
-/// before this can ship enabled. When `false`, VectorUpdate is applied
-/// unconditionally (the prior, ship-tested behaviour).
-const USE_VECTOR_SEQUENCE_GATE: bool = false;
+/// advanced on accept. When `false`, VectorUpdate is applied
+/// unconditionally (the prior behaviour).
+///
+/// **Enabled (2026-06-04).** OQ-1 was settled by the running server's own
+/// source (`~/ace-server`): `GameMessageVectorUpdate` writes
+/// `GetNextSequence(SequenceType.ObjectVector)` on every broadcast, so the
+/// stamp is strictly monotonic per object — the gate accepts in-order
+/// frames and drops only genuinely reordered/stale UDP, matching retail.
+/// Remote baselines are seeded from ObjectCreate (`hydrate_from_odd` copies
+/// all 9 sequences incl. `ObjectVector`); the self player's baseline (0)
+/// matches a fresh-login server `ObjectVector`, so no first-update drop.
+const USE_VECTOR_SEQUENCE_GATE: bool = true;
 
 impl WorldState {
     pub(crate) fn authoritative_body_id_for_guid(&self, guid: Guid) -> Option<SpatialBodyId> {
