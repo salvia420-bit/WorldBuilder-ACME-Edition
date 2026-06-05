@@ -40,14 +40,31 @@
 
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import {
+  attachFloatyFrame,
+  resolveFrameSpritesFromLayout,
+  TOOLBAR_FRAME_UI_IDS,
+} from "../ui/ac_floaty_frame.js";
+import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
+import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
 
 const OVERLAY_ID = "hb-hotbar";
 const WIDTH = 310;
-const HEIGHT = 40;            // single-row variant; retail's 100 is the
-                              // two-row default. Stick to one row until
-                              // we expose row-toggle.
-const SLOT_SIZE = 30;
-const SLOT_COUNT = 9;
+const HEIGHT = 100;           // Retail two-row default (gmFloatyToolbarUI
+                              // 0x10000602: 310×100). The retail panel-
+                              // button band that retail draws at y=0..57
+                              // lives in `target-bar.js` as a separate
+                              // overlay in our impl (P2-36 deviation):
+                              // PanelButton_Social/Magic/Skill/Quest/
+                              // World/Options + Use/Examine/Sel-Object
+                              // all map to the target-bar's TOP row + 9
+                              // panel shortcuts. Different overlay,
+                              // same content; the top 0..57 band of the
+                              // hotbar stays empty.
+const SLOT_SIZE = 32;         // Retail per gmToolbarUI::InitShortcutArray.
+const SLOTS_PER_ROW = 9;
+const ROW_COUNT = 2;
+const SLOT_COUNT = SLOTS_PER_ROW * ROW_COUNT;
 
 /** gmFloatyToolbarUI — retail layout that drives the hotbar chrome.
  *  Element-id map confirmed by hotbar_layout_dump 2026-05-24:
@@ -76,6 +93,14 @@ const TOOLBAR_SLOT_IDS_ROW1 = [
   0x100001A7, 0x100001A8, 0x100001A9, 0x100001AA, 0x100001AB,
   0x100001AC, 0x100001AD, 0x100001AE, 0x100001AF,
 ];
+// ShortcutBar2 row — verified against Chorizite UIElementId.cs
+// (ShortcutBar2_Shortcut1Button..ShortcutBar2_Shortcut9Button) and
+// acclient.c:240892-241012.
+const TOOLBAR_SLOT_IDS_ROW2 = [
+  0x100006B7, 0x100006B8, 0x100006B9, 0x100006BA, 0x100006BB,
+  0x100006BC, 0x100006BD, 0x100006BE, 0x100006BF,
+];
+const TOOLBAR_SLOT_IDS_BY_ROW = [TOOLBAR_SLOT_IDS_ROW1, TOOLBAR_SLOT_IDS_ROW2];
 
 let stylesInjected = false;
 function ensureStyles() {
@@ -96,9 +121,14 @@ function ensureStyles() {
       pointer-events: none;
       font-family: var(--hb-font-serif);
       background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
+      box-shadow: var(--hb-shadow-panel);
+    }
+    /* Pre-FloatyFrame fallback chrome — visible during the brief window
+       between mount and resolveFrameSpritesFromLayout completing. The
+       8-piece sprite chrome paints over this once loaded. */
+    #${OVERLAY_ID}:not(.hb-floaty-framed) {
       border: 5px solid transparent;
       border-image: url("./sprites/acsprites/panel.png") 5 / 5px / 0 stretch;
-      box-shadow: var(--hb-shadow-panel);
     }
     /* Row container — absolute-positioned so layout-driven slot
        offsets from gmToolbarUI 0x21000016 can place each slot
@@ -113,6 +143,8 @@ function ensureStyles() {
       right: 6px;
       bottom: 5px;
       pointer-events: auto;
+      /* Above FloatyFrame chrome (z-index:1 on its 8 sprite pieces). */
+      z-index: 2;
     }
     #${OVERLAY_ID} .hb-hotbar-slot {
       position: absolute;
@@ -163,8 +195,15 @@ function ensureStyles() {
 
 const LS_KEY = "holtburger_hotbar_v1";
 function loadState() {
-  try { return JSON.parse(localStorage.getItem(LS_KEY)) || { slots: Array(SLOT_COUNT).fill(null) }; }
-  catch (_) { return { slots: Array(SLOT_COUNT).fill(null) }; }
+  const fallback = () => ({ slots: Array(SLOT_COUNT).fill(null) });
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LS_KEY)) || fallback();
+    // Migrate older 9-slot saves to 18 slots — pad with nulls so
+    // row 2 starts empty without forcing the user to re-bind row 1.
+    if (!Array.isArray(parsed.slots)) parsed.slots = [];
+    while (parsed.slots.length < SLOT_COUNT) parsed.slots.push(null);
+    return parsed;
+  } catch (_) { return fallback(); }
 }
 function saveState(s) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch (_) {}
@@ -246,48 +285,72 @@ function applyHotbarLayout(refs, attempt = 0) {
         applied += 1;
       }
       // Content frame 0x1000001B at (5,5) 300×122 — the area where
-      // slot grid nests. The retail (5,5) inset is the FRAME WIDTH;
-      // our overlay CSS already draws this via `border: 5px solid
-      // transparent` + border-image (brass 9-slice). Absolute-
-      // positioned children measure from the PADDING edge (inside
-      // the border), so we use (0, 0) to land at the same retail
-      // anatomy without double-counting the inset.
+      // slot grid nests. With FloatyFrame chrome the 5px gutter is
+      // owned by the absolutely-positioned sprite divs (TL/T/TR/L/BL/
+      // B/BR/R), so the row container starts at (5, 5) instead of
+      // (0, 0).
       const content = findElementById(floaty, HOTBAR_ELEM_CONTENT_FRAME);
       if (content && refs.rowEl) {
-        refs.rowEl.style.left = "0px";
-        refs.rowEl.style.top = "0px";
+        refs.rowEl.style.left = "5px";
+        refs.rowEl.style.top = "5px";
         if (typeof content.width === "number") refs.rowEl.style.width = `${content.width}px`;
-        // Don't override height — content frame (122) is taller than
-        // our single-row variant. Keep our compact height for now.
         refs.rowEl.style.right = "";
         refs.rowEl.style.bottom = "";
         applied += 1;
       }
+      // P0-3 / task #14 proof — attach retail 8-piece chrome from the
+      // DAT. Sprites resolved via the StateDesc emission shipped in
+      // task #1 (lib.rs fetch_layout v3). Idempotent via the
+      // hb-floaty-framed class so retries don't double-attach.
+      if (!refs.overlayEl.classList.contains("hb-floaty-framed")) {
+        const sprites = resolveFrameSpritesFromLayout(floaty, TOOLBAR_FRAME_UI_IDS);
+        if (sprites) {
+          attachFloatyFrame(refs.overlayEl, {
+            unlocked: sprites.unlocked,
+            locked: sprites.locked,
+            cornerSize: 5,
+            borderThickness: 5,
+            // No windowId yet — toolbar's `m_eWindowID` isn't in
+            // WINDOW_ID yet. Wire up when hotbar adopts the window-
+            // position adapter (task #15).
+          });
+          refs.overlayEl.classList.add("hb-floaty-framed");
+          applied += 1;
+          try {
+            window.__diag?.layout?.onHotbarFloatyFrame?.({
+              unlocked: sprites.unlocked, locked: sprites.locked,
+            });
+          } catch (_) {}
+        }
+      }
     }
     // Per-slot positions — relative to gmToolbarUI's root frame at
     // (0,0). Row 1: y=58, x=6,38,70,102,134,166,198,230,262; each
-    // 32×32 (stride 32). Our row container sits at the gmFloaty
-    // content-frame origin (5,5 in overlay coords), and layout x
-    // values are relative to gmToolbarUI's 0,0 which retail nests
-    // INSIDE the gmFloaty content frame — so layout x is directly
-    // row-relative.
+    // 32×32 (stride 32). Row 2: y=90, same x pattern. Our row
+    // container sits at the gmFloaty content-frame origin (5,5 in
+    // overlay coords); layout x/y are relative to gmToolbarUI's 0,0
+    // which retail nests INSIDE the gmFloaty content frame — so
+    // layout (x,y) lands directly on the row container.
     //
-    // y is rebased to 0: retail puts slots at y=58 because rows
-    // 0..57 carry panel buttons + sel-object field. Our compact
-    // single-row variant lifts slots to the row top.
+    // We DO apply desc.y now (vs the prior single-row "rebase to 0"
+    // hack) so row 1 and row 2 sit at the retail-correct vertical
+    // positions. The top 0..57 band is reserved for panel buttons
+    // (cross-find P2 follow-up; empty until then).
     if (toolbar && refs.slotEls) {
-      for (let i = 0; i < TOOLBAR_SLOT_IDS_ROW1.length; i++) {
-        const slotEl = refs.slotEls[i];
-        if (!slotEl) continue;
-        const desc = findElementById(toolbar, TOOLBAR_SLOT_IDS_ROW1[i]);
-        if (!desc) continue;
-        if (typeof desc.x === "number") slotEl.style.left = `${desc.x}px`;
-        if (typeof desc.width === "number") slotEl.style.width = `${desc.width}px`;
-        if (typeof desc.height === "number") slotEl.style.height = `${desc.height}px`;
-        // y intentionally NOT applied — keep top:0 from CSS so the
-        // single-row variant doesn't carry the 58px panel-button
-        // offset from retail.
-        slotUpdates += 1;
+      let flat = 0;
+      for (let row = 0; row < TOOLBAR_SLOT_IDS_BY_ROW.length; row++) {
+        const ids = TOOLBAR_SLOT_IDS_BY_ROW[row];
+        for (let i = 0; i < ids.length; i++, flat++) {
+          const slotEl = refs.slotEls[flat];
+          if (!slotEl) continue;
+          const desc = findElementById(toolbar, ids[i]);
+          if (!desc) continue;
+          if (typeof desc.x === "number") slotEl.style.left = `${desc.x}px`;
+          if (typeof desc.y === "number") slotEl.style.top = `${desc.y}px`;
+          if (typeof desc.width === "number") slotEl.style.width = `${desc.width}px`;
+          if (typeof desc.height === "number") slotEl.style.height = `${desc.height}px`;
+          slotUpdates += 1;
+        }
       }
     }
     try {
@@ -322,27 +385,61 @@ export function mount(ctx) {
   const state = loadState();
   const slotEls = [];
 
+  // P1-6 follow-up: server-side persistence for hotbar bindings.
+  // ACE handler `Player_Character.HandleActionAddShortcut` writes
+  // `(index, objectId)` to the Character table — bindings survive
+  // logout. We mirror retail UX: spell-bind clear → add ordering.
+  // No-op when the wasm session isn't logged in or the bundle
+  // predates the addShortcut method (older clients).
+  function sendAddShortcut(slotIndex, objectGuid, spellId) {
+    try {
+      const handle = window.__sessionHandle ?? null;
+      if (handle && typeof handle.addShortcut === "function") {
+        handle.addShortcut(slotIndex >>> 0, objectGuid >>> 0, spellId >>> 0, 0);
+      }
+    } catch (e) {
+      console.warn(`[hotbar] addShortcut(idx=${slotIndex}) failed:`, e);
+    }
+  }
+  function sendRemoveShortcut(slotIndex) {
+    try {
+      const handle = window.__sessionHandle ?? null;
+      if (handle && typeof handle.removeShortcut === "function") {
+        handle.removeShortcut(slotIndex >>> 0);
+      }
+    } catch (e) {
+      console.warn(`[hotbar] removeShortcut(idx=${slotIndex}) failed:`, e);
+    }
+  }
+
   function renderSlot(idx) {
     const el = slotEls[idx];
     const bound = state.slots[idx];
     el.classList.toggle("bound", !!bound);
     const icon = el.querySelector(".hb-hotbar-slot-icon");
-    if (bound && bound.spellId) {
-      // Spell icon — try our spell-component icon table; fall back to
-      // a generic spell glyph.
-      icon.style.backgroundImage = "url('./data/ui-sprites/0x06004CC1.png')"; // compass disk as placeholder
-      icon.style.opacity = "1";
-    } else if (bound && bound.itemGuid) {
-      // Item icon — generic placeholder (full per-item icon resolution
-      // requires hooking through entity-manager's item-icon cache, a
-      // follow-on UX polish). The bound-state highlight on the slot
-      // border is enough to signal "this slot holds an item".
-      icon.style.backgroundImage = "url('./data/ui-sprites/0x06004CC1.png')";
-      icon.style.opacity = "1";
-    } else {
+    if (!bound) {
       icon.style.backgroundImage = "";
       icon.style.opacity = "0";
+      icon.dataset.boundKey = "";
+      return;
     }
+    // P1-23 (cross-find hotbar-slot-icon-placeholder): resolve the
+    // bound spell/item to its real DAT icon via the shared resolver.
+    // The compass-disk placeholder paints until the async fetch lands
+    // — then the data-URL background replaces it. boundKey guards
+    // against races where renderSlot is called repeatedly while the
+    // promise is still in flight.
+    icon.style.backgroundImage = "url('./data/ui-sprites/0x06004CC1.png')";
+    icon.style.opacity = "1";
+    const key = bound.spellId
+      ? `spell:${bound.spellId}`
+      : `item:${bound.itemGuid}`;
+    icon.dataset.boundKey = key;
+    resolveBindingIcon(bound).then((url) => {
+      // Bail if the slot got re-bound while we were fetching.
+      if (icon.dataset.boundKey !== key) return;
+      if (url) icon.style.backgroundImage = `url("${url}")`;
+    }).catch(() => { /* shared helper logs; placeholder stays */ });
   }
 
   // Read the soft-target GUID — the most recently clicked entity in the
@@ -471,10 +568,16 @@ export function mount(ctx) {
     const el = document.createElement("div");
     el.className = "hb-hotbar-slot";
     el.dataset.slot = String(i);
+    const rowIdx = Math.floor(i / SLOTS_PER_ROW);
+    const colIdx = i % SLOTS_PER_ROW;
+    el.dataset.row = String(rowIdx);
     // Default absolute-positioned layout (CSS fallback). The retail
     // layout overrides these via applyHotbarLayout() after mount.
-    // Spacing: SLOT_SIZE + 2px gap = 32px stride starting at x=0.
-    el.style.left = `${i * (SLOT_SIZE + 2)}px`;
+    // Stride: SLOT_SIZE px starting at x=6 (retail x positions
+    // 6,38,70,102,...). Row spacing: 32px vertical stride starting at
+    // y=58 to mirror retail (panel buttons fill 0..57).
+    el.style.left = `${6 + colIdx * SLOT_SIZE}px`;
+    el.style.top = `${58 + rowIdx * SLOT_SIZE}px`;
 
     const icon = document.createElement("div");
     icon.className = "hb-hotbar-slot-icon";
@@ -482,7 +585,10 @@ export function mount(ctx) {
 
     const num = document.createElement("ac-text");
     num.className = "hb-hotbar-slot-num";
-    num.textContent = String(i + 1);
+    // Retail draws 1..9 on row 1 only; row 2 is unlabeled (user
+    // assigns keys via Options → Controls, so the number isn't
+    // meaningful).
+    num.textContent = rowIdx === 0 ? String(colIdx + 1) : "";
     el.appendChild(num);
 
     // Click → fire.
@@ -516,18 +622,27 @@ export function mount(ctx) {
       const iguid = ev.dataTransfer?.getData("application/x-hb-inv-guid");
       if (sid) {
         ev.preventDefault();
-        state.slots[i] = { spellId: Number(sid) };
+        const spellId = Number(sid);
+        // ACE expects "shortcut on top of existing item" to remove the
+        // old binding first then add the new one. We mirror that here.
+        const prev = state.slots[i];
+        if (prev) sendRemoveShortcut(i);
+        state.slots[i] = { spellId };
         saveState(state);
         renderSlot(i);
+        sendAddShortcut(i, 0, spellId);
         return;
       }
       if (iguid) {
         ev.preventDefault();
         const guid = parseInt(iguid, 10) >>> 0;
         if (guid > 0) {
+          const prev = state.slots[i];
+          if (prev) sendRemoveShortcut(i);
           state.slots[i] = { itemGuid: guid };
           saveState(state);
           renderSlot(i);
+          sendAddShortcut(i, guid, 0);
         }
       }
     });
@@ -535,9 +650,11 @@ export function mount(ctx) {
     // Right-click → clear slot.
     el.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
+      const prev = state.slots[i];
       state.slots[i] = null;
       saveState(state);
       renderSlot(i);
+      if (prev) sendRemoveShortcut(i);
     });
 
     row.appendChild(el);
@@ -546,6 +663,7 @@ export function mount(ctx) {
   }
 
   document.body.appendChild(overlay);
+  attachDefaultTopDragHandle(overlay, WINDOW_ID.HOTBAR);
 
   // Apply retail layout positions for the panel + slot row. Mounts
   // via the bar before wasm is ready; the helper handles retries.
@@ -557,24 +675,69 @@ export function mount(ctx) {
     slotEls,
   });
 
-  // Hotbar slot keys 1-9 (default Digit1..Digit9). User-rebindable
-  // via Options → Controls → Local Actions. Suppress while focused
-  // on a text input (chat send, etc.).
+  // Hotbar slot keys: row 1 = Digit1..Digit9 by default, row 2 = no
+  // default binding (retail leaves these unbound — user assigns via
+  // Options → Controls → Local Actions). Suppress while focused on a
+  // text input (chat send, etc.).
   function onKey(ev) {
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    for (let slot = 1; slot <= SLOT_COUNT; slot++) {
+    // Row 1
+    for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
       const binding = resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_${slot}`], `Digit${slot}`);
       if (matchesBinding(ev, binding)) {
         fireSlot(slot - 1);
         return;
       }
     }
+    // Row 2 — `HOTBAR_R2_1`..`HOTBAR_R2_9`, no default code (null).
+    for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
+      const binding = resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_R2_${slot}`], null);
+      if (binding && matchesBinding(ev, binding)) {
+        fireSlot(SLOTS_PER_ROW + slot - 1);
+        return;
+      }
+    }
   }
   window.addEventListener("keydown", onKey);
 
+  // P1-6 follow-up #2 (task #18): reconcile localStorage cache with the
+  // server's authoritative shortcut state once PlayerDescription lands.
+  // `playerShortcuts()` returns [] until then; we poll at 1Hz and run
+  // exactly one merge on first non-empty result. After reconciliation,
+  // per-bind sync (sendAdd/RemoveShortcut) keeps both sides in sync, so
+  // no further polling is needed.
+  function reconcileWithServer() {
+    const handle = window.__sessionHandle ?? null;
+    if (!handle || typeof handle.playerShortcuts !== "function") return false;
+    const flat = handle.playerShortcuts();
+    if (!flat || flat.length === 0) return false;
+    const newSlots = Array(SLOT_COUNT).fill(null);
+    for (let i = 0; i + 2 < flat.length; i += 3) {
+      const idx = flat[i] >>> 0;
+      const objectGuid = flat[i + 1] >>> 0;
+      const packed = flat[i + 2] >>> 0;
+      const spellId = packed & 0xFFFF;
+      if (idx >= SLOT_COUNT) continue;
+      if (spellId > 0)         newSlots[idx] = { spellId };
+      else if (objectGuid > 0) newSlots[idx] = { itemGuid: objectGuid };
+    }
+    state.slots = newSlots;
+    saveState(state);
+    for (let i = 0; i < SLOT_COUNT; i++) renderSlot(i);
+    return true;
+  }
+  let reconcileAttempts = 0;
+  const reconcileTimer = setInterval(() => {
+    reconcileAttempts++;
+    if (reconcileWithServer() || reconcileAttempts > 30) {
+      clearInterval(reconcileTimer);
+    }
+  }, 1000);
+
   return () => {
     window.removeEventListener("keydown", onKey);
+    clearInterval(reconcileTimer);
     overlay.remove();
   };
 }

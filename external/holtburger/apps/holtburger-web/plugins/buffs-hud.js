@@ -47,6 +47,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 
 const OVERLAY_ID = "hb-buffs-hud";
 const STYLE_ID = "hb-buffs-hud-style";
@@ -266,6 +267,10 @@ function ensureStyles() {
   const s = document.createElement("style");
   s.id = STYLE_ID;
   s.textContent = `
+    /* P3-32 (cross-find gap-027): single ListBox container — icons
+       wrap horizontally at the overlay level (was column-stacked rows
+       with row-internal horizontal wrap). flex-wrap is set so a long
+       enchantment list breaks to multiple rows naturally. */
     #${OVERLAY_ID} {
       position: fixed;
       top: 40px;
@@ -273,8 +278,9 @@ function ensureStyles() {
       z-index: 51;
       pointer-events: auto;
       display: none;
-      flex-direction: column;
-      gap: 4px;
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: 3px;
       padding: 4px 6px;
       max-width: 520px;
       font-family: var(--hb-font-serif);
@@ -283,19 +289,19 @@ function ensureStyles() {
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
     }
     #${OVERLAY_ID}[data-open="1"] { display: flex; }
+    /* P3-32 (cross-find gap-027 + buffs-identity-01): retail
+       gmEffectsUI displays one ListBox of all active enchantments
+       (border tint differentiates beneficial / harmful / cooldown).
+       display:contents on .hb-buff-row flattens the three category
+       rows into a single flex flow at the overlay level, matching
+       retail. Kind borders + tooltips carry the categorization
+       signal. The row label is hidden — retail uses the tooltip +
+       sort order to convey category. */
     #${OVERLAY_ID} .hb-buff-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 3px;
-      min-height: 26px;
+      display: contents;
     }
     #${OVERLAY_ID} .hb-buff-row-label {
-      color: var(--hb-text-muted-3);
-      font-size: 9px;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      padding-right: 4px;
-      align-self: center;
+      display: none;
     }
     #${OVERLAY_ID} .hb-buff {
       width: 24px;
@@ -772,6 +778,7 @@ export function mount(ctx) {
   overlay.appendChild(state.rowsEl.debuff);
   overlay.appendChild(state.rowsEl.cooldown);
   document.body.appendChild(overlay);
+  attachDefaultTopDragHandle(overlay, WINDOW_ID.BUFFS);
   state.overlayEl = overlay;
 
   // Expose toggle for status-indicators.js.

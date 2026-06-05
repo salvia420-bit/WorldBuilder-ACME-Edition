@@ -264,9 +264,23 @@ export function applyLayoutRegions(layoutId, refs, opts = {}) {
  * Get the state-overrides map (`UIStateId → StateDesc`) for an element.
  * Returns an empty object if the element has no states. Keys are
  * strings (JSON object property convention).
+ *
+ * The DAT carries the element's default-state data twice: once at
+ * `element.state_desc` (cached by ACE for hot-path access) and once
+ * inside `element.states` keyed by `default_state`. If the latter is
+ * missing we inject the former under its own `state_id` so callers
+ * always see the default state via the same lookup.
  */
 export function getElementStates(element) {
-  return element?.states ?? {};
+  const states = element?.states ?? {};
+  const baseStateDesc = element?.state_desc;
+  if (baseStateDesc && typeof baseStateDesc.state_id === "number") {
+    const key = String(baseStateDesc.state_id);
+    if (!states[key]) {
+      return { ...states, [key]: baseStateDesc };
+    }
+  }
+  return states;
 }
 
 /**

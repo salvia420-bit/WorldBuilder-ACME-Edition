@@ -480,10 +480,17 @@ pub enum GameActionOpcode {
     // QueryAge = 0x01C2,
     // /// C2S: Query a character's birth date.
     // QueryBirth = 0x01C4,
-    // /// C2S: Add an item or spell shortcut to the UI.
-    // AddShortCut = 0x019C,
-    // /// C2S: Remove a shortcut from the UI.
-    // RemoveShortCut = 0x019D,
+    /// C2S: Add an item or spell shortcut to the UI hotbar (gmFloaty-
+    /// ToolbarUI). Payload is a packed `Shortcut`
+    /// (`messages/player/shortcuts.rs`). ACE dispatcher:
+    /// `Network/GameAction/Actions/GameActionAddShortcut.cs`,
+    /// handler `Player_Character.HandleActionAddShortcut`.
+    AddShortCut = 0x019C,
+    /// C2S: Remove a shortcut from the UI. Payload is `u32 index`.
+    /// ACE dispatcher:
+    /// `Network/GameAction/Actions/GameActionRemoveShortcut.cs`,
+    /// handler `Player_Character.HandleActionRemoveShortcut`.
+    RemoveShortCut = 0x019D,
     // /// C2S: Response to a server confirmation dialog.
     ConfirmationResponse = 0x0275,
     // /// C2S: Response to an admin plugin list query.

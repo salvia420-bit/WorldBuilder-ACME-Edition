@@ -18,6 +18,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 
 const OVERLAY_ID = "hb-status-indicators";
 const WIDTH = 150;
@@ -260,6 +261,7 @@ export function mount(_ctx) {
   }
 
   document.body.appendChild(overlay);
+  attachDefaultTopDragHandle(overlay, WINDOW_ID.STATUS_INDICATORS);
 
   // Apply retail layout positions for sub-elements. mountBar() runs
   // BEFORE wasm is ready, so applyStatusIndicatorsLayout has an 8 × 2s
@@ -326,6 +328,15 @@ export function mount(_ctx) {
     else tier = "ok";
     if (tier !== linkLastTier) {
       linkLastTier = tier;
+      // P2-37 (cross-find indicators-states-link-01) DEFERRED: retail
+      // ships 6 distinct LinkStatus sprites in layout 0x21000071's
+      // per-state StateDesc.media. The proper port walks the layout
+      // via fetch_layout + resolveFrameSpritesFromLayout-style picker
+      // and caches a state→sprite map. Until then, hue-rotate fakes
+      // 3 visible tiers from the green-chain base sprite — visually
+      // close enough that the deferred extraction can land as a
+      // drop-in replacement without UX disruption.
+      //
       // CSS filter: keep green-chain sprite as-is for ok; tint to
       // yellow / red for middling / poor. hue-rotate values picked by
       // eye against the source green (~hue 120°) — yellow ≈ -60°,

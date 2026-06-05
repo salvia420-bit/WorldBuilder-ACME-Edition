@@ -36,6 +36,7 @@
 //                                the meter, x/w differs per bar)
 
 import { applyLayoutRegions } from "../ui/ac_layout.js";
+import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 
 const OVERLAY_ID = "hb-vitals-hud";
 
@@ -104,14 +105,33 @@ function ensureStyles() {
        label its vials. The sprite already carries the brass rim + beveled
        liquid-in-vial gradient; we don't add any extra border that would
        compress the sprite vertically or hide the bevel. */
-    #${OVERLAY_ID} .hud-vital-label { display: none; }
+    /* P1-19 (cross-find vitals-labels-hidden): show 1-char vital label
+       inline before the bar — matches retail gmFloatyVitalsUI layout
+       0x2100006C which carries label text alongside each meter. */
+    #${OVERLAY_ID} .hud-vital-label {
+      display: inline-block;
+      width: 12px;
+      margin-right: 4px;
+      font-size: 11px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream-bright);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+      text-align: center;
+      vertical-align: middle;
+      pointer-events: none;
+    }
     #${OVERLAY_ID} .hud-vital-bar {
       position: relative;
-      width: 250px;
+      /* P1-19 (cross-find vitals-bar-width-mismatch): retail HealthMeter /
+         StaminaMeter / ManaMeter in layout 0x2100006C all carry width=150
+         (verified via the layout JSON dump). Was 250px. */
+      width: 150px;
       height: 16px;
       background: transparent;
       overflow: hidden;
       border: none;
+      vertical-align: middle;
+      display: inline-block;
     }
     #${OVERLAY_ID} .hud-vital-fill {
       position: absolute;
@@ -130,11 +150,14 @@ function ensureStyles() {
     #${OVERLAY_ID} .hud-vital.mana .hud-vital-fill {
       background: url("./data/ui-sprites/0x0600748E.png") 0/100% 100% no-repeat;
     }
+    /* P1-19 (cross-find vitals-nums-position): right-anchor numeric
+       readout so it doesn't overlap the bar fill animation. Was
+       center-anchored which hid the % progress under the digits. */
     #${OVERLAY_ID} .hud-vital-nums {
       position: absolute;
-      left: 50%;
+      right: 4px;
       top: 50%;
-      transform: translate(-50%, -50%);
+      transform: translateY(-50%);
       min-width: 0;
       font-size: 10px;
       font-family: var(--hb-font-serif);
@@ -358,6 +381,7 @@ export function mount(ctx) {
   overlay.id = OVERLAY_ID;
   overlay.hidden = true;
   document.body.appendChild(overlay);
+  attachDefaultTopDragHandle(overlay, WINDOW_ID.VITALS);
 
   // Size the overlay to retail dimensions on first mount. Bar rows
   // are positioned by `renderVitals` as they're added; layout sticks

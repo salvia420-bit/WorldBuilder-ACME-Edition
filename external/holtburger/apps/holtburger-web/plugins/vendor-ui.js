@@ -472,7 +472,7 @@ function ensureStyles() {
   background: url("${SP}/0x06004C4C.png") no-repeat center / contain;
   border: 0;
   font-family: inherit; font-size: 11px; font-weight: 700;
-  color: #d44; text-shadow: 0 1px 0 rgba(0,0,0,.85);
+  color: var(--hb-text-cream); text-shadow: 0 1px 0 rgba(0,0,0,.85);
   cursor: pointer; padding: 0;
   letter-spacing: .02em;
   box-sizing: border-box;
@@ -775,7 +775,7 @@ function buildOverlay() {
   itemsBuyBtn.className = "hvb-btn hvb-btn-buy";
   itemsBuyBtn.dataset.slot = "top";
   itemsBuyBtn.disabled = true;
-  setAcText(itemsBuyBtn, "Buy", { color: "#d44" });
+  setAcText(itemsBuyBtn, "Buy", { color: "#f0d8a0" });
   itemsBuyBtn.addEventListener("click", handleBuyInstant);
   itemsPane.appendChild(itemsBuyBtn);
 
@@ -784,7 +784,7 @@ function buildOverlay() {
   itemsAddBtn.className = "hvb-btn hvb-btn-add";
   itemsAddBtn.dataset.slot = "bottom";
   itemsAddBtn.disabled = true;
-  setAcText(itemsAddBtn, "Add to List", { color: "#d44" });
+  setAcText(itemsAddBtn, "Add to List", { color: "#f0d8a0" });
   itemsAddBtn.addEventListener("click", handleAddToBuying);
   itemsPane.appendChild(itemsAddBtn);
 
@@ -830,7 +830,7 @@ function buildOverlay() {
   buyingConfirmBtn.className = "hvb-btn hvb-btn-confirm-buy";
   buyingConfirmBtn.dataset.slot = "top";
   buyingConfirmBtn.disabled = true;
-  setAcText(buyingConfirmBtn, "Confirm", { color: "#d44" });
+  setAcText(buyingConfirmBtn, "Confirm", { color: "#f0d8a0" });
   buyingConfirmBtn.addEventListener("click", handleConfirmBuy);
   buyingPane.appendChild(buyingConfirmBtn);
 
@@ -839,7 +839,7 @@ function buildOverlay() {
   buyingClearBtn.className = "hvb-btn hvb-btn-clear-buy";
   buyingClearBtn.dataset.slot = "bottom";
   buyingClearBtn.disabled = true;
-  setAcText(buyingClearBtn, "Clear", { color: "#d44" });
+  setAcText(buyingClearBtn, "Clear", { color: "#f0d8a0" });
   buyingClearBtn.addEventListener("click", () => {
     state.buyQueue = []; render();
   });
@@ -894,7 +894,7 @@ function buildOverlay() {
   sellingConfirmBtn.className = "hvb-btn hvb-btn-confirm-sell";
   sellingConfirmBtn.dataset.slot = "top";
   sellingConfirmBtn.disabled = true;
-  setAcText(sellingConfirmBtn, "Confirm", { color: "#d44" });
+  setAcText(sellingConfirmBtn, "Confirm", { color: "#f0d8a0" });
   sellingConfirmBtn.addEventListener("click", handleConfirmSell);
   sellingPane.appendChild(sellingConfirmBtn);
 
@@ -903,7 +903,7 @@ function buildOverlay() {
   sellingClearBtn.className = "hvb-btn hvb-btn-clear-sell";
   sellingClearBtn.dataset.slot = "bottom";
   sellingClearBtn.disabled = true;
-  setAcText(sellingClearBtn, "Clear", { color: "#d44" });
+  setAcText(sellingClearBtn, "Clear", { color: "#f0d8a0" });
   sellingClearBtn.addEventListener("click", () => {
     state.sellQueue = []; render();
   });

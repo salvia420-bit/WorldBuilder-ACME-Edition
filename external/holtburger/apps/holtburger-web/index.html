@@ -1107,7 +1107,6 @@
       //   - journalPanelPlugin    — `.view` registered for F6 panel
       //   - contractsPanelPlugin  — `.view` registered for F7 panel
       //   - optionsPanelPlugin    — `.view` registered for F10 panel
-      //   - compass-hud           — side-effect import (no named exports)
       //
       // Truly orphan imports DELETED by J1.C (no reference anywhere):
       //   spellResearchPlugin (1100), debugOverlayPlugin (1102).
@@ -1130,7 +1129,6 @@
       import * as optionsPanelPlugin from "./plugins/options-panel.js";
       // Wave 4.A (2026-05-28) — Train Skills view (gmSkillUI port).
       import * as trainSkillsPlugin from "./plugins/train-skills.js";
-      import "./plugins/compass-hud.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
       // CMT Wave 2 / Phase 5 (2026-05-26): remote-player swing dispatch.
       // The damageTaken / evadedAttacker handlers consult the
@@ -1823,21 +1821,25 @@
           // otherwise.
           import("./ui/ac_font.js")
             .then(async (m) => {
-              const runtime = await m.loadAcFont();
-              if (runtime) console.log("[ac-font] runtime ready");
-              else console.warn("[ac-font] runtime null after load (font missing?)");
-              // Preload the heading font (0x40000019, 21×22, 1912
-              // glyphs) for main-panel title strips. Fire-and-forget;
-              // setAcText falls back to UI font if this misses.
-              m.loadAcFont(m.HEADING_FONT_ID)
-                .then((h) => h && console.log("[ac-font] heading runtime ready"))
-                .catch(() => {});
-              // Preload the chat-window font (0x40000027, 16×15, 1419
-              // glyphs) — Latin extended + smart-quote/symbol set for
-              // real chat text.
-              m.loadAcFont(m.CHAT_FONT_ID)
-                .then((c) => c && console.log("[ac-font] chat runtime ready"))
-                .catch(() => {});
+              // P0-25 (cross-find gap-030): block until ALL 4 primary
+              // fonts (UI + COMPACT + HEADING + CHAT) are ready so
+              // labels don't flash through the system-font fallback
+              // mid-mount. Each missing-font fallback resolves to
+              // `null` rather than rejecting, so a partial loss
+              // doesn't deadlock the boot.
+              const [ui, compact, heading, chat] =
+                await m.loadPrimaryFonts();
+              console.log("[ac-font] primary fonts:",
+                ui ? "UI" : "ui-missing",
+                compact ? "+ COMPACT" : "(no compact)",
+                heading ? "+ HEADING" : "(no heading)",
+                chat ? "+ CHAT" : "(no chat)");
+              // Specialty fonts (damage popup / battle text / CJK) —
+              // fire-and-forget; they decorate transient overlays
+              // where a brief fallback is unobtrusive.
+              m.loadAcFont(m.DAMAGE_POPUP_FONT_ID).catch(() => {});
+              m.loadAcFont(m.BATTLE_TEXT_FONT_ID).catch(() => {});
+              m.loadAcFont(m.CJK_FONT_ID).catch(() => {});
             })
             .catch((err) => console.warn("[ac-font] preload failed:", err));
 

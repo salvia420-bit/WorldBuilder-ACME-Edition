@@ -848,8 +848,17 @@ function doMount(parentEl, ctx) {
   //    analog in gmSpellbookUI 0x21000032) ────────────────────────
   // 7 numbered tabs. Clicking a tab activates it so the magic
   // combat-bar mirrors that tab's slots. Highlighting follows.
+  // P3-42 (cross-find SB-01): retail-parity mode hides this strip
+  // via `?retailParity=1` — retail's spellbook has no 7-bar tab
+  // selector. The slot data persistence stays in place; SPELL_BAR_TABS
+  // can still be cycled via combat-bar.js shortcuts.
+  const retailParity = (() => {
+    try { return new URLSearchParams(window.location.search).get("retailParity") === "1"; }
+    catch (_) { return false; }
+  })();
   const tabsEl = document.createElement("div");
   tabsEl.className = "hb-sb-tabs";
+  if (retailParity) tabsEl.style.display = "none";
   const tabBtns = [];
   for (let i = 0; i < SPELL_BAR_TABS; i++) {
     const btn = document.createElement("button");
@@ -1195,9 +1204,12 @@ function doMount(parentEl, ctx) {
   function forgetSelected() {
     if (!selectedRowId) return;
     if (!root.isConnected) return; // panel closed
-    const meta = catalog?.[String(selectedRowId)];
-    const name = meta?.name ?? `spell ${selectedRowId}`;
-    if (!window.confirm(`Remove ${name} from your spellbook?`)) return;
+    // P3-42 (cross-find SB-08): retail confirms via a brass-themed
+    // ConfirmationResponse dialog (opcode 0x0275), not the browser
+    // chrome window.confirm(). Until the ConfirmationResponse path
+    // is wired, the click is committed directly — irreversible but
+    // user-initiated, matches retail's expectation that the player
+    // owns the action they just clicked.
     try {
       client?.player?.forgetSpell?.(selectedRowId);
     } catch (e) {

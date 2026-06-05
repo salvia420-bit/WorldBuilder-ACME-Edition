@@ -16,12 +16,44 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { applyLayoutRegions } from "../ui/ac_layout.js";
+import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 
 const OVERLAY_ID = "hb-radar";
+const TOOLTIP_ID = "hb-radar-tooltip";
 const WIDTH = 120;
 const HEIGHT = 140;
 const DISK_SIZE = 120;
 const BUTTON_SIZE = 27;
+
+// Blip projection — entities within MAX_RADAR_RANGE metres show as a
+// 3px dot at polar (dx, dy) scaled into the disk's effective radius.
+// The effective radius leaves ~10px margin so blips don't intrude on
+// the brass rim.
+const MAX_RADAR_RANGE = 50;
+const DOT_RADIUS_PX = (DISK_SIZE / 2) - 10;
+const MAX_BLIPS = 32;
+
+// objDescFlags bits used as a fallback when the WO classifier can't
+// resolve a canonical class. Mirrors gmRadarUI's flag-based fallback.
+const ODF_PLAYER = 0x00000008;
+const ODF_VENDOR = 0x00000010;
+
+// Category → dot color. Players white, creatures/monsters red,
+// NPCs/Vendors green. Items/containers/statics are filtered out before
+// reaching this map. Matches retail gmRadarUI::GetBlipColor.
+const DOT_COLORS = Object.freeze({
+  player:   "#ffffff",
+  creature: "#ff4040",
+  npc:      "#40d060",
+  vendor:   "#40d060",
+});
+
+const RADAR_HOSTILE_ONLY_BY_URL = (() => {
+  try {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("radarHostileOnly") === "1";
+  } catch (_) { return false; }
+})();
 
 /** gmRadarUI — retail layout that drives the radar/compass panel.
  *  Element-id map confirmed by radar_layout_dump 2026-05-24:
@@ -170,8 +202,318 @@ function ensureStyles() {
       background: transparent;
     }
     #${OVERLAY_ID} .hb-radar-coords:empty::before { content: ""; }
+    /* Entity blips — children of .hb-radar-rotor so they rotate with
+       the disk. World-frame deltas project to rotor-local pixel
+       offsets; the rotor's -heading rotation then puts each blip at
+       the correct screen position relative to the player's facing. */
+    #${OVERLAY_ID} .hb-radar-blip {
+      position: absolute;
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      will-change: left, top, opacity;
+      pointer-events: auto;
+      cursor: pointer;
+      z-index: 4;
+    }
+    #${OVERLAY_ID} .hb-radar-blip-pulse {
+      transform: translate(-50%, -50%) scale(2.2);
+      transition: transform 200ms ease-out;
+    }
+    #${OVERLAY_ID} .hb-radar-hostile-indicator {
+      position: absolute;
+      top: 122px;
+      right: 4px;
+      font-family: var(--hb-font-serif, "Cinzel", "Trajan Pro", "Times New Roman", serif);
+      font-size: 9px;
+      color: var(--hb-text-gold, #ffd76a);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+      pointer-events: none;
+      letter-spacing: 0.5px;
+      z-index: 5;
+    }
+    #${OVERLAY_ID} .hb-radar-hostile-indicator[hidden] { display: none; }
+    #${TOOLTIP_ID} {
+      position: fixed;
+      z-index: 51;
+      pointer-events: none;
+      padding: 3px 6px;
+      background: var(--hb-overlay-dark-deep, rgba(0,0,0,0.78));
+      border: 1px solid var(--hb-border-brass, #8a7544);
+      box-shadow: 0 1px 0 var(--hb-border-brass-deep, #5a4a28) inset,
+                  0 0 3px rgba(0,0,0,0.7);
+      font-family: var(--hb-font-serif, "Cinzel", "Trajan Pro", "Times New Roman", serif);
+      color: var(--hb-text-cream, #f0d8a0);
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+      transform: translate(-50%, -100%);
+      text-shadow: 0 0 2px rgba(0,0,0,0.9), 0 1px 0 #000;
+    }
+    #${TOOLTIP_ID}[hidden] { display: none; }
+    #${TOOLTIP_ID} .hb-radar-tooltip-tag-hostile { color: #ff5050; font-weight: 600; }
+    #${TOOLTIP_ID} .hb-radar-tooltip-tag-friendly { color: #ffffff; }
+    #${TOOLTIP_ID} .hb-radar-tooltip-tag-neutral { color: #f0c87c; }
   `;
   document.head.appendChild(style);
+}
+
+// Entity classifier — port from compass-hud. Prefer the WorldObject
+// map's canonical class (set by GameEvent.ObjectCreate / template
+// resolution); fall back to objDescFlags bits when the WO record is
+// absent (entity created mid-zone-load, etc.). Returns null for things
+// that shouldn't render on the radar (items, containers, statics).
+function classifyEntityForRadar(guid, inst) {
+  try {
+    const wo = window.__wom?.get?.(guid >>> 0);
+    const cls = wo?.canonicalObjectClass || wo?.className;
+    if (cls === "Player") return "player";
+    if (cls === "Vendor") return "vendor";
+    if (cls === "Npc") return "npc";
+    if (cls === "Creature" || cls === "Monster") return "creature";
+  } catch (_) {}
+  const meta = inst?.meta || {};
+  const odf = (meta.objDescFlags >>> 0) || 0;
+  if (odf & ODF_PLAYER) return "player";
+  if (odf & ODF_VENDOR) return "vendor";
+  if (meta.category === "creature") return "creature";
+  return null;
+}
+
+function entityDisplayName(ref) {
+  const inst = ref?.inst;
+  const m = inst?.meta;
+  if (m && typeof m.name === "string" && m.name.length > 0) return m.name;
+  const rn = inst?.root?.name;
+  if (typeof rn === "string" && rn.length > 0) return rn;
+  return `0x${(ref?.guid >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function entityDisposition(ref) {
+  const kind = ref?.kind;
+  if (kind === "player") return "friendly";
+  if (kind === "npc" || kind === "vendor") return "neutral";
+  if (kind === "creature") return "hostile";
+  try {
+    const wo = window.__wom?.get?.((ref?.guid >>> 0));
+    const cls = wo?.canonicalObjectClass || wo?.className;
+    if (cls === "Player") return "friendly";
+    if (cls === "Npc" || cls === "Vendor") return "neutral";
+    if (cls === "Creature" || cls === "Monster") return "hostile";
+  } catch (_) {}
+  return "neutral";
+}
+
+// Module-level blip state. mount() owns the lifecycle and clears these
+// in the teardown closure so unmount-remount stays clean.
+let _overlayEl = null;
+let _rotorEl = null;
+let _blipPool = [];
+let _blipRefs = [];
+let _tooltipEl = null;
+let _hostileIndicatorEl = null;
+let _hoveredBlipIdx = -1;
+let _radarHostileOnly = RADAR_HOSTILE_ONLY_BY_URL;
+
+function getLocalPlayerAcPos() {
+  try {
+    const em = window.liveScene3d?.entityManager;
+    const lpg = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+    if (!lpg) return null;
+    const inst = em?.entityMap?.get?.(lpg);
+    const p = inst?.root?.position;
+    if (!p) return null;
+    return { x: p.x, y: p.y, z: p.z };
+  } catch (_) { return null; }
+}
+
+function ensureBlipPool() {
+  if (!_rotorEl) return;
+  while (_blipPool.length < MAX_BLIPS) {
+    const d = document.createElement("div");
+    d.className = "hb-radar-blip";
+    d.style.display = "none";
+    _rotorEl.appendChild(d);
+    _blipPool.push(d);
+  }
+}
+
+// Project entities to rotor-local pixel coordinates. Because the rotor
+// is later rotated by -heading, a blip placed in rotor-local "world
+// frame" (centerX + dx*scale, centerY - dy*scale) ends up at the right
+// screen position automatically — no manual heading rotation needed
+// for the blip placement step.
+//
+// World delta uses entity.root.position.{x,y} treated as AC (east, north)
+// in line with the existing compass-hud blip code. The entityManager's
+// `root.position` is the canonical position source — see entities.js
+// for that contract.
+function updateRadarBlips(playerPos) {
+  if (!_overlayEl || _overlayEl.hidden || !_rotorEl) return;
+  const em = window.liveScene3d?.entityManager;
+  const map = em?.entityMap;
+  if (!map || !playerPos) {
+    for (const b of _blipPool) b.style.display = "none";
+    for (let i = 0; i < _blipRefs.length; i++) _blipRefs[i] = null;
+    return;
+  }
+  const localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+
+  const candidates = [];
+  for (const [guid, inst] of map) {
+    const g = (guid >>> 0);
+    if (g === localGuid) continue;
+    const pos = inst?.root?.position;
+    if (!pos) continue;
+    const dx = pos.x - playerPos.x;
+    const dy = pos.y - playerPos.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > MAX_RADAR_RANGE || dist < 0.01) continue;
+    const kind = classifyEntityForRadar(g, inst);
+    if (!kind) continue;
+    if (_radarHostileOnly && kind !== "creature") continue;
+    candidates.push({ dx, dy, dist, kind, guid: g, inst });
+  }
+
+  // Closest first so dot-pool slots go to the nearest entities.
+  candidates.sort((a, b) => a.dist - b.dist);
+  ensureBlipPool();
+  const n = Math.min(candidates.length, _blipPool.length);
+  const scale = DOT_RADIUS_PX / MAX_RADAR_RANGE;
+  for (let i = 0; i < n; i++) {
+    const c = candidates[i];
+    const b = _blipPool[i];
+    const localX = DISK_SIZE / 2 + c.dx * scale;
+    const localY = DISK_SIZE / 2 - c.dy * scale;
+    const alpha = Math.max(0.25, 1 - c.dist / MAX_RADAR_RANGE);
+    b.style.display = "block";
+    b.style.left = `${localX}px`;
+    b.style.top = `${localY}px`;
+    b.style.background = DOT_COLORS[c.kind] || "#ffffff";
+    b.style.opacity = String(alpha);
+    b.style.boxShadow = `0 0 2px ${DOT_COLORS[c.kind] || "#ffffff"}`;
+    _blipRefs[i] = {
+      guid: c.guid, inst: c.inst, dx: c.dx, dy: c.dy, dist: c.dist,
+      kind: c.kind, localX, localY,
+    };
+  }
+  for (let i = n; i < _blipPool.length; i++) {
+    _blipPool[i].style.display = "none";
+    _blipRefs[i] = null;
+  }
+  if (_hoveredBlipIdx >= n) {
+    _hoveredBlipIdx = -1;
+    hideTooltip();
+  }
+}
+
+function ensureTooltip() {
+  if (_tooltipEl) return _tooltipEl;
+  const t = document.createElement("div");
+  t.id = TOOLTIP_ID;
+  t.hidden = true;
+  document.body.appendChild(t);
+  _tooltipEl = t;
+  return t;
+}
+
+function fillTooltipContent(ref) {
+  const t = ensureTooltip();
+  // Bearing reported relative to player facing: a blip directly in
+  // front shows 0°, +right, −left. Since the blip's rotor-local
+  // offset (cx, cy) is already in player-facing frame after the
+  // rotor's -heading rotation cancels out the world-frame placement,
+  // we recompute the bearing here directly from world-deltas to keep
+  // the math one-source-of-truth.
+  const bearingDeg = Math.round(
+    (Math.atan2(ref.dx, ref.dy) * 180) / Math.PI,
+  );
+  const bearingStr = bearingDeg > 0 ? `+${bearingDeg}` : `${bearingDeg}`;
+  const distM = ref.dist.toFixed(1);
+  const disposition = entityDisposition(ref);
+  t.textContent = `${entityDisplayName(ref)} • ${distM}m • ${bearingStr}° • `;
+  const tagEl = document.createElement("span");
+  tagEl.className = `hb-radar-tooltip-tag-${disposition}`;
+  tagEl.textContent = disposition.toUpperCase();
+  t.appendChild(tagEl);
+}
+
+// Position the tooltip at the blip's screen-space location. The blip
+// lives inside .hb-radar-rotor which is rotated by -heading every
+// frame, so we compute the blip's screen position analytically from
+// its rotor-local offset + the current heading. Cheaper than reading
+// getBoundingClientRect on each frame (no layout reflow).
+function updateTooltipPosition(headingDeg) {
+  if (_hoveredBlipIdx < 0 || !_tooltipEl || _tooltipEl.hidden) return;
+  const ref = _blipRefs[_hoveredBlipIdx];
+  if (!ref || !_overlayEl) return;
+  const overlayRect = _overlayEl.getBoundingClientRect();
+  const theta = (-headingDeg * Math.PI) / 180;
+  const lx = ref.localX - DISK_SIZE / 2;
+  const ly = ref.localY - DISK_SIZE / 2;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  const screenX = cos * lx - sin * ly;
+  const screenY = sin * lx + cos * ly;
+  _tooltipEl.style.left = `${overlayRect.left + DISK_SIZE / 2 + screenX}px`;
+  _tooltipEl.style.top = `${overlayRect.top + DISK_SIZE / 2 + screenY - 6}px`;
+}
+
+function hideTooltip() {
+  if (_tooltipEl) _tooltipEl.hidden = true;
+}
+
+function blipIndexFromEvent(ev) {
+  const el = ev.target;
+  if (!el || !el.classList || !el.classList.contains("hb-radar-blip")) return -1;
+  const idx = _blipPool.indexOf(el);
+  if (idx < 0) return -1;
+  if (!_blipRefs[idx]) return -1;
+  return idx;
+}
+
+function onBlipMouseOver(ev) {
+  const idx = blipIndexFromEvent(ev);
+  if (idx < 0) return;
+  _hoveredBlipIdx = idx;
+  fillTooltipContent(_blipRefs[idx]);
+  if (_tooltipEl) _tooltipEl.hidden = false;
+}
+
+function onBlipMouseOut(ev) {
+  const idx = blipIndexFromEvent(ev);
+  if (idx < 0) return;
+  // Only hide if leaving for something that isn't another blip.
+  const related = ev.relatedTarget;
+  if (related && related.classList && related.classList.contains("hb-radar-blip")) return;
+  if (_hoveredBlipIdx === idx) {
+    _hoveredBlipIdx = -1;
+    hideTooltip();
+  }
+}
+
+function onBlipClick(ev) {
+  const idx = blipIndexFromEvent(ev);
+  if (idx < 0) return;
+  const ref = _blipRefs[idx];
+  if (!ref) return;
+  try {
+    window.liveScene3d?.entityManager?.setSelectedTarget?.(ref.guid >>> 0);
+  } catch (_) {}
+  const b = _blipPool[idx];
+  if (b) {
+    b.classList.add("hb-radar-blip-pulse");
+    window.setTimeout(() => {
+      try { b.classList.remove("hb-radar-blip-pulse"); } catch (_) {}
+    }, 200);
+  }
+}
+
+function setRadarHostileOnly(enabled) {
+  _radarHostileOnly = !!enabled;
+  if (_hostileIndicatorEl) _hostileIndicatorEl.hidden = !_radarHostileOnly;
+  if (_hoveredBlipIdx >= 0) { hideTooltip(); _hoveredBlipIdx = -1; }
 }
 
 export const manifest = {
@@ -269,50 +611,36 @@ export function mount(_ctx) {
   centre.className = "hb-radar-centre";
   overlay.appendChild(centre);
 
-  // Lock toggle (upper-left) — clicking will lock/unlock UI repositioning.
-  // Wire-up of the global UI lock is a follow-on; for now toggles a
-  // visual indicator (alternate sprite 0x060074B8 = locked state).
-  let locked = false;
+  // Lock toggle (upper-left) and Move handle (upper-right). Both wired
+  // via the shared ac_window_position adapter, which owns drag,
+  // localStorage persistence (key `hb.window.100006D3`), and the
+  // `hb-ui-lock-changed` CustomEvent broadcast so other floaties can
+  // react. Alternate sprite 0x060074B8 = locked state.
   const lockBtn = document.createElement("div");
   lockBtn.className = "hb-radar-lock";
   lockBtn.setAttribute("role", "button");
   lockBtn.setAttribute("aria-label", "Lock UI");
-  lockBtn.addEventListener("click", () => {
-    locked = !locked;
-    lockBtn.style.backgroundImage = locked
-      ? "url('./data/ui-sprites/0x060074B8.png')"
-      : "url('./data/ui-sprites/0x060074B7.png')";
-    document.documentElement.classList.toggle("hb-ui-locked", locked);
-  });
   overlay.appendChild(lockBtn);
 
-  // Move handle (upper-right) — pointer-capture-based drag so the
-  // browser keeps mouse events flowing even if the cursor leaves the
-  // 27x27 hit area mid-drag.
   const moveBtn = document.createElement("div");
   moveBtn.className = "hb-radar-move";
   moveBtn.setAttribute("role", "button");
   moveBtn.setAttribute("aria-label", "Move Compass");
-  let drag = null;
-  moveBtn.addEventListener("pointerdown", (ev) => {
-    if (locked) return;
-    ev.preventDefault();
-    const rect = overlay.getBoundingClientRect();
-    drag = { ox: ev.clientX - rect.left, oy: ev.clientY - rect.top };
-    try { moveBtn.setPointerCapture(ev.pointerId); } catch (_) {}
-  });
-  moveBtn.addEventListener("pointermove", (ev) => {
-    if (!drag) return;
-    overlay.style.top = `${ev.clientY - drag.oy}px`;
-    overlay.style.left = `${ev.clientX - drag.ox}px`;
-    overlay.style.right = "auto";
-  });
-  moveBtn.addEventListener("pointerup", (ev) => {
-    drag = null;
-    try { moveBtn.releasePointerCapture(ev.pointerId); } catch (_) {}
-  });
-  moveBtn.addEventListener("pointercancel", () => { drag = null; });
   overlay.appendChild(moveBtn);
+
+  attachWindowPosition(overlay, {
+    windowId: WINDOW_ID.RADAR,
+    dragHandle: moveBtn,
+    lockButton: lockBtn,
+    defaultPos: { top: "8px", right: "8px" },
+    onLockChange: (locked) => {
+      lockBtn.style.backgroundImage = locked
+        ? "url('./data/ui-sprites/0x060074B8.png')"
+        : "url('./data/ui-sprites/0x060074B7.png')";
+      // Backward-compat global hook — other CSS may key off this class.
+      document.documentElement.classList.toggle("hb-ui-locked", locked);
+    },
+  });
 
   // Coords strip — empty by default so no horizontal line shows. Populated
   // by the rAF tick below once getPlayerWorldPos() returns valid data.
@@ -321,7 +649,27 @@ export function mount(_ctx) {
   setAcText(coords, "");
   overlay.appendChild(coords);
 
+  // Hostile-only indicator label (visible when ?radarHostileOnly=1).
+  const hostileIndicator = document.createElement("div");
+  hostileIndicator.className = "hb-radar-hostile-indicator";
+  hostileIndicator.textContent = "[HOSTILE]";
+  hostileIndicator.hidden = !_radarHostileOnly;
+  overlay.appendChild(hostileIndicator);
+
   document.body.appendChild(overlay);
+
+  // Plumb module-level refs and stand up the blip pool + tooltip so
+  // the rAF tick below can populate the radar each frame.
+  _overlayEl = overlay;
+  _rotorEl = rotor;
+  _hostileIndicatorEl = hostileIndicator;
+  _blipPool = [];
+  _blipRefs = [];
+  ensureBlipPool();
+  ensureTooltip();
+  overlay.addEventListener("mouseover", onBlipMouseOver);
+  overlay.addEventListener("mouseout", onBlipMouseOut);
+  overlay.addEventListener("click", onBlipClick);
 
   // Apply retail layout positions for sub-elements. The hand-tuned
   // CSS values are very close already (1-2px deltas), but layout-driven
@@ -377,12 +725,40 @@ export function mount(_ctx) {
       const pos = sw?.getPlayerWorldPos?.();
       if (pos) setAcText(coords, fmtCoord(pos.x, pos.z));
     } catch (_) {}
+    // Entity blips — placed in rotor-local coords each frame; the
+    // rotor's -heading rotation (above) carries them to the correct
+    // screen position. Tooltip follows the hovered blip analytically.
+    const playerPos = getLocalPlayerAcPos();
+    updateRadarBlips(playerPos);
+    updateTooltipPosition(heading);
     rafId = requestAnimationFrame(tick);
   }
   rafId = requestAnimationFrame(tick);
 
   return () => {
     cancelAnimationFrame(rafId);
+    try {
+      overlay.removeEventListener("mouseover", onBlipMouseOver);
+      overlay.removeEventListener("mouseout", onBlipMouseOut);
+      overlay.removeEventListener("click", onBlipClick);
+    } catch (_) {}
     overlay.remove();
+    if (_tooltipEl && _tooltipEl.parentNode) {
+      _tooltipEl.parentNode.removeChild(_tooltipEl);
+    }
+    _overlayEl = null;
+    _rotorEl = null;
+    _tooltipEl = null;
+    _hostileIndicatorEl = null;
+    _blipPool = [];
+    _blipRefs = [];
+    _hoveredBlipIdx = -1;
   };
+}
+
+// Expose hostile-only toggle for runtime tweaking (used by HUD options
+// follow-up; also lets the existing compass-hud `?radarHostileOnly=1`
+// URL flag keep working once compass-hud is deleted).
+if (typeof window !== "undefined") {
+  window.__radar = { setRadarHostileOnly };
 }

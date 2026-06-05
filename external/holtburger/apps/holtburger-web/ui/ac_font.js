@@ -52,6 +52,38 @@ export const HEADING_FONT_ID = 0x40000019;
  */
 export const CHAT_FONT_ID = 0x40000027;
 
+/**
+ * Damage popup floaty font — 30 × 34 cell, 210 glyph set (Latin/digits
+ * only). Used by the 3D-world damage popups (`+100`, `-N`) where the
+ * larger glyph anchors the value over distance / against busy 3D
+ * backgrounds. Per `docs/ac-font-inventory-2026-05-24.md`. 36×39
+ * (0x40000010) is the bigger sibling if 30×34 reads small.
+ */
+export const DAMAGE_POPUP_FONT_ID = 0x4000000F;
+
+/**
+ * Scrolling battle-text font — 22 × 13 cell, 1258 glyph set
+ * (mid-Latin-extended). The condensed serif retail uses for the
+ * combat-log scroller. Per `docs/ac-font-inventory-2026-05-24.md`.
+ */
+export const BATTLE_TEXT_FONT_ID = 0x40000031;
+
+/**
+ * CJK fallback — 14 × 14 cell, 20609 glyph set (Japanese / Chinese /
+ * Korean). Smallest of the CJK family; used when the chat font misses
+ * a glyph and a fallback is needed. Per
+ * `docs/ac-font-inventory-2026-05-24.md`.
+ */
+export const CJK_FONT_ID = 0x40000017;
+
+/** Primary font IDs the boot path must have ready before first paint
+ *  so labels don't flash through the system-font fallback. The CJK +
+ *  damage-popup + battle-text fonts are fire-and-forget — they only
+ *  show on transient overlays where a brief fallback is unobtrusive. */
+const PRIMARY_FONT_IDS = Object.freeze([
+  UI_FONT_ID, COMPACT_FONT_ID, HEADING_FONT_ID, CHAT_FONT_ID,
+]);
+
 // Module-scoped per-font runtime cache. Each entry holds the
 // HTMLCanvasElement of the decoded foreground atlas and a Map<u32, glyph>.
 const runtimes = new Map();
@@ -111,6 +143,30 @@ export async function loadAcFont(fontId = UI_FONT_ID) {
   })();
   inFlight.set(fontId, promise);
   return promise;
+}
+
+/**
+ * P0-25 (cross-find gap-030): preload all primary fonts in parallel
+ * and resolve when the set is ready. Boot path should `await` this
+ * before mounting plugins so labels don't flash through the system-
+ * font fallback. Failures resolve to `null` for that font (caller
+ * still gets a useful result for the fonts that did load).
+ *
+ * @returns {Promise<Array<AcFontRuntime|null>>}
+ */
+export function loadPrimaryFonts() {
+  return Promise.all(PRIMARY_FONT_IDS.map((id) => loadAcFont(id)));
+}
+
+/** Singleton promise the boot path can await for "first paint OK to
+ *  render labels". Resolves once all 4 primary fonts have a runtime
+ *  (or each individual load has settled — `null` results are tolerated
+ *  so a missing font doesn't deadlock the boot). */
+let _primaryFontsReady = null;
+export function whenPrimaryFontsReady() {
+  if (_primaryFontsReady) return _primaryFontsReady;
+  _primaryFontsReady = loadPrimaryFonts().then(() => undefined);
+  return _primaryFontsReady;
 }
 
 /**

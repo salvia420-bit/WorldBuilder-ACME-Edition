@@ -157,6 +157,52 @@ impl ProtocolPack for SetSingleCharacterOptionActionData {
     }
 }
 
+/// C2S `AddShortCut` (sub-opcode 0x019C) payload — a single `Shortcut`
+/// record (index/objectId/spellId/layer). ACE dispatcher reads it via
+/// `ClientMessage.Payload.ReadShortcut()` then calls
+/// `Player_Character.HandleActionAddShortcut`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddShortcutActionData {
+    pub shortcut: crate::messages::player::shortcuts::Shortcut,
+}
+
+impl ProtocolUnpack for AddShortcutActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        let shortcut = crate::messages::player::shortcuts::Shortcut::unpack(data, offset)?;
+        Some(Self { shortcut })
+    }
+}
+
+impl ProtocolPack for AddShortcutActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        self.shortcut.pack(writer);
+    }
+}
+
+/// C2S `RemoveShortCut` (sub-opcode 0x019D) payload — just a `u32`
+/// index identifying which hotbar slot to clear. ACE dispatcher reads
+/// `ClientMessage.Payload.ReadUInt32()` then calls
+/// `Player_Character.HandleActionRemoveShortcut`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveShortcutActionData {
+    pub index: u32,
+}
+
+impl ProtocolUnpack for RemoveShortcutActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() { return None; }
+        let index = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(Self { index })
+    }
+}
+
+impl ProtocolPack for RemoveShortcutActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        writer.write_u32::<LittleEndian>(self.index).unwrap();
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwearAllegianceActionData {
     pub target_guid: Guid,

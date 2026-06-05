@@ -6595,8 +6595,8 @@ pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
 /// in `client_portal.dat` (namespace `eor/portal`). Both records
 /// must be available; if either is missing we return `null`.
 ///
-/// Returns JSON shape (v2 — additive `states` field, all v1 fields
-/// preserved):
+/// Returns JSON shape (v3 — additive `state_desc` field for the cached
+/// default-state data; all v2 fields preserved):
 /// ```json
 /// {
 ///   "id": <u32>,
@@ -6613,6 +6613,8 @@ pub async fn fetch_action_map(map_id: u32) -> Result<String, JsValue> {
 ///       "z_level": <u32?>,
 ///       "left_edge": <u32>, "top_edge": <u32>,
 ///       "right_edge": <u32>, "bottom_edge": <u32>,
+///       "state_desc": { ... },   // same StateDesc shape as below;
+///                                 // the element's cached default-state.
 ///       "states": {
 ///         // UIStateId → StateDesc; usually empty {}; populated for
 ///         // multi-state elements (lock buttons, dropdowns, etc.):
@@ -6727,14 +6729,23 @@ pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
         out.push_str(&el.right_edge.to_string());
         out.push_str(",\"bottom_edge\":");
         out.push_str(&el.bottom_edge.to_string());
-        // G3 states emission temporarily reverted to rule out the
-        // serde_json::to_string path as a cause of runtime issues
-        // observed through cloudflared. The Rust struct still parses
-        // states; we just don't serialize them. JS helpers
-        // (getElementStates / getStateProperty / getStateMediaByType)
-        // see empty `states: {}` on every element and behave as no-op
-        // until this is re-enabled.
-        out.push_str(",\"states\":{}");
+        // G3 emission re-enabled (2026-06-05). The element's base
+        // `state_desc` (cached default-state data) plus the per-state
+        // overrides `states` map both ship to JS so the layout consumers
+        // (getElementStates / getStateProperty / getStateMediaByType
+        // in ui/ac_layout.js) can resolve sprite DataIds, colors, and
+        // media triggers from the DAT instead of CSS approximations.
+        // `serde_json::to_string` errors fall back to the prior empty
+        // shape so a malformed sub-record can't blow up the whole
+        // layout payload.
+        let state_desc_json = serde_json::to_string(&el.state_desc)
+            .unwrap_or_else(|_| "null".to_string());
+        out.push_str(",\"state_desc\":");
+        out.push_str(&state_desc_json);
+        let states_json = serde_json::to_string(&el.states)
+            .unwrap_or_else(|_| "{}".to_string());
+        out.push_str(",\"states\":");
+        out.push_str(&states_json);
         out.push_str(",\"children\":[");
         let mut first = true;
         for (ck, cv) in &el.children {
@@ -15698,6 +15709,28 @@ enum SessionCommand {
         option: holtburger_common::CharacterOption,
         value: bool,
     },
+    /// P1-6 follow-up (2026-06-05): hotbar slot bind. Sends
+    /// `GameAction::AddShortcut` (sub-opcode `0x019C`). ACE handler
+    /// `Player_Character.HandleActionAddShortcut` calls
+    /// `Character.AddOrUpdateShortcut(index, objectId)` with
+    /// `CharacterChangesDetected = true` so the binding survives
+    /// logout. `spell_id` + `layer` are part of the wire packet but
+    /// ACE only persists `(index, objectId)`; clients use
+    /// non-zero `spell_id` to flag spell-bindings vs item-bindings.
+    AddShortcut {
+        index: u32,
+        object_guid: u32,
+        spell_id: u16,
+        layer: u16,
+    },
+    /// P1-6 follow-up (2026-06-05): hotbar slot clear. Sends
+    /// `GameAction::RemoveShortcut` (sub-opcode `0x019D`). ACE handler
+    /// `Player_Character.HandleActionRemoveShortcut` calls
+    /// `Character.TryRemoveShortcut(index)` + sets
+    /// `CharacterChangesDetected = true`.
+    RemoveShortcut {
+        index: u32,
+    },
     /// PR-LL 2026-05-23: drag-and-drop give from inventory onto an
     /// NPC / player target. Maps 1:1 to `GameAction::GiveObjectRequest`
     /// (sub-opcode 0x00CD).
@@ -21404,6 +21437,23 @@ struct LatestStats {
     // uses when `player_run_rate()` is `None`. JS reads via `playerRunRate`
     // on each `kind=8 playerStatsUpdated` drain.
     run_rate: f32,
+    // P0-2 follow-up (2026-06-05): cached
+    // `world.player.options1`/`options2` raw bits. ACE does NOT echo
+    // CharacterOptions1/2 back via PropertyInt (PropertyInt.cs:639-640
+    // are commented out); the server-authoritative state arrives via
+    // `PlayerDescription`'s `options1`/`options2` fields and is
+    // optimistically updated by the wasm `SetCharacterOption` arm so the
+    // options-panel checkboxes reflect the latest user intent + the
+    // server's login-time state. JS reads via
+    // `isCharacterOptionEnabled(idx)`.
+    character_options1: u32,
+    character_options2: u32,
+    // P1-6 follow-up (2026-06-05): hotbar slot bindings hydrated from
+    // `PlayerDescription.shortcuts` on login. Tuple shape
+    // `(index, object_guid, spell_id, layer)` — JS reconciles via
+    // `playerShortcuts()`. ACE persists `(index, object_id)` only; the
+    // wire still carries spell_id/layer for retail-shape symmetry.
+    shortcuts: Vec<(u32, u32, u16, u16)>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -23928,6 +23978,102 @@ impl SessionHandle {
                     "setCharacterOption: cmd channel closed ({e})"
                 ))
             })
+    }
+
+    /// P1-6 follow-up (2026-06-05): bind a hotbar slot. Routes through
+    /// `SessionCommand::AddShortcut` → `GameAction::AddShortcut`
+    /// (sub-opcode `0x019C`). For item bindings pass the item GUID
+    /// in `object_guid` and `spell_id=0`. For spell bindings pass
+    /// `object_guid=0` and the spell id in `spell_id`. `layer` is a
+    /// retail wire field (0 in practice today).
+    #[wasm_bindgen(js_name = addShortcut)]
+    pub fn add_shortcut(
+        &self,
+        index: u32,
+        object_guid: u32,
+        spell_id: u32,
+        layer: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AddShortcut {
+                index,
+                object_guid,
+                spell_id: spell_id as u16,
+                layer: layer as u16,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("addShortcut: cmd channel closed ({e})"))
+            })
+    }
+
+    /// P1-6 follow-up (2026-06-05): clear a hotbar slot. Routes
+    /// through `SessionCommand::RemoveShortcut` →
+    /// `GameAction::RemoveShortcut` (sub-opcode `0x019D`).
+    #[wasm_bindgen(js_name = removeShortcut)]
+    pub fn remove_shortcut(&self, index: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RemoveShortcut { index })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("removeShortcut: cmd channel closed ({e})"))
+            })
+    }
+
+    /// P1-6 follow-up #2 (2026-06-05): read the server-authoritative
+    /// hotbar bindings hydrated from `PlayerDescription.shortcuts` on
+    /// login. Returns a flat `Uint32Array` of triples
+    /// `[index, object_guid, packed]` where `packed = (layer << 16) |
+    /// spell_id`. Empty array before PlayerDescription lands. The JS
+    /// hotbar reads this on mount to reconcile its localStorage cache
+    /// with the server's saved state.
+    #[wasm_bindgen(js_name = playerShortcuts)]
+    pub fn player_shortcuts(&self) -> Vec<u32> {
+        let stats = self.latest_stats.borrow();
+        let Some(stats) = stats.as_ref() else { return Vec::new(); };
+        stats
+            .shortcuts
+            .iter()
+            .flat_map(|(index, object_guid, spell_id, layer)| {
+                let packed = ((*layer as u32) << 16) | (*spell_id as u32);
+                [*index, *object_guid, packed]
+            })
+            .collect()
+    }
+
+    /// P0-2 follow-up (2026-06-05): read the current state of a single
+    /// `CharacterOption` from the cached `LatestStats` snapshot. The
+    /// snapshot is hydrated by `PlayerDescription` (server-authoritative,
+    /// login-time) and optimistically updated on every
+    /// `setCharacterOption` call. Returns `false` before the first
+    /// stats publish (i.e. pre-login or before the player Entity lands)
+    /// — this matches the cli's `character_option_enabled(option)` reading
+    /// the default-empty bitfield.
+    ///
+    /// `option` is the `holtburger_common::CharacterOption` enum INDEX
+    /// (0x00..0x36 per `crates/holtburger-common/src/character.rs:117`),
+    /// the same value `setCharacterOption` accepts. Unknown indices
+    /// reject with a JS-side error.
+    #[wasm_bindgen(js_name = isCharacterOptionEnabled)]
+    pub fn is_character_option_enabled(&self, option: u32) -> Result<bool, JsValue> {
+        use holtburger_common::{CharacterOption, CharacterOptions1, CharacterOptions2};
+        use holtburger_world::player::types::{character_option_mask, CharacterOptionMask};
+        let option = CharacterOption::from_repr(option).ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "isCharacterOptionEnabled: unknown CharacterOption value {option:#x} \
+                 (see holtburger_common::CharacterOption — UseFastMissiles=0x2B etc.)"
+            ))
+        })?;
+        let stats = self.latest_stats.borrow();
+        let Some(stats) = stats.as_ref() else { return Ok(false); };
+        Ok(match character_option_mask(option) {
+            CharacterOptionMask::Options1(flag) => {
+                CharacterOptions1::from_bits_truncate(stats.character_options1).contains(flag)
+            }
+            CharacterOptionMask::Options2(flag) => {
+                CharacterOptions2::from_bits_truncate(stats.character_options2).contains(flag)
+            }
+        })
     }
 
     /// PR-LL 2026-05-23: give `amount` × player-owned item
@@ -26457,6 +26603,19 @@ fn publish_player_stats_snapshot(
     // matches what the cli sees. (`WorldContextExt` already in scope
     // from the burden read a few lines above.)
     let skill_credits = world.player_unspent_skill_points();
+    // P0-2 follow-up (2026-06-05): raw CharacterOptions1/2 bits straight
+    // off the cached player struct. Hydrated by PlayerDescription on
+    // login (PlayerState.options1/options2) and optimistically updated by
+    // the SetCharacterOption recv-loop arm so the JS isCharacterOption-
+    // Enabled getter reflects user toggles before the next login.
+    let character_options1 = world.player.options1.bits();
+    let character_options2 = world.player.options2.bits();
+    let shortcuts: Vec<(u32, u32, u16, u16)> = world
+        .player
+        .shortcuts
+        .iter()
+        .map(|s| (s.index, u32::from(s.object_id), s.spell_id, s.layer))
+        .collect();
     *latest_stats.borrow_mut() = Some(LatestStats {
         name,
         vitals,
@@ -26471,6 +26630,9 @@ fn publish_player_stats_snapshot(
         accuracy_mod,
         skill_credits,
         run_rate,
+        character_options1,
+        character_options2,
+        shortcuts,
     });
 }
 
@@ -32477,15 +32639,19 @@ async fn recv_loop(
                         // ClientCommand::SetCharacterOption from
                         // holtburger-core/src/client/commands.rs:603-614 —
                         // build and send a GameAction::SetSingleCharacterOption.
-                        // ACE updates the player's CharacterOptions1/2
-                        // bitfield server-side and echoes back via
-                        // Private/PublicUpdatePropertyInt; we let the
-                        // existing player-stats pipeline pick up the echo
-                        // rather than mirror world.player state here
-                        // (the cli's set_character_option_enabled +
-                        // emit_player_options_updated calls live on the
-                        // full holtburger-core::Client, not on this slim
-                        // wasm-session SessionHandle).
+                        //
+                        // 2026-06-05 update (P0-2 follow-up): ACE does NOT
+                        // echo CharacterOptions1/2 back via PropertyInt
+                        // (`PropertyInt.cs:639-640` are commented out —
+                        // 9003/9004), so the prior "let the player-stats
+                        // pipeline pick up the echo" path was a no-op. The
+                        // server-authoritative state arrives via
+                        // `PlayerDescription`'s `options1`/`options2`
+                        // fields on (re)login. To make the options-panel
+                        // checkboxes reflect user intent IMMEDIATELY
+                        // mid-session, we optimistically apply the same
+                        // bitflag mutation locally + re-publish the stats
+                        // snapshot so JS getters see the new state.
                         use holtburger_protocol::messages::{
                             GameAction, SetSingleCharacterOptionActionData,
                         };
@@ -32507,9 +32673,73 @@ async fn recv_loop(
                             });
                             return;
                         }
+                        if let Some(w) = world.as_mut() {
+                            w.player.set_character_option_enabled(option, value);
+                            publish_player_stats_snapshot(w, &latest_stats);
+                        }
                         console_log_str(&format!(
                             "[character-option] set: {option:?} = {value}",
                         ));
+                    }
+                    Some(SessionCommand::AddShortcut { index, object_guid, spell_id, layer }) => {
+                        // P1-6 follow-up: send GameAction::AddShortcut
+                        // (sub-opcode 0x019C) to ACE. The server persists
+                        // (index, objectId) to the Character table —
+                        // bindings survive logout. spell_id + layer are
+                        // wire-only fields ACE doesn't store; we still
+                        // ship them so the packet matches the retail
+                        // ACE.Network ReadShortcut() shape.
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, AddShortcutActionData,
+                            player::shortcuts::Shortcut,
+                        };
+                        let action = GameAction::AddShortcut(Box::new(AddShortcutActionData {
+                            shortcut: Shortcut {
+                                index,
+                                object_id: Guid(object_guid),
+                                spell_id,
+                                layer,
+                            },
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(AddShortcut idx={index} guid=0x{object_guid:08X}): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("add_shortcut: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[shortcut] add: idx={index} guid=0x{object_guid:08X} spell={spell_id} layer={layer}",
+                        ));
+                    }
+                    Some(SessionCommand::RemoveShortcut { index }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, RemoveShortcutActionData,
+                        };
+                        let action = GameAction::RemoveShortcut(Box::new(RemoveShortcutActionData {
+                            index,
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(RemoveShortcut idx={index}): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("remove_shortcut: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!("[shortcut] remove: idx={index}"));
                     }
                     Some(SessionCommand::GiveObject {
                         target_guid,

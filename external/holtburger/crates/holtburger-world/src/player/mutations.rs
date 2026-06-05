@@ -375,6 +375,7 @@ impl PlayerState {
         self.options1 = data.options1;
         self.options2 = data.options2;
         self.hotbar_spells = data.hotbar_spells.clone();
+        self.shortcuts = data.shortcuts.clone();
         self.desired_comps = data.desired_comps.clone();
         self.spellbook_filters = data.spellbook_filters;
         self.gameplay_options = data.gameplay_options.clone();

@@ -109,7 +109,12 @@ const PAPERDOLL_W = 224;
 const PAPERDOLL_H = 214;
 const BAG_COL_W = 61;
 const SLOT_SIZE = 32;
-const GRID_COLS = 7;
+// P2-21 (cross-find inv-items-grid-cols): retail gmInventoryUI uses 6
+// columns. Was 7. Hand-tuned to fit our 300px content frame minus
+// 8px padding minus 16px bag column = 276/6 = 46px-wide cells with
+// the 32×32 slot icon centered. The visible item grid feels tighter
+// than retail at 7 cols.
+const GRID_COLS = 6;
 
 // Wave 13.2 — ItemType bit for the Container subclass (side packs).
 // Source: external/ACE/Source/ACE.Entity/Enum/ItemType.cs:18
@@ -336,25 +341,29 @@ function ensureStyles() {
       height: ${PAPERDOLL_H}px;
       pointer-events: auto;
     }
+    /* P2-21 (cross-find inv-paperdoll-backdrop): retail's paperdoll
+       background is flat (no gradient, no border) — the slot frame
+       sprites already carry the brass anatomy. Dropped the radial-
+       gradient + brass-dim border. */
     #${OVERLAY_ID} .hb-inv-paperdoll-bg {
       position: absolute;
       top: 0; left: 0;
       width: 100%; height: 100%;
-      background:
-        radial-gradient(ellipse at center, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.8) 100%);
-      border: 1px solid var(--hb-border-brass-dim);
+      background: transparent;
       z-index: 0;
     }
-    /* Wave 14 — PaperdollViewport canvas. Renders the local player's
-       3D rig behind the slot frames so equipped armor/dyes show on
-       the body AND the slot icon stays visible at the panel edge.
-       pointer-events:none lets slot clicks pass through to the slots. */
+    /* P2-21 (cross-find inv-paperdoll-3d-doll): dim the 3D rig so the
+       slot icons read first. Retail has no 3D ragdoll figure here —
+       this is a Holtburger addition. opacity:0.25 keeps it visible
+       enough to indicate equipped armor without distracting from
+       slot interaction. */
     #${OVERLAY_ID} .hb-inv-paperdoll-viewport {
       position: absolute;
       top: 0; left: 0;
       width: 100%; height: 100%;
       z-index: 1;
       pointer-events: none;
+      opacity: 0.25;
     }
     #${OVERLAY_ID} .hb-inv-paperdoll-viewport canvas {
       display: block;
@@ -371,10 +380,13 @@ function ensureStyles() {
        child-ImageMedia from LayoutDesc 0x21000037 and already
        includes the dark stone frame, so we DON'T layer a separate
        slot-bg image underneath. */
+    /* P2-21 (cross-find inv-doll-slot-size + inv-doll-slot-opacity):
+       slot size 28→32 (retail PAPERDOLL_SLOTS slot ImageMedia is 32×32);
+       drop opacity:0.6 default — slots are fully opaque at rest. */
     #${OVERLAY_ID} .hb-inv-doll-slot {
       position: absolute;
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       background-color: rgba(0, 0, 0, 0.4);
       background-size: 100% 100%;
       background-repeat: no-repeat;
@@ -383,10 +395,9 @@ function ensureStyles() {
       image-rendering: pixelated;
       cursor: pointer;
       transition: filter 120ms ease;
-      opacity: 0.6;
       z-index: 2;
     }
-    #${OVERLAY_ID} .hb-inv-doll-slot:hover { opacity: 1; filter: brightness(1.3); }
+    #${OVERLAY_ID} .hb-inv-doll-slot:hover { filter: brightness(1.3); }
     #${OVERLAY_ID} .hb-inv-doll-slot.equipped {
       opacity: 1;
       filter: drop-shadow(0 0 3px var(--hb-text-gold));
@@ -489,66 +500,71 @@ function ensureStyles() {
        label sits below the bag tabs in the empty lower band of the
        bag column. Both are children of .hb-inv-bagcol so their
        absolute positions resolve inside that 61×339 box. */
-    #${OVERLAY_ID} .hb-inv-burden-meter {
+    /* P1-30 (cross-find inv-burden-*): horizontal 3-cell row under the
+       paperdoll — label | pct | bar. Was a 6x28 vertical strip on the
+       bag column (overlapped the bag-tab meter) + a numeric label
+       perched above. The new row sits in the previously-empty band at
+       y=222 between the paperdoll body (ends y=204) and the items
+       grid (starts y=237). */
+    #${OVERLAY_ID} .hb-inv-burden-row {
       position: absolute;
-      top: 4px;
-      right: 4px;
-      width: 6px;
-      height: 28px;
+      top: 222px;
+      left: 6px;
+      right: 73px;             /* clear the 61px bag column on the right */
+      height: 14px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--hb-font-serif);
+      color: var(--hb-text-cream);
+      font-size: 10px;
+      z-index: 3;
+      pointer-events: auto;
+      user-select: none;
+    }
+    #${OVERLAY_ID} .hb-inv-burden-row .label {
+      flex: 0 0 auto;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--hb-text-cream);
+    }
+    #${OVERLAY_ID} .hb-inv-burden-row .pct {
+      flex: 0 0 38px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: var(--hb-text-gold);
+    }
+    #${OVERLAY_ID} .hb-inv-burden-meter {
+      flex: 1 1 auto;
+      position: relative;
+      height: 8px;
       background: rgba(0, 0, 0, 0.55);
       border: 1px solid var(--hb-border-brass-dim);
       overflow: hidden;
       pointer-events: none;
-      z-index: 2;
     }
     #${OVERLAY_ID} .hb-inv-burden-meter::after {
       content: "";
       position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      height: var(--burden-fill, 0%);
+      top: 0; bottom: 0; left: 0;
+      width: var(--burden-fill, 0%);
       background: var(--burden-color, hsl(120, 70%, 45%));
-      transition: height 0.18s ease-out, background 0.18s ease-out;
+      transition: width 0.18s ease-out, background 0.18s ease-out;
     }
-    /* Numeric burden label — positioned ABOVE the bag column (in the
-       empty y=0..22 band of the inventory overlay above where the
-       bag column starts at y=23), aligned with the bag column's
-       horizontal extent on the right edge of the panel. The user's
-       retail anatomy says the text sits "on top of" (above) the top
-       bag, not overlaid on it; the meter strip handles the visual
-       fill cue on the right edge of the first pack. Appended to
-       overlay, not bagCol, since it lives outside the bag column's
-       300×362 box. */
+    /* The .hb-inv-burden-text class is kept for the over-encumbered red
+       tint cue (.over) on the wrapping row. Was a free-floating label
+       above the bag column; now a no-op positional container — the row
+       above does the layout work. */
     #${OVERLAY_ID} .hb-inv-burden-text {
-      position: absolute;
-      top: 4px;
-      right: 0;
-      width: 61px;
-      height: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 3px;
-      font-size: 9px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.8);
-      pointer-events: auto;
-      user-select: none;
-      letter-spacing: 0.02em;
-      z-index: 2;
+      display: contents;
     }
-    #${OVERLAY_ID} .hb-inv-burden-text .pct {
-      color: var(--hb-text-gold);
-      font-variant-numeric: tabular-nums;
-    }
-    #${OVERLAY_ID} .hb-inv-burden-text.over {
-      color: #ff8060;
-    }
-    #${OVERLAY_ID} .hb-inv-burden-text.over .pct {
-      color: #ff8060;
-    }
+    /* Over-encumbered cue — .over toggled on the row by
+       refreshBurdenText(). Mirrored on .hb-inv-burden-text for any
+       legacy consumers that still look up that class. */
+    #${OVERLAY_ID} .hb-inv-burden-row.over,
+    #${OVERLAY_ID} .hb-inv-burden-text.over { color: #ff8060; }
+    #${OVERLAY_ID} .hb-inv-burden-row.over .pct,
+    #${OVERLAY_ID} .hb-inv-burden-text.over .pct { color: #ff8060; }
     /* Aetheria-gated sigil slots — hidden when their AetheriaBitfield
        (PropertyInt 322) bit is unset. Port of retail
        gmPaperDollUI::UpdateAetheria (ACBindings gmPaperDollUI.cs:217-222).
@@ -560,19 +576,12 @@ function ensureStyles() {
        until quest unlock, but we render them as faded slot frames so the
        player understands they exist and where they'll appear once
        unlocked. Lock icon overlay via :after. */
+    /* P2-21 (cross-find inv-slots-toggle-presence): retail HIDES the
+       aetheria slot frame entirely when the quest isn't unlocked
+       (PropertyInt::AetheriaBitfield bit is 0). Prior impl showed a
+       grayed-out lock icon — non-retail. */
     #${OVERLAY_ID} .hb-inv-doll-slot.aetheria-locked {
-      opacity: 0.25;
-      filter: grayscale(1);
-      pointer-events: none;
-    }
-    #${OVERLAY_ID} .hb-inv-doll-slot.aetheria-locked::after {
-      content: "🔒";
-      position: absolute;
-      top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 10px;
-      color: rgba(255, 255, 255, 0.6);
-      pointer-events: none;
+      display: none;
     }
     /* "Slots" toggle button — port of retail gmPaperDollUI::m_SlotCheckbox
        (ACBindings gmPaperDollUI.cs:134 + acclient.c:221636,221667,
@@ -1220,23 +1229,29 @@ function doMount(parentEl, _ctx) {
   // `handle.playerBurden` (0.0..N float, encumbrance / capacity per
   // ACE EncumbranceSystem.GetBurden); refreshed on every
   // `playerStatsUpdated` event AND every rebuild() pass.
-  const burdenMeter = document.createElement("div");
-  burdenMeter.className = "hb-inv-burden-meter";
-  bagCol.appendChild(burdenMeter);
-  const burdenText = document.createElement("div");
-  burdenText.className = "hb-inv-burden-text";
+  // P1-30 (cross-find inv-burden-*): 3-cell horizontal row mounted
+  // BELOW the paperdoll (y=222 in CSS), spanning the inventory width
+  // up to the bag column. Avoids the bag-tab-meter overlap the prior
+  // 6×28 vertical strip caused.
+  const burdenRow = document.createElement("div");
+  burdenRow.className = "hb-inv-burden-row";
   const burdenLabel = document.createElement("span");
   burdenLabel.className = "label";
   setAcText(burdenLabel, "Burden", { color: "#f0d8a0" });
   const burdenPct = document.createElement("span");
   burdenPct.className = "pct";
   setAcText(burdenPct, "—", { color: "#f0c060" });
-  burdenText.appendChild(burdenLabel);
-  burdenText.appendChild(burdenPct);
-  // burdenText lives outside the bag column (above it, in the empty
-  // top-right strip of the inventory overlay). The meter stays
-  // inside bagCol since it's anchored to the first pack tab.
-  overlay.appendChild(burdenText);
+  const burdenMeter = document.createElement("div");
+  burdenMeter.className = "hb-inv-burden-meter";
+  burdenRow.appendChild(burdenLabel);
+  burdenRow.appendChild(burdenPct);
+  burdenRow.appendChild(burdenMeter);
+  overlay.appendChild(burdenRow);
+  // Keep the .hb-inv-burden-text element around as the "over" CSS
+  // hook; legacy code in refreshBurdenText toggles `.over` on it.
+  // Now a `display: contents` shim that holds the same per-row state
+  // tag without affecting layout.
+  const burdenText = burdenRow; // alias — refreshBurdenText below toggles .over on this
 
   // Items grid (pack contents)
   const itemsGrid = document.createElement("div");

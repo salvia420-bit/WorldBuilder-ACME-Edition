@@ -40,6 +40,18 @@ export const LOCAL_ACTIONS = [
   { labelHash: "0xFF000007", label: "Hotbar Slot 7", defaultCode: "Digit7" },
   { labelHash: "0xFF000008", label: "Hotbar Slot 8", defaultCode: "Digit8" },
   { labelHash: "0xFF000009", label: "Hotbar Slot 9", defaultCode: "Digit9" },
+  // Row 2 (ShortcutBar2 in retail / Chorizite). Retail leaves these
+  // unbound by default — players opt in via Options → Controls. Null
+  // defaultCode = no default binding.
+  { labelHash: "0xFF00000A", label: "Hotbar Row 2 Slot 1", defaultCode: null },
+  { labelHash: "0xFF00000B", label: "Hotbar Row 2 Slot 2", defaultCode: null },
+  { labelHash: "0xFF00000C", label: "Hotbar Row 2 Slot 3", defaultCode: null },
+  { labelHash: "0xFF00000D", label: "Hotbar Row 2 Slot 4", defaultCode: null },
+  { labelHash: "0xFF00000E", label: "Hotbar Row 2 Slot 5", defaultCode: null },
+  { labelHash: "0xFF00000F", label: "Hotbar Row 2 Slot 6", defaultCode: null },
+  { labelHash: "0xFF000012", label: "Hotbar Row 2 Slot 7", defaultCode: null },
+  { labelHash: "0xFF000013", label: "Hotbar Row 2 Slot 8", defaultCode: null },
+  { labelHash: "0xFF000014", label: "Hotbar Row 2 Slot 9", defaultCode: null },
   { labelHash: "0xFF000010", label: "Close Panel / Popover", defaultCode: "Escape" },
   { labelHash: "0xFF000011", label: "Delete Selected Spell", defaultCode: "Delete" },
 ];
@@ -57,6 +69,15 @@ export const LOCAL_ACTION_IDS = Object.freeze({
   HOTBAR_7: "0xFF000007",
   HOTBAR_8: "0xFF000008",
   HOTBAR_9: "0xFF000009",
+  HOTBAR_R2_1: "0xFF00000A",
+  HOTBAR_R2_2: "0xFF00000B",
+  HOTBAR_R2_3: "0xFF00000C",
+  HOTBAR_R2_4: "0xFF00000D",
+  HOTBAR_R2_5: "0xFF00000E",
+  HOTBAR_R2_6: "0xFF00000F",
+  HOTBAR_R2_7: "0xFF000012",
+  HOTBAR_R2_8: "0xFF000013",
+  HOTBAR_R2_9: "0xFF000014",
   CLOSE:    "0xFF000010",
   DELETE_SPELL: "0xFF000011",
 });

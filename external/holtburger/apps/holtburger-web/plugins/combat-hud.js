@@ -42,6 +42,7 @@
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { computeDamageRatingRollup } from "../ui/ac_damage_rating.js";
+import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 
 /** gmCombatUI — retail layout that drives the combat HUD horizontal bar.
  *  Element-id map confirmed by combat_hud_layout_dump 2026-05-24:
@@ -144,9 +145,13 @@ function ensureStyles() {
       pointer-events: auto;
       font-family: var(--hb-font-serif);
       color: var(--hb-text-cream);
-      background: rgba(20, 14, 8, 0.92);
-      border: 1px solid var(--hb-border-brass);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.55);
+      /* P1-24 (cross-find combat-hud-chrome-background): retail
+       * gmCombatUI is a child of gmFloatyPowerBarUI whose chrome
+       * (border + frame) wraps the 8 outer sprites; this overlay
+       * carries no synthetic background of its own. Was a solid
+       * rgba(20,14,8,0.92) panel + brass border. */
+      background: transparent;
+      box-shadow: none;
       display: none;
       box-sizing: border-box;
     }
@@ -245,18 +250,13 @@ function ensureStyles() {
      * text. Tabular nums so the digits don't jitter as the rollup
      * components flip between single-digit (sneak +0) and double-digit
      * (reckless +20) values. */
+    /* P1-24 (cross-find combat-hud-panel-dr-row): retail gmCombatUI
+     * has no on-bar damage-rating breakdown — DR is shown in the
+     * combat log + character sheet, not as a HUD row. The DOM stays
+     * (the DR-rollup math is consumed by other panels via
+     * computeDamageRatingRollup) but the row is hidden. */
     #${OVERLAY_ID} .hch-dr-row {
-      position: absolute;
-      left: 305px; top: 29px;
-      width: 405px; height: 14px;
-      color: var(--hb-text-gold-dim);
-      font-size: 10px;
-      line-height: 14px;
-      letter-spacing: 0.03em;
-      pointer-events: none;
-      font-variant-numeric: tabular-nums;
-      white-space: nowrap;
-      overflow: hidden;
+      display: none;
     }
     /* The "DR: +N" total — slightly brighter gold so the headline
      * value reads cleanly against the dim breakdown. */
@@ -306,20 +306,12 @@ function ensureStyles() {
      * (30s) instead of popping out. Pointer-events:none so the slider
      * drag-rect underneath remains clickable (defensive — the DR row
      * does the same). */
+    /* P1-24 (cross-find combat-hud-panel-last-hit): retail's last-hit
+     * readout lives in the chat log, not on the combat HUD. DOM stays
+     * (the JS still tracks damageDealt for any downstream consumers)
+     * but the row is hidden. */
     #${OVERLAY_ID} .hch-last-hit {
-      position: absolute;
-      left: 5px; top: 48px;
-      width: 705px; height: 14px;
-      color: var(--hb-text-gold-dim);
-      font-size: 10px;
-      line-height: 14px;
-      letter-spacing: 0.03em;
-      pointer-events: none;
-      font-variant-numeric: tabular-nums;
-      white-space: nowrap;
-      overflow: hidden;
-      opacity: 1;
-      transition: opacity ${LAST_HIT_FADE_MS}ms ease-out;
+      display: none;
     }
     /* Idle / out-of-combat fade-out state. data-idle is flipped by
      * the JS idle timer; the CSS transition handles the visual fade. */
@@ -712,10 +704,14 @@ function build() {
     powerSlider.releasePointerCapture?.(ev.pointerId);
   });
 
-  // "Power" label (0x10000051).
+  // P1-24 (cross-find combat-hud-identity-recklessness): retail
+  // gmCombatUI's m_RecklessnessField (acclient.h:54502) labels this as
+  // "Recklessness" — the slider drives the Recklessness skill +
+  // power-bar value, not a generic "Power". The 0x10000051 element_id
+  // is the same UIElement holding the label.
   const powerLabel = document.createElement("div");
   powerLabel.className = "hch-power-label";
-  setAcText(powerLabel, "Power");
+  setAcText(powerLabel, "Recklessness");
   ov.appendChild(powerLabel);
 
   // Power-value readout (0x10000052).
@@ -827,6 +823,18 @@ function build() {
     { id: "low",    label: "Low",    value: 0 },
   ];
   const heightEls = { high: null, medium: null, low: null };
+  // P1-24 (cross-find combat-hud-states-armed): mirror retail
+  // `UIElement::SetState(Highlight)` when a height is selected so the
+  // sprite swap visually anchors the user's choice. Synced from
+  // `window.__combatBarState.attackHeight` (the cross-plugin truth set
+  // by picking.js + combat-bar) AND from local clicks.
+  function syncArmedFromState() {
+    const v = window.__combatBarState?.attackHeight;
+    if (v == null) return;
+    for (const h of HEIGHTS) {
+      if (heightEls[h.id]) heightEls[h.id].classList.toggle("armed", v === h.value);
+    }
+  }
   for (const h of HEIGHTS) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -843,13 +851,19 @@ function build() {
       } else {
         console.warn("[combat-hud] __fireAttackOnTarget not exposed");
       }
+      if (window.__combatBarState) {
+        window.__combatBarState.attackHeight = h.value;
+      }
+      syncArmedFromState();
     });
     buttons.appendChild(btn);
     heightEls[h.id] = btn;
   }
+  syncArmedFromState();
   ov.appendChild(buttons);
 
   document.body.appendChild(ov);
+  attachDefaultTopDragHandle(ov, WINDOW_ID.COMBAT_HUD);
 
   // Apply retail layout positions for sub-elements once the DOM is wired.
   applyCombatHudLayout({

@@ -98,6 +98,8 @@ pub enum GameAction {
     RaiseSkill(Box<RaiseSkillActionData>),
     TrainSkill(Box<TrainSkillActionData>),
     SetSingleCharacterOption(Box<SetSingleCharacterOptionActionData>),
+    AddShortcut(Box<AddShortcutActionData>),
+    RemoveShortcut(Box<RemoveShortcutActionData>),
     GiveObjectRequest(Box<GiveObjectRequestActionData>),
     CastTargetedSpell(Box<CastTargetedSpellActionData>),
     CastUntargetedSpell(Box<CastUntargetedSpellActionData>),
@@ -355,6 +357,12 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::SetSingleCharacterOption => GameAction::SetSingleCharacterOption(
                     Box::new(SetSingleCharacterOptionActionData::unpack(data, offset)?),
                 ),
+                GameActionOpcode::AddShortCut => GameAction::AddShortcut(Box::new(
+                    AddShortcutActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::RemoveShortCut => GameAction::RemoveShortcut(Box::new(
+                    RemoveShortcutActionData::unpack(data, offset)?,
+                )),
                 GameActionOpcode::GiveObjectRequest => GameAction::GiveObjectRequest(Box::new(
                     GiveObjectRequestActionData::unpack(data, offset)?,
                 )),
@@ -788,6 +796,16 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::SetSingleCharacterOption(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::SetSingleCharacterOption as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AddShortcut(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AddShortCut as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::RemoveShortcut(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::RemoveShortCut as u32)
                     .unwrap();
                 data.pack(buf);
             }

@@ -45,6 +45,7 @@
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
+import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
 
 const EXAMINE_LAYOUT_ID = 0x2100006B;
 // Retail popup root is 310x400 inside an 800x600 canvas. Our embed
@@ -429,28 +430,11 @@ function renderInscription(wrapEl, guid) {
   setAcText(body, trimmed.length > 0 ? trimmed : "(blank)");
   if (trimmed.length === 0) body.style.opacity = "0.6";
   wrapEl.appendChild(body);
-  if (info.ownedByPlayer) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "hb-exa-insc-btn";
-    setAcText(btn, "Set Inscription");
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (!handle?.setInscription) {
-        console.warn("[examine] setInscription not available");
-        return;
-      }
-      const next = window.prompt("New inscription:", info.text);
-      if (next === null) return;
-      try {
-        handle.setInscription((guid >>> 0), next);
-      } catch (e) {
-        console.warn("[examine] setInscription failed:", e);
-      }
-    });
-    wrapEl.appendChild(btn);
-  }
+  // P2-44 (cross-find EX-06): Set-Inscription button dropped. Retail
+  // examine is read-only; the user sets inscriptions via the
+  // dedicated UI command path (chat /si or item context menu), not
+  // a window.prompt() embedded in the examine popup. Inscription
+  // text remains displayed for read.
 }
 
 function populateFromInventory(body, ctx, nameEl, guidEl) {
@@ -653,6 +637,15 @@ export const view = {
     iconEl.style.right = "8px";
     iconEl.style.top = "6px";
     root.appendChild(iconEl);
+    // P2-44 (cross-find EX-02 / placeholder cluster): resolve the
+    // entity's real iconId via the shared resolver. Fire-and-forget;
+    // the icon paints in once the data URL arrives.
+    const exaGuid = (ctx?.guid ?? 0) >>> 0;
+    if (exaGuid) {
+      resolveBindingIcon({ itemGuid: exaGuid })
+        .then((url) => { if (url) iconEl.style.backgroundImage = `url("${url}")`; })
+        .catch(() => {});
+    }
 
     // Property rows above the main body — retail 0x10000160 (Row1) and
     // 0x10000162 (Row2) at popup-space (11, 52) / (11, 71) 278x19.

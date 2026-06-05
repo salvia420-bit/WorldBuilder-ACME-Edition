@@ -71,14 +71,24 @@ const SP = "./data/ui-sprites";
 const COMBAT_MODE_NON_COMBAT = 1; // wasm setCombatMode arg for peace
 const COMBAT_MODE_MELEE_DEFAULT = 2; // wasm setCombatMode arg for combat-ready
 
-// Top-row sprite buttons in retail render order (acclient.c layout
-// 0x21000016 read order — element IDs 197/198/199/055A/19A).
+// P1-31 (cross-find gap-025): retail's 9-icon panel strip. The first 5
+// are the layout-DAT-positioned originals (gmToolbarUI 0x21000016
+// element IDs 197/198/199/055A/19A); the trailing 4 are the
+// inventory / skills / fellowship / journal shortcuts retail also
+// surfaces here. Sprite IDs for the 4 additions reuse the closest
+// retail icons available in our extracted set (compass disk for any
+// missing — the bar.js img.onerror fallback shows an emoji until a
+// real DAT-sourced icon is wired).
 const TOP_BUTTONS = [
-  { id: "allegiance", view: "allegiance", title: "Allegiance Panel", sprite: "0x0600111F", hover: "0x06001121" },
-  { id: "spellbook",  view: "spellbook",  title: "Spellbook Panel",  sprite: "0x06001119", hover: "0x0600111B" },
-  { id: "attributes", view: "character",  title: "Attributes Panel", sprite: "0x06001122", hover: "0x06001124" },
-  { id: "map",        view: "map",        title: "Map Panel",        sprite: "0x060069AE", hover: "0x060069AF" },
-  { id: "options",    view: "options",    title: "Options Panel",    sprite: "0x06001116", hover: "0x06001118" },
+  { id: "allegiance", view: "allegiance",   title: "Allegiance Panel", sprite: "0x0600111F", hover: "0x06001121" },
+  { id: "spellbook",  view: "spellbook",    title: "Spellbook Panel",  sprite: "0x06001119", hover: "0x0600111B" },
+  { id: "attributes", view: "character",    title: "Attributes Panel", sprite: "0x06001122", hover: "0x06001124" },
+  { id: "map",        view: "map",          title: "Map Panel",        sprite: "0x060069AE", hover: "0x060069AF" },
+  { id: "options",    view: "options",      title: "Options Panel",    sprite: "0x06001116", hover: "0x06001118" },
+  { id: "inventory",  view: "inventory",    title: "Inventory Panel",  sprite: "0x06004CC1", hover: "0x06004CC1" },
+  { id: "skills",     view: "train-skills", title: "Skills Panel",     sprite: "0x06004CC1", hover: "0x06004CC1" },
+  { id: "fellowship", view: "fellowship",   title: "Fellowship Panel", sprite: "0x06004CC1", hover: "0x06004CC1" },
+  { id: "journal",    view: "journal",      title: "Journal Panel",    sprite: "0x06004CC1", hover: "0x06004CC1" },
 ];
 
 function ensureStyles() {
@@ -100,7 +110,11 @@ function ensureStyles() {
       /* Layout-driven: row 1 (.htb-top) + row 2 (.htb-action) +
          stance/pack overlap both rows via absolute positioning. */
     }
-    /* ─ Top row: 5 panel-shortcut sprites + combat stance ─ */
+    /* ─ Top row: 9 panel-shortcut sprites + combat stance ─
+       P1-31 (cross-find gap-025): expanded from the retail-DAT-driven
+       5 to retail's full 9-icon strip. Flex layout because applyTarget-
+       BarLayout's per-element absolute positions only cover the first
+       5 — the 4 trailing icons need a self-distributing container. */
     #${OVERLAY_ID} .htb-top {
       position: absolute;
       top: 0;
@@ -109,9 +123,12 @@ function ensureStyles() {
       height: 27px;
       background: rgba(20, 14, 8, 0.85);
       border: 1px solid var(--hb-border-brass-dim);
+      display: flex;
+      align-items: center;
+      gap: 1px;
     }
     #${OVERLAY_ID} .htb-panel-btn {
-      width: 34px; height: 27px;
+      width: 28px; height: 25px;
       background-position: center;
       background-size: contain;
       background-repeat: no-repeat;
@@ -121,6 +138,8 @@ function ensureStyles() {
       font-size: 0;
       filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
       transition: filter 80ms;
+      flex: 0 0 auto;
+      position: static;
     }
     #${OVERLAY_ID} .htb-panel-btn:hover { filter: brightness(1.4) drop-shadow(0 0 3px rgba(255, 220, 120, 0.55)); }
     #${OVERLAY_ID} .htb-stance-btn {
@@ -494,22 +513,15 @@ function applyTargetBarLayout(refs, attempt = 0) {
     // they're already containing blocks for their absolutely-positioned
     // children AND removed from flow (so they don't push each other
     // down). We don't touch position here — only clear any padding/gap
-    // that the old flex CSS might have left dangling.
-    if (refs.topRow) {
-      refs.topRow.style.padding = "0";
-      refs.topRow.style.gap = "0";
-    }
+    // P1-31 (cross-find gap-025): the top row is flex-distributed now
+    // so the 9 panel icons + stance share the 300px width. Don't
+    // clobber the flex gap/padding the CSS sets, and don't
+    // applyEl-position the 5 retail icons (would absolute-position
+    // them and break flow for the 4 new ones).
     if (refs.actionRow) {
       refs.actionRow.style.padding = "0";
       refs.actionRow.style.gap = "0";
     }
-
-    // Row 1 — 5 panel-shortcut sprites at retail x positions.
-    applied += applyEl(refs.panelBtns.allegiance, findElementById(layout, TB_ELEMS.allegiance));
-    applied += applyEl(refs.panelBtns.spellbook,  findElementById(layout, TB_ELEMS.spellbook));
-    applied += applyEl(refs.panelBtns.attributes, findElementById(layout, TB_ELEMS.attributes));
-    applied += applyEl(refs.panelBtns.map,        findElementById(layout, TB_ELEMS.map));
-    applied += applyEl(refs.panelBtns.options,    findElementById(layout, TB_ELEMS.options));
 
     // Stance button — retail places this at (0,0) 55×58 spanning rows
     // 1+2 on the LEFT. Our hand-tuned panel has stance on the right.

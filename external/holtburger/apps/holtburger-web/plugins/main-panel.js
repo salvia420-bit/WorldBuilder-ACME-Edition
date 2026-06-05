@@ -21,6 +21,7 @@
 
 import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 
 const OVERLAY_ID = "hb-main-panel";
 const STYLE_ID = "hb-main-panel-style";
@@ -114,92 +115,38 @@ let closeBtn = null;
 let stack = [];
 let currentCleanup = null;
 
-// Improvement C (2026-05-29) — draggable floating panels with localStorage
-// position persistence. Exported so plugins like chat-panel, vendor-ui,
-// container-panel, etc. can opt in with `installDragPersistence(rootEl,
-// dragHandleEl, "panel-id")`. The id keys `hb_panel_pos_<id>` so each
-// panel remembers its own last position. On restore we clamp the position
-// inside the current viewport so a window-shrink doesn't strand a panel
-// off-screen.
-const LS_KEY_PREFIX = "hb_panel_pos_";
+// Deprecated shim (kept for any straggling caller; new code should use
+// `attachWindowPosition` from `ui/ac_window_position.js`). 2026-06-05
+// consolidation reused the new adapter's enhanced impl (viewport
+// clamping, interactive-child guard, debounced save, lock-event
+// broadcast) and added the `legacyKey` migration so prior
+// `hb_panel_pos_<id>` saves carry forward. The string panelId resolves
+// to a synthetic windowId for callers that don't yet have a layout
+// root DID handy.
 const DRAG_BUTTON_SELECTOR = ".hb-mp-close,.hb-mp-back,button,input,select,textarea,[data-drag-ignore]";
 export function installDragPersistence(rootEl, handleEl, panelId) {
   if (!rootEl || !handleEl) return () => {};
-
-  // Restore last saved position (if any), clamped to current viewport.
-  try {
-    const raw = localStorage.getItem(LS_KEY_PREFIX + panelId);
-    if (raw) {
-      const { left, top } = JSON.parse(raw);
-      if (typeof left === "number" && typeof top === "number") {
-        const r = rootEl.getBoundingClientRect();
-        const w = r.width || 300;
-        const h = r.height || 200;
-        const maxLeft = Math.max(0, window.innerWidth - w);
-        const maxTop  = Math.max(0, window.innerHeight - h);
-        rootEl.style.left  = `${Math.max(0, Math.min(left, maxLeft))}px`;
-        rootEl.style.top   = `${Math.max(0, Math.min(top,  maxTop))}px`;
-        rootEl.style.right = "";  // override CSS right anchor if set
-      }
+  // Map known panelIds to verified windowIds; fall back to a hash for
+  // unknown callers. Hash uses a u32 with the 0xFFFE prefix to avoid
+  // collisions with real layout DIDs.
+  const KNOWN = { "main-panel": WINDOW_ID.MAIN_PANEL, "chat-panel": WINDOW_ID.CHAT };
+  let windowId = KNOWN[panelId];
+  if (typeof windowId !== "number") {
+    // Simple FNV-1a 32 of the panelId for the synthetic case.
+    let h = 0x811c9dc5;
+    for (let i = 0; i < panelId.length; i++) {
+      h ^= panelId.charCodeAt(i);
+      h = (h * 0x01000193) >>> 0;
     }
-  } catch (_e) { /* JSON parse / quota errors — silently ignore */ }
-
-  let dragging = false;
-  let startX = 0, startY = 0, startLeft = 0, startTop = 0;
-  let saveDebounce = 0;
-
-  const onDown = (e) => {
-    // Don't start drag when user clicks the close button / back button /
-    // any interactive child.
-    if (e.target.closest(DRAG_BUTTON_SELECTOR) && e.target !== handleEl) return;
-    if (e.button != null && e.button !== 0) return;  // left-click only
-    const r = rootEl.getBoundingClientRect();
-    startX = e.clientX; startY = e.clientY;
-    startLeft = r.left; startTop = r.top;
-    dragging = true;
-    // Switch root to absolute left/top before drag; clear CSS right anchor.
-    rootEl.style.left  = `${startLeft}px`;
-    rootEl.style.top   = `${startTop}px`;
-    rootEl.style.right = "";
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup",   onUp,   { once: true });
-    handleEl.setPointerCapture?.(e.pointerId);
-    e.preventDefault();
-  };
-  const onMove = (e) => {
-    if (!dragging) return;
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-    const r = rootEl.getBoundingClientRect();
-    const w = r.width, h = r.height;
-    const maxLeft = Math.max(0, window.innerWidth  - w);
-    const maxTop  = Math.max(0, window.innerHeight - h);
-    rootEl.style.left = `${Math.max(0, Math.min(startLeft + dx, maxLeft))}px`;
-    rootEl.style.top  = `${Math.max(0, Math.min(startTop  + dy, maxTop))}px`;
-  };
-  const onUp = () => {
-    dragging = false;
-    document.removeEventListener("pointermove", onMove);
-    // Debounce localStorage write to coalesce a rapid drag-flick.
-    clearTimeout(saveDebounce);
-    saveDebounce = setTimeout(() => {
-      try {
-        const r = rootEl.getBoundingClientRect();
-        localStorage.setItem(LS_KEY_PREFIX + panelId, JSON.stringify({
-          left: Math.round(r.left), top: Math.round(r.top),
-        }));
-      } catch (_e) { /* quota / disabled — fine */ }
-    }, 120);
-  };
-
-  handleEl.style.cursor = "move";
-  handleEl.addEventListener("pointerdown", onDown);
-
-  return () => {
-    handleEl.removeEventListener("pointerdown", onDown);
-    document.removeEventListener("pointermove", onMove);
-    clearTimeout(saveDebounce);
-  };
+    windowId = (0xFFFE0000 | (h & 0xFFFF)) >>> 0;
+  }
+  attachWindowPosition(rootEl, {
+    windowId,
+    dragHandle: handleEl,
+    ignoreSelector: DRAG_BUTTON_SELECTOR,
+    legacyKey: `hb_panel_pos_${panelId}`,
+  });
+  return () => { /* attachWindowPosition has no teardown handle today */ };
 }
 
 function ensureStyles() {

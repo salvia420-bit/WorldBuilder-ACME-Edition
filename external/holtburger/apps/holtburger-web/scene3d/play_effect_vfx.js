@@ -2102,7 +2102,7 @@ function _runPlaceholderDispatch(targetGuid, scriptId) {
 // successful login). Importing this module at page load doesn't
 // guarantee `window.__pluginClient` exists yet — so we poll briefly
 // for it, then bind. The same pattern is used by other one-shot
-// listener modules (e.g. compass-hud's plugin-style auto-mount).
+// listener modules that wire themselves via window.__pluginClient.
 //
 // Idempotency: a `__playEffectVfxBound` flag on `window` prevents
 // double-binding if this module is re-evaluated (Firefox ES-module

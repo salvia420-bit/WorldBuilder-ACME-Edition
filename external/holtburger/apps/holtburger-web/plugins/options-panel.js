@@ -308,7 +308,7 @@ const TABS = [
   { id: "controls", label: "Controls", render: renderControlsTab },
   { id: "chat",     label: "Chat",     render: stubTab("Chat", "Channel colours / timestamps / per-channel mute. Plumbing partially in plugins/chat-panel.js (tab filters).") },
   { id: "network",  label: "Network",  render: stubTab("Network", "Server latency display / packet-loss warning / autoreconnect. Surfacing requires Login_WorldInfo bus event (api.js coverage row 8 — currently MISSING).") },
-  { id: "char",     label: "Character",render: stubTab("Character", "Auto-loot prefs / fellowship-XP/loot share defaults / PK opt-in. Maps to retail's CharacterOptionsPanel UI command group.") },
+  { id: "char",     label: "Character",render: renderCharacterTab },
   { id: "about",    label: "About",    render: renderAboutTab },
 ];
 
@@ -584,6 +584,192 @@ const ACTION_CATEGORY_NAMES = {
   0x1000000C: "Quickslots",
   0x1000000D: "Chat Mode",
 };
+
+// ---------------------------------------------------------------------
+// Character tab — CharacterOption bitfield toggles.
+//
+// Each row sends `sessionHandle.setCharacterOption(option, value)` on
+// change (wasm fan-out: SessionCommand::SetCharacterOption →
+// GameAction::SetSingleCharacterOption sub-opcode 0x0167, ACE handler
+// `Player_Character.cs:80-106`). ACE persists to the Character row's
+// `CharacterOptions1` / `CharacterOptions2` columns and echoes back via
+// `Private/PublicUpdatePropertyInt`; the existing player-stats pipeline
+// consumes the echo.
+//
+// The `option` value is the `holtburger_common::CharacterOption` enum
+// INDEX (0..0x36 — `crates/holtburger-common/src/character.rs:117`),
+// NOT the retail bitfield mask (which uses 0x2 / 0x200000 / 0x10000000
+// style bit values). The wasm side validates the index via FromRepr
+// before serializing.
+//
+// We hold the last user click in `LS_CHAR_OPTIONS_KEY` so the panel
+// can render the right checkbox state on reopen. Server-side authority
+// remains the truth — a future follow-up will reconcile by reading
+// CharacterOptions1/2 off the player-stats stream.
+
+const LS_CHAR_OPTIONS_KEY = "holtburger_character_options_v1";
+
+// Subset of CharacterOption indices exposed in v1 of the Character tab.
+// Grouped roughly by retail's gmConfigUI Character sub-panel layout.
+// Add more entries as the panel matures.
+const CHARACTER_OPTION_GROUPS = [
+  {
+    section: "Combat",
+    options: [
+      { idx: 0x00, label: "Auto-repeat attacks" },
+      { idx: 0x0D, label: "Auto-target combat" },
+      { idx: 0x07, label: "Keep combat target in view" },
+      { idx: 0x19, label: "Use charge attack" },
+      { idx: 0x2A, label: "Lead missile targets" },
+      { idx: 0x2B, label: "Use fast missiles" },
+      { idx: 0x0C, label: "Advanced combat interface" },
+    ],
+  },
+  {
+    section: "Movement & Camera",
+    options: [
+      { idx: 0x0A, label: "Run as default movement" },
+      { idx: 0x31, label: "Use mouse turning" },
+    ],
+  },
+  {
+    section: "Interface",
+    options: [
+      { idx: 0x13, label: "Side-by-side vitals" },
+      { idx: 0x14, label: "Show coordinates by the radar" },
+      { idx: 0x15, label: "Display spell durations" },
+      { idx: 0x08, label: "Display 3D tooltips" },
+      { idx: 0x21, label: "Display timestamps" },
+      { idx: 0x0B, label: "Stay in chat mode after sending" },
+      { idx: 0x33, label: "Lock UI" },
+    ],
+  },
+  {
+    section: "Social",
+    options: [
+      { idx: 0x01, label: "Ignore allegiance requests" },
+      { idx: 0x02, label: "Ignore fellowship requests" },
+      { idx: 0x03, label: "Ignore all trade requests" },
+      { idx: 0x06, label: "Let other players give you items" },
+      { idx: 0x12, label: "Automatically accept fellowship requests" },
+      { idx: 0x0F, label: "Share fellowship XP and luminance" },
+      { idx: 0x11, label: "Share fellowship loot" },
+      { idx: 0x18, label: "Show allegiance logons" },
+    ],
+  },
+  {
+    section: "Chat channels",
+    options: [
+      { idx: 0x1B, label: "Listen to allegiance chat" },
+      { idx: 0x23, label: "Listen to general chat" },
+      { idx: 0x24, label: "Listen to trade chat" },
+      { idx: 0x25, label: "Listen to LFG chat" },
+      { idx: 0x26, label: "Listen to roleplay chat" },
+      { idx: 0x2E, label: "Listen to society chat" },
+      { idx: 0x34, label: "Listen to PK death messages" },
+    ],
+  },
+  {
+    section: "Visual",
+    options: [
+      { idx: 0x05, label: "Always daylight outdoors" },
+      { idx: 0x04, label: "Disable most weather effects" },
+      { idx: 0x2F, label: "Show helm/headgear" },
+      { idx: 0x32, label: "Show cloak" },
+      { idx: 0x30, label: "Disable distance fog" },
+    ],
+  },
+];
+
+function loadCharacterOptions() {
+  try {
+    const raw = localStorage.getItem(LS_CHAR_OPTIONS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === "object") ? parsed : {};
+  } catch (_) { return {}; }
+}
+
+function saveCharacterOption(idx, value) {
+  try {
+    const state = loadCharacterOptions();
+    state[String(idx)] = !!value;
+    localStorage.setItem(LS_CHAR_OPTIONS_KEY, JSON.stringify(state));
+  } catch (_) {}
+}
+
+// Pull the current state of a CharacterOption — prefer the server-
+// authoritative bits exposed by `isCharacterOptionEnabled` (hydrated by
+// `PlayerDescription` on login, optimistically updated in the wasm
+// SetCharacterOption arm). Fall back to the localStorage cache when
+// offline (pre-login or wasm method absent — older bundle).
+function readCharacterOption(idx, handle, localCache) {
+  if (handle && typeof handle.isCharacterOptionEnabled === "function") {
+    try { return !!handle.isCharacterOptionEnabled(idx >>> 0); }
+    catch (_) { /* unknown index — fall back to local cache */ }
+  }
+  return !!localCache[String(idx)];
+}
+
+function renderCharacterTab(bodyEl) {
+  bodyEl.innerHTML = "";
+  const localCache = loadCharacterOptions();
+  const handle = window.__sessionHandle ?? null;
+  const offline = !handle || typeof handle.setCharacterOption !== "function";
+  const hasServerState =
+    !!handle && typeof handle.isCharacterOptionEnabled === "function";
+
+  if (offline) {
+    const banner = document.createElement("div");
+    banner.className = "hb-opt-stub";
+    banner.style.marginBottom = "10px";
+    banner.innerHTML =
+      "<b>Offline preview</b><br>Toggles record locally but won't sync to the server until login completes.";
+    bodyEl.appendChild(banner);
+  } else if (!hasServerState) {
+    const banner = document.createElement("div");
+    banner.className = "hb-opt-stub";
+    banner.style.marginBottom = "10px";
+    banner.innerHTML =
+      "<b>Local-state mode</b><br>Wasm bundle predates the <code>isCharacterOptionEnabled</code> getter — toggles still sync via <code>setCharacterOption</code> but checkboxes read from localStorage. Refresh after the next wasm rebuild.";
+    bodyEl.appendChild(banner);
+  }
+
+  for (const group of CHARACTER_OPTION_GROUPS) {
+    const sec = document.createElement("div");
+    sec.className = "hb-opt-section";
+    setAcText(sec, group.section);
+    bodyEl.appendChild(sec);
+    for (const opt of group.options) {
+      const row = document.createElement("label");
+      row.className = "hb-opt-row";
+      row.style.cssText =
+        "display:flex;align-items:center;gap:10px;padding:4px 8px;cursor:pointer;";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = readCharacterOption(opt.idx, handle, localCache);
+      cb.style.cssText = "accent-color: var(--hb-text-gold);";
+      cb.addEventListener("change", () => {
+        const value = cb.checked;
+        saveCharacterOption(opt.idx, value);
+        try {
+          handle?.setCharacterOption?.(opt.idx >>> 0, value);
+        } catch (e) {
+          // Wire failure is best-effort — keep local state, log only.
+          console.warn(
+            `[options-panel] setCharacterOption(0x${opt.idx.toString(16)}=${value}) failed:`,
+            e,
+          );
+        }
+      });
+      const label = document.createElement("ac-text");
+      label.textContent = opt.label;
+      row.appendChild(cb);
+      row.appendChild(label);
+      bodyEl.appendChild(row);
+    }
+  }
+}
 
 function renderAboutTab(bodyEl) {
   bodyEl.innerHTML = `

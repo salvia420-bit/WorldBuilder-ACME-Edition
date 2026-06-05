@@ -40,6 +40,15 @@ function ensureStyles() {
       margin-top: 8px;
       line-height: 1.4;
     }
+    /* P1-26 (cross-find gap-001): bar-icon tint reflects current combat
+       mode. Retail toggles the dove between peaceful (cool tone) and
+       combat-ready (warm tone) states via SetState on the gmFloaty-
+       ToolbarUI's peace/combat button. We approximate with a filter
+       tint until the real combat-mode sprite is extracted. */
+    .hb-bar-icon[data-stance="peace"]  img { filter: drop-shadow(0 0 2px rgba(120, 200, 255, 0.45)); }
+    .hb-bar-icon[data-stance="melee"]  img { filter: drop-shadow(0 0 2px rgba(255, 140, 80,  0.55)) hue-rotate(-25deg); }
+    .hb-bar-icon[data-stance="ranged"] img { filter: drop-shadow(0 0 2px rgba(255, 200, 80,  0.55)) hue-rotate(-15deg); }
+    .hb-bar-icon[data-stance="magic"]  img { filter: drop-shadow(0 0 2px rgba(200, 140, 255, 0.55)) hue-rotate(45deg); }
   `;
   document.head.appendChild(style);
 }
@@ -127,6 +136,37 @@ export function activate(bodyEl, ctx) {
 
   render();
 
+  return () => {
+    if (statsHandler && client?.events?.off) {
+      client.events.off("playerStatsUpdated", statsHandler);
+    }
+  };
+}
+
+// P1-26 (cross-find gap-001): bar-icon mode swap. Mount-time hook (runs
+// independently of the panel's activate() so the dove tint stays
+// up-to-date even when the user never opens the panel). Subscribes to
+// playerStatsUpdated and writes `data-stance="peace|melee|ranged|magic"`
+// onto the bar icon button; CSS above takes it from there.
+export function mount(ctx) {
+  const client = ctx?.client ?? window.__pluginClient ?? null;
+  ensureStyles();
+
+  function applyStanceToBarIcon() {
+    const low = (typeof window.__getCurrentStanceLow === "function")
+      ? window.__getCurrentStanceLow()
+      : 0x003d;
+    const kind = classifyStance(low);
+    const btn = document.querySelector('.hb-bar-icon[data-plugin-id="stance-toggle"]');
+    if (btn) btn.dataset.stance = kind;
+  }
+  // First apply on next animation frame so bar.js has built the icon.
+  requestAnimationFrame(applyStanceToBarIcon);
+  let statsHandler = null;
+  if (client?.events?.on) {
+    statsHandler = applyStanceToBarIcon;
+    client.events.on("playerStatsUpdated", statsHandler);
+  }
   return () => {
     if (statsHandler && client?.events?.off) {
       client.events.off("playerStatsUpdated", statsHandler);

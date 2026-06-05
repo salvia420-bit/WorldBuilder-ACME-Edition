@@ -79,17 +79,17 @@ const CHAT_ELEM_INPUT_FIELD  = 0x10000016;
 const CHAT_ELEM_SEND_BTN     = 0x10000019;
 
 // 6-tab strip — explicit derivative of the retail 4-button layout
-// (0x10000522-0x10000525) to satisfy the Discord ask for distinct
-// allegiance/fellowship windows. Rendered as a horizontal strip
-// above the chat log (the 4 retail buttons can't host 6 vertically
-// in the 100-px panel height).
+// (0x10000522-0x10000525). P2-20 (cross-find chat-filter-count-and-
+// labels): truncated to 4 retail entries (A/L/T/C); Allegiance + Fellow-
+// ship remain selectable via the Channels popup (CHANNELS array below)
+// — retail folds those channels under the Chan dropdown, not as
+// independent filter buttons. The 4 retail buttons fit in the 100-px
+// panel height which the prior 6-button strip did not.
 const TABS = [
   { id: "all",      label: "All"   },
   { id: "local",    label: "Local" },
   { id: "tell",     label: "Tell"  },
   { id: "channels", label: "Chan"  },
-  { id: "alleg",    label: "Alleg" },
-  { id: "fell",     label: "Fell"  },
 ];
 
 // CHAT_CATEGORY_* colours — mirror the index.html `#chat-log .cat-N`
@@ -141,6 +141,12 @@ function ensureStyles() {
        Width 360 to clear the top-right Maximize button at (368,5).
        Replaces the retail 4-button left-edge column to fit the
        Alleg + Fell + Chan split. */
+    /* P2-39 (cross-find chat-filter-anchor-orientation): horizontal
+       tab strip at top, NOT retail's vertical 16x16 column on the
+       left. ACCEPTED DEVIATION — horizontal reads better at our
+       400-wide panel + matches contemporary chat UX (Discord/Slack/
+       game chat). Switch to vertical only if retail-parity QA flags
+       this as essential. */
     #${OVERLAY_ID} .hb-chat-tab-strip {
       position: absolute;
       top: 0;
@@ -250,15 +256,15 @@ function ensureStyles() {
       word-break: break-word;
       text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
     }
-    /* 6-tab filter chains. "all" shows everything; "local" keeps
-       cat-1 + cat-4 (spoken/emote); "tell" cat-2; "channels" generic
-       channel chatter (cat-3,12,13,14,15,22,23); "alleg" cat-17 only;
-       "fell" cat-16 only. Combat/Magic/System are subsumed by "all". */
+    /* 4-tab retail filter chains. "all" shows everything; "local" keeps
+       cat-1 + cat-4 (spoken/emote); "tell" cat-2; "channels" — all
+       channel chatter INCLUDING allegiance (cat-17) and fellowship
+       (cat-16). Combat/Magic/System are subsumed by "all". Alleg / Fell
+       posting still works via the CHANNELS popup; just no dedicated
+       filter button. */
     #${OVERLAY_ID} .hb-chat-scroll[data-tab="local"] .hb-chat-line:not(.cat-1):not(.cat-4):not(.echo) { display: none; }
     #${OVERLAY_ID} .hb-chat-scroll[data-tab="tell"] .hb-chat-line:not(.cat-2):not(.echo) { display: none; }
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="channels"] .hb-chat-line:not(.cat-3):not(.cat-12):not(.cat-13):not(.cat-14):not(.cat-15):not(.cat-22):not(.cat-23):not(.echo) { display: none; }
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="alleg"] .hb-chat-line:not(.cat-17):not(.echo) { display: none; }
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="fell"] .hb-chat-line:not(.cat-16):not(.echo) { display: none; }
+    #${OVERLAY_ID} .hb-chat-scroll[data-tab="channels"] .hb-chat-line:not(.cat-3):not(.cat-12):not(.cat-13):not(.cat-14):not(.cat-15):not(.cat-16):not(.cat-17):not(.cat-22):not(.cat-23):not(.echo) { display: none; }
     /* Resize handle — bottom-right corner, drag to grow/shrink. Wiki
        says retail chat windows are resizable, with size persisted
        per-character. Persistence is a follow-on. */
@@ -314,12 +320,9 @@ function ensureStyles() {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    #${OVERLAY_ID} .hb-chat-channel-btn::after {
-      content: "▾";
-      margin-left: 2px;
-      font-size: 7px;
-      color: var(--hb-text-cream);
-    }
+    /* P2-20 (cross-find chat-channel-selector-chevron): retail's
+       channel button has no chevron decoration. Drop the inserted
+       ▾ glyph. */
     #${OVERLAY_ID} .hb-chat-channel-btn:hover {
       background: var(--hb-overlay-active);
     }
@@ -353,11 +356,8 @@ function ensureStyles() {
       background: var(--hb-overlay-active);
       color: var(--hb-text-gold);
     }
-    #${OVERLAY_ID} .hb-chat-channel-item .hb-chat-channel-cmd {
-      color: var(--hb-text-muted);
-      font-size: 9px;
-      margin-left: 12px;
-    }
+    /* .hb-chat-channel-cmd CSS dropped together with the per-item
+       cmd span (P2-20 chat-channel-menu-slash-cmd-leak). */
     #${OVERLAY_ID} .hb-chat-channel-item.selected {
       background: var(--hb-overlay-active);
       color: var(--hb-text-gold);
@@ -619,10 +619,10 @@ export function mount(_ctx) {
     const lbl = document.createElement("span");
     setAcText(lbl, c.label);
     item.appendChild(lbl);
-    const cmd = document.createElement("span");
-    cmd.className = "hb-chat-channel-cmd";
-    setAcText(cmd, c.cmd.trim() || "say");
-    item.appendChild(cmd);
+    // P2-20 (cross-find chat-channel-menu-slash-cmd-leak): retail's
+    // channel popup shows just the label — the `/a` / `/f` slash
+    // commands aren't listed. Drop the per-item cmd span. The cmd is
+    // still applied when the user picks a channel (CHANNELS[i].cmd).
     channelMenu.appendChild(item);
     channelItems[c.id] = item;
   }
@@ -704,6 +704,35 @@ export function mount(_ctx) {
   resizeHandle.addEventListener("pointercancel", () => { resizeDrag = null; });
   overlay.appendChild(resizeHandle);
 
+  // P2-40 (cross-find chat-maximize-button-spurious): retail's chat
+  // panel has a maximize/restore toggle that swaps between the
+  // current height and m_OldHeight (acclient.c). Click expands to
+  // ~half the viewport height; click again restores. Tucked into
+  // the top-right corner of the panel, 12×12 square.
+  const maxBtn = document.createElement("div");
+  maxBtn.className = "hb-chat-maxbtn";
+  maxBtn.title = "Maximize / Restore";
+  maxBtn.style.cssText =
+    "position:absolute;top:2px;right:14px;width:12px;height:12px;cursor:pointer;" +
+    "background:rgba(0,0,0,0.4);border:1px solid var(--hb-border-brass-dim);" +
+    "z-index:25;color:var(--hb-text-cream);font-size:9px;text-align:center;line-height:11px;";
+  maxBtn.textContent = "▢";
+  overlay.appendChild(maxBtn);
+  let savedHeight = null;
+  maxBtn.addEventListener("click", () => {
+    if (savedHeight == null) {
+      // Maximize — save current height, expand to half viewport.
+      savedHeight = overlay.style.height || `${overlay.getBoundingClientRect().height}px`;
+      overlay.style.height = `${Math.max(220, Math.floor(window.innerHeight * 0.5))}px`;
+      maxBtn.textContent = "▣";
+    } else {
+      // Restore to previous size (retail m_OldHeight).
+      overlay.style.height = savedHeight;
+      savedHeight = null;
+      maxBtn.textContent = "▢";
+    }
+  });
+
   // No lock + move handles on chat — those are radar-only chrome per
   // user direction 2026-05-22. Resize is on the bottom-right corner.
 
@@ -765,9 +794,12 @@ export function mount(_ctx) {
     // (17px) was bumped to accommodate the 16px cell.
     setAcText(line, srcLi.textContent || "", { color: lineColor, fontId: CHAT_FONT_ID });
     scroll.appendChild(line);
-    // Auto-scroll if pinned to bottom.
+    // Auto-scroll if pinned to bottom; otherwise raise the new-messages
+    // badge so the user knows there's chatter waiting (P2-29).
     if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40) {
       scroll.scrollTop = scroll.scrollHeight;
+    } else if (typeof overlay._hbChatMaybeFlag === "function") {
+      overlay._hbChatMaybeFlag();
     }
     // Cap our own mirror at MAX_LINES (insurance vs source-log resets).
     while (scroll.childElementCount > MAX_LINES) {
@@ -837,18 +869,103 @@ export function mount(_ctx) {
       input.value = "";
     }
   }
-  input.addEventListener("keydown", (ev) => {
-    if (ev.key !== "Enter") return;
-    ev.preventDefault();
+  // P2-29 (cross-find chat-input-history-missing): retail's
+  // m_InputHistory ring buffer — Up/Down arrows recall recent sends.
+  // 64-entry ring is bigger than retail's docs cite (32) but cheap
+  // and gives users a less-frustrating recall window.
+  const inputHistory = [];
+  const HISTORY_MAX = 64;
+  let historyCursor = -1;       // -1 = past the latest entry (typing fresh)
+  let historyDraft = "";        // saved while browsing history
+  function pushHistory(text) {
+    const t = (text ?? "").trim();
+    if (!t) return;
+    // Skip if same as latest entry (deduplicate consecutive resubmits).
+    if (inputHistory.length > 0 && inputHistory[inputHistory.length - 1] === t) return;
+    inputHistory.push(t);
+    if (inputHistory.length > HISTORY_MAX) inputHistory.shift();
+    historyCursor = -1;
+    historyDraft = "";
+  }
+  function recallHistory(direction) {
+    if (inputHistory.length === 0) return;
+    if (historyCursor === -1) {
+      // First Up after typing — remember the draft.
+      historyDraft = input.value;
+      historyCursor = inputHistory.length - 1;
+    } else {
+      historyCursor += direction === "up" ? -1 : 1;
+      historyCursor = Math.max(0, Math.min(inputHistory.length, historyCursor));
+    }
+    if (historyCursor >= inputHistory.length) {
+      // Past the latest — restore the draft.
+      input.value = historyDraft;
+      historyCursor = -1;
+      historyDraft = "";
+    } else {
+      input.value = inputHistory[historyCursor];
+    }
+    // Place caret at end so the user can keep typing.
+    requestAnimationFrame(() => {
+      input.selectionStart = input.value.length;
+      input.selectionEnd = input.value.length;
+    });
+  }
+  function submitChatWithHistory() {
+    const outgoing = (input.value ?? "").trim();
+    pushHistory(outgoing);
     submitChat();
+  }
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      submitChatWithHistory();
+      return;
+    }
+    if (ev.key === "ArrowUp")   { ev.preventDefault(); recallHistory("up");   return; }
+    if (ev.key === "ArrowDown") { ev.preventDefault(); recallHistory("down"); return; }
   });
   sendBtn.addEventListener("click", (ev) => {
     ev.preventDefault();
-    submitChat();
+    submitChatWithHistory();
     input.focus();
   });
   // Stop the global keydown-driven movement from firing while typing.
   input.addEventListener("keydown", (ev) => ev.stopPropagation(), true);
+
+  // P2-29 (cross-find chat-new-messages-badge-missing): retail's
+  // m_chatNewNonVisibleTextIndicator (element 0x1000048C, 16×16 at
+  // 0,57). Lights when new chat-log entries arrive while the scroll
+  // is NOT at the bottom (user is reviewing history). Clicking the
+  // badge scrolls to bottom + clears it. Hidden by default.
+  const badge = document.createElement("div");
+  badge.className = "hb-chat-new-badge";
+  badge.hidden = true;
+  badge.title = "New messages — click to scroll";
+  badge.style.cssText =
+    "position:absolute;left:6px;top:54px;width:16px;height:16px;cursor:pointer;" +
+    "background:linear-gradient(180deg,#ffd76a 0%,#a87830 100%);" +
+    "border:1px solid var(--hb-border-brass);border-radius:50%;z-index:20;" +
+    "box-shadow:0 0 6px rgba(255,200,80,0.7);";
+  overlay.appendChild(badge);
+  badge.addEventListener("click", () => {
+    scroll.scrollTop = scroll.scrollHeight;
+    badge.hidden = true;
+  });
+  function isScrollNearBottom() {
+    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 24;
+  }
+  // Hide the badge when the user scrolls back to bottom themselves.
+  scroll.addEventListener("scroll", () => {
+    if (isScrollNearBottom()) badge.hidden = true;
+  });
+  // The MutationObserver below already watches for new lines; expose a
+  // helper it can call to light the badge when warranted.
+  function maybeFlagNewMessages() {
+    if (!isScrollNearBottom()) badge.hidden = false;
+  }
+  // Bind the helper so the observer block (below mount return) can see it.
+  overlay._hbChatMaybeFlag = maybeFlagNewMessages;
 
   return () => {
     if (observer) observer.disconnect();

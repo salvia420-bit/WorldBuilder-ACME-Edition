@@ -272,12 +272,17 @@ pub(crate) struct LastSentStats {
     pub vitae: f32,
 }
 
-enum CharacterOptionMask {
+pub enum CharacterOptionMask {
     Options1(CharacterOptions1),
     Options2(CharacterOptions2),
 }
 
-fn character_option_mask(option: CharacterOption) -> CharacterOptionMask {
+/// Map a `CharacterOption` enum index to the underlying
+/// `CharacterOptions1` or `CharacterOptions2` bitflag value. Exposed so
+/// downstream crates (the wasm SessionHandle's `isCharacterOptionEnabled`
+/// JS getter) can resolve a per-option boolean from a snapshot of the
+/// raw bits without going through `PlayerState`.
+pub fn character_option_mask(option: CharacterOption) -> CharacterOptionMask {
     match option {
         CharacterOption::AutoRepeatAttacks => {
             CharacterOptionMask::Options1(CharacterOptions1::AUTO_REPEAT_ATTACK)
@@ -507,6 +512,12 @@ pub struct PlayerState {
     pub options2: CharacterOptions2,
     /// Content of the 8 spellbook hotbars (Organization). Each inner vec corresponds to a UI hotbar.
     pub hotbar_spells: Vec<Vec<u32>>,
+    /// Quick-bar shortcut bindings (gmFloatyToolbarUI slots) hydrated
+    /// from `PlayerDescription.shortcuts`. ACE persists these in the
+    /// `CharacterPropertiesShortcutBar` table — server-authoritative on
+    /// every login. The wasm `playerShortcuts()` getter publishes this
+    /// vec so the JS hotbar can reconcile its localStorage cache.
+    pub shortcuts: Vec<holtburger_protocol::messages::player::shortcuts::Shortcut>,
     /// Desired material component counts retained from PlayerDescription.
     pub desired_comps: Vec<(u32, u32)>,
     /// Spellbook filter bitfield retained from PlayerDescription.
@@ -736,6 +747,7 @@ impl PlayerState {
             options1: CharacterOptions1::empty(),
             options2: CharacterOptions2::empty(),
             hotbar_spells: vec![Vec::new(); 8],
+            shortcuts: Vec::new(),
             desired_comps: Vec::new(),
             spellbook_filters: 0,
             gameplay_options: Vec::new(),
