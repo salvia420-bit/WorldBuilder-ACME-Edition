@@ -349,6 +349,15 @@ pub struct SpatialScene {
     /// containment is computed from the 8x8 grid in O(1) by
     /// `WorldPosition::derived_outdoor_cell_id`.
     cell_aabbs: HashMap<u32, Aabb>,
+    /// 2026-06-04 (Phase 4 ambient-sound gate): per-cell SeenOutside
+    /// bit, keyed by full 32-bit cell id. `true` when the EnvCell's
+    /// `flags & ENVCELL_FLAG_SEEN_OUTSIDE (0x01)` is set (env_cell.rs:32).
+    /// Retail feeds outdoor ambient into an EnvCell when the cell is an
+    /// outdoor cell OR this bit is set — acclient.c:146721/146746. Lives
+    /// parallel to `cell_aabbs` (populated by `fetchEnvCellsInLandblock`
+    /// via the same pending-pile drain, cleared on landblock unload). The
+    /// liveness.rs:137-143 TODO documents this exact lookup.
+    cell_seen_outside: HashMap<u32, bool>,
     /// 2026-05-10 indoor collision (Phase 6 step G follow-on):
     /// world-space physics triangles per cell, populated by the
     /// wasm bundle's `populateCellPhysicsForLandblock` from
@@ -501,6 +510,7 @@ impl SpatialScene {
             building_aabb_index: HashMap::new(),
             cell_portal_graph: HashMap::new(),
             cell_aabbs: HashMap::new(),
+            cell_seen_outside: HashMap::new(),
             cell_physics_index: HashMap::new(),
             cell_physics_bsp: HashMap::new(),
             cell_membership: HashMap::new(),
@@ -795,6 +805,15 @@ impl SpatialScene {
         self.cell_aabbs.insert(cell_id, aabb);
     }
 
+    /// 2026-06-04 (Phase 4 ambient-sound gate): register the SeenOutside
+    /// bit for an indoor cell. JS-side `fetchEnvCellsInLandblock` reads
+    /// `envcell.flags & ENVCELL_FLAG_SEEN_OUTSIDE` (env_cell.rs:32) and
+    /// pushes the boolean alongside the cell AABB; the recv-loop drain
+    /// installs it here. Mirrors `insert_cell_aabb` exactly.
+    pub fn insert_cell_seen_outside(&mut self, cell_id: u32, v: bool) {
+        self.cell_seen_outside.insert(cell_id, v);
+    }
+
     /// Phase 6 step D: drop every portal edge and AABB whose endpoint
     /// shares the given landblock high word. Used when a landblock
     /// unloads — the next entry will repopulate via the lazy
@@ -819,6 +838,12 @@ impl SpatialScene {
         self.cell_aabbs
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         let aabbs_removed = aabbs_before - self.cell_aabbs.len();
+        // 2026-06-04 (Phase 4 ambient-sound gate): keep
+        // `cell_seen_outside` sympathetic with `cell_aabbs` — same
+        // EnvCell lifetime, same landblock-high retain. Count rolls
+        // into `aabbs_removed` (per-cell flag counts aren't load-bearing).
+        self.cell_seen_outside
+            .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         // 2026-05-10 indoor collision: keep `cell_physics_index`
         // sympathetic with `cell_aabbs` — when a landblock unloads,
         // its triangles go too. Counts roll into `aabbs_removed` so
@@ -906,6 +931,17 @@ impl SpatialScene {
     /// reads to disambiguate Z-stacked floors.
     pub fn cell_aabb(&self, cell_id: u32) -> Option<Aabb> {
         self.cell_aabbs.get(&cell_id).copied()
+    }
+
+    /// 2026-06-04 (Phase 4 ambient-sound gate): read the SeenOutside bit
+    /// for `cell_id`. Returns `false` for the no-cell / outdoor / not-yet-
+    /// baked case (key absent) — correct because outdoor cells already
+    /// short-circuit the indoor ambient gate, so this only matters when
+    /// the pose is indoors. Retail feeds outdoor ambient into a cell when
+    /// (outdoor-cell OR seen_outside) — acclient.c:146721/146746. Mirrors
+    /// `cell_aabb` (read access to the parallel `cell_seen_outside` map).
+    pub fn cell_seen_outside(&self, cell_id: u32) -> bool {
+        self.cell_seen_outside.get(&cell_id).copied().unwrap_or(false)
     }
 
     /// Iterate every (cell_id, world-space AABB) pair currently loaded.

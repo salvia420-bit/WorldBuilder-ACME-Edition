@@ -1495,7 +1495,22 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           liveScene3dRef.audioManager.updateFollowingPositions((guid) => {
             const inst = emap.get(guid >>> 0);
             const p = inst?.root?.position;
-            return p ? { x: p.x, y: p.y, z: p.z } : null;
+            if (!p) return null;
+            // D4-NEW-1 (2026-06-05) — listener/emitter coordinate-frame
+            // parity. The listener is set above from `cam.position`, which
+            // is a three.js-frame vector. `inst.root.position` is the LOCAL
+            // (AC-frame) entity position; the worldRoot.rotation.x=-π/2 that
+            // would rotate it into three.js space lives on the parent group
+            // and NEVER reaches the AudioContext (panners have no scene
+            // graph). Passing AC coords verbatim scrambles HRTF DIRECTION
+            // (AC-north (0,+10,0) → panner overhead instead of three.js -Z
+            // forward); distance is preserved but bearing is permuted. Apply
+            // `acToThree` so the moving emitter shares the listener's frame.
+            // Retail keeps emitter+listener in one shared AC Position frame
+            // (acclient.c:383163-383164). (audio-fidelity-deep
+            // D4-NEW-1-verification.md, verdict PARTIAL/HIGH.)
+            const [tx, ty, tz] = acToThree(p.x, p.y, p.z);
+            return { x: tx, y: ty, z: tz };
           });
         }
       } catch (_) {
@@ -3263,6 +3278,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             result.reason = "enum_not_in_sound_table";
             return result;
           }
+          // P2 (2026-06-05) — PlayProbability gate. Retail
+          // `GameMessageSound` playback (PlaySoundA path) rolls the
+          // resolved row's `probability_` before emitting; the
+          // AnimationHook (entities.js ~:7536) and PhysicsScript paths
+          // already gate this way, but this 0xF750 path played
+          // unconditionally. Mirror the same gate so a prob<1 SoundEntry
+          // is suppressed at its true rate. No-op on the prob=1 tables
+          // observed; matches retail on prob<1 tables. Use the cache rng
+          // for test determinism, falling back to Math.random.
+          // (audio-fidelity-deep AUDIO-EVIDENCE.md P2 / NEW-3-verify.md.)
+          if (entry.probability != null && entry.probability < 1.0) {
+            const r = (typeof cache?._rng === "function") ? cache._rng() : Math.random();
+            if (r >= entry.probability) {
+              result.reason = "probability_gate_suppressed";
+              result.probability = +entry.probability;
+              return result;
+            }
+          }
           const pos = inst.root?.position;
           if (!pos) {
             result.reason = "entity_no_position";
@@ -3288,10 +3321,20 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               },
             });
           }
+          // D4-NEW-1 (2026-06-05) — transform the AC-frame entity position
+          // into the three.js listener frame before handing it to the
+          // panner. `pos` is `inst.root.position` (LOCAL/AC coords); the
+          // worldRoot -π/2 rotation never reaches the AudioContext, so
+          // without this the HRTF bearing is permuted (north → overhead).
+          // The event-log `world_pos` above stays AC-frame for cross-source
+          // diffing; only the panner value is transformed so emitter and
+          // listener share one frame (acclient.c:383163-383164). (audio-
+          // fidelity-deep D4-NEW-1-verification.md, verdict PARTIAL/HIGH.)
+          const [panX, panY, panZ] = acToThree(pos.x, pos.y, pos.z);
           try {
             await audioMgr.play(
               entry.waveDid >>> 0,
-              { x: pos.x, y: pos.y, z: pos.z },
+              { x: panX, y: panY, z: panZ },
               { gain }
             );
           } catch (e) {
@@ -3382,6 +3425,30 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           }
           try {
             return !!handle.isCurrentCellIndoor();
+          } catch (_) {
+            return false;
+          }
+        },
+        // Phase 4 (2026-06-04) — sibling provider for the ENVCELL_FLAG_SEEN_OUTSIDE
+        // bit (0x01, env_cell.rs:32). Retail feeds outdoor ambient into a cell
+        // when (outdoor-cell OR seen_outside) — acclient.c:146721/146746. Mirrors
+        // the isCurrentCellIndoor closure above: same handle lookup, typeof-guard,
+        // try/catch → false on any miss. Reads the new wasm getter
+        // handle.isCurrentCellSeenOutside() (js_name `isCurrentCellSeenOutside`).
+        isCurrentCellSeenOutside: () => {
+          // eslint-disable-next-line no-undef
+          const handle =
+            (typeof window !== "undefined" ? window.__sessionHandle : null) ??
+            sessionHandle ??
+            null;
+          if (
+            !handle ||
+            typeof handle.isCurrentCellSeenOutside !== "function"
+          ) {
+            return false;
+          }
+          try {
+            return !!handle.isCurrentCellSeenOutside();
           } catch (_) {
             return false;
           }

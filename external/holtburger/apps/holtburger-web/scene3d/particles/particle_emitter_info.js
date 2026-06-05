@@ -199,15 +199,16 @@ export class ParticleEmitterInfo {
     if (normalizeCheckSmall(result)) {
       return result.set(0, 0, 0);
     }
-    // ACE: scaled = randomAngle * ((MaxOffset - MinOffset) + MinOffset)
-    //               * ThreadSafeRandom.Next(0, 1);
-    // The `(MaxOffset - MinOffset) + MinOffset` collapses to just `MaxOffset`
-    // mathematically; this is an ACE bug-or-quirk (likely meant
-    // `(MaxOffset - MinOffset) * t + MinOffset` for lerp) but we port
-    // faithfully. Flagged for the report; do NOT fix here.
-    const range = (this.maxOffset - this.minOffset) + this.minOffset;
+    // DIM6 / W1.4 (2026-06-05): correct toward RETAIL, not ACE. Retail
+    // `GetRandomOffset = RollDice(0,1)*(max_offset - min_offset) + min_offset`
+    // (acclient.c:324582). The prior port computed
+    // `range = (MaxOffset - MinOffset) + MinOffset = MaxOffset` then `* t`,
+    // i.e. `t*MaxOffset` — which drops MinOffset (error `min*(1-t)`). ACE
+    // shares the same algebra bug; sibling GetRandomA/B/C already use the
+    // correct lerp. See anim-deep-2026-06-04/FIX-PLAN.md (W1.4 / DIM6).
     const t = rng();
-    return result.multiplyScalar(range * t);
+    const scalar = t * (this.maxOffset - this.minOffset) + this.minOffset;
+    return result.multiplyScalar(scalar);
   }
 
   /**

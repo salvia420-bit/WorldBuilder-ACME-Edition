@@ -91,6 +91,15 @@ impl AnimationHook {
             // so this cite is for any future code that slots the floats
             // into named fields. Trusting DRW's order would swap prob↔prio.
             // See [[feedback_dat_parser_mislabels]] memory for the full pattern.
+            //
+            // 2026-06-04: the wasm getters that DO slot these floats
+            // (apps/holtburger-web/src/lib.rs `soundProbability` /
+            // `soundPriority`, both getter pairs) now read RETAIL order
+            // — on-disk `[gid@0, prob@4, prio@8, vol@12]`
+            // (acclient.c:343129-343138) — i.e. probability<-[4..8],
+            // priority<-[8..12]. They previously read the swapped
+            // DRW-labelled order; corrected so the OFFSET-4 PlayProbability
+            // gate fires on the right float.
             21 => read_exact_payload(reader, 16)?, // SoundTweaked (gid + 3 f32)
             22 => read_exact_payload(reader, 12)?, // SetOmega (Vector3)
             23 => read_exact_payload(reader, 8)?,  // TextureVelocity (2 f32)

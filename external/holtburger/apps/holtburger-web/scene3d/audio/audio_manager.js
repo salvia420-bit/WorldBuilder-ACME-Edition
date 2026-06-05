@@ -24,8 +24,12 @@
 // listener's forward/up vectors are derived from the quaternion so
 // PannerNode HRTF panning swings as the player turns.
 
-const DEFAULT_REF_DISTANCE = 6.0;      // meters: at this distance, full volume
-const DEFAULT_ROLLOFF_FACTOR = 1.0;    // inverse-square attenuation rate
+// Phase 0 (2026-06-04) — retail inverse-square attenuation. ref=5/rolloff=2
+// with distanceModel "exponential" gives WebAudio gain = (max(d,ref)/ref)^(-rolloff)
+// = 25/d^2 for d>=5 (flat unity below). Bit-matches retail GetAttenuation
+// (acclient.c:383086-383087, VOL_MIN_DIST_SQ=25=5*5).
+const DEFAULT_REF_DISTANCE = 5.0;      // meters: at/below this distance, full volume
+const DEFAULT_ROLLOFF_FACTOR = 2.0;    // inverse-SQUARE attenuation rate (retail)
 const DEFAULT_MAX_DISTANCE = 200.0;    // clamp falloff beyond this distance
 
 /**
@@ -35,6 +39,8 @@ const DEFAULT_MAX_DISTANCE = 200.0;    // clamp falloff beyond this distance
  * @property {number} [maxDistance]  Override per-call clamp distance.
  * @property {number} [gain]         Per-call gain multiplier (0..1).
  * @property {boolean} [loop]        Loop the source (default false).
+ * @property {("effect"|"ambient")} [category] Phase 3 (2026-06-04) — category
+ *        master bus to route through. "effect" (default) | "ambient".
  */
 
 export class AudioManager {
@@ -55,6 +61,12 @@ export class AudioManager {
     this._ctx = null;
     /** @type {GainNode|null} */
     this._master = null;
+    // Phase 3 (2026-06-04) — retail category master buses (effect/ambient),
+    // each feeding the global master. Created lazily in `_initContext()`.
+    /** @type {GainNode|null} */
+    this._effectMaster = null;
+    /** @type {GainNode|null} */
+    this._ambientMaster = null;
     /** @type {AudioListener|null} */
     this._listener = null;
 
@@ -105,6 +117,22 @@ export class AudioManager {
       this._master = this._ctx.createGain();
       this._master.gain.value = this._masterGainValue;
       this._master.connect(this._ctx.destination);
+      // Phase 3 (2026-06-04) — retail category master buses. Sounds route
+      // through a per-category bus (effect/ambient) into the global master,
+      // mirroring retail's effect_sound_volume(@45628) / ambient_sound_volume
+      // (@45630) sliders premultiplied before dB (acclient.c:383092-383095).
+      // Default gain 1.0 = inaudible/transparent at defaults; setters below
+      // expose per-category control. Guard so a re-init doesn't orphan buses.
+      if (!this._effectMaster) {
+        this._effectMaster = this._ctx.createGain();
+        this._effectMaster.gain.value = 1.0;
+        this._effectMaster.connect(this._master);
+      }
+      if (!this._ambientMaster) {
+        this._ambientMaster = this._ctx.createGain();
+        this._ambientMaster.gain.value = 1.0;
+        this._ambientMaster.connect(this._master);
+      }
       this._listener = this._ctx.listener;
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -136,6 +164,26 @@ export class AudioManager {
   setMasterGain(value) {
     this._masterGainValue = Math.max(0.0, Math.min(1.0, value));
     if (this._master) this._master.gain.value = this._masterGainValue;
+  }
+
+  /**
+   * Phase 3 (2026-06-04) — effect-category bus volume (0..1). Mirrors retail
+   * effect_sound_volume (acclient.c:@45628). Routes all `category:"effect"`
+   * (the default) sounds. Inaudible/transparent at the 1.0 default.
+   */
+  setEffectGain(value) {
+    const v = Math.max(0.0, Math.min(1.0, value));
+    if (this._effectMaster) this._effectMaster.gain.value = v;
+  }
+
+  /**
+   * Phase 3 (2026-06-04) — ambient-category bus volume (0..1). Mirrors retail
+   * ambient_sound_volume (acclient.c:@45630). Routes all `category:"ambient"`
+   * sounds (lifecycle-managed by ambient_runtime). Transparent at 1.0 default.
+   */
+  setAmbientGain(value) {
+    const v = Math.max(0.0, Math.min(1.0, value));
+    if (this._ambientMaster) this._ambientMaster.gain.value = v;
   }
 
   /**
@@ -271,6 +319,30 @@ export class AudioManager {
   }
 
   /**
+   * Phase 3b (2026-06-05) — quantize a linear gain to the retail integer-dB
+   * grid. Retail GetAttenuation computes attenuation = ceil(log2(v5)*6.0206)
+   * (acclient.c:383098; 6.0206 = 20*log10(2)) and applies that integer-dB
+   * value rather than the raw linear gain. We reproduce the same snap:
+   *   dB = ceil(log2(g) * 6.0206)   then   g' = 2^(dB / 6.0206)
+   * Edge cases mirror retail's branches:
+   *   - g <= 0  -> v5 not > 0.0 -> suppressed/silent (acclient.c:383110) -> 0.
+   *   - g >= 1  -> retail clamps v4 > 1.0 to 1.0 (acclient.c:383089); log2(1)=0,
+   *               ceil(0)=0, 2^0 = 1 -> unity.
+   * Result is within <1 dB of the input and inaudible at the 1.0 default.
+   * Static + pure so headless unit tests can assert g' for fixed gains with no
+   * AudioContext.
+   *
+   * @param {number} g Linear gain (typically 0..1).
+   * @returns {number} dB-quantized linear gain.
+   */
+  static _quantizeGainToDb(g) {
+    if (!(g > 0)) return 0.0;            // <=0 / NaN -> retail silence branch
+    const clamped = g > 1.0 ? 1.0 : g;  // retail v4 > 1.0 clamp
+    const dB = Math.ceil(Math.log2(clamped) * 6.0206);
+    return Math.pow(2, dB / 6.0206);
+  }
+
+  /**
    * Play a one-shot positional sound at a world position.
    *
    * Fire-and-forget: returns a Promise<{source, panner, gain}|null>
@@ -296,6 +368,34 @@ export class AudioManager {
         return null;
       }
     }
+    // Phase 2 (2026-06-04) — retail -50 dB silence cull (ONE-SHOTS ONLY).
+    // Retail computes attenuation = ceil(log2(v5)*6.0206) and drops the sound
+    // when it falls below VOL_MIN(-50, @45626) (acclient.c:383098-383108).
+    // With our inverse-square v=25/d^2, -50 dB (=10^(-50/20)=0.0031623) is
+    // crossed near d=88.9 m: 25/d^2 < 0.0031623 => d > 88.91. Cull here BEFORE
+    // _loadBuffer to save the fetch+decode. We do NOT cull loops
+    // (opts.loop===true): ambient loops are lifecycle-managed by
+    // ambient_runtime and may re-enter range as the listener moves.
+    const SILENCE_CUTOFF_DISTANCE = 88.91; // 25/d^2 < 0.0031623 => d > 88.9 m
+    if (!opts.loop) {
+      const L = this._ctx.listener;
+      let lx, ly, lz;
+      if (L && L.positionX && typeof L.positionX.value === "number") {
+        lx = L.positionX.value; ly = L.positionY.value; lz = L.positionZ.value;
+      }
+      // If we can't determine the listener position (older setPosition-only
+      // browsers, or pre-setListener), SKIP the cull — never throw.
+      if (typeof lx === "number" && worldPos) {
+        const dx = worldPos.x - lx;
+        const dy = worldPos.y - ly;
+        const dz = worldPos.z - lz;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist > SILENCE_CUTOFF_DISTANCE) {
+          this.skipCount += 1;
+          return null;
+        }
+      }
+    }
     const buf = await this._loadBuffer(did);
     if (!buf) {
       this.skipCount += 1;
@@ -307,7 +407,9 @@ export class AudioManager {
 
     const panner = this._ctx.createPanner();
     panner.panningModel = "HRTF";
-    panner.distanceModel = "inverse";
+    // Phase 0 (2026-06-04) — "exponential" gives (max(d,ref)/ref)^(-rolloff);
+    // with ref=5/rolloff=2 = 25/d^2 = retail inverse-square (acclient.c:383086).
+    panner.distanceModel = "exponential";
     panner.refDistance = opts.refDistance ?? DEFAULT_REF_DISTANCE;
     panner.rolloffFactor = opts.rolloffFactor ?? DEFAULT_ROLLOFF_FACTOR;
     panner.maxDistance = opts.maxDistance ?? DEFAULT_MAX_DISTANCE;
@@ -320,9 +422,23 @@ export class AudioManager {
     }
 
     const gain = this._ctx.createGain();
-    gain.gain.value = (opts.gain ?? 1.0);
+    // Phase 3b (2026-06-05) — dB-domain ceil quantization. Retail
+    // GetAttenuation does not apply the effective gain v5 linearly: it
+    // quantizes to integer decibels via attenuation = ceil(log2(v5)*6.0206)
+    // (acclient.c:383098), where 6.0206 = 20*log10(2) maps a log2 ratio to dB.
+    // Mirror that here by snapping the per-call gain to the same integer-dB
+    // grid before handing it to the GainNode. Sub-1dB change, dominated by the
+    // Phase 0 curve error and inaudible at the 1.0 default (ceil(0)=0 -> 1.0);
+    // implemented for retail faithfulness per FIX-PLAN Phase 3b, not audibility.
+    gain.gain.value = AudioManager._quantizeGainToDb(opts.gain ?? 1.0);
 
-    source.connect(gain).connect(panner).connect(this._master);
+    // Phase 3 (2026-06-04) — route through the category master bus
+    // (effect default | ambient). Falls back to the global master if the
+    // bus is missing (e.g. an older context that predates bus creation).
+    const bus = (opts.category === "ambient")
+      ? this._ambientMaster
+      : this._effectMaster;
+    source.connect(gain).connect(panner).connect(bus || this._master);
     // Wave 2 / G1 fix (2026-05-28) — disconnect the chain when the source
     // ends. For one-shots, `onended` fires when the buffer finishes; for
     // loops it fires when the caller calls `source.stop()`. Without this,
@@ -383,6 +499,9 @@ export class AudioManager {
     this._bufferCache.clear();
     this._ctx = null;
     this._master = null;
+    // Phase 3 (2026-06-04) — drop the category bus refs alongside master.
+    this._effectMaster = null;
+    this._ambientMaster = null;
     this._listener = null;
   }
 }

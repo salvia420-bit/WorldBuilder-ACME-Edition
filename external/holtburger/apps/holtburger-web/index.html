@@ -10188,6 +10188,47 @@ void main() {
                   console.warn(`[step 3] setMovementInput rejected: ${String(err?.message ?? err)}`);
                 }
 
+                // W3.1 (2026-06-05): client-predict the local forward/run
+                // locomotion cycle, mirroring the Jump (~line 8389) and the
+                // sidestep block just below. Previously forward was server-
+                // authoritative only (waited for ACE's UpdateMotion echo), so
+                // the legs lagged one RTT behind the keypress while position was
+                // already predicted — the "stuck in idle on move-start" symptom
+                // under real latency. Retail is autonomous (acclient.c autonomy=2:
+                // apply_interpreted_movement → DoInterpretedMotion plays the clip
+                // immediately on input; MoveToState is validation-only; ACE
+                // Player_Networking.cs:365 echoes the originator). The echo
+                // (loop.js KIND_MOTION → em.setMotion) stays as idempotent
+                // reconciliation — setMotion no-ops on an unchanged cacheKey, so
+                // we fire the SAME full MotionCommand ACE broadcasts to avoid a
+                // redundant re-fade.
+                try {
+                  const em = window.liveScene3d?.entityManager;
+                  const localGuid =
+                    typeof window.getLocalPlayerGuid === "function"
+                      ? window.getLocalPlayerGuid()
+                      : null;
+                  if (em && localGuid != null && typeof em.setMotion === "function") {
+                    const NONCOMBAT_STANCE = 0x8000003D;
+                    const stance =
+                      (typeof em.getStance === "function"
+                        ? em.getStance(localGuid >>> 0) >>> 0
+                        : 0) || NONCOMBAT_STANCE;
+                    // Full retail MotionCommand values (Ace.Entity/Enum/
+                    // MotionCommand): RunForward 0x44000007, WalkForward
+                    // 0x45000005, WalkBackwards 0x45000006, Ready 0x41000003.
+                    // Backward is always a walk; `run = !shift` (run-by-default).
+                    let forwardCmd;
+                    if (forward > 0) forwardCmd = run ? 0x44000007 : 0x45000005;
+                    else if (forward < 0) forwardCmd = 0x45000006;
+                    else forwardCmd = 0x41000003; // stopped → Ready (idle base pose)
+                    em.setMotion(localGuid >>> 0, forwardCmd >>> 0, stance);
+                  }
+                } catch (e) {
+                  // eslint-disable-next-line no-console
+                  console.warn("[w3.1] local forward prediction failed:", e);
+                }
+
                 // Wave 2 Phase 2.2 (2026-05-26): drive the local rig's
                 // sidestep-overlay layer from the JS input keystate.
                 // Mirrors the Phase 1.5 Jump local-trigger pattern at
@@ -10208,11 +10249,11 @@ void main() {
                 // method JSDoc) to install a second AnimationAction at
                 // weight 0.5 alongside the forward one.
                 //
-                // The forward command itself doesn't fire from here —
-                // ACE's UpdateMotion broadcast (KIND_MOTION event in
-                // the entity drain) already drives `em.setMotion` for
-                // the forward axis. Layered design: forward = server-
-                // authoritative; sidestep overlay = client-predicted.
+                // The forward base cycle now ALSO fires locally (W3.1
+                // block above, 2026-06-05) so the legs animate immediately;
+                // ACE's UpdateMotion broadcast (KIND_MOTION) reconciles it
+                // idempotently. This sidestep overlay is client-predicted
+                // here and blends on top of that forward base.
                 try {
                   const em = window.liveScene3d?.entityManager;
                   const localGuid =
@@ -10250,7 +10291,21 @@ void main() {
                     // retail client played on a SideStepLeft input).
                     const sidestepCmd =
                       strafe !== 0 ? 0x6500000F /* SideStepRight */ : 0;
-                    em.setSidestepLayer(localGuid >>> 0, sidestepCmd, stance);
+                    // W4.5 / DIM1-3 (2026-06-05): thread the real wire
+                    // `sidestep_speed` scalar into the overlay so the rig
+                    // can velScale the strafe cycle, instead of the renderer
+                    // hardcoding `_sidestepSpeed = 1.0`. The wasm wire-emit
+                    // (`crates/holtburger-core/src/client/movement/common.rs:288`
+                    // `raw_motion_state.sidestep_speed = Some(sign)`) sends the
+                    // SIGNED unit magnitude — `±1.0`, where the sign carries
+                    // Left-vs-Right (Phase 2.5 collapses Left into Right with a
+                    // negated speed). `strafe` here (`d:+1 / a:-1`) is exactly
+                    // that `sign`; the renderer stores `|speed|` so direction
+                    // stays in the position integrator, matching retail
+                    // `MotionInterp.cs:414` / `~/ac-headers/acclient.c:332766`.
+                    // Harmless until velScale (W0.1/W4.6) is live; logically
+                    // depends on W0.1 (DONE).
+                    em.setSidestepLayer(localGuid >>> 0, sidestepCmd, stance, strafe);
                   }
                 } catch (e) {
                   console.warn("[wave2.2] local setSidestepLayer failed:", e);

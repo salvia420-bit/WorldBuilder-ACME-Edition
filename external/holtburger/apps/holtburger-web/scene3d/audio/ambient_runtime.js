@@ -113,6 +113,11 @@ export class AmbientRuntime {
    *        Indoor predicate. When true, continuous loops are stopped
    *        and probabilistic timers freeze. Defaults to `() => false`
    *        (always outdoor) if unset.
+   * @param {() => boolean} [opts.isCurrentCellSeenOutside]
+   *        Phase 4 (2026-06-04) — ENVCELL_FLAG_SEEN_OUTSIDE (0x01)
+   *        predicate. When true in an indoor cell, the indoor gate is
+   *        relaxed so the region's outdoor ambient keeps running
+   *        (retail acclient.c:146721/146746). Defaults to `() => false`.
    * @param {() => Array<{userData: {lbX: number, lbY: number,
    *           terrainCodes: Uint8Array}}>|Array} [opts.getTerrainMeshes]
    *        Returns the array of terrain Mesh objects, each whose
@@ -170,6 +175,15 @@ export class AmbientRuntime {
     this._isCurrentCellIndoor =
       typeof opts.isCurrentCellIndoor === "function"
         ? opts.isCurrentCellIndoor
+        : () => false;
+    // Phase 4 (2026-06-04) — ENVCELL_FLAG_SEEN_OUTSIDE (0x01) provider.
+    // Retail feeds outdoor ambient into a cell when it is an outdoor
+    // cell OR carries the seen_outside flag (acclient.c:146721/146746),
+    // so a portal/window cell keeps the region's outdoor ambient alive.
+    // Defaults to `() => false` (never seen-outside) if unset.
+    this._isCurrentCellSeenOutside =
+      typeof opts.isCurrentCellSeenOutside === "function"
+        ? opts.isCurrentCellSeenOutside
         : () => false;
     this._getTerrainMeshes =
       typeof opts.getTerrainMeshes === "function"
@@ -296,7 +310,15 @@ export class AmbientRuntime {
     // here too so the user doesn't hear sky-wind through a dungeon
     // wall.
     const indoor = !!this._isCurrentCellIndoor();
-    if (indoor) {
+    // Phase 4 (2026-06-04) — ENVCELL_FLAG_SEEN_OUTSIDE (0x01) relaxes
+    // the indoor gate: retail feeds outdoor ambient into a cell when it
+    // is an outdoor cell OR carries seen_outside, so a portal/window
+    // cell keeps the region's outdoor ambient alive instead of tearing
+    // down its loops (acclient.c:146721/146746). Only treat the cell as
+    // "indoor for ambient purposes" when indoor AND NOT seen_outside.
+    const seenOutside = !!this._isCurrentCellSeenOutside?.();
+    const ambientIndoor = indoor && !seenOutside;
+    if (ambientIndoor) {
       if (!this._lastIndoor) {
         // Transition outdoor → indoor: stop continuous loops + clear
         // the active-STB state so the next outdoor tick re-primes.
@@ -709,6 +731,10 @@ export class AmbientRuntime {
         resolved.waveDid >>> 0,
         listenerPos,
         {
+          // Phase 3 (2026-06-04) — route through the ambient category
+          // bus so the ambient_sound_volume slider premultiplies before
+          // the dB curve (retail acclient.c:383092-383095, @45630).
+          category: "ambient",
           loop: true,
           gain,
           refDistance: AMBIENT_REF_DISTANCE,
@@ -776,6 +802,10 @@ export class AmbientRuntime {
         resolved.waveDid >>> 0,
         listenerPos,
         {
+          // Phase 3 (2026-06-04) — route through the ambient category
+          // bus so the ambient_sound_volume slider premultiplies before
+          // the dB curve (retail acclient.c:383092-383095, @45630).
+          category: "ambient",
           loop: false,
           gain,
           refDistance: AMBIENT_REF_DISTANCE,

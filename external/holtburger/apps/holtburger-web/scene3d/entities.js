@@ -305,6 +305,7 @@ import {
   meshToGeometryGroups,
   surfacePixelsToTexture,
   acQuatToThree,
+  acToThree,
 } from "./adapter.js";
 import { AnimationCache, cycleTimeScale } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
@@ -319,18 +320,20 @@ import { buildLightForSetupLight } from "./lighting.js";
 // actual ground speed / authored cycle speed (|MotionData.velocity|). Default
 // OFF (eye-test-tuned gait change); read once at module load. try/catch for
 // the Node test harness (no `window`).
-// T1: flip to default-on only after a GPU eye-test validates gait. The
-// 'actual' speed input now comes from the wasm `stateGroundSpeed` getter
-// (see tick() / _resolveStateGroundSpeed) instead of the XZ-delta EMA, but
-// the default stays OFF until the gait is eye-test-confirmed on the 1070.
+// T1: default-ON as of 2026-06-05. The runtime `cycleBaseSpeed` denominator now
+// resolves (~4.0 run / 2.6 walk) after the prefetch fix in lib.rs cycle_base_speed
+// (was 0.0 from a sync-cache miss => velScale silently no-op'd). 'actual' speed
+// comes from the wasm `stateGroundSpeed` getter (see tick()/_resolveStateGroundSpeed).
+// `?velScale=off` disables. velScale only scales an already-running loco cycle, so
+// it stays inert until the stuck-in-idle/walk-run dispatch gap is fixed — harmless.
 const VEL_SCALE_ON = (() => {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     return (
-      new URLSearchParams(window.location.search).get("velScale")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("velScale")?.toLowerCase() !== "off"
     );
   } catch (_) {
-    return false;
+    return true;
   }
 })();
 
@@ -1157,6 +1160,15 @@ class EntityInstance {
     // directly, so airborneTilt stays null for the humanoid case.
     if (this.airborneTilt) {
       this.root.quaternion.multiply(this.airborneTilt);
+    }
+    // DIM1-2 / W4.3 (2026-06-05): re-apply any accumulated SetOmega spin AFTER
+    // the server-orientation copy() above (which otherwise stomps it), mirroring
+    // the airborneTilt re-apply. `_omegaAccumQ` is integrated each frame by
+    // `_tickHookOmega`. Retail keeps omega as a persistent angular-velocity
+    // re-applied every tick (acclient.c:316613/:317777). Pre-multiply to match
+    // the world-space spin order used in `_tickHookOmega`.
+    if (this._omegaAccumQ) {
+      this.root.quaternion.premultiply(this._omegaAccumQ);
     }
   }
 
@@ -2599,6 +2611,13 @@ export class EntityManager {
       // Translucent with T>0.
       if (isTranslucent && sfTranslucency > 0) {
         mat.opacity = Math.max(0, 1 - sfTranslucency);
+        // DIM7-5 / W4.2 (2026-06-05): stash the AUTHORED base translucency so a
+        // later Transparent(20)/TransparentPart(7) hook ramp can floor against
+        // it — retail floors `_end` to translucencyOriginal
+        // (acclient.c:316947-316956) so a hook can't render a base-translucent
+        // surface MORE opaque than its authored baseline.
+        // `_applyRampValueToMaterial` reads this back. (anim-deep FIX-PLAN W4.2.)
+        mat.userData = { ...(mat.userData || {}), __baseTranslucency: sfTranslucency };
       }
     } else if (isClipMap) {
       // Binary alpha mask (foliage, fences) — alphaTest cuts alpha=0 frags.
@@ -2704,6 +2723,15 @@ export class EntityManager {
       inst.root.quaternion.copy(acQuatToThree(qw, qx, qy, qz));
       if (inst.airborneTilt) {
         inst.root.quaternion.multiply(inst.airborneTilt);
+      }
+      // DIM1-2 / W4.3 (2026-06-05): re-apply accumulated SetOmega spin after the
+      // server-orientation copy() so a remote entity that BOTH spins (set_omega)
+      // AND streams position updates keeps spinning — retail set_omega is a
+      // persistent angular-velocity re-applied every tick (acclient.c:316613/
+      // :317777). Mirrors the airborneTilt re-apply above; pre-multiply to match
+      // `_tickHookOmega`'s world-space order. (anim-deep FIX-PLAN W4.3.)
+      if (inst._omegaAccumQ) {
+        inst.root.quaternion.premultiply(inst._omegaAccumQ);
       }
       // Lazily allocate the per-entity target vector (reused in place — no
       // per-update allocation).
@@ -4849,8 +4877,15 @@ export class EntityManager {
    * @param {number} guid
    * @param {number} sidestepCmd Full u32 motion command. Use 0 to clear.
    * @param {number} motionStance Stance (current_style); 0 inherits.
+   * @param {number} [speed] W4.5 / DIM1-3 (2026-06-05): the wire
+   *   `sidestep_speed` scalar (retail MotionInterp.cs:414 / acclient.c:332766
+   *   scales the strafe anim by it). When omitted/non-finite, defaults to 1.0
+   *   (the un-modulated sidestep anim speed) — backward-compatible with the
+   *   3-arg local caller (index.html). Threading the real wire value here makes
+   *   `inst._sidestepSpeed` carry the fractional magnitude the
+   *   `stateGroundSpeed` getter / velScale consume. (anim-deep FIX-PLAN W4.5.)
    */
-  async setSidestepLayer(guid, sidestepCmd, motionStance) {
+  async setSidestepLayer(guid, sidestepCmd, motionStance, speed) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return;
     // Wave 2 Phase 2.5 (2026-05-26): defensive Left → Right substitution.
@@ -4903,12 +4938,15 @@ export class EntityManager {
     }
     // T1: stash the interpreted sidestep command (full u32, already collapsed
     // to SideStepRight 0x6500000F above) for the stateGroundSpeed getter's X
-    // term. The wire `sidestep_speed` magnitude isn't carried into this layer
-    // dispatch (the rig only needs one clip per direction), so use 1.0 — retail
-    // get_state_velocity keys the X term on `command == SideStepRight` and
-    // scales by sidestep_speed; 1.0 yields the un-modulated sidestep anim speed.
+    // term. retail get_state_velocity keys the X term on
+    // `command == SideStepRight` and scales by sidestep_speed.
+    // W4.5 / DIM1-3 (2026-06-05): thread the real wire `sidestep_speed`
+    // magnitude (was hardcoded 1.0, dropping fractional-speed strafes). When the
+    // caller omits it (3-arg callers) `speed` is undefined → fall back to 1.0,
+    // the un-modulated sidestep anim speed. Harmless until velScale is live AND
+    // a fractional-speed strafe occurs. (anim-deep FIX-PLAN W4.5.)
     inst._sidestepCommand = cmd >>> 0;
-    inst._sidestepSpeed = 1.0;
+    inst._sidestepSpeed = Number.isFinite(speed) ? Math.abs(speed) : 1.0;
 
     let stance = (motionStance >>> 0);
     if (stance === 0 && inst.lastStance) {
@@ -6074,7 +6112,19 @@ export class EntityManager {
     return cloned;
   }
 
-  async _attachParticleChainForEntity(guid, rig, pesId, depth = 0) {
+  // W4.7 / DIM3-3 (2026-06-05): `defaultPartIndex` lets a caller anchor the
+  // invoked script's emitters at a specific SetupModel part when the script's
+  // OWN CreateParticle hook carries no part (root sentinel). DefaultScriptPart
+  // (18) passes its `_part_index` (retail `play_default_script(object,
+  // _part_index)`, acclient.c:342324-342327); CreateParticle(13/26) already
+  // anchors per-part via the hook's own `createParticlePartIndex`, so a hook
+  // that names its OWN part still wins — `defaultPartIndex` only fills the
+  // root-sentinel case. Anchoring uses the existing `inst.root.partFrames[
+  // partIndex]` per-part-frame path (particle_emitter.js:347), NOT a different
+  // parent Object3D. Default -1 = body root (unchanged behavior). Threaded
+  // through CallPES recursion so sub-scripts inherit it. (anim-deep FIX-PLAN
+  // W4.7.)
+  async _attachParticleChainForEntity(guid, rig, pesId, depth = 0, defaultPartIndex = -1) {
     // F.D-fu (2026-05-20): emit a chain-walker entry log so validators
     // (and devs eyeballing console) can correlate spawn dispatch with
     // chain-walker firing. Critical for diagnosing "no PhysicsScriptHook
@@ -6170,7 +6220,20 @@ export class EntityManager {
                 });
               }
               // Wave 3 / A4 — follow the entity so HRTF tracks moving sources.
-              audioMgr.play(waveId, pos, { gain: volume, followGuid: (guid >>> 0) }).catch(() => {});
+              // D4-NEW-1 (2026-06-05): `pos` here is the entity's RAW AC-frame
+              // position (rig.position lives under worldRoot, whose -π/2 X
+              // rotation never reaches the AudioContext). The listener is set
+              // in three.js frame (index.js:1479-1480), so the emitter must be
+              // transformed into the SAME frame or its panned DIRECTION is
+              // permuted (AC-north → overhead instead of three.js -Z forward).
+              // Apply acToThree (ax,ay,az)→(ax,az,-ay); distance is preserved
+              // either way. Retail shares one frame (acclient.c:383163-383164).
+              // (D4-NEW-1-verification.md — verdict PARTIAL/HIGH.) NOTE: this
+              // followGuid sound's per-rAF panner update lives in
+              // index.js updateFollowingPositions and must apply the same
+              // transform there to stay corrected after frame 0.
+              const a4t = acToThree(pos.x, pos.y, pos.z);
+              audioMgr.play(waveId, { x: a4t[0], y: a4t[1], z: a4t[2] }, { gain: volume, followGuid: (guid >>> 0) }).catch(() => {});
             }, delayMs);
             timeoutIds.push(tid);
           }
@@ -6269,9 +6332,39 @@ export class EntityManager {
         const pesDelayMs = Math.max(0, ((+e.startTime || 0) + randPause) * 1000);
         const tid = setTimeout(() => {
           if (!this.entityMap.has(guid >>> 0)) return;
-          this._attachParticleChainForEntity(guid, rig, callPesDid, depth + 1).catch(() => {});
+          // W4.7 — inherit the default part anchor in the sub-script.
+          this._attachParticleChainForEntity(guid, rig, callPesDid, depth + 1, defaultPartIndex).catch(() => {});
         }, pesDelayMs);
         timeoutIds.push(tid);
+        continue;
+      }
+
+      // DIM6-2 / W1.3 (2026-06-05): the PhysicsScript chain-walker previously
+      // `continue`'d past Destroy(14)/Stop(15) hooks, silently dropping them —
+      // retail tears emitters down by the per-script handle
+      // (acclient.c:342513-342545, :316382-316407), mirroring the already-
+      // correct AnimationHook path at entities.js (~hookType 14/15 above).
+      // The PhysicsScriptEntryJs wasm getter `createParticleEmitterInstanceId`
+      // is GATED on hook_type 13|26 (lib.rs:34803-34809) so it returns 0 for
+      // 14/15; the handle for those is the 4-byte payload at hookData[0..4]
+      // (parallels AnimationHookJs::particle_emitter_id, lib.rs:13237-13239),
+      // so read it directly from `e.hookData` (the same Uint8Array view the
+      // SoundTable/Scale/CallPES arms above decode). (anim-deep FIX-PLAN W1.3.)
+      if (e.hookType === 14 || e.hookType === 15) {
+        const hb = e.hookData; // Uint8Array view of the 4-byte payload.
+        if (hb && hb.byteLength >= 4 && this._worldParticleManager) {
+          const dvh = new DataView(hb.buffer, hb.byteOffset, hb.byteLength);
+          const handle = dvh.getUint32(0, true) >>> 0;
+          if (handle !== 0) {
+            try {
+              if (e.hookType === 14) {
+                this._worldParticleManager.destroyParticleEmitter(handle);
+              } else {
+                this._worldParticleManager.stopParticleEmitter(handle);
+              }
+            } catch (_) { /* idempotent — never error on unknown id */ }
+          }
+        }
         continue;
       }
 
@@ -6327,9 +6420,17 @@ export class EntityManager {
         quaternion: _particleAttachScratchQuat,
       };
 
-      const partIndex = (e.createParticlePartIndex === 0xffffffff)
+      let partIndex = (e.createParticlePartIndex === 0xffffffff)
         ? -1
         : (e.createParticlePartIndex | 0);
+      // W4.7 / DIM3-3 (2026-06-05): if this hook anchors at the body root
+      // (sentinel -1) but the invoking DefaultScriptPart(18) supplied a default
+      // part, anchor at that part instead — retail `play_default_script` passes
+      // `_part_index` as the script's base part. A hook that names its OWN part
+      // is unaffected. (anim-deep FIX-PLAN W4.7.)
+      if (partIndex === -1 && (defaultPartIndex | 0) >= 0) {
+        partIndex = defaultPartIndex | 0;
+      }
 
       // F.D-fu (2026-05-20): record the CreateParticle hook FIRING (the
       // contract-level event per docs/event-completeness-method.md
@@ -6387,11 +6488,21 @@ export class EntityManager {
       // emitterIds order can differ from manifest order on slow-
       // emitter cases, but no caller asserts ordering on that map.
       const emitterIdForCatch = (emitterId >>> 0);
+      // DIM6-2 / W1.3 (2026-06-05): seed the manager emitter with the per-script
+      // INSTANCE handle (createParticleEmitterInstanceId = hookData[36..40],
+      // lib.rs:34803-34809) — NOT the EmitterInfo DID `emitterId` above — so a
+      // later Destroy(14)/Stop(15) hook in the same chain can key teardown by
+      // that handle. ParticleManager.addEmitter already honors a supplied
+      // `emitterId` (particle_manager.js:126/:131/:238); when 0 it auto-assigns,
+      // so the moon (pure CreateParticle, handle 0) is unaffected. Mirrors the
+      // AnimationHook CreateParticle path (entities.js _fireCreateParticleHook
+      // passes `emitterId: emitterIdSeed`). (anim-deep FIX-PLAN W1.3.)
       this._worldParticleManager.addEmitter({
         emitterInfo,
         parent: rig,  // <-- the entity rig (THREE.Group); .position + .quaternion track the entity
         partIndex,
         parentOffset: offset,
+        emitterId: (e.createParticleEmitterInstanceId >>> 0),
       })
         .then((id) => {
           if (id !== 0) {
@@ -7410,8 +7521,15 @@ export class EntityManager {
           },
         });
       }
+      // D4-NEW-1 (2026-06-05): transform the RAW AC-frame entity position into
+      // the three.js frame the AudioContext listener lives in (acToThree
+      // (ax,ay,az)→(ax,az,-ay)); otherwise the panner pans a permuted
+      // DIRECTION (north→overhead). Distance is preserved. This Sound(1) hook
+      // carries no followGuid, so the one-time transform fully corrects it.
+      // (D4-NEW-1-verification.md PARTIAL/HIGH; retail acclient.c:383163-383164.)
+      const sndT = acToThree(pos.x, pos.y, pos.z);
       audioMgr
-        .play(waveId, { x: pos.x, y: pos.y, z: pos.z })
+        .play(waveId, { x: sndT[0], y: sndT[1], z: sndT[2] })
         .catch(() => {});
       this._soundHookFires = (this._soundHookFires | 0) + 1;
       return;
@@ -7437,6 +7555,19 @@ export class EntityManager {
         .resolveSound(stbDid, soundEnum)
         .then((entry) => {
           if (!entry) return; // soft null — Sound enum not in this STB
+          // DIM8-2 / W1.2 (2026-06-05): roll the per-row PlayProbability gate.
+          // Retail `SoundTableHook::Execute → PlaySoundA` gates playback on
+          // `PlayProbability(selected.probability_)` AFTER the uniform pick
+          // (acclient.c:383681-383703); we resolved `entry.probability` from
+          // the cache but discarded it. Use the SoundTableCache rng (cache._rng)
+          // for test determinism, falling back to Math.random. Most rows are
+          // probability==1.0 so audible impact is low. The PhysicsScript adapter
+          // (entities.js ~:6226) routes hookType 2 through this same arm, so the
+          // single gate covers both paths. (anim-deep FIX-PLAN W1.2.)
+          if (entry.probability != null && entry.probability < 1.0) {
+            const r = (typeof cache?._rng === "function") ? cache._rng() : Math.random();
+            if (r >= entry.probability) return;
+          }
           const gain = entry.volume > 0 ? entry.volume : 1.0;
           // Snapshot pos again at await-resolution time so a moving
           // entity's audio lands at its current location, not where
@@ -7470,7 +7601,14 @@ export class EntityManager {
             });
           }
           // Wave 3 / A4 — follow the entity so HRTF tracks moving sources.
-          audioMgr.play(entry.waveDid, { x: px, y: py, z: pz }, { gain, followGuid: (inst.guid >>> 0) }).catch(() => {});
+          // D4-NEW-1 (2026-06-05): transform the RAW AC-frame snapshot into the
+          // three.js listener frame (acToThree (ax,ay,az)→(ax,az,-ay)) so the
+          // panned direction matches the listener; distance is preserved.
+          // followGuid: the per-rAF panner refresh in index.js
+          // updateFollowingPositions must apply the same transform to keep this
+          // corrected past frame 0. (D4-NEW-1-verification.md; acclient.c:383163-383164.)
+          const stbT = acToThree(px, py, pz);
+          audioMgr.play(entry.waveDid, { x: stbT[0], y: stbT[1], z: stbT[2] }, { gain, followGuid: (inst.guid >>> 0) }).catch(() => {});
         })
         .catch(() => {});
       this._soundTableHookFires = (this._soundTableHookFires | 0) + 1;
@@ -7638,8 +7776,15 @@ export class EntityManager {
       // the panner follows a moving source. Important for SoundTweaked
       // (e.g. monster idle vocalizations on a creature that's pursuing
       // the player).
+      // D4-NEW-1 (2026-06-05): transform the RAW AC-frame entity position into
+      // the three.js listener frame (acToThree (ax,ay,az)→(ax,az,-ay)) so the
+      // panned direction is correct; distance is preserved. followGuid: the
+      // per-rAF panner refresh in index.js updateFollowingPositions must apply
+      // the same transform to stay corrected past frame 0.
+      // (D4-NEW-1-verification.md PARTIAL/HIGH; retail acclient.c:383163-383164.)
+      const twkT = acToThree(pos.x, pos.y, pos.z);
       audioMgr
-        .play(waveId, { x: pos.x, y: pos.y, z: pos.z }, { gain, followGuid: (inst.guid >>> 0) })
+        .play(waveId, { x: twkT[0], y: twkT[1], z: twkT[2] }, { gain, followGuid: (inst.guid >>> 0) })
         .catch(() => {});
       this._soundTweakedHookFires = (this._soundTweakedHookFires | 0) + 1;
       return;
@@ -7721,19 +7866,22 @@ export class EntityManager {
       return;
     }
     // Wave 4 (2026-05-28) — DefaultScriptPart (18). Same chain walker
-    // as DefaultScript (17); the `partIndex` field is currently
-    // advisory — `_attachParticleChainForEntity` anchors emitters at
-    // the rig root, not per-part. Carrying the hint in telemetry so a
-    // future chain-walker extension (per-part anchor override) has the
-    // wire field captured. Retail uses this to fire a "puff of smoke"
+    // as DefaultScript (17). Retail uses this to fire a "puff of smoke"
     // PhysicsScript at the foot part instead of the body root.
+    // W4.7 / DIM3-3 (2026-06-05): thread the wire `partIndex` into the walker
+    // as the invoked script's DEFAULT anchor part so the emitter anchors at
+    // `inst.parts[partIndex]` (via the partFrames path) instead of the body
+    // root — retail `play_default_script(object, _part_index)`
+    // (acclient.c:342324-342327). Was previously advisory/telemetry-only.
     if (hookType === 18) {
       const pesId = (inst.physicsScriptDid >>> 0) ||
         ((inst.meta?.physicsScriptDid >>> 0) | 0) ||
         0;
       const partHint = hook.partIndex >>> 0;
+      // Normalize the root sentinel (0xFFFFFFFF) to the walker's -1 default.
+      const defaultPartIndex = (partHint === 0xFFFFFFFF) ? -1 : (partHint | 0);
       if (pesId !== 0) {
-        this._attachParticleChainForEntity(inst.guid >>> 0, inst.root, pesId)
+        this._attachParticleChainForEntity(inst.guid >>> 0, inst.root, pesId, 0, defaultPartIndex)
           .catch(() => {});
       }
       if (pushEventRecord) {
@@ -8015,8 +8163,20 @@ export class EntityManager {
       // the static-surface path (materials.js:1836 `opacity = 1 - translucency`).
       // `transparent: true` is required for three.js to actually blend;
       // value <= 0 (fully opaque) restores the fast opaque path.
-      material.opacity = 1 - value;
-      material.transparent = value > 0;
+      //
+      // DIM7-5 / W4.2 (2026-06-05): floor the ramp VALUE (translucency) to the
+      // surface's authored base translucency so a Transparent hook can never
+      // render a base-translucent surface MORE opaque than its authored
+      // baseline — retail floors `_end` to translucencyOriginal
+      // (acclient.c:316947-316956). The base is stashed on `userData` at clone
+      // time (`__baseTranslucency`, see _applyPalettedSurfaceRenderState).
+      // Absent (non-paletted / opaque-base surfaces) → floor 0 = current
+      // behavior. Covers both the ramp and the snap (both route through here,
+      // _tickMaterialHooks tween-done branch). (anim-deep FIX-PLAN W4.2.)
+      const baseTrans = +(material.userData?.__baseTranslucency ?? 0);
+      const flooredValue = value < baseTrans ? baseTrans : value;
+      material.opacity = 1 - flooredValue;
+      material.transparent = flooredValue > 0;
       // depthWrite mirrors transparency to avoid sorting glitches on
       // edges (matches the standard PBR-ghost convention).
       if (material.transparent && material.depthWrite !== false) {
@@ -8034,6 +8194,15 @@ export class EntityManager {
       // when the cached material had `emissive = (0, 0, 0)`.
       if (material.emissive) {
         material.emissive.setRGB(value, value, value);
+        // DIM7-3 / W4.1 (2026-06-05): force emissiveIntensity to 1.0 so the
+        // on-screen luminance equals `value` raw, matching retail
+        // SetLuminositySimple (acclient.c:360612-360617, raw emissive set).
+        // A BASE-Luminous surface's cloned material carries
+        // emissiveIntensity = min(2.0, sfLuminosity) (entities.js ~:2615 /
+        // materials.js); three.js renders emissive × emissiveIntensity, so
+        // leaving it would DOUBLE-brighten a base-luminous surface that also
+        // gets a runtime Luminous hook. (anim-deep FIX-PLAN W4.1.)
+        material.emissiveIntensity = 1.0;
       }
     } else if (hookType === 10 || hookType === 11) {
       // Diffuse — albedo scalar. Multiplies the texture by `value`;
@@ -8115,7 +8284,53 @@ export class EntityManager {
         delete mat.userData.__hookTexVel;
       } else {
         mat.userData.__hookTexVel = { us, vs };
+        // DIM1-4 / W4.4 (2026-06-05): the per-frame UV scroll in
+        // `_tickMaterialHooks` hard-gates `if (!mat.map) continue;`, so a
+        // material whose diffuse texture hasn't been lazily upgraded yet would
+        // silently DROP the scroll. Retail `SetPartTextureVelocity` scrolls
+        // unconditionally (acclient.c:342554). Trigger the lazy diffuse-texture
+        // upgrade now (mirrors the needsTex path at ~:2506) so the scroll has a
+        // `.map` to offset. Fire-and-forget; most water/lava/sign surfaces
+        // already carry a base map so this no-ops. (anim-deep FIX-PLAN W4.4.)
+        if (!mat.map) {
+          this._ensureEntityMaterialMap(inst, did >>> 0).catch(() => {});
+        }
       }
+    }
+  }
+
+  /**
+   * DIM1-4 / W4.4 (2026-06-05) — lazily attach a diffuse `.map` to an
+   * entity-owned material that was cloned from a still-untextured (map-less)
+   * cache material, so a TextureVelocity hook installed on it has a texture to
+   * UV-scroll. Resolves the textured cache material via the SAME path the
+   * surface-refresh retry uses (`materialCache.get(did, fetch_surfaces_pixels)`)
+   * and lifts a per-entity CLONE of its `.map` onto the entity material (the
+   * clone keeps the velocity `.offset` private; the underlying `Texture.image`
+   * is shared, so no extra GPU upload). No-op if the surface still has no
+   * texture (resource not arrived) or the entity material was disposed.
+   */
+  async _ensureEntityMaterialMap(inst, surfaceDid) {
+    const did = surfaceDid >>> 0;
+    if (!this.materialCache || typeof this.wasmExports?.fetch_surfaces_pixels !== "function") return;
+    const mat = inst._entityMaterials?.get(did);
+    // Already upgraded (by us or by a concurrent call), gone, or velocity
+    // cleared meanwhile → nothing to do.
+    if (!mat || mat.map || !mat.userData?.__hookTexVel) return;
+    let cacheMat;
+    try {
+      cacheMat = await this.materialCache.get(did, this.wasmExports.fetch_surfaces_pixels);
+    } catch (_) {
+      return; // transient — a later TextureVelocity install retries
+    }
+    if (inst._disposed || this.entityMap.get(inst.guid) !== inst) return;
+    if (!mat.map && mat.userData?.__hookTexVel && cacheMat && cacheMat.map) {
+      const tex = cacheMat.map.clone();
+      tex.userData = { ...(tex.userData || {}), __disposable: true };
+      delete tex.userData.__cacheOwned;
+      tex.needsUpdate = false; // shared image, no re-upload
+      mat.map = tex;
+      mat.needsUpdate = true;
     }
   }
 
@@ -8187,6 +8402,17 @@ export class EntityManager {
       Math.cos(halfAngle),   // w
     );
     inst.root.quaternion.multiplyQuaternions(_omegaScratchQ, inst.root.quaternion);
+    // DIM1-2 / W4.3 (2026-06-05): accumulate the SAME pre-multiplied spin delta
+    // into a persistent `_omegaAccumQ` so a subsequent server `setPose` copy()
+    // (which resets root.quaternion to the server orientation + airborneTilt
+    // and would otherwise STOMP the baked-in spin) can re-apply it — retail
+    // set_omega is a persistent angular-VELOCITY field re-applied every tick
+    // (acclient.c:316613/:317777), never lost on an orientation update. Only an
+    // entity that BOTH spins AND receives position updates repros the clobber;
+    // static spinners (signs/fans, no setPose) are unaffected.
+    // (anim-deep FIX-PLAN W4.3.)
+    if (!inst._omegaAccumQ) inst._omegaAccumQ = new THREE.Quaternion();
+    inst._omegaAccumQ.premultiply(_omegaScratchQ);
   }
 
   /**

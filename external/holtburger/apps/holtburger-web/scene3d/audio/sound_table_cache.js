@@ -31,15 +31,23 @@
 // successful resolves; failures fall through and the next `get()` will
 // re-issue the fetch.
 //
-// Weighted-random pick algorithm:
+// Selection (UNIFORM) pick algorithm:
 //   - 0 entries → null (caller skips)
 //   - 1 entry → return directly (avoids RNG churn — Task A measured
 //     4185 entries across 4184 keys, so the average is ~1.0 per key)
-//   - N entries, sum of `probability` > 0 → standard "spin a uniform
-//     pointer in [0, sum), walk the prefix sums" weighted pick
-//   - N entries, all probabilities = 0 → uniform random pick across
-//     the entries (rare but legal; the alternative would be silently
-//     dropping the call)
+//   - N entries → UNIFORM pick `floor((N-1) * rng())` across the
+//     entries, bit-faithful to retail `SoundManager::GetSound`
+//     (acclient.c:383446-383450; chorizite SoundManager.cs:90-97).
+//     `probability` is NOT a selection weight — it gates a SEPARATE
+//     PlayProbability roll at the playback call site (the consumer's
+//     `rng() < probability` check), independent of which entry is chosen.
+//
+// 2026-06-05 (item W2.1 / D-2, audio-fidelity-deep-2026-06-04 FIX-PLAN):
+//   Rewrote this header (and the @property/@param/resolveSound prose
+//   below) to describe the uniform pick. The earlier text described a
+//   removed `probability`-weighted prefix-sum picker — that was a
+//   divergence from retail GetSound and the live code at `resolveSound`
+//   already does the uniform pick. Doc-only sync; no behavior change.
 
 const SOUND_TABLE_PREFIX = 0x20;
 
@@ -52,9 +60,13 @@ function isSoundTableDid(did) {
  * @property {number} waveDid     Wave DID (0x0Axxxxxx) to play.
  * @property {number} priority    AC priority float (currently unused
  *                                JS-side; preserved for future logic).
- * @property {number} probability Per-row probability weight (already
- *                                consumed by the picker; returned so
- *                                callers can log / debug).
+ * @property {number} probability Per-row PlayProbability gate (0..1).
+ *                                NOT consumed by the selection pick
+ *                                (which is uniform — see
+ *                                resolveSound); returned so the caller
+ *                                can roll its own `rng() < probability`
+ *                                playback gate (retail PlayProbability,
+ *                                acclient.c:383507) and/or log/debug.
  * @property {number} volume      Per-row volume multiplier (0..1).
  */
 
@@ -67,9 +79,9 @@ export class SoundTableCache {
    *        `id`, `hashKey`, `numHashes`, `numSounds` getters plus
    *        `soundKeys()` and `entriesForSound(soundEnum)` methods.
    * @param {object} [opts.rng]
-   *        Optional random source for the weighted pick. Used by tests
-   *        to make `resolveSound` deterministic. Must return a float in
-   *        [0, 1). Defaults to `Math.random`.
+   *        Optional random source for the uniform selection pick. Used
+   *        by tests to make `resolveSound` deterministic. Must return a
+   *        float in [0, 1). Defaults to `Math.random`.
    * @param {boolean} [opts.warnOnBadDid=true]
    *        If true, log a one-shot `console.warn` the first time a
    *        non-0x20-prefixed DID is passed in. Defaults to true.
@@ -171,8 +183,9 @@ export class SoundTableCache {
 
   /**
    * Resolve a (soundTableDid, soundEnum) pair to one `SoundEntry`,
-   * picked by `probability`-weighted random across the entries
-   * attached to `soundEnum` in this SoundTable.
+   * picked by UNIFORM random across the entries attached to `soundEnum`
+   * in this SoundTable. `probability` is NOT a selection weight (it
+   * gates a separate PlayProbability roll at the call site).
    *
    * Returns `null` if the SoundTable has no entries for `soundEnum`
    * (the common case — most tables only carry a handful of enums) or

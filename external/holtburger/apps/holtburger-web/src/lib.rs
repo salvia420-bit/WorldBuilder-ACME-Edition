@@ -4726,12 +4726,30 @@ mod moveto_hint_tests {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = cycleBaseSpeed)]
 pub async fn cycle_base_speed(mtable_id: u32, stance: u32, command: u32) -> f32 {
-    use holtburger_dat::file_type::MotionTable;
-    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_dat::file_type::{MotionKinematics, MotionTable};
+    use holtburger_dat::{HOLTBURGER_CORE_NAMESPACE, ResourceKey, ResourceSource};
     if mtable_id == 0 || (mtable_id >> 24) != 0x09 {
         return 0.0;
     }
     let source = global_source::global_source();
+    // (2026-06-05) Hydrate BOTH records this fn reads before the SYNC
+    // `get_file_by_key` calls below. `cycle_base_speed` is `async` precisely so it
+    // can honor the `global_source` contract — "prefetch the records it'll read
+    // before any sync `get_file_by_key`" (global_source.rs docs). Without this the
+    // sync reads depend on the player MotionTable + the `holtburger/core` MOTK
+    // already being warm from incidental paths (the rig animation build /
+    // `load_world_bootstrap`). The MOTK loads at EnteredWorld (motion_tables=436)
+    // but is LRU-evicted by gameplay shard churn before this runs, and the player
+    // MT may never have been persisted for this `(mtable,stance,cmd)` query — so
+    // the sync reads missed and the resolver returned 0.0, silently no-op'ing
+    // velScale (headless-confirmed cycleBaseSpeed==0 even render-on). Re-prefetch
+    // is cheap when already cached; it is the documented hydrate-then-read pattern.
+    let _ = source
+        .prefetch(&[
+            ResourceKey::new("eor/portal", mtable_id),
+            ResourceKey::new(HOLTBURGER_CORE_NAMESPACE, MotionKinematics::FILE_ID),
+        ])
+        .await;
     let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", mtable_id)) {
         Ok(b) => b,
         Err(_) => return 0.0,
@@ -4972,6 +4990,17 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // in lockstep with `frames` (same slice + same reverse).
     let mut pos: Vec<f32> = Vec::new();
     let mut t = 0.0f32;
+    // 2026-06-05 [DIM5/W1.5]: running root-motion accumulator. ACE composes
+    // PosFrames CUMULATIVELY — the net displacement at frame N is the running
+    // sum of pos_frames[0..=N] (Sequence.cs:383 / AFrame.cs:43-49; retail
+    // Frame::combine at acclient.c:340420-340457). Previously we pushed each
+    // raw per-frame `origin` delta and `animation.js` added it directly, so a
+    // multi-frame translating one-shot (lunge/door/lever/knockback) showed only
+    // the last-frame delta and under-translated. Carry one accumulator across
+    // ALL concatenated segments (forward `+=`, reverse `-=`) so `pos` holds
+    // cumulative net displacement; `animation.js:156-161` (add-to-every-part)
+    // is unchanged. No-op for idle/walk/run (pos_frames empty → zeros pushed).
+    let mut pos_accum = [0.0f32; 3];
 
     for anim_data in &motion_data.anims {
         let anim_did = anim_data.anim_id;
@@ -5015,23 +5044,36 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         let reverse = anim_data.framerate < 0.0;
         let push_frame = |idx: usize,
                           frames: &mut Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
-                          pos: &mut Vec<f32>| {
+                          pos: &mut Vec<f32>,
+                          accum: &mut [f32; 3]| {
             frames.push(anim.part_frames[idx].clone());
+            // 2026-06-05 [DIM5/W1.5]: accumulate this frame's origin delta into
+            // the running root-motion sum, then emit the CUMULATIVE value (per
+            // ACE Sequence.cs:383 / AFrame.cs:43-49). Reverse segments play the
+            // delta backward, so subtract (mirrors retail Frame::Subtract /
+            // negated combine on backward playback). No POS_FRAMES → zero delta,
+            // so `accum` is unchanged and we emit the carried sum (zeros for a
+            // pure idle/walk/run cycle).
             if has_pos {
                 let o = &anim.pos_frames[idx].origin;
-                pos.push(o.x);
-                pos.push(o.y);
-                pos.push(o.z);
-            } else {
-                pos.push(0.0);
-                pos.push(0.0);
-                pos.push(0.0);
+                if reverse {
+                    accum[0] -= o.x;
+                    accum[1] -= o.y;
+                    accum[2] -= o.z;
+                } else {
+                    accum[0] += o.x;
+                    accum[1] += o.y;
+                    accum[2] += o.z;
+                }
             }
+            pos.push(accum[0]);
+            pos.push(accum[1]);
+            pos.push(accum[2]);
         };
         if reverse {
             // Reverse playback: HighFrame → LowFrame (AnimSequenceNode).
             for idx in (low..high).rev() {
-                push_frame(idx, &mut frames, &mut pos);
+                push_frame(idx, &mut frames, &mut pos, &mut pos_accum);
                 // Hook direction flip (2026-06-03). In retail this segment runs
                 // Backward, so `Sequence.execute_hooks` fires Both(0)+Backward(-1)
                 // and skips Forward(1). We bake it as FORWARD-ordered frames and
@@ -5051,7 +5093,7 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
             }
         } else {
             for idx in low..high {
-                push_frame(idx, &mut frames, &mut pos);
+                push_frame(idx, &mut frames, &mut pos, &mut pos_accum);
                 times.push(t);
                 t += dt;
             }
@@ -9129,6 +9171,7 @@ thread_local! {
         std::cell::RefCell<CellGraphPending> =
             const { std::cell::RefCell::new(CellGraphPending {
                 aabbs: Vec::new(),
+                seen_outside: Vec::new(),
                 portals: Vec::new(),
                 portal_polygons: Vec::new(),
             }) };
@@ -9250,6 +9293,11 @@ struct SkyShadow {
 #[cfg(target_arch = "wasm32")]
 struct CellGraphPending {
     aabbs: Vec<(u32, holtburger_common::Aabb)>,
+    /// 2026-06-04 (Phase 4 ambient-sound gate): per-cell SeenOutside bit
+    /// `(cell_id, flags & ENVCELL_FLAG_SEEN_OUTSIDE != 0)` queued
+    /// alongside `aabbs` and drained into `scene.cell_seen_outside` on
+    /// each TickMovement. See env_cell.rs:32 (the bit) + liveness.rs:137.
+    seen_outside: Vec<(u32, bool)>,
     portals: Vec<(u32, u32)>,
     /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
     /// world space (already transformed through the EnvCell's
@@ -9411,6 +9459,12 @@ fn drain_pending_cell_graph_into(scene: &mut holtburger_world::SpatialScene) -> 
         let aabbs = buf.aabbs.len();
         for (cell_id, aabb) in buf.aabbs.drain(..) {
             scene.insert_cell_aabb(cell_id, aabb);
+        }
+        // 2026-06-04 (Phase 4 ambient-sound gate): drain the SeenOutside
+        // bits alongside the AABBs into the parallel `cell_seen_outside`
+        // map. Same TickMovement cadence; one entry per EnvCell loaded.
+        for (cell_id, v) in buf.seen_outside.drain(..) {
+            scene.insert_cell_seen_outside(cell_id, v);
         }
         // Phase 5 PView port: drain portal polygons alongside edges.
         for (cell_id, poly) in buf.portal_polygons.drain(..) {
@@ -12107,6 +12161,19 @@ pub async fn fetch_env_cells_in_landblock(
         CELL_GRAPH_PENDING.with(|pending| {
             let mut pending = pending.borrow_mut();
             pending.aabbs.push((envcell.cell_id, world_aabb));
+            // 2026-06-04 (Phase 4 ambient-sound gate): queue this cell's
+            // SeenOutside bit alongside its AABB. Retail feeds outdoor
+            // ambient into an EnvCell when (outdoor-cell OR seen_outside)
+            // — acclient.c:146721/146746. The bit is dropped after this
+            // scope today (only `(cell_id, aabb)` + portals survive), so
+            // it has to be queued here to reach `world.scene`. Same
+            // bit-test the liveness.rs:141 TODO calls for.
+            pending.seen_outside.push((
+                envcell.cell_id,
+                (envcell.flags
+                    & holtburger_dat::file_type::env_cell::ENVCELL_FLAG_SEEN_OUTSIDE)
+                    != 0,
+            ));
             for &neighbour in &portal_cell_ids {
                 if neighbour == 0 || neighbour == envcell.cell_id {
                     continue;
@@ -12921,7 +12988,11 @@ pub async fn fetch_entity_cycle_frames(
 ///   `hookData`. The Task E executor only handles 1/2 today;
 ///   CreateParticle on entity animations is left as a TODO.
 /// - `hook_type = 21` (SoundTweaked): 16-byte payload =
-///   `[u32 wave_did, f32 priority, f32 probability, f32 volume]`.
+///   `[u32 wave_did, f32 probability, f32 priority, f32 volume]`.
+///   2026-06-05 [W2.1/D-2]: corrected order to match retail
+///   `SoundTweakedHook::UnPack` (acclient.c:343129 — gid@0, prob@4,
+///   prio@8, vol@12) and the corrected getters below (prob reads
+///   OFFSET 4, prio OFFSET 8). The C# DAT readers mislabel these.
 ///   Currently TODO in entity-animation handler.
 ///
 /// The `time_in_clip_s` field is `(frame_index / clip_fps)` — the
@@ -12994,23 +13065,32 @@ impl AnimationHookJs {
     }
 
     /// **SoundTweaked (21)** priority. `0.0` for other types.
+    /// 2026-06-04: retail on-disk order is `[gid@0, prob@4, prio@8, vol@12]`
+    /// (acclient.c:343129 SoundTweakedHook::UnPack; prob@4, prio@8). The C#
+    /// DAT readers (melt/DRW/Chorizite) MISLABEL these and we inherited the
+    /// swap — corrected here: priority reads OFFSET 8 (was 4).
     #[wasm_bindgen(getter, js_name = soundPriority)]
     pub fn sound_priority(&self) -> f32 {
         if self.hook_type == 21 && self.hook_data.len() == 16 {
-            f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+            f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
         } else {
             0.0
         }
     }
 
     /// **SoundTweaked (21)** probability. `1.0` for plain Sound (1)
-    /// (always plays); `0.0` for other types.
+    /// (always plays — no probability field, confirmed melt SoundHook.cs);
+    /// `0.0` for other types.
+    /// 2026-06-04: retail on-disk order is `[gid@0, prob@4, prio@8, vol@12]`
+    /// (acclient.c:343129; the PlayProbability gate is the OFFSET-4 float).
+    /// The prior DRW-order swap was corrected: probability reads OFFSET 4
+    /// (was 8).
     #[wasm_bindgen(getter, js_name = soundProbability)]
     pub fn sound_probability(&self) -> f32 {
         match self.hook_type {
             1 => 1.0,
             21 if self.hook_data.len() == 16 => {
-                f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
+                f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
             }
             _ => 0.0,
         }
@@ -13476,6 +13556,11 @@ pub struct EntityAnimationData {
     /// whole-object translation offset, 3 f32 (x,y,z) per keyframe (length ==
     /// num_frames * 3). All-zero for cycles without `AnimationFlags::POS_FRAMES`.
     /// `buildAnimationClip` adds it to every part's position track.
+    /// 2026-06-05 [DIM5/W1.5]: these are now CUMULATIVE net displacements (the
+    /// running sum of the raw per-frame `pos_frames` deltas, forward `+=` /
+    /// reverse `-=`), matching ACE `Sequence.cs:383`/`AFrame.cs:43-49`. JS still
+    /// adds the value at frame `i` directly — but the value is the accumulated
+    /// total at `i`, not a single-frame delta.
     pos_frames: Vec<f32>,
     /// T4: total clip duration in seconds (== last frame time + its segment dt).
     duration: f32,
@@ -13579,6 +13664,9 @@ impl EntityAnimationData {
     /// `numFrames * 3`). Empty / all-zero for cycles without pos_frames.
     /// `buildAnimationClip` adds `[posFrames[3i], posFrames[3i+1],
     /// posFrames[3i+2]]` to every part's position keyframe at frame `i`.
+    /// 2026-06-05 [DIM5/W1.5]: the value at frame `i` is the CUMULATIVE net
+    /// displacement (running sum of the raw deltas), not a single-frame delta —
+    /// see `build_concatenated_motion_frames` and ACE `Sequence.cs:383`.
     #[wasm_bindgen(getter, js_name = posFrames)]
     pub fn pos_frames(&self) -> Vec<f32> {
         self.pos_frames.clone()
@@ -20094,6 +20182,75 @@ fn resolve_physics_script_table_did(
     setup.default_script_table.unwrap_or(0)
 }
 
+/// 2026-06-05 [D7-NEW-2]: resolve the entity's SoundTable (DAT 0x22) DID,
+/// mirroring `resolve_physics_script_table_did` above and retail's
+/// two-source lookup chain for the sound table. Until now we resolved the
+/// sound table from the wire `stable_id` ONLY (`data.stable_id.unwrap_or(0)`),
+/// dropping the Setup-model fallback that the physics-script table already
+/// honors — so entities whose weenie omits the `STABLE` flag but whose
+/// `CSetup` carries `default_stable_id` played silence for per-object/hook
+/// sounds. (Surfaced in `audio-fidelity-deep-2026-06-04/`
+/// `sound-hook-dispatch-findings.md` NEW-2; not in the 6-phase FIX-PLAN.)
+///
+/// **Priority (retail-accurate):**
+/// 1. Wire `PhysicsDesc.stable_id` (`PhysicsDescriptionFlag::STABLE`) — the
+///    runtime override. Retail `CPhysicsObj::set_state`/`set_setup` at
+///    `acclient.c:322308-322319` Releases the current `sound_table` and
+///    re-`DBObj::Get`s `v3->stable_id.id` when the wire carries it,
+///    unconditionally winning over the Setup default.
+/// 2. Fall back to the Setup model's `default_stable_id`. Retail
+///    `CPhysicsObj::InitDefaults`/`InitWithSetup` at
+///    `acclient.c:320871-320884` reads `setup->default_stable_id.id` on
+///    initial setup load and stashes the `CSoundTable` pointer. Our
+///    `holtburger_dat::file_type::SetupModel::default_sound_table` field is
+///    the same value (4th of the 5 trailing IDs; see
+///    `setup_model.rs:431` / the `default_anim, default_script,
+///    default_mtable, default_stable, default_phstable` slot order).
+///
+/// Returns `0` when neither source carries a table DID — fine for entities
+/// with no SoundTable (inert scenery, items, etc.); the JS `SoundTableCache`
+/// simply has nothing to prewarm and Sound/SoundTable hooks resolve to silence,
+/// matching retail's null `sound_table` (`acclient.c:322312`).
+#[cfg(target_arch = "wasm32")]
+fn resolve_sound_table_did(stable_id: Option<u32>, setup_id: u32) -> u32 {
+    // 1) Runtime PhysicsDesc override — the wire `stable_id` (set from the
+    // `PhysicsDescriptionFlag::STABLE` block). When present this wins
+    // outright; retail does an unconditional Release+Re-Get at
+    // acclient.c:322308-322319 without consulting Setup.
+    if let Some(id) = stable_id
+        && id != 0
+    {
+        return id;
+    }
+    // 2) Fall back to the Setup model's `default_sound_table`. The entity
+    // carries its Setup DID on `data.csetup_id` (= the `model_id` derived at
+    // the KIND_SPAWN site). Sync DAT read from the global resource source —
+    // identical I/O profile to `resolve_physics_script_table_did`.
+    if setup_id == 0 || (setup_id >> 24) != 0x02 {
+        return 0;
+    }
+    if !global_source::has_resource_source() {
+        return 0;
+    }
+    use holtburger_dat::ResourceSource;
+    let source = global_source::global_source();
+    let Ok(bytes) = source
+        .as_ref()
+        .get_file_by_key(holtburger_dat::ResourceKey::new("eor/portal", setup_id))
+    else {
+        return 0;
+    };
+    let Ok(setup) = holtburger_dat::file_type::SetupModel::unpack(
+        &mut std::io::Cursor::new(&bytes),
+    ) else {
+        return 0;
+    };
+    // `default_sound_table` is retail's `default_stable_id` (4th of the 5 ID
+    // slots — see `setup_model.rs:431`). `None` is encoded as the all-zero
+    // raw u32; `decode_optional_resource_id` already maps `0` to `None`.
+    setup.default_sound_table.unwrap_or(0)
+}
+
 /// Phase 4 step 4 follow-on: spatial-bypass version of
 /// `holtburger_world::handlers::inventory::handle_message`'s
 /// `GameMessage::ObjectCreate` arm. Inserts the entity into
@@ -20859,6 +21016,13 @@ pub struct SessionHandle {
 struct CellSceneSnapshot {
     current_cell: u32,
     is_indoor: bool,
+    /// 2026-06-04 (Phase 4 ambient-sound gate): SeenOutside bit for the
+    /// current cell. Read by JS via `isCurrentCellSeenOutside`. Retail
+    /// feeds outdoor ambient into an EnvCell when (outdoor-cell OR
+    /// seen_outside) — acclient.c:146721/146746. Only meaningful when
+    /// `is_indoor == true` (outdoor poses already take the outdoor path);
+    /// `false` for the no-cell / outdoor / not-yet-baked case.
+    seen_outside: bool,
     render_set: Vec<u32>,
     /// Phase 4 PView port (2026-05-25): per-cell world-space AABBs
     /// for frustum culling, mirroring WB's
@@ -22589,6 +22753,18 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = isCurrentCellIndoor)]
     pub fn is_current_cell_indoor(&self) -> bool {
         self.cell_scene_snapshot.borrow().is_indoor
+    }
+
+    /// 2026-06-04 (Phase 4 ambient-sound gate): the SeenOutside bit for
+    /// the current cell. JS reads this so an indoor EnvCell flagged
+    /// SeenOutside (`flags & 0x01`, env_cell.rs:32) still receives the
+    /// outdoor ambient bed — retail feeds outdoor ambient into a cell
+    /// when (outdoor-cell OR seen_outside) — acclient.c:146721/146746.
+    /// `false` for outdoor / no-cell poses (they already take the
+    /// outdoor path, so this only matters when `isCurrentCellIndoor`).
+    #[wasm_bindgen(js_name = isCurrentCellSeenOutside)]
+    pub fn is_current_cell_seen_outside(&self) -> bool {
+        self.cell_scene_snapshot.borrow().seen_outside
     }
 
     /// Workstream Sky-B (parametric skybox, 2026-05-11): evaluate the
@@ -26924,6 +27100,13 @@ fn publish_cell_scene_snapshot(
     *snapshot.borrow_mut() = CellSceneSnapshot {
         current_cell: current,
         is_indoor: pose.is_indoors(),
+        // 2026-06-04 (Phase 4 ambient-sound gate): SeenOutside bit for the
+        // current cell. `current` is the FULL 32-bit cell id; for an
+        // indoor pose that is the EnvCell's own `cell_id`, the same key
+        // `fetchEnvCellsInLandblock` pushed into `cell_seen_outside`, so
+        // the lookup matches cleanly. Reader returns `false` for the
+        // outdoor / no-cell case (key absent) — acclient.c:146721/146746.
+        seen_outside: world.scene.cell_seen_outside(current),
         render_set: render_vec,
         cell_aabbs,
         cell_portal_polygons,
@@ -29317,7 +29500,22 @@ async fn recv_loop(
                                     // `SoundTableCache` with this DID on spawn so
                                     // animation Sound/SoundTable hooks resolve
                                     // synchronously after the first frame.
-                                    sound_table_did: data.stable_id.unwrap_or(0),
+                                    // 2026-06-05 [D7-NEW-2]: was
+                                    // `data.stable_id.unwrap_or(0)` (wire STABLE
+                                    // ONLY), which dropped the Setup-model fallback
+                                    // the physics-script table already honors.
+                                    // `resolve_sound_table_did` implements retail's
+                                    // two-source chain — wire `stable_id`
+                                    // (PhysicsDesc STABLE override,
+                                    // acclient.c:322308-322319) ELSE
+                                    // `Setup.default_stable_id`
+                                    // (acclient.c:320871-320884) — so entities that
+                                    // omit STABLE but carry a CSetup
+                                    // `default_sound_table` no longer play silence.
+                                    sound_table_did: resolve_sound_table_did(
+                                        data.stable_id,
+                                        data.csetup_id.unwrap_or(0),
+                                    ),
                                     // Entity-Completeness E.B (2026-05-19):
                                     // canonical-classifier inputs. WorldObjectManager
                                     // pipes these through canonicalClassify(item_type,
@@ -34734,7 +34932,11 @@ impl PhysicsScriptEntryJs {
     //
     // SoundHook (hookType 1, body=4 bytes): `[u32 sound_id]`
     // SoundTweakedHook (hookType 21, body=16 bytes):
-    //   `[u32 sound_id, f32 priority, f32 probability, f32 volume]`
+    //   `[u32 sound_id, f32 probability, f32 priority, f32 volume]`
+    //   2026-06-05 [W2.1/D-2]: corrected order to match retail
+    //   SoundTweakedHook::UnPack (acclient.c:343129 — gid@0, prob@4,
+    //   prio@8, vol@12) and the corrected getters below (prob reads
+    //   OFFSET 4, prio OFFSET 8). The C# DAT readers mislabel these.
     //
     // Both reference a Wave (0x0A) DID. The Sky-J P5 + H2 chain walkers
     // call these getters to schedule playback via the AudioManager.
@@ -34755,23 +34957,32 @@ impl PhysicsScriptEntryJs {
     }
 
     /// SoundTweaked priority (hook_type 21 only). 0.0 otherwise.
+    /// 2026-06-04: retail on-disk order is `[gid@0, prob@4, prio@8, vol@12]`
+    /// (acclient.c:343129 SoundTweakedHook::UnPack; prob@4, prio@8). The C#
+    /// DAT readers (melt/DRW/Chorizite) MISLABEL these and we inherited the
+    /// swap — corrected here: priority reads OFFSET 8 (was 4).
     #[wasm_bindgen(getter, js_name = soundPriority)]
     pub fn sound_priority(&self) -> f32 {
         if self.hook_type == 21 && self.hook_data.len() == 16 {
-            f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+            f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
         } else {
             0.0
         }
     }
 
     /// SoundTweaked probability `[0, 1]` (hook_type 21 only). 1.0 for
-    /// the plain Sound hook (always plays) and 0.0 otherwise.
+    /// the plain Sound hook (always plays — no probability field, confirmed
+    /// melt SoundHook.cs) and 0.0 otherwise.
+    /// 2026-06-04: retail on-disk order is `[gid@0, prob@4, prio@8, vol@12]`
+    /// (acclient.c:343129; the PlayProbability gate is the OFFSET-4 float).
+    /// The prior DRW-order swap was corrected: probability reads OFFSET 4
+    /// (was 8).
     #[wasm_bindgen(getter, js_name = soundProbability)]
     pub fn sound_probability(&self) -> f32 {
         match self.hook_type {
             1 => 1.0,
             21 if self.hook_data.len() == 16 => {
-                f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
+                f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
             }
             _ => 0.0,
         }
