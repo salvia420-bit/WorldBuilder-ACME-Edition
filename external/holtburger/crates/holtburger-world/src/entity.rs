@@ -151,14 +151,20 @@ impl EntityMotionSnapshot {
             MovementType::TurnToHeading => {
                 MovementTypeData::TurnToHeading(TurnToHeading::unpack(movement_data, &mut offset)?)
             }
-            MovementType::Invalid
-            | MovementType::RawCommand
+            // Only MovementType::Invalid (0) carries an InterpretedMotionState body;
+            // unpack_ext would over-read >=4 bytes for the stop/raw types (1-5),
+            // which use the same `Invalid` data variant but an empty MovementInvalid
+            // (consumes nothing). Mirrors the A5 fix in movement/messages/motion.rs.
+            MovementType::Invalid => MovementTypeData::Invalid(
+                MovementInvalid::unpack_ext(movement_data, &mut offset, motion_flags)?,
+            ),
+            MovementType::RawCommand
             | MovementType::InterpretedCommand
             | MovementType::StopRawCommand
             | MovementType::StopInterpretedCommand
-            | MovementType::StopCompletely => MovementTypeData::Invalid(
-                MovementInvalid::unpack_ext(movement_data, &mut offset, motion_flags)?,
-            ),
+            | MovementType::StopCompletely => {
+                MovementTypeData::Invalid(MovementInvalid::default())
+            }
         };
 
         Self::from_movement_event(&MovementEventData {
@@ -239,6 +245,27 @@ mod tests {
 
         assert_eq!(snapshot.current_style, Some(MotionStance::NonCombat));
         assert_eq!(snapshot.directive, None);
+    }
+
+    #[test]
+    fn object_description_stop_completely_does_not_over_read_absent_body() {
+        use holtburger_protocol::messages::object::messages::description::ObjectDescriptionData;
+        // movement_data is exactly the 4-byte header: type=5 (StopCompletely),
+        // motion_flags=0, current_style=NonCombat — and NO body. Pre-fix, types
+        // 1-5 routed through MovementInvalid::unpack_ext, which over-reads >=4
+        // absent body bytes and makes from_object_description return None. Post-fix
+        // they use an empty MovementInvalid (consumes nothing), so the header parses.
+        let style = MotionStance::NonCombat.interpreted();
+        let mut movement_data = vec![MovementType::StopCompletely as u8, 0x00];
+        movement_data.extend_from_slice(&style.to_le_bytes());
+        let desc = ObjectDescriptionData {
+            movement_data: Some(movement_data),
+            ..ObjectDescriptionData::default()
+        };
+
+        let snapshot = EntityMotionSnapshot::from_object_description(&desc)
+            .expect("StopCompletely header (no body) must parse without over-reading");
+        assert_eq!(snapshot.current_style, Some(MotionStance::NonCombat));
     }
 }
 
