@@ -10069,7 +10069,16 @@ void main() {
                       // Forward in heading direction; backstep flips
                       // by PI and uses 1.0 m/s regardless of run.
                       let effHeading = heading;
-                      let speed = run ? FALLBACK_RUN_RATE_SCALAR : WALK_FORWARD_SPEED;
+                      // B3/D6/PRED-1: predict the local sprite at the SAME
+                      // skill-derived run rate the wasm body integrates at
+                      // (`playerRunRate()`, exported lib.rs:25931), not the
+                      // hardcoded 4.5 m/s FALLBACK_RUN_RATE_SCALAR. The two
+                      // predictors previously diverged (~1.8x), producing the
+                      // forward-bias sawtooth; feeding the wasm rate keeps the
+                      // rendered sprite and the authoritative wasm pose in step.
+                      // (playerRunRate() falls back to FALLBACK_RUN_RATE_SCALAR
+                      // until the skill-derived rate is known.)
+                      let speed = run ? playerRunRate() : WALK_FORWARD_SPEED;
                       if (forward < 0) {
                         effHeading = heading + Math.PI;
                         speed = WALK_FORWARD_SPEED;
