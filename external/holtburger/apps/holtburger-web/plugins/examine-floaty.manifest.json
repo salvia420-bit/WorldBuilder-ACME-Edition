@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "examine-floaty",
+  "name": "Examine Floaty",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "gmFloatyExaminationUI 0x2100006B — standalone 310x400 examine window",
+  "icon": "🔎",
+  "iconHidden": true,
+  "entry": "./examine-floaty.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}

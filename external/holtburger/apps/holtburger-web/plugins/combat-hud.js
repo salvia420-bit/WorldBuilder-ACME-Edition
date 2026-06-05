@@ -1053,12 +1053,27 @@ export function mount(_ctx) {
   syncPowerFill();
   updateDamageRating();
 
-  // 4Hz poll of the authoritative stance source. Cheap; ~0.0001ms.
-  const t = setInterval(() => {
+  // P3-41 — drive show/hide off `playerStatsUpdated` (kind=8 covers
+  // every stance refresh sourced via PrivateUpdateAttribute2nd /
+  // applyConfirmedStance). 1Hz fallback timer guards against any
+  // dropped bus event so the combat-hud always converges.
+  const recomputeVisible = () => {
     const inCombat = stanceIsCombat();
     if (inCombat && !state.visible) show();
     else if (!inCombat && state.visible) hide();
-  }, 250);
+  };
+  const onStatsForCombatVisible = () => recomputeVisible();
+  const pcStanceClient = window.__pluginClient ?? null;
+  if (pcStanceClient?.events?.on) {
+    pcStanceClient.events.on("playerStatsUpdated", onStatsForCombatVisible);
+  } else if (window.__pluginClientReady?.then) {
+    window.__pluginClientReady.then((client) => {
+      if (client?.events?.on) {
+        client.events.on("playerStatsUpdated", onStatsForCombatVisible);
+      }
+    });
+  }
+  const t = setInterval(recomputeVisible, 1000);
 
   // Phase 35: rAF-poll the powerLevel / stance pair so a combat-bar
   // slider drag (which DOES NOT emit an event — see combat-bar.js:733
@@ -1127,13 +1142,20 @@ export function mount(_ctx) {
     updateDamageRating();
     return true;
   }
+  // P3-41 — replace 500ms client-discovery poll with one-shot await
+  // on the pluginClient bootstrap promise. Falls back to the poll for
+  // older index.html or tests that don't install the promise.
   if (!drTryHookEvents()) {
-    drPluginPoll = setInterval(() => {
-      if (drTryHookEvents()) {
-        clearInterval(drPluginPoll);
-        drPluginPoll = null;
-      }
-    }, 500);
+    if (typeof window !== "undefined" && window.__pluginClientReady?.then) {
+      window.__pluginClientReady.then(() => { drTryHookEvents(); });
+    } else {
+      drPluginPoll = setInterval(() => {
+        if (drTryHookEvents()) {
+          clearInterval(drPluginPoll);
+          drPluginPoll = null;
+        }
+      }, 500);
+    }
   }
 
   // Q1a: subscribe to the Death bus event for the self-death overlay.
@@ -1172,6 +1194,10 @@ export function mount(_ctx) {
     drUnsubStats = null;
     drUnsubSneak = null;
     lhUnsubDamage = null;
+    const pcEnd2 = window.__pluginClient ?? null;
+    if (pcEnd2?.events?.off) {
+      try { pcEnd2.events.off("playerStatsUpdated", onStatsForCombatVisible); } catch (_) {}
+    }
     if (state.overlayEl) {
       state.overlayEl.remove();
       state.overlayEl = null;

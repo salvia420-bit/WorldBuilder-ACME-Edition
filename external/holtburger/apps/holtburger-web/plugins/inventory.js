@@ -1414,7 +1414,13 @@ function doMount(parentEl, _ctx) {
       setSelected(srcLi);
       const guid = srcLi.dataset?.guid;
       const name = srcLi.querySelector(".name")?.textContent || "Item";
-      window.__mainPanel?.pushView?.("examine", { guid, name, fromInventory: true, srcLi });
+      // Route via __showExamineFor so the flag-gated floaty path (EX-03)
+      // takes over; fall back to main-panel push when no router is up.
+      if (typeof window.__showExamineFor === "function") {
+        window.__showExamineFor(Number(guid) >>> 0, { name, fromInventory: true, srcLi });
+      } else {
+        window.__mainPanel?.pushView?.("examine", { guid, name, fromInventory: true, srcLi });
+      }
     });
     return slot;
   }

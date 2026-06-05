@@ -433,11 +433,25 @@ function build() {
   examineBtn.title = "Examine Selected";
   examineBtn.addEventListener("click", () => {
     if (!state.selectedGuid) return;
-    window.__mainPanel?.toggleView?.("examine", {
-      guid: state.selectedGuid,
-      name: state.selectedName,
-      fromEntity: true,
-    });
+    // Toggle: when the floaty is already open on the same target,
+    // close it. Otherwise route through __showExamineFor so the
+    // flag-gated floaty vs main-panel path (EX-03) is honored.
+    if (window.__examineFloaty?.isOpen?.()) {
+      window.__examineFloaty.close?.();
+      return;
+    }
+    if (typeof window.__showExamineFor === "function") {
+      window.__showExamineFor(state.selectedGuid, {
+        name: state.selectedName,
+        fromEntity: true,
+      });
+    } else {
+      window.__mainPanel?.toggleView?.("examine", {
+        guid: state.selectedGuid,
+        name: state.selectedName,
+        fromEntity: true,
+      });
+    }
   });
   action.appendChild(examineBtn);
   refs.examineBtn = examineBtn;
@@ -589,29 +603,25 @@ export function mount(_ctx) {
   // includes the 8 × 2s retry loop for early-boot eor/local shards.
   applyTargetBarLayout(refs);
 
-  // Poll selection state at 4Hz (selectionChanged bus event is MISSING
-  // per api.js coverage row 5; future PR replaces the poll).
-  const selTimer = setInterval(() => {
-    const next = getSelectedTargetGuid();
+  // P3-41 — drive selection + stance off the bus (selectionChanged for
+  // target, playerStatsUpdated for stance). Keep a low-frequency timer
+  // (1Hz) ONLY as a backstop for late-name resolution and event-drop
+  // recovery; the previous 4Hz/2Hz polls were the primary loop.
+  const updateSelection = (nextOverride) => {
+    const next = (nextOverride != null) ? (nextOverride >>> 0) : getSelectedTargetGuid();
     if (next !== state.selectedGuid) {
       state.selectedGuid = next;
       state.selectedName = next ? (lookupEntityName(next) || "") : "";
       renderTarget();
     } else if (next && !state.selectedName) {
-      // Late-name resolution: name may land after selection.
       const n = lookupEntityName(next);
       if (n) {
         state.selectedName = n;
         renderTarget();
       }
     }
-  }, 250);
-
-  // Stance state derives from the authoritative motion-table stance
-  // (window.__getCurrentStanceLow — updated by applyConfirmedStance
-  // on every kind=5 UpdateMotion). Low 16 bits == 0x3D = Peace;
-  // anything else non-zero = in combat. Poll at 2Hz; cheap.
-  const stanceTimer = setInterval(() => {
+  };
+  const updateStance = () => {
     let inCombat = state.inCombat;
     try {
       const stanceLow = (typeof window.__getCurrentStanceLow === "function")
@@ -623,14 +633,41 @@ export function mount(_ctx) {
       state.inCombat = inCombat;
       renderStance();
     }
-  }, 500);
+  };
+  const onSelectionChanged = (ev) => {
+    const guid = (ev?.detail?.guid ?? 0) >>> 0;
+    updateSelection(guid);
+  };
+  const onStatsUpdated = () => updateStance();
+  const pc = window.__pluginClient ?? null;
+  let pcSubscribed = false;
+  if (pc?.events?.on) {
+    pc.events.on("selectionChanged", onSelectionChanged);
+    pc.events.on("playerStatsUpdated", onStatsUpdated);
+    pcSubscribed = true;
+  } else if (window.__pluginClientReady?.then) {
+    window.__pluginClientReady.then((client) => {
+      if (client?.events?.on) {
+        client.events.on("selectionChanged", onSelectionChanged);
+        client.events.on("playerStatsUpdated", onStatsUpdated);
+        pcSubscribed = true;
+      }
+    });
+  }
+  // Backstop — 1Hz catches late-name resolution + recovers from any
+  // dropped bus event.
+  const fallbackTimer = setInterval(() => { updateSelection(); updateStance(); }, 1000);
 
   renderTarget();
   renderStance();
 
   return () => {
-    clearInterval(selTimer);
-    clearInterval(stanceTimer);
+    clearInterval(fallbackTimer);
+    const pcEnd = window.__pluginClient ?? null;
+    if (pcSubscribed && pcEnd?.events?.off) {
+      try { pcEnd.events.off("selectionChanged", onSelectionChanged); } catch (_) {}
+      try { pcEnd.events.off("playerStatsUpdated", onStatsUpdated); } catch (_) {}
+    }
     if (state.overlayEl) {
       state.overlayEl.remove();
       state.overlayEl = null;

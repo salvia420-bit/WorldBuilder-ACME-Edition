@@ -594,21 +594,187 @@ function populateFromEntity(body, ctx, nameEl, guidEl) {
   }
 }
 
-// View interface — registered with main-panel under id "examine".
-export const view = {
-  name: "Examine",
-  nameFor: (ctx) => {
-    if (ctx?.name) return `Examine: ${ctx.name}`;
-    if (ctx?.srcLi) {
-      const n = ctx.srcLi.querySelector(".name")?.textContent;
-      if (n) return `Examine: ${n}`;
+// Element-id map + layout id for callers that need to position chrome
+// around the examine body in a standalone floaty.
+export const EXAMINE_LAYOUT = {
+  layoutId: EXAMINE_LAYOUT_ID,
+  elements: EXAMINE_ELEMS,
+};
+
+// EX-05 (2026-06-05) — render the AppraisalProfile snapshot returned
+// by `getObjectAppraisal(guid)` (wasm-side) into `wrapEl`. JSON-parses
+// the snapshot and lays out three sections:
+//   • Attributes — CreatureProfile.attributes (Str/End/Coord/Quick/
+//     Focus/Self) + Health/Stamina/Mana via WorldObjectProperties.ints
+//   • Skills — CreatureProfile.skills (per-skill base/current/buffed
+//     mapping). The exact wire shape is preserved verbatim; UI just
+//     formats each entry.
+//   • Effects — armor/weapon/resist enchantment bitfields surfaced as
+//     hex chips; spell-book GUIDs printed as a short list.
+//
+// Wraps inside `wrapEl.innerHTML = ""` for re-render-on-event. Hidden
+// (display:none) when no appraisal has landed yet for this GUID.
+function renderAppraisal(wrapEl, guid) {
+  if (!wrapEl) return;
+  wrapEl.innerHTML = "";
+  if (!guid) { wrapEl.style.display = "none"; return; }
+  let snapshot = null;
+  try {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    if (handle?.getObjectAppraisal) {
+      const json = handle.getObjectAppraisal(guid >>> 0);
+      if (typeof json === "string" && json.length > 0) {
+        snapshot = JSON.parse(json);
+      }
     }
-    return "Examine";
-  },
-  mount: (parentEl, ctx) => {
-    ensureStyles();
-    const root = document.createElement("div");
-    root.className = "hb-exa-root";
+  } catch (_) {}
+  if (!snapshot) { wrapEl.style.display = "none"; return; }
+  wrapEl.style.display = "";
+
+  // Helper: emit a "section header" + key/value rows table inside
+  // wrapEl, like populate*'s `section()`/`r()` but scoped to wrapEl.
+  const sec = (text) => {
+    const s = document.createElement("div");
+    s.className = "hb-exa-section";
+    setAcText(s, text);
+    wrapEl.appendChild(s);
+  };
+  const row = (label, value) => {
+    if (value == null || value === "") return;
+    const r = document.createElement("div");
+    r.className = "hb-exa-row";
+    const l = document.createElement("span");
+    l.className = "hb-exa-label";
+    setAcText(l, label);
+    const v = document.createElement("span");
+    v.className = "hb-exa-value";
+    setAcText(v, String(value));
+    r.appendChild(l);
+    r.appendChild(v);
+    wrapEl.appendChild(r);
+  };
+
+  const props = snapshot.properties || {};
+  const ints = props.ints || {};
+  const floats = props.floats || {};
+  const strings = props.strings || {};
+  const cp = snapshot.creatureProfile || null;
+  const ap = snapshot.armorProfile || null;
+  const wp = snapshot.weaponProfile || null;
+  const hp = snapshot.hookProfile || null;
+  const al = snapshot.armorLevels || null;
+
+  // === Attributes ===
+  if (cp?.attributes || ints.Strength != null || ints.Endurance != null
+      || ints.Coordination != null || ints.Quickness != null
+      || ints.Focus != null || ints.Self != null) {
+    sec("Attributes");
+    const a = cp?.attributes || {};
+    row("Strength",     a.strength     ?? ints.Strength);
+    row("Endurance",    a.endurance    ?? ints.Endurance);
+    row("Coordination", a.coordination ?? ints.Coordination);
+    row("Quickness",    a.quickness    ?? ints.Quickness);
+    row("Focus",        a.focus        ?? ints.Focus);
+    row("Self",         a.self_        ?? a.self ?? ints.Self);
+    const v = cp?.vitals || {};
+    row("Health",       v.health       ?? ints.MaxHealth);
+    row("Stamina",      v.stamina      ?? ints.MaxStamina);
+    row("Mana",         v.mana         ?? ints.MaxMana);
+  }
+
+  // === Skills ===
+  // CreatureProfile.skills is wire-shape (per-skill profile records).
+  // Without a SkillTable lookup in this scope, render each entry's
+  // key + base/current pair. JS-side later may join with the skill
+  // catalog for human labels.
+  if (cp?.skills && typeof cp.skills === "object") {
+    const entries = Object.entries(cp.skills);
+    if (entries.length > 0) {
+      sec("Skills");
+      for (const [skillKey, skillVal] of entries) {
+        if (!skillVal) continue;
+        const base = skillVal.base ?? skillVal.Base ?? skillVal.init_level;
+        const current = skillVal.current ?? skillVal.Current ?? skillVal.level_from_pp;
+        const label = `Skill ${skillKey}`;
+        const value = (base != null && current != null)
+          ? `${current} (base ${base})`
+          : (base ?? current ?? "—");
+        row(label, value);
+      }
+    }
+  }
+
+  // === Equipment / Item profile ===
+  if (ap || wp || hp || al) {
+    sec("Item");
+    if (ap?.armor_level != null) row("Armor Level", ap.armor_level);
+    if (ap?.physical_mod != null) row("Physical Mod", Number(ap.physical_mod).toFixed(2));
+    if (ap?.acid_mod != null)     row("Acid Mod",     Number(ap.acid_mod).toFixed(2));
+    if (ap?.fire_mod != null)     row("Fire Mod",     Number(ap.fire_mod).toFixed(2));
+    if (ap?.cold_mod != null)     row("Cold Mod",     Number(ap.cold_mod).toFixed(2));
+    if (ap?.electric_mod != null) row("Electric Mod", Number(ap.electric_mod).toFixed(2));
+    if (wp?.damage != null)       row("Damage",       wp.damage);
+    if (wp?.damage_variance != null) row("Variance",  Number(wp.damage_variance).toFixed(2));
+    if (wp?.damage_mod != null)   row("Damage Mod",   Number(wp.damage_mod).toFixed(2));
+    if (wp?.attack_skill != null) row("Attack Skill", wp.attack_skill);
+    if (al?.head_armor_level != null) row("Head Armor",  al.head_armor_level);
+    if (al?.foot_armor_level != null) row("Foot Armor",  al.foot_armor_level);
+    if (al?.chest_armor_level != null) row("Chest Armor", al.chest_armor_level);
+    if (hp?.hook_type != null)    row("Hook Type",    hp.hook_type);
+  }
+
+  // === Effects: enchantment bitfields + spell-book ===
+  const ah = snapshot.armorHighlight,  ac = snapshot.armorColor;
+  const wh = snapshot.weaponHighlight, wc = snapshot.weaponColor;
+  const rh = snapshot.resistHighlight, rc = snapshot.resistColor;
+  const sb = Array.isArray(snapshot.spellBook) ? snapshot.spellBook : [];
+  if (ah != null || wh != null || rh != null || sb.length > 0) {
+    sec("Effects");
+    const hex = (n) => `0x${(n >>> 0).toString(16).toUpperCase().padStart(4, "0")}`;
+    if (ah != null) row("Armor Ench.",  `${hex(ah)} / color ${hex(ac ?? 0)}`);
+    if (wh != null) row("Weapon Ench.", `${hex(wh)} / color ${hex(wc ?? 0)}`);
+    if (rh != null) row("Resist Ench.", `${hex(rh)} / color ${hex(rc ?? 0)}`);
+    if (sb.length > 0) {
+      row("Imbued Spells", `${sb.length} spell${sb.length === 1 ? "" : "s"}`);
+    }
+  }
+
+  // === Debug (gated) — Type/Class/Wcid/X/Y/Z/Landblock ===
+  // Reserved for `?debug=1` per the EX-05 plan; cheap to leave gated.
+  try {
+    const params = new URLSearchParams(window.location?.search ?? "");
+    if (params.get("debug") === "1") {
+      sec("Debug");
+      row("ItemType",    ints.ItemType);
+      row("CreatureType", ints.CreatureType);
+      if (strings.LongDesc) row("Long Desc", strings.LongDesc);
+      if (strings.PluralName) row("Plural", strings.PluralName);
+      const flt = (k) => floats[k] != null ? Number(floats[k]).toFixed(2) : undefined;
+      row("Weight",  flt("EncumbranceVal"));
+      row("Value",   ints.Value);
+    }
+  } catch (_) {}
+}
+
+// Resolve the title text for an examine context (matches view.nameFor).
+export function examineTitleFor(ctx) {
+  if (ctx?.name) return `Examine: ${ctx.name}`;
+  if (ctx?.srcLi) {
+    const n = ctx.srcLi.querySelector?.(".name")?.textContent;
+    if (n) return `Examine: ${n}`;
+  }
+  return "Examine";
+}
+
+// Build the examine body DOM into `parentEl` and wire up paperdoll +
+// inscription + bus refresh subscriptions. Returns a cleanup function.
+// Used by BOTH the main-panel view (main-panel host) and the standalone
+// floaty (gmFloatyExaminationUI). Caller owns the outer chrome
+// (title bar / close button / frame); this only owns the body content.
+export function mountExamineBody(parentEl, ctx) {
+  ensureStyles();
+  const root = document.createElement("div");
+  root.className = "hb-exa-root";
 
     // Head band — retail places the icon at (244, 6) (right side) and
     // the header text block at (6, 2) 232x38. applyExamineLayout
@@ -765,11 +931,35 @@ export const view = {
     }
     renderInscription(inscWrap, examineGuid);
 
+    // EX-05 (2026-06-05) — AppraisalProfile section. Adds a sub-block
+    // inside the scrollable body that renders the entity's full
+    // AppraisalProfile (AttributeInfoRegion / SkillInfoRegion /
+    // EffectInfoRegion analogues). Fires `requestAppraisal(guid)` on
+    // mount; subscribes to `objectAppraised` and reads back via
+    // `getObjectAppraisal(guid)` whenever the GUID matches our target.
+    const appraisalWrap = document.createElement("div");
+    appraisalWrap.className = "hb-exa-appraisal-wrap";
+    appraisalWrap.style.display = "none";
+    appraisalWrap.style.marginTop = "6px";
+    body.appendChild(appraisalWrap);
+    renderAppraisal(appraisalWrap, examineGuid);
+    if (examineGuid) {
+      try {
+        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+        if (handle?.requestAppraisal) handle.requestAppraisal(examineGuid >>> 0);
+      } catch (_) {}
+    }
+
     // Refresh inscription on bookUpdated (book panel pushes fresh
     // BookSnapshot here) and on playerInventoryChanged (ownership
     // gates the Set Inscription button).
     const pc = window.__pluginClient ?? null;
     const onRefresh = () => renderInscription(inscWrap, examineGuid);
+    const onAppraised = (ev) => {
+      const guid = (ev?.detail?.u32Payload ?? 0) >>> 0;
+      if (!examineGuid || guid !== (examineGuid >>> 0)) return;
+      renderAppraisal(appraisalWrap, examineGuid);
+    };
     // Wave 3.B — refresh the paperdoll when the examined entity's
     // appearance changes (e.g. NPC equips a new item via ACE's
     // applyAppearance broadcast). Local-player-only events fire for
@@ -791,6 +981,7 @@ export const view = {
       pc.events.on("bookUpdated", onRefresh);
       pc.events.on("playerInventoryChanged", onRefresh);
       pc.events.on("entityAppearanceChanged", onAppearanceRefresh);
+      pc.events.on("objectAppraised", onAppraised);
     }
 
     return () => {
@@ -798,6 +989,7 @@ export const view = {
         try { pc.events.off("bookUpdated", onRefresh); } catch (_) {}
         try { pc.events.off("playerInventoryChanged", onRefresh); } catch (_) {}
         try { pc.events.off("entityAppearanceChanged", onAppearanceRefresh); } catch (_) {}
+        try { pc.events.off("objectAppraised", onAppraised); } catch (_) {}
       }
       if (paperdollViewport) {
         try { paperdollViewport.dispose(); } catch (_) {}
@@ -805,7 +997,15 @@ export const view = {
       }
       root.remove();
     };
-  },
+}
+
+// View interface — registered with main-panel under id "examine".
+// Thin wrapper around mountExamineBody so the floaty (EX-03) shares
+// the same body builder.
+export const view = {
+  name: "Examine",
+  nameFor: examineTitleFor,
+  mount: (parentEl, ctx) => mountExamineBody(parentEl, ctx),
 };
 
 // Selection-poll module: watches getSelectedTarget() and pushes the
@@ -878,7 +1078,12 @@ if (typeof window !== "undefined") {
       }
     }
     const ctx = { guid, name: snap.name, fromEntity: true };
-    if (window.__mainPanel?.pushView) {
+    // Route through __showExamineFor so the flag-gated floaty vs
+    // main-panel choice (examine-floaty.js mount) is honored. Falls
+    // through to mainPanel directly if no router is installed.
+    if (typeof window.__showExamineFor === "function") {
+      window.__showExamineFor(guid, { name: snap.name, fromEntity: true });
+    } else if (window.__mainPanel?.pushView) {
       window.__mainPanel.pushView("examine", ctx);
     } else if (window.__mainPanel?.showView) {
       window.__mainPanel.showView("examine", ctx);

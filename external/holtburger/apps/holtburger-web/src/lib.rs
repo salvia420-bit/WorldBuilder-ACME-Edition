@@ -15501,6 +15501,16 @@ enum SessionCommand {
     /// - Out-of-range / not-interactive → `GameEvent::WeenieError`,
     ///   normalised into `kind=13 UseFailed`.
     UseObject { guid: u32 },
+    /// EX-05 (2026-06-05) — examine refactor wire side. Sends
+    /// `GameAction::IdentifyObject(guid)` (sub-opcode 0x00C8). ACE
+    /// replies with `GameEvent::IdentifyObjectResponse` (opcode
+    /// 0x00C9) which the world dispatcher folds into the entity's
+    /// `properties.*` + AppraisalProfile sub-bodies; the recv loop
+    /// then emits `kind=32 ObjectAppraised`. The examine UI plugin
+    /// subscribes to that event + reads via [`SessionHandle::
+    /// get_object_appraisal`] to render the AttributeInfoRegion /
+    /// SkillInfoRegion / EffectInfoRegion sections.
+    RequestAppraisal { guid: u32 },
     // === Wave 5.A — tradeskill useWithTarget (2026-05-28) ===
     /// Tradeskill primitive: apply `item_guid` (typically a material,
     /// salvage stack, or tinker) to `target_guid` (the recipient
@@ -18132,6 +18142,48 @@ impl AllegianceInfoSnapshotJs {
 }
 
 /// Wave-F3 (2026-05-27): convert a wire `AllegianceInfoResponseEventData`
+/// EX-05 (2026-06-05) — build a JSON-shaped AppraisalSnapshot of an
+/// `Entity`'s post-IdentifyObject state. Used by the recv loop's
+/// `WorldEvent::EntityIdentified` arm to populate `latest_appraisals`,
+/// which JS consumes via `getObjectAppraisal(guid)` — returning the
+/// raw JSON string for `JSON.parse` on the JS side.
+///
+/// Shape (all keys camelCase to match JS convention):
+/// ```text
+/// {
+///   guid, properties: WorldObjectProperties,
+///   armorProfile?, creatureProfile?, weaponProfile?, hookProfile?,
+///   armorLevels?,
+///   spellBook: number[],
+///   armorHighlight?, armorColor?,
+///   weaponHighlight?, weaponColor?,
+///   resistHighlight?, resistColor?,
+/// }
+/// ```
+///
+/// Failure: returns `"null"` if serde_json::to_string fails (shouldn't
+/// happen since every field derives Serialize cleanly).
+#[cfg(target_arch = "wasm32")]
+fn build_appraisal_snapshot(entity: &holtburger_world::entity::Entity) -> String {
+    let v = serde_json::json!({
+        "guid": u32::from(entity.guid),
+        "properties": entity.properties,
+        "armorProfile": entity.armor_profile,
+        "creatureProfile": entity.creature_profile,
+        "weaponProfile": entity.weapon_profile,
+        "hookProfile": entity.hook_profile,
+        "armorLevels": entity.armor_levels,
+        "spellBook": entity.spell_book,
+        "armorHighlight": entity.armor_highlight,
+        "armorColor": entity.armor_color,
+        "weaponHighlight": entity.weapon_highlight,
+        "weaponColor": entity.weapon_color,
+        "resistHighlight": entity.resist_highlight,
+        "resistColor": entity.resist_color,
+    });
+    serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string())
+}
+
 /// to its JS-facing snapshot. Walks the records list flagging the
 /// monarch + remaining members. The monarch is the root of the queried
 /// tree; everyone in `records` is a vassal/sub-vassal (we don't try to
@@ -20686,6 +20738,18 @@ pub struct SessionHandle {
     /// [`SessionHandle::get_object_inscription`] on demand at render
     /// time; no event drain needed.
     latest_inscriptions: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, String>>>,
+    /// EX-05 (2026-06-05): per-object AppraisalProfile snapshot keyed by
+    /// object GUID. Each value is a JSON-serialized
+    /// `AppraisalSnapshot` (see `build_appraisal_snapshot`) carrying the
+    /// IntProperties / BoolProperties / Int64Properties / FloatProperties /
+    /// StringProperties / DataIdProperties tables, the optional sub-bodies
+    /// (creature_profile / armor_profile / weapon_profile / hook_profile /
+    /// armor_levels), the spell_book list, and the armor/weapon/resist
+    /// highlight bitfields. Populated by the recv loop's
+    /// `WorldEvent::EntityIdentified` arm. Read by JS via
+    /// [`SessionHandle::get_object_appraisal`] — the JSON parses cleanly
+    /// into a JS object via `JSON.parse`.
+    latest_appraisals: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, String>>>,
     /// PR-JJ 2026-05-23: the local player's active enchantments —
     /// snapshot of `world.player.enchantments` refreshed by the recv
     /// loop on every `WorldEvent::PlayerEnchantmentsUpdated` (the
@@ -25081,6 +25145,52 @@ impl SessionHandle {
         self.latest_inscriptions.borrow().get(&guid).cloned()
     }
 
+    /// EX-05 (2026-06-05) — examine refactor wire side. Fire
+    /// `GameAction::IdentifyObject(guid)` (sub-opcode 0x00C8) — the
+    /// retail "Assess" / "Examine" request. ACE replies with
+    /// `GameEvent::IdentifyObjectResponse` (opcode 0x00C9) and the
+    /// world's `inventory::handle_event` arm folds the payload
+    /// (BoolProperties / IntProperties / Int64Properties /
+    /// FloatProperties / StringProperties / DataIdProperties +
+    /// optional ArmorProfile / CreatureProfile / WeaponProfile /
+    /// HookProfile / ArmorLevels + SpellBook + enchantment bitfields)
+    /// into the entity. Plugins read via
+    /// [`SessionHandle::get_object_appraisal`] after subscribing to
+    /// the existing `kind=32 ObjectAppraised` bus event.
+    ///
+    /// Timing. Safe pre-spawn (ACE silently no-ops if the GUID is
+    /// unknown). Idempotent — calling repeatedly just re-fires the
+    /// request.
+    #[wasm_bindgen(js_name = requestAppraisal)]
+    pub fn request_appraisal(&self, guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RequestAppraisal { guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("request_appraisal: cmd channel closed ({e})"))
+            })
+    }
+
+    /// EX-05 (2026-06-05) — companion read API to [`Self::request_appraisal`].
+    /// Returns the JSON-serialized `AppraisalSnapshot` for `guid`, or
+    /// `None` if the object hasn't been appraised yet. Caller parses
+    /// via `JSON.parse(...)` to access the
+    /// AttributeInfoRegion / SkillInfoRegion / EffectInfoRegion fields.
+    ///
+    /// Snapshot is refreshed in-place every time
+    /// `WorldEvent::EntityIdentified` arrives for this GUID (so a
+    /// repeat-appraisal returns fresh data after the next `kind=32`
+    /// drain).
+    ///
+    /// Note: the JSON shape is documented on `build_appraisal_snapshot`.
+    /// JS-side examples (camelCase): `appraisal.armorProfile`,
+    /// `appraisal.creatureProfile.attributes`,
+    /// `appraisal.properties.ints["EncumbranceVal"]`.
+    #[wasm_bindgen(js_name = getObjectAppraisal)]
+    pub fn get_object_appraisal(&self, guid: u32) -> Option<String> {
+        self.latest_appraisals.borrow().get(&guid).cloned()
+    }
+
     /// Housing — purchase a house from the given slumlord NPC. Sends
     /// `GameAction::BuyHouse` (sub-opcode 0x021C). `item_guids` are the
     /// player-owned items being tendered as payment (pyreals, trade
@@ -25619,6 +25729,15 @@ pub async fn start_session(
     let latest_inscriptions: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, String>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // EX-05 (2026-06-05): per-object AppraisalProfile snapshot, populated
+    // by the recv loop's EntityIdentified arm. JSON-serialized struct
+    // matches `AppraisalSnapshot` (defined on holtburger_world's entity
+    // type) so the JS examine plugin can render every AttributeInfoRegion /
+    // SkillInfoRegion / EffectInfoRegion section. Read on-demand by
+    // [`SessionHandle::get_object_appraisal`].
+    let latest_appraisals: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, String>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
     // TurbineChat state (2026-05-25): tracks whether ACE has the
     // Turbine-style chat infrastructure enabled (from CharacterList
     // packet's `use_turbine_chat` flag) + the per-channel-type room
@@ -25834,6 +25953,7 @@ pub async fn start_session(
         let latest_container_contents_inner = latest_container_contents.clone();
         let latest_object_icons_inner = latest_object_icons.clone();
         let latest_inscriptions_inner = latest_inscriptions.clone();
+        let latest_appraisals_inner = latest_appraisals.clone();
         let latest_enchantments_inner = latest_enchantments.clone();
         let latest_fellowship_inner = latest_fellowship.clone();
         let latest_trade_inner = latest_trade.clone();
@@ -25878,6 +25998,7 @@ pub async fn start_session(
                 latest_container_contents_inner,
                 latest_object_icons_inner,
                 latest_inscriptions_inner,
+                latest_appraisals_inner,
                 latest_enchantments_inner,
                 latest_fellowship_inner,
                 latest_trade_inner,
@@ -25978,6 +26099,7 @@ pub async fn start_session(
         latest_container_contents,
         latest_object_icons,
         latest_inscriptions,
+        latest_appraisals,
         latest_enchantments,
         latest_fellowship,
         latest_trade,
@@ -27380,6 +27502,9 @@ async fn recv_loop(
     latest_inscriptions: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, String>>,
     >,
+    latest_appraisals: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, String>>,
+    >,
     latest_enchantments: std::rc::Rc<std::cell::RefCell<Vec<PlayerEnchantment>>>,
     latest_fellowship: std::rc::Rc<std::cell::RefCell<Option<FellowshipSnapshot>>>,
     latest_trade: std::rc::Rc<std::cell::RefCell<Option<TradeSnapshot>>>,
@@ -28048,6 +28173,21 @@ async fn recv_loop(
                                         }
                                     }
                                     inventory_changed = true;
+                                    // EX-05 (2026-06-05) — examine refactor
+                                    // wire side. Build a JSON-shaped snapshot
+                                    // of the entity's full appraisal data
+                                    // (the 6 property tables + 4 optional
+                                    // sub-bodies + spell-book + enchantment
+                                    // bitfields + armor-levels) and stash
+                                    // it on `latest_appraisals` keyed by
+                                    // GUID. The JS examine plugin reads via
+                                    // `getObjectAppraisal(guid)` after the
+                                    // kind=32 event fires below.
+                                    let appraisal_json =
+                                        build_appraisal_snapshot(&entity);
+                                    latest_appraisals
+                                        .borrow_mut()
+                                        .insert(u32::from(entity_guid), appraisal_json);
                                     // ACPlugin PR-2 (2026-05-27): emit
                                     // kind=32 ObjectAppraised. The
                                     // existing kind=3 META_REFRESH
@@ -32232,6 +32372,34 @@ async fn recv_loop(
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("use_object: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    // EX-05 (2026-06-05) — examine refactor: fire
+                    // `GameAction::IdentifyObject(guid)` (sub-opcode 0x00C8).
+                    // ACE replies with `GameEvent::IdentifyObjectResponse`
+                    // (opcode 0x00C9) which lands in the world's
+                    // `inventory::handle_event` arm and is folded into
+                    // the entity's `properties.*` + AppraisalProfile
+                    // sub-bodies. The post-fold `WorldEvent::EntityIdentified`
+                    // already emits `kind=32 ObjectAppraised` so the JS
+                    // examine plugin just subscribes to that event and
+                    // re-reads via [`SessionHandle::get_object_appraisal`].
+                    Some(SessionCommand::RequestAppraisal { guid }) => {
+                        let action = holtburger_protocol::messages::GameAction::IdentifyObject(
+                            Box::new(holtburger_protocol::messages::IdentifyObjectActionData {
+                                guid: holtburger_common::Guid::from(guid),
+                            }),
+                        );
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(IdentifyObject guid=0x{guid:08X}): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("request_appraisal: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
                                 f32_payload: None,

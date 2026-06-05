@@ -17,8 +17,12 @@
 // events for vitae level, burden %, link RTT, etc.) are follow-on.
 
 import { setAcText } from "../ui/ac_font.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import {
+  loadLayout, findElementById, getCachedLayout,
+  getElementStates, getStateMediaByType,
+} from "../ui/ac_layout.js";
 import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
+import { fetchIconDataUrl } from "../ui/ac_icon_cache.js";
 
 const OVERLAY_ID = "hb-status-indicators";
 const WIDTH = 150;
@@ -297,6 +301,65 @@ export function mount(_ctx) {
   const linkTip = linkEl?.querySelector(".hb-indicator-tip");
   let linkLastTier = null;
   let linkLastTipText = null;
+
+  // P2-37 closure (2026-06-05) — walk layout 0x21000071's LinkStatus
+  // element (0x100000F8) for its per-state Image media, then resolve
+  // each state's `0x06xxxxxx` sprite DID to a data URL via the icon
+  // cache. The map drives a real sprite swap on tier change; the
+  // hue-rotate fallback below keeps things visible until the map lands
+  // (or for the small number of state ids we don't have a mapping for).
+  // States: retail LinkStatus carries 6 states. Without per-state
+  // semantics extracted, we sort the state ids and pick first / middle /
+  // last as our 3-tier ok/middling/poor proxies. That mirrors retail's
+  // "best→worst" ordering within the StateDesc array; any future
+  // refinement (e.g. tying tier→state via UIStateId enum) lands as
+  // a tier→state lookup table here.
+  const linkStateUrls = { ok: null, middling: null, poor: null };
+  let linkStateMapReady = false;
+  async function buildLinkStateMap() {
+    const layout = getCachedLayout(STATUS_INDICATORS_LAYOUT_ID)
+      ?? (await loadLayout(STATUS_INDICATORS_LAYOUT_ID).catch(() => null));
+    if (!layout) return;
+    const desc = findElementById(layout, STATUS_ELEMS.linkstatus);
+    if (!desc) return;
+    const states = getElementStates(desc);
+    const stateIds = Object.keys(states).sort((a, b) => Number(a) - Number(b));
+    if (stateIds.length === 0) return;
+    // Pick state ids for the 3 tiers. First=ok, last=poor, middle=middling.
+    const okId = stateIds[0];
+    const poorId = stateIds[stateIds.length - 1];
+    const middlingId = stateIds[Math.floor((stateIds.length - 1) / 2)] || okId;
+    const resolve = async (sid) => {
+      const did = getStateMediaByType(states[sid], "Image")?.file;
+      if (!did) return null;
+      try {
+        return await fetchIconDataUrl(did >>> 0, "link-status");
+      } catch (_) {
+        return null;
+      }
+    };
+    const [okUrl, middlingUrl, poorUrl] = await Promise.all([
+      resolve(okId), resolve(middlingId), resolve(poorId),
+    ]);
+    if (okUrl) linkStateUrls.ok = okUrl;
+    if (middlingUrl) linkStateUrls.middling = middlingUrl;
+    if (poorUrl) linkStateUrls.poor = poorUrl;
+    linkStateMapReady = !!(okUrl || middlingUrl || poorUrl);
+    try {
+      window.__diag?.layout?.onLinkStatusStateMap?.({
+        states: stateIds.length,
+        resolved: ["ok", "middling", "poor"].filter((k) => !!linkStateUrls[k]).length,
+      });
+    } catch (_) {}
+    // Re-apply current tier so the sprite swaps in immediately.
+    if (linkEl && linkLastTier && linkStateUrls[linkLastTier]) {
+      linkEl.style.backgroundImage = `url("${linkStateUrls[linkLastTier]}")`;
+      linkEl.style.filter = "";
+    }
+  }
+  // Fire-and-forget; the swap can land async without blocking the poll.
+  void buildLinkStateMap();
+
   const linkPollTimer = setInterval(() => {
     if (!linkEl) return;
     const handle = window.__sessionHandle;
@@ -328,20 +391,17 @@ export function mount(_ctx) {
     else tier = "ok";
     if (tier !== linkLastTier) {
       linkLastTier = tier;
-      // P2-37 (cross-find indicators-states-link-01) DEFERRED: retail
-      // ships 6 distinct LinkStatus sprites in layout 0x21000071's
-      // per-state StateDesc.media. The proper port walks the layout
-      // via fetch_layout + resolveFrameSpritesFromLayout-style picker
-      // and caches a state→sprite map. Until then, hue-rotate fakes
-      // 3 visible tiers from the green-chain base sprite — visually
-      // close enough that the deferred extraction can land as a
-      // drop-in replacement without UX disruption.
-      //
-      // CSS filter: keep green-chain sprite as-is for ok; tint to
-      // yellow / red for middling / poor. hue-rotate values picked by
-      // eye against the source green (~hue 120°) — yellow ≈ -60°,
-      // red ≈ -120°. Saturate boosts the tinted color.
-      if (tier === "ok") {
+      // P2-37 (cross-find indicators-states-link-01) — when the state
+      // map is ready (StateDesc-driven sprites extracted from layout
+      // 0x21000071), swap the real per-tier sprite. Falls back to the
+      // hue-rotate placeholder until the async layout walk completes
+      // (or for tiers whose state-id we couldn't resolve a sprite for).
+      const stateUrl = linkStateMapReady ? linkStateUrls[tier] : null;
+      if (stateUrl) {
+        linkEl.style.backgroundImage = `url("${stateUrl}")`;
+        linkEl.style.filter = "";
+        linkEl.style.opacity = "1";
+      } else if (tier === "ok") {
         linkEl.style.filter = "";
         linkEl.style.opacity = "1";
       } else if (tier === "middling") {
@@ -578,13 +638,20 @@ export function mount(_ctx) {
     return true;
   }
 
+  // P3-41 — replace 500ms client-discovery poll with one-shot await on
+  // the global pluginClient bootstrap promise. Falls back to the poll
+  // when the promise isn't installed yet.
   if (!tryWireClient()) {
-    clientPollTimer = setInterval(() => {
-      if (tryWireClient()) {
-        clearInterval(clientPollTimer);
-        clientPollTimer = null;
-      }
-    }, 500);
+    if (typeof window !== "undefined" && window.__pluginClientReady?.then) {
+      window.__pluginClientReady.then(() => { tryWireClient(); });
+    } else {
+      clientPollTimer = setInterval(() => {
+        if (tryWireClient()) {
+          clearInterval(clientPollTimer);
+          clientPollTimer = null;
+        }
+      }, 500);
+    }
   }
 
   return () => {

@@ -441,13 +441,21 @@ export function mount(ctx) {
     return true;
   }
 
+  // P3-41 — replace 500ms tryHook poll with a one-shot await on the
+  // global bootstrap promise installed by index.html. Falls back to the
+  // poll when the promise hasn't been wired yet (older index.html / unit
+  // tests that drive the plugin without the host).
   if (!tryHook()) {
-    pollTimer = setInterval(() => {
-      if (tryHook()) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-    }, 500);
+    if (typeof window !== "undefined" && window.__pluginClientReady?.then) {
+      window.__pluginClientReady.then(() => { tryHook(); });
+    } else {
+      pollTimer = setInterval(() => {
+        if (tryHook()) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }, 500);
+    }
   }
 
   return () => {

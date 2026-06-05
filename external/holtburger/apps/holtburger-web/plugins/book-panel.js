@@ -542,13 +542,20 @@ function trySubscribe() {
   return true;
 }
 if (typeof window !== "undefined") {
+  // P3-41 — replace bootstrap poll with one-shot await on the global
+  // pluginClient bootstrap promise (installed by index.html). Falls
+  // back to the poll if the promise isn't installed (older host / tests).
   if (!trySubscribe()) {
-    _subscribeTimer = setInterval(() => {
-      if (trySubscribe()) {
-        clearInterval(_subscribeTimer);
-        _subscribeTimer = null;
-      }
-    }, 500);
+    if (window.__pluginClientReady?.then) {
+      window.__pluginClientReady.then(() => { trySubscribe(); });
+    } else {
+      _subscribeTimer = setInterval(() => {
+        if (trySubscribe()) {
+          clearInterval(_subscribeTimer);
+          _subscribeTimer = null;
+        }
+      }, 500);
+    }
   }
 
   // Debug entry — open a book by guid.

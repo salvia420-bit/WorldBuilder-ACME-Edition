@@ -14,6 +14,7 @@
     { "manifestPath": "./dye-preview.manifest.json", "devPath": "./dye-preview.manifest.dev.json" },
     { "manifestPath": "./emote-panel.manifest.json", "devPath": "./emote-panel.manifest.dev.json" },
     { "manifestPath": "./examine-target.manifest.json", "devPath": "./examine-target.manifest.dev.json" },
+    { "manifestPath": "./examine-floaty.manifest.json", "devPath": "./examine-floaty.manifest.dev.json" },
     { "manifestPath": "./fellowship-panel.manifest.json", "devPath": "./fellowship-panel.manifest.dev.json" },
     { "manifestPath": "./hotbar.manifest.json", "devPath": "./hotbar.manifest.dev.json" },
     { "manifestPath": "./house-panel.manifest.json", "devPath": "./house-panel.manifest.dev.json" },

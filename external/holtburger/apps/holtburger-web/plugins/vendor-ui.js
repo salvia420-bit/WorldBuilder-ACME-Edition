@@ -382,16 +382,90 @@ function ensureStyles() {
 #${OVERLAY_ID} .hvb-pane.active { display: block; }
 
 /* Items pane — children are absolute and positioned via layout. */
+/* P3-45 — UIElement_Menu port. The category dropdown is a custom
+   div+ul rather than a native <select> so the brass-trim aesthetic
+   matches the rest of the vendor frame. Keyboard accessible: Enter
+   opens, ArrowUp/Down moves, Enter commits, Escape closes. The
+   underlying <select> is hidden but kept in place so existing
+   applyVendorLayout positioning + change-event semantics still work. */
 #${OVERLAY_ID} .hvb-category {
+  display: none;
+}
+#${OVERLAY_ID} .hvb-menu {
   position: absolute;
   left: 4px; top: 4px;
   width: 117px; height: 18px;
   background: var(--hb-overlay-dark-deep);
   color: var(--hb-text-cream);
   border: 1px solid var(--hb-border-brass-dim);
-  font-family: inherit; font-size: 10px;
-  padding: 0 2px;
+  font-family: inherit;
+  font-size: 10px;
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+#${OVERLAY_ID} .hvb-menu:hover,
+#${OVERLAY_ID} .hvb-menu:focus {
+  border-color: var(--hb-border-brass);
+  color: var(--hb-text-cream-bright);
+}
+#${OVERLAY_ID} .hvb-menu-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#${OVERLAY_ID} .hvb-menu-chevron {
+  margin-left: 4px;
+  color: var(--hb-border-brass);
+  font-size: 8px;
+  line-height: 1;
+}
+#${OVERLAY_ID} .hvb-menu-panel {
+  position: absolute;
+  left: 4px;
+  top: 22px;
+  width: 117px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--hb-overlay-dark-deep);
+  border: 1px solid var(--hb-border-brass);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.55);
+  z-index: 80;
+  font-family: inherit;
+  font-size: 10px;
+  padding: 2px;
+  display: none;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hb-border-brass) var(--hb-overlay-dark-deep);
+}
+#${OVERLAY_ID} .hvb-menu-panel[data-open="1"] {
+  display: block;
+}
+#${OVERLAY_ID} .hvb-menu-item {
+  padding: 2px 6px;
+  cursor: pointer;
+  color: var(--hb-text-cream);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid transparent;
+  box-sizing: border-box;
+}
+#${OVERLAY_ID} .hvb-menu-item:hover,
+#${OVERLAY_ID} .hvb-menu-item[data-focused="1"] {
+  background: var(--hb-overlay-hover);
+  border-color: var(--hb-border-brass-dim);
+  color: var(--hb-text-cream-bright);
+}
+#${OVERLAY_ID} .hvb-menu-item[data-selected="1"] {
+  color: var(--hb-text-gold);
+  background: var(--hb-overlay-active);
 }
 #${OVERLAY_ID} .hvb-selected-name {
   position: absolute;
@@ -738,6 +812,10 @@ function buildOverlay() {
   itemsPane.className = "hvb-pane hvb-pane-items active";
   itemsPane.dataset.pane = "items";
 
+  // P3-45 — UIElement_Menu port. The native <select> is kept (hidden)
+  // so applyVendorLayout's positioning still works on the underlying
+  // ref. A custom dropdown panel renders on top of it with retail-style
+  // brass chrome. Keyboard accessible via Tab + Enter + arrow keys.
   const itemsCat = document.createElement("select");
   itemsCat.className = "hvb-category";
   for (const c of CATEGORY_TABLE) {
@@ -748,9 +826,125 @@ function buildOverlay() {
   itemsCat.addEventListener("change", (e) => {
     state.categoryFilter = e.target.value;
     state.selectedItemGuid = null;
+    syncMenuFromSelect();
     render();
   });
   itemsPane.appendChild(itemsCat);
+
+  // Custom menu button + dropdown panel.
+  const menuBtn = document.createElement("div");
+  menuBtn.className = "hvb-menu";
+  menuBtn.setAttribute("role", "combobox");
+  menuBtn.setAttribute("aria-haspopup", "listbox");
+  menuBtn.setAttribute("aria-expanded", "false");
+  menuBtn.setAttribute("tabindex", "0");
+  const menuLabel = document.createElement("span");
+  menuLabel.className = "hvb-menu-label";
+  menuBtn.appendChild(menuLabel);
+  const menuChevron = document.createElement("span");
+  menuChevron.className = "hvb-menu-chevron";
+  menuChevron.textContent = "▾";
+  menuBtn.appendChild(menuChevron);
+  itemsPane.appendChild(menuBtn);
+
+  const menuPanel = document.createElement("div");
+  menuPanel.className = "hvb-menu-panel";
+  menuPanel.setAttribute("role", "listbox");
+  for (const c of CATEGORY_TABLE) {
+    const item = document.createElement("div");
+    item.className = "hvb-menu-item";
+    item.dataset.value = c.id;
+    item.setAttribute("role", "option");
+    setAcText(item, c.label);
+    item.addEventListener("click", () => {
+      itemsCat.value = c.id;
+      itemsCat.dispatchEvent(new Event("change", { bubbles: true }));
+      closeMenu();
+      menuBtn.focus();
+    });
+    menuPanel.appendChild(item);
+  }
+  itemsPane.appendChild(menuPanel);
+
+  let menuFocusIdx = 0;
+  function syncMenuFromSelect() {
+    const v = itemsCat.value;
+    const found = CATEGORY_TABLE.find((c) => c.id === v) ?? CATEGORY_TABLE[0];
+    setAcText(menuLabel, found.label);
+    const items = menuPanel.querySelectorAll(".hvb-menu-item");
+    items.forEach((el) => {
+      const selected = el.dataset.value === v;
+      el.dataset.selected = selected ? "1" : "0";
+    });
+  }
+  function openMenu() {
+    menuPanel.dataset.open = "1";
+    menuBtn.setAttribute("aria-expanded", "true");
+    // Move focus to the currently selected option.
+    const items = Array.from(menuPanel.querySelectorAll(".hvb-menu-item"));
+    menuFocusIdx = Math.max(0, items.findIndex((el) => el.dataset.selected === "1"));
+    updateFocusVisible(items);
+    items[menuFocusIdx]?.scrollIntoView?.({ block: "nearest" });
+    document.addEventListener("mousedown", onDocMouseDown, true);
+  }
+  function closeMenu() {
+    menuPanel.dataset.open = "0";
+    menuBtn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("mousedown", onDocMouseDown, true);
+  }
+  function updateFocusVisible(items) {
+    items.forEach((el, i) => {
+      el.dataset.focused = i === menuFocusIdx ? "1" : "0";
+    });
+  }
+  function onDocMouseDown(ev) {
+    if (!menuPanel.contains(ev.target) && !menuBtn.contains(ev.target)) {
+      closeMenu();
+    }
+  }
+  menuBtn.addEventListener("click", () => {
+    if (menuPanel.dataset.open === "1") closeMenu();
+    else openMenu();
+  });
+  menuBtn.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " " || ev.key === "ArrowDown") {
+      ev.preventDefault();
+      if (menuPanel.dataset.open !== "1") openMenu();
+    } else if (ev.key === "Escape" && menuPanel.dataset.open === "1") {
+      closeMenu();
+    }
+  });
+  menuPanel.addEventListener("keydown", (ev) => {
+    const items = Array.from(menuPanel.querySelectorAll(".hvb-menu-item"));
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      menuFocusIdx = Math.min(items.length - 1, menuFocusIdx + 1);
+      updateFocusVisible(items);
+      items[menuFocusIdx]?.scrollIntoView?.({ block: "nearest" });
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      menuFocusIdx = Math.max(0, menuFocusIdx - 1);
+      updateFocusVisible(items);
+      items[menuFocusIdx]?.scrollIntoView?.({ block: "nearest" });
+    } else if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      items[menuFocusIdx]?.click();
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeMenu();
+      menuBtn.focus();
+    }
+  });
+  // Keyboard nav while the button is focused: ArrowDown opens; if the
+  // panel is open and the user presses ArrowDown again, hand focus to
+  // the panel so the keydown handler above takes over.
+  menuPanel.setAttribute("tabindex", "-1");
+  menuBtn.addEventListener("keydown", (ev) => {
+    if (menuPanel.dataset.open === "1" && (ev.key === "ArrowDown" || ev.key === "ArrowUp")) {
+      menuPanel.focus();
+    }
+  });
+  syncMenuFromSelect();
 
   const itemsName = document.createElement("div");
   itemsName.className = "hvb-selected-name";
@@ -925,6 +1119,9 @@ function buildOverlay() {
     items: {
       pane:    itemsPane,
       cat:     itemsCat,
+      menu:    menuBtn,
+      menuPanel,
+      syncMenu: syncMenuFromSelect,
       name:    itemsName,
       price:   itemsPrice,
       strip:   itemsStrip,
@@ -1029,6 +1226,19 @@ function applyVendorLayout(refs) {
       if (!desc) continue;
       applyBox(el, desc);
       applied += 1;
+      // P3-45 — keep the menu button (UIElement_Menu port) in sync with
+      // the hidden <select>'s layout position so the brass dropdown
+      // tracks any retail layout overrides.
+      if (id === VENDOR_ELEMS.itemsCat && refs.items.menu) {
+        applyBox(refs.items.menu, desc);
+        if (refs.items.menuPanel) {
+          if (typeof desc.x === "number") refs.items.menuPanel.style.left = `${desc.x}px`;
+          if (typeof desc.y === "number" && typeof desc.height === "number") {
+            refs.items.menuPanel.style.top = `${desc.y + desc.height}px`;
+          }
+          if (typeof desc.width === "number") refs.items.menuPanel.style.width = `${desc.width}px`;
+        }
+      }
     }
     // Buying pane children.
     const buyingPairs = [
@@ -1574,17 +1784,26 @@ export function mount(ctx) {
     // ACE refreshes kind=12 after every buy. Drop the queues only
     // when switching vendors.
     showOverlay();
-    if (state.refs?.items?.cat) state.refs.items.cat.value = "all";
+    if (state.refs?.items?.cat) {
+      state.refs.items.cat.value = "all";
+      try { state.refs.items.syncMenu?.(); } catch (_) {}
+    }
     render();
   }
 
+  // P3-41 — replace 500ms client-discovery poll with one-shot await on
+  // the global pluginClient bootstrap promise installed by index.html.
   if (!tryHook()) {
-    pollTimer = setInterval(() => {
-      if (tryHook()) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-    }, 500);
+    if (typeof window !== "undefined" && window.__pluginClientReady?.then) {
+      window.__pluginClientReady.then(() => { tryHook(); });
+    } else {
+      pollTimer = setInterval(() => {
+        if (tryHook()) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }, 500);
+    }
   }
 
   return () => {
@@ -1632,7 +1851,10 @@ if (typeof window !== "undefined") {
     state.sellQueue = [];
     state.categoryFilter = "all";
     showOverlay();
-    if (state.refs?.items?.cat) state.refs.items.cat.value = "all";
+    if (state.refs?.items?.cat) {
+      state.refs.items.cat.value = "all";
+      try { state.refs.items.syncMenu?.(); } catch (_) {}
+    }
     render();
   };
   window.__vendorBarDebug = () => openDebug();

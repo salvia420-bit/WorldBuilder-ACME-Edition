@@ -530,6 +530,41 @@ function ensureStyles() {
       accent-color: var(--hb-text-gold);
       margin: 0;
     }
+    /* Retail-parity brass toggle — replaces the native browser
+       checkbox with a 10×10 brass-bordered button that paints filled
+       (gold sprite) when on / dim when off. CSS-only — no DAT
+       extraction needed because the spellbook's own sprite-set is the
+       same brass-trim used by .hb-sb-action-btn. */
+    body[data-retail-parity="1"] .hb-sb-filter-cb input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 10px;
+      height: 10px;
+      box-sizing: border-box;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid var(--hb-border-brass-dim);
+      cursor: pointer;
+      position: relative;
+      padding: 0;
+      transition: background 80ms ease, border-color 80ms ease;
+    }
+    body[data-retail-parity="1"] .hb-sb-filter-cb input[type="checkbox"]:hover {
+      border-color: var(--hb-border-brass);
+    }
+    body[data-retail-parity="1"] .hb-sb-filter-cb input[type="checkbox"]:checked {
+      background: var(--hb-text-gold);
+      border-color: var(--hb-text-gold);
+      box-shadow: 0 0 2px rgba(255, 220, 120, 0.55) inset;
+    }
+    body[data-retail-parity="1"] .hb-sb-filter-cb input[type="checkbox"]:checked::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      background: linear-gradient(135deg,
+        var(--hb-bg-stone-bottom) 0%,
+        var(--hb-text-gold) 50%,
+        var(--hb-bg-stone-top) 100%);
+    }
     /* Multi-state action button — retail 0x100002A5 (187,61) 100×32.
        2 states (idle / hover-or-disabled). Used as "Forget Spell"
        trigger for the currently-selected row (Phase J.1 wire — was
@@ -859,6 +894,12 @@ function doMount(parentEl, ctx) {
   const tabsEl = document.createElement("div");
   tabsEl.className = "hb-sb-tabs";
   if (retailParity) tabsEl.style.display = "none";
+  // P3-44 (cross-find SB brass toggle) — flip a body data-attr so the
+  // sprite-style filter checkbox CSS rules above kick in only when
+  // retail parity is enabled.
+  if (retailParity) {
+    try { document.body.dataset.retailParity = "1"; } catch (_) {}
+  }
   const tabBtns = [];
   for (let i = 0; i < SPELL_BAR_TABS; i++) {
     const btn = document.createElement("button");

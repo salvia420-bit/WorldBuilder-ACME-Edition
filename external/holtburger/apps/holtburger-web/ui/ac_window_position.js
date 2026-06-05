@@ -311,6 +311,9 @@ export const WINDOW_ID = Object.freeze({
   STATUS_INDICATORS: 0x10000610, // gmFloatyIndicatorsUI root (verified)
   COMBAT_HUD:        0x1000004B, // gmCombatUI root (verified)
   MAIN_PANEL:        0x100005FE, // gmFloatyPanelUI root (verified)
+  // gmFloatyExaminationUI 0x2100006B; root element_id is the 310×400
+  // popup at (20, 20) confirmed by examine_target_layout_dump 2026-05-24.
+  EXAMINE:           0x100005F2, // gmFloatyExaminationUI root (verified)
   // gmEffectsUI's m_eWindowID isn't extracted from a layout yet — use a
   // synthetic high-bit u32 (0xFFFF0001) so localStorage keys don't
   // collide with real layout DIDs. Swap to the real value once

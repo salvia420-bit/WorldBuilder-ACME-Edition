@@ -1141,6 +1141,14 @@
 
       let pluginClient = null;
       let barInstance = null;
+
+      // P3-41 — promise that resolves to the pluginClient as soon as
+      // login completes. Replaces the polling pattern many plugins use
+      // (setInterval(500, check window.__pluginClient)) with a single
+      // `await window.__pluginClientReady` await.
+      window.__pluginClientReady = new Promise((resolve) => {
+        window.__resolvePluginClient = resolve;
+      });
       // Chorizite WorldObject taxonomy mirror — populated lazily right after
       // start_session resolves. Exposed as `window.__wom` for plugin/debugger
       // consumption. See CHORIZITE_PORTING_PLAN.md §13 for the contract.
@@ -7504,6 +7512,12 @@ void main() {
           if (!pluginClient) {
             pluginClient = createClient(handle);
             window.__pluginClient = pluginClient;
+            // P3-41 — resolve the bootstrap promise so plugins can
+            // `await window.__pluginClientReady` instead of polling.
+            if (typeof window.__resolvePluginClient === "function") {
+              try { window.__resolvePluginClient(pluginClient); } catch (_) {}
+              window.__resolvePluginClient = null;
+            }
           }
 
           // Chorizite WorldObject typed-class hierarchy. Idempotent across

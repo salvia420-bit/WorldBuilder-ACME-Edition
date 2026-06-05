@@ -191,13 +191,19 @@ export function mount(ctx) {
     return true;
   }
 
+  // P3-41 — replace 500ms client-discovery poll with one-shot await
+  // on the pluginClient bootstrap promise.
   if (!tryHook()) {
-    pollTimer = setInterval(() => {
-      if (tryHook()) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-    }, 500);
+    if (typeof window !== "undefined" && window.__pluginClientReady?.then) {
+      window.__pluginClientReady.then(() => { tryHook(); });
+    } else {
+      pollTimer = setInterval(() => {
+        if (tryHook()) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }, 500);
+    }
   }
 
   // Debug helper — fire a fake event so the overlay is visible without
