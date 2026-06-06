@@ -72,6 +72,12 @@ export class WorldObjectManager extends EventTarget {
     this.objects = new Map();
     this.loaded = false;
     this.client = options.client ?? null;
+    // Events arriving from ACE before load() resolves (taxonomy + enums
+    // are async-fetched). Buffer so we don't drop ObjectCreated for the
+    // boot landblock — that's ~30-400 entities the per-render plugins
+    // would otherwise never see classified.
+    this._pendingCreate = [];
+    this._pendingDelete = [];
   }
 
   /**
@@ -90,6 +96,17 @@ export class WorldObjectManager extends EventTarget {
     await this.taxonomy.load(taxonomyUrl);
     await this.enums.load(enumsUrl);
     this.loaded = true;
+    // Drain any events that arrived during the async load window.
+    const pendingCreates = this._pendingCreate;
+    const pendingDeletes = this._pendingDelete;
+    this._pendingCreate = [];
+    this._pendingDelete = [];
+    for (const ev of pendingCreates) {
+      try { this.onObjectCreated(ev); } catch (e) { console.warn('[wom] replay onObjectCreated:', e); }
+    }
+    for (const ev of pendingDeletes) {
+      try { this.onObjectDeleted(ev); } catch (e) { console.warn('[wom] replay onObjectDeleted:', e); }
+    }
   }
 
   /**
@@ -103,7 +120,7 @@ export class WorldObjectManager extends EventTarget {
    */
   onObjectCreated(event) {
     if (!this.loaded) {
-      console.warn('WorldObjectManager: onObjectCreated before load()');
+      this._pendingCreate.push(event);
       return null;
     }
     const { guid, classId, itemType, objDescFlags, weenieFlags } = this.#normalizeCreationPayload(event);
@@ -155,6 +172,10 @@ export class WorldObjectManager extends EventTarget {
 
   /** Called on a kind=? ObjectDeleted / Released. */
   onObjectDeleted(event) {
+    if (!this.loaded) {
+      this._pendingDelete.push(event);
+      return false;
+    }
     const guid = event.guid ?? event.objectId;
     const wo = this.objects.get(guid);
     if (!wo) return false;

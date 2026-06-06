@@ -720,6 +720,7 @@ export async function preInit3D(canvas) {
     cssH,
     layoutChromeH,
     layoutMarginW,
+    _isAgentMode,
     renderer,
     scene,
     worldRoot,
@@ -760,6 +761,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     cssH,
     layoutChromeH,
     layoutMarginW,
+    _isAgentMode,
     renderer,
     scene,
     worldRoot,
@@ -1859,22 +1861,30 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   try {
     const client = window.__pluginClient;
     if (client?.events?.on) {
+      // Plugin facade wraps the ClientEvent payload in CustomEvent.detail.
+      // Field names are camelCase (u32Payload, u32Payload2) per the
+      // wasm-side ClientEvent struct + index.html drainEvents shape —
+      // NOT snake-case. Earlier wave passed snake-case which collapsed
+      // to 0, so markWielderDirty(0) silently did nothing.
+      const readPayload = (evt) => evt?.detail ?? evt ?? {};
       client.events.on("kind:49", (evt) => {
-        // u32_payload_2 = new wielder guid; that's the rig that needs a
+        // u32Payload2 = new wielder guid; that's the rig that needs a
         // re-sync of its attached children.
-        const w = (evt?.u32_payload_2 >>> 0) || 0;
+        const p = readPayload(evt);
+        const w = (p.u32Payload2 >>> 0) || 0;
         markWielderDirty(w);
       });
       client.events.on("kind:47", (evt) => {
         // Prior wielder needs its attached-children set re-synced too
         // (one of its kids just left). attachChildToParent reconciles
         // by diffing entityWieldedItems against _attachedChildren.
-        const w = (evt?.u32_payload_2 >>> 0) || 0;
+        const p = readPayload(evt);
+        const w = (p.u32Payload2 >>> 0) || 0;
         markWielderDirty(w);
         // Also instruct the detach side immediately so the mesh
         // unparents from the wielder's hand even before the rAF
         // coalesce runs.
-        const child = (evt?.u32_payload >>> 0) || 0;
+        const child = (p.u32Payload >>> 0) || 0;
         if (child) {
           try { entityManager.attachChildToParent(child, 0, 0, 0); }
           catch (_) {}

@@ -1713,8 +1713,28 @@ function doMount(parentEl, _ctx) {
           return;
         }
         const validLocs = (item?.validLocations >>> 0) || 0;
-        if (validLocs && handle?.setWielded) {
-          const mask = pickWieldSlotMask(validLocs);
+        // Fall through to a heuristic slot when validLocations isn't on the
+        // snapshot yet (ACE only ships the WeenieHeaderFlag.ValidLocations
+        // bit when the weenie has it set in the database — items where the
+        // property is null/0 arrive with vl=0 even though they ARE wieldable).
+        // Heuristic: equippable bit in itemType → pick a sane slot per type.
+        // Without this fallback, ctrl/dbl-click on a hammer with vl=0 hits
+        // the `if (validLocs && ...)` guard and silently does nothing.
+        const itemTypeBits = (item?.itemType >>> 0) || 0;
+        const ITEM_TYPE_MELEE = 0x00000001;
+        const ITEM_TYPE_ARMOR = 0x00000002;
+        const ITEM_TYPE_CLOTHING = 0x00000004;
+        const ITEM_TYPE_JEWELRY = 0x00000008;
+        const ITEM_TYPE_MISSILE = 0x00000100;
+        const ITEM_TYPE_CASTER = 0x00010000;
+        const fallbackMask =
+          (itemTypeBits & ITEM_TYPE_MELEE) ? 0x00100000 :
+          (itemTypeBits & ITEM_TYPE_MISSILE) ? 0x00400000 :
+          (itemTypeBits & ITEM_TYPE_CASTER) ? 0x01000000 :
+          0;
+        const effectiveVL = validLocs || fallbackMask;
+        if (effectiveVL && handle?.setWielded) {
+          const mask = pickWieldSlotMask(effectiveVL);
           const playerState = buildPlayerEquipState(inventorySnapshot, {
             stance: window.__combatBarState?.stance,
             inCombatMode: !!window.__combatBarState?.inCombatMode,

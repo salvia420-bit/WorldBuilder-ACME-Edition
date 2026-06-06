@@ -584,9 +584,16 @@ impl WorldState {
                 sync.server_time + elapsed
             }
             None => {
-                // Fallback to wall clock if no sync yet
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                // Fallback to wall clock if no sync yet. `web_time` re-exports
+                // `std::time` on native and falls through to `Date.now()` on
+                // wasm32-unknown-unknown where `std::time::SystemTime::now()`
+                // hard-panics with "time not implemented on this platform".
+                // Callers can reach this branch before the first
+                // ServerTimeUpdate arrives (e.g. an entity spawn during the
+                // login → in-world window); panicking collapses the recv loop
+                // and the player gets stuck unable to move.
+                web_time::SystemTime::now()
+                    .duration_since(web_time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs_f64()
             }

@@ -91,11 +91,28 @@ function _wrapHandle(handle) {
   // wrapper for tracked names. Untracked names fall through to the raw
   // method so the proxy contract is identical for non-instrumented
   // paths.
+  // Cache bound wrappers so repeated property access returns the same
+  // function reference (matters for `removeEventListener`-style callers).
+  const boundCache = new Map();
   const proxy = new Proxy(handle, {
     get(target, prop, receiver) {
       const raw = Reflect.get(target, prop, receiver);
       if (typeof raw !== "function") return raw;
-      if (!TRACKED_METHODS.has(prop)) return raw;
+      // wasm-bindgen exported methods read private class fields
+      // (`#ptr`) off `this`. Private fields are tied to the original
+      // object — they CANNOT be accessed via a Proxy. If we return
+      // `raw` here, JS sets `this = proxy` on call, the private-field
+      // read throws, and every untracked wasm method (setCombatMode,
+      // setMovementInput, useObject, ...) silently dies. Bind to the
+      // original handle in every case so the wasm pointer resolves.
+      if (!TRACKED_METHODS.has(prop)) {
+        let bound = boundCache.get(prop);
+        if (!bound) {
+          bound = raw.bind(target);
+          boundCache.set(prop, bound);
+        }
+        return bound;
+      }
       const idx = TRACKED_METHODS.get(prop);
       return function (...args) {
         try {

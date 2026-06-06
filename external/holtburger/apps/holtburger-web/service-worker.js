@@ -127,8 +127,6 @@ function isCacheable(url) {
 // perf audit: 11 distinct shards fetched 2–3× per session, ~4 MB
 // wasted. Single-flight by URL collapses races onto one network
 // request; the clone() lets each consumer read its own body.
-const inflight = new Map();
-
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
@@ -136,33 +134,30 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     (async () => {
-      const cache = await caches.open(CONTENT_CACHE);
-      const cached = await cache.match(event.request);
-      if (cached) {
-        return cached;
+      const cache = await caches.open(CONTENT_CACHE).catch(() => null);
+      if (cache) {
+        const cached = await cache.match(event.request).catch(() => null);
+        if (cached) return cached;
       }
-      const key = event.request.url;
-      let promise = inflight.get(key);
-      if (!promise) {
-        promise = (async () => {
-          const network = await fetch(event.request);
-          // Only cache successful, basic-type responses. Opaque
-          // (cross-origin, no-CORS) responses can't be inspected for
-          // status and would fill the cache with phantom entries on
-          // failure. Same-origin assets always come back as `basic`.
-          if (network.ok && network.type === "basic") {
-            // `Response` bodies can only be read once; clone before
-            // caching so the page still sees the body downstream.
-            cache.put(event.request, network.clone()).catch((e) => {
-              console.warn("[holtburger-sw] cache.put failed:", e);
-            });
-          }
-          return network;
-        })().finally(() => inflight.delete(key));
-        inflight.set(key, promise);
+      // Fetch fresh. Clone ONCE for the cache before returning the
+      // original — Response bodies are locked after the first clone()
+      // on a given instance, so the old (inflight-dedup + double-clone)
+      // pattern threw "body already used" on the second consumer when
+      // upstream chunked-encoded the response.
+      try {
+        const network = await fetch(event.request);
+        if (cache && network.ok && network.type === "basic") {
+          cache.put(event.request, network.clone()).catch((e) => {
+            console.warn("[holtburger-sw] cache.put failed:", e);
+          });
+        }
+        return network;
+      } catch (e) {
+        // Any unexpected SW error — fall through to a direct passthrough
+        // so the page sees the same response it would get without the SW.
+        console.warn("[holtburger-sw] fetch failed, passing through:", e);
+        return fetch(event.request);
       }
-      const shared = await promise;
-      return shared.clone();
     })()
   );
 });

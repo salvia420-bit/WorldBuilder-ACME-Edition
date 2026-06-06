@@ -279,9 +279,16 @@ export class AudioManager {
       try {
         wave = await this._fetchWave(key);
       } catch (e) {
-        this.lastError = String(e?.message ?? e);
-        // eslint-disable-next-line no-console
-        console.warn(`[H3/audio] fetchWave(0x${key.toString(16)}) failed:`, e);
+        const msg = String(e?.message ?? e);
+        this.lastError = msg;
+        // "record not prefetched" is a known + expected failure mode for
+        // optimistic-audio callers that fire sounds outside the boot
+        // prefetch set — they handle the null return and stay silent.
+        // Logging here floods the console without adding signal.
+        if (!msg.includes("not prefetched")) {
+          // eslint-disable-next-line no-console
+          console.warn(`[H3/audio] fetchWave(0x${key.toString(16)}) failed:`, e);
+        }
         return null;
       }
       let bytes;

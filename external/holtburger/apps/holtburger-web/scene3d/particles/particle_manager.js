@@ -58,6 +58,7 @@ import { ParticleEmitterInfo } from "./particle_emitter_info.js";
 // cache-owned references (e.g. anything returned by the shared
 // MaterialCache) are skipped to avoid crashing other renderers that
 // still hold the same GPU resource.
+const _doubleTagWarned = new Set();
 function _disposeMaterialIfOwned(mat) {
   if (!mat) return;
   const ud = mat.userData;
@@ -66,12 +67,18 @@ function _disposeMaterialIfOwned(mat) {
     // Programmer error: a cache material was tagged disposable at some
     // clone site that should have stayed cache-owned. Disposing would
     // free the shared GPU resource other emitters still reference.
-    // eslint-disable-next-line no-console
-    console.error(
-      "[particle_manager/E3] _disposeMaterialIfOwned: material is BOTH __cacheOwned and __disposable —" +
-        " refusing to dispose. Audit the clone site that produced it.",
-      { name: mat.name, userData: ud }
-    );
+    // Rate-limit to one log per material name — emitters cycle many
+    // times per second and the spam swamps the console otherwise.
+    const key = mat.name || "<unnamed>";
+    if (!_doubleTagWarned.has(key)) {
+      _doubleTagWarned.add(key);
+      // eslint-disable-next-line no-console
+      console.error(
+        "[particle_manager/E3] _disposeMaterialIfOwned: material is BOTH __cacheOwned and __disposable —" +
+          " refusing to dispose. Audit the clone site that produced it. (further occurrences for this name silenced)",
+        { name: mat.name, userData: ud }
+      );
+    }
     return;
   }
   if (ud.__disposable !== true) return;
