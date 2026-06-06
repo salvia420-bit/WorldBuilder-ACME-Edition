@@ -1083,7 +1083,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=icon-pixels-wiring-fix-20260530";
+      } from "./pkg/holtburger_web.js?v=movement-trace-20260605";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -10094,6 +10094,9 @@ void main() {
                       // rendered sprite and the authoritative wasm pose in step.
                       // (playerRunRate() falls back to FALLBACK_RUN_RATE_SCALAR
                       // until the skill-derived rate is known.)
+                      // NOTE: this is the 2D-sprite predictor; the 3D snapback
+                      // fix lives in camera.js _advancePrediction (the 3D rig's
+                      // X/Y comes from cameraSwitcher.predictedPlayerPos).
                       let speed = run ? playerRunRate() : WALK_FORWARD_SPEED;
                       if (forward < 0) {
                         effHeading = heading + Math.PI;

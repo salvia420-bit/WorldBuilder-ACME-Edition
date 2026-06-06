@@ -51,6 +51,14 @@ pub struct LightInfo {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AnimationHook {
     pub hook_type: u32,
+    /// `AnimHookDir`: Backward=-1, Both=0, Forward=1 (acclient.h:7311). The
+    /// retail enum also defines UNKNOWN=0xFFFFFFFE (-2), but that is a
+    /// constructor default that `CAnimHook::UnPackHook` overwrites with the
+    /// wire value before any fire (acclient.c:339695), so it is never
+    /// serialized — a full portal.dat survey (2026-06-05) found zero hooks
+    /// carrying -2. Consumers should treat any value outside {-1,0,1} as
+    /// Both(0) / unconditional-fire and must NOT blanket-negate it (see the
+    /// reverse-segment clamp in web `build_concatenated_motion_frames`).
     pub direction: i32,
     pub data: Vec<u8>,
 }
