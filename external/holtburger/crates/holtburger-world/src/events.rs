@@ -237,4 +237,27 @@ pub enum WorldEvent {
         script_id: u32,
         speed: f32,
     },
+    /// Wave A / PR1 (2026-06-06): a previously-wielded entity's
+    /// `PropertyInstanceId::Wielder` transitioned from non-NULL to
+    /// NULL. Emitted by `state::mutations::apply_instance_id_side_effect`
+    /// when it observes the transition. `prior_wielder_guid` is the
+    /// non-NULL wielder GUID observed before the mutation, pulled from
+    /// `WorldState.prior_wielders`. PR8 will use this for symmetric
+    /// local/remote dequip detach in the paperdoll UI without forcing
+    /// the JS side to track prior wielders itself.
+    EntityDetached {
+        entity_guid: u32,
+        prior_wielder_guid: u32,
+    },
+    /// Wave A / PR1 (2026-06-06): server-confirmed inventory-action
+    /// rejection. Surfaces a `WeenieError` whose context is an
+    /// inventory mutation (move / split / merge / wield). PR13 will
+    /// consume this to display a transient error toast tied to the
+    /// originating item GUID so the inventory panel can roll back any
+    /// optimistic UI state. `item_guid` is 0 when the rejection cannot
+    /// be tied back to a specific entity.
+    InventoryActionFailed {
+        item_guid: u32,
+        weenie_error_code: u32,
+    },
 }

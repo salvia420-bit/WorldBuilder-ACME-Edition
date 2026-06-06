@@ -1122,6 +1122,23 @@ impl WorldState {
         events: &mut Vec<WorldEvent>,
     ) {
         let mut clear_world_presence = false;
+        // Wave A / PR1 (2026-06-06): track Wielder transitions. The new
+        // Wielder is `value`; the prior Wielder (if any) is whatever we
+        // last recorded in `prior_wielders` for this entity. When `value`
+        // is NULL and we have a prior non-NULL wielder, emit
+        // `EntityDetached` so JS / paperdoll consumers can react to the
+        // dequip without having to track prior state themselves.
+        let mut detached_prior_wielder: Option<u32> = None;
+        if property == PropertyInstanceId::Wielder {
+            let item_guid_u32 = u32::from(target_guid);
+            if value == Guid::NULL {
+                if let Some(prior) = self.prior_wielders.remove(&item_guid_u32) {
+                    detached_prior_wielder = Some(prior);
+                }
+            } else {
+                self.prior_wielders.insert(item_guid_u32, u32::from(value));
+            }
+        }
 
         if let Some(entity) = self.entities.get_mut(target_guid) {
             match property {
@@ -1141,6 +1158,13 @@ impl WorldState {
                 }
                 _ => {}
             }
+        }
+
+        if let Some(prior_wielder_guid) = detached_prior_wielder {
+            events.push(WorldEvent::EntityDetached {
+                entity_guid: u32::from(target_guid),
+                prior_wielder_guid,
+            });
         }
 
         if clear_world_presence {

@@ -15672,6 +15672,40 @@ const CLIENT_EVENT_KIND_PORTAL_STORM: u32 = 45;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_ENTITY_ENCHANTMENTS_UPDATED: u32 = 46;
 
+/// `kind = 47` — EntityDetached. Wave A / PR1 (2026-06-06): a
+/// previously-wielded item's `PropertyInstanceId::Wielder` transitioned
+/// from non-NULL to NULL. Emitted by `holtburger_world::state::mutations::
+/// apply_instance_id_side_effect` when it observes the transition, with
+/// the prior wielder GUID pulled from `WorldState.prior_wielders`. PR8
+/// uses this for symmetric local/remote dequip detach in the paperdoll
+/// UI without forcing the JS side to track prior wielders itself.
+///
+/// `u32_payload` = item GUID (the entity that just got detached).
+/// `u32_payload_2` = prior wielder GUID.
+/// `string_payload` = None. `f32_payload` = None.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ENTITY_DETACHED: u32 = 47;
+
+/// `kind = 48` — InventoryActionFailed. Wave A / PR1 (2026-06-06):
+/// ACE rejected an inventory mutation (move, split, merge, wield) with
+/// a `WeenieError` code. PR13 owns the producer: it adds an
+/// inventory-action-context tracker that classifies an incoming
+/// `WorldEvent::WeenieError` as belonging to a recent inventory
+/// SessionCommand and converts it to `WorldEvent::InventoryActionFailed`
+/// before this dispatch arm runs. Wave A stages the variant + dispatch
+/// arm + the `plugins/weenie_error_messages.js` lookup module so that
+/// PR13 only has to add the converter.
+///
+/// `u32_payload` = item GUID the failed action targeted (0 if not
+/// resolvable from the ACE rejection).
+/// `u32_payload_2` = `WeenieError` discriminant; JS callers resolve to
+/// English via `weenieErrorMessage(u32_payload_2)` from
+/// `plugins/weenie_error_messages.js`.
+/// `string_payload` = None (lookup happens JS-side).
+/// `f32_payload` = None.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED: u32 = 48;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -16401,6 +16435,61 @@ enum SessionCommand {
     /// owns the unequip-first-if-needed sequencing.
     DropItem {
         item_guid: u32,
+    },
+    /// Wave A / PR2 (2026-06-06): move `item_guid` into `container_guid`
+    /// at slot `placement`. Maps to `GameAction::PutItemInContainer`
+    /// (sub-opcode 0x0019). Used for pack→pack reorganisation,
+    /// dequipping a wielded item back into the main pack, and moving
+    /// items between side packs. ACE owns validation (container
+    /// ownership, capacity, slot match).
+    MoveItem {
+        item_guid: u32,
+        container_guid: u32,
+        placement: u32,
+    },
+    /// Wave A / PR2 (2026-06-06): unwield `item_guid` back into the
+    /// player's main pack at slot 0. The recv-loop resolves
+    /// `container_guid` to `world.player.guid` and then sends the same
+    /// `GameAction::PutItemInContainer` (sub-opcode 0x0019) wire packet
+    /// as `MoveItem`. Kept as a distinct command so the JS surface
+    /// doesn't need to expose the local player's GUID.
+    UnwieldToPack {
+        item_guid: u32,
+    },
+    /// Wave A / PR3 (2026-06-06): split `amount` off `stack_guid` and
+    /// wield the split-off stack in the slot matching `equip_mask`.
+    /// Maps to `GameAction::StackableSplitToWield` (sub-opcode 0x019B).
+    /// Used for ammo split-and-wield in one round-trip.
+    SplitStackToWield {
+        stack_guid: u32,
+        equip_mask: u32,
+        amount: u32,
+    },
+    /// Wave A / PR3 (2026-06-06): split `amount` off `stack_guid` and
+    /// place the split-off stack into `container_guid` at slot
+    /// `placement`. Maps to `GameAction::StackableSplitToContainer`
+    /// (sub-opcode 0x0055).
+    SplitStackToContainer {
+        stack_guid: u32,
+        container_guid: u32,
+        placement: u32,
+        amount: u32,
+    },
+    /// Wave A / PR3 (2026-06-06): split `amount` off `stack_guid` and
+    /// drop the split-off stack into the 3D world at the player's
+    /// feet. Maps to `GameAction::StackableSplitTo3D` (sub-opcode
+    /// 0x0056).
+    SplitStackTo3D {
+        stack_guid: u32,
+        amount: u32,
+    },
+    /// Wave A / PR3 (2026-06-06): merge `amount` from `src_guid` onto
+    /// `dst_guid`. Maps to `GameAction::StackableMerge` (sub-opcode
+    /// 0x0054). ACE validates wcid match + stack-size cap.
+    MergeStacks {
+        src_guid: u32,
+        dst_guid: u32,
+        amount: u32,
     },
     /// Wave F.5 (2026-05-27): JS-side abandon-contract action. Sends
     /// `GameAction::AbandonContract` (sub-opcode 0x0316) carrying a
@@ -17413,6 +17502,13 @@ pub struct InventoryItem {
     /// `crates/holtburger-common/src/properties/property_keys/floats.rs:75`
     /// for the enum value.
     damage_mod: f32,
+    valid_locations: u32,
+    weapon_skill: u32,
+    ammo_type: u32,
+    default_combat_style: u32,
+    attuned: u32,
+    bonded: u32,
+    containers_capacity: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -17523,6 +17619,41 @@ impl InventoryItem {
     #[wasm_bindgen(getter, js_name = damageMod)]
     pub fn damage_mod(&self) -> f32 {
         self.damage_mod
+    }
+
+    #[wasm_bindgen(getter, js_name = validLocations)]
+    pub fn valid_locations(&self) -> u32 {
+        self.valid_locations
+    }
+
+    #[wasm_bindgen(getter, js_name = weaponSkill)]
+    pub fn weapon_skill(&self) -> u32 {
+        self.weapon_skill
+    }
+
+    #[wasm_bindgen(getter, js_name = ammoType)]
+    pub fn ammo_type(&self) -> u32 {
+        self.ammo_type
+    }
+
+    #[wasm_bindgen(getter, js_name = defaultCombatStyle)]
+    pub fn default_combat_style(&self) -> u32 {
+        self.default_combat_style
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn attuned(&self) -> u32 {
+        self.attuned
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn bonded(&self) -> u32 {
+        self.bonded
+    }
+
+    #[wasm_bindgen(getter, js_name = containersCapacity)]
+    pub fn containers_capacity(&self) -> u32 {
+        self.containers_capacity
     }
 }
 
@@ -27179,6 +27310,34 @@ fn publish_player_inventory_snapshot(
             .get_float_prop(PropertyFloat::DamageMod)
             .map(|v| v as f32)
             .unwrap_or(1.0);
+        let valid_locations = entity
+            .get_int_prop(PropertyInt::ValidLocations)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
+        let weapon_skill = entity
+            .get_int_prop(PropertyInt::WeaponSkill)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
+        let ammo_type = entity
+            .get_int_prop(PropertyInt::AmmoType)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
+        let default_combat_style = entity
+            .get_int_prop(PropertyInt::DefaultCombatStyle)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
+        let attuned = entity
+            .get_int_prop(PropertyInt::Attuned)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
+        let bonded = entity
+            .get_int_prop(PropertyInt::Bonded)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
+        let containers_capacity = entity
+            .get_int_prop(PropertyInt::ContainersCapacity)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -27192,6 +27351,13 @@ fn publish_player_inventory_snapshot(
             attack_type,
             maximum_velocity,
             damage_mod,
+            valid_locations,
+            weapon_skill,
+            ammo_type,
+            default_combat_style,
+            attuned,
+            bonded,
+            containers_capacity,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS
@@ -28542,6 +28708,31 @@ async fn recv_loop(
                                     // false positive here just refreshes
                                     // the panel one extra time.
                                     inventory_changed = true;
+                                }
+                                WorldEvent::EntityDetached {
+                                    entity_guid,
+                                    prior_wielder_guid,
+                                } => {
+                                    inventory_changed = true;
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ENTITY_DETACHED,
+                                        string_payload: None,
+                                        u32_payload: Some(*entity_guid),
+                                        u32_payload_2: Some(*prior_wielder_guid),
+                                        f32_payload: None,
+                                    });
+                                }
+                                WorldEvent::InventoryActionFailed {
+                                    item_guid,
+                                    weenie_error_code,
+                                } => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED,
+                                        string_payload: None,
+                                        u32_payload: Some(*item_guid),
+                                        u32_payload_2: Some(*weenie_error_code),
+                                        f32_payload: None,
+                                    });
                                 }
                                 // Phase 4 step 6f: EntityIdentified
                                 // arrives in response to our auto-fired
@@ -34711,6 +34902,210 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[paperdoll/drop] item=0x{item_guid:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::MoveItem {
+                        item_guid,
+                        container_guid,
+                        placement,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, PutItemInContainerActionData,
+                        };
+                        let action = GameAction::PutItemInContainer(Box::new(
+                            PutItemInContainerActionData {
+                                item_guid: Guid(item_guid),
+                                container_guid: Guid(container_guid),
+                                placement,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(PutItemInContainer): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("move_item: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[inventory/move] item=0x{item_guid:08X} container=0x{container_guid:08X} slot={placement}",
+                        ));
+                    }
+                    Some(SessionCommand::UnwieldToPack { item_guid }) => {
+                        // Wave A / PR2 (2026-06-06): resolve container_guid
+                        // to the local player's GUID, then issue the same
+                        // PutItemInContainer wire packet (0x0019) with
+                        // placement=0. ACE accepts the move and broadcasts
+                        // the WieldObject clear + PrivateUpdateProperty
+                        // events that drive the paperdoll detach.
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, PutItemInContainerActionData,
+                        };
+                        let Some(w) = world.as_ref() else {
+                            console_log_str(
+                                "[inventory/unwield] before WorldState ready — dropping",
+                            );
+                            continue;
+                        };
+                        let player_guid_raw = u32::from(w.player.guid);
+                        if player_guid_raw == 0 {
+                            console_log_str(
+                                "[inventory/unwield] player guid not yet resolved — dropping",
+                            );
+                            continue;
+                        }
+                        let action = GameAction::PutItemInContainer(Box::new(
+                            PutItemInContainerActionData {
+                                item_guid: Guid(item_guid),
+                                container_guid: Guid(player_guid_raw),
+                                placement: 0,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(PutItemInContainer/Unwield): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("unwield_to_pack: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[inventory/unwield] item=0x{item_guid:08X} player=0x{player_guid_raw:08X}",
+                        ));
+                    }
+                    Some(SessionCommand::SplitStackToWield {
+                        stack_guid,
+                        equip_mask,
+                        amount,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::inventory::types::EquipMask;
+                        use holtburger_protocol::messages::{
+                            GameAction, StackableSplitToWieldActionData,
+                        };
+                        let action = GameAction::StackableSplitToWield(Box::new(
+                            StackableSplitToWieldActionData {
+                                stack_guid: Guid(stack_guid),
+                                equip_mask: EquipMask::from_bits_truncate(equip_mask),
+                                amount: amount as i32,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(StackableSplitToWield): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("split_stack_to_wield: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[inventory/split-wield] stack=0x{stack_guid:08X} slot=0x{equip_mask:08X} amount={amount}",
+                        ));
+                    }
+                    Some(SessionCommand::SplitStackToContainer {
+                        stack_guid,
+                        container_guid,
+                        placement,
+                        amount,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, StackableSplitToContainerActionData,
+                        };
+                        let action = GameAction::StackableSplitToContainer(Box::new(
+                            StackableSplitToContainerActionData {
+                                stack_guid: Guid(stack_guid),
+                                container_guid: Guid(container_guid),
+                                place: placement as i32,
+                                amount: amount as i32,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(StackableSplitToContainer): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("split_stack_to_container: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[inventory/split-container] stack=0x{stack_guid:08X} container=0x{container_guid:08X} slot={placement} amount={amount}",
+                        ));
+                    }
+                    Some(SessionCommand::SplitStackTo3D {
+                        stack_guid,
+                        amount,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, StackableSplitTo3DActionData,
+                        };
+                        let action = GameAction::StackableSplitTo3D(Box::new(
+                            StackableSplitTo3DActionData {
+                                stack_guid: Guid(stack_guid),
+                                amount: amount as i32,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(StackableSplitTo3D): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("split_stack_to_3d: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[inventory/split-3d] stack=0x{stack_guid:08X} amount={amount}",
+                        ));
+                    }
+                    Some(SessionCommand::MergeStacks {
+                        src_guid,
+                        dst_guid,
+                        amount,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, StackableMergeActionData,
+                        };
+                        let action = GameAction::StackableMerge(Box::new(
+                            StackableMergeActionData {
+                                merge_from_guid: Guid(src_guid),
+                                merge_to_guid: Guid(dst_guid),
+                                amount: amount as i32,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(StackableMerge): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("merge_stacks: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[inventory/merge] src=0x{src_guid:08X} dst=0x{dst_guid:08X} amount={amount}",
                         ));
                     }
                     Some(SessionCommand::AbandonContract { contract_id }) => {
@@ -41301,6 +41696,153 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("setWielded: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Wave A / PR2 (2026-06-06): move `item_guid` into `container_guid`
+    /// at slot `placement`. Sends `SessionCommand::MoveItem` →
+    /// `GameAction::PutItemInContainer` (sub-opcode 0x0019).
+    #[wasm_bindgen(js_name = moveItem)]
+    pub fn move_item(
+        &self,
+        item_guid: u32,
+        container_guid: u32,
+        placement: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::MoveItem {
+                item_guid,
+                container_guid,
+                placement,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("moveItem: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Wave A / PR2 (2026-06-06): semantic alias of `moveItem` for the
+    /// call sites that want a name matching the wire opcode.
+    #[wasm_bindgen(js_name = putItemInContainer)]
+    pub fn put_item_in_container(
+        &self,
+        item_guid: u32,
+        container_guid: u32,
+        placement: u32,
+    ) -> Result<(), JsValue> {
+        self.move_item(item_guid, container_guid, placement)
+    }
+
+    /// Wave A / PR2 (2026-06-06): unwield `item_guid` back into the
+    /// player's main pack at slot 0. The recv-loop resolves the
+    /// container GUID to the local player's GUID so the JS surface
+    /// doesn't need to track it.
+    #[wasm_bindgen(js_name = unwieldToPack)]
+    pub fn unwield_to_pack(&self, item_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::UnwieldToPack { item_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("unwieldToPack: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Wave A / PR3 (2026-06-06): split `amount` off `stack_guid` and
+    /// wield the split-off stack into `slot`. Sends
+    /// `SessionCommand::SplitStackToWield` →
+    /// `GameAction::StackableSplitToWield` (sub-opcode 0x019B).
+    #[wasm_bindgen(js_name = splitStackToWield)]
+    pub fn split_stack_to_wield(
+        &self,
+        stack_guid: u32,
+        slot: u32,
+        amount: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SplitStackToWield {
+                stack_guid,
+                equip_mask: slot,
+                amount,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "splitStackToWield: cmd channel closed ({e})"
+                ))
+            })
+    }
+
+    /// Wave A / PR3 (2026-06-06): split `amount` off `stack_guid` and
+    /// place the split-off stack into `container_guid` at slot
+    /// `placement`. Sends `SessionCommand::SplitStackToContainer` →
+    /// `GameAction::StackableSplitToContainer` (sub-opcode 0x0055).
+    #[wasm_bindgen(js_name = splitStackToContainer)]
+    pub fn split_stack_to_container(
+        &self,
+        stack_guid: u32,
+        container_guid: u32,
+        placement: u32,
+        amount: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SplitStackToContainer {
+                stack_guid,
+                container_guid,
+                placement,
+                amount,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "splitStackToContainer: cmd channel closed ({e})"
+                ))
+            })
+    }
+
+    /// Wave A / PR3 (2026-06-06): split `amount` off `stack_guid` and
+    /// drop the split-off stack into the 3D world. Sends
+    /// `SessionCommand::SplitStackTo3D` →
+    /// `GameAction::StackableSplitTo3D` (sub-opcode 0x0056).
+    #[wasm_bindgen(js_name = splitStackTo3D)]
+    pub fn split_stack_to_3d(
+        &self,
+        stack_guid: u32,
+        amount: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SplitStackTo3D {
+                stack_guid,
+                amount,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "splitStackTo3D: cmd channel closed ({e})"
+                ))
+            })
+    }
+
+    /// Wave A / PR3 (2026-06-06): merge `amount` from `src_guid` onto
+    /// `dst_guid`. Sends `SessionCommand::MergeStacks` →
+    /// `GameAction::StackableMerge` (sub-opcode 0x0054).
+    #[wasm_bindgen(js_name = mergeStacks)]
+    pub fn merge_stacks(
+        &self,
+        src_guid: u32,
+        dst_guid: u32,
+        amount: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::MergeStacks {
+                src_guid,
+                dst_guid,
+                amount,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "mergeStacks: cmd channel closed ({e})"
+                ))
             })
     }
 

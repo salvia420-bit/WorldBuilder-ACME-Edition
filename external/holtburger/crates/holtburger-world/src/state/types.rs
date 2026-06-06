@@ -90,6 +90,16 @@ pub struct WorldState {
     pub(crate) setup_radii: std::collections::HashMap<u32, f32>,
     pub(crate) entity_lifecycle: EntityLifecycleStore,
     pub(crate) self_movement_capabilities_override: Option<SelfMovementCapabilities>,
+    /// Wave A / PR1 (2026-06-06): item GUID → prior wielder GUID. Used
+    /// by `apply_instance_id_side_effect` to detect `Wielder` transitions
+    /// from non-NULL to NULL and emit `WorldEvent::EntityDetached` with
+    /// the prior wielder. Populated when a non-NULL Wielder is observed;
+    /// pruned when the entry's Wielder is observed transitioning to NULL
+    /// OR when the entity is deleted (inventory.rs ObjectDelete handler).
+    /// No explicit cap — entries are bounded by the entities map size
+    /// because each entry corresponds to exactly one live entity and is
+    /// pruned on entity delete.
+    pub(crate) prior_wielders: std::collections::HashMap<u32, u32>,
 }
 
 impl WorldState {
@@ -429,6 +439,7 @@ impl WorldState {
             setup_radii: std::collections::HashMap::new(),
             entity_lifecycle: EntityLifecycleStore::default(),
             self_movement_capabilities_override: None,
+            prior_wielders: std::collections::HashMap::new(),
         }
     }
 

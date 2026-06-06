@@ -52,11 +52,17 @@ pub(crate) fn handle_message(
         }
         GameMessage::ObjectDelete(data) => {
             state.update_player_inventory_recursive(data.guid, false);
+            // Wave A / PR1 (2026-06-06): prune prior_wielders so the
+            // map stays bounded by live entity count.
+            state.prior_wielders.remove(&u32::from(data.guid));
             state.mark_entity_explicit_delete(data.guid);
             true
         }
         GameMessage::InventoryRemoveObject(data) => {
             state.update_player_inventory_recursive(data.object_guid, false);
+            // Wave A / PR1 (2026-06-06): prune prior_wielders so the
+            // map stays bounded by live entity count.
+            state.prior_wielders.remove(&u32::from(data.object_guid));
             state.mark_entity_explicit_delete(data.object_guid);
             true
         }
