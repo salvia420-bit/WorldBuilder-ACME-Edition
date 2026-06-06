@@ -1129,6 +1129,10 @@ impl WorldState {
         // `EntityDetached` so JS / paperdoll consumers can react to the
         // dequip without having to track prior state themselves.
         let mut detached_prior_wielder: Option<u32> = None;
+        // Wave C / PR8 (2026-06-06): also track the new wielder on
+        // non-NULL transitions so we can emit `EntityAttached` after the
+        // state mutation lands. The detach path stays Wave A logic.
+        let mut attached_new_wielder: Option<u32> = None;
         if property == PropertyInstanceId::Wielder {
             let item_guid_u32 = u32::from(target_guid);
             if value == Guid::NULL {
@@ -1136,6 +1140,7 @@ impl WorldState {
                     detached_prior_wielder = Some(prior);
                 }
             } else {
+                attached_new_wielder = Some(u32::from(value));
                 self.prior_wielders.insert(item_guid_u32, u32::from(value));
             }
         }
@@ -1164,6 +1169,15 @@ impl WorldState {
             events.push(WorldEvent::EntityDetached {
                 entity_guid: u32::from(target_guid),
                 prior_wielder_guid,
+            });
+        }
+        // Wave C / PR8 (2026-06-06): mirror the EntityDetached emission.
+        // JS consumes this as kind=49 to drive PaperdollViewport reload
+        // + 3D world rig wielded-children attach.
+        if let Some(new_wielder_guid) = attached_new_wielder {
+            events.push(WorldEvent::EntityAttached {
+                entity_guid: u32::from(target_guid),
+                new_wielder_guid,
             });
         }
 

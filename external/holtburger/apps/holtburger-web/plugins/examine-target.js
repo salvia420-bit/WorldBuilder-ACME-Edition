@@ -510,11 +510,38 @@ function renderEntityPaperdoll(wrapEl, guid) {
   // ~284px usable interior (300 minus left/right body padding).
   const viewport = new PaperdollViewport({ width: 224, height: 178 });
   wrapEl.appendChild(viewport.dom);
+  // Pull the examined entity's wielded items and thread them into
+  // loadPlayer so the examine popover shows held weapons (not just
+  // armor). Same wasm + meta-source contract as the local player path
+  // in plugins/inventory.js::refreshPaperdollViewport.
+  const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+  let wieldedItems = [];
+  if (handle && typeof handle.entityWieldedItems === "function") {
+    try {
+      const raw = handle.entityWieldedItems(g) || [];
+      for (const w of raw) {
+        if (((w.equipMask >>> 0) & 0x3700000) === 0) continue;
+        const childInst = em?.entityMap?.get?.(w.guid >>> 0);
+        if (!childInst?.meta) continue;
+        wieldedItems.push({
+          itemGuid: w.guid >>> 0,
+          parentLocation: (typeof w.parentLocation === "number")
+            ? (w.parentLocation >>> 0) : 0,
+          placement: (typeof w.placement === "number")
+            ? (w.placement >>> 0) : 0,
+          meta: childInst.meta,
+        });
+      }
+    } catch (_) { wieldedItems = []; }
+  }
+  const stanceLow = 0; // examined entity's stance is not surfaced; 0 = idle pose
   viewport.loadPlayer(
     setupId,
     (meta.mtableId ?? 0) >>> 0,
     (meta.paletteId ?? 0) >>> 0,
     meta.subPalettes ?? new Uint32Array(0),
+    wieldedItems,
+    stanceLow,
   ).catch(() => { /* loadPlayer logs internally on failure */ });
   try {
     window.__diag?.examine?.onPaperdollMounted?.({

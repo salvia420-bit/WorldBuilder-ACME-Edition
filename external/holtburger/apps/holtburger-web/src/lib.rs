@@ -15706,6 +15706,20 @@ const CLIENT_EVENT_KIND_ENTITY_DETACHED: u32 = 47;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED: u32 = 48;
 
+/// `kind = 49` — EntityAttached. Wave C / PR8 (2026-06-06): the symmetric
+/// equip signal that matches kind=47 `EntityDetached`. Fires when a
+/// previously-unwielded (or differently-wielded) entity's
+/// `PropertyInstanceId::Wielder` transitions to a non-NULL wielder. JS
+/// consumes this in `plugins/inventory.js` (paperdoll reload),
+/// `plugins/examine-target.js` (NPC paperdoll), and `scene3d/entities.js`
+/// (3D world rig wielded-children pass) to attach the weapon mesh.
+///
+/// `u32_payload` = item GUID (the entity that just got attached).
+/// `u32_payload_2` = new wielder GUID.
+/// `string_payload` = None. `f32_payload` = None.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ENTITY_ATTACHED: u32 = 49;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -17734,6 +17748,19 @@ struct WieldedWeaponEntry {
     /// `crates/holtburger-common/src/properties/property_keys/floats.rs:75`
     /// for the enum value.
     damage_mod: f32,
+    /// Wave C / PR8 (2026-06-06): `PropertyInt::Placement = 65` snapshotted
+    /// off the wielded item entity at ObjectCreate time. Carries the retail
+    /// `Placement` enum (RightHandCombat=1, RightHandNonCombat=2, LeftHand=3,
+    /// Belt=4, Quiver=5, Shield=6, LeftWeapon=7, etc.) which the JS-side
+    /// attach path uses to pick combat-grip vs idle-grip pose. `0` when the
+    /// property isn't on the entity yet.
+    placement: u32,
+    /// Wave C / PR8 (2026-06-06): `PropertyInt::ParentLocation = 52`
+    /// snapshotted at ObjectCreate time. Identifies the attach bone
+    /// (RightHand=1, LeftHand=2, Shield=3, Belt=4, Quiver=5, Mouth=7).
+    /// `0` when the property isn't on the entity yet — the JS attach
+    /// path falls back to a heuristic from equip_mask in that case.
+    parent_location: u32,
 }
 
 /// CMT Wave 2 / Phase 5 (2026-05-26): JS-facing wielded-weapon record
@@ -17773,6 +17800,13 @@ pub struct EquippedWeaponJs {
     /// ACE `BaseDamageMod.cs:52`'s `?? 1.0f` fallback). See
     /// [`WieldedWeaponEntry::damage_mod`] for the source-side comment.
     damage_mod: f32,
+    /// Wave C / PR8 (2026-06-06): `PropertyInt::Placement = 65` from the
+    /// wielded item — drives paperdoll + world-rig pose selection.
+    placement: u32,
+    /// Wave C / PR8 (2026-06-06): `PropertyInt::ParentLocation = 52`
+    /// from the wielded item — identifies the attach bone for
+    /// `scene3d/entities.js::attachChildToParent`.
+    parent_location: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -17796,6 +17830,19 @@ impl EquippedWeaponJs {
     /// CASTER / TWO_HANDED branches).
     #[wasm_bindgen(getter, js_name = equipMask)]
     pub fn equip_mask(&self) -> u32 { self.equip_mask }
+
+    /// Wave C / PR8 (2026-06-06): `PropertyInt::Placement` (65) — combat-grip
+    /// vs idle-grip pose key. Read by `scene3d/ac_paperdoll_viewport.js` and
+    /// `scene3d/entities.js::attachChildToParent`.
+    #[wasm_bindgen(getter)]
+    pub fn placement(&self) -> u32 { self.placement }
+
+    /// Wave C / PR8 (2026-06-06): `PropertyInt::ParentLocation` (52)
+    /// — attach-bone enum (RightHand=1, LeftHand=2, Shield=3, Belt=4,
+    /// Quiver=5, Mouth=7). JS calls `fetchSetupHoldingLocations(wielderSetupId)`
+    /// and indexes by this value.
+    #[wasm_bindgen(getter, js_name = parentLocation)]
+    pub fn parent_location(&self) -> u32 { self.parent_location }
 
     /// Display name (debug / tooltip).
     #[wasm_bindgen(getter)]
@@ -20883,22 +20930,35 @@ fn apply_inventory_object_create(
         .map(|v| v as f32)
         .unwrap_or(1.0);
 
-    // CMT Wave 2 / Phase 5 (2026-05-26): non-local wielder index. When
-    // ACE ships an ObjectCreate for a wielded item AND the wielder is
-    // NOT the local player, snapshot the four CMT-classifier-relevant
-    // fields into the per-wielder list. The local-player path falls
-    // through to the existing `world.player.wield_item` + inventory
-    // snapshot machinery. Index is keyed by wielder GUID so the
-    // renderer can look up "what is this drudge holding?" without
-    // scanning entities. Only items carrying an actual equip-slot bit
-    // make it in; pack/container items have `equip_mask == 0` and are
-    // skipped (this is the wielded-weapon channel, not the inventory
-    // channel — non-local entities' pack contents aren't surfaced).
+    // Wielder index. When ACE ships an ObjectCreate for a wielded item,
+    // snapshot the classifier-relevant fields into the per-wielder list.
+    // Index is keyed by wielder GUID so the renderer can look up
+    // "what is this entity holding?" without scanning entities — covers
+    // both remote wielders AND the local player so the local-player rig
+    // and paperdoll preview can attach the wielded mesh from the same
+    // surface (wielded mesh attach, 2026-06-06). Only items carrying an
+    // actual equip-slot bit make it in; pack/container items have
+    // `equip_mask == 0` and are skipped (this is the wielded-weapon
+    // channel, not the inventory channel — pack contents aren't surfaced
+    // here).
     if let Some(w_guid) = wielder_id
-        && w_guid != world.player.guid
         && !equip_mask.is_empty()
     {
         let w_u32 = u32::from(w_guid);
+        // Wave C / PR8 (2026-06-06): snapshot Placement (PropertyInt 65)
+        // and ParentLocation (PropertyInt 52) off the wielded item
+        // so the JS attach path doesn't need a second wasm round-trip per
+        // wielded item per paperdoll rebuild. Both fall through to 0 when
+        // not on the entity yet; the JS side falls back to a heuristic on
+        // equip_mask in that case.
+        let placement = entity
+            .get_int_prop(PropertyInt::Placement)
+            .map(|v| v as u32)
+            .unwrap_or(0);
+        let parent_location = entity
+            .get_int_prop(PropertyInt::ParentLocation)
+            .map(|v| v as u32)
+            .unwrap_or(0);
         let entry = WieldedWeaponEntry {
             item_guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -20908,6 +20968,8 @@ fn apply_inventory_object_create(
             attack_type,
             maximum_velocity,
             damage_mod,
+            placement,
+            parent_location,
         };
         let mut idx = wielder_index.borrow_mut();
         let list = idx.entry(w_u32).or_default();
@@ -22532,6 +22594,8 @@ impl SessionHandle {
                 attack_type: entry.attack_type,
                 maximum_velocity: entry.maximum_velocity,
                 damage_mod: entry.damage_mod,
+                placement: entry.placement,
+                parent_location: entry.parent_location,
             });
         }
         None
@@ -22571,6 +22635,8 @@ impl SessionHandle {
                     attack_type: entry.attack_type,
                     maximum_velocity: entry.maximum_velocity,
                     damage_mod: entry.damage_mod,
+                    placement: entry.placement,
+                    parent_location: entry.parent_location,
                 })
                 .collect(),
             None => Vec::new(),
@@ -28719,6 +28785,23 @@ async fn recv_loop(
                                         string_payload: None,
                                         u32_payload: Some(*entity_guid),
                                         u32_payload_2: Some(*prior_wielder_guid),
+                                        f32_payload: None,
+                                    });
+                                }
+                                // Wave C / PR8 (2026-06-06): mirror the
+                                // EntityDetached arm. JS consumers (paperdoll
+                                // reload, 3D rig wielded-children pass) listen
+                                // for kind=49 alongside kind=47.
+                                WorldEvent::EntityAttached {
+                                    entity_guid,
+                                    new_wielder_guid,
+                                } => {
+                                    inventory_changed = true;
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ENTITY_ATTACHED,
+                                        string_payload: None,
+                                        u32_payload: Some(*entity_guid),
+                                        u32_payload_2: Some(*new_wielder_guid),
                                         f32_payload: None,
                                     });
                                 }

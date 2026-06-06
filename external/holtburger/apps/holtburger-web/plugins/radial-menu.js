@@ -258,13 +258,19 @@ function buildItems(ctx) {
         label: "Equip ▸",
         children: options.map((o) => ({
           label: `Equip — ${o.name}`,
-          action: () => { try { handle.setWielded(guid, o.mask >>> 0); } catch (e) { console.warn("[ctx-menu] equip failed:", e); } },
+          action: () => {
+            try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
+            try { handle.setWielded(guid, o.mask >>> 0); } catch (e) { console.warn("[ctx-menu] equip failed:", e); }
+          },
         })),
       });
     } else if (isInPack && vl !== 0) {
       items.push({
         label: "Equip",
-        action: () => { try { handle.setWielded(guid, pickWieldSlotMaskShared(vl)); } catch (e) { console.warn("[ctx-menu] equip failed:", e); } },
+        action: () => {
+          try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
+          try { handle.setWielded(guid, pickWieldSlotMaskShared(vl)); } catch (e) { console.warn("[ctx-menu] equip failed:", e); }
+        },
       });
     }
   }
@@ -272,7 +278,17 @@ function buildItems(ctx) {
   if (isEquipped && typeof handle?.unwieldToPack === "function") {
     items.push({
       label: "Unequip",
-      action: () => { try { handle.unwieldToPack(guid); } catch (e) { console.warn("[ctx-menu] unwield failed:", e); } },
+      action: () => {
+        // Wave C / PR10 (2026-06-06): optimistic UnwieldObject sound BEFORE the
+        // wire send. Apply agent replicates the matching one-liner at the four
+        // other radial-menu action sites:
+        //   setWielded (equip) line ~261     -> 0x8C (WieldObject)
+        //   setWielded (auto)  line ~267     -> 0x8C (WieldObject)
+        //   dropItem           line ~286     -> 0x90 (DropItem)
+        //   splitStackTo3D     line ~316     -> 0x90 (DropItem)
+        try { window.__audioOptimistic?.playOptimistic?.(0x8D, guid); } catch (_) {}
+        try { handle.unwieldToPack(guid); } catch (e) { console.warn("[ctx-menu] unwield failed:", e); }
+      },
     });
   }
   // Use — for items with itemType USABLE bit or consumable items.
@@ -292,9 +308,13 @@ function buildItems(ctx) {
       action: () => {
         if (attuned) return;
         if (bonded) {
-          confirmBondedDrop(invItem.name, () => { try { handle.dropItem(guid); } catch (e) { console.warn("[ctx-menu] drop failed:", e); } });
+          confirmBondedDrop(invItem.name, () => {
+            try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
+            try { handle.dropItem(guid); } catch (e) { console.warn("[ctx-menu] drop failed:", e); }
+          });
           return;
         }
+        try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
         try { handle.dropItem(guid); } catch (e) { console.warn("[ctx-menu] drop failed:", e); }
       },
     });
@@ -319,6 +339,7 @@ function buildItems(ctx) {
       splitPrompt: { max: count - 1 },
       action: (amount) => {
         const n = Math.max(1, Math.min((amount | 0), count - 1));
+        try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
         try { handle.splitStackTo3D(guid, n); } catch (e) { console.warn("[ctx-menu] split failed:", e); }
       },
     });

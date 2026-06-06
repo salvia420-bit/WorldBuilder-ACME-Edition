@@ -56,6 +56,9 @@ import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+// Side-effect import: installs window.__audioOptimistic for the
+// optimistic inventory-action sound cues + server-echo dedupe ring.
+import "./audio_optimistic.js";
 import {
   aetheriaSlotIsLocked,
   formatBurdenText,
@@ -898,6 +901,37 @@ function ensureStyles() {
       color: var(--hb-text-gold);
       text-align: right;
     }
+
+    /* Wave C / PR9 (2026-06-06): paperdoll slot equipped-state fade +
+       magic halo + multi-state precedence + stack-count font consistency. */
+
+    .hb-inv-doll-slot.equipped { background-image: none !important; transition: background-image 200ms ease-out; }
+
+    .hb-inv-doll-slot.magic-glow::after {
+      content: ""; position: absolute; inset: -3px; border-radius: 6px;
+      pointer-events: none; box-shadow: 0 0 8px 2px rgba(80, 140, 255, 0.55);
+      animation: hb-magic-pulse 1800ms ease-in-out infinite;
+    }
+    @keyframes hb-magic-pulse {
+      0%, 100% { box-shadow: 0 0 6px 1px rgba(80, 140, 255, 0.45); }
+      50%      { box-shadow: 0 0 12px 3px rgba(120, 170, 255, 0.75); }
+    }
+
+    /* Multi-state precedence: selected beats armed beats reject beats target
+       beats hover. */
+    .hb-inv-slot.hover       { outline: 1px solid rgba(240, 216, 160, 0.35); }
+    .hb-inv-slot.drag-target { outline: 1px solid rgba(255, 200, 80, 0.7); z-index: 2; }
+    .hb-inv-slot.drag-reject { outline: 1px solid rgba(255, 128, 128, 0.85); z-index: 3; }
+    .hb-inv-slot.armed       { outline: 2px solid rgba(120, 200, 120, 0.85); z-index: 4; }
+    .hb-inv-slot.selected    { outline: 2px solid rgba(240, 216, 160, 0.95); z-index: 5; }
+
+    /* Stack-count font consistency between legacy <ul> grid + polymorphic grid */
+    .hb-inv-slot .hb-inv-stack,
+    #inv-pack li .stack {
+      font-family: "AC", "Trebuchet MS", sans-serif;
+      font-size: 11px; line-height: 12px;
+      text-shadow: 0 1px 1px rgba(0,0,0,0.85);
+    }
   `;
   document.head.appendChild(style);
 }
@@ -1090,9 +1124,24 @@ function doMount(parentEl, _ctx) {
       ev.dataTransfer.setData("application/x-hb-inv-guid", guid);
       ev.dataTransfer.setData("text/x-hb-item-guid", guid);
       ev.dataTransfer.effectAllowed = "move";
-      // Stash on overlay so the dragover dispatcher can publish it
-      // (HTML5 forbids reading dataTransfer.getData outside drop).
       overlay.dataset.draggingGuid = guid;
+      // Wave C / PR9 (2026-06-06): iconId-driven 32x32 Image ghost so
+      // the drag cursor reads as the item icon, not a styled slot box.
+      // Source: the item's iconId from the inventory snapshot routed
+      // through the existing icon cache.
+      try {
+        const item = getItemByGuid(parseInt(guid, 10) >>> 0);
+        const iconDid = (item?.iconId >>> 0) || 0;
+        if (iconDid && typeof window.__iconCache?.getUrl === "function") {
+          const url = window.__iconCache.getUrl(iconDid);
+          if (url) {
+            const img = new Image();
+            img.src = url;
+            img.width = 32; img.height = 32;
+            ev.dataTransfer.setDragImage(img, 16, 16);
+          }
+        }
+      } catch (_) {}
     });
     // Wave-D4: drop-target for pack→paperdoll wield. Allow drop only
     // when the mime is present. On enter/over highlight in brass; on
@@ -1142,6 +1191,12 @@ function doMount(parentEl, _ctx) {
       ev.preventDefault();
       ev.stopPropagation();
       const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      // Wave C / PR10 (2026-06-06): optimistic UnwieldObject sound BEFORE
+      // the wire send. The server-broadcast echo is suppressed via the
+      // recent-fire ring in plugins/audio_optimistic.js. The Apply agent
+      // applies the same pattern at the paperdoll drop site (wield = 0x8C)
+      // and the grid double-click equip site in inventory.js.
+      try { window.__audioOptimistic?.playOptimistic?.(0x8D, guid); } catch (_) {}
       if (typeof handle?.unwieldToPack === "function") {
         try { handle.unwieldToPack(guid); }
         catch (e) { console.warn("[paperdoll-dblclick] unwieldToPack failed:", e); }
@@ -1214,6 +1269,7 @@ function doMount(parentEl, _ctx) {
         try { paperdollToast("Equipping speculatively (item attributes pending).", { speculative: true }); } catch (_) {}
       }
       if (handle?.setWielded) {
+        try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
         try { handle.setWielded(guid, s.equipMask >>> 0); }
         catch (e) { console.warn("[paperdoll] setWielded failed:", e); }
       } else if (handle?.wieldFromPack) {
@@ -1502,10 +1558,24 @@ function doMount(parentEl, _ctx) {
       slot.draggable = true;
       slot.addEventListener("dragstart", (ev) => {
         ev.dataTransfer.setData("application/x-hb-inv-guid", slot.dataset.guid);
-        // Mirror the legacy <ul>'s second MIME so vendor-ui sell-zone
-        // accepts drags from the polymorphic overlay too.
         ev.dataTransfer.setData("text/x-hb-item-guid", slot.dataset.guid);
         ev.dataTransfer.effectAllowed = "move";
+        // Wave C / PR9 (2026-06-06): iconId-driven Image ghost (matches
+        // the paperdoll-slot pattern). Replaces the prior DOM-element
+        // ghost at line 1650 which read as a styled slot box.
+        try {
+          const item = getItemByGuid(parseInt(slot.dataset.guid, 10) >>> 0);
+          const iconDid = (item?.iconId >>> 0) || 0;
+          if (iconDid && typeof window.__iconCache?.getUrl === "function") {
+            const url = window.__iconCache.getUrl(iconDid);
+            if (url) {
+              const img = new Image();
+              img.src = url;
+              img.width = 32; img.height = 32;
+              ev.dataTransfer.setDragImage(img, 16, 16);
+            }
+          }
+        } catch (_) {}
       });
     }
     // === Wave 5.C — tradeskill drag-end hook (2026-05-28) ===
@@ -1584,6 +1654,7 @@ function doMount(parentEl, _ctx) {
             try { srcLi.classList.add("reject"); setTimeout(() => srcLi.classList.remove("reject"), 250); } catch (_) {}
             return;
           }
+          try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
           try { handle.setWielded(guid, mask >>> 0); }
           catch (e) { console.warn("[inv-click] setWielded failed:", e); }
           return;
@@ -1646,15 +1717,11 @@ function doMount(parentEl, _ctx) {
         } catch (e) { console.warn("[inv-click] context menu failed:", e); }
       }
     });
-    // setDragImage at 16,16 → retail ghost feel. Use the slot's own icon.
-    slot.addEventListener("dragstart", (ev) => {
-      try {
-        const icon = slot.querySelector(".hb-inv-icon");
-        if (icon && ev.dataTransfer?.setDragImage) {
-          ev.dataTransfer.setDragImage(icon, 16, 16);
-        }
-      } catch (_) {}
-    });
+    // Wave C / PR9 (2026-06-06): Image-ghost path moved into the primary
+    // dragstart above. Browsers honor the LAST setDragImage in the
+    // dragstart event chain, so leaving this as a no-op preserves the
+    // primary handler's iconId-driven ghost.
+    // (intentionally empty — primary dragstart owns the ghost)
     return slot;
   }
 
@@ -1918,11 +1985,41 @@ function doMount(parentEl, _ctx) {
       if (!meta) return;
       const setupId = (meta.modelId ?? meta.setupId ?? 0) >>> 0;
       if (setupId === 0) return;
+      // Wave C / PR8 (2026-06-06): collect wielded-item descriptors so
+      // the paperdoll renders weapons in-hand. Source of truth is the
+      // wasm wielder_index (entityWieldedItems(playerGuid)); per-item
+      // meta (setupId/mtableId/paletteId/subPalettes) comes from the
+      // entity's own spawn meta in entityMap (populated by ObjectCreate).
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      let wieldedItems = [];
+      if (handle && typeof handle.entityWieldedItems === "function") {
+        try {
+          const raw = handle.entityWieldedItems(lpg) || [];
+          for (const w of raw) {
+            // Held items only (Selectable mask) — armor/ammo ride ObjDesc.
+            if (((w.equipMask >>> 0) & 0x3700000) === 0) continue;
+            const childInst = em?.entityMap?.get?.(w.guid >>> 0);
+            if (!childInst?.meta) continue;
+            wieldedItems.push({
+              itemGuid: w.guid >>> 0,
+              parentLocation: (typeof w.parentLocation === "number")
+                ? (w.parentLocation >>> 0) : 0,
+              placement: (typeof w.placement === "number")
+                ? (w.placement >>> 0) : 0,
+              meta: childInst.meta,
+            });
+          }
+        } catch (_) { wieldedItems = []; }
+      }
+      const stanceLow = (typeof window.__getCurrentStanceLow === "function")
+        ? (window.__getCurrentStanceLow() >>> 0) : 0;
       paperdollViewport.loadPlayer(
         setupId,
         (meta.mtableId ?? 0) >>> 0,
         (meta.paletteId ?? 0) >>> 0,
         meta.subPalettes ?? new Uint32Array(0),
+        wieldedItems,
+        stanceLow,
       ).then((ok) => {
         // 2026-05-29 — loadPlayer's "single render" can hit an empty
         // back-buffer when the panel was display:none at load time
@@ -2202,6 +2299,7 @@ function doMount(parentEl, _ctx) {
     if (!guid) return;
     const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
     if (handle?.dropItem) {
+      try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
       try { handle.dropItem(guid); }
       catch (e) { console.warn("[paperdoll] dropItem failed:", e); }
     }
@@ -2233,6 +2331,37 @@ function doMount(parentEl, _ctx) {
     }
   } catch (_) { /* bus may not be initialized yet */ }
 
+  // Wave C / PR8 (2026-06-06): rebuild the paperdoll when the wielder
+  // state changes (kind=47 EntityDetached / kind=49 EntityAttached).
+  // Coalesced via rAF so dual-wield swaps + bulk equip cause ONE
+  // rebuild() per tick instead of N. The MutationObserver-driven
+  // rebuild() already covers kind=11 inventory deltas; this hook adds
+  // the wielder-property channel.
+  let wieldedRebuildScheduled = false;
+  function scheduleWieldedRebuild() {
+    if (wieldedRebuildScheduled) return;
+    wieldedRebuildScheduled = true;
+    requestAnimationFrame(() => {
+      wieldedRebuildScheduled = false;
+      try { rebuild(); } catch (_) {}
+    });
+  }
+  let unsubscribeAttach = null;
+  let unsubscribeDetach = null;
+  try {
+    const client = window.__pluginClient;
+    if (client?.events?.on) {
+      client.events.on("kind:47", scheduleWieldedRebuild);
+      client.events.on("kind:49", scheduleWieldedRebuild);
+      unsubscribeAttach = () => {
+        try { client.events.off?.("kind:49", scheduleWieldedRebuild); } catch (_) {}
+      };
+      unsubscribeDetach = () => {
+        try { client.events.off?.("kind:47", scheduleWieldedRebuild); } catch (_) {}
+      };
+    }
+  } catch (_) { /* bus may not be initialized yet */ }
+
   return () => {
     window.removeEventListener("keydown", onKey);
     delete window.__isInventoryItem;
@@ -2243,6 +2372,8 @@ function doMount(parentEl, _ctx) {
       canvasEl.removeEventListener("drop", onCanvasDrop);
     }
     if (unsubscribeStats) unsubscribeStats();
+    if (unsubscribeAttach) unsubscribeAttach();
+    if (unsubscribeDetach) unsubscribeDetach();
     for (const o of observers) o.disconnect();
     // Wave 14 — release the WebGL context. Chrome caps live contexts
     // around 16; without this the inventory view can leak a context

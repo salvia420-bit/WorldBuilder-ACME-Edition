@@ -1053,11 +1053,24 @@ function doMount(parentEl, ctx) {
     row.title = `${meta.name} — ${meta.untargeted ? "self-cast" : "targeted"}, ${meta.mana} mana, lvl ${meta.level}`;
     row.addEventListener("dragstart", (ev) => {
       // Phase H.5 — drag spell to populate a combat-bar slot.
-      // dataTransfer carries the spell ID; combat-bar's row handlers
-      // read it from "application/x-hb-spell-id".
       ev.dataTransfer.effectAllowed = "copy";
       ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
       ev.dataTransfer.setData("text/plain", meta.name);
+      // Wave C / PR9 (2026-06-06): iconId-driven Image ghost so the drag
+      // cursor reads as the spell icon. Source: meta.iconId routed
+      // through the icon cache (already used by spellbook row render).
+      try {
+        const iconDid = (meta?.iconId >>> 0) || 0;
+        if (iconDid && typeof window.__iconCache?.getUrl === "function") {
+          const url = window.__iconCache.getUrl(iconDid);
+          if (url) {
+            const img = new Image();
+            img.src = url;
+            img.width = 32; img.height = 32;
+            ev.dataTransfer.setDragImage(img, 16, 16);
+          }
+        }
+      } catch (_) {}
     });
 
     const name = document.createElement("span");

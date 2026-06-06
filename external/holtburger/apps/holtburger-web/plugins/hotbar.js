@@ -190,6 +190,35 @@ function ensureStyles() {
       pointer-events: none;
       line-height: 1;
     }
+
+    /* Wave C / PR10 (2026-06-06): hotbar slot click-feedback pulse + flag-
+       gated radial cooldown overlay. */
+    #${OVERLAY_ID} .hb-hotbar-slot.firing {
+      transform: scale(1.1); filter: brightness(1.4);
+      transition: transform 50ms ease-out, filter 50ms ease-out;
+    }
+    #${OVERLAY_ID} .hb-hotbar-slot:not(.firing) {
+      transition: transform 90ms ease-out, filter 90ms ease-out;
+    }
+
+    /* Cooldown overlay — gated behind localStorage hb-hotbar.cooldown-preview.
+       TODO(PR10-followup): wire a server cooldown-update event so this can
+       fire unconditionally. Today there's no ACE event that surfaces
+       item.NextSpellCastTimestamp to the client, so the overlay is flag-only
+       and the JS that toggles .cooldown-active is a follow-on. */
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background: rgba(0,0,0,0.55);
+      clip-path: polygon(50% 0, 100% 0, 100% 100%, 0 100%, 0 0, 50% 0);
+      animation: hb-hotbar-cd 2500ms linear forwards;
+    }
+    @keyframes hb-hotbar-cd {
+      0%   { clip-path: polygon(50% 50%, 50% 0, 100% 0, 100% 100%, 0 100%, 0 0, 50% 0); }
+      25%  { clip-path: polygon(50% 50%, 100% 50%, 100% 100%, 0 100%, 0 0, 50% 0); }
+      50%  { clip-path: polygon(50% 50%, 50% 100%, 0 100%, 0 0, 50% 0); }
+      75%  { clip-path: polygon(50% 50%, 0 50%, 0 0, 50% 0); }
+      100% { clip-path: polygon(50% 50%, 50% 0); }
+    }
   `;
   document.head.appendChild(style);
 }
@@ -692,11 +721,32 @@ export function mount(ctx) {
       ev.dataTransfer.effectAllowed = "move";
       el._dragging = true;
       lastDragTs = Date.now();
+      // Wave C / PR9 (2026-06-06): iconId-driven Image ghost. The hotbar
+      // slot's .hb-hotbar-icon child carries the background-image url;
+      // pull it through a new Image so the ghost reads as a 32x32
+      // sprite instead of the full slot DOM.
+      try {
+        const iconEl = el.querySelector?.(".hb-hotbar-icon");
+        const bg = iconEl ? getComputedStyle(iconEl).backgroundImage : "";
+        const m = bg && bg !== "none" ? /url\(["']?([^"')]+)["']?\)/.exec(bg) : null;
+        if (m && m[1]) {
+          const img = new Image();
+          img.src = m[1];
+          img.width = 32; img.height = 32;
+          ev.dataTransfer.setDragImage(img, 16, 16);
+        }
+      } catch (_) {}
     });
     el.addEventListener("dragend", () => {
       // 50ms post-dragend so the synthetic click that follows is suppressed.
       setTimeout(() => { el._dragging = false; }, 50);
     });
+    // Wave C / PR10 (2026-06-06): retail click-feedback pulse. The .firing
+    // class triggers a 50ms scale 1.1 + brightness 1.4 then snaps back.
+    el.addEventListener("click", () => {
+      el.classList.add("firing");
+      setTimeout(() => el.classList.remove("firing"), 90);
+    }, true);
     el.addEventListener("dragenter", (ev) => {
       if (dragHasAcceptedType(ev.dataTransfer?.types)) {
         ev.preventDefault();

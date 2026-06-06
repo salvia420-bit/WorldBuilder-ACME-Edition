@@ -94,6 +94,15 @@ export class PaperdollViewport {
     // Stash of last-loaded params so callers can skip redundant reloads
     // when no substitution has actually changed.
     this._lastLoadKey = null;
+    // Wave C / PR8 (2026-06-06): race-cancel token for loadPlayer.
+    // Each loadPlayer call increments this; awaiting paths bail out
+    // when their captured token != current so a late wieldedItems
+    // animationCache.get can't clobber a newer reload.
+    this._inflightLoadToken = 0;
+    // Wave C / PR8 (2026-06-06): wielder-side holding-location cache,
+    // keyed by wielder setupId. Mirrors `entities.js::_holdingLocCache`
+    // pattern; populated lazily inside loadPlayer's wielded pass.
+    this._holdingLocCache = new Map();
   }
 
   /** Returns the canvas element — caller appends to its container. */
@@ -103,11 +112,22 @@ export class PaperdollViewport {
    * Build a stable key for the (setupId, mtableId, paletteId, subPalettes)
    * tuple so callers can debounce no-op reloads.
    */
-  _loadKey(setupId, mtableId, paletteId, subPalettes) {
+  _loadKey(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow) {
     const sp = subPalettes
       ? Array.from(subPalettes).join(",")
       : "";
-    return `${setupId >>> 0}:${mtableId >>> 0}:${paletteId >>> 0}:${sp}`;
+    // Wave C / PR8 (2026-06-06): include wielded tuple + stance so equip
+    // deltas + combat-mode toggle hot-swap the cached rig instead of
+    // no-op'ing on the body-only key.
+    let wt = "";
+    if (Array.isArray(wieldedItems) && wieldedItems.length > 0) {
+      const sorted = wieldedItems
+        .slice()
+        .sort((a, b) => (a?.itemGuid >>> 0) - (b?.itemGuid >>> 0))
+        .map((w) => `${(w?.itemGuid >>> 0)}-${(w?.parentLocation >>> 0)}-${(w?.placement >>> 0)}`);
+      wt = sorted.join(";");
+    }
+    return `${setupId >>> 0}:${mtableId >>> 0}:${paletteId >>> 0}:${sp}|w=${wt}|s=${(stanceLow >>> 0)}`;
   }
 
   /**
@@ -127,11 +147,27 @@ export class PaperdollViewport {
    *                                    applyAppearance code path).
    * @returns {Promise<boolean>}
    */
-  async loadPlayer(setupId, mtableId, paletteId, subPalettes) {
+  /**
+   * Wave C / PR8 (2026-06-06): extended signature.
+   *
+   * @param {Array<{itemGuid:number, parentLocation:number, placement:number,
+   *   meta?:{setupId?:number, mtableId?:number, paletteId?:number,
+   *   subPalettes?:Uint32Array}}>} [wieldedItems] — items to attach
+   *   onto the rig (sword, wand, shield). Armor/ammo (equip_mask &
+   *   0x3700000 == 0) is rendered via the body rig's ObjDesc path
+   *   and must NOT be passed here.
+   * @param {number} [stanceLow] — `window.__getCurrentStanceLow()`
+   *   result. Currently informational; future pose-driven rendering
+   *   may key off this. Caching uses it so a combat-mode toggle
+   *   forces a re-render.
+   */
+  async loadPlayer(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow) {
     if (this._disposed) return false;
     if (!setupId) return false;
-    const key = this._loadKey(setupId, mtableId, paletteId, subPalettes);
+    const key = this._loadKey(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow);
     if (key === this._lastLoadKey) return true;
+    // Wave C / PR8 — race-cancel token captured at entry.
+    const token = ++this._inflightLoadToken;
 
     const em = window.liveScene3d?.entityManager;
     if (!em?.animationCache?.get) return false;
@@ -236,16 +272,129 @@ export class PaperdollViewport {
 
     // Compute bounds in post-rotation world space once the whole rig is
     // assembled. setFromObject walks updateMatrixWorld() internally.
+    //
+    // Wave C / PR8 (2026-06-06): bounds are captured BEFORE attaching
+    // wielded children so camera framing stays anchored on the body
+    // silhouette. A held two-hander pushes the unbiased bounds out by
+    // ~1m and would shrink the doll's apparent size; retail's
+    // gmPaperDollUI frames on the body and lets the weapon overflow.
     this.rigRoot.updateMatrixWorld(true);
     const bounds = new THREE.Box3().setFromObject(this.rigRoot);
 
     this._frameRig(bounds);
+
+    // Wave C / PR8 (2026-06-06): wielded-children pass. For each wielded
+    // item, build a child rig from its meta and parent it under the
+    // wielder part identified by the SetupModel's holding-location
+    // table at the ParentLocation enum value. Race-cancel on token
+    // mismatch so a late await can't land into a newer reload.
+    if (Array.isArray(wieldedItems) && wieldedItems.length > 0) {
+      try {
+        await this._attachWieldedChildren(
+          setupId >>> 0, wieldedItems, token,
+        );
+      } catch (_) { /* best-effort */ }
+      if (token !== this._inflightLoadToken) return false;
+    }
+
     this._lastLoadKey = key;
     // Single render — no rAF loop needed for a static doll. start()
-    // remains available for callers that want continuous re-render
-    // (e.g. for future moving paperdoll hooks).
+    // remains available for callers that want continuous re-render.
     try { this.renderer.render(this.scene, this.camera); } catch (_) {}
     return true;
+  }
+
+  /**
+   * Wave C / PR8 (2026-06-06): build a child rig for each wielded item
+   * and parent it under the wielder part identified by ParentLocation.
+   * Mirrors `scene3d/entities.js::attachChildToParent` but for the
+   * paperdoll's static rig (no animation, no _attachedChildren tracking).
+   */
+  async _attachWieldedChildren(wielderSetupId, wieldedItems, token) {
+    const em = window.liveScene3d?.entityManager;
+    if (!em?.animationCache?.get) return;
+    const fetchKeyframes = em.wasmExports?.fetchEntityAnimationKeyframes;
+    if (typeof fetchKeyframes !== "function") return;
+    const fetchHL = em.wasmExports?.fetchSetupHoldingLocations;
+    let locTable = this._holdingLocCache.get(wielderSetupId);
+    if (!locTable && typeof fetchHL === "function") {
+      try {
+        const bundle = await fetchHL(wielderSetupId);
+        if (token !== this._inflightLoadToken) return;
+        locTable = new Map();
+        const locs = bundle?.takeLocations ? bundle.takeLocations() : [];
+        for (const e of (locs ?? [])) {
+          locTable.set((e.locationKey >>> 0), {
+            partId: e.partId | 0,
+            ox: +e.ox, oy: +e.oy, oz: +e.oz,
+            qw: +e.qw, qx: +e.qx, qy: +e.qy, qz: +e.qz,
+          });
+        }
+        this._holdingLocCache.set(wielderSetupId, locTable);
+      } catch (_) { /* fall through */ }
+    }
+    // Only items with the "Selectable" mask (equipMask & 0x3700000) — held
+    // weapons / shields. Armor/clothing/ammo (equipMask without held bits)
+    // are rendered via the body rig's ObjDesc path; attaching them here
+    // would double-render. The caller already filters this; this is a
+    // defense-in-depth guard.
+    for (const w of wieldedItems) {
+      if (!w || !w.meta) continue;
+      const childSetup = (w.meta.setupId ?? w.meta.modelId ?? 0) >>> 0;
+      if (childSetup === 0) continue;
+      let childEntry = null;
+      try {
+        childEntry = await em.animationCache.get(
+          childSetup, (w.meta.mtableId ?? 0) >>> 0, 0, 0, fetchKeyframes,
+          {
+            modelChanges: new Uint32Array(0),
+            textureChanges: new Uint32Array(0),
+            paletteId: (w.meta.paletteId ?? 0) >>> 0,
+            paletteSubsFlat: w.meta.subPalettes ?? new Uint32Array(0),
+          },
+        );
+      } catch (_) { continue; }
+      if (token !== this._inflightLoadToken) return;
+      if (!childEntry || !Array.isArray(childEntry.partGroups)) continue;
+      const childRoot = new THREE.Group();
+      childRoot.name = `paperdoll-wielded-${(w.itemGuid >>> 0)}`;
+      for (let p = 0; p < childEntry.partGroups.length; p += 1) {
+        const pg = childEntry.partGroups[p];
+        if (!pg) continue;
+        const partGroup = new THREE.Group();
+        if (childEntry.restOrigins && childEntry.restOrigins.length >= (p + 1) * 3) {
+          partGroup.position.set(
+            childEntry.restOrigins[p*3+0],
+            childEntry.restOrigins[p*3+1],
+            childEntry.restOrigins[p*3+2],
+          );
+        }
+        if (childEntry.restOrientations && childEntry.restOrientations.length >= (p + 1) * 4) {
+          const rq = childEntry.restOrientations;
+          partGroup.quaternion.set(rq[p*4+1], rq[p*4+2], rq[p*4+3], rq[p*4+0]);
+        }
+        for (const grp of (pg.groups ?? [])) {
+          const did = grp.surfaceDid >>> 0;
+          const mat = em.materialCache?.getCached?.(did) ?? this._fallbackMaterial();
+          partGroup.add(new THREE.Mesh(grp.geometry, mat));
+        }
+        childRoot.add(partGroup);
+      }
+      // Mount on wielder part per ParentLocation.
+      const loc = locTable?.get((w.parentLocation >>> 0));
+      const wielderParts = this.rigRoot.children;
+      let mount = this.rigRoot;
+      if (loc && loc.partId >= 0 && loc.partId < wielderParts.length) {
+        mount = wielderParts[loc.partId];
+      }
+      if (loc) {
+        childRoot.position.set(loc.ox, loc.oy, loc.oz);
+        // AC quat order (qw, qx, qy, qz) -> three (qx, qy, qz, qw).
+        childRoot.quaternion.set(loc.qx, loc.qy, loc.qz, loc.qw);
+      }
+      mount.add(childRoot);
+    }
+    this.rigRoot.updateMatrixWorld(true);
   }
 
   /**

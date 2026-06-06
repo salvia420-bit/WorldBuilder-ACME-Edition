@@ -2912,9 +2912,17 @@ export class EntityManager {
   }
 
   /**
-   * Detach a previously-attached child: unparent back to entitiesGroup and
-   * hide (the item is leaving view — ACE typically ObjectDeletes it next).
-   * Idempotent; safe for unknown / already-detached guids.
+   * Detach a previously-attached child: unparent back to entitiesGroup.
+   * Wave C / PR8 (2026-06-06): no longer sets visibility=false. The prior
+   * behavior was correct for the unequip-to-pack case (ACE ObjectDeletes
+   * the item right after, and dispose() runs from the normal despawn
+   * path), but it broke the drop-to-ground case — ACE follows up with a
+   * new SetPosition + ObjectCreate that re-uses the same GUID and
+   * expects the mesh to stay visible at the new world position. Letting
+   * visibility default to true (matches the spawn-time state) is
+   * correct for both flows: dispose() removes the entity entirely when
+   * an ObjectDelete arrives, and SetPosition keeps the mesh visible at
+   * the new position. Idempotent; safe for unknown / already-detached.
    */
   _detachChild(childGuid) {
     const cGuid = childGuid >>> 0;
@@ -2928,7 +2936,9 @@ export class EntityManager {
     }
     if (c.root.parent) c.root.parent.remove(c.root);
     if (this.scene3d?.entitiesGroup) this.scene3d.entitiesGroup.add(c.root);
-    c.root.visible = false;
+    // visibility intentionally left at its current value (true) so ground-
+    // drops render the item at its new position. ObjectDelete reaches the
+    // normal despawn path that fully removes the entity.
     c._attachedParentGuid = null;
   }
 

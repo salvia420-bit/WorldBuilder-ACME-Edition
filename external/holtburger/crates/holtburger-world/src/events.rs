@@ -249,6 +249,18 @@ pub enum WorldEvent {
         entity_guid: u32,
         prior_wielder_guid: u32,
     },
+    /// Wave C / PR8 (2026-06-06): a wielded entity's
+    /// `PropertyInstanceId::Wielder` transitioned from NULL (or a
+    /// different wielder) to a non-NULL wielder. Emitted by
+    /// `state::mutations::apply_instance_id_side_effect` when it
+    /// observes the transition. `new_wielder_guid` is the wielder GUID
+    /// the item was just bound to. JS consumes this as ClientEvent
+    /// kind=49 to drive PaperdollViewport + the 3D world rig wielded-
+    /// children attach pass without re-scanning property state.
+    EntityAttached {
+        entity_guid: u32,
+        new_wielder_guid: u32,
+    },
     /// Wave A / PR1 (2026-06-06): server-confirmed inventory-action
     /// rejection. Surfaces a `WeenieError` whose context is an
     /// inventory mutation (move / split / merge / wield). PR13 will

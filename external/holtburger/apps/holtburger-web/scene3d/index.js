@@ -1814,6 +1814,75 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // the 2D drainEvents off the 3D path; for now we coexist via the
   // hook.
   const entityManager = new EntityManager(scene3dForBuilders, wasmExports);
+
+  // Wielded-children pass for the local player rig in the world scene
+  // + ALL remote players. The recv loop emits kind=47 EntityDetached
+  // and kind=49 EntityAttached for every Wielder property transition;
+  // we coalesce these per rAF so a bulk equip/dual-wield swap causes
+  // ONE attach batch instead of N. The actual attach path lives in
+  // EntityManager.attachChildToParent (also used by remote ParentEvent
+  // 0xF749 flow); this hook drives it from the property-delta side.
+  // Local player and remote players use the same code path.
+  let wieldedDirty = new Set();
+  let wieldedFlushRaf = 0;
+  function flushWieldedDirty() {
+    wieldedFlushRaf = 0;
+    const handle = window.__sessionHandle;
+    if (!handle || typeof handle.entityWieldedItems !== "function") return;
+    const pending = wieldedDirty;
+    wieldedDirty = new Set();
+    for (const wielderGuid of pending) {
+      let items;
+      try { items = handle.entityWieldedItems(wielderGuid >>> 0); }
+      catch (_) { continue; }
+      if (!Array.isArray(items)) continue;
+      for (const it of items) {
+        const childGuid = it?.guid >>> 0;
+        if (childGuid === 0) continue;
+        // Held items only (Selectable mask) — armor/ammo go via ObjDesc.
+        if (((it.equipMask >>> 0) & 0x3700000) === 0) continue;
+        const loc = (it.parentLocation >>> 0) || 0;
+        const place = (it.placement >>> 0) || 0;
+        try {
+          entityManager.attachChildToParent(childGuid, wielderGuid >>> 0, loc, place);
+        } catch (_) {}
+      }
+    }
+  }
+  function markWielderDirty(wielderGuid) {
+    if (!wielderGuid) return;
+    wieldedDirty.add(wielderGuid >>> 0);
+    if (wieldedFlushRaf === 0) {
+      wieldedFlushRaf = requestAnimationFrame(flushWieldedDirty);
+    }
+  }
+  try {
+    const client = window.__pluginClient;
+    if (client?.events?.on) {
+      client.events.on("kind:49", (evt) => {
+        // u32_payload_2 = new wielder guid; that's the rig that needs a
+        // re-sync of its attached children.
+        const w = (evt?.u32_payload_2 >>> 0) || 0;
+        markWielderDirty(w);
+      });
+      client.events.on("kind:47", (evt) => {
+        // Prior wielder needs its attached-children set re-synced too
+        // (one of its kids just left). attachChildToParent reconciles
+        // by diffing entityWieldedItems against _attachedChildren.
+        const w = (evt?.u32_payload_2 >>> 0) || 0;
+        markWielderDirty(w);
+        // Also instruct the detach side immediately so the mesh
+        // unparents from the wielder's hand even before the rAF
+        // coalesce runs.
+        const child = (evt?.u32_payload >>> 0) || 0;
+        if (child) {
+          try { entityManager.attachChildToParent(child, 0, 0, 0); }
+          catch (_) {}
+        }
+      });
+    }
+  } catch (_) { /* event bus may not be initialized yet */ }
+
   scene3dForBuilders.entityManager = entityManager;
 
   // Phase 7.5 — camera switcher. Owns the WASD + mouse-look listeners,
@@ -3237,6 +3306,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         //   await window.__synthGameMessageSound(guid, 0x51);  // scale=1
         window.__synthGameMessageSound = async (guid, soundEnum, scale) => {
           const safeScale = (typeof scale === "number" && scale > 0) ? +scale : 1.0;
+          // Wave C / PR10 (2026-06-06): symmetric echo-suppress for the
+          // synthetic-injection path so validator probes exercise the
+          // same recent-fire ring check as the live kind=16 consumer.
+          // No-op when audio_optimistic.js hasn't been imported yet.
+          try {
+            if (window.__audioOptimistic?.shouldSuppressEcho?.((soundEnum >>> 0), (guid >>> 0))) {
+              return { ok: false, reason: "suppressed_by_optimistic_ring", guid: (guid >>> 0), soundEnum: (soundEnum >>> 0) };
+            }
+          } catch (_) {}
           const result = {
             ok: false,
             reason: null,

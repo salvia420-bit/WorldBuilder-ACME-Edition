@@ -1083,7 +1083,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=wave-a-20260606";
+      } from "./pkg/holtburger_web.js?v=wave-c-20260606";
 
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
@@ -6991,6 +6991,21 @@ void main() {
             ev.dataTransfer.setData("text/x-hb-item-guid", String(guid));
             ev.dataTransfer.setData("text/plain", name);
             ev.dataTransfer.effectAllowed = "copy";
+            // Wave C / PR9 (2026-06-06): iconId-driven Image ghost. The
+            // legacy <ul>'s <li> rendering stashes the iconId on a child
+            // .icon element's background-image; pull it through a new
+            // Image so the ghost matches the polymorphic-grid path.
+            try {
+              const iconEl = li.querySelector(".icon");
+              const bg = iconEl ? getComputedStyle(iconEl).backgroundImage : "";
+              const m = bg && bg !== "none" ? /url\(["']?([^"')]+)["']?\)/.exec(bg) : null;
+              if (m && m[1]) {
+                const img = new Image();
+                img.src = m[1];
+                img.width = 32; img.height = 32;
+                ev.dataTransfer.setDragImage(img, 16, 16);
+              }
+            } catch (_) {}
           });
         }
       }
@@ -9652,6 +9667,18 @@ void main() {
                             },
                           });
                         }
+                        // Wave C / PR10 (2026-06-06): suppress the
+                        // server-broadcast echo when the same
+                        // (soundEnum, itemGuid) was fired optimistically
+                        // by audio_optimistic.js within the last 300ms.
+                        // The ring entry is consumed on the suppress
+                        // check so a second genuine fire still plays.
+                        try {
+                          if (window.__audioOptimistic?.shouldSuppressEcho?.(sndEnum, sndGuid)) {
+                            stats.suppressedEchoes = (stats.suppressedEchoes | 0) + 1;
+                            return Promise.resolve();
+                          }
+                        } catch (_) {}
                         return audioMgr.play(
                           entry.waveDid,
                           { x: pos.x, y: pos.y, z: pos.z },
