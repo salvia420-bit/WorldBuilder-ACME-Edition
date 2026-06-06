@@ -1231,16 +1231,28 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         em.setVelocity(_velScratch);
       } else if (kind === KIND_MOTION) {
         const motionGuid = upd.guid >>> 0;
-        const motionCmd = (upd.motionCommand ?? 0) >>> 0;
-        // A1 (2026-05-29): forward the server's per-motion playback speed
-        // (UpdateMotion.forward_speed) so EntityManager.setMotion scales the
-        // animation framerate. Defaults to 1.0 (no scaling) when absent.
-        em.setMotion(
-          motionGuid,
-          motionCmd,
-          (upd.motionStance ?? 0) >>> 0,
-          +(upd.motionSpeed ?? 1.0)
-        );
+        // DIM10/A-2 (2026-06-05): the local player's gait is client-predicted —
+        // W3.1 fires setMotion on keystate (index.html ~10207). Re-dispatching
+        // the server's UpdateMotion echo to the local rig FIGHTS that predictor:
+        // the echoed command can differ from the prediction (server's skill-
+        // derived WalkForward vs the predicted RunForward, or a stance/link
+        // mismatch), so the run clip keeps crossfading and never loops cleanly
+        // ("running animation interrupts"). Retail is autonomy=2 (local owns its
+        // locomotion frames). Mirror the KIND_POSITION local-guid skip (:1211)
+        // and the 2D path's kind=5 skip (index.html ~6305). Remote entities
+        // still drive their gait from the server echo.
+        if (!isLocalPlayerGuid(motionGuid)) {
+          const motionCmd = (upd.motionCommand ?? 0) >>> 0;
+          // A1 (2026-05-29): forward the server's per-motion playback speed
+          // (UpdateMotion.forward_speed) so EntityManager.setMotion scales the
+          // animation framerate. Defaults to 1.0 (no scaling) when absent.
+          em.setMotion(
+            motionGuid,
+            motionCmd,
+            (upd.motionStance ?? 0) >>> 0,
+            +(upd.motionSpeed ?? 1.0)
+          );
+        }
         // Wave 10 Phase 10.1 (2026-05-26) — removed the
         // Fallen→setAirborne(false) coupling here. The wasm-side
         // touchdown emission now uses `kind=18
@@ -1401,14 +1413,20 @@ export function installSharedDrainHook(scene3d) {
           em.setVelocity(_velScratch);
         } else if (kind === KIND_MOTION) {
           const motionGuid = upd.guid >>> 0;
-          const motionCmd = (upd.motionCommand ?? 0) >>> 0;
-          // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
-          em.setMotion(
-            motionGuid,
-            motionCmd,
-            (upd.motionStance ?? 0) >>> 0,
-            +(upd.motionSpeed ?? 1.0)
-          );
+          // DIM10/A-2 (2026-06-05): skip the local player — its gait is
+          // client-predicted (W3.1, index.html ~10207); re-dispatching the
+          // server echo fights the predictor and breaks the run loop. See the
+          // matching block above (~:1232) for the full rationale.
+          if (!isLocalPlayerGuid(motionGuid)) {
+            const motionCmd = (upd.motionCommand ?? 0) >>> 0;
+            // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
+            em.setMotion(
+              motionGuid,
+              motionCmd,
+              (upd.motionStance ?? 0) >>> 0,
+              +(upd.motionSpeed ?? 1.0)
+            );
+          }
           // Wave 10 Phase 10.1 (2026-05-26) — removed the
           // Fallen→setAirborne(false) coupling here. See the matching
           // comment in the direct-drain path above; the local arms-up

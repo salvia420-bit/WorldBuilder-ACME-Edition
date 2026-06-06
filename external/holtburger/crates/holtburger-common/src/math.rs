@@ -209,6 +209,55 @@ impl Quaternion {
                 + v.z * (1.0 - 2.0 * (xx + yy)),
         }
     }
+
+    /// Hamilton product `self * other` (apply `other`, then `self`).
+    /// Field order is w,x,y,z throughout — same convention as the rest of
+    /// this struct and `System.Numerics.Quaternion.Multiply`. Used by the
+    /// DIM5-2 root-motion orientation accumulator
+    /// (`build_concatenated_motion_frames`) to compose per-frame pos_frame
+    /// orientations cumulatively, mirroring ACE `AFrame.cs:43-49`
+    /// (`orientation = Quaternion.Multiply(a.Ori, b.Ori)`) and melt
+    /// `MotionTable.cs:229` (`orientation *= posFrame.Orientation`).
+    pub fn multiply(self, other: Self) -> Self {
+        Self {
+            w: self.w * other.w - self.x * other.x - self.y * other.y - self.z * other.z,
+            x: self.w * other.x + self.x * other.w + self.y * other.z - self.z * other.y,
+            y: self.w * other.y - self.x * other.z + self.y * other.w + self.z * other.x,
+            z: self.w * other.z + self.x * other.y - self.y * other.x + self.z * other.w,
+        }
+    }
+
+    /// Scale to unit length. Returns `self` unchanged for a zero-magnitude
+    /// quaternion (degenerate; never produced by a unit-quat product but
+    /// guarded to avoid NaN). Mirrors melt `MotionTable.cs:230`
+    /// (`Quaternion.Normalize`) — the accumulator normalizes after each
+    /// compose so float drift over a long cycle can't denormalize the frame.
+    pub fn normalize(self) -> Self {
+        let mag = (self.w * self.w + self.x * self.x + self.y * self.y + self.z * self.z).sqrt();
+        if mag > 0.0 {
+            Self {
+                w: self.w / mag,
+                x: self.x / mag,
+                y: self.y / mag,
+                z: self.z / mag,
+            }
+        } else {
+            self
+        }
+    }
+
+    /// Conjugate (negate the vector part). For a UNIT quaternion this equals
+    /// the inverse, so it undoes a rotation — used by the DIM5-2 accumulator
+    /// to de-accumulate orientation on reverse-played (negative-framerate)
+    /// segments.
+    pub fn conjugate(self) -> Self {
+        Self {
+            w: self.w,
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, BinRead, BinWrite, PartialEq)]
@@ -838,5 +887,61 @@ mod tests {
             q.x,
             q.y
         );
+    }
+
+    // ── DIM5-2 quaternion ops (root-motion orientation accumulator) ──────────
+
+    fn quat_close(a: Quaternion, b: Quaternion, eps: f32) -> bool {
+        (a.w - b.w).abs() < eps
+            && (a.x - b.x).abs() < eps
+            && (a.y - b.y).abs() < eps
+            && (a.z - b.z).abs() < eps
+    }
+
+    /// 90° yaw about +Z (the only non-identity orientation authored in retail
+    /// root motion — gate probe 2026-06-05 confirmed all pos_frame.orientation
+    /// is pure-Z).
+    fn yaw_z(deg: f32) -> Quaternion {
+        let h = deg.to_radians() * 0.5;
+        Quaternion { w: h.cos(), x: 0.0, y: 0.0, z: h.sin() }
+    }
+
+    #[test]
+    fn quat_multiply_identity_is_noop() {
+        let q = yaw_z(37.0);
+        assert!(quat_close(Quaternion::identity().multiply(q), q, 1e-6));
+        assert!(quat_close(q.multiply(Quaternion::identity()), q, 1e-6));
+    }
+
+    #[test]
+    fn quat_multiply_composes_yaw_additively() {
+        // 30° then 60° about Z == 90° about Z.
+        let composed = yaw_z(30.0).multiply(yaw_z(60.0)).normalize();
+        assert!(quat_close(composed, yaw_z(90.0), 1e-5));
+    }
+
+    #[test]
+    fn quat_conjugate_undoes_rotation() {
+        let q = yaw_z(90.0);
+        // q * conj(q) == identity for a unit quaternion.
+        assert!(quat_close(q.multiply(q.conjugate()).normalize(), Quaternion::identity(), 1e-5));
+    }
+
+    #[test]
+    fn quat_normalize_unitizes() {
+        let q = Quaternion { w: 2.0, x: 0.0, y: 0.0, z: 0.0 };
+        let n = q.normalize();
+        assert!(quat_close(n, Quaternion::identity(), 1e-6));
+        // Zero-magnitude is returned unchanged (no NaN).
+        let z = Quaternion { w: 0.0, x: 0.0, y: 0.0, z: 0.0 };
+        assert!(quat_close(z.normalize(), z, 1e-6));
+    }
+
+    #[test]
+    fn quat_rotate_vector_yaw_90_x_to_y() {
+        // +90° about Z sends +X to +Y (right-handed).
+        let v = yaw_z(90.0).rotate_vector(Vector3::new(1.0, 0.0, 0.0));
+        assert!((v.x - 0.0).abs() < 1e-5 && (v.y - 1.0).abs() < 1e-5 && (v.z - 0.0).abs() < 1e-5,
+            "got ({:.4},{:.4},{:.4})", v.x, v.y, v.z);
     }
 }

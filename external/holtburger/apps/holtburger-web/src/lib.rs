@@ -4717,6 +4717,100 @@ mod moveto_hint_tests {
     }
 }
 
+#[cfg(test)]
+mod dim5_root_motion_tests {
+    use super::{advance_root_motion, fold_root_motion_into_parts};
+    use holtburger_common::{Quaternion, Vector3};
+    use holtburger_dat::graphics::Frame;
+
+    fn yaw_z(deg: f32) -> Quaternion {
+        let h = deg.to_radians() * 0.5;
+        Quaternion {
+            w: h.cos(),
+            x: 0.0,
+            y: 0.0,
+            z: h.sin(),
+        }
+    }
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn identity_orientation_is_plain_translation_sum() {
+        // No rotation → cumulative T is the raw running sum and R stays
+        // identity: byte-identical to the legacy translation-only path, which
+        // is why flipping DIM5_2_ROOT_ORIENT can't change any identity cycle
+        // (every reachable PLAYER cycle, per the 2026-06-05 DAT gate).
+        let mut t = [0.0f32; 3];
+        let mut r = Quaternion::identity();
+        advance_root_motion(&mut t, &mut r, Vector3::new(1.0, 0.0, 0.0), Quaternion::identity(), false);
+        advance_root_motion(&mut t, &mut r, Vector3::new(0.0, 2.0, 0.0), Quaternion::identity(), false);
+        assert!(close(t[0], 1.0) && close(t[1], 2.0) && close(t[2], 0.0), "T = {:?}", t);
+        assert!(close(r.w, 1.0) && close(r.z, 0.0));
+    }
+
+    #[test]
+    fn forward_then_yaw_curves_translation() {
+        // "move +X by 1, turn 90° about Z, move +X by 1" → L-shaped net path
+        // ending at (1,1,0) facing 180°: the 2nd delta is rotated by the
+        // orientation accumulated from the 1st step. This is the curved
+        // root-motion behaviour the legacy raw-sum got wrong (it would land at
+        // (2,0,0), a straight line).
+        let mut t = [0.0f32; 3];
+        let mut r = Quaternion::identity();
+        advance_root_motion(&mut t, &mut r, Vector3::new(1.0, 0.0, 0.0), yaw_z(90.0), false);
+        assert!(close(t[0], 1.0) && close(t[1], 0.0), "after step1 T={:?}", t);
+        advance_root_motion(&mut t, &mut r, Vector3::new(1.0, 0.0, 0.0), yaw_z(90.0), false);
+        assert!(close(t[0], 1.0) && close(t[1], 1.0) && close(t[2], 0.0), "after step2 T={:?}", t);
+        // R = yaw(180): w=cos90=0, |z|=sin90=1.
+        assert!(close(r.w, 0.0) && close(r.z.abs(), 1.0), "R=({},{},{},{})", r.w, r.x, r.y, r.z);
+    }
+
+    #[test]
+    fn reverse_identity_orientation_matches_legacy_negation() {
+        // The only reachable reverse case (player reverse cycles carry identity
+        // orientation): subtract the raw delta, R stays identity — identical to
+        // the legacy `accum -= o` path, so reverse locomotion is unchanged.
+        let mut t = [0.0f32; 3];
+        let mut r = Quaternion::identity();
+        advance_root_motion(&mut t, &mut r, Vector3::new(1.0, 0.5, -0.2), Quaternion::identity(), true);
+        assert!(close(t[0], -1.0) && close(t[1], -0.5) && close(t[2], 0.2), "T={:?}", t);
+        assert!(close(r.w, 1.0) && close(r.z, 0.0));
+    }
+
+    #[test]
+    fn fold_identity_orientation_is_pure_translate() {
+        // r = identity → world = partLocal + t, exactly the legacy per-part
+        // `+ pos` channel. This is why the gated fold can't change identity
+        // cycles (every reachable player cycle).
+        let mut parts = vec![Frame {
+            origin: Vector3::new(2.0, 0.0, -1.0),
+            orientation: Quaternion::identity(),
+        }];
+        fold_root_motion_into_parts(&mut parts, Quaternion::identity(), [1.0, 1.0, 1.0]);
+        let f = &parts[0];
+        assert!(close(f.origin.x, 3.0) && close(f.origin.y, 1.0) && close(f.origin.z, 0.0), "origin={:?}", f.origin);
+        assert!(close(f.orientation.w, 1.0) && close(f.orientation.z, 0.0));
+    }
+
+    #[test]
+    fn fold_yaw_rotates_part_about_origin_then_translates() {
+        // r = +90° about Z, t = 0 → part at +X lands at +Y and its orientation
+        // composes the yaw (rigid-body: world = r·partLocal + t).
+        let mut parts = vec![Frame {
+            origin: Vector3::new(1.0, 0.0, 0.0),
+            orientation: Quaternion::identity(),
+        }];
+        fold_root_motion_into_parts(&mut parts, yaw_z(90.0), [0.0, 0.0, 0.0]);
+        let f = &parts[0];
+        assert!(close(f.origin.x, 0.0) && close(f.origin.y, 1.0) && close(f.origin.z, 0.0), "origin={:?}", f.origin);
+        // orientation == yaw(90): w=cos45, z=sin45.
+        assert!(close(f.orientation.w, 0.7071) && close(f.orientation.z, 0.7071),
+            "quat=({},{},{},{})", f.orientation.w, f.orientation.x, f.orientation.y, f.orientation.z);
+    }
+}
+
 /// T11 — wasm export: authored ground speed (`|MotionData.velocity|`) of a
 /// locomotion cycle, for the JS anti-ice-skating `cycleTimeScale`. JS already
 /// holds the resolved `mtableId` (it keys the AnimationCache by it), so this
@@ -4965,6 +5059,84 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
 ///
 /// Returns `(frames, frame_times_secs, total_duration_secs)` or `None` when no
 /// segment yields a usable frame (so callers keep their rest-pose fallback).
+///
+/// ## DIM5-2 root-motion ORIENTATION gate
+/// `DIM5_2_ROOT_ORIENT` (default `false`) switches root motion from the
+/// shipped translation-only channel to melt's rigid-body composition
+/// (`MotionTable.cs:225-231`): each pos_frame's translation delta is rotated
+/// by the **accumulated** orientation before summing, the orientation is
+/// accumulated as a quaternion product, and the resulting rigid frame
+/// `(R_n, T_n)` is folded directly into every part of `part_frames`
+/// (`world = R_n·partLocal + T_n`, `quat = R_n·partQuat`) — so the separate
+/// `pos` channel is zeroed (no double-translate). It is a **no-op vs. the
+/// shipped path for every identity-orientation cycle** — the 2026-06-05 DAT
+/// gate proved both player tables (0x09000001 / 0x09000202) carry zero
+/// non-identity orientation, so flipping this never changes the local player
+/// rig; the only authored orientation lives on creature cycles (pure yaw, up
+/// to 27° on MT 0x090001D5 cmd 0x0011 — the eye-test target). Kept default-off
+/// pending a 1070 creature eye-test (no GPU validation is possible code-only);
+/// the math + accumulator are host-unit-tested. See `docs/2026-06-05-anim-recon/`.
+// 2026-06-05: flipped ON for the 1070 creature eye-test (MT 0x090001D5 cmd
+// 0x0011, 27° yaw). No-op for the player rig (identity-orientation cycles);
+// only changes creature root-motion orientation. Revert to `false` if the
+// eye-test regresses.
+#[cfg(any(target_arch = "wasm32", test))]
+const DIM5_2_ROOT_ORIENT: bool = true;
+
+/// DIM5-2: advance the running root-motion frame `(T, R)` by one pos_frame,
+/// mirroring melt `MotionTable.cs:225-230` / ACE `AFrame.cs:43-49`:
+///   `T += R · origin;  R = (R · orientation).normalize()`
+/// The translation delta is rotated by the orientation accumulated through the
+/// PREVIOUS frame (so a turn part-way through a cycle curves the remaining
+/// translation), THEN the orientation composes. Reverse (negative-framerate)
+/// playback de-accumulates with the conjugate (= inverse for unit quats) and
+/// subtracts the rotated delta. Pure — host-unit-tested (`dim5_*` tests).
+#[cfg(any(target_arch = "wasm32", test))]
+fn advance_root_motion(
+    pos_accum: &mut [f32; 3],
+    ori_accum: &mut holtburger_common::Quaternion,
+    origin: holtburger_common::Vector3,
+    orientation: holtburger_common::Quaternion,
+    reverse: bool,
+) {
+    let rotated = ori_accum.rotate_vector(origin);
+    if reverse {
+        pos_accum[0] -= rotated.x;
+        pos_accum[1] -= rotated.y;
+        pos_accum[2] -= rotated.z;
+        *ori_accum = ori_accum.multiply(orientation.conjugate()).normalize();
+    } else {
+        pos_accum[0] += rotated.x;
+        pos_accum[1] += rotated.y;
+        pos_accum[2] += rotated.z;
+        *ori_accum = ori_accum.multiply(orientation).normalize();
+    }
+}
+
+/// DIM5-2: fold the cumulative rigid root-motion frame `(r, t)` into every
+/// part of one keyframe — `world = r·partLocal + t`, `quat = r·partQuat` —
+/// matching retail's whole-object Frame applied to per-part model-space
+/// transforms. With root motion baked in here, the additive `pos` channel is
+/// zeroed so JS doesn't double-translate. For identity `r` this is a pure
+/// translate (`r·v == v`), so it equals the legacy per-part `+ pos` path on
+/// every identity-orientation cycle. Pure — host-unit-tested (`dim5_*` tests).
+#[cfg(any(target_arch = "wasm32", test))]
+fn fold_root_motion_into_parts(
+    parts: &mut [holtburger_dat::graphics::Frame],
+    r: holtburger_common::Quaternion,
+    t: [f32; 3],
+) {
+    for fr in parts.iter_mut() {
+        let p = r.rotate_vector(fr.origin);
+        fr.origin.x = p.x + t[0];
+        fr.origin.y = p.y + t[1];
+        fr.origin.z = p.z + t[2];
+        fr.orientation = r.multiply(fr.orientation).normalize();
+    }
+}
+
+/// Returns `(frames, frame_times_secs, total_duration_secs)` or `None` when no
+/// segment yields a usable frame (so callers keep their rest-pose fallback).
 #[cfg(any(target_arch = "wasm32", test))]
 fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
@@ -5001,6 +5173,11 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // cumulative net displacement; `animation.js:156-161` (add-to-every-part)
     // is unchanged. No-op for idle/walk/run (pos_frames empty → zeros pushed).
     let mut pos_accum = [0.0f32; 3];
+    // 2026-06-05 [DIM5-2]: running root-motion ORIENTATION accumulator. Only
+    // touched on the `DIM5_2_ROOT_ORIENT` path; stays identity for every
+    // identity-orientation cycle (so the gated fold is a no-op there). Mirrors
+    // melt `MotionTable.cs:229` (`orientation *= posFrame.Orientation`).
+    let mut ori_accum = holtburger_common::Quaternion::identity();
 
     for anim_data in &motion_data.anims {
         let anim_did = anim_data.anim_id;
@@ -5045,35 +5222,66 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         let push_frame = |idx: usize,
                           frames: &mut Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
                           pos: &mut Vec<f32>,
-                          accum: &mut [f32; 3]| {
+                          accum: &mut [f32; 3],
+                          ori: &mut holtburger_common::Quaternion| {
             frames.push(anim.part_frames[idx].clone());
-            // 2026-06-05 [DIM5/W1.5]: accumulate this frame's origin delta into
-            // the running root-motion sum, then emit the CUMULATIVE value (per
-            // ACE Sequence.cs:383 / AFrame.cs:43-49). Reverse segments play the
-            // delta backward, so subtract (mirrors retail Frame::Subtract /
-            // negated combine on backward playback). No POS_FRAMES → zero delta,
-            // so `accum` is unchanged and we emit the carried sum (zeros for a
-            // pure idle/walk/run cycle).
-            if has_pos {
-                let o = &anim.pos_frames[idx].origin;
-                if reverse {
-                    accum[0] -= o.x;
-                    accum[1] -= o.y;
-                    accum[2] -= o.z;
-                } else {
-                    accum[0] += o.x;
-                    accum[1] += o.y;
-                    accum[2] += o.z;
+            if DIM5_2_ROOT_ORIENT {
+                // DIM5-2 (melt MotionTable.cs:225-231): rigid-body root motion.
+                // Rotate this frame's translation delta by the orientation
+                // accumulated through the PREVIOUS frame, add to T, then compose
+                // the orientation: `T += R·origin; R = (R·orientation).norm()`.
+                // Reverse (negative-framerate) playback de-accumulates with the
+                // conjugate. Then fold the rigid frame (R_n, T_n) into every
+                // part of the just-pushed keyframe (`world = R·partLocal + T`,
+                // `quat = R·partQuat`) and zero the additive `pos` channel so JS
+                // doesn't double-translate. For identity-orientation cycles this
+                // is byte-identical to the legacy path (R stays identity →
+                // R·v == v), so flipping the gate only affects creature yaw
+                // cycles. No POS_FRAMES → identity delta → carried (R, T) unchanged.
+                if has_pos {
+                    advance_root_motion(
+                        accum,
+                        ori,
+                        anim.pos_frames[idx].origin,
+                        anim.pos_frames[idx].orientation,
+                        reverse,
+                    );
                 }
+                if let Some(f) = frames.last_mut() {
+                    fold_root_motion_into_parts(&mut f.frames, *ori, *accum);
+                }
+                pos.push(0.0);
+                pos.push(0.0);
+                pos.push(0.0);
+            } else {
+                // 2026-06-05 [DIM5/W1.5]: accumulate this frame's origin delta into
+                // the running root-motion sum, then emit the CUMULATIVE value (per
+                // ACE Sequence.cs:383 / AFrame.cs:43-49). Reverse segments play the
+                // delta backward, so subtract (mirrors retail Frame::Subtract /
+                // negated combine on backward playback). No POS_FRAMES → zero delta,
+                // so `accum` is unchanged and we emit the carried sum (zeros for a
+                // pure idle/walk/run cycle).
+                if has_pos {
+                    let o = &anim.pos_frames[idx].origin;
+                    if reverse {
+                        accum[0] -= o.x;
+                        accum[1] -= o.y;
+                        accum[2] -= o.z;
+                    } else {
+                        accum[0] += o.x;
+                        accum[1] += o.y;
+                        accum[2] += o.z;
+                    }
+                }
+                pos.push(accum[0]);
+                pos.push(accum[1]);
+                pos.push(accum[2]);
             }
-            pos.push(accum[0]);
-            pos.push(accum[1]);
-            pos.push(accum[2]);
         };
         if reverse {
             // Reverse playback: HighFrame → LowFrame (AnimSequenceNode).
             for idx in (low..high).rev() {
-                push_frame(idx, &mut frames, &mut pos, &mut pos_accum);
+                push_frame(idx, &mut frames, &mut pos, &mut pos_accum, &mut ori_accum);
                 // Hook direction flip (2026-06-03). In retail this segment runs
                 // Backward, so `Sequence.execute_hooks` fires Both(0)+Backward(-1)
                 // and skips Forward(1). We bake it as FORWARD-ordered frames and
@@ -5085,7 +5293,22 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
                 // hooks for the reverse segment.
                 if let Some(f) = frames.last_mut() {
                     for h in &mut f.hooks {
-                        h.direction = -h.direction;
+                        // DIM3-4 (2026-06-05): negate only the wire-valid
+                        // AnimHookDir values {Forward=1, Backward=-1}; Both(0)
+                        // stays 0. The retail enum also defines UNKNOWN=-2 (a
+                        // constructor sentinel that `CAnimHook::UnPackHook`
+                        // overwrites from the wire before any fire, so it never
+                        // reaches a baked hook — confirmed absent across the
+                        // full portal.dat survey), but a blanket `-h.direction`
+                        // would map a stray -2 to +2, out of the {-1,0,1} the
+                        // JS `_fireHook` gate understands. Clamp by matching the
+                        // known values and passing anything else through
+                        // unchanged.
+                        h.direction = match h.direction {
+                            1 => -1,
+                            -1 => 1,
+                            other => other,
+                        };
                     }
                 }
                 times.push(t);
@@ -5093,7 +5316,7 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
             }
         } else {
             for idx in low..high {
-                push_frame(idx, &mut frames, &mut pos, &mut pos_accum);
+                push_frame(idx, &mut frames, &mut pos, &mut pos_accum, &mut ori_accum);
                 times.push(t);
                 t += dt;
             }
@@ -27423,6 +27646,37 @@ fn publish_cell_scene_snapshot(
 /// JS callers treat the read as "use stashed pose / wait for next
 /// emit".
 #[cfg(target_arch = "wasm32")]
+// ── Movement instrumentation (2026-06-05 snapback investigation) ──────────
+// Per-TickMovement trace recorded AT THE SOURCE (no rAF-sampling noise) so we
+// can compare the wasm integrator pose vs ACE's raw authoritative pose vs the
+// integrator velocity. Each record = 6 f32:
+//   [runtime_global_x, runtime_global_y, has_auth, auth_global_x, auth_global_y, vel_xy_mag]
+// runtime_pose = body.pose (integrated); authoritative_pose = raw server pose.
+// Global X/Y = (lb>>24&0xff)*192 + local.x, (lb>>16&0xff)*192 + local.y — wrap-safe.
+// JS: startMovementTrace(), drive, getMovementTrace() → analyze offline.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static MOVEMENT_TRACE_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static MOVEMENT_TRACE: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Start (clear + enable) the per-tick movement trace. JS: `startMovementTrace()`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = startMovementTrace)]
+pub fn start_movement_trace() {
+    MOVEMENT_TRACE.with(|t| t.borrow_mut().clear());
+    MOVEMENT_TRACE_ON.with(|c| c.set(true));
+}
+
+/// Drain + disable the movement trace (flat f32, 6 per tick — see the layout
+/// comment above). JS: `getMovementTrace()`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = getMovementTrace)]
+pub fn get_movement_trace() -> Vec<f32> {
+    MOVEMENT_TRACE_ON.with(|c| c.set(false));
+    MOVEMENT_TRACE.with(|t| t.borrow().clone())
+}
+
 fn publish_local_player_pose(
     world: &holtburger_world::WorldState,
     pose_cell: &std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
@@ -27452,6 +27706,37 @@ fn publish_local_player_pose(
         heading,
         landblock_id: u32::from(pose.landblock_id),
     });
+
+    // Movement trace (snapback investigation): record integrator pose vs raw
+    // server (authoritative) pose vs integrator velocity, per tick, at source.
+    #[cfg(target_arch = "wasm32")]
+    if MOVEMENT_TRACE_ON.with(|c| c.get()) {
+        if let Some(bid) = world.runtime_body_id_for_guid(world.player.guid) {
+            if let Some(view) = world.runtime_body_view(bid) {
+                let rlb = u32::from(view.runtime_pose.landblock_id);
+                let rgx = ((rlb >> 24) & 0xff) as f32 * 192.0 + view.runtime_pose.coords.x;
+                let rgy = ((rlb >> 16) & 0xff) as f32 * 192.0 + view.runtime_pose.coords.y;
+                let (has_a, agx, agy) = match view.authoritative_pose.as_ref() {
+                    Some(a) => {
+                        let albv = u32::from(a.landblock_id);
+                        (
+                            1.0f32,
+                            ((albv >> 24) & 0xff) as f32 * 192.0 + a.coords.x,
+                            ((albv >> 16) & 0xff) as f32 * 192.0 + a.coords.y,
+                        )
+                    }
+                    None => (0.0f32, 0.0f32, 0.0f32),
+                };
+                let vmag = (view.velocity.x * view.velocity.x + view.velocity.y * view.velocity.y).sqrt();
+                MOVEMENT_TRACE.with(|t| {
+                    let mut b = t.borrow_mut();
+                    if b.len() < 36_000 {
+                        b.extend_from_slice(&[rgx, rgy, has_a, agx, agy, vmag]);
+                    }
+                });
+            }
+        }
+    }
 }
 
 /// **Wave 10 Phase 10.4 (2026-05-26).** Companion to

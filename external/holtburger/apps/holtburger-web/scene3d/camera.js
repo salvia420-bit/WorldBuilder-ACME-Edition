@@ -1275,50 +1275,21 @@ export class CameraSwitcher {
       return;
     }
 
-    // Landblock crossing (teleport / LB transition) — hard-snap; an
-    // exponential ease across a ±192 m jump would slide the avatar
-    // across the world.
-    if (this._predPrevLandblockId !== null
-        && target.landblockId !== this._predPrevLandblockId) {
-      this.predictedPlayerPos.x = target.x;
-      this.predictedPlayerPos.y = target.y;
-      this.predictedPlayerPos.z = target.z;
-      this._predPrevLandblockId = target.landblockId;
-      return;
-    }
+    // 2026-06-05 FULL COLLAPSE — render the local rig DIRECTLY at the
+    // wasm-owned integrator pose. No JS exponential ease, no JS hard-snap
+    // branches, no academy no-snap policy. The wasm side is the single
+    // retail-faithful CPhysicsObj-equivalent: it already predicts locally
+    // AND reconciles against the server. The JS layer re-smoothing/snapping
+    // on top was the "slightly off from retail" divergence (it produced the
+    // visible snap-back). Direct-assign so the rendered avatar IS the physics
+    // pose, exactly as retail renders off its own CPhysicsObj — including
+    // teleports/force-positions, which the wasm pose already reflects.
+    // (Legacy JS WASD predictor still available via `window.__predPureSmooth
+    // === false` for A/B.)
+    this.predictedPlayerPos.x = target.x;
+    this.predictedPlayerPos.y = target.y;
+    this.predictedPlayerPos.z = target.z;
     this._predPrevLandblockId = target.landblockId;
-
-    // Large within-landblock correction (server force-position rubberband,
-    // or the very first ease after a snap) — hard-snap instead of easing.
-    // An exponential ease across several metres would visibly slide the
-    // avatar over ~tau ms. Mirrors the legacy `> 5 m` reconcile branch
-    // (the LB-crossing check above only catches teleports that change the
-    // landblock id; a big same-landblock correction would otherwise ooze).
-    {
-      const dx = target.x - this.predictedPlayerPos.x;
-      const dy = target.y - this.predictedPlayerPos.y;
-      const dz = target.z - this.predictedPlayerPos.z;
-      if (dx * dx + dy * dy + dz * dz > PRED_SMOOTH_SNAP_DIST_M * PRED_SMOOTH_SNAP_DIST_M) {
-        this.predictedPlayerPos.x = target.x;
-        this.predictedPlayerPos.y = target.y;
-        this.predictedPlayerPos.z = target.z;
-        return;
-      }
-    }
-
-    // Framerate-independent exponential ease toward the integrator pose.
-    // dt is clamped (matches the legacy advance path's 100 ms cap) so a
-    // resumed hidden tab doesn't ease in one giant step.
-    const dtMs = Math.min(dt, 0.1) * 1000.0;
-    if (!(dtMs > 0)) return;
-    const tau = this._lerpDurationMs > 0 ? this._lerpDurationMs : 150.0;
-    const frac = 1.0 - Math.exp(-dtMs / tau);
-    this.predictedPlayerPos.x +=
-      (target.x - this.predictedPlayerPos.x) * frac;
-    this.predictedPlayerPos.y +=
-      (target.y - this.predictedPlayerPos.y) * frac;
-    this.predictedPlayerPos.z +=
-      (target.z - this.predictedPlayerPos.z) * frac;
   }
 
   /**

@@ -7490,6 +7490,12 @@ export class EntityManager {
     // (PhysicsScript-sourced, e.g. the SoundTable/Luminous synthesis at
     // ~:5955/:5968) carry no `direction` field → `undefined` → NOT === -1 →
     // they fire (correct; they're not direction-tagged AnimationHooks).
+    // DIM3-4 (2026-06-05): retail's AnimHookDir also has UNKNOWN=-2 (a
+    // constructor sentinel never serialized to the wire — see the Rust
+    // `AnimationHook.direction` doc). This `=== -1` gate is already fail-soft
+    // for it: a stray -2 is NOT -1, so it fires (treated as Both/unconditional),
+    // which is the correct fallback. The Rust reverse-segment baker also clamps
+    // its negation so -2 can never become +2.
     if ((hook.direction | 0) === -1) return;
     const hookType = hook.hookType | 0;
     const pos = inst.root.position;
