@@ -337,6 +337,27 @@ const VEL_SCALE_ON = (() => {
   }
 })();
 
+// OMEGA (2026-06-06) — `?cycleOmega=on` gates applying a cycle's authored
+// MotionData.omega (continuous angular velocity) to the rig. Default OFF: a
+// behaviour change that needs a 1070 eye-test on a real authored spinner
+// (sign/fan) + a reachability scan (which in-scene MTs carry cycle omega).
+// EXCLUDES turn-in-place cycles — their omega is the turn rate already driven by
+// server heading / heading-ease, so applying it would double-count and break
+// turning (the player MT TurnRight cycle carries omega [0,0,-1.5], confirmed via
+// the wasm `cycleOmega` getter). Integrated in `_tickHookOmega` (summed with
+// SetOmega hook omega). Harmless while OFF: no `_cycleOmega` is ever set, so all
+// consumers see undefined and behaviour is byte-identical.
+const CYCLE_OMEGA_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("cycleOmega")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
 // T9 (2026-05-28) — `?dynLod=on` gates DYNAMIC entity LOD. Spawn already picks
 // a degrade band once (frozen); this re-queries the band at the live distance
 // (throttled) and despawn+respawns the entity at the new band when it crosses
@@ -1481,6 +1502,8 @@ export class EntityManager {
     // AnimationCache cacheKey, memoised across entities sharing a cycle.
     /** @type {Map<string, number>} */
     this._cycleBaseSpeedCache = new Map();
+    // OMEGA (2026-06-06): memoised cycle-omega lookups (cacheKey -> {x,y,z}|null).
+    this._cycleOmegaCache = new Map();
     // T9 — dynamic-LOD recheck throttle accumulator (seconds).
     this._dynLodAccum = 0;
     this.materialCache = scene3d?.materialCache ?? null;
@@ -2675,6 +2698,7 @@ export class EntityManager {
       this._headingEaseOn &&
       isRemote &&
       !inst._omega &&
+      !inst._cycleOmega &&
       !inst._isAirborne &&
       !inst.airborneTilt;
     if (easeHeading) {
@@ -4435,6 +4459,34 @@ export class EntityManager {
   }
 
   /**
+   * OMEGA (2026-06-06) — resolve a cycle's authored MotionData.omega (rad/s)
+   * via the wasm `cycleOmega` export and stash it so `_tickHookOmega` can spin
+   * the rig continuously while the cycle plays (e.g. an authored spinning
+   * sign/fan idle cycle). Memoised by cacheKey. Stores `inst._cycleOmega` only
+   * if the cycle is still the entity's active omega cycle when the (async) fetch
+   * resolves. `null` when the cycle has no omega (the common case) or without
+   * the export (older wasm). Only reached when `?cycleOmega=on`.
+   */
+  async _resolveCycleOmega(inst, mtableId, stance, cmd, cacheKey) {
+    const fn = this.wasmExports?.cycleOmega;
+    if (typeof fn !== "function") return;
+    let o = this._cycleOmegaCache.get(cacheKey);
+    if (o === undefined) {
+      try {
+        const a = await fn(mtableId >>> 0, stance >>> 0, cmd >>> 0);
+        o =
+          a && a.length === 3 && (a[0] || a[1] || a[2])
+            ? { x: a[0], y: a[1], z: a[2] }
+            : null;
+      } catch (_) {
+        o = null;
+      }
+      this._cycleOmegaCache.set(cacheKey, o);
+    }
+    if (inst._cycleOmegaKey === cacheKey) inst._cycleOmega = o;
+  }
+
+  /**
    * T1: resolve the entity's current 'actual' ground anim-speed (m/s) from
    * the wasm `stateGroundSpeed` getter — a synchronous pure-math mirror of
    * retail `CMotionInterp::get_state_velocity` (acclient.c:343539). It consumes
@@ -4641,6 +4693,20 @@ export class EntityManager {
     // Locomotion. Build the cache key the same way the spawn path did
     // (resolvedStance falls back to the entity's first-bake stance).
     const cacheKey = AnimationCache.makeKey(setupId, mtableId, cmd, stance);
+    // OMEGA (2026-06-06): apply this cycle's authored MotionData.omega
+    // (continuous angular velocity — e.g. a spinning sign/fan idle cycle) under
+    // ?cycleOmega=on (default OFF), EXCLUDING turn-in-place cycles whose omega is
+    // the turn rate already driven by server heading / heading-ease (applying it
+    // would double-count and break turning). `cmdLow` already has TurnLeft folded
+    // to TurnRight above. Async + memoised; integrated each frame in
+    // `_tickHookOmega`. Cleared when switching to a cycle without omega.
+    if (CYCLE_OMEGA_ON && cmdLow !== CMD_LOW_TURN_RIGHT) {
+      inst._cycleOmegaKey = cacheKey;
+      this._resolveCycleOmega(inst, mtableId, stance, cmd, cacheKey);
+    } else if (inst._cycleOmega) {
+      inst._cycleOmega = null;
+      inst._cycleOmegaKey = null;
+    }
     // T11 — mark this as the entity's active locomotion cycle and resolve its
     // authored ground speed (async, memoised) so the per-frame tick can scale
     // playback to actual ground travel. Only walk/run-family cycles (sidestep
@@ -7093,6 +7159,7 @@ export class EntityManager {
         inst._headingEaseInit &&
         inst._serverTargetQuat &&
         !inst._omega &&
+        !inst._cycleOmega &&
         !inst._isAirborne &&
         !inst.airborneTilt
       ) {
@@ -7265,7 +7332,7 @@ export class EntityManager {
       // Wave 3 (2026-05-28) — SetOmega continuous angular velocity.
       // Persistent state, not a tween — applies `omega * dt` to the
       // root quaternion each frame until a SetOmega(0,0,0) clears it.
-      if (inst._omega) {
+      if (inst._omega || inst._cycleOmega) {
         try {
           this._tickHookOmega(inst, dt);
         } catch (e) {
@@ -8390,9 +8457,16 @@ export class EntityManager {
    * allocations across the entity list.
    */
   _tickHookOmega(inst, dt) {
-    const omega = inst._omega;
-    if (!omega || !inst.root) return;
-    const ox = omega.x, oy = omega.y, oz = omega.z;
+    if (!inst.root) return;
+    // Sum the SetOmega-hook omega (`_omega`) and the authored cycle omega
+    // (`_cycleOmega`, ?cycleOmega=on). Either may be absent; when both are the
+    // omega is the combined angular velocity. With cycleOmega OFF, `_cycleOmega`
+    // is never set, so this reduces to the original hook-only behaviour.
+    const ho = inst._omega, co = inst._cycleOmega;
+    if (!ho && !co) return;
+    const ox = (ho ? ho.x : 0) + (co ? co.x : 0);
+    const oy = (ho ? ho.y : 0) + (co ? co.y : 0);
+    const oz = (ho ? ho.z : 0) + (co ? co.z : 0);
     const magSq = ox * ox + oy * oy + oz * oz;
     if (magSq === 0) return;
     const mag = Math.sqrt(magSq);

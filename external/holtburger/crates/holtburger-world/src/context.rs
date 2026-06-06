@@ -73,6 +73,92 @@ pub fn run_rate_from_skill_and_burden(run_skill: f32, burden: f32) -> f32 {
     }
 }
 
+/// Provenance of the `run_skill` value fed into `run_rate_from_skill_and_burden`
+/// for the local player. ACE `Creature.GetRunRate` always uses
+/// `GetCreatureSkill(Skill.Run).Current`; our [`WorldContextExt::player_run_rate`]
+/// falls back to Quickness when the wire hasn't populated the Run skill yet, so a
+/// live capture must report WHICH source it used to diff against ACE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RunSkillSource {
+    /// Neither the Run skill nor Quickness is loaded yet — `player_run_rate()`
+    /// returns `None` and the caller applies the flat fallback cap.
+    #[default]
+    Unavailable,
+    /// The wire-supplied Run skill `current` was used (matches ACE).
+    WireRunSkill,
+    /// Run skill absent → fell back to the Quickness attribute `current`
+    /// (no ACE equivalent — a prime suspect for run-rate over-run).
+    QuicknessFallback,
+}
+
+impl RunSkillSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::WireRunSkill => "wire_run_skill",
+            Self::QuicknessFallback => "quickness_fallback",
+        }
+    }
+}
+
+/// Read-only diagnostic snapshot of every input to
+/// `run_rate_from_skill_and_burden` for the local player, with provenance.
+/// Mirrors [`WorldContextExt::player_run_rate`] exactly — same skill fallback,
+/// same `burden.unwrap_or(3.0)` — so a 1070 capture can be diffed against ACE
+/// `Creature.GetRunRate` (`GetCreatureSkill(Skill.Run).Current` + burden from
+/// `EncumbranceSystem.GetBurden`). Does NOT change any value; pure observation
+/// of the snapback root (the run-skill INPUT, not the formula).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct RunRateInputs {
+    /// `run_rate_from_skill_and_burden(run_skill_used, burden)`, or `None` when
+    /// stats aren't loaded (the caller then applies the flat fallback cap).
+    pub run_rate: Option<f32>,
+    /// The skill value actually fed into the formula.
+    pub run_skill_used: Option<f32>,
+    pub run_skill_source: RunSkillSource,
+    /// The wire-supplied Run skill `current`, independent of which source won.
+    pub run_skill_wire: Option<u32>,
+    /// The Quickness attribute `current`, if present.
+    pub quickness: Option<u32>,
+    /// The burden actually fed into the formula (`encumbrance / capacity`,
+    /// or `3.0` when capacity is unknown — same default as `player_run_rate`).
+    pub burden: f32,
+    /// `burden_load_modifier(burden)` — clamped at 1.0 (burden is a brake only).
+    pub load_mod: f32,
+    pub encumbrance: Option<f32>,
+    pub capacity: Option<f32>,
+    pub strength: Option<u32>,
+    pub num_augs: i32,
+}
+
+impl RunRateInputs {
+    /// Compact JSON for the wasm `playerRunRateInputs` getter / 1070 capture.
+    pub fn to_json(&self) -> String {
+        fn of(v: Option<f32>) -> String {
+            v.map_or_else(|| "null".to_string(), |x| format!("{x}"))
+        }
+        fn ou(v: Option<u32>) -> String {
+            v.map_or_else(|| "null".to_string(), |x| x.to_string())
+        }
+        format!(
+            "{{\"run_rate\":{},\"run_skill_used\":{},\"run_skill_source\":\"{}\",\
+             \"run_skill_wire\":{},\"quickness\":{},\"burden\":{},\"load_mod\":{},\
+             \"encumbrance\":{},\"capacity\":{},\"strength\":{},\"num_augs\":{}}}",
+            of(self.run_rate),
+            of(self.run_skill_used),
+            self.run_skill_source.as_str(),
+            ou(self.run_skill_wire),
+            ou(self.quickness),
+            self.burden,
+            self.load_mod,
+            of(self.encumbrance),
+            of(self.capacity),
+            ou(self.strength),
+            self.num_augs,
+        )
+    }
+}
+
 pub fn normalize_name_for_lookup(name: &str) -> String {
     name.chars()
         .filter(|character| character.is_alphanumeric())
@@ -166,7 +252,16 @@ pub trait WorldContextExt: WorldContext {
 
         let mut encumbrance = 0.0;
         for guid in self.iter_inventory() {
-            let item = self.get_entity(guid)?;
+            // Skip inventory guids whose entity hasn't loaded yet rather than
+            // collapsing the whole sum to `None`. A single unresolved guid
+            // (common during the boot window before all ObjectCreate frames
+            // drain) used to make `player_burden` fall back to 3.0 → load_mod
+            // 0.0, which would transiently floor `run_rate` to 1.0 on a
+            // sub-800-Run char (observed in the 2026-06-06 capture). A partial
+            // sum is correct-and-recovering; None was wrong-and-slow.
+            let Some(item) = self.get_entity(guid) else {
+                continue;
+            };
 
             if let Some(container_id) = item.container_id()
                 && self.is_in_player_inventory(container_id)
@@ -193,7 +288,13 @@ pub trait WorldContextExt: WorldContext {
             .get_player_int_property(PropertyInt::AugmentationIncreasedCarryingCapacity)
             .unwrap_or(0)
             .max(0) as f32;
-        Some((150.0 * strength) + (num_augs * 30.0 * strength))
+        // ACE `EncumbranceSystem.EncumbranceCapacity` caps the augmentation
+        // bonus burden at 150 before scaling by strength: `bonusBurden = 30 *
+        // numAugs; if (bonusBurden > 150) bonusBurden = 150` (EncumbranceSystem.cs:5-20).
+        // Without the cap our capacity over-counts for num_augs >= 6 (30*6 = 180 > 150),
+        // under-counting burden for heavily-augmented over-encumbered chars.
+        let bonus_burden = (num_augs * 30.0).min(150.0);
+        Some((150.0 * strength) + (bonus_burden * strength))
     }
 
     fn player_burden(&self) -> Option<f32> {
@@ -222,6 +323,46 @@ pub trait WorldContextExt: WorldContext {
         } as f32;
         let burden = self.player_burden().unwrap_or(3.0);
         Some(run_rate_from_skill_and_burden(run_skill, burden))
+    }
+
+    /// Read-only provenance snapshot of every input to `player_run_rate()` —
+    /// the run-skill VALUE and its source (wire Run skill vs Quickness
+    /// fallback), burden, encumbrance/capacity, and the resulting `run_rate`.
+    /// Built for the live snapback probe: capture on the 1070 for `+Tester`
+    /// and diff against ACE `Creature.GetRunRate`. Mirrors `player_run_rate()`
+    /// step-for-step (same fallback order, same `burden.unwrap_or(3.0)`) so
+    /// the reported `run_rate` equals what the velScale path actually consumed.
+    fn player_run_rate_inputs(&self) -> RunRateInputs {
+        let run_skill_wire = self.get_player_skill_current(SkillType::Run);
+        let quickness = self.get_player_attribute_current(AttributeType::QuicknessAttr);
+        let strength = self.get_player_attribute_current(AttributeType::StrengthAttr);
+        let num_augs = self
+            .get_player_int_property(PropertyInt::AugmentationIncreasedCarryingCapacity)
+            .unwrap_or(0)
+            .max(0);
+
+        let (run_skill_used, run_skill_source) = match run_skill_wire {
+            Some(v) => (Some(v as f32), RunSkillSource::WireRunSkill),
+            None => match quickness {
+                Some(v) => (Some(v as f32), RunSkillSource::QuicknessFallback),
+                None => (None, RunSkillSource::Unavailable),
+            },
+        };
+
+        let burden = self.player_burden().unwrap_or(3.0);
+        RunRateInputs {
+            run_rate: run_skill_used.map(|s| run_rate_from_skill_and_burden(s, burden)),
+            run_skill_used,
+            run_skill_source,
+            run_skill_wire,
+            quickness,
+            burden,
+            load_mod: burden_load_modifier(burden),
+            encumbrance: self.player_encumbrance(),
+            capacity: self.player_capacity(),
+            strength,
+            num_augs,
+        }
     }
 
     fn combat_target_status(&self, guid: Guid) -> CombatTargetStatus {
@@ -671,7 +812,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use super::{
-        CombatTargetStatus, WorldContext, WorldContextExt, burden_load_modifier,
+        CombatTargetStatus, RunSkillSource, WorldContext, WorldContextExt, burden_load_modifier,
         run_rate_from_skill_and_burden,
     };
     use crate::entity::{Entity, EntityMotionSnapshot};
@@ -775,6 +916,107 @@ mod tests {
         // survives → 4/4 = 1.0 (the slowest non-zero rate).
         let r_heavy = run_rate_from_skill_and_burden(300.0, 2.5);
         assert!((r_heavy - 1.0).abs() < 1e-6, "r_heavy = {r_heavy}");
+    }
+
+    /// Snapback probe (2026-06-06): `player_run_rate_inputs()` must (a) report
+    /// the wire Run skill when present, (b) fall back to Quickness with the
+    /// fallback source flagged, (c) report `Unavailable` + `None` run_rate when
+    /// neither is loaded, and in every case its `run_rate` must equal
+    /// `player_run_rate()` so the probe measures exactly what the velScale path
+    /// consumed. The Quickness-fallback source is the prime snapback suspect.
+    #[test]
+    fn player_run_rate_inputs_reports_skill_source_and_matches_run_rate() {
+        let player_guid = Guid(0x5000_0001);
+        let base = || TestWorld {
+            player_guid: Some(player_guid),
+            // Strength 100 → capacity 15000, empty inventory → burden 0 → load_mod 1.0,
+            // keeping the rate skill-discriminating rather than collapsing to 3.0.
+            player_attributes: HashMap::from([(AttributeType::StrengthAttr, 100)]),
+            ..Default::default()
+        };
+
+        // (a) wire Run skill wins; run_rate matches player_run_rate.
+        let mut wire = base();
+        wire.player_skills.insert(SkillType::Run, 185);
+        wire.player_attributes.insert(AttributeType::QuicknessAttr, 180);
+        let i = wire.player_run_rate_inputs();
+        assert_eq!(i.run_skill_source, RunSkillSource::WireRunSkill);
+        assert_eq!(i.run_skill_used, Some(185.0));
+        assert_eq!(i.run_skill_wire, Some(185));
+        assert_eq!(i.quickness, Some(180));
+        assert!((i.load_mod - 1.0).abs() < 1e-6);
+        assert_eq!(i.run_rate, wire.player_run_rate());
+        assert!(i.to_json().contains("\"run_skill_source\":\"wire_run_skill\""));
+
+        // (b) no wire Run skill → Quickness fallback (no ACE equivalent).
+        let mut fb = base();
+        fb.player_attributes.insert(AttributeType::QuicknessAttr, 180);
+        let i = fb.player_run_rate_inputs();
+        assert_eq!(i.run_skill_source, RunSkillSource::QuicknessFallback);
+        assert_eq!(i.run_skill_used, Some(180.0));
+        assert_eq!(i.run_skill_wire, None);
+        assert_eq!(i.run_rate, fb.player_run_rate());
+        assert!(i.to_json().contains("\"run_skill_source\":\"quickness_fallback\""));
+
+        // (c) neither loaded → Unavailable + None run_rate (caller applies cap).
+        let mut none = TestWorld {
+            player_guid: Some(player_guid),
+            ..Default::default()
+        };
+        none.player_attributes.remove(&AttributeType::QuicknessAttr);
+        let i = none.player_run_rate_inputs();
+        assert_eq!(i.run_skill_source, RunSkillSource::Unavailable);
+        assert_eq!(i.run_rate, None);
+        assert_eq!(none.player_run_rate(), None);
+        assert!(i.to_json().contains("\"run_rate\":null"));
+    }
+
+    /// AUG-CAP (2026-06-06): the augmentation carry-capacity bonus is capped at
+    /// 150 (× strength) to match ACE `EncumbranceSystem.EncumbranceCapacity`.
+    /// The cap only bites at num_augs >= 6 (30 * 6 = 180 > 150).
+    #[test]
+    fn player_capacity_caps_augmentation_bonus_at_150() {
+        let player_guid = Guid(0x5000_0001);
+        let with_augs = |augs: i32| TestWorld {
+            player_guid: Some(player_guid),
+            player_attributes: HashMap::from([(AttributeType::StrengthAttr, 100)]),
+            player_int_properties: vec![(
+                PropertyInt::AugmentationIncreasedCarryingCapacity,
+                augs,
+            )],
+            ..Default::default()
+        };
+        // num_augs=1 → bonus 30 (< cap): 150*100 + 30*100 = 18000 (unchanged).
+        assert_eq!(with_augs(1).player_capacity(), Some(18_000.0));
+        // num_augs=6 → bonus 30*6=180 capped to 150: 150*100 + 150*100 = 30000.
+        assert_eq!(with_augs(6).player_capacity(), Some(30_000.0));
+        // num_augs=10 → still capped: 30000, NOT 150*100 + 300*100 = 45000.
+        assert_eq!(with_augs(10).player_capacity(), Some(30_000.0));
+    }
+
+    /// ENC-ROBUST (2026-06-06): an inventory guid with no loaded entity is
+    /// skipped (partial sum), not collapsed to `None` — so burden never
+    /// transiently spikes to 3.0 (over-encumbered) during the boot window.
+    #[test]
+    fn player_encumbrance_skips_unresolved_inventory_guids() {
+        let player_guid = Guid(0x5000_0001);
+        let loaded_guid = Guid(0x8000_0001);
+        let unloaded_guid = Guid(0x8000_0002); // in inventory, NOT in entities
+
+        let mut world = TestWorld {
+            player_guid: Some(player_guid),
+            inventory: HashSet::from([loaded_guid, unloaded_guid]),
+            ..Default::default()
+        };
+        let mut loaded = item_in_container(loaded_guid, player_guid, "Sack");
+        loaded
+            .properties
+            .ints
+            .insert(PropertyInt::EncumbranceVal, 250);
+        world.entities.insert(loaded_guid, loaded);
+
+        // Unresolved guid skipped → partial sum of the loaded item only, NOT None.
+        assert_eq!(world.player_encumbrance(), Some(250.0));
     }
 
     #[test]

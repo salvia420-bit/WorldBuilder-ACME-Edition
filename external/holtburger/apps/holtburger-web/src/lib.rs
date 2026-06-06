@@ -4902,6 +4902,99 @@ fn motion_kinematics_cycle_base_speed<S: holtburger_dat::ResourceSource + ?Sized
     if mag > 1e-4 { Some(mag) } else { None }
 }
 
+/// OMEGA (2026-06-06) — `MotionData.omega` (cycle-wide angular velocity, rad/s)
+/// for a `(stance, command)` cycle, read directly off the MotionTable. Mirrors
+/// [`motion_cycle_base_speed`]. `None` when the cycle has no omega channel (the
+/// common case — most cycles only translate). Pairs with the `cycleOmega`
+/// export feeding the (deferred) JS cycle-omega apply; for now it also lets a
+/// headless probe answer the reachability question (which in-scene cycles spin).
+#[cfg(target_arch = "wasm32")]
+fn motion_cycle_omega(
+    mtable: &holtburger_dat::file_type::MotionTable,
+    stance: u32,
+    command: u32,
+) -> Option<[f32; 3]> {
+    let resolved_stance = if stance == 0 {
+        mtable.default_style
+    } else {
+        stance
+    };
+    let md = mtable.motion_data_for_cycle(resolved_stance, command)?;
+    let o = md.omega?;
+    let mag = (o.x * o.x + o.y * o.y + o.z * o.z).sqrt();
+    if mag > 1e-6 { Some([o.x, o.y, o.z]) } else { None }
+}
+
+/// OMEGA (2026-06-06) — `(stance, command)` cycle omega from the standalone
+/// MotionKinematics asset (the baked fallback, same source as
+/// [`motion_kinematics_cycle_base_speed`]). `None` on any miss / absent omega.
+#[cfg(target_arch = "wasm32")]
+fn motion_kinematics_cycle_omega<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    motion_table_id: u32,
+    stance: u32,
+    command: u32,
+) -> Option<[f32; 3]> {
+    use holtburger_dat::file_type::MotionKinematics;
+    use holtburger_dat::{HOLTBURGER_CORE_NAMESPACE, ResourceKey};
+    let bytes = source
+        .get_file_by_key(ResourceKey::new(
+            HOLTBURGER_CORE_NAMESPACE,
+            MotionKinematics::FILE_ID,
+        ))
+        .ok()?;
+    let kinematics = MotionKinematics::read(&mut std::io::Cursor::new(&bytes)).ok()?;
+    let entry = kinematics.cycle_kinematics(motion_table_id, stance, command)?;
+    let o = entry.omega?;
+    let mag = (o.x * o.x + o.y * o.y + o.z * o.z).sqrt();
+    if mag > 1e-6 { Some([o.x, o.y, o.z]) } else { None }
+}
+
+/// OMEGA (2026-06-06) — free wasm export of a cycle's `MotionData.omega`
+/// (rad/s, `[x, y, z]`) for `(mtable, stance, command)`. Empty `Vec` = no omega
+/// (most cycles). Mirrors the [`cycle_base_speed`] resolve chain
+/// (MotionData.omega → MotionKinematics omega). Read-only: surfaces the
+/// parsed-but-unapplied cycle omega (the idle-spinner gap — `motion_table.rs`
+/// parses it, nothing consumes it). The JS render-apply is intentionally
+/// deferred pending (a) a reachability check — call this for in-scene MTs to
+/// see which cycles carry non-zero omega — and (b) a GPU eye-test on a real
+/// spinner, because the apply touches the hot per-frame `_tickHookOmega` path
+/// and must compose with SetOmega-hook omega without clobbering it.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = cycleOmega)]
+pub async fn cycle_omega(mtable_id: u32, stance: u32, command: u32) -> Vec<f32> {
+    use holtburger_dat::file_type::{MotionKinematics, MotionTable};
+    use holtburger_dat::{HOLTBURGER_CORE_NAMESPACE, ResourceKey, ResourceSource as _};
+    if mtable_id == 0 || (mtable_id >> 24) != 0x09 {
+        return Vec::new();
+    }
+    let source = global_source::global_source();
+    let _ = source
+        .prefetch(&[
+            ResourceKey::new("eor/portal", mtable_id),
+            ResourceKey::new(HOLTBURGER_CORE_NAMESPACE, MotionKinematics::FILE_ID),
+        ])
+        .await;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", mtable_id)) {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+    let mtable = match MotionTable::read(&mut std::io::Cursor::new(&bytes)) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+    // step 1 — MotionData.omega off the MotionTable cycle.
+    if let Some(o) = motion_cycle_omega(&mtable, stance, command) {
+        return o.to_vec();
+    }
+    // step 2 — the standalone MotionKinematics omega channel.
+    let resolved_stance = mtable.resolve_stance(stance);
+    if let Some(o) = motion_kinematics_cycle_omega(&*source, mtable_id, resolved_stance, command) {
+        return o.to_vec();
+    }
+    Vec::new()
+}
+
 /// T1 — pure-math mirror of retail `CMotionInterp::get_state_velocity`
 /// (`acclient.c:343539-343594` / ACE `MotionInterp.cs:678-700`). Computes the
 /// interpreted-state world velocity from the live motion scalars and returns
@@ -26599,6 +26692,35 @@ thread_local! {
 pub fn player_run_rate_export() -> f32 {
     LATEST_RUN_RATE.with(|c| c.get())
 }
+
+// Snapback probe (2026-06-06): mirror of the latest `RunRateInputs` JSON so a
+// 1070 capture can read the run-skill VALUE + its source (wire Run skill vs
+// Quickness fallback), burden, and the resulting run_rate as a FREE wasm export.
+// The research pass pinned the snapback root to the run-skill INPUT (the formula
+// is retail-faithful); this getter is the live measurement to diff against ACE
+// `Creature.GetRunRate`. Written by `publish_player_stats_snapshot` on each stats
+// delta; seeded to an empty object pre-spawn. See
+// `apps/holtburger-web/docs/2026-06-06-movement-anim-research/RESEARCH-REPORT.md`.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static LATEST_RUN_RATE_INPUTS_JSON: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
+}
+
+/// Snapback probe (2026-06-06) — free wasm export of the latest run-rate INPUTS
+/// as a JSON string: `{run_rate, run_skill_used, run_skill_source,
+/// run_skill_wire, quickness, burden, load_mod, encumbrance, capacity, strength,
+/// num_augs}`. `run_skill_source` is `"wire_run_skill"`, `"quickness_fallback"`,
+/// or `"unavailable"`. Returns `"{}"` until the first stats snapshot hydrates it.
+/// JS: `JSON.parse(wasmExports.playerRunRateInputs())`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = playerRunRateInputs)]
+pub fn player_run_rate_inputs_export() -> String {
+    LATEST_RUN_RATE_INPUTS_JSON.with(|c| {
+        let s = c.borrow();
+        if s.is_empty() { "{}".to_string() } else { s.clone() }
+    })
+}
 #[cfg(target_arch = "wasm32")]
 const RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.5;
 #[cfg(target_arch = "wasm32")]
@@ -26922,6 +27044,15 @@ fn publish_player_stats_snapshot(
     // `playerRunRate` wasm export (the JS velScale path consumes it there).
     #[cfg(target_arch = "wasm32")]
     LATEST_RUN_RATE.with(|c| c.set(run_rate));
+    // Snapback probe (2026-06-06): capture the run-rate INPUTS with provenance
+    // (run-skill value + source, burden, encumbrance/capacity) on the same
+    // trigger, for the free `playerRunRateInputs` getter. Read-only — does not
+    // affect `run_rate` above; this is the live measurement of the snapback root.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let inputs_json = world.player_run_rate_inputs().to_json();
+        LATEST_RUN_RATE_INPUTS_JSON.with(|c| *c.borrow_mut() = inputs_json);
+    }
     // Wave D.1 follow-on (2026-05-27): pull `PropertyInt::AetheriaBitfield`
     // (322) straight off the player Entity for the JS paperdoll's
     // `UpdateAetheria` gating (ACBindings `gmPaperDollUI.cs:217-222`,
@@ -27675,6 +27806,57 @@ pub fn start_movement_trace() {
 pub fn get_movement_trace() -> Vec<f32> {
     MOVEMENT_TRACE_ON.with(|c| c.set(false));
     MOVEMENT_TRACE.with(|t| t.borrow().clone())
+}
+
+// Multi-action motion queue (2026-06-06, approach B / side-channel): the
+// Action-class `commands` Vec (emotes / gestures) carried by an UpdateMotion's
+// `InterpretedMotionState` that the single `motion_command` emit DROPS. Mages'
+// strafe-cast / cast-break tech is NOT here (those are SubState ForwardCommand +
+// the sidestep axis) — this is the cosmetic action list. Flattened 4 u32 per
+// action: `[guid, command_low_u16, packed_sequence_u16, stance_u16]`. JS drains
+// via `pollMotionActions` and FIFO-plays each NEW action (stamp-dedup, retail
+// `acclient.c:344388-344418`), gated by `?multiAction=on` (default OFF). Action
+// speed is deferred (plays at 1.0). Side-channel so NONE of the 14 `EntityUpdate`
+// emit literals are touched.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static MOTION_ACTIONS: std::cell::RefCell<Vec<u32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Multi-action queue (2026-06-06) — drain the queued Action-class motion
+/// commands as a flat `Vec<u32>`, 4 per action: `[guid, command_low,
+/// packed_sequence, stance]`. JS: `for (let i = 0; i < a.length; i += 4) {…}`.
+/// Empty in the steady state (most UpdateMotions carry no action list).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = pollMotionActions)]
+pub fn poll_motion_actions() -> Vec<u32> {
+    MOTION_ACTIONS.with(|q| std::mem::take(&mut *q.borrow_mut()))
+}
+
+// Casting-ingredient axes (2026-06-06): the remote sidestep + turn axes that the
+// single `forward_command` motion emit DROPS. Retail `get_state_velocity` uses
+// all three axes (X = sidestep, Y = forward, + turn omega), so a remote
+// strafe-casting needs the sidestep footwork overlay and a remote turning in
+// place needs the turn cycle — neither renders today. Flattened 5 u32 per remote
+// UpdateMotion that carries a sidestep or turn axis: `[guid, stance,
+// sidestep_low, turn_low, forward_idle]`. JS routes sidestep → `setSidestepLayer`
+// (additive overlay) and a turn-in-place → the turn cycle, gated by
+// `?castAxes=on` (default OFF). Speeds deferred (setSidestepLayer defaults 1.0,
+// matching today's local behaviour — OQ-3).
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static MOTION_AXES: std::cell::RefCell<Vec<u32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Casting-ingredient axes (2026-06-06) — drain the queued remote sidestep/turn
+/// axes as a flat `Vec<u32>`, 5 per entry: `[guid, stance, sidestep_low,
+/// turn_low, forward_idle]`. JS: `for (let i = 0; i < a.length; i += 5) {…}`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = pollMotionAxes)]
+pub fn poll_motion_axes() -> Vec<u32> {
+    MOTION_AXES.with(|q| std::mem::take(&mut *q.borrow_mut()))
 }
 
 fn publish_local_player_pose(
@@ -30590,6 +30772,70 @@ async fn recv_loop(
                                 // (`forward_speed`) → JS anim framerate scale.
                                 motion_speed: motion_speed_f32,
                             });
+                            // Multi-action queue (2026-06-06, approach B):
+                            // surface the Action-class `commands` Vec
+                            // (emotes/gestures) the single `motion_command` emit
+                            // above DROPS, so JS can FIFO-play them with
+                            // stamp-dedup. Only the Invalid (autonomous) envelope
+                            // carries `InterpretedMotionState.commands`. The
+                            // `len() > 1` log is the reachability probe (does
+                            // vanilla ACE ever pack >=2?).
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                if let MovementTypeData::Invalid(inv) = &data.data {
+                                    let actions = &inv.state.commands;
+                                    if DIAG_VERBOSE && actions.len() > 1 {
+                                        console_log_str(&format!(
+                                            "[multi-action] guid=0x{:08X} commands={} (>=2 reachable)",
+                                            u32::from(data.guid),
+                                            actions.len(),
+                                        ));
+                                    }
+                                    if !actions.is_empty() {
+                                        let guid = u32::from(data.guid);
+                                        let stance = u32::from(data.current_style);
+                                        MOTION_ACTIONS.with(|q| {
+                                            let mut b = q.borrow_mut();
+                                            for item in actions {
+                                                b.push(guid);
+                                                b.push(u32::from(item.command.raw()));
+                                                b.push(u32::from(item.packed_sequence));
+                                                b.push(stance);
+                                            }
+                                        });
+                                    }
+                                    // Casting-ingredient axes: surface the remote
+                                    // sidestep + turn axes the forward_command emit
+                                    // above drops (strafe-cast footwork + turn-in-
+                                    // place cycle). 5 u32: [guid, stance,
+                                    // sidestep_low, turn_low, forward_idle].
+                                    let side_cmd = inv
+                                        .state
+                                        .sidestep_command
+                                        .map(|c| u32::from(c.raw()))
+                                        .unwrap_or(0);
+                                    let turn_cmd = inv
+                                        .state
+                                        .turn_command
+                                        .map(|c| u32::from(c.raw()))
+                                        .unwrap_or(0);
+                                    if side_cmd != 0 || turn_cmd != 0 {
+                                        let guid = u32::from(data.guid);
+                                        let stance = u32::from(data.current_style);
+                                        let forward_idle =
+                                            u32::from(inv.state.forward_command.is_none());
+                                        MOTION_AXES.with(|q| {
+                                            q.borrow_mut().extend_from_slice(&[
+                                                guid,
+                                                stance,
+                                                side_cmd,
+                                                turn_cmd,
+                                                forward_idle,
+                                            ]);
+                                        });
+                                    }
+                                }
+                            }
                         }
                         GameMessage::VectorUpdate(data) => {
                             // Remote-airborne heuristic. ACE

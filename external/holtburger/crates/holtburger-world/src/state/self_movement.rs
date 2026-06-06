@@ -134,6 +134,87 @@ impl SelfMovementCapabilities {
     }
 }
 
+/// Retail motion-modifier physics — `combine_motion`/`subtract_motion`
+/// (`acclient.c:337477`/`:337505`), `combine_physics` (`:339714`), and
+/// `re_modify` (`:337286`). A modifier is **visually inert** — verified:
+/// `combine_motion` appends NO animation frames, it only calls `combine_physics`
+/// — yet **behaviorally real**: each held modifier adds its `(velocity, omega) *
+/// speed_mod` to the running motion, and `re_modify` re-applies the whole held
+/// set across a base-cycle swap so the physics PERSISTS through it (e.g. movement
+/// physics held through a cast-gesture cycle swap — the fastcast case). Built for
+/// behavioral (not visual) retail parity; gated where wired.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct MotionPhysics {
+    pub velocity: Vector3,
+    pub omega: Vector3,
+}
+
+impl MotionPhysics {
+    /// `CSequence::combine_physics` (`acclient.c:339714`) — component-wise add.
+    pub fn combine_physics(&mut self, velocity: Vector3, omega: Vector3) {
+        self.velocity = self.velocity + velocity;
+        self.omega = self.omega + omega;
+    }
+
+    /// Inverse of `combine_physics` (`acclient.c:339730`) — component-wise sub.
+    pub fn subtract_physics(&mut self, velocity: Vector3, omega: Vector3) {
+        self.velocity = self.velocity - velocity;
+        self.omega = self.omega - omega;
+    }
+
+    /// `combine_motion` (`acclient.c:337477`) — add a modifier's `(velocity,
+    /// omega)` scaled by `speed_mod`.
+    pub fn combine_motion(&mut self, velocity: Vector3, omega: Vector3, speed_mod: f32) {
+        self.combine_physics(velocity * speed_mod, omega * speed_mod);
+    }
+
+    /// `subtract_motion` (`acclient.c:337505`).
+    pub fn subtract_motion(&mut self, velocity: Vector3, omega: Vector3, speed_mod: f32) {
+        self.subtract_physics(velocity * speed_mod, omega * speed_mod);
+    }
+}
+
+/// The held modifier set — the `MotionState` modifier list
+/// (`add_modifier`/`remove_modifier`/`clear_modifiers`, `acclient.c:6979-6991`).
+/// `combined_onto` mirrors `re_modify` (`:337286`): re-apply every held modifier
+/// onto a fresh base, so the held physics survives a base-cycle swap. Each entry
+/// is a `(velocity, omega, speed_mod)` modifier.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MotionModifierStack {
+    modifiers: Vec<(Vector3, Vector3, f32)>,
+}
+
+impl MotionModifierStack {
+    /// `MotionState::add_modifier` (`acclient.c:6991`).
+    pub fn add_modifier(&mut self, velocity: Vector3, omega: Vector3, speed_mod: f32) {
+        self.modifiers.push((velocity, omega, speed_mod));
+    }
+
+    /// `MotionState::clear_modifiers` (`acclient.c:6981`).
+    pub fn clear(&mut self) {
+        self.modifiers.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.modifiers.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.modifiers.len()
+    }
+
+    /// `CMotionTable::re_modify` (`acclient.c:337286`): re-apply every held
+    /// modifier's physics onto `base` (e.g. after a base-cycle swap) and return
+    /// the combined physics — the held modifiers persist across the swap.
+    pub fn combined_onto(&self, base: MotionPhysics) -> MotionPhysics {
+        let mut out = base;
+        for &(velocity, omega, speed_mod) in &self.modifiers {
+            out.combine_motion(velocity, omega, speed_mod);
+        }
+        out
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum SelfMovementKinematicsError {
     #[error(transparent)]
@@ -286,5 +367,66 @@ fn missing_required_kinematics_error(
         stance: resolution.movement_profile.stance,
         kind,
         kind_label: kind.label(),
+    }
+}
+
+#[cfg(test)]
+mod modifier_tests {
+    use super::{MotionModifierStack, MotionPhysics};
+    use holtburger_common::Vector3;
+
+    /// `combine_motion` (acclient.c:337489-337501): `v += speed_mod*data.velocity`,
+    /// `o += speed_mod*data.omega`.
+    #[test]
+    fn combine_motion_adds_scaled_physics_per_acclient() {
+        let mut p = MotionPhysics::default();
+        p.combine_motion(Vector3::new(2.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 1.5), 1.0);
+        assert_eq!(p.velocity, Vector3::new(2.0, 0.0, 0.0));
+        assert_eq!(p.omega, Vector3::new(0.0, 0.0, 1.5));
+        p.combine_motion(Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 1.0), 0.5);
+        assert_eq!(p.velocity, Vector3::new(2.5, 0.0, 0.0));
+        assert_eq!(p.omega, Vector3::new(0.0, 0.0, 2.0));
+    }
+
+    /// `subtract_motion` (acclient.c:337505) is the exact inverse.
+    #[test]
+    fn subtract_motion_is_the_inverse() {
+        let mut p = MotionPhysics::default();
+        let v = Vector3::new(3.0, -1.0, 0.0);
+        let o = Vector3::new(0.0, 0.0, 1.5);
+        p.combine_motion(v, o, 1.0);
+        p.subtract_motion(v, o, 1.0);
+        assert_eq!(p.velocity, Vector3::new(0.0, 0.0, 0.0));
+        assert_eq!(p.omega, Vector3::new(0.0, 0.0, 0.0));
+    }
+
+    /// `re_modify` (acclient.c:337286): a held sidestep + turn modifier set
+    /// PERSISTS across a base-cycle swap — the fastcast case (strafe/turn physics
+    /// held through a cast-gesture swap, visually inert but behaviorally real).
+    #[test]
+    fn re_modify_reapplies_held_set_across_a_base_swap() {
+        let mut stack = MotionModifierStack::default();
+        stack.add_modifier(Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 0.0), 1.0); // sidestep
+        stack.add_modifier(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 0.0, -1.5), 1.0); // turn
+        assert_eq!(stack.len(), 2);
+
+        // base = run-forward (4 m/s +X). Held modifiers add strafe + turn.
+        let run_base = MotionPhysics {
+            velocity: Vector3::new(4.0, 0.0, 0.0),
+            omega: Vector3::new(0.0, 0.0, 0.0),
+        };
+        let on_run = stack.combined_onto(run_base);
+        assert_eq!(on_run.velocity, Vector3::new(4.0, 1.0, 0.0));
+        assert_eq!(on_run.omega, Vector3::new(0.0, 0.0, -1.5));
+
+        // Base swaps to a cast gesture (~0 base physics). re_modify re-applies the
+        // held set → the strafe + turn PERSIST through the swap.
+        let on_cast = stack.combined_onto(MotionPhysics::default());
+        assert_eq!(on_cast.velocity, Vector3::new(0.0, 1.0, 0.0));
+        assert_eq!(on_cast.omega, Vector3::new(0.0, 0.0, -1.5));
+
+        stack.clear();
+        assert!(stack.is_empty());
+        assert_eq!(stack.combined_onto(run_base).velocity, run_base.velocity);
     }
 }

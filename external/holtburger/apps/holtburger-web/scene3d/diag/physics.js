@@ -108,6 +108,30 @@ function dist3(a, b) {
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+/**
+ * Snapback probe (2026-06-06): read the local player's run-rate INPUTS with
+ * provenance from the free wasm export `playerRunRateInputs()` (lib.rs). Parses
+ * the JSON and cross-checks the scalar `playerRunRate()` export. Returns null
+ * pre-spawn / before stats hydrate or if the export isn't in this build.
+ */
+function readRunRateInputs() {
+  if (typeof window === "undefined") return null;
+  const ls = window.liveScene3d;
+  const wasm = ls?.wasmExports ?? ls?.entityManager?.wasmExports ?? null;
+  if (!wasm || typeof wasm.playerRunRateInputs !== "function") return null;
+  try {
+    const parsed = JSON.parse(wasm.playerRunRateInputs());
+    if (typeof wasm.playerRunRate === "function") {
+      // The scalar the velScale path actually consumes — should equal
+      // parsed.run_rate (or the 4.5 fallback when source is "unavailable").
+      parsed.run_rate_scalar_export = wasm.playerRunRate();
+    }
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
 export function attachPhysics(diag) {
   const physics = {
     samples: [],
@@ -201,6 +225,25 @@ export function attachPhysics(diag) {
     /** Clear the ring buffer. Counters in summary() reset implicitly. */
     reset() {
       this.samples.length = 0;
+    },
+
+    /**
+     * Snapback probe (2026-06-06): the live run-rate INPUTS with provenance —
+     * `{run_rate, run_skill_used, run_skill_source, run_skill_wire, quickness,
+     * burden, load_mod, encumbrance, capacity, strength, num_augs,
+     * run_rate_scalar_export}` from the wasm `playerRunRateInputs` export.
+     *
+     * The research pass pinned the snapback root to the run-skill INPUT (the
+     * `run_rate_from_skill_and_burden` formula is retail-faithful; burden only
+     * brakes — `load_mod` clamps at 1.0). Capture this on the 1070 for `+Tester`
+     * and diff `run_skill_source` / `run_skill_used` against ACE
+     * `Creature.GetRunRate` (`GetCreatureSkill(Skill.Run).Current` + burden).
+     * `run_skill_source === "quickness_fallback"` is the prime suspect.
+     * Returns null pre-spawn / before stats hydrate. Read-only — does not
+     * perturb the integrator (cf. `__diag.physics.summary()` drift it drives).
+     */
+    runRate() {
+      return readRunRateInputs();
     },
   };
 

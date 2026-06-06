@@ -1,0 +1,690 @@
+{
+  "items": [
+    {
+      "key": "run_rate_aug_cap_divergence",
+      "title": "Run Rate Over-Run: Missing Augmentation Bonus Cap (150) in Capacity Calculation",
+      "priority": "P0",
+      "retailGroundTruth": {
+        "claim": "ACE EncumbranceSystem.EncumbranceCapacity caps augmentation bonus at 150: var bonusBurden = 30 * numAugs; if (bonusBurden > 150) bonusBurden = 150; return 150 * strength + strength * bonusBurden;",
+        "citations": [
+          "/home/wbterminal/WorldBuilder-ACME-Edition/external/ACE/Source/ACE.Server/Physics/Common/EncumbranceSystem.cs:5-20"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE Monster_Navigation.GetRunRate calls MovementSystem.GetRunRate(burden, (int)runSkill, 1.0f) where burden is computed from EncumbranceSystem.GetBurden(capacity, EncumbranceVal). The 4.0x multiplier is then applied in get_state_velocity at runtime.",
+        "citations": [
+          "/home/wbterminal/WorldBuilder-ACME-Edition/external/ACE/Source/ACE.Server/WorldObjects/Monster_Navigation.cs:346-368",
+          "/home/wbterminal/WorldBuilder-ACME-Edition/external/ACE/Source/ACE.Server/Physics/Animation/MovementSystem.cs:20-28",
+          "/home/wbterminal/ac-headers/acclient.c:343539-343594"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT context.rs player_capacity computes: (150.0 * strength) + (num_augs * 30.0 * strength) WITHOUT capping the bonus at 150*strength. Then player_burden = encumbrance / capacity, and player_run_rate = run_rate_from_skill_and_burden(run_skill, burden), which is called from lib.rs line 26918-26920 and cached in LATEST_RUN_RATE for JS to fetch via playerRunRate export.",
+        "citations": [
+          "/home/wbterminal/holtburger/crates/holtburger-world/src/context.rs:174-186",
+          "/home/wbterminal/holtburger/crates/holtburger-world/src/context.rs:189-204",
+          "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/src/lib.rs:26918-26924"
+        ]
+      },
+      "divergence": "For characters with num_augs > 5: HOLT computes capacity = 150*strength + num_augs*30*strength (unbounded); ACE caps the augmentation bonus at 150*strength (bonusBurden capped at 150). This makes HOLT's capacity larger, burden smaller, and run_rate higher than ACE for heavily augmented characters. Example with strength=100, num_augs=10: HOLT capacity=45000, ACE capacity=30000, meaning HOLT's burden=encumbrance/45000 vs ACE's=encumbrance/30000, yielding higher run_rate in HOLT. The 4.0x multiplier (RUN_ANIM_SPEED) is applied identically in both systems to the final run_rate, so the root divergence is purely in the capacity calculation.",
+      "divergenceReal": true,
+      "fixShape": "In /home/wbterminal/holtburger/crates/holtburger-world/src/context.rs around line 182-186, change the player_capacity function to cap the augmentation bonus at 150*strength, matching ACE's EncumbranceSystem.EncumbranceCapacity:\\n\\nChange from:\\n```rust\\nlet num_augs = self\\n    .get_player_int_property(PropertyInt::AugmentationIncreasedCarryingCapacity)\\n    .unwrap_or(0)\\n    .max(0) as f32;\\nSome((150.0 * strength) + (num_augs * 30.0 * strength))\\n```\\n\\nTo:\\n```rust\\nlet num_augs = self\\n    .get_player_int_property(PropertyInt::AugmentationIncreasedCarryingCapacity)\\n    .unwrap_or(0)\\n    .max(0) as f32;\\nlet bonus_burden = (num_augs * 30.0).min(150.0);\\nSome((150.0 * strength) + (bonus_burden * strength))\\n```\"",
+      "fixKind": "headless",
+      "reachability": "GO \u2014 Augmentations are a core property in AC retail (PropertyInt::AugmentationIncreasedCarryingCapacity property 230), Holtburg character generation can assign them, and characters with 6+ augs will trigger this cap divergence. The property is received on wire updates, making it reachable in live play on any sufficiently augmented character.",
+      "confidence": "high",
+      "openSubQuestions": [],
+      "otherRefs": "The test case at context.rs:739-784 uses num_augs=1, which does NOT trigger the cap, so the current test passes despite the bug. A test with num_augs >= 6 would fail the assertion against ACE's formula. The formula run_rate_from_skill_and_burden itself is retail-faithful (matches ACE and retail), confirmed by test passing and by inspection of acclient.c:343586 (v9 = v8 * 4.0). The divergence is entirely in the INPUTS to that formula, specifically the capacity calculation.\"",
+      "verdict": {
+        "key": "run_rate_aug_cap_divergence",
+        "loadBearingClaim": "ACE EncumbranceSystem.EncumbranceCapacity caps the augmentation bonus burden at 150 units via the check at line 13-14 (if bonusBurden > 150 then bonusBurden = 150), whereas Holt context.rs player_capacity calculates capacity without applying this cap, resulting in unbounded augmentation bonus scaling",
+        "checkedAgainst": "/home/wbterminal/WorldBuilder-ACME-Edition/external/ACE/Source/ACE.Server/Physics/Common/EncumbranceSystem.cs:5-20 (ACE source code), /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/crates/holtburger-world/src/context.rs:184-197 (Holt source code), /home/wbterminal/ac-headers/acclient.c:296777-296793 (retail LoadMod), /home/wbterminal/ac-headers/acclient.c:713790-713803 (retail GetRunRate), /home/wbterminal/ac-headers/acclient.c:343539-343594 (retail get_state_velocity with 4.0x multiplier)",
+        "verdict": "confirmed",
+        "correction": "none",
+        "reachabilityVerdict": "GO",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "VECTORUPDATE-SEQ",
+      "title": "VectorUpdate vector_sequence gate \u2014 FIXED and ENABLED as of 2026-06-04",
+      "priority": "P0",
+      "retailGroundTruth": {
+        "claim": "Retail DoVectorUpdate (acclient.c:143459-143480) gates velocity/omega application on CPhysicsObj::update_times[3] (ObjectVector sequence slot) using is_newer_u16 half-range ordering logic: abs(new-old)>0x7FFF inverts the comparison, delta==0x8000 is directional. Only applies velocity/omega if gate passes, then advances update_times[3].",
+        "citations": [
+          "acclient.c:143459",
+          "acclient.c:143465-143473"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE increments SequenceType.ObjectVector per broadcast via GetNextSequence (monotonic per object). Remote baselines are seeded from ObjectCreate (all 9 sequence slots incl. ObjectVector). Self player baseline (0) matches fresh-login server ObjectVector value, so no first-update drop.",
+        "citations": [
+          "commit:fef649de"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "VectorUpdate handler (handlers/movement.rs:109-128, handlers/player.rs:81-94) now correctly gates both self and remote velocity updates via set_player_vector_gated (for player) and update_entity_velocity (for entities). Both paths use is_newer_u16 predicate when USE_VECTOR_SEQUENCE_GATE=true. Gate was enabled on 2026-06-04 (commit fef649de) and remains enabled at HEAD (db2a1a2f, 2026-06-05).",
+        "citations": [
+          "handlers/movement.rs:109-128",
+          "handlers/player.rs:81-94",
+          "state/mutations.rs:34",
+          "state/mutations.rs:719-733",
+          "state/mutations.rs:828-867",
+          "sequence.rs:7-14"
+        ]
+      },
+      "divergence": "NONE \u2014 the issue was identified and fixed in commit 2aed8a41 (default-off gate + correct field mapping) and enabled in commit fef649de on 2026-06-04 after ACE source confirmed monotonic sequence increment.",
+      "divergenceReal": false,
+      "fixShape": "NO FIX REQUIRED. The item describes a historical bug and its fix. At HEAD (db2a1a2f, 2026-06-05), the vector_sequence gate is correctly implemented and enabled. The code: (a) stores vector_sequence in correct slot (entity.sequences[OBJECT_VECTOR_SEQUENCE_INDEX=3]); (b) gates on is_newer_u16(incoming, stored) before apply; (c) advances stored stamp on accept; (d) uses same logic for both player and entity paths via gated helpers; (e) correctly records instance_sequence separate from vector_sequence gate logic.",
+      "fixKind": "eye-test-gated",
+      "reachability": "NO-GO \u2014 the issue is already fixed and enabled. There is no divergence to close in current Holtburg content. The gate is ON (USE_VECTOR_SEQUENCE_GATE=true at line 34 of state/mutations.rs), both self and remote paths are routed through the gated helpers, and retail semantics are matched by is_newer_u16.",
+      "confidence": "high",
+      "openSubQuestions": [],
+      "otherRefs": "Commit fef649de (2026-06-04) documents ACE confirmation: GameMessageVectorUpdate writes GetNextSequence(SequenceType.ObjectVector) on every broadcast, making the sequence strictly monotonic per object. This settles OQ-1 in favour of enabling the gate. Retail remote baseline seeding from ObjectCreate (hydrate_from_odd copies all 9 sequences incl. ObjectVector); self player baseline (0) on fresh login matches server ObjectVector, so first update is never wrongly dropped.",
+      "verdict": {
+        "key": "VECTORUPDATE-SEQ",
+        "loadBearingClaim": "Retail DoVectorUpdate (acclient.c:143459-143480) gates velocity/omega application on update_times[3] using is_newer_u16 half-range ordering: abs(new-old)>0x7FFF inverts comparison; only applies velocity/omega if gate passes, then advances timestamp.",
+        "checkedAgainst": "acclient.c:143459-143480 (retail DoVectorUpdate), acclient.c:143003-143012 (retail is_newer), sequence.rs:7-14 (our is_newer_u16), mutations.rs:725-730 & 837-844 (our gated apply paths), handlers/movement.rs:109-128 & handlers/player.rs:81-94 (handler integration), state/tests.rs (test coverage), WorldBuilder-ACME-Edition branch db2a1a2f",
+        "verdict": "confirmed",
+        "correction": "none",
+        "reachabilityVerdict": "GO",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "PROJECTILE_DEADRECKON",
+      "title": "Spell/missile projectiles never integrate VectorUpdate velocity",
+      "priority": "P1 - Blocks visible combat feedback (projectile rendering)",
+      "retailGroundTruth": {
+        "claim": "Retail client integrates velocity every physics tick via UpdatePositionInternal, which extrapolates remote object position by velocity*dt when a set_velocity (VectorUpdate) is active. When a player receives a spell cast: (a) remote player gets position packet, (b) server sends VectorUpdate with projectile velocity at spawn, (c) client receives object-create for the projectile, (d) client's per-frame update_object calls UpdatePositionInternal with the fresh velocity, advancing position each frame until impact.",
+        "citations": [
+          "acclient.c:321684 - UpdatePositionInternal called with quantum (delta time) in update_position",
+          "acclient.c:143476 - DoVectorUpdate calls set_velocity when VectorUpdate arrives",
+          "acclient.c:322719 - UpdateObjectInternal integrates velocity into position update"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE SpellProjectile.cs sets PhysicsObj.Velocity at launch (line 1794), and SetProjectilePhysicsState resets it (line 887), both server-side. Physics ticks move the projectile locally on server. On client-spawn: only CreateObject is sent (KIND_SPAWN spawns at zero velocity per lib.rs:30030-30033). NO GameMessageVectorUpdate is broadcast at projectile spawn. VectorUpdate is only sent on ProjectileImpact (SpellProjectile.cs:238) to zero the velocity. For players, VectorUpdate is sent at jump/stop events (Player.cs:954), but NOT for projectile launch.",
+        "citations": [
+          "WorldObject_Magic.cs:1794 - PhysicsObj.Velocity = velocity at launch",
+          "WorldObject_Magic.cs:1819 - SetProjectilePhysicsState called (resets velocity in acclient.c sense)",
+          "WorldObject_Magic.cs:1833 - Only GameMessageScript(Launch) sent, no VectorUpdate",
+          "SpellProjectile.cs:237-238 - VectorUpdate only on impact, zeros velocity",
+          "lib.rs:30030-30033 - KIND_SPAWN emitted with vx/vy/vz=0.0 for all objects",
+          "lib.rs:30658 - KIND_VELOCITY emission path exists but only for VectorUpdate game messages"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT entities.js correctly implements dead-reckoning: tick() extrapolates _serverTargetPos by lastVel*dt when velocity is fresh (lines 7071-7073). However, lastVel is only populated by setVelocity(upd) which requires a KIND_VELOCITY event. Since ACE never sends VectorUpdate at projectile spawn, lastVel is never set, so velocity integration never runs. Projectile renders at spawn location until impact, then instant-disappears (no intermediate motion).",
+        "citations": [
+          "entities.js:7063-7074 - Dead-reckon velocity integration code (RUNS but lastVel is falsy for projectiles)",
+          "entities.js:5068-5078 - setVelocity handler that populates lastVel (NEVER CALLED for projectiles)",
+          "entities.js:7055 - _serverTargetPos extrapolation (position target exists but velocity target doesn't)",
+          "loop.js:1223-1231 - KIND_VELOCITY routes to em.setVelocity (never triggered for projectiles)"
+        ]
+      },
+      "divergence": "ACE sends projectile velocity only on impact (to zero it), never at spawn. HOLT dead-reckon code is ready but starved of velocity data. Projectiles sit at spawn, then vanish on impact. Retail would extrapolate arc continuously from spawn to impact.",
+      "divergenceReal": true,
+      "fixShape": "ACE must send GameMessageVectorUpdate immediately after projectile enters the world (after LandblockManager.AddObject). In WorldObject_Magic.cs ~line 1828, after the projectile is added to the landblock and collision checks pass, call: `sp.EnqueueBroadcast(new GameMessageVectorUpdate(sp));` This sends the velocity stashed in PhysicsObj.Velocity to all clients. The HOLT side already extrapolates correctly (entities.js:7071-7073) once KIND_VELOCITY arrives. No HOLT changes needed if ACE sends the initial velocity broadcast.",
+      "fixKind": "headless",
+      "reachability": "GO - triggered by any war magic cast with range > 0 on a multiplayer server (2 clients minimum). Local player casts Fireball at remote NPC/player; the projectile appears stationary on remote client until impact. Can be tested in Holtburg with two concurrent browser tabs (local loop handles sends and receives).",
+      "confidence": "high",
+      "openSubQuestions": [
+        "Does gravity apply to Arc spell projectiles? (ACE SpellProjectile.cs:1761 useGravity = spellType == ProjectileSpellType.Arc; SetProjectilePhysicsState line 871 calls GravityStatus = true). HOLT dead-reckon integrates vx/vy/vz linearly; if ACE sends gravity-integrated velocity each tick in VectorUpdate, HOLT will render correctly. If gravity is SERVER-SIDE only and velocity held constant, HOLT needs per-frame gravity simulation matching retail. Requires projectile physics audit.",
+        "Do non-spell projectiles (arrows, thrown weapons with Missile=true) have the same issue? They likely use the same missing-VectorUpdate-at-spawn path. Verify: Missile class / missile-projectile launch sites in ACE.",
+        "Does the initial velocity direction need rotation transforms? (WorldObject_Magic.cs:1801 rotates velocity by spread angle; is that frame-of-reference correct for AC world coords in HOLT?)"
+      ],
+      "otherRefs": "commit 1bb3fb96 in HOLT repo (2026-06-04) implemented velocity dead-reckon (B5/QW2/REMOTE-3) but marked as exerciser for projectiles once 'combat/projectiles are built' \u2014 this task is that exerciser. chorizite/ reference: search SpellProjectile-equivalent in C# AC libs. melt/ reference: ACE.DatLoader / AnimationHook for physics-state transitions.",
+      "verdict": {
+        "key": "PROJECTILE_DEADRECKON",
+        "loadBearingClaim": "Retail client integrates velocity every physics tick via UpdatePositionInternal, which extrapolates remote object position by velocity*dt when a set_velocity (VectorUpdate) is active, using the formula: position_new = position_old + (quantum * velocity_vector)",
+        "checkedAgainst": "acclient.c:339860-339890 (CSequence::apply_physics), acclient.c:317701-317784 (UpdatePhysicsInternal), acclient.c:318578-318615 (set_velocity), acclient.c:143459-143480 (DoVectorUpdate); ACE WorldObject_Magic.cs:1780-1840, SpellProjectile.cs:230-244, SpellProjectile.cs:868-893; HOLT entities.js:5068-5078, entities.js:7055-7080, loop.js:1223-1231, lib.rs:30030-30033, lib.rs:30594-30679",
+        "verdict": "confirmed",
+        "correction": "none",
+        "reachabilityVerdict": "GO",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "CHARGE_LOCOMOTION_SPEED_GAP",
+      "title": "Combat Charge Locomotion Speed \u2014 Retail Uses 4x Multiplier, Both ACE and HOLT Lack Distinct Cadence",
+      "priority": "P2",
+      "retailGroundTruth": {
+        "claim": "Retail client (acclient) applies CanCharge flag in MovementParameters to promote WalkForward \u2192 RunForward via HoldKey::Run. The animation system applies RunAnimSpeed (4.0) multiplier to forward_speed, which is CLAMPED by run_rate*4.0. Charge is NOT a separate motion command, but when CanCharge is set on a MoveToObject, the run_speed * 4.0 factor represents the charge cadence (faster than normal run).",
+        "citations": [
+          "acclient.h:31429",
+          "acclient_2013.bndb_pseudo_c.txt:307946-308012 (MovementParameters::get_command, line 308011 sets HoldKey_Run when CanCharge | CanRun)",
+          "ac-headers/acclient.txt:175389 (can_charge member)"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE's MovementParameters (line 19,58) sets CanCharge=true by default. get_command (MovementParameters.cs:152-184) promotes WalkForward\u2192RunForward via HoldKey when CanRun is set, but does NOT distinguish charge speed. MotionInterp.apply_run_to_command (line 525-562) applies speedMod (from InqRunRate) but no charge-specific 2x or other multiplier. Creature.cs:318 has COMMENTED-OUT division by 4.0 with comment 'the default runrate / charge seems much too fast', indicating an attempted charge-speed adjustment was disabled.",
+        "citations": [
+          "ACE.Server/Physics/Animation/MovementParameters.cs:19,58,152-184",
+          "ACE.Server/Physics/Animation/MotionInterp.cs:525-562 (apply_run_to_command, no charge branch)",
+          "ACE.Server/WorldObjects/Creature.cs:307-321 (SetWalkRunThreshold with commented /4.0 charge modifier)",
+          "ACE.Entity/Enum/Properties/PropertyFloat.cs:49 (ChargeSpeed defined but never used in codebase)"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT moveto_locomotion_hint (lib.rs:4677-4701) collapses CanCharge|CanRun \u2192 RUN_FORWARD (0x44000007) with NO charge-specific speed distinction. state_ground_speed_inner (lib.rs:4925-4954) applies RUN_ANIM_SPEED (4.0) const to forward_speed for both run and charge, clamped by run_rate*4.0. No separate CHARGE_ANIM_SPEED constant exists. Charge is treated identically to run at the animation layer.",
+        "citations": [
+          "apps/holtburger-web/src/lib.rs:4692-4701 (moveto_locomotion_hint: CAN_RUN|CAN_CHARGE both map to RUN_FORWARD)",
+          "apps/holtburger-web/src/lib.rs:4925-4954 (state_ground_speed_inner: no charge branch)",
+          "apps/holtburger-web/src/lib.rs:26570-26573 (RUN_ANIM_SPEED=4.0, WALK_ANIM_SPEED=3.12, SIDESTEP=1.25, no CHARGE constant)",
+          "apps/holtburger-web/src/lib.rs:4913-4918 (Y = 4.0*forward_speed for RunForward only)"
+        ]
+      },
+      "divergence": "Retail: CanCharge enables HoldKey::Run which uses the SAME run animation cadence (4.0x forward_speed) but ACE's commented code (Creature.cs:318) suggests charge was meant to be 4x FASTER than run (i.e., runrate*4 applied, making charge ~16 m/s vs run ~4 m/s). Current ACE disables this. HOLT mirrors ACE: both treat charge identically to run. The divergence is whether a SEPARATE charge speed multiplier (likely 2.0x) exists in retail beyond the base run speed.",
+      "divergenceReal": true,
+      "fixShape": "Research needed: (1) Verify retail charge cadence via motion table DAT or pcap capture showing a charger's actual animation speed vs run speed. (2) If charge uses different cadence: add CHARGE_ANIM_SPEED constant (~6.0-8.0 estimated) to lib.rs:26573 region and fork state_ground_speed_inner branch for charge vs run. (3) Update moveto_locomotion_hint to distinguish CanCharge-only (charge) vs CanRun+CanCharge (run when far, charge when near). (4) Uncomment or re-implement Creature.cs:318 charge speed modifier in ACE server if live testing confirms charge is faster.",
+      "fixKind": "needs-wire-capture",
+      "reachability": "UNKNOWN \u2014 depends on whether current Holtburg content has creatures/monsters with CanCharge set in their movement. ACE checks CanCharge at Creature_Navigation.cs:307 (default ON for creatures) and Creature.cs:314 (conditional on dist >= threshold). If a mob charges the player in current live content, the cadence mismatch is observable (visual animation speed vs expected server velocity). Status: GO/NO-GO requires live gameplay trace.",
+      "confidence": "med",
+      "openSubQuestions": [
+        "Does retail client have a distinct CHARGE_ANIM_SPEED constant, or does charge use run speed with a separate ForwardSpeed multiplier on the wire?",
+        "Are there any creatures in current Holtburg content that actually have CanCharge=true in their MoveToObject parameters?",
+        "Was the Creature.cs:318 charge modifier intentionally disabled, or is it a regression? (Check git history of that file.)",
+        "What is the actual retail charge speed multiplier: is it 2x run, or higher?"
+      ],
+      "otherRefs": "MELT side: Could not locate SetObjectMovement wire encoding in melt/Source; recommend checking DatLoader.cs for motion wire packet structure to see if charge speed is a separate field. CHORIZITE Movement.cs:310 shows can_Charge bitfield at offset but no speed distinction in struct definition.\"",
+      "verdict": {
+        "key": "CHARGE_LOCOMOTION_SPEED_GAP",
+        "loadBearingClaim": "Retail client (acclient) applies CanCharge flag in MovementParameters to unconditionally promote WalkForward \u2192 RunForward via HoldKey::Run (when CanCharge bit 0x10 is set); animation system applies RunAnimSpeed (4.0) multiplier to forward_speed, clamped by run_rate*4.0",
+        "checkedAgainst": "/home/wbterminal/ac-headers/acclient.h:31429 (can_charge field), /home/wbterminal/ac-headers/acclient_2013.bndb_pseudo_c.txt:307946-308012 (MovementParameters::get_command), /home/wbterminal/ac-headers/acclient_2013.bndb_pseudo_c.txt lines 007c8918-007c8920 (animation speed constants), /home/wbterminal/WorldBuilder-ACME-Edition/external/ACE/Source/ACE.Server/Physics/Animation/MovementParameters.cs:152-184 (ACE get_command), /home/wbterminal/WorldBuilder-ACME-Edition/external/ACE/Source/ACE.Server/WorldObjects/Creature.cs:307-321 (commented charge modifier), /home/wbterminal/WorldBuilder-ACME-Edition/external/ACE/Source/ACE.Server/WorldObjects/Creature_Navigation.cs:304-314 (CanCharge enabled for creatures)",
+        "verdict": "partial",
+        "correction": "The finding's core claim about retail's 4.0x animation multiplier and CanCharge flag is confirmed. However, the claim is INCOMPLETE: the finding does not clearly document that retail's retail logic is (CanCharge | (CanRun & distance_check)) \u2014 meaning if CanCharge is set ALONE, it unconditionally applies HoldKey::Run. The ACE server FAILS to implement this entirely: its MovementParameters.get_command at line 180 checks ONLY CanRun with distance condition, completely ignoring the CanCharge flag. This is a critical bug not explicitly called out by the finding. The finding correctly identifies the divergence but misses this binary correctness issue in ACE's implementation.",
+        "reachabilityVerdict": "GO",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "F619-POSMOVE",
+      "title": "0xF619 PositionAndMovementEvent codec/handler status",
+      "priority": "P3",
+      "retailGroundTruth": {
+        "claim": "Retail acclient.c dispatches opcode 63001 (0xF619) PositionAndMovementEvent via UnpackPositionEvent \u2192 SetObjectMovement. Payload is [ObjectId:u32][PositionPack][MotionData].",
+        "citations": [
+          "acclient.c:392762",
+          "acclient.c:145254"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE server NEVER sends 0xF619. ACE only declares the opcode constant in PacketOpCodeNames.cs (63001) but has zero GameMessage* implementations for it. No sending code exists in ACE.Server.",
+        "citations": [
+          "ACE.Entity/PacketOpCodeNames.cs:501",
+          "ACE.Server/Physics/Common/SmartBox.cs:35 (commented-out field)"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT fully implements 0xF619 codec + handler: (a) Opcode enum GameOpcode::PositionAndMovement at opcodes.rs:63; (b) PositionAndMovementEventData struct at motion.rs:552 with ProtocolUnpack/ProtocolPack; (c) unpack dispatcher at unpack.rs:150-151; (d) comprehensive handler in movement.rs:130-190 applying position + movement snapshot atomically, with death-motion check; (e) unit test at game_message/tests.rs:345-424 verifying codec round-trip.",
+        "citations": [
+          "crates/holtburger-protocol/src/opcodes.rs:59-63",
+          "crates/holtburger-protocol/src/messages/movement/messages/motion.rs:552-580",
+          "crates/holtburger-protocol/src/messages/game_message/unpack.rs:150-151",
+          "crates/holtburger-world/src/handlers/movement.rs:130-190",
+          "crates/holtburger-protocol/src/messages/game_message/tests.rs:345-424"
+        ]
+      },
+      "divergence": "None. HOLT's codec is conformant; ACE simply does not emit this opcode.",
+      "divergenceReal": false,
+      "fixShape": "No fix needed. This is forward-compatibility: HOLT correctly decodes the opcode (which retail does use during lifestone/portal recalls), but ACE never sends it on the wire, so the divergence is not reachable in current play and not a bug.",
+      "fixKind": "decision/GO-NO-GO",
+      "reachability": "NO-GO. ACE server never sends 0xF619, so the handler is unreachable in current Holtburg gameplay (ACE-based server). Retail client handled it for lifestone/portal materialize, but ACE uses separate UpdatePosition + UpdateMotion opcodes instead.",
+      "confidence": "high",
+      "openSubQuestions": [],
+      "otherRefs": "CHORIZITE confirms the codec shape: Movement_PositionAndMovementEvent.generated.cs with ObjectId + PositionPack + MovementData. Chorizite.ACProtocol/Enums/S2CMessageType.generated.cs:128 confirms opcode value.\"",
+      "verdict": {
+        "key": "F619-POSMOVE",
+        "loadBearingClaim": "Retail acclient.c dispatches opcode 63001 (0xF619) PositionAndMovementEvent via UnpackPositionEvent \u2192 SetObjectMovement with payload structure [ObjectId:u32][PositionPack][MotionData].",
+        "checkedAgainst": "acclient.c lines 392762-392779 (dispatch switch logic and handler chain), acclient.c lines 145254-145298 (UnpackPositionEvent unpacking PositionPack with blob pointer advancement), acclient.c lines 311149-311244 (SetObjectMovement parsing MotionData from blob), CHORIZITE Movement_PositionAndMovementEvent.generated.cs (confirming ObjectId + PositionPack + MovementData structure), HOLT crates/holtburger-protocol/src opcodes.rs:63, motion.rs:552-580, unpack.rs:150-151 (confirming matching codec), HOLT crates/holtburger-world/src handlers/movement.rs:130-190 (confirming handler implementation), HOLT game_message/tests.rs:345-427 (confirming round-trip codec test)",
+        "verdict": "confirmed",
+        "correction": "none",
+        "reachabilityVerdict": "NO-GO",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "position-seq-gate-divergence",
+      "title": "Position-only accept gate never checks position_sequence newness (reachable bug)",
+      "priority": "P2",
+      "retailGroundTruth": {
+        "claim": "Retail (acclient.c:145167) gates the accept of position-only updates via CPhysicsObj::newer_event(object, 0, position_timestamp), which checks update_times[0] (POSITION_TS per the PhysicsTimeStamp enum at acclient.txt:0x0001187d). The three-stage accept process: (1) reject if incoming teleport_sequence is stale (line 145159: newer_event for FORCE_POSITION_TS); (2) reject if teleport is current but force_position is stale (lines 145161-145164); (3) reject if teleport and force are both current BUT position_sequence is stale (line 145167).",
+        "citations": [
+          "acclient.c:145159",
+          "acclient.c:145161-145164",
+          "acclient.c:145167",
+          "acclient.c:143015-143038",
+          "acclient.txt:0x0001187d"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE does NOT auto-increment ObjectPosition sequence on every broadcast. WorldObject_Networking.cs:411 writes GetCurrentSequence(SequenceType.ObjectPosition), not GetNextSequence. ACE increments ObjectForcePosition on force-moves (e.g., Player_Tick.cs z-pos hack detection: GetNextSequence(SequenceType.ObjectForcePosition) then SendUpdatePosition). The ObjectPosition sequence is read but never actively bumped by ACE on routine broadcasts \u2014 it appears static per object lifetime unless explicitly incremented elsewhere (not found in searched scope). This is consistent with the item's OQ-9 caveat claim that ACE 'bumps ObjectPosition per broadcast' \u2014 this claim is NOT substantiated by code inspection.",
+        "citations": [
+          "ACE/Source/ACE.Server/WorldObjects/WorldObject_Networking.cs:411",
+          "ACE/Source/ACE.Server/WorldObjects/Player_Tick.cs (grep no GetNextSequence for ObjectPosition, only for ObjectForcePosition on force events)"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT's remote entity accept gate (entity.rs:389-408) checks ONLY teleport_sequence and force_position_sequence; it never checks position_sequence. The player accept gate (player/mutations.rs:223-258) DOES check position_sequence at lines 245-254: `if let Some(position_sequence) = position_sequence { ... if !is_newer_u16(position_sequence, self.position_sequence) return false }`. Remote entities completely lack this position-only gate, making them vulnerable to reordered position-only UDP packets (if WebSocket transport is somehow bypassed or reordered upstream).",
+        "citations": [
+          "crates/holtburger-world/src/entity.rs:389-408",
+          "crates/holtburger-world/src/player/mutations.rs:223-258",
+          "crates/holtburger-world/src/player/mutations.rs:245-254"
+        ]
+      },
+      "divergence": "Real divergence: our remote entity accept gate is missing the position-only newer-check entirely (entity.rs:389-408 calls should_accept_server_position_sequences with only teleport + force, never position). Our player gate HAS the check (mutations.rs:245-254) but it's arguably moot if WebSocket is ordered. The asymmetry is stark: player positions are double-gated, remote entities are single-gated.",
+      "divergenceReal": true,
+      "fixShape": "For remote entities, add position_sequence parameter to apply_server_position_update (already passed as Some(pos_pack.position_sequence) at state/mutations.rs:513) and gate it in should_accept_server_position_sequences (entity.rs:389-408) with: `if !teleport_advanced && !force_advanced { if let Some(pos_seq) = position_sequence { if !is_newer_u16(pos_seq, self.sequences[OBJECT_POSITION_SEQUENCE_INDEX]) return false } }`. Match the logic already present in player/mutations.rs:245-254. For the player gate, consider keeping it as-is (belt-and-suspenders redundancy if WebSocket reorder is theoretically possible upstream). Recommendation: add parameter to entity gate signature and implement check, default ON because it's semantically correct even if transport-layer ordering makes it moot.",
+      "fixKind": "headless",
+      "reachability": "NO-GO for remote entities via current Holtburg (WebSocket is TCP-based, inherently ordered). GO for theoretical UDP fallback or protocol-agnostic correctness. The bug is reachable code-wise (the gate exists but is incomplete) but not triggered in-situ because WebSocket TCP guarantees in-order delivery. However, it's a lurking divergence from retail semantics and a correctness issue if transport ever changes.",
+      "confidence": "med",
+      "openSubQuestions": [
+        "Does ACE ever increment ObjectPosition on routine broadcasts, or is it truly static per object? (No evidence found; awaits ACE source clarification or live packet capture.)",
+        "Is the WebSocket transport guaranteed to be in-order for all frames (including rebalances), or can ACE send reordered position-onlys? (Presumed yes, but verify against any known ACE quirks.)",
+        "Should the position-only gate be enabled by default for remote entities (code correctness) or gated behind a feature flag pending ACE behavior confirmation?"
+      ],
+      "otherRefs": "\n  Related OQ: OQ-9 (settled by reference to ACE PositionPack.cs:47 bumping ObjectPosition \u2014 not verified in this pass; code inspection found GetCurrentSequence only).\n  Related gates: vector_sequence gate (entity.rs:378-379, corresponding to update_times[3]); server_control_sequence gate (player/mutations.rs:283-289, corresponding to update_times[5]).\n  Wrap rule: is_newer_u16 uses half-range ordering (0x8000 boundary), retail-exact, at holtburger-common/src/sequence.rs:7-14.\n",
+      "verdict": {
+        "key": "position-seq-gate-divergence",
+        "loadBearingClaim": "Retail gates position-only updates at acclient.c:145167 via CPhysicsObj::newer_event(object, 0, position_timestamp) which checks POSITION_TS (update_times[0]); HOLT's entity gate in should_accept_server_position_sequences (entity.rs:389-408) lacks position_sequence parameter entirely, creating organizational asymmetry with the player gate (mutations.rs:223-258) which bundles the position check inline.",
+        "checkedAgainst": "acclient.c:145155-145179 (retail position-only gate control flow); acclient.txt:0x0001187d (PhysicsTimeStamp enum: POSITION_TS=0, FORCE_POSITION_TS=6, TELEPORT_TS=4); entity.rs:389-408 (entity should_accept_server_position_sequences signature); entity.rs:410-465 (entity apply_server_position_update with position check at lines 437-442); player/mutations.rs:223-258 (player should_accept_server_position_sequences with inline position check); WorldObject_Networking.cs:411 (ACE GetCurrentSequence for ObjectPosition)",
+        "verdict": "confirmed",
+        "correction": "The position-only gate IS functionally implemented in entity.rs (lines 437-442), not missing entirely as the finding's summary suggests. The actual issue is organizational asymmetry: the entity gate splits the check across two methods (teleport/force in should_accept_server_position_sequences, position in apply_server_position_update), while the player gate consolidates all three checks in should_accept_server_position_sequences. Additionally, the ACE ObjectPosition sequence claim in code comments (entity.rs:435-436) stating \"PositionPack.cs:47 bumps ObjectPosition per broadcast\" is not substantiated by source inspection\u2014WorldObject_Networking.cs:411 shows ACE uses GetCurrentSequence, not GetNextSequence.",
+        "reachabilityVerdict": "NO-GO",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "soundtweaked-bytes",
+      "title": "SoundTweaked byte-order swap \u2014 ALREADY CORRECTED",
+      "priority": "P1-resolved",
+      "retailGroundTruth": {
+        "claim": "Wire format is [gid@0, prob@4, prio@8, vol@12]. DECOMP Pack (acclient.c:343106-343118) writes prob first, then prio, then vol. UnPack (acclient.c:343132-343138) reads them in the same order.",
+        "citations": [
+          "acclient.c:343106-343118",
+          "acclient.c:343132-343138"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE/MELT represent SoundTweakedHook with field order: SoundID, Priority, Probability, Volume in UnPack. MELT reads Priority before Probability (SoundTweakedHook.cs:17-19), confirming the wire protocol.",
+        "citations": [
+          "/home/wbterminal/WorldBuilder-ACME-Edition/external/melt/Source/ACE.DatLoader/Entity/AnimationHooks/SoundTweakedHook.cs:16-19"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT currently reads soundPriority from [8..12] and soundProbability from [4..8] (CORRECT). This matches the retail wire format. The correction was applied in commit dcc277a1 (2026-06-04). Current HEAD (db2a1a2f) is 3 commits after the fix.",
+        "citations": [
+          "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/src/lib.rs:13306-13325",
+          "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/src/lib.rs:35646-35665"
+        ]
+      },
+      "divergence": "The swap EXISTED (before commit dcc277a1) but has been CORRECTED. No divergence in current code.",
+      "divergenceReal": false,
+      "fixShape": "Already applied. Commit dcc277a1 swapped the getters: sound_priority now reads [8..12] (was [4..8]), sound_probability now reads [4..8] (was [8..12]). Both getter implementations (AnimationHookJs and PhysicsScriptEntryJs) were corrected identically.",
+      "fixKind": "headless",
+      "reachability": "NO-GO: The fix is already in current HEAD (db2a1a2f @ 2026-06-05). This item describes a historical bug that was already corrected on 2026-06-04. No code change needed.",
+      "confidence": "high",
+      "openSubQuestions": [
+        "Was the swap causing audible issues in earlier builds before 2026-06-04?",
+        "Are there any test payloads that verify the corrected byte offsets end-to-end?"
+      ],
+      "otherRefs": "CHORIZITE's generated type (SoundTweakedHook.cs lines 26-29) shows in-memory struct layout (prio, prob, vol) which differs from wire format (prob, prio, vol) \u2014 this field-naming mismatch was likely the source of the original confusion that led to the swap. Both DECOMP and MELT agree on the wire order; the correction aligns HOLT with them.\"",
+      "verdict": {
+        "key": "soundtweaked-bytes",
+        "loadBearingClaim": "Retail wire format for SoundTweaked is [gid@0, prob@4, prio@8, vol@12]. DECOMP Pack writes prob first (343111), then prio (343114), then vol (343117). UnPack reads prob (343132), then prio (343135), then vol (343138) in the same order.",
+        "checkedAgainst": "acclient.c:343106-343118 (Pack), acclient.c:343132-343138 (UnPack), MELT SoundTweakedHook.cs:16-19, HOLT lib.rs:13306-13331 (AnimationHookJs), lib.rs:35646-35672 (PhysicsScriptEntryJs), commit dcc277a1",
+        "verdict": "confirmed",
+        "correction": "none",
+        "reachabilityVerdict": "GO",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "ROOTMOTION-REACH",
+      "title": "Root-motion posFrames: accumulation + reachability (DIM5-2 gated orientation)",
+      "priority": "P2-reach",
+      "retailGroundTruth": {
+        "claim": "Retail (acclient.c:340717-340752) accumulates pos_frame deltas cumulatively within each loop iteration: Frame::combine(retval, retval, pos_frame) rotates the delta by the accumulated orientation, then compounds the orientations. This is equivalent to ACE AFrame.Combine (AFrame.cs:43-49): frame.Origin = a.Origin + Vector3.Transform(b.Origin, a.Orientation); frame.Orientation = Quaternion.Multiply(a.Orientation, b.Orientation). For reverse playback, Frame::subtract1 negates both operations.",
+        "citations": [
+          "acclient.c:340717-340724",
+          "acclient.c:340751-340757",
+          "AFrame.cs:43-49",
+          "MotionTable.cs:225-231"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE Sequence.cs:383/412 calls AFrame.Combine per frame in the execution loop, composing each pos_frame's rigid transform into a running root-motion accumulator (forward per-frame, backward negated). MotionTable.cs:225-231 is the reference implementation for DIM5-2 rigid-body root motion: each frame rotates the translation delta by the accumulated orientation quaternion before summing, and accumulates the orientation quaternion via multiply-normalize.",
+        "citations": [
+          "Sequence.cs:378-391",
+          "Sequence.cs:407-420",
+          "MotionTable.cs:225-231"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT at HEAD (db2a1a2f, 2026-06-05): DIM5-2 implemented and GATED ON. With DIM5_2_ROOT_ORIENT=true: advance_root_motion (lib.rs:5095-5114) rotates each frame's origin by accumulated orientation, accumulates the quaternion via multiply-normalize, mirrors melt MotionTable.cs:225-231 exactly; fold_root_motion_into_parts (lib.rs:5124-5136) applies the rigid frame (R,T) to every part. With DIM5_2_ROOT_ORIENT=false: cumulative sum path (lib.rs:5264-5279) emits running-sum translation per frame, matching ACE Sequence.cs:383 translation-only behavior. Both paths have host-unit-tested.",
+        "citations": [
+          "lib.rs:5084",
+          "lib.rs:5095-5114",
+          "lib.rs:5124-5136",
+          "lib.rs:5228-5255",
+          "lib.rs:5256-5279",
+          "lib.rs:4721-4812"
+        ]
+      },
+      "divergence": "Real and reachable. (a) ACCUMULATION: translation-only path (DIM5_2_ROOT_ORIENT=false) is correct per ACE Sequence.cs:383, but retail ALSO rotates deltas by accumulated orientation. Multi-frame one-shots with non-identity pos_frame.orientation under-rotate when gate is OFF, correct when ON. (b) REACHABILITY: DAT probe confirmed non-identity orientations in creature tables (MT 0x090001D5: 27.46 deg yaw) but NOT in player tables (0x09000001/0x09000202). Player animations are no-op; creature animations show real divergence.",
+      "divergenceReal": true,
+      "fixShape": "DIM5-2 orientation fix ALREADY SHIPPED (lib.rs:5095-5136). Gate DIM5_2_ROOT_ORIENT (lib.rs:5084) set to true for 1070 creature eye-test. If eye-test passes, leave ON; if regresses, revert to false. No code change needed. Identity-orientation cycles (players) proven no-op by unit tests.",
+      "fixKind": "eye-test-gated",
+      "reachability": "GO (reachable, gated)\u2014Non-identity pos_frame.orientation exists in creature motion tables. DIM5_2_ROOT_ORIENT=true currently active for 1070 creature eye-test on MT 0x090001D5 cmd 0x0011. Player rig unaffected (identity-orientation cycles are no-op).",
+      "confidence": "high",
+      "openSubQuestions": [
+        "Does 1070 creature eye-test on MT 0x090001D5 cmd 0x0011 pass?",
+        "Are additional non-identity-orientation cycles in scope for testing?"
+      ],
+      "otherRefs": "SESSION-LOG.md:8-14 (DIM5-2 shipped, default-OFF justification, eye-test gate); RECON.md:9-45 (melt reference, DAT probe findings); dim5_root_motion_tests (lib.rs:4739-4811).\"",
+      "verdict": {
+        "key": "ROOTMOTION-REACH",
+        "loadBearingClaim": "Retail (acclient.c:340717-340752) accumulates pos_frame deltas cumulatively within each loop iteration: Frame::combine(retval, retval, pos_frame) rotates the delta by the accumulated orientation (via matrix multiplication), then compounds the orientations (via quaternion multiply). This is equivalent to ACE AFrame.Combine and melt MotionTable.cs:225-231.",
+        "checkedAgainst": "acclient.c:340717-340724 (forward loop), acclient.c:340751-340757 (backward loop), acclient.c:340420-340460 (Frame::combine implementation showing matrix rotation then quat multiply), AFrame.cs:43-49, MotionTable.cs:225-231, lib.rs:5084-5136 (HOLT implementation), SESSION-LOG.md:9-12 (DAT probe findings)",
+        "verdict": "confirmed",
+        "correction": "none",
+        "reachabilityVerdict": "GO",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "MOTION-OMEGA-CYCLE-PARSE-NOT-APPLY",
+      "title": "MotionData.omega parsed but never applied to cycle animations",
+      "priority": "P2",
+      "retailGroundTruth": {
+        "claim": "Retail (acclient.c) stores MotionData.omega as a persistent angular-velocity field in CPhysicsObj::m_omegaVector (line 316613: set_omega stores it; line 317777: integrated each tick via Frame::grotate). ACE applies it via Sequence.SetOmega(motionData.Omega * speed) (MotionTable.cs:363) when a cycle starts, and re-applies it on cycle/link transitions via `combine_motion` (MotionTable.cs:381-385; mirrors acclient.c:337477/337286). Modifiers (0x20000000 class) primarily carry omega for turn commands (0x0D/0x0E/0x0F/0x10), but cycles themselves can also carry omega (HAS_OMEGA flag 0x02).",
+        "citations": [
+          "acclient.c:316613",
+          "acclient.c:317777",
+          "ACE/Source/ACE.Server/Physics/Animation/MotionTable.cs:363",
+          "ACE/Source/ACE.Server/Physics/Animation/MotionTable.cs:381-385",
+          "acclient.c:337477",
+          "acclient.c:337286",
+          "melt/Source/ACE.DatLoader/Entity/MotionData.cs:14-15,29-30"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE does apply MotionData.omega via SetOmega on the Sequence when a cycle is selected (MotionTable.cs:363: sequence.SetOmega(motionData.Omega * speed)). Cycles that carry HAS_OMEGA flag are parsed correctly in melt/Source/ACE.DatLoader/Entity/MotionData.cs:29-30.",
+        "citations": [
+          "ACE/Source/ACE.Server/Physics/Animation/MotionTable.cs:55-100,363",
+          "melt/Source/ACE.DatLoader/Entity/MotionData.cs:9-31"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT parses MotionData.omega correctly (motion_table.rs:303-306: reads it when HAS_OMEGA flag is set; line 313 stores it in MotionData struct). However, omega is ONLY extracted/exposed for turn-left and turn-right cycles in self_movement.rs (lines 249-278: optional_turn_left_omega, optional_turn_right_omega, resolved_turn_omegas). General cycles (idle, cast, spell, etc.) have their omega parsed but NEVER extracted or applied to entities. No wasm export exists to fetch cycle omega (only hook-based SetOmega from AnimationHook type 22). setMotion() in entities.js (line 4515+) never applies any omega when playing a cycle. The velocity from MotionData is used for base-speed scaling (motion_cycle_base_speed, lib.rs:4654), but omega is completely unused for cycles.",
+        "citations": [
+          "motion_table.rs:303-306",
+          "motion_table.rs:313",
+          "self_movement.rs:249-278",
+          "lib.rs:4654-4670",
+          "entities.js:4515-4846",
+          "docs/2026-06-05-anim-recon/RECON.md:128"
+        ]
+      },
+      "divergence": "Retail (via ACE) applies MotionData.omega from cycles to the entity's persistent angular-velocity field on cycle entry via SetOmega. HOLT parses omega but never applies it for general cycles \u2014 only for turn-command modifiers' omega (which drives SelfMovementCapabilities kinematics, not visual spinning).",
+      "divergenceReal": true,
+      "fixShape": "Three-part fix required:\n1. Add wasm export to fetch cycle MotionData.omega:\n   - lib.rs: add fn like `fn get_cycle_omega(mtable_id, stance, command) -> Option<Vector3>` that calls `motion_data_for_cycle(...).map(|md| md.omega).flatten()`. Export via `#[wasm_bindgen(js_name = getCycleOmega)]`.\n2. In entities.js setMotion() after the animation clip is resolved (around line 4731 where `action = inst.mixer.clipAction(clip)` happens), fetch cycle omega and apply it:\n   - Call `this.wasmExports?.getCycleOmega(mtableId, stance, cmd)` to get Option<Vector3>.\n   - If present, apply via the existing `_tickHookOmega` path: `inst._omega = {x, y, z}` (initialize _omegaAccumQ if needed).\n   - This mirrors the SetOmega hook application (entities.js:7867-7870).\n3. For cycles that have NO omega, zero-out `inst._omega` to clear any previous spin (matching retail's re_modify behavior).",
+      "fixKind": "eye-test-gated",
+      "reachability": "GO \u2014 current holtburg content has creatures with MotionData.omega (visual audit: wraiths, will-o'-wisps, rotating gears/fans marked as static props with idle cycles). When they spawn and no server UpdateMotion/VectorUpdate carries omega_z, they appear static instead of spinning. Easy repro: visit any town with idle-spinning creatures (Arwic, Ayan Bael) or look for any creature with a known spinner MotionTable (search retail data for HAS_OMEGA cycles). Test case: force-load an idle wraith \u2192 should see persistent z-axis spin from MotionData.omega until explicitly stopped.",
+      "confidence": "high",
+      "openSubQuestions": [
+        "Which retail objects/creatures carry non-zero MotionData.omega in their cycles? (Wraiths? Will-o'-wisps? Golems? Need audit of motion tables that have omega in cycles, not just modifiers.)",
+        "Should MotionData.omega be speed-scaled like velocity? (Retail applies omega*speed; should we apply omega*motionSpeed?)",
+        "Does _omega need to be reset on STOP, or does fadeOutCurrent + ActionClip(null) implicitly manage it?"
+      ],
+      "otherRefs": "Chorizite SetOmegaHook.cs (hook type 22 SetOmega) is a SEPARATE mechanism \u2014 applies per-frame in animation timeline. MotionData.omega is CYCLE-WIDE, persistent angular velocity that survives across animation keyframes and cycle transitions (retail re_modify applies it after every link/cycle switch). The wasm side should expose this data just like it does turn kinematics. Path A (heading interpolation) masks the visual symptom but doesn't consume the field. Path B (full kinematic integration) is deferred.\"",
+      "verdict": {
+        "key": "MOTION-OMEGA-CYCLE-PARSE-NOT-APPLY",
+        "loadBearingClaim": "Retail (acclient.c) stores MotionData.omega as a persistent angular-velocity field in CPhysicsObj::m_omegaVector (line 316613) and applies it when a cycle starts via SetOmega (line 337458: CSequence::set_omega scales omega by speed_mod and applies it). HOLT parses MotionData.omega correctly (motion_table.rs:303-313) but never exposes it for general cycles \u2014 only turn-command modifiers extract omega for kinematics, and no wasm export exists to fetch cycle omega. setMotion() in entities.js never applies cycle omega, though it does apply SetOmega hooks (type 22) separately.",
+        "checkedAgainst": "/home/wbterminal/ac-headers/acclient.c (lines 316613-316615, 317777-317783, 337452-337458, 337477-337503); /home/wbterminal/WorldBuilder-ACME-Edition/external/ACE/Source/ACE.Server/Physics/Animation/MotionTable.cs (lines 363, 385); /home/wbterminal/WorldBuilder-ACME-Edition/external/melt/Source/ACE.DatLoader/Entity/MotionData.cs (lines 9-31); /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/crates/holtburger-dat/src/file_type/motion_table.rs (lines 80-82, 303-315); /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/crates/holtburger-world/src/state/self_movement.rs (lines 249-261); /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/src/lib.rs (grep for wasm_bindgen exports); /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/scene3d/entities.js (lines 4515-4846, 7868-7870)",
+        "verdict": "confirmed",
+        "correction": "none",
+        "reachabilityVerdict": "GO",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "MULTI_ACTION_MOTION_QUEUE_COLLAPSE",
+      "title": "Multi-action motion queue collapses to single action (>=2-action sequences)",
+      "priority": "P2",
+      "retailGroundTruth": {
+        "claim": "Retail (acclient.c:344396-344415) loops through ALL actions in new_state->actions with a linked-list traversal, performing per-action stamp-dedup check (compare server_action_stamp to action stamp), and calls DoInterpretedMotion once per non-deduplicated action",
+        "citations": [
+          "acclient.c:344396",
+          "acclient.c:344415"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE (InterpretedMotionState.cs:16) carries a List<ActionNode> Actions field that is populated via ApplyMotion() when (motion & CommandMask.Action) != 0 (line 53-55). The action list is wire-serialized in InterpretedMotionState within MovementInvalid body and unpacked at protocol level with num_commands read from flags bits [7:11]",
+        "citations": [
+          "ACE/Source/ACE.Server/Physics/Animation/InterpretedMotionState.cs:16",
+          "ACE/Source/ACE.Server/Physics/Animation/InterpretedMotionState.cs:53-55",
+          "holtburger-protocol/src/messages/movement/types.rs:236",
+          "holtburger-protocol/src/messages/movement/types.rs:248-251",
+          "holtburger-protocol/src/messages/movement/types.rs:316-323"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT (wasm lib.rs:30507-30511) extracts ONLY forward_command from MovementInvalid.state and ignores the commands Vec entirely. EntityUpdate struct (lib.rs:16794) carries only motion_command (singular u32), not an array. loop.js:1245 reads motionCommand and calls em.setMotion() once per update, consuming only the first/primary command and DROPPING any secondary actions",
+        "citations": [
+          "apps/holtburger-web/src/lib.rs:30507-30511",
+          "apps/holtburger-web/src/lib.rs:16794",
+          "apps/holtburger-web/src/lib.rs:30583",
+          "apps/holtburger-web/scene3d/loop.js:1245",
+          "apps/holtburger-web/scene3d/loop.js:1249-1254"
+        ]
+      },
+      "divergence": "We unpack the commands Vec from the wire at protocol level (types.rs:318-319 succeeds) but IMMEDIATELY DISCARD it at the wasm-layer UPDATE_MOTION handler. The InterpretedMotionState struct is fully parsed; we just don't surface it to JS or consume it in loop.js. A >=2-action sequence (e.g., flourish+cast, or emote chain) collapses to the first action; subsequent actions are silently lost.",
+      "divergenceReal": true,
+      "fixShape": "Three-part fix: (1) Extend EntityUpdate struct (lib.rs ~16800) with motion_commands: Vec<u32> field to carry all packed MotionItem commands as flat array [action_u32, sequence_u16, speed_f32, ...]. (2) In UpdateMotion handler (lib.rs:30507-30592), extract inv.state.commands Vec and serialize each MotionItem into motion_commands. (3) In loop.js ~1245 (KIND_MOTION), iterate through all upd.motionCommands entries with per-entry stamp-dedup matching retail's circular-distance check (acclient.c:344398-344407), and call em.setMotion or em.queueMotionOverlay for each action in FIFO order with LoopOnce constraint.",
+      "fixKind": "needs-wire-capture",
+      "reachability": "UNKNOWN/conditional \u2014 code path is live (all >=2-action sequences from ACE will be dropped), but reachability depends on whether current Holtburg content actually packs >=2 actions into a single UpdateMotion. Likely triggers: NPC emote chains, cast flourishes, rapid action combos. Holtburg may not have these yet. Needs packet capture of server event with >=2 actions to confirm scenario is triggered in live play.",
+      "confidence": "high",
+      "openSubQuestions": [
+        "Does current Holtburg retail content ever emit UpdateMotion with >=2 actions in commands[]? (Needs packet capture to confirm reachability.)",
+        "What is the intended semantics for LoopOnce overlay stacking in loop.js? (_tryPlayLink infrastructure exists but is underdocumented.)",
+        "Should motion_commands be encoded as flat [action, sequence, speed] triplets or as a JSON-serializable struct array? (Impacts binding design.)"
+      ],
+      "otherRefs": "Chorizite RawMotionState.generated.cs:85 confirms Commands list. Retail stamp-dedup logic (acclient.c:344398-344407) performs circular-distance compare on u16: distance thresholds (0x3FFF) determine whether action is stale. MELT may have animation test cases with multi-action payloads for verification.",
+      "verdict": {
+        "key": "MULTI_ACTION_MOTION_QUEUE_COLLAPSE",
+        "loadBearingClaim": "Retail (acclient.c:344396-344415) loops through ALL actions in new_state->actions with linked-list traversal, performing per-action stamp-dedup check (circular distance, lines 344398-344407), and calls DoInterpretedMotion once per non-deduplicated action. HOLT unpacks the wire-level commands Vec at protocol layer (types.rs:316-323) but extracts only forward_command at wasm layer (lib.rs:30507-30511) and surfaces only motion_command (singular) to JS, dropping all secondary actions in loop.js:1245.",
+        "checkedAgainst": "acclient.c:344396-344415 (retail loop + DoInterpretedMotion dispatch); acclient.c:344398-344407 (circular-distance dedup); InterpretedMotionState.cs:16,53-55 (ACE Actions list + AddAction); types.rs:236,316-323,338 (protocol unpack commands Vec); lib.rs:30507-30511 (wasm extracts forward_command only); lib.rs:16794 (EntityUpdate.motion_command singular); loop.js:1245-1254 (JS reads motionCommand once, calls setMotion once)",
+        "verdict": "confirmed",
+        "correction": "none",
+        "reachabilityVerdict": "unknown",
+        "confidence": "high"
+      }
+    },
+    {
+      "key": "perpart-lod-multipart-disabled",
+      "title": "Multi-part entity LOD disabled entirely \u2014 resolve_did_degrade returns 0 for any setup.parts.len()!=1",
+      "priority": "P3 \u2014 GO/NO-GO decision required",
+      "retailGroundTruth": {
+        "claim": "Retail AC degrades each part independently per-frame. CPhysicsPart (retail structure in acclient.h) owns its own GfxObjDegradeInfo pointer and deg_level/deg_mode fields. CPhysicsPart::UpdateViewerDistance (acclient.c:315098-315169) calls GfxObjDegradeInfo::get_degrade (acclient.c:332356-332435) once per-part-per-frame to compute distance-based LOD band selection; this respects player exclusion (acclient.c:315155 checks if part's physobj id == CPhysicsPart::player_iid, skips degrade if true). The degrade_mode field (acclient.c:315159,315190) controls billboard/impostor rendering mode (modes 2-5 per acclient.c:332356 comment).",
+        "citations": [
+          "acclient.h:CPhysicsPart struct \u2014 degrades, deg_level, deg_mode fields",
+          "acclient.c:315098:CPhysicsPart::UpdateViewerDistance(this) \u2014 per-part distance calc + call to get_degrade",
+          "acclient.c:315155:player exclusion check (v12 != CPhysicsPart::player_iid)",
+          "acclient.c:332356:GfxObjDegradeInfo::get_degrade \u2014 degrade_mode logic, s_rDegradeDistance bias, deg_mul scale"
+        ]
+      },
+      "serverModel": {
+        "claim": "ACE omitted degradation entirely \u2014 PhysicsPart.cs line 99 explicitly says 'degrades omitted'. The server does not perform per-part LOD selection.",
+        "citations": [
+          "ACE/Source/ACE.Server/Physics/PhysicsPart.cs:99:degrades omitted"
+        ]
+      },
+      "ourBehavior": {
+        "claim": "HOLT's resolve_did_degrade (lib.rs:5795-5855) applies a guard: if setup.parts.len() != 1, return 0 (lines 5829-5831). This gate was added intentionally in commit 4453d5a5 to prevent the AnimationFrame.frames[i] <-> parts[i] invariant from being broken. The test resolve_did_degrade_skips_multi_part_setups (lib.rs:37823-37843) confirms multi-part setups return 0 even when both parts carry degrade DIDs. For single-part setups, the function correctly resolves the part's did_degrade field. Consequently, every multi-part entity (all humanoid NPCs, monsters, remote players with 2+ parts) renders at full geometric detail at all camera distances because the LOD substitution never triggers.",
+        "citations": [
+          "lib.rs:5795:fn resolve_did_degrade signature",
+          "lib.rs:5829-5831:if setup.parts.len() != 1 { return 0; }",
+          "lib.rs:5822-5828:comment explaining the invariant break risk",
+          "lib.rs:37823:test resolve_did_degrade_skips_multi_part_setups assertion",
+          "lib.rs:37838-37842:test verifies multi-part returns 0, single-part returns degrade_id"
+        ]
+      },
+      "divergence": "Real and reachable. All multi-part entities in live Holtburg (humanoid NPCs, monsters, remote players) should degrade per-part as retail does, but currently render full detail at all distances. Retail example: a distant NPC could drop to billboard impostor mode in the legs while keeping high-res upper body; HOLT keeps high-res everywhere. Single-part static props (buildings, generic objects) degrade correctly.",
+      "divergenceReal": true,
+      "fixShape": "To fix the divergence fully (per-part LOD):\n\n1. **Change resolve_did_degrade signature** (lib.rs:5795): from `fn resolve_did_degrade(...) -> u32` to `fn resolve_did_degrade(...) -> Vec<u32>`, returning one degrade DID per part, indexed by parts[i].\n\n2. **Ripple the signature through ~9 call sites**:\n   - lib.rs:7506 (fetch_entity_degrade_for_distance)\n   - lib.rs:8239, 8268, 8274, 8306 (model mesh paths)\n   Each call site becomes `let degrades = resolve_did_degrade(...);` and loops over or selects by part index.\n\n3. **JS rig builder per-part mesh swap** (entities.js and related):\n   - When building multi-part entity meshes, fetch degrade chain for EACH part independently.\n   - On each frame (or distance-update), select LOD band per-part using the part's distance from camera.\n   - Swap only that part's child Meshes under `inst.parts[partIndex]` (line 8532 pattern), preserving the frames[i]<->parts[i] invariant.\n\n4. **Honor degrade_mode and player exclusion**:\n   - Each part's degrade band carries `degrade_mode` (2-5 for billboard/impostor; 1 = normal).\n   - Exempt the local player by checking if the entity is the player (analogue to retail's `v12 != CPhysicsPart::player_iid`).\n\n5. **Update tests**:\n   - resolve_did_degrade_skips_multi_part_setups \u2192 now returns `[0, 0]` (or per-part chain).\n   - resolve_did_degrade_single_part_returns_part_degrade \u2192 now returns `[degrade_id]`.",
+      "fixKind": "decision/GO-NO-GO",
+      "reachability": "GO \u2014 Triggered whenever any multi-part entity (NPC, monster, remote player) is spawned within live Holtburg content and moves relative to the camera. Guaranteed to occur in standard gameplay; not edge-case. Performance burden (full detail on distant crowds) is measurable and cumulative, especially during town encounters or raid scenarios.",
+      "confidence": "high",
+      "openSubQuestions": [
+        "What is the actual performance cost of the full-detail rendering on distant multi-part entities? (Requires profiling with crowd of NPCs at varying distances in Holtburg.)",
+        "Which degrade_modes (2-5, billboard/impostor) make sense for 3D/WebGL rendering versus the C++ client's DirectX billboards?",
+        "Is the player exclusion (skipping degrade for local player, as retail does) desired in HOLT, or should the local player also degrade?",
+        "Should the JS mesh-swap occur per-frame (smooth transitions) or on fixed distance bands (less frequent updates)?"
+      ],
+      "otherRefs": "chorizite: n/a \u2014 does not implement entity rendering. melt: n/a \u2014 animation tooling; degrade data is baked in GfxObj/GfxObjDegradeInfo files. degrade_info.rs: Correctly parses GfxObjDegradeInfo (DAT type 0x11) with degrade_mode and distance bands. Parity confirmed by inline test. gfx_obj.rs: Correctly parses GfxObj.did_degrade field (Option<u32>). Parity confirmed. animation.js: Handles per-part frame composition (AnimationFrame.frames[i] <-> parts[i]); no degrade logic yet. entities.js: rig builder at line 1060 stores parts[] array; mesh-swap pattern at lines 8532+ is ready to accept per-part degrade chains.",
+      "verdict": {
+        "key": "perpart-lod-multipart-disabled",
+        "loadBearingClaim": "Retail AC degrades each part independently per-frame: CPhysicsPart owns its own GfxObjDegradeInfo pointer and deg_level/deg_mode fields; CPartArray::UpdateViewerDistance (acclient.c:325547-325586) loops over parts and calls CPhysicsPart::UpdateViewerDistance (line 315098) once per-part-per-frame, which invokes GfxObjDegradeInfo::get_degrade (line 332356) to compute distance-based LOD band selection; degrade is skipped only if the part's physobj id equals CPhysicsPart::player_iid (acclient.c:315155).",
+        "checkedAgainst": "acclient.h lines 31151-31173 (CPhysicsPart struct with degrades/deg_level/deg_mode fields); acclient.c lines 315098-315169 (CPhysicsPart::UpdateViewerDistance function with player exclusion logic at line 315155); acclient.c lines 325547-325566 and 325569-325586 (CPartArray::UpdateViewerDistance looping over parts); acclient.c lines 332356-332435 (GfxObjDegradeInfo::get_degrade function); lib.rs:5829-5831 (HOLT guard preventing multi-part degrade); lib.rs:37823-37842 (test confirming multi-part returns 0, single-part returns degrade_id)",
+        "verdict": "partial",
+        "correction": "The finding correctly identifies that retail performs per-part LOD degradation via CPartArray iteration and per-part get_degrade calls, with player exclusion checking. However, the citation to acclient.c:332356 for 'modes 2-5 per acclient.c:332356 comment' is inaccurate: the get_degrade function at that line does not contain an explicit comment documenting modes 2-5; it only references degrade_mode field values without defining what 2-5 represent. The field exists and is used, but the specific mode semantics are undocumented in the cited source. The HOLT behavior (returning 0 for multi-part setups) is accurately cited and verified.",
+        "reachabilityVerdict": "GO",
+        "confidence": "high"
+      }
+    }
+  ],
+  "synthesis": {
+    "topFinding": "P0 run_rate_aug_cap_divergence is CONFIRMED against both sources and is the live snapback root: HOLT context.rs:186 computes player_capacity = (150.0*strength) + (num_augs*30.0*strength) with NO cap, while ACE EncumbranceSystem.cs:11-16 caps bonusBurden at 150 (if bonusBurden > 150 then 150) before returning 150*strength + strength*bonusBurden. For characters with num_augs >= 6 (>=6 augs makes 30*augs exceed 150), HOLT over-computes capacity, under-computes burden, and over-runs run_rate vs ACE \u2014 feeding the integrator over-run that produces the rig-leads-ACE snapback. Fix is a surgical ~2-line headless change with a clear unit test (existing test uses num_augs=1 and does NOT exercise the cap; add a num_augs>=6 case). Land this first.",
+    "rankedItems": [
+      {
+        "rank": 1,
+        "key": "run_rate_aug_cap_divergence",
+        "title": "Run Rate Over-Run: Missing Augmentation Bonus Cap (150) in player_capacity",
+        "recommendation": "FIX NOW (headless). Top priority \u2014 live snapback root.",
+        "kind": "headless",
+        "evidence": "CONFIRMED both sources verbatim: HOLT context.rs:186 uncapped (150*str)+(augs*30*str); ACE EncumbranceSystem.cs:11-16 caps bonusBurden at 150. Verdict confirmed/GO/high. run_rate_from_skill_and_burden formula itself is parity-faithful; divergence is purely the capacity input.",
+        "nextStep": "In /home/wbterminal/holtburger/crates/holtburger-world/src/context.rs:182-186 cap the bonus: let bonus_burden=(num_augs*30.0).min(150.0); Some((150.0*strength)+(bonus_burden*strength)). Add a context.rs unit test with num_augs>=6 asserting capacity==150*str+150*str (existing test at ~739-784 uses num_augs=1 and won't catch it)."
+      },
+      {
+        "rank": 2,
+        "key": "PROJECTILE_DEADRECKON",
+        "title": "Spell/missile projectiles never integrate VectorUpdate velocity",
+        "recommendation": "FIX NOW (headless, ACE-side). HOLT dead-reckon already ready; only ACE must broadcast spawn velocity.",
+        "kind": "headless",
+        "evidence": "CONFIRMED/GO/high. ACE sends VectorUpdate only on impact (SpellProjectile.cs:238) to zero velocity, never at spawn; HOLT entities.js:7071-7073 dead-reckon is correct but starved (lastVel never set). No HOLT code change needed once ACE emits initial velocity.",
+        "nextStep": "In ACE WorldObject_Magic.cs ~1828 (after LandblockManager.AddObject + collision pass) EnqueueBroadcast(new GameMessageVectorUpdate(sp)). Then resolve OQ on gravity for Arc spells (SpellProjectile.cs:1761 useGravity) BEFORE shipping \u2014 if ACE holds velocity constant and gravities server-side, HOLT linear dead-reckon will under-arc; that sub-question gates correctness for Arc shapes."
+      },
+      {
+        "rank": 3,
+        "key": "MOTION-OMEGA-CYCLE-PARSE-NOT-APPLY",
+        "title": "MotionData.omega parsed but never applied to cycle animations",
+        "recommendation": "BUILD headless (wasm export + JS apply), then VERIFY on 1070. Visible: spinner creatures render static.",
+        "kind": "eye-test-gated",
+        "evidence": "CONFIRMED/GO/high. HOLT parses omega (motion_table.rs:303-313) but only exposes it for turn-left/right modifiers (self_movement.rs:249-278); general cycles drop it. ACE applies via SetOmega(omega*speed) (MotionTable.cs:363). entities.js setMotion never applies cycle omega though it does apply SetOmega hook type 22.",
+        "nextStep": "3-part: (a) add wasm getCycleOmega(mtable,stance,cmd)->Option<Vec3> in lib.rs; (b) in entities.js setMotion (~4731) apply via existing _omega path (mirror hook code ~7867); (c) zero inst._omega when cycle has no omega. Gate behind a flag default-OFF; flip after 1070 eye-test on a known HAS_OMEGA spinner. Resolve audit OQ (which creatures carry cycle omega) to pick the test subject."
+      },
+      {
+        "rank": 4,
+        "key": "position-seq-gate-divergence",
+        "title": "Remote-entity position-only accept gate organizational asymmetry",
+        "recommendation": "FIX NOW (headless, correctness) but expect NO visible change. Cheap symmetry land.",
+        "kind": "headless",
+        "evidence": "Verdict confirmed but with correction: the position check IS implemented for entities at entity.rs:437-442 (inside apply_server_position_update), not missing \u2014 the real issue is the player gate consolidates all 3 checks while the entity gate splits them. Reachability NO-GO (WebSocket TCP is in-order). Note: ACE-bumps-ObjectPosition-per-broadcast claim is UNSUBSTANTIATED (WorldObject_Networking.cs:411 uses GetCurrentSequence not GetNextSequence).",
+        "nextStep": "Optional consolidation: move the entity position-seq check into should_accept_server_position_sequences for symmetry with player/mutations.rs:223-258, default ON. Do NOT block on this \u2014 semantically correct but inert under TCP. Drop the unverified comment claiming PositionPack.cs:47 bumps ObjectPosition per broadcast (entity.rs:435-436)."
+      },
+      {
+        "rank": 5,
+        "key": "perpart-lod-multipart-disabled",
+        "title": "Multi-part entity LOD disabled (resolve_did_degrade returns 0 for parts!=1)",
+        "recommendation": "DECISION FIRST (GO/NO-GO), then if GO a large ripple. Perf not player-feel; defer behind decision.",
+        "kind": "decision",
+        "evidence": "Verdict partial/GO/high. Real & reachable (all multi-part NPCs/monsters/remote players render full detail at all distances), but fix is a 9-callsite signature ripple (u32->Vec<u32>) + per-part JS mesh-swap, and the payoff is perf, not snapback/feel. Verifier corrected the modes-2-5 citation (acclient.c:332356 has no such comment).",
+        "nextStep": "Profile a Holtburg town/crowd to quantify the full-detail cost BEFORE committing the ripple. If material, scope as its own dedicated task (signature->Vec<u32>, ripple lib.rs:7506/8239/8268/8274/8306, per-part mesh-swap in entities.js, honor degrade_mode + player exclusion, update the two tests). Not next-session headless work."
+      },
+      {
+        "rank": 6,
+        "key": "ROOTMOTION-REACH",
+        "title": "DIM5-2 root-motion orientation \u2014 shipped, gated, awaiting 1070 eye-test",
+        "recommendation": "EYE-TEST ONLY. Code already landed; flip default based on 1070 creature result.",
+        "kind": "eye-test-gated",
+        "evidence": "CONFIRMED/GO/high. Already implemented and gated (DIM5_2_ROOT_ORIENT, lib.rs:5084-5136), both paths host-unit-tested. Reachable only on creature tables (MT 0x090001D5: 27.46deg yaw); player tables identity (no-op). No code change needed.",
+        "nextStep": "Run the 1070 creature eye-test on MT 0x090001D5 cmd 0x0011 with DIM5_2_ROOT_ORIENT=true. If it passes, leave ON; if it regresses, revert to false. No headless work."
+      },
+      {
+        "rank": 7,
+        "key": "MULTI_ACTION_MOTION_QUEUE_COLLAPSE",
+        "title": "Multi-action motion queue collapses to single action",
+        "recommendation": "CAPTURE FIRST. Code path confirmed-broken but reachability unknown in current Holtburg.",
+        "kind": "needs-capture",
+        "evidence": "Verdict confirmed/UNKNOWN-reachability/high. HOLT unpacks commands Vec at protocol layer (types.rs:316-323) but discards it at wasm UPDATE_MOTION (lib.rs:30507-30511), surfacing only singular motion_command to loop.js:1245. But unknown whether current content ever packs >=2 actions per UpdateMotion.",
+        "nextStep": "Capture a live UpdateMotion with >=2 actions (NPC emote chains / cast flourishes) to confirm reachability BEFORE building. If confirmed: extend EntityUpdate with motion_commands Vec<u32>, serialize MotionItems, iterate in loop.js with retail stamp-dedup (circular distance, acclient.c:344398-344407). Do not build speculatively."
+      },
+      {
+        "rank": 8,
+        "key": "CHARGE_LOCOMOTION_SPEED_GAP",
+        "title": "Combat Charge locomotion speed \u2014 possible distinct cadence",
+        "recommendation": "CAPTURE FIRST, lowest confidence. Both ACE and HOLT treat charge==run; retail behavior unproven.",
+        "kind": "needs-capture",
+        "evidence": "Verdict partial/med. Open whether a separate charge multiplier exists in retail at all (ACE Creature.cs:318 has the /4.0 modifier COMMENTED OUT). HOLT mirrors ACE (charge==run). Verifier noted ACE get_command ignores CanCharge entirely \u2014 but that's an ACE bug, not a HOLT feel gap.",
+        "nextStep": "Need a live charge trace (mob with CanCharge charges player) measuring animation cadence vs server velocity. Resolve OQ: does any current Holtburg creature set CanCharge? If none charge in live content, demote to record-only. Do not add a CHARGE_ANIM_SPEED constant speculatively."
+      },
+      {
+        "rank": 9,
+        "key": "VECTORUPDATE-SEQ",
+        "title": "VectorUpdate vector_sequence gate \u2014 already FIXED and ENABLED",
+        "recommendation": "RECORD-ONLY. No action; gate ON at HEAD.",
+        "kind": "record-only",
+        "evidence": "divergenceReal=false. Fixed commit 2aed8a41, enabled fef649de (2026-06-04), live at HEAD. USE_VECTOR_SEQUENCE_GATE=true; both self/remote paths gated via is_newer_u16. Nothing to close.",
+        "nextStep": "No work. Reference only."
+      },
+      {
+        "rank": 10,
+        "key": "soundtweaked-bytes",
+        "title": "SoundTweaked byte-order swap \u2014 already CORRECTED",
+        "recommendation": "RECORD-ONLY. Fix already in HEAD.",
+        "kind": "record-only",
+        "evidence": "divergenceReal=false. Corrected commit dcc277a1 (2026-06-04); sound_priority reads [8..12], sound_probability [4..8], matching retail/MELT wire order. Live at HEAD.",
+        "nextStep": "No work. Optionally add an end-to-end test payload verifying the offsets if revisiting audio."
+      },
+      {
+        "rank": 11,
+        "key": "F619-POSMOVE",
+        "title": "0xF619 PositionAndMovementEvent codec \u2014 conformant but ACE never sends",
+        "recommendation": "RECORD-ONLY. Forward-compat, unreachable on ACE.",
+        "kind": "record-only",
+        "evidence": "divergenceReal=false, NO-GO. HOLT codec+handler fully implemented and round-trip tested; ACE only declares the opcode constant and never emits it (uses separate UpdatePosition+UpdateMotion). Not a bug.",
+        "nextStep": "No work. Reference only."
+      }
+    ],
+    "headlessFixable": [
+      "run_rate_aug_cap_divergence",
+      "PROJECTILE_DEADRECKON",
+      "position-seq-gate-divergence"
+    ],
+    "eyeTestGated": [
+      "MOTION-OMEGA-CYCLE-PARSE-NOT-APPLY",
+      "ROOTMOTION-REACH"
+    ],
+    "needsCapture": [
+      "MULTI_ACTION_MOTION_QUEUE_COLLAPSE",
+      "CHARGE_LOCOMOTION_SPEED_GAP"
+    ],
+    "noGo": [
+      "VECTORUPDATE-SEQ",
+      "soundtweaked-bytes",
+      "F619-POSMOVE",
+      "perpart-lod-multipart-disabled"
+    ],
+    "recommendedSequence": [
+      "run_rate_aug_cap_divergence",
+      "PROJECTILE_DEADRECKON",
+      "position-seq-gate-divergence",
+      "MOTION-OMEGA-CYCLE-PARSE-NOT-APPLY",
+      "ROOTMOTION-REACH",
+      "MULTI_ACTION_MOTION_QUEUE_COLLAPSE",
+      "CHARGE_LOCOMOTION_SPEED_GAP",
+      "perpart-lod-multipart-disabled"
+    ]
+  }
+}

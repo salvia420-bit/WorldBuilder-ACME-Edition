@@ -65,6 +65,117 @@ const KIND_ATTACH = 7;
 // single shared scratch is safe across both drain paths.
 const _velScratch = { guid: 0, vx: 0, vy: 0, vz: 0, omegaZ: 0 };
 
+// Multi-action motion queue (2026-06-06, approach B) — `?multiAction=on` (default
+// OFF) FIFO-plays the Action-class `commands` list (emotes / gestures) that the
+// single motion_command path drops, drained from the wasm `pollMotionActions`
+// side-channel. Default OFF: needs a 1070 eye-test + a reachability confirmation
+// (the wasm side logs `commands.len() > 1`). NOTE: cosmetic actions, NOT the
+// strafe-cast / cast-break tech (those are SubState ForwardCommand + the sidestep
+// axis — a separate gap).
+const MULTI_ACTION_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("multiAction")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// Per-entity last-applied action stamp (15-bit) for the multi-action FIFO's
+// stamp-dedup. Mirrors retail's per-object `server_action_stamp`
+// (acclient.c:344400-344414): an action plays only if its sequence is NEWER
+// under the half-range wrap compare.
+const _actionStamps = new Map();
+function actionStampIsNewer(seq, stamp) {
+  const a = seq & 0x7fff, b = stamp & 0x7fff;
+  const diff = Math.abs(a - b);
+  return diff <= 0x3fff ? b < a : a < b;
+}
+
+// Drain the wasm multi-action side-channel (`pollMotionActions`, flat 4-u32
+// groups: [guid, command_low, packed_sequence, stance]) and FIFO-play each NEW
+// action per entity. No-op unless `?multiAction=on`. Plays via `em.setMotion`
+// (same path the single motion_command uses) — Action-class commands resolve to
+// their one-shot clip; unresolved ones no-op harmlessly. Local guid is skipped.
+function drainMotionActions(scene3d, sessionHandle) {
+  if (!MULTI_ACTION_ON) return;
+  if (!sessionHandle || typeof sessionHandle.pollMotionActions !== "function") return;
+  let flat;
+  try {
+    flat = sessionHandle.pollMotionActions();
+  } catch (_) {
+    return;
+  }
+  if (!flat || flat.length < 4) return;
+  const em = scene3d?.entityManager;
+  if (!em) return;
+  for (let i = 0; i + 3 < flat.length; i += 4) {
+    const guid = flat[i] >>> 0;
+    if (isLocalPlayerGuid(guid)) continue;
+    const cmdLow = flat[i + 1] >>> 0;
+    const seq = flat[i + 2] & 0x7fff;
+    const stance = flat[i + 3] >>> 0;
+    const prev = _actionStamps.get(guid);
+    if (prev !== undefined && !actionStampIsNewer(seq, prev)) continue;
+    _actionStamps.set(guid, seq);
+    em.setMotion(guid, cmdLow, stance, 1.0);
+  }
+}
+
+// Casting-ingredient axes (2026-06-06) — `?castAxes=on` (default OFF) surfaces
+// the remote sidestep + turn axes the single forward_command path drops, so a
+// remote strafe-casting shows footwork and a remote turning in place shows the
+// turn cycle. These are the retail casting *ingredients* (acclient
+// get_state_velocity uses all three axes); built so a retail-faithful cast
+// sequence renders fully, NOT forcing anything. Default OFF (needs a 1070
+// eye-test). Drains the wasm `pollMotionAxes` side-channel.
+const CAST_AXES_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("castAxes")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+function drainMotionAxes(scene3d, sessionHandle) {
+  if (!CAST_AXES_ON) return;
+  if (!sessionHandle || typeof sessionHandle.pollMotionAxes !== "function") return;
+  let flat;
+  try {
+    flat = sessionHandle.pollMotionAxes();
+  } catch (_) {
+    return;
+  }
+  if (!flat || flat.length < 5) return;
+  const em = scene3d?.entityManager;
+  if (!em) return;
+  for (let i = 0; i + 4 < flat.length; i += 5) {
+    const guid = flat[i] >>> 0;
+    if (isLocalPlayerGuid(guid)) continue;
+    const stance = flat[i + 1] >>> 0;
+    const sideCmd = flat[i + 2] >>> 0;
+    const turnCmd = flat[i + 3] >>> 0;
+    const forwardIdle = flat[i + 4] >>> 0;
+    // Sidestep → additive strafe overlay (strafe-cast footwork). Speed defaults
+    // to 1.0 inside setSidestepLayer (OQ-3), matching today's local behaviour.
+    if (sideCmd !== 0 && typeof em.setSidestepLayer === "function") {
+      em.setSidestepLayer(guid, sideCmd, stance);
+    }
+    // Turn → a turn-in-place (no forward command) plays the turn cycle as the
+    // base motion; heading-ease still drives the actual rotation, so the cycle is
+    // just the legwork. When forward IS active (run / cast gesture), the turn is
+    // ignored here — the forward cycle owns the legs, heading-ease the rotation.
+    if (turnCmd !== 0 && forwardIdle && typeof em.setMotion === "function") {
+      em.setMotion(guid, turnCmd, stance, 1.0);
+    }
+  }
+}
+
 // A2 (perf plan 2026-05-18) — get-or-allocate the per-guid slot in
 // `window.__lastEntityWorldPos`. Mutates the slot in place on each
 // KIND_POSITION instead of allocating a fresh `{x,y,z,ts}` literal.
@@ -1026,6 +1137,13 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   if (scene3d?.entityManager) {
     scene3d.entityManager.tick(dt);
     drainEntityEvents3D(scene3d, sessionHandle);
+    // Multi-action queue (2026-06-06): FIFO-play queued Action-class motions
+    // (emotes/gestures) drained from the wasm side-channel. No-op unless
+    // ?multiAction=on. After drainEntityEvents3D so the entity exists.
+    drainMotionActions(scene3d, sessionHandle);
+    // Casting-ingredient axes: render remote strafe footwork + turn-in-place.
+    // No-op unless ?castAxes=on. After drainMotionActions so the entity exists.
+    drainMotionAxes(scene3d, sessionHandle);
     // Cohere-B follow-on (2026-05-12): drive the local-player rig
     // from the wasm integrator's authoritative pose each rAF. Runs
     // AFTER drainEntityEvents3D so any KIND_SPAWN for the local guid
