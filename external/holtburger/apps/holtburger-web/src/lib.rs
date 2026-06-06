@@ -1790,12 +1790,24 @@ pub async fn fetch_landblock_scenery(
     // gates the fetch path; Phase E gates).
     scenery_fetch::maybe_log_sha256(&base_url).await;
 
+    // Fire all per-LB JSONL fetches concurrently instead of awaiting one
+    // round-trip at a time. The renderer hands us the whole ring in a single
+    // call, so the old serial `for` loop paid N back-to-back RTTs — the
+    // dominant cold-boot scenery cost. join_all polls the futures in parallel
+    // and the result Vec preserves input order, so the flattened `out` stays
+    // byte-identical to the serial output. Safe for the same reason the spawns
+    // SoA path is (see fetch_landblock_spawns_soa below): fetch_one_lb's CACHE
+    // is a thread-local and the wasm runtime is single-threaded, so the scoped
+    // `.with` borrows can't race across the concurrent awaits.
+    let lb_keys: Vec<u32> = cell_ids.iter().map(|id| id & 0xFFFF_0000).collect();
+    let fetches = lb_keys
+        .iter()
+        .map(|&lb_key| scenery_fetch::fetch_one_lb(&base_url, lb_key));
+    let results = futures::future::join_all(fetches).await;
+
     let mut out: Vec<ScenicPlacementJs> = Vec::new();
-    for &cell_id in &cell_ids {
-        let lb_key = cell_id & 0xFFFF_0000;
-        let recs = scenery_fetch::fetch_one_lb(&base_url, lb_key)
-            .await
-            .map_err(|e| JsValue::from_str(&e))?;
+    for (&lb_key, res) in lb_keys.iter().zip(results) {
+        let recs = res.map_err(|e| JsValue::from_str(&e))?;
         for r in &recs {
             out.push(scenery_fetch::to_js(r, lb_key));
         }
@@ -2582,11 +2594,17 @@ pub async fn fetch_landblock_scenery_soa(
     let mut source_obj_idx: Vec<u32> = Vec::new();
     let mut default_script_id: Vec<u32> = Vec::new();
 
-    for &cell_id in &cell_ids {
-        let lb_key = cell_id & 0xFFFF_0000;
-        let recs = scenery_fetch::fetch_one_lb(&base_url, lb_key)
-            .await
-            .map_err(|e| JsValue::from_str(&e))?;
+    // Concurrent per-LB fetch — see `fetch_landblock_scenery` above for the
+    // rationale and the thread-local-safety note. join_all preserves input
+    // order so the SoA append stays byte-identical to the previous serial loop.
+    let lb_keys: Vec<u32> = cell_ids.iter().map(|id| id & 0xFFFF_0000).collect();
+    let fetches = lb_keys
+        .iter()
+        .map(|&lb_key| scenery_fetch::fetch_one_lb(&base_url, lb_key));
+    let results = futures::future::join_all(fetches).await;
+
+    for (&lb_key, res) in lb_keys.iter().zip(results) {
+        let recs = res.map_err(|e| JsValue::from_str(&e))?;
         for r in &recs {
             obj_ids.push(r.obj_id);
             landblock_ids.push(lb_key);

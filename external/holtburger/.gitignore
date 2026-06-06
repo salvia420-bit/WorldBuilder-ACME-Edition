@@ -40,3 +40,5 @@ release-test/data/
 dist-manifest.json
 
 .vscode/
+# self-signed dev cert for scripts/serve-http2.mjs
+scripts/.http2-cert/

@@ -566,22 +566,51 @@ export async function loadPlugins(opts) {
     return true;
   }
 
+  // [c.1] PRE-IMPORT all plugin modules CONCURRENTLY. This used to be a serial
+  // `for (id of started) { module = await import(modulePath) }` — so N plugins
+  // (81 in the live build) paid N module round-trips back-to-back, the single
+  // biggest contributor to the cold-boot JS request waterfall. Firing the
+  // dynamic imports together overlaps their fetch+parse. It is behaviourally
+  // safe: ES modules evaluate exactly once with their own dependencies first
+  // regardless of *when* the import is initiated, and the dependency-ordered
+  // lifecycle ([c.2] below) is unchanged — only the body downloads overlap.
+  // Per-id errors are captured so one bad import still can't break the rest.
+  const moduleById = new Map();
+  const importErrors = new Map();
+  await Promise.all(
+    started.map(async (id) => {
+      const entry = entryById.get(id);
+      if (!entry) return;
+      if (entry.module != null) {
+        moduleById.set(id, entry.module);
+        return;
+      }
+      if (entry.modulePath) {
+        try {
+          // eslint-disable-next-line no-undef
+          moduleById.set(id, await import(entry.modulePath));
+        } catch (e) {
+          importErrors.set(id, e);
+        }
+      }
+    })
+  );
+
+  // [c.2] Run the 5-stage lifecycle in resolved dependency order. This loop is
+  // intentionally still SEQUENTIAL — load order is a correctness contract (a
+  // plugin's onLoad may rely on a dependency's onLoad having already run).
   for (const id of started) {
     const entry = entryById.get(id);
     if (!entry) continue;
     const manifest = /** @type {PluginManifest} */ (entry.manifest);
 
-    let module = entry.module;
-    if (module == null && entry.modulePath) {
-      try {
-        // eslint-disable-next-line no-undef
-        module = await import(entry.modulePath);
-      } catch (e) {
-        log('error', `${id}: failed to import ${entry.modulePath} — ${e.message}`);
-        skipped.push({ id, reason: `import failed: ${e.message}` });
-        continue;
-      }
+    if (importErrors.has(id)) {
+      const e = importErrors.get(id);
+      log('error', `${id}: failed to import ${entry.modulePath} — ${e.message}`);
+      skipped.push({ id, reason: `import failed: ${e.message}` });
+      continue;
     }
+    const module = moduleById.get(id);
     if (module == null) {
       log('warn', `${id}: no module supplied (set entry.module or entry.modulePath)`);
       skipped.push({ id, reason: 'no module supplied' });
