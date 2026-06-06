@@ -47,6 +47,7 @@ import {
 } from "../ui/ac_floaty_frame.js";
 import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
+import { canBindToHotbar } from "./inventory_helpers.js";
 
 const OVERLAY_ID = "hb-hotbar";
 const WIDTH = 310;
@@ -469,6 +470,67 @@ export function mount(ctx) {
     src.appendChild(li);
   }
 
+  // Migration sweep — clear stale Container bindings from pre-Wave-B saves.
+  // Reads the live inventory once on mount; safe to no-op if wasm isn't
+  // up yet (we get re-run on reconcile).
+  function migrateClearContainerBindings() {
+    try {
+      const handle = window.__sessionHandle ?? null;
+      if (typeof handle?.playerInventory !== "function") return;
+      const inv = handle.playerInventory();
+      if (!Array.isArray(inv) || inv.length === 0) return;
+      let dirty = false;
+      for (let i = 0; i < state.slots.length; i++) {
+        const b = state.slots[i];
+        if (!b?.itemGuid) continue;
+        const it = inv.find((x) => (x.guid >>> 0) === (b.itemGuid >>> 0));
+        if (!it) continue;
+        if (typeof canBindToHotbar === "function") {
+          const v = canBindToHotbar(it);
+          if (!v.ok) {
+            state.slots[i] = null;
+            dirty = true;
+            sendRemoveShortcut(i);
+          }
+        }
+      }
+      if (dirty) { saveState(state); for (let i = 0; i < SLOT_COUNT; i++) renderSlot(i); }
+    } catch (_) {}
+  }
+  setTimeout(migrateClearContainerBindings, 1500);
+
+  // Armed-spell bridge: if combat-bar has an armed targeted spell AND
+  // this slot is an item binding, fire castTargetedSpell(itemGuid, spellId)
+  // and emit hbHotbarItemTargeted so combat-bar clears its armed state.
+  // This must run BEFORE the normal decideFireAction dispatch.
+  function tryFireArmedSpellOnItem(idx) {
+    const bound = state.slots[idx];
+    if (!bound?.itemGuid) return false;
+    const armed = (window.__combatBarState?.armedSpellId >>> 0) || 0;
+    if (!armed) return false;
+    const client = ctx?.client ?? window.__pluginClient ?? null;
+    const handle = window.__sessionHandle ?? null;
+    const fire =
+      (typeof handle?.castTargetedSpell === "function" && ((g, s) => handle.castTargetedSpell(s, g))) ||
+      (typeof client?.player?.castSpell === "function" && ((g, s) => client.player.castSpell(s, g)));
+    if (!fire) return false;
+    try {
+      fire(bound.itemGuid, armed);
+      logToChat(
+        `Hotbar ${idx + 1}: cast spell 0x${armed.toString(16).toUpperCase()} on item 0x${bound.itemGuid.toString(16).toUpperCase()}`,
+      );
+      try {
+        window.dispatchEvent(new CustomEvent("hbHotbarItemTargeted", {
+          detail: { slotIndex: idx, itemGuid: bound.itemGuid, spellId: armed },
+        }));
+      } catch (_) {}
+      return true;
+    } catch (e) {
+      logToChat(`Hotbar ${idx + 1}: armed-cast failed — ${e?.message ?? e}`);
+      return false;
+    }
+  }
+
   function fireSlot(idx) {
     const bound = state.slots[idx];
     if (!bound) return;
@@ -493,6 +555,7 @@ export function mount(ctx) {
         // getSpellRecord throws if SpellTable not loaded — keep default.
       }
     }
+    if (tryFireArmedSpellOnItem(idx)) return;
     const action = decideFireAction(bound, {
       isSelfTargeted,
       softTargetGuid: getSoftTargetGuid(),
@@ -500,11 +563,6 @@ export function mount(ctx) {
 
     switch (action.kind) {
       case "useItem": {
-        // Item slot — straight UseObject. Matches target-bar.js:388
-        // (Use Selected button) and retail acclient.c:240034
-        // `ItemHolder::UseObject(itemID, 0, 0)` (UseShortcut's
-        // i_bUse=true branch). ACE handles the rest server-side
-        // (potion drink, portal gem teleport, tinker UI open, etc.).
         if (typeof handle?.useObject !== "function") {
           logToChat(`Hotbar ${idx + 1}: not logged in — useObject unavailable`);
           return;
@@ -514,6 +572,11 @@ export function mount(ctx) {
           logToChat(
             `Hotbar ${idx + 1}: use item 0x${action.itemGuid.toString(16).toUpperCase()}`,
           );
+          // Successful fire → clear any armed item set by inventory click /
+          // context menu. Keyboard 1-7 taps that resolve to needTarget/none
+          // do NOT reach this branch, so muscle-memory taps don't nuke
+          // armed state.
+          try { window.__inventory?.setArmedItem?.(0); } catch (_) {}
         } catch (e) {
           logToChat(`Hotbar ${idx + 1}: useObject failed — ${e?.message ?? e}`);
         }
@@ -529,6 +592,7 @@ export function mount(ctx) {
           logToChat(
             `Hotbar ${idx + 1}: cast spell 0x${action.spellId.toString(16).toUpperCase()} on self`,
           );
+          try { window.__inventory?.setArmedItem?.(0); } catch (_) {}
         } catch (e) {
           logToChat(`Hotbar ${idx + 1}: cast failed — ${e?.message ?? e}`);
         }
@@ -544,6 +608,7 @@ export function mount(ctx) {
           logToChat(
             `Hotbar ${idx + 1}: cast spell 0x${action.spellId.toString(16).toUpperCase()} on 0x${action.targetGuid.toString(16).toUpperCase()}`,
           );
+          try { window.__inventory?.setArmedItem?.(0); } catch (_) {}
         } catch (e) {
           logToChat(`Hotbar ${idx + 1}: cast failed — ${e?.message ?? e}`);
         }
@@ -562,6 +627,13 @@ export function mount(ctx) {
       default:
         logToChat(`Hotbar ${idx + 1}: (unbound)`);
     }
+  }
+
+  // Reconcile-pause-on-drag — user-driven swaps don't fight server
+  // reconcile mid-gesture. 5s cap from last drag.
+  let lastDragTs = 0;
+  function inDragPauseWindow() {
+    return (Date.now() - lastDragTs) < 5000;
   }
 
   for (let i = 0; i < SLOT_COUNT; i++) {
@@ -591,18 +663,40 @@ export function mount(ctx) {
     num.textContent = rowIdx === 0 ? String(colIdx + 1) : "";
     el.appendChild(num);
 
-    // Click → fire.
-    el.addEventListener("click", () => fireSlot(i));
+    // Click → fire. Suppress synthetic click immediately after dragend.
+    el.addEventListener("click", () => {
+      if (el._dragging) return;
+      fireSlot(i);
+    });
 
-    // Drag-drop: spellbook + combat-bar use mime "application/x-hb-spell-id".
-    // Inventory uses "application/x-hb-inv-guid" (per inventory.js:904 and
-    // picking.js's canvas-drop give path). The hotbar accepts either kind.
+    // Drag-drop MIMEs accepted by hotbar slots:
+    //   application/x-hb-spell-id      from spellbook + combat-bar
+    //   application/x-hb-inv-guid      from inventory (item bind)
+    //   application/x-hb-hotbar-slot   hotbar↔hotbar slot swap (NEW)
+    // The hotbar-slot MIME is the ONLY accepted swap signal — we do NOT
+    // also consume inv-guid for swaps, to prevent cross-consume from
+    // trade-panel or canvas drag sources.
     function dragHasAcceptedType(types) {
       if (!types) return false;
       const arr = Array.from(types);
       return arr.includes("application/x-hb-spell-id")
-          || arr.includes("application/x-hb-inv-guid");
+          || arr.includes("application/x-hb-inv-guid")
+          || arr.includes("application/x-hb-hotbar-slot");
     }
+    // Hotbar slot is itself a drag source for swap.
+    el.draggable = true;
+    el.addEventListener("dragstart", (ev) => {
+      const b = state.slots[i];
+      if (!b) { ev.preventDefault(); return; }
+      ev.dataTransfer.setData("application/x-hb-hotbar-slot", String(i));
+      ev.dataTransfer.effectAllowed = "move";
+      el._dragging = true;
+      lastDragTs = Date.now();
+    });
+    el.addEventListener("dragend", () => {
+      // 50ms post-dragend so the synthetic click that follows is suppressed.
+      setTimeout(() => { el._dragging = false; }, 50);
+    });
     el.addEventListener("dragenter", (ev) => {
       if (dragHasAcceptedType(ev.dataTransfer?.types)) {
         ev.preventDefault();
@@ -633,10 +727,45 @@ export function mount(ctx) {
         sendAddShortcut(i, 0, spellId);
         return;
       }
+      // Hotbar↔hotbar swap: RM→ADD→RM→ADD per Player_Character.cs:252-258.
+      const fromSlotStr = ev.dataTransfer?.getData("application/x-hb-hotbar-slot");
+      if (fromSlotStr !== "" && fromSlotStr != null) {
+        const fromIdx = parseInt(fromSlotStr, 10);
+        if (Number.isInteger(fromIdx) && fromIdx !== i && fromIdx >= 0 && fromIdx < SLOT_COUNT) {
+          ev.preventDefault();
+          const a = state.slots[fromIdx];
+          const b = state.slots[i];
+          if (a) sendRemoveShortcut(fromIdx);
+          if (b) sendRemoveShortcut(i);
+          state.slots[fromIdx] = b || null;
+          state.slots[i] = a || null;
+          saveState(state);
+          renderSlot(fromIdx);
+          renderSlot(i);
+          if (state.slots[fromIdx]) sendAddShortcut(fromIdx, state.slots[fromIdx].itemGuid || 0, state.slots[fromIdx].spellId || 0);
+          if (state.slots[i]) sendAddShortcut(i, state.slots[i].itemGuid || 0, state.slots[i].spellId || 0);
+          return;
+        }
+      }
       if (iguid) {
         ev.preventDefault();
         const guid = parseInt(iguid, 10) >>> 0;
         if (guid > 0) {
+          // Validate against canBindToHotbar — rejects Container + Sigil.
+          try {
+            const handle = window.__sessionHandle ?? null;
+            const inv = typeof handle?.playerInventory === "function" ? handle.playerInventory() : [];
+            const item = inv.find((x) => (x.guid >>> 0) === guid) || null;
+            if (item && typeof canBindToHotbar === "function") {
+              const v = canBindToHotbar(item);
+              if (!v.ok) {
+                el.classList.add("drag-reject");
+                setTimeout(() => el.classList.remove("drag-reject"), 250);
+                logToChat(`Hotbar ${i + 1}: ${v.reason}`);
+                return;
+              }
+            }
+          } catch (_) {}
           const prev = state.slots[i];
           if (prev) sendRemoveShortcut(i);
           state.slots[i] = { itemGuid: guid };
@@ -647,9 +776,30 @@ export function mount(ctx) {
       }
     });
 
-    // Right-click → clear slot.
+    // Right-click → polymorphic context menu. Legacy destructive
+    // clear is gone — Remove Binding lives in the menu now.
     el.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
+      ev.stopPropagation();
+      const b = state.slots[i];
+      // Empty slots have no menu actions that make sense — skip rather than
+      // surface a useless Examine on guid=0.
+      if (!b) return;
+      const guid = (b?.itemGuid >>> 0) || 0;
+      if (typeof window.__openContextMenuFor === "function") {
+        try {
+          window.__openContextMenuFor({
+            source: "hotbar",
+            guid,
+            slotIndex: i,
+            spellId: (b?.spellId | 0) || 0,
+            clientX: ev.clientX,
+            clientY: ev.clientY,
+          });
+        } catch (e) { console.warn("[hotbar-rc] context menu failed:", e); }
+        return;
+      }
+      // Legacy fallback: clear (pre-context-menu behaviour).
       const prev = state.slots[i];
       state.slots[i] = null;
       saveState(state);
@@ -708,26 +858,95 @@ export function mount(ctx) {
   // per-bind sync (sendAdd/RemoveShortcut) keeps both sides in sync, so
   // no further polling is needed.
   function reconcileWithServer() {
+    if (inDragPauseWindow()) return false;
     const handle = window.__sessionHandle ?? null;
     if (!handle || typeof handle.playerShortcuts !== "function") return false;
     const flat = handle.playerShortcuts();
     if (!flat || flat.length === 0) return false;
-    const newSlots = Array(SLOT_COUNT).fill(null);
-    for (let i = 0; i + 2 < flat.length; i += 3) {
-      const idx = flat[i] >>> 0;
-      const objectGuid = flat[i + 1] >>> 0;
-      const packed = flat[i + 2] >>> 0;
+    // Server is objectGuid-only; we keep local spell bindings + wcid.
+    // Build server snapshot first, then merge: server item bindings WIN
+    // when objectGuid is present; local spell bindings persist where the
+    // server slot is empty (server never sends spell-only on relogin).
+    const serverSlots = Array(SLOT_COUNT).fill(null);
+    for (let k = 0; k + 2 < flat.length; k += 3) {
+      const idx = flat[k] >>> 0;
+      const objectGuid = flat[k + 1] >>> 0;
+      const packed = flat[k + 2] >>> 0;
       const spellId = packed & 0xFFFF;
       if (idx >= SLOT_COUNT) continue;
-      if (spellId > 0)         newSlots[idx] = { spellId };
-      else if (objectGuid > 0) newSlots[idx] = { itemGuid: objectGuid };
+      if (spellId > 0) serverSlots[idx] = { spellId };
+      else if (objectGuid > 0) serverSlots[idx] = { itemGuid: objectGuid };
     }
-    state.slots = newSlots;
+    const merged = Array(SLOT_COUNT).fill(null);
+    for (let idx = 0; idx < SLOT_COUNT; idx++) {
+      const s = serverSlots[idx];
+      const l = state.slots[idx];
+      if (s) {
+        // Persist wcid alongside guid so post-restart objectGuid reuse can
+        // be validated against the inventory snapshot's wcid.
+        if (s.itemGuid) {
+          let wcid = 0;
+          try {
+            const inv = handle.playerInventory?.() ?? [];
+            const it = inv.find((x) => (x.guid >>> 0) === (s.itemGuid >>> 0));
+            wcid = (it?.wcid >>> 0) || 0;
+          } catch (_) {}
+          merged[idx] = { itemGuid: s.itemGuid, wcid };
+        } else {
+          merged[idx] = s;
+        }
+      } else if (l?.spellId) {
+        merged[idx] = l; // preserve local spell binding (server is item-only)
+      }
+    }
+    state.slots = merged;
     saveState(state);
     for (let i = 0; i < SLOT_COUNT; i++) renderSlot(i);
     return true;
   }
+
+  // Counters hoisted above pruneStaleItemBindings so the bus subscriber
+  // can read them without a TDZ risk if the dispatch becomes synchronous.
+  let inWorld = false;
+  let firstBindAt = 0;
   let reconcileAttempts = 0;
+  // pruneStaleItemBindings: 3-gated. Only sweeps when in_world AND we've
+  // completed reconcile AND any local binding is old enough AND we have
+  // inventory snapshot to compare against.
+  function pruneStaleItemBindings() {
+    if (!inWorld) return;
+    if (reconcileAttempts < 30) return;
+    if ((Date.now() - firstBindAt) <= 5000) return;
+    const handle = window.__sessionHandle ?? null;
+    if (typeof handle?.playerInventory !== "function") return;
+    const inv = handle.playerInventory();
+    if (!Array.isArray(inv) || inv.length === 0) return;
+    let dirty = false;
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const b = state.slots[i];
+      if (!b?.itemGuid) continue;
+      const it = inv.find((x) => (x.guid >>> 0) === (b.itemGuid >>> 0));
+      if (it) continue;
+      // Stale binding; if wcid known, look for matching wcid on a different guid
+      // (post-restart objectGuid reuse).
+      if (b.wcid) {
+        const alt = inv.find((x) => (x.wcid >>> 0) === (b.wcid >>> 0));
+        if (alt) { state.slots[i] = { itemGuid: alt.guid >>> 0, wcid: b.wcid }; dirty = true; continue; }
+      }
+      state.slots[i] = null;
+      dirty = true;
+      sendRemoveShortcut(i);
+    }
+    if (dirty) { saveState(state); for (let i = 0; i < SLOT_COUNT; i++) renderSlot(i); }
+  }
+  // All bus subscriptions use the plugin facade (same channel index.html
+  // emits playerInventoryChanged on); previous wave wrongly used the
+  // window DOM event bus and the listener never fired.
+  try {
+    const client = ctx?.client ?? window.__pluginClient;
+    client?.events?.on?.("playerInventoryChanged", pruneStaleItemBindings);
+    client?.events?.on?.("landblockChanged", () => { inWorld = true; });
+  } catch (_) {}
   const reconcileTimer = setInterval(() => {
     reconcileAttempts++;
     if (reconcileWithServer() || reconcileAttempts > 30) {
@@ -735,9 +954,63 @@ export function mount(ctx) {
     }
   }, 1000);
 
+  // Opaque API for the context menu (Add To Hotbar flyout). All methods
+  // return COPIES of slot data to prevent external mutation; binds go
+  // through the same RM→ADD pipeline as the drop path.
+  window.__hotbar = Object.freeze({
+    getSlot(slotIndex) {
+      const i = (slotIndex | 0);
+      if (i < 0 || i >= SLOT_COUNT) return null;
+      const s = state.slots[i];
+      return s ? { ...s } : null;
+    },
+    bindItemToSlot(slotIndex, guid) {
+      const i = (slotIndex | 0);
+      const g = (guid >>> 0);
+      if (i < 0 || i >= SLOT_COUNT || !g) return false;
+      const prev = state.slots[i];
+      if (prev) sendRemoveShortcut(i);
+      state.slots[i] = { itemGuid: g };
+      firstBindAt = Date.now();
+      saveState(state);
+      renderSlot(i);
+      sendAddShortcut(i, g, 0);
+      return true;
+    },
+    bindSpellToSlot(slotIndex, spellId) {
+      const i = (slotIndex | 0);
+      const s = (spellId | 0);
+      if (i < 0 || i >= SLOT_COUNT || !s) return false;
+      const prev = state.slots[i];
+      if (prev) sendRemoveShortcut(i);
+      state.slots[i] = { spellId: s };
+      saveState(state);
+      renderSlot(i);
+      sendAddShortcut(i, 0, s);
+      return true;
+    },
+    removeBinding(slotIndex) {
+      const i = (slotIndex | 0);
+      if (i < 0 || i >= SLOT_COUNT) return false;
+      const prev = state.slots[i];
+      state.slots[i] = null;
+      saveState(state);
+      renderSlot(i);
+      if (prev) sendRemoveShortcut(i);
+      return true;
+    },
+    findFirstEmpty() {
+      for (let i = 0; i < SLOT_COUNT; i++) {
+        if (!state.slots[i]) return i;
+      }
+      return null;
+    },
+  });
+
   return () => {
     window.removeEventListener("keydown", onKey);
     clearInterval(reconcileTimer);
     overlay.remove();
+    try { delete window.__hotbar; } catch (_) { window.__hotbar = undefined; }
   };
 }

@@ -535,6 +535,18 @@ export class CameraSwitcher {
           if (dx * dx + dy * dy < 25 && candidateGuid != null) {
             if (
               typeof window !== "undefined" &&
+              typeof window.__openContextMenuFor === "function"
+            ) {
+              try {
+                window.__openContextMenuFor({
+                  source: "scene3d",
+                  guid: candidateGuid,
+                  clientX: ev.clientX,
+                  clientY: ev.clientY,
+                });
+              } catch (_) {}
+            } else if (
+              typeof window !== "undefined" &&
               typeof window.__openRadialMenuFor === "function"
             ) {
               try {

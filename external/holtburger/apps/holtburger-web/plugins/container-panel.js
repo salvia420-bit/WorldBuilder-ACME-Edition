@@ -269,20 +269,38 @@ function renderItems(items) {
         window.__showExamineFor(it.guid >>> 0);
       }
     });
-    // TODO: right-click → "take from container" once wasm exports a
-    // MoveToContainer / GetFromContainer action (mirrors ACE
-    // GameAction::MoveItem with container_guid=playerGuid).
+    // Right-click → polymorphic context menu. Now that wasm has
+    // moveItem we can offer Take From Container directly from the menu.
     slot.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
+      ev.stopPropagation();
+      const guid = (it.guid >>> 0) || 0;
+      if (!guid) return;
+      if (typeof window.__openContextMenuFor === "function") {
+        try {
+          window.__openContextMenuFor({
+            source: "container-panel",
+            guid,
+            containerGuid: (overlayEl?._containerGuid >>> 0) || 0,
+            slotIndex: Array.prototype.indexOf.call(grid.children, slot),
+            name: it.name,
+            clientX: ev.clientX,
+            clientY: ev.clientY,
+          });
+        } catch (e) { console.warn("[container-panel-rc] context menu failed:", e); }
+      }
     });
     grid.appendChild(slot);
   }
 }
 
+// Expose overlay-level containerGuid so the per-slot contextmenu can
+// thread it into the context menu without re-querying.
 function openContainer(containerGuid, containerName) {
   const g = (containerGuid >>> 0) || 0;
   if (!g) return;
   if (!overlayEl) overlayEl = buildOverlay();
+  overlayEl._containerGuid = g;
   setAcText(overlayEl._titleEl, containerName || "Container", { color: "#f0c87c" });
 
   const handle = window.__sessionHandle;
@@ -314,6 +332,9 @@ function openContainer(containerGuid, containerName) {
     onDocMouseDownHandler = (ev) => {
       if (!overlayEl || overlayEl.dataset.open !== "1") return;
       if (overlayEl.contains(ev.target)) return;
+      // Race guard: if the context menu is open, let its docMouseDown
+      // close-handler win — we don't fight it.
+      if (window.__radialMenuOpen) return;
       hidePanel();
     };
     document.addEventListener("mousedown", onDocMouseDownHandler, true);

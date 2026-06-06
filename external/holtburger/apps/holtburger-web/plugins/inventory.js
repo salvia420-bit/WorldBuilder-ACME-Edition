@@ -61,6 +61,8 @@ import {
   formatBurdenText,
   computeInventoryTitle,
   parseSlotsViewChecked,
+  canEquipInSlot,
+  buildPlayerEquipState,
 } from "./inventory_helpers.js";
 
 /** Retail LayoutDescs covering the inventory window.
@@ -383,6 +385,19 @@ function ensureStyles() {
     /* P2-21 (cross-find inv-doll-slot-size + inv-doll-slot-opacity):
        slot size 28→32 (retail PAPERDOLL_SLOTS slot ImageMedia is 32×32);
        drop opacity:0.6 default — slots are fully opaque at rest. */
+    body.hb-armed-item, body.hb-armed-item * { cursor: crosshair !important; }
+    #${OVERLAY_ID} .hb-inv-slot.armed {
+      box-shadow: 0 0 0 2px var(--hb-text-gold, #f0c060) inset;
+    }
+    #${OVERLAY_ID} .hb-inv-slot.armed::after {
+      content: "i";
+      position: absolute;
+      top: 1px; right: 2px;
+      font-family: var(--hb-font-serif, serif);
+      font-size: 10px;
+      color: var(--hb-text-gold, #f0c060);
+      pointer-events: none;
+    }
     #${OVERLAY_ID} .hb-inv-doll-slot {
       position: absolute;
       width: 32px;
@@ -404,6 +419,42 @@ function ensureStyles() {
     }
     #${OVERLAY_ID} .hb-inv-doll-slot.drag-target {
       filter: drop-shadow(0 0 4px rgba(120, 220, 120, 0.9));
+    }
+    #${OVERLAY_ID} .hb-inv-doll-slot.drag-reject {
+      filter: drop-shadow(0 0 4px rgba(220, 80, 80, 0.95));
+      animation: hb-inv-drag-reject-flash 200ms ease-out;
+    }
+    @keyframes hb-inv-drag-reject-flash {
+      0%   { background-color: rgba(180, 40, 40, 0.6); }
+      100% { background-color: rgba(0, 0, 0, 0.4); }
+    }
+    #${OVERLAY_ID} .hb-inv-slot.reject {
+      animation: hb-inv-source-reject 250ms ease-out;
+    }
+    @keyframes hb-inv-source-reject {
+      0%   { box-shadow: 0 0 0 2px rgba(220, 80, 80, 0.95) inset; }
+      100% { box-shadow: none; }
+    }
+    #${OVERLAY_ID} .hb-inv-doll-slot.speculative {
+      border-color: var(--hb-text-gold, #f0c060);
+    }
+    #${OVERLAY_ID} .hb-inv-paperdoll-toast {
+      position: absolute;
+      left: 8px; right: 8px;
+      bottom: 4px;
+      padding: 3px 6px;
+      font-family: var(--hb-font-serif, serif);
+      font-size: 11px;
+      background: rgba(20, 14, 8, 0.92);
+      border: 1px solid var(--hb-border-brass-dim, #6a4f1c);
+      text-align: center;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 120ms ease;
+      z-index: 10;
+    }
+    #${OVERLAY_ID} .hb-inv-paperdoll-toast[data-show="1"] {
+      opacity: 1;
     }
     #${OVERLAY_ID} .hb-inv-doll-icon {
       position: absolute;
@@ -1053,13 +1104,76 @@ function doMount(parentEl, _ctx) {
       }
     });
     el.addEventListener("dragover", (ev) => {
-      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
-        ev.preventDefault();
-        ev.dataTransfer.dropEffect = "move";
+      if (!ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) return;
+      ev.preventDefault();
+      // Reject feedback: validate the dragged item against this slot mask.
+      const draggedGuid = (parseInt(overlay.dataset.draggingGuid, 10) >>> 0) || 0;
+      const item = draggedGuid ? getItemByGuid(draggedGuid) : null;
+      const playerState = buildPlayerEquipState(inventorySnapshot, {
+        stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
+        inCombatMode: !!window.__combatBarState?.inCombatMode,
+      });
+      const verdict = canEquipInSlot(item, s.equipMask >>> 0, playerState);
+      if (!verdict.ok) {
+        ev.dataTransfer.dropEffect = "none";
+        el.classList.add("drag-reject");
+        el.classList.remove("drag-target");
+        setAcText(el.querySelector(".hb-inv-doll-tip"), verdict.reason, { color: "#ff8080" });
+        return;
       }
+      el.classList.remove("drag-reject");
+      el.classList.add("drag-target");
+      ev.dataTransfer.dropEffect = "move";
     });
     el.addEventListener("dragleave", () => {
       el.classList.remove("drag-target");
+      el.classList.remove("drag-reject");
+      setAcText(el.querySelector(".hb-inv-doll-tip"), s.name, { color: "#f0d8a0" });
+    });
+    // Paperdoll-slot double-click → unwield back to main pack.
+    // Uses Wave A export handle.unwieldToPack; falls back to chat hint if
+    // the wasm bundle predates Wave A.
+    el.addEventListener("dblclick", (ev) => {
+      if (ev.button !== 0) return;
+      const guidStr = el.dataset.itemGuid;
+      if (!guidStr) return;
+      const guid = (parseInt(guidStr, 10) >>> 0) || 0;
+      if (!guid) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (typeof handle?.unwieldToPack === "function") {
+        try { handle.unwieldToPack(guid); }
+        catch (e) { console.warn("[paperdoll-dblclick] unwieldToPack failed:", e); }
+      } else {
+        const src = document.getElementById("chat-log");
+        if (src) {
+          const li = document.createElement("li");
+          li.dataset.cat = "0"; li.className = "cat-0";
+          li.textContent = "Cannot unwield: server build too old.";
+          src.appendChild(li);
+        }
+      }
+    });
+    // Paperdoll right-click → polymorphic context menu.
+    el.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const guidStr = el.dataset.itemGuid;
+      if (!guidStr) return;
+      const guid = (parseInt(guidStr, 10) >>> 0) || 0;
+      if (!guid) return;
+      if (typeof window.__openContextMenuFor === "function") {
+        try {
+          window.__openContextMenuFor({
+            source: "inv-paperdoll",
+            guid,
+            name: el.dataset.itemName || s.name,
+            clientX: ev.clientX,
+            clientY: ev.clientY,
+          });
+        } catch (e) { console.warn("[paperdoll-rc] context menu failed:", e); }
+      }
     });
     el.addEventListener("drop", (ev) => {
       el.classList.remove("drag-target");
@@ -1077,6 +1191,28 @@ function doMount(parentEl, _ctx) {
       // `SetWielded(weenie, slot)` naming). Falls back to legacy
       // `wieldFromPack` if the wasm pkg is pre-Wave-1.D so a stale build
       // doesn't break paperdoll wield.
+      // Drop-time defensive re-validation. Stance can change mid-drag.
+      const dropItem = getItemByGuid(guid);
+      const dropState = buildPlayerEquipState(inventorySnapshot, {
+        stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
+        inCombatMode: !!window.__combatBarState?.inCombatMode,
+      });
+      const dropVerdict = canEquipInSlot(dropItem, s.equipMask >>> 0, dropState);
+      if (!dropVerdict.ok) {
+        try { paperdollToast(dropVerdict.reason); } catch (_) {}
+        try {
+          const srcSlot = overlay.querySelector(`.hb-inv-slot[data-guid="${String(guid)}"]`);
+          if (srcSlot) {
+            srcSlot.classList.add("reject");
+            setTimeout(() => srcSlot.classList.remove("reject"), 250);
+          }
+        } catch (_) {}
+        return;
+      }
+      // Speculative path (Wave A may not have populated validLocations yet).
+      if (dropVerdict.speculative) {
+        try { paperdollToast("Equipping speculatively (item attributes pending).", { speculative: true }); } catch (_) {}
+      }
       if (handle?.setWielded) {
         try { handle.setWielded(guid, s.equipMask >>> 0); }
         catch (e) { console.warn("[paperdoll] setWielded failed:", e); }
@@ -1366,6 +1502,9 @@ function doMount(parentEl, _ctx) {
       slot.draggable = true;
       slot.addEventListener("dragstart", (ev) => {
         ev.dataTransfer.setData("application/x-hb-inv-guid", slot.dataset.guid);
+        // Mirror the legacy <ul>'s second MIME so vendor-ui sell-zone
+        // accepts drags from the polymorphic overlay too.
+        ev.dataTransfer.setData("text/x-hb-item-guid", slot.dataset.guid);
         ev.dataTransfer.effectAllowed = "move";
       });
     }
@@ -1407,22 +1546,191 @@ function doMount(parentEl, _ctx) {
         }));
       } catch (_) {}
     });
-    // Single click → select + push examine view onto main-panel stack.
-    // The shared container swaps the whole pane to examine; "Back"
-    // returns to inventory. Matches retail's full-pane transition.
-    slot.addEventListener("click", () => {
+    // Click dispatcher. Single LMB selects; ctrl-click or dblclick uses/equips/opens;
+    // shift-click opens the context menu pre-armed for Split Stack; right-click hands off
+    // to the polymorphic context menu. Legacy examine-on-single-click is gated behind
+    // localStorage 'hb-inv.legacy-click-examine' = '1' for regression A/B.
+    slot.addEventListener("click", (ev) => {
+      if (ev.button !== 0) return;
       setSelected(srcLi);
-      const guid = srcLi.dataset?.guid;
+      const guid = (parseInt(srcLi.dataset?.guid, 10) >>> 0) || 0;
       const name = srcLi.querySelector(".name")?.textContent || "Item";
-      // Route via __showExamineFor so the flag-gated floaty path (EX-03)
-      // takes over; fall back to main-panel push when no router is up.
-      if (typeof window.__showExamineFor === "function") {
-        window.__showExamineFor(Number(guid) >>> 0, { name, fromInventory: true, srcLi });
-      } else {
-        window.__mainPanel?.pushView?.("examine", { guid, name, fromInventory: true, srcLi });
+      const item = getItemByGuid(guid);
+      const legacy = (() => {
+        try { return window.localStorage?.getItem?.("hb-inv.legacy-click-examine") === "1"; }
+        catch (_) { return false; }
+      })();
+      // Dispatcher: dblclick (ev.detail >= 2) OR Ctrl-click → USE / EQUIP / OPEN.
+      if ((ev.detail >= 2 || ev.ctrlKey) && guid) {
+        const itemType = (item?.itemType >>> 0) || 0;
+        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+        // Container items open into a side panel rather than equipping.
+        // 0x40000000 per the user-authorized spec (Container itemtype bit).
+        if ((itemType & 0x40000000) !== 0) {
+          try { window.__openContainerFor?.(guid, item?.name || name); }
+          catch (_) { /* container plugin may be down */ }
+          return;
+        }
+        const validLocs = (item?.validLocations >>> 0) || 0;
+        if (validLocs && handle?.setWielded) {
+          const mask = pickWieldSlotMask(validLocs);
+          const playerState = buildPlayerEquipState(inventorySnapshot, {
+            stance: window.__combatBarState?.stance,
+            inCombatMode: !!window.__combatBarState?.inCombatMode,
+          });
+          const verdict = canEquipInSlot(item, mask >>> 0, playerState);
+          if (verdict && verdict.ok === false) {
+            try { paperdollToast(verdict.reason || "Cannot equip there."); } catch (_) {}
+            try { srcLi.classList.add("reject"); setTimeout(() => srcLi.classList.remove("reject"), 250); } catch (_) {}
+            return;
+          }
+          try { handle.setWielded(guid, mask >>> 0); }
+          catch (e) { console.warn("[inv-click] setWielded failed:", e); }
+          return;
+        }
+        if (typeof handle?.useObject === "function") {
+          try { handle.useObject(guid); }
+          catch (e) { console.warn("[inv-click] useObject failed:", e); }
+          return;
+        }
+        return;
+      }
+      // Shift-click → open context menu pre-focused on Split Stack so the
+      // inline numeric prompt is the user's next click.
+      if (ev.shiftKey && guid) {
+        const count = (item?.stackSize >>> 0) || (item?.stackCount >>> 0) || 1;
+        if (count > 1 && typeof window.__openContextMenuFor === "function") {
+          try {
+            window.__openContextMenuFor({
+              source: "inv-grid",
+              guid,
+              srcLi,
+              name,
+              clientX: ev.clientX,
+              clientY: ev.clientY,
+              focusAction: "split",
+            });
+          } catch (e) { console.warn("[inv-click] split-via-menu failed:", e); }
+          return;
+        }
+      }
+      // Single LMB: SELECT only. Legacy users can opt back into examine-on-click.
+      if (legacy) {
+        if (typeof window.__showExamineFor === "function") {
+          window.__showExamineFor(guid, { name, fromInventory: true, srcLi });
+        } else {
+          window.__mainPanel?.pushView?.("examine", { guid, name, fromInventory: true, srcLi });
+        }
       }
     });
+    // Right-click → polymorphic context menu. preventDefault so the
+    // browser menu never shows; feature-detect __openContextMenuFor so the
+    // legacy main-panel examine still works if the menu plugin isn't loaded.
+    slot.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const guid = (parseInt(srcLi.dataset?.guid, 10) >>> 0) || 0;
+      if (!guid) return;
+      setSelected(srcLi);
+      const name = srcLi.querySelector(".name")?.textContent || "Item";
+      if (typeof window.__openContextMenuFor === "function") {
+        try {
+          window.__openContextMenuFor({
+            source: "inv-grid",
+            guid,
+            srcLi,
+            name,
+            clientX: ev.clientX,
+            clientY: ev.clientY,
+          });
+        } catch (e) { console.warn("[inv-click] context menu failed:", e); }
+      }
+    });
+    // setDragImage at 16,16 → retail ghost feel. Use the slot's own icon.
+    slot.addEventListener("dragstart", (ev) => {
+      try {
+        const icon = slot.querySelector(".hb-inv-icon");
+        if (icon && ev.dataTransfer?.setDragImage) {
+          ev.dataTransfer.setDragImage(icon, 16, 16);
+        }
+      } catch (_) {}
+    });
     return slot;
+  }
+
+  // Isolate a single-bit equip slot mask from a multi-bit ValidLocations
+  // value, with explicit precedence mirroring retail acclient.c:220400
+  // (gmPaperDollUI's WhichSlotForItem). A weapon that fits Melee + Held
+  // resolves to Melee; a held caster that fits Held + TwoHanded resolves
+  // to Held; rings/sigils fall through to lowest-set-bit. Pure function,
+  // safe to call with 0 (returns 0).
+  function pickWieldSlotMask(validLocations) {
+    const v = (validLocations >>> 0) || 0;
+    if (v === 0) return 0;
+    // Single-bit fast path.
+    if ((v & (v - 1)) === 0) return v;
+    const PRECEDENCE = [
+      0x00100000, // MeleeWeapon
+      0x00200000, // Shield
+      0x00400000, // MissileWeapon
+      0x00800000, // MissileAmmo
+      0x01000000, // Held
+      0x02000000, // TwoHanded
+      0x04000000, // TrinketOne
+      0x08000000, // Cloak
+      0x10000000, // Sigil Blue
+      0x20000000, // Sigil Yellow
+      0x40000000, // Sigil Red
+    ];
+    for (const bit of PRECEDENCE) {
+      if ((v & bit) !== 0) return bit;
+    }
+    return v & -v; // lowest set bit
+  }
+
+  // Armed-item namespace. armedGuid is the current grid-armed item (a future addition may add
+  // armedSpellId here). Backward-compat alias on window.__inventory_armedGuid
+  // keeps old consumers working.
+  if (!window.__inventory) window.__inventory = { armedGuid: 0 };
+  function setArmedItem(guid) {
+    const g = (guid >>> 0) || 0;
+    window.__inventory.armedGuid = g;
+    window.__inventory_armedGuid = g;
+    try { document.body.classList.toggle("hb-armed-item", g !== 0); }
+    catch (_) {}
+    // Toggle the per-slot 'i' badge in this overlay; other panels read
+    // the body class for the cursor change.
+    try {
+      overlay.querySelectorAll(".hb-inv-slot.armed").forEach((s) => s.classList.remove("armed"));
+      if (g) {
+        const sel = overlay.querySelector(`.hb-inv-slot[data-guid="${String(g)}"]`);
+        if (sel) sel.classList.add("armed");
+      }
+    } catch (_) {}
+  }
+  window.__inventory.setArmedItem = setArmedItem;
+
+  // Imports for slot-typing validation. Pure helpers; safe to call
+  // before login (return ok with no info).
+  // (canEquipInSlot/canBindToHotbar/buildPlayerEquipState live in
+  //  inventory_helpers.js.)
+
+  // Inline reject-feedback overlay anchored to the paperdoll, modelled
+  // on vendor-ui.js:751. Auto-dismisses after 1500ms. NOT a global toast
+  // bus — strictly scoped to the inventory overlay.
+  function paperdollToast(text, opts) {
+    if (!paperdoll) return;
+    const speculative = !!opts?.speculative;
+    let el = paperdoll.querySelector(".hb-inv-paperdoll-toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "hb-inv-paperdoll-toast";
+      paperdoll.appendChild(el);
+    }
+    setAcText(el, text, { color: speculative ? "#f0c060" : "#ff8080" });
+    el.dataset.show = "1";
+    clearTimeout(el._dismiss);
+    el._dismiss = setTimeout(() => { el.dataset.show = "0"; }, 1500);
   }
 
   // Cached snapshot of the most recent SessionHandle.playerInventory()
@@ -1802,10 +2110,16 @@ function doMount(parentEl, _ctx) {
     }, 500);
   }
 
-  // E key removed 2026-05-22 (movement-key collision with turn-right).
-  // Inventory item examine now requires explicit click on the item
-  // slot — the slot click handler pushes the examine view directly.
-  function onKey(_ev) { /* no-op placeholder for cleanup symmetry */ }
+  // ESC clears any armed-item state (armed via menu "Use With" / shift-click).
+  // Skip when focused on a text input so chat editing isn't intercepted.
+  function onKey(ev) {
+    if (ev?.key !== "Escape") return;
+    const tag = ev.target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if ((window.__inventory?.armedGuid >>> 0) !== 0) {
+      setArmedItem(0);
+    }
+  }
   window.addEventListener("keydown", onKey);
 
   // Wave 7.9 — dragover event dispatch for plugins that want to react
@@ -1851,7 +2165,13 @@ function doMount(parentEl, _ctx) {
   // during subsequent dragover events (dataTransfer.getData isn't
   // available outside drop per the HTML5 spec).
   overlay.addEventListener("dragstart", (ev) => {
-    const guid = ev.target?.dataset?.guid ?? ev.target?.closest?.("[data-guid]")?.dataset?.guid;
+    // Paperdoll slots use dataset.itemGuid; grid uses dataset.guid. Fall
+    // back to closest() for elements that put the guid on an ancestor.
+    const t = ev.target;
+    const guid = t?.dataset?.itemGuid
+      ?? t?.dataset?.guid
+      ?? t?.closest?.("[data-item-guid]")?.dataset?.itemGuid
+      ?? t?.closest?.("[data-guid]")?.dataset?.guid;
     if (guid) overlay.dataset.draggingGuid = guid;
   }, true);
   overlay.addEventListener("dragend", () => {

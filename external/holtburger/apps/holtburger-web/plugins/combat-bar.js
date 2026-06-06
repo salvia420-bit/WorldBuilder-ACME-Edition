@@ -528,6 +528,15 @@ if (typeof window !== "undefined") {
   installAutoDisarmHooks();
 }
 
+// Subscribe at module-load to the hotbar bus event — when a hotbar
+// slot fires an armed spell on an item, clear the armed state so the
+// combat-bar UI is consistent.
+try {
+  window.addEventListener("hbHotbarItemTargeted", () => {
+    try { clearArmedSpell(); } catch (_) {}
+  });
+} catch (_) {}
+
 // Auto-disarm subscriptions. Runs at module-load (see syncWindowState
 // IIFE above) so the disarm hook is live even before the user opens
 // the combat panel — armed-spell state lives in localStorage +
@@ -1195,6 +1204,14 @@ function renderSpellPicker(bodyEl, state, client) {
   function renderRows() {
     list.innerHTML = "";
     rows.clear();
+    // Caster wielded? Recomputed every render so equip/unequip transitions
+    // refresh the tooltip suffix. EquipMask Held|TwoHanded = 0x03000000.
+    let casterWielded = false;
+    try {
+      const handle = window.__sessionHandle ?? null;
+      const inv = typeof handle?.playerInventory === "function" ? handle.playerInventory() : [];
+      casterWielded = Array.isArray(inv) && inv.some((it) => ((it.equipMask >>> 0) & 0x03000000) !== 0);
+    } catch (_) {}
 
     const slots = getSpellBarSlots();
     const populated = slots.filter((v) => v > 0);
@@ -1316,11 +1333,15 @@ function renderSpellPicker(bodyEl, state, client) {
       // Tooltip mirrors the badge so screen-readers + hover both
       // surface the projectile pattern. `(Bolt)` etc. appended only
       // when we have a classification; unclassified spells get just
-      // the name as before.
+      // the name as before. When no caster is wielded and the spell
+      // isn't Item Enchantment (school 3, which casts via components),
+      // suffix a hint — informational only; the row still casts.
+      const needsCasterHint = !casterWielded && (meta?.school !== 3);
+      const casterSuffix = needsCasterHint ? " — no caster wielded" : "";
       if (classification && classification.shape) {
-        row.title = `${baseName} (${classification.shape})`;
+        row.title = `${baseName} (${classification.shape})${casterSuffix}`;
       } else {
-        row.title = baseName;
+        row.title = `${baseName}${casterSuffix}`;
       }
 
       row.addEventListener("click", () => {

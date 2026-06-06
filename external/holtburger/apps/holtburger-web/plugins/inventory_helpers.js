@@ -108,3 +108,131 @@ export function computeInventoryTitle(selectedContainerId, bagSlots, playerName)
 export function parseSlotsViewChecked(raw) {
   return raw === "1";
 }
+
+// EquipMask bits used by canEquipInSlot (mirrors ACE EquipMask.cs values
+// already referenced by inventory.js PAPERDOLL_SLOTS).
+export const EQUIP = Object.freeze({
+  MeleeWeapon:  0x00100000,
+  Shield:       0x00200000,
+  MissileWeapon:0x00400000,
+  MissileAmmo:  0x00800000,
+  Held:         0x01000000,
+  TwoHanded:    0x02000000,
+  TrinketOne:   0x04000000,
+  Cloak:        0x08000000,
+  SigilBlue:    0x10000000,
+  SigilYellow:  0x20000000,
+  SigilRed:     0x40000000,
+});
+export const ITEM_TYPE_CONTAINER = 0x40000000;
+export const ITEM_TYPE_SIGIL = 0x00020000; // Aetheria sigil
+
+// CombatStyle bits — DefaultCombatStyle PropertyInt 46.
+export const COMBAT_STYLE_CASTER = 0x00000040; // Magic Caster
+export const COMBAT_STYLE_AMMO_LAUNCHER = 0x00008000; // ranged that consumes ammo
+
+/**
+ * Build a derived equip-state snapshot from the wasm playerInventory()
+ * array. Mirrors ACE Player_Inventory.cs:1746-1902 inputs.
+ *
+ * @param {Array<object>} snapshot  Result of handle.playerInventory().
+ * @param {object}        opts      {stance?: number, inCombatMode?: boolean}
+ * @returns {{equippedByMask:Object, mainWeapon:object|null, offhand:object|null, stance:number, inCombatMode:boolean}}
+ */
+export function buildPlayerEquipState(snapshot, opts) {
+  const inv = Array.isArray(snapshot) ? snapshot : [];
+  const o = opts || {};
+  const out = {
+    equippedByMask: Object.create(null),
+    mainWeapon: null,
+    offhand: null,
+    stance: (o.stance >>> 0) || 0,
+    inCombatMode: !!o.inCombatMode,
+  };
+  for (const it of inv) {
+    const m = (it?.equipMask >>> 0) || 0;
+    if (m === 0) continue;
+    out.equippedByMask[m] = it;
+    if ((m & (EQUIP.MeleeWeapon | EQUIP.MissileWeapon | EQUIP.TwoHanded)) !== 0) {
+      out.mainWeapon = it;
+    }
+    if ((m & (EQUIP.Shield | EQUIP.Held)) !== 0) {
+      out.offhand = it;
+    }
+  }
+  return out;
+}
+
+/**
+ * Slot-typing validator. Pure function, returns { ok, reason } where
+ * reason is the RETAIL-string rejection text ("A shield may not be worn
+ * with the %s", "Cannot hold %s while in combat") with %s pre-filled.
+ * Fails OPEN with ok=true when item.validLocations is 0 (Wave A may not
+ * have populated it yet) — caller flags a 'speculative' tooltip.
+ *
+ * Mirrors ACE Player_Inventory.cs:1746-1902 rejection cascade:
+ *   - Shield rejected by TwoHanded OR Caster OR AmmoLauncher main-hand
+ *   - Caster requires non-combat (cannot hold caster while in combat
+ *     with a melee weapon equipped)
+ *   - Ammo: ammoType must match the equipped MissileWeapon's expected ammo
+ */
+export function canEquipInSlot(item, slotMask, playerEquipState) {
+  if (!item) return { ok: false, reason: "No item." };
+  const slot = (slotMask >>> 0) || 0;
+  const vl = (item.validLocations >>> 0) || 0;
+  if (vl === 0) {
+    return { ok: true, speculative: true, reason: "" };
+  }
+  if (slot !== 0 && (vl & slot) === 0) {
+    return { ok: false, reason: "This item cannot be worn in that slot." };
+  }
+  const state = playerEquipState || { equippedByMask: {} };
+  const main = state.mainWeapon;
+  const mainCombatStyle = (main?.defaultCombatStyle >>> 0) || 0;
+  const mainMask = (main?.equipMask >>> 0) || 0;
+  // Shield rejection cascade.
+  if (slot === EQUIP.Shield || (vl & EQUIP.Shield) !== 0) {
+    if (main && (mainMask & EQUIP.TwoHanded) !== 0) {
+      return { ok: false, reason: `A shield may not be worn with the ${main.name || "two-handed weapon"}` };
+    }
+    if (main && (mainCombatStyle & COMBAT_STYLE_CASTER) !== 0) {
+      return { ok: false, reason: `A shield may not be worn with the ${main.name || "caster"}` };
+    }
+    if (main && (mainCombatStyle & COMBAT_STYLE_AMMO_LAUNCHER) !== 0) {
+      return { ok: false, reason: `A shield may not be worn with the ${main.name || "missile weapon"}` };
+    }
+  }
+  // Caster (Held) — cannot hold a caster while in combat with a melee weapon.
+  const itemStyle = (item.defaultCombatStyle >>> 0) || 0;
+  if ((slot === EQUIP.Held || (vl & EQUIP.Held) !== 0) && (itemStyle & COMBAT_STYLE_CASTER) !== 0) {
+    if (state.inCombatMode && main && (mainMask & EQUIP.MeleeWeapon) !== 0) {
+      return { ok: false, reason: `Cannot hold ${item.name || "caster"} while in combat` };
+    }
+  }
+  // Ammo: ammoType must match the equipped MissileWeapon's expected ammoType.
+  if (slot === EQUIP.MissileAmmo || (vl & EQUIP.MissileAmmo) !== 0) {
+    const mw = state.equippedByMask[EQUIP.MissileWeapon] || null;
+    const expected = (mw?.ammoType >>> 0) || 0;
+    const have = (item.ammoType >>> 0) || 0;
+    if (mw && expected !== 0 && have !== 0 && expected !== have) {
+      return { ok: false, reason: `This ammunition does not fit your ${mw.name || "missile weapon"}` };
+    }
+  }
+  return { ok: true, reason: "" };
+}
+
+/**
+ * Hotbar-binding validator. Rejects Container items and Sigil items per
+ * the user-authorized spec; everything else binds. Returns { ok, reason }.
+ */
+export function canBindToHotbar(item) {
+  if (!item) return { ok: false, reason: "No item." };
+  const itemType = (item.itemType >>> 0) || 0;
+  if ((itemType & ITEM_TYPE_CONTAINER) !== 0) {
+    return { ok: false, reason: "Containers cannot be bound to the hotbar." };
+  }
+  if ((itemType & ITEM_TYPE_SIGIL) !== 0) {
+    return { ok: false, reason: "Sigils cannot be bound to the hotbar." };
+  }
+  return { ok: true, reason: "" };
+}
