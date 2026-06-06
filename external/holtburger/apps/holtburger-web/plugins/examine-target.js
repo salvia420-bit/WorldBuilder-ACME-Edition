@@ -1062,7 +1062,11 @@ export function mount(_ctx) {
   // Examine is now only triggered explicitly via
   // window.__showExamineFor(guid), inventory slot click, or right-click
   // (when wired). Keeping the debug helper for console testing.
-  window.__showExamineFor = (guid) => window.__mainPanel?.pushView?.("examine", { guid: guid >>> 0 });
+  // Forward an optional ctx so callers can thread {fromInventory, srcLi,
+  // name} — examine-target.js:996 checks ctx?.fromInventory. Earlier
+  // signature dropped the second arg silently and broke container-panel +
+  // inventory grid -> examine context.
+  window.__showExamineFor = (guid, ctx) => window.__mainPanel?.pushView?.("examine", { guid: guid >>> 0, ...(ctx || {}) });
 
   return () => {
     delete window.__showExamineFor;

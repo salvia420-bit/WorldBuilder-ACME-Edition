@@ -191,7 +191,8 @@ function confirmBondedDrop(name, onConfirm) {
 }
 
 function itemTypeIsContainer(invItem) {
-  return ((invItem?.itemType >>> 0) & 0x40000000) !== 0;
+  // Per ACE.Entity/Enum/ItemType.cs: Container = 0x00000200.
+  return ((invItem?.itemType >>> 0) & 0x00000200) !== 0;
 }
 
 function pickWieldSlotMaskShared(vl) {
@@ -303,10 +304,14 @@ function buildItems(ctx) {
     const attuned = (invItem.attuned >>> 0) !== 0;
     const bonded = (invItem.bonded >>> 0) !== 0;
     items.push({
+      // Wave D / PR13 (2026-06-06): also gate on window.__isBusy() so
+      // Drop is unavailable mid-cast / mid-teleport. Attuned remains the
+      // primary blocker (label changes to reflect that).
       label: attuned ? "Drop (attuned)" : "Drop",
-      disabled: attuned,
+      disabled: attuned || (typeof window.__isBusy === "function" && window.__isBusy()),
       action: () => {
         if (attuned) return;
+        if (typeof window.__isBusy === "function" && window.__isBusy()) return;
         if (bonded) {
           confirmBondedDrop(invItem.name, () => {
             try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
@@ -323,10 +328,12 @@ function buildItems(ctx) {
   if (invItem && typeof handle?.giveObject === "function") {
     const target = (() => { try { return window.liveScene3d?.entityManager?.getSelectedTarget?.() >>> 0; } catch (_) { return 0; } })();
     items.push({
+      // Wave D / PR13 (2026-06-06): isBusy gate (cast-windup / boot).
       label: target ? "Give" : "Give (no target)",
-      disabled: !target,
+      disabled: !target || (typeof window.__isBusy === "function" && window.__isBusy()),
       action: () => {
         if (!target) return;
+        if (typeof window.__isBusy === "function" && window.__isBusy()) return;
         try { handle.giveObject(target, guid, 1); } catch (e) { console.warn("[ctx-menu] give failed:", e); }
       },
     });
@@ -336,8 +343,13 @@ function buildItems(ctx) {
   if (invItem && count > 1 && typeof handle?.splitStackTo3D === "function") {
     items.push({
       label: "Split Stack…",
+      // Wave D / PR13 (2026-06-06): isBusy gate. Split Stack had no
+      // disabled property before; mirror Drop/Give to keep the trio
+      // consistent.
+      disabled: (typeof window.__isBusy === "function" && window.__isBusy()),
       splitPrompt: { max: count - 1 },
       action: (amount) => {
+        if (typeof window.__isBusy === "function" && window.__isBusy()) return;
         const n = Math.max(1, Math.min((amount | 0), count - 1));
         try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
         try { handle.splitStackTo3D(guid, n); } catch (e) { console.warn("[ctx-menu] split failed:", e); }

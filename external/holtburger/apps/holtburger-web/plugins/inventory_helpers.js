@@ -124,7 +124,10 @@ export const EQUIP = Object.freeze({
   SigilYellow:  0x20000000,
   SigilRed:     0x40000000,
 });
-export const ITEM_TYPE_CONTAINER = 0x40000000;
+// Per ACE.Entity/Enum/ItemType.cs: Container = 0x00000200. (0x40000000 is
+// TinkeringMaterial; mis-bit caused the right-click Open and double-click
+// open paths to silently never match real sacks/pouches.)
+export const ITEM_TYPE_CONTAINER = 0x00000200;
 export const ITEM_TYPE_SIGIL = 0x00020000; // Aetheria sigil
 
 // CombatStyle bits — DefaultCombatStyle PropertyInt 46.

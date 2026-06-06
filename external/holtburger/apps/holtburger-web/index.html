@@ -6988,9 +6988,15 @@ void main() {
             if (!li || !li.draggable) return;
             const guid = Number(li.dataset.guid) >>> 0;
             const name = li.querySelector(".name")?.textContent ?? "";
+            // Wave D / PR11 (2026-06-06): dual-mime so the polymorphic
+            // grid drop-sites (bag-tabs, container-panel, paperdoll,
+            // canvas) parse the legacy <li> as a peer. effectAllowed
+            // moves to 'move' since these now route through moveItem /
+            // dropItem / setWielded — not a copy.
+            ev.dataTransfer.setData("application/x-hb-inv-guid", String(guid));
             ev.dataTransfer.setData("text/x-hb-item-guid", String(guid));
             ev.dataTransfer.setData("text/plain", name);
-            ev.dataTransfer.effectAllowed = "copy";
+            ev.dataTransfer.effectAllowed = "move";
             // Wave C / PR9 (2026-06-06): iconId-driven Image ghost. The
             // legacy <ul>'s <li> rendering stashes the iconId on a child
             // .icon element's background-image; pull it through a new
@@ -7166,11 +7172,12 @@ void main() {
           const meta = item.stackSize > 1
             ? `<span class="stack">×${item.stackSize}</span>`
             : (item.value > 0 ? `${item.value} pyreals` : "");
-          // Pack items are draggable so the vendor-ui plugin can
-          // accept them as a sell drop. Equipped items aren't draggable
-          // (would need an unequip wire first; ACE rejects sells of
-          // equipped items anyway).
-          const draggable = item.equipMask === 0 ? "draggable=\"true\"" : "";
+          // Wave D / PR11 (2026-06-06): every owned pack/equipped item
+          // is draggable. Vendor-ui still rejects equipped sells (with a
+          // toast — see vendor-ui dual-mime patch), but the inventory
+          // drag-source is uniform so paperdoll->items-grid unequip and
+          // bag-tab routing work without a per-item branch.
+          const draggable = "draggable=\"true\"";
           const row =
             `<li data-guid="${item.guid}" data-type-bit="0x${typeBit.toString(16)}" ${draggable}>` +
               `<span class="name">${escapeHtml(item.name || "(unnamed)")}</span>` +
@@ -9297,6 +9304,17 @@ void main() {
                 const errCode = evt.u32Payload >>> 0;
                 // eslint-disable-next-line no-console
                 console.log(`[step 5] UseFailed ${errLabel} code=${errCode}`);
+                // Wave D / PR13 (2026-06-06): re-emit on the plugin
+                // bus so rejection_feedback.js can correlate this
+                // WeenieError with its recent-action ring and
+                // synthesize an 'inventoryActionFailed' (kind:48)
+                // event. Mirrors the playerInventoryChanged /
+                // containerOpened emit pattern above.
+                if (window.__pluginClient?.events?.emit) {
+                  try {
+                    window.__pluginClient.events.emit("kind:13", evt);
+                  } catch (_) {}
+                }
               } else if (evt.kind === 14) {
                 // Phase 4 step 5: UseDone OK — door opened, container
                 // approached, lifestone touched. The visible reaction

@@ -59,6 +59,11 @@ import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.
 // Side-effect import: installs window.__audioOptimistic for the
 // optimistic inventory-action sound cues + server-echo dedupe ring.
 import "./audio_optimistic.js";
+// Wave D / PR13 (2026-06-06): side-effect import installs the
+// recent-action Proxy on window.__sessionHandle + the kind:13 WeenieError
+// subscription that synthesizes kind:48 inventoryActionFailed events.
+// Also exposes window.__isBusy() for radial-menu.js Drop/Give/Split.
+import "./rejection_feedback.js";
 import {
   aetheriaSlotIsLocked,
   formatBurdenText,
@@ -526,6 +531,13 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-inv-bagtab.selected {
       opacity: 1;
       filter: drop-shadow(0 0 3px var(--hb-text-gold));
+    }
+    #${OVERLAY_ID} .hb-inv-bagtab.hb-inv-bagtab-drop-over {
+      outline: 2px solid var(--hb-text-gold, #f0c060);
+      outline-offset: -2px;
+    }
+    #${OVERLAY_ID} .hb-inv-bagtab.reject {
+      animation: hb-inv-source-reject 400ms ease-out;
     }
     /* Pack icon overlay inside the tab (~24×24 centered in 28×28). */
     #${OVERLAY_ID} .hb-inv-bagtab-icon {
@@ -1398,6 +1410,65 @@ function doMount(parentEl, _ctx) {
       // pack; "Contents of <pack name>" on side pack.
       refreshPanelTitle();
     });
+    // Wave D / PR11 (2026-06-06): bag-tab as drop target. Three cases:
+    //   A) Container dropped on tab i (i>=1) -> moveItem(g, playerGuid, i)
+    //      sets PlacementPosition (Container.cs:179 sort order).
+    //   B) Non-container on a populated tab -> moveItem(g, containerId, 0)
+    //      moves the item INTO the pack at that tab.
+    //   C) Non-container on an empty tab -> 400ms .reject flash; no wire.
+    tab.addEventListener("dragenter", (ev) => {
+      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")
+          || ev.dataTransfer?.types?.includes("text/x-hb-item-guid")) {
+        ev.preventDefault();
+        tab.classList.add("hb-inv-bagtab-drop-over");
+      }
+    });
+    tab.addEventListener("dragover", (ev) => {
+      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")
+          || ev.dataTransfer?.types?.includes("text/x-hb-item-guid")) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+      }
+    });
+    tab.addEventListener("dragleave", () => {
+      tab.classList.remove("hb-inv-bagtab-drop-over");
+    });
+    tab.addEventListener("drop", (ev) => {
+      tab.classList.remove("hb-inv-bagtab-drop-over");
+      const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid")
+        || ev.dataTransfer?.getData("text/x-hb-item-guid");
+      if (!guidStr) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const sourceGuid = (parseInt(guidStr, 10) >>> 0);
+      if (!sourceGuid) return;
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (!handle || typeof handle.moveItem !== "function") return;
+      const srcItem = getItemByGuid(sourceGuid);
+      const srcIsContainer = !!srcItem && ((srcItem.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0;
+      const me = (typeof window.getLocalPlayerGuid === "function")
+        ? (window.getLocalPlayerGuid() >>> 0) : 0;
+      const slotData = bagSlots[i];
+      // Case A: drop a container onto a tab — reorder via PlacementPosition.
+      if (srcIsContainer && i >= 1 && me) {
+        try { handle.moveItem(sourceGuid, me, i); }
+        catch (e) { console.warn("[inv-bag-tab] reorder failed:", e); }
+        return;
+      }
+      // Case B: non-container onto a populated tab -> into that pack.
+      // For i=0 (main pack), substitute the player guid — slotData.containerId
+      // is 0 there and ACE rejects moveItem with container_guid=0.
+      if (!srcIsContainer && slotData) {
+        const dest = (i === 0) ? me : (slotData.containerId >>> 0);
+        if (!dest) return;
+        try { handle.moveItem(sourceGuid, dest, 0); }
+        catch (e) { console.warn("[inv-bag-tab] move-into failed:", e); }
+        return;
+      }
+      // Case C: non-container onto an empty tab -> reject flash.
+      tab.classList.add("reject");
+      setTimeout(() => tab.classList.remove("reject"), 400);
+    });
     bagCol.appendChild(tab);
     bagTabEls.push({ tabEl: tab, iconEl: tabIcon });
   }
@@ -1635,8 +1706,8 @@ function doMount(parentEl, _ctx) {
         const itemType = (item?.itemType >>> 0) || 0;
         const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
         // Container items open into a side panel rather than equipping.
-        // 0x40000000 per the user-authorized spec (Container itemtype bit).
-        if ((itemType & 0x40000000) !== 0) {
+        // Per ACE.Entity/Enum/ItemType.cs: Container = 0x00000200.
+        if ((itemType & 0x00000200) !== 0) {
           try { window.__openContainerFor?.(guid, item?.name || name); }
           catch (_) { /* container plugin may be down */ }
           return;
@@ -1925,7 +1996,32 @@ function doMount(parentEl, _ctx) {
         continue;
       }
       tabEl.classList.remove("empty");
-      tabEl.title = slot.name;
+      // Wave D / PR11 (2026-06-06): enrich tooltip with (n/m) capacity
+      // from the Wave A `containers_capacity` getter. Falls back to the
+      // retail default of 24 for any container whose capacity field
+      // hasn't propagated yet. n is computed from the snapshot by
+      // counting items whose containerId matches this pack.
+      const containerId = slot.containerId >>> 0;
+      let cap = 24;
+      let used = 0;
+      if (containerId === 0) {
+        // Main pack: count items at containerId 0 that aren't themselves
+        // containers (those occupy the side-tab strip, not main-pack capacity).
+        for (const it of inventorySnapshot) {
+          if ((it.containerId >>> 0) !== 0) continue;
+          if (((it.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0) continue;
+          used++;
+        }
+      } else {
+        for (const it of inventorySnapshot) {
+          if ((it.containerId >>> 0) === containerId) used++;
+          if ((it.guid >>> 0) === containerId) {
+            const c = (it.containersCapacity >>> 0) | 0;
+            if (c > 0) cap = c;
+          }
+        }
+      }
+      tabEl.title = `${slot.name} (${used}/${cap})`;
       tabEl.classList.toggle("selected", slot.containerId === selectedPackContainerId);
       // Phase 13.4 — pack icon overlay. Side packs (containerId !== 0)
       // have an iconId from PublicWeenieDescription. Main pack uses the
@@ -1948,6 +2044,12 @@ function doMount(parentEl, _ctx) {
   // currently selected pack. Pack <li>s come from index.html's #inv-pack
   // list, but containerId is on the wasm snapshot — we cross-reference
   // via the cached `inventorySnapshot` (see refreshInventorySnapshot).
+  //
+  // Wave D / PR11 (2026-06-06): containers (ItemType bit 0x200) surface
+  // ONLY via the bag-tab strip; suppress them from the main-pack grid so
+  // a side pack doesn't double-render (once as a slot, once as a tab).
+  // The skip is gated on selectedPackContainerId === 0 — inside a side
+  // pack a nested container would still render (rare, but legal).
   function rebuildItemsGrid() {
     itemsGrid.innerHTML = "";
     const pack = document.getElementById("inv-pack");
@@ -1960,6 +2062,11 @@ function doMount(parentEl, _ctx) {
       // visibility so we never silently hide everything.
       const itemContainerId = item ? (item.containerId >>> 0) : 0;
       if (itemContainerId !== selectedPackContainerId) continue;
+      if (selectedPackContainerId === 0
+          && item
+          && ((item.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0) {
+        continue;
+      }
       itemsGrid.appendChild(makeSlot(li));
     }
   }
@@ -2348,16 +2455,34 @@ function doMount(parentEl, _ctx) {
   }
   let unsubscribeAttach = null;
   let unsubscribeDetach = null;
+  // Wave D / PR11 (2026-06-06): coalesce playerInventoryChanged-driven
+  // rebuilds via microtask debounce so the MutationObserver tick AND the
+  // bus event fire ONE rebuild per tick instead of two. Reuses
+  // scheduleWieldedRebuild's rAF gate via a sibling scheduler.
+  let inventoryRebuildScheduled = false;
+  function scheduleInventoryRebuild() {
+    if (inventoryRebuildScheduled) return;
+    inventoryRebuildScheduled = true;
+    queueMicrotask(() => {
+      inventoryRebuildScheduled = false;
+      try { rebuild(); } catch (_) {}
+    });
+  }
+  let unsubscribeInventory = null;
   try {
     const client = window.__pluginClient;
     if (client?.events?.on) {
       client.events.on("kind:47", scheduleWieldedRebuild);
       client.events.on("kind:49", scheduleWieldedRebuild);
+      client.events.on("playerInventoryChanged", scheduleInventoryRebuild);
       unsubscribeAttach = () => {
         try { client.events.off?.("kind:49", scheduleWieldedRebuild); } catch (_) {}
       };
       unsubscribeDetach = () => {
         try { client.events.off?.("kind:47", scheduleWieldedRebuild); } catch (_) {}
+      };
+      unsubscribeInventory = () => {
+        try { client.events.off?.("playerInventoryChanged", scheduleInventoryRebuild); } catch (_) {}
       };
     }
   } catch (_) { /* bus may not be initialized yet */ }
@@ -2374,6 +2499,7 @@ function doMount(parentEl, _ctx) {
     if (unsubscribeStats) unsubscribeStats();
     if (unsubscribeAttach) unsubscribeAttach();
     if (unsubscribeDetach) unsubscribeDetach();
+    if (unsubscribeInventory) unsubscribeInventory();
     for (const o of observers) o.disconnect();
     // Wave 14 — release the WebGL context. Chrome caps live contexts
     // around 16; without this the inventory view can leak a context

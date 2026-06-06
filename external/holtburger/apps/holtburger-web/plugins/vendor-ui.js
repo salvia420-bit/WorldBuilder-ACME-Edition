@@ -1307,16 +1307,29 @@ function onKeyDown(ev) {
   if (matchesBinding(ev, binding)) hideOverlay();
 }
 
+// Wave D (2026-06-06): accept BOTH the legacy text/x-hb-item-guid
+// and the polymorphic application/x-hb-inv-guid mimes so the bag-tab
+// drag surfaces dual-mime'd in inventory.js + index.html route here.
+function _hasInvMime(dt) {
+  if (!dt?.types) return false;
+  return dt.types.includes("text/x-hb-item-guid")
+      || dt.types.includes("application/x-hb-inv-guid");
+}
 function onDragEnter(ev) {
-  if (ev.dataTransfer?.types?.includes("text/x-hb-item-guid")) {
+  if (_hasInvMime(ev.dataTransfer)) {
     ev.preventDefault();
     state.overlayEl.classList.add("hvb-drag-over");
   }
 }
 function onDragOver(ev) {
-  if (ev.dataTransfer?.types?.includes("text/x-hb-item-guid")) {
+  if (_hasInvMime(ev.dataTransfer)) {
     ev.preventDefault();
-    ev.dataTransfer.dropEffect = "copy";
+    // Sources now uniformly set effectAllowed='move' (legacy <li> +
+    // polymorphic items-grid + container-panel). Per WHATWG drag-drop
+    // spec, dropEffect='copy' is incompatible with effectAllowed='move'
+    // and the operation gets cancelled — the user sees a not-allowed
+    // cursor and drop never fires. Match the source intent.
+    ev.dataTransfer.dropEffect = "move";
   }
 }
 function onDragLeave(ev) {
@@ -1324,7 +1337,8 @@ function onDragLeave(ev) {
 }
 function onDrop(ev) {
   state.overlayEl.classList.remove("hvb-drag-over");
-  const guidStr = ev.dataTransfer?.getData("text/x-hb-item-guid");
+  const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid")
+    || ev.dataTransfer?.getData("text/x-hb-item-guid");
   if (!guidStr) return;
   ev.preventDefault();
   const guid = parseInt(guidStr, 10) >>> 0;
@@ -1335,6 +1349,17 @@ function onDrop(ev) {
   const item = inv.find((i) => (i.guid >>> 0) === guid);
   if (!item) {
     toast(`drop: item 0x${guid.toString(16)} not in inventory`, "err");
+    return;
+  }
+  // Wave D (2026-06-06): ACE rejects sells of equipped items
+  // (Player_Commerce.cs disallows the wire); reject client-side so the
+  // staging queue stays clean. Flash the drop zone red + toast the user.
+  if ((item.equipMask >>> 0) !== 0) {
+    state.overlayEl.querySelector?.(".hvb-sell-drop")?.classList?.add?.("hb-server-rejected");
+    setTimeout(() => {
+      state.overlayEl?.querySelector?.(".hvb-sell-drop")?.classList?.remove?.("hb-server-rejected");
+    }, 400);
+    toast(`Unequip "${item.name}" first`, "err");
     return;
   }
   // Switch to Selling tab and stage the item.

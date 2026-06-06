@@ -266,7 +266,15 @@ function renderItems(items) {
     slot.addEventListener("click", (ev) => {
       ev.stopPropagation();
       if (typeof window.__showExamineFor === "function") {
-        window.__showExamineFor(it.guid >>> 0);
+        // Wave D / PR12 (2026-06-06): pass full ctx so examine-target.js's
+        // fromInventory branch (examine-target.js:921) fires. srcLi gives
+        // examine-target a dataset.guid fallback when the wasm snapshot
+        // hasn't caught up; name avoids a re-query of resolveItemMeta.
+        window.__showExamineFor(it.guid >>> 0, {
+          name: it.name,
+          fromInventory: true,
+          srcLi: slot,
+        });
       }
     });
     // Right-click → polymorphic context menu. Now that wasm has
@@ -290,8 +298,101 @@ function renderItems(items) {
         } catch (e) { console.warn("[container-panel-rc] context menu failed:", e); }
       }
     });
+    // Wave D / PR12 (2026-06-06): gated drag-source + drop-target on
+    // each container slot. Default OFF — legacy click-examine wins. Set
+    // localStorage 'hb-cp.nestedPackDrag' = '1' OR ?nestedPackDrag=1 in
+    // the URL to opt in. Mouse events only (Firefox 128+).
+    if (_nestedPackDragEnabled()) {
+      slot.draggable = true;
+      slot.addEventListener("dragstart", (ev) => {
+        try {
+          ev.dataTransfer.setData("application/x-hb-inv-guid", String(it.guid >>> 0));
+          ev.dataTransfer.setData("text/x-hb-item-guid", String(it.guid >>> 0));
+          ev.dataTransfer.effectAllowed = "move";
+          if (it.iconId && typeof window.__iconCache?.getUrl === "function") {
+            const url = window.__iconCache.getUrl(it.iconId >>> 0);
+            if (url) {
+              const img = new Image();
+              img.src = url;
+              img.width = 32; img.height = 32;
+              ev.dataTransfer.setDragImage(img, 16, 16);
+            }
+          }
+        } catch (_) {}
+      });
+      const _accepts = (dt) => !!dt?.types && (dt.types.includes("application/x-hb-inv-guid") || dt.types.includes("text/x-hb-item-guid"));
+      slot.addEventListener("dragenter", (ev) => {
+        if (!_accepts(ev.dataTransfer)) return;
+        ev.preventDefault();
+        slot.classList.add("drag-target");
+      });
+      slot.addEventListener("dragover", (ev) => {
+        if (!_accepts(ev.dataTransfer)) return;
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+      });
+      slot.addEventListener("dragleave", () => slot.classList.remove("drag-target"));
+      slot.addEventListener("drop", (ev) => {
+        slot.classList.remove("drag-target");
+        const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid")
+          || ev.dataTransfer?.getData("text/x-hb-item-guid");
+        if (!guidStr) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const srcGuid = parseInt(guidStr, 10) >>> 0;
+        const containerGuid = (overlayEl?._containerGuid >>> 0) || 0;
+        if (!srcGuid || !containerGuid || srcGuid === containerGuid) return;
+        // Wave D / PR12 (2026-06-06): Corpse carve-out — ACE
+        // Player_Inventory.cs:888-895 rejects drop-INTO on non-monster
+        // corpses (WeenieError.Dead). Detect via canonical ODF_CORPSE bit
+        // (0x00002000) on the container's entity meta. Drag-source still
+        // works (take-from-corpse); only drop-INTO is blocked.
+        if (_containerIsCorpse(containerGuid)) {
+          slot.classList.add("hb-server-rejected");
+          setTimeout(() => slot.classList.remove("hb-server-rejected"), 400);
+          return;
+        }
+        const handle = window.__sessionHandle;
+        if (typeof handle?.moveItem === "function") {
+          try { handle.moveItem(srcGuid, containerGuid, 0); }
+          catch (e) { console.warn("[container-panel-drop] moveItem failed:", e); }
+        }
+      });
+    }
     grid.appendChild(slot);
   }
+}
+
+// Wave D / PR12 (2026-06-06): feature gate for nested-pack drag. URL
+// param wins over localStorage so wire-agents and visual eye-tests can
+// pass `?nestedPackDrag=1` without persisting state across sessions.
+function _nestedPackDragEnabled() {
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    const q = sp.get("nestedPackDrag");
+    if (q === "1" || q === "on" || q === "true") return true;
+    if (q === "0" || q === "off" || q === "false") return false;
+  } catch (_) {}
+  try { return window.localStorage?.getItem?.("hb-cp.nestedPackDrag") === "1"; }
+  catch (_) { return false; }
+}
+
+// Corpse detection via canonical_classify ODF_CORPSE bit (0x00002000)
+// on the container's entity meta. resolveItemMeta() already searches
+// playerInventory then liveScene3d.entityManager; we re-resolve here so
+// the lookup is fresh at drop time. Returns false if entity meta is
+// missing — never blocks unknown containers.
+function _containerIsCorpse(containerGuid) {
+  const g = containerGuid >>> 0;
+  try {
+    const em = window.liveScene3d?.entityManager;
+    const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
+    if (!ent) return false;
+    const meta = ent.meta || ent;
+    if (meta?.objectClass === "Corpse") return true;
+    const odf = (meta?.objDescFlags >>> 0) || 0;
+    return (odf & 0x00002000) !== 0;
+  } catch (_) { return false; }
 }
 
 // Expose overlay-level containerGuid so the per-slot contextmenu can
