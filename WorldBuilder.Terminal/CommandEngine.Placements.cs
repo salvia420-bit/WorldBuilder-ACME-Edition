@@ -166,6 +166,19 @@ public partial class CommandEngine {
         var dungeonPath = Path.Combine(outDir, "dungeon_instances.sql");
         File.WriteAllText(dungeonPath, dungeonSql);
 
+        // E1 (wave-2) PR1: write the addressable source-of-truth sidecar (placements_enriched.jsonl).
+        // This is purely ADDITIVE — it does not touch the SQL buffers above, so the existing
+        // landblock_instances.sql / dungeon_instances.sql output is byte-identical (HARD CONSTRAINT 1).
+        var enriched = new List<EnrichedPlacement>();
+        foreach (var p in project.OutdoorInstancePlacements)
+            enriched.Add(EnrichedPlacementStore.FromOutdoor(p));
+        foreach (var (_, doc) in project.DocumentManager.ActiveDocs) {
+            if (doc is not DungeonDocument dng) continue;
+            foreach (var p in dng.InstancePlacements)
+                enriched.Add(EnrichedPlacementStore.FromDungeon(dng.LandblockKey, p));
+        }
+        var enrichedPath = EnrichedPlacementStore.WriteFile(outDir, enriched);
+
         int? rowsApplied = null;
         if (apply) {
             var settings = project.AceDb;
@@ -181,6 +194,7 @@ public partial class CommandEngine {
         return new PlacementExportSqlResult(true,
             outdoorPath, outdoorRecords.Count,
             dungeonPath, dungeonCount,
-            rowsApplied);
+            rowsApplied,
+            enrichedPath, enriched.Count);
     }
 }

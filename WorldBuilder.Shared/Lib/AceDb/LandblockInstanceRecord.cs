@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using WorldBuilder.Shared.Models;
+
 namespace WorldBuilder.Shared.Lib.AceDb {
     /// <summary>
     /// Lightweight projection of a row from the ACE ace_world.landblock_instance table.
@@ -31,5 +34,19 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         /// True when this instance is in a dungeon/interior cell (0x0100+).
         /// </summary>
         public bool IsDungeon => CellId >= 0x0100;
+
+        // ── E1 (wave-2) enrichment — additive, default null/empty ───────────
+        // Carried downstream from the source placement so future SQL emitters (PR2/PR3) can
+        // write weenie_properties_* / biota_properties_*. PR1 does NOT read these in the
+        // existing landblock_instance SQL emitter, so the existing SQL output is unchanged.
+
+        /// <summary>Optional addressable dye. Null preserves existing landblock_instance SQL.</summary>
+        public PlacementDye? Dye { get; set; }
+
+        /// <summary>Optional generator profiles. Null/empty preserves existing SQL.</summary>
+        public List<PlacementGenerator>? Generators { get; set; }
+
+        /// <summary>Optional multi-position map keyed by PositionType enum. Null preserves existing SQL.</summary>
+        public Dictionary<PositionType, PlacementPosition>? Positions { get; set; }
     }
 }

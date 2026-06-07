@@ -2948,6 +2948,7 @@ public class JsonCommandProcessor {
         return Serialize(new { success = r.Success, command = "placement-export-sql",
             outdoorPath = r.OutdoorPath, outdoorCount = r.OutdoorCount,
             dungeonPath = r.DungeonPath, dungeonCount = r.DungeonCount,
+            enrichedJsonlPath = r.EnrichedJsonlPath, enrichedCount = r.EnrichedCount,
             rowsAppliedToDb = r.RowsAppliedToDb });
     }
 

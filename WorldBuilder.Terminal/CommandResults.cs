@@ -1262,7 +1262,8 @@ public record PlacementExportSqlResult(
     bool Success,
     string OutdoorPath, int OutdoorCount,
     string DungeonPath, int DungeonCount,
-    int? RowsAppliedToDb);
+    int? RowsAppliedToDb,
+    string? EnrichedJsonlPath = null, int EnrichedCount = 0);
 
 // ── O4: ACE DB Weenie CRUD ─────────────────────────────────
 public record WeenieSaveScalarsResult(

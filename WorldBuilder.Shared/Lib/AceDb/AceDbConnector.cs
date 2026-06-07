@@ -265,6 +265,10 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                     AnglesX = q.X,
                     AnglesY = q.Y,
                     AnglesZ = q.Z,
+                    // E1 enrichment carried through additively (PR1: not read by existing SQL emitter).
+                    Dye = p.Dye,
+                    Generators = p.Generators,
+                    Positions = p.Positions,
                 });
             }
             return list;
@@ -289,6 +293,10 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                     AnglesX = p.AnglesX,
                     AnglesY = p.AnglesY,
                     AnglesZ = p.AnglesZ,
+                    // E1 enrichment carried through additively (PR1: not read by existing SQL emitter).
+                    Dye = p.Dye,
+                    Generators = p.Generators,
+                    Positions = p.Positions,
                 });
             }
             return list;

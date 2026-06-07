@@ -1,5 +1,7 @@
+using System.Collections.Generic;
 using System.Numerics;
 using System.Text.Json.Serialization;
+using WorldBuilder.Shared.Lib.AceDb;
 
 namespace WorldBuilder.Shared.Models {
     /// <summary>
@@ -18,6 +20,20 @@ namespace WorldBuilder.Shared.Models {
         public float AnglesX { get; set; }
         public float AnglesY { get; set; }
         public float AnglesZ { get; set; } = 1f;
+
+        // ── E1 (wave-2) enrichment — additive, default null/empty ───────────
+        // These carry per-instance dye / generator / multi-position state through the
+        // export round-trip (placements_enriched.jsonl). They default to null so existing
+        // placements and the existing landblock_instance SQL path are unaffected (SPEC §3.0).
+
+        /// <summary>Optional addressable dye (SubPaletteId DID + offset/length, and/or template tint).</summary>
+        public PlacementDye? Dye { get; set; }
+
+        /// <summary>Optional generator profiles; one SQL row each. Null/empty when not a generator.</summary>
+        public List<PlacementGenerator>? Generators { get; set; }
+
+        /// <summary>Optional multi-position map keyed by PositionType enum (never an array offset).</summary>
+        public Dictionary<PositionType, PlacementPosition>? Positions { get; set; }
 
         [JsonIgnore]
         public Vector3 Origin {

@@ -2819,6 +2819,8 @@ public class TerminalRepl {
                     var r = _engine.PlacementExportSqlAsync(outDir, apply).GetAwaiter().GetResult();
                     Console.WriteLine($"Wrote landblock_instances.sql ({r.OutdoorCount} rows) → {r.OutdoorPath}");
                     Console.WriteLine($"Wrote dungeon_instances.sql ({r.DungeonCount} rows) → {r.DungeonPath}");
+                    if (r.EnrichedJsonlPath != null)
+                        Console.WriteLine($"Wrote {WorldBuilder.Shared.Lib.AceDb.EnrichedPlacementStore.FileName} ({r.EnrichedCount} records) → {r.EnrichedJsonlPath}");
                     if (r.RowsAppliedToDb.HasValue) Console.WriteLine($"Applied {r.RowsAppliedToDb} row(s) to ace-db.");
                     break;
                 }

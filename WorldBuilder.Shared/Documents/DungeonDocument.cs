@@ -9,6 +9,8 @@ using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Lib.AceDb;
+using WorldBuilder.Shared.Models;
 
 namespace WorldBuilder.Shared.Documents {
 
@@ -57,10 +59,26 @@ namespace WorldBuilder.Shared.Documents {
     /// </summary>
     [MemoryPackable]
     public partial class DungeonInstancePlacement {
-        public uint WeenieClassId { get; set; }
-        public ushort CellNumber { get; set; }
-        public Vector3 Origin { get; set; }
-        public Quaternion Orientation { get; set; } = Quaternion.Identity;
+        // ── MemoryPack wire contract — EXPLICIT [MemoryPackOrder] (SPEC §3.0/§7.5, HARD CONSTRAINT 5) ──
+        // Slots 0–3 are the LEGACY members and MUST NEVER be renumbered or reordered, so old
+        // .dungeon blobs (serialized before enrichment, member-count header = 4) still deserialize
+        // with the enrichment fields (slots 4–6) defaulting to null. Append new members at slot 7+;
+        // a mid-insert renumber is now a visible decision rather than a silent old-blob break.
+        [MemoryPackOrder(0)] public uint WeenieClassId { get; set; }
+        [MemoryPackOrder(1)] public ushort CellNumber { get; set; }
+        [MemoryPackOrder(2)] public Vector3 Origin { get; set; }
+        [MemoryPackOrder(3)] public Quaternion Orientation { get; set; } = Quaternion.Identity;
+
+        // ── E1 (wave-2) enrichment — APPENDED at slots 4–6, default null ──
+
+        /// <summary>Optional addressable dye (SubPaletteId DID + offset/length, and/or template tint).</summary>
+        [MemoryPackOrder(4)] public PlacementDye? Dye { get; set; }
+
+        /// <summary>Optional generator profiles; one SQL row each. Null/empty when not a generator.</summary>
+        [MemoryPackOrder(5)] public List<PlacementGenerator>? Generators { get; set; }
+
+        /// <summary>Optional multi-position map keyed by PositionType enum (never an array offset).</summary>
+        [MemoryPackOrder(6)] public Dictionary<PositionType, PlacementPosition>? Positions { get; set; }
     }
 
     public partial class DungeonDocument : BaseDocument {
