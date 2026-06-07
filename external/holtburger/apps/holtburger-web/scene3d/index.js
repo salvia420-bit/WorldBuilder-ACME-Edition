@@ -3192,13 +3192,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               const inst = liveScene3d?.entityManager?.entityMap?.get(guid >>> 0);
               const p = inst?.root?.position;
               if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
-                // worldRoot uses three.js coords (x east, y up, z south);
-                // AC coords used in lb-key are (x east, y north). The
-                // existing `acToThree` flips y→-z, so the inverse here is
-                // ac_x = three_x, ac_y = -three_z. See scene3d/adapter.js
-                // for the canonical transform.
+                // The rig lives inside worldRoot in AC coords (setPose
+                // writes root.position = AC x/y/z verbatim); the -π/2
+                // worldRoot rotation is a parent transform, not baked into
+                // these local coords. So AC north is p.y directly.
                 const acX = p.x;
-                const acY = -p.z;
+                const acY = p.y;
                 const lbX = Math.floor(acX / 192) & 0xff;
                 const lbY = Math.floor(acY / 192) & 0xff;
                 return lbKeyFromXY(lbX, lbY);
@@ -3206,7 +3205,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             }
           }
         } catch (_) {}
-        return liveScene3d.playerLbKey ?? liveScene3d.initialCentreLbKey ?? null;
+        return scene3dForBuilders.playerLbKey ?? scene3dForBuilders.initialCentreLbKey ?? null;
       },
       debug: lbLruDebug,
     });

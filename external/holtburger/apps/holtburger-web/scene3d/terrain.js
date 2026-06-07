@@ -2918,7 +2918,7 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
 
 const _terrainVisualRaycaster = new THREE.Raycaster();
 const _terrainVisualRayOrigin = new THREE.Vector3();
-const _terrainVisualRayDir = new THREE.Vector3(0, 0, -1);
+const _terrainVisualRayDir = new THREE.Vector3(0, -1, 0);
 const _terrainVisualIntersects = [];
 
 export function getTerrainVisualZ(scene3d, x, y, fallbackZ) {
@@ -2926,10 +2926,14 @@ export function getTerrainVisualZ(scene3d, x, y, fallbackZ) {
   if (!group || !group.children || group.children.length === 0) {
     return fallbackZ;
   }
-  // Cast from well above any plausible terrain height (Holtburg ~96 m
-  // peak; AC overall ~200 m max) so the ray origin is always above
-  // the surface.
-  _terrainVisualRayOrigin.set(x, y, 1000);
+  // Raycaster works in three.js WORLD space, but the terrain mesh sits
+  // under worldRoot's -π/2 X rotation (AC z-up → three y-up). So we
+  // transform the AC query into the world frame: acToThree(x, y, 1000) =
+  // (x, 1000, -y), cast straight down (three -Y), and read the hit back
+  // as AC z = point.y (the exact closed-form inverse). Cast from well
+  // above any plausible terrain height (Holtburg ~96 m peak; AC overall
+  // ~200 m max) so the ray origin is always above the surface.
+  _terrainVisualRayOrigin.set(x, 1000, -y);
   _terrainVisualRaycaster.set(_terrainVisualRayOrigin, _terrainVisualRayDir);
   _terrainVisualRaycaster.far = 2000;
   _terrainVisualIntersects.length = 0;
@@ -2939,7 +2943,7 @@ export function getTerrainVisualZ(scene3d, x, y, fallbackZ) {
     _terrainVisualIntersects
   );
   if (_terrainVisualIntersects.length === 0) return fallbackZ;
-  const z = _terrainVisualIntersects[0].point.z;
+  const z = _terrainVisualIntersects[0].point.y;
   _terrainVisualIntersects.length = 0;
   return Number.isFinite(z) ? z : fallbackZ;
 }
