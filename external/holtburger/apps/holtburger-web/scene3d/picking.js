@@ -356,11 +356,22 @@ export function setupClickPicking({
     // entities typically in PVS) and each entity root may have child
     // meshes (rig parts) that need to be tested. The key win is that
     // statics are NOT in `roots` at all.
+    // `intersectObjects` returns hits already sorted near→far. Walk them
+    // in distance order and return the first one that resolves to a
+    // non-local entity guid. This skips occluders that aren't pickable
+    // targets — most importantly the LOCAL player's own rig, which is in
+    // `roots` (so the camera ray hits it) but absent from `guidByRoot`
+    // (excluded above). Standing the player between the camera and an NPC
+    // previously returned null (#18); now the loop steps past the self-
+    // hit to the NPC behind it. "Can't pick yourself" is preserved: a
+    // self-hit yields no guidByRoot match, so the loop simply advances.
     const hits = raycaster.intersectObjects(roots, true);
-    if (hits.length === 0) return null;
-    let obj = hits[0].object;
-    while (obj && !guidByRoot.has(obj)) obj = obj.parent;
-    return obj ? guidByRoot.get(obj) : null;
+    for (const hit of hits) {
+      let obj = hit.object;
+      while (obj && !guidByRoot.has(obj)) obj = obj.parent;
+      if (obj) return guidByRoot.get(obj);
+    }
+    return null;
   }
 
   function onPointerDown(ev) {
@@ -909,6 +920,11 @@ export function setupClickPicking({
 
   return {
     destroy() {
+      // Stop any in-flight charge: cancels the rAF chargeTick loop,
+      // zeroes movement input, and releases a held windup pose. Without
+      // this, destroy() left the pursuit rAF running (and the player
+      // walking) after the picking subsystem was torn down.
+      cancelCharge();
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("dragover", onCanvasDragOver);
       canvas.removeEventListener("drop", onCanvasDrop);

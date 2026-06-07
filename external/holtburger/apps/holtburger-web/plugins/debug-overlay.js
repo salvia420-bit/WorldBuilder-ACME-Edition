@@ -54,6 +54,15 @@ let _mouseY = -1;
 let _mouseOverCanvas = false;
 let _canvasListenersBound = null; // the <canvas> we bound to, so we can rebind if it changes
 
+// Cursor-pick memoization (#32). The raycast allocates per call
+// (Raycaster builds a fresh hit array + walks entity rigs), and the
+// rAF tick ran it EVERY frame even with a stationary cursor — a GC
+// sawtooth on idle. Cache the last resolved guid and only re-pick when
+// the cursor actually moved (or left the canvas). `_cursorDirty` starts
+// true so the first tick after a mousemove picks once.
+let _lastCursorGuid = null;
+let _cursorDirty = false;
+
 // FPS rolling-window state. We keep the last 60 frame timestamps and
 // recompute the average once per second. Frame-ms is just the delta
 // since the previous tick.
@@ -161,10 +170,12 @@ function onCanvasMouseMove(ev) {
   _mouseX = ev.clientX;
   _mouseY = ev.clientY;
   _mouseOverCanvas = true;
+  _cursorDirty = true; // (#32) re-pick on the next updateValues()
 }
 
 function onCanvasMouseLeave() {
   _mouseOverCanvas = false;
+  _cursorDirty = true; // (#32) clear the cached guid on the next tick
 }
 
 function hex32(n) {
@@ -248,13 +259,20 @@ function updateValues() {
 
   // Cursor pick — only run when the mouse is actually over the canvas
   // and __pickEntityAt is available. The raycast is O(entities-in-PVS)
-  // which is ~200 max — cheap enough to do per-frame.
-  let cursorGuid = null;
-  if (_mouseOverCanvas && typeof window.__pickEntityAt === "function" && _mouseX >= 0) {
-    try { cursorGuid = window.__pickEntityAt(_mouseX, _mouseY); } catch (_) {}
+  // which is ~200 max, but it allocates per call, so (#32) we re-pick
+  // ONLY when the cursor moved (`_cursorDirty`) instead of every frame —
+  // a stationary cursor reuses the cached `_lastCursorGuid` and does no
+  // raycast (no per-frame GC sawtooth on idle hover).
+  if (_cursorDirty) {
+    let cursorGuid = null;
+    if (_mouseOverCanvas && typeof window.__pickEntityAt === "function" && _mouseX >= 0) {
+      try { cursorGuid = window.__pickEntityAt(_mouseX, _mouseY); } catch (_) {}
+    }
+    _lastCursorGuid = cursorGuid;
+    _cursorDirty = false;
   }
-  if (cursorGuid != null) {
-    _valueEls.cursorGuid.textContent = hex32(cursorGuid);
+  if (_lastCursorGuid != null) {
+    _valueEls.cursorGuid.textContent = hex32(_lastCursorGuid);
   } else {
     _valueEls.cursorGuid.textContent = "none";
   }
