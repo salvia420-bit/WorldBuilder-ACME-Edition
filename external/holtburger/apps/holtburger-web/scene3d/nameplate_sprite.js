@@ -178,22 +178,27 @@ const _lodCamWorld = { x: 0, y: 0, z: 0 };
 let _lodRafId = 0;
 let _lodDisposed = false;
 
-// ITEM_TYPE bit constants mirrored from `index.html:2771` (the 2D PIXI
-// path). We only need the bits the nameplate-colour switch reads.
+// ITEM_TYPE bit constants mirrored from the authoritative wire ItemType
+// enum (`index.html:4525` — the frozen `ITEM_TYPE` object the 2D PIXI
+// path's `categoryForItemType` reads). We only need the bits the
+// nameplate-colour switch reads. Earlier this file carried three wrong
+// values (WRITABLE 0x00100000, LIFE_STONE 0x04000000, CASTER 0x00200000)
+// that did not exist in the wire enum, so Books, Lifestones, and Wands
+// fell through to the neutral-white "misc" branch.
 const ITEM_TYPE_CREATURE = 0x00000010;
 const ITEM_TYPE_PORTAL = 0x00010000;
-const ITEM_TYPE_LIFE_STONE = 0x04000000;
+const ITEM_TYPE_LIFE_STONE = 0x10000000;
 const ITEM_TYPE_CONTAINER = 0x00000200;
-const ITEM_TYPE_WRITABLE = 0x00100000;
+const ITEM_TYPE_WRITABLE = 0x00002000;
 const ITEM_TYPE_MELEE_WEAPON = 0x00000001;
 const ITEM_TYPE_MISSILE_WEAPON = 0x00000100;
-const ITEM_TYPE_CASTER = 0x00200000;
+const ITEM_TYPE_CASTER = 0x00008000;
 const ITEM_TYPE_ARMOR = 0x00000002;
 const ITEM_TYPE_CLOTHING = 0x00000004;
 
 /**
  * Map an itemType bitmask to a coarse visual category. Mirrors
- * `categoryForItemType` (`index.html:2799`). Used by
+ * `categoryForItemType` (`index.html:4553`). Used by
  * `nameplateColorForCategory` to pick text fill.
  */
 export function categoryForItemType(itemType) {
@@ -984,6 +989,13 @@ export function tickNameplateLod(scene3d) {
     const d2 = dx * dx + dy * dy + dz * dz;
     if (d2 > rangeSq) {
       sprite.visible = false;
+      // Wave 4.B (#19) — hide the sibling buff badge too. The badge is
+      // parented to the same root but is NOT in entityMap's nameplate
+      // slot, so without this it stays visible after the nameplate LODs
+      // out (stranded "+N" chip floating with no name). Mirrors the
+      // in-range visibility sync below.
+      const badge = root.children?.find((c) => c?.name?.startsWith?.("buff_badge_"));
+      if (badge) badge.visible = false;
       continue;
     }
     _lodScratch.push({ sprite, d2 });
