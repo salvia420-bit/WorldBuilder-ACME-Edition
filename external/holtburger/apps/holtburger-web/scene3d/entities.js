@@ -2152,8 +2152,13 @@ export class EntityManager {
     const wy = lbY * 192.0 + (meta.y ?? 0);
     const wz = meta.z ?? 0;
     inst.setPose(wx, wy, wz, meta.qw ?? 1, meta.qx ?? 0, meta.qy ?? 0, meta.qz ?? 0);
-    if (meta.objScale && meta.objScale > 0 && meta.objScale !== 1) {
-      root.scale.setScalar(meta.objScale);
+    // #9 (2026-06-07): remember the entity's authored base scale so the
+    // generic jump pose can multiply through it instead of stomping x/y/z
+    // back to 1.0 (which collapsed scaled creatures mid-jump). Defaults to
+    // 1.0 for the common objScale==1 path → byte-identical transforms.
+    inst._baseScale = (meta.objScale && meta.objScale > 0) ? meta.objScale : 1.0;
+    if (inst._baseScale !== 1) {
+      root.scale.setScalar(inst._baseScale);
     }
 
     // Step D: AnimationMixer + initial action.
@@ -3749,7 +3754,11 @@ export class EntityManager {
   }
 
   _clearGenericJumpPose(inst) {
-    // Reverse: tween back to identity tilt + scale 1.0.
+    // Reverse: tween back to identity tilt + scale 1.0 (fraction of base).
+    // #9: fromScale is the current scale FRACTION relative to the entity's
+    // authored base scale (root.scale.z is base*fraction), so divide back
+    // out. base defaults to 1 → byte-identical to the prior `scale.z`.
+    const base = inst._baseScale || 1.0;
     inst._jumpPoseTween = {
       startMs: performance.now(),
       durationMs: 200,
@@ -3757,7 +3766,7 @@ export class EntityManager {
         ? inst.airborneTilt.clone()
         : new THREE.Quaternion(),
       toTilt: new THREE.Quaternion(), // identity
-      fromScale: inst.root.scale.z,
+      fromScale: inst.root.scale.z / base,
       toScale: 1.0,
       isLanding: true,
       kind: "generic",
@@ -4367,9 +4376,12 @@ export class EntityManager {
       if (inst.airborneTilt) {
         inst.root.quaternion.multiply(tweenQ);
       }
-      // Scale: simple lerp.
+      // Scale: simple lerp of the fraction, applied THROUGH the entity's
+      // authored base scale so scaled creatures keep their size mid-jump.
+      // #9: base defaults to 1 → scale.set(1, 1, scaleZ) (byte-identical).
+      const base = inst._baseScale || 1.0;
       const scaleZ = tween.fromScale + (tween.toScale - tween.fromScale) * eased;
-      inst.root.scale.set(1.0, 1.0, scaleZ);
+      inst.root.scale.set(base, base, base * scaleZ);
     }
 
     if (clampedT >= 1) {
@@ -4716,6 +4728,11 @@ export class EntityManager {
     } else if (inst._cycleOmega) {
       inst._cycleOmega = null;
       inst._cycleOmegaKey = null;
+      // #8 (2026-06-07): drop the accumulated spin delta when the cycle's
+      // authored omega stops, mirroring the SetOmega(0,0,0) hook-stop reset,
+      // so a later server setPose doesn't re-stamp a residual spin. Only when
+      // no SetOmega-hook spin remains (it owns the accum otherwise).
+      if (!inst._omega) inst._omegaAccumQ = null;
     }
     // T11 — mark this as the entity's active locomotion cycle and resolve its
     // authored ground speed (async, memoised) so the per-frame tick can scale
@@ -7942,9 +7959,16 @@ export class EntityManager {
       // Persistent state until another SetOmega arrives (zero vector =
       // stop). Per-frame integration in `_tickHookOmega`.
       const ox = +hook.omegaX, oy = +hook.omegaY, oz = +hook.omegaZ;
-      inst._omega = (ox === 0 && oy === 0 && oz === 0)
+      const stop = (ox === 0 && oy === 0 && oz === 0);
+      inst._omega = stop
         ? null  // stop — clearing the field skips the tick fast-path
         : { x: ox, y: oy, z: oz };
+      // #8 (2026-06-07): on stop, also drop the accumulated spin delta so a
+      // subsequent server setPose re-application (`_omegaAccumQ.premultiply`
+      // in setPose / _tickHookOmega) doesn't keep stamping a residual spin
+      // onto the now-stopped heading. Only the hook spin clears here; the
+      // cycle-omega path clears its own accum via cycleOmega below.
+      if (stop && !inst._cycleOmega) inst._omegaAccumQ = null;
       this._setOmegaHookFires = (this._setOmegaHookFires | 0) + 1;
       return;
     }
