@@ -436,7 +436,16 @@ export class CameraSwitcher {
     this._predictionTraceCapacity = 256;
 
     // Listeners registered for cleanup in `dispose()`.
+    //
+    // C1 split (2026-06-07): `_listeners` holds ONLY the per-mode DOM
+    // listeners that `switchMode()` tears down on each mode change (the
+    // 4 follow-mode mouse handlers). The page-global input listeners
+    // (blur/keydown/keyup/wheel/C) live in `_globalListeners` and are
+    // installed ONCE in the constructor — they must survive switchMode's
+    // cleanup, otherwise the very first `switchMode("follow")` call from
+    // the constructor wipes the WASD/mode-cycle handlers it just added.
     this._listeners = [];
+    this._globalListeners = [];
 
     this._installKeyListeners();
     this._installModeToggle();
@@ -624,6 +633,17 @@ export class CameraSwitcher {
       // is implicit (the camera follows the player).
       this.activeCamera = this.ortho;
     }
+  }
+
+  /**
+   * C1 (#4): the camera the render loop / picker should use RIGHT NOW.
+   * Returns `activeCamera` (the ortho instance in topDown, persp in
+   * follow/orbit) — NOT `this.persp`. picking.js:323 and the debug
+   * overlay read this; returning persp would re-break top-down/ortho
+   * picking (the ray would be cast from the frozen perspective camera).
+   */
+  getActive() {
+    return this.activeCamera;
   }
 
   // ---- per-rAF tick -------------------------------------------------
@@ -1584,10 +1604,10 @@ export class CameraSwitcher {
     document.addEventListener("keyup", onKeyUp);
     if (typeof window !== "undefined") {
       window.addEventListener("blur", onBlur);
-      this._listeners.push(["blur", onBlur, window]);
+      this._globalListeners.push(["blur", onBlur, window]);
     }
-    this._listeners.push(["keydown", onKeyDown, document]);
-    this._listeners.push(["keyup", onKeyUp, document]);
+    this._globalListeners.push(["keydown", onKeyDown, document]);
+    this._globalListeners.push(["keyup", onKeyUp, document]);
 
     // Wheel zoom for top-down mode.
     if (this.domElement) {
@@ -1600,7 +1620,7 @@ export class CameraSwitcher {
         this.ortho.updateProjectionMatrix();
       };
       this.domElement.addEventListener("wheel", onWheel, { passive: true });
-      this._listeners.push(["wheel", onWheel, this.domElement]);
+      this._globalListeners.push(["wheel", onWheel, this.domElement]);
     }
   }
 
@@ -1623,7 +1643,7 @@ export class CameraSwitcher {
       }
     };
     document.addEventListener("keydown", onKeyDown);
-    this._listeners.push(["keydown", onKeyDown, document]);
+    this._globalListeners.push(["keydown", onKeyDown, document]);
   }
 
   // ---- helpers ------------------------------------------------------
@@ -1650,11 +1670,15 @@ export class CameraSwitcher {
       try { this.controls.dispose(); } catch (_) {}
     }
     this.controls = null;
-    for (const [type, fn, target] of this._listeners) {
+    // C1 split: free BOTH the per-mode listeners and the page-global
+    // input listeners. dispose() is page-teardown, not a mode change, so
+    // (unlike switchMode) it must drop the global handlers too.
+    for (const [type, fn, target] of [...this._listeners, ...this._globalListeners]) {
       try {
         target.removeEventListener(type, fn);
       } catch (_) {}
     }
     this._listeners = [];
+    this._globalListeners = [];
   }
 }

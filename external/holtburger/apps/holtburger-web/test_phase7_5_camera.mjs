@@ -402,6 +402,132 @@ check(
     `controls=${switcher.controls}`
 );
 
+// ---- C1 listener-split assertions (#1) + getActive (#4) -------------
+// These FAIL on pre-C1 code (no `_globalListeners`, the constructor's
+// switchMode('follow') strips the global blur/keydown/keyup/wheel/C
+// handlers, and there is no getActive()). They prove the C1 split.
+//
+// Construct a SECOND switcher with instrumented window/document/canvas
+// shims so we can record every removeEventListener call made during the
+// constructor (which runs switchMode('follow') at the end). The global
+// input listeners must NOT appear in that removed[] list.
+const removedDuringCtor = [];
+const recordingDoc = {
+    addEventListener: () => {},
+    removeEventListener: (type) => { removedDuringCtor.push(["document", type]); },
+    activeElement: null,
+};
+const recordingWindow = {
+    addEventListener: () => {},
+    removeEventListener: (type) => { removedDuringCtor.push(["window", type]); },
+};
+const recordingCanvas = {
+    addEventListener: () => {},
+    removeEventListener: (type) => { removedDuringCtor.push(["canvas", type]); },
+    clientWidth: 800,
+    clientHeight: 600,
+    width: 800,
+    height: 600,
+    style: {},
+    ownerDocument: {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        body: {
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            style: {},
+            requestPointerLock: () => {},
+        },
+        pointerLockElement: null,
+        exitPointerLock: () => {},
+    },
+    requestPointerLock: () => {},
+    setPointerCapture: () => {},
+    releasePointerCapture: () => {},
+    getRootNode() { return this.ownerDocument; },
+    getBoundingClientRect: () => ({
+        left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600,
+    }),
+};
+// Re-build the module factory bound to the recording shims so the
+// constructor's listener installers see them.
+const recFactoryEnv = factory(
+    THREE,
+    OrbitControls,
+    PointerLockControls,
+    globalThis.performance ?? { now: () => Date.now() },
+    recordingWindow,
+    recordingDoc
+);
+const recPersp = new THREE.PerspectiveCamera(60, 800 / 600, 0.1, 5000);
+const recOrtho = recFactoryEnv.createOrthoCamera(recordingCanvas);
+const switcher2 = new recFactoryEnv.CameraSwitcher({
+    scene3d: {},
+    perspectiveCamera: recPersp,
+    orthoCamera: recOrtho,
+    domElement: recordingCanvas,
+    sessionHandle: mockSession,
+    getPlayerWorldPos,
+});
+
+// (A) the 5 global input listeners (blur/keydown/keyup/wheel/C) landed
+// in _globalListeners — at least 4 (window 'blur' is skipped if window
+// is undefined, but our shim provides it, so expect all 5).
+check(
+    "C1 (#1): _globalListeners holds the page-global input handlers (>=4)",
+    Array.isArray(switcher2._globalListeners) && switcher2._globalListeners.length >= 4,
+    `_globalListeners.length=${switcher2._globalListeners ? switcher2._globalListeners.length : "MISSING"}`
+);
+
+// (B) the constructor's switchMode('follow') must NOT have removed any
+// of the global input listeners.
+const removedGlobalTypes = removedDuringCtor
+    .filter(([, type]) => ["blur", "keydown", "keyup", "wheel"].includes(type));
+check(
+    "C1 (#1): constructor switchMode did NOT remove any global input listener",
+    removedGlobalTypes.length === 0,
+    `removed=${JSON.stringify(removedGlobalTypes)}`
+);
+
+// (C) toggling modes twice does not change the global listener count
+// (switchMode tears down only the per-mode _listeners).
+const globalLenBefore = switcher2._globalListeners.length;
+switcher2.switchMode("orbit");
+switcher2.switchMode("topDown");
+check(
+    "C1 (#1): _globalListeners.length unchanged after two switchMode toggles",
+    switcher2._globalListeners.length === globalLenBefore,
+    `before=${globalLenBefore} after=${switcher2._globalListeners.length}`
+);
+
+// (D) getActive() returns the live activeCamera (ortho in topDown,
+// persp in follow/orbit), NOT this.persp.
+switcher2.switchMode("topDown");
+const getActiveIsFn = typeof switcher2.getActive === "function";
+check(
+    "C1 (#4): getActive is a function",
+    getActiveIsFn,
+    `typeof getActive=${typeof switcher2.getActive}`
+);
+check(
+    "C1 (#4): getActive()===ortho in topDown",
+    getActiveIsFn && switcher2.getActive() === recOrtho,
+    `getActive()===ortho? ${getActiveIsFn && switcher2.getActive() === recOrtho}`
+);
+switcher2.switchMode("follow");
+check(
+    "C1 (#4): getActive()===persp in follow",
+    getActiveIsFn && switcher2.getActive() === recPersp,
+    `getActive()===persp? ${getActiveIsFn && switcher2.getActive() === recPersp}`
+);
+switcher2.switchMode("orbit");
+check(
+    "C1 (#4): getActive()===persp in orbit",
+    getActiveIsFn && switcher2.getActive() === recPersp,
+    `getActive()===persp? ${getActiveIsFn && switcher2.getActive() === recPersp}`
+);
+switcher2.dispose();
+
 // ---- Summary --------------------------------------------------------
 console.log("=========================");
 console.log("Resolution of the load-bearing sign convention:");
