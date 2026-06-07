@@ -45,6 +45,7 @@ import {
 } from "./adapter.js";
 import { materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
+import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 
 // ?cellBugParity=retail keeps indoor cells visible from outdoors — matches a known retail rendering quirk for nostalgia research.
 const CELL_BUG_PARITY = (() => {
@@ -105,6 +106,11 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       "buildEnvCellsForLandblock: wasmExports missing fetchEnvCellsInLandblock / fetch_surfaces_pixels"
     );
   }
+  // M2 (worker-based asset bake): worker-routed decoders when enabled
+  // (`?bakeWorker=1`); identical references to wasmExports.* when disabled
+  // (byte-identical to pre-M2). Drop-in results (consumers guard `.free()`).
+  const mmFetch = modelMeshFetcher(wasmExports);
+  const spFetch = surfacePixelsFetcher(wasmExports);
   if (!scene3d.materialCache) {
     throw new Error(
       "buildEnvCellsForLandblock: scene3d.materialCache missing — Phase 7.2 should have installed it before EnvCell load"
@@ -267,7 +273,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     try {
       await scene3d.materialCache.preload(
         [...allCellSurfaceDids],
-        wasmExports.fetch_surfaces_pixels
+        spFetch
       );
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -290,7 +296,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     const ids = [...uniqueStaticDids];
     let staticMeshes;
     try {
-      staticMeshes = await wasmExports.fetch_model_meshes(new Uint32Array(ids));
+      staticMeshes = await mmFetch(new Uint32Array(ids));
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[scene3d.cells] fetch_model_meshes (cell statics) failed:", e);
@@ -326,7 +332,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         try {
           await scene3d.materialCache.preload(
             [...allStaticSurfaceDids],
-            wasmExports.fetch_surfaces_pixels
+            spFetch
           );
         } catch (e) {
           // eslint-disable-next-line no-console

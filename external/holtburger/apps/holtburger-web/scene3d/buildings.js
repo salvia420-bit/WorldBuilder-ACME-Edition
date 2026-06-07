@@ -57,6 +57,7 @@ import {
   acQuatToThree,
 } from "./adapter.js";
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
+import { surfacePixelsFetcher } from "./bake_worker_client.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -647,7 +648,7 @@ export async function bakeBuildingsForLandblock(
     try {
       await opts.materialCache.preload(
         [...lbSurfaceDids],
-        wasmExports.fetch_surfaces_pixels
+        surfacePixelsFetcher(wasmExports)
       );
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -919,7 +920,7 @@ export async function bakeBuildingsRing(
       try {
         await opts.materialCache.preload(
           [...allSurfaceDidsSet],
-          wasmExports.fetch_surfaces_pixels
+          surfacePixelsFetcher(wasmExports)
         );
       } catch (e) {
         // eslint-disable-next-line no-console

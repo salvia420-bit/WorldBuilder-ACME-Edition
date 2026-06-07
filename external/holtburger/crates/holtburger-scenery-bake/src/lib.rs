@@ -129,6 +129,54 @@ impl std::str::FromStr for BakeMode {
     }
 }
 
+/// Addressable identity for one baked generated-scenery placement.
+///
+/// Every field is a stable, content-derived key — not a coordinate or
+/// an array offset that shifts when an unrelated placement is added or
+/// removed. This is the canonical traceability key the
+/// explicit-everywhere validator and the (forthcoming) worker-bake
+/// merge use to assert "this rendered object IS this baked placement"
+/// without reconstructing identity from floating-point positions.
+///
+/// Identity ONLY: it carries none of the bake's acceptance math and
+/// does not influence which placements are emitted. The shape is
+/// adopted from upstream (`merklejerk` `static_outdoor_scene.rs`)'s
+/// `GeneratedScenery` instance key — the identity struct alone, with
+/// none of upstream's divergent placement-acceptance logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct GeneratedSceneryIdentity {
+    /// Packed `(lbX << 24) | (lbY << 16)` of the owning landblock.
+    pub landblock_id: u32,
+    /// Scene (`0x12xxxxxx`) DID whose `ObjectDesc` produced this placement.
+    pub scene_id: u32,
+    /// Source terrain-vertex index `0..81` (the loop `i` that sourced it).
+    pub terrain_index: u32,
+    /// Index of the `ObjectDesc` within `Scene.objects` (the template).
+    pub template_index: u32,
+    /// The placed GfxObj (`0x01`) / SetupModel (`0x02`) DID.
+    pub source_did: u32,
+}
+
+impl GeneratedSceneryIdentity {
+    /// Canonical, collision-free string key for this placement:
+    /// `landblock-static/{landblock_id:08x}/generatedscenery/{scene_id:08x}/{terrain_index}/{template_index}/{source_did:08x}`.
+    ///
+    /// Stable across re-bakes of the same DAT inputs and unique within a
+    /// landblock (the `(terrain_index, template_index)` pair is unique
+    /// per emitted placement). Use it as the key when merging the three
+    /// placement streams or asserting render/placement traceability.
+    pub fn stable_id(&self) -> String {
+        format!(
+            "landblock-static/{:08x}/generatedscenery/{:08x}/{}/{}/{:08x}",
+            self.landblock_id,
+            self.scene_id,
+            self.terrain_index,
+            self.template_index,
+            self.source_did
+        )
+    }
+}
+
 /// One baked scenery placement. Emitted by `bake_landblock`.
 ///
 /// Coordinates `(x, y, z)` are LB-local, `[0, 192]` on each axis for
@@ -165,6 +213,11 @@ pub struct ScenicPlacement {
     /// Index into `Scene.objects` of the `ObjectDesc` that emitted
     /// this placement.
     pub source_obj_idx: u32,
+    /// Addressable identity — the canonical, content-derived
+    /// traceability key (see [`GeneratedSceneryIdentity`]). Supersedes
+    /// the `source_*` debug fields above and is decoupled from the bake
+    /// math (adding it does not change which placements are emitted).
+    pub identity: GeneratedSceneryIdentity,
 }
 
 /// Per-candidate placement transform parameters passed to the bake's
@@ -449,6 +502,13 @@ fn bake_landblock_impl(
                 source_cell_x: cell_x,
                 source_cell_y: cell_y,
                 source_obj_idx: j_u32,
+                identity: GeneratedSceneryIdentity {
+                    landblock_id,
+                    scene_id,
+                    terrain_index: i as u32,
+                    template_index: j_u32,
+                    source_did: obj.obj_id,
+                },
             });
         }
     }

@@ -65,6 +65,7 @@ import * as THREE from "three";
 import { meshToFusedGeometry, placementToMatrix4 } from "./adapter.js";
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
+import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -1108,10 +1109,13 @@ export async function bakeStaticsForLandblock(
   }
 
   const uniqueModelIds = [...new Set(statics.map((s) => s.modelId))];
-  const primary = await fetchPrimaryGeometries(
-    uniqueModelIds,
-    wasmExports.fetch_model_meshes
-  );
+  // M2 (worker-based asset bake): route the model-mesh decode through the
+  // bake worker when enabled (`?bakeWorker=1`). When disabled, `mmFetch`
+  // IS `wasmExports.fetch_model_meshes` (identical reference) — byte-
+  // identical to pre-M2. Worker results are drop-in (same field surface).
+  const mmFetch = modelMeshFetcher(wasmExports);
+  const spFetch = surfacePixelsFetcher(wasmExports);
+  const primary = await fetchPrimaryGeometries(uniqueModelIds, mmFetch);
   if (primary.fetchFailed) {
     return {
       ...makeEmptySummary(),
@@ -1120,7 +1124,7 @@ export async function bakeStaticsForLandblock(
   }
   const degradedGeomByModel = await fetchDegradedGeometries(
     primary.didDegradeByModel,
-    wasmExports.fetch_model_meshes,
+    mmFetch,
     wasmExports.fetch_gfx_obj_degrade_info
   );
 
@@ -1131,7 +1135,7 @@ export async function bakeStaticsForLandblock(
     try {
       await materialCache.preload(
         [...primary.allSurfaceDids],
-        wasmExports.fetch_surfaces_pixels
+        spFetch
       );
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -1494,10 +1498,11 @@ export async function bakeStaticsRing(
   if (uniqueModelIds.length === 0) {
     return makeEmptySummary();
   }
-  const primary = await fetchPrimaryGeometries(
-    uniqueModelIds,
-    wasmExports.fetch_model_meshes
-  );
+  // M2: worker-routed model-mesh decode when enabled; IS
+  // wasmExports.fetch_model_meshes when disabled (byte-identical to pre-M2).
+  const mmFetch = modelMeshFetcher(wasmExports);
+  const spFetch = surfacePixelsFetcher(wasmExports);
+  const primary = await fetchPrimaryGeometries(uniqueModelIds, mmFetch);
   mark(`stage2: fetchPrimaryGeometries (${uniqueModelIds.length} models)`);
   if (primary.fetchFailed) {
     return {
@@ -1526,7 +1531,7 @@ export async function bakeStaticsRing(
     ? new Map()
     : await fetchDegradedGeometries(
         primary.didDegradeByModel,
-        wasmExports.fetch_model_meshes,
+        mmFetch,
         wasmExports.fetch_gfx_obj_degrade_info
       );
   mark(`stage2: fetchDegradedGeometries (${primary.didDegradeByModel?.size ?? 0} degraded${scene3d.wireframeMode ? " — SKIPPED in wire" : ""})`);
@@ -1538,7 +1543,7 @@ export async function bakeStaticsRing(
     try {
       await materialCache.preload(
         [...primary.allSurfaceDids],
-        wasmExports.fetch_surfaces_pixels
+        spFetch
       );
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -2048,7 +2053,7 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
       const r = await resolveGfxObj(hwGfxObjId);
       if (!r?.surfaceDid) return null;
       try {
-        return await materialCache.get(r.surfaceDid, wasmExports.fetch_surfaces_pixels);
+        return await materialCache.get(r.surfaceDid, surfacePixelsFetcher(wasmExports));
       } catch (_) {
         return null;
       }

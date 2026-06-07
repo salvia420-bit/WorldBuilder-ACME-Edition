@@ -931,6 +931,7 @@ fn format_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use holtburger_scenery_bake::GeneratedSceneryIdentity;
 
     #[test]
     fn parse_hex_u32_accepts_prefixed_and_bare() {
@@ -1118,6 +1119,7 @@ mod tests {
             source_cell_x: 3,
             source_cell_y: 5,
             source_obj_idx: 2,
+            identity: GeneratedSceneryIdentity::default(),
         };
         let mut buf = Vec::new();
         write_placement_line(&mut buf, &p, 0x330003EC).unwrap();
@@ -1150,6 +1152,7 @@ mod tests {
             source_cell_x: 0,
             source_cell_y: 0,
             source_obj_idx: 0,
+            identity: GeneratedSceneryIdentity::default(),
         };
         let mut buf = Vec::new();
         write_placement_line(&mut buf, &p, 0).unwrap();

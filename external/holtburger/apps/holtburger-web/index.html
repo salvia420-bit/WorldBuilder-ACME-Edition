@@ -1229,6 +1229,7 @@
       } from "./pkg/holtburger_web.js?v=wave-c-20260606b";
 
       import * as PIXI from "pixi.js";
+      import { configureBakeWorker } from "./scene3d/bake_worker_client.js";
       import { createClient } from "./plugins/api.js";
       import { mountBar } from "./ui/bar.js";
       // Polish A (2026-05-27) + J1.C (2026-05-27): PR 8 plugin loader
@@ -1879,6 +1880,16 @@
             "[Phase 5.0/5.2] manifest-mode source initialized from",
             MANIFEST_URL
           );
+          // M2 (worker-based asset bake): register the manifest URL with the
+          // bake worker. Enabled only when `?bakeWorker=1` is in the page URL
+          // (configure() reads the flag). The worker spawns lazily on the
+          // first bake and falls back to the main thread on any error, so
+          // this is a no-op for default loads.
+          try {
+            configureBakeWorker({ manifestUrl: MANIFEST_URL });
+          } catch (e) {
+            console.warn("[M2] configureBakeWorker failed (non-fatal):", e);
+          }
 
           // Data-layer health gate (single-root consolidation, 2026-05-30).
           // The baked scenery/spawns layers used to silently vanish whenever
