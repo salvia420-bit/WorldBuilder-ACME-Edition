@@ -856,6 +856,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // when DevTools-open / window-resize fires during the long init3D
   // await chain below.
   let resizeDebounce = null;
+  // Single debounced resize handler (#12). Folds in EVERYTHING the
+  // viewport needs kept in sync: renderer size, the perspective AND the
+  // ortho camera projections (so a `C`-toggle to top-down after a resize
+  // still frames correctly), the atmosphere pipeline + its depth-texture
+  // rewire, and the cloud overlay's internal RTs. `orthoCamera` is
+  // declared with `const` further down in init3D's body but is always in
+  // scope by the time a real resize event can fire the deferred callback.
   window.addEventListener("resize", () => {
     if (resizeDebounce) clearTimeout(resizeDebounce);
     resizeDebounce = setTimeout(() => {
@@ -868,6 +875,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       renderer.setSize(newW, newH, false);
       camera.aspect = newW / newH;
       camera.updateProjectionMatrix();
+      // Re-derive the ortho frustum width from the new aspect ratio.
+      // Frustum height is fixed at construction (TOPDOWN_FRUSTUM_HEIGHT_M
+      // in camera.js); width scales with aspect.
+      if (orthoCamera) {
+        const halfH = (orthoCamera.top - orthoCamera.bottom) / 2;
+        const halfW = halfH * (newW / newH);
+        orthoCamera.left = -halfW;
+        orthoCamera.right = halfW;
+        orthoCamera.updateProjectionMatrix();
+      }
       if (atmospherePipeline) {
         atmospherePipeline.setSize(newW, newH);
         // Re-wire the cloud overlay's depth-sampling uniform — the
@@ -882,6 +899,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             atmospherePipeline.getSceneDepthTexture()
           );
         }
+      }
+      // Clouds-D: keep the cloud effect's internal RTs in sync with the
+      // canvas. The CloudsEffect resolution-scale machinery handles the
+      // ratio internally.
+      if (liveScene3d?.cloudOverlay) {
+        liveScene3d.cloudOverlay.setSize(newW, newH);
       }
     }, 150);
   });
@@ -1337,45 +1360,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // (recentering on the player) is the switcher's job.
   const orthoCamera = createOrthoCamera(canvas);
 
-  // Resize handler — keep the renderer tracking the canvas's CSS size.
-  // Both the perspective AND ortho camera projections need updating so
-  // a `C`-toggle to top-down after a resize still framing correctly.
-  const onResize = () => {
-    const cw = canvas.clientWidth || canvas.width || 1;
-    const ch = canvas.clientHeight || canvas.height || 1;
-    renderer.setSize(cw, ch, false);
-    camera.aspect = cw / ch;
-    camera.updateProjectionMatrix();
-    // Re-derive the ortho frustum width from the new aspect ratio.
-    // Frustum height is fixed at construction (TOPDOWN_FRUSTUM_HEIGHT_M
-    // in camera.js); width scales with aspect.
-    const halfH = (orthoCamera.top - orthoCamera.bottom) / 2;
-    const halfW = halfH * (cw / ch);
-    orthoCamera.left = -halfW;
-    orthoCamera.right = halfW;
-    orthoCamera.updateProjectionMatrix();
-    if (atmospherePipeline) {
-      atmospherePipeline.setSize(cw, ch);
-      // Re-wire cloud overlay's depth uniform to the rebuilt depth
-      // texture (atmospherePipeline.setSize disposes the old).
-      if (
-        liveScene3d?.cloudOverlay &&
-        typeof liveScene3d.cloudOverlay.setSceneDepthTexture === "function" &&
-        typeof atmospherePipeline.getSceneDepthTexture === "function"
-      ) {
-        liveScene3d.cloudOverlay.setSceneDepthTexture(
-          atmospherePipeline.getSceneDepthTexture()
-        );
-      }
-    }
-    // Clouds-D: keep the cloud effect's internal RTs in sync with the
-    // canvas. The CloudsEffect resolution-scale machinery handles the
-    // ratio internally.
-    if (liveScene3d?.cloudOverlay) {
-      liveScene3d.cloudOverlay.setSize(cw, ch);
-    }
-  };
-  window.addEventListener("resize", onResize);
+  // #12 (2026-06-07): the immediate `onResize` handler that previously
+  // lived + registered here was COLLAPSED into the single debounced
+  // resize handler above (declared right after `camera`). It now folds
+  // in the ortho-frustum update + cloud RT resize too, so a drag-resize
+  // triggers exactly ONE deferred GL realloc instead of a synchronous
+  // realloc per event on top of the debounced one.
 
   // Render loop. Phase 7.0 was a thin rAF wrapper; Phase 7.3 wires
   // `tickPerFrame` from `./loop.js` so cell-visibility flips happen
@@ -1409,7 +1399,37 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // to the per-frame budget; on render-on-demand we no-op (the caller
   // drives via __renderOnce). Bare rAF stays the default.
   const _frameIntervalMs = targetFps > 0 ? 1000 / targetFps : 0;
+  // #14 (2026-06-07): the dt-recovery freeze must scale with the loop's
+  // cadence, otherwise a slow paced loop (e.g. ?targetFps=1 → 1000 ms
+  // raw dt EVERY frame) permanently trips the >0.5 s recovery arm and
+  // freezes sim forever. Gate on the larger of the fixed 0.5 s floor and
+  // 1.5× the configured frame interval. ?renderOnDemand=1 advances by
+  // hand at arbitrary spacing (a screenshot loop may pause seconds
+  // between __renderOnce()), so disable recovery entirely (Infinity) and
+  // rely on the existing min(rawDt, 0.1) clamp. Default bare-rAF
+  // (_frameIntervalMs===0, not renderOnDemand) → max(0.5, 0) === 0.5,
+  // byte-identical to the pre-fix threshold.
+  const _dtRecoveryThresholdS = renderOnDemand
+    ? Infinity
+    : Math.max(DT_RECOVERY_RAW_THRESHOLD_S, (_frameIntervalMs / 1000) * 1.5);
   let _lastScheduleTs = null;
+  // sched-timers (2026-06-07): track the in-flight scheduler handles so
+  // stop()/onPause()/onResume() can cancel a pending re-arm. Without
+  // this, a paused/restored loop (context-loss recovery, hot-swap stop)
+  // can leave an orphaned setTimeout/rAF that fires an extra tick — on
+  // ?targetFps=N a mid-interval pause→resume could double the cadence.
+  let _schedTimeoutId = null;
+  let _schedRafId = null;
+  function _cancelSchedule() {
+    if (_schedTimeoutId !== null) {
+      clearTimeout(_schedTimeoutId);
+      _schedTimeoutId = null;
+    }
+    if (_schedRafId !== null) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(_schedRafId);
+      _schedRafId = null;
+    }
+  }
   function scheduleNext() {
     if (renderOnDemand) return;
     if (_frameIntervalMs > 0) {
@@ -1419,13 +1439,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       _lastScheduleTs = now;
       const delay = Math.max(0, _frameIntervalMs - elapsed);
       if (delay > 0) {
-        setTimeout(() => requestAnimationFrame(tick), delay);
+        _schedTimeoutId = setTimeout(() => {
+          _schedTimeoutId = null;
+          _schedRafId = requestAnimationFrame(tick);
+        }, delay);
       } else {
-        requestAnimationFrame(tick);
+        _schedRafId = requestAnimationFrame(tick);
       }
       return;
     }
-    requestAnimationFrame(tick);
+    _schedRafId = requestAnimationFrame(tick);
   }
   function tick(nowTs) {
     if (!running) return;
@@ -1437,8 +1460,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     let dt;
     if (lastFrameTs === null) {
       dt = 0.016;
-    } else if (rawDt > DT_RECOVERY_RAW_THRESHOLD_S) {
+    } else if (rawDt > _dtRecoveryThresholdS) {
       // First frame after a long gap — arm recovery and freeze sim.
+      // Threshold scales with cadence (#14) so paced loops don't
+      // self-freeze; Infinity under renderOnDemand disables this arm.
       dtRecoveryFramesRemaining = DT_RECOVERY_FRAMES;
       dt = 0;
     } else if (dtRecoveryFramesRemaining > 0) {
@@ -2102,7 +2127,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     },
     _pushEventRecord: pushEventRecord,
     // Stop hook — future phases use this for renderer hot-swap.
-    stop() { running = false; },
+    // sched-timers (2026-06-07): cancel any pending re-arm so a stopped
+    // loop leaves no orphaned setTimeout/rAF that could fire one more tick.
+    stop() { running = false; _cancelSchedule(); },
     // Render-completeness audit (2026-05-29) — GAP 2: re-attach SetupModel
     // lights for geometry that streamed in after the initial boot scan
     // (interior cell lanterns via GAP 1, plus newly-baked buildings/statics).
@@ -2329,12 +2356,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     renderer,
     canvas,
     getLiveScene3d: () => liveScene3d,
-    onPause: () => { running = false; },
+    onPause: () => { running = false; _cancelSchedule(); },
     onResume: () => {
       running = true;
       // Reset the dt baseline so the first frame post-restore doesn't
-      // trip the >500ms recovery-freeze path and stall sim for 10 frames.
+      // trip the recovery-freeze path and stall sim for 10 frames.
       lastFrameTs = null;
+      // sched-timers: cancel any handle the pause left in flight before
+      // re-arming, so context loss/restore mid-interval doesn't double
+      // the cadence (two ticks racing per frame interval).
+      _cancelSchedule();
       scheduleNext();
     },
     pushEventRecord: (rec) => {

@@ -133,12 +133,20 @@ export class LandblockLRU {
       ? lbKeyOf(currentLbKeyArg >>> 0)
       : null;
 
+    // lru-null-lb (2026-06-07): bail out entirely when we don't know the
+    // player's current LB yet (getCurrentLbId() returned null during
+    // pre-spawn boot, between LB transitions, or whenever the player pos
+    // is unresolved). Without a current key the Chebyshev always-resident
+    // ring is unknown, so eviction would pick candidates purely by
+    // lastTouchMs and could blow away the player's own LB + its 3×3 ring
+    // (e.g. ?lbCap=4 at boot → pre-spawn ring flicker). Skipping this
+    // tick keeps everything resident until a real current LB resolves.
+    if (currentLbKey == null) return;
+
     // Refresh the always-resident floor's timestamps so they're never
     // candidates for eviction even under adversarial maxResident < 9.
-    if (currentLbKey != null) {
-      this.touch(currentLbKey);
-      for (const k of ringKeysAround(currentLbKey)) this.touch(k);
-    }
+    this.touch(currentLbKey);
+    for (const k of ringKeysAround(currentLbKey)) this.touch(k);
 
     if (this.entries.size <= this.maxResident) return;
 
