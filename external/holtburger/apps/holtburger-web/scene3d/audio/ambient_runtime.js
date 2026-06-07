@@ -48,6 +48,8 @@
 // per-tick chain walker that resolves DAT-driven data through
 // fetchX → addEmitter).
 
+import { acToThree } from "../adapter.js";
+
 // ----- Constants ---------------------------------------------------
 
 // Per-LB mesh layout (mirrors `terrain.js`).
@@ -701,9 +703,13 @@ export class AmbientRuntime {
         // retry every tick.
         return;
       }
-      // STB may have changed under us while resolving; skip if so.
+      // #31 (2026-06-07) — the loop may have been stopped (and a NEW
+      // loop for the same sType — even under the SAME stbId, e.g. an
+      // indoor↔outdoor toggle re-priming the active STB) installed
+      // under us while resolving. Guard on the HANDLE IDENTITY, not
+      // stbId: only proceed if the map slot still holds OUR handle.
       const stillActive = this._continuousLoops.get(sType);
-      if (!stillActive || stillActive.stbId !== stbId) return;
+      if (stillActive !== handle) return;
       // Play at the listener position so HRTF panning lands
       // centred — non-positional "town-wide hum" per the doc plan.
       const gain = clamp01(ambientVolume * resolved.volume);
@@ -727,9 +733,21 @@ export class AmbientRuntime {
           gain,
         },
       });
+      // #15 (2026-06-07) — the AudioListener is anchored at the active
+      // camera in three.js world coords (index.js setListener), so the
+      // PannerNode position must be in the SAME frame. listenerPos here
+      // is AC (Z-up, +Y north); transform it before play() or HRTF
+      // panning + the play()-side distance cull both see a frame
+      // mismatch (one-shots silently culled, loops mis-panned). The
+      // event-log world_pos above intentionally stays AC-frame.
+      const [px, py, pz] = acToThree(
+        +listenerPos.x,
+        +listenerPos.y,
+        +listenerPos.z
+      );
       const audio = await this._audioManager.play(
         resolved.waveDid >>> 0,
-        listenerPos,
+        { x: px, y: py, z: pz },
         {
           // Phase 3 (2026-06-04) — route through the ambient category
           // bus so the ambient_sound_volume slider premultiplies before
@@ -742,9 +760,13 @@ export class AmbientRuntime {
           maxDistance: AMBIENT_MAX_DISTANCE,
         }
       );
-      // Re-check active state after the second await.
+      // Re-check active state after the second await. #31 — guard on
+      // handle identity: if the slot no longer holds OUR handle (the
+      // loop was stopped + possibly re-started for the same sType/stbId)
+      // we lost the race, so stop the source we just started and do NOT
+      // write it onto whatever handle now occupies the slot.
       const final = this._continuousLoops.get(sType);
-      if (!final || final.stbId !== stbId) {
+      if (final !== handle) {
         // Lost the race — stop the source we just started.
         this._stopAudioHandle(audio);
         return;
@@ -798,9 +820,18 @@ export class AmbientRuntime {
           gain,
         },
       });
+      // #15 (2026-06-07) — transform AC→three before play() so the
+      // PannerNode lands in the same frame as the camera-anchored
+      // AudioListener (else the one-shot is silently distance-culled).
+      // The event-log world_pos above intentionally stays AC-frame.
+      const [px, py, pz] = acToThree(
+        +listenerPos.x,
+        +listenerPos.y,
+        +listenerPos.z
+      );
       await this._audioManager.play(
         resolved.waveDid >>> 0,
-        listenerPos,
+        { x: px, y: py, z: pz },
         {
           // Phase 3 (2026-06-04) — route through the ambient category
           // bus so the ambient_sound_volume slider premultiplies before
