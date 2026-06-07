@@ -1568,6 +1568,24 @@ export class EntityManager {
     // forever — the prune drops anything older than 5s. ms timestamp,
     // checked at end of `tick(dt)`.
     this._lastRecentLocomotionPruneMs = 0;
+    // Batch 9 #2 (2026-06-07): per-spawn generation token. `spawn()`
+    // bumps + captures a generation per GUID before any async work and
+    // threads it into `_spawnImpl(meta, gen)`. A concurrent `remove(guid)`
+    // (or re-`spawn`) bumps the same GUID's generation, so the in-flight
+    // `_spawnImpl` can detect that its result is stale at the Step-E
+    // commit and dispose the half-built rig instead of attaching a ghost.
+    // The token is deleted on `spawn()`'s terminal path (when it still
+    // owns the latest generation) so the Map stays bounded. NOTE: this is
+    // intentionally NOT the identity-check pattern used by the surface-
+    // refresh timer (`this.entityMap.get(inst.guid) !== inst`, ~2548) —
+    // that guard runs AFTER the rig is committed; the generation token
+    // covers the BEFORE-commit window where `entityMap` has no entry yet.
+    /** @type {Map<number, number>} */
+    this._spawnGen = new Map();
+    // Batch 9 em-dispose (2026-06-07): set true by `dispose()` so any
+    // in-flight `_spawnImpl` (or deferred timer) bails instead of
+    // attaching to a torn-down manager.
+    this._disposed = false;
   }
 
   /**
@@ -1604,6 +1622,12 @@ export class EntityManager {
       // `ensureEntitySprite`'s `entry.modelId === 0` upgrade path.
       this.remove(guid);
     }
+    // Batch 9 #2 (2026-06-07): bump + capture this spawn's generation
+    // BEFORE any async work. A later remove()/re-spawn of the same GUID
+    // bumps it again; the in-flight `_spawnImpl` carries `gen` and bails
+    // at the Step-E commit if it no longer matches (stale spawn race).
+    const gen = ((this._spawnGen.get(guid) | 0) + 1) | 0;
+    this._spawnGen.set(guid, gen);
     // Diagnostic hook (always-on; cheap when __diag not installed). Fires
     // BEFORE any async work so the "spawn attempt observed" signal is
     // captured even if _spawnImpl never returns. See scene3d/diag.js.
@@ -1619,7 +1643,7 @@ export class EntityManager {
         window.__diag.onSpawnAttempted({ ...meta, guid, isLocalPlayer });
       } catch (_) { /* diag must never break spawn */ }
     }
-    const promise = this._spawnImpl(meta).catch((e) => {
+    const promise = this._spawnImpl(meta, gen).catch((e) => {
       this.lastError = String(e?.message ?? e);
       // eslint-disable-next-line no-console
       console.warn(`[phase7.4b] spawn(0x${guid.toString(16)}) failed:`, e);
@@ -1635,10 +1659,23 @@ export class EntityManager {
       return inst;
     } finally {
       this.spawnInFlight.delete(guid);
+      // Batch 9 #2: drop the generation token to keep `_spawnGen` bounded.
+      // Two cases clear it: (a) we still own the latest generation (no
+      // concurrent remove/re-spawn supplanted us), or (b) a remove() raced us
+      // and bumped the generation but did NOT launch a replacement spawn
+      // (spawnInFlight — already cleared above — has no entry), so the token
+      // would otherwise linger with no owner. If a NEWER spawn is in flight,
+      // the token belongs to it and we leave it for that spawn's terminal path.
+      if (
+        (this._spawnGen.get(guid) | 0) === gen ||
+        !this.spawnInFlight.has(guid)
+      ) {
+        this._spawnGen.delete(guid);
+      }
     }
   }
 
-  async _spawnImpl(meta) {
+  async _spawnImpl(meta, gen = 0) {
     const guid = meta.guid >>> 0;
     let setupId = (meta.modelId ?? meta.setupId ?? 0) >>> 0;
     if (!setupId) {
@@ -2214,6 +2251,20 @@ export class EntityManager {
       }
     }
 
+    // Batch 9 #2 (2026-06-07): spawn-race liveness guard. Between this
+    // spawn's generation capture and now, a remove(guid)/re-spawn (or
+    // manager dispose()) may have run while `_spawnImpl` awaited the
+    // animation cache / surface decode. If our generation was supplanted
+    // or the manager is torn down, do NOT attach the half-built rig (that
+    // is the #2 "ghost rig" leak). Dispose ONLY this instance — routed
+    // through `inst.dispose()`, which frees just the `__disposable`-tagged
+    // geometry; the shared AnimationCache geometry (registered untagged at
+    // ~2089) MUST survive for any sibling entity on the same setupId. A
+    // blanket geometry.dispose() here would crash their next render.
+    if (this._disposed || (this._spawnGen.get(guid) | 0) !== gen) {
+      try { inst.dispose(); } catch (_) {}
+      return null;
+    }
     // Step E: parent under entitiesGroup + register.
     if (this.scene3d?.entitiesGroup) {
       this.scene3d.entitiesGroup.add(root);
@@ -5486,6 +5537,14 @@ export class EntityManager {
    */
   remove(guid) {
     const g = guid >>> 0;
+    // Batch 9 #2 (2026-06-07): bump the spawn generation FIRST — even on
+    // the early-return path below. A remove() that races an in-flight
+    // _spawnImpl (entityMap has no committed entry yet) must still
+    // invalidate that spawn so its Step-E liveness guard disposes the
+    // half-built rig instead of attaching a ghost.
+    if (this._spawnGen.has(g)) {
+      this._spawnGen.set(g, ((this._spawnGen.get(g) | 0) + 1) | 0);
+    }
     const inst = this.entityMap.get(g);
     if (!inst) return;
     // Render-completeness audit (2026-05-29) — wielded-item lifecycle.
@@ -6423,12 +6482,38 @@ export class EntityManager {
         const pauseW = +callPesPause || 0;
         const randPause = pauseW < 0.0002 ? 0 : timeRng() * pauseW;
         const pesDelayMs = Math.max(0, ((+e.startTime || 0) + randPause) * 1000);
-        const tid = setTimeout(() => {
-          if (!this.entityMap.has(guid >>> 0)) return;
+        // Batch 9 #24 (2026-06-07): the CallPES timer fires AFTER this
+        // chain walk has already `.set` its local `timeoutIds` into
+        // `_soundTimeoutsForGuid` (~6622). Worse, the recursive sub-script
+        // walk this timer kicks does its OWN `.set` on the same GUID,
+        // clobbering the parent's tracked ids. So we don't rely on the
+        // local `timeoutIds`/`.set` for this timer: register it DIRECTLY
+        // into the persistent per-guid array (get-or-create + PUSH — the
+        // value is an Array, never `.set`/Set.add) so remove(guid) can
+        // cancel a still-pending CallPES even after the sub-walk clobbers
+        // the map's array, and self-remove on fire so fired ids don't
+        // accumulate. We also keep the local push so a same-walk `.set`
+        // stays self-consistent for callers that snapshot it immediately.
+        const gKey = guid >>> 0;
+        const pesTid = setTimeout(() => {
+          // Self-remove this id from the persistent array first so a
+          // later remove(guid) doesn't waste a clearTimeout on a fired id.
+          const arr = this._soundTimeoutsForGuid.get(gKey);
+          if (arr) {
+            const i = arr.indexOf(pesTid);
+            if (i !== -1) arr.splice(i, 1);
+          }
+          if (!this.entityMap.has(gKey)) return;
           // W4.7 — inherit the default part anchor in the sub-script.
           this._attachParticleChainForEntity(guid, rig, callPesDid, depth + 1, defaultPartIndex).catch(() => {});
         }, pesDelayMs);
-        timeoutIds.push(tid);
+        let pesBucket = this._soundTimeoutsForGuid.get(gKey);
+        if (!pesBucket) {
+          pesBucket = [];
+          this._soundTimeoutsForGuid.set(gKey, pesBucket);
+        }
+        pesBucket.push(pesTid);
+        timeoutIds.push(pesTid);
         continue;
       }
 
@@ -6619,7 +6704,21 @@ export class EntityManager {
       );
     }
     if (timeoutIds.length > 0) {
-      this._soundTimeoutsForGuid.set(guid, timeoutIds);
+      // Batch 9 #24 (2026-06-07): get-or-create + MERGE rather than `.set`
+      // (clobber). The CallPES arm above may have already registered its
+      // self-removing timer into this guid's array; a recursive sub-script
+      // walk hitting this line must NOT replace that array out from under
+      // the still-pending parent timers. Dedup so a CallPES timer that is
+      // in BOTH the local `timeoutIds` and the persistent array (it pushes
+      // to both) isn't recorded twice. The value stays a plain Array.
+      let bucket = this._soundTimeoutsForGuid.get(guid);
+      if (!bucket) {
+        bucket = [];
+        this._soundTimeoutsForGuid.set(guid, bucket);
+      }
+      for (const tid of timeoutIds) {
+        if (bucket.indexOf(tid) === -1) bucket.push(tid);
+      }
       // eslint-disable-next-line no-console
       console.log(
         `[entities/H3-E1] scheduled ${timeoutIds.length} sound hooks ` +
@@ -8692,15 +8791,26 @@ export class EntityManager {
       }
     }
 
-    // Detach existing children. We DON'T dispose the old geometries
-    // here — `inst.geometries` still references them, and entity
-    // release walks that list. The cost is mild VRAM bloat across the
-    // hook lifetime (a helm-swap leaks the old helm geometry until
-    // entity despawn). For Wave 7's scope this is acceptable; a
-    // future Wave 8 could unregister + dispose old geometries here.
+    // Detach existing children. Batch 9 #11 (2026-06-07): dispose +
+    // unregister any old child geometry that was itself produced by a
+    // PRIOR ReplaceObject (tagged `userData.__disposable === true` below).
+    // A rapid helm-on→helm-off→helm-on sequence previously leaked the
+    // intermediate swapped-out geometries until entity despawn; freeing
+    // them here keeps `renderer.info.memory.geometries` flat. We dispose
+    // ONLY `__disposable`-tagged geometry — the original spawn meshes
+    // carry the SHARED, UNtagged AnimationCache geometry (registered at
+    // ~2089) which other entities on the same setupId still render, so it
+    // MUST survive. We also drop those refs from `inst.geometries` so the
+    // entity's own dispose() doesn't double-free (idempotent, but tidy).
     const oldChildren = partGroup.children.slice();
     for (const child of oldChildren) {
       partGroup.remove(child);
+      const og = child.geometry;
+      if (og && og.userData?.__disposable === true) {
+        const idx = inst.geometries.indexOf(og);
+        if (idx !== -1) inst.geometries.splice(idx, 1);
+        try { og.dispose(); } catch (_) {}
+      }
     }
 
     // Attach new Meshes — same per-group pattern as spawn (~line 1671)
@@ -8716,6 +8826,17 @@ export class EntityManager {
       } else {
         mat = this._fallbackMaterial();
       }
+      // Batch 9 #11 (2026-06-07): tag ReplaceObject geometry as entity-
+      // OWNED so both the detach loop above (on a later swap) and the
+      // entity's dispose() free it. Unlike the spawn path's SHARED
+      // AnimationCache geometry, this geometry is built fresh from
+      // `meshToGeometryGroups(wasmMesh)` for THIS entity only, so it is
+      // safe (and necessary) to dispose. Merge to preserve any existing
+      // userData (none today, but keep the convention's spread idiom).
+      g.geometry.userData = {
+        ...(g.geometry.userData || {}),
+        __disposable: true,
+      };
       const m = new THREE.Mesh(g.geometry, mat);
       m.name = `part_${partIndex}_surface_${did.toString(16)}_replaced`;
       m.userData = { guid, partIndex, surfaceDid: did, replaced: true };
@@ -8732,14 +8853,29 @@ export class EntityManager {
    * teardown.
    */
   dispose() {
-    for (const inst of this.entityMap.values()) {
-      inst.dispose();
+    // Batch 9 em-dispose (2026-06-07): mark disposed FIRST so any in-flight
+    // `_spawnImpl` bails at its Step-E liveness guard instead of attaching
+    // to a torn-down manager.
+    this._disposed = true;
+    // Route every live entity through `remove(g)` rather than the bare
+    // `inst.dispose()`. The old loop disposed each rig's subtree but
+    // LEAKED the manager-side bookkeeping `remove()` owns: particle
+    // emitters (`_particleEmittersForGuid`), pending Sound/SoundTable/
+    // CallPES timers (`_soundTimeoutsForGuid`), and entity-attached lights
+    // still referenced in `scene3d.activeLights`. `remove()` mutates
+    // `entityMap` as it goes, so snapshot the keys first. It also clears
+    // the per-guid name/attach/sort-center/chain-resolve maps in lockstep.
+    for (const g of [...this.entityMap.keys()]) {
+      try { this.remove(g); } catch (_) {}
     }
     this.entityMap.clear();
     // B4 (2026-05-18): drop the name→guid index in lockstep with
-    // entityMap so a re-init starts from a clean state.
+    // entityMap so a re-init starts from a clean state. (remove() prunes
+    // entries as it goes; clear() is a belt-and-suspenders no-op if empty.)
     this._nameToGuid.clear();
     this.spawnInFlight.clear();
+    // Batch 9 #2 (2026-06-07): drop all spawn-generation tokens.
+    this._spawnGen.clear();
     this.animationCache.dispose();
     if (this._sharedFallback) {
       try {
