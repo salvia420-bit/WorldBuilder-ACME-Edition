@@ -55,7 +55,7 @@
 //     teardown — they're reused).
 
 import * as THREE from "three";
-import { getAcFont, loadAcFont, renderAcText } from "../ui/ac_font.js";
+import { getAcFont, renderAcText, whenPrimaryFontsReady } from "../ui/ac_font.js";
 
 // AC's character rig is ~1.8 m crown-to-feet (rough average). Lift to
 // ~2.2 m so the nameplate sits well above the head with a small air
@@ -134,8 +134,82 @@ function _capCacheFifo(cache, max) {
   }
 }
 
-// Sentinel so we only attach one cache-flush watch per AC-font load.
-let _pendingAcFontWatch = false;
+// #27 (Option A) — system-font bake gate. To avoid the use-after-dispose
+// + never-upgraded-early-nameplate race, we do NOT bake a system-font
+// fallback nameplate during the boot window while the AC bitmap font is
+// still loading. Instead, baking is gated: it proceeds once EITHER the AC
+// font has resolved (the desired path — bakes go straight to the retail
+// font, no system-font entry is ever created) OR a timeout elapses (the
+// fallback path — if the AC font never loads, nameplates still appear in
+// the system font rather than never appearing at all).
+//
+// Because the AC font is ready before the first system-font bake can fire
+// in the common case, the old "bake in sys, then disposeNameplateCache()
+// on font load" dance — which disposed CanvasTextures still held by live
+// sprites and never re-baked early nameplates — is removed entirely.
+//
+// `_systemFontBakeAllowed` starts false (defer system-font bakes) and is
+// flipped true when the timeout fires. AC-font bakes are never gated by
+// this flag (they read `getAcFont()` directly).
+const SYSTEM_FONT_BAKE_TIMEOUT_MS = 5000;
+let _systemFontBakeAllowed = false;
+let _fontReadyWatchStarted = false;
+
+/**
+ * Walk the live entity map and (re-)attempt a nameplate bake for every
+ * entity that doesn't yet carry one. Called once the AC font resolves OR
+ * the timeout fallback opens the gate, so entities whose bake was deferred
+ * during the boot race finally get their nameplate (in the retail font on
+ * the happy path; in the system font on the timeout path). Browser-only;
+ * fail-soft.
+ */
+function _flushDeferredNameplates() {
+  try {
+    if (typeof window === "undefined") return;
+    const live = window.liveScene3d;
+    const entityMap = live && live.entityManager && live.entityManager.entityMap;
+    if (!entityMap || typeof entityMap.values !== "function") return;
+    for (const inst of entityMap.values()) {
+      // Only entities still missing a nameplate sprite need a retry; ones
+      // that already have one are left untouched (no churn / no dispose).
+      if (inst && !inst._nameplateSprite) {
+        try { ensureNameplateForEntity(inst, live); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
+/**
+ * Arm the one-time AC-font readiness watch + timeout fallback that
+ * controls `_systemFontBakeAllowed`. Idempotent. On either signal (AC
+ * font ready OR timeout) it flushes any nameplate bakes deferred during
+ * the boot race. Returns nothing; the gate is read by
+ * getOrBakeNameplateMaterial.
+ */
+function _ensureFontReadyWatch() {
+  if (_fontReadyWatchStarted) return;
+  _fontReadyWatchStarted = true;
+  // Kick off the primary-font load so getAcFont() resolves ASAP. Once it
+  // settles, AC-font bakes take over naturally; no cache flush needed
+  // (we never baked a system-font entry while the font was loading). Then
+  // re-attempt any nameplate bakes that were deferred during the boot race.
+  try {
+    whenPrimaryFontsReady()
+      .catch(() => {})
+      .then(() => { _flushDeferredNameplates(); });
+  } catch (_) {}
+  // Timeout fallback: if the AC font never loads, open the gate so
+  // nameplates still bake (in the system font) rather than never appearing,
+  // then flush the deferred bakes through the now-open gate.
+  try {
+    if (typeof setTimeout === "function") {
+      setTimeout(() => {
+        _systemFontBakeAllowed = true;
+        _flushDeferredNameplates();
+      }, SYSTEM_FONT_BAKE_TIMEOUT_MS);
+    }
+  } catch (_) {}
+}
 
 // 2026-05-23 — ?hud=none gate. Sprite-baked nameplates are GPU-scene
 // objects, not DOM, so the no-hud CSS can't hide them. Read the URL
@@ -319,8 +393,11 @@ function _bakeWithCanvasText(cacheKey, textCanvas) {
 }
 
 function getOrBakeNameplateMaterial(name, colorHex) {
-  // Cache key includes the font generation so entries baked with the
-  // system fallback get re-baked once the AC font finishes loading.
+  // Cache key includes the font generation (`ac` vs `sys`) so an AC-font
+  // bake and a (timeout-fallback) system-font bake of the same name never
+  // collide. With #27 (Option A) a system-font entry is only ever created
+  // after the timeout fallback opens the gate, so in the common path every
+  // entry is keyed `…|ac`.
   const acFontReady = !!getAcFont();
   const cacheKey = `${name}|${colorHex}|${acFontReady ? "ac" : "sys"}`;
   const hit = _nameplateCache.get(cacheKey);
@@ -331,23 +408,14 @@ function getOrBakeNameplateMaterial(name, colorHex) {
   // The real browser path always has document.
   if (typeof document === "undefined") return null;
 
-  // Schedule a one-time cache flush when the AC font becomes available
-  // so existing system-font nameplates get re-baked in the retail font.
-  if (!acFontReady && !_pendingAcFontWatch) {
-    _pendingAcFontWatch = true;
-    loadAcFont()
-      .then((runtime) => {
-        if (runtime) disposeNameplateCache();
-      })
-      .catch(() => {})
-      .finally(() => {
-        _pendingAcFontWatch = false;
-      });
-  }
+  // #27 (Option A) — arm the AC-font readiness watch + timeout fallback
+  // on first bake attempt. This kicks the primary-font load and arms the
+  // system-font-bake timeout gate. Idempotent.
+  _ensureFontReadyWatch();
 
   // AC-font path — produce the text canvas from the retail bitmap font.
   // The renderAcText() call returns null if the font isn't loaded yet,
-  // which falls through to the system-font path below.
+  // which falls through to the (possibly gated) system-font path below.
   if (acFontReady) {
     // scale=2 gets us roughly 32px-tall AC glyphs (max_char_height=16).
     const textCanvas = renderAcText(name, { color: colorHex, scale: 2, shadow: false });
@@ -355,6 +423,17 @@ function getOrBakeNameplateMaterial(name, colorHex) {
       return _bakeWithCanvasText(cacheKey, textCanvas);
     }
   }
+
+  // #27 (Option A) — DEFER the system-font bake during the boot race.
+  // While the AC font is still loading and the timeout fallback hasn't
+  // fired, return null so NO `…|sys` nameplate is created. The caller
+  // (ensureNameplateForEntity) leaves `inst._nameplateSprite` unset, so
+  // the next spawn/refresh/MetaRefresh re-attempts the bake — and by then
+  // the AC font is almost always ready, so the nameplate bakes straight
+  // into the retail font with no use-after-dispose or font-upgrade dance.
+  // Once the timeout fallback opens the gate (AC font never loaded), we
+  // fall through and bake in the system font so nameplates still appear.
+  if (!_systemFontBakeAllowed) return null;
 
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
