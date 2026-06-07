@@ -14,6 +14,10 @@ import { getCombatDiagSnapshot } from "../../ui/ac_combat_maneuver.js";
 const DEFAULT_MAX_FAILURES = 20;
 const DEFAULT_MAX_MISSES = 100;
 const DEFAULT_MAX_HITS_SAMPLE = 50;
+// Plugin-client poll give-up ceiling: 60 ticks @ 500ms ≈ 30s. Stops the
+// subscription-install polls from spinning forever when the page is
+// opened without ever logging in (no `window.__pluginClient`).
+const SUB_POLL_MAX_TICKS = 60;
 // Wave 12 / Phase 39 (2026-05-26): sneak-attack predictor accuracy.
 // Window inside which a `damageDealt` event with `attackConditions`
 // SneakAttack bit (0x4) can be retroactively matched to a recent
@@ -568,6 +572,19 @@ export function attachCombat(diag) {
       };
       combat.sneakMatchSamples.length = 0;
       combat.pendingPredictions.length = 0;
+      // Clear any in-flight subscription-install poll timers (they're
+      // module-scope and self-clear on success/give-up, but reset()
+      // should not leave a stray interval running). The bound
+      // subscriptions themselves stay installed — reset() clears
+      // counters, not the hookup (idempotent contract, Phase 36/39).
+      if (_sneakSubPollTimer != null) {
+        try { clearInterval(_sneakSubPollTimer); } catch (_) {}
+        _sneakSubPollTimer = null;
+      }
+      if (_damageDealtSubPollTimer != null) {
+        try { clearInterval(_damageDealtSubPollTimer); } catch (_) {}
+        _damageDealtSubPollTimer = null;
+      }
     },
   };
 
@@ -615,10 +632,22 @@ function _installSneakSubscription() {
   };
 
   if (!tryHook()) {
+    // Bound poll: if the plugin client never appears (e.g. the page is
+    // opened without ever logging in), stop polling after ~30s instead
+    // of spinning a 500ms interval forever.
+    let ticks = 0;
     _sneakSubPollTimer = setInterval(() => {
       if (tryHook()) {
         try { clearInterval(_sneakSubPollTimer); } catch (_) {}
         _sneakSubPollTimer = null;
+        return;
+      }
+      ticks += 1;
+      if (ticks >= SUB_POLL_MAX_TICKS) {
+        try { clearInterval(_sneakSubPollTimer); } catch (_) {}
+        _sneakSubPollTimer = null;
+        // eslint-disable-next-line no-console
+        console.warn("[diag.combat] gave up waiting for __pluginClient (sneakAttackPredicted not subscribed)");
       }
     }, 500);
   }
@@ -650,10 +679,21 @@ function _installDamageDealtSubscription() {
   };
 
   if (!tryHook()) {
+    // Bound poll: give up after ~30s if the plugin client never shows
+    // (mirror of the sneak-subscription poll's ceiling).
+    let ticks = 0;
     _damageDealtSubPollTimer = setInterval(() => {
       if (tryHook()) {
         try { clearInterval(_damageDealtSubPollTimer); } catch (_) {}
         _damageDealtSubPollTimer = null;
+        return;
+      }
+      ticks += 1;
+      if (ticks >= SUB_POLL_MAX_TICKS) {
+        try { clearInterval(_damageDealtSubPollTimer); } catch (_) {}
+        _damageDealtSubPollTimer = null;
+        // eslint-disable-next-line no-console
+        console.warn("[diag.combat] gave up waiting for __pluginClient (damageDealt not subscribed)");
       }
     }, 500);
   }

@@ -29,6 +29,7 @@
 // installed __diag via `attach<Name>(diag)`. Imported here to keep diag.js
 // the single installation point; modules can fail to load gracefully via
 // the optional-chain in the install loop.
+import { lbKeyOf } from "./landblock_lru.js";
 import { attachPlacements as _attachPlacements } from "./diag/placements.js";
 import { attachEntityTypes as _attachEntityTypes } from "./diag/entity_types.js";
 import { attachEvents as _attachEvents } from "./diag/events.js";
@@ -182,7 +183,7 @@ export function installDiag() {
     onSpawnFailed(meta, error) {
       const g = (meta?.guid >>> 0) || 0;
       const pending = this.spawns.pending.get(g);
-      const lbId = pending?.landblockId ?? ((meta?.landblockId >>> 0) & 0xffff0000);
+      const lbId = pending?.landblockId ?? lbKeyOf(meta?.landblockId >>> 0);
       const wcid = pending?.wcid ?? (meta?.wcid >>> 0);
       this.spawns.failed.push({
         guid: g,

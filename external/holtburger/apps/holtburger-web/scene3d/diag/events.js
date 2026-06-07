@@ -14,10 +14,24 @@
 const NO_TAP = { error: "events tap disabled; URL needs ?eventLog=on" };
 const POS_TOL_M_SQ = 25;   // 5m tolerance (5² = 25)
 const TIME_TOL_MS  = 2000; // ±2s
+const METERS_PER_LB = 192.0;
 
 function normalizeLb(lbId) {
   const raw = typeof lbId === "string" ? parseInt(lbId, 16) : lbId;
   return ((raw & 0xffff0000) >>> 0);
+}
+
+// AC-frame LB derivation (mirrors diag/placements.js): event world_pos
+// stays AC-frame (the F.C/_pushEventRecord writer never applies
+// acToThree), so the landblock byte for a record is just floor(ac/192).
+// Pure AC arithmetic — no acToThree inverse.
+const lbByte = (w) => Math.floor(w / METERS_PER_LB) & 0xff;
+const lbKey  = (x, y) => (((x & 0xff) << 24) | ((y & 0xff) << 16)) >>> 0;
+function lbKeyOfWorldPos(wp) {
+  if (!Array.isArray(wp)) return null;
+  const x = wp[0], y = wp[1];
+  if (typeof x !== "number" || typeof y !== "number") return null;
+  return lbKey(lbByte(x), lbByte(y));
 }
 
 /** True iff the host runtime wired up the F.C push helper. */
@@ -148,9 +162,16 @@ export function attachEvents(diag) {
       const window_ = { t0, t1 };
 
       const expectedForLb = expectedEvents.filter((e) => normalizeLb(e.landblockId) === lb);
+      // Filter observed records to THIS landblock too — otherwise the
+      // diff's `extra` bucket (and the matcher) sees events from every
+      // LB the session has visited. Derive each record's LB from its
+      // AC-frame world_pos (floor(ac/192)); records without a usable
+      // world_pos can't be placed, so they're excluded from the per-LB
+      // diff (they still appear in tail()/summary()/probe()).
       const obs = snap().records.filter((r) => {
         const t = typeof r.t_wall_ms === "number" ? r.t_wall_ms : 0;
-        return t >= t0 && t <= t1;
+        if (t < t0 || t > t1) return false;
+        return lbKeyOfWorldPos(r.world_pos) === lb;
       });
 
       const paired = new Set();   // observed indices already matched
