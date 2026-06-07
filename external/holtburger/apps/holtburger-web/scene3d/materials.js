@@ -74,6 +74,19 @@ export const SURFACE_TYPE = Object.freeze({
 // Surface. Caller paints these with `materialCache.fallbackMaterial`.
 const FALLBACK_SURFACE_DID = 0;
 
+// #22 (2026-06-07) — paletted-material LRU cap. Each dyed outfit
+// signature (surface|palette|subPalettes) mints one cache-owned
+// MeshStandardMaterial + (optionally) one owned DataTexture. Without a
+// cap a long crowded-town session grows `palettedMaterials` /
+// `palettedTextures` unbounded (one live leak — every other cache is
+// keyed by a bounded DID/bucket space). The cap is GENEROUS (256) so a
+// same-frame-baked material is never evicted out from under the caller
+// that just installed it; eviction is oldest-by-insertion (Map preserves
+// insertion order), disposing the material AND its paired owned texture
+// together. This is NOT the page-teardown `dispose()` path — the LRU
+// never calls `dispose()`.
+const PALETTED_CACHE_CAP = 256;
+
 // Phase 0.1 — shadow casting gate. Translucent and Additive surfaces
 // don't cast (shadow pass is depth-only — would render a solid box,
 // and three.js warns). Opaque + ClipMap honour alphaTest, so they cast.
@@ -1482,6 +1495,25 @@ export class MaterialCache {
       this.palettedTextures.set(key, texture);
     }
     this.palettedMaterials.set(key, material);
+    // #22 — insertion-order LRU cap. Map iteration is insertion-ordered,
+    // so the FIRST key is the oldest. Evict oldest-first while over cap,
+    // disposing the material AND its paired owned texture together. The
+    // `oldestKey === key` guard ensures the entry we just installed this
+    // call is never the one evicted (so a same-frame-baked material stays
+    // retrievable same frame). Re-inserting an existing key keeps its
+    // original position in the Map (it does NOT move to the end), so that
+    // guard also covers the degenerate "the entry we just re-set is also
+    // the oldest" case. Fail-soft: a throwing dispose() must not abort.
+    while (this.palettedMaterials.size > PALETTED_CACHE_CAP) {
+      const oldestKey = this.palettedMaterials.keys().next().value;
+      if (oldestKey === undefined || oldestKey === key) break;
+      const oldMat = this.palettedMaterials.get(oldestKey);
+      const oldTex = this.palettedTextures.get(oldestKey);
+      this.palettedMaterials.delete(oldestKey);
+      this.palettedTextures.delete(oldestKey);
+      try { oldMat?.dispose?.(); } catch (_) {}
+      try { oldTex?.dispose?.(); } catch (_) {}
+    }
     return material;
   }
 
@@ -2776,15 +2808,58 @@ export class MaterialCache {
    * fallback (the cache is empty).
    */
   dispose() {
-    for (const tex of this.textures.values()) tex.dispose();
-    for (const tex of this.normalTextures.values()) tex.dispose();
-    for (const tex of this.heightTextures.values()) tex.dispose();
-    for (const mat of this.materials.values()) mat.dispose();
-    this.fallbackMaterial.dispose();
-    this.materials.clear();
-    this.textures.clear();
-    this.normalTextures.clear();
-    this.heightTextures.clear();
+    // Page-teardown only — the LRU eviction path NEVER calls this. Every
+    // step is fail-soft (one throwing dispose() must not abort the rest)
+    // and idempotent: each map is cleared after its loop, so a second
+    // call walks empty maps and is a no-op. Helper keeps the body terse.
+    const _disposeEach = (map, pick) => {
+      if (!map) return;
+      for (const v of map.values()) {
+        try { pick(v)?.dispose?.(); } catch (_) {}
+      }
+      map.clear();
+    };
+
+    _disposeEach(this.textures, (t) => t);
+    _disposeEach(this.normalTextures, (t) => t);
+    _disposeEach(this.heightTextures, (t) => t);
+    _disposeEach(this.materials, (m) => m);
+    // T2 FrontSide variants — clones of base materials (share textures,
+    // which are owned by `this.textures` and already freed above), so we
+    // only dispose the material objects themselves.
+    _disposeEach(this.frontSideMaterials, (m) => m);
+    // Wire-agent buckets + per-DID dominant-colour materials.
+    _disposeEach(this.wireframeBuckets, (m) => m);
+    _disposeEach(this.wireframeFillBuckets, (m) => m);
+    if (this.didMaterials) {
+      for (const entry of this.didMaterials.values()) {
+        try { entry?.wire?.dispose?.(); } catch (_) {}
+        try { entry?.fill?.dispose?.(); } catch (_) {}
+      }
+      this.didMaterials.clear();
+    }
+    // Cache-owned paletted materials + their paired owned textures.
+    _disposeEach(this.palettedMaterials, (m) => m);
+    _disposeEach(this.palettedTextures, (t) => t);
+    // anim-frames (#22 fold-in) — the per-surface animated-frame
+    // DataTextures. `entry.mat` is the SAME object held in `this.materials`
+    // (guarded by the build path), already disposed above, so dispose ONLY
+    // the frame textures here to avoid a double-dispose of the material.
+    if (this._animatedMaterials) {
+      for (const entry of this._animatedMaterials.values()) {
+        const frames = entry?.frames;
+        if (Array.isArray(frames)) {
+          for (const f of frames) {
+            try { f?.dispose?.(); } catch (_) {}
+          }
+        }
+      }
+      this._animatedMaterials.clear();
+    }
+    try { this.fallbackMaterial?.dispose?.(); } catch (_) {}
+    if (this.wireMatToFill) this.wireMatToFill.clear();
+    if (this._animChecked) this._animChecked.clear();
     this.pendingFetches.clear();
+    if (this.pendingStartTimes) this.pendingStartTimes.clear();
   }
 }
