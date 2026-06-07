@@ -6756,6 +6756,20 @@ void main() {
         const useRenderer3d =
           new URLSearchParams(window.location.search).get("renderer") === "3d";
         if (useRenderer3d) {
+          // #13 Option A — idempotency guard. The autoLogin / kick-retry
+          // path can re-enter renderHoltburg after a char is already in
+          // world (e.g. one 0x0D rejection then success), re-firing this
+          // block. `window.liveScene3d` is assigned by init3D (scene3d/
+          // index.js:2361) once a renderer exists, so if it is already
+          // present we MUST NOT import + call init3D a second time — that
+          // stacks a 2nd WebGLRenderer (doubled GPU context, detached
+          // canvas, duplicated resize listeners). Short-circuit: report
+          // status and skip the init3D import/call entirely.
+          if (window.liveScene3d) {
+            renderStatus.innerHTML =
+              `<span class="ok">[OK]</span> 3D renderer already live — skipping re-init (idempotency guard).`;
+            return;
+          }
           renderStatus.textContent = "Initializing 3D renderer (?renderer=3d)…";
           const { init3D } = await import("./scene3d/index.js?v=diag-followons-2026-05-23");
           // sessionHandle exposed via window.__sessionHandle by the
