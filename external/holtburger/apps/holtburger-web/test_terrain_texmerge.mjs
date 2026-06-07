@@ -20,7 +20,7 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
 import { register } from "node:module";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STUB_LOADER_PATH = resolvePath(__dirname, "_three_stub_palette_loader.mjs");
@@ -32,6 +32,9 @@ register(pathToFileURL(STUB_LOADER_PATH).href, import.meta.url);
 
 const adapterUrl = pathToFileURL(resolvePath(__dirname, "scene3d/adapter.js")).href;
 const { buildAlphaMaskArrayBytes } = await import(adapterUrl);
+// `three` resolves to the committed stub via the registered loader; pull
+// it in for the #23 per-LB TexMerge DataTexture shape check.
+const THREE = await import("three");
 
 let failed = 0;
 let passed = 0;
@@ -119,6 +122,79 @@ check("Rot180 maps [1,0] → [0,1]", eq(rotateCellUv([1, 0], 2), [0, 1]), `got=[
 for (let r = 0; r < 4; r++) {
   check(`Rot${r * 90} fixes the cell centre`, eq(rotateCellUv([0.5, 0.5], r), [0.5, 0.5]));
 }
+
+// ---- Test 4 (#23): per-LB TexMerge DataTexture shape ------------------
+//
+// Mirrors terrain.js `bakeTerrainForLandblock`'s mergeDataTex construction
+// (48×8 RGBA8, NearestFilter, NoColorSpace, no mipmaps) for a 1536-byte
+// (= 48*8*4) merge buffer. The full bake builds a complete ShaderMaterial
+// + wasm round-trip, which is exercised in the browser capture
+// (capture_terrain_texmerge_evict.cjs); here we lock the DataTexture
+// contract that the per-LB userData.mergeDataTexture carries so the LRU
+// can dispose it.
+
+console.log("Test 4: per-LB TexMerge DataTexture shape (#23)");
+const MERGE_LEN = 48 * 8 * 4; // 1536
+const mergeBytes = new Uint8Array(MERGE_LEN);
+for (let i = 0; i < MERGE_LEN; i += 1) mergeBytes[i] = i & 0xff;
+const mergeTex = new THREE.DataTexture(
+  Uint8Array.from(mergeBytes),
+  48,
+  8,
+  THREE.RGBAFormat,
+  THREE.UnsignedByteType
+);
+mergeTex.colorSpace = THREE.NoColorSpace;
+mergeTex.magFilter = THREE.NearestFilter;
+mergeTex.minFilter = THREE.NearestFilter;
+mergeTex.generateMipmaps = false;
+mergeTex.needsUpdate = true;
+check("mergeData buffer is 1536 bytes (48×8 RGBA8)", mergeBytes.length === MERGE_LEN, `len=${mergeBytes.length}`);
+check("mergeDataTexture is a THREE.DataTexture", mergeTex instanceof THREE.DataTexture);
+check("DataTexture is 48×8", mergeTex.image?.width === 48 && mergeTex.image?.height === 8, `${mergeTex.image?.width}x${mergeTex.image?.height}`);
+check("DataTexture format === RGBAFormat", mergeTex.format === THREE.RGBAFormat);
+check("DataTexture type === UnsignedByteType", mergeTex.type === THREE.UnsignedByteType);
+check("DataTexture colorSpace === NoColorSpace (packed data)", mergeTex.colorSpace === THREE.NoColorSpace);
+check("DataTexture mag/minFilter === NearestFilter", mergeTex.magFilter === THREE.NearestFilter && mergeTex.minFilter === THREE.NearestFilter);
+check("DataTexture generateMipmaps === false", mergeTex.generateMipmaps === false);
+
+// ---- Test 5 (#23): source-structure regression guards -----------------
+//
+// The full per-LB bake/eviction wiring is browser-tested; these
+// deterministic source asserts catch the two structural regressions the
+// node harness CAN see:
+//   (a) `let mergeDataTex = null;` is HOISTED to function scope (sibling
+//       of vertexTypesTex) — if it slid back inside the `else` block,
+//       `lbMesh.userData` would throw a ReferenceError at runtime.
+//   (b) `mergeDataTexture: mergeDataTex` is wired into lbMesh.userData.
+//   (c) both index.js terrain track sites add mergeDataTexture to the
+//       LRU disposables textures with `.filter(Boolean)`.
+
+console.log("Test 5: #23 source-structure regression guards");
+const terrainSrc = readFileSync(resolvePath(__dirname, "scene3d/terrain.js"), "utf8");
+const indexSrc = readFileSync(resolvePath(__dirname, "scene3d/index.js"), "utf8");
+
+// (a) Hoist: the `let mergeDataTex = null;` declaration must appear BEFORE
+// the wireframeMode branch (function scope), not only inside `else`.
+const wireBranchIdx = terrainSrc.indexOf("if (scene3d.wireframeMode) {");
+const hoistDeclIdx = terrainSrc.indexOf("let mergeDataTex = null;");
+check("mergeDataTex declared (let mergeDataTex = null;)", hoistDeclIdx !== -1);
+check("mergeDataTex HOISTED above the wireframeMode branch (function scope)",
+  hoistDeclIdx !== -1 && wireBranchIdx !== -1 && hoistDeclIdx < wireBranchIdx,
+  `declIdx=${hoistDeclIdx} wireIdx=${wireBranchIdx}`);
+// The old block-scoped redeclaration inside `else` must be gone.
+check("no second `let mergeDataTex = null;` (block-scoped redeclare removed)",
+  terrainSrc.indexOf("let mergeDataTex = null;", hoistDeclIdx + 1) === -1);
+
+// (b) userData wiring.
+check("lbMesh.userData carries `mergeDataTexture: mergeDataTex`",
+  /mergeDataTexture:\s*mergeDataTex/.test(terrainSrc));
+
+// (c) index.js track sites add mergeDataTexture via .filter(Boolean).
+check("index.js wires ud.mergeDataTexture into LRU textures (.filter(Boolean))",
+  /ud\.vertexTypesTexture,\s*ud\.mergeDataTexture\]\.filter\(Boolean\)/.test(indexSrc));
+check("index.js wires lazy-bake userData.mergeDataTexture into LRU textures",
+  /userData\?\.mergeDataTexture,?\s*\]\.filter\(Boolean\)/.test(indexSrc));
 
 console.log("");
 console.log(`Results: ${passed} passed, ${failed} failed`);

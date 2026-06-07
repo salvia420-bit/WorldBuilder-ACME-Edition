@@ -2246,6 +2246,12 @@ export async function bakeTerrainForLandblock(
     }
   }
   let vertexTypesTex = null;
+  // T1/#23 — hoisted to function scope (sibling of `vertexTypesTex`) so
+  // the per-LB DataTexture is reachable from `lbMesh.userData` below.
+  // Built inside the textured-mode `else` branch (wire-agent leaves it
+  // null). Without this hoist the userData read would throw a
+  // ReferenceError (the texture was previously block-scoped to `else`).
+  let mergeDataTex = null;
   // Wire-agent: skip the per-LB DataTexture upload and use a pair of
   // shared MeshBasicMaterials. The fill material reads a per-vertex
   // `color` attribute computed from TERRAIN_CODE_TO_RGB + the existing
@@ -2300,7 +2306,7 @@ export async function bakeTerrainForLandblock(
     // only when `?texMerge=on` AND the wasm mesh carries merge data. The
     // shader reads it via texelFetch(uMergeData, ivec2(cx*6+slot, cy)). On
     // the off path mergeDataTex stays null and uTexMergeEnabled is 0.
-    let mergeDataTex = null;
+    // (Declaration hoisted to function scope above; assigned here.)
     if (opts.texMergeEnabled) {
       const mergeBytes = wasmMesh.terrainMergeData; // Uint8Array(1536) or empty
       if (mergeBytes && mergeBytes.length === 48 * 8 * 4) {
@@ -2594,6 +2600,11 @@ export async function bakeTerrainForLandblock(
     heightMin,
     heightMax,
     vertexTypesTexture: vertexTypesTex,
+    // T1/#23 — per-LB TexMerge DataTexture (null unless `?texMerge=on`
+    // AND the wasm mesh carried merge data). Exposed so the LRU track
+    // sites can add it to `disposables.textures` for eviction (it's a
+    // per-LB GPU resource, not a cache-shared atlas).
+    mergeDataTexture: mergeDataTex,
     terrainCodes: terrainCodesCopy,
     roadCodes: roadCodesCopy,
     hasRoads,

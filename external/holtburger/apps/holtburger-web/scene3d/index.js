@@ -2253,9 +2253,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 // (wire mode uses two cache-owned MeshBasicMaterials); the per-LB
                 // ShaderMaterial is the textured-mode case.
                 materials: lbMesh.material?.userData?.__cacheOwned ? [] : [lbMesh.material],
-                textures: lbMesh.userData?.vertexTypesTexture
-                  ? [lbMesh.userData.vertexTypesTexture]
-                  : [],
+                // #23 — vertexTypesTexture + (optional) TexMerge
+                // mergeDataTexture are both per-LB DataTextures.
+                // `.filter(Boolean)` drops the null mergeDataTexture on the
+                // off path (`?texMerge` not set / no merge data).
+                textures: [
+                  lbMesh.userData?.vertexTypesTexture,
+                  lbMesh.userData?.mergeDataTexture,
+                ].filter(Boolean),
               };
               lru.track(lbKeyForLru, disposables);
             } else {
@@ -3284,7 +3289,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             materials: (c.material && !c.material.userData?.__cacheOwned)
               ? [c.material]
               : [],
-            textures: ud.vertexTypesTexture ? [ud.vertexTypesTexture] : [],
+            // #23 — vertexTypesTexture + (optional) mergeDataTexture, both
+            // per-LB DataTextures. `.filter(Boolean)` drops the null
+            // mergeDataTexture when TexMerge is off.
+            textures: [ud.vertexTypesTexture, ud.mergeDataTexture].filter(Boolean),
           };
           landblockLru.track(key, disposables);
         }
@@ -3303,6 +3311,25 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       };
       trackByLandblockUd(liveScene3d.buildingsGroup?.children);
       trackByLandblockUd(liveScene3d.staticsGroup?.children);
+      // C3 #7 — the cross-LB statics InstancedMesh / LOD nodes carry NO
+      // `userData.landblockId` (they batch placements across the whole
+      // ring), so `trackByLandblockUd` above skips them. Fan each node into
+      // the LRU under EVERY lb-key it covers (`userData.coversLbKeys`) so
+      // eviction refcounts it: the node's geometry is freed only when the
+      // last covered LB evicts. track()'s instancedNodes append dedups, so
+      // listing a node under multiple keys is safe. This must run even for
+      // keys already in `seen` (a terrain-tracked LB may ALSO be covered by
+      // an instanced node and needs the node registered for refcounting).
+      const staticsInstancedNodes = staticsSummary?.instancedNodes;
+      if (Array.isArray(staticsInstancedNodes)) {
+        for (const node of staticsInstancedNodes) {
+          const covers = node?.userData?.coversLbKeys;
+          if (!(covers instanceof Set)) continue;
+          for (const coveredKey of covers) {
+            landblockLru.track(coveredKey, { instancedNodes: [node] });
+          }
+        }
+      }
       // C3 #6 — the boot-time `attachSetupModelLights` (line ~1338) ran
       // BEFORE this LRU existed, so its lights couldn't be tracked then.
       // Fan its `lightsByLbKey` buckets in now so the initial ring's

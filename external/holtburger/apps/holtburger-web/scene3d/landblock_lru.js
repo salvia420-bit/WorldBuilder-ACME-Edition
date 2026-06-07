@@ -80,7 +80,7 @@ export class LandblockLRU {
     this.debug = !!debug;
 
     // Map<lbKey, { lastTouchMs: number, disposables: { geometries:[],
-    //   materials:[], textures:[], lights:[] } }>
+    //   materials:[], textures:[], lights:[], instancedNodes:[] } }>
     this.entries = new Map();
 
     this._evictedTotal = 0;
@@ -99,15 +99,16 @@ export class LandblockLRU {
     if (!entry) {
       entry = {
         lastTouchMs: now,
-        disposables: { geometries: [], materials: [], textures: [], lights: [] },
+        disposables: { geometries: [], materials: [], textures: [], lights: [], instancedNodes: [] },
       };
       this.entries.set(key, entry);
     } else {
       entry.lastTouchMs = now;
-      // Back-compat: entries created before the lights bucket existed
-      // (or by a stale shape) get it lazily so the append below + evict
-      // step 5b never touch undefined.
+      // Back-compat: entries created before the lights / instancedNodes
+      // buckets existed (or by a stale shape) get them lazily so the
+      // appends below + evict steps 5b/5c never touch undefined.
       if (!Array.isArray(entry.disposables.lights)) entry.disposables.lights = [];
+      if (!Array.isArray(entry.disposables.instancedNodes)) entry.disposables.instancedNodes = [];
     }
     if (Array.isArray(options.geometries)) {
       for (const g of options.geometries) if (g) entry.disposables.geometries.push(g);
@@ -123,6 +124,18 @@ export class LandblockLRU {
     // `options.lights` behave exactly as before (back-compatible).
     if (Array.isArray(options.lights)) {
       for (const l of options.lights) if (l) entry.disposables.lights.push(l);
+    }
+    // C3 #7 — track the cross-LB statics InstancedMesh / LOD nodes that
+    // cover this LB so eviction can refcount them (each node carries a
+    // `userData.coversLbKeys` Set; the node's geometry is disposed only
+    // when the LAST covered LB evicts). Dedup so re-tracking the same LB
+    // (idempotent re-bake / re-walk) doesn't list a node twice under one
+    // key. Callers omitting `options.instancedNodes` behave as before.
+    if (Array.isArray(options.instancedNodes)) {
+      const bucket = entry.disposables.instancedNodes;
+      for (const n of options.instancedNodes) {
+        if (n && !bucket.includes(n)) bucket.push(n);
+      }
     }
   }
 
@@ -296,6 +309,57 @@ export class LandblockLRU {
       try { t.dispose && t.dispose(); } catch (_) {}
     }
 
+    // 5c. C3 #7 — refcount the cross-LB statics InstancedMesh / LOD nodes.
+    //    Each node batches placements from EVERY LB in the bake ring into
+    //    one draw call, so it must NOT be removed/disposed until the LAST
+    //    covered LB evicts. Each node carries `userData.coversLbKeys`
+    //    (a Set of lb-keys it covers). On eviction: drop THIS lbKey from
+    //    that Set; if the Set is now empty the node is no longer needed —
+    //    remove it from staticsGroup and dispose its GEOMETRY ONLY (the
+    //    material is `__cacheOwned`, shared cross-LB via MaterialCache —
+    //    NEVER dispose it). Otherwise the node stays live for the LBs it
+    //    still covers, and this LB must be re-marked statics-baked AFTER
+    //    step 6's `staticsBakedLbs.delete` (see below) so a re-walk into
+    //    it doesn't re-bake duplicate singletons on top of the surviving
+    //    InstancedMesh. Fail-soft per node. LOD-wrapped nodes carry the
+    //    coversLbKeys on the LOD wrapper; geometry disposal walks both
+    //    LOD levels' instanced leaves.
+    let keptInstancedForThisLb = false;
+    const trackedNodes = entry.disposables.instancedNodes;
+    if (Array.isArray(trackedNodes) && trackedNodes.length > 0) {
+      for (const node of trackedNodes) {
+        if (!node) continue;
+        try {
+          const covers = node.userData?.coversLbKeys;
+          if (covers instanceof Set) {
+            covers.delete(lbKey);
+            if (covers.size > 0) {
+              keptInstancedForThisLb = true;
+              continue;
+            }
+          }
+          // No remaining covered LBs (or no Set at all → treat as a
+          // single-LB node) — remove + dispose geometry only.
+          if (s.staticsGroup && typeof s.staticsGroup.remove === "function") {
+            s.staticsGroup.remove(node);
+          } else if (typeof node.removeFromParent === "function") {
+            node.removeFromParent();
+          }
+          // Dispose every InstancedMesh leaf's geometry. Plain
+          // InstancedMesh exposes `.geometry`; a THREE.LOD wrapper exposes
+          // `.levels[i].object.geometry`. Materials are skipped entirely.
+          if (Array.isArray(node.levels)) {
+            for (const lvl of node.levels) {
+              const g = lvl?.object?.geometry;
+              try { g?.dispose && g.dispose(); } catch (_) {}
+            }
+          } else if (node.geometry) {
+            try { node.geometry.dispose && node.geometry.dispose(); } catch (_) {}
+          }
+        } catch (_) { /* fail-soft per node */ }
+      }
+    }
+
     // 6. Clear idempotency sets so a re-entry actually re-bakes.
     //    Without this, the lazy hooks would short-circuit and leave
     //    the LB visually empty until a hard reload.
@@ -303,6 +367,19 @@ export class LandblockLRU {
     if (s.buildingsBakedLbs instanceof Set) s.buildingsBakedLbs.delete(lbKey);
     if (s.staticsBakedLbs instanceof Set) s.staticsBakedLbs.delete(lbKey);
     if (s.envCellLoadedLbs instanceof Set) s.envCellLoadedLbs.delete(lbKey);
+
+    // 6b. C3 #7 — if a cross-LB InstancedMesh node survived step 5c (it
+    //    still covers other resident LBs), this LB's statics are STILL on
+    //    screen via that shared node. Re-mark it statics-baked (undoing
+    //    the unconditional delete above) so a re-walk into this LB takes
+    //    the idempotent short-circuit instead of re-baking duplicate
+    //    singleton meshes layered on top of the live InstancedMesh
+    //    (z-fight + double-draw). Only the singleton statics-baked LBs
+    //    (no surviving node) stay unmarked and correctly re-bake on
+    //    re-entry.
+    if (keptInstancedForThisLb && s.staticsBakedLbs instanceof Set) {
+      s.staticsBakedLbs.add(lbKey);
+    }
 
     // 7. Also drop the per-LB ShaderMaterial entry off scene3d's
     //    terrainMaterials registry (the per-rAF uTime push iterates

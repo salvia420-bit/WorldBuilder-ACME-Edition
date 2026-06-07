@@ -64,6 +64,7 @@
 import * as THREE from "three";
 import { meshToFusedGeometry, placementToMatrix4 } from "./adapter.js";
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
+import { lbKeyOf } from "./landblock_lru.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -875,6 +876,18 @@ function buildInstancedNode({
       : landblockInfoCount === 0
       ? "scenery"
       : "mixed";
+  // C3 #7 — set of lb-keys this batched node covers. The LRU refcounts
+  // eviction against this Set: the node's geometry is only disposed when
+  // the LAST covered LB evicts (until then the node still draws statics
+  // for the other resident LBs). Built once here from the group's
+  // placements (each carries the full 32-bit landblockId → lbKeyOf masks
+  // it to the 16-bit lb-key). Shared by reference onto BOTH the
+  // InstancedMesh and the LOD wrapper so either object handed to the LRU
+  // refcounts the same Set.
+  const coversLbKeys = new Set();
+  for (const p of group) {
+    if (p.landblockId != null) coversLbKeys.add(lbKeyOf(p.landblockId >>> 0));
+  }
   const instanced = new THREE.InstancedMesh(geom, mat, group.length);
   instanced.name = `static-instanced-${modelKey}-x${group.length}`;
   instanced.userData = {
@@ -884,6 +897,7 @@ function buildInstancedNode({
     source,
     sceneryCount,
     landblockInfoCount,
+    coversLbKeys,
   };
   if (staticsShadow) {
     instanced.castShadow = staticsMatCastsShadow;
@@ -951,6 +965,10 @@ function buildInstancedNode({
     source,
     sceneryCount,
     landblockInfoCount,
+    // C3 #7 — same coversLbKeys Set as the InstancedMesh leaves (the LRU
+    // is handed the LOD wrapper for instanced-LOD nodes; both LOD levels
+    // share these covered lb-keys).
+    coversLbKeys,
   };
   // G1 (waves-2 2026-05-29) — billboard orientation is NOT applied to
   // the InstancedMesh degraded leaf. Each instance sits at a distinct
@@ -1586,6 +1604,11 @@ export async function bakeStaticsRing(
   // wired in"). A group is scenery-bearing if any of its placements
   // carry `source === "scenery"`.
   let sceneryBearingInstancedGroupCount = 0;
+  // C3 #7 — collect the cross-LB InstancedMesh / LOD nodes so the caller
+  // can hand each to the LRU under every lb-key it covers (refcount
+  // eviction). Singletons carry `userData.landblockId` and are evicted by
+  // the existing per-LB walker, so they are NOT collected here.
+  const instancedNodes = [];
   for (const [modelId, group] of placementsByModel) {
     const geom = primary.geomByModel.get(modelId);
     const mat = matByModel.get(modelId) || materialCache.fallbackMaterial;
@@ -1616,6 +1639,7 @@ export async function bakeStaticsRing(
         staticsReceiveShadow,
       });
       scene3d.staticsGroup.add(node);
+      instancedNodes.push(node);
       instancedGroupCount += 1;
       objectCount += group.length;
       if (isLod) lodCount += 1;
@@ -1707,6 +1731,10 @@ export async function bakeStaticsRing(
     sceneryObjectCount,
     landblockInfoObjectCount,
     sceneryBearingInstancedGroupCount,
+    // C3 #7 — the cross-LB InstancedMesh / LOD nodes (each carries a
+    // `userData.coversLbKeys` Set). The caller fans these into the LRU
+    // under every covered lb-key for refcounted eviction.
+    instancedNodes,
   };
 }
 

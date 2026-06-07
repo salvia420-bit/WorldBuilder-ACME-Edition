@@ -44,6 +44,7 @@ import {
   acQuatToThree,
 } from "./adapter.js";
 import { materialCanCastShadow } from "./materials.js";
+import { lbKeyOf } from "./landblock_lru.js";
 
 // ?cellBugParity=retail keeps indoor cells visible from outdoors — matches a known retail rendering quirk for nostalgia research.
 const CELL_BUG_PARITY = (() => {
@@ -625,13 +626,19 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // mask. Without this, EnvCell meshes render on layer 0 (alongside terrain)
   // and the depth-clear split in atmosphere_pipeline.js can't isolate them.
   // Recursive traverse covers cellContainer, meshGroup, and every Mesh.
-  // F3 cancellation guard: if this LB was evicted while we time-sliced the
-  // build across frames, do NOT attach — evict() already removed lbKey from
-  // envCellLoadedLbs, so attaching now would orphan these cells and let a later
-  // re-approach rebuild duplicates. Dispose the per-LB geometries we built
-  // (materials are cache-shared, never disposed here) and bail. Only possible
-  // when time-slicing is on (the sync path can't interleave with evict()).
-  if (envcellTimeSlice && !scene3d.envCellLoadedLbs.has(lbKey)) {
+  // F3 cancellation guard: if this LB was evicted while this build was
+  // suspended at ANY await point, do NOT attach — evict() already removed
+  // lbKey from envCellLoadedLbs, so attaching now would orphan these cells
+  // and let a later re-approach rebuild duplicates. Dispose the per-LB
+  // geometries we built (materials are cache-shared, never disposed here)
+  // and bail.
+  // envcell-guard (#likely): the `envcellTimeSlice &&` qualifier was
+  // WRONG — even the non-time-sliced ("sync") path awaits
+  // `renderer.compileAsync` above, which yields to the event loop and lets
+  // an eviction tick run before we reach this attach. Guarding only the
+  // time-sliced path left the sync path able to re-attach an evicted LB's
+  // cells (duplicate cells on re-approach). Always re-check residency.
+  if (!scene3d.envCellLoadedLbs.has(lbKey)) {
     for (const g of lbDisposableGeometries) {
       try { if (g && typeof g.dispose === "function") g.dispose(); } catch (_) {}
     }
@@ -931,7 +938,12 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   seen.clear();
   for (let i = 0; i < renderSetArr.length; i += 1) {
     const cellId = renderSetArr[i] >>> 0;
-    const lbKey = cellId & 0xffff0000;
+    // pvs-signed-key — `cellId & 0xffff0000` (a raw bitwise AND) yields a
+    // SIGNED 32-bit int when bit 31 is set (e.g. 0xA9B40000 → negative),
+    // which then mismatches the unsigned lb-keys the bake/idempotency
+    // Sets are keyed on. `lbKeyOf` applies `>>> 0` as its LAST op so the
+    // key is always the canonical unsigned 32-bit lb-key.
+    const lbKey = lbKeyOf(cellId);
     if (lbKey === 0) continue;
     if (seen.has(lbKey)) continue;
     seen.add(lbKey);
