@@ -207,6 +207,39 @@ const DETAIL_UNIFORM_DEFAULTS = Object.freeze({
   blend: 0.6,
 });
 
+// Build the program-cache-key string for whatever patch set is on the
+// material RIGHT NOW. three.js uses `customProgramCacheKey()` to decide
+// whether two materials can share a compiled WebGLProgram; the stock
+// key ignores our onBeforeCompile string surgery, so without this two
+// materials that differ ONLY in their patch composition (e.g. CSM+POM
+// vs CSM+lightClamp) collapse onto one program and render each other's
+// shader. The key reads each patch's userData flag LAZILY at call time
+// (three calls this during setProgram, after every installer has run)
+// so the order of patch installation never matters.
+function _patchSetCacheKey(material) {
+  const u = material.userData || {};
+  return (
+    "hb" +
+    "|d" + (u.detailEnabled ? 1 : 0) +
+    "|c" + (u.csmEnabled ? 1 : 0) +
+    "|p" + (u.pomEnabled ? 1 : 0) +
+    "|l" + (u.lightClampRetail ? 1 : 0) +
+    "|a" + (u.__aoPatched ? 1 : 0) +
+    "|b" + (u.__depthBiased ? 1 : 0)
+  );
+}
+
+// Install a `customProgramCacheKey` that disambiguates our patch sets.
+// Idempotent — every installer calls it via `_chainBeforeCompile`, but
+// the closure always reflects the current userData so re-installing is
+// harmless. The closure reads userData lazily (NOT at install time) so
+// patches added after this call are still reflected in the key.
+function _installPatchSetCacheKey(material) {
+  material.customProgramCacheKey = function () {
+    return _patchSetCacheKey(this);
+  };
+}
+
 // Compose a new onBeforeCompile hook with whatever was previously set on
 // the material. Each shader-patch installer (detail, CSM, ...) calls
 // this so the chain is preserved — three.js calls onBeforeCompile ONCE
@@ -216,12 +249,14 @@ function _chainBeforeCompile(material, newHook) {
   const prev = material.onBeforeCompile;
   if (typeof prev !== "function" || prev === THREE.Material.prototype.onBeforeCompile) {
     material.onBeforeCompile = newHook;
+    _installPatchSetCacheKey(material);
     return;
   }
   material.onBeforeCompile = function chainedOnBeforeCompile(shader, renderer) {
     prev.call(this, shader, renderer);
     newHook.call(this, shader, renderer);
   };
+  _installPatchSetCacheKey(material);
 }
 
 // 2026-05-22 — wire-agent: cheap normal-based AO modulation. Patches a
