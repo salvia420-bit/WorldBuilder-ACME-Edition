@@ -684,12 +684,19 @@ export function callHook(module, hook, ctx) {
  * loader discovers the plugins it should consider.
  *
  * Each descriptor's `manifestPath` is fetched relative to the index URL.
- * `devPath` (optional) is fetched the same way; 404 is treated as "no dev
- * sidecar" (silently skipped).
+ * `devPath` (optional, dev-override sidecar) is fetched the same way; 404 is
+ * treated as "no dev sidecar" (silently skipped). The probe is GATED: it only
+ * runs when dev mode is on (`?dev` in the URL, or `opts.probeDev === true`).
+ * In a normal/production load no sidecars exist, so probing every descriptor
+ * just spams the console with 404s (a network 404 is logged by the browser and
+ * can't be suppressed from JS) — gating keeps the console clean while a dev who
+ * wants the override opts in with `?dev=1`.
  *
  * @param {Object} opts
  * @param {string} opts.indexUrl                 URL of the manifest index JSON.
  * @param {typeof fetch} [opts.fetch]            Defaults to globalThis.fetch.
+ * @param {boolean} [opts.probeDev]              Fetch `devPath` sidecars. Defaults
+ *     to whether `?dev` is present in the page URL (false outside a browser).
  * @returns {Promise<{ entries: Array<{manifest:any, dev?:any, modulePath:string}>, skipped: {id?:string,reason:string}[] }>}
  */
 export async function fetchManifestIndex(opts) {
@@ -699,6 +706,19 @@ export async function fetchManifestIndex(opts) {
     throw new Error('fetchManifestIndex: no fetch available');
   }
   const indexUrl = opts.indexUrl;
+  // Dev-sidecar probing is opt-in: explicit `opts.probeDev`, else `?dev` in the
+  // page URL. Off by default so a normal load doesn't 404 on every (absent)
+  // `<id>.manifest.dev.json`.
+  const probeDev = opts.probeDev != null
+    ? !!opts.probeDev
+    : (() => {
+        try {
+          // eslint-disable-next-line no-undef
+          return new URLSearchParams(globalThis.location?.search || '').has('dev');
+        } catch {
+          return false;
+        }
+      })();
   const indexRes = await fetchImpl(indexUrl);
   if (!indexRes.ok) throw new Error(`fetchManifestIndex: ${indexUrl} → ${indexRes.status}`);
   const indexJson = await indexRes.json();
@@ -723,7 +743,7 @@ export async function fetchManifestIndex(opts) {
       continue;
     }
     let dev = null;
-    if (typeof desc.devPath === 'string') {
+    if (probeDev && typeof desc.devPath === 'string') {
       const devUrl = new URL(desc.devPath, base).href;
       try {
         const res = await fetchImpl(devUrl);

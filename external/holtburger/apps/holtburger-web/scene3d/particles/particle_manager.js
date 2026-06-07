@@ -242,6 +242,13 @@ export class ParticleManager {
           // Perf E3 (2026-05-18): tag the clone so destroyParticleEmitter()
           // can dispose it. The base material from materialFactory may be
           // cache-owned — only the per-slot CLONE is owned by this emitter.
+          // THREE.Material.clone() deep-copies userData, so the clone inherits
+          // a `__cacheOwned: true` tag when the base was a cache material;
+          // clear it here so the clone is unambiguously disposable. Without
+          // this, _disposeMaterialIfOwned() sees BOTH flags, trips the E3
+          // guard, and refuses to free the clone → per-slot material leak on
+          // landblock eviction while moving.
+          mat.userData.__cacheOwned = false;
           mat.userData.__disposable = true;
         }
         // NOTE: `geometry` is shared across all slots and originates from
