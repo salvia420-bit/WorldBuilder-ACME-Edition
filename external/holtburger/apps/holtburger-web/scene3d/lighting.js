@@ -744,6 +744,18 @@ export function releaseLight(scene3d, light) {
       light.removeFromParent();
     }
   } catch (_) { /* fail-soft */ }
+  // B10b (likely:spotlight-target): an oriented SpotLight's `.target`
+  // was added as a sibling under the same part Object3D, so detach it
+  // here too. No-op for PointLights and for SpotLights that never
+  // wired a target (the common/shipped case — target.parent is null).
+  try {
+    const tgt = light.isSpotLight ? light.target : null;
+    if (tgt && tgt.parent && typeof tgt.parent.remove === "function") {
+      tgt.parent.remove(tgt);
+    } else if (tgt && typeof tgt.removeFromParent === "function") {
+      tgt.removeFromParent();
+    }
+  } catch (_) { /* fail-soft */ }
   try {
     if (typeof light.dispose === "function") light.dispose();
   } catch (_) { /* fail-soft */ }
@@ -1070,6 +1082,14 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
         }
         attachedAny = true;
         object3D.add(inst);
+        // B10b (likely:spotlight-target): an oriented SpotLight aims at
+        // its `.target`; parent the target as a sibling under the SAME
+        // part Object3D so it tracks the rig. `releaseLight`/evict
+        // detaches it. DORMANT on shipped data (PointLights have no
+        // `spotTargetLocal`), so this branch never runs today.
+        if (inst.isSpotLight && inst.userData && inst.userData.spotTargetLocal) {
+          object3D.add(inst.target);
+        }
         scene3d.activeLights.push(inst);
         summary.lightCount += 1;
         if (inst.isPointLight) summary.pointLightCount += 1;
@@ -1227,6 +1247,20 @@ function createLightFromTemplate(template, transform) {
     }
     light.userData = ud;
   }
+  // B10b (likely:spotlight-target): re-aim a templated SpotLight's
+  // target from the (part-local) `spotTargetLocal` the source carried.
+  // All placements of one `sl` share the same part-local origin +
+  // orientation, so the target position is identical per template. The
+  // attach loop adds `light.target` under the part Object3D. DORMANT on
+  // shipped data (no SpotLights → `spotTargetLocal` absent).
+  if (
+    light.isSpotLight &&
+    light.userData &&
+    light.userData.spotTargetLocal
+  ) {
+    const t = light.userData.spotTargetLocal;
+    light.target.position.set(t.x, t.y, t.z);
+  }
   return light;
 }
 
@@ -1261,6 +1295,13 @@ function makeThreeLightForSetupLight(sl) {
   // Read defensively — wasm-bindgen getters can throw if the handle
   // has been freed, and tests pass plain objects with identical shape.
   let x, y, z, r, g, b, intensity, falloff, coneAngle;
+  // B10b (likely:spotlight-target): orientation quaternion (AC wire
+  // order w,x,y,z). ABSENT on the currently-shipped wasm pkg (these
+  // getters were added in this batch but the committed pkg predates a
+  // wasm-pack rebuild) → reading them yields `undefined` → `+undefined`
+  // === NaN, so the `Number.isFinite` guard below leaves the SpotLight
+  // target wiring DORMANT until a rebuild activates the feature.
+  let qx, qy, qz, qw;
   try {
     x = +sl.x;
     y = +sl.y;
@@ -1271,6 +1312,10 @@ function makeThreeLightForSetupLight(sl) {
     intensity = +sl.intensity;
     falloff = +sl.falloff;
     coneAngle = +sl.coneAngle;
+    qx = +sl.qx;
+    qy = +sl.qy;
+    qz = +sl.qz;
+    qw = +sl.qw;
   } catch (_) {
     return null;
   }
@@ -1324,6 +1369,14 @@ function makeThreeLightForSetupLight(sl) {
     THREE.SRGBColorSpace
   );
   let lightObj;
+  // B10b (likely:spotlight-target): SpotLight cone aim. Computed ONLY
+  // when this is a SpotLight AND the bridged orientation quaternion is
+  // present + finite. On the currently-shipped pkg the qx/qy/qz/qw
+  // getters are absent (→ NaN) AND all shipped LightInfo descriptors
+  // have cone_angle<=0 (→ PointLight), so `spotTargetLocal` stays null
+  // and the attach/release path is byte-identical to today. A SpotLight
+  // with no orientation falls back to three.js's default downward aim.
+  let spotTargetLocal = null;
   if (Number.isFinite(coneAngle) && coneAngle > 0) {
     // SpotLight. `angle` is the cone's half-angle in radians;
     // `penumbra` is the soft-edge fraction; `decay` is physical
@@ -1336,6 +1389,30 @@ function makeThreeLightForSetupLight(sl) {
       SPOTLIGHT_PENUMBRA,
       LIGHT_DECAY
     );
+    if (
+      Number.isFinite(qx) &&
+      Number.isFinite(qy) &&
+      Number.isFinite(qz) &&
+      Number.isFinite(qw)
+    ) {
+      // The light + its target are siblings under the per-part
+      // Object3D (which itself carries the AC→three rotation via
+      // worldRoot), so both stay in the AC-native part frame — the
+      // same frame the rest-pose path applies its raw AC quat in
+      // (entities.js `partGroup.quaternion.set(qx,qy,qz,qw)`). AC's
+      // canonical forward is +Y; rotate it by the orientation quat to
+      // get the cone direction, then place the target one unit ahead
+      // of the light's local origin.
+      const aim = new THREE.Vector3(0, 1, 0).applyQuaternion(
+        new THREE.Quaternion(qx, qy, qz, qw)
+      );
+      spotTargetLocal = { x: x + aim.x, y: y + aim.y, z: z + aim.z };
+      lightObj.target.position.set(
+        spotTargetLocal.x,
+        spotTargetLocal.y,
+        spotTargetLocal.z
+      );
+    }
   } else {
     // PointLight.
     lightObj = new THREE.PointLight(
@@ -1351,6 +1428,10 @@ function makeThreeLightForSetupLight(sl) {
     setupLightOrigin: { x, y, z },
     coneAngle,
     falloff: safeFalloff,
+    // B10b: non-null only for an oriented SpotLight; the attach loop
+    // reads it to add `light.target` as a sibling under the same part
+    // Object3D, and `releaseLight` detaches it on eviction.
+    spotTargetLocal,
   };
   return lightObj;
 }

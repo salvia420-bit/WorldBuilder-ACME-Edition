@@ -8660,6 +8660,13 @@ fn compute_hinge_frames<S: holtburger_dat::ResourceSource + ?Sized>(
 /// ARGB `color: u32` in the DAT (`R = (color >> 16) & 0xFF`).
 /// `intensity / falloff / cone_angle` are passed through verbatim;
 /// `cone_angle == 0.0` → PointLight, `> 0.0` → SpotLight.
+///
+/// B10b (`likely:spotlight-target`): `qx/qy/qz/qw` carry the LightInfo
+/// `viewer_space_location.orientation` quaternion (AC wire order is
+/// w,x,y,z; surfaced as the individual components so the JS side can
+/// reorder to three.js x,y,z,w). Previously the bridge DROPPED the
+/// orientation, so SpotLights had no aim direction. Identity quat
+/// `(0,0,0,1)` for PointLights / lights with no authored orientation.
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 #[derive(Debug, Clone, Copy)]
@@ -8674,6 +8681,10 @@ pub struct SetupLight {
     pub(crate) intensity: f32,
     pub(crate) falloff: f32,
     pub(crate) cone_angle: f32,
+    pub(crate) qx: f32,
+    pub(crate) qy: f32,
+    pub(crate) qz: f32,
+    pub(crate) qw: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -8699,6 +8710,17 @@ impl SetupLight {
     pub fn falloff(&self) -> f32 { self.falloff }
     #[wasm_bindgen(getter, js_name = coneAngle)]
     pub fn cone_angle(&self) -> f32 { self.cone_angle }
+    // B10b (likely:spotlight-target): LightInfo orientation quaternion
+    // (AC wire order w,x,y,z) — surfaced per-component so the JS
+    // SpotLight branch can aim the cone via SpotLight.target.
+    #[wasm_bindgen(getter)]
+    pub fn qx(&self) -> f32 { self.qx }
+    #[wasm_bindgen(getter)]
+    pub fn qy(&self) -> f32 { self.qy }
+    #[wasm_bindgen(getter)]
+    pub fn qz(&self) -> f32 { self.qz }
+    #[wasm_bindgen(getter)]
+    pub fn qw(&self) -> f32 { self.qw }
 }
 
 /// Phase 7.6.1 (follow-on #1): per-SetupModel light bundle returned
@@ -8815,6 +8837,10 @@ fn collect_setup_model_lights<S: holtburger_dat::ResourceSource + ?Sized>(
         let r = ((argb >> 16) & 0xFF) as f32 / 255.0;
         let g = ((argb >>  8) & 0xFF) as f32 / 255.0;
         let b = ((argb      ) & 0xFF) as f32 / 255.0;
+        // B10b (likely:spotlight-target): carry the part-LOCAL
+        // orientation quaternion (AC wire order w,x,y,z) so the JS
+        // SpotLight branch can aim its cone. PointLights ignore it.
+        let q = &info.viewer_space_location.orientation;
         out.push(SetupLight {
             part_index: pi,
             x: info.viewer_space_location.origin.x,
@@ -8826,6 +8852,10 @@ fn collect_setup_model_lights<S: holtburger_dat::ResourceSource + ?Sized>(
             intensity: info.intensity,
             falloff: info.falloff,
             cone_angle: info.cone_angle,
+            qx: q.x,
+            qy: q.y,
+            qz: q.z,
+            qw: q.w,
         });
     }
     out
