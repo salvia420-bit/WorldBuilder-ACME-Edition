@@ -1,6 +1,6 @@
 // scene3d/weather/manager.js — ties rain + snow + lightning to weather_state.
 //
-// One tick per frame: reads `getWeatherState()` (is_storm + temperature),
+// One tick per frame: reads `readWeatherFlags()` (is_storm + temperature),
 // applies intensities, then delegates to the systems. URL knobs (`?rain=on`,
 // `?lightning=on`, `?rain=off`, `?lightning=off`, `?snow=on`, `?snow=off`,
 // `?thunderDid=0x...`) parse once at construct time and override the
@@ -19,7 +19,7 @@
 import { RainSystem } from "./rain.js";
 import { SnowSystem } from "./snow.js";
 import { LightningSystem } from "./lightning.js";
-import { getWeatherState } from "../weather_state.js";
+import { readWeatherFlags } from "../weather_state.js";
 
 const STORM_RAIN_INTENSITY = 1.0;
 const STORM_SNOW_INTENSITY = 1.0;
@@ -83,6 +83,9 @@ export class WeatherEffectsManager {
       streakGfxId: 0,   // W1/W2: precip-mesh DID for type selection
       hasDroplets: false,
     };
+
+    // Reusable scratch for the per-frame weather-flags read (zero-alloc).
+    this._wxFlags = { is_storm: false, temperature_C: NaN };
   }
 
   /**
@@ -118,7 +121,7 @@ export class WeatherEffectsManager {
     let storm = false;
     let temperatureC = NaN;
     try {
-      const s = getWeatherState();
+      const s = readWeatherFlags(this._wxFlags);
       storm = !!s?.is_storm;
       temperatureC = Number.isFinite(s?.temperature_C) ? s.temperature_C : NaN;
     } catch (_) {}

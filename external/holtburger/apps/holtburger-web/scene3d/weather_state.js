@@ -236,6 +236,21 @@ export function getWeatherState() {
   };
 }
 
+/**
+ * Zero-alloc per-frame accessor for the two fields the weather Manager
+ * tick reads (`is_storm` + `temperature_C`). Pass a reusable scratch
+ * object as `out`; it is filled and returned (one is allocated if
+ * omitted). Unlike getWeatherState() this never allocates per call,
+ * which matters in the per-frame tick path. getWeatherState() stays the
+ * full read-only snapshot for cloud_volume and devtools.
+ */
+export function readWeatherFlags(out) {
+  const dst = out || {};
+  dst.is_storm = state.is_storm;
+  dst.temperature_C = state.temperature_C;
+  return dst;
+}
+
 // Initialise derived fields on module load.
 recompute();
 

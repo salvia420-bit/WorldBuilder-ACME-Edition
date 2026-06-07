@@ -481,7 +481,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     dispose() {
       composer.passes.forEach((p) => p.dispose?.());
       aerialPerspective.dispose?.();
-      lensFlare.dispose?.();
+      lensFlare?.dispose?.();
       bloom?.dispose?.();
       vignette?.dispose?.();
       toneMapping.dispose?.();

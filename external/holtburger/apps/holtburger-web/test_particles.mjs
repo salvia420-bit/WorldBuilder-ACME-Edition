@@ -673,6 +673,111 @@ check(
 }
 
 // ============================================================
+// Test 11b: addEmitter snapshots parentOffset BY VALUE at entry (#17)
+// ------------------------------------------------------------
+// Regression guard for C5-async-liveness: addEmitter awaits the
+// geometry/material factories before parenting. If the caller mutates
+// the shared offset frame while those awaits are pending, the emitter
+// must STILL parent to the offset as it was at addEmitter() entry — the
+// fix snapshots offsetFrame synchronously up front. Also exercises the
+// plain-POJO offset path ({x,y,z} / {w,x,y,z} without THREE methods).
+// ============================================================
+{
+  mockTime = 0;
+  mockRngVal = 0.5;
+
+  // --- THREE-instance offset, mutated mid-await -----------------------
+  const scene = new THREE.Scene();
+  // Deferred geometryFactory: resolves only when we fire `release`, so we
+  // can mutate the shared offset between addEmitter() and resolve.
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const mgr = new ParticleManager({
+    scene,
+    geometryFactory: async (_) => { await gate; return new THREE.BufferGeometry(); },
+    materialFactory: async (_) => new THREE.MeshBasicMaterial({ transparent: true }),
+  });
+
+  const sharedOffset = {
+    position: new THREE.Vector3(7, 8, 9),
+    quaternion: new THREE.Quaternion(),
+  };
+  const addPromise = mgr.addEmitter({
+    emitterInfo: makeBaseInfo({
+      particleType: ParticleType.Still,
+      maxParticles: 1,
+      totalParticles: 1,
+      totalSeconds: 0,
+      lifespan: 2.0,
+      lifespanRand: 0,
+    }),
+    parent: { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() },
+    partIndex: -1,
+    parentOffset: sharedOffset,
+  });
+  // Mutate the shared frame BEFORE the deferred factory resolves — a
+  // late read inside addEmitter would pick up these mutated values.
+  sharedOffset.position.set(111, 222, 333);
+  release();
+  const id = await addPromise;
+  const emitter = mgr.particleTable.get(id);
+  check(
+    "Test 11b: parentOffset snapshot survives mid-await mutation (THREE instance)",
+    !!emitter
+      && approx(emitter.parentOffset.position.x, 7)
+      && approx(emitter.parentOffset.position.y, 8)
+      && approx(emitter.parentOffset.position.z, 9),
+    emitter
+      ? `parentOffset.position=(${emitter.parentOffset.position.x}, ${emitter.parentOffset.position.y}, ${emitter.parentOffset.position.z}) expected (7, 8, 9)`
+      : "emitter not found"
+  );
+  // The snapshot must be a distinct object — not an alias of the caller's
+  // frame — so future caller mutations cannot reach into the emitter.
+  check(
+    "Test 11b: snapshot is a copy, not an alias of caller's offset",
+    !!emitter && emitter.parentOffset.position !== sharedOffset.position,
+    "emitter.parentOffset.position must be a fresh Vector3"
+  );
+
+  // --- plain-POJO offset path -----------------------------------------
+  const scene2 = new THREE.Scene();
+  const mgr2 = new ParticleManager({
+    scene: scene2,
+    geometryFactory: async (_) => new THREE.BufferGeometry(),
+    materialFactory: async (_) => new THREE.MeshBasicMaterial({ transparent: true }),
+  });
+  const id2 = await mgr2.addEmitter({
+    emitterInfo: makeBaseInfo({
+      particleType: ParticleType.Still,
+      maxParticles: 1,
+      totalParticles: 1,
+      totalSeconds: 0,
+      lifespan: 2.0,
+      lifespanRand: 0,
+    }),
+    parent: { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() },
+    partIndex: -1,
+    // Bare POJOs, no .clone()/.copy() — exercises the `?? new THREE...`
+    // fallback in the snapshot.
+    parentOffset: {
+      position: { x: 1, y: 2, z: 3 },
+      quaternion: { x: 0, y: 0, z: 0, w: 1 },
+    },
+  });
+  const emitter2 = mgr2.particleTable.get(id2);
+  check(
+    "Test 11b: plain-POJO offset is accepted and snapshotted",
+    !!emitter2
+      && approx(emitter2.parentOffset.position.x, 1)
+      && approx(emitter2.parentOffset.position.y, 2)
+      && approx(emitter2.parentOffset.position.z, 3),
+    emitter2
+      ? `parentOffset.position=(${emitter2.parentOffset.position.x}, ${emitter2.parentOffset.position.y}, ${emitter2.parentOffset.position.z}) expected (1, 2, 3)`
+      : "emitter not found"
+  );
+}
+
+// ============================================================
 // Test 12: ParticleEmitterInfo random helpers
 // ============================================================
 {

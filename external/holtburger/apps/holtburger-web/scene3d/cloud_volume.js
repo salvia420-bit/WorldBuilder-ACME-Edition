@@ -371,12 +371,18 @@ export class CloudVolume {
    * Tear-down. Frees the underlying CloudsEffect's GPU resources.
    */
   dispose() {
-    if (this.effect && typeof this.effect.dispose === 'function') {
-      this.effect.dispose();
-    }
+    // Sole owner of the CloudsEffect: CloudOverlay detaches the
+    // EffectPass before composer.dispose() so the effect is freed here
+    // only. Null `this.effect` FIRST so a re-entrant dispose() (or a
+    // racing tick reading this.effect) sees the torn-down state and
+    // never double-disposes.
+    const effect = this.effect;
     this.effect = null;
     this.material = null;
     this._lastState = null;
+    if (effect && typeof effect.dispose === 'function') {
+      effect.dispose();
+    }
   }
 }
 

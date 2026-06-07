@@ -608,6 +608,13 @@ export class CloudOverlay {
       this.overlayMesh.geometry.dispose();
       this.overlayMaterial.dispose();
       this._stbnTex?.dispose?.();
+      // Single-owner cloud teardown: detach the cloud EffectPass from
+      // the composer BEFORE composer.dispose() so EffectComposer does
+      // not dispose the wrapped CloudsEffect. CloudVolume.dispose() is
+      // the sole owner that frees the effect's GPU resources.
+      if (this.composer && this._cloudEffectPass) {
+        this.composer.removePass(this._cloudEffectPass);
+      }
       this.composer?.dispose?.();
       this.volume.dispose();
     } catch (err) {

@@ -282,8 +282,8 @@ void main() {
       // Per-light pulse phase from position hash, scaled to a full
       // cycle so the asterisk lights start out of sync.
       float mlPhase   = mhash21(mlPos * 31.7) * 6.2831853;
-      float mlPulse   = 0.45 + 0.55 * sin(t * 6.2831853 / mlPer + mlPhase);
-      float mlTwinkle = 0.80 + 0.30 * sin(t * 11.0 + mlPhase * 2.1);
+      float mlPulse   = 0.45 + 0.55 * sin(tm * 6.2831853 / mlPer + mlPhase);
+      float mlTwinkle = 0.80 + 0.30 * sin(tm * 11.0 + mlPhase * 2.1);
       float mlScale   = mlBri * mlPulse * mlTwinkle * uCityIntensity;
       microEmission += neon * (mlCore * 1.4 + mlHalo) * mlScale;
       microAlphaAcc  = max(microAlphaAcc, (mlCore * 0.8 + mlHalo) * mlScale);

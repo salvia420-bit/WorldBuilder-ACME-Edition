@@ -133,6 +133,33 @@ export class ParticleManager {
       emitterId = 0,
     } = req;
 
+    // C5 (async liveness): snapshot the offset frame BY VALUE at entry,
+    // BEFORE any await below. `parentOffset` is often a shared/scratch
+    // frame the caller may mutate (e.g. overlapping CreateParticle
+    // chains reusing one entity frame) while geometryFactory /
+    // materialFactory / setInfo are still pending; a late read would
+    // parent this emitter to whatever the offset became by resolve time.
+    // Accept THREE instances (clone) AND plain {x,y,z}/{w,x,y,z} POJOs.
+    const offsetFrame = {
+      position: parentOffset
+        ? (parentOffset.position?.clone?.()
+            ?? new THREE.Vector3(
+              parentOffset.position?.x ?? 0,
+              parentOffset.position?.y ?? 0,
+              parentOffset.position?.z ?? 0,
+            ))
+        : new THREE.Vector3(0, 0, 0),
+      quaternion: parentOffset
+        ? (parentOffset.quaternion?.clone?.()
+            ?? new THREE.Quaternion(
+              parentOffset.quaternion?.x ?? 0,
+              parentOffset.quaternion?.y ?? 0,
+              parentOffset.quaternion?.z ?? 0,
+              parentOffset.quaternion?.w ?? 1,
+            ))
+        : new THREE.Quaternion(),
+    };
+
     // ACE: if emitterID is non-zero and already in table, REMOVE old
     // entry first (CreateParticleEmitter, line 28-29).
     if (emitterId !== 0 && this.particleTable.has(emitterId)) {
@@ -233,10 +260,6 @@ export class ParticleManager {
     if (!ok) {
       return 0;
     }
-    const offsetFrame = parentOffset ?? {
-      position: new THREE.Vector3(0, 0, 0),
-      quaternion: new THREE.Quaternion(),
-    };
     if (!emitter.setParenting(partIndex, offsetFrame)) {
       return 0;
     }

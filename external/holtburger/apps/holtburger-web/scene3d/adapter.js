@@ -320,9 +320,9 @@ export function subdividedLandblockMeshToGeometry(wasmSub) {
  * and the bytes are copied directly into the array texture buffer.
  */
 export function buildTerrainAtlasArrayBytes(terrainTextures) {
-  if (!Array.isArray(terrainTextures) && !terrainTextures.length) {
+  if (!Array.isArray(terrainTextures) || terrainTextures.length === 0) {
     throw new Error(
-      `buildTerrainAtlasArrayBytes: terrainTextures is not array-like (got ${typeof terrainTextures})`
+      `buildTerrainAtlasArrayBytes: terrainTextures is not a non-empty array (got ${typeof terrainTextures}, length ${terrainTextures?.length})`
     );
   }
   if (terrainTextures.length !== ATLAS_DEPTH) {
