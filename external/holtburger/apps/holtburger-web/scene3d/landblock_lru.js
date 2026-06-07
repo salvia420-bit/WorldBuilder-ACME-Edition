@@ -80,7 +80,7 @@ export class LandblockLRU {
     this.debug = !!debug;
 
     // Map<lbKey, { lastTouchMs: number, disposables: { geometries:[],
-    //   materials:[], textures:[] } }>
+    //   materials:[], textures:[], lights:[] } }>
     this.entries = new Map();
 
     this._evictedTotal = 0;
@@ -99,11 +99,15 @@ export class LandblockLRU {
     if (!entry) {
       entry = {
         lastTouchMs: now,
-        disposables: { geometries: [], materials: [], textures: [] },
+        disposables: { geometries: [], materials: [], textures: [], lights: [] },
       };
       this.entries.set(key, entry);
     } else {
       entry.lastTouchMs = now;
+      // Back-compat: entries created before the lights bucket existed
+      // (or by a stale shape) get it lazily so the append below + evict
+      // step 5b never touch undefined.
+      if (!Array.isArray(entry.disposables.lights)) entry.disposables.lights = [];
     }
     if (Array.isArray(options.geometries)) {
       for (const g of options.geometries) if (g) entry.disposables.geometries.push(g);
@@ -113,6 +117,12 @@ export class LandblockLRU {
     }
     if (Array.isArray(options.textures)) {
       for (const t of options.textures) if (t) entry.disposables.textures.push(t);
+    }
+    // C3 #6 — track per-LB SetupModel light instances so eviction can
+    // splice/detach/dispose them synchronously. Callers omitting
+    // `options.lights` behave exactly as before (back-compatible).
+    if (Array.isArray(options.lights)) {
+      for (const l of options.lights) if (l) entry.disposables.lights.push(l);
     }
   }
 
@@ -236,6 +246,37 @@ export class LandblockLRU {
         }
       }
       for (const id of killIds) s.cellContainers3d.delete(id);
+    }
+
+    // 5b. C3 #6 — release per-LB SetupModel lights SYNCHRONOUSLY before
+    //    the geom/mat/tex loops (and before `entries.delete`) so the
+    //    next frame's `capActiveLightsByDistance` never sorts/sees a
+    //    stale, detached light. This INLINES lighting.js#releaseLight
+    //    (splice scene3d.activeLights → detach from parent → dispose)
+    //    to keep landblock_lru a ZERO-IMPORT leaf (no cycle with
+    //    lighting.js, which imports lbKeyOf from here). Fail-soft.
+    const tracked = entry.disposables.lights;
+    if (Array.isArray(tracked) && tracked.length > 0) {
+      const activeLights = s.activeLights;
+      for (const light of tracked) {
+        if (!light) continue;
+        try {
+          if (Array.isArray(activeLights)) {
+            const idx = activeLights.indexOf(light);
+            if (idx !== -1) activeLights.splice(idx, 1);
+          }
+        } catch (_) {}
+        try {
+          if (light.parent && typeof light.parent.remove === "function") {
+            light.parent.remove(light);
+          } else if (typeof light.removeFromParent === "function") {
+            light.removeFromParent();
+          }
+        } catch (_) {}
+        try {
+          if (typeof light.dispose === "function") light.dispose();
+        } catch (_) {}
+      }
     }
 
     // 5. Dispose per-LB owned resources. Skip anything tagged

@@ -105,6 +105,13 @@ function loadModule(relPath) {
         /^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/csm\.js["'];?\s*$/m,
         ""
     );
+    // Strip relative `./landblock_lru.js` import (B10 #6, 2026-06-07);
+    // a `lbKeyOf` shim is prepended to the composite below so the
+    // imported name resolves.
+    src = src.replace(
+        /^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/landblock_lru\.js["'];?\s*$/m,
+        ""
+    );
     return src;
 }
 
@@ -120,10 +127,17 @@ function stripExports(src) {
 
 const csmSrc = loadModule("scene3d/csm.js");
 const lightingSrc = loadModule("scene3d/lighting.js");
+// B10 #6 — lighting.js now imports `lbKeyOf` from landblock_lru.js. Shim
+// it (same 16-bit-key mask the module exports) so the stripped import
+// resolves in this closure-eval harness.
+const lbKeyOfShim =
+    "const LB_KEY_MASK = 0xffff_0000 >>> 0;\n" +
+    "function lbKeyOf(idOrKey) { return (idOrKey & LB_KEY_MASK) >>> 0; }\n";
 const composite =
+    "// === landblock_lru.js (lbKeyOf shim) ===\n" + lbKeyOfShim + "\n" +
     "// === csm.js ===\n" + stripExports(csmSrc) + "\n" +
     "// === lighting.js ===\n" + stripExports(lightingSrc) + "\n" +
-    "; return { setupSceneLighting, tickLightingForCellState, attachSetupModelLights, buildLightForSetupLight, LIGHTING_CONSTANTS };";
+    "; return { setupSceneLighting, tickLightingForCellState, attachSetupModelLights, buildLightForSetupLight, releaseLight, LIGHTING_CONSTANTS };";
 
 const factory = new Function("THREE", composite);
 const lightingMod = factory(THREE);

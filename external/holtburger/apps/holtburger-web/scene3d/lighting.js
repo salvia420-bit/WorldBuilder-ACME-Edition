@@ -56,6 +56,7 @@
 
 import * as THREE from "three";
 import { setupCsm, updateCsm, refreshCsmUniforms } from "./csm.js";
+import { lbKeyOf } from "./landblock_lru.js";
 
 // Default sun direction in three.js world space (Y-up). 45° down +
 // east-ish so hillshading on the south-facing slopes of Holtburg
@@ -492,12 +493,25 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
           }
           if (diurnal && diurnal.color && ambient.color) {
             const c = diurnal.color;
+            // #16 (2026-06-07) — the ARGB ambient snapshot is authored in
+            // sRGB; decode to linear so the tint matches retail (parity
+            // with the SetupLight color fix below). Decode the target
+            // into a reusable scratch Color FIRST so the change gate
+            // still compares linear-vs-linear (otherwise the stored
+            // linear ambient.color.r would never equal the sRGB c.r and
+            // we'd re-set every frame).
+            let want = scene3d._ambientColorScratch;
+            if (!want || typeof want.setRGB !== "function") {
+              want = new THREE.Color();
+              scene3d._ambientColorScratch = want;
+            }
+            want.setRGB(c.r, c.g, c.b, THREE.SRGBColorSpace);
             if (
-              Math.abs(ambient.color.r - c.r) > 1e-4 ||
-              Math.abs(ambient.color.g - c.g) > 1e-4 ||
-              Math.abs(ambient.color.b - c.b) > 1e-4
+              Math.abs(ambient.color.r - want.r) > 1e-4 ||
+              Math.abs(ambient.color.g - want.g) > 1e-4 ||
+              Math.abs(ambient.color.b - want.b) > 1e-4
             ) {
-              ambient.color.setRGB(c.r, c.g, c.b);
+              ambient.color.copy(want);
             }
           }
         }
@@ -700,6 +714,42 @@ function capActiveLightsByDistance(scene3d) {
 function sortByDistSq(a, b) { return a.distSq - b.distSq; }
 
 /**
+ * C3 #6 — release a SetupModel light: splice it out of
+ * `scene3d.activeLights` (so next frame's `capActiveLightsByDistance`
+ * never sorts/sees a stale detached light), detach it from its parent
+ * Object3D, and dispose it. Fail-soft + idempotent (releasing a light
+ * already absent from activeLights / already detached is a no-op).
+ *
+ * Exported so `entities.js` (entity-attached SetLight lights) can adopt
+ * the same release path on `remove()`. The landblock LRU keeps a
+ * zero-import leaf and INLINES the equivalent splice/detach/dispose in
+ * its `evict()` (it must not import this module — cycle avoidance).
+ *
+ * @param {Object} scene3d - the live `liveScene3d` shape (may be null).
+ * @param {THREE.Light} light - the light to release (may be null).
+ */
+export function releaseLight(scene3d, light) {
+  if (!light) return;
+  try {
+    const lights = scene3d?.activeLights;
+    if (Array.isArray(lights)) {
+      const idx = lights.indexOf(light);
+      if (idx !== -1) lights.splice(idx, 1);
+    }
+  } catch (_) { /* fail-soft */ }
+  try {
+    if (light.parent && typeof light.parent.remove === "function") {
+      light.parent.remove(light);
+    } else if (typeof light.removeFromParent === "function") {
+      light.removeFromParent();
+    }
+  } catch (_) { /* fail-soft */ }
+  try {
+    if (typeof light.dispose === "function") light.dispose();
+  } catch (_) { /* fail-soft */ }
+}
+
+/**
  * Phase 7.6.1 (3D port follow-on #1) — per-SetupModel point/spot
  * lights.
  *
@@ -746,6 +796,13 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
     modelsWithLights: 0,
     noLightModels: 0,
     wasmExportMissing: false,
+    // C3 #6 — per-lb-key bucket of the light instances attached on this
+    // pass, so the caller (index.js `_rescanSetupLights`) can fan them
+    // into `landblockLru.track(lbKey, { lights })` for synchronous
+    // splice/detach/dispose on eviction. Entity-rig lights get NO lbKey
+    // (owned by entities.js remove()) so they never land here.
+    /** @type {Map<number, THREE.Light[]>} */
+    lightsByLbKey: new Map(),
   };
 
   if (!scene3d) return summary;
@@ -785,7 +842,12 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
   // Entities (`entities.js`) — each entity rig has per-part Group
   // children. Same convention as buildings; we'd reach them via
   // `scene3d.entityManager.entityMap` (Map<guid, { root, parts: [Group, ...] }>).
-  /** @type {Map<number, Array<{ partIndex: number, object3D: any }>>} */
+  // C3 #6 — each entry also carries the resolved `lbKey` (16-bit packed
+  // landblock key) of the placement it belongs to, so the attach loop
+  // can stamp `inst.userData.__lbKey` and bucket the instance into
+  // `summary.lightsByLbKey` for eviction. `lbKey === null` means the
+  // owner manages the light's lifecycle itself (entity rigs).
+  /** @type {Map<number, Array<{ partIndex: number, object3D: any, lbKey: number|null }>>} */
   const partsBySetupId = new Map();
 
   function recordBuildingTree(buildingsGroup) {
@@ -802,6 +864,10 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // light to every existing placement and pile up duplicates.
       if (ud.__setupLightScanned) continue;
       ud.__setupLightScanned = true;
+      // C3 #6 — resolve the placement's lb-key off its userData
+      // landblockId (full 32-bit; mask via lbKeyOf) so eviction can
+      // splice this placement's lights.
+      const lbKey = ud.landblockId != null ? lbKeyOf(ud.landblockId >>> 0) : null;
       // partGroups is an array of hingeWrappers (Phase 7.2 stash);
       // their `.userData.partIndex` is dense from 0.
       const partGroups =
@@ -820,7 +886,7 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
           (partGroup.userData?.partIndex ?? -1) >>> 0 >= 0
             ? partGroup.userData?.partIndex ?? 0
             : 0;
-        entry.push({ partIndex: pi, object3D: partGroup });
+        entry.push({ partIndex: pi, object3D: partGroup, lbKey });
       }
     }
   }
@@ -834,6 +900,9 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // Idempotency tag (GAP 2) — see recordBuildingTree.
       if (ud.__setupLightScanned) continue;
       ud.__setupLightScanned = true;
+      // C3 #6 — resolve the static's lb-key (walk-up off userData
+      // landblockId) so eviction can splice this static's lights.
+      const lbKey = ud.landblockId != null ? lbKeyOf(ud.landblockId >>> 0) : null;
       // Fused mesh — treat as part 0. Capture-script side asserts
       // `light.parent === mesh` for statics with lights.
       let entry = partsBySetupId.get(modelId);
@@ -841,7 +910,7 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
         entry = [];
         partsBySetupId.set(modelId, entry);
       }
-      entry.push({ partIndex: 0, object3D: mesh });
+      entry.push({ partIndex: 0, object3D: mesh, lbKey });
     }
   }
 
@@ -864,14 +933,17 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
         entry = [];
         partsBySetupId.set(setupId, entry);
       }
+      // C3 #6 — entity-rig lights are owned by entities.js `remove()`
+      // (it detaches/disposes per-rig lights), so they get NO __lbKey
+      // and are NEVER bucketed into lightsByLbKey. Pass lbKey: null.
       for (let pi = 0; pi < parts.length; pi += 1) {
         const p = parts[pi];
-        if (p) entry.push({ partIndex: pi, object3D: p });
+        if (p) entry.push({ partIndex: pi, object3D: p, lbKey: null });
       }
       // If no per-part groups were tracked, fall back to attaching at
       // the rig root as part 0.
       if (parts.length === 0) {
-        entry.push({ partIndex: 0, object3D: root });
+        entry.push({ partIndex: 0, object3D: root, lbKey: null });
       }
     });
   }
@@ -898,12 +970,16 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
         if (!modelId) continue;
         if (ud.__setupLightScanned) continue;
         ud.__setupLightScanned = true;
+        // C3 #6 — resolve the cell static's lb-key from its cellId
+        // (cellId & 0xffff_0000 === lbKey) so eviction can splice this
+        // interior prop's lights.
+        const lbKey = ud.cellId != null ? lbKeyOf(ud.cellId >>> 0) : null;
         let entry = partsBySetupId.get(modelId);
         if (!entry) {
           entry = [];
           partsBySetupId.set(modelId, entry);
         }
-        entry.push({ partIndex: 0, object3D: mesh });
+        entry.push({ partIndex: 0, object3D: mesh, lbKey });
       }
     }
   }
@@ -975,7 +1051,7 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // placement setups never pay the template cost.
       /** @type {ReturnType<typeof getOrBuildLightTemplate>|null} */
       let template = null;
-      for (const { partIndex, object3D } of partEntries) {
+      for (const { partIndex, object3D, lbKey } of partEntries) {
         if (partIndex !== targetPartIndex) continue;
         // Per-placement instance. First placement reuses the source
         // light (zero allocation beyond what `makeThreeLightForSetupLight`
@@ -998,6 +1074,22 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
         summary.lightCount += 1;
         if (inst.isPointLight) summary.pointLightCount += 1;
         else if (inst.isSpotLight) summary.spotLightCount += 1;
+        // C3 #6 — stamp the per-light-instance lb-key (NEVER the shared
+        // template params) and bucket into lightsByLbKey so the caller
+        // can hand this LB's lights to `landblockLru.track(lbKey,
+        // {lights})` for splice/detach/dispose on eviction. Entity-rig
+        // lights carry lbKey === null and are skipped (owned by
+        // entities.js remove()).
+        if (lbKey != null) {
+          if (!inst.userData) inst.userData = {};
+          inst.userData.__lbKey = lbKey >>> 0;
+          let bucket = summary.lightsByLbKey.get(lbKey >>> 0);
+          if (!bucket) {
+            bucket = [];
+            summary.lightsByLbKey.set(lbKey >>> 0, bucket);
+          }
+          bucket.push(inst);
+        }
       }
       if (!attachedAny) {
         // No matching part for this light's partIndex — possible
@@ -1218,10 +1310,18 @@ function makeThreeLightForSetupLight(sl) {
   // infinite reach, unchanged).
   const safeFalloff =
     Number.isFinite(falloff) && falloff > 0 ? falloff * STATIC_LIGHT_FACTOR : 0;
-  const color = new THREE.Color(
+  // #16 (2026-06-07) — AC's LightInfo color channels are authored in
+  // gamma/sRGB space (the same space the DAT textures live in). With
+  // three.js ColorManagement enabled (the renderer's default), a bare
+  // `new THREE.Color(r,g,b)` treats the triple as already-linear and
+  // skips the sRGB→linear decode, over-brightening + desaturating every
+  // lantern/brazier tint. `setRGB(r,g,b, SRGBColorSpace)` does the
+  // decode so the linear color the shader sees matches the authored hue.
+  const color = new THREE.Color().setRGB(
     Number.isFinite(r) ? r : 1,
     Number.isFinite(g) ? g : 1,
-    Number.isFinite(b) ? b : 1
+    Number.isFinite(b) ? b : 1,
+    THREE.SRGBColorSpace
   );
   let lightObj;
   if (Number.isFinite(coneAngle) && coneAngle > 0) {

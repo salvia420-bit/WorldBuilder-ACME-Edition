@@ -2142,6 +2142,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       this._setupLightsRescanChain = Promise.resolve(this._setupLightsRescanChain)
         .catch(() => {})
         .then(() => attachSetupModelLights(self, self.wasmExports))
+        .then((summary) => {
+          // C3 #6 — fan the per-lb-key light buckets into the LRU so
+          // eviction can splice/detach/dispose each LB's SetupModel
+          // lights synchronously (lighting.js#releaseLight equivalent,
+          // inlined in evict() step 5b). track() is back-compatible —
+          // it appends `options.lights` to the existing disposables.
+          try {
+            const byKey = summary?.lightsByLbKey;
+            if (byKey && typeof byKey.forEach === "function" && self.landblockLru) {
+              byKey.forEach((lights, lbKey) => {
+                if (Array.isArray(lights) && lights.length > 0) {
+                  self.landblockLru.track(lbKey, { lights });
+                }
+              });
+            }
+          } catch (_) { /* fail-soft */ }
+          return summary;
+        })
         .catch((e) => {
           // eslint-disable-next-line no-console
           console.warn("[lighting] _rescanSetupLights failed:", e);
@@ -3285,6 +3303,20 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       };
       trackByLandblockUd(liveScene3d.buildingsGroup?.children);
       trackByLandblockUd(liveScene3d.staticsGroup?.children);
+      // C3 #6 — the boot-time `attachSetupModelLights` (line ~1338) ran
+      // BEFORE this LRU existed, so its lights couldn't be tracked then.
+      // Fan its `lightsByLbKey` buckets in now so the initial ring's
+      // SetupModel lights are spliced/disposed on eviction. (Per-LB
+      // re-scans after streaming use `_rescanSetupLights`, which fans
+      // its own summary.)
+      const bootByKey = scene3dForBuilders.setupLightsSummary?.lightsByLbKey;
+      if (bootByKey && typeof bootByKey.forEach === "function") {
+        bootByKey.forEach((lights, lbKey) => {
+          if (Array.isArray(lights) && lights.length > 0) {
+            landblockLru.track(lbKey, { lights });
+          }
+        });
+      }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[lbLru] initial-ring bulk-track failed:", e);
