@@ -1188,6 +1188,7 @@
         fetchBuildingPlacement,
         fetchSetupModelLights,
         populateBuildingAabbsForLandblock,
+        populateStaticsAabbsForLandblock,
         populateSkyDescFromRegion,
         fetchEnvCellsInLandblock,
         // Sky-J P3 + H3-C: PhysicsScript / ParticleEmitter / Wave fetch.
@@ -5717,6 +5718,20 @@ void main() {
             console.log(
               `[phase6.B] queued ${count} building AABBs for landblock 0x${lbId.toString(16).padStart(8, "0")}`
             );
+            // B4 Tier-1: also bake outdoor static (tree/sign/prop) AABBs for
+            // this landblock so the player integrator's static-collision
+            // clamp engages. Same trigger/dedup as the building pass; its own
+            // try so a static failure doesn't disturb building bookkeeping.
+            try {
+              const sCount = await populateStaticsAabbsForLandblock(lbId);
+              console.log(
+                `[b4] queued ${sCount} static AABBs for landblock 0x${lbId.toString(16).padStart(8, "0")}`
+              );
+            } catch (se) {
+              console.warn(
+                `[b4] populateStaticsAabbsForLandblock(0x${lbId.toString(16)}) failed:`, se
+              );
+            }
           } catch (e) {
             console.warn(
               `[phase6.B] populateBuildingAabbsForLandblock(0x${lbId.toString(16)}) failed:`, e
@@ -6878,6 +6893,7 @@ void main() {
             fetchBuildingPlacement,
             fetchSetupModelLights,
             populateBuildingAabbsForLandblock,
+            populateStaticsAabbsForLandblock,
             fetchEnvCellsInLandblock,
             // Sky-J P3 + H3-C — wire the PhysicsScript/ParticleEmitter/
             // Wave fetch through to scene3d so:

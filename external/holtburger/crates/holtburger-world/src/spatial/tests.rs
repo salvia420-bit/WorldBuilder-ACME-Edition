@@ -646,16 +646,36 @@ fn reconcile_local_force_position_pulls_working_pose_toward_target_over_ticks() 
     assert_eq!(body.authoritative_pose, Some(forced));
     // The simulating mode is retained — the integrator keeps driving.
     assert_eq!(body.sampling.mode, SpatialSampleMode::SimulatingVelocity);
-    // The working pose was pulled toward the target. With a 3 m gap and
-    // a 10 m leash the gap collapses (we land on the target this tick),
-    // but never overshoots away from it.
-    let after_dist = body.pose.distance_to(&forced);
+    // With `USE_RETAIL_INTERPOLATE` on (now the shipped path), a sub-blip
+    // force-position INSTALLS the retail `ConstrainTo`+`InterpolateTo`
+    // interpolator and does NOT move the working pose this tick — the
+    // per-frame stepper eases it (no one-tick snap-back).
     assert!(
-        after_dist < start_dist,
-        "working pose should move toward target: {after_dist} < {start_dist}"
+        body.force_position_interp.is_interpolating(),
+        "sub-blip gap installs the retail interpolator"
     );
-    assert!(after_dist <= 1e-3, "3 m gap is within the 10 m leash → converges");
+    assert!(
+        (body.pose.distance_to(&forced) - start_dist).abs() < 1e-3,
+        "reconcile alone must not move the working pose (the stepper eases it)"
+    );
     assert_eq!(body.pose.landblock_id, lb, "stays in the forced landblock");
+
+    // Drive the per-frame interpolator: the gap eases monotonically toward
+    // the target and lands in the 0.05 m dead-band within a few frames.
+    let mut prev = scene.body(body_id).unwrap().pose.distance_to(&forced);
+    let mut converged = false;
+    for _ in 0..120 {
+        scene.step_force_position_interpolation(body_id, 0.016, 36.0, true);
+        let d = scene.body(body_id).unwrap().pose.distance_to(&forced);
+        assert!(d <= prev + 1e-4, "monotonic ease toward target: {d} <= {prev}");
+        prev = d;
+        if d <= 0.05 {
+            converged = true;
+            break;
+        }
+    }
+    assert!(converged, "interpolator eases into the 0.05 m dead-band within 120 frames");
+    assert_eq!(scene.body(body_id).unwrap().pose.landblock_id, lb);
 }
 
 /// Physics deep-dive 2026-06-01 (gap 4): a force-position beyond the
@@ -720,15 +740,14 @@ fn reconcile_local_force_position_preserves_far_and_holds_within_deadband() {
     assert_eq!(scene.body(body_id2).unwrap().pose, drifted);
 }
 
-/// Physics deep-dive 2026-06-01 (gap 4, opt-in `USE_RETAIL_INTERPOLATE`):
-/// with the faithful-interpolate flag DEFAULT-OFF, the shipped solver
-/// behaviour is unchanged — the per-frame stepper is a NO-OP and the
-/// per-message single-step constraint-pull still runs. This guards that
-/// the opt-in path does not leak into the shipped path. (When the flag is
-/// flipped on the curve itself is exercised by the
-/// `force_position_interp` unit tests.)
+/// Physics deep-dive 2026-06-01 (gap 4): `USE_RETAIL_INTERPOLATE` is now
+/// the shipped path. A sub-blip force-position INSTALLS the retail
+/// `ConstrainTo`+`InterpolateTo` interpolator (it does NOT single-step
+/// collapse the gap), and the per-frame stepper ADVANCES the working pose
+/// toward the target instead of being a no-op. (The easing curve itself
+/// is also covered by the `force_position_interp` unit tests.)
 #[test]
-fn force_position_interpolation_stepper_is_noop_while_flag_default_off() {
+fn force_position_interpolation_stepper_advances_when_flag_on() {
     let mut scene = SpatialScene::new();
     let now = Instant::now();
     let body_id = SpatialBodyId::LocalPlayer(Guid(0x5000_00AA));
@@ -746,9 +765,8 @@ fn force_position_interpolation_stepper_is_noop_while_flag_default_off() {
     working.sampling.mode = SpatialSampleMode::SimulatingVelocity;
     scene.update_body(working);
 
-    // Reconcile a sub-blip forced pose. With the flag default-off this
-    // runs the shipped single-step constraint-pull (3 m < 10 m leash →
-    // collapses to target) and installs NOTHING on the interpolator.
+    // Reconcile a sub-blip forced pose. With the flag on this INSTALLS the
+    // interpolator and leaves the working pose where it is (no collapse).
     let forced = make(50.0, 50.0);
     scene.reconcile_authoritative_body(
         body_id,
@@ -760,17 +778,23 @@ fn force_position_interpolation_stepper_is_noop_while_flag_default_off() {
     );
 
     let body = scene.body(body_id).unwrap();
-    // Shipped path collapsed the 3 m gap this tick.
-    assert!(body.pose.distance_to(&forced) <= 1e-3);
-    // No retail interpolation installed (flag off).
-    assert!(!body.force_position_interp.is_interpolating());
+    // Interpolator installed; the 3 m gap is NOT collapsed this tick.
+    assert!(body.force_position_interp.is_interpolating());
+    assert!(
+        body.pose.distance_to(&forced) > 1.0,
+        "reconcile installs the ease; it must not snap the 3 m gap shut"
+    );
 
-    // The per-frame stepper is a no-op while the flag is off: returns
-    // Idle and leaves the pose untouched.
-    let before = scene.body(body_id).unwrap().pose;
+    // The per-frame stepper now ADVANCES (not Idle) and moves the pose
+    // toward the target.
+    let before = scene.body(body_id).unwrap().pose.distance_to(&forced);
     let out = scene.step_force_position_interpolation(body_id, 0.016, 36.0, true);
-    assert_eq!(out, InterpStep::Idle);
-    assert_eq!(scene.body(body_id).unwrap().pose, before);
+    assert!(
+        matches!(out, InterpStep::Progressed { .. } | InterpStep::Completed { .. }),
+        "stepper advances while interpolating"
+    );
+    let after = scene.body(body_id).unwrap().pose.distance_to(&forced);
+    assert!(after < before, "stepper eases the pose toward the target");
 }
 
 /// The standalone retail interpolator can be installed and stepped
