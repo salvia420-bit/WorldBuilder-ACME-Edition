@@ -390,6 +390,11 @@ const DYN_LOD_INTERVAL_S = 0.5;
 // every retail script (none nest beyond 2); the walker bails past it.
 const MAX_CALL_PES_DEPTH = 3;
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
+// Track B7 (2026-06-08): spawn-time PhysicsScriptTable prewarm. Reuses the
+// Phase 49 cached facade so the first object-triggered PlayEffect on this
+// entity resolves warm (table + scripts + emitters already in the DAT
+// caches) instead of paying the full cold async chain at cue time.
+import { fetchPhysicsScriptTable } from "../ui/ac_physics_script_table.js";
 // T6: reuse the particle runtime's shared RNG hook so the CallPES delay
 // jitter is the same mockable uniform[0,1) the rest of scene3d/particles
 // draws from (Math.random by default, deterministic under setRng in tests).
@@ -1815,6 +1820,11 @@ export class EntityManager {
     this._soundTimeoutsForGuid = new Map();
     /** @type {Set<number>} */
     this._particleChainsAttached = new Set();
+    // Track B7 (2026-06-08): PhysicsScriptTable DIDs already prewarmed
+    // (spawn-time warm of table + scripts + emitters + ParticleManager)
+    // so the same table isn't re-walked for every entity that shares it.
+    /** @type {Set<number>} */
+    this._prewarmedScriptTables = new Set();
     // F.D-fu3 (2026-05-20): per-guid promise that resolves when the
     // H2 chain walker has fully landed (including all `addEmitter`
     // awaits + setTimeout schedules for Sound hooks). Distinct from
@@ -2755,6 +2765,25 @@ export class EntityManager {
           };
         });
       this._particleChainResolveForGuid.set(guid, resolvePromise);
+    }
+
+    // Track B7 (2026-06-08): if this entity carries a PhysicsScriptTable
+    // (DAT 0x34) it can be the target of an object-triggered PlayEffect
+    // (opcode 0xF755) at any moment. The PlayEffect resolver
+    // (play_effect_vfx.js::_tryResolveRealVfx) walks a COLD async chain
+    // — fetchPhysicsScriptTable → fetchPhysicsScript → per-hook
+    // fetchParticleEmitter, plus the lazy ParticleManager build — which
+    // made the spell effect land 5+s late on first touch. Fire-and-forget
+    // a best-effort prewarm here so those DAT records + the world
+    // ParticleManager are already warm by the time the cue arrives.
+    // Guarded: no-op (and never throws) when the entity has no table DID
+    // or the wasm getters are unavailable.
+    {
+      let tableDid = 0;
+      try { tableDid = (this.getPhysicsScriptTableDid(guid) >>> 0); } catch (_) { tableDid = 0; }
+      if (tableDid !== 0) {
+        this._prewarmPhysicsScriptTable(tableDid, root).catch(() => {});
+      }
     }
     // Follow-on #10 (3D port state doc) — DOM nameplate overlay. Skip
     // the local player (matches the 2D path's `ensureNameplate` skip at
@@ -3859,6 +3888,86 @@ export class EntityManager {
       }
     } catch (_) { /* never break callers */ }
     return 0;
+  }
+
+  /**
+   * Track B7 (2026-06-08): best-effort spawn-time prewarm for an entity
+   * that carries a PhysicsScriptTable (DAT 0x34). Called fire-and-forget
+   * from `_spawnImpl` so the first object-triggered PlayEffect cue on
+   * this entity resolves WARM instead of paying the cold async chain in
+   * `play_effect_vfx.js::_tryResolveRealVfx` (table → script → emitter
+   * fetches + lazy ParticleManager build) that made the effect land 5+s
+   * late.
+   *
+   * What it warms:
+   *   1. The world `ParticleManager` (so the PlayEffect resolver's
+   *      `em._worldParticleManager != null` fast-path is satisfied and it
+   *      doesn't bail to the placeholder for lack of a manager).
+   *   2. The PhysicsScriptTable JSON (Phase 49 cached facade).
+   *   3. A bounded set of the table's PhysicsScripts (0x33) and their
+   *      CreateParticle ParticleEmitters (0x32) — the DAT records the
+   *      resolver will need. Bounded so a table with many PScriptTypes
+   *      doesn't fan out into a huge prefetch storm on every spawn.
+   *
+   * Never throws — every fetch is individually guarded; the caller
+   * attaches a `.catch(() => {})` for belt-and-braces.
+   *
+   * @param {number} tableDid — 0x34xxxxxx PhysicsScriptTable DID (nonzero)
+   * @param {THREE.Object3D} rig — the entity rig, for ParticleManager wiring
+   * @returns {Promise<void>}
+   */
+  async _prewarmPhysicsScriptTable(tableDid, rig) {
+    const td = (tableDid >>> 0);
+    if (td === 0) return;
+    // Dedup: only prewarm a given table DID once per session. The DAT
+    // caches make repeat fetches cheap, but skipping the walk entirely
+    // avoids redundant parse cost when many entities share a table.
+    if (this._prewarmedScriptTables.has(td)) return;
+    this._prewarmedScriptTables.add(td);
+
+    // 1. Warm the world ParticleManager (idempotent — returns the
+    //    existing one when already built).
+    try { await this._ensureWorldParticleManager(rig); } catch (_) {}
+
+    // 2. Warm the table JSON via the cached facade.
+    let table;
+    try { table = await fetchPhysicsScriptTable(td); } catch (_) { table = null; }
+    if (!table || !table.scripts || typeof table.scripts !== "object") return;
+
+    const wasm = this.wasmExports;
+    if (!wasm || typeof wasm.fetchPhysicsScript !== "function") return;
+
+    // 3. Prefetch a bounded set of the resolvable scripts + their
+    //    CreateParticle emitters. Collect unique scriptDids first (the
+    //    same DID can appear under multiple PScriptTypes), then cap.
+    const PREWARM_SCRIPT_CAP = 16;
+    const scriptDids = new Set();
+    for (const key of Object.keys(table.scripts)) {
+      const entries = table.scripts[key];
+      if (!Array.isArray(entries)) continue;
+      for (const ent of entries) {
+        const did = (ent?.scriptDid >>> 0);
+        if (did !== 0) scriptDids.add(did);
+        if (scriptDids.size >= PREWARM_SCRIPT_CAP) break;
+      }
+      if (scriptDids.size >= PREWARM_SCRIPT_CAP) break;
+    }
+
+    const canFetchEmitter = (typeof wasm.fetchParticleEmitter === "function");
+    for (const scriptDid of scriptDids) {
+      let ps;
+      try { ps = await wasm.fetchPhysicsScript(scriptDid); } catch (_) { continue; }
+      if (!ps || typeof ps.takeEntries !== "function" || !canFetchEmitter) continue;
+      let entriesJs;
+      try { entriesJs = ps.takeEntries(); } catch (_) { continue; }
+      if (!Array.isArray(entriesJs)) continue;
+      for (const e of entriesJs) {
+        if (e.hookType !== 13 && e.hookType !== 26) continue;
+        const emitterDid = (e.createParticleEmitterId >>> 0);
+        if (emitterDid === 0) continue;
+        try { await wasm.fetchParticleEmitter(emitterDid); } catch (_) { /* warm-only */ }
+      }
+    }
   }
 
   /**

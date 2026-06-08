@@ -1139,7 +1139,48 @@ const _realVfxStats = {
   missAddEmitter: 0,
   missNoEntity: 0,
   missNoParticleManager: 0,
+  // Track B7 — resolver exceeded the hard deadline; placeholder kept.
+  timedOut: 0,
 };
+
+/**
+ * Track B7 (2026-06-08): hard-deadline wrapper around `_tryResolveRealVfx`.
+ *
+ * The caller has ALREADY shown the synchronous placeholder burst before
+ * invoking this, so the resolver's only job here is the upgrade to real
+ * emitters. A cold chain (first-touch DAT fetches + lazy ParticleManager
+ * build) can take multiple seconds; we cap the wait with a Promise.race
+ * against a short deadline so the upgrade never blocks indefinitely. On
+ * timeout we keep the placeholder already on screen and bump a diag
+ * counter — the in-flight resolver promise is left to settle on its own
+ * (it never throws, and its emitters/cleanup self-manage if it lands
+ * after the deadline).
+ *
+ * @param {number} targetGuid
+ * @param {number} scriptId
+ * @param {number} speed
+ */
+function _tryResolveRealVfxBounded(targetGuid, scriptId, speed) {
+  const DEADLINE_MS = 300;
+  let timer = null;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), DEADLINE_MS);
+  });
+  Promise.race([
+    _tryResolveRealVfx(targetGuid, scriptId, speed),
+    deadline,
+  ]).then((outcome) => {
+    if (outcome === "timeout") {
+      _realVfxStats.timedOut += 1;
+    }
+  }).catch(() => {
+    // Defensive: `_tryResolveRealVfx` contracts to never reject. The
+    // placeholder is already shown, so any unforeseen throw is a no-op
+    // for the user-visible cue.
+  }).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
+}
 
 /**
  * Phase 51 resolver: walk the
@@ -1269,69 +1310,25 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   // 8. We need access to the per-scene `ParticleManager`. The world-
   //    side instance lives on `entityManager._worldParticleManager`,
   //    lazily created on the first H2 chain walk
-  //    (`entities.js::_attachParticleChainForEntity` line ~3446). If
-  //    no entity has ever fired an H2 chain yet (early in the session,
-  //    or in a low-PhysicsScript region), the manager is still null
-  //    — we use the same lazy-create code path.
+  //    (`entities.js::_attachParticleChainForEntity` line ~3446) or by
+  //    the Track B7 spawn-time prewarm. If no entity has ever fired an
+  //    H2 chain / been prewarmed yet (early in the session, or in a
+  //    low-PhysicsScript region), the manager is still null and we fall
+  //    back to the already-shown placeholder for this cue.
   //
-  //    Reuse the existing manager when available; otherwise build one
-  //    by triggering the same dynamic import + factory wiring the H2
-  //    walker uses. We DON'T touch `scene3d/particles/` directly here
-  //    (mandate § "don't refactor scene3d/particles/").
-  let wm = em._worldParticleManager;
-  if (!wm) {
-    // Best-effort lazy create. Mirrors the wiring at entities.js:3446.
-    try {
-      const { ParticleManager } = await import("./particles/index.js");
-      const adapter = await import("./adapter.js");
-      const meshToGeometryGroups = adapter.meshToGeometryGroups;
-      const materialCache = em.materialCache;
-      const resolveGfxObj = async (hwGfxObjId) => {
-        if (!wasmExports || typeof wasmExports.fetchBuildingPlacement !== "function") {
-          return null;
-        }
-        let bundle;
-        try { bundle = await wasmExports.fetchBuildingPlacement(hwGfxObjId); }
-        catch (_) { return null; }
-        if ((bundle.partCount | 0) === 0) {
-          if (typeof bundle.free === "function") bundle.free();
-          return null;
-        }
-        const meshes = bundle.takePartMeshes();
-        if (typeof bundle.free === "function") bundle.free();
-        const wasmMesh = meshes[0];
-        if (!wasmMesh) return null;
-        const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
-        if (typeof wasmMesh.free === "function") wasmMesh.free();
-        if (!groups || groups.length === 0) return null;
-        return {
-          geometry: groups[0].geometry,
-          surfaceDid: groups[0].surfaceDid || surfaceDids[0] || 0,
-        };
-      };
-      wm = new ParticleManager({
-        scene: ls.entitiesGroup ?? inst.root.parent,
-        geometryFactory: async (hwGfxObjId) => {
-          const r = await resolveGfxObj(hwGfxObjId);
-          return r?.geometry ?? null;
-        },
-        materialFactory: async (hwGfxObjId) => {
-          if (!materialCache) return null;
-          const r = await resolveGfxObj(hwGfxObjId);
-          if (!r?.surfaceDid) return null;
-          try {
-            return await materialCache.get(r.surfaceDid, wasmExports.fetch_surfaces_pixels);
-          } catch (_) { return null; }
-        },
-      });
-      em._worldParticleManager = wm;
-    } catch (err) {
-      _realVfxStats.missNoParticleManager += 1;
-      // eslint-disable-next-line no-console
-      console.warn("[play-effect-vfx/real] lazy ParticleManager creation failed:", err);
-      return false;
-    }
-  }
+  //    Reuse the existing manager when available. Track B7 (2026-06-08):
+  //    we NO LONGER build the manager (dynamic import + geometry/material
+  //    factory wiring) inline here. That lazy build runs on the PlayEffect
+  //    critical path and is one of the slow steps that made the spell
+  //    effect land seconds late on first touch. The placeholder burst is
+  //    already on screen by the time this resolver runs, so when the
+  //    manager doesn't exist yet we simply fall back to it (return false)
+  //    and let the H2 entity-spawn chain — or the spawn-time prewarm —
+  //    create `_worldParticleManager`. Subsequent PlayEffects on a warm
+  //    manager then resolve to real emitters. (We DON'T touch
+  //    `scene3d/particles/` directly here either — mandate § "don't
+  //    refactor scene3d/particles/".)
+  const wm = em._worldParticleManager;
   if (!wm) {
     _realVfxStats.missNoParticleManager += 1;
     return false;
@@ -1343,7 +1340,22 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   //    destruction after ONE_SHOT_LIFETIME_MS so PlayEffect bursts
   //    don't accumulate forever (the mandate calls out 2-3 seconds for
   //    Launch/Explode-class events).
+  //
+  //    Track B7 (2026-06-08): honor the per-hook StartTime. Retail
+  //    `ScriptManager::AddScript` schedules each hook at
+  //    `cur_time + data[0].start_time`; we previously spawned every
+  //    emitter at `now`, collapsing scripted timing to t=0 and (with
+  //    the old cold-chain) actually landing them seconds LATE. We now
+  //    fetch the EmitterInfo synchronously (warming the DAT) then defer
+  //    the `wm.addEmitter` visual via setTimeout at the hook's
+  //    StartTime — mirroring the H2 chain-walker arms at
+  //    entities.js:~6649 / ~6738. `spawnedEmitterIds` is shared with
+  //    the RP6 group + per-guid map below; the deferred callbacks push
+  //    the resolved emitter id into it as each lands (same fire-and-
+  //    forget bookkeeping shape as entities.js:6994-6997).
   const spawnedEmitterIds = [];
+  let pendingSpawnCount = 0;
+  let maxStartTimeMs = 0;
   for (const e of entriesJs) {
     if (e.hookType !== 13 && e.hookType !== 26) continue;
     const emitterDid = (e.createParticleEmitterId >>> 0);
@@ -1383,31 +1395,49 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
       ? -1
       : (e.createParticlePartIndex | 0);
 
-    let emitterId = 0;
-    try {
-      emitterId = await wm.addEmitter({
+    // StartTime-driven schedule (entities.js:~6649/~6738 pattern).
+    const startDelayMs = Math.max(0, (+e.startTime || 0) * 1000);
+    if (startDelayMs > maxStartTimeMs) maxStartTimeMs = startDelayMs;
+    pendingSpawnCount += 1;
+    setTimeout(() => {
+      // The target may have despawned during the StartTime delay; if
+      // so, skip the spawn (matches the H2 arms' entityMap guard).
+      if (!em.entityMap?.has?.(targetGuid >>> 0)) return;
+      wm.addEmitter({
         emitterInfo,
         parent: inst.root,
         partIndex,
         parentOffset: offset,
-      });
-    } catch (err) {
-      _realVfxStats.missAddEmitter += 1;
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[play-effect-vfx/real] addEmitter(0x${emitterDid.toString(16)}) threw:`,
-        err,
-      );
-      continue;
-    }
-    if (emitterId !== 0) {
-      spawnedEmitterIds.push(emitterId);
-    } else {
-      _realVfxStats.missAddEmitter += 1;
-    }
+      })
+        .then((emitterId) => {
+          if (emitterId !== 0) {
+            spawnedEmitterIds.push(emitterId);
+            // Keep the per-guid tracking honest as late hooks land so
+            // entity-remove can tear them down (the synchronous block
+            // below created the array; push into the live one if it
+            // still exists, otherwise re-seed it).
+            let perGuidIds = em._particleEmittersForGuid.get(targetGuid);
+            if (!perGuidIds) {
+              perGuidIds = [];
+              em._particleEmittersForGuid.set(targetGuid, perGuidIds);
+            }
+            perGuidIds.push(emitterId);
+          } else {
+            _realVfxStats.missAddEmitter += 1;
+          }
+        })
+        .catch((err) => {
+          _realVfxStats.missAddEmitter += 1;
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[play-effect-vfx/real] addEmitter(0x${emitterDid.toString(16)}) threw:`,
+            err,
+          );
+        });
+    }, startDelayMs);
   }
 
-  if (spawnedEmitterIds.length === 0) {
+  if (pendingSpawnCount === 0) {
     return false;
   }
 
@@ -1422,13 +1452,16 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   // instance has held a now-stale `this.parent` reference for the
   // remainder of its lifetime. Mirrors the H2 spawn-time chain at
   // entities.js:4693-4694 which also writes into this map.
+  //
+  // Track B7 (2026-06-08): the StartTime-deferred spawn callbacks above
+  // now push their resolved emitter ids into this per-guid array as they
+  // land (the array may still be empty at THIS synchronous point). We
+  // ensure the array exists up front so an entity-remove that races the
+  // first deferred spawn finds a bucket to clear.
   {
-    let perGuidIds = em._particleEmittersForGuid.get(targetGuid);
-    if (!perGuidIds) {
-      perGuidIds = [];
-      em._particleEmittersForGuid.set(targetGuid, perGuidIds);
+    if (!em._particleEmittersForGuid.get(targetGuid)) {
+      em._particleEmittersForGuid.set(targetGuid, []);
     }
-    for (const eid of spawnedEmitterIds) perGuidIds.push(eid);
   }
 
   // RP6 (2026-06-08): register this PlayEffect emitter group with the
@@ -1456,7 +1489,11 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   //     Explode (~1.2s) + the long tail of misc scripts; emitters
   //     whose own particles all expire earlier are no-op cleaned up
   //     by `ParticleManager.tick()`'s auto-remove path.
-  const ONE_SHOT_LIFETIME_MS = 2500;
+  //
+  //     Track B7 (2026-06-08): extend the cleanup base by the largest
+  //     hook StartTime so late-scheduled hooks aren't torn down before
+  //     they even spawn (their setTimeout fires at +maxStartTimeMs).
+  const ONE_SHOT_LIFETIME_MS = 2500 + maxStartTimeMs;
   setTimeout(() => {
     // RP6: drop from the cap registry first (idempotent if already
     // FIFO-evicted — indexOf returns -1 and the splice is a no-op).
@@ -1487,7 +1524,9 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
     `[play-effect-vfx/real] resolved scriptId=0x${scriptId.toString(16)} ` +
       `target=0x${targetGuid.toString(16)} table=0x${tableDid.toString(16)} ` +
       `pes=0x${pesId.toString(16)} speed=${speed.toFixed(3)} ` +
-      `emitters=${spawnedEmitterIds.length}`,
+      // Track B7: emitters spawn at their StartTime, so report the
+      // SCHEDULED count here (the resolved count grows asynchronously).
+      `emittersScheduled=${pendingSpawnCount}`,
   );
   return true;
 }
@@ -1534,19 +1573,24 @@ function _onPlayEffect(evt) {
   })();
 
   if (tableDid !== 0) {
-    // Entity has a PhysicsScriptTable; try the chain. Placeholder
-    // fallthrough deferred to the .then() miss branch.
-    _tryResolveRealVfx(targetGuid, scriptId, speed).then((spawned) => {
-      if (!spawned) {
-        // Real-VFX miss — run the placeholder. The resolver already
-        // bumped a `_realVfxStats.miss*` counter for diag.
-        _runPlaceholderDispatch(targetGuid, scriptId);
-      }
-    }).catch(() => {
-      // Defensive: resolver promised to never reject. Still, fall
-      // through to placeholder on any unforeseen throw.
-      _runPlaceholderDispatch(targetGuid, scriptId);
-    });
+    // Track B7 (2026-06-08): show the synchronous placeholder burst
+    // IMMEDIATELY for the table-bearing branch too. Previously this
+    // branch returned with no synchronous visual and deferred the
+    // placeholder to the resolver's miss branch — but the resolver is
+    // a cold async chain (fetchPhysicsScriptTable → fetchPhysicsScript
+    // → per-hook fetchParticleEmitter + lazy ParticleManager build)
+    // that can take 5+s on first hit, so the spell effect appeared
+    // seconds late at the visual level even on a clean resolve. Retail
+    // ScriptManager::AddScript does a synchronous local DAT get; we
+    // emulate the "instant cue" by always firing the placeholder now,
+    // then letting the resolver upgrade/replace it with real emitters
+    // when the chain lands (the real emitters are additive, and the
+    // placeholder self-expires on its own short lifetime).
+    _runPlaceholderDispatch(targetGuid, scriptId);
+    // Then kick off the real-VFX resolver under a hard deadline so a
+    // slow/cold chain can't hang the upgrade — on timeout we simply
+    // keep the placeholder already shown above.
+    _tryResolveRealVfxBounded(targetGuid, scriptId, speed);
     return;
   }
   // No table → synchronous placeholder path, identical to pre-Phase-51
