@@ -9,14 +9,24 @@
 //      9-LB ring.
 //   2. Unique modelIds → fetch_model_meshes (one round-trip,
 //      Uint32Array of u32s).
-//   3. For each unique modelId: meshToFusedGeometry → one fused
-//      `BufferGeometry`. (Per-surface partitioning is overkill for
-//      static props — most are single-surface, and the draw-call cost
-//      of N×fused dwarfs the visual win.)
+//   3. For each unique modelId: meshToGeometryGroups → one
+//      `BufferGeometry` PER SURFACE the model uses (RP1, 2026-06-08).
+//      Pre-RP1 this fused the model into ONE geometry painted with its
+//      FIRST ("dominant") surface — so ~47.5% of placements (whole-Dereth
+//      measurement: 1,486,218 of 3,131,844) that use multi-surface models
+//      rendered every non-dominant polygon with the WRONG texture (a
+//      tree's leaves painted with bark, etc.). RP1 partitions per-surface
+//      (the buildings.js path) and builds one InstancedMesh/Mesh per
+//      surface, each with `materialCache.getCached(surfaceDid)`. A
+//      single-surface model is byte-identical to pre-RP1 (one node, one
+//      material); a multi-surface model gets one node per surface so each
+//      polygon gets its correct texture. Draw calls become O(unique
+//      model×surface) — still O(1) in placement count.
 //   4. **F#5+6 (LOD + InstancedMesh)** — landed 2026-05-10:
-//      - Group placements by `modelId`. Models with `>=2` instances are
-//        collapsed into a single `THREE.InstancedMesh` (one draw call
-//        instead of N). Singletons stay as plain `THREE.Mesh`.
+//      - Group placements by `modelId`, then emit one node per surface
+//        group. Models with `>=2` instances are collapsed into a single
+//        `THREE.InstancedMesh` per surface (one draw call per (model,
+//        surface) instead of N). Singletons stay as plain `THREE.Mesh`.
 //      - When the wasm `ModelMesh.didDegrade` is non-zero (rare for
 //        Holtburg — most statics have no degrade chain), the full
 //        geometry + degraded geometry are wrapped in `THREE.LOD` with
@@ -62,7 +72,10 @@
 //      Phase 7.2 capture, F#5+6 capture) stay green.
 
 import * as THREE from "three";
-import { meshToFusedGeometry, placementToMatrix4 } from "./adapter.js";
+import {
+  meshToGeometryGroups,
+  placementToMatrix4,
+} from "./adapter.js";
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
@@ -416,27 +429,41 @@ async function fetchAndDrainScenery(cellIds, wasmExports) {
 }
 
 /**
- * Fetch the per-model fused geometries + dominant surface DIDs +
+ * RP1 (2026-06-08) — fetch the per-model PER-SURFACE geometry groups +
  * didDegrade chain from `fetch_model_meshes` for a given set of
- * `uniqueModelIds`. Mirrors the inner body of the pre-refactor
- * `buildHoltburgStatics`. Returns `{ geomByModel, dominantSurfaceByModel,
- * didDegradeByModel, allSurfaceDids, skippedZeroTri }`.
+ * `uniqueModelIds`.
+ *
+ * The pre-RP1 path fused each model into ONE BufferGeometry painted with
+ * its FIRST ("dominant") surface — so ~47.5% of placements (whole-Dereth
+ * measurement: 1,486,218 of 3,131,844) that use multi-surface models
+ * rendered every non-dominant polygon with the WRONG texture (e.g. a
+ * tree's leaves painted with bark). RP1 replaces the single fused geom
+ * with the buildings.js-proven per-surface partition: one BufferGeometry
+ * per unique surfaceIndex the model uses (handles two-sided pos/neg
+ * surfaces and the 0xFF "no surface" → surfaceDid 0 fallback bucket),
+ * via the existing `adapter.meshToGeometryGroups`.
+ *
+ * Returns `{ groupsByModel, didDegradeByModel, allSurfaceDids,
+ * skippedZeroTri }` where `groupsByModel` maps modelId → array of
+ * `{ geometry, surfaceDid, doubleSided }`. A single-surface model has a
+ * one-element array (and renders byte-identically to the pre-RP1 path —
+ * one InstancedMesh/Mesh, one material). A multi-surface model has one
+ * entry per surface and renders one InstancedMesh/Mesh per surface, each
+ * with `materialCache.getCached(group.surfaceDid)`.
  *
  * Note: this is intentionally separate from `fetchDegradedGeometries`
  * below — the degraded fetch is a SECOND `fetch_model_meshes` round
  * trip and is only meaningful once the primary chain is in hand.
  */
 async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
-  const geomByModel = new Map();
-  const dominantSurfaceByModel = new Map();
+  const groupsByModel = new Map();
   const didDegradeByModel = new Map();
   const allSurfaceDids = new Set();
   let skippedZeroTri = 0;
 
   if (uniqueModelIds.length === 0) {
     return {
-      geomByModel,
-      dominantSurfaceByModel,
+      groupsByModel,
       didDegradeByModel,
       allSurfaceDids,
       skippedZeroTri,
@@ -450,8 +477,7 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     // eslint-disable-next-line no-console
     console.warn("[scene3d.statics] fetch_model_meshes batch failed:", e);
     return {
-      geomByModel,
-      dominantSurfaceByModel,
+      groupsByModel,
       didDegradeByModel,
       allSurfaceDids,
       skippedZeroTri,
@@ -470,13 +496,9 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     }
     // Snapshot every DID this model references — material cache
     // preloads them in one batch below. Each `surfaces` getter
-    // allocates a fresh Uint32Array, so we read once and stash the
-    // first entry as the dominant DID.
+    // allocates a fresh Uint32Array; read once.
     const surfacesArr = m.surfaces;
     for (const did of surfacesArr) allSurfaceDids.add(did >>> 0);
-    if (surfacesArr.length > 0) {
-      dominantSurfaceByModel.set(id, surfacesArr[0] >>> 0);
-    }
 
     // F#5 — snapshot didDegrade. 0 = no degrade chain.
     const dd = (m.didDegrade ?? 0) >>> 0;
@@ -484,16 +506,19 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
       didDegradeByModel.set(id, dd);
     }
 
-    const geom = meshToFusedGeometry(m);
-    if (geom) {
-      geomByModel.set(id, geom);
+    // RP1 — per-surface partition (the buildings.js path). One group per
+    // unique surfaceIndex; the 0xFF "no surface" bucket comes back with
+    // surfaceDid 0 and is painted with the fallback material by
+    // `materialCache.getCached(0)` (which returns fallbackMaterial).
+    const { groups } = meshToGeometryGroups(m);
+    if (groups && groups.length > 0) {
+      groupsByModel.set(id, groups);
     }
     if (typeof m.free === "function") m.free();
   }
 
   return {
-    geomByModel,
-    dominantSurfaceByModel,
+    groupsByModel,
     didDegradeByModel,
     allSurfaceDids,
     skippedZeroTri,
@@ -501,10 +526,38 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
 }
 
 /**
+ * RP1 — composite key for the degraded surface-group Map. Mirrors the
+ * FULL mesh's bucket identity (surfaceIndex, sides) so that under the
+ * default `?perPolyCull` a single surfaceDid that splits into a
+ * DoubleSide group and a FrontSide group keeps two DISTINCT degraded
+ * entries (one per full group), instead of collapsing to one (which
+ * would drop+leak one geometry and double-free the survivor). Pairs 1:1
+ * with the full group via the same `(surfaceDid, doubleSided)` tuple.
+ */
+function degradedSurfaceKey(surfaceDid, doubleSided) {
+  return `${surfaceDid >>> 0}|${doubleSided ? 1 : 0}`;
+}
+
+/**
  * F#5 — fetch degraded variant geometries for every model that
  * reports a non-zero didDegrade. One wasm round-trip resolves them
  * all. Failures (degraded DID not in DAT) silently drop to "no LOD"
  * and the model uses a plain Mesh / InstancedMesh.
+ *
+ * RP1 (2026-06-08) — the degraded leaf is now ALSO partitioned
+ * per-surface (matching the full mesh) so the LOD path keeps the
+ * per-surfaceDid material key. Returns
+ * `Map<modelId, Map<surfaceKey, geometry>>` where surfaceKey is the
+ * `(surfaceDid, doubleSided)` composite from `degradedSurfaceKey` — the
+ * SAME bucket identity the full mesh uses — so each FULL surface group
+ * can pair its LOD with its OWN degraded surface group (one geometry per
+ * full group, never shared → no LRU double-free). A full surface group
+ * whose bucket has no degraded counterpart renders without an LOD
+ * wrapper (always full-detail) — it
+ * never gets painted with the wrong texture. The authored swap distance
+ * (`lodDist`) and billboard mode (`degradeMode`) are stamped onto EVERY
+ * degraded group geometry's userData (they are per-band, identical for
+ * all of a model's degraded surfaces).
  */
 async function fetchDegradedGeometries(
   didDegradeByModel,
@@ -574,9 +627,13 @@ async function fetchDegradedGeometries(
   }
   if (perModel.size === 0) return degradedGeomByModel;
 
-  // Batch-fetch the unique band geometries (0x01 GfxObjs).
+  // Batch-fetch the unique band geometries (0x01 GfxObjs). RP1 — each
+  // band mesh is partitioned per-surface (matching the full mesh), so a
+  // gfxId maps to a `Map<surfaceDid, geometry>` rather than one fused
+  // geom. The full surface groups pair their LOD with the degraded
+  // surface group of the SAME surfaceDid.
   const uniqueGfxIds = [...new Set([...perModel.values()].map((v) => v.gfxId))];
-  const geomByGfxId = new Map();
+  const groupsByGfxId = new Map();
   try {
     const meshes = await fetchModelMeshes(new Uint32Array(uniqueGfxIds));
     for (let i = 0; i < uniqueGfxIds.length; i += 1) {
@@ -585,8 +642,22 @@ async function fetchDegradedGeometries(
         if (m && typeof m.free === "function") m.free();
         continue;
       }
-      const geom = meshToFusedGeometry(m);
-      if (geom) geomByGfxId.set(uniqueGfxIds[i], geom);
+      const { groups } = meshToGeometryGroups(m);
+      if (groups && groups.length > 0) {
+        const bySurface = new Map();
+        // RP1 — key by (surfaceDid, doubleSided) to match the FULL mesh's
+        // bucket identity. Under default `?perPolyCull`, one surfaceDid can
+        // emit TWO groups (DoubleSide + FrontSide); keying by surfaceDid
+        // alone would collapse them — the second would overwrite the first
+        // (dropped/leaked geometry) AND both full groups would then share
+        // one degraded geometry object → double-free on LRU eviction.
+        // meshToGeometryGroups returns `doubleSided` on every group, so the
+        // composite key keeps the sub-groups distinct and pairing 1:1.
+        for (const g of groups) {
+          bySurface.set(degradedSurfaceKey(g.surfaceDid, g.doubleSided), g.geometry);
+        }
+        groupsByGfxId.set(uniqueGfxIds[i], bySurface);
+      }
       if (typeof m.free === "function") m.free();
     }
   } catch (e) {
@@ -599,45 +670,27 @@ async function fetchDegradedGeometries(
   }
 
   for (const [modelId, { gfxId, dist, degradeMode }] of perModel) {
-    const geom = geomByGfxId.get(gfxId);
-    if (!geom) continue;
-    // Stash the authored swap distance on the geometry so the node
-    // builders can read it without changing their (Map-shaped) interface.
-    if (dist != null) {
-      geom.userData = geom.userData || {};
-      geom.userData.lodDist = dist;
+    const bySurface = groupsByGfxId.get(gfxId);
+    if (!bySurface || bySurface.size === 0) continue;
+    for (const geom of bySurface.values()) {
+      // Stash the authored swap distance on each surface group's geometry
+      // so the node builders can read it per group. lodDist + degradeMode
+      // are per-band — identical across the model's degraded surfaces.
+      if (dist != null) {
+        geom.userData = geom.userData || {};
+        geom.userData.lodDist = dist;
+      }
+      // G1 — carry the band's billboard mode the same way. The node
+      // builders copy it onto the LOD node so `tickStaticsBillboards`
+      // can orient the degraded leaf each frame.
+      if (degradeMode) {
+        geom.userData = geom.userData || {};
+        geom.userData.degradeMode = degradeMode;
+      }
     }
-    // G1 — carry the band's billboard mode the same way. The node
-    // builders copy it onto the LOD node so `tickStaticsBillboards`
-    // can orient the degraded leaf each frame. `geom` is shared across
-    // every placement of this modelId, so the value is identical for
-    // all of that model's LOD nodes (correct — degrade_mode is per-band,
-    // not per-placement).
-    if (degradeMode) {
-      geom.userData = geom.userData || {};
-      geom.userData.degradeMode = degradeMode;
-    }
-    degradedGeomByModel.set(modelId, geom);
+    degradedGeomByModel.set(modelId, bySurface);
   }
   return degradedGeomByModel;
-}
-
-/**
- * Build the "dominant" material map per modelId. Falls back to the
- * cache's fallback material when the model has no resolved surface.
- * Same shape used by both bakers.
- */
-function buildMaterialMap(geomByModel, dominantSurfaceByModel, materialCache) {
-  const matByModel = new Map();
-  for (const [modelId] of geomByModel) {
-    const did = dominantSurfaceByModel.get(modelId);
-    if (typeof did === "number" && did !== 0) {
-      matByModel.set(modelId, materialCache.getCached(did));
-    } else {
-      matByModel.set(modelId, materialCache.fallbackMaterial);
-    }
-  }
-  return matByModel;
 }
 
 /**
@@ -674,12 +727,21 @@ function makePlacementMatrixHelper() {
 }
 
 /**
- * Build a singleton plain-Mesh node (no InstancedMesh) for one
- * placement. Used by:
+ * Build a singleton plain-Mesh node (no InstancedMesh) for ONE
+ * placement's ONE surface group. Used by:
  *   - the ring driver for groups with exactly one instance, and
  *   - the per-LB lazy baker for EVERY placement in the new LB
  *     (because per-LB lazy adds can't be batched into the ring's
  *     existing InstancedMesh without complex re-instantiation).
+ *
+ * RP1 (2026-06-08) — invoked ONCE PER SURFACE GROUP of the placement's
+ * model. A single-surface model = one call = one node (byte-identical
+ * to the pre-RP1 fused path); a 2-surface model = two calls = two nodes
+ * (correct textures). `geom` / `mat` are this surface group's geometry +
+ * `materialCache.getCached(surfaceDid)`; `surfaceDid` is folded into the
+ * node name/userData so multiple surface-group nodes for the same
+ * placement don't collide and the LRU's per-LB scene-graph eviction
+ * (keyed by `userData.landblockId`) catches every one of them.
  *
  * When `degradedGeom` is non-null, wraps the full + degraded leaves
  * in a `THREE.LOD`. Most Holtburg statics have no degrade chain so
@@ -691,6 +753,7 @@ function makePlacementMatrixHelper() {
 function buildSingletonNode({
   placement,
   modelId,
+  surfaceDid = 0,
   geom,
   degradedGeom,
   mat,
@@ -699,13 +762,14 @@ function buildSingletonNode({
   staticsReceiveShadow,
 }) {
   const modelKey = (modelId >>> 0).toString(16).padStart(8, "0");
+  const surfaceKey = (surfaceDid >>> 0).toString(16).padStart(8, "0");
   const lbX = (placement.landblockId >>> 24) & 0xff;
   const lbY = (placement.landblockId >>> 16) & 0xff;
   const worldX = lbX * METERS_PER_LANDBLOCK + placement.x;
   const worldY = lbY * METERS_PER_LANDBLOCK + placement.y;
   const placementKey =
     `${(placement.landblockId >>> 0).toString(16).padStart(8, "0")}_` +
-    `${placement.x.toFixed(2)}_${placement.y.toFixed(2)}_${modelKey}`;
+    `${placement.x.toFixed(2)}_${placement.y.toFixed(2)}_${modelKey}_s${surfaceKey}`;
 
   // Phase C.3 — uniform per-placement scale. LandblockInfo placements
   // arrive with `scale = 1` (set by `drainPlacements`); scenery
@@ -740,6 +804,7 @@ function buildSingletonNode({
   }
   mesh.userData = {
     modelId,
+    surfaceDid,
     landblockId: placement.landblockId,
     placementKey,
     isBuilding: false,
@@ -779,6 +844,7 @@ function buildSingletonNode({
   }
   degradedMesh.userData = {
     modelId,
+    surfaceDid,
     landblockId: placement.landblockId,
     placementKey,
     isBuilding: false,
@@ -822,6 +888,7 @@ function buildSingletonNode({
   lod.addLevel(degradedMesh, swapDist);
   lod.userData = {
     modelId,
+    surfaceDid,
     landblockId: placement.landblockId,
     placementKey,
     isBuilding: false,
@@ -849,6 +916,7 @@ function buildSingletonNode({
  */
 function buildInstancedNode({
   modelId,
+  surfaceDid = 0,
   group,
   geom,
   degradedGeom,
@@ -859,6 +927,7 @@ function buildInstancedNode({
   staticsReceiveShadow,
 }) {
   const modelKey = (modelId >>> 0).toString(16).padStart(8, "0");
+  const surfaceKey = (surfaceDid >>> 0).toString(16).padStart(8, "0");
   // Phase C.3 — track per-source counts so post-bake queries can
   // distinguish "this instanced group is 30% LandblockInfo + 70%
   // scenery" without walking every matrix. Single-source groups (the
@@ -885,14 +954,24 @@ function buildInstancedNode({
   // it to the 16-bit lb-key). Shared by reference onto BOTH the
   // InstancedMesh and the LOD wrapper so either object handed to the LRU
   // refcounts the same Set.
+  //
+  // RP1 (2026-06-08) — this builder is now called ONCE PER SURFACE GROUP
+  // of the model, so a multi-surface model produces several distinct
+  // InstancedMesh/LOD nodes, EACH owning its own `coversLbKeys` Set (the
+  // LRU mutates the Set in-place on eviction, so the per-surface nodes
+  // must not share one Set — otherwise the first surface's eviction would
+  // empty the Set the other surfaces' refcount depends on). Each node
+  // also owns its own geometry (this group's), disposed exactly once by
+  // the LRU when its own Set empties.
   const coversLbKeys = new Set();
   for (const p of group) {
     if (p.landblockId != null) coversLbKeys.add(lbKeyOf(p.landblockId >>> 0));
   }
   const instanced = new THREE.InstancedMesh(geom, mat, group.length);
-  instanced.name = `static-instanced-${modelKey}-x${group.length}`;
+  instanced.name = `static-instanced-${modelKey}-s${surfaceKey}-x${group.length}`;
   instanced.userData = {
     modelId,
+    surfaceDid,
     isBuilding: false,
     instanceCount: group.length,
     source,
@@ -920,8 +999,8 @@ function buildInstancedNode({
   }
   instanced.instanceMatrix.needsUpdate = true;
   // BoundingSphere for the geometry is already computed in
-  // meshToFusedGeometry. InstancedMesh additionally needs an
-  // aggregate boundingSphere covering all instance positions for
+  // meshToGeometryGroups (per surface group). InstancedMesh additionally
+  // needs an aggregate boundingSphere covering all instance positions for
   // accurate frustum culling. three.js's InstancedMesh exposes
   // `computeBoundingSphere()` that walks the per-instance matrices
   // and expands the geometry's sphere.
@@ -936,7 +1015,7 @@ function buildInstancedNode({
     mat,
     group.length
   );
-  degradedInstanced.name = `static-instanced-degraded-${modelKey}`;
+  degradedInstanced.name = `static-instanced-degraded-${modelKey}-s${surfaceKey}`;
   if (staticsShadow) {
     degradedInstanced.castShadow = staticsMatCastsShadow;
     // C2 + FU2 — same low-preset gate as the full-detail InstancedMesh
@@ -953,7 +1032,7 @@ function buildInstancedNode({
   degradedInstanced.computeBoundingSphere();
 
   const lod = new THREE.LOD();
-  lod.name = `static-lod-${modelKey}`;
+  lod.name = `static-lod-${modelKey}-s${surfaceKey}`;
   lod.addLevel(instanced, 0);
   // G3 note: the instanced path still uses the fixed LOD_DISTANCE_M
   // guess rather than the band's authored distance — see the
@@ -961,6 +1040,7 @@ function buildInstancedNode({
   lod.addLevel(degradedInstanced, LOD_DISTANCE_M);
   lod.userData = {
     modelId,
+    surfaceDid,
     isBuilding: false,
     isInstancedLod: true,
     source,
@@ -1146,20 +1226,22 @@ export async function bakeStaticsForLandblock(
     }
   }
 
-  const matByModel = buildMaterialMap(
-    primary.geomByModel,
-    primary.dominantSurfaceByModel,
-    materialCache
-  );
-
-  // === Per-LB instantiation — plain Mesh per placement, no InstancedMesh ===
+  // === Per-LB instantiation — plain Mesh per placement PER SURFACE GROUP,
+  //     no InstancedMesh ===
   // Document the per-LB vs ring shape divergence: this loop emits one
-  // node per placement, even when two placements in the same LB share
-  // a modelId. The ring driver collapses those duplicates into
-  // InstancedMesh; the per-LB lazy baker does not, because the
-  // expected per-LB placement count (~5 median across the 13×13 ring)
-  // makes the InstancedMesh round-trip cost higher than the saved
-  // draw calls.
+  // node per placement (per surface group), even when two placements in
+  // the same LB share a modelId. The ring driver collapses those
+  // duplicates into InstancedMesh; the per-LB lazy baker does not,
+  // because the expected per-LB placement count (~5 median across the
+  // 13×13 ring) makes the InstancedMesh round-trip cost higher than the
+  // saved draw calls.
+  //
+  // RP1 (2026-06-08) — materials are resolved PER SURFACE GROUP via
+  // `materialCache.getCached(group.surfaceDid)` (the buildings.js path),
+  // not from a per-model dominant-surface map. A single-surface model
+  // still emits one node (byte-identical to the pre-RP1 fused path); a
+  // multi-surface model emits one node per surface so each polygon gets
+  // its correct texture.
   const staticsShadow = !!scene3d.shadowsEnabled || !!scene3d.csmEnabled;
   // C2 (perf plan 2026-05-18) — at the `low` quality preset every
   // static skips receiveShadow (CSM frustum-test cost scales linearly
@@ -1201,29 +1283,49 @@ export async function bakeStaticsForLandblock(
   const addedNodes = [];
   let _chunkStart = performance.now();
   for (const placement of statics) {
-    const geom = primary.geomByModel.get(placement.modelId);
-    if (!geom) {
+    const groups = primary.groupsByModel.get(placement.modelId);
+    if (!groups || groups.length === 0) {
       skippedNoMesh += 1;
       continue;
     }
-    const mat =
-      matByModel.get(placement.modelId) || materialCache.fallbackMaterial;
-    const degradedGeom = degradedGeomByModel.get(placement.modelId) || null;
-    const staticsMatCastsShadow = materialCanCastShadow(mat);
-    const { node, isLod } = buildSingletonNode({
-      placement,
-      modelId: placement.modelId,
-      geom,
-      degradedGeom,
-      mat,
-      staticsShadow,
-      staticsMatCastsShadow,
-      staticsReceiveShadow,
-    });
-    addedNodes.push(node);
+    // RP1 — degraded surface groups keyed by surfaceDid for this model.
+    const degradedBySurface =
+      degradedGeomByModel.get(placement.modelId) || null;
+    // One node per surface group. Single-surface model → one node
+    // (byte-identical to the pre-RP1 fused path); multi-surface model →
+    // one node per surface, each painted with its own material.
+    for (const g of groups) {
+      const mat = materialCache.getCached(g.surfaceDid);
+      // Pair the LOD with the degraded surface group of the SAME
+      // (surfaceDid, doubleSided) bucket; a group with no degraded
+      // counterpart renders without an LOD wrapper (always full-detail),
+      // never with a wrong texture. The composite key keeps each full
+      // group bound to ITS OWN degraded geometry so one degraded geom is
+      // never shared by two full groups (no LRU double-free).
+      const degradedGeom =
+        (degradedBySurface &&
+          degradedBySurface.get(degradedSurfaceKey(g.surfaceDid, g.doubleSided))) ||
+        null;
+      const staticsMatCastsShadow = materialCanCastShadow(mat);
+      const { node, isLod } = buildSingletonNode({
+        placement,
+        modelId: placement.modelId,
+        surfaceDid: g.surfaceDid >>> 0,
+        geom: g.geometry,
+        degradedGeom,
+        mat,
+        staticsShadow,
+        staticsMatCastsShadow,
+        staticsReceiveShadow,
+      });
+      addedNodes.push(node);
+      singletonCount += 1;
+      if (isLod) lodCount += 1;
+    }
+    // `objectCount` counts PLACEMENTS rendered (one per placement,
+    // regardless of how many surface groups it spans); `singletonCount`
+    // counts NODES (≥ objectCount for multi-surface models).
     objectCount += 1;
-    singletonCount += 1;
-    if (isLod) lodCount += 1;
     if (placement.source === "scenery") sceneryObjectCount += 1;
     else landblockInfoObjectCount += 1;
 
@@ -1240,8 +1342,15 @@ export async function bakeStaticsForLandblock(
   // duplicates. Dispose the per-LB geometries and bail. The nodes were never
   // added to the scene graph, so nothing is GPU-resident to leak.
   if (staticsTimeSlice && !scene3d.staticsBakedLbs.has(lbKey)) {
-    for (const geom of primary.geomByModel.values()) { try { geom?.dispose?.(); } catch (_) {} }
-    for (const geom of degradedGeomByModel.values()) { try { geom?.dispose?.(); } catch (_) {} }
+    // RP1 — dispose every per-surface group geometry (full + degraded)
+    // for this LB's models. groupsByModel: modelId → [{geometry,...}];
+    // degradedGeomByModel: modelId → Map<surfaceDid, geometry>.
+    for (const groups of primary.groupsByModel.values()) {
+      for (const g of groups) { try { g?.geometry?.dispose?.(); } catch (_) {} }
+    }
+    for (const bySurface of degradedGeomByModel.values()) {
+      for (const geom of bySurface.values()) { try { geom?.dispose?.(); } catch (_) {} }
+    }
     return {
       ...makeEmptySummary(),
       evictedDuringBuild: true,
@@ -1262,15 +1371,24 @@ export async function bakeStaticsForLandblock(
 
   // LRU wave H4 — per-LB owned BufferGeometries. The per-LB baker doesn't
   // share a cross-LB `bakeCache` (unlike buildings.js), so every entry in
-  // `geomByModel` / `degradedGeomByModel` is owned by THIS bake call even
+  // `groupsByModel` / `degradedGeomByModel` is owned by THIS bake call even
   // when a later LB happens to bake the same modelId. Materials are
   // cache-shared via `materialCache.getCached` → empty here.
+  //
+  // RP1 (2026-06-08) — a multi-surface model now owns N per-surface group
+  // geometries (full) + its degraded surface-group geometries. Track EVERY
+  // one so the LRU disposes each exactly once on eviction (matching the
+  // singleton nodes built above, which each reference one group geometry).
   const lbDisposableGeometries = [];
-  for (const geom of primary.geomByModel.values()) {
-    if (geom) lbDisposableGeometries.push(geom);
+  for (const groups of primary.groupsByModel.values()) {
+    for (const g of groups) {
+      if (g && g.geometry) lbDisposableGeometries.push(g.geometry);
+    }
   }
-  for (const geom of degradedGeomByModel.values()) {
-    if (geom) lbDisposableGeometries.push(geom);
+  for (const bySurface of degradedGeomByModel.values()) {
+    for (const geom of bySurface.values()) {
+      if (geom) lbDisposableGeometries.push(geom);
+    }
   }
 
   // Draw-call savings for the per-LB path: every placement becomes
@@ -1280,7 +1398,7 @@ export async function bakeStaticsForLandblock(
   // comment block above.
   return {
     objectCount,
-    modelCount: primary.geomByModel.size,
+    modelCount: primary.groupsByModel.size,
     surfaceCount: primary.allSurfaceDids.size,
     skippedZeroTri: primary.skippedZeroTri,
     skippedNoMesh,
@@ -1555,20 +1673,22 @@ export async function bakeStaticsRing(
   }
   mark(`stage2: materialCache.preload (${primary.allSurfaceDids.size} surfaces)`);
 
-  const matByModel = buildMaterialMap(
-    primary.geomByModel,
-    primary.dominantSurfaceByModel,
-    materialCache
-  );
-  mark("stage2: buildMaterialMap (JS)");
-
-  // ── Stage 3: ring-wide group-by-modelId + InstancedMesh/Mesh emit ──
+  // ── Stage 3: ring-wide group-by-modelId + per-surface InstancedMesh/
+  //    Mesh emit ──
   // This is the divergent step vs the per-LB baker: placements
   // sharing a modelId across LBs are batched into a single
   // InstancedMesh. Singletons stay as plain Mesh.
+  //
+  // RP1 (2026-06-08) — for EACH model we now build one InstancedMesh
+  // (or plain Mesh for singletons) PER SURFACE GROUP, each painted with
+  // `materialCache.getCached(group.surfaceDid)`. A single-surface model
+  // produces one node per modelId exactly as before (byte-identical); a
+  // multi-surface model produces one node per surface so every polygon
+  // gets its correct texture. Draw calls become O(unique model×surface),
+  // still O(1) in placement count — the accepted, measured tradeoff.
   const placementsByModel = new Map();
   for (const placement of statics) {
-    if (!primary.geomByModel.has(placement.modelId)) continue;
+    if (!primary.groupsByModel.has(placement.modelId)) continue;
     let arr = placementsByModel.get(placement.modelId);
     if (!arr) {
       arr = [];
@@ -1615,12 +1735,12 @@ export async function bakeStaticsRing(
   // the existing per-LB walker, so they are NOT collected here.
   const instancedNodes = [];
   for (const [modelId, group] of placementsByModel) {
-    const geom = primary.geomByModel.get(modelId);
-    const mat = matByModel.get(modelId) || materialCache.fallbackMaterial;
-    const degradedGeom = degradedGeomByModel.get(modelId) || null;
-    const staticsMatCastsShadow = materialCanCastShadow(mat);
+    const surfaceGroups = primary.groupsByModel.get(modelId);
+    if (!surfaceGroups || surfaceGroups.length === 0) continue;
+    // RP1 — degraded surface groups keyed by surfaceDid for this model.
+    const degradedBySurface = degradedGeomByModel.get(modelId) || null;
 
-    // Count scenery vs LandblockInfo placements within this group.
+    // Count scenery vs LandblockInfo placements within this model's group.
     let groupSceneryCount = 0;
     for (const p of group) {
       if (p.source === "scenery") groupSceneryCount += 1;
@@ -1629,46 +1749,75 @@ export async function bakeStaticsRing(
     sceneryObjectCount += groupSceneryCount;
     landblockInfoObjectCount += groupLandblockInfoCount;
 
-    if (group.length >= 2) {
-      // === InstancedMesh path ===
-      // One draw call per modelId, regardless of placement count.
-      const { node, isLod } = buildInstancedNode({
-        modelId,
-        group,
-        geom,
-        degradedGeom,
-        mat,
-        placementMatrix,
-        staticsShadow,
-        staticsMatCastsShadow,
-        staticsReceiveShadow,
-      });
-      scene3d.staticsGroup.add(node);
-      instancedNodes.push(node);
-      instancedGroupCount += 1;
-      objectCount += group.length;
-      if (isLod) lodCount += 1;
-      if (groupSceneryCount > 0) sceneryBearingInstancedGroupCount += 1;
-    } else {
-      // === Singleton Mesh path ===
-      // Only one placement; InstancedMesh has no draw-call advantage
-      // over plain Mesh here (still 1 draw call) AND costs an extra
-      // instanceMatrix attribute buffer. Stick with plain Mesh.
-      const placement = group[0];
-      const { node, isLod } = buildSingletonNode({
-        placement,
-        modelId,
-        geom,
-        degradedGeom,
-        mat,
-        staticsShadow,
-        staticsMatCastsShadow,
-        staticsReceiveShadow,
-      });
-      scene3d.staticsGroup.add(node);
-      singletonCount += 1;
-      objectCount += 1;
-      if (isLod) lodCount += 1;
+    // `objectCount` counts PLACEMENTS rendered (independent of how many
+    // surface groups each model spans); `instancedGroupCount` /
+    // `singletonCount` count NODES (draw calls): one per surface group.
+    objectCount += group.length;
+
+    const isInstanced = group.length >= 2;
+    if (isInstanced && groupSceneryCount > 0) {
+      // A model is scenery-bearing once; count it per model (not per
+      // surface) so the headline metric stays comparable to pre-RP1.
+      sceneryBearingInstancedGroupCount += 1;
+    }
+
+    // RP1 — one node PER SURFACE GROUP. Single-surface model → one node
+    // per modelId (byte-identical to the pre-RP1 fused path).
+    for (const sg of surfaceGroups) {
+      const mat = materialCache.getCached(sg.surfaceDid);
+      const staticsMatCastsShadow = materialCanCastShadow(mat);
+      // Pair the LOD with the degraded surface group of the SAME
+      // (surfaceDid, doubleSided) bucket; a group with no degraded
+      // counterpart renders without an LOD wrapper (never with a wrong
+      // texture). The composite key binds each full group to ITS OWN
+      // degraded geometry so one degraded geom is never shared by two
+      // full groups → each degraded leaf is disposed exactly once on
+      // LRU eviction (no double-free).
+      const degradedGeom =
+        (degradedBySurface &&
+          degradedBySurface.get(degradedSurfaceKey(sg.surfaceDid, sg.doubleSided))) ||
+        null;
+
+      if (isInstanced) {
+        // === InstancedMesh path ===
+        // One draw call per (model, surface), regardless of placement count.
+        const { node, isLod } = buildInstancedNode({
+          modelId,
+          surfaceDid: sg.surfaceDid >>> 0,
+          group,
+          geom: sg.geometry,
+          degradedGeom,
+          mat,
+          placementMatrix,
+          staticsShadow,
+          staticsMatCastsShadow,
+          staticsReceiveShadow,
+        });
+        scene3d.staticsGroup.add(node);
+        instancedNodes.push(node);
+        instancedGroupCount += 1;
+        if (isLod) lodCount += 1;
+      } else {
+        // === Singleton Mesh path ===
+        // Only one placement; InstancedMesh has no draw-call advantage
+        // over plain Mesh here (still 1 draw call) AND costs an extra
+        // instanceMatrix attribute buffer. Stick with plain Mesh.
+        const placement = group[0];
+        const { node, isLod } = buildSingletonNode({
+          placement,
+          modelId,
+          surfaceDid: sg.surfaceDid >>> 0,
+          geom: sg.geometry,
+          degradedGeom,
+          mat,
+          staticsShadow,
+          staticsMatCastsShadow,
+          staticsReceiveShadow,
+        });
+        scene3d.staticsGroup.add(node);
+        singletonCount += 1;
+        if (isLod) lodCount += 1;
+      }
     }
   }
   mark(`stage3: build+add ${placementsByModel.size} groups (inst=${instancedGroupCount}, single=${singletonCount})`);
@@ -1687,7 +1836,7 @@ export async function bakeStaticsRing(
   mark("stage3: attachStaticDefaultScripts (V1)");
 
   // Count placements that had no geometry (the model failed to fetch
-  // OR was 0-tri AND got dropped from `geomByModel`). The
+  // OR was 0-tri AND got dropped from `groupsByModel`). The
   // `skippedZeroTri` count is per-model; `skippedNoMesh` here is
   // per-placement of models we couldn't render. Per-LB break-out is
   // accumulated alongside so the [phase7.2] statics log can name the
@@ -1695,7 +1844,7 @@ export async function bakeStaticsRing(
   // which LB regressed).
   const skippedNoMeshByLb = new Map();
   for (const placement of statics) {
-    if (!primary.geomByModel.has(placement.modelId)) {
+    if (!primary.groupsByModel.has(placement.modelId)) {
       skippedNoMesh += 1;
       const lb = placement.landblockId;
       if (lb != null) {
@@ -1704,17 +1853,22 @@ export async function bakeStaticsRing(
     }
   }
 
-  // Draw-call savings: full per-placement Mesh path would have
-  // produced `objectCount` draw calls. Instancing collapses each
-  // multi-instance group to 1. Singletons remain 1 each. So the
-  // post-fix draw call count for statics is
-  // `instancedGroupCount + singletonCount`.
+  // Draw-call savings: a full per-placement Mesh path would have produced
+  // `objectCount × (avg surfaces/model)` draw calls. Instancing collapses
+  // each multi-instance (model, surface) to 1 node. Singletons remain 1
+  // node per surface. So the post-fix draw call count for statics is
+  // `instancedGroupCount + singletonCount` (both now count NODES — one per
+  // (model, surface) — RP1 2026-06-08, was per-model pre-RP1). The
+  // estimate is `objectCount − nodeCount`; for single-surface-dominated
+  // rings this is unchanged from pre-RP1, and it shrinks (fewer collapsed
+  // calls) in proportion to the share of multi-surface models — the
+  // accepted, measured tradeoff for correct per-polygon textures.
   const drawCallReductionEstimate =
     objectCount - (instancedGroupCount + singletonCount);
 
   return {
     objectCount,
-    modelCount: primary.geomByModel.size,
+    modelCount: primary.groupsByModel.size,
     surfaceCount: primary.allSurfaceDids.size,
     skippedZeroTri: primary.skippedZeroTri,
     skippedNoMesh,
