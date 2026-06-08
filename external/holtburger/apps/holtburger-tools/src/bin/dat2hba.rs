@@ -1,4 +1,5 @@
 use clap::Parser;
+use holtburger_tools::boot_verify::{EXIT_NOT_FULLY_PACKABLE, format_report, verify_boot_pack};
 use holtburger_tools::{ArchiveProfile, Dat2HbaOptions, DatInputSpec, ToolError, run};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -59,6 +60,16 @@ struct Args {
     /// default Holtburg). Ignored for other profiles.
     #[arg(long, value_parser = parse_hex_u32, default_value = "0xA9B4")]
     boot_landblock: u32,
+
+    /// After writing the HBA, run the read-only boot-reachability
+    /// walk against it (E4) and print whether `--boot-landblock` is
+    /// *fully packable* — i.e. every GfxObj/Surface/SurfaceTexture/
+    /// Texture/Palette its spawn-area placements reference is present.
+    /// Exits non-zero (code 3) when NOT fully packable so CI can gate a
+    /// generated boot pack. Additive: off by default, leaves the
+    /// produced archive untouched.
+    #[arg(long)]
+    verify_boot_reachability: bool,
 }
 
 impl Args {
@@ -92,11 +103,33 @@ impl Args {
 
 fn main() -> holtburger_tools::error::Result<()> {
     env_logger::init();
-    let options = Args::parse().into_options()?;
+    let args = Args::parse();
+    let verify_boot = args.verify_boot_reachability;
+    let options = args.into_options()?;
+    // Capture the bits the verification needs before `run` consumes
+    // `options` (the boot-reachability flag is a binary-only concern, so
+    // `Dat2HbaOptions` deliberately doesn't carry it).
+    let output_path = options.output.clone();
+    let boot_landblock = options.boot_landblock;
 
     println!("🎨 holtburger-tools: starting the glow-up...");
     run(options)?;
     println!("✨ Glow-up complete!");
+
+    if verify_boot {
+        let result = verify_boot_pack(&output_path, boot_landblock)?;
+        // Report to stdout so it lands in CI logs alongside the
+        // glow-up status; the headline line is machine-greppable.
+        print!("{}", format_report(&result, boot_landblock));
+        if !result.fully_packable {
+            eprintln!(
+                "dat2hba: boot landblock 0x{boot_landblock:04X} is NOT fully packable ({} dangling DID(s)) — boot pack gate FAILED",
+                result.missing_dids.len()
+            );
+            std::process::exit(EXIT_NOT_FULLY_PACKABLE);
+        }
+        println!("dat2hba: boot landblock 0x{boot_landblock:04X} is fully packable (visual chain) ✅");
+    }
 
     Ok(())
 }
@@ -110,6 +143,8 @@ mod tests {
     fn args_default_profile_is_full() {
         let args = Args::try_parse_from(["dat2hba", "portal.dat", "portal.hba"])
             .expect("default args should parse");
+        // Boot-reachability verification is opt-in (additive default).
+        assert!(!args.verify_boot_reachability);
         let options = args
             .into_options()
             .expect("args should convert into options");
@@ -119,6 +154,39 @@ mod tests {
         assert_eq!(options.inputs[0].path, PathBuf::from("portal.dat"));
         assert_eq!(options.inputs[0].namespace, None);
         assert_eq!(options.output, PathBuf::from("portal.hba"));
+    }
+
+    #[test]
+    fn args_parse_verify_boot_reachability_flag() {
+        let args = Args::try_parse_from([
+            "dat2hba",
+            "eor/cell=client_cell_1.dat",
+            "eor/portal=client_portal.dat",
+            "boot.hba",
+            "--profile",
+            "boot",
+            "--boot-landblock",
+            "0xA9B4",
+            "--verify-boot-reachability",
+        ])
+        .expect("verify-boot-reachability args should parse");
+
+        assert!(args.verify_boot_reachability);
+        let options = args
+            .into_options()
+            .expect("args should convert into options");
+        assert_eq!(options.profile, ArchiveProfile::Boot);
+        assert_eq!(options.boot_landblock, 0xA9B4);
+    }
+
+    #[test]
+    fn cli_help_lists_verify_boot_reachability_flag() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(
+            help.contains("--verify-boot-reachability"),
+            "help should advertise the new flag, got:\n{help}"
+        );
+        assert!(help.contains("fully packable"));
     }
 
     #[test]

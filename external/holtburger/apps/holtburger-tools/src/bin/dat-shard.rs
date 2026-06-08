@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use holtburger_tools::boot_verify::{EXIT_NOT_FULLY_PACKABLE, format_report, verify_boot_pack};
 use holtburger_tools::dat_shard::{
     DEFAULT_MANIFEST_VERSION, DatShardOptions, parse_hex_u32, shard_bundle_dispatch,
 };
@@ -63,6 +64,16 @@ struct Args {
     /// `manifest/<namespace>.bin` per-namespace catalogs.
     #[arg(long, value_name = "DIR")]
     output: PathBuf,
+
+    /// After writing `boot.hba`, run the read-only boot-reachability
+    /// walk against it (E4) and print whether `--boot-landblock` is
+    /// *fully packable* — i.e. every GfxObj/Surface/SurfaceTexture/
+    /// Texture/Palette its spawn-area placements reference made it into
+    /// the boot pack. Exits non-zero (code 3) when NOT fully packable so
+    /// CI can gate the generated boot pack. Additive: off by default,
+    /// leaves the produced files untouched.
+    #[arg(long)]
+    verify_boot_reachability: bool,
 }
 
 impl Args {
@@ -81,7 +92,9 @@ impl Args {
 
 fn main() -> Result<()> {
     env_logger::init();
-    let opts = Args::parse().into_options();
+    let args = Args::parse();
+    let verify_boot = args.verify_boot_reachability;
+    let opts = args.into_options();
     println!(
         "dat-shard: starting (manifest v{})...",
         opts.manifest_version
@@ -94,5 +107,65 @@ fn main() -> Result<()> {
         bake.boot_covers_count(),
         opts.output_dir.join("manifest.json"),
     );
+
+    if verify_boot {
+        // The boot pack is always written to `<output>/boot.hba` by
+        // `write_boot_pack`. Re-open it read-only and walk it.
+        let boot_hba = opts.output_dir.join("boot.hba");
+        let result = verify_boot_pack(&boot_hba, opts.boot_landblock)?;
+        print!("{}", format_report(&result, opts.boot_landblock));
+        if !result.fully_packable {
+            eprintln!(
+                "dat-shard: boot landblock 0x{:04X} is NOT fully packable ({} dangling DID(s)) — boot pack gate FAILED",
+                opts.boot_landblock,
+                result.missing_dids.len()
+            );
+            std::process::exit(EXIT_NOT_FULLY_PACKABLE);
+        }
+        println!(
+            "dat-shard: boot landblock 0x{:04X} is fully packable (visual chain) ✅",
+            opts.boot_landblock
+        );
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn verify_boot_reachability_is_off_by_default() {
+        let args = Args::try_parse_from(["dat-shard", "--input", "bundle.hba", "--output", "out"])
+            .expect("default args should parse");
+        assert!(!args.verify_boot_reachability);
+    }
+
+    #[test]
+    fn verify_boot_reachability_flag_parses() {
+        let args = Args::try_parse_from([
+            "dat-shard",
+            "--input",
+            "bundle.hba",
+            "--output",
+            "out",
+            "--boot-landblock",
+            "0xA9B4",
+            "--verify-boot-reachability",
+        ])
+        .expect("verify-boot-reachability args should parse");
+        assert!(args.verify_boot_reachability);
+        assert_eq!(args.boot_landblock, 0xA9B4);
+    }
+
+    #[test]
+    fn cli_help_lists_verify_boot_reachability_flag() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(
+            help.contains("--verify-boot-reachability"),
+            "help should advertise the new flag, got:\n{help}"
+        );
+        assert!(help.contains("fully packable"));
+    }
 }
