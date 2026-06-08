@@ -10,6 +10,7 @@
 //! We mirror `BinaryReader::ReadString` from `external/GDL/PhatSDK/Support/`
 //! `BinaryReader.cpp:48-73` which reads `WORD len; bytes; ReadAlign();`.
 
+use crate::file_type::region::write_pstring_char;
 use crate::utils::read_pstring_char;
 use binrw::{
     BinRead, BinResult,
@@ -90,6 +91,37 @@ impl GameTime {
             seasons,
         })
     }
+
+    /// Reverse of [`GameTime::unpack`] — emits the wire layout in the exact
+    /// field order the parser reads: `f64 zero_time_of_year`, `u32 zero_year`,
+    /// `f32 day_length`, `u32 days_per_year`, `year_spec` (PStringBase<char>,
+    /// 4-aligned), `u32 num_times_of_day` + that many [`TimeOfDay`], `u32
+    /// num_days_of_week` + that many bare aligned PStrings, `u32 num_seasons`
+    /// + that many [`Season`]. Mirrors `dats.xml:2780-2806`.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.zero_time_of_year.to_le_bytes());
+        out.extend_from_slice(&self.zero_year.to_le_bytes());
+        out.extend_from_slice(&self.day_length.to_le_bytes());
+        out.extend_from_slice(&self.days_per_year.to_le_bytes());
+
+        write_pstring_char(out, &self.year_spec);
+
+        out.extend_from_slice(&(self.times_of_day.len() as u32).to_le_bytes());
+        for tod in &self.times_of_day {
+            tod.pack(out);
+        }
+
+        out.extend_from_slice(&(self.days_of_week.len() as u32).to_le_bytes());
+        for name in &self.days_of_week {
+            // dats.xml:2790-2792 — bare AC1LegacyPStringBase, same align-to-4.
+            write_pstring_char(out, name);
+        }
+
+        out.extend_from_slice(&(self.seasons.len() as u32).to_le_bytes());
+        for s in &self.seasons {
+            s.pack(out);
+        }
+    }
 }
 
 impl TimeOfDay {
@@ -105,6 +137,15 @@ impl TimeOfDay {
             name,
         })
     }
+
+    /// Reverse of [`TimeOfDay::unpack`] — `f32 start`, the 4-byte bool
+    /// `is_night` (dats.xml:2798 `bool size="4"`, written as `1u32`/`0u32`),
+    /// then the 4-aligned PStringBase<char> `name`.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.start.to_le_bytes());
+        out.extend_from_slice(&(self.is_night as u32).to_le_bytes());
+        write_pstring_char(out, &self.name);
+    }
 }
 
 impl Season {
@@ -112,5 +153,12 @@ impl Season {
         let start = u32::read_le(reader)?;
         let name = read_pstring_char(reader)?;
         Ok(Season { start, name })
+    }
+
+    /// Reverse of [`Season::unpack`] — `u32 start` then the 4-aligned
+    /// PStringBase<char> `name`.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.start.to_le_bytes());
+        write_pstring_char(out, &self.name);
     }
 }

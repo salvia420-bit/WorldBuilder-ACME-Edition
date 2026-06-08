@@ -27,3 +27,8 @@ pub mod surface_texture;
 pub mod animation;
 pub mod render_texture;
 pub mod texture;
+
+// E12c slice-3 — WRITE-NEW Region (0x13), the largest dat-write type. Inverse
+// pack authored in holtburger-dat next to the Region/GameTime parsers; this
+// thin impl adds the parts_mask ↔ sub-record-presence guard.
+pub mod region;

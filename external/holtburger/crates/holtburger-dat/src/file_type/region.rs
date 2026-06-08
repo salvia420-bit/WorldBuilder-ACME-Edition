@@ -21,8 +21,11 @@
 //! - `HasRegionMisc = 0x200`
 //!
 //! The four optional sub-records appear *in the wire order*
-//! `[SoundInfo, SceneInfo, SkyInfo, TerrainInfo, RegionMisc]` *not* in mask-bit
-//! order — but each is gated on its specific bit. `TerrainInfo` is unconditional.
+//! `[SkyInfo, SoundInfo, SceneInfo, TerrainInfo, RegionMisc]` *not* in mask-bit
+//! order — `SkyInfo` (bit `0x10`) is emitted FIRST even though its bit value is
+//! higher than `SoundInfo`'s (`0x01`). Each is gated on its specific bit and
+//! `TerrainInfo` is unconditional. This matches `Region::unpack`/`Region::pack`
+//! and PhatSDK `RegionDesc.cpp:268-306`.
 
 use crate::file_type::game_time::GameTime;
 use crate::utils::{align_boundary, read_pstring_char};
@@ -30,6 +33,44 @@ use binrw::{
     BinRead, BinResult,
     io::{Read, Seek},
 };
+
+/// Write a `PStringBase<char>` into `out` — the exact inverse of
+/// [`crate::utils::read_pstring_char`] (the primitive every Region/GameTime
+/// string is read with). Wire format per `acclient.c:296509-296568`:
+///
+/// ```text
+///   u16 length                  (if length >= 0xFFFF, write 0xFFFF then u32 length)
+///   length × Windows-1252 bytes
+///   pad with 0x00 to the next 4-byte boundary
+/// ```
+///
+/// The 4-byte align-pad is computed from `out.len()` (the absolute stream
+/// offset, since a whole-record pack always starts the buffer at offset 0).
+/// This MUST match the reader's `align_boundary(4)` so the cursor lands on
+/// the same offset after a round-trip — an off-by-4 here silently corrupts
+/// every subsequent field. `read_pstring_char` strips trailing NULs on the
+/// way in, so this is a lossless inverse *iff the source string carried no
+/// trailing NUL* — retail Region/GameTime strings carry none, so the
+/// encode → pad path reproduces the original bytes exactly. (A NUL-bearing
+/// fixture would re-pack with a shorter `len`; the current parser cannot
+/// represent one anyway.)
+pub(crate) fn write_pstring_char(out: &mut Vec<u8>, s: &str) {
+    let (bytes, _, _) = encoding_rs::WINDOWS_1252.encode(s);
+    let len = bytes.len();
+    if len < 0xFFFF {
+        out.extend_from_slice(&(len as u16).to_le_bytes());
+    } else {
+        // 0xFFFF u16 sentinel → extended u32 length (mirrors the reader's
+        // `if len_u16 == 0xFFFF { read u32 }` escape).
+        out.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        out.extend_from_slice(&(len as u32).to_le_bytes());
+    }
+    out.extend_from_slice(&bytes);
+    // Pad to the next 4-byte boundary (reader does align_boundary(4)).
+    while out.len() % 4 != 0 {
+        out.push(0);
+    }
+}
 
 /// `PartsMask & HasSoundInfo` — Region carries `SoundDesc`.
 pub const PARTS_MASK_HAS_SOUND_INFO: u32 = 0x0000_0001;
@@ -86,6 +127,24 @@ impl LandDefs {
             land_height_table,
         })
     }
+
+    /// Reverse of [`LandDefs::unpack`] — the eight scalar fields in their
+    /// exact read order (i32/f32 mixed per the struct), followed by all 256
+    /// `f32` land-height-table entries. No alignment is involved (every field
+    /// is a 4-byte payload).
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.num_block_length.to_le_bytes());
+        out.extend_from_slice(&self.num_block_width.to_le_bytes());
+        out.extend_from_slice(&self.square_length.to_le_bytes());
+        out.extend_from_slice(&self.l_block_length.to_le_bytes());
+        out.extend_from_slice(&self.vertex_per_cell.to_le_bytes());
+        out.extend_from_slice(&self.max_obj_height.to_le_bytes());
+        out.extend_from_slice(&self.sky_height.to_le_bytes());
+        out.extend_from_slice(&self.road_width.to_le_bytes());
+        for h in &self.land_height_table {
+            out.extend_from_slice(&h.to_le_bytes());
+        }
+    }
 }
 
 /// Top-level skybox descriptor — owns N DayGroups (one is active per in-world
@@ -121,6 +180,23 @@ impl SkyDesc {
             light_tick_size,
             day_groups,
         })
+    }
+
+    /// Reverse of [`SkyDesc::unpack`] — `f64 tick_size`, `f64
+    /// light_tick_size`, the `align_boundary(4)` pad (a no-op after 16 bytes
+    /// of doubles, mirrored for parity with PhatSDK SkyDesc.cpp:37), `u32
+    /// num_day_groups`, then that many [`DayGroup`].
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.tick_size.to_le_bytes());
+        out.extend_from_slice(&self.light_tick_size.to_le_bytes());
+        // PhatSDK SkyDesc.cpp:37 ReadAlign — mirror align_boundary(4).
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(&(self.day_groups.len() as u32).to_le_bytes());
+        for dg in &self.day_groups {
+            dg.pack(out);
+        }
     }
 }
 
@@ -164,6 +240,26 @@ impl DayGroup {
             sky_objects,
             sky_time,
         })
+    }
+
+    /// Reverse of [`DayGroup::unpack`] — `f32 chance_of_occur`, the 4-aligned
+    /// PStringBase<char> `day_name`, `u32 num_sky_objects` + that many
+    /// [`SkyObject`] (BEFORE the sky-time list, per PhatSDK
+    /// SkyDesc.cpp:117-125), then `u32 num_sky_time` + that many
+    /// [`SkyTimeOfDay`].
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.chance_of_occur.to_le_bytes());
+        write_pstring_char(out, &self.day_name);
+
+        out.extend_from_slice(&(self.sky_objects.len() as u32).to_le_bytes());
+        for so in &self.sky_objects {
+            so.pack(out);
+        }
+
+        out.extend_from_slice(&(self.sky_time.len() as u32).to_le_bytes());
+        for st in &self.sky_time {
+            st.pack(out);
+        }
     }
 }
 
@@ -219,6 +315,25 @@ impl SkyObject {
             default_pes_object_id,
             properties,
         })
+    }
+
+    /// Reverse of [`SkyObject::unpack`] — the nine dwords in read order (six
+    /// `f32` then three `u32`), then the `align_boundary(4)` pad (no-op after
+    /// 36 bytes; mirrored for parity with PhatSDK SkyDesc.cpp:190).
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.begin_time.to_le_bytes());
+        out.extend_from_slice(&self.end_time.to_le_bytes());
+        out.extend_from_slice(&self.begin_angle.to_le_bytes());
+        out.extend_from_slice(&self.end_angle.to_le_bytes());
+        out.extend_from_slice(&self.tex_velocity_x.to_le_bytes());
+        out.extend_from_slice(&self.tex_velocity_y.to_le_bytes());
+        out.extend_from_slice(&self.default_gfx_object_id.to_le_bytes());
+        out.extend_from_slice(&self.default_pes_object_id.to_le_bytes());
+        out.extend_from_slice(&self.properties.to_le_bytes());
+        // PhatSDK SkyDesc.cpp:190 ReadAlign — mirror align_boundary(4).
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
     }
 }
 
@@ -280,6 +395,35 @@ impl SkyTimeOfDay {
             sky_obj_replace,
         })
     }
+
+    /// Reverse of [`SkyTimeOfDay::unpack`] — the eleven fields in read order
+    /// (`begin`, `dir_bright`, `dir_heading`, `dir_pitch` as `f32`; `dir_color`
+    /// as `u32`; `amb_bright` `f32`; `amb_color` `u32`; `min_world_fog`,
+    /// `max_world_fog` `f32`; `world_fog_color`, `world_fog` `u32`), then the
+    /// `align_boundary(4)` pad (no-op after 44 bytes; mirrored for parity with
+    /// PhatSDK SkyDesc.cpp:224), then `u32 num_replace` + that many
+    /// [`SkyObjectReplace`].
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.begin.to_le_bytes());
+        out.extend_from_slice(&self.dir_bright.to_le_bytes());
+        out.extend_from_slice(&self.dir_heading.to_le_bytes());
+        out.extend_from_slice(&self.dir_pitch.to_le_bytes());
+        out.extend_from_slice(&self.dir_color.to_le_bytes());
+        out.extend_from_slice(&self.amb_bright.to_le_bytes());
+        out.extend_from_slice(&self.amb_color.to_le_bytes());
+        out.extend_from_slice(&self.min_world_fog.to_le_bytes());
+        out.extend_from_slice(&self.max_world_fog.to_le_bytes());
+        out.extend_from_slice(&self.world_fog_color.to_le_bytes());
+        out.extend_from_slice(&self.world_fog.to_le_bytes());
+        // PhatSDK SkyDesc.cpp:224 ReadAlign before the count — mirror it.
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(&(self.sky_obj_replace.len() as u32).to_le_bytes());
+        for r in &self.sky_obj_replace {
+            r.pack(out);
+        }
+    }
 }
 
 /// Per-keyframe override that swaps a `SkyObject`'s gfx mesh + color params.
@@ -315,6 +459,24 @@ impl SkyObjectReplace {
             luminosity,
             max_bright,
         })
+    }
+
+    /// Reverse of [`SkyObjectReplace::unpack`] — the six dwords in read order
+    /// (`object_index`, `gfx_obj_id` as `u32`; `rotate`, `transparent`,
+    /// `luminosity`, `max_bright` as `f32`), then the `align_boundary(4)` pad
+    /// (no-op after 24 bytes; mirrored for parity with PhatSDK
+    /// SkyDesc.cpp:161).
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.object_index.to_le_bytes());
+        out.extend_from_slice(&self.gfx_obj_id.to_le_bytes());
+        out.extend_from_slice(&self.rotate.to_le_bytes());
+        out.extend_from_slice(&self.transparent.to_le_bytes());
+        out.extend_from_slice(&self.luminosity.to_le_bytes());
+        out.extend_from_slice(&self.max_bright.to_le_bytes());
+        // PhatSDK SkyDesc.cpp:161 ReadAlign — mirror align_boundary(4).
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
     }
 }
 
@@ -478,6 +640,19 @@ impl SceneType {
         }
         Ok(SceneType { stb_index, scenes })
     }
+
+    /// Reverse of [`SceneType::unpack`] — `i32 stb_index` (SIGNED — `-1` is
+    /// the "no ambient sounds" sentinel; writing it as a `u32` cast would
+    /// preserve the same bytes but the field type must stay `i32` per
+    /// PhatSDK RegionDesc.cpp:276), then `u32 num_scenes` + that many `u32`
+    /// Scene DIDs.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.stb_index.to_le_bytes());
+        out.extend_from_slice(&(self.scenes.len() as u32).to_le_bytes());
+        for scene in &self.scenes {
+            out.extend_from_slice(&scene.to_le_bytes());
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -493,6 +668,15 @@ impl SceneDesc {
             scene_types.push(SceneType::unpack(reader)?);
         }
         Ok(SceneDesc { scene_types })
+    }
+
+    /// Reverse of [`SceneDesc::unpack`] — `u32 num_scene_types` + that many
+    /// [`SceneType`].
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&(self.scene_types.len() as u32).to_le_bytes());
+        for st in &self.scene_types {
+            st.pack(out);
+        }
     }
 }
 
@@ -512,6 +696,12 @@ impl TerrainAlphaMap {
             texture_id: u32::read_le(reader)?,
         })
     }
+
+    /// Reverse of [`TerrainAlphaMap::unpack`] — `u32 t_code`, `u32 texture_id`.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.t_code.to_le_bytes());
+        out.extend_from_slice(&self.texture_id.to_le_bytes());
+    }
 }
 
 /// Road alpha-blend overlay.
@@ -528,6 +718,12 @@ impl RoadAlphaMap {
             r_code: u32::read_le(reader)?,
             texture_id: u32::read_le(reader)?,
         })
+    }
+
+    /// Reverse of [`RoadAlphaMap::unpack`] — `u32 r_code`, `u32 texture_id`.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.r_code.to_le_bytes());
+        out.extend_from_slice(&self.texture_id.to_le_bytes());
     }
 }
 
@@ -564,6 +760,20 @@ impl TerrainTex {
             detail_texture_id: u32::read_le(reader)?,
         })
     }
+
+    /// Reverse of [`TerrainTex::unpack`] — the ten `u32` fields in read order.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.texture_id.to_le_bytes());
+        out.extend_from_slice(&self.tex_tiling.to_le_bytes());
+        out.extend_from_slice(&self.max_vert_bright.to_le_bytes());
+        out.extend_from_slice(&self.min_vert_bright.to_le_bytes());
+        out.extend_from_slice(&self.max_vert_saturate.to_le_bytes());
+        out.extend_from_slice(&self.min_vert_saturate.to_le_bytes());
+        out.extend_from_slice(&self.max_vert_hue.to_le_bytes());
+        out.extend_from_slice(&self.min_vert_hue.to_le_bytes());
+        out.extend_from_slice(&self.detail_tex_tiling.to_le_bytes());
+        out.extend_from_slice(&self.detail_texture_id.to_le_bytes());
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -581,6 +791,13 @@ impl TMTerrainDesc {
             terrain_type,
             terrain_tex,
         })
+    }
+
+    /// Reverse of [`TMTerrainDesc::unpack`] — `u32 terrain_type` then the
+    /// [`TerrainTex`] payload.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.terrain_type.to_le_bytes());
+        self.terrain_tex.pack(out);
     }
 }
 
@@ -629,6 +846,34 @@ impl TexMerge {
             terrain_desc,
         })
     }
+
+    /// Reverse of [`TexMerge::unpack`] — `u32 base_tex_size`, then the four
+    /// length-prefixed lists in their exact read order: corner
+    /// [`TerrainAlphaMap`]s, side [`TerrainAlphaMap`]s, road [`RoadAlphaMap`]s,
+    /// and [`TMTerrainDesc`]s. Each list is `u32 count` + that many records.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.base_tex_size.to_le_bytes());
+
+        out.extend_from_slice(&(self.corner_terrain_maps.len() as u32).to_le_bytes());
+        for m in &self.corner_terrain_maps {
+            m.pack(out);
+        }
+
+        out.extend_from_slice(&(self.side_terrain_maps.len() as u32).to_le_bytes());
+        for m in &self.side_terrain_maps {
+            m.pack(out);
+        }
+
+        out.extend_from_slice(&(self.road_maps.len() as u32).to_le_bytes());
+        for m in &self.road_maps {
+            m.pack(out);
+        }
+
+        out.extend_from_slice(&(self.terrain_desc.len() as u32).to_le_bytes());
+        for d in &self.terrain_desc {
+            d.pack(out);
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -646,6 +891,13 @@ impl LandSurf {
             surf_type,
             tex_merge,
         })
+    }
+
+    /// Reverse of [`LandSurf::unpack`] — `u32 surf_type` then the [`TexMerge`]
+    /// payload.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.surf_type.to_le_bytes());
+        self.tex_merge.pack(out);
     }
 }
 
@@ -673,6 +925,18 @@ impl TerrainType {
             scene_types,
         })
     }
+
+    /// Reverse of [`TerrainType::unpack`] — the 4-aligned PStringBase<char>
+    /// `terrain_name`, `u32 terrain_color`, `u32 num_scene_types` + that many
+    /// `u32` Scene DIDs.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        write_pstring_char(out, &self.terrain_name);
+        out.extend_from_slice(&self.terrain_color.to_le_bytes());
+        out.extend_from_slice(&(self.scene_types.len() as u32).to_le_bytes());
+        for scene in &self.scene_types {
+            out.extend_from_slice(&scene.to_le_bytes());
+        }
+    }
 }
 
 /// Region-level terrain palette + texture-blending rules. Unconditional —
@@ -695,6 +959,16 @@ impl TerrainDesc {
             terrain_types,
             land_surfaces,
         })
+    }
+
+    /// Reverse of [`TerrainDesc::unpack`] — `u32 num_terrain_types` + that many
+    /// [`TerrainType`], then the [`LandSurf`] payload.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&(self.terrain_types.len() as u32).to_le_bytes());
+        for tt in &self.terrain_types {
+            tt.pack(out);
+        }
+        self.land_surfaces.pack(out);
     }
 }
 
@@ -719,6 +993,16 @@ impl RegionMisc {
             clear_cell_id: u32::read_le(reader)?,
             clear_monster_id: u32::read_le(reader)?,
         })
+    }
+
+    /// Reverse of [`RegionMisc::unpack`] — the six `u32` fields in read order.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&self.game_map_id.to_le_bytes());
+        out.extend_from_slice(&self.autotest_map_id.to_le_bytes());
+        out.extend_from_slice(&self.autotest_map_size.to_le_bytes());
+        out.extend_from_slice(&self.clear_cell_id.to_le_bytes());
+        out.extend_from_slice(&self.clear_monster_id.to_le_bytes());
     }
 }
 
@@ -812,6 +1096,84 @@ impl Region {
             terrain_info,
             region_misc,
         })
+    }
+
+    /// Reverse of [`Region::unpack`] — serialize the full Region body into
+    /// `out`. Field order is the EXACT inverse of the reader:
+    ///
+    /// ```text
+    ///   id(u32) region_number(u32) version(u32)
+    ///   region_name (PStringBase<char>, 4-aligned)
+    ///   land_defs (8 scalars + 256 f32)
+    ///   game_time (GameTime)
+    ///   parts_mask(u32)
+    ///   if parts_mask & 0x10  : SkyDesc      (HasSkyInfo)   ← WIRE ORDER: sky first
+    ///   if parts_mask & 0x01  : SoundDesc    (HasSoundInfo)
+    ///   if parts_mask & 0x02  : SceneDesc    (HasSceneInfo)
+    ///   TerrainDesc                                          (unconditional)
+    ///   if parts_mask & 0x200 : RegionMisc   (HasRegionMisc) ← after TerrainInfo
+    /// ```
+    ///
+    /// The optional blocks are emitted in WIRE order — `[Sky, Sound, Scene,
+    /// (Terrain), Misc]` — NOT bit-value order, matching `Region::unpack` and
+    /// PhatSDK RegionDesc.cpp:268-306. Each is gated on its own parts_mask
+    /// bit; a bit set with a `None` field is an unwritable contradiction
+    /// (the byte stream could not be re-parsed back to the same record), so
+    /// this returns an error rather than emitting bad bytes. The higher-level
+    /// `DatPack for Region` guard rejects BOTH directions (set-but-None AND
+    /// clear-but-Some) up front; this inverse only needs the set-but-None
+    /// check to stay a faithful inverse of the reader.
+    pub fn pack(&self, out: &mut Vec<u8>) -> BinResult<()> {
+        out.extend_from_slice(&self.id.to_le_bytes());
+        out.extend_from_slice(&self.region_number.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        write_pstring_char(out, &self.region_name);
+
+        self.land_defs.pack(out);
+        self.game_time.pack(out);
+        out.extend_from_slice(&self.parts_mask.to_le_bytes());
+
+        // WIRE ORDER: SkyInfo (0x10) first, even though its bit value is
+        // higher than SoundInfo's. Mirrors Region::unpack exactly.
+        if self.parts_mask & PARTS_MASK_HAS_SKY_INFO != 0 {
+            let sky = self.sky_info.as_ref().ok_or_else(|| binrw::Error::AssertFail {
+                pos: out.len() as u64,
+                message: "parts_mask HasSkyInfo (0x10) set but sky_info is None".to_string(),
+            })?;
+            sky.pack(out);
+        }
+
+        if self.parts_mask & PARTS_MASK_HAS_SOUND_INFO != 0 {
+            let sound = self.sound_info.as_ref().ok_or_else(|| binrw::Error::AssertFail {
+                pos: out.len() as u64,
+                message: "parts_mask HasSoundInfo (0x01) set but sound_info is None".to_string(),
+            })?;
+            // SoundDesc already has an inverse pack() (shipped) — WRAP it.
+            sound.pack(out);
+        }
+
+        if self.parts_mask & PARTS_MASK_HAS_SCENE_INFO != 0 {
+            let scene = self.scene_info.as_ref().ok_or_else(|| binrw::Error::AssertFail {
+                pos: out.len() as u64,
+                message: "parts_mask HasSceneInfo (0x02) set but scene_info is None".to_string(),
+            })?;
+            scene.pack(out);
+        }
+
+        // TerrainInfo is unconditional.
+        self.terrain_info.pack(out);
+
+        // RegionMisc comes AFTER TerrainInfo (second maskmap).
+        if self.parts_mask & PARTS_MASK_HAS_REGION_MISC != 0 {
+            let misc = self.region_misc.as_ref().ok_or_else(|| binrw::Error::AssertFail {
+                pos: out.len() as u64,
+                message: "parts_mask HasRegionMisc (0x200) set but region_misc is None"
+                    .to_string(),
+            })?;
+            misc.pack(out);
+        }
+
+        Ok(())
     }
 }
 
