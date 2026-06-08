@@ -15,7 +15,8 @@
 
 use crate::Result;
 use crate::file_type::palette::Palette;
-use binrw::{BinRead, binread};
+use binrw::{BinRead, BinResult, BinWrite, binread};
+use std::io::{Seek, Write};
 
 /// Subset of `SurfacePixelFormat` from upstream ACE
 /// `Source/ACE.Entity/Enum/SurfacePixelFormat.cs`. Values are the
@@ -103,6 +104,135 @@ impl Texture {
 
     pub fn format(&self) -> SurfacePixelFormat {
         SurfacePixelFormat::from_u32(self.format_raw)
+    }
+
+    /// Serialize this Texture back into the canonical DAT body layout —
+    /// `[u32 id][i32 _unknown][i32 width][i32 height][u32 format_raw]`
+    /// `[i32 length][u8 source_data]*length[u32 default_palette_id]?` — the
+    /// exact inverse of [`Texture::unpack`]. The byte length is derived from
+    /// `source_data.len()` (written as an `i32`, matching the read side), and
+    /// `default_palette_id` is emitted iff the format is palette-indexed
+    /// (P8 / Index16, i.e. [`SurfacePixelFormat::needs_palette`]) — the exact
+    /// condition the reader gates the trailing `Option<u32>` on. The compressed
+    /// / JPEG formats (`Dxt*`, `CustomRawJpeg`) are serialized verbatim from
+    /// `source_data` (no decode), so `unpack(pack(x)) == x` holds byte-for-byte
+    /// for every format.
+    ///
+    /// INTRA-RECORD validation only: this method does NOT resolve the
+    /// `default_palette_id` against a real [`Palette`] nor bounds-check pixel
+    /// indices — that cross-record check requires a palette argument the
+    /// `DatPack` trait path does not carry, and lives in the dat-write
+    /// `pack/texture.rs` separate `Texture::pack_validated`-style path
+    /// (E12 design §B, deferred). Here we only ensure the on-wire shape is the
+    /// faithful inverse of the read.
+    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> BinResult<()> {
+        // Last-line structural guard (mirrors Animation::write): the reader
+        // gates the trailing default_palette_id on `needs_palette()` ALONE
+        // (P8/Index16), so a record whose palette-id presence disagrees with
+        // its format could not be re-read after writing — fail closed before
+        // emitting any bytes rather than producing a non-re-readable record.
+        // (A P8/Index16 record with default_palette_id==None would otherwise
+        // write 4 bytes short; a non-indexed record carrying Some would write
+        // 4 stray bytes the reader never consumes.) The richer attributable
+        // InvariantViolation is raised by the dat-write pack/texture.rs guard
+        // on the trait path; this keeps the inherent pack/pack_validated path
+        // symmetric and fail-closed too.
+        if self.format().needs_palette() != self.default_palette_id.is_some() {
+            return Err(binrw::Error::Custom {
+                pos: writer.stream_position().unwrap_or(0),
+                err: Box::new(TextureWriteError(format!(
+                    "format {:?} needs_palette={} but default_palette_id.is_some()={} \
+                     (would not round-trip: the reader reads the trailing id iff the \
+                     format is P8/Index16)",
+                    self.format(),
+                    self.format().needs_palette(),
+                    self.default_palette_id.is_some(),
+                ))),
+            });
+        }
+
+        self.id.write_le(writer)?;
+        self._unknown.write_le(writer)?;
+        self.width.write_le(writer)?;
+        self.height.write_le(writer)?;
+        self.format_raw.write_le(writer)?;
+        let length = i32::try_from(self.source_data.len()).map_err(|e| binrw::Error::Custom {
+            pos: writer.stream_position().unwrap_or(0),
+            err: Box::new(e),
+        })?;
+        length.write_le(writer)?;
+        writer.write_all(&self.source_data)?;
+        // The trailing default_palette_id is present iff the format is
+        // palette-indexed — exactly the binrw `if` the reader gates it on.
+        // The guard above guarantees the Some-ness matches needs_palette(), so
+        // this emits the id for every palette-indexed record.
+        if self.format().needs_palette() {
+            if let Some(pid) = self.default_palette_id {
+                pid.write_le(writer)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Pack into a freshly allocated `Vec<u8>` — for byte-equal round-trip
+    /// parity against retail Textures.
+    pub fn pack(&self) -> Result<Vec<u8>> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        self.write(&mut buf)?;
+        Ok(buf.into_inner())
+    }
+
+    /// CROSS-RECORD validated pack (E12 design §B.5 #11; deferred from the
+    /// `DatPack::pack` trait path because that path carries no palette).
+    ///
+    /// For the palette-indexed formats (P8 / Index16) this resolves the
+    /// texture's pixel indices against the supplied [`Palette`] and rejects
+    /// (fail-closed, no bytes emitted) any index `>= palette.colors.len()`:
+    /// `u8` indices for P8, `u16`-little-endian indices for Index16. The
+    /// caller is responsible for passing the palette the texture's
+    /// `default_palette_id` resolves to. Non-palettized formats have no
+    /// cross-record dependency and pack straight through.
+    ///
+    /// This lives here (next to the parser) rather than in `holtburger-dat-write`
+    /// because the orphan rule forbids an inherent `impl Texture` outside this
+    /// crate. The dat-write `DatPack::pack` path runs the INTRA-record guards
+    /// (palette-id presence + width×height×bpp); this path adds the cross-record
+    /// index-bounds half.
+    pub fn pack_validated(&self, palette: &Palette) -> Result<Vec<u8>> {
+        let pal_len = palette.colors.len();
+        match self.format() {
+            SurfacePixelFormat::P8 => {
+                for (i, &idx) in self.source_data.iter().enumerate() {
+                    if (idx as usize) >= pal_len {
+                        return Err(crate::DatError::Corruption(format!(
+                            "Texture 0x{:08X}: P8 pixel {i} index {idx} >= palette len {pal_len} (palette 0x{:08X})",
+                            self.id, palette.id
+                        )));
+                    }
+                }
+            }
+            SurfacePixelFormat::Index16 => {
+                if self.source_data.len() % 2 != 0 {
+                    return Err(crate::DatError::Corruption(format!(
+                        "Texture 0x{:08X}: Index16 source_data length {} is not a multiple of 2",
+                        self.id,
+                        self.source_data.len()
+                    )));
+                }
+                for (i, chunk) in self.source_data.chunks_exact(2).enumerate() {
+                    let idx = (chunk[0] as usize) | ((chunk[1] as usize) << 8);
+                    if idx >= pal_len {
+                        return Err(crate::DatError::Corruption(format!(
+                            "Texture 0x{:08X}: Index16 pixel {i} index {idx} >= palette len {pal_len} (palette 0x{:08X})",
+                            self.id, palette.id
+                        )));
+                    }
+                }
+            }
+            // Non-palettized formats have no cross-record dependency.
+            _ => {}
+        }
+        self.pack()
     }
 
     /// For `CustomRawJpeg` records, peek the JPEG's SOF marker to get
@@ -401,6 +531,21 @@ impl Texture {
     }
 }
 
+/// Fail-closed write guard error (the inherent `Texture::write` last-line
+/// structural guard). Boxed into `binrw::Error::Custom` so `pack` /
+/// `pack_validated` surface it as an `Err` instead of emitting a
+/// non-re-readable record.
+#[derive(Debug)]
+struct TextureWriteError(String);
+
+impl std::fmt::Display for TextureWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Texture write invariant: {}", self.0)
+    }
+}
+
+impl std::error::Error for TextureWriteError {}
+
 #[derive(Debug)]
 pub enum TextureDecodeError {
     UnsupportedFormat(SurfacePixelFormat),
@@ -512,6 +657,144 @@ mod tests {
         let tex = Texture::unpack(&buf).unwrap();
         let err = tex.to_rgba8(|_| panic!("no palette")).unwrap_err();
         assert!(matches!(err, TextureDecodeError::UnsupportedFormat(_)));
+    }
+
+    #[test]
+    fn pack_is_exact_inverse_of_unpack_non_palettized() {
+        // CustomLscapeR8G8B8 (243) — no trailing palette id.
+        let pixels = vec![
+            0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
+        ];
+        let buf = make_texture_header(243, 2, 2, &pixels, None);
+        let tex = Texture::unpack(&buf).unwrap();
+        let packed = tex.pack().unwrap();
+        assert_eq!(packed, buf, "pack must be the exact byte inverse of unpack");
+        let reparsed = Texture::unpack(&packed).unwrap();
+        assert_eq!(reparsed.id, tex.id);
+        assert_eq!(reparsed.width, tex.width);
+        assert_eq!(reparsed.height, tex.height);
+        assert_eq!(reparsed.format_raw, tex.format_raw);
+        assert_eq!(reparsed.source_data, tex.source_data);
+        assert!(reparsed.default_palette_id.is_none());
+    }
+
+    #[test]
+    fn pack_is_exact_inverse_of_unpack_palettized() {
+        // P8 (41) — trailing default_palette_id present.
+        let pixels = vec![0u8, 1, 2];
+        let buf = make_texture_header(41, 3, 1, &pixels, Some(0x04001000));
+        let tex = Texture::unpack(&buf).unwrap();
+        let packed = tex.pack().unwrap();
+        assert_eq!(
+            packed, buf,
+            "palettized pack must include the trailing palette id and be byte-exact"
+        );
+        let reparsed = Texture::unpack(&packed).unwrap();
+        assert_eq!(reparsed.default_palette_id, Some(0x04001000));
+    }
+
+    #[test]
+    fn pack_validated_accepts_in_bounds_p8_indices() {
+        // P8 (41): 2x2, indices {0,1,2,0} into a 3-colour palette.
+        let buf = make_texture_header(41, 2, 2, &[0u8, 1, 2, 0], Some(0x04003000));
+        let tex = Texture::unpack(&buf).unwrap();
+        let pal = Palette {
+            id: 0x04003000,
+            colors: vec![0xFF000000, 0xFF000001, 0xFF000002],
+        };
+        let bytes = tex.pack_validated(&pal).expect("in-bounds indices must pass");
+        assert_eq!(bytes, tex.pack().unwrap(), "validated pack equals plain pack when in-bounds");
+    }
+
+    #[test]
+    fn pack_validated_rejects_out_of_bounds_p8_index() {
+        // index 5 with a 3-colour palette → out of bounds.
+        let buf = make_texture_header(41, 2, 2, &[0u8, 1, 5, 0], Some(0x04003000));
+        let tex = Texture::unpack(&buf).unwrap();
+        let pal = Palette {
+            id: 0x04003000,
+            colors: vec![0xFF000000, 0xFF000001, 0xFF000002],
+        };
+        let err = tex
+            .pack_validated(&pal)
+            .expect_err("out-of-bounds P8 index must be rejected");
+        assert!(
+            format!("{err}").contains(">= palette len"),
+            "error should attribute the bounds violation: {err}"
+        );
+    }
+
+    #[test]
+    fn pack_validated_rejects_out_of_bounds_index16() {
+        // Index16 (101): 1 pixel, index = 5 (le u16) with a 3-colour palette.
+        let buf = make_texture_header(101, 1, 1, &[0x05, 0x00], Some(0x04003000));
+        let tex = Texture::unpack(&buf).unwrap();
+        let pal = Palette {
+            id: 0x04003000,
+            colors: vec![0xFF000000, 0xFF000001, 0xFF000002],
+        };
+        let err = tex
+            .pack_validated(&pal)
+            .expect_err("out-of-bounds Index16 index must be rejected");
+        assert!(format!("{err}").contains(">= palette len"), "{err}");
+    }
+
+    #[test]
+    fn inherent_pack_rejects_indexed_format_missing_palette_id() {
+        // P8 (41) with default_palette_id == None: the reader would try to
+        // read a trailing u32 that the writer omits, so the inherent pack must
+        // fail closed (Err, no panic, no short bytes) rather than emit a
+        // non-re-readable record. Constructed directly because unpack always
+        // sets Some for indexed formats.
+        let tex = Texture {
+            id: 0x0600_0042,
+            _unknown: 0,
+            width: 2,
+            height: 2,
+            format_raw: 41, // P8
+            length: 4,
+            source_data: vec![0u8; 4],
+            default_palette_id: None,
+        };
+        let err = tex
+            .pack()
+            .expect_err("P8 with no palette id must fail closed");
+        assert!(
+            format!("{err}").contains("needs_palette"),
+            "error should attribute the palette-id presence mismatch: {err}"
+        );
+    }
+
+    #[test]
+    fn inherent_pack_rejects_non_indexed_format_carrying_palette_id() {
+        // A8R8G8B8 (21) with a stray default_palette_id: the reader never reads
+        // a trailing id for non-indexed formats, so emitting one would not
+        // round-trip — fail closed.
+        let tex = Texture {
+            id: 0x0600_0043,
+            _unknown: 0,
+            width: 1,
+            height: 1,
+            format_raw: 21, // A8R8G8B8 (not palette-indexed)
+            length: 4,
+            source_data: vec![0u8; 4],
+            default_palette_id: Some(0x0400_2000),
+        };
+        let err = tex
+            .pack()
+            .expect_err("non-indexed format carrying a palette id must fail closed");
+        assert!(format!("{err}").contains("needs_palette"), "{err}");
+    }
+
+    #[test]
+    fn pack_serializes_jpeg_source_verbatim() {
+        // CustomRawJpeg (500) — header dims are 0,0; payload bytes serialized
+        // verbatim (no decode), with no trailing palette id.
+        let fake_jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0x02, 0x03];
+        let buf = make_texture_header(500, 0, 0, &fake_jpeg, None);
+        let tex = Texture::unpack(&buf).unwrap();
+        let packed = tex.pack().unwrap();
+        assert_eq!(packed, buf, "JPEG source must round-trip verbatim");
     }
 
     #[test]

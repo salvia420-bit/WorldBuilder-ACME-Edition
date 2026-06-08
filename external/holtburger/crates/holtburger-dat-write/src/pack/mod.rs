@@ -21,3 +21,9 @@ pub mod physics_script;
 pub mod palette;
 pub mod surface;
 pub mod surface_texture;
+
+// E12c slice-2 — WRITE-NEW raster / animation types (inverse pack authored in
+// holtburger-dat next to the parser).
+pub mod animation;
+pub mod render_texture;
+pub mod texture;

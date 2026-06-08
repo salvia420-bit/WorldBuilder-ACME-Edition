@@ -14,11 +14,9 @@
 //! [i32 count]               // List<uint>.Unpack uses an Int32 length
 //! [u32 texture_id] * count  // each is a Surface (0x06) entry
 //! ```
-//!
-//! Read-only; no write path.
 
-use binrw::{BinRead, BinResult, binread};
-use std::io::{Read, Seek};
+use binrw::{BinRead, BinResult, BinWrite, binread};
+use std::io::{Read, Seek, Write};
 
 #[binread]
 #[derive(Debug, Clone, serde::Serialize)]
@@ -40,6 +38,35 @@ impl RenderTexture {
     /// First referenced Surface (0x06) ID, if any.
     pub fn first_texture(&self) -> Option<u32> {
         self.textures.first().copied()
+    }
+
+    /// Serialize this RenderTexture back into the canonical DAT body layout —
+    /// `[u32 id][i32 unknown][u8 unknown_byte][i32 count][u32 texture_id]*count`
+    /// — the exact inverse of [`RenderTexture::unpack`] / [`parse_texture_ids`].
+    /// The texture-id count is derived from `textures.len()` (written as an
+    /// `i32`, matching the read side) so `unpack(pack(x)) == x` holds
+    /// byte-for-byte.
+    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> BinResult<()> {
+        self.id.write_le(writer)?;
+        self.unknown.write_le(writer)?;
+        self.unknown_byte.write_le(writer)?;
+        let count = i32::try_from(self.textures.len()).map_err(|e| binrw::Error::Custom {
+            pos: writer.stream_position().unwrap_or(0),
+            err: Box::new(e),
+        })?;
+        count.write_le(writer)?;
+        for &texture_id in &self.textures {
+            texture_id.write_le(writer)?;
+        }
+        Ok(())
+    }
+
+    /// Pack into a freshly allocated `Vec<u8>` — for byte-equal round-trip
+    /// parity against retail RenderTextures.
+    pub fn pack(&self) -> Result<Vec<u8>, binrw::Error> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        self.write(&mut buf)?;
+        Ok(buf.into_inner())
     }
 }
 
@@ -95,5 +122,18 @@ mod tests {
         assert_eq!(rt.unknown, -1);
         assert!(rt.textures.is_empty());
         assert_eq!(rt.first_texture(), None);
+    }
+
+    #[test]
+    fn write_pack_is_exact_inverse_of_unpack() {
+        let buf = pack(0x15000000, 0, 1, &[0x06001234, 0x06001235]);
+        let rt = RenderTexture::unpack(&buf).unwrap();
+        let packed = RenderTexture::pack(&rt).unwrap();
+        assert_eq!(packed, buf, "pack must be the exact byte inverse of unpack");
+        let reparsed = RenderTexture::unpack(&packed).unwrap();
+        assert_eq!(reparsed.id, rt.id);
+        assert_eq!(reparsed.unknown, rt.unknown);
+        assert_eq!(reparsed.unknown_byte, rt.unknown_byte);
+        assert_eq!(reparsed.textures, rt.textures);
     }
 }
