@@ -5,6 +5,7 @@ members = [
     "crates/holtburger-core",
     "crates/holtburger-common",
     "crates/holtburger-dat",
+    "crates/holtburger-dat-write",
     "crates/holtburger-event-bake",
     "crates/holtburger-protocol",
     "crates/holtburger-manifest",

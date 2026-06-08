@@ -1517,6 +1517,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "holtburger-dat-write"
+version = "0.1.0"
+dependencies = [
+ "binrw",
+ "holtburger-common",
+ "holtburger-dat",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "holtburger-event-bake"
 version = "0.1.0"
 dependencies = [
