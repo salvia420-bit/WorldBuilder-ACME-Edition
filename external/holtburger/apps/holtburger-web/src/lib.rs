@@ -3883,6 +3883,28 @@ pub struct ModelMesh {
     /// variant available; JS-side LOD wrappers fall back to a plain
     /// `THREE.Mesh` instead of `THREE.LOD`.
     did_degrade: u32,
+    /// E8 (2026-06-08): one source polygon id per emitted triangle.
+    /// Length = `tri_count`. ADDITIVE + OPTIONAL — existing consumers that
+    /// only read positions/uvs/indices are unaffected. Pairs with
+    /// `side_kinds` for round-trip validation and ML training data.
+    ///
+    /// UNIQUENESS CAVEAT: a `polygon_id` is the source `gfx.polygons` /
+    /// `cell.polygons` key, which is unique only WITHIN a single source
+    /// GfxObj / EnvCell. The aggregated single-mesh export paths
+    /// (`triangulate_setup_model_at_frame` flattens every SetupModel part's
+    /// tris, and `append_environment_tris` flattens every cell's tris into
+    /// one `ModelMesh`) reset their polygon-id namespace per part / per
+    /// cell, so two different source polygons in different parts/cells can
+    /// share the same `polygon_id`. For globally-unique per-tri provenance
+    /// across a multi-part model, use the per-part export
+    /// (`triangulate_setup_model_per_part`) where each part is packed into
+    /// its own `ModelMesh` and the `(polygon_id, side_kind)` pair is unique.
+    polygon_ids: Vec<u16>,
+    /// E8 (2026-06-08): one [`SideKind`] (as `u8`) per emitted triangle —
+    /// `0` Positive, `1` PositiveReversed, `2` Negative. Length =
+    /// `tri_count`. Crosses the wasm boundary as a `Uint8Array` (mirrors
+    /// `sides_types`). Pairs with `polygon_ids`.
+    side_kinds: Vec<u8>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3933,6 +3955,48 @@ impl ModelMesh {
     pub fn did_degrade(&self) -> u32 {
         self.did_degrade
     }
+    /// E8 — per-triangle source polygon id (`Uint16Array`). Length =
+    /// `tri_count`. ADDITIVE: consumers that ignore it are unaffected.
+    #[wasm_bindgen(getter, js_name = polygonIds)]
+    pub fn polygon_ids(&self) -> Vec<u16> { self.polygon_ids.clone() }
+    /// E8 — per-triangle polygon SIDE (`Uint8Array` of [`SideKind`] u8s:
+    /// `0` Positive, `1` PositiveReversed, `2` Negative). Length =
+    /// `tri_count`. Pairs with `polygonIds` for full (polygon, side)
+    /// provenance.
+    #[wasm_bindgen(getter, js_name = sideKinds)]
+    pub fn side_kinds(&self) -> Vec<u8> { self.side_kinds.clone() }
+}
+
+/// E8 (2026-06-08): per-polygon-side material traceability tag. Mirrors
+/// upstream `PreparedPolygonRenderSideKind` so each exported triangle
+/// records which SIDE of its source polygon it represents (round-trip
+/// validation / ML training data). Paired with `polygon_id`, this gives
+/// `(polygon, side)` provenance — globally unique on the per-part export
+/// path; per-source-part only on the aggregated single-mesh path (see the
+/// uniqueness caveat on [`ModelMesh::polygon_ids`]). Discriminants are
+/// explicit + `#[repr(u8)]` so the value survives the typed-array boundary
+/// unchanged (`ModelMesh.sideKinds` is a `Uint8Array` of these values, one
+/// per emitted tri).
+///
+/// - `Positive` — the polygon's positive (front) face, original winding,
+///   `pos_surface` material. This is the only kind a single-sided poly emits.
+/// - `PositiveReversed` — the positive face emitted with REVERSED winding.
+///   Reserved for parity with the upstream enum; the current triangulator
+///   does not emit it (back faces use the negative surface → `Negative`),
+///   but it is part of the round-trip contract so downstream consumers can
+///   distinguish a flipped-positive draw from a true negative-side draw.
+/// - `Negative` — the polygon's negative (back) face: reversed winding +
+///   negated normals + `neg_surface` material. Emitted only for two-sided
+///   polys (`sides_type == CullMode::Clockwise`) with a DISTINCT back
+///   surface (see `append_gfx_tris_with_tex_swaps`).
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SideKind {
+    Positive = 0,
+    PositiveReversed = 1,
+    Negative = 2,
 }
 
 /// Internal triangle accumulator. Mirrors `ObjectSpriteGenerator.Tri`
@@ -3955,6 +4019,20 @@ struct Tri {
     /// `sides_type == 1 ? CULLMODE_NONE : CULLMODE_CW`). The JS adapter uses
     /// this to pick FrontSide vs DoubleSide per polygon (behind `?perPolyCull`).
     sides_type: u8,
+    /// E8 (2026-06-08): the source polygon id (`gfx.polygons` /
+    /// `cell.polygons` key) this tri was fan-triangulated from. ADDITIVE +
+    /// OPTIONAL — lets a round-trip validator / ML pipeline trace each tri
+    /// back to its source polygon. Multiple tris share a `polygon_id` when a
+    /// poly has >3 verts. NOTE: the id is unique only within ONE source
+    /// GfxObj / EnvCell; the aggregated single-mesh paths flatten multiple
+    /// parts/cells (each with its own namespace) into one `ModelMesh`, so
+    /// global per-tri uniqueness holds only on the per-part export path —
+    /// see [`ModelMesh::polygon_ids`].
+    polygon_id: u16,
+    /// E8 (2026-06-08): which SIDE of the source polygon this tri represents
+    /// (front/positive vs back/negative). Pairs with `polygon_id` for the
+    /// full (polygon, side) provenance of every emitted triangle.
+    side_kind: SideKind,
 }
 
 /// Walk a [`GfxObj`]'s polygons, fan-triangulate each, transform by
@@ -4153,6 +4231,9 @@ fn append_gfx_tris_with_tex_swaps(
                 normals: [n0, n1, n2],
                 surface_did: pos_surface_did,
                 sides_type: poly.sides_type as u8,
+                // E8: front face → positive side of polygon `pid`.
+                polygon_id: pid,
+                side_kind: SideKind::Positive,
             });
             if emit_back_face {
                 // Reversed winding (A, C, B) + flipped normals so the back
@@ -4168,6 +4249,9 @@ fn append_gfx_tris_with_tex_swaps(
                     // Explicit opposite face of a 2-sided-distinct poly →
                     // single-sided (its own winding is the front for `neg`).
                     sides_type: poly.sides_type as u8,
+                    // E8: back face → negative side of the SAME polygon `pid`.
+                    polygon_id: pid,
+                    side_kind: SideKind::Negative,
                 });
             }
         }
@@ -6096,6 +6180,10 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
     let mut normals = Vec::with_capacity(tris.len() * 9);
     let mut surface_indices = Vec::with_capacity(tris.len());
     let mut sides_types: Vec<u8> = Vec::with_capacity(tris.len());
+    // E8: per-tri (polygon_id, side_kind) provenance — one entry per
+    // emitted triangle, same order as positions/surface_indices.
+    let mut polygon_ids: Vec<u16> = Vec::with_capacity(tris.len());
+    let mut side_kinds: Vec<u8> = Vec::with_capacity(tris.len());
 
     let mut bbox_min = [f32::INFINITY; 3];
     let mut bbox_max = [f32::NEG_INFINITY; 3];
@@ -6115,6 +6203,9 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
         };
         surface_indices.push(sidx);
         sides_types.push(tri.sides_type);
+        // E8: trace this tri to its source polygon + side.
+        polygon_ids.push(tri.polygon_id);
+        side_kinds.push(tri.side_kind as u8);
 
         for v in 0..3 {
             let p = tri.pos[v];
@@ -6149,6 +6240,9 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
         // (`fetch_model_mesh` / `fetch_model_meshes`) post-fills this
         // via a separate GfxObj walk after the pack returns.
         did_degrade: 0,
+        // E8: per-tri (polygon, side) provenance.
+        polygon_ids,
+        side_kinds,
     }
 }
 
@@ -11187,6 +11281,9 @@ impl EnvCellPlacement {
             bbox_min: [0.0; 3],
             bbox_max: [0.0; 3],
             did_degrade: 0,
+            // E8: empty replacement mesh — no triangles, no provenance.
+            polygon_ids: Vec::new(),
+            side_kinds: Vec::new(),
         })
     }
 }
@@ -11273,6 +11370,9 @@ fn append_environment_tris(
                     // Environment (EnvCell) geometry stays two-sided (DoubleSide)
                     // — unchanged behaviour, never single-sided by the cull flag.
                     sides_type: 1,
+                    // E8: EnvCell polys only emit the positive (front) side.
+                    polygon_id: pid,
+                    side_kind: SideKind::Positive,
                 });
             }
         }
@@ -13034,6 +13134,9 @@ impl ModelMesh {
             bbox_min: self.bbox_min,
             bbox_max: self.bbox_max,
             did_degrade: self.did_degrade,
+            // E8: per-tri (polygon, side) provenance survives the clone.
+            polygon_ids: self.polygon_ids.clone(),
+            side_kinds: self.side_kinds.clone(),
         }
     }
 }
@@ -28254,6 +28357,7 @@ pub fn poll_motion_axes() -> Vec<u32> {
     MOTION_AXES.with(|q| std::mem::take(&mut *q.borrow_mut()))
 }
 
+#[cfg(target_arch = "wasm32")]
 fn publish_local_player_pose(
     world: &holtburger_world::WorldState,
     pose_cell: &std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
@@ -38642,6 +38746,125 @@ mod tests_substitution {
             "two-sided same-surface poly must emit ONE tri (DoubleSide draw)"
         );
         assert_eq!(tris[0].surface_did, 0xCCDD0001);
+    }
+
+    /// E8 (2026-06-08) — synth GfxObj carrying TWO polygons with
+    /// NON-DEFAULT ids so the test can prove each emitted tri traces to
+    /// exactly one source polygon SIDE:
+    ///   - poly id `7`: a single-sided QUAD (4 verts) → fan-triangulates
+    ///     to TWO tris, both `polygon_id == 7`, `side_kind == Positive`.
+    ///   - poly id `3`: a two-sided TRI with DISTINCT pos/neg surfaces →
+    ///     emits a `Positive` front tri + a `Negative` back tri, both
+    ///     `polygon_id == 3`.
+    /// Round-trips through `GfxObj::pack`/`unpack` so the provenance is
+    /// derived from the same binrw path live data flows through.
+    fn synth_gfx_obj_traceable(id: u32) -> Vec<u8> {
+        let mk_vert = |x: f32, y: f32| SWVertex {
+            num_uvs: 1,
+            origin: Vector3 { x, y, z: 0.0 },
+            normal: Vector3 { x: 0.0, y: 0.0, z: 1.0 },
+            uvs: vec![Vec2Duv { u: x, v: y }],
+        };
+        let mut vertices = HashMap::new();
+        // Quad corners (poly 7) + a separate triangle (poly 3) reuses 0,1,2.
+        vertices.insert(0u16, mk_vert(0.0, 0.0));
+        vertices.insert(1u16, mk_vert(1.0, 0.0));
+        vertices.insert(2u16, mk_vert(1.0, 1.0));
+        vertices.insert(3u16, mk_vert(0.0, 1.0));
+
+        // poly id 7: single-sided quad (4 verts → 2 tris).
+        let quad = Polygon {
+            num_pts: 4,
+            stippling: 0,
+            sides_type: 1, // Positive only (DoubleSide, no back-face emit)
+            pos_surface: 0,
+            neg_surface: -1,
+            vertex_ids: vec![0, 1, 2, 3],
+            pos_uv_indices: vec![0, 0, 0, 0],
+            neg_uv_indices: vec![],
+        };
+        // poly id 3: two-sided tri with DISTINCT pos/neg surfaces.
+        let two_sided = Polygon {
+            num_pts: 3,
+            stippling: 0,
+            sides_type: 2, // CullMode::Clockwise → emit back face
+            pos_surface: 0,
+            neg_surface: 1,
+            vertex_ids: vec![0, 1, 2],
+            pos_uv_indices: vec![0, 0, 0],
+            neg_uv_indices: vec![0, 0, 0],
+        };
+        let mut polygons = HashMap::new();
+        polygons.insert(7u16, quad);
+        polygons.insert(3u16, two_sided);
+
+        let gfx = GfxObj {
+            id,
+            flags: GfxObjFlags::HAS_DRAWING,
+            surfaces: vec![0xE8000001, 0xE8000002],
+            vertex_array: CVertexArray { vertex_type: 1, vertices },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons,
+            drawing_bsp: Some(BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: Some(Sphere { center: Vector3::zero(), radius: 1.0 }),
+                poly_ids: vec![3, 7],
+            })),
+            did_degrade: None,
+        };
+        let mut data = Vec::new();
+        gfx.pack(&mut Cursor::new(&mut data)).unwrap();
+        data
+    }
+
+    /// E8 — each emitted triangle traces to exactly one source
+    /// (polygon_id, side_kind). poly_ids are walked in SORTED order
+    /// (3 before 7), so the back-face-bearing two-sided poly 3 emits
+    /// first, then the quad poly 7. ADDITIVE: this asserts the new
+    /// fields without touching the existing pos/uv/normal/surface layout.
+    #[test]
+    fn append_gfx_tris_tags_each_tri_with_polygon_id_and_side_kind() {
+        let bytes = synth_gfx_obj_traceable(0x01000E80);
+        let gfx = GfxObj::unpack(&mut Cursor::new(&bytes)).unwrap();
+        let mut tris = Vec::new();
+        append_gfx_tris_with_tex_swaps(
+            &mut tris,
+            &gfx,
+            Vector3::zero(),
+            Quaternion::identity(),
+            &[],
+        );
+        // poly 3 (sorted first): Positive front + Negative back = 2 tris.
+        // poly 7 (quad, 4 verts): fan → 2 Positive tris.
+        assert_eq!(tris.len(), 4, "2 (two-sided tri) + 2 (quad fan) = 4 tris");
+
+        // Tri 0 — poly 3 front (positive surface, original winding).
+        assert_eq!(tris[0].polygon_id, 3);
+        assert_eq!(tris[0].side_kind, SideKind::Positive);
+        assert_eq!(tris[0].surface_did, 0xE8000001);
+        // Tri 1 — poly 3 back (negative surface, reversed winding).
+        assert_eq!(tris[1].polygon_id, 3);
+        assert_eq!(tris[1].side_kind, SideKind::Negative);
+        assert_eq!(tris[1].surface_did, 0xE8000002);
+        // Tri 0 and Tri 1 trace to the SAME polygon, opposite sides.
+        assert_eq!(tris[0].polygon_id, tris[1].polygon_id);
+        assert_ne!(tris[0].side_kind, tris[1].side_kind);
+
+        // Tris 2 & 3 — the quad's two fan triangles, both poly 7 positive.
+        assert_eq!(tris[2].polygon_id, 7);
+        assert_eq!(tris[2].side_kind, SideKind::Positive);
+        assert_eq!(tris[3].polygon_id, 7);
+        assert_eq!(tris[3].side_kind, SideKind::Positive);
+        // Both quad tris share the source polygon id (>3-vert fan provenance).
+        assert_eq!(tris[2].polygon_id, tris[3].polygon_id);
+
+        // Discriminant contract (matches the JS-side Uint8Array decode).
+        assert_eq!(SideKind::Positive as u8, 0);
+        assert_eq!(SideKind::PositiveReversed as u8, 1);
+        assert_eq!(SideKind::Negative as u8, 2);
     }
 
     // followup (2026-06-03) — minimal GfxObj that carries ONLY a
