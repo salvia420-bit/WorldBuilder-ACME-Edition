@@ -9,11 +9,11 @@
 //! [u8  total_objects]               // read as a byte (then widened)
 //! [u8  table_size]                  // ignored
 //! ( [u32 key]                       // language key
+//!   [u32 maximum_same_characters_in_a_row]
 //!   [u32 maximum_vowels_in_a_row]
 //!   [u32 first_n_characters_must_have_a_vowel]
 //!   [u32 vowel_containing_substring_length]
-//!   [u32 extra_allowed_characters]
-//!   [u8  unknown]
+//!   [unicode string extra_allowed_characters]   // ReadUnicodeString, NOT a u32
 //!   [u32 num_letter_groups]
 //!   ( <unicode string> ) * num_letter_groups
 //! ) * total_objects
@@ -34,25 +34,30 @@ pub const FILE_ID: u32 = 0x0E00_0020;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct NameFilterLanguageData {
+    pub maximum_same_characters_in_a_row: u32,
     pub maximum_vowels_in_a_row: u32,
     pub first_n_characters_must_have_a_vowel: u32,
     pub vowel_containing_substring_length: u32,
-    pub extra_allowed_characters: u32,
-    pub unknown: u8,
+    /// `ExtraAllowedCharacters` is a `ReadUnicodeString` (length-prefixed UTF-16LE), NOT a u32 —
+    /// `PStringBase<unsigned short>` per acclient.h:48095 / ace-server NameFilterLanguageData.cs:22.
+    pub extra_allowed_characters: String,
     pub compound_letter_groups: Vec<String>,
 }
 
 impl NameFilterLanguageData {
     fn read_internal<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
+        // Authoritative acclient layout (acclient.h:48091-48096) / ace-server
+        // NameFilterLanguageData.cs::Unpack: a LEADING MaximumSameCharactersInARow u32, and
+        // ExtraAllowedCharacters is a ReadUnicodeString (NOT a u32). melt's reader omits the
+        // leading field and mis-types ExtraAllowedCharacters as u32 + a spurious u8 — do NOT mirror it.
+        let maximum_same_characters_in_a_row = u32::read_le(reader)?;
         let maximum_vowels_in_a_row = u32::read_le(reader)?;
         let first_n_characters_must_have_a_vowel = u32::read_le(reader)?;
         let vowel_containing_substring_length = u32::read_le(reader)?;
-        let extra_allowed_characters = u32::read_le(reader)?;
-        let unknown = u8::read_le(reader)?;
+        let extra_allowed_characters = read_unicode_string(reader)?;
 
-        // melt `NameFilterLanguageData.cs` line 25 reads this group count as a
-        // PLAIN little-endian u32 (`reader.ReadUInt32()`), NOT a compressed-u32.
-        // Only the inner per-string length (read_unicode_string) is compressed.
+        // The group count is a PLAIN little-endian u32 (ReadUInt32), NOT a compressed-u32;
+        // only the inner per-string length (read_unicode_string) is compressed.
         let num_letter_groups = u32::read_le(reader)? as usize;
         let mut compound_letter_groups = Vec::with_capacity(num_letter_groups);
         for _ in 0..num_letter_groups {
@@ -60,11 +65,11 @@ impl NameFilterLanguageData {
         }
 
         Ok(Self {
+            maximum_same_characters_in_a_row,
             maximum_vowels_in_a_row,
             first_n_characters_must_have_a_vowel,
             vowel_containing_substring_length,
             extra_allowed_characters,
-            unknown,
             compound_letter_groups,
         })
     }
@@ -155,11 +160,11 @@ mod tests {
         buf.push(0); // table_size (ignored)
 
         buf.extend_from_slice(&0x0000_0001u32.to_le_bytes()); // key (language)
+        buf.extend_from_slice(&5u32.to_le_bytes()); // maximum_same_characters_in_a_row
         buf.extend_from_slice(&3u32.to_le_bytes()); // maximum_vowels_in_a_row
         buf.extend_from_slice(&4u32.to_le_bytes()); // first_n_characters_must_have_a_vowel
         buf.extend_from_slice(&2u32.to_le_bytes()); // vowel_containing_substring_length
-        buf.extend_from_slice(&0x20u32.to_le_bytes()); // extra_allowed_characters
-        buf.push(7); // unknown
+        push_unicode_string(&mut buf, "-'"); // extra_allowed_characters (ReadUnicodeString)
         buf.extend_from_slice(&2u32.to_le_bytes()); // num_letter_groups (plain u32)
         push_unicode_string(&mut buf, "ch");
         push_unicode_string(&mut buf, "th");
@@ -168,11 +173,11 @@ mod tests {
         assert_eq!(nft.id, FILE_ID);
         assert_eq!(nft.language_data.len(), 1);
         let ld = nft.language_data.get(&1).unwrap();
+        assert_eq!(ld.maximum_same_characters_in_a_row, 5);
         assert_eq!(ld.maximum_vowels_in_a_row, 3);
         assert_eq!(ld.first_n_characters_must_have_a_vowel, 4);
         assert_eq!(ld.vowel_containing_substring_length, 2);
-        assert_eq!(ld.extra_allowed_characters, 0x20);
-        assert_eq!(ld.unknown, 7);
+        assert_eq!(ld.extra_allowed_characters, "-'");
         assert_eq!(
             ld.compound_letter_groups,
             vec!["ch".to_string(), "th".to_string()]
