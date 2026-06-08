@@ -252,7 +252,10 @@ public class JsonCommandProcessor {
             ["placement-add-outdoor"] = CmdPlacementAddOutdoor,
             ["placement-add-dungeon"] = CmdPlacementAddDungeon,
             ["placement-remove"] = CmdPlacementRemove,
+            ["placement-set-scope"] = CmdPlacementSetScope,
             ["placement-export-sql"] = CmdPlacementExportSql,
+            ["ace-shard-db-connect"] = CmdAceShardDbConnect,
+            ["ace-shard-db-status"] = CmdAceShardDbStatus,
             ["fresh-start"] = CmdFreshStart,
             ["generate-world"] = CmdGenerateWorld,
             ["export-towns-csv"] = CmdExportTownsCsv,
@@ -2403,7 +2406,10 @@ public class JsonCommandProcessor {
             new { name = "placement-add-outdoor", args = "lbX, lbY, wcid, cellNumber?, originX, originY, originZ, anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends an outdoor instance placement to Project.OutdoorInstancePlacements" },
             new { name = "placement-add-dungeon", args = "lbX, lbY, wcid, cellNumber?, originX, originY, originZ, anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends a dungeon instance placement to the dungeon document for the given lb" },
             new { name = "placement-remove",    args = "kind, index",                              description = "Removes an outdoor or dungeon placement by index in its respective list" },
-            new { name = "placement-export-sql", args = "out?, apply?, dryRun?",                    description = "Writes landblock_instances.sql + dungeon_instances.sql + per-class weenie_properties_*.sql; --apply runs placement SQL against ace-db; --dry-run emits files only (no DB)" },
+            new { name = "placement-set-scope", args = "kind, index, scope",                       description = "Sets a placement's enrichment scope: classDefault (Option A, world weenie_properties_*) or placementOverride (Option B, shard biota_properties_*)" },
+            new { name = "ace-shard-db-connect", args = "host, port?, database?, user?, password?",  description = "Tests + saves the ACE SHARD DB connection (separate from world ace-db); db defaults to ace_shard; rejects a target matching the world DB" },
+            new { name = "ace-shard-db-status",  args = "",                                         description = "Shows the ACE SHARD DB connection settings + tests connectivity" },
+            new { name = "placement-export-sql", args = "out?, apply?, dryRun?, force?, validate?",   description = "Writes landblock_instances.sql + dungeon_instances.sql + per-class weenie_properties_*.sql (world) + per-placement biota_properties_*.sql (shard) + validation_report.jsonl; E6 validation gate blocks on errors unless force; apply writes world to ace-db + biota to ace-shard-db; dryRun emits files only (no DB)" },
             new { name = "fresh-start",         args = "confirm",                                  description = "Wipes all terrain to deep sea + deletes all dungeon documents (requires confirm:true)" },
             new { name = "generate-world",      args = "params?, apply?, exportTownsCsv?",         description = "GUI-parity world generation: ResetWorldDocs → terrain → buildings → decorations; optional CSV emit" },
             new { name = "export-towns-csv",    args = "fromResult, out",                          description = "Renders the GUI's towns CSV from a worldgen result JSON written by generate-world" },
@@ -2939,13 +2945,45 @@ public class JsonCommandProcessor {
             kind = r.Kind, index = r.Index, landblock = r.Landblock });
     }
 
+    private string CmdPlacementSetScope(System.Text.Json.Nodes.JsonNode node) {
+        string kind = node["kind"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'kind' field (outdoor|dungeon)");
+        int index = node["index"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'index'");
+        string scope = node["scope"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'scope' field (classDefault|placementOverride)");
+        var r = _engine.PlacementSetScope(kind, index, scope);
+        return Serialize(new { success = r.Success, command = "placement-set-scope",
+            kind = r.Kind, index = r.Index, scope = r.Scope });
+    }
+
+    private string CmdAceShardDbConnect(System.Text.Json.Nodes.JsonNode node) {
+        string host = node["host"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'host'");
+        int port = node["port"]?.GetValue<int>() ?? 3306;
+        string database = node["database"]?.GetValue<string>() ?? node["db"]?.GetValue<string>() ?? "";
+        string user = node["user"]?.GetValue<string>() ?? "root";
+        string password = node["password"]?.GetValue<string>() ?? node["pass"]?.GetValue<string>() ?? "";
+        var r = _engine.AceShardDbConnectAsync(host, port, database, user, password).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "ace-shard-db-connect",
+            host = r.Host, port = r.Port, database = r.Database, user = r.User,
+            settingsSaved = r.SettingsSaved, error = r.Error });
+    }
+
+    private string CmdAceShardDbStatus(System.Text.Json.Nodes.JsonNode node) {
+        var r = _engine.AceShardDbStatusAsync().GetAwaiter().GetResult();
+        return Serialize(new { success = true, command = "ace-shard-db-status",
+            hasSettings = r.HasSettings, host = r.Host, port = r.Port,
+            database = r.Database, user = r.User, connectionOk = r.ConnectionOk, error = r.Error });
+    }
+
     private string CmdPlacementExportSql(System.Text.Json.Nodes.JsonNode node) {
         string outDir = node["out"]?.GetValue<string>()
             ?? _projectManager.CurrentProject?.ProjectDirectory
             ?? Directory.GetCurrentDirectory();
         bool apply = node["apply"]?.GetValue<bool>() ?? false;
         bool dryRun = node["dryRun"]?.GetValue<bool>() ?? node["dry-run"]?.GetValue<bool>() ?? false;
-        var r = _engine.PlacementExportSqlAsync(outDir, apply, dryRun).GetAwaiter().GetResult();
+        bool force = node["force"]?.GetValue<bool>() ?? false;
+        bool validate = node["validate"]?.GetValue<bool>() ?? true;
+        var r = _engine.PlacementExportSqlAsync(outDir, apply, dryRun, force, validate).GetAwaiter().GetResult();
         return Serialize(new { success = r.Success, command = "placement-export-sql",
             outdoorPath = r.OutdoorPath, outdoorCount = r.OutdoorCount,
             dungeonPath = r.DungeonPath, dungeonCount = r.DungeonCount,
@@ -2955,7 +2993,19 @@ public class JsonCommandProcessor {
             enrichmentManifestPath = r.EnrichmentManifestPath,
             enrichmentConflictCount = r.EnrichmentConflictCount,
             placementOverrideSkipped = r.PlacementOverrideSkipped,
-            rowsAppliedToDb = r.RowsAppliedToDb });
+            // E1 (wave-2) PR3 — Option B biota override + E6 validation gate.
+            biotaSqlPaths = r.BiotaSqlPaths,
+            biotaManifestPath = r.BiotaManifestPath,
+            biotaCount = r.BiotaCount,
+            biotaMintedGuids = r.BiotaMintedGuids,
+            biotaWarningCount = r.BiotaWarningCount,
+            biotaSkipped = r.BiotaSkipped,
+            validationReportPath = r.ValidationReportPath,
+            validationErrorCount = r.ValidationErrorCount,
+            validationWarningCount = r.ValidationWarningCount,
+            validationBlocked = r.ValidationBlocked,
+            rowsAppliedToDb = r.RowsAppliedToDb,
+            shardRowsAppliedToDb = r.ShardRowsAppliedToDb });
     }
 
     private string CmdWeenieSave(System.Text.Json.Nodes.JsonNode node) {

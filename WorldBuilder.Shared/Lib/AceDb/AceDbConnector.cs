@@ -210,6 +210,12 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         /// </summary>
         public static string GenerateInsertSql(LandblockInstanceRecord record, string databaseName = "ace_world") {
             uint guid = record.Guid;
+            // A STATIC, explicitly-threaded guid (PR3 Option B addressable key, 0x70000000-range)
+            // makes the INSERT idempotent: prefix a scoped DELETE so a re-apply REPLACES rather than
+            // DUPLICATES the placement (these rows are addressable by guid == biota.id). A guid of 0
+            // keeps the legacy auto-guid (random) path, and a non-static explicit guid keeps the
+            // legacy pure-INSERT shape byte-for-byte (HARD CONSTRAINT 2) — no DELETE prefix in either.
+            bool idempotent = guid != 0 && StaticGuidAllocator.IsStatic(guid);
             if (guid == 0)
                 guid = (uint)System.Security.Cryptography.RandomNumberGenerator.GetInt32(1, int.MaxValue);
 
@@ -224,11 +230,16 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 z = 0f;
             }
 
-            return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+            string insert = string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "INSERT INTO `{0}`.`landblock_instance` (`guid`, `weenie_Class_Id`, `obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`, `angles_w`, `angles_x`, `angles_y`, `angles_z`) VALUES ({1}, {2}, {3}, {4:F6}, {5:F6}, {6:F6}, {7:F6}, {8:F6}, {9:F6}, {10:F6});",
                 databaseName, guid, record.WeenieClassId, record.ObjCellId,
                 record.OriginX, record.OriginY, record.OriginZ,
                 w, x, y, z);
+
+            if (!idempotent) return insert;
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "DELETE FROM `{0}`.`landblock_instance` WHERE `guid` = {1};\n{2}",
+                databaseName, guid, insert);
         }
 
         /// <summary>
@@ -255,7 +266,10 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 uint objCellId = ((uint)landblockId << 16) | p.CellNumber;
                 var q = p.Orientation;
                 list.Add(new LandblockInstanceRecord {
-                    Guid = 0,
+                    // E1 PR3: thread the placement guid so a per-placement biota override (Option B)
+                    // is addressable — ACE matches the override by landblock_instance.guid == biota.id
+                    // (WorldObjectFactory.cs:297). Null/0 keeps the legacy auto-guid behavior.
+                    Guid = p.Guid ?? 0,
                     WeenieClassId = p.WeenieClassId,
                     ObjCellId = objCellId,
                     OriginX = p.Origin.X,
@@ -283,7 +297,9 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             foreach (var p in placements) {
                 uint objCellId = ((uint)p.LandblockId << 16) | p.CellNumber;
                 list.Add(new LandblockInstanceRecord {
-                    Guid = 0,
+                    // E1 PR3: thread the placement guid (see ToLandblockInstanceRecords). Null/0 keeps
+                    // the legacy auto-guid behavior so the existing landblock_instances.sql is unchanged.
+                    Guid = p.Guid ?? 0,
                     WeenieClassId = p.WeenieClassId,
                     ObjCellId = objCellId,
                     OriginX = p.OriginX,
@@ -310,6 +326,40 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             await conn.OpenAsync(ct);
             await using var cmd = new MySqlCommand(sql, conn);
             return await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        /// <summary>
+        /// E1 (wave-2) PR3 — execute several SQL scripts in ONE transaction against this connector's
+        /// DB. Used by the live <c>--apply</c> path so the per-class (world) or per-placement (shard)
+        /// enrichment is applied atomically: either every DELETE+INSERT lands or none does (rollback
+        /// on any error). Each script is itself a DELETE+INSERT, so the apply is IDEMPOTENT
+        /// (re-running replaces the same rows). Null/empty scripts are skipped. Returns the total
+        /// affected-row count.
+        ///
+        /// <para>This is the real, configurable apply primitive — the connection comes from the
+        /// supplied <see cref="AceDbSettings"/> (world vs shard is chosen by the CALLER passing the
+        /// right connector; this method never crosses DBs). Verified against a live ACE server is a
+        /// separate human-driven integration step; all automated tests exercise the file-emit /
+        /// dry-run path instead (HARD CONSTRAINT 1 — no test requires a running DB).</para>
+        /// </summary>
+        public async Task<int> ExecuteScriptsTransactionalAsync(IEnumerable<string?> scripts, CancellationToken ct = default) {
+            await using var conn = new MySqlConnection(_settings.ConnectionString);
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            int total = 0;
+            try {
+                foreach (var script in scripts) {
+                    if (string.IsNullOrWhiteSpace(script)) continue;
+                    await using var cmd = new MySqlCommand(script, conn, tx);
+                    total += await cmd.ExecuteNonQueryAsync(ct);
+                }
+                await tx.CommitAsync(ct);
+                return total;
+            }
+            catch {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
         }
 
         public async Task<SpellRecord?> GetSpellAsync(uint id, CancellationToken ct = default) {

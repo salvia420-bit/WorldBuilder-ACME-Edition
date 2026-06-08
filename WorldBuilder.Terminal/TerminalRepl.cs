@@ -184,6 +184,7 @@ public class TerminalRepl {
             ["remap-buildings-v2"] = HandleRemapBuildingsV2,
             ["remap-buildings-sql"] = HandleRemapBuildingsSql,
             ["ace-db"] = HandleAceDb,
+            ["ace-shard-db"] = HandleAceShardDb,
             ["dungeon"] = HandleDungeon,
             ["obj-export"] = HandleObjExport,
             ["obj-import"] = HandleObjImport,
@@ -2746,7 +2747,7 @@ public class TerminalRepl {
             Console.WriteLine("  placement add-outdoor <lbX> <lbY> <wcid> <cellNum> <originX> <originY> <originZ> [--angles w x y z]");
             Console.WriteLine("  placement add-dungeon <lbX> <lbY> <wcid> <cellNum> <originX> <originY> <originZ> [--angles w x y z]");
             Console.WriteLine("  placement remove <outdoor|dungeon> <index>");
-            Console.WriteLine("  placement export-sql [--out <dir>] [--apply] [--dry-run]");
+            Console.WriteLine("  placement export-sql [--out <dir>] [--apply] [--dry-run] [--force] [--no-validate]");
             return;
         }
         try {
@@ -2812,28 +2813,48 @@ public class TerminalRepl {
                     string? outDir = null;
                     bool apply = false;
                     bool dryRun = false;
+                    bool force = false;
+                    bool validate = true;
                     for (int i = 2; i < tokens.Length; i++) {
                         if (tokens[i] == "--out" && i + 1 < tokens.Length) { outDir = tokens[i + 1]; i++; }
                         else if (tokens[i] == "--apply") apply = true;
                         else if (tokens[i] == "--dry-run") dryRun = true;
+                        else if (tokens[i] == "--force") force = true;
+                        else if (tokens[i] == "--no-validate") validate = false;
                     }
                     outDir ??= _engine.GetCurrentProjectDirectoryOrCwd();
-                    var r = _engine.PlacementExportSqlAsync(outDir, apply, dryRun).GetAwaiter().GetResult();
+                    var r = _engine.PlacementExportSqlAsync(outDir, apply, dryRun, force, validate).GetAwaiter().GetResult();
                     Console.WriteLine($"Wrote landblock_instances.sql ({r.OutdoorCount} rows) → {r.OutdoorPath}");
                     Console.WriteLine($"Wrote dungeon_instances.sql ({r.DungeonCount} rows) → {r.DungeonPath}");
                     if (r.EnrichedJsonlPath != null)
                         Console.WriteLine($"Wrote {WorldBuilder.Shared.Lib.AceDb.EnrichedPlacementStore.FileName} ({r.EnrichedCount} records) → {r.EnrichedJsonlPath}");
+                    if (r.ValidationReportPath != null)
+                        Console.WriteLine($"Validation: {r.ValidationErrorCount} error(s), {r.ValidationWarningCount} warning(s) → {r.ValidationReportPath}");
+                    if (r.ValidationBlocked) {
+                        Console.WriteLine($"BLOCKED: validation errors present. Fix them or re-run with --force to downgrade to warnings.");
+                        break;
+                    }
                     if (r.EnrichmentSqlPaths != null && r.EnrichmentSqlPaths.Count > 0) {
                         foreach (var ep in r.EnrichmentSqlPaths)
                             Console.WriteLine($"Wrote {System.IO.Path.GetFileName(ep)} → {ep}");
                         Console.WriteLine($"Wrote enrichment_manifest.json → {r.EnrichmentManifestPath}");
                     }
+                    if (r.BiotaSqlPaths != null && r.BiotaSqlPaths.Count > 0) {
+                        foreach (var bp in r.BiotaSqlPaths)
+                            Console.WriteLine($"Wrote {System.IO.Path.GetFileName(bp)} → {bp}");
+                        Console.WriteLine($"Wrote biota_manifest.json ({r.BiotaCount} biota override(s), {r.BiotaMintedGuids} guid(s) minted) → {r.BiotaManifestPath}");
+                    }
                     if (r.EnrichmentConflictCount > 0)
                         Console.WriteLine($"WARN: {r.EnrichmentConflictCount} wcid(s) skipped for conflicting per-class enrichment (see manifest).");
                     if (r.PlacementOverrideSkipped > 0)
-                        Console.WriteLine($"Note: {r.PlacementOverrideSkipped} placement(s) with scope=PlacementOverride skipped (PR3 / biota).");
+                        Console.WriteLine($"Note: {r.PlacementOverrideSkipped} ClassDefault-scope placement(s) carried no per-class rows; {r.BiotaCount} PlacementOverride emitted to biota.");
+                    if (r.BiotaWarningCount > 0)
+                        Console.WriteLine($"WARN: {r.BiotaWarningCount} biota override warning(s) (out-of-range guid / clamped PaletteTemplate — see biota_manifest.json).");
+                    if (r.BiotaSkipped > 0)
+                        Console.WriteLine($"WARN: {r.BiotaSkipped} biota override(s) skipped (guid outside the landblock static range).");
                     if (r.DryRun) Console.WriteLine("--dry-run: no DB connection was made.");
-                    if (r.RowsAppliedToDb.HasValue) Console.WriteLine($"Applied {r.RowsAppliedToDb} row(s) to ace-db.");
+                    if (r.RowsAppliedToDb.HasValue) Console.WriteLine($"Applied {r.RowsAppliedToDb} row(s) to ace-db (world).");
+                    if (r.ShardRowsAppliedToDb.HasValue) Console.WriteLine($"Applied {r.ShardRowsAppliedToDb} row(s) to ace-shard-db (biota overrides).");
                     break;
                 }
                 default:
@@ -4371,6 +4392,85 @@ public class TerminalRepl {
             Console.WriteLine($"  âœ— Connection failed: {r.Error}");
             Console.ResetColor();
         }
+        Console.WriteLine();
+    }
+
+    // E1 (wave-2) PR3 — ACE SHARD DB (separate from world ace-db; Option B biota override target).
+    private void HandleAceShardDb(string[] tokens) {
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: ace-shard-db <sub-command>");
+            Console.WriteLine("  connect <host> <port> [db] <user> <pass>  Test + save SHARD connection (db defaults to ace_shard)");
+            Console.WriteLine("  status                                     Show shard settings + test");
+            return;
+        }
+        var sub = tokens[1].ToLowerInvariant();
+        switch (sub) {
+            case "connect": HandleAceShardDbConnect(tokens); break;
+            case "status":  HandleAceShardDbStatus(); break;
+            default:
+                Console.WriteLine($"Unknown ace-shard-db sub-command: '{sub}'");
+                Console.WriteLine("  Available: connect, status");
+                break;
+        }
+    }
+
+    private void HandleAceShardDbConnect(string[] tokens) {
+        // ace-shard-db connect <host> <port> <database> <user> <password>
+        if (tokens.Length < 7) {
+            Console.WriteLine("Usage: ace-shard-db connect <host> <port> <database> <user> <password>");
+            Console.WriteLine("  Example: ace-shard-db connect localhost 3306 ace_shard root mypassword");
+            return;
+        }
+        string host = tokens[2];
+        if (!TryParseInt(tokens[3], "port", out int port)) return;
+        string database = tokens[4];
+        string user = tokens[5];
+        string password = tokens[6];
+
+        Console.WriteLine($"Testing SHARD connection to {host}:{port}/{database} as {user}...");
+        var r = _engine.AceShardDbConnectAsync(host, port, database, user, password).GetAwaiter().GetResult();
+        Console.WriteLine();
+        if (r.Success) {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine("  Shard connection successful!");
+            Console.ResetColor();
+            Console.WriteLine($"  Host     : {r.Host}:{r.Port}");
+            Console.WriteLine($"  Database : {r.Database}");
+            Console.WriteLine($"  User     : {r.User}");
+            if (r.SettingsSaved) {
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine("  Shard settings saved to project JSON.");
+                Console.ResetColor();
+            } else {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("  No project loaded - settings not saved.");
+                Console.ResetColor();
+            }
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  Shard connection failed: {r.Error}");
+            Console.ResetColor();
+        }
+        Console.WriteLine();
+    }
+
+    private void HandleAceShardDbStatus() {
+        var r = _engine.AceShardDbStatusAsync().GetAwaiter().GetResult();
+        Console.WriteLine();
+        if (!r.HasSettings) {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("  No ACE SHARD database settings configured.");
+            Console.WriteLine("  Use 'ace-shard-db connect <host> <port> <db> <user> <pass>' to set up.");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.WriteLine("  === ACE Shard Database Status ===");
+        Console.WriteLine($"  Host     : {r.Host}:{r.Port}");
+        Console.WriteLine($"  Database : {r.Database}");
+        Console.WriteLine($"  User     : {r.User}");
+        Console.WriteLine($"  Connection: {(r.ConnectionOk == true ? "OK" : "FAILED")}");
+        if (r.Error != null) Console.WriteLine($"  Error    : {r.Error}");
         Console.WriteLine();
     }
 

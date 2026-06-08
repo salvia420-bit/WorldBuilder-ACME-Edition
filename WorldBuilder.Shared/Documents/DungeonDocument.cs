@@ -79,6 +79,23 @@ namespace WorldBuilder.Shared.Documents {
 
         /// <summary>Optional multi-position map keyed by PositionType enum (never an array offset).</summary>
         [MemoryPackOrder(6)] public Dictionary<PositionType, PlacementPosition>? Positions { get; set; }
+
+        /// <summary>
+        /// E1 (wave-2) PR3 — optional placement guid (the Option B per-placement addressable key,
+        /// <c>landblock_instance.guid == biota.id</c>). APPENDED at slot 7 so old (slots 0–6) blobs
+        /// still deserialize with Guid null (HARD CONSTRAINT 5, append-only). Null for fresh
+        /// placements; minted in the static range at export when a biota override is emitted.
+        /// </summary>
+        [MemoryPackOrder(7)] public uint? Guid { get; set; }
+
+        /// <summary>
+        /// E1 (wave-2) PR3 — per-placement export TARGET (SPEC §3.4). ClassDefault → world
+        /// <c>weenie_properties_*</c> (default); PlacementOverride → shard <c>biota_properties_*</c>
+        /// keyed by <see cref="Guid"/> (Option B). APPENDED at slot 8 so old (slots 0–7) blobs still
+        /// deserialize with Scope defaulting to ClassDefault (HARD CONSTRAINT 5, append-only).
+        /// </summary>
+        [MemoryPackOrder(8)] public WorldBuilder.Shared.Models.EnrichmentScope Scope { get; set; }
+            = WorldBuilder.Shared.Models.EnrichmentScope.ClassDefault;
     }
 
     public partial class DungeonDocument : BaseDocument {

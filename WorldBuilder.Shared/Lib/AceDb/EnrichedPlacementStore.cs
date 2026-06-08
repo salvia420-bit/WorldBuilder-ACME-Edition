@@ -156,12 +156,17 @@ namespace WorldBuilder.Shared.Lib.AceDb {
 
         // ── Conversion: in-memory placement model ⇄ EnrichedPlacement ──────
 
-        /// <summary>Project an outdoor placement to its addressable enriched record.</summary>
-        public static EnrichedPlacement FromOutdoor(OutdoorInstancePlacement p, EnrichmentScope scope = EnrichmentScope.ClassDefault) => new() {
+        /// <summary>
+        /// Project an outdoor placement to its addressable enriched record. The export
+        /// <see cref="EnrichmentScope"/> comes from the placement model itself (PR3); an explicit
+        /// <paramref name="scope"/> override forces it (e.g. a CLI-level default) when not null.
+        /// </summary>
+        public static EnrichedPlacement FromOutdoor(OutdoorInstancePlacement p, EnrichmentScope? scope = null) => new() {
             Kind = "outdoor",
             Landblock = p.LandblockId,
             CellNumber = p.CellNumber,
             WeenieClassId = p.WeenieClassId,
+            Guid = p.Guid,
             OriginX = p.OriginX,
             OriginY = p.OriginY,
             OriginZ = p.OriginZ,
@@ -172,17 +177,22 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             Dye = p.Dye,
             Generators = p.Generators,
             Positions = p.Positions,
-            Scope = scope,
+            Scope = scope ?? p.Scope,
         };
 
-        /// <summary>Project a dungeon placement to its addressable enriched record.</summary>
-        public static EnrichedPlacement FromDungeon(ushort landblockId, DungeonInstancePlacement p, EnrichmentScope scope = EnrichmentScope.ClassDefault) {
+        /// <summary>
+        /// Project a dungeon placement to its addressable enriched record. The export
+        /// <see cref="EnrichmentScope"/> comes from the placement model itself (PR3); an explicit
+        /// <paramref name="scope"/> override forces it when not null.
+        /// </summary>
+        public static EnrichedPlacement FromDungeon(ushort landblockId, DungeonInstancePlacement p, EnrichmentScope? scope = null) {
             var q = p.Orientation;
             return new EnrichedPlacement {
                 Kind = "dungeon",
                 Landblock = landblockId,
                 CellNumber = p.CellNumber,
                 WeenieClassId = p.WeenieClassId,
+                Guid = p.Guid,
                 OriginX = p.Origin.X,
                 OriginY = p.Origin.Y,
                 OriginZ = p.Origin.Z,
@@ -193,7 +203,7 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 Dye = p.Dye,
                 Generators = p.Generators,
                 Positions = p.Positions,
-                Scope = scope,
+                Scope = scope ?? p.Scope,
             };
         }
 
@@ -216,6 +226,7 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 LandblockId = e.Landblock,
                 WeenieClassId = e.WeenieClassId,
                 CellNumber = e.CellNumber,
+                Guid = e.Guid,
                 OriginX = e.OriginX,
                 OriginY = e.OriginY,
                 OriginZ = e.OriginZ,
@@ -226,6 +237,7 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 Dye = e.Dye,
                 Generators = e.Generators,
                 Positions = e.Positions,
+                Scope = e.Scope,
             };
         }
 
@@ -233,11 +245,13 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         public static DungeonInstancePlacement ToDungeon(EnrichedPlacement e) => new() {
             WeenieClassId = e.WeenieClassId,
             CellNumber = e.CellNumber,
+            Guid = e.Guid,
             Origin = new Vector3(e.OriginX, e.OriginY, e.OriginZ),
             Orientation = RebuildOrientation(e),
             Dye = e.Dye,
             Generators = e.Generators,
             Positions = e.Positions,
+            Scope = e.Scope,
         };
 
         private static IEnumerable<EnrichedPlacement> Order(IEnumerable<EnrichedPlacement> placements) =>

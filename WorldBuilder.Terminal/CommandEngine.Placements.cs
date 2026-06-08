@@ -140,7 +140,48 @@ public partial class CommandEngine {
         throw new ArgumentException($"Unknown kind '{kind}'. Expected outdoor|dungeon.");
     }
 
-    public async Task<PlacementExportSqlResult> PlacementExportSqlAsync(string outDir, bool apply, bool dryRun = false) {
+    /// <summary>
+    /// E1 (wave-2) PR3 — set the enrichment export SCOPE on one placement (the Option A vs Option B
+    /// switch, SPEC §3.4). <paramref name="scope"/> is "classdefault" (world weenie_properties_*) or
+    /// "placementoverride" (shard biota_properties_*). Persists the change.
+    /// </summary>
+    public PlacementSetScopeResult PlacementSetScope(string kind, int index, string scope) {
+        RequireProject();
+        var project = _projectManager.CurrentProject!;
+
+        EnrichmentScope parsed = scope.Trim().ToLowerInvariant() switch {
+            "classdefault" or "class" or "a" or "world" => EnrichmentScope.ClassDefault,
+            "placementoverride" or "override" or "b" or "shard" => EnrichmentScope.PlacementOverride,
+            _ => throw new ArgumentException($"Unknown scope '{scope}'. Expected classDefault|placementOverride."),
+        };
+
+        if (kind.Equals("outdoor", StringComparison.OrdinalIgnoreCase)) {
+            if (index < 0 || index >= project.OutdoorInstancePlacements.Count)
+                return new PlacementSetScopeResult(false, kind, index, parsed.ToString());
+            project.OutdoorInstancePlacements[index].Scope = parsed;
+            project.Save();
+            return new PlacementSetScopeResult(true, kind, index, parsed.ToString());
+        }
+
+        if (kind.Equals("dungeon", StringComparison.OrdinalIgnoreCase)) {
+            int total = 0;
+            foreach (var (_, doc) in project.DocumentManager.ActiveDocs) {
+                if (doc is not DungeonDocument dng) continue;
+                if (index >= total + dng.InstancePlacements.Count) {
+                    total += dng.InstancePlacements.Count;
+                    continue;
+                }
+                dng.InstancePlacements[index - total].Scope = parsed;
+                return new PlacementSetScopeResult(true, kind, index, parsed.ToString());
+            }
+            return new PlacementSetScopeResult(false, kind, index, parsed.ToString());
+        }
+
+        throw new ArgumentException($"Unknown kind '{kind}'. Expected outdoor|dungeon.");
+    }
+
+    public async Task<PlacementExportSqlResult> PlacementExportSqlAsync(
+        string outDir, bool apply, bool dryRun = false, bool force = false, bool validate = true) {
         RequireProject();
         Directory.CreateDirectory(outDir);
         var project = _projectManager.CurrentProject!;
@@ -150,9 +191,194 @@ public partial class CommandEngine {
         // so it is mutually exclusive with --apply.
         if (dryRun) apply = false;
 
+        // E1 (wave-2) PR1: build the addressable source-of-truth set. The export Scope rides on each
+        // placement model (PR3); ClassDefault → world weenie_properties_*, PlacementOverride → shard
+        // biota_properties_*. Keep a back-reference to the source model so a MINTED guid can be
+        // written back onto it (stable addressable key across sessions/round-trips).
+        var enriched = new List<EnrichedPlacement>();
+        var sourceOutdoor = new Dictionary<EnrichedPlacement, OutdoorInstancePlacement>();
+        var sourceDungeon = new Dictionary<EnrichedPlacement, DungeonInstancePlacement>();
+        foreach (var p in project.OutdoorInstancePlacements) {
+            var e = EnrichedPlacementStore.FromOutdoor(p);
+            sourceOutdoor[e] = p;
+            enriched.Add(e);
+        }
+        foreach (var (_, doc) in project.DocumentManager.ActiveDocs) {
+            if (doc is not DungeonDocument dng) continue;
+            foreach (var p in dng.InstancePlacements) {
+                var e = EnrichedPlacementStore.FromDungeon(dng.LandblockKey, p);
+                sourceDungeon[e] = p;
+                enriched.Add(e);
+            }
+        }
+
+        var outdoorPath = Path.Combine(outDir, "landblock_instances.sql");
+        var dungeonPath = Path.Combine(outDir, "dungeon_instances.sql");
+        var enrichedPath = Path.Combine(outDir, EnrichedPlacementStore.FileName);
+
+        // E1 (wave-2) PR2: GENERATE the per-class (Option A) world-DB enrichment SQL. Pure file-emit;
+        // NEVER connects to a live DB.
+        var (bundle, enrichmentPaths, manifestPath) =
+            EnrichmentSqlExporter.WriteFiles(outDir, enriched);
+
+        // E1 (wave-2) PR3 / E6: OFFLINE validation gate. Runs BEFORE guid minting / world+biota
+        // emission + before any apply, against the in-memory WeenieIndex (no live DB — SPEC §6).
+        // Errors BLOCK the apply / biota emission unless --force; a validation_report.jsonl sidecar is
+        // always written when validation is enabled. On --apply we additionally treat an un-ingested
+        // index as a BLOCKING error (a live write must not skip wcid/type resolution).
+        string? validationReportPath = null;
+        int validationErrors = 0, validationWarnings = 0;
+        bool validationBlocked = false;
+        if (validate) {
+            var report = EnrichedPlacementValidator.Validate(enriched, WeenieIndex, applying: apply);
+            validationReportPath = EnrichedPlacementValidator.WriteReport(outDir, report);
+            validationErrors = report.ErrorCount;
+            validationWarnings = report.WarningCount;
+            if (!report.Ok && !force) {
+                // Hard gate: errors present and no --force → do NOT mint guids, emit biota SQL, or
+                // apply anything. Still write the world placement directives + JSONL (harmless file
+                // emits with NO minted guids) so the operator can inspect what would have shipped.
+                validationBlocked = true;
+                var (vOutdoorRecords, vOutdoorSql, vDungeonSql, vDungeonCount) =
+                    WritePlacementDirectives(project, outdoorPath, dungeonPath);
+                EnrichedPlacementStore.WriteFile(outDir, enriched);
+                return new PlacementExportSqlResult(false,
+                    outdoorPath, vOutdoorRecords,
+                    dungeonPath, vDungeonCount,
+                    null,
+                    enrichedPath, enriched.Count,
+                    dryRun,
+                    enrichmentPaths,
+                    manifestPath,
+                    bundle.Conflicts.Count,
+                    bundle.PlacementOverrideSkipped,
+                    BiotaSqlPaths: null,
+                    BiotaManifestPath: null,
+                    BiotaCount: 0,
+                    BiotaMintedGuids: 0,
+                    BiotaWarningCount: 0,
+                    BiotaSkipped: 0,
+                    ValidationReportPath: validationReportPath,
+                    ValidationErrorCount: validationErrors,
+                    ValidationWarningCount: validationWarnings,
+                    ValidationBlocked: true,
+                    ShardRowsAppliedToDb: null);
+            }
+        }
+
+        // E1 (wave-2) PR3: MINT/THREAD the per-placement (Option B) static guids FIRST — Build writes
+        // each resolved guid back onto its source EnrichedPlacement.Guid. This must happen BEFORE the
+        // world landblock_instance SQL + the JSONL are written so (a) landblock_instance.guid ==
+        // biota.id (the world↔shard join ACE uses, WorldObjectFactory.cs:297) and (b) the minted guid
+        // is recorded in placements_enriched.jsonl and is STABLE across re-exports. The WeenieIndex
+        // resolves each override's real WeenieType (an Undef stub would vanish on load).
+        var (biotaBundle, biotaPaths, biotaManifestPath) =
+            BiotaEnrichmentSqlExporter.WriteFiles(outDir, enriched, WeenieIndex);
+        int biotaCount = biotaBundle.Biota?.BiotaCount ?? 0;
+        int biotaMinted = biotaBundle.Assignments.Count(a => a.Minted);
+
+        // Propagate the minted/threaded guids back onto the live placement models so the editor
+        // session keeps the stable addressable key (and a project Save persists it).
+        bool anyMinted = false;
+        foreach (var e in enriched) {
+            if (e.Guid is not { } g) continue;
+            if (sourceOutdoor.TryGetValue(e, out var op) && op.Guid != g) { op.Guid = g; anyMinted = true; }
+            if (sourceDungeon.TryGetValue(e, out var dp) && dp.Guid != g) { dp.Guid = g; anyMinted = true; }
+        }
+        if (anyMinted) project.Save();
+
+        // Now write the world placement directives — they carry the threaded guids (PR3) — and the
+        // JSONL (which records the minted guids). The JSONL is written AFTER minting so the recorded
+        // guid is the stable one.
+        var (outdoorRecordCount, outdoorSql, dungeonSql, dungeonCount2) =
+            WritePlacementDirectives(project, outdoorPath, dungeonPath);
+        EnrichedPlacementStore.WriteFile(outDir, enriched);
+
+        int? rowsApplied = null;
+        int? shardRowsApplied = null;
+        if (apply) {
+            // Pure, DB-free routing: WORLD scripts (placements + per-class) vs SHARD scripts (biota
+            // override), kept SEPARATE (HARD CONSTRAINT 3, never crossed).
+            var plan = EnrichmentApplyPlan.Build(outdoorSql, outdoorRecordCount, dungeonSql, dungeonCount2,
+                bundle, biotaBundle);
+
+            // Validate ALL preconditions BEFORE opening any transaction so a missing shard config
+            // cannot leave a half-applied (world-committed, shard-skipped) live DB.
+            var settings = project.AceDb;
+            if (settings == null || string.IsNullOrEmpty(settings.Host))
+                throw new InvalidOperationException("--apply requires ace-db connect to be configured first.");
+
+            AceDbSettings? shard = null;
+            if (plan.RequiresShard) {
+                shard = project.AceShardDb;
+                if (shard == null || string.IsNullOrEmpty(shard.Host))
+                    throw new InvalidOperationException(
+                        "--apply has Option B per-placement biota overrides but no SHARD DB is configured. " +
+                        "Configure ace-shard-db connect (separate from ace-db / world) before applying biota overrides.");
+                // HARD CONSTRAINT 3: the shard target must NOT resolve to the same Server+Database as
+                // the world, or biota rows would land in the world DB.
+                if (SameTarget(settings, shard))
+                    throw new InvalidOperationException(
+                        "--apply shard DB resolves to the SAME Server+Database as the world DB; biota overrides would be " +
+                        "written to the world DB. Point ace-shard-db at a distinct shard database (e.g. ace_shard).");
+            }
+
+            // World (per-class Option A + the placement directives) → AceDb (WORLD).
+            using var connector = new AceDbConnector(settings);
+            rowsApplied = await connector.ExecuteScriptsTransactionalAsync(plan.WorldScripts);
+
+            // Per-placement biota override (Option B) → AceShardDb (SHARD, separate connection).
+            // SAFETY GATE: ACE static biotas are FULL self-contained snapshots — CreateWorldObject(biota)
+            // builds the object purely from the stored biota rows with NO weenie merge (BiotaConverter).
+            // PR3 emits only the DIVERGING facets (palette/generator/position + dye int/float) over a
+            // minted stub, so a live shard apply would produce an object missing its name/Setup DID/base
+            // props. Until full base-weenie→biota copying lands (spec defers this), the live shard write
+            // is opt-in behind --force; the file-emit (always written above) is safe to inspect.
+            if (plan.RequiresShard) {
+                if (!force)
+                    throw new InvalidOperationException(
+                        "--apply Option B (per-placement biota override) writes a SPARSE biota (only the diverging facets " +
+                        "over a minted stub). ACE static biotas are FULL self-contained snapshots, so a live apply would " +
+                        "produce an incomplete object (missing name/Setup DID/base properties). The biota*.sql file-emit is " +
+                        "written for inspection; pass --force to apply the sparse override to the live shard anyway, or wait " +
+                        "for full base-weenie→biota minting.");
+                using var shardConnector = new AceDbConnector(shard!);
+                shardRowsApplied = await shardConnector.ExecuteScriptsTransactionalAsync(plan.ShardScripts);
+            }
+        }
+
+        return new PlacementExportSqlResult(true,
+            outdoorPath, outdoorRecordCount,
+            dungeonPath, dungeonCount2,
+            rowsApplied,
+            enrichedPath, enriched.Count,
+            dryRun,
+            enrichmentPaths,
+            manifestPath,
+            bundle.Conflicts.Count,
+            bundle.PlacementOverrideSkipped,
+            BiotaSqlPaths: biotaPaths,
+            BiotaManifestPath: biotaManifestPath,
+            BiotaCount: biotaCount,
+            BiotaMintedGuids: biotaMinted,
+            BiotaWarningCount: biotaBundle.Warnings.Count,
+            BiotaSkipped: biotaBundle.Skipped,
+            ValidationReportPath: validationReportPath,
+            ValidationErrorCount: validationErrors,
+            ValidationWarningCount: validationWarnings,
+            ValidationBlocked: validationBlocked,
+            ShardRowsAppliedToDb: shardRowsApplied);
+    }
+
+    /// <summary>
+    /// Generate + write the (unchanged-shape) placement directive SQL files (landblock_instances.sql,
+    /// dungeon_instances.sql) from the CURRENT placement models — which by this point carry any
+    /// minted/threaded PR3 guids. Returns (outdoorCount, outdoorSql, dungeonSql, dungeonCount).
+    /// </summary>
+    private (int OutdoorCount, string OutdoorSql, string DungeonSql, int DungeonCount) WritePlacementDirectives(
+        WorldBuilder.Shared.Models.Project project, string outdoorPath, string dungeonPath) {
         var outdoorRecords = AceDbConnector.ToLandblockInstanceRecordsFromOutdoor(project.OutdoorInstancePlacements);
         var outdoorSql = AceDbConnector.GenerateInsertSqlBatch(outdoorRecords);
-        var outdoorPath = Path.Combine(outDir, "landblock_instances.sql");
         File.WriteAllText(outdoorPath, outdoorSql);
 
         int dungeonCount = 0;
@@ -168,51 +394,13 @@ public partial class CommandEngine {
             dungeonCount += records.Count;
         }
         var dungeonSql = dungeonSqlBuilder.ToString();
-        var dungeonPath = Path.Combine(outDir, "dungeon_instances.sql");
         File.WriteAllText(dungeonPath, dungeonSql);
-
-        // E1 (wave-2) PR1: write the addressable source-of-truth sidecar (placements_enriched.jsonl).
-        // This is purely ADDITIVE — it does not touch the SQL buffers above, so the existing
-        // landblock_instances.sql / dungeon_instances.sql output is byte-identical (HARD CONSTRAINT 1).
-        var enriched = new List<EnrichedPlacement>();
-        foreach (var p in project.OutdoorInstancePlacements)
-            enriched.Add(EnrichedPlacementStore.FromOutdoor(p));
-        foreach (var (_, doc) in project.DocumentManager.ActiveDocs) {
-            if (doc is not DungeonDocument dng) continue;
-            foreach (var p in dng.InstancePlacements)
-                enriched.Add(EnrichedPlacementStore.FromDungeon(dng.LandblockKey, p));
-        }
-        var enrichedPath = EnrichedPlacementStore.WriteFile(outDir, enriched);
-
-        // E1 (wave-2) PR2: GENERATE the per-class (Option A) world-DB enrichment SQL from the
-        // same enriched set and WRITE it to per-table .sql files (+ a manifest). This is a pure
-        // file-emit — it NEVER connects to a live DB (PR2 scope; biota/shard apply is PR3). It is
-        // ADDITIVE: the landblock_instances.sql / dungeon_instances.sql / placements_enriched.jsonl
-        // above are untouched (HARD CONSTRAINT 1).
-        var (bundle, enrichmentPaths, manifestPath) =
-            EnrichmentSqlExporter.WriteFiles(outDir, enriched);
-
-        int? rowsApplied = null;
-        if (apply) {
-            var settings = project.AceDb;
-            if (settings == null || string.IsNullOrEmpty(settings.Host))
-                throw new InvalidOperationException("--apply requires ace-db connect to be configured first.");
-            using var connector = new AceDbConnector(settings);
-            int n = 0;
-            if (outdoorRecords.Count > 0) n += await connector.ExecuteSqlAsync(outdoorSql);
-            if (dungeonCount > 0) n += await connector.ExecuteSqlAsync(dungeonSql);
-            rowsApplied = n;
-        }
-
-        return new PlacementExportSqlResult(true,
-            outdoorPath, outdoorRecords.Count,
-            dungeonPath, dungeonCount,
-            rowsApplied,
-            enrichedPath, enriched.Count,
-            dryRun,
-            enrichmentPaths,
-            manifestPath,
-            bundle.Conflicts.Count,
-            bundle.PlacementOverrideSkipped);
+        return (outdoorRecords.Count, outdoorSql, dungeonSql, dungeonCount);
     }
+
+    /// <summary>True when two ACE DB settings resolve to the same Server+Port+Database (world↔shard collision guard).</summary>
+    private static bool SameTarget(AceDbSettings a, AceDbSettings b) =>
+        string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase)
+        && a.Port == b.Port
+        && string.Equals(a.Database, b.Database, StringComparison.OrdinalIgnoreCase);
 }

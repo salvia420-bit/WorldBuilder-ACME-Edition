@@ -1258,6 +1258,9 @@ public record PlacementAddResult(bool Success, string Kind, int Index, string La
 
 public record PlacementRemoveResult(bool Removed, string Kind, int Index, string? Landblock);
 
+// E1 (wave-2) PR3 — sets the enrichment export scope (Option A class-default vs Option B placement-override).
+public record PlacementSetScopeResult(bool Success, string Kind, int Index, string Scope);
+
 public record PlacementExportSqlResult(
     bool Success,
     string OutdoorPath, int OutdoorCount,
@@ -1269,7 +1272,19 @@ public record PlacementExportSqlResult(
     System.Collections.Generic.IReadOnlyList<string>? EnrichmentSqlPaths = null,
     string? EnrichmentManifestPath = null,
     int EnrichmentConflictCount = 0,
-    int PlacementOverrideSkipped = 0);
+    int PlacementOverrideSkipped = 0,
+    // E1 (wave-2) PR3 — Option B per-placement biota override (shard DB) + E6 validation gate.
+    System.Collections.Generic.IReadOnlyList<string>? BiotaSqlPaths = null,
+    string? BiotaManifestPath = null,
+    int BiotaCount = 0,
+    int BiotaMintedGuids = 0,
+    int BiotaWarningCount = 0,
+    int BiotaSkipped = 0,
+    string? ValidationReportPath = null,
+    int ValidationErrorCount = 0,
+    int ValidationWarningCount = 0,
+    bool ValidationBlocked = false,
+    int? ShardRowsAppliedToDb = null);
 
 // ── O4: ACE DB Weenie CRUD ─────────────────────────────────
 public record WeenieSaveScalarsResult(

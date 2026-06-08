@@ -8068,6 +8068,71 @@ public partial class CommandEngine {
     }
 
     /// <summary>
+    /// E1 (wave-2) PR3 — tests + saves the ACE SHARD database connection (separate from the WORLD
+    /// <see cref="WorldBuilder.Shared.Models.Project.AceDb"/>). Required for the Option B per-placement
+    /// biota override apply path. <paramref name="database"/> defaults to
+    /// <see cref="AceDbConnector.ShardDbName"/> (ace_shard) when blank — NOT ace_world — so a biota
+    /// write never lands in the world DB (HARD CONSTRAINT 3). Rejects pointing the shard at the same
+    /// Server+Port+Database as the configured world DB.
+    /// </summary>
+    public async Task<AceDbConnectResult> AceShardDbConnectAsync(
+        string host, int port, string database, string user, string password) {
+
+        if (string.IsNullOrWhiteSpace(database)) database = AceDbConnector.ShardDbName;
+
+        var world = _projectManager.CurrentProject?.AceDb;
+        if (world != null
+            && string.Equals(world.Host, host, StringComparison.OrdinalIgnoreCase)
+            && world.Port == port
+            && string.Equals(world.Database, database, StringComparison.OrdinalIgnoreCase)) {
+            return new AceDbConnectResult(false, host, port, database, user, false,
+                "Shard DB resolves to the SAME Server+Database as the configured world DB (ace-db). " +
+                "Point ace-shard-db at a distinct shard database (e.g. ace_shard) so biota overrides are not written to the world DB.");
+        }
+
+        var settings = new AceDbSettings {
+            Host = host, Port = port, Database = database,
+            User = user, Password = password
+        };
+
+        try {
+            using var connector = new AceDbConnector(settings);
+            var error = await connector.TestConnectionAsync();
+            if (error != null)
+                return new AceDbConnectResult(false, host, port, database, user, false, error);
+
+            bool saved = false;
+            if (_projectManager.CurrentProject != null) {
+                _projectManager.CurrentProject.AceShardDb = settings;
+                _projectManager.CurrentProject.Save();
+                saved = true;
+            }
+
+            return new AceDbConnectResult(true, host, port, database, user, saved);
+        } catch (Exception ex) {
+            return new AceDbConnectResult(false, host, port, database, user, false, ex.Message);
+        }
+    }
+
+    /// <summary>Shows current ACE SHARD database connection settings and tests connectivity.</summary>
+    public async Task<AceDbStatusResult> AceShardDbStatusAsync() {
+        var settings = _projectManager.CurrentProject?.AceShardDb;
+        if (settings == null)
+            return new AceDbStatusResult(false);
+
+        try {
+            using var connector = new AceDbConnector(settings);
+            var error = await connector.TestConnectionAsync();
+            return new AceDbStatusResult(true, settings.Host, settings.Port,
+                settings.Database, settings.User,
+                error == null, error);
+        } catch (Exception ex) {
+            return new AceDbStatusResult(true, settings.Host, settings.Port,
+                settings.Database, settings.User, false, ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Queries all landblock_instance records for a given landblock ID.
     /// </summary>
     public async Task<AceDbQueryInstancesResult> AceDbQueryInstancesAsync(ushort landblockId) {

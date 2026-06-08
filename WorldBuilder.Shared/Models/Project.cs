@@ -143,6 +143,15 @@ namespace WorldBuilder.Shared.Models {
         public AceDbSettings? AceDb { get; set; }
 
         /// <summary>
+        /// E1 (wave-2) PR3 — ACE SHARD database connection (separate from <see cref="AceDb"/>, which
+        /// is WORLD-only). Required for the Option B per-placement biota override apply path
+        /// (<c>biota</c> + <c>biota_properties_*</c> rows live in the shard DB, SPEC §2.3 / open
+        /// question 1). Null until configured; Option B <c>--apply</c> blocks rather than silently
+        /// writing biota rows to the world DB (HARD CONSTRAINT 3). Persisted per-project.
+        /// </summary>
+        public AceDbSettings? AceShardDb { get; set; }
+
+        /// <summary>
         /// Outdoor landblock instance placements (generators/items/portals) added from the Terrain editor.
         /// Exported to landblock_instances.sql when ACE DB is configured.
         /// </summary>

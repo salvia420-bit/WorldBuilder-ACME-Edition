@@ -21,6 +21,15 @@ namespace WorldBuilder.Shared.Models {
         public float AnglesY { get; set; }
         public float AnglesZ { get; set; } = 1f;
 
+        /// <summary>
+        /// E1 (wave-2) PR3 — optional placement guid (the Option B / per-placement addressable key,
+        /// <c>landblock_instance.guid == biota.id</c>). Null for fresh placements; minted in the
+        /// static range (<see cref="WorldBuilder.Shared.Lib.AceDb.StaticGuidAllocator"/>) at export
+        /// time when a per-placement biota override is emitted. Additive — default null preserves the
+        /// existing landblock_instance SQL path (the emitter still auto-generates a guid when 0).
+        /// </summary>
+        public uint? Guid { get; set; }
+
         // ── E1 (wave-2) enrichment — additive, default null/empty ───────────
         // These carry per-instance dye / generator / multi-position state through the
         // export round-trip (placements_enriched.jsonl). They default to null so existing
@@ -34,6 +43,15 @@ namespace WorldBuilder.Shared.Models {
 
         /// <summary>Optional multi-position map keyed by PositionType enum (never an array offset).</summary>
         public Dictionary<PositionType, PlacementPosition>? Positions { get; set; }
+
+        /// <summary>
+        /// E1 (wave-2) PR3 — per-placement export TARGET (SPEC §3.4). <see cref="EnrichmentScope.ClassDefault"/>
+        /// (the default) routes enrichment to the WORLD <c>weenie_properties_*</c> tables keyed by wcid;
+        /// <see cref="EnrichmentScope.PlacementOverride"/> routes it to the SHARD <c>biota_properties_*</c>
+        /// tables keyed by the placement <see cref="Guid"/> (Option B). Additive — default ClassDefault
+        /// preserves the PR1/PR2 world-only behavior.
+        /// </summary>
+        public EnrichmentScope Scope { get; set; } = EnrichmentScope.ClassDefault;
 
         [JsonIgnore]
         public Vector3 Origin {
