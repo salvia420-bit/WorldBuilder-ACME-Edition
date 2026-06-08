@@ -104,6 +104,16 @@ const NDC_CORNERS = [
 // skipping) only if perf demands it AND the texel snap is doing its
 // job — bump cautiously, validate against the texel size of the LARGEST
 // cascade (300 m / 1024 = 0.293 m).
+//
+// RP5 (lighting/shadow perf, 2026-06-08) — these two thresholds are now
+// optionally overridable via `setupCsm(scene, { camDeltaSqEps, sunDeltaSqEps })`
+// (wired to URL flags by the lighting layer). The defaults below are the
+// validated values; raising them skips more refits at the cost of a little
+// shadow swim on slow pans — see the threshold rationale above before
+// retuning. The static-scene shadow-raster gate (lighting.js) reuses the
+// SAME refit decision (via `csmState.didRefitThisTick`) as its primary
+// "camera/sun moved" signal, so a too-aggressive eps here also widens the
+// raster-skip window — keep them conservative.
 const CAM_DELTA_SQ_EPS = 1e-4; // m²
 const SUN_DELTA_SQ_EPS = 1e-6; // unit-vector²
 
@@ -129,6 +139,12 @@ const SUN_DELTA_SQ_EPS = 1e-6; // unit-vector²
  *   shadow map resolution. Length must be 3.
  * @param {number} [opts.blendFrac=DEFAULT_CSM_BLEND_FRAC] - blend zone
  *   as fraction of each cascade range.
+ * @param {number} [opts.camDeltaSqEps=CAM_DELTA_SQ_EPS] - RP5 tunable
+ *   squared-metres camera-move threshold below which `updateCsm` skips
+ *   the per-cascade refit. Defaults to the validated CAM_DELTA_SQ_EPS.
+ * @param {number} [opts.sunDeltaSqEps=SUN_DELTA_SQ_EPS] - RP5 tunable
+ *   squared sun-direction-delta threshold below which `updateCsm` skips
+ *   the per-cascade refit. Defaults to the validated SUN_DELTA_SQ_EPS.
  * @returns {{
  *   lights: THREE.DirectionalLight[3],
  *   splits: number[],
@@ -157,6 +173,14 @@ export function setupCsm(scene, opts = {}) {
   const sunDir = opts.sunDir
     ? { x: opts.sunDir.x, y: opts.sunDir.y, z: opts.sunDir.z }
     : { x: 60, y: 80, z: 30 };
+  // RP5 — per-instance refit thresholds. Fall back to the validated
+  // module constants when the caller doesn't pass a finite override.
+  const camDeltaSqEps = Number.isFinite(opts.camDeltaSqEps)
+    ? opts.camDeltaSqEps
+    : CAM_DELTA_SQ_EPS;
+  const sunDeltaSqEps = Number.isFinite(opts.sunDeltaSqEps)
+    ? opts.sunDeltaSqEps
+    : SUN_DELTA_SQ_EPS;
 
   const csmGroup = new THREE.Group();
   csmGroup.name = "csm-cascades";
@@ -198,6 +222,19 @@ export function setupCsm(scene, opts = {}) {
     blendFrac,
     sunDir,
     csmGroup,
+    // RP5 — per-instance refit thresholds (default = the validated module
+    // constants). `updateCsm` reads these instead of the bare constants
+    // so the lighting/URL layer can retune without editing this file.
+    camDeltaSqEps,
+    sunDeltaSqEps,
+    // RP5 — set by every `updateCsm` call: true when this tick actually
+    // refit the cascades (camera or sun moved past threshold), false when
+    // it early-outed because the scene was static. The static-scene
+    // shadow-raster gate in lighting.js consumes this as its primary
+    // "shadows must re-raster this frame" signal. Initialised true so the
+    // very first frame after setup re-rasters (matches the NaN-sentinel
+    // first-frame rebuild below).
+    didRefitThisTick: true,
     // Receivers' materials register here once patched, so we can refresh
     // uniforms after each `updateCsm` without re-walking the scene.
     patchedMaterials: new Set(),
@@ -227,6 +264,10 @@ export function setupCsm(scene, opts = {}) {
       this._lastSunX = NaN;
       this._lastSunY = NaN;
       this._lastSunZ = NaN;
+      // RP5 — a forced rebuild WILL refit on the next updateCsm, so the
+      // static-shadow gate must re-raster that frame. Mark it now so even
+      // if the gate is read before updateCsm runs, it errs toward drawing.
+      this.didRefitThisTick = true;
     },
     dispose() {
       // Reset the skip-rebuild cache too, so a future re-setup that
@@ -278,7 +319,9 @@ export function updateCsm(csmState, camera, sunDir) {
   if (!camera.isPerspectiveCamera) {
     // Top-down ortho path — cascades can't sensibly fit an ortho view
     // frustum's depth slices. Skip; the cached defaults from setupCsm
-    // remain.
+    // remain. RP5 — no refit happened, so the static-shadow gate must
+    // NOT treat this frame as a re-raster trigger on its own.
+    csmState.didRefitThisTick = false;
     return;
   }
   const dir = sunDir ?? csmState.sunDir;
@@ -325,7 +368,20 @@ export function updateCsm(csmState, camera, sunDir) {
   // NaN propagates through subtraction, so on first call (cached NaNs)
   // both deltaSq will be NaN, NaN < eps is false → we fall through to
   // the rebuild path. Subsequent frames compare real numbers.
-  if (camDeltaSq < CAM_DELTA_SQ_EPS && sunDeltaSq < SUN_DELTA_SQ_EPS) {
+  // RP5 — use the per-instance thresholds (default = the module
+  // constants) so the lighting/URL layer can retune skip aggressiveness.
+  const camEps = Number.isFinite(csmState.camDeltaSqEps)
+    ? csmState.camDeltaSqEps
+    : CAM_DELTA_SQ_EPS;
+  const sunEps = Number.isFinite(csmState.sunDeltaSqEps)
+    ? csmState.sunDeltaSqEps
+    : SUN_DELTA_SQ_EPS;
+  if (camDeltaSq < camEps && sunDeltaSq < sunEps) {
+    // RP5 — static this tick: no cascade refit. The shadow maps three
+    // already rastered last frame stay valid, so the static-scene gate
+    // can skip the re-raster (unless something else, e.g. an indoor/
+    // outdoor flip or the staleness bound, forces it).
+    csmState.didRefitThisTick = false;
     return;
   }
 
@@ -355,6 +411,10 @@ export function updateCsm(csmState, camera, sunDir) {
   csmState._lastSunX = lx;
   csmState._lastSunY = ly;
   csmState._lastSunZ = lz;
+  // RP5 — cascades were refit this tick (camera and/or sun moved). The
+  // static-scene shadow-raster gate treats this as "shadows changed →
+  // re-raster this frame".
+  csmState.didRefitThisTick = true;
 }
 
 /**

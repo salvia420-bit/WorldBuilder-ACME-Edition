@@ -268,9 +268,15 @@ export function setupSceneLighting(scene, opts = {}) {
   // tick to push fresh shadow-map textures + matrices.
   let csmState = null;
   if (csmEnabled) {
-    csmState = setupCsm(scene, {
-      sunDir: { x: sunPos.x, y: sunPos.y, z: sunPos.z },
-    });
+    // RP5 — pass through the optional CSM refit-threshold overrides
+    // (?csmCamEps / ?csmSunEps). When absent (null), setupCsm falls back
+    // to its own validated CAM/SUN_DELTA_SQ_EPS defaults, so this is a
+    // no-op on the default URL.
+    const rp5 = getRp5Config();
+    const csmOpts = { sunDir: { x: sunPos.x, y: sunPos.y, z: sunPos.z } };
+    if (rp5.csmCamEps !== null) csmOpts.camDeltaSqEps = rp5.csmCamEps;
+    if (rp5.csmSunEps !== null) csmOpts.sunDeltaSqEps = rp5.csmSunEps;
+    csmState = setupCsm(scene, csmOpts);
   }
 
   function dispose() {
@@ -281,9 +287,22 @@ export function setupSceneLighting(scene, opts = {}) {
       csmState.dispose();
     }
     scene.remove(lightsGroup);
+    // RP5 (review fix) — restore three's default per-frame raster cadence
+    // on the renderer the static-shadow gate took over. The renderer is
+    // owned outside this bundle and can outlive a lighting dispose (soft
+    // 3D→2D→3D re-init reusing the same WebGLRenderer); leaving it at
+    // autoUpdate=false would freeze a reused renderer's shadows until the
+    // next gated session re-warmed them. The gate stashes the renderer it
+    // gated on `bundle._rp5GatedRenderer`; restore autoUpdate=true there.
+    const gatedRenderer = bundle._rp5GatedRenderer;
+    if (gatedRenderer?.shadowMap && gatedRenderer.shadowMap.autoUpdate === false) {
+      gatedRenderer.shadowMap.autoUpdate = true;
+    }
+    bundle._rp5GatedRenderer = null;
   }
 
-  return { sun, ambient, hemisphere, lightsGroup, csmState, dispose };
+  const bundle = { sun, ambient, hemisphere, lightsGroup, csmState, dispose };
+  return bundle;
 }
 
 /**
@@ -312,13 +331,17 @@ export function setupSceneLighting(scene, opts = {}) {
  *   target moves to (x, 0, z) ignoring the input y — we keep the
  *   target at ground level so the shadow frustum's near/far slice
  *   is always anchored on the terrain plane.
+ * @returns {boolean} RP5 — true when the shadow frustum actually moved
+ *   this call (the texel-snapped target changed), false when it was
+ *   already at the snapped position. The single-shadow static-scene
+ *   raster gate consumes this as its "camera moved → re-raster" signal.
  */
 export function updateShadowCameraTarget(lighting, targetThreePos) {
-  if (!lighting || !targetThreePos) return;
+  if (!lighting || !targetThreePos) return false;
   const sun = lighting.sun;
-  if (!sun || !sun.castShadow) return;
+  if (!sun || !sun.castShadow) return false;
   const target = sun.target;
-  if (!target) return;
+  if (!target) return false;
   // Cache the original light direction (computed lazily once; the
   // sun's initial position vs. its target.position is the direction
   // vector we want to preserve as the target slides under the player).
@@ -350,7 +373,9 @@ export function updateShadowCameraTarget(lighting, targetThreePos) {
     // re-derives its view matrix this frame.
     target.updateMatrixWorld();
     sun.shadow.camera.updateProjectionMatrix();
+    return true; // RP5 — frustum moved this frame.
   }
+  return false; // RP5 — already texel-snapped; nothing moved.
 }
 
 // Maximum number of per-SetupModel lights allowed to render in any
@@ -375,6 +400,128 @@ const MAX_ACTIVE_LIGHTS = 32;
 // throttled. Bump higher (8) if frametime audits show more headroom
 // is wanted at the cost of more boundary pop.
 const LIGHT_SORT_INTERVAL = 4;
+
+// === RP5 (lighting/shadow perf, 2026-06-08) — config knobs ===========
+// All parsed ONCE at module load (mirrors the ?fogLerp / ?frameBudget /
+// ?netDrainHz pattern used across this stack) and fail-soft to the
+// defaults in the Node harness (no `window`). Every lever is reversible
+// via URL flag; the static-shadow gate is the only one that touches the
+// renderer, and it does so as a PURE raster-skip control (see below).
+//
+//   ?shadowStaticGate=off   disable the static-scene shadow-raster skip
+//                           entirely (renderer.shadowMap.autoUpdate stays
+//                           true → three rasters all 3 cascade maps every
+//                           frame, pre-RP5 behaviour).
+//   ?lightSortInterval=<n>  override LIGHT_SORT_INTERVAL (1..240). Default
+//                           4 (PARITY-PRESERVING — same as the prior
+//                           hard-coded LIGHT_SORT_INTERVAL). The cap-cross
+//                           guard re-sorts immediately on any active-light
+//                           count change, so a longer interval only delays
+//                           the rare same-count move-across-the-32-boundary
+//                           pop, not genuine spawn/despawn — operators who
+//                           want the extra headroom can opt INTO 8 via
+//                           ?lightSortInterval=8 (was briefly the default;
+//                           reverted to 4 to keep the default cap-boundary
+//                           pop behaviour byte-identical to pre-RP5).
+//   ?shadowMaxStale=<n>     RP5 staleness ceiling: a SECONDARY bound (the
+//                           per-caster movement scan re-rasters moving rigs
+//                           immediately) that forces a re-raster at least
+//                           every N frames so the residual cases (in-place
+//                           limb animation, geometry streaming in while
+//                           stationary, context restore) can't freeze a
+//                           shadow. Default 12 (~200 ms @60fps, ~400 ms
+//                           @30fps). `0`/`off` does NOT fully drop the
+//                           ceiling — it's CLAMPED to a 60-frame (~1 s)
+//                           floor so a permanent freeze is impossible (RED
+//                           LINE). An explicit small N (e.g. 1 = every
+//                           frame) is honoured as-is (only raises raster
+//                           frequency, always safe).
+//   ?csmCamEps=<m2> ?csmSunEps=<v2>  override the CSM refit thresholds
+//                           (squared metres / squared unit-vector). Larger
+//                           = fewer refits + (because the static-shadow
+//                           gate reuses the refit decision) fewer rasters,
+//                           at the cost of shadow swim on slow pans. Omit
+//                           to keep csm.js's validated defaults.
+
+const RP5_DEFAULT_SHADOW_MAX_STALE = 12;
+// RP5 (review fix) — hard floor for the staleness ceiling. `?shadowMaxStale=off`
+// / `=0` is clamped to this instead of fully dropping the ceiling, so even the
+// residual cases the per-caster movement scan can't see (WebGL context restore
+// on the single-shadow path, geometry streaming in while stationary, in-place
+// limb animation) ALWAYS self-heal within ~1 s. The gate must never produce a
+// permanently-stale shadow (RED LINE), so a true zero ceiling is not offered.
+const SHADOW_MAX_STALE_FLOOR = 60;
+// PARITY: default == the prior hard-coded LIGHT_SORT_INTERVAL (4). Bumping
+// the default to 8 doubled the worst-case same-count cap-boundary pop on the
+// DEFAULT URL (3→7 frames) without an opt-in, so the default is held at 4;
+// ?lightSortInterval=8 opts into the longer interval for more headroom.
+const RP5_DEFAULT_LIGHT_SORT_INTERVAL = 4;
+
+function _rp5ReadParams() {
+  if (typeof window === "undefined" || !window.location) return null;
+  try {
+    return new URLSearchParams(window.location.search);
+  } catch (_) {
+    return null;
+  }
+}
+
+let _rp5Config;
+function getRp5Config() {
+  if (_rp5Config !== undefined) return _rp5Config;
+  const cfg = {
+    shadowStaticGate: true,
+    lightSortInterval: RP5_DEFAULT_LIGHT_SORT_INTERVAL,
+    shadowMaxStaleFrames: RP5_DEFAULT_SHADOW_MAX_STALE,
+    csmCamEps: null, // null ⇒ use csm.js's validated default
+    csmSunEps: null,
+  };
+  const ps = _rp5ReadParams();
+  if (ps) {
+    const gate = ps.get("shadowStaticGate");
+    if (typeof gate === "string" && gate.toLowerCase() === "off") {
+      cfg.shadowStaticGate = false;
+    }
+    const lsi = ps.get("lightSortInterval");
+    if (lsi !== null) {
+      const n = parseInt(lsi, 10);
+      // Clamp to a sane band: 1 = sort every frame (pre-throttle), 240 =
+      // ~4 s @60fps worst-case boundary-pop lag. The count-delta guard in
+      // capActiveLightsByDistance still forces an immediate re-sort on any
+      // spawn/despawn regardless of this interval.
+      if (Number.isFinite(n) && n >= 1) cfg.lightSortInterval = Math.min(240, n);
+    }
+    const sms = ps.get("shadowMaxStale");
+    if (sms !== null) {
+      if (sms.toLowerCase() === "off" || sms === "0") {
+        // RP5 (review fix) — `off`/`0` does NOT fully drop the ceiling.
+        // The per-caster movement scan (scanDynamicCasterMovement) already
+        // re-rasters on any moving rig, but a handful of residual cases
+        // (WebGL context restore on the single-shadow path, geometry
+        // streaming in while the player is stationary, in-place limb
+        // animation) have no explicit signal. Clamp to a 60-frame floor
+        // (~1 s @60fps) so those cases ALWAYS self-heal within a second —
+        // the gate must never produce a permanently-stale shadow (RED
+        // LINE). 60 frames is still ~98% fewer rasters than autoUpdate.
+        cfg.shadowMaxStaleFrames = SHADOW_MAX_STALE_FLOOR;
+      } else {
+        // An explicit numeric N is the operator deliberately choosing the
+        // ceiling. Small N (e.g. ?shadowMaxStale=1 = re-raster every frame)
+        // only INCREASES raster frequency, so it's safe and left as-is —
+        // the floor only guards the "drop the ceiling entirely" (off/0)
+        // case above, which is the only way to reach a permanent freeze.
+        const n = parseInt(sms, 10);
+        if (Number.isFinite(n) && n >= 1) cfg.shadowMaxStaleFrames = Math.min(600, n);
+      }
+    }
+    const camEps = parseFloat(ps.get("csmCamEps"));
+    if (Number.isFinite(camEps) && camEps >= 0) cfg.csmCamEps = camEps;
+    const sunEps = parseFloat(ps.get("csmSunEps"));
+    if (Number.isFinite(sunEps) && sunEps >= 0) cfg.csmSunEps = sunEps;
+  }
+  _rp5Config = cfg;
+  return _rp5Config;
+}
 
 // === LG1 (render-completeness waves-3, 2026-05-29) — intensity clamp ===
 // Upper bound on per-light intensity. The previous cap of 8.0 guarded
@@ -443,6 +590,13 @@ const STATIC_LIGHT_FACTOR = 1.3;
 export function tickLightingForCellState(scene3d, sessionHandle) {
   if (!scene3d) return;
 
+  // RP5 — accumulate "shadows changed this frame → must re-raster" across
+  // the indoor/outdoor flip, the single-shadow frustum recentre, and the
+  // CSM refit below. Combined + bounded by the static-shadow gate at the
+  // end of this tick (applyStaticShadowGate). Starts false; any of the
+  // contributing levers flips it true.
+  let shadowDirty = false;
+
   // === Indoor/outdoor toggle (sun + ambient) ==========================
   const lighting = scene3d.lighting;
   if (lighting) {
@@ -461,6 +615,10 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
         const wantSunVisible = !isIndoor;
         if (sun.visible !== wantSunVisible) {
           sun.visible = wantSunVisible;
+          // RP5 — the sun (and thus its shadow contribution) just turned
+          // on/off; force a shadow re-raster this frame so the cached
+          // shadow map doesn't lag the indoor/outdoor transition.
+          shadowDirty = true;
         }
         // === L1 (waves-2, 2026-05-29) — AC diurnal ambient on the legacy
         // path ==========================================================
@@ -527,7 +685,13 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
   if (lighting && lighting.sun?.castShadow) {
     const playerThreePos = resolvePlayerThreePos(scene3d);
     if (playerThreePos) {
-      updateShadowCameraTarget(lighting, playerThreePos);
+      // RP5 — the recentre returns true when the texel-snapped frustum
+      // actually moved (i.e. the player/camera moved enough to shift the
+      // shadow camera), which is the single-shadow path's "camera moved →
+      // re-raster" signal.
+      if (updateShadowCameraTarget(lighting, playerThreePos)) {
+        shadowDirty = true;
+      }
     }
   }
 
@@ -544,21 +708,256 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
       try {
         updateCsm(lighting.csmState, cam);
         refreshCsmUniforms(lighting.csmState);
+        // RP5 — updateCsm set `didRefitThisTick` true iff it actually
+        // refit the cascades (camera/sun moved past threshold). That IS
+        // the CSM-path "shadows changed → re-raster" signal. Skipped
+        // refits leave the previous frame's shadow maps valid, so we can
+        // skip the raster (subject to the staleness bound below).
+        if (lighting.csmState.didRefitThisTick) {
+          shadowDirty = true;
+        }
       } catch (e) {
         if (!scene3d._csmTickWarned) {
           scene3d._csmTickWarned = true;
           // eslint-disable-next-line no-console
           console.warn("[visfid-p33] CSM tick failed:", e);
         }
+        // RP5 — a thrown CSM tick leaves the cascade fit ambiguous; err
+        // toward correctness and re-raster this frame.
+        shadowDirty = true;
       }
     }
   }
+
+  // RP5 — STATIC-SCENE SHADOW GATE (the big win). Drive the three.js
+  // shadow-map RASTER off `shadowDirty` so a provably-static scene skips
+  // re-rendering all (1 or 3) shadow maps. Runs AFTER both shadow paths
+  // have updated their frusta this frame. See applyStaticShadowGate.
+  applyStaticShadowGate(scene3d, lighting, shadowDirty);
 
   // === Per-SetupModel light cap (top-32 by squared distance) ==========
   // We cap regardless of whether the indoor toggle ran (capture scripts
   // can validate the cap with a sessionHandle that has no
   // isCurrentCellIndoor — the cap exists on its own merits).
   capActiveLightsByDistance(scene3d);
+}
+
+/**
+ * RP5 — STATIC-SCENE SHADOW GATE.
+ *
+ * Three.js re-rasters every enabled shadow map on EVERY `renderer.render`
+ * (because `renderer.shadowMap.autoUpdate` defaults true). For our
+ * directional shadows (1 map on the single-shadow path, 3 on the CSM
+ * path) the geometry is overwhelmingly STATIC — buildings/statics/terrain
+ * never move and the sun/camera are often still. Re-rasterising identical
+ * shadow maps every frame is pure waste.
+ *
+ * This gate flips `renderer.shadowMap.autoUpdate = false` (once) and then
+ * sets `renderer.shadowMap.needsUpdate = true` ONLY on frames where
+ * something shadow-relevant changed. three.js consumes `needsUpdate` on
+ * the next render and clears it itself, so this is a pure one-shot raster
+ * trigger — when shadows DO render, the output is byte-identical to today
+ * (we never touch frustum/bias/map-size/caster tagging; only WHEN the
+ * raster fires).
+ *
+ * Correctness contract (SAFE-with-RED-LINES): we re-raster whenever
+ *   - the camera or sun moved (CSM `didRefitThisTick` / single-shadow
+ *     frustum recentre returned true), OR
+ *   - the indoor/outdoor sun.visible flipped, OR
+ *   - ANY DYNAMIC SHADOW CASTER MOVED — every entity rig (NPC / player /
+ *     projectile; all tagged `castShadow` in entities.js and rastered into
+ *     the directional/CSM shadow map) is scanned each tick via
+ *     `scanDynamicCasterMovement` and a change in any rig's world
+ *     position/orientation forces an immediate re-raster. This is the
+ *     RED-LINE guarantee: a walking NPC or a flying projectile's shadow
+ *     tracks at the render cadence (≤1 frame lag), NOT only at the
+ *     staleness ceiling. (The scan compares the entity-rig ROOT transform;
+ *     pure in-place limb animation that never moves the root is bounded by
+ *     the staleness ceiling below — a far subtler shadow change.) OR
+ *   - the staleness ceiling (?shadowMaxStale, default 12 frames) elapsed
+ *     since the last raster — a secondary BOUND that catches the residual
+ *     cases the explicit signals miss (in-place limb animation, geometry
+ *     streaming in while the player stands still, a freed/reattached
+ *     caster). With the ceiling at 12 frames an in-place-animating NPC's
+ *     shadow refreshes ~5×/s @60fps even if its root never translates; set
+ *     `?shadowMaxStale=1` to re-raster every frame (functionally pre-RP5).
+ *     `?shadowMaxStale=off`/`=0` is CLAMPED to a 60-frame floor (never a
+ *     true zero) so the ceiling can never permanently freeze a shadow even
+ *     in the residual cases the per-caster scan doesn't cover.
+ *
+ * No-op (leaves three's default per-frame raster) when:
+ *   - `?shadowStaticGate=off`, OR
+ *   - no renderer / no shadowMap reachable, OR
+ *   - shadows aren't enabled (`renderer.shadowMap.enabled === false`) —
+ *     in which case there's nothing to gate.
+ *
+ * Reached entirely through `scene3d.renderer` (the renderer is stashed on
+ * `liveScene3d` in index.js); no index.js edit required.
+ *
+ * @param {Object} scene3d - the live `liveScene3d` shape.
+ * @param {Object|null} lighting - the lighting bundle (sun + csmState).
+ * @param {boolean} shadowDirty - accumulated "shadows changed this frame".
+ */
+function applyStaticShadowGate(scene3d, lighting, shadowDirty) {
+  const cfg = getRp5Config();
+  if (!cfg.shadowStaticGate) {
+    // RP5 (review fix) — renderer-state-leak heal. The renderer is owned
+    // outside the lighting bundle and can outlive a lighting dispose (e.g.
+    // a 3D→2D→3D soft re-init reusing the same WebGLRenderer). A PRIOR
+    // gated session may have left `shadowMap.autoUpdate = false`; if THIS
+    // session has the gate disabled we'd otherwise never restore three's
+    // default per-frame raster, leaving the new session's shadows frozen.
+    // Restore autoUpdate=true once if we find it left false while the gate
+    // is off (idempotent; only touches the renderer when it's stale).
+    const r = scene3d?.renderer;
+    const sm = r?.shadowMap;
+    if (sm && sm.enabled && sm.autoUpdate === false && !scene3d._rp5ShadowGateActive) {
+      sm.autoUpdate = true;
+    }
+    return;
+  }
+
+  const renderer = scene3d?.renderer;
+  const shadowMap = renderer?.shadowMap;
+  // Nothing to gate if there's no renderer, no shadowMap, or shadows are
+  // disabled (index.js only sets `enabled = true` on the shadow/CSM path).
+  if (!shadowMap || !shadowMap.enabled) return;
+
+  // Is there actually a shadow caster wired this session? Single-shadow
+  // path = sun.castShadow; CSM path = a csmState. If neither, there are
+  // no shadow maps to raster, so leave three's defaults untouched.
+  const hasSingleShadow = !!(lighting && lighting.sun && lighting.sun.castShadow);
+  const hasCsm = !!(lighting && lighting.csmState);
+  if (!hasSingleShadow && !hasCsm) return;
+
+  // One-time: take manual control of the raster. We flip autoUpdate off
+  // exactly once (guarded so a third party flipping it back on mid-session
+  // is respected on the NEXT detection — we only force-disable when WE own
+  // it). The first frame after taking control force-renders so the maps
+  // are warm regardless of camera/sun state.
+  if (!scene3d._rp5ShadowGateActive) {
+    scene3d._rp5ShadowGateActive = true;
+    shadowMap.autoUpdate = false;
+    scene3d._rp5ShadowStaleFrames = 0;
+    shadowDirty = true; // warm the maps on the first gated frame.
+    // RP5 (review fix) — stash the renderer we gated on the lighting
+    // bundle so its dispose() can restore autoUpdate=true when this scene3d
+    // tears down (the renderer can outlive the lighting bundle on a soft
+    // re-init). No-op when there's no lighting bundle (gate still works via
+    // the scene3d-keyed state above).
+    if (lighting) lighting._rp5GatedRenderer = renderer;
+  }
+
+  // RED-LINE — re-raster whenever ANY DYNAMIC CASTER MOVED. Entity rigs
+  // (NPCs / local player / projectiles) are tagged castShadow and DO get
+  // rastered into the directional/CSM shadow map, so a moving rig whose
+  // shadow only refreshed at the staleness ceiling would show a laggy /
+  // detached shadow (worst on fast projectiles). Scan the live entity-rig
+  // root transforms and force an immediate re-raster on any change. This
+  // runs BEFORE the staleness ceiling so a moving caster always wins.
+  // Skipped (returns false) when the gate isn't reading dynamic casters —
+  // e.g. no entityManager. NOTE on ordering: this lighting tick runs
+  // BEFORE entityManager.tick(dt) in loop.js, so we sample each rig's
+  // PREVIOUS-frame transform; a change vs. two-frames-ago means the rig is
+  // moving, so we arm needsUpdate and the post-entityManager.tick raster
+  // captures the freshest pose (≤1 frame lag — the render-cadence bound
+  // the RED LINE asks for, not the staleness bound).
+  if (!shadowDirty && scanDynamicCasterMovement(scene3d)) {
+    shadowDirty = true;
+  }
+
+  // Staleness ceiling — a SECONDARY bound that catches the residual cases
+  // the explicit signals miss (in-place limb animation that never moves a
+  // rig root, geometry streaming in while stationary, a reattached caster).
+  // `?shadowMaxStale=off`/`=0` is clamped to a 60-frame floor (see
+  // getRp5Config) so the ceiling can never be a true zero — it must never
+  // permanently freeze a shadow even when the per-caster scan doesn't cover
+  // a case.
+  const maxStale = cfg.shadowMaxStaleFrames | 0;
+  let stale = scene3d._rp5ShadowStaleFrames | 0;
+  if (!shadowDirty && maxStale > 0 && stale + 1 >= maxStale) {
+    shadowDirty = true;
+  }
+
+  if (shadowDirty) {
+    // One-shot raster trigger. three.js renders all enabled shadow maps
+    // on the next `renderer.render` and resets needsUpdate to false.
+    shadowMap.needsUpdate = true;
+    scene3d._rp5ShadowStaleFrames = 0;
+  } else {
+    scene3d._rp5ShadowStaleFrames = stale + 1;
+  }
+}
+
+/**
+ * RP5 RED-LINE — detect whether any DYNAMIC SHADOW CASTER (entity rig:
+ * NPC, local player, projectile) moved since the previous tick, so the
+ * static-shadow gate can force an immediate re-raster (rather than waiting
+ * for the staleness ceiling). Entity meshes are tagged `castShadow` on the
+ * shadow/CSM path (entities.js), so they ARE rastered into the directional/
+ * CSM shadow map; a moving rig whose shadow only refreshed at the ceiling
+ * would show a laggy/detached shadow.
+ *
+ * Cheap, zero-allocation, fail-soft:
+ *   - Reads `scene3d.entityManager.entityMap` (a Map<guid, EntityInstance>).
+ *   - For each rig, hashes its ROOT world position + quaternion into a
+ *     single rolling FNV-ish accumulator. The rig root is what translates
+ *     when an NPC walks or a projectile flies; comparing it catches the
+ *     dominant, most-visible moving-caster cases. (Pure in-place limb
+ *     animation that never moves the root is left to the staleness ceiling
+ *     — a far subtler shadow change.)
+ *   - Compares this frame's accumulated hash against the value stored on
+ *     `scene3d._rp5CasterHash`; returns true (and updates the stored hash)
+ *     when they differ.
+ *
+ * Uses the rig root's LOCAL position/quaternion (root is parented directly
+ * under worldRoot, so its local transform IS its world transform up to the
+ * fixed worldRoot rotation — a change in local transform is a change in
+ * world transform, which is all we need to detect "it moved"). This avoids
+ * forcing a getWorldPosition matrix recompute per entity per frame.
+ *
+ * @param {Object} scene3d - the live `liveScene3d` shape.
+ * @returns {boolean} true when a caster moved since the last call.
+ */
+function scanDynamicCasterMovement(scene3d) {
+  const em = scene3d?.entityManager;
+  const map = em?.entityMap;
+  if (!map || typeof map.forEach !== "function") return false;
+  // Rolling 32-bit accumulator over every rig root's transform. Mixes guid
+  // so a despawn+spawn that lands a new rig at the same transform still
+  // changes the hash (the SET of casters changed). Integer math only — no
+  // allocation, no sqrt.
+  let hash = 0x811c9dc5 | 0; // FNV offset basis
+  map.forEach((inst, guid) => {
+    const root = inst && inst.root;
+    if (!root) return;
+    const p = root.position;
+    const q = root.quaternion;
+    // Quantize floats to ~1mm / ~1e-3 rad so sub-visible jitter (or
+    // float noise from the integrator) doesn't churn the raster every
+    // frame; a genuine walk/fly easily clears these steps each frame.
+    // `| 0` truncates to int32 — wrap is fine, we only compare equality.
+    const acc =
+      (guid | 0) ^
+      ((p.x * 1000) | 0) ^
+      (((p.y * 1000) | 0) * 3) ^
+      (((p.z * 1000) | 0) * 7) ^
+      (((q.x * 1000) | 0) * 11) ^
+      (((q.y * 1000) | 0) * 13) ^
+      (((q.z * 1000) | 0) * 17) ^
+      (((q.w * 1000) | 0) * 19);
+    // FNV-style mix so order-independent collisions are unlikely.
+    hash = (hash ^ acc) | 0;
+    hash = (hash + ((hash << 1) | 0) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24)) | 0;
+  });
+  const prev = scene3d._rp5CasterHash;
+  scene3d._rp5CasterHash = hash;
+  // First call (prev === undefined): treat as "no change" — the gate's
+  // own first-frame warm-up already forced a raster, and the entity map
+  // is typically empty at gate-activation time anyway. Returning false
+  // here avoids a spurious re-raster the frame the hash is first seeded.
+  if (prev === undefined) return false;
+  return hash !== prev;
 }
 
 /**
@@ -630,20 +1029,29 @@ function capActiveLightsByDistance(scene3d) {
 
   // Perf C6 — throttle: increment per-scene3d frame counter, then
   // decide whether to skip the sort + .visible toggle this tick. We
-  // skip when both (a) we sorted recently (< LIGHT_SORT_INTERVAL
-  // frames ago) AND (b) the active light count is unchanged since the
-  // last sort. Any count delta (a spawn / despawn from
-  // `attachSetupModelLights` or cell unload) forces a fresh sort so a
-  // newly-attached light doesn't sit invisible behind the cap. The
-  // previous-frame .visible flags survive untouched, which IS the win
-  // — the toggle loop also gets skipped, not just the sort.
+  // skip when both (a) we sorted recently (< sortInterval frames ago)
+  // AND (b) the active light count is unchanged since the last sort.
+  // Any count delta (a spawn / despawn from `attachSetupModelLights` or
+  // cell unload) forces a fresh sort so a newly-attached light doesn't
+  // sit invisible behind the cap. The previous-frame .visible flags
+  // survive untouched, which IS the win — the toggle loop also gets
+  // skipped, not just the sort.
+  //
+  // RP5 — `sortInterval` is the configurable LIGHT_SORT_INTERVAL
+  // (?lightSortInterval, default 4 — parity with the prior hard-coded value).
+  // The count-unchanged guard (a) above is the REQUIRED cap-boundary
+  // anti-pop safeguard: it re-sorts immediately whenever the active light
+  // SET changes (spawn/despawn), so a longer interval only delays the
+  // rare same-count move-across-the-32-boundary case by a few frames,
+  // never a genuine light appearing/disappearing.
+  const sortInterval = getRp5Config().lightSortInterval || LIGHT_SORT_INTERVAL;
   const frameCounter = (scene3d._lightSortFrameCounter ?? 0) + 1;
   scene3d._lightSortFrameCounter = frameCounter;
   const lastSortFrame = scene3d._lightSortLastFrame ?? 0;
   const lastSortCount = scene3d._lightSortLastCount ?? -1;
   if (
     lastSortCount === lights.length &&
-    frameCounter - lastSortFrame < LIGHT_SORT_INTERVAL
+    frameCounter - lastSortFrame < sortInterval
   ) {
     return;
   }
