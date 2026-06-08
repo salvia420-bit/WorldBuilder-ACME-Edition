@@ -5,8 +5,8 @@
 //! (most-significant byte = alpha). Per-pixel decode uses the index
 //! from the palettized texture's source data to look up `colors[i]`.
 
-use binrw::{BinRead, BinResult, binread};
-use std::io::{Read, Seek};
+use binrw::{BinRead, BinResult, BinWrite, binread};
+use std::io::{Read, Seek, Write};
 
 #[binread]
 #[derive(Debug, Clone, serde::Serialize)]
@@ -21,6 +21,32 @@ impl Palette {
     pub fn unpack(data: &[u8]) -> Result<Self, binrw::Error> {
         let mut cursor = std::io::Cursor::new(data);
         Self::read(&mut cursor)
+    }
+
+    /// Serialize this Palette back into the canonical DAT body layout —
+    /// `[u32 id][i32 count][u32 colour]*count` — the exact inverse of
+    /// [`Palette::unpack`] / [`parse_colors`]. The colour count is derived
+    /// from `colors.len()` (written as an `i32`, matching the read side), so
+    /// `unpack(pack(x)) == x` holds byte-for-byte.
+    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> BinResult<()> {
+        self.id.write_le(writer)?;
+        let count = i32::try_from(self.colors.len()).map_err(|e| binrw::Error::Custom {
+            pos: writer.stream_position().unwrap_or(0),
+            err: Box::new(e),
+        })?;
+        count.write_le(writer)?;
+        for &color in &self.colors {
+            color.write_le(writer)?;
+        }
+        Ok(())
+    }
+
+    /// Pack into a freshly allocated `Vec<u8>` — for byte-equal round-trip
+    /// parity against retail Palettes.
+    pub fn pack(&self) -> Result<Vec<u8>, binrw::Error> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        self.write(&mut buf)?;
+        Ok(buf.into_inner())
     }
 
     /// Splice a contiguous range of colours from `src` into `self`, matching
@@ -76,6 +102,38 @@ mod tests {
         let pal = Palette::unpack(&buf).unwrap();
         assert_eq!(pal.id, 0x04001234);
         assert_eq!(pal.colors, vec![0xFFFFFFFF, 0xFFFF0000, 0xFF00FF00]);
+    }
+
+    #[test]
+    fn pack_is_exact_inverse_of_unpack() {
+        // Read a known-good palette, pack it, and assert the bytes are
+        // byte-for-byte identical to the source (no re-derivation drift).
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0x04001234u32.to_le_bytes());
+        buf.extend_from_slice(&3i32.to_le_bytes());
+        buf.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+        buf.extend_from_slice(&0xFFFF0000u32.to_le_bytes());
+        buf.extend_from_slice(&0xFF00FF00u32.to_le_bytes());
+
+        let pal = Palette::unpack(&buf).unwrap();
+        let packed = pal.pack().unwrap();
+        assert_eq!(packed, buf, "pack must be the exact byte inverse of unpack");
+
+        // And re-unpack yields the same structure.
+        let reparsed = Palette::unpack(&packed).unwrap();
+        assert_eq!(reparsed.id, pal.id);
+        assert_eq!(reparsed.colors, pal.colors);
+    }
+
+    #[test]
+    fn pack_empty_palette_round_trips() {
+        let pal = Palette { id: 0x0400_0001, colors: vec![] };
+        let packed = pal.pack().unwrap();
+        // id (4) + count (4) + 0 colours.
+        assert_eq!(packed.len(), 8);
+        let reparsed = Palette::unpack(&packed).unwrap();
+        assert_eq!(reparsed.id, 0x0400_0001);
+        assert!(reparsed.colors.is_empty());
     }
 
     fn pal(colors: Vec<u32>) -> Palette {

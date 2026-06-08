@@ -17,7 +17,7 @@
 use holtburger_dat::{HbaStreamWriter, HbaWriter};
 
 use crate::error::Result;
-use crate::DatPack;
+use crate::{DatPack, WriteError};
 
 /// Extension trait adding a type-aware write to a DAT container writer.
 ///
@@ -33,21 +33,77 @@ pub trait AddTyped {
     /// [`holtburger_dat::DatError`] (bridged) on a duplicate key /
     /// namespace error.
     fn add_typed<T: DatPack>(&mut self, namespace: &str, obj: &T) -> Result<()>;
+
+    /// Like [`AddTyped::add_typed`] but keys the entry under an explicitly
+    /// supplied `id` rather than `obj.id()`. Required for body-id-less record
+    /// types (e.g. `Surface`, whose DID lives in the dat-directory entry, not
+    /// the record body, so `Surface::id()` is `0`) — the caller supplies the
+    /// real DID at the container layer.
+    fn add_typed_with_id<T: DatPack>(
+        &mut self,
+        namespace: &str,
+        id: u32,
+        obj: &T,
+    ) -> Result<()>;
 }
 
 impl AddTyped for HbaWriter {
     fn add_typed<T: DatPack>(&mut self, namespace: &str, obj: &T) -> Result<()> {
+        let id = obj.id();
+        if id == 0 {
+            return Err(zero_id_violation(obj.type_id()));
+        }
         let data = obj.pack()?;
-        self.add(namespace, obj.id(), obj.type_id(), data)?;
+        self.add(namespace, id, obj.type_id(), data)?;
+        Ok(())
+    }
+
+    fn add_typed_with_id<T: DatPack>(
+        &mut self,
+        namespace: &str,
+        id: u32,
+        obj: &T,
+    ) -> Result<()> {
+        let data = obj.pack()?;
+        self.add(namespace, id, obj.type_id(), data)?;
         Ok(())
     }
 }
 
 impl AddTyped for HbaStreamWriter {
     fn add_typed<T: DatPack>(&mut self, namespace: &str, obj: &T) -> Result<()> {
+        let id = obj.id();
+        if id == 0 {
+            return Err(zero_id_violation(obj.type_id()));
+        }
         let data = obj.pack()?;
-        self.add(namespace, obj.id(), obj.type_id(), data)?;
+        self.add(namespace, id, obj.type_id(), data)?;
         Ok(())
+    }
+
+    fn add_typed_with_id<T: DatPack>(
+        &mut self,
+        namespace: &str,
+        id: u32,
+        obj: &T,
+    ) -> Result<()> {
+        let data = obj.pack()?;
+        self.add(namespace, id, obj.type_id(), data)?;
+        Ok(())
+    }
+}
+
+/// `obj.id() == 0` signals a body-id-less record (e.g. `Surface`, whose DID
+/// lives in the dat-directory entry, not the record body). Such a type must be
+/// written with its real DID via [`AddTyped::add_typed_with_id`], never
+/// silently keyed at DID 0 by `add_typed`. Fail closed.
+fn zero_id_violation(type_id: u32) -> WriteError {
+    WriteError::InvariantViolation {
+        type_id,
+        file_id: 0,
+        reason: "add_typed requires a non-zero obj.id(); a body-id-less record \
+                 (e.g. Surface) must be written via add_typed_with_id with its real DID"
+            .to_string(),
     }
 }
 
@@ -127,5 +183,51 @@ mod tests {
             err,
             crate::WriteError::InvariantViolation { .. }
         ));
+    }
+
+    #[test]
+    fn add_typed_rejects_zero_id_and_with_id_keys_distinctly() {
+        // A body-id-less record (id()==0, e.g. Surface) must be REJECTED by
+        // add_typed (the footgun guard), and instead written via
+        // add_typed_with_id, which keys distinct real DIDs without the DID-0
+        // collision the old Surface::id()==0 path would have caused.
+        struct ZeroId;
+        impl DatPack for ZeroId {
+            fn pack(&self) -> Result<Vec<u8>> {
+                Ok(vec![0xAA, 0xBB, 0xCC, 0xDD])
+            }
+            fn type_id(&self) -> u32 {
+                DatFileType::Surface as u32
+            }
+            fn id(&self) -> u32 {
+                0
+            }
+        }
+
+        let mut writer = HbaWriter::new();
+        writer.set_compression(false);
+
+        let err = writer
+            .add_typed(EOR_PORTAL_NAMESPACE, &ZeroId)
+            .expect_err("add_typed must reject a zero id");
+        assert!(matches!(err, crate::WriteError::InvariantViolation { .. }));
+
+        writer
+            .add_typed_with_id(EOR_PORTAL_NAMESPACE, 0x0800_0001, &ZeroId)
+            .expect("explicit DID 0x08000001 ok");
+        writer
+            .add_typed_with_id(EOR_PORTAL_NAMESPACE, 0x0800_0002, &ZeroId)
+            .expect("second distinct DID ok — no DID-0 collision");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ids.hba");
+        writer.write(&path).expect("write hba");
+        let reader = HbaReader::open(&path).expect("open hba");
+        assert!(reader
+            .get_file_in_namespace(EOR_PORTAL_NAMESPACE, 0x0800_0001)
+            .is_ok());
+        assert!(reader
+            .get_file_in_namespace(EOR_PORTAL_NAMESPACE, 0x0800_0002)
+            .is_ok());
     }
 }

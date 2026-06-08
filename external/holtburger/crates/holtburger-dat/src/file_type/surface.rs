@@ -38,7 +38,8 @@
 //! `Translucent = 0x10`, etc. The image/clipmap branch fires when
 //! either `0x2` or `0x4` is set — mask `0x06`.
 
-use binrw::{BinRead, binread};
+use binrw::{BinRead, BinResult, BinWrite, binread};
+use std::io::{Seek, Write};
 
 /// Mask matching `Base1Image (0x2) | Base1ClipMap (0x4)`. When either
 /// bit is set, the surface body holds `(orig_texture_id, orig_palette_id)`
@@ -74,6 +75,62 @@ impl Surface {
     pub fn unpack(data: &[u8]) -> Result<Self, binrw::Error> {
         let mut cursor = std::io::Cursor::new(data);
         Self::read(&mut cursor)
+    }
+
+    /// Serialize this Surface back into the canonical DAT body layout, the
+    /// exact inverse of [`Surface::unpack`]:
+    /// ```text
+    /// [u32 surface_type]
+    /// if (surface_type & 0x06) != 0 { [u32 orig_texture_id][u32 orig_palette_id] }
+    /// else                          { [u32 color_value] }
+    /// [f32 translucency][f32 luminosity][f32 diffuse]
+    /// ```
+    /// The body branch is gated by the `surface_type` bitfield exactly as the
+    /// reader gates it (mask `0x06` = `Base1Image | Base1ClipMap`), so the
+    /// textured / solid bodies are MUTUALLY EXCLUSIVE. The matching field
+    /// (`texture_refs` for textured, `color_value` for solid) MUST be present
+    /// or this returns an error rather than emitting bytes the reader cannot
+    /// re-parse — `unpack(pack(x)) == x` only holds when the in-memory record
+    /// agrees with its own type bitfield. (The higher-level write path also
+    /// guards this up front via `WriteError::InvariantViolation`.)
+    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> BinResult<()> {
+        self.surface_type.write_le(writer)?;
+
+        if (self.surface_type & SURFACE_TYPE_TEXTURE_MASK) != 0 {
+            // Textured branch: write (orig_texture_id, orig_palette_id).
+            let refs = self.texture_refs.as_ref().ok_or_else(|| binrw::Error::AssertFail {
+                pos: writer.stream_position().unwrap_or(0),
+                message: format!(
+                    "Surface type 0x{:08X} is textured (& 0x06) but texture_refs is None",
+                    self.surface_type
+                ),
+            })?;
+            refs.orig_texture_id.write_le(writer)?;
+            refs.orig_palette_id.write_le(writer)?;
+        } else {
+            // Solid branch: write the single ARGB color_value.
+            let color = self.color_value.ok_or_else(|| binrw::Error::AssertFail {
+                pos: writer.stream_position().unwrap_or(0),
+                message: format!(
+                    "Surface type 0x{:08X} is solid (& 0x06 == 0) but color_value is None",
+                    self.surface_type
+                ),
+            })?;
+            color.write_le(writer)?;
+        }
+
+        self.translucency.write_le(writer)?;
+        self.luminosity.write_le(writer)?;
+        self.diffuse.write_le(writer)?;
+        Ok(())
+    }
+
+    /// Pack into a freshly allocated `Vec<u8>` — for byte-equal round-trip
+    /// parity against retail Surfaces.
+    pub fn pack(&self) -> Result<Vec<u8>, binrw::Error> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        self.write(&mut buf)?;
+        Ok(buf.into_inner())
     }
 
     /// Solid ARGB if the surface stored a `color_value`. `None` for
@@ -157,6 +214,45 @@ mod tests {
         let surf = Surface::unpack(&buf).unwrap();
         assert_eq!(surf.surface_type, 0x04);
         assert_eq!(surf.textured(), Some((0x06002222, 0x04003333)));
+    }
+
+    #[test]
+    fn pack_is_exact_inverse_of_unpack_solid() {
+        // Solid surface: pack must reproduce the source bytes exactly.
+        let buf = pack_solid(0x01, 0xFF8B6442, 0.0, 0.25, 0.75);
+        let surf = Surface::unpack(&buf).unwrap();
+        let packed = surf.pack().unwrap();
+        assert_eq!(packed, buf, "solid pack must be the exact byte inverse of unpack");
+        assert_eq!(packed.len(), 20);
+
+        let reparsed = Surface::unpack(&packed).unwrap();
+        assert_eq!(reparsed.surface_type, 0x01);
+        assert_eq!(reparsed.color_value, Some(0xFF8B6442));
+        assert!(reparsed.texture_refs.is_none());
+    }
+
+    #[test]
+    fn pack_is_exact_inverse_of_unpack_textured() {
+        // Textured surface (Base1Image 0x02): pack must reproduce the source.
+        let buf = pack_textured(0x02, 0x06001000, 0x04001000, 0.1, 0.2, 0.3);
+        let surf = Surface::unpack(&buf).unwrap();
+        let packed = surf.pack().unwrap();
+        assert_eq!(packed, buf, "textured pack must be the exact byte inverse of unpack");
+        assert_eq!(packed.len(), 24);
+
+        let reparsed = Surface::unpack(&packed).unwrap();
+        assert_eq!(reparsed.surface_type, 0x02);
+        assert!(reparsed.color_value.is_none());
+        assert_eq!(reparsed.textured(), Some((0x06001000, 0x04001000)));
+    }
+
+    #[test]
+    fn pack_clipmap_round_trips() {
+        // Base1ClipMap (0x04) also takes the textured branch.
+        let buf = pack_textured(0x04, 0x06002222, 0x04003333, 0.5, 0.5, 0.5);
+        let surf = Surface::unpack(&buf).unwrap();
+        let packed = surf.pack().unwrap();
+        assert_eq!(packed, buf);
     }
 
     #[test]
