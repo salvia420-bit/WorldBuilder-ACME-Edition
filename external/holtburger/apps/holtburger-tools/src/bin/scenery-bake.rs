@@ -25,7 +25,7 @@
 //!   walking the full 256-cell-per-axis grid in row-major order
 //! - `@<path>` to load one LB id per non-empty line from a list file
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -36,8 +36,9 @@ use binrw::io::Cursor;
 use clap::Parser;
 use holtburger_common::Vector3;
 use holtburger_dat::DatDatabase;
-use holtburger_dat::file_type::{GfxObj, Region, Scene, SetupModel};
+use holtburger_dat::file_type::{GfxObj, Region, Scene, SetupModel, Surface};
 use holtburger_dat::landblock::{CellLandblock, LandblockInfo};
+use holtburger_dat::walk::read_gfx_obj_surfaces;
 use holtburger_scenery_bake::{
     Aabb2D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock, placements_fingerprint,
     transform_mesh_to_aabb,
@@ -596,6 +597,230 @@ fn resolve_default_script(portal: &DatDatabase, obj_id: u32) -> u32 {
     }
 }
 
+/// E9a (RUST half of E9, 2026-06-08) — Maximum SetupModel part-nesting
+/// depth honoured when resolving a placement to its GfxObj parts.
+/// Retail SetupModels never nest more than one level; cap at 4 to stay
+/// well clear of that while still terminating any pathological cycle the
+/// `visited` set somehow misses. Mirrors
+/// `boot_reachability::MAX_SETUP_DEPTH` and `walk::walk_model`.
+const E9A_MAX_SETUP_DEPTH: usize = 4;
+
+/// E9a — collect the UNIQUE Surface (`0x08`) DIDs referenced by every
+/// placement in one baked landblock.
+///
+/// Each `ScenicPlacement.obj_id` is a model root — a GfxObj (`0x01`) or
+/// a SetupModel (`0x02`). Resolution mirrors the read-only visual-chain
+/// DFS in `boot_reachability::Walker::walk_model`, but stops one hop
+/// earlier: we only need the Surface DIDs themselves, not the
+/// SurfaceTexture/Texture/Palette chain those surfaces point at.
+///
+/// - GfxObj (`0x01`): read its `surfaces: Vec<u32>` via the minimal
+///   header parser [`read_gfx_obj_surfaces`] (the same helper the boot
+///   walk uses — the full `GfxObj::unpack` chokes on some retail
+///   vertex/BSP data and isn't needed here).
+/// - SetupModel (`0x02`): read its `parts: Vec<u32>` (each part is a
+///   GfxObj DID) and resolve each part's surfaces. Bounded by a
+///   `visited` set plus [`E9A_MAX_SETUP_DEPTH`].
+///
+/// Records that are missing or unparseable simply contribute no
+/// surfaces — a partial source yields a partial set rather than an
+/// error, matching the rest of the bake's miss-tolerant posture. The
+/// returned `BTreeSet` is naturally deduped and sorted for determinism.
+fn collect_lb_surface_dids(portal: &DatDatabase, placements: &[ScenicPlacement]) -> BTreeSet<u32> {
+    let mut surfaces: BTreeSet<u32> = BTreeSet::new();
+    // `visited` spans model/part DIDs across ALL placements so a GfxObj
+    // shared by two placements (or a SetupModel part shared by two
+    // SetupModels) is resolved exactly once.
+    let mut visited: BTreeSet<u32> = BTreeSet::new();
+    for p in placements {
+        collect_model_surfaces(portal, p.obj_id, &mut surfaces, &mut visited, 0);
+    }
+    surfaces
+}
+
+/// Resolve one model root (GfxObj `0x01` or SetupModel `0x02`) to its
+/// Surface DIDs, accumulating into `surfaces`. `visited` bounds the
+/// SetupModel recursion against cycles; `depth` caps nesting.
+fn collect_model_surfaces(
+    portal: &DatDatabase,
+    did: u32,
+    surfaces: &mut BTreeSet<u32>,
+    visited: &mut BTreeSet<u32>,
+    depth: usize,
+) {
+    if depth > E9A_MAX_SETUP_DEPTH {
+        return;
+    }
+    if !visited.insert(did) {
+        // Already chased this model/part — its surfaces are already in.
+        return;
+    }
+    let Ok(bytes) = portal.get_file(did) else {
+        // Missing — contributes no surfaces.
+        return;
+    };
+    match (did >> 24) as u8 {
+        0x01 => {
+            // GfxObj — chase its surface list with the minimal header
+            // parser (matches the boot-reachability walk).
+            if let Some(gfx_surfaces) = read_gfx_obj_surfaces(&bytes) {
+                surfaces.extend(gfx_surfaces);
+            }
+        }
+        0x02 => {
+            // SetupModel — recurse into each part (typically GfxObj DIDs).
+            if let Ok(setup) = SetupModel::unpack(&mut Cursor::new(&bytes)) {
+                for part_id in setup.parts {
+                    collect_model_surfaces(portal, part_id, surfaces, visited, depth + 1);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// E9a — the explicit, per-DID material record emitted into
+/// `<lbHex>.scenery.materials.json`. This is the DAT Surface (`0x08`)
+/// record E9b round-trips back into synthetic Surface DAT records — so
+/// NO procedural derivation/fudging: every field is copied straight off
+/// [`Surface`].
+///
+/// Round-trip fidelity note: the identity-bearing fields are byte-exact
+/// (`surface_type` raw u32, `color_value` decimal u32, `orig_texture_id`
+/// / `orig_palette_id` as `0x%08X`). The three material SCALARS
+/// (`translucency`/`luminosity`/`diffuse`) go through the bake's shared
+/// `format_f32_six_sig` float convention — `{:.6}`-rounded in the
+/// default mode (so an E9b reconstruction can differ by up to ~5e-7 per
+/// scalar), or the exact `to_bits()` decimal-u32 under the `--bits`
+/// diagnostic mode. This matches the JSONL placement floats exactly (same
+/// helper, same `--bits` escape hatch for bit-exact parity); the identity
+/// key (`surface_did`) and the type/color/texture refs are never lossy.
+///
+/// Keyed by `surface_did` — an addressable Surface/Palette DID, NEVER a
+/// list-local index (E9 GAUGE guardrail). Exactly one of `color_value`
+/// (solid surface) or `orig_texture_id`+`orig_palette_id` (textured
+/// surface) is present, mirroring the Surface wire format. `luminous_flag`
+/// is the only computed field and is a pure threshold over the faithful
+/// `luminosity` (`luminosity > 0.0`); the client (`materials.js`)
+/// derives its own `normal_scale_category` from these fields — that
+/// CLIENT-side categorization is OUT of scope for this DAT-faithful
+/// sidecar (deferred to the client).
+struct MaterialRecord {
+    surface_did: u32,
+    surface_type: u32,
+    translucency: f32,
+    luminosity: f32,
+    diffuse: f32,
+    /// Solid surfaces only — the ARGB `color_value`.
+    color_value: Option<u32>,
+    /// Textured surfaces only — `(orig_texture_id, orig_palette_id)`.
+    texture_refs: Option<(u32, u32)>,
+}
+
+/// Load a Surface (`0x08`) DID and build its faithful [`MaterialRecord`].
+/// Returns `None` when the record is missing or unparseable (the surface
+/// simply drops out of the sidecar — miss-tolerant, like the rest of the
+/// bake).
+///
+/// A Surface carrying a non-finite scalar (`NaN`/`±inf` in
+/// `translucency`/`luminosity`/`diffuse`) is ALSO dropped: `{:.6}` (and
+/// `to_bits()` is fine, but the default path) renders those as the bare
+/// tokens `NaN`/`inf`/`-inf`, which are not valid JSON numbers and would
+/// void the entire `<lbHex>.scenery.materials.json` array (the sidecar
+/// is one monolithic document, unlike the line-recoverable JSONL). Such
+/// values never occur in canonical retail Surfaces (they pass preflight);
+/// dropping a hostile/corrupt one keeps the document parseable, treating
+/// it exactly like a missing surface rather than fudging a placeholder.
+fn load_material_record(portal: &DatDatabase, surface_did: u32) -> Option<MaterialRecord> {
+    let bytes = portal.get_file(surface_did).ok()?;
+    let surface = Surface::unpack(&bytes).ok()?;
+    // Guard the three DAT-sourced scalars: a non-finite float would emit
+    // an invalid-JSON token and break parse of the whole array.
+    if !surface.translucency.is_finite()
+        || !surface.luminosity.is_finite()
+        || !surface.diffuse.is_finite()
+    {
+        return None;
+    }
+    Some(MaterialRecord {
+        surface_did,
+        surface_type: surface.surface_type,
+        translucency: surface.translucency,
+        luminosity: surface.luminosity,
+        diffuse: surface.diffuse,
+        color_value: surface.solid_color(),
+        texture_refs: surface.textured(),
+    })
+}
+
+/// Serialize one [`MaterialRecord`] as a single-line JSON object. The
+/// three float scalars go through the bake's shared `format_f32_six_sig`
+/// helper for determinism — `{:.6}` in the default mode, or the exact
+/// `to_bits()` decimal-u32 when the `--bits`/`EMIT_BITS` diagnostic mode
+/// is active (same behaviour, same helper, as the JSONL placement
+/// floats, so a `--bits` sidecar is NOT `{:.6}`). DIDs are `0x%08X` hex
+/// strings (same convention as the JSONL `obj_id`) so E9b can round-trip
+/// them straight back into DAT Surface records. `luminous_flag` is
+/// emitted as a JSON bool. Exactly one of the `color_value` /
+/// `orig_texture_id`+`orig_palette_id` branches is written, matching the
+/// Surface wire format. Callers pass only finite scalars
+/// (`load_material_record` drops non-finite ones), so the float fields
+/// are always valid JSON numbers.
+fn format_material_record(m: &MaterialRecord) -> String {
+    let luminous_flag = m.luminosity > 0.0;
+    let mut s = format!(
+        "{{\"surface_did\":\"0x{:08X}\",\"surface_type\":{},\"translucency\":{},\"luminosity\":{},\"diffuse\":{}",
+        m.surface_did,
+        m.surface_type,
+        format_f32_six_sig(m.translucency),
+        format_f32_six_sig(m.luminosity),
+        format_f32_six_sig(m.diffuse),
+    );
+    match (m.color_value, m.texture_refs) {
+        (Some(color), _) => {
+            // Solid surface — faithful ARGB color_value.
+            s.push_str(&format!(",\"color_value\":{}", color));
+        }
+        (None, Some((orig_texture_id, orig_palette_id))) => {
+            // Textured surface — faithful (SurfaceTexture, Palette) refs.
+            s.push_str(&format!(
+                ",\"orig_texture_id\":\"0x{:08X}\",\"orig_palette_id\":\"0x{:08X}\"",
+                orig_texture_id, orig_palette_id
+            ));
+        }
+        (None, None) => {
+            // Surface carried neither (should not happen for a well-formed
+            // record — the texture-mask branch always populates one). Emit
+            // neither rather than fudge a value.
+        }
+    }
+    s.push_str(&format!(",\"luminous_flag\":{}}}", luminous_flag));
+    s
+}
+
+/// E9a — render the full `<lbHex>.scenery.materials.json` body: a
+/// DETERMINISTIC array (sorted by `surface_did`, since `surface_dids` is
+/// a `BTreeSet`) of per-surface [`MaterialRecord`]s. One object per line
+/// for diff-friendliness; the whole document is a single JSON array.
+/// Surfaces that fail to load are silently skipped (miss-tolerant).
+fn format_materials_sidecar(portal: &DatDatabase, surface_dids: &BTreeSet<u32>) -> String {
+    let records: Vec<MaterialRecord> = surface_dids
+        .iter()
+        .filter_map(|&sid| load_material_record(portal, sid))
+        .collect();
+    let mut body = String::from("[\n");
+    for (i, m) in records.iter().enumerate() {
+        body.push_str("  ");
+        body.push_str(&format_material_record(m));
+        if i + 1 < records.len() {
+            body.push(',');
+        }
+        body.push('\n');
+    }
+    body.push_str("]\n");
+    body
+}
+
 /// Serialize one `ScenicPlacement` line in the JSONL format documented
 /// by `hypotheticalmethod.md`. All floats are formatted via
 /// `format_f32_six_sig`, which uses `{:.6}` (six digits after the
@@ -778,6 +1003,21 @@ fn bake_one(
     writeln!(sf, "placements-hash\t{fp:016x}")?;
     sf.flush()?;
 
+    // E9a (RUST half of E9, 2026-06-08) — per-LB addressable per-surface
+    // MATERIAL sidecar. ADDITIVE only: it never touches the JSONL or
+    // `.sha256` outputs above. Collect the unique Surface (0x08) DIDs the
+    // LB's placements reference (GfxObj.surfaces / SetupModel.parts →
+    // GfxObj.surfaces), load each via the DatDatabase, and emit the
+    // faithful per-DID material record. The C# WB.Terminal re-import that
+    // round-trips this into synthetic Surface DAT records is the separate
+    // deferred E9b half. Empty (0 surfaces) is still emitted so consumers
+    // can pattern-match on file presence, like the JSONL.
+    let surface_dids = collect_lb_surface_dids(portal, &placements);
+    let materials_body = format_materials_sidecar(portal, &surface_dids);
+    let materials_path = out_dir.join(format!("0x{lb_key:04X}.scenery.materials.json"));
+    fs::write(&materials_path, materials_body)
+        .with_context(|| format!("write {}", materials_path.display()))?;
+
     debug!(
         "LB 0x{lb_key:04X}: {} placements ({} buildings collide-blocking) → {}",
         placements.len(),
@@ -957,6 +1197,471 @@ fn format_manifest(
 mod tests {
     use super::*;
     use holtburger_scenery_bake::GeneratedSceneryIdentity;
+
+    // -----------------------------------------------------------------
+    // E9a — minimal `.dat` fixture builder. Mirrors the sectored,
+    // B-tree-indexed on-disk format `DatDatabase::new` parses (the same
+    // layout `tests/scenery_bake_preflight.rs::build_minimal_dat`
+    // produces), reduced to a single leaf directory node. Lets the E9a
+    // material-sidecar test open a real `DatDatabase` over hand-rolled
+    // GfxObj / SetupModel / Surface records.
+    // -----------------------------------------------------------------
+
+    const TEST_DAT_HEADER_OFFSET: usize = 0x140;
+    const TEST_DAT_MAGIC: u32 = 0x0000_5442;
+    const TEST_DIRECTORY_NODE_SIZE: usize = 1716;
+    const TEST_BRANCHES_COUNT: usize = 62;
+    const TEST_BLOCK_SIZE: u32 = 1024;
+    const TEST_ROOT_SECTOR: u32 = 0x400;
+    const TEST_ROOT_TAIL_SECTOR: u32 = TEST_ROOT_SECTOR + TEST_BLOCK_SIZE; // 0x800
+    const TEST_DATA_SECTOR: u32 = TEST_ROOT_TAIL_SECTOR + TEST_BLOCK_SIZE; // 0xC00
+
+    fn test_write_sector(out: &mut [u8], sector_offset: u32, next_address: u32, data: &[u8]) {
+        let so = sector_offset as usize;
+        out[so..so + 4].copy_from_slice(&next_address.to_le_bytes());
+        out[so + 4..so + 4 + data.len()].copy_from_slice(data);
+    }
+
+    fn test_dat_header(file_size: u32) -> Vec<u8> {
+        let mut b = Vec::with_capacity(80);
+        b.extend_from_slice(&TEST_DAT_MAGIC.to_le_bytes());
+        b.extend_from_slice(&TEST_BLOCK_SIZE.to_le_bytes());
+        b.extend_from_slice(&file_size.to_le_bytes());
+        b.extend_from_slice(&1u32.to_le_bytes()); // dataset = portal
+        for _ in 0..4 {
+            b.extend_from_slice(&0u32.to_le_bytes()); // subset/free_head/tail/count
+        }
+        b.extend_from_slice(&TEST_ROOT_SECTOR.to_le_bytes()); // root_offset
+        for _ in 0..6 {
+            b.extend_from_slice(&0u32.to_le_bytes()); // lru x3, master_map, engine, game
+        }
+        b.extend_from_slice(&[0u8; 16]); // version_string
+        b.extend_from_slice(&0u32.to_le_bytes()); // version_minor
+        assert_eq!(b.len(), 80);
+        b
+    }
+
+    /// Build a single-leaf `.dat` blob carrying the given `(id, payload)`
+    /// records and return the bytes. One directory node spanning two
+    /// chained root sectors; each payload starts at its own block-aligned
+    /// sector.
+    fn build_test_dat(records: &[(u32, Vec<u8>)]) -> Vec<u8> {
+        let block_data = (TEST_BLOCK_SIZE - 4) as usize;
+        let mut next_sector = TEST_DATA_SECTOR;
+        let mut starts: Vec<u32> = Vec::new();
+        for (_id, payload) in records {
+            starts.push(next_sector);
+            let sectors = if payload.is_empty() {
+                1
+            } else {
+                payload.len().div_ceil(block_data)
+            };
+            next_sector += sectors as u32 * TEST_BLOCK_SIZE;
+        }
+        let total = next_sector as usize;
+        let mut out = vec![0u8; total];
+
+        let header = test_dat_header(total as u32);
+        out[TEST_DAT_HEADER_OFFSET..TEST_DAT_HEADER_OFFSET + header.len()]
+            .copy_from_slice(&header);
+
+        // Directory node: 62 zero branches + entry_count + entries.
+        let mut node = Vec::with_capacity(TEST_DIRECTORY_NODE_SIZE);
+        for _ in 0..TEST_BRANCHES_COUNT {
+            node.extend_from_slice(&0u32.to_le_bytes());
+        }
+        node.extend_from_slice(&(records.len() as u32).to_le_bytes());
+        for (idx, (id, payload)) in records.iter().enumerate() {
+            node.extend_from_slice(&0u32.to_le_bytes()); // bit_flags (uncompressed)
+            node.extend_from_slice(&id.to_le_bytes());
+            node.extend_from_slice(&starts[idx].to_le_bytes());
+            node.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            node.extend_from_slice(&0u32.to_le_bytes()); // timestamp
+            node.extend_from_slice(&0u32.to_le_bytes()); // version
+        }
+        node.resize(TEST_DIRECTORY_NODE_SIZE, 0);
+
+        test_write_sector(&mut out, TEST_ROOT_SECTOR, TEST_ROOT_TAIL_SECTOR, &node[0..block_data]);
+        let tail = TEST_DIRECTORY_NODE_SIZE - block_data;
+        test_write_sector(
+            &mut out,
+            TEST_ROOT_TAIL_SECTOR,
+            0,
+            &node[block_data..block_data + tail],
+        );
+
+        for (idx, (_id, payload)) in records.iter().enumerate() {
+            let mut sector = starts[idx];
+            let mut remaining = payload.as_slice();
+            while !remaining.is_empty() {
+                let take = remaining.len().min(block_data);
+                let next = if take == remaining.len() { 0 } else { sector + TEST_BLOCK_SIZE };
+                test_write_sector(&mut out, sector, next, &remaining[..take]);
+                remaining = &remaining[take..];
+                sector += TEST_BLOCK_SIZE;
+            }
+            if payload.is_empty() {
+                test_write_sector(&mut out, starts[idx], 0, &[]);
+            }
+        }
+        out
+    }
+
+    /// Minimal GfxObj header `read_gfx_obj_surfaces` accepts:
+    /// `[u32 id][u32 flags=0][smart_vec u32 surfaces]`.
+    fn build_test_gfx_obj(id: u32, surfaces: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes()); // flags
+        assert!(surfaces.len() < 0x80, "test helper emits 1-byte smart-vec counts only");
+        buf.push(surfaces.len() as u8); // smart_vec 1-byte count
+        for &s in surfaces {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        buf
+    }
+
+    /// Minimal SetupModel `SetupModel::unpack` accepts, with `parts` and
+    /// every list/dict count zero. flags=0 → no parent_index/default_scale.
+    fn build_test_setup_model(id: u32, parts: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes()); // flags
+        buf.extend_from_slice(&(parts.len() as u32).to_le_bytes());
+        for &p in parts {
+            buf.extend_from_slice(&p.to_le_bytes());
+        }
+        buf.extend_from_slice(&0u32.to_le_bytes()); // num_holding
+        buf.extend_from_slice(&0u32.to_le_bytes()); // num_conn
+        buf.extend_from_slice(&0i32.to_le_bytes()); // num_placements
+        buf.extend_from_slice(&0u32.to_le_bytes()); // num_cyl
+        buf.extend_from_slice(&0u32.to_le_bytes()); // num_sph
+        buf.extend_from_slice(&0f32.to_le_bytes()); // height
+        buf.extend_from_slice(&0f32.to_le_bytes()); // radius
+        buf.extend_from_slice(&0f32.to_le_bytes()); // step_up
+        buf.extend_from_slice(&0f32.to_le_bytes()); // step_down
+        for _ in 0..8 {
+            buf.extend_from_slice(&0f32.to_le_bytes()); // sorting + selection sphere (4 f32 each)
+        }
+        buf.extend_from_slice(&0u32.to_le_bytes()); // num_lights
+        for _ in 0..5 {
+            buf.extend_from_slice(&0u32.to_le_bytes()); // 5 optional resource ids
+        }
+        buf
+    }
+
+    /// Solid Surface (Base1Solid 0x1): `[type][color][f32 transl][f32 lum][f32 diff]`.
+    fn build_test_solid_surface(
+        surface_type: u32,
+        color: u32,
+        translucency: f32,
+        luminosity: f32,
+        diffuse: f32,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&color.to_le_bytes());
+        buf.extend_from_slice(&translucency.to_le_bytes());
+        buf.extend_from_slice(&luminosity.to_le_bytes());
+        buf.extend_from_slice(&diffuse.to_le_bytes());
+        buf
+    }
+
+    /// Textured Surface (Base1Image 0x2): `[type][orig_tex][orig_pal][f32*3]`.
+    fn build_test_textured_surface(
+        surface_type: u32,
+        orig_texture_id: u32,
+        orig_palette_id: u32,
+        translucency: f32,
+        luminosity: f32,
+        diffuse: f32,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&orig_texture_id.to_le_bytes());
+        buf.extend_from_slice(&orig_palette_id.to_le_bytes());
+        buf.extend_from_slice(&translucency.to_le_bytes());
+        buf.extend_from_slice(&luminosity.to_le_bytes());
+        buf.extend_from_slice(&diffuse.to_le_bytes());
+        buf
+    }
+
+    /// Open a `DatDatabase` over a freshly-written fixture `.dat`. Returns
+    /// the db plus the tempdir guard (kept alive so the file isn't
+    /// deleted while the db's file handle is open).
+    fn open_fixture_dat(records: &[(u32, Vec<u8>)]) -> (DatDatabase, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fixture_portal.dat");
+        fs::write(&path, build_test_dat(records)).expect("write fixture dat");
+        let db = DatDatabase::new(&path).expect("open fixture dat");
+        (db, dir)
+    }
+
+    fn mk_placement(obj_id: u32) -> ScenicPlacement {
+        ScenicPlacement {
+            obj_id,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            qw: 1.0,
+            qx: 0.0,
+            qy: 0.0,
+            qz: 0.0,
+            scale: 1.0,
+            source_cell_x: 0,
+            source_cell_y: 0,
+            source_obj_idx: 0,
+            identity: GeneratedSceneryIdentity::default(),
+        }
+    }
+
+    /// E9a — the headline test: bake a small fixture LB's worth of
+    /// placements (a GfxObj root and a SetupModel root) and assert the
+    /// materials sidecar (a) collects exactly the unique Surface DIDs the
+    /// placements reach, (b) reproduces each Surface's DAT fields
+    /// faithfully (no derivation/fudging), and (c) is ordered
+    /// deterministically by `surface_did`.
+    #[test]
+    fn materials_sidecar_collects_dids_with_faithful_fields_and_deterministic_order() {
+        // DIDs. Surfaces deliberately handed to the fixture out of sorted
+        // order so the BTreeSet-driven emit must re-sort them.
+        const GFX: u32 = 0x0100_1234;
+        const SETUP: u32 = 0x0200_5678;
+        const PART_GFX: u32 = 0x0100_9ABC;
+        // Surface DIDs (NOT in ascending order across the two models).
+        const SURF_TEXTURED: u32 = 0x0800_0040; // referenced by GFX
+        const SURF_SOLID: u32 = 0x0800_0010; // referenced by GFX (lower DID, listed 2nd)
+        const SURF_LUMINOUS: u32 = 0x0800_00FF; // referenced by PART_GFX (via SETUP)
+        // Texture/palette refs the textured surface points at (NOT
+        // collected — E9a stops at the Surface DID itself).
+        const ST: u32 = 0x0500_1000;
+        const PAL: u32 = 0x0400_2000;
+
+        let records = vec![
+            // GfxObj references the textured + solid surfaces (textured
+            // first in its list, but the lower-DID solid must sort first).
+            (GFX, build_test_gfx_obj(GFX, &[SURF_TEXTURED, SURF_SOLID])),
+            // SetupModel → one GfxObj part → one luminous solid surface.
+            (SETUP, build_test_setup_model(SETUP, &[PART_GFX])),
+            (PART_GFX, build_test_gfx_obj(PART_GFX, &[SURF_LUMINOUS])),
+            // Textured surface (Base1Image): faithful tex/pal refs +
+            // floats. luminosity 0 → luminous_flag false.
+            (
+                SURF_TEXTURED,
+                build_test_textured_surface(0x02, ST, PAL, 0.25, 0.0, 0.75),
+            ),
+            // Solid surface (Base1Solid): faithful ARGB color + floats.
+            (
+                SURF_SOLID,
+                build_test_solid_surface(0x01, 0xFF8B6442, 0.1, 0.0, 0.5),
+            ),
+            // Luminous solid (Base1Solid | Luminous 0x40): luminosity > 0
+            // → luminous_flag true.
+            (
+                SURF_LUMINOUS,
+                build_test_solid_surface(0x41, 0xFFFFFFFF, 0.0, 0.5, 1.0),
+            ),
+        ];
+        let (db, _guard) = open_fixture_dat(&records);
+
+        // Two placements: a bare GfxObj and a SetupModel. The same GfxObj
+        // placed twice (or shared surfaces) must dedup — add GFX twice.
+        let placements = vec![mk_placement(GFX), mk_placement(SETUP), mk_placement(GFX)];
+
+        // (a) Exactly the three unique Surface DIDs, sorted ascending.
+        let dids = collect_lb_surface_dids(&db, &placements);
+        assert_eq!(
+            dids,
+            BTreeSet::from([SURF_SOLID, SURF_TEXTURED, SURF_LUMINOUS]),
+            "must collect exactly the unique surfaces reached by the placements"
+        );
+        // The texture/palette chain BEYOND the surface is NOT collected.
+        assert!(!dids.contains(&ST));
+        assert!(!dids.contains(&PAL));
+        // Model/part DIDs are not surfaces and must not leak in.
+        assert!(!dids.contains(&GFX));
+        assert!(!dids.contains(&SETUP));
+        assert!(!dids.contains(&PART_GFX));
+
+        // (b)+(c) Render the sidecar and verify faithful fields + order.
+        let sidecar = format_materials_sidecar(&db, &dids);
+
+        // Parse the emitted JSON array back to assert structure +
+        // ordering precisely.
+        let parsed: serde_json::Value = serde_json::from_str(&sidecar).expect("valid JSON array");
+        let arr = parsed.as_array().expect("top-level array");
+        assert_eq!(arr.len(), 3, "one object per unique surface");
+
+        // Deterministic ordering: ascending by surface_did.
+        let order: Vec<String> = arr
+            .iter()
+            .map(|o| o["surface_did"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            order,
+            vec!["0x08000010", "0x08000040", "0x080000FF"],
+            "objects must be sorted ascending by surface_did"
+        );
+
+        // Solid surface (0x08000010) — faithful fields, color_value set,
+        // no texture refs, luminous_flag false.
+        let solid = &arr[0];
+        assert_eq!(solid["surface_did"], "0x08000010");
+        assert_eq!(solid["surface_type"], 0x01);
+        assert_eq!(solid["translucency"], serde_json::json!(0.1));
+        assert_eq!(solid["luminosity"], serde_json::json!(0.0));
+        assert_eq!(solid["diffuse"], serde_json::json!(0.5));
+        assert_eq!(solid["color_value"], serde_json::json!(0xFF8B6442u32));
+        assert!(solid.get("orig_texture_id").is_none());
+        assert!(solid.get("orig_palette_id").is_none());
+        assert_eq!(solid["luminous_flag"], serde_json::json!(false));
+
+        // Textured surface (0x08000040) — faithful refs as hex strings,
+        // no color_value, luminous_flag false.
+        let textured = &arr[1];
+        assert_eq!(textured["surface_did"], "0x08000040");
+        assert_eq!(textured["surface_type"], 0x02);
+        assert_eq!(textured["translucency"], serde_json::json!(0.25));
+        assert_eq!(textured["luminosity"], serde_json::json!(0.0));
+        assert_eq!(textured["diffuse"], serde_json::json!(0.75));
+        assert_eq!(textured["orig_texture_id"], "0x05001000");
+        assert_eq!(textured["orig_palette_id"], "0x04002000");
+        assert!(textured.get("color_value").is_none());
+        assert_eq!(textured["luminous_flag"], serde_json::json!(false));
+
+        // Luminous solid (0x080000FF) — luminosity 0.5 > 0 → flag true.
+        let luminous = &arr[2];
+        assert_eq!(luminous["surface_did"], "0x080000FF");
+        assert_eq!(luminous["surface_type"], 0x41);
+        assert_eq!(luminous["luminosity"], serde_json::json!(0.5));
+        assert_eq!(luminous["color_value"], serde_json::json!(0xFFFFFFFFu32));
+        assert_eq!(luminous["luminous_flag"], serde_json::json!(true));
+
+        // Determinism: re-rendering the same inputs is byte-identical.
+        let sidecar2 = format_materials_sidecar(&db, &dids);
+        assert_eq!(sidecar, sidecar2, "sidecar emission must be deterministic");
+    }
+
+    /// E9a — zero placements (the empty-LB case) yields a valid, empty
+    /// JSON array. The bake always emits the sidecar so consumers can
+    /// pattern-match on presence.
+    #[test]
+    fn materials_sidecar_empty_for_no_placements() {
+        let (db, _guard) = open_fixture_dat(&[]);
+        let dids = collect_lb_surface_dids(&db, &[]);
+        assert!(dids.is_empty());
+        let sidecar = format_materials_sidecar(&db, &dids);
+        let parsed: serde_json::Value = serde_json::from_str(&sidecar).expect("valid JSON");
+        assert_eq!(parsed.as_array().unwrap().len(), 0);
+    }
+
+    /// E9a — a missing Surface DID (referenced by a GfxObj but absent from
+    /// the dat) is collected as a DID but contributes no record to the
+    /// sidecar (miss-tolerant — no fudged placeholder).
+    #[test]
+    fn materials_sidecar_skips_missing_surface_records() {
+        const GFX: u32 = 0x0100_0001;
+        const SURF_PRESENT: u32 = 0x0800_0001;
+        const SURF_MISSING: u32 = 0x0800_0002;
+        let records = vec![
+            (GFX, build_test_gfx_obj(GFX, &[SURF_PRESENT, SURF_MISSING])),
+            (
+                SURF_PRESENT,
+                build_test_solid_surface(0x01, 0xFF000000, 0.0, 0.0, 1.0),
+            ),
+            // SURF_MISSING intentionally not inserted.
+        ];
+        let (db, _guard) = open_fixture_dat(&records);
+        let dids = collect_lb_surface_dids(&db, &[mk_placement(GFX)]);
+        // Both DIDs are collected from the GfxObj surface list.
+        assert_eq!(dids, BTreeSet::from([SURF_PRESENT, SURF_MISSING]));
+        // But only the present surface produces a record.
+        let sidecar = format_materials_sidecar(&db, &dids);
+        let parsed: serde_json::Value = serde_json::from_str(&sidecar).expect("valid JSON");
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "missing surface must not produce a record");
+        assert_eq!(arr[0]["surface_did"], "0x08000001");
+    }
+
+    /// E9a — a Surface carrying a non-finite scalar (`NaN`/`±inf` in
+    /// translucency/luminosity/diffuse) is dropped like a missing record
+    /// rather than emitted, so the monolithic JSON array stays valid.
+    /// `{:.6}` would otherwise render `NaN`/`inf`/`-inf` — bare tokens
+    /// that are not valid JSON numbers and would void the whole document.
+    #[test]
+    fn materials_sidecar_drops_non_finite_scalar_surfaces() {
+        const GFX: u32 = 0x0100_0001;
+        const SURF_GOOD: u32 = 0x0800_0001;
+        const SURF_NAN: u32 = 0x0800_0002;
+        const SURF_INF: u32 = 0x0800_0003;
+        let records = vec![
+            (
+                GFX,
+                build_test_gfx_obj(GFX, &[SURF_GOOD, SURF_NAN, SURF_INF]),
+            ),
+            (
+                SURF_GOOD,
+                build_test_solid_surface(0x01, 0xFF000000, 0.0, 0.0, 1.0),
+            ),
+            // luminosity = NaN — must be dropped.
+            (
+                SURF_NAN,
+                build_test_solid_surface(0x01, 0xFF111111, 0.0, f32::NAN, 1.0),
+            ),
+            // diffuse = +inf — must be dropped.
+            (
+                SURF_INF,
+                build_test_solid_surface(0x01, 0xFF222222, 0.0, 0.0, f32::INFINITY),
+            ),
+        ];
+        let (db, _guard) = open_fixture_dat(&records);
+        let dids = collect_lb_surface_dids(&db, &[mk_placement(GFX)]);
+        // All three DIDs are collected from the GfxObj surface list.
+        assert_eq!(dids, BTreeSet::from([SURF_GOOD, SURF_NAN, SURF_INF]));
+        // But only the finite surface produces a record, and the document
+        // is still valid JSON (would fail to parse if NaN/inf leaked in).
+        let sidecar = format_materials_sidecar(&db, &dids);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&sidecar).expect("non-finite scalars must not break JSON parse");
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "non-finite-scalar surfaces must be dropped");
+        assert_eq!(arr[0]["surface_did"], "0x08000001");
+    }
+
+    /// E9a — an unparseable SetupModel root and a model root absent from
+    /// the dat both contribute no surfaces without panicking
+    /// (miss-tolerant model resolution). Asserts the partial set and a
+    /// still-valid sidecar.
+    #[test]
+    fn materials_sidecar_tolerates_unparseable_and_missing_model_roots() {
+        const GOOD_GFX: u32 = 0x0100_0001;
+        const BAD_SETUP: u32 = 0x0200_0002; // present but unparseable bytes
+        const MISSING_GFX: u32 = 0x0100_0003; // referenced but absent from the dat
+        const SURF: u32 = 0x0800_0001;
+        let records = vec![
+            (GOOD_GFX, build_test_gfx_obj(GOOD_GFX, &[SURF])),
+            // Deliberately truncated SetupModel: only an id, no flags/parts.
+            // `SetupModel::unpack` errors → no surfaces, no panic.
+            (BAD_SETUP, vec![0x01, 0x02, 0x03]),
+            (SURF, build_test_solid_surface(0x01, 0xFF000000, 0.0, 0.0, 1.0)),
+            // MISSING_GFX intentionally not inserted.
+        ];
+        let (db, _guard) = open_fixture_dat(&records);
+        let placements = vec![
+            mk_placement(GOOD_GFX),
+            mk_placement(BAD_SETUP),
+            mk_placement(MISSING_GFX),
+        ];
+        // Only the good GfxObj's surface is reached; the unparseable and
+        // missing roots contribute nothing.
+        let dids = collect_lb_surface_dids(&db, &placements);
+        assert_eq!(dids, BTreeSet::from([SURF]));
+        let sidecar = format_materials_sidecar(&db, &dids);
+        let parsed: serde_json::Value = serde_json::from_str(&sidecar).expect("valid JSON");
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["surface_did"], "0x08000001");
+    }
 
     #[test]
     fn parse_hex_u32_accepts_prefixed_and_bare() {
