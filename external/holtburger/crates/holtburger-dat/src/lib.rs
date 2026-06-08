@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod boot_reachability;
 pub mod error;
 pub mod file_type;
 pub mod graphics;
@@ -16,6 +17,7 @@ pub mod well_known_ids;
 
 use crate::utils::FileExtPolyfill;
 pub use archive::{HbaReader, HbaStreamWriter, HbaWriter};
+pub use boot_reachability::{BootReachability, walk_boot_reachability};
 use binrw::{BinRead, io::Cursor};
 pub use error::{DatError, Result};
 pub use file_type::{DatFileType, DatKind};

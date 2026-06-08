@@ -1,5 +1,6 @@
+use crate::boot_reachability::{BootReachability, walk_boot_reachability};
 use crate::file_type::{CharGen, ChatPoseTable, DatFileType, SkillTable, SpellTable, XpTable};
-use crate::{EOR_CELL_NAMESPACE, EOR_PORTAL_NAMESPACE};
+use crate::{EOR_CELL_NAMESPACE, EOR_PORTAL_NAMESPACE, ResourceSource};
 
 /// A manifest that defines which file IDs and file types should be kept when stripping archives.
 pub struct StripperManifest {
@@ -88,14 +89,26 @@ impl StripperManifest {
     /// `0xXXYYFFFE`.
     ///
     /// This is the same minimum-viable boot policy as
-    /// `holtburger_tools::dat_shard::is_boot_essential`. The
-    /// transitive Surface/SurfaceTexture/Texture/Palette/GfxObj/
-    /// SetupModel/MotionTable walk through the boot landblock's
-    /// object placements is out of scope for this commit; both
-    /// `dat-shard` and `dat2hba --profile boot` will gain it
-    /// together in a follow-up commit (Phase 5.1) that factors
-    /// the walk helpers out of `apps/holtburger-web` private code
-    /// into shared `holtburger-dat` utilities.
+    /// `holtburger_tools::dat_shard::is_boot_essential`.
+    ///
+    /// Phase 5.1 (resolved): the transitive Surface/SurfaceTexture/
+    /// Texture/Palette/GfxObj/SetupModel walk through the boot
+    /// landblock's object placements now lives in the shared
+    /// [`crate::boot_reachability`] module. The static manifest below
+    /// still only *names* the catalog tables + the 9-cell terrain
+    /// neighborhood (it can't know the placement-graph closure without
+    /// reading the DAT). To audit whether a produced boot HBA actually
+    /// contains every model/surface/texture/palette the spawn-area
+    /// placements reference, call
+    /// [`StripperManifest::verify_boot_reachability`] (or
+    /// [`crate::walk_boot_reachability`] directly) against the packed
+    /// archive — it answers "is the boot landblock fully packable?"
+    /// with a read-only DFS. The walker is the shared building block;
+    /// `dat-shard` and `dat2hba --profile boot` do **not** yet invoke
+    /// it — wiring the audit into those tools (e.g. a `--verify-boot`
+    /// flag that logs/fails on `!fully_packable`) is a follow-up. The
+    /// walker only covers the *visual* record chain (model/surface/
+    /// texture/palette); see [`BootReachability`] for the precise scope.
     pub fn boot(boot_landblock: u32) -> Self {
         let mut manifest = Self::new();
         for file_id in [
@@ -123,6 +136,28 @@ impl StripperManifest {
             }
         }
         manifest
+    }
+
+    /// Phase 5.1 — audit whether the boot landblock is *fully packable*
+    /// against a packed resource source (typically the produced
+    /// `boot.hba` opened as an [`crate::HbaReader`], which implements
+    /// [`ResourceSource`]).
+    ///
+    /// Runs the read-only transitive reachability walk from the boot
+    /// landblock's object placements (see
+    /// [`crate::walk_boot_reachability`]) and returns the resulting
+    /// [`BootReachability`]. `result.fully_packable` is the headline
+    /// answer (covering the *visual* model/surface/texture/palette
+    /// chain — see [`BootReachability`] for the exact scope);
+    /// `result.missing_dids` lists any dangling references the static
+    /// manifest failed to include.
+    ///
+    /// Read-only: this neither mutates the manifest nor the source.
+    pub fn verify_boot_reachability<S: ResourceSource + ?Sized>(
+        source: &S,
+        boot_landblock: u32,
+    ) -> BootReachability {
+        walk_boot_reachability(source, boot_landblock)
     }
 
     pub fn new() -> Self {
