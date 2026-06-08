@@ -439,9 +439,191 @@ const _DIRTY_FIGHTING_IDS = new Set([
 // when the tween finishes.
 //
 // Keyed by an opaque numeric handle so cleanup can skip-iterate. We
-// don't need ordered iteration; a Map keeps insert/delete O(1).
+// don't need ordered iteration; a Map keeps insert/delete O(1). A Map
+// preserves insertion order, so the FIFO overflow drop (RP6 lever 2)
+// can evict the OLDEST active burst via `_activeBursts.keys().next()`.
 const _activeBursts = new Map();
 let _nextHandle = 1;
+
+// =====================================================================
+// RP6 (2026-06-08) — placeholder-burst pooling + concurrent caps.
+// =====================================================================
+// The three placeholder burst helpers (_spawnBurst / _spawnRingBurst /
+// _spawnCubeBurst) previously allocated a FRESH geometry + material +
+// mesh per burst and disposed all three on tween-complete. Under a
+// combat storm (Splatter/Spark fire per-hit) that is a churn of dozens
+// of GPU buffer allocs+frees per second.
+//
+// RP6 pools by burst SHAPE. The geometry of each shape is identical
+// across every burst (only `mesh.scale` / `material` vary), so we keep
+// ONE shared, never-disposed geometry per shape and a free-list of
+// reusable {mesh, material} pairs. On reuse the mesh + material are
+// FULLY reset (position, scale, rotation, opacity, color, blending,
+// side, renderOrder, parent, visible) so no stale state carries over.
+//
+// Pool size is bounded — if the free-list is full on release we let
+// that pair fall through to real disposal (so a transient storm can't
+// pin unbounded GPU memory in the pool either).
+const _BURST_SHAPE = { SPHERE: 0, RING: 1, CUBE: 2 };
+// Per-shape shared geometry, lazily built on first use (so importing
+// the module in a non-WebGL / SSR test context doesn't allocate GPU
+// buffers eagerly). Never disposed.
+const _sharedGeometry = [null, null, null];
+function _getSharedGeometry(shape) {
+  let g = _sharedGeometry[shape];
+  if (g) return g;
+  if (shape === _BURST_SHAPE.SPHERE) {
+    g = new THREE.SphereGeometry(1.0, 16, 12);
+  } else if (shape === _BURST_SHAPE.RING) {
+    // Same params as the pre-pool _spawnRingBurst torus.
+    g = new THREE.TorusGeometry(0.5, 0.05, 12, 24);
+  } else {
+    g = new THREE.BoxGeometry(1, 1, 1);
+  }
+  _sharedGeometry[shape] = g;
+  return g;
+}
+// Free-lists of reusable meshes per shape. Each holds detached meshes
+// (removed from parent, invisible) whose material is reset on re-acquire.
+const _burstPool = [[], [], []];
+// Cap the pooled idle meshes per shape. Beyond this, released meshes
+// are really disposed rather than retained.
+const _BURST_POOL_MAX = 24;
+
+/**
+ * Acquire a burst mesh of `shape`, applying all per-burst properties.
+ * Reuses a pooled mesh+material when available; otherwise allocates one
+ * around the shared geometry. The returned mesh is fully reset — no
+ * stale position/scale/rotation/opacity/parent from a prior burst.
+ *
+ * `side` differs per shape (sphere/cube = FrontSide, ring = DoubleSide),
+ * so it's passed explicitly to keep the reset complete.
+ */
+function _acquireBurstMesh(shape, parent, position, scaleFrom, color, side) {
+  const pool = _burstPool[shape];
+  let mesh = pool.pop() || null;
+  if (mesh) {
+    // Reuse: reset material + transform fully.
+    const mat = mesh.material;
+    mat.color.set(color);
+    mat.opacity = 1.0;
+    mat.transparent = true;
+    mat.blending = THREE.AdditiveBlending;
+    mat.depthWrite = false;
+    mat.side = side;
+    // RP6 (2026-06-08): do NOT set `mat.needsUpdate = true` here. For a
+    // MeshBasicMaterial, color/opacity are plain uniforms that update
+    // without a recompile, and transparent/blending/depthWrite are
+    // render-state (not program-cache keys). `side` is constant per shape
+    // pool (sphere/cube=FrontSide, ring=DoubleSide) and each shape has its
+    // OWN pool, so the program-cache key never changes across reuses.
+    // Setting needsUpdate would bump material.version and force the
+    // renderer to re-run getProgram()/uniform re-eval on the next render —
+    // per-reuse churn the pre-pool (fresh-material) path never paid. If a
+    // future change makes `side` vary within a pool, set needsUpdate only
+    // on that specific transition.
+    mesh.scale.setScalar(scaleFrom);
+    mesh.position.copy(position);
+    mesh.rotation.set(0, 0, 0);
+    mesh.quaternion.set(0, 0, 0, 1);
+    mesh.visible = true;
+  } else {
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 1.0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side,
+    });
+    mesh = new THREE.Mesh(_getSharedGeometry(shape), material);
+    mesh.position.copy(position);
+    mesh.scale.setScalar(scaleFrom);
+  }
+  mesh.renderOrder = 950;
+  // Tag the shape so _releaseBurstMesh can return it to the right pool
+  // without re-deriving it from geometry identity.
+  mesh.userData.__rp6Shape = shape;
+  if (parent) parent.add(mesh);
+  return mesh;
+}
+
+/**
+ * Release a burst mesh back to its shape pool (or really dispose its
+ * material if the pool is full). The shared geometry is NEVER disposed.
+ * Always detaches from the parent + hides first so a pooled mesh can't
+ * keep rendering.
+ */
+function _releaseBurstMesh(mesh) {
+  if (!mesh) return;
+  if (mesh.parent) mesh.parent.remove(mesh);
+  mesh.visible = false;
+  const shape = mesh.userData?.__rp6Shape;
+  const pool = (shape === 0 || shape === 1 || shape === 2)
+    ? _burstPool[shape]
+    : null;
+  if (pool && pool.length < _BURST_POOL_MAX) {
+    pool.push(mesh);
+    return;
+  }
+  // Pool full (or untagged) — really free this material. The shared
+  // geometry stays alive for the pooled siblings.
+  try {
+    if (mesh.material && typeof mesh.material.dispose === "function") {
+      mesh.material.dispose();
+    }
+  } catch (_) {}
+}
+
+// RP6 lever 2 — concurrent PLACEHOLDER-burst cap. Independent of the
+// real-VFX emitter cap below. When the active-burst count exceeds this,
+// the OLDEST non-critical burst is force-completed (FIFO) to make room
+// — keeps a sustained Spark/Splatter storm from unbounded growth. The
+// per-burst `critical` flag exempts gameplay-important cues (death,
+// cast/fizzle/explode, heal/damage) from eviction.
+const _MAX_ACTIVE_BURSTS = 64;
+
+// Module flag set by _runPlaceholderDispatch for the duration of one
+// (synchronous) dispatch so the spawn helpers can tag the burst they
+// create as critical-or-not without threading a parameter through the
+// dozens of _spawnBurst/_spawnRingBurst/_spawnCubeBurst call sites.
+// Reset to false at the top of every dispatch; the spawn happens
+// synchronously inside the same switch, so there's no interleaving.
+let _currentBurstCritical = false;
+
+// Gameplay-critical PlayScript IDs whose placeholder burst must NEVER
+// be FIFO-evicted under the concurrent cap (RP6 guardrail): death/
+// destroy, cast-result (fizzle/explode), heal/damage. These are the
+// cues a player must always see. Frequent cosmetic cues (Spark,
+// Splatter, Enchant, Regen, SpecialState…) are evictable. NOTE: this
+// is purely the EVICTION-exemption set for the soft cap; the cues are
+// still rendered normally — criticality only protects them from being
+// dropped early when the screen is saturated.
+const _CRITICAL_PLAY_SCRIPT_IDS = new Set([
+  PLAY_SCRIPT.Explode,
+  PLAY_SCRIPT.Fizzle,
+  PLAY_SCRIPT.Destroy,
+  PLAY_SCRIPT.DisappearDestroy,
+  PLAY_SCRIPT.HealthUpRed, PLAY_SCRIPT.HealthUpBlue, PLAY_SCRIPT.HealthUpYellow,
+  PLAY_SCRIPT.HealthDownRed, PLAY_SCRIPT.HealthDownBlue,
+  PLAY_SCRIPT.HealthDownYellow, PLAY_SCRIPT.HealthDownVoid,
+]);
+function _isCriticalPlayScript(scriptId) {
+  return _CRITICAL_PLAY_SCRIPT_IDS.has(scriptId);
+}
+
+function _enforceBurstCap() {
+  if (_activeBursts.size <= _MAX_ACTIVE_BURSTS) return;
+  // Map preserves insertion order → iterate oldest-first, evicting the
+  // first non-critical burst(s) until under the cap. Never drop a
+  // critical burst (let those exceed the soft cap rather than skip a
+  // death/cast cue).
+  for (const [handle, burst] of _activeBursts) {
+    if (_activeBursts.size <= _MAX_ACTIVE_BURSTS) break;
+    if (burst.critical) continue;
+    _disposeBurst(handle, burst);
+  }
+}
 
 // Single shared rAF loop for ALL active bursts. Idle when the map is
 // empty; resumes on next spawn. Avoids one rAF callback per burst.
@@ -493,14 +675,24 @@ function _ensureRafRunning() {
 
 function _disposeBurst(handle, burst) {
   try {
-    if (burst.parent && burst.mesh && burst.mesh.parent === burst.parent) {
-      burst.parent.remove(burst.mesh);
-    }
-    if (burst.geometry && typeof burst.geometry.dispose === "function") {
-      burst.geometry.dispose();
-    }
-    if (burst.material && typeof burst.material.dispose === "function") {
-      burst.material.dispose();
+    // RP6 (2026-06-08): return the mesh + its material to the shape
+    // pool instead of disposing them. The shared per-shape geometry is
+    // never disposed; the material is reset on re-acquire. Detaches +
+    // hides inside _releaseBurstMesh so a pooled mesh can't keep
+    // rendering. Pre-pool bursts (if any ever set burst.geometry) fall
+    // back to the old dispose path for belt-and-braces.
+    if (burst.mesh && burst.mesh.userData && burst.mesh.userData.__rp6Shape !== undefined) {
+      _releaseBurstMesh(burst.mesh);
+    } else {
+      if (burst.parent && burst.mesh && burst.mesh.parent === burst.parent) {
+        burst.parent.remove(burst.mesh);
+      }
+      if (burst.geometry && typeof burst.geometry.dispose === "function") {
+        burst.geometry.dispose();
+      }
+      if (burst.material && typeof burst.material.dispose === "function") {
+        burst.material.dispose();
+      }
     }
   } catch (e) {
     // Never let a disposal error kill the rAF loop or leak the
@@ -564,41 +756,31 @@ function _resolveTargetPlacement(targetGuid) {
  */
 function _spawnBurst(parent, position, scaleFrom, scaleTo, color, durationMs) {
   if (!parent) return;
-  // Unit sphere (radius 1) — actual size driven by mesh.scale. Reusing
-  // a shared baseline geometry would save allocations but each burst
-  // can dispose its own geometry cleanly on completion without
-  // refcounting. At realistic spawn rates this is fine.
-  const geometry = new THREE.SphereGeometry(1.0, 16, 12);
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 1.0,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.FrontSide,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
+  // RP6 (2026-06-08): pooled sphere. The unit-sphere geometry is shared
+  // across all sphere bursts (sizing is driven by mesh.scale); the mesh
+  // + material come from / return to the shape pool. depthWrite:false
+  // (set in _acquireBurstMesh) means we don't occlude later geometry.
+  const mesh = _acquireBurstMesh(
+    _BURST_SHAPE.SPHERE, parent, position, scaleFrom, color, THREE.FrontSide,
+  );
   mesh.name = "playEffectBurst";
-  mesh.position.copy(position);
-  mesh.scale.setScalar(scaleFrom);
-  // Render slightly above terrain/entities so it's visible against
-  // dense rigs (drudge body, etc.). depthWrite:false above already
-  // means we don't occlude later geometry.
-  mesh.renderOrder = 950;
-  parent.add(mesh);
 
   const handle = _nextHandle++;
   _activeBursts.set(handle, {
     mesh,
-    geometry,
-    material,
+    // RP6: `material` is referenced (pool-owned) so the rAF tween can
+    // lerp opacity without re-deriving it; it is NOT disposed here —
+    // the __rp6Shape tag routes cleanup back to the pool.
+    material: mesh.material,
     parent,
     startMs: performance.now(),
     scaleFrom,
     scaleTo,
     opacityFrom: 1.0,
     durationMs: durationMs || 0, // 0 = inherit TWEEN_DURATION_MS in the tick loop
+    critical: _currentBurstCritical,
   });
+  _enforceBurstCap();
   _ensureRafRunning();
 }
 
@@ -632,32 +814,19 @@ function _spawnRingBurst(
   rotateRadians = 0,
 ) {
   if (!parent) return;
-  // Torus parameters per Phase 37 plan: outer radius 0.5, tube
-  // thickness 0.05, 12 radial segments, 24 tubular segments. Cheap
-  // (288 tris) and reads cleanly as a "shield ring" silhouette.
-  const geometry = new THREE.TorusGeometry(0.5, 0.05, 12, 24);
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 1.0,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    // Rings are thin; DoubleSide ensures visibility regardless of
-    // camera angle relative to the torus's XY plane.
-    side: THREE.DoubleSide,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
+  // RP6 (2026-06-08): pooled torus ring (outer radius 0.5, tube 0.05,
+  // 12×24 segments — same silhouette as pre-pool). Rings are thin so
+  // the shared material uses DoubleSide for visibility at any camera
+  // angle to the torus's XY plane.
+  const mesh = _acquireBurstMesh(
+    _BURST_SHAPE.RING, parent, position, scaleFrom, color, THREE.DoubleSide,
+  );
   mesh.name = "playEffectRing";
-  mesh.position.copy(position);
-  mesh.scale.setScalar(scaleFrom);
-  mesh.renderOrder = 950;
-  parent.add(mesh);
 
   const handle = _nextHandle++;
   _activeBursts.set(handle, {
     mesh,
-    geometry,
-    material,
+    material: mesh.material,
     parent,
     startMs: performance.now(),
     scaleFrom,
@@ -665,7 +834,9 @@ function _spawnRingBurst(
     opacityFrom: 1.0,
     durationMs: durationMs || 0,
     rotateRadians,
+    critical: _currentBurstCritical,
   });
+  _enforceBurstCap();
   _ensureRafRunning();
 }
 
@@ -696,29 +867,17 @@ function _spawnCubeBurst(
   durationMs,
 ) {
   if (!parent) return;
-  // Box(1,1,1) — 12 tris, cheaper than the sphere. Scale-driven sizing
+  // RP6 (2026-06-08): pooled box (1×1×1, 12 tris). Scale-driven sizing
   // matches the other burst helpers' invariants.
-  const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 1.0,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.FrontSide,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
+  const mesh = _acquireBurstMesh(
+    _BURST_SHAPE.CUBE, parent, position, scaleFrom, color, THREE.FrontSide,
+  );
   mesh.name = "playEffectCube";
-  mesh.position.copy(position);
-  mesh.scale.setScalar(scaleFrom);
-  mesh.renderOrder = 950;
-  parent.add(mesh);
 
   const handle = _nextHandle++;
   _activeBursts.set(handle, {
     mesh,
-    geometry,
-    material,
+    material: mesh.material,
     parent,
     startMs: performance.now(),
     scaleFrom,
@@ -728,7 +887,9 @@ function _spawnCubeBurst(
     // Quarter-turn over the burst lifetime — drives the same Z-rotation
     // path the ring uses (rAF tick reads `rotateRadians` if present).
     rotateRadians: Math.PI * 0.5,
+    critical: _currentBurstCritical,
   });
+  _enforceBurstCap();
   _ensureRafRunning();
 }
 
@@ -903,9 +1064,70 @@ function _runPickerSelfTests() {
 // at the bottom of this file. `attempts` is incremented for every
 // PlayEffect that has a non-zero physicsScriptTableDid; `resolved`
 // only when the chain produced at least one spawned emitter.
+// =====================================================================
+// RP6 (2026-06-08) — concurrent PlayEffect one-shot emitter cap.
+// =====================================================================
+// `_tryResolveRealVfx` spawns real ParticleManager emitters for a
+// PlayEffect and schedules them for destruction after
+// ONE_SHOT_LIFETIME_MS. Under a storm of overlapping spell PlayEffects
+// the live emitter count (each with its own per-slot meshes, capped by
+// E6 but still real GPU work) can pile up. RP6 caps the number of
+// CONCURRENT PlayEffect-spawned emitter GROUPS and, on overflow,
+// force-destroys the OLDEST non-critical group early (FIFO).
+//
+// SCOPE — this cap covers ONLY the PlayEffect one-shot path (this
+// file). H2 entity-spawn emitters (entities.js
+// _attachParticleChainForEntity) go straight to `wm.addEmitter` and are
+// NEVER entered into this registry, so they are exempt by construction
+// (RP6 guardrail). Critical cues (death/cast/heal/damage) are never
+// evicted — they fall through and live their full ONE_SHOT_LIFETIME_MS.
+//
+// Each registry entry: { wm, ids:number[], critical:boolean }. `ids`
+// is the SAME array reference the spawning call pushed into so the
+// scheduled cleanup can splice without re-tracking.
+const _playEffectEmitterGroups = [];
+// Max concurrent PlayEffect emitter GROUPS held live at once. One
+// PlayEffect typically resolves to 1-3 emitters; 24 groups is a
+// generous headroom over realistic overlap while still bounding the
+// worst case.
+const _MAX_PLAYEFFECT_EMITTER_GROUPS = 24;
+
+/** Force-destroy a PlayEffect emitter group's emitters now (FIFO evict). */
+function _destroyEmitterGroup(group) {
+  if (!group || !group.wm) return;
+  for (const eid of group.ids) {
+    try { group.wm.destroyParticleEmitter(eid); } catch (_) {}
+  }
+}
+
+/** Register a freshly-spawned PlayEffect emitter group + evict overflow. */
+function _registerEmitterGroup(group) {
+  _playEffectEmitterGroups.push(group);
+  if (_playEffectEmitterGroups.length <= _MAX_PLAYEFFECT_EMITTER_GROUPS) return;
+  // Over cap — evict oldest NON-critical groups (FIFO) until back under.
+  for (let i = 0; i < _playEffectEmitterGroups.length; i++) {
+    if (_playEffectEmitterGroups.length <= _MAX_PLAYEFFECT_EMITTER_GROUPS) break;
+    const g = _playEffectEmitterGroups[i];
+    if (!g || g.critical) continue;
+    _destroyEmitterGroup(g);
+    g._evicted = true;
+    _realVfxStats.rp6Evicted += 1;
+    _playEffectEmitterGroups.splice(i, 1);
+    i -= 1;
+  }
+}
+
+/** Drop a group from the registry once its own one-shot timer fired. */
+function _unregisterEmitterGroup(group) {
+  const idx = _playEffectEmitterGroups.indexOf(group);
+  if (idx !== -1) _playEffectEmitterGroups.splice(idx, 1);
+}
+
 const _realVfxStats = {
   attempts: 0,
   resolved: 0,
+  // RP6 — count of PlayEffect emitter groups FIFO-evicted under the cap.
+  rp6Evicted: 0,
   // Per-failure breakdown — helps the diag dashboard surface the most-
   // common miss mode. Bumped from `_tryResolveRealVfx`.
   missNoTable: 0,
@@ -1209,6 +1431,24 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
     for (const eid of spawnedEmitterIds) perGuidIds.push(eid);
   }
 
+  // RP6 (2026-06-08): register this PlayEffect emitter group with the
+  // concurrent-cap FIFO registry. If the live group count is over the
+  // cap, the OLDEST non-critical group is force-destroyed here (its
+  // emitters torn down early). H2 entity-spawn emitters never enter
+  // this registry (they go straight through entities.js → wm.addEmitter)
+  // so they are exempt from the cap by construction. Critical cues
+  // (death/cast/heal/damage) are never evicted. Registering AFTER the
+  // per-guid tracking above means an evicted group's emitter IDs are
+  // still pruned correctly when the entity-remove or one-shot timer
+  // fires (destroyParticleEmitter is idempotent).
+  const _rp6Group = {
+    wm,
+    ids: spawnedEmitterIds,
+    critical: _isCriticalPlayScript(scriptId),
+    _evicted: false,
+  };
+  _registerEmitterGroup(_rp6Group);
+
   // 10. Schedule one-shot cleanup. PlayEffect events are by definition
   //     one-shot (the wire opcode broadcasts a single "play this script
   //     once" cue); long-lived per-entity scripts go through the H2
@@ -1218,6 +1458,9 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   //     by `ParticleManager.tick()`'s auto-remove path.
   const ONE_SHOT_LIFETIME_MS = 2500;
   setTimeout(() => {
+    // RP6: drop from the cap registry first (idempotent if already
+    // FIFO-evicted — indexOf returns -1 and the splice is a no-op).
+    _unregisterEmitterGroup(_rp6Group);
     for (const eid of spawnedEmitterIds) {
       try { wm.destroyParticleEmitter(eid); } catch (_) {}
     }
@@ -1323,6 +1566,12 @@ function _onPlayEffect(evt) {
  */
 function _runPlaceholderDispatch(targetGuid, scriptId) {
   const placement = _resolveTargetPlacement(targetGuid);
+
+  // RP6 (2026-06-08): mark this dispatch's burst critical-or-not so the
+  // concurrent-burst cap won't FIFO-evict gameplay-important cues. Set
+  // for the whole synchronous dispatch below (the spawn helpers read
+  // it); the spawn is synchronous so there's no interleaving risk.
+  _currentBurstCritical = _isCriticalPlayScript(scriptId);
 
   switch (scriptId) {
     case PLAY_SCRIPT.Launch: {
@@ -2161,6 +2410,20 @@ export const __test = Object.freeze({
   // Phase 51 — diag counters snapshot. Read-only view; production code
   // should read via the `VFX_COVERAGE.realVfx*` getters.
   realVfxStats: () => Object.freeze({ ..._realVfxStats }),
+  // RP6 (2026-06-08) — pool + cap introspection for acceptance tests.
+  // `burstPoolSizes` returns the idle free-list length per shape;
+  // `playEffectEmitterGroupCount` returns live PlayEffect emitter
+  // groups under the concurrent cap; `isCriticalPlayScript` exposes the
+  // FIFO-exemption classifier.
+  burstPoolSizes: () => ({
+    sphere: _burstPool[_BURST_SHAPE.SPHERE].length,
+    ring: _burstPool[_BURST_SHAPE.RING].length,
+    cube: _burstPool[_BURST_SHAPE.CUBE].length,
+  }),
+  playEffectEmitterGroupCount: () => _playEffectEmitterGroups.length,
+  isCriticalPlayScript: _isCriticalPlayScript,
+  maxActiveBursts: _MAX_ACTIVE_BURSTS,
+  maxPlayEffectEmitterGroups: _MAX_PLAYEFFECT_EMITTER_GROUPS,
 });
 
 // =====================================================================
