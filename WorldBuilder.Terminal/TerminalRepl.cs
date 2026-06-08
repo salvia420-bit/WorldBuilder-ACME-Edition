@@ -2746,7 +2746,7 @@ public class TerminalRepl {
             Console.WriteLine("  placement add-outdoor <lbX> <lbY> <wcid> <cellNum> <originX> <originY> <originZ> [--angles w x y z]");
             Console.WriteLine("  placement add-dungeon <lbX> <lbY> <wcid> <cellNum> <originX> <originY> <originZ> [--angles w x y z]");
             Console.WriteLine("  placement remove <outdoor|dungeon> <index>");
-            Console.WriteLine("  placement export-sql [--out <dir>] [--apply]");
+            Console.WriteLine("  placement export-sql [--out <dir>] [--apply] [--dry-run]");
             return;
         }
         try {
@@ -2811,16 +2811,28 @@ public class TerminalRepl {
                 case "export-sql": {
                     string? outDir = null;
                     bool apply = false;
+                    bool dryRun = false;
                     for (int i = 2; i < tokens.Length; i++) {
                         if (tokens[i] == "--out" && i + 1 < tokens.Length) { outDir = tokens[i + 1]; i++; }
                         else if (tokens[i] == "--apply") apply = true;
+                        else if (tokens[i] == "--dry-run") dryRun = true;
                     }
                     outDir ??= _engine.GetCurrentProjectDirectoryOrCwd();
-                    var r = _engine.PlacementExportSqlAsync(outDir, apply).GetAwaiter().GetResult();
+                    var r = _engine.PlacementExportSqlAsync(outDir, apply, dryRun).GetAwaiter().GetResult();
                     Console.WriteLine($"Wrote landblock_instances.sql ({r.OutdoorCount} rows) → {r.OutdoorPath}");
                     Console.WriteLine($"Wrote dungeon_instances.sql ({r.DungeonCount} rows) → {r.DungeonPath}");
                     if (r.EnrichedJsonlPath != null)
                         Console.WriteLine($"Wrote {WorldBuilder.Shared.Lib.AceDb.EnrichedPlacementStore.FileName} ({r.EnrichedCount} records) → {r.EnrichedJsonlPath}");
+                    if (r.EnrichmentSqlPaths != null && r.EnrichmentSqlPaths.Count > 0) {
+                        foreach (var ep in r.EnrichmentSqlPaths)
+                            Console.WriteLine($"Wrote {System.IO.Path.GetFileName(ep)} → {ep}");
+                        Console.WriteLine($"Wrote enrichment_manifest.json → {r.EnrichmentManifestPath}");
+                    }
+                    if (r.EnrichmentConflictCount > 0)
+                        Console.WriteLine($"WARN: {r.EnrichmentConflictCount} wcid(s) skipped for conflicting per-class enrichment (see manifest).");
+                    if (r.PlacementOverrideSkipped > 0)
+                        Console.WriteLine($"Note: {r.PlacementOverrideSkipped} placement(s) with scope=PlacementOverride skipped (PR3 / biota).");
+                    if (r.DryRun) Console.WriteLine("--dry-run: no DB connection was made.");
                     if (r.RowsAppliedToDb.HasValue) Console.WriteLine($"Applied {r.RowsAppliedToDb} row(s) to ace-db.");
                     break;
                 }

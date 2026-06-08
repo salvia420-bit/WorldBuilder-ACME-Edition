@@ -2403,7 +2403,7 @@ public class JsonCommandProcessor {
             new { name = "placement-add-outdoor", args = "lbX, lbY, wcid, cellNumber?, originX, originY, originZ, anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends an outdoor instance placement to Project.OutdoorInstancePlacements" },
             new { name = "placement-add-dungeon", args = "lbX, lbY, wcid, cellNumber?, originX, originY, originZ, anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends a dungeon instance placement to the dungeon document for the given lb" },
             new { name = "placement-remove",    args = "kind, index",                              description = "Removes an outdoor or dungeon placement by index in its respective list" },
-            new { name = "placement-export-sql", args = "out?, apply?",                            description = "Writes landblock_instances.sql + dungeon_instances.sql; --apply runs them against ace-db" },
+            new { name = "placement-export-sql", args = "out?, apply?, dryRun?",                    description = "Writes landblock_instances.sql + dungeon_instances.sql + per-class weenie_properties_*.sql; --apply runs placement SQL against ace-db; --dry-run emits files only (no DB)" },
             new { name = "fresh-start",         args = "confirm",                                  description = "Wipes all terrain to deep sea + deletes all dungeon documents (requires confirm:true)" },
             new { name = "generate-world",      args = "params?, apply?, exportTownsCsv?",         description = "GUI-parity world generation: ResetWorldDocs → terrain → buildings → decorations; optional CSV emit" },
             new { name = "export-towns-csv",    args = "fromResult, out",                          description = "Renders the GUI's towns CSV from a worldgen result JSON written by generate-world" },
@@ -2944,11 +2944,17 @@ public class JsonCommandProcessor {
             ?? _projectManager.CurrentProject?.ProjectDirectory
             ?? Directory.GetCurrentDirectory();
         bool apply = node["apply"]?.GetValue<bool>() ?? false;
-        var r = _engine.PlacementExportSqlAsync(outDir, apply).GetAwaiter().GetResult();
+        bool dryRun = node["dryRun"]?.GetValue<bool>() ?? node["dry-run"]?.GetValue<bool>() ?? false;
+        var r = _engine.PlacementExportSqlAsync(outDir, apply, dryRun).GetAwaiter().GetResult();
         return Serialize(new { success = r.Success, command = "placement-export-sql",
             outdoorPath = r.OutdoorPath, outdoorCount = r.OutdoorCount,
             dungeonPath = r.DungeonPath, dungeonCount = r.DungeonCount,
             enrichedJsonlPath = r.EnrichedJsonlPath, enrichedCount = r.EnrichedCount,
+            dryRun = r.DryRun,
+            enrichmentSqlPaths = r.EnrichmentSqlPaths,
+            enrichmentManifestPath = r.EnrichmentManifestPath,
+            enrichmentConflictCount = r.EnrichmentConflictCount,
+            placementOverrideSkipped = r.PlacementOverrideSkipped,
             rowsAppliedToDb = r.RowsAppliedToDb });
     }
 

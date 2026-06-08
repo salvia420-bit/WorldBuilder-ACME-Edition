@@ -1263,7 +1263,13 @@ public record PlacementExportSqlResult(
     string OutdoorPath, int OutdoorCount,
     string DungeonPath, int DungeonCount,
     int? RowsAppliedToDb,
-    string? EnrichedJsonlPath = null, int EnrichedCount = 0);
+    string? EnrichedJsonlPath = null, int EnrichedCount = 0,
+    // E1 (wave-2) PR2 — per-class enrichment SQL emission (Option A).
+    bool DryRun = false,
+    System.Collections.Generic.IReadOnlyList<string>? EnrichmentSqlPaths = null,
+    string? EnrichmentManifestPath = null,
+    int EnrichmentConflictCount = 0,
+    int PlacementOverrideSkipped = 0);
 
 // ── O4: ACE DB Weenie CRUD ─────────────────────────────────
 public record WeenieSaveScalarsResult(

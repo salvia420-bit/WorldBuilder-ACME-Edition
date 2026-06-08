@@ -140,10 +140,15 @@ public partial class CommandEngine {
         throw new ArgumentException($"Unknown kind '{kind}'. Expected outdoor|dungeon.");
     }
 
-    public async Task<PlacementExportSqlResult> PlacementExportSqlAsync(string outDir, bool apply) {
+    public async Task<PlacementExportSqlResult> PlacementExportSqlAsync(string outDir, bool apply, bool dryRun = false) {
         RequireProject();
         Directory.CreateDirectory(outDir);
         var project = _projectManager.CurrentProject!;
+
+        // E1 (wave-2) PR2: --dry-run is a file-emit-only path. It writes the generated SQL
+        // (including the new per-class enrichment tables) and NEVER touches a live ACE DB —
+        // so it is mutually exclusive with --apply.
+        if (dryRun) apply = false;
 
         var outdoorRecords = AceDbConnector.ToLandblockInstanceRecordsFromOutdoor(project.OutdoorInstancePlacements);
         var outdoorSql = AceDbConnector.GenerateInsertSqlBatch(outdoorRecords);
@@ -179,6 +184,14 @@ public partial class CommandEngine {
         }
         var enrichedPath = EnrichedPlacementStore.WriteFile(outDir, enriched);
 
+        // E1 (wave-2) PR2: GENERATE the per-class (Option A) world-DB enrichment SQL from the
+        // same enriched set and WRITE it to per-table .sql files (+ a manifest). This is a pure
+        // file-emit — it NEVER connects to a live DB (PR2 scope; biota/shard apply is PR3). It is
+        // ADDITIVE: the landblock_instances.sql / dungeon_instances.sql / placements_enriched.jsonl
+        // above are untouched (HARD CONSTRAINT 1).
+        var (bundle, enrichmentPaths, manifestPath) =
+            EnrichmentSqlExporter.WriteFiles(outDir, enriched);
+
         int? rowsApplied = null;
         if (apply) {
             var settings = project.AceDb;
@@ -195,6 +208,11 @@ public partial class CommandEngine {
             outdoorPath, outdoorRecords.Count,
             dungeonPath, dungeonCount,
             rowsApplied,
-            enrichedPath, enriched.Count);
+            enrichedPath, enriched.Count,
+            dryRun,
+            enrichmentPaths,
+            manifestPath,
+            bundle.Conflicts.Count,
+            bundle.PlacementOverrideSkipped);
     }
 }
