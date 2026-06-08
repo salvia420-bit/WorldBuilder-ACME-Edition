@@ -1286,6 +1286,29 @@ public record PlacementExportSqlResult(
     bool ValidationBlocked = false,
     int? ShardRowsAppliedToDb = null);
 
+// ── E9b: scenery material sidecar → synthetic Surface(0x08) DAT round-trip ─
+//
+// Per-surface outcome of importing one E9a `<lbHex>.scenery.materials.json` record into the
+// target (synthetic/project) DAT. Keyed by the addressable surface_did (0x08 DID) — never a
+// list index. RoundTripOk asserts the re-read Surface fields equal the sidecar values.
+public record SurfaceMaterialImportRecord(
+    uint SurfaceDid,            // 0x08xxxxxx Surface DataId (the addressable key)
+    uint SurfaceType,           // SurfaceType bitfield (raw u32)
+    bool Textured,              // true → orig_texture_id/orig_palette_id; false → solid color_value
+    bool Written,               // DatEasyWriter.Save succeeded
+    bool RoundTripOk,           // re-read Surface(0x08) fields == sidecar values
+    string? Error = null);
+
+public record SurfaceMaterialImportResult(
+    bool Success,
+    string DatDir,                                       // target DAT directory written to
+    int SourceFileCount,                                 // sidecar JSON files read
+    int RecordCount,                                     // total material records across sidecars
+    int WrittenCount,                                    // Surfaces written to the DAT
+    int RoundTripOkCount,                                // Surfaces that round-tripped faithfully
+    System.Collections.Generic.IReadOnlyList<SurfaceMaterialImportRecord> Records,
+    string? Error = null);
+
 // ── O4: ACE DB Weenie CRUD ─────────────────────────────────
 public record WeenieSaveScalarsResult(
     bool Success,

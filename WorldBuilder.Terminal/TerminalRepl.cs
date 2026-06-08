@@ -161,6 +161,7 @@ public class TerminalRepl {
             ["spell"] = HandleSpell,
             ["weenie"] = HandleWeenie,
             ["placement"] = HandlePlacement,
+            ["surface-materials"] = HandleSurfaceMaterials,
             ["fresh-start"] = HandleFreshStart,
             ["generate-world"] = HandleGenerateWorld,
             ["export-towns-csv"] = HandleExportTownsCsv,
@@ -2859,6 +2860,60 @@ public class TerminalRepl {
                 }
                 default:
                     Console.WriteLine($"Unknown placement subcommand: {tokens[1]}");
+                    break;
+            }
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    // E9b — round-trip an E9a scenery materials sidecar into synthetic Surface(0x08) DAT records.
+    private void HandleSurfaceMaterials(string[] tokens) {
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: surface-materials import <sidecar.json|dir> [--out <dat-dir>]");
+            Console.WriteLine("  Reads E9a <lbHex>.scenery.materials.json and WRITES synthetic Surface(0x08) DAT");
+            Console.WriteLine("  records into the target dat dir (additive override — NEVER a retail base DAT),");
+            Console.WriteLine("  then re-reads each Surface and asserts round-trip fidelity to the sidecar.");
+            return;
+        }
+        try {
+            switch (tokens[1].ToLowerInvariant()) {
+                case "import": {
+                    if (tokens.Length < 3) {
+                        Console.WriteLine("Usage: surface-materials import <sidecar.json|dir> [--out <dat-dir>]");
+                        return;
+                    }
+                    string sidecar = tokens[2];
+                    string? outDir = null;
+                    for (int i = 3; i < tokens.Length; i++) {
+                        if (tokens[i] == "--out" && i + 1 < tokens.Length) { outDir = tokens[i + 1]; i++; }
+                    }
+                    // Default target = a project-scoped synthetic dat dir (never the retail base DATs).
+                    outDir ??= System.IO.Path.Combine(_engine.GetCurrentProjectDirectoryOrCwd(), "dats", "synthetic");
+                    var r = _engine.SurfaceMaterialImport(sidecar, outDir);
+                    if (r.Error != null) Console.WriteLine($"Error: {r.Error}");
+                    Console.WriteLine($"Read {r.RecordCount} material record(s) from {r.SourceFileCount} sidecar file(s).");
+                    Console.WriteLine($"Wrote {r.WrittenCount} Surface(0x08) record(s) → {r.DatDir}");
+                    Console.WriteLine($"Round-trip OK: {r.RoundTripOkCount}/{r.RecordCount}");
+                    int shown = 0;
+                    foreach (var rec in r.Records) {
+                        if (rec.RoundTripOk && shown >= 8) continue;
+                        string kind = rec.Textured ? "textured" : "solid";
+                        string status = !rec.Written ? "WRITE-FAILED" : (rec.RoundTripOk ? "ok" : "RT-MISMATCH");
+                        Console.WriteLine($"  0x{rec.SurfaceDid:X8} type=0x{rec.SurfaceType:X} ({kind}) {status}"
+                            + (rec.Error != null ? $" — {rec.Error}" : ""));
+                        if (!rec.RoundTripOk) continue;
+                        shown++;
+                    }
+                    if (r.Success && r.RecordCount == 0)
+                        Console.WriteLine("surface-materials import: SUCCESS (empty sidecar — no-op for an empty landblock).");
+                    else
+                        Console.WriteLine(r.Success ? "surface-materials import: SUCCESS." : "surface-materials import: had failures.");
+                    break;
+                }
+                default:
+                    Console.WriteLine($"Unknown surface-materials subcommand: {tokens[1]}");
                     break;
             }
         }
