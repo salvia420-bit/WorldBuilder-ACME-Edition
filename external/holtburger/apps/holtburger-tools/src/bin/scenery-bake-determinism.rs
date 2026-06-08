@@ -184,9 +184,17 @@ fn load_scene(portal: &DatDatabase, scene_id: u32) -> Option<Scene> {
     Scene::unpack(&mut cursor).ok()
 }
 
-/// Format one placement to a stable line. Matches the CLI's
-/// `write_placement_line` byte-for-byte so cross-binary diffs are
-/// possible. (Inline format string — small enough not to extract.)
+/// Format one placement to a stable line. Mirrors only the
+/// position/format-stable PREFIX of the CLI's `write_placement_line`
+/// (`obj_id`..`source_obj_idx`); it deliberately does NOT emit the CLI's
+/// appended sidecar fields (`default_script_id` V1, `stable_id` V2)
+/// because this tool does not resolve the SetupModel `default_script` DID.
+/// It is therefore NOT a full byte-for-byte mirror of a CLI bake line — a
+/// raw cross-binary diff against the real CLI output will differ on those
+/// trailing fields. The determinism self-check is unaffected: it diffs
+/// run-1 vs run-2, both produced by THIS formatter, so the prefix is
+/// byte-stable run-to-run. (Inline format string — small enough not to
+/// extract.)
 fn placement_line(p: &ScenicPlacement) -> String {
     fn f(v: f32) -> String {
         let v = if v == 0.0 { 0.0 } else { v };

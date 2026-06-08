@@ -322,6 +322,18 @@ pub fn placements_fingerprint(placements: &[ScenicPlacement]) -> u64 {
     h
 }
 
+impl ScenicPlacement {
+    /// Canonical, content-derived addressable identity for this
+    /// placement — delegates to [`GeneratedSceneryIdentity::stable_id`]
+    /// on this placement's [`identity`](Self::identity). This is the
+    /// join key serialized to the per-LB `.scenery.jsonl` (`stable_id`
+    /// field) and consumed by the scenery-cross-check oracle and E8
+    /// traceability. Stable across re-bakes of the same DAT inputs.
+    pub fn stable_id(&self) -> String {
+        self.identity.stable_id()
+    }
+}
+
 /// Per-candidate placement transform parameters passed to the bake's
 /// AABB-building closure. The closure is expected to load the mesh
 /// for `obj_id`, run each vertex through

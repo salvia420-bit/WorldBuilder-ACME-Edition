@@ -603,10 +603,22 @@ fn resolve_default_script(portal: &DatDatabase, obj_id: u32) -> u32 {
 /// while staying short enough for diffs to read).
 /// `default_script_id` (V1, 2026-05-29) is emitted as a `0x{:08X}` hex
 /// string — same convention as `obj_id` — so the wasm reader's
-/// `obj_id_hex_to_u32` helper can round-trip it. It's the LAST field so
-/// older readers (and the JSONL `#[serde(default)]` on the wasm side)
-/// stay forward/backward-compatible: a record without it parses to 0
-/// (→ renderer no-op), a record with it carries the ambient-script DID.
+/// `obj_id_hex_to_u32` helper can round-trip it.
+///
+/// `stable_id` (V2, M4-step1, 2026-06-08) is APPENDED last: the
+/// content-derived addressable identity ([`ScenicPlacement::stable_id`])
+/// the forthcoming scenery-cross-check oracle (M4-step2) and E8
+/// traceability join on. It's a plain canonical path string (not a hex
+/// DID), e.g. `landblock-static/{lb:08x}/generatedscenery/...`. Appended
+/// after `default_script_id` so the bake output stays diff-stable for
+/// unchanged content: every prior field keeps its exact position and
+/// format. Forward-compat (a pre-V2 reader on a V2 line) holds because
+/// the wasm `ScenicPlacementJsonRaw` deserializer has no
+/// `#[serde(deny_unknown_fields)]`, so serde's default behavior silently
+/// ignores the unknown `stable_id` key. Backward-compat (a V2 reader on a
+/// pre-V2 line) is what `#[serde(default)]` covers — but only on the
+/// known optional fields like `default_script_id`; an absent `stable_id`
+/// is likewise tolerated by any reader that doesn't model it.
 fn write_placement_line<W: Write>(
     mut w: W,
     p: &ScenicPlacement,
@@ -614,7 +626,7 @@ fn write_placement_line<W: Write>(
 ) -> Result<()> {
     writeln!(
         w,
-        "{{\"obj_id\":\"0x{:08X}\",\"x\":{},\"y\":{},\"z\":{},\"qw\":{},\"qx\":{},\"qy\":{},\"qz\":{},\"scale\":{},\"source_cell_x\":{},\"source_cell_y\":{},\"source_obj_idx\":{},\"default_script_id\":\"0x{:08X}\"}}",
+        "{{\"obj_id\":\"0x{:08X}\",\"x\":{},\"y\":{},\"z\":{},\"qw\":{},\"qx\":{},\"qy\":{},\"qz\":{},\"scale\":{},\"source_cell_x\":{},\"source_cell_y\":{},\"source_obj_idx\":{},\"default_script_id\":\"0x{:08X}\",\"stable_id\":{:?}}}",
         p.obj_id,
         format_f32_six_sig(p.x),
         format_f32_six_sig(p.y),
@@ -628,6 +640,7 @@ fn write_placement_line<W: Write>(
         p.source_cell_y,
         p.source_obj_idx,
         default_script_id,
+        p.stable_id(),
     )?;
     Ok(())
 }
@@ -1142,9 +1155,66 @@ mod tests {
         assert!(s.starts_with("{\"obj_id\":\"0x02000123\""));
         // Six digits after decimal.
         assert!(s.contains("\"x\":12.340000"));
-        // V1 (2026-05-29) — trailing default_script_id, hex-string, last field.
-        assert!(s.contains("\"default_script_id\":\"0x330003EC\""));
-        assert!(s.trim_end().ends_with("\"default_script_id\":\"0x330003EC\"}"));
+        // V1 (2026-05-29) — default_script_id, hex-string. No longer the
+        // last field (V2 appended `stable_id`), so assert it's present and
+        // still precedes the appended identity.
+        assert!(s.contains("\"default_script_id\":\"0x330003EC\","));
+        // V2 (M4-step1) — `stable_id` is APPENDED last.
+        assert!(s.trim_end().ends_with("}"));
+        assert!(s.contains("\"stable_id\":"));
+    }
+
+    /// V2 (M4-step1, 2026-06-08) — the emitted JSONL line carries
+    /// `stable_id`, it is APPENDED after `default_script_id` (the prior
+    /// last field), and it equals `ScenicPlacement::stable_id()` (the
+    /// content-derived join key the scenery-cross-check oracle and E8
+    /// traceability consume).
+    #[test]
+    fn write_placement_line_emits_stable_id_matching_placement() {
+        let identity = GeneratedSceneryIdentity {
+            landblock_id: 0xCEAA_0000,
+            scene_id: 0x1200_00AB,
+            terrain_index: 42,
+            template_index: 3,
+            source_did: 0x0200_0123,
+        };
+        let p = ScenicPlacement {
+            obj_id: 0x02000123,
+            x: 12.34,
+            y: 56.78,
+            z: 9.01,
+            qw: 1.0,
+            qx: 0.0,
+            qy: 0.0,
+            qz: 0.0,
+            scale: 1.0,
+            source_cell_x: 3,
+            source_cell_y: 5,
+            source_obj_idx: 3,
+            identity,
+        };
+        let mut buf = Vec::new();
+        write_placement_line(&mut buf, &p, 0x330003EC).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+
+        // The line carries `stable_id` and it equals the placement's
+        // canonical addressable identity.
+        let expected = p.stable_id();
+        // Same value as the underlying identity (delegation sanity check).
+        assert_eq!(expected, identity.stable_id());
+        assert!(
+            s.contains(&format!("\"stable_id\":\"{expected}\"")),
+            "line {s:?} missing stable_id {expected:?}"
+        );
+        // APPENDED last — closes the object right after stable_id.
+        assert!(
+            s.trim_end()
+                .ends_with(&format!("\"stable_id\":\"{expected}\"}}")),
+            "stable_id is not the last field in {s:?}"
+        );
+        // Round-trip guardrail: appended after default_script_id, prior
+        // fields keep their exact order/format.
+        assert!(s.contains("\"default_script_id\":\"0x330003EC\",\"stable_id\":"));
     }
 
     /// V1 (2026-05-29) — a GfxObj (`0x01`) placement emits a zero
