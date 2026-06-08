@@ -777,12 +777,87 @@ const CROSSFADE_S = 0;
 // requires per-frame projection-matrix bookkeeping and per-entity
 // bounding spheres. Distance-only is well-defined and load-bearing
 // enough to ship first.
-const MAX_TICK_DIST = 120;
-const MAX_TICK_DIST_SQ = MAX_TICK_DIST * MAX_TICK_DIST; // 14400 m²
+//
+// RP2 (2026-06-08) — `?maxTickDist=<metres>` tunes the gate radius at
+// eye-test WITHOUT changing the default. Absent / non-finite / ≤0 → 120 m
+// exactly (byte-identical behaviour, the same 14400 m² compare as before).
+// A SMALLER value culls more distant entities' tick bodies (bigger time-
+// budget win, more re-entry snap); a LARGER value keeps more ticking. Read
+// once at module load; try/catch for the Node harness (no `window`). The
+// gate convention (local player + active tweens always tick) is unchanged.
+const MAX_TICK_DIST = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return 120;
+    const v = new URLSearchParams(window.location.search).get("maxTickDist");
+    const n = v == null ? NaN : parseFloat(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  } catch (_) { /* Node / no window → default */ }
+  return 120;
+})();
+const MAX_TICK_DIST_SQ = MAX_TICK_DIST * MAX_TICK_DIST; // default 14400 m²
+
+// RP2 (2026-06-08) — far-band SMOOTHING STRIDE. The position-ease +
+// heading-ease passes in `tick(dt)` are pure visual smoothing of the
+// server-authoritative pose (the snap target is re-anchored every update,
+// so the eased value never drifts and a missed frame is recovered on the
+// next run). They are therefore visual-lag-tolerant: for an entity that is
+// ticked but FAR from the camera, running them every Nth frame instead of
+// every frame is below the perceptual threshold while cutting the slerp /
+// vector-lerp + exp() cost. `?entitySmoothStride=<2..4>` opts in. Default
+// 1 → run every frame (byte-identical to pre-RP2: no stamp is ever read,
+// the whole stride branch is dead). The stride applies ONLY to position +
+// heading easing, ONLY beyond `ENTITY_SMOOTH_NEAR_DIST_SQ`, and NEVER to
+// the local player, an entity inside the near band, or anything with an
+// active jump/swing/cast tween (those run the easing every frame as
+// before). mixer.update / hooks / tweens / particles are untouched.
+const ENTITY_SMOOTH_STRIDE = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return 1;
+    const v = new URLSearchParams(window.location.search).get("entitySmoothStride");
+    const n = v == null ? NaN : parseInt(v, 10);
+    // Clamp to [1,4]: 1 = off (default behaviour), 4 = most aggressive. A
+    // value of 1 means "no throttle" so the hot path stays byte-identical.
+    if (Number.isFinite(n) && n >= 2) return Math.min(n, 4);
+  } catch (_) { /* Node / no window → default */ }
+  return 1;
+})();
+// Near band (metres) inside which smoothing always runs every frame even
+// when a stride is configured — close entities are where stutter is most
+// visible, so they never get throttled. Squared to compare without a sqrt.
+const ENTITY_SMOOTH_NEAR_DIST = 40;
+const ENTITY_SMOOTH_NEAR_DIST_SQ = ENTITY_SMOOTH_NEAR_DIST * ENTITY_SMOOTH_NEAR_DIST;
+
+// RP2 (2026-06-08) — velocity-scale gait recompute throttle. The T11
+// anti-ice-skating gait already low-pass-filters ground speed through an
+// EMA (α=0.3), so recomputing `cycleTimeScale` + `setEffectiveTimeScale`
+// every render frame is wasteful — the EMA barely moves between 60/144 fps
+// frames. `?gaitHz=<hz>` caps the recompute to ~that rate (per entity, via
+// a last-recompute timestamp). Default 0 → recompute every frame
+// (byte-identical to pre-RP2: no timestamp is ever read). Only the gait
+// MATH is throttled; the per-frame EMA position-delta sampling still runs
+// every frame so the EMA stays accurate when a recompute does fire.
+const GAIT_RECOMPUTE_HZ = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return 0;
+    const v = new URLSearchParams(window.location.search).get("gaitHz");
+    const n = v == null ? NaN : parseFloat(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  } catch (_) { /* Node / no window → default */ }
+  return 0;
+})();
+const GAIT_RECOMPUTE_INTERVAL_MS = GAIT_RECOMPUTE_HZ > 0 ? 1000 / GAIT_RECOMPUTE_HZ : 0;
+
 // Module-private scratch Vector3 for entity world-position lookup in
 // `_shouldTickEntity`. Callers must NOT retain a reference — the next
 // `tick(dt)` reuses it.
 const _tickGateScratch = new THREE.Vector3();
+// RP2 — second scratch Vector3 for the smoothing-stride near/far distance
+// classification in `tick(dt)`. Distinct from `_tickGateScratch` because the
+// gate's scratch is consumed inside `_shouldTickEntity` before tick reuses
+// it; keeping a separate one avoids any aliasing if the gate is refactored.
+// Only written when a smoothing stride is configured (the flag-off path
+// never touches it). Callers must NOT retain a reference.
+const _smoothDistScratch = new THREE.Vector3();
 
 // Scratch Vector3 + Quaternion for the particle-attach offset frame
 // passed to `ParticleManager.addEmitter({ parentOffset })`. The manager
@@ -1506,6 +1581,12 @@ export class EntityManager {
     this._cycleOmegaCache = new Map();
     // T9 — dynamic-LOD recheck throttle accumulator (seconds).
     this._dynLodAccum = 0;
+    // RP2 (2026-06-08) — monotonic frame counter for the far-band smoothing
+    // stride (`?entitySmoothStride=`). Only advanced in `tick` when a stride
+    // is configured; per-entity `_smoothFrameStamp` records the frame an
+    // entity last ran position/heading easing so the next eligible frame is
+    // `(stamp + stride)`. Default (stride==1) leaves both untouched.
+    this._smoothFrame = 0;
     this.materialCache = scene3d?.materialCache ?? null;
     /** @type {Map<number, Promise<EntityInstance|null>>} */
     this.spawnInFlight = new Map();
@@ -5895,9 +5976,20 @@ export class EntityManager {
     }
 
     // Compute view-space depth for each transparent part.
+    // RP2 (2026-06-08): the keyed array is reused (`.length = 0`) AND its
+    // entry OBJECTS are pooled in `_sortCenterKeyedPool`, so the per-frame
+    // sort pass allocates nothing once an entity's transparent-part count has
+    // stabilised (previously each part pushed a fresh `{part,z}` literal every
+    // frame). The pool grows monotonically to the max part count ever seen and
+    // is reused across frames; `keyed` holds (possibly-reordered after sort)
+    // references INTO the pool, so we index `keyed[i].part`, never the pool by
+    // slot, after the sort. Whole block runs only when `?sortCenter=on`.
     let keyed = inst._sortCenterKeyed;
     if (!keyed) keyed = inst._sortCenterKeyed = [];
     keyed.length = 0;
+    let pool = inst._sortCenterKeyedPool;
+    if (!pool) pool = inst._sortCenterKeyedPool = [];
+    let poolIdx = 0;
     for (const p of list) {
       const part = inst.parts[p];
       // World position of the part Group.
@@ -5919,7 +6011,14 @@ export class EntityManager {
       // Project into the camera's view space; .z is the depth (more negative
       // = farther in front of the camera, per three.js view-space convention).
       _sortCenterScratchVec3.applyMatrix4(camera.matrixWorldInverse);
-      keyed.push({ part: p, z: _sortCenterScratchVec3.z });
+      // Reuse a pooled entry object (grow the pool only on first sight of a
+      // larger transparent-part count); overwrite its fields in place.
+      let entry = pool[poolIdx];
+      if (entry === undefined) entry = pool[poolIdx] = { part: 0, z: 0 };
+      entry.part = p;
+      entry.z = _sortCenterScratchVec3.z;
+      keyed.push(entry);
+      poolIdx += 1;
     }
     // Back-to-front: farthest (most negative view z) first → lowest
     // renderOrder, so it draws first and nearer parts blend over it.
@@ -7200,6 +7299,38 @@ export class EntityManager {
     const _sortCenterCamera = this._sortCenterOn
       ? (this.scene3d?.cameraSwitcher?.activeCamera ?? this.scene3d?.camera ?? null)
       : null;
+    // RP2 (2026-06-08) — monotonic per-tick frame counter for the far-band
+    // smoothing stride. Only incremented when a stride is configured, so the
+    // default (stride==1) path never even touches it. Bounded growth is fine
+    // (compared via subtraction, not stored long-term). Resolve the camera
+    // ONCE for the near/far distance test, same accessor convention as the
+    // gate / sort pass; null when the stride is off OR no camera resolvable
+    // (→ run every frame, fail-soft like the gate's bail-open). The gait-Hz
+    // throttle reads `performance.now()` once here so per-entity recompute
+    // gating doesn't call it in the loop.
+    const _smoothStrideOn = ENTITY_SMOOTH_STRIDE > 1;
+    const _smoothCamera = _smoothStrideOn
+      ? (this.scene3d?.cameraSwitcher?.activeCamera ?? this.scene3d?.camera ?? null)
+      : null;
+    if (_smoothStrideOn) this._smoothFrame = (this._smoothFrame | 0) + 1;
+    const _smoothFrame = this._smoothFrame | 0;
+    const _gaitThrottleOn = GAIT_RECOMPUTE_INTERVAL_MS > 0;
+    const _gaitNowMs = _gaitThrottleOn
+      ? (typeof performance !== "undefined" ? performance.now() : 0)
+      : 0;
+    // RP2 — resolve the local-player guid ONCE for the smoothing-stride
+    // exclusion (the local player must never be throttled). Only needed when a
+    // stride is configured. Same defensive resolution as `_shouldTickEntity`'s
+    // gate (the function existing-but-throwing → treat as "no local player").
+    let _smoothLocalGuid = null;
+    if (_smoothStrideOn) {
+      try {
+        if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+          const lpg = window.getLocalPlayerGuid();
+          if (lpg !== null && lpg !== undefined) _smoothLocalGuid = lpg >>> 0;
+        }
+      } catch (_) { /* fall through → no local-player exclusion this tick */ }
+    }
     for (const inst of this.entityMap.values()) {
       // Perf B1 (2026-05-18) — distance + local-player + active-tween
       // gate. When false, skip mixer.update, hook execution, and the
@@ -7209,6 +7340,62 @@ export class EntityManager {
       // readable for downstream consumers. Animation snap on
       // re-entry is the documented MVP trade.
       if (!this._shouldTickEntity(inst)) continue;
+      // RP2 (2026-06-08) — far-band SMOOTHING-STRIDE decision. `runSmoothing`
+      // gates ONLY the position-ease + heading-ease passes below (pure visual
+      // smoothing of a re-anchored server target — lag-tolerant, self-
+      // correcting). Default true so the stride-off path is byte-identical.
+      // When a stride IS configured we run the easing every frame for the
+      // local player, any entity inside the near band, and anything with an
+      // active jump/swing/cast tween (close / important motion is never
+      // throttled); for everything else we run it on frames where
+      // `(_smoothFrame - stamp) >= stride`, recording the stamp. A first-time
+      // entity (no stamp) runs this frame and stamps. mixer.update / hooks /
+      // tweens / particles are NEVER gated by this — they still run every tick.
+      let runSmoothing = true;
+      if (_smoothStrideOn) {
+        const isLocal =
+          _smoothLocalGuid !== null && (inst.guid >>> 0) === _smoothLocalGuid;
+        const hasActiveTween =
+          inst._jumpPoseTween || inst._swingTween || inst._castTween;
+        if (isLocal || hasActiveTween) {
+          // Always-smooth set: run every frame and keep the stamp current so a
+          // later transition into the throttled set doesn't fire immediately.
+          inst._smoothFrameStamp = _smoothFrame;
+        } else {
+          // Distance test — same world-space + bail-open convention as the
+          // gate. No resolvable camera/position → treat as near (run every
+          // frame). Beyond the near band → apply the stride.
+          let nearOrUnknown = true;
+          if (_smoothCamera && _smoothCamera.position && inst.root) {
+            if (typeof inst.root.getWorldPosition === "function") {
+              inst.root.getWorldPosition(_smoothDistScratch);
+            } else if (inst.root.position) {
+              _smoothDistScratch.set(
+                inst.root.position.x,
+                inst.root.position.y,
+                inst.root.position.z
+              );
+            } else {
+              _smoothDistScratch.copy(_smoothCamera.position); // dist 0 → near
+            }
+            const sdx = _smoothDistScratch.x - _smoothCamera.position.x;
+            const sdy = _smoothDistScratch.y - _smoothCamera.position.y;
+            const sdz = _smoothDistScratch.z - _smoothCamera.position.z;
+            const sDistSq = sdx * sdx + sdy * sdy + sdz * sdz;
+            nearOrUnknown = sDistSq <= ENTITY_SMOOTH_NEAR_DIST_SQ;
+          }
+          if (nearOrUnknown) {
+            inst._smoothFrameStamp = _smoothFrame;
+          } else {
+            const stamp = inst._smoothFrameStamp;
+            if (stamp === undefined || _smoothFrame - stamp >= ENTITY_SMOOTH_STRIDE) {
+              inst._smoothFrameStamp = _smoothFrame;
+            } else {
+              runSmoothing = false;
+            }
+          }
+        }
+      }
       // === Wave R3.B (2026-05-29) — transparent-part depth sort. Runs AFTER
       // the gate (distant entities skip, like every other per-frame body) and
       // AFTER mixer/tween updates further below would move part frames — but
@@ -7243,7 +7430,11 @@ export class EntityManager {
       // time a target exists here it's already a remote entity that should
       // glide. Jump/swing/cast/scale tweens move root.quaternion + scale (NOT
       // position) for remote entities, so easing position never fights them.
-      if (this._deadReckonOn && inst._serverTargetPos) {
+      // RP2: `runSmoothing` short-circuits this block on throttled far-band
+      // frames (default true → no change). The target is re-anchored every
+      // setPose, so a skipped frame is recovered on the next run with no drift
+      // — the documented far-band visual-lag trade. mixer/hooks are untouched.
+      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos) {
         const tgt = inst._serverTargetPos;
         // B5/QW2/REMOTE-3: extrapolate the server target forward by the last
         // VectorUpdate velocity while it's fresh — retail integrates
@@ -7281,7 +7472,11 @@ export class EntityManager {
       // this frame instead of being fought; the discontinuity snap lives in
       // setPose. Runs after the position ease + before mixer.update so the
       // velocity-scale gait reads the heading actually rendered.
+      // RP2: `runSmoothing` short-circuits the slerp on throttled far-band
+      // frames (default true → no change). Same self-correcting re-anchor
+      // argument as the position ease above.
       if (
+        runSmoothing &&
         inst._headingEaseInit &&
         inst._serverTargetQuat &&
         !inst._omega &&
@@ -7306,19 +7501,61 @@ export class EntityManager {
       // server-pose snap can't freeze or hyper-spin the rig. ?velScale=on only.
       if (VEL_SCALE_ON) {
         const p = inst.root.position;
-        if (inst._velPrevX !== undefined) {
-          const dx = p.x - inst._velPrevX;
-          const dz = p.z - inst._velPrevZ;
-          const sp = Math.hypot(dx, dz) / dt;
-          inst._emaSpeed =
-            inst._emaSpeed === undefined ? sp : inst._emaSpeed * 0.7 + sp * 0.3;
+        // RP2 (2026-06-08) — EMA-sampler / smoothing-stride interaction guard.
+        // The EMA derives ground speed from the per-frame XZ delta of
+        // `inst.root.position`, but for remote entities that position is moved
+        // ONLY by the dead-reckon position-ease above (7437), which is gated by
+        // `runSmoothing`. On a throttled far-band frame (`_smoothStrideOn &&
+        // !runSmoothing`) the ease is skipped, so the position is FROZEN this
+        // frame: sampling it would fold a spurious ~0 delta into the EMA (and
+        // then a full-gap spike on the next run frame), staircasing the EMA
+        // toward zero and re-introducing the ice-skating gait that velScale
+        // exists to remove. So we accumulate `dt` across skipped frames and
+        // sample/fold ONLY on frames where the position was actually integrated,
+        // dividing the delta by the full elapsed interval since the last sample
+        // (correct m/s magnitude over a multi-frame gap). `_velPrevX/Z` is held
+        // (not advanced) on skipped frames so the next sample spans the real
+        // motion interval. The held EMA value persists across skipped frames.
+        //
+        // Default path: `_smoothStrideOn` false → `runSmoothing` is never set
+        // false (it starts true and is only cleared inside the stride block at
+        // 7355) → `_velSample` always true and `_velAccumDt` is always exactly
+        // the current-frame `dt`, so this collapses to the exact prior code
+        // (fold every frame, divide by `dt`) — byte-identical with flags off.
+        const _velSample = runSmoothing;
+        inst._velAccumDt = (inst._velAccumDt || 0) + dt;
+        if (_velSample) {
+          if (inst._velPrevX !== undefined && inst._velAccumDt > 0) {
+            const dx = p.x - inst._velPrevX;
+            const dz = p.z - inst._velPrevZ;
+            const sp = Math.hypot(dx, dz) / inst._velAccumDt;
+            inst._emaSpeed =
+              inst._emaSpeed === undefined ? sp : inst._emaSpeed * 0.7 + sp * 0.3;
+          }
+          inst._velPrevX = p.x;
+          inst._velPrevZ = p.z;
+          inst._velAccumDt = 0;
         }
-        inst._velPrevX = p.x;
-        inst._velPrevZ = p.z;
         const base = inst._locoBaseSpeed;
-        if (base > 0 && inst._locoCycleKey) {
+        // RP2 (2026-06-08) — gait recompute throttle. The EMA sampling above
+        // ran this frame regardless; the EXPENSIVE part (the wasm getter call,
+        // `cycleTimeScale`, `setEffectiveTimeScale`) is what we cap to ~gaitHz.
+        // When throttled, three.js retains the last `effectiveTimeScale` on the
+        // action, so the gait holds its previous (low-pass-EMA-derived) value —
+        // imperceptible since the EMA barely moves between frames. Default
+        // (`gaitHz` absent → interval 0) → `_gaitThrottleOn` false → recompute
+        // every frame, byte-identical to pre-RP2.
+        let _gaitRecompute = true;
+        if (_gaitThrottleOn) {
+          const last = inst._gaitLastRecomputeMs;
+          if (last !== undefined && _gaitNowMs - last < GAIT_RECOMPUTE_INTERVAL_MS) {
+            _gaitRecompute = false;
+          }
+        }
+        if (_gaitRecompute && base > 0 && inst._locoCycleKey) {
           const locoAction = inst.actions.get(inst._locoCycleKey);
           if (locoAction && locoAction.isRunning()) {
+            if (_gaitThrottleOn) inst._gaitLastRecomputeMs = _gaitNowMs;
             // T1: prefer the wasm `stateGroundSpeed` getter (a mirror of retail
             // CMotionInterp::get_state_velocity) for the 'actual' ground anim-
             // speed instead of the rig XZ-position-delta EMA. The getter is pure
