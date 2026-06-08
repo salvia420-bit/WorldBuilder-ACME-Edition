@@ -953,15 +953,197 @@ export function tickShadowReceiveGate(scene3d) {
   }
 }
 
+// === RP3 — render-loop frame budgeting (2026-06-08, client-only) ===
+//
+// A heavy DEFERRABLE phase (the nameplate DOM-projection in particular,
+// 5-50 ms; the sky/atmosphere stack, ~5-10 ms) can blow a 16.6 ms frame
+// and STALL INPUT — the camera switcher (#13) reads WASD and dispatches
+// setMovementInput to wasm, and the entity drain (#16) applies server
+// position snaps. If those run AFTER a phase that already ate the frame,
+// the dispatch lands late and the player feels input lag.
+//
+// RP3 adds a per-frame budget guard around the DEFERRABLE phases ONLY.
+// The contract (see GUARDRAIL in the track brief):
+//   - CRITICAL phases (#1 cell-visibility, #5 lighting, #13 camera/input,
+//     #15 mixer, #16 entity-drain, #19 local-player pose) ALWAYS run every
+//     frame, unconditionally, in their existing order. They are NEVER gated
+//     by the budget or a throttle.
+//   - DEFERRABLE phases run only when (a) their throttle interval has
+//     elapsed AND (b) the frame still has budget left — UNLESS they have
+//     been skipped `MAX_DEFER_FRAMES` times in a row, in which case they
+//     FORCE-RUN regardless of budget so they never freeze indefinitely
+//     (bounded staleness). The existing 5 Hz shadow-receive gate keeps its
+//     own throttle and is left exactly as-is.
+//
+// The deferrable groups (mapped to the brief's phase numbers):
+//   PVS  — #2 PVS load expansion (renderSet scan + ring expand). Throttled
+//          to ~10 Hz; the actual loads are idempotent, so a missed frame
+//          just means the prefetch leads by a few ms less.
+//   SKY  — #4 terrain sun-dir + #7-#12 sky-lighting / fog / atmosphere /
+//          skydome / weather. ~5-10 ms. The downstream consumers (#8-#12)
+//          read `skyLightingController._lastState`, a cached snapshot, so
+//          throttling the whole block to ~10 Hz just holds the snapshot one
+//          extra frame — the sky visibly glides at 10 Hz, imperceptible.
+//   NAME — #20 nameplate DOM-projection. The single biggest deferrable
+//          (5-50 ms). Budget-gated + force-run on staleness so labels track
+//          but never block input on a heavy frame.
+//
+// Phases #3 (water/lava uTime clock) and #6 (shadow-receive gate) are NOT
+// in any deferrable group: #3 is cheap and must run every frame to keep
+// neighbouring-LB water phase-locked; #6 already self-throttles at 5 Hz.
+//
+// Config (URL flags, parsed once, mirrors the ?netDrainHz / ?fogLerp
+// pattern used elsewhere in this stack):
+//   ?frameBudget=<ms>   per-frame soft budget for deferrables. Default 9.
+//                       `?frameBudget=off` disables the guard entirely
+//                       (every phase runs every frame — pre-RP3 behaviour).
+//   ?deferHz=<hz>       throttle rate for PVS + SKY groups. Default 10.
+// All knobs fail-soft to the defaults in the Node harness (no `window`).
+const RP3_DEFAULT_BUDGET_MS = 9;
+const RP3_DEFAULT_DEFER_HZ = 10;
+// Bounded-staleness ceiling: a deferrable that keeps losing the budget race
+// is force-run after this many consecutive skips so it can never freeze.
+// At 60 fps that is ~50 ms of worst-case staleness for a budget-starved
+// phase; at 30 fps ~100 ms. Both are well under a human-noticeable freeze.
+const RP3_MAX_DEFER_FRAMES = 3;
+
+const _rp3Config = (() => {
+  let budgetMs = RP3_DEFAULT_BUDGET_MS;
+  let deferHz = RP3_DEFAULT_DEFER_HZ;
+  let enabled = true;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const ps = new URLSearchParams(window.location.search);
+      const rawBudget = ps.get("frameBudget");
+      if (rawBudget !== null) {
+        if (rawBudget.toLowerCase() === "off") {
+          enabled = false;
+        } else {
+          const n = parseFloat(rawBudget);
+          // Clamp to a sane band: below ~2 ms a single critical phase
+          // could already exceed it (making the guard a no-op churner);
+          // above one frame the guard never triggers. 2-33 ms.
+          if (Number.isFinite(n) && n > 0) budgetMs = Math.max(2, Math.min(n, 33));
+        }
+      }
+      const rawHz = ps.get("deferHz");
+      if (rawHz !== null) {
+        const h = parseFloat(rawHz);
+        if (Number.isFinite(h) && h > 0) deferHz = Math.max(1, Math.min(h, 60));
+      }
+    }
+  } catch (_) {
+    /* fail-soft to defaults */
+  }
+  return {
+    enabled,
+    budgetMs,
+    deferHz,
+    // Per-group throttle interval in seconds (measured against the monotonic
+    // frame-start clock), indexed by RP3_G_*. PVS + SKY throttle to `deferHz`;
+    // NAME has NO
+    // throttle (interval 0 = "due" every frame) — it wants the highest
+    // refresh the budget allows so labels track moving entities crisply,
+    // and is bounded only by the budget gate + the staleness ceiling.
+    throttleSec: [1 / deferHz, 1 / deferHz, 0],
+  };
+})();
+
+// Lazily attach (and return) the per-scene frame-budget bookkeeping. One
+// object per scene3d, reused every frame — NO per-frame allocation in the
+// hot path (the brief's "no new per-frame allocations" guardrail). Fields:
+//   frameStartMs   — performance.now() at the top of this frame's tick.
+//   lastRunSec[g]  — monotonic frame-start clock (sec) when group `g` last ran.
+//   skips[g]       — consecutive frames group `g` has been deferred.
+// Groups are indexed by the RP3_G_* constants below.
+const RP3_G_PVS = 0;
+const RP3_G_SKY = 1;
+const RP3_G_NAME = 2;
+function _rp3State(scene3d) {
+  let st = scene3d._rp3FrameBudget;
+  if (!st) {
+    st = scene3d._rp3FrameBudget = {
+      frameStartMs: 0,
+      // -Infinity → every group is "due" on the first frame so nothing
+      // waits a throttle interval before its first run.
+      lastRunSec: [-Infinity, -Infinity, -Infinity],
+      skips: [0, 0, 0],
+    };
+  }
+  return st;
+}
+
+// Decide whether deferrable group `g` runs this frame.
+//   1. Guard disabled (?frameBudget=off) → always run.
+//   2. Throttle: skip if < throttleSec has elapsed since the group last ran
+//      (returns false WITHOUT counting a skip — the group isn't "due" yet,
+//      so staleness isn't accumulating).
+//   3. Due, but over budget AND under the staleness ceiling → defer
+//      (count a skip).
+//   4. Due and (within budget OR at the staleness ceiling) → run, reset skip.
+// `nowMs` is the intra-frame performance.now() budget clock; `tsSec` is the
+// monotonic frame-start clock (seconds) used for the wall-clock throttle —
+// it always advances (rAF AND net-drain callers), so a frozen frameTime can
+// never defeat the throttle and starve a group.
+function _rp3ShouldRun(st, g, tsSec, nowMs) {
+  if (!_rp3Config.enabled) return true;
+  if (tsSec - st.lastRunSec[g] < _rp3Config.throttleSec[g]) return false;
+  const overBudget = nowMs - st.frameStartMs > _rp3Config.budgetMs;
+  if (overBudget && st.skips[g] < RP3_MAX_DEFER_FRAMES) {
+    st.skips[g] += 1;
+    return false;
+  }
+  st.skips[g] = 0;
+  st.lastRunSec[g] = tsSec;
+  return true;
+}
+
+// Cheap monotonic intra-frame clock for the budget check. Distinct from the
+// frameTime snapshot (which is stamped once at tick start) — we need the
+// LIVE elapsed-this-frame, so a fresh now() is correct here and is not a new
+// "time source" in the multi-clock sense (it measures one frame's duration,
+// never world/sim time).
+function _rp3NowMs() {
+  return (typeof performance !== "undefined" && performance.now)
+    ? performance.now()
+    : Date.now();
+}
+
 export function tickPerFrame(scene3d, sessionHandle, dt) {
+  // RP3 — stamp the frame-budget clock + resolve the wall-clock the throttles
+  // read. Both the budget gate and the throttle now share ONE live monotonic
+  // clock (_rp3NowMs), captured once per tick. This is deliberately NOT driven
+  // off scene3d.frameTime.tsSec: see the throttle-clock note below.
+  const _rp3 = scene3d ? _rp3State(scene3d) : null;
+  const _rp3FrameStartMs = _rp3NowMs();
+  if (_rp3) _rp3.frameStartMs = _rp3FrameStartMs;
+  // RP3 throttle clock — derived from the LIVE monotonic frame-start clock,
+  // NOT scene3d.frameTime.tsSec. frameTime is stamped ONLY by the rAF tick
+  // (index.js); under ?renderOnDemand=1 the rAF loop fires once at boot then
+  // idles, so frameTime.tsSec FREEZES. The ?netDrainHz=N setInterval then
+  // calls tickPerFrame against that frozen snapshot — and because the throttle
+  // early-return below never counts a skip, the force-run ceiling never fires
+  // and PVS (#2) + the SKY group (#4,#7-#12) would be starved forever during
+  // the idle window (the exact "permanently starved" guardrail violation).
+  // _rp3NowMs() advances on every call regardless of which caller (rAF or
+  // net-drain) drives the tick, so the throttle interval elapses normally in
+  // both paths; the rAF path is unchanged (both clocks advance ~per frame).
+  const _rp3TsSec = _rp3FrameStartMs * 0.001;
+
+  // ── CRITICAL #1 — cell visibility (gates the whole scene). ───────────
   tickCellVisibility3D(scene3d, sessionHandle);
-  // 2026-05-16 — PVS-driven scenery + buildings expansion (paired with
-  // STATICS_RING_RADIUS=2 and BUILDINGS_RING_RADIUS=2 boot rings in
-  // index.js). Reads the wasm renderSet and triggers
-  // `loadStaticsForLandblock` + `loadBuildingsForLandblock` for any LB
-  // the player can see but hasn't entered yet. Both hooks are
-  // idempotent + cheap.
-  tickPvsLoadExpansion(scene3d, sessionHandle);
+  // ── DEFERRABLE #2 (group PVS) — PVS-driven scenery + buildings ───────
+  // expansion (paired with STATICS_RING_RADIUS=2 and BUILDINGS_RING_RADIUS=2
+  // boot rings in index.js). Reads the wasm renderSet and triggers
+  // `loadStaticsForLandblock` + `loadBuildingsForLandblock` for any LB the
+  // player can see but hasn't entered yet. Both hooks are idempotent + cheap,
+  // so RP3 throttles the per-frame renderSet scan + ring expand to ~10 Hz:
+  // the loads themselves are still async, this just stops re-walking the
+  // renderSet 60×/s when nothing has moved. Force-runs on staleness so a
+  // budget-starved frame can never stall scenery prefetch indefinitely.
+  if (!_rp3 || _rp3ShouldRun(_rp3, RP3_G_PVS, _rp3TsSec, _rp3NowMs())) {
+    tickPvsLoadExpansion(scene3d, sessionHandle);
+  }
   // Phase 2.2 — water/lava vertex displacement clock. Runs FIRST so the
   // displacement is current before any code reads terrain positions
   // this frame (e.g. nameplate projection sampling terrain Y). Wrapped
@@ -975,18 +1157,36 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       console.warn("[phase2.2] tickTerrainUTime threw:", e);
     }
   }
-  try {
-    tickTerrainSunDir(scene3d);
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    if (!scene3d._terrainSunDirTickWarned) {
-      scene3d._terrainSunDirTickWarned = true;
-      console.warn("[terrain-sun] tickTerrainSunDir threw:", e);
+  // ── DEFERRABLE group SKY decision (#4 + #7-#12). ─────────────────────
+  // Evaluated ONCE per frame here (it mutates the skip counter + throttle
+  // stamp, so it must not be re-called for the same group). The SKY group
+  // is the terrain sun-dir push (#4) plus the whole sky-lighting / fog /
+  // atmosphere / skydome / weather stack (#7-#12). They run or skip as a
+  // COHERENT UNIT: #8-#12 read `skyLightingController._lastState` — the
+  // cached snapshot #7 (skyLightingController.tick) writes — so holding the
+  // snapshot one extra frame keeps the whole stack self-consistent. Note
+  // the CRITICAL lighting tick (#5) and the already-5Hz-throttled shadow
+  // gate (#6) sit between #4 and #7 in source order and are NOT in this
+  // group — they always run. `?frameBudget=off` → _rp3 is still allocated
+  // but _rp3ShouldRun short-circuits to true, so SKY runs every frame.
+  const _rp3RunSky = !_rp3 || _rp3ShouldRun(_rp3, RP3_G_SKY, _rp3TsSec, _rp3NowMs());
+  // ── DEFERRABLE #4 (group SKY) — terrain sun-direction push. ──────────
+  if (_rp3RunSky) {
+    try {
+      tickTerrainSunDir(scene3d);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._terrainSunDirTickWarned) {
+        scene3d._terrainSunDirTickWarned = true;
+        console.warn("[terrain-sun] tickTerrainSunDir threw:", e);
+      }
     }
   }
-  // Phase 7.6 — lighting tick AFTER cell visibility so it reads the
-  // freshly-flipped indoor/outdoor state on the same frame. Wraps in
-  // try/catch so a thrown isCurrentCellIndoor() never kills the tick.
+  // ── CRITICAL #5 — Phase 7.6 lighting tick AFTER cell visibility so it ─
+  // reads the freshly-flipped indoor/outdoor state on the same frame. This
+  // is indoor/outdoor material state (not the deferrable SKY group) and is
+  // NEVER budget-gated. Wraps in try/catch so a thrown isCurrentCellIndoor()
+  // never kills the tick.
   try {
     tickLightingForCellState(scene3d, sessionHandle);
   } catch (e) {
@@ -1021,7 +1221,11 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // touching `.visible` so the two composers don't fight. No-op when
   // the controller hasn't been wired (e.g. setupSceneLighting was
   // skipped) or when `getSkyState()` returns null (pre-populator).
-  if (scene3d?.skyLightingController) {
+  //
+  // RP3 — phases #7-#12 (this block through tickWeatherState) gate on the
+  // single `_rp3RunSky` decision computed above so the whole sky stack
+  // throttles to ~10 Hz as one unit (it shares `_lastState`).
+  if (_rp3RunSky && scene3d?.skyLightingController) {
     try {
       scene3d.skyLightingController.tick(dt);
     } catch (e) {
@@ -1052,7 +1256,7 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // getSkyState() call. The probe tracks the active camera so its
   // SH-irradiance computation reflects the camera's altitude in the
   // atmosphere.
-  if (scene3d?.atmosphereLights) {
+  if (_rp3RunSky && scene3d?.atmosphereLights) {
     try {
       const state = scene3d.skyLightingController?._lastState ?? null;
       const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
@@ -1069,7 +1273,7 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // physical lights so sun position in the sky matches the sunlight
   // direction. Stars are a fixed celestial backdrop (no per-frame
   // motion); only sun direction needs updating.
-  if (scene3d?.atmosphereSky) {
+  if (_rp3RunSky && scene3d?.atmosphereSky) {
     try {
       const state = scene3d.skyLightingController?._lastState ?? null;
       scene3d.atmosphereSky.tick(state);
@@ -1088,7 +1292,7 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // same frame. Camera-parented; reads `cameraSwitcher.activeCamera`
   // (Phase 7.5) so the dome translates with whichever camera the
   // user has toggled to. No-op pre-construction or pre-populate.
-  if (scene3d?.skyDome) {
+  if (_rp3RunSky && scene3d?.skyDome) {
     try {
       const activeCam =
         scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
@@ -1107,16 +1311,23 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // current. Derives the DayGroup weather profile + is_storm from the real
   // SkyObject snapshots (W4), drives weather_state, the precip manager
   // (W2/W5), and the W1 billboard host. Fully fail-soft.
-  try {
-    tickWeatherState(scene3d, sessionHandle);
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    if (!scene3d._weatherStateTickWarned) {
-      scene3d._weatherStateTickWarned = true;
-      console.warn("[w3] tickWeatherState threw:", e);
+  //
+  // RP3 — #12, last of the SKY group; gated on the same `_rp3RunSky`
+  // decision so weather throttles in lockstep with the snapshot it reads.
+  if (_rp3RunSky) {
+    try {
+      tickWeatherState(scene3d, sessionHandle);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._weatherStateTickWarned) {
+        scene3d._weatherStateTickWarned = true;
+        console.warn("[w3] tickWeatherState threw:", e);
+      }
     }
   }
-  // Phase 7.5 — camera tick BEFORE entity tick. The switcher reads
+  // ── CRITICAL #13 — Phase 7.5 camera tick BEFORE entity tick. ─────────
+  // READS WASD INPUT + dispatches setMovementInput to wasm; stalling this
+  // is visible input lag, so RP3 NEVER budget-gates it. The switcher reads
   // last-frame entity poses for follow framing AND dispatches
   // setMovementInput (which the wasm side consumes asynchronously, so
   // the dispatch order vs the entity tick has no race).
@@ -1134,6 +1345,10 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // Render-completeness audit (2026-05-29) — advance animated SurfaceTextures
   // (water/lava/effect frame cycling). No-op until an animated surface loads.
   scene3d?.materialCache?.tickAnimatedSurfaces?.(dt);
+  // ── CRITICAL #15 mixer + #16 entity-drain + #19 local pose. ──────────
+  // All unconditional — RP3 NEVER budget-gates this block: #15 advances
+  // animation, #16 applies server KIND_POSITION snaps, #19 drives the
+  // camera-follow rig. Skipping any of these would desync the world.
   if (scene3d?.entityManager) {
     scene3d.entityManager.tick(dt);
     drainEntityEvents3D(scene3d, sessionHandle);
@@ -1161,16 +1376,26 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
-  // Follow-on #10 (3D port state doc) — DOM-projected nameplate overlay
-  // tick. Runs AFTER entity tick so the per-rAF mixer.update has
-  // already advanced the rig poses for THIS frame — the nameplate
-  // projection then sees current-frame world positions, not stale ones.
-  // AFTER cameraSwitcher.tick (above) so the camera's matrixWorldInverse
-  // + projectionMatrix reflect the camera position we're about to
-  // render with. Wrapped in try/catch so a thrown projection / DOM
-  // write never kills the tick (one-time warn matches the
-  // cameraSwitcher.tick guard above).
-  if (scene3d?.nameplateLayer) {
+  // ── DEFERRABLE #20 (group NAME) — DOM-projected nameplate overlay. ───
+  // The single biggest deferrable (5-50 ms): a full project-every-entity +
+  // DOM-write pass. Runs LAST, after every CRITICAL phase has already had
+  // its frame, so deferring it can only ever cost label freshness — never
+  // input, entity drain, or camera follow. RP3 budget-gates it with NO
+  // throttle (it's "due" every frame): when the frame is cheap it runs
+  // every frame (crisp labels); when the frame is already over budget it
+  // is deferred, but force-runs after RP3_MAX_DEFER_FRAMES consecutive
+  // skips (~50 ms @60fps) so labels never freeze. This naturally lands at
+  // "every 2nd/3rd frame" under sustained load. `?frameBudget=off` →
+  // _rp3ShouldRun short-circuits to true → runs every frame (pre-RP3).
+  //
+  // It still runs AFTER entity tick so the per-rAF mixer.update has
+  // advanced the rig poses for THIS frame — the projection sees
+  // current-frame world positions — and AFTER cameraSwitcher.tick so the
+  // camera matrices reflect the position we're about to render with.
+  // Wrapped in try/catch so a thrown projection / DOM write never kills
+  // the tick (one-time warn matches the cameraSwitcher.tick guard above).
+  const _rp3RunName = !_rp3 || _rp3ShouldRun(_rp3, RP3_G_NAME, _rp3TsSec, _rp3NowMs());
+  if (_rp3RunName && scene3d?.nameplateLayer) {
     try {
       const activeCam =
         scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
