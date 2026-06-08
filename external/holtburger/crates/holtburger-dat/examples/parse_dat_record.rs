@@ -26,9 +26,10 @@
 
 use holtburger_dat::DatDatabase;
 use holtburger_dat::file_type::{
-    Animation, CharGen, ChatPoseTable, EnvCell, Environment, GfxObj, MotionTable,
-    Palette, ParticleEmitter, PhysicsScript, PhysicsScriptTable, Region, Scene, SetupModel,
-    SkillTable, SoundTable, SpellTable, Surface, SurfaceTexture, Texture, Wave, XpTable,
+    Animation, BadData, CharGen, ChatPoseTable, EnvCell, Environment, GfxObj, Iteration,
+    MotionTable, NameFilterTable, Palette, ParticleEmitter, PhysicsScript, PhysicsScriptTable,
+    QualityFilter, Region, RenderTexture, Scene, SetupModel, SkillTable, SoundTable, SpellTable,
+    Surface, SurfaceTexture, TabooTable, Texture, Wave, XpTable,
 };
 use holtburger_dat::landblock::{CellLandblock, LandblockInfo};
 use serde::Serialize;
@@ -208,7 +209,15 @@ fn dispatch_parse(id: u32, bytes: &[u8], dat_path: &str) -> ParseOutcome {
         };
     }
     if id == 0xFFFF0001 {
-        return ParseOutcome::unsupported("Iteration");
+        let mut c = std::io::Cursor::new(bytes);
+        return match Iteration::read(&mut c) {
+            Ok(v) => ParseOutcome::ok("Iteration", "holtburger_dat::file_type::Iteration", &v),
+            Err(e) => ParseOutcome::err(
+                "Iteration",
+                "holtburger_dat::file_type::Iteration",
+                format!("parse: {e}"),
+            ),
+        };
     }
 
     // EnvCell indoor cells: suffix is in [0x0001..=0xFFFD]. They live in
@@ -318,6 +327,10 @@ fn dispatch_parse(id: u32, bytes: &[u8], dat_path: &str) -> ParseOutcome {
                 Err(e) => ParseOutcome::err("Region", "holtburger_dat::file_type::Region", format!("parse: {e}")),
             }
         }
+        0x15 => match RenderTexture::unpack(bytes) {
+            Ok(v) => ParseOutcome::ok("RenderTexture", "holtburger_dat::file_type::RenderTexture", &v),
+            Err(e) => ParseOutcome::err("RenderTexture", "holtburger_dat::file_type::RenderTexture", format!("parse: {e}")),
+        },
         0x20 => match SoundTable::unpack(bytes) {
             Ok(v) => ParseOutcome::ok("SoundTable", "holtburger_dat::file_type::SoundTable", &v),
             Err(e) => ParseOutcome::err("SoundTable", "holtburger_dat::file_type::SoundTable", format!("parse: {e}")),
@@ -359,6 +372,7 @@ fn is_portal_prefix(prefix: u8) -> bool {
             | 0x10
             | 0x12
             | 0x13
+            | 0x15
             | 0x1F
             | 0x20
             | 0x30
@@ -409,6 +423,24 @@ fn parse_table_record(id: u32, bytes: &[u8]) -> ParseOutcome {
                 Err(e) => ParseOutcome::err("SpellTable", "holtburger_dat::file_type::SpellTable", format!("parse: {e}")),
             }
         }
+        0x0E00001A => match BadData::unpack(bytes) {
+            Ok(v) => ParseOutcome::ok("BadData", "holtburger_dat::file_type::BadData", &v),
+            Err(e) => ParseOutcome::err("BadData", "holtburger_dat::file_type::BadData", format!("parse: {e}")),
+        },
+        0x0E00001E => match TabooTable::unpack(bytes) {
+            Ok(v) => ParseOutcome::ok("TabooTable", "holtburger_dat::file_type::TabooTable", &v),
+            Err(e) => ParseOutcome::err("TabooTable", "holtburger_dat::file_type::TabooTable", format!("parse: {e}")),
+        },
+        0x0E000020 => match NameFilterTable::unpack(bytes) {
+            Ok(v) => ParseOutcome::ok("NameFilterTable", "holtburger_dat::file_type::NameFilterTable", &v),
+            Err(e) => ParseOutcome::err("NameFilterTable", "holtburger_dat::file_type::NameFilterTable", format!("parse: {e}")),
+        },
+        // QualityFilter records share the 0x0E01xxxx high half (e.g.
+        // 0x0E010001 / 0x0E010002) — match on the prefix, not a single ID.
+        _ if (id & 0xFFFF_0000) == 0x0E01_0000 => match QualityFilter::unpack(bytes) {
+            Ok(v) => ParseOutcome::ok("QualityFilter", "holtburger_dat::file_type::QualityFilter", &v),
+            Err(e) => ParseOutcome::err("QualityFilter", "holtburger_dat::file_type::QualityFilter", format!("parse: {e}")),
+        },
         _ => ParseOutcome::unsupported(&format!("Table_0x{:08X}", id)),
     }
 }

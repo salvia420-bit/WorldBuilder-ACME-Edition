@@ -1,5 +1,6 @@
 pub mod action_map;
 pub mod animation;
+pub mod bad_data;
 pub mod char_gen;
 pub mod chat_pose_table;
 pub mod clothing;
@@ -15,6 +16,7 @@ pub mod environment;
 pub mod font;
 pub mod game_time;
 pub mod gfx_obj;
+pub mod iteration;
 pub mod keymap;
 pub mod language_string;
 pub mod layout;
@@ -22,13 +24,16 @@ pub mod master_property;
 pub mod media_desc;
 pub mod motion_kinematics;
 pub mod motion_table;
+pub mod name_filter_table;
 pub mod object_desc;
 pub mod palette;
 pub mod palette_set;
 pub mod particle_emitter;
 pub mod physics_script;
 pub mod physics_script_table;
+pub mod quality_filter;
 pub mod region;
+pub mod render_texture;
 pub mod scene;
 pub mod setup_model;
 pub mod skill_table;
@@ -39,12 +44,14 @@ pub mod state_desc;
 pub mod string_table;
 pub mod surface;
 pub mod surface_texture;
+pub mod taboo_table;
 pub mod texture;
 pub mod wave;
 pub mod xp_table;
 
 pub use action_map::{ActionMap, ActionMapValue, InputMapConflictsValue, UserBindingValue};
 pub use animation::Animation;
+pub use bad_data::BadData;
 pub use char_gen::CharGen;
 pub use chat_pose_table::{ChatEmoteData, ChatPoseTable};
 pub use clothing::{
@@ -62,6 +69,7 @@ pub use environment::{CellStruct, Environment};
 pub use font::{Font, FontCharDesc};
 pub use game_time::{GameTime, Season, TimeOfDay};
 pub use gfx_obj::GfxObj;
+pub use iteration::Iteration;
 pub use keymap::{CInputMap, ControlSpecification, DeviceKeyMapEntry, KeyMap, QualifiedControl};
 pub use language_string::LanguageString;
 pub use layout::{ElementDesc, LayoutDesc};
@@ -76,6 +84,7 @@ pub use motion_kinematics::{MotionKinematics, MotionKinematicsTable};
 pub use motion_table::{
     AnimData, MotionCommandKinematics, MotionData, MotionTable, MotionTableMovementProfile,
 };
+pub use name_filter_table::{NameFilterLanguageData, NameFilterTable};
 pub use object_desc::ObjectDesc;
 pub use palette::Palette;
 pub use palette_set::PaletteSet;
@@ -84,6 +93,7 @@ pub use physics_script::{PhysicsScript, PhysicsScriptData};
 pub use physics_script_table::{
     PhysicsScriptTable, PhysicsScriptTableData, PhysicsScriptTableEntry,
 };
+pub use quality_filter::QualityFilter;
 pub use region::{
     DayGroup, LandDefs, Region, RegionMisc, SceneDesc, SkyDesc, SkyObject, SkyObjectReplace,
     SkyTimeOfDay, SoundDesc, TerrainDesc,
@@ -96,8 +106,10 @@ pub use spell_components_table::{SpellComponent, SpellComponentsTable};
 pub use spell_table::SpellTable;
 pub use state_desc::StateDesc;
 pub use string_table::{StringTable, StringTableString};
+pub use render_texture::RenderTexture;
 pub use surface::{Surface, TextureRefs as SurfaceTextureRefs};
 pub use surface_texture::SurfaceTexture;
+pub use taboo_table::{TabooTable, TabooTableEntry};
 pub use texture::{SurfacePixelFormat, Texture, TextureDecodeError};
 pub use wave::{PcmFormat, Wave, WAVEFORMATEX_SIZE};
 pub use xp_table::XpTable;
