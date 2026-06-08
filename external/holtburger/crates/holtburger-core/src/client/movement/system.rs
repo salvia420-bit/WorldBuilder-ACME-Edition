@@ -2265,19 +2265,33 @@ impl MovementSystem {
         // the server-forced height and undo the floor snap (retail re-
         // derives the contact plane after `InterpolateTo`). So when
         // grounded we keep the snapped Z and only adopt the interpolated
-        // XY/heading. Airborne the interpolator owns the full pose.
-        let snapped_z = pose.coords.z;
-        let pose = match world
-            .scene
-            .step_force_position_interpolation(body_id, dt_s, max_speed, on_contact)
-        {
-            InterpStep::Progressed { mut pose } | InterpStep::Completed { mut pose } => {
-                if on_contact {
+        // XY/heading.
+        //
+        // While AIRBORNE the integrator owns the full pose: `pose` already
+        // holds this tick's freshly-integrated ballistic arc. We must NOT
+        // step/adopt the force-position interpolator here — its per-frame
+        // step reads the STALE start-of-tick `body.pose` (the runtime
+        // write-back happens below at `set_local_player_runtime_pose`), and
+        // its `!on_contact` early-out (ACE InterpolationManager no-contact
+        // path) returns that stale pose verbatim. Adopting it would discard
+        // the gravity integration and FREEZE the jump arc for the whole
+        // airborne window (the interp also never completes while
+        // !on_contact). The installed interpolation stays armed and resumes
+        // easing on touchdown. (See the Wave-1 adversarial review finding.)
+        let pose = if on_contact {
+            let snapped_z = pose.coords.z;
+            match world.scene.step_force_position_interpolation(
+                body_id, dt_s, max_speed, on_contact,
+            ) {
+                InterpStep::Progressed { mut pose }
+                | InterpStep::Completed { mut pose } => {
                     pose.coords.z = snapped_z;
+                    pose
                 }
-                pose
+                _ => pose,
             }
-            _ => pose,
+        } else {
+            pose
         };
 
         let _ = world.set_local_player_runtime_pose(pose);

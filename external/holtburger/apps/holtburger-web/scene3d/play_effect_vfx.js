@@ -1400,6 +1400,13 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
     if (startDelayMs > maxStartTimeMs) maxStartTimeMs = startDelayMs;
     pendingSpawnCount += 1;
     setTimeout(() => {
+      // Wave-1 review (RP6 cap): if this group was FIFO-evicted under
+      // concurrent-emitter cap pressure during the StartTime delay, do
+      // NOT spawn the late emitter — the eviction's force-destroy already
+      // ran and a late spawn would escape the cap. (`_rp6Group` is
+      // declared below and is initialized by the time this async
+      // callback fires.)
+      if (_rp6Group._evicted) return;
       // The target may have despawned during the StartTime delay; if
       // so, skip the spawn (matches the H2 arms' entityMap guard).
       if (!em.entityMap?.has?.(targetGuid >>> 0)) return;
@@ -1411,6 +1418,14 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
       })
         .then((emitterId) => {
           if (emitterId !== 0) {
+            // Wave-1 review: a despawn that raced this addEmitter resolve
+            // already tore down (and dropped) this guid's per-emitter
+            // bucket; re-seeding it would strand a live emitter the
+            // entity-remove path can no longer reap. Destroy it now.
+            if (!em.entityMap?.has?.(targetGuid >>> 0)) {
+              try { wm.destroyParticleEmitter(emitterId); } catch (_) {}
+              return;
+            }
             spawnedEmitterIds.push(emitterId);
             // Keep the per-guid tracking honest as late hooks land so
             // entity-remove can tear them down (the synchronous block

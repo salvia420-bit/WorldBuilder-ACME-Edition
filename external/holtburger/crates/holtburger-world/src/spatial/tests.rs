@@ -797,6 +797,60 @@ fn force_position_interpolation_stepper_advances_when_flag_on() {
     assert!(after < before, "stepper eases the pose toward the target");
 }
 
+/// Wave-1 adversarial-review guard (B1+B2/B3 airborne interaction): while
+/// AIRBORNE (`on_contact = false`) the per-frame stepper performs ACE's
+/// no-contact early-out — it returns the working pose UNCHANGED and the
+/// interpolation does NOT complete (stays armed). The core integrator
+/// therefore must NOT adopt this result mid-jump: doing so would replace
+/// the freshly-integrated ballistic pose with the stale working pose and
+/// FREEZE the jump arc. The integrator keeps its ballistic pose while
+/// airborne and lets the installed interpolation resume on touchdown.
+#[test]
+fn force_position_interpolation_stepper_is_inert_while_airborne() {
+    let mut scene = SpatialScene::new();
+    let now = Instant::now();
+    let body_id = SpatialBodyId::LocalPlayer(Guid(0x5000_00BB));
+    let lb = Guid(0x00A9_B400 & 0xFFFF_0000);
+    let make = |x: f32, y: f32| WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(x, y, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+
+    scene.register_body(SpatialBody::new(body_id, make(50.0, 50.0), now));
+    let mut working = scene.body(body_id).unwrap().clone();
+    working.pose = make(53.0, 50.0); // 3 m drift
+    working.sampling.mode = SpatialSampleMode::SimulatingVelocity;
+    scene.update_body(working);
+
+    // Install the interpolator via a sub-blip reconcile.
+    let forced = make(50.0, 50.0);
+    scene.reconcile_authoritative_body(
+        body_id,
+        forced,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+    assert!(scene.body(body_id).unwrap().force_position_interp.is_interpolating());
+
+    let before = scene.body(body_id).unwrap().pose;
+    // Step with `on_contact = false` (airborne): the no-contact early-out
+    // returns the working pose verbatim without advancing or completing.
+    let out = scene.step_force_position_interpolation(body_id, 0.016, 36.0, false);
+    assert!(matches!(out, InterpStep::Progressed { .. }));
+    assert_eq!(
+        scene.body(body_id).unwrap().pose,
+        before,
+        "airborne step must leave the working pose untouched (no freeze-source)"
+    );
+    assert!(
+        scene.body(body_id).unwrap().force_position_interp.is_interpolating(),
+        "interpolation stays armed while airborne and resumes on touchdown"
+    );
+}
+
 /// The standalone retail interpolator can be installed and stepped
 /// directly regardless of the scene flag — this exercises the full
 /// `InterpolateTo` (install) → per-frame `adjust_offset` (step) →
