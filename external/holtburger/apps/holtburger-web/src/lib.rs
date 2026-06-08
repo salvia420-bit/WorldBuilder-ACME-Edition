@@ -1670,6 +1670,19 @@ mod scenery_fetch {
             });
         }
 
+        // E5 — determinism freeze-hash gate (ADVISORY). Recompute the
+        // FNV-1a/64 fingerprint over the placements we just loaded and
+        // compare it to the `placements-hash` line the bake CLI wrote
+        // into the per-LB sidecar. A mismatch means the shipped JSONL
+        // diverged from what a fresh bake of the same DAT inputs would
+        // produce ("edited the bake math but forgot to re-bake"). We
+        // WARN and proceed — NEVER error, NEVER re-derive. The sha256
+        // (line 1 of the sidecar) already guards transit/storage; this
+        // guards bake-logic drift only. Best-effort: if the sidecar is
+        // missing or carries no `placements-hash` line (pre-E5 bake) we
+        // stay silent.
+        maybe_gate_freeze_hash(base_url, lb_hex.as_str(), &out).await;
+
         // Insert into cache. Clone is shallow (CachedRecord is Copy)
         // but rustc still needs the explicit `.clone()` for the
         // signature.
@@ -1677,13 +1690,115 @@ mod scenery_fetch {
         Ok(out)
     }
 
+    /// Canonicalise one f32 into the bits the `*.scenery.jsonl` wire
+    /// carries — the wasm twin of
+    /// `holtburger_scenery_bake::wire_f32_bits`. The bake serialises
+    /// every float through `{:.6}` (with `-0.0 → 0.0`), which is LOSSY
+    /// for f32, so the bake-side `placements_fingerprint` hashes the
+    /// post-truncation bits, NOT the full-precision in-memory f32. We
+    /// MUST hash the same representation or the advisory gate false-
+    /// positives on essentially every non-axis-aligned placement (e.g.
+    /// a `0.7071068` quaternion component round-trips to different bits).
+    ///
+    /// The values we receive in `CachedRecord` were already parsed from
+    /// the `{:.6}` JSONL text, so re-applying the same `{:.6}` rule here
+    /// is idempotent — but doing it explicitly makes both sides provably
+    /// symmetric regardless of how the record was sourced, and matches
+    /// the bake-side helper rule-for-rule.
+    fn wire_f32_bits(v: f32) -> u32 {
+        let v = if v == 0.0 { 0.0 } else { v };
+        let truncated: f32 = format!("{v:.6}").parse().unwrap_or(v);
+        truncated.to_bits()
+    }
+
+    /// FNV-1a/64 over the FROZEN explicit placement stream — the wasm
+    /// twin of `holtburger_scenery_bake::placements_fingerprint`. Folds
+    /// the SAME twelve wire fields, in the SAME order, with the SAME
+    /// constants, so the value matches the `placements-hash` the bake
+    /// CLI wrote bit-for-bit. The nine float fields are folded through
+    /// [`wire_f32_bits`] (the post-`{:.6}` bits the JSONL carries), the
+    /// three `u32` fields as-is — exactly the bake side's rule. Identity
+    /// (E2) is intentionally excluded — the JSONL doesn't carry it, so
+    /// neither side can hash it. Kept inline (rather than depending on
+    /// the bake crate, which pulls in the whole DAT stack) because the
+    /// logic is a trivially-auditable FNV-1a fold; the
+    /// `placements_fingerprint_is_stable` golden test pins the bake side
+    /// and this WARN is advisory either way.
+    fn placements_freeze_hash(records: &[CachedRecord]) -> u64 {
+        const FNV1A_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV1A_PRIME: u64 = 0x0000_0100_0000_01b3;
+        let mut h = FNV1A_OFFSET;
+        for r in records {
+            for word in [
+                r.obj_id,
+                wire_f32_bits(r.x),
+                wire_f32_bits(r.y),
+                wire_f32_bits(r.z),
+                wire_f32_bits(r.qw),
+                wire_f32_bits(r.qx),
+                wire_f32_bits(r.qy),
+                wire_f32_bits(r.qz),
+                wire_f32_bits(r.scale),
+                r.source_cell_x,
+                r.source_cell_y,
+                r.source_obj_idx,
+            ] {
+                for byte in word.to_le_bytes() {
+                    h ^= byte as u64;
+                    h = h.wrapping_mul(FNV1A_PRIME);
+                }
+            }
+        }
+        h
+    }
+
+    /// Advisory E5 freeze-hash gate for one LB. Fetches the per-LB
+    /// sidecar, extracts the `placements-hash\t<hex>` line (line 2; the
+    /// bake CLI writes sha256 on line 1, this hash on line 2), and WARNs
+    /// if the recomputed fingerprint diverges. Silent on any failure
+    /// (missing sidecar, pre-E5 bake without the line, unparseable hex)
+    /// — the gate is advisory and must never gate the render path.
+    async fn maybe_gate_freeze_hash(base_url: &str, lb_hex: &str, records: &[CachedRecord]) {
+        let url = format!("{base_url}{lb_hex}.scenery.jsonl.sha256");
+        let bytes = match holtburger_resource_http::fetch_bytes(&url).await {
+            Ok(b) => b,
+            Err(_) => return, // missing sidecar / 404 → nothing to gate against
+        };
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            return;
+        };
+        // Find the `placements-hash\t<hex>` line. Pre-E5 sidecars (only
+        // a sha256 line) simply don't have it → silent no-op.
+        let Some(expected_hex) = text.lines().find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("placements-hash")
+                .map(|rest| rest.trim())
+                .filter(|h| !h.is_empty())
+        }) else {
+            return;
+        };
+        let Ok(expected) = u64::from_str_radix(expected_hex, 16) else {
+            return;
+        };
+        let got = placements_freeze_hash(records);
+        if got != expected {
+            super::console_log_str(&format!(
+                "fetch_landblock_scenery: WARN {lb_hex}: scenery-bake output diverged \
+                 — manual re-bake may be required (placements-hash sidecar={expected:016x}, \
+                 recomputed={got:016x}, {} placements). Advisory only; rendering shipped \
+                 placements as-is.",
+                records.len()
+            ));
+        }
+    }
+
     /// One-shot: fetch + log `bake-source.sha256` next to the JSONL
     /// files. Logged at info level (`console_log_str` via the
     /// `extern "C"` glue). On failure (404, parse error, whatever)
-    /// we log a debug line and move on — the optional verification
-    /// gate is a Phase E concern; here we only need the manifest to
-    /// land in the page log for human inspection. Never gates
-    /// `fetch_landblock_scenery`.
+    /// we log a debug line and move on — this logs the INPUT-DAT
+    /// manifest for human inspection; the E5 per-LB determinism
+    /// freeze-hash gate (advisory WARN) lives in `fetch_one_lb` via
+    /// `maybe_gate_freeze_hash`. Never gates `fetch_landblock_scenery`.
     pub async fn maybe_log_sha256(base_url: &str) {
         let already = SHA_LOGGED.with(|cell| {
             let was = *cell.borrow();
@@ -1706,7 +1821,7 @@ mod scenery_fetch {
             Err(e) => {
                 super::console_log_str(&format!(
                     "fetch_landblock_scenery: bake-source.sha256 fetch failed ({e}); \
-                     proceeding (Phase E will gate)"
+                     proceeding (per-LB E5 freeze-hash gate still applies in fetch_one_lb)"
                 ));
             }
         }

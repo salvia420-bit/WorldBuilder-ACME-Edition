@@ -220,6 +220,108 @@ pub struct ScenicPlacement {
     pub identity: GeneratedSceneryIdentity,
 }
 
+/// FNV-1a/64 offset basis. Seed for [`fnv1a_fold`].
+pub const FNV1A_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+/// FNV-1a/64 prime multiplier. Used by [`fnv1a_fold`].
+pub const FNV1A_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Fold one `u32` word (little-endian bytes) into a running FNV-1a/64
+/// hash. The single primitive both the bake-side sidecar emitter and
+/// the client-side load-time gate fold through, so a placement's
+/// fingerprint is identical bit-for-bit on either side regardless of
+/// platform (no `DefaultHasher`, no external dep). Seed with
+/// [`FNV1A_OFFSET`].
+#[inline]
+pub fn fnv1a_fold(mut h: u64, word: u32) -> u64 {
+    for byte in word.to_le_bytes() {
+        h ^= byte as u64;
+        h = h.wrapping_mul(FNV1A_PRIME);
+    }
+    h
+}
+
+/// Canonicalise one f32 into the **exact value the `*.scenery.jsonl`
+/// wire carries**, and return its IEEE-754 bits. This is the single
+/// load-bearing rule that makes the E5 freeze hash agree across the
+/// bake/client boundary.
+///
+/// The bake serialises every float through `scenery-bake.rs`'s
+/// `format_f32_six_sig` — `{:.6}` with a `-0.0 → 0.0` normalisation —
+/// which is **lossy** for f32 (round-tripping an arbitrary f32 needs up
+/// to 9 significant decimal digits, not 6). The client only ever sees
+/// the truncated text and parses it back into a *different* f32 bit
+/// pattern (e.g. a `0.7071068` quaternion component round-trips
+/// `0x3f3504f4 → "0.707107" → 0x3f3504f7`). So the fingerprint MUST
+/// hash the post-truncation value, not the raw in-memory f32, or the
+/// advisory gate false-positives on essentially every non-axis-aligned
+/// placement.
+///
+/// This helper formats with the identical `{:.6}` + `-0.0 → 0.0` rule
+/// and reparses, yielding the same bits the client reconstructs from
+/// the JSONL. It is **idempotent**: applying it to an already-reparsed
+/// value is a no-op, so the client can safely canonicalise its parsed
+/// fields with the same rule.
+#[inline]
+pub fn wire_f32_bits(v: f32) -> u32 {
+    // Match `format_f32_six_sig`: collapse both zero encodings first so
+    // a signed -0.0 hashes identically to +0.0.
+    let v = if v == 0.0 { 0.0 } else { v };
+    // `{:.6}` is locale-free in Rust (always `.`), so this is byte-
+    // stable across machines, and reparsing recovers exactly the f32
+    // the client gets from `serde_json`.
+    let truncated: f32 = format!("{v:.6}").parse().unwrap_or(v);
+    truncated.to_bits()
+}
+
+/// Deterministic FNV-1a/64 fingerprint over the FROZEN, explicit
+/// placement stream — the **E5 determinism freeze hash**.
+///
+/// Hashes only the twelve wire-serialised fields of each
+/// [`ScenicPlacement`] (the same fields the per-LB `*.scenery.jsonl`
+/// carries: `obj_id`, the `(x, y, z)` coordinates, the `(qw, qx, qy,
+/// qz)` quaternion, `scale`, and the `source_*` attribution words). The
+/// three `u32` words (`obj_id`, `source_*`) round-trip the JSONL
+/// exactly and are folded as-is. The nine float words are folded
+/// through [`wire_f32_bits`] — the post-`{:.6}`-truncation bits the
+/// JSONL actually carries — NOT the full-precision in-memory f32,
+/// because the client can only reconstruct the truncated value (see
+/// [`wire_f32_bits`] for why hashing the raw f32 false-positives the
+/// gate). It deliberately does **not** fold the
+/// [`GeneratedSceneryIdentity`] — that key is recomputed from frozen
+/// content on load but is not serialised into the JSONL, so the
+/// client could not reproduce an identity-inclusive hash. Hashing the
+/// shared wire fields lets the bake CLI emit a `placements-hash` line
+/// in the per-LB sidecar and the client recompute the SAME value over
+/// the loaded placement array.
+///
+/// This fingerprint is **advisory**: a mismatch means the shipped
+/// `*.scenery.jsonl` diverged from what a fresh bake of the same DAT
+/// inputs would produce (the "edited noise.rs but forgot to re-bake"
+/// trap). It is hashed over the frozen explicit placements only and
+/// MUST NEVER be used to trigger a procedural re-derive on load.
+pub fn placements_fingerprint(placements: &[ScenicPlacement]) -> u64 {
+    let mut h = FNV1A_OFFSET;
+    for p in placements {
+        for word in [
+            p.obj_id,
+            wire_f32_bits(p.x),
+            wire_f32_bits(p.y),
+            wire_f32_bits(p.z),
+            wire_f32_bits(p.qw),
+            wire_f32_bits(p.qx),
+            wire_f32_bits(p.qy),
+            wire_f32_bits(p.qz),
+            wire_f32_bits(p.scale),
+            p.source_cell_x,
+            p.source_cell_y,
+            p.source_obj_idx,
+        ] {
+            h = fnv1a_fold(h, word);
+        }
+    }
+    h
+}
+
 /// Per-candidate placement transform parameters passed to the bake's
 /// AABB-building closure. The closure is expected to load the mesh
 /// for `obj_id`, run each vertex through

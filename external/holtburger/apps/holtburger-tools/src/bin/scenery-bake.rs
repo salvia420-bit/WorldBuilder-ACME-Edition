@@ -39,7 +39,8 @@ use holtburger_dat::DatDatabase;
 use holtburger_dat::file_type::{GfxObj, Region, Scene, SetupModel};
 use holtburger_dat::landblock::{CellLandblock, LandblockInfo};
 use holtburger_scenery_bake::{
-    Aabb2D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock, transform_mesh_to_aabb,
+    Aabb2D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock, placements_fingerprint,
+    transform_mesh_to_aabb,
 };
 use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
@@ -750,7 +751,18 @@ fn bake_one(
     let sidecar_path = out_dir.join(format!("0x{lb_key:04X}.scenery.jsonl.sha256"));
     let mut sf = File::create(&sidecar_path)
         .with_context(|| format!("create {}", sidecar_path.display()))?;
+    // E5 — determinism freeze hash. FNV-1a/64 over the FROZEN explicit
+    // placement stream (the twelve wire fields, the same ones the JSONL
+    // carries). The client recomputes this over the loaded placements
+    // and WARNs (never errors) on mismatch — an advisory "bake math
+    // changed but nobody re-baked" guard. The sha256 above guards
+    // transit/storage; this guards bake-logic drift. It is the FIRST
+    // whitespace token on line 1 (sha256) that the JS `verifyManifests`
+    // sidecar reader consumes, so the `placements-hash` line below is
+    // purely additive and ignored by older readers.
+    let fp = placements_fingerprint(&placements);
     writeln!(sf, "{sha}")?;
+    writeln!(sf, "placements-hash\t{fp:016x}")?;
     sf.flush()?;
 
     debug!(
@@ -1158,5 +1170,170 @@ mod tests {
         write_placement_line(&mut buf, &p, 0).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("\"default_script_id\":\"0x00000000\""));
+    }
+
+    /// Minimal client-side mirror of the wasm `ScenicPlacementJsonRaw`
+    /// reader: the twelve wire fields parsed straight out of the JSONL.
+    /// `obj_id` / `source_*` are u32, the nine floats land in f32 — i.e.
+    /// the EXACT representation `fetch_one_lb` reconstructs from the
+    /// shipped (lossy `{:.6}`) text.
+    #[derive(serde::Deserialize)]
+    struct WireRecord {
+        obj_id: String,
+        x: f32,
+        y: f32,
+        z: f32,
+        qw: f32,
+        qx: f32,
+        qy: f32,
+        qz: f32,
+        scale: f32,
+        source_cell_x: u32,
+        source_cell_y: u32,
+        source_obj_idx: u32,
+    }
+
+    /// FNV-1a/64 over the wire fields of the CLIENT-PARSED records — the
+    /// hand-rolled twin of `holtburger-web`'s `placements_freeze_hash`,
+    /// folding each float's bits exactly as the client receives them
+    /// (already truncated through `{:.6}`). No further canonicalisation:
+    /// this hashes the literal reparsed f32 the renderer would use, so a
+    /// match against the bake-side `placements_fingerprint` proves both
+    /// sides agree on the post-wire value.
+    fn client_freeze_hash(records: &[WireRecord]) -> u64 {
+        const FNV1A_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV1A_PRIME: u64 = 0x0000_0100_0000_01b3;
+        let mut h = FNV1A_OFFSET;
+        for r in records {
+            let obj_id = u32::from_str_radix(r.obj_id.trim_start_matches("0x"), 16).unwrap();
+            for word in [
+                obj_id,
+                r.x.to_bits(),
+                r.y.to_bits(),
+                r.z.to_bits(),
+                r.qw.to_bits(),
+                r.qx.to_bits(),
+                r.qy.to_bits(),
+                r.qz.to_bits(),
+                r.scale.to_bits(),
+                r.source_cell_x,
+                r.source_cell_y,
+                r.source_obj_idx,
+            ] {
+                for byte in word.to_le_bytes() {
+                    h ^= byte as u64;
+                    h = h.wrapping_mul(FNV1A_PRIME);
+                }
+            }
+        }
+        h
+    }
+
+    /// E5 freeze-hash round-trip — through the REAL wire path. We start
+    /// from full-precision in-memory placements, serialise them with
+    /// `write_placement_line` (the production `{:.6}` JSONL emitter),
+    /// compute the bake-side `placements_fingerprint` for the sidecar,
+    /// then REPARSE the JSONL back into f32 (exactly as the wasm client
+    /// does) and recompute the client-side fold. The two MUST match.
+    ///
+    /// This is the regression guard for the precision-mismatch bug: the
+    /// fixture deliberately uses a non-6-decimal-exact quaternion
+    /// component (`qw = cos(40°/2) = 0.93969...`, whose f32 bits do NOT
+    /// survive a `{:.6}` round-trip) so that hashing the raw in-memory
+    /// f32 on the bake side would FALSE-POSITIVE here. Because
+    /// `placements_fingerprint` folds the post-`{:.6}` wire bits, the
+    /// bake-side hash equals what the client reconstructs.
+    ///
+    /// We also verify the two-line sidecar shape (bare sha256 first
+    /// token, then `placements-hash\t<hex>`) the JS `verifyManifests`
+    /// reader and the wasm gate depend on, and that mutating ONE
+    /// coordinate makes the recomputed hash diverge (the advisory WARN).
+    #[test]
+    fn freeze_hash_sidecar_round_trips_and_detects_mutation() {
+        // Non-axis-aligned yaw so qw/qz are NOT 6-decimal-exact f32 —
+        // the case the precision bug used to silently break.
+        let rad = 40.0_f32.to_radians();
+        let half = rad * 0.5;
+        let qw = (half as f64).cos() as f32;
+        let qz = (half as f64).sin() as f32;
+        let mk = |x: f32| ScenicPlacement {
+            obj_id: 0x0100_0042,
+            x,
+            // 7.123457 is not exactly representable and rounds under
+            // `{:.6}` — exercises the lossy path on a coordinate too.
+            y: 7.1234567,
+            z: 3.25,
+            qw,
+            qx: 0.0,
+            qy: 0.0,
+            qz,
+            scale: 1.0,
+            source_cell_x: 1,
+            source_cell_y: 2,
+            source_obj_idx: 0,
+            identity: GeneratedSceneryIdentity::default(),
+        };
+        let placements = vec![mk(10.0), mk(20.123457), mk(30.0)];
+
+        // Bake side: compute the hash and render the two-line sidecar.
+        let fp = placements_fingerprint(&placements);
+        let fake_sha = "a".repeat(64);
+        let sidecar = format!("{fake_sha}\nplacements-hash\t{fp:016x}\n");
+
+        // The bare-sha-first-token invariant the JS reader relies on.
+        assert_eq!(sidecar.trim().split_whitespace().next().unwrap(), fake_sha);
+
+        // Bake side: serialise EXACTLY as production does (lossy `{:.6}`).
+        let mut buf = Vec::new();
+        for p in &placements {
+            write_placement_line(&mut buf, p, 0).unwrap();
+        }
+        let jsonl = String::from_utf8(buf).unwrap();
+
+        // Client side: reparse the shipped JSONL into f32 (as the wasm
+        // reader does) and recompute the fold over the reconstructed
+        // values.
+        let reparsed: Vec<WireRecord> = jsonl
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(reparsed.len(), placements.len());
+        let client = client_freeze_hash(&reparsed);
+
+        // The load-bearing assertion: the bake-side sidecar hash equals
+        // the value the client reconstructs from the shipped JSONL — even
+        // though the floats lost precision in `{:.6}`. Before the fix
+        // (bake hashing raw in-memory f32 bits) this diverged for the
+        // non-6-decimal-exact quaternion, false-positiving the gate.
+        assert_eq!(
+            client, fp,
+            "client-recomputed freeze hash must equal the bake-side \
+             sidecar hash over the SAME wire-truncated values"
+        );
+
+        // Extract the `placements-hash` line exactly like the wasm gate
+        // and confirm it parses to the bake-side fp.
+        let expected_hex = sidecar
+            .lines()
+            .find_map(|line| {
+                let line = line.trim();
+                line.strip_prefix("placements-hash")
+                    .map(str::trim)
+                    .filter(|h| !h.is_empty())
+            })
+            .expect("sidecar carries a placements-hash line");
+        assert_eq!(u64::from_str_radix(expected_hex, 16).unwrap(), fp);
+
+        // Mutate one coordinate → the advisory gate must detect drift,
+        // even after the lossy round-trip (20.0001 differs from 20.123457
+        // at the 6-decimal grain).
+        let mut mutated = placements.clone();
+        mutated[1].x = 20.0001;
+        assert_ne!(
+            placements_fingerprint(&mutated),
+            fp,
+            "a single mutated coordinate must change the freeze hash"
+        );
     }
 }

@@ -17,8 +17,9 @@ use holtburger_dat::graphics::Frame;
 use holtburger_dat::landblock::CellLandblock;
 use holtburger_common::{Quaternion, Vector3};
 use holtburger_scenery_bake::{
-    Aabb2D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock, bilinear_height_from_grid,
-    transform_mesh_to_aabb, triangle_plane_height_from_grid, vertex_heights,
+    Aabb2D, BakeMode, FNV1A_OFFSET, PlacementXform, ScenicPlacement, bake_landblock,
+    bilinear_height_from_grid, fnv1a_fold, placements_fingerprint, transform_mesh_to_aabb,
+    triangle_plane_height_from_grid, vertex_heights, wire_f32_bits,
 };
 use std::path::PathBuf;
 
@@ -304,8 +305,14 @@ fn bake_output_fingerprint_is_stable() {
 
     // Stable FNV-1a/64 over the bit-exact output, including the E2
     // addressable identity, so an identity-population regression also
-    // trips the guard.
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    // trips the guard. Folded through the shipped `fnv1a_fold` (E5) —
+    // the exact primitive the per-LB sidecar emitter and the client
+    // load-time gate use — over the twelve wire-serialised words plus
+    // the five identity words, per placement, in order. (The advisory
+    // gate hashes only the twelve wire words via `placements_fingerprint`,
+    // since identity isn't carried in the JSONL; see
+    // `placements_fingerprint_is_stable` below.)
+    let mut h = FNV1A_OFFSET;
     for p in &placements {
         let c = placement_to_bits(p);
         let words = [
@@ -328,10 +335,7 @@ fn bake_output_fingerprint_is_stable() {
             p.identity.source_did,
         ];
         for w in words {
-            for byte in w.to_le_bytes() {
-                h ^= byte as u64;
-                h = h.wrapping_mul(0x0000_0100_0000_01b3);
-            }
+            h = fnv1a_fold(h, w);
         }
     }
     let got = format!("{h:016x}");
@@ -344,6 +348,82 @@ fn bake_output_fingerprint_is_stable() {
         "scenery bake output fingerprint drifted (placement count = {}). \
          If intentional, update GOLDEN and re-bake shipped scenery; \
          else a logic change silently altered the bake.",
+        placements.len()
+    );
+}
+
+/// E5 advisory freeze hash. Pins [`placements_fingerprint`] — the
+/// twelve wire-serialised words only (no E2 identity, since the JSONL
+/// doesn't carry it) — so the value the bake CLI writes to each
+/// `*.scenery.jsonl.sha256` sidecar's `placements-hash` line and the
+/// value the client recomputes on load are pinned to a committed
+/// golden. The full identity-inclusive guard is
+/// `bake_output_fingerprint_is_stable` above; this one is what the
+/// production gate actually compares.
+///
+/// Also asserts the hand-fold and the public helper agree, so the
+/// fingerprint can't silently change shape (field order / count).
+#[test]
+fn placements_fingerprint_is_stable() {
+    const SCENE_DID: u32 = 0x1200_0001;
+    let region = synth_region(SCENE_DID);
+    let lb = synth_landblock();
+    let scene = synth_scene(SCENE_DID);
+    let placements = bake_landblock(
+        &region,
+        &lb,
+        0xA9B4_0000,
+        |id| if id == SCENE_DID { Some(scene.clone()) } else { None },
+        fixed_world_aabb_fn(),
+        &[],
+        BakeMode::AceCompat,
+    );
+    assert!(!placements.is_empty());
+
+    // Hand-fold the twelve wire words to prove the helper hashes the
+    // exact fields the JSONL carries (and in this order). The nine float
+    // words are folded through `wire_f32_bits` — the post-`{:.6}`
+    // truncation bits the JSONL actually carries — NOT the full-precision
+    // in-memory f32, because the client can only reconstruct the
+    // truncated value. The three u32 words round-trip exactly.
+    let mut want = FNV1A_OFFSET;
+    for p in &placements {
+        for w in [
+            p.obj_id,
+            wire_f32_bits(p.x),
+            wire_f32_bits(p.y),
+            wire_f32_bits(p.z),
+            wire_f32_bits(p.qw),
+            wire_f32_bits(p.qx),
+            wire_f32_bits(p.qy),
+            wire_f32_bits(p.qz),
+            wire_f32_bits(p.scale),
+            p.source_cell_x,
+            p.source_cell_y,
+            p.source_obj_idx,
+        ] {
+            want = fnv1a_fold(want, w);
+        }
+    }
+    let got = placements_fingerprint(&placements);
+    assert_eq!(
+        got, want,
+        "placements_fingerprint diverged from the hand-folded twelve \
+         wire words — field set/order changed"
+    );
+
+    // FNV-1a/64 of the AceCompat synthetic-fixture bake, wire fields
+    // only, with the nine floats folded as their post-`{:.6}` wire bits
+    // (the value the JSONL carries and the client reconstructs — NOT the
+    // full-precision in-memory f32). Captured 2026-06-08; change only
+    // deliberately (and re-bake shipped scenery — the client gate
+    // compares against the sidecar).
+    const GOLDEN: &str = "3c1ae2c0c6cf0ac6";
+    assert_eq!(
+        format!("{got:016x}"),
+        GOLDEN,
+        "placements_fingerprint drifted (placement count = {}); if \
+         intentional, update GOLDEN and re-bake shipped scenery.",
         placements.len()
     );
 }
