@@ -36,6 +36,7 @@ pub mod region;
 pub mod render_texture;
 pub mod scene;
 pub mod setup_model;
+pub mod setup_model_hooks;
 pub mod skill_table;
 pub mod sound_table;
 pub mod spell_components_table;
@@ -100,6 +101,7 @@ pub use region::{
 };
 pub use scene::Scene;
 pub use setup_model::SetupModel;
+pub use setup_model_hooks::AnimationHookData;
 pub use skill_table::SkillTable;
 pub use sound_table::{SoundData, SoundEntry, SoundHashData, SoundTable};
 pub use spell_components_table::{SpellComponent, SpellComponentsTable};

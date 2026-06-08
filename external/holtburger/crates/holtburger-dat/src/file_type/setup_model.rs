@@ -153,6 +153,20 @@ impl AnimationHook {
         Ok(())
     }
 
+    /// Decode this wire hook into a typed
+    /// [`AnimationHookData`](crate::file_type::setup_model_hooks::AnimationHookData) variant — one
+    /// per `AnimationHookType` — with the hook's distinct named fields and
+    /// DataID/identity preserved (enhancement E10). The opaque `data` here is
+    /// the payload plus its 0..3-byte alignment pad; `decode` reads only the
+    /// variant's fields and ignores the trailing pad, so this never loses the
+    /// byte-equal wire form held by `self`.
+    ///
+    /// To go the other way (typed → wire), use
+    /// [`AnimationHookData::to_hook`](crate::file_type::setup_model_hooks::AnimationHookData::to_hook).
+    pub fn decode(&self) -> BinResult<crate::file_type::setup_model_hooks::AnimationHookData> {
+        crate::file_type::setup_model_hooks::AnimationHookData::decode(self.hook_type, &self.data)
+    }
+
     /// If this hook is a `CreateParticle` (type 13) or `CreateBlockingParticle`
     /// (type 26), decode the 40-byte payload into named fields.
     ///
