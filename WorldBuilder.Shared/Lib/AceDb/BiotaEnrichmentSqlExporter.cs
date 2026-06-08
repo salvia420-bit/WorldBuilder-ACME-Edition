@@ -61,6 +61,19 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             public BiotaSqlTable? Float { get; init; }
 
             /// <summary>
+            /// Option-B BASE COPY: <c>biota_properties_d_i_d</c> carrying the base weenie's Setup DID
+            /// (type=1), copied offline from the WeenieIndex. This is the increment that makes the
+            /// otherwise-sparse static biota RENDERABLE (a biota with no Setup DID fails to spawn).
+            /// </summary>
+            public BiotaSqlTable? Did { get; init; }
+
+            /// <summary>
+            /// Option-B BASE COPY: <c>biota_properties_string</c> carrying the base weenie's Name
+            /// (type=1), cheap identity copied offline from the WeenieIndex.
+            /// </summary>
+            public BiotaSqlTable? String { get; init; }
+
+            /// <summary>
             /// Per-placement guid assignments actually used (after threading/minting), keyed by the
             /// placement's stable key. Lets the re-import / round-trip path recover the guid that was
             /// written even when the placement arrived without one.
@@ -82,6 +95,8 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                     if (Position != null) yield return Position;
                     if (Int != null) yield return Int;
                     if (Float != null) yield return Float;
+                    if (Did != null) yield return Did;
+                    if (String != null) yield return String;
                 }
             }
 
@@ -113,6 +128,13 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             public PlacementDye? Dye;
             public List<PlacementGenerator>? Generators;
             public Dictionary<PositionType, PlacementPosition>? Positions;
+
+            // ── Option-B BASE COPY (offline, from the WeenieIndex) ──────────
+            // The base weenie's Setup DID + Name copied into the sparse biota so the static object is
+            // RENDERABLE (a sparse biota with no Setup DID fails to spawn on the server). Both come from
+            // the ingested WeenieIndex — NO live DB. A FULL base-weenie property copy stays DEFERRED.
+            public uint BaseSetupDid;   // 0 when the index has no Setup for this wcid.
+            public string? BaseName;    // null when the index has no DisplayName.
         }
 
         /// <summary>
@@ -179,6 +201,8 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 // weenie. Without a resolvable type the override is unspawnable → SKIP with a warning
                 // rather than emit a biota that silently vanishes on the server.
                 int weenieType;
+                uint baseSetupDid = 0;
+                string? baseName = null;
                 if (canResolveType) {
                     var entry = index!.Get((int)p.WeenieClassId);
                     if (entry == null || entry.WeenieType == 0) {
@@ -191,6 +215,24 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                         continue;
                     }
                     weenieType = entry.WeenieType;
+
+                    // ── Option-B BASE COPY (offline, from the WeenieIndex) ──────────────────────
+                    // Copy the base weenie's Setup DID + Name into the sparse biota so the static
+                    // object actually RENDERS. ACE static biotas are full self-contained snapshots
+                    // (CreateWorldObject(biota)+BiotaConverter build purely from the stored biota, no
+                    // weenie merge); the prior sparse biota had no Setup DID and failed to spawn
+                    // ("Unable to find object_id 00000000 in Portal"). Both fields are in the ingested
+                    // index — NO live DB. A FULL base-weenie property copy (all ints/floats/strings/
+                    // positions) needs the full weenie record (live DB) and stays DEFERRED.
+                    baseSetupDid = entry.SetupDid ?? 0u;
+                    baseName = entry.DisplayName;
+                    if (baseSetupDid == 0) {
+                        warnings.Add(new BiotaWarning {
+                            Guid = guid, WeenieClassId = p.WeenieClassId, Kind = "base_setup_did_missing",
+                            Detail = $"wcid {p.WeenieClassId} has no Setup DID in the WeenieIndex; the sparse biota " +
+                                     "still has no model and may fail to render (\"Unable to find object_id 00000000 in Portal\").",
+                        });
+                    }
                 }
                 else {
                     // No index ingested. We cannot certify a non-Undef type. Surface a warning and
@@ -229,6 +271,7 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                     Guid = guid, WeenieClassId = p.WeenieClassId, WeenieType = weenieType,
                     Landblock = p.Landblock, CellNumber = p.CellNumber, Kind = p.Kind, Minted = minted,
                     Source = p, Dye = p.Dye, Generators = p.Generators, Positions = p.Positions,
+                    BaseSetupDid = baseSetupDid, BaseName = baseName,
                 });
             }
 
@@ -241,9 +284,18 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             var positionBlocks = new List<(uint, string)>();
             var intBlocks = new List<(uint, string)>();
             var floatBlocks = new List<(uint, string)>();
+            var didBlocks = new List<(uint, string)>();
+            var stringBlocks = new List<(uint, string)>();
 
             foreach (var r in resolved) {
                 biotaBlocks.Add((r.Guid, AceDbConnector.GenerateBiotaStubSql(r.Guid, r.WeenieClassId, r.WeenieType)));
+
+                // Option-B BASE COPY: Setup DID (unblocks rendering) + Name (cheap identity), both from
+                // the offline WeenieIndex. Each emitter returns null when the index has no value.
+                var did = AceDbConnector.GenerateBiotaSetupDidSql(r.Guid, r.BaseSetupDid);
+                if (did != null) didBlocks.Add((r.Guid, did));
+                var nameSql = AceDbConnector.GenerateBiotaNameStringSql(r.Guid, r.BaseName);
+                if (nameSql != null) stringBlocks.Add((r.Guid, nameSql));
 
                 if (r.Dye != null) {
                     var pal = AceDbConnector.GenerateBiotaPaletteSql(r.Guid, r.Dye);
@@ -282,6 +334,8 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 Position = Assemble("biota_properties_position", AceDbConnector.BiotaPositionSqlFileName, positionBlocks),
                 Int = Assemble("biota_properties_int", AceDbConnector.BiotaIntSqlFileName, intBlocks),
                 Float = Assemble("biota_properties_float", AceDbConnector.BiotaFloatSqlFileName, floatBlocks),
+                Did = Assemble("biota_properties_d_i_d", AceDbConnector.BiotaDidSqlFileName, didBlocks),
+                String = Assemble("biota_properties_string", AceDbConnector.BiotaStringSqlFileName, stringBlocks),
                 Assignments = assignments,
                 Warnings = sortedWarnings,
                 Skipped = skipped,

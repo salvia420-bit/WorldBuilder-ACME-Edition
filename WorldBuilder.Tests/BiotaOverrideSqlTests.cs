@@ -132,6 +132,78 @@ public class BiotaOverrideSqlTests {
             AceDbConnector.GenerateBiotaShadeFloatSql(Guid0, SampleDye())!);
     }
 
+    [Fact]
+    public void BiotaSetupDidSql_Golden_Type1_FromIndex() {
+        // Option-B BASE COPY: the base weenie's Setup DID goes to biota_properties_d_i_d type=1 — the
+        // increment that makes the otherwise-sparse static biota RENDERABLE (no Setup DID → "Unable to
+        // find object_id 00000000 in Portal"). DELETE targets the exact (object_Id, type=1) row.
+        const string expected =
+            "DELETE FROM `biota_properties_d_i_d` WHERE `object_Id` = 2058428416 AND `type` = 1;\n" +
+            "INSERT INTO `biota_properties_d_i_d` (`object_Id`, `type`, `value`)\n" +
+            "VALUES (2058428416, 1, 33554433) /* Setup 0x02000001 */;\n";
+        string sql = AceDbConnector.GenerateBiotaSetupDidSql(Guid0, 0x02000001u)!;
+        Assert.Equal(expected, sql);
+        // A 0 Setup (index has no Setup for the wcid) emits nothing.
+        Assert.Null(AceDbConnector.GenerateBiotaSetupDidSql(Guid0, 0u));
+    }
+
+    [Fact]
+    public void BiotaNameStringSql_Golden_Type1_Escaped() {
+        // Cheap identity copy: base weenie Name → biota_properties_string type=1, single-quote escaped.
+        const string expected =
+            "DELETE FROM `biota_properties_string` WHERE `object_Id` = 2058428416 AND `type` = 1;\n" +
+            "INSERT INTO `biota_properties_string` (`object_Id`, `type`, `value`)\n" +
+            "VALUES (2058428416, 1, 'Olthoi''s Lair') /* Name */;\n";
+        string sql = AceDbConnector.GenerateBiotaNameStringSql(Guid0, "Olthoi's Lair")!;
+        Assert.Equal(expected, sql);
+        Assert.Null(AceDbConnector.GenerateBiotaNameStringSql(Guid0, "  "));
+    }
+
+    [Fact]
+    public void BiotaExporter_EmitsBaseSetupDid_AndName_FromIndex_UnblocksRendering() {
+        // The headline of this task: the Option-B bundle for a known wcid now carries a
+        // biota_properties_d_i_d row with the base weenie's Setup DID (type=1), copied OFFLINE from the
+        // WeenieIndex — so the static object spawns. The cheap Name identity is copied too.
+        var over = new EnrichedPlacement {
+            Kind = "outdoor", Landblock = 0xAB12, CellNumber = 1, WeenieClassId = 1234,
+            Scope = EnrichmentScope.PlacementOverride, Dye = SampleDye(),
+        };
+        var bundle = BiotaEnrichmentSqlExporter.Build(new[] { over }, BiotaIndex());
+
+        // Setup DID row present, keyed by the minted guid, value = the index's SetupDid (0x02000001).
+        Assert.NotNull(bundle.Did);
+        Assert.Equal(1, bundle.Did!.BiotaCount);
+        Assert.Contains("INSERT INTO `biota_properties_d_i_d`", bundle.Did.Sql);
+        Assert.Contains("VALUES (2058428416, 1, 33554433)", bundle.Did.Sql); // guid, type=Setup(1), 0x02000001
+        // Name string row present (cheap identity copy).
+        Assert.NotNull(bundle.String);
+        Assert.Contains("INSERT INTO `biota_properties_string`", bundle.String!.Sql);
+        Assert.Contains("VALUES (2058428416, 1, 'wcid 1234')", bundle.String.Sql);
+        // The base copy is NEVER the world weenie path.
+        Assert.DoesNotContain("weenie_properties", bundle.Did.Sql);
+    }
+
+    [Fact]
+    public void BiotaExporter_NoSetupInIndex_WarnsAndOmitsDidRow() {
+        // An index entry with a resolvable WeenieType but NO Setup DID: the biota still emits (the type
+        // is known), but the d_i_d table is absent and a base_setup_did_missing warning is surfaced —
+        // the object may still fail to render, made visible rather than silent.
+        var dict = new Dictionary<int, WeenieIndexEntry> {
+            [1234] = new WeenieIndexEntry(
+                Wcid: 1234, ClassName: "wcid_1234", WeenieType: 1, IsServerManaged: false, IsNpc: false,
+                DisplayName: "wcid 1234", Title: null, SetupDid: null, IconDid: null,
+                PaletteBaseDid: null, CreatureType: null, Level: null, SourceMask: WeenieSource.AceDb),
+        };
+        var over = new EnrichedPlacement {
+            Kind = "outdoor", Landblock = 0xAB12, CellNumber = 1, WeenieClassId = 1234,
+            Scope = EnrichmentScope.PlacementOverride, Dye = SampleDye(),
+        };
+        var bundle = BiotaEnrichmentSqlExporter.Build(new[] { over }, new WeenieIndex(dict));
+        Assert.Single(bundle.Assignments);    // still emitted (type known)
+        Assert.Null(bundle.Did);              // no Setup → no d_i_d table
+        Assert.Contains(bundle.Warnings, w => w.Kind == "base_setup_did_missing");
+    }
+
     // ── 2. Guid threading / static range ─────────────────────────────────
 
     [Fact]
@@ -296,8 +368,12 @@ public class BiotaOverrideSqlTests {
             Assert.True(File.Exists(Path.Combine(dir, AceDbConnector.BiotaPositionSqlFileName)));
             Assert.True(File.Exists(Path.Combine(dir, AceDbConnector.BiotaIntSqlFileName)));
             Assert.True(File.Exists(Path.Combine(dir, AceDbConnector.BiotaFloatSqlFileName)));
+            // Option-B BASE COPY: Setup DID (biota_properties_d_i_d) + Name (biota_properties_string),
+            // resolved offline from the WeenieIndex (BiotaIndex resolves wcid 1234 → SetupDid + name).
+            Assert.True(File.Exists(Path.Combine(dir, AceDbConnector.BiotaDidSqlFileName)));
+            Assert.True(File.Exists(Path.Combine(dir, AceDbConnector.BiotaStringSqlFileName)));
             Assert.True(File.Exists(manifestPath));
-            Assert.Equal(6, written.Count); // biota + 5 property tables
+            Assert.Equal(8, written.Count); // biota + 5 facet tables + base-copy d_i_d + string
 
             string manifest = File.ReadAllText(manifestPath);
             Assert.Contains("\"scope\":\"PlacementOverride\"", manifest);

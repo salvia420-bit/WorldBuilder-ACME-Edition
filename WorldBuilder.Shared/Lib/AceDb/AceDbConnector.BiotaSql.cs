@@ -55,6 +55,13 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         public const string BiotaPositionSqlFileName = "biota_properties_position.sql";
         public const string BiotaIntSqlFileName = "biota_properties_int.sql";
         public const string BiotaFloatSqlFileName = "biota_properties_float.sql";
+        public const string BiotaDidSqlFileName = "biota_properties_d_i_d.sql";
+        public const string BiotaStringSqlFileName = "biota_properties_string.sql";
+
+        /// <summary><c>PropertyDataId.Setup</c> — the Setup (GfxObj/SetupModel) DID property type.</summary>
+        public const int PropertyDataId_Setup = 1;
+        /// <summary><c>PropertyString.Name</c> — the object's display-name string property type.</summary>
+        public const int PropertyString_Name = 1;
 
         /// <summary>
         /// ACE biota default <c>populated_Collection_Flags</c> when none are set (all-flags sentinel,
@@ -240,6 +247,78 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             AppendValues(sb, rows);
             return sb.ToString();
         }
+
+        // ── biota_properties_d_i_d (Setup, type=1) — Option-B BASE COPY ──────
+
+        /// <summary>
+        /// Emit <c>biota_properties_d_i_d</c> carrying the base weenie's <c>Setup</c> DID
+        /// (<see cref="PropertyDataId_Setup"/>, type=1) for one placement's object.
+        ///
+        /// <para>WHY (the rendering unblock): ACE static biotas are FULL self-contained snapshots —
+        /// <c>WorldObjectFactory.CreateWorldObject(biota)</c> + <c>BiotaConverter</c> build the object
+        /// purely from the stored biota rows with NO weenie merge. Option B's sparse biota (stub + only
+        /// the diverging palette/generator/position/dye facets) therefore has NO Setup DID, and the
+        /// server fails to spawn it ("Unable to find object_id 00000000 in Portal" — the documented
+        /// deferred limitation at CommandEngine.Placements.cs). Copying the base weenie's Setup DID into
+        /// the biota gives the object a model to render, which is the minimal viable spawn.</para>
+        ///
+        /// <para>OFFLINE-ONLY: <paramref name="setupDid"/> is resolved from the ingested
+        /// <see cref="Lib.WeenieIndex"/> (which carries SetupDid for ~all weenies) — NO live DB. A FULL
+        /// base-weenie property copy (all ints/floats/strings/positions) needs the full weenie record
+        /// (live DB) and stays DEFERRED. This is the Setup-DID increment only.</para>
+        ///
+        /// <para>The DELETE targets the exact (object_Id, type=1) row so other DID properties stay
+        /// untouched (idempotent replace).</para>
+        ///
+        /// Returns null when <paramref name="setupDid"/> is 0 (no Setup in the index — nothing to copy).
+        /// </summary>
+        public static string? GenerateBiotaSetupDidSql(uint guid, uint setupDid) {
+            if (setupDid == 0) return null;
+
+            var sb = new StringBuilder();
+            AppendBiotaDeleteTyped(sb, "biota_properties_d_i_d", guid, PropertyDataId_Setup);
+            sb.AppendLine("INSERT INTO `biota_properties_d_i_d` (`object_Id`, `type`, `value`)");
+            var rows = new List<string> {
+                $"{guid}, {PropertyDataId_Setup}, {setupDid}) /* Setup 0x{setupDid:X8} */",
+            };
+            AppendValues(sb, rows);
+            return sb.ToString();
+        }
+
+        // ── biota_properties_string (Name, type=1) — Option-B BASE COPY ──────
+
+        /// <summary>
+        /// Emit <c>biota_properties_string</c> carrying the base weenie's <c>Name</c>
+        /// (<see cref="PropertyString_Name"/>, type=1) for one placement's object. Cheap identity copy
+        /// from the same offline <see cref="Lib.WeenieIndex"/> (the index carries a DisplayName for ~all
+        /// weenies) so the spawned static object has a label without a live-DB read.
+        ///
+        /// <para>The value is single-quote escaped (doubled quotes + escaped backslash) — the ONLY
+        /// string-bearing biota emitter, so it is the only one that needs literal escaping; every other
+        /// Option-B value is a numeric literal. The DELETE targets the exact (object_Id, type=1) row.</para>
+        ///
+        /// Returns null when <paramref name="name"/> is null/blank (nothing to copy).
+        /// </summary>
+        public static string? GenerateBiotaNameStringSql(uint guid, string? name) {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+
+            var sb = new StringBuilder();
+            AppendBiotaDeleteTyped(sb, "biota_properties_string", guid, PropertyString_Name);
+            sb.AppendLine("INSERT INTO `biota_properties_string` (`object_Id`, `type`, `value`)");
+            var rows = new List<string> {
+                $"{guid}, {PropertyString_Name}, '{EscapeSqlString(name)}') /* Name */",
+            };
+            AppendValues(sb, rows);
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Escape a string for a single-quoted MySQL literal: backslash and single-quote are doubled
+        /// (ANSI/MySQL both honor <c>''</c>; backslash is escaped for MySQL's default backslash mode).
+        /// The only user/DB text reaching Option-B SQL is the weenie Name, routed through here.
+        /// </summary>
+        private static string EscapeSqlString(string s) =>
+            s.Replace("\\", "\\\\").Replace("'", "''");
 
         // ── Shared biota DELETE helpers (object_Id keyed by the placement guid) ──
 

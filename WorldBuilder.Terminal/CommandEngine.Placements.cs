@@ -330,18 +330,23 @@ public partial class CommandEngine {
             // Per-placement biota override (Option B) → AceShardDb (SHARD, separate connection).
             // SAFETY GATE: ACE static biotas are FULL self-contained snapshots — CreateWorldObject(biota)
             // builds the object purely from the stored biota rows with NO weenie merge (BiotaConverter).
-            // PR3 emits only the DIVERGING facets (palette/generator/position + dye int/float) over a
-            // minted stub, so a live shard apply would produce an object missing its name/Setup DID/base
-            // props. Until full base-weenie→biota copying lands (spec defers this), the live shard write
-            // is opt-in behind --force; the file-emit (always written above) is safe to inspect.
+            // Option B emits the DIVERGING facets (palette/generator/position + dye int/float) over a
+            // minted stub PLUS the Option-B BASE COPY: the base weenie's Setup DID (biota_properties_d_i_d
+            // type=1) and Name (biota_properties_string type=1), resolved OFFLINE from the WeenieIndex.
+            // The Setup DID is the increment that makes the static object RENDERABLE — without it the
+            // server fails to spawn it ("Unable to find object_id 00000000 in Portal"). A FULL base-weenie
+            // property copy (all ints/floats/strings/positions) still needs the full weenie record (live
+            // DB) and stays DEFERRED, so a live shard apply remains opt-in behind --force (the object now
+            // renders, but other base properties are still absent); the file-emit is always safe to inspect.
             if (plan.RequiresShard) {
                 if (!force)
                     throw new InvalidOperationException(
-                        "--apply Option B (per-placement biota override) writes a SPARSE biota (only the diverging facets " +
-                        "over a minted stub). ACE static biotas are FULL self-contained snapshots, so a live apply would " +
-                        "produce an incomplete object (missing name/Setup DID/base properties). The biota*.sql file-emit is " +
-                        "written for inspection; pass --force to apply the sparse override to the live shard anyway, or wait " +
-                        "for full base-weenie→biota minting.");
+                        "--apply Option B (per-placement biota override) writes a biota carrying the diverging facets + the " +
+                        "base Setup DID and Name (copied offline from the WeenieIndex, so the object renders) over a minted " +
+                        "stub. A FULL base-weenie property copy (all ints/floats/strings/positions) still needs the live " +
+                        "weenie record and stays DEFERRED, so the object's other base properties remain absent. The biota*.sql " +
+                        "file-emit is written for inspection; pass --force to apply the override to the live shard anyway, or " +
+                        "wait for full base-weenie→biota minting.");
                 using var shardConnector = new AceDbConnector(shard!);
                 shardRowsApplied = await shardConnector.ExecuteScriptsTransactionalAsync(plan.ShardScripts);
             }
