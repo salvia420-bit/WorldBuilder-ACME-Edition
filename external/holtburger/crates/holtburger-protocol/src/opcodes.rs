@@ -307,23 +307,29 @@ pub enum GameOpcode {
     // --- Data Download (DDD) ---
     /// S2C: Data download interrogation.
     /// Part of the DDD (Distribution Database Download) system for syncing game data.
+    /// Payload: ServersRegion, NameRuleLanguage, ProductId, SupportedLanguages
+    /// (PackableList<uint>) — see `DddInterrogationData`. protocol.xml:8464-8468.
     DddInterrogation = 0xF7E5,
     /// C2S: Response to data download interrogation.
     DddInterrogationResponse = 0xF7E6,
-    // /// S2C/C2S: DDD data message.
-    // DddDataMessage = 0xF7E2,
-    // /// S2C/C2S: Request DDD data.
-    // DddRequestDataMessage = 0xF7E3,
-    // /// S2C/C2S: DDD error message.
-    // DddErrorMessage = 0xF7E4,
-    // /// S2C/C2S: Begin DDD process.
-    // DddBeginDdd = 0xF7E7,
-    // /// S2C/C2S: Begin pull DDD process.
+    /// S2C: DDD data message — carries a chunk of a DAT resource. Switches on the
+    /// Compression field; DataSize includes its own DWORD. protocol.xml:8437-8453.
+    DddDataMessage = 0xF7E2,
+    /// C2S: Request DDD data (ResourceType + ResourceId). protocol.xml:7940-7942.
+    DddRequestDataMessage = 0xF7E3,
+    /// S2C: DDD error message (ResourceType + ResourceId + RError). protocol.xml:8455-8458.
+    DddErrorMessage = 0xF7E4,
+    /// S2C: Begin DDD process — DataExpected + PackableList<DDDRevision>.
+    /// protocol.xml:8460-8462 (DDDRevision at protocol.xml:6565-6572).
+    DddBeginDdd = 0xF7E7,
+    // /// S2C/C2S: Begin pull DDD process. SKIP (E12a): no protocol.xml definition —
+    // /// do not wire without a verified field list.
     // DddBeginPullDdd = 0xF7E8,
-    // /// S2C/C2S: DDD iteration data.
+    // /// S2C/C2S: DDD iteration data. SKIP (E12a): no protocol.xml definition —
+    // /// do not wire without a verified field list.
     // DddIterationData = 0xF7E9,
-    // /// S2C: End DDD process.
-    // DddEndDdd = 0xF7EA,
+    /// S2C and C2S: End DDD process. No payload. protocol.xml:8470 / 7949.
+    DddEndDdd = 0xF7EA,
 
     // --- Server & Account Status ---
     // /// S2C: Account has been banned.

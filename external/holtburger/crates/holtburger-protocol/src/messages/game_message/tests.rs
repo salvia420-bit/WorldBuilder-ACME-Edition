@@ -86,6 +86,101 @@ fn test_dispatch_ddd_interrogation_response() {
 }
 
 #[test]
+fn test_dispatch_ddd_interrogation() {
+    // 0xF7E5 + ServersRegion + NameRuleLanguage + ProductId + PackableList<uint>.
+    let mut wire = Vec::new();
+    wire.extend_from_slice(&(crate::opcodes::GameOpcode::DddInterrogation as u32).to_le_bytes());
+    wire.extend_from_slice(&1u32.to_le_bytes()); // servers_region
+    wire.extend_from_slice(&2u32.to_le_bytes()); // name_rule_language
+    wire.extend_from_slice(&3u32.to_le_bytes()); // product_id
+    wire.extend_from_slice(&2u32.to_le_bytes()); // count
+    wire.extend_from_slice(&1u32.to_le_bytes());
+    wire.extend_from_slice(&2u32.to_le_bytes());
+    assert_dispatch_match(&wire, |msg| matches!(msg, GameMessage::DddInterrogation(_)));
+}
+
+#[test]
+fn test_dispatch_ddd_request_data_message() {
+    let mut wire = Vec::new();
+    wire.extend_from_slice(
+        &(crate::opcodes::GameOpcode::DddRequestDataMessage as u32).to_le_bytes(),
+    );
+    wire.extend_from_slice(&1u32.to_le_bytes()); // resource_type
+    // resource_id 0x06000001 as a PackedDWORD (4-byte high-bit form).
+    wire.extend_from_slice(&[0x00, 0x86, 0x01, 0x00]);
+    assert_dispatch_match(&wire, |msg| {
+        matches!(msg, GameMessage::DddRequestDataMessage(_))
+    });
+}
+
+#[test]
+fn test_dispatch_ddd_error_message() {
+    let mut wire = Vec::new();
+    wire.extend_from_slice(&(crate::opcodes::GameOpcode::DddErrorMessage as u32).to_le_bytes());
+    wire.extend_from_slice(&2u32.to_le_bytes()); // resource_type
+    // resource_id 0x0A000042 as a PackedDWORD (4-byte high-bit form).
+    wire.extend_from_slice(&[0x00, 0x8A, 0x42, 0x00]);
+    wire.extend_from_slice(&4u32.to_le_bytes()); // r_error
+    assert_dispatch_match(&wire, |msg| matches!(msg, GameMessage::DddErrorMessage(_)));
+}
+
+#[test]
+fn test_dispatch_ddd_data_message_uncompressed() {
+    let payload = [0xDEu8, 0xAD, 0xBE, 0xEF];
+    let mut wire = Vec::new();
+    wire.extend_from_slice(&(crate::opcodes::GameOpcode::DddDataMessage as u32).to_le_bytes());
+    wire.extend_from_slice(&0x01u64.to_le_bytes()); // dat_file (Int64)
+    wire.extend_from_slice(&0x06u32.to_le_bytes()); // resource_type
+    wire.extend_from_slice(&0x0600_0001u32.to_le_bytes()); // resource_id
+    wire.extend_from_slice(&7u32.to_le_bytes()); // iteration
+    wire.push(0x00); // compression = uncompressed (byte)
+    wire.extend_from_slice(&1u32.to_le_bytes()); // version
+    wire.extend_from_slice(&(4 + payload.len() as u32).to_le_bytes()); // data_size
+    wire.extend_from_slice(&payload);
+    assert_dispatch_match(&wire, |msg| matches!(msg, GameMessage::DddDataMessage(_)));
+}
+
+#[test]
+fn test_dispatch_ddd_data_message_compressed() {
+    let payload = [0x11u8, 0x22, 0x33];
+    let mut wire = Vec::new();
+    wire.extend_from_slice(&(crate::opcodes::GameOpcode::DddDataMessage as u32).to_le_bytes());
+    wire.extend_from_slice(&0x01u64.to_le_bytes()); // dat_file (Int64)
+    wire.extend_from_slice(&0x06u32.to_le_bytes()); // resource_type
+    wire.extend_from_slice(&0x0600_0002u32.to_le_bytes()); // resource_id
+    wire.extend_from_slice(&3u32.to_le_bytes()); // iteration
+    wire.push(0x01); // compression = compressed (byte)
+    wire.extend_from_slice(&1u32.to_le_bytes()); // version
+    wire.extend_from_slice(&(8 + payload.len() as u32).to_le_bytes()); // data_size
+    wire.extend_from_slice(&0x0000_1000u32.to_le_bytes()); // file_size
+    wire.extend_from_slice(&payload);
+    assert_dispatch_match(&wire, |msg| matches!(msg, GameMessage::DddDataMessage(_)));
+}
+
+#[test]
+fn test_dispatch_ddd_begin_ddd() {
+    let mut wire = Vec::new();
+    wire.extend_from_slice(&(crate::opcodes::GameOpcode::DddBeginDdd as u32).to_le_bytes());
+    wire.extend_from_slice(&0x2000u32.to_le_bytes()); // data_expected
+    wire.extend_from_slice(&1u32.to_le_bytes()); // revisions count
+    wire.extend_from_slice(&0x0000_0001_0000_0001u64.to_le_bytes()); // id_dat_file
+    wire.extend_from_slice(&5u32.to_le_bytes()); // iteration
+    wire.extend_from_slice(&1u32.to_le_bytes()); // ids_to_download count
+    wire.extend_from_slice(&0x0600_0001u32.to_le_bytes());
+    wire.extend_from_slice(&0u32.to_le_bytes()); // ids_to_purge count
+    assert_dispatch_match(&wire, |msg| matches!(msg, GameMessage::DddBeginDdd(_)));
+}
+
+#[test]
+fn test_dispatch_ddd_end_ddd() {
+    // Empty payload — opcode only.
+    let wire = (crate::opcodes::GameOpcode::DddEndDdd as u32)
+        .to_le_bytes()
+        .to_vec();
+    assert_dispatch_match(&wire, |msg| matches!(msg, GameMessage::DddEndDdd));
+}
+
+#[test]
 fn test_dispatch_game_action_move_to_state() {
     assert_dispatch_match(test_fixtures::MOVE_TO_STATE, |msg| {
         matches!(msg, GameMessage::GameAction(_))

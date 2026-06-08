@@ -517,7 +517,7 @@ impl ClientRuntime {
                     .send(ClientViewEvent::BootAccount(reason.clone()));
                 Ok(())
             }
-            GameMessage::DddInterrogation => {
+            GameMessage::DddInterrogation(_data) => {
                 let resp =
                     GameMessage::DddInterrogationResponse(Box::new(DddInterrogationResponseData {
                         language: 1,

@@ -31,8 +31,13 @@ pub enum GameMessage {
     ServerMessage(Box<ServerMessageData>),
     PlayerKilled(Box<PlayerKilledData>),
     TurbineChat(Box<TurbineChatMessageData>),
-    DddInterrogation,
+    DddInterrogation(Box<DddInterrogationData>),
     DddInterrogationResponse(Box<DddInterrogationResponseData>),
+    DddRequestDataMessage(Box<DddRequestDataMessageData>),
+    DddErrorMessage(Box<DddErrorMessageData>),
+    DddDataMessage(Box<DddDataMessageData>),
+    DddBeginDdd(Box<DddBeginDddData>),
+    DddEndDdd, // 0xF7EA — empty payload
     CharacterError(Box<CharacterErrorData>),
     AccountBoot(Box<BootAccountData>),
     CharacterLogOff, // 0xF653

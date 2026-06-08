@@ -76,10 +76,25 @@ impl ProtocolUnpack for GameMessage {
             GameOpcode::CharacterEnterWorldServerReady => {
                 Some(GameMessage::CharacterEnterWorldServerReady)
             }
-            GameOpcode::DddInterrogation => Some(GameMessage::DddInterrogation),
+            GameOpcode::DddInterrogation => Some(GameMessage::DddInterrogation(Box::new(
+                DddInterrogationData::unpack(data, offset)?,
+            ))),
             GameOpcode::DddInterrogationResponse => Some(GameMessage::DddInterrogationResponse(
                 Box::new(DddInterrogationResponseData::unpack(data, offset)?),
             )),
+            GameOpcode::DddRequestDataMessage => Some(GameMessage::DddRequestDataMessage(
+                Box::new(DddRequestDataMessageData::unpack(data, offset)?),
+            )),
+            GameOpcode::DddErrorMessage => Some(GameMessage::DddErrorMessage(Box::new(
+                DddErrorMessageData::unpack(data, offset)?,
+            ))),
+            GameOpcode::DddDataMessage => Some(GameMessage::DddDataMessage(Box::new(
+                DddDataMessageData::unpack(data, offset)?,
+            ))),
+            GameOpcode::DddBeginDdd => Some(GameMessage::DddBeginDdd(Box::new(
+                DddBeginDddData::unpack(data, offset)?,
+            ))),
+            GameOpcode::DddEndDdd => Some(GameMessage::DddEndDdd),
             GameOpcode::CharacterError => Some(GameMessage::CharacterError(Box::new(
                 CharacterErrorData::unpack(data, offset)?,
             ))),

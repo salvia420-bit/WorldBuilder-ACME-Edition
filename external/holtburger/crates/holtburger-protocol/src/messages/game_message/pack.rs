@@ -342,8 +342,33 @@ impl ProtocolPack for GameMessage {
                     .unwrap();
                 data.pack(buf);
             }
-            GameMessage::DddInterrogation => {
+            GameMessage::DddInterrogation(data) => {
                 buf.write_u32::<LittleEndian>(GameOpcode::DddInterrogation as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameMessage::DddRequestDataMessage(data) => {
+                buf.write_u32::<LittleEndian>(GameOpcode::DddRequestDataMessage as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameMessage::DddErrorMessage(data) => {
+                buf.write_u32::<LittleEndian>(GameOpcode::DddErrorMessage as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameMessage::DddDataMessage(data) => {
+                buf.write_u32::<LittleEndian>(GameOpcode::DddDataMessage as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameMessage::DddBeginDdd(data) => {
+                buf.write_u32::<LittleEndian>(GameOpcode::DddBeginDdd as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameMessage::DddEndDdd => {
+                buf.write_u32::<LittleEndian>(GameOpcode::DddEndDdd as u32)
                     .unwrap();
             }
             GameMessage::Unknown(opcode, data) => {
