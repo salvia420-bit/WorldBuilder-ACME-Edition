@@ -53,10 +53,13 @@ const SCENERY_BAKE_LIB_VERSION: &str = "holtburger-scenery-bake/0.1.0";
 
 /// Phase-1 parity-hardening diagnostic. When `--bits` is set,
 /// `format_f32_six_sig` emits raw `to_bits()` (decimal u32) instead of the
-/// `{:.6}` decimal string, so a bit-identity check against
-/// `scenery-cross-check --bits` sees the exact f32 rather than a lossy
-/// 6-decimal rounding. Process-global because the formatter is called deep
-/// in the per-placement write path; a one-shot CLI sets it once at startup.
+/// `{:.6}` decimal string, so an EXTERNAL bit-identity comparison (e.g.
+/// `diff` of two `--bits` runs of THIS tool) sees the exact f32 rather than a
+/// lossy 6-decimal rounding. NOTE: `scenery-cross-check` does NOT consume this
+/// format — it compares the `{:.6}` wire values at a 1e-6 float epsilon and
+/// has no `--bits` mode; feeding it a `--bits` sidecar is unsupported.
+/// Process-global because the formatter is called deep in the per-placement
+/// write path; a one-shot CLI sets it once at startup.
 static EMIT_BITS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// CLI surface. Per the determinism contract: NO defaults for
@@ -121,8 +124,9 @@ struct Cli {
     /// Diagnostic (Phase-1 parity hardening): emit each f32 field as its
     /// raw IEEE-754 `to_bits()` value (decimal u32, -0 normalised to +0)
     /// instead of the `{:.6}` decimal string, for exact bit-identity
-    /// comparison against `scenery-cross-check --bits`. NOT consumed by
-    /// the renderer — diagnostic output only.
+    /// comparison of two `--bits` runs via an external `diff`. NOT consumed by
+    /// the renderer and NOT consumed by `scenery-cross-check` (which has no
+    /// `--bits` mode) — diagnostic output only.
     #[arg(long)]
     bits: bool,
 }
@@ -880,9 +884,10 @@ fn format_f32_six_sig(v: f32) -> String {
     // through floor()). f32 IEEE-754 has two zero encodings; output
     // them identically.
     let v = if v == 0.0 { 0.0 } else { v };
-    // Phase-1 diagnostic: emit raw IEEE-754 bits (decimal u32) so the
-    // parity check sees the exact f32, not a lossy 6-decimal rounding.
-    // Valid JSON number; consumed only by `compare-bits.py`.
+    // Phase-1 diagnostic: emit raw IEEE-754 bits (decimal u32) so an external
+    // bit-identity comparison sees the exact f32, not a lossy 6-decimal
+    // rounding. Valid JSON number; for external `diff`-style comparison only —
+    // NOT consumed by `scenery-cross-check` (which reads the `{:.6}` wire form).
     if EMIT_BITS.load(std::sync::atomic::Ordering::Relaxed) {
         return v.to_bits().to_string();
     }
