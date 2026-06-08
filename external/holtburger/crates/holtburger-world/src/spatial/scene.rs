@@ -62,7 +62,7 @@ const USE_LOCAL_FORCE_POSITION_CONSTRAINT: bool = true;
 /// stays byte-for-byte identical. The easing curve, the install path and
 /// the per-frame stepper are all implemented + unit-tested here so the
 /// remaining work is purely the integrator call-site.
-const USE_RETAIL_INTERPOLATE: bool = false;
+const USE_RETAIL_INTERPOLATE: bool = true;
 
 /// Physics deep-dive 2026-06-01 (gap 4) — retail autonomy-blip /
 /// constraint-leash distances for the local-player force-position
@@ -93,6 +93,23 @@ const BLIP_SNAP_DISTANCE_OUTDOOR_M: f32 = 100.0;
 const CONSTRAINT_LEASH_INDOOR_M: f32 = 5.0;
 const CONSTRAINT_LEASH_OUTDOOR_M: f32 = 10.0;
 const RECONCILE_DEADBAND_M: f32 = 0.05;
+
+/// Physics deep-dive 2026-06-08 (track B1) — retail
+/// `CPhysicsObj::GetMaxConstraintDistance` (`PhysicsObj.cs`, the player
+/// arm): `50.0` outdoor / `20.0` indoor. This is the `ConstrainTo`
+/// `max_distance` (the leash CAP), NOT the autonomy-blip snap radius.
+///
+/// The install path used to (incorrectly) pass the autonomy-blip radius
+/// (`BLIP_SNAP_DISTANCE_*` = 100/25) as the interpolator `max` arg, which
+/// let the constraint leash scale out to the full snap distance and
+/// collapse the gap in effectively one ease — re-introducing the yank.
+/// Passing the true `GetMaxConstraintDistance` here keeps the leash
+/// bounded so a sub-blip gap eases over several frames instead of
+/// snapping. The `if distance > blip` install gate still uses the
+/// autonomy-blip radius (100/25) — that cutoff is the academy-rubberband
+/// invariant and is intentionally left untouched.
+const CONSTRAINT_MAX_INDOOR_M: f32 = 20.0;
+const CONSTRAINT_MAX_OUTDOOR_M: f32 = 50.0;
 
 /// Constraint-pull the integrator working pose `current` toward the
 /// server-forced `target`, returning the corrected pose. Indoor/outdoor
@@ -1776,17 +1793,26 @@ impl SpatialScene {
                 } else {
                     CONSTRAINT_LEASH_OUTDOOR_M
                 };
+                let leash_max = if indoor {
+                    CONSTRAINT_MAX_INDOOR_M
+                } else {
+                    CONSTRAINT_MAX_OUTDOOR_M
+                };
                 let distance = body.pose.distance_to(&pose);
                 if distance > blip {
                     body.force_position_interp.stop();
                 } else {
                     // `keep_heading = true`: the integrator owns heading
                     // and the forced rotation is recorded in
-                    // `authoritative_pose` above. `start = leash`,
-                    // `max = blip` mirror `GetStartConstraintDistance` /
-                    // `GetMaxConstraintDistance` for the player.
+                    // `authoritative_pose` above. `start = leash`
+                    // (`GetStartConstraintDistance` = 10 outdoor / 5
+                    // indoor), `max = leash_max`
+                    // (`GetMaxConstraintDistance` = 50 outdoor / 20 indoor)
+                    // for the player. The `if distance > blip` gate above
+                    // still uses the autonomy-blip radius (100/25) — that
+                    // is the academy-rubberband cutoff, NOT the leash cap.
                     body.force_position_interp.install(
-                        body.pose, pose, leash_start, blip, true,
+                        body.pose, pose, leash_start, leash_max, true,
                     );
                 }
             } else if USE_LOCAL_FORCE_POSITION_CONSTRAINT {

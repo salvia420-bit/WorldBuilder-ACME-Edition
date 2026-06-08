@@ -242,9 +242,18 @@ impl ClientSimulationSystem {
                 return Ok(Vec::new());
             }
             MovementTypeData::Invalid(_) => {
+                // Track B1 — Invalid is the server's Stop/terminate arm for
+                // a server-controlled move. It MUST clear any installed
+                // projection so the per-tick drive stops immediately;
+                // otherwise a MoveToObject projection (which carries no
+                // self-timeout) would keep driving the player toward the
+                // stale target.
                 movement.clear_server_controlled_projection();
             }
             _ => {
+                // Any other server movement type supersedes a prior
+                // MoveToObject projection — clear it so the two don't
+                // fight (Track B1).
                 movement.clear_server_controlled_projection();
             }
         }

@@ -174,6 +174,24 @@ const USE_AUTONOMOUS_POSITION_CHANGE_GATE: bool = true;
 const AUTONOMOUS_POSE_EPSILON_M: f32 = 0.05;
 const AUTONOMOUS_POSE_HEADING_EPSILON_RAD: f32 = 0.0035;
 
+/// Track B1 — bounded age after which a server-controlled projection
+/// (installed by a MoveToObject during a cast) is abandoned if the
+/// server never sent a terminating Stop/Invalid. A MoveToObject install
+/// carries no timeout of its own and DRIVES the player toward the target
+/// every tick, so a dropped terminating packet would otherwise rubber-
+/// band / drag the avatar forever. 8 s comfortably outlasts a normal
+/// approach-to-cast while still bounding a stuck projection.
+const SERVER_PROJECTION_MAX_AGE: Duration = Duration::from_secs(8);
+
+/// Track B1 — landblock-divergence tolerance for abandoning a
+/// server-controlled projection. When the player's landblock no longer
+/// matches the projection target's landblock the projection can never
+/// converge (the per-frame drive only nudges within the target block),
+/// so we CLEAR it rather than drive toward a stale cross-block target.
+/// The tolerance is one landblock cell in each axis (the projection
+/// install seeds the target into the same cell as the request).
+const SERVER_PROJECTION_LANDBLOCK_TOLERANCE: u32 = 1;
+
 /// Physics deep-dive 2026-06-01 (Dimension 3, the contested friction
 /// *coefficient*) — A/B knob for the grounded ground-friction value.
 ///
@@ -525,6 +543,14 @@ pub(crate) struct MovementSystem {
     last_server_motion_intent: Option<ServerMotionIntent>,
     suppress_frontend_autonomous_once: bool,
     server_controlled_projection: Option<ServerControlledProjection>,
+    /// Track B1 — install time of the active server-controlled
+    /// projection, used by [`reconcile_server_controlled_projection`] to
+    /// abandon a projection that the server never closes out (no explicit
+    /// Stop/Invalid arm arrived) after [`SERVER_PROJECTION_MAX_AGE`]. A
+    /// MoveToObject installs no timeout of its own, so a dropped
+    /// terminating packet would otherwise drive the player toward the
+    /// target forever. `None` whenever no projection is installed.
+    server_controlled_projection_installed_at: Option<Instant>,
     next_autonomous_position_heartbeat_at: Option<Instant>,
     /// Physics deep-dive 2026-06-01 (gap 4) — the pose + contact byte of
     /// the last AutonomousPosition packet we actually sent, used by the
@@ -625,6 +651,7 @@ impl MovementSystem {
             last_server_motion_intent: None,
             suppress_frontend_autonomous_once: false,
             server_controlled_projection: None,
+            server_controlled_projection_installed_at: None,
             next_autonomous_position_heartbeat_at: None,
             last_sent_autonomous_pose: None,
             last_sent_autonomous_contact: None,
@@ -641,10 +668,15 @@ impl MovementSystem {
         projection: ServerControlledProjection,
     ) {
         self.server_controlled_projection = Some(projection);
+        // Track B1 — stamp the install time so the per-tick reconcile can
+        // abandon a projection the server never closes out (dropped
+        // Stop/Invalid) after `SERVER_PROJECTION_MAX_AGE`.
+        self.server_controlled_projection_installed_at = Some(Instant::now());
     }
 
     pub(crate) fn clear_server_controlled_projection(&mut self) {
         self.server_controlled_projection = None;
+        self.server_controlled_projection_installed_at = None;
     }
 
     fn clear_autonomous_position_heartbeat_schedule(&mut self) {
@@ -806,7 +838,7 @@ impl MovementSystem {
         world: &mut WorldState,
         session: &mut Session,
     ) -> Result<Vec<WorldEvent>> {
-        self.reconcile_server_controlled_projection(world);
+        self.reconcile_server_controlled_projection(world, now);
 
         let had_active_manual_motion = matches!(
             self.active_drive,
@@ -933,7 +965,23 @@ impl MovementSystem {
 
         let body_id = SpatialBodyId::LocalPlayer(world.player.guid);
 
-        if let Some(projection) = self.server_controlled_projection {
+        // Track B1 — suppress-while-steering. The projection drive STACKS
+        // additively on top of manual WASD integration (both consume this
+        // tick), so while the user is actively steering (Manual active
+        // drive) we must NOT also apply the server-controlled projection
+        // drive — otherwise the two deltas fight and the avatar is dragged
+        // off the player's input. When the user is steering, the projection
+        // is left installed (it is cleared by the reconcile on
+        // completion / divergence / staleness) but its drive is skipped.
+        let manual_active = matches!(
+            self.active_drive,
+            Some(ActiveDriveState {
+                intent: ActiveDriveIntent::Manual(_),
+                ..
+            })
+        );
+
+        if let Some(projection) = self.server_controlled_projection.filter(|_| !manual_active) {
             let current_pose = world.local_player_runtime_pose().unwrap_or_default();
             let to_target = projection.target_pose.global_coords() - current_pose.global_coords();
             let max_step = (projection.speed_mps.max(0.1) * dt.as_secs_f32().max(0.001)).max(0.05);
@@ -2123,11 +2171,25 @@ impl MovementSystem {
         let body_id = SpatialBodyId::LocalPlayer(world.player.guid);
         let on_contact = !world.player.is_airborne;
         let max_speed = capabilities.resolved_manual_run_speed() * 2.0;
+        // Track B1 — the local floor-Z snap above owns the vertical axis
+        // while grounded (it just placed the feet on the terrain/cell
+        // floor). The force-position interpolator eases the CONTACT-PLANE
+        // origin (XY) toward the server target; it must NOT drag Z back to
+        // the server-forced height and undo the floor snap (retail re-
+        // derives the contact plane after `InterpolateTo`). So when
+        // grounded we keep the snapped Z and only adopt the interpolated
+        // XY/heading. Airborne the interpolator owns the full pose.
+        let snapped_z = pose.coords.z;
         let pose = match world
             .scene
             .step_force_position_interpolation(body_id, dt_s, max_speed, on_contact)
         {
-            InterpStep::Progressed { pose } | InterpStep::Completed { pose } => pose,
+            InterpStep::Progressed { mut pose } | InterpStep::Completed { mut pose } => {
+                if on_contact {
+                    pose.coords.z = snapped_z;
+                }
+                pose
+            }
             _ => pose,
         };
 
@@ -2182,15 +2244,50 @@ impl MovementSystem {
         ))
     }
 
-    fn reconcile_server_controlled_projection(&mut self, world: &WorldState) {
+    fn reconcile_server_controlled_projection(&mut self, world: &WorldState, now: Instant) {
         let Some(projection) = self.server_controlled_projection else {
             return;
         };
+
+        // Track B1 — bounded-age staleness. A MoveToObject install carries
+        // no timeout of its own and DRIVES the player every tick, so a
+        // dropped terminating Stop/Invalid would otherwise drag the avatar
+        // toward a stale target forever. Abandon it past the max age.
+        if let Some(installed_at) = self.server_controlled_projection_installed_at {
+            if now.saturating_duration_since(installed_at) >= SERVER_PROJECTION_MAX_AGE {
+                log::info!(
+                    "movement: abandoning stale server-controlled projection (age >= {:?}) target {:?}",
+                    SERVER_PROJECTION_MAX_AGE,
+                    projection.target_pose
+                );
+                self.clear_server_controlled_projection();
+                return;
+            }
+        }
+
         let Some(current_pose) = world.local_player_runtime_pose() else {
             return;
         };
 
-        if current_pose.landblock_id != projection.target_pose.landblock_id {
+        // Track B1 — landblock divergence. When the player's landblock no
+        // longer matches the projection target's block (beyond a one-cell
+        // tolerance per axis) the per-frame drive — which only nudges
+        // within the target block — can never converge, so CLEAR the
+        // projection rather than early-returning and driving toward a
+        // stale cross-block target every tick.
+        let (cur_lb_x, cur_lb_y) = current_pose.landblock_coords();
+        let (tgt_lb_x, tgt_lb_y) = projection.target_pose.landblock_coords();
+        let lb_dx = (cur_lb_x as i32 - tgt_lb_x as i32).unsigned_abs();
+        let lb_dy = (cur_lb_y as i32 - tgt_lb_y as i32).unsigned_abs();
+        if lb_dx > SERVER_PROJECTION_LANDBLOCK_TOLERANCE
+            || lb_dy > SERVER_PROJECTION_LANDBLOCK_TOLERANCE
+        {
+            log::info!(
+                "movement: abandoning server-controlled projection on landblock divergence (player {:?} vs target {:?})",
+                current_pose.landblock_id,
+                projection.target_pose.landblock_id
+            );
+            self.clear_server_controlled_projection();
             return;
         }
 
@@ -2199,7 +2296,7 @@ impl MovementSystem {
                 "movement: completed server-controlled projection at {:?}",
                 projection.target_pose
             );
-            self.server_controlled_projection = None;
+            self.clear_server_controlled_projection();
         }
     }
 
