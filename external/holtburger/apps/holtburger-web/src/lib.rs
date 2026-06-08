@@ -9842,6 +9842,24 @@ thread_local! {
         std::cell::RefCell<Vec<(u32, holtburger_common::Triangle)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// Track B4 outdoor-static collision (Tier 1, 2026-06-08): pending
+    /// static-AABB inserts queued by `populateStaticsAabbsForLandblock`
+    /// and drained by the recv loop on each `SessionCommand::TickMovement`
+    /// alongside `BUILDING_AABB_PENDING`. One entry per non-building
+    /// placement in `LandblockInfo.objects` (the `Stab` list,
+    /// `is_building == false`) — trees, signs, props. Outer Vec entries
+    /// are `(landblock_high, StaticAabbEntry)` tuples — the same shape
+    /// `SpatialScene::insert_static_aabb` consumes one at a time. Keyed
+    /// by `landblock_high` (the `0xXXYY0000` form) to match
+    /// `statics_aabb_index`'s shape. Cleared together with
+    /// `BUILDING_AABB_PENDING` in the `LANDBLOCK_CLEAR_PENDING` drain so
+    /// a re-entry re-bake REPLACES rather than appends (the index is
+    /// append-only — without the clear, duplicates accumulate on every
+    /// landblock re-load / relog).
+    static STATIC_AABB_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_world::StaticAabbEntry)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
     /// Workstream Sky-B (parametric skybox, 2026-05-11): thread-local
     /// holding the parsed SkyDesc + GameTime + per-frame evaluator
     /// state. Populated once per session by `populateSkyDescFromRegion`
@@ -10142,6 +10160,28 @@ fn drain_pending_building_physics_into(
         let count = buf.len();
         for (landblock_high, tri) in buf.drain(..) {
             scene.insert_building_triangle(landblock_high, tri);
+        }
+        count
+    })
+}
+
+/// Track B4 outdoor-static collision (Tier 1, 2026-06-08): drain the
+/// pending static-AABB pile into the live scene's `statics_aabb_index`.
+/// Returns the number of entries inserted. Called from the same
+/// `TickMovement` arm as the building-AABB drain so the integrator's
+/// static clamp (`statics_aabbs_near_pose`) sees the new statics the
+/// same tick the building AABBs land. Idempotent on an empty pile.
+///
+/// Mirrors `drain_pending_building_aabbs_into` in shape; the only
+/// difference is the destination index (`insert_static_aabb`, keyed by
+/// `landblock_high` rather than the outdoor cell id).
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_static_aabbs_into(scene: &mut holtburger_world::SpatialScene) -> usize {
+    STATIC_AABB_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (landblock_high, entry) in buf.drain(..) {
+            scene.insert_static_aabb(landblock_high, entry);
         }
         count
     })
@@ -10543,6 +10583,206 @@ pub async fn populate_building_aabbs_for_landblock(
     landblock_id: u32,
 ) -> Result<u32, JsValue> {
     populate_building_aabbs_for_landblock_impl(landblock_id).await
+}
+
+/// Track B4 outdoor-static collision (Tier 1, 2026-06-08): the
+/// non-building parallel of `populate_building_aabbs_for_landblock_impl`.
+/// Walks `LandblockInfo.objects` (the `Stab` list — non-building
+/// placements: trees, signs, props, foliage, `is_building == false`),
+/// derives each placement's world-space AABB, and queues them into
+/// `STATIC_AABB_PENDING` for insertion into the live
+/// `WorldState::scene::statics_aabb_index` on the next `TickMovement`.
+///
+/// AABB-only (Tier 1): unlike the building path this does NOT extract
+/// physics triangles or building origins — the integrator's static
+/// clamp is a coarse stop-and-push against the world AABB. Tier-2
+/// (per-static physics BSP / faithful `FindObjCollisions` polygon test)
+/// is a deferred follow-on.
+///
+/// Returns the count of AABBs queued. Same "missing LandblockInfo is
+/// zero, not a failure" contract as the building path: ocean / sparse-
+/// wilderness landblocks return `Ok(0)`. Errors propagate only on
+/// prefetch / parse failures.
+#[cfg(target_arch = "wasm32")]
+async fn populate_statics_aabbs_for_landblock_impl(
+    landblock_id: u32,
+) -> Result<u32, JsValue> {
+    use holtburger_common::Aabb;
+    use holtburger_dat::landblock::LandblockInfo;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_world::StaticAabbEntry;
+
+    const LB_M: f32 = 192.0;
+
+    let landblock_high = landblock_id & 0xFFFF_0000;
+    let info_cell = landblock_high | 0x0000_FFFE;
+    let lb_x_byte = ((landblock_high >> 24) & 0xFF) as f32;
+    let lb_y_byte = ((landblock_high >> 16) & 0xFF) as f32;
+    let landblock_origin_x = lb_x_byte * LB_M;
+    let landblock_origin_y = lb_y_byte * LB_M;
+
+    let source = global_source::global_source();
+
+    source
+        .prefetch(&[ResourceKey::new("eor/cell", info_cell)])
+        .await
+        .map_err(|e| JsValue::from_str(&format!(
+            "populateStaticsAabbsForLandblock: prefetch landblock 0x{landblock_high:08X}: {e}"
+        )))?;
+
+    let info_bytes = match source.get_file_by_key(ResourceKey::new("eor/cell", info_cell)) {
+        Ok(b) => b,
+        // No LandblockInfo (ocean / sparse wilderness): zero statics is
+        // a valid outcome.
+        Err(_) => return Ok(0),
+    };
+    let info = LandblockInfo::unpack(&info_bytes).map_err(|e| {
+        JsValue::from_str(&format!(
+            "populateStaticsAabbsForLandblock: LandblockInfo::unpack 0x{info_cell:08X}: {e}"
+        ))
+    })?;
+
+    if info.objects.is_empty() {
+        return Ok(0);
+    }
+
+    // Prefetch every Setup/GfxObj referenced by the statics list. Setup
+    // walks discover GfxObj children dynamically, so the 0x02 path
+    // relies on `ensure_walk_prefetched_keyed` per setup to chase
+    // missing children; pre-prefetching the top-level keys batches the
+    // round-trip.
+    let model_keys: Vec<ResourceKey<'_>> = info
+        .objects
+        .iter()
+        .map(|s| ResourceKey::new("eor/portal", s.id))
+        .collect();
+    source.prefetch(&model_keys).await.map_err(|e| {
+        JsValue::from_str(&format!(
+            "populateStaticsAabbsForLandblock: prefetch models for 0x{landblock_high:08X}: {e}"
+        ))
+    })?;
+
+    let mut total = 0u32;
+
+    for stab in info.objects.iter() {
+        let model_id = stab.id;
+        let placement_origin = holtburger_common::Vector3 {
+            x: stab.frame.origin.x + landblock_origin_x,
+            y: stab.frame.origin.y + landblock_origin_y,
+            z: stab.frame.origin.z,
+        };
+        let placement_orientation = stab.frame.orientation;
+
+        // Statics may be raw GfxObjs (`0x01...`) or SetupModels
+        // (`0x02...`); mirror the building path's branching so the
+        // collision coverage matches what the renderer draws. AABB-only
+        // (no physics triangles): `walk_setup_parts_with_geom` returns
+        // per-part local-space AABBs, the GfxObj branch builds one from
+        // the vertex array directly.
+        let part_aabbs: Vec<Aabb> = match (model_id >> 24) as u8 {
+            0x01 => {
+                source
+                    .prefetch(&[ResourceKey::new("eor/portal", model_id)])
+                    .await
+                    .ok();
+                match source.get_file_by_key(ResourceKey::new("eor/portal", model_id)) {
+                    Ok(bytes) => match holtburger_dat::file_type::GfxObj::unpack(
+                        &mut std::io::Cursor::new(&bytes),
+                    ) {
+                        Ok(gfx) => {
+                            let mut aabb = Aabb::empty();
+                            for vert in gfx.vertex_array.vertices.values() {
+                                aabb.expand_to_include_point(vert.origin);
+                            }
+                            vec![aabb]
+                        }
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                }
+            }
+            0x02 => {
+                let initial = [ResourceKey::new("eor/portal", model_id)];
+                // F.37 walk-result dedup: static model_ids are heavily
+                // shared across LBs (the standard pine / signpost appears
+                // in hundreds of LBs); two concurrent calls on adjacent
+                // LBs share one prefetch loop per overlapping model_id.
+                let cache_key = prefetch::WalkCacheKey::new(
+                    "populateStaticsAabbsForLandblock:0x02",
+                )
+                .with_u32(model_id);
+                if let Err(e) = prefetch::ensure_walk_prefetched_keyed(
+                    cache_key,
+                    &source,
+                    &initial,
+                    move |s| {
+                        let _ = walk_setup_parts_with_geom(s, model_id);
+                    },
+                )
+                .await
+                {
+                    log::warn!(
+                        "populateStaticsAabbsForLandblock: ensure_walk_prefetched 0x{model_id:08X}: {e:?}"
+                    );
+                    continue;
+                }
+                match walk_setup_parts_with_geom(source.as_ref(), model_id) {
+                    Some(v) => v,
+                    None => continue,
+                }
+            }
+            _ => continue,
+        };
+
+        for part_local in part_aabbs.iter() {
+            if part_local.is_empty() {
+                continue;
+            }
+            // Lift the part-local AABB to world space (8-corner rotate +
+            // translate; conservative bound of the rotated mesh).
+            let world_aabb: Aabb =
+                part_local.transform_by(placement_orientation, placement_origin);
+            STATIC_AABB_PENDING.with(|pile| {
+                pile.borrow_mut().push((
+                    landblock_high,
+                    StaticAabbEntry {
+                        did: model_id,
+                        aabb: world_aabb,
+                    },
+                ));
+            });
+            total += 1;
+        }
+    }
+
+    Ok(total)
+}
+
+/// Track B4 outdoor-static collision (Tier 1, 2026-06-08): public wasm
+/// export. Fetches the LandblockInfo for `landblock_id`, walks every
+/// non-building `Stab` placement (`LandblockInfo.objects`), derives a
+/// per-part world-space AABB, and queues them for insertion into the
+/// live `WorldState::scene::statics_aabb_index` on the next
+/// `MovementSystemHandle::tick`. Returns the count of AABBs queued.
+///
+/// JS callers should fire-and-forget this once per landblock loaded,
+/// alongside the existing `populateBuildingAabbsForLandblock` call
+/// (kind=7 EnteredWorld + LB-change handler). Re-bake on re-entry is
+/// safe: the `LANDBLOCK_CLEAR_PENDING` drain purges the prior statics
+/// for the landblock before the re-bake lands (mirrors the building
+/// path), so the index doesn't accumulate duplicates on relog.
+///
+/// `landblock_id` accepts either the bare landblock high word
+/// (`0xA9B40000`) or any cell ID within the landblock; only the high
+/// 16 bits drive resolution. Returns `Ok(0)` (not an error) when the
+/// landblock has no LandblockInfo record (ocean, sparse wilderness) or
+/// no `Stab` entries (open countryside).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = populateStaticsAabbsForLandblock)]
+pub async fn populate_statics_aabbs_for_landblock(
+    landblock_id: u32,
+) -> Result<u32, JsValue> {
+    populate_statics_aabbs_for_landblock_impl(landblock_id).await
 }
 
 /// Workstream Sky-B (parametric skybox, 2026-05-11): populate the
@@ -35995,6 +36235,12 @@ async fn recv_loop(
                             for lb in buf.drain(..) {
                                 w.scene.clear_cells_for_landblock(lb);
                                 w.scene.clear_building_aabbs_for_landblock(lb);
+                                // Track B4: purge outdoor-static AABBs for
+                                // the evicted landblock too (mirror of the
+                                // building purge) so an evict+re-enter
+                                // re-bake REPLACES rather than appends —
+                                // `insert_static_aabb` is append-only.
+                                w.scene.clear_static_aabbs_for_landblock(lb);
                             }
                             n
                         });
@@ -36019,6 +36265,21 @@ async fn recv_loop(
                                 "[phase6.B] drained {drained} pending building AABBs into scene \
                                  (total now {} across all cells)",
                                 w.scene.building_aabb_count(),
+                            ));
+                        }
+                        // Track B4 outdoor-static collision (Tier 1,
+                        // 2026-06-08): drain any static-AABB inserts
+                        // queued by JS-side
+                        // `populateStaticsAabbsForLandblock` calls.
+                        // Same cadence/justification as the building-AABB
+                        // drain — runs before the integrator tick so the
+                        // first static clamp against new AABBs sees them.
+                        let drained_statics = drain_pending_static_aabbs_into(&mut w.scene);
+                        if drained_statics > 0 {
+                            console_log_str(&format!(
+                                "[b4] drained {drained_statics} pending static AABBs into scene \
+                                 (total now {} across all landblocks)",
+                                w.scene.static_aabb_count(),
                             ));
                         }
                         // Phase 6 step E follow-up (2026-05-09): drain

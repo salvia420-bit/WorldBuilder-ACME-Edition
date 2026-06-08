@@ -1559,6 +1559,93 @@ impl MovementSystem {
         } else {
             lateral_clamped
         };
+        // Track B4 outdoor-static collision (Tier 1, AABB-only,
+        // 2026-06-08): clamp the (building/indoor-clamped) lateral
+        // delta against the outdoor non-building statics near the
+        // player (trees, signs, props from `LandblockInfo.objects`,
+        // the `Stab` list with `is_building == false`). These get NO
+        // player collision in the shipped solver — the indoor/building
+        // passes above only cover EnvCell mesh + building AABBs, and
+        // the statics-AABB index had no live consumer here (only the
+        // camera sweep read it). ACE's `PhysicsObj.FindObjCollisions`
+        // tests the mover against every nearby `PhysicsState::Static`
+        // object via its physics geometry; Tier-1 approximates that
+        // with a coarse stop-and-slide against each static's world-
+        // space AABB. Mirrors `clamp_delta_against_buildings_with_-
+        // normal`'s math (swept-sphere clamp + one slide iteration)
+        // but inlined here because the per-static-AABB clamp has no
+        // wall-normal consumer (statics don't feed edge/cliff-slide).
+        //
+        // Tier-2 (per-static physics-BSP, the faithful FindObjCollisions
+        // polygon test) and the swept `BSPTree.find_collisions` port are
+        // a deferred follow-on; this pass is AABB-only.
+        let lateral_clamped = if lateral_clamped.length_squared() <= 1e-10 {
+            lateral_clamped
+        } else {
+            // Broad-phase: the scene query already restricts to the
+            // pose's landblock + the immediate 3x3 neighbour ring, and
+            // outdoor statics fan-in is small (Holtburg's central LB
+            // has ~70). Empty candidate sets early-out before any
+            // swept-sphere math, so dense LBs stay cheap.
+            let candidates = world.scene.statics_aabbs_near_pose(&pose);
+            if candidates.is_empty() {
+                lateral_clamped
+            } else {
+                let radius = holtburger_world::spatial::PLAYER_CAPSULE_RADIUS;
+                match holtburger_world::spatial::sweep_sphere_against_static_aabbs(
+                    &candidates,
+                    &pose,
+                    lateral_clamped,
+                    radius,
+                ) {
+                    None => lateral_clamped,
+                    Some(hit) => {
+                        // Stop short of the static (back off a hair so
+                        // the capsule never rests exactly on the face),
+                        // then attempt a single slide along the hit
+                        // plane against the same candidate set. Same
+                        // shape as the building clamp's slide pass.
+                        let delta = lateral_clamped;
+                        let backoff = 1e-3;
+                        let safe_t =
+                            (hit.t - backoff / delta.length().max(1e-6)).max(0.0);
+                        let stopped_delta = delta * safe_t;
+                        let remaining = delta * (1.0 - safe_t);
+                        let into_normal = remaining.dot(&hit.normal);
+                        let slide = remaining - hit.normal * into_normal;
+                        if slide.length_squared() <= 1e-10 {
+                            stopped_delta
+                        } else {
+                            let slide_pose = holtburger_common::position::WorldPosition {
+                                landblock_id: pose.landblock_id,
+                                coords: Vector3::new(
+                                    pose.coords.x + stopped_delta.x,
+                                    pose.coords.y + stopped_delta.y,
+                                    pose.coords.z + stopped_delta.z,
+                                ),
+                                rotation: pose.rotation,
+                            };
+                            let slide_clamped =
+                                match holtburger_world::spatial::sweep_sphere_against_static_aabbs(
+                                    &candidates,
+                                    &slide_pose,
+                                    slide,
+                                    radius,
+                                ) {
+                                    Some(slide_hit) => {
+                                        slide
+                                            * (slide_hit.t
+                                                - backoff / slide.length().max(1e-6))
+                                                .max(0.0)
+                                    }
+                                    None => slide,
+                                };
+                            stopped_delta + slide_clamped
+                        }
+                    }
+                }
+            }
+        };
         // Entity collision pass. Mirrors ACE's
         // `PhysicsObj.find_object_collisions`
         // (`Source/ACE.Server/Physics/PhysicsObj.cs:~410`), which
