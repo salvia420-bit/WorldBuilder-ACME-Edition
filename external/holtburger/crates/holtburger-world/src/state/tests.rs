@@ -522,6 +522,7 @@ fn resolve_body_projection_input_uses_grounded_motion_snapshot_without_vector_up
         sidestep_speed: None,
         turn_speed: crate::entity::OrderedMotionSpeed::from_f32(0.75),
         directive: None,
+        ..Default::default()
     });
     state.entities.insert(entity);
 
@@ -576,6 +577,7 @@ fn resolve_body_projection_input_falls_back_to_velocity_for_airborne_body() {
         sidestep_speed: None,
         turn_speed: None,
         directive: None,
+        ..Default::default()
     });
     state.entities.insert(entity);
 

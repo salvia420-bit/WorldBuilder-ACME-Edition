@@ -1238,6 +1238,34 @@ function classifyMotionCommand(cmd) {
   return null;
 }
 
+// Wave 2 (2026-06-08) — defensive low-16 → full-32bit expansion for the
+// MotionTable LINK lookup. The link inner key is the FULL 32-bit
+// MotionCommand (never the masked low-16; C3) — `lib.rs` already ships a
+// full command on the main KIND_MOTION_ACTION path, but the
+// `pollMotionActions` side-channel and any legacy caller can still hand
+// `setMotion` a bare low-16. If the high bits are already set we return the
+// value unchanged (lossless for the main path); otherwise we OR in the
+// correct Action class by RANGE, mirroring the Rust
+// `expand_motion_command_low16` exactly (a coarse attack/cast split would
+// mis-prefix the magic powerups, which classify "cast" but are 0x10-class).
+// Ranges per ACE MotionCommand.cs (cross-checked against chorizite):
+//   0x16..0x1D  Reload..JumpCharging (incl. Eat 0x1A / Drink 0x1B) → 0x40
+//   0x1E..0x39  AimLevel..MagicPray (aim + magic gestures)         → 0x40
+//   0x50..0x6E  FallDown..SpinAttack (melee/attack swings)         → 0x10
+//   0x6F..0x78  MagicPowerUp01..10 (cast windups)                  → 0x10
+//   0x11F..0x131 multi-strike attacks + colored powerups           → 0x10
+// Anything outside these ranges falls back to the use/emote class (0x40).
+function expandActionCommandLow16(cmd) {
+  const c = cmd >>> 0;
+  if ((c >>> 16) !== 0) return c; // already a full 32-bit command
+  const low = c & 0xffff;
+  const isAttackClass =
+    (low >= 0x0050 && low <= 0x0078) ||
+    (low >= 0x011f && low <= 0x0131);
+  const classBit = isAttackClass ? 0x10000000 : 0x40000000;
+  return (classBit | low) >>> 0;
+}
+
 // Wave 3.E (2026-05-19) — typed widening of `classifyMotionCommand`.
 //
 // **Purpose.** When the renderer plays a swing (`setMotion(guid, cmd,
@@ -5157,7 +5185,12 @@ export class EntityManager {
       // The arms-up incantation gesture must yield to the real cast
       // clip; otherwise both arms stick out through the spell animation.
       inst._castTween = null;
-      this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, cmd, stance);
+      // Wave 2 (2026-06-08, C3): the MotionTable link inner key is the
+      // FULL 32-bit command. lib.rs's main path already sends one, but a
+      // bare low-16 from the side-channel / legacy caller is expanded here
+      // so the link still resolves (no-op when already full-32bit).
+      const linkCmd = expandActionCommandLow16(cmd);
+      this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, linkCmd, stance);
       // Don't update `lastMotionCommand` — the next locomotion
       // broadcast should resolve its link transition from the
       // PREVIOUS locomotion cmd, not from this swing.
@@ -6523,7 +6556,30 @@ export class EntityManager {
     }
     if (!this.entityMap.has(inst.guid >>> 0)) return;
     const clip = entry?.clip;
-    if (!clip) return; // No link registered for this transition.
+    if (!clip) {
+      // No link registered for this (stance, from→to) transition. For
+      // locomotion transition links this is the common/expected case
+      // (most cycles have no explicit link clip), but for an Action-class
+      // one-shot (attack swing / cast / eat) a null clip means a genuinely
+      // MISSING MotionTable link entry — the swing/eat will be invisible.
+      // Wave 2 (2026-06-08): surface that as a one-line diag instead of a
+      // silent return so a missing link is observable in the console.
+      // classifyMotionCommand masks &0xffff, so it tolerates a full-32bit
+      // or low-16 command equally.
+      const tcls = (typeof classifyMotionCommand === "function")
+        ? classifyMotionCommand(toCmd >>> 0)
+        : null;
+      if (tcls === "attack" || tcls === "cast") {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[motion-link] no MotionTable link for ${(tcls)} 0x${(toCmd >>> 0).toString(16)} ` +
+          `(from 0x${(fromCmd >>> 0).toString(16)}, stance 0x${(stance >>> 0).toString(16)}, ` +
+          `mtable 0x${(mtableId >>> 0).toString(16)}) on entity 0x${(inst.guid >>> 0).toString(16)} ` +
+          `— swing/cast/eat will not play`,
+        );
+      }
+      return;
+    }
     // Use a stable cache key so repeated transitions reuse the same
     // AnimationAction (mixer-bound bindings live per-entity).
     const linkKey = `link:${fromCmd.toString(16)}->${toCmd.toString(16)}:${stance.toString(16)}`;

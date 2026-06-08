@@ -79,15 +79,24 @@ pub fn motion_allows_jump(substate: u32) -> bool {
 /// is a `pub u16` newtype), but PhatSDK's
 /// [`motion_allows_jump`] operates on the full 32-bit value.
 ///
-/// This is a partial table that ONLY covers the substates needed for
-/// jump-gating (the ranges enumerated in [`motion_allows_jump`] plus a
-/// few well-known idle states). Misses return `None`; the caller
-/// should preserve the previous substate when this happens (a
-/// permissive default keeps jump from breaking on unknown server
-/// motion commands).
+/// This is a partial table. It originally covered only the substates
+/// needed for jump-gating (the ranges enumerated in
+/// [`motion_allows_jump`] plus a few well-known idle states). Wave 2
+/// (2026-06-08) widened it to the full Action-class consumable/use range
+/// (Eat / Drink / Reading / JumpCharging — needed so the renderer can
+/// resolve the MotionTable link clip for B6's eat one-shot) and the
+/// melee/attack swing range (needed for B10 creature attacks), so that
+/// the single inbound `UpdateMotion` action command can be expanded ONCE
+/// here in Rust and shipped to JS as a full 32-bit `MotionCommand` (the
+/// MotionTable link inner key is the full value, never the masked
+/// low-16 — a wrong class prefix misses the DAT link entry just as badly
+/// as a missing one). Misses return `None`; the caller should preserve
+/// the previous substate when this happens (a permissive default keeps
+/// jump from breaking on unknown server motion commands).
 ///
-/// Sourced from ACE `Source/ACE.Entity/Enum/MotionCommand.cs` (lines
-/// 7-127 + the substate ranges starting at 304).
+/// Sourced from ACE `Source/ACE.Entity/Enum/MotionCommand.cs`
+/// (cross-checked against chorizite `Chorizite.Common/Enums/
+/// MotionCommand.cs`).
 pub fn expand_motion_command_low16(low16: u16) -> Option<u32> {
     match low16 {
         // Idle / locomotion (not in blocked set, but tracked so the
@@ -102,20 +111,39 @@ pub fn expand_motion_command_low16(low16: u16) -> Option<u32> {
         0x0008 => Some(0x4000_0008), // Fallen
         // Falling — NOT blocked here; is_airborne covers it.
         0x0015 => Some(0x4000_0015), // Falling
-        // Reload..Pickup — blocked.
-        0x0016 => Some(0x4000_0016), // Reload
-        0x0017 => Some(0x4000_0017), // Unload
-        0x0018 => Some(0x4000_0018), // Pickup
         // Crouch..Sleeping — blocked.
         0x0012 => Some(0x4100_0012), // Crouch
         0x0013 => Some(0x4100_0013), // Sitting
         0x0014 => Some(0x4100_0014), // Sleeping
-        // AimLevel..MagicPray — blocked.
+        // Reload..JumpCharging — the Action-class consumable/use range. The
+        // jump gate only blocks Reload..Pickup (`0x16..0x18`); the rest of
+        // the range (StoreInBackpack 0x19, Eat 0x1A, Drink 0x1B, Reading
+        // 0x1C, JumpCharging 0x1D) is NOT in the blocked set, but Wave 2
+        // needs the full 32-bit value so the renderer can resolve the
+        // MotionTable link clip for these one-shots (Eat / Drink especially
+        // — B6). All carry the `0x40000000` Action class prefix.
+        // ACE `MotionCommand.cs:29-37`: Reload=0x40000016 .. JumpCharging=
+        // 0x4000001d (verified against chorizite `MotionCommand.cs:29-37`).
+        0x0016..=0x001D => Some(0x4000_0000 | u32::from(low16)),
+        // AimLevel..MagicPray — blocked. Magic gesture / aim substates,
+        // Action class. ACE `MotionCommand.cs:37-64`.
         0x001E..=0x0039 => Some(0x4000_0000 | u32::from(low16)),
-        // MagicPowerUp01..MagicPowerUp10 — blocked.
+        // FallDown..SpinAttack — the melee/attack swing range, all class
+        // 0x10000000 in ACE `MotionCommand.cs:87-117` (FallDown 0x10000050
+        // .. SpinAttack 0x1000006e — includes ThrustMed/Low/High, Slash*,
+        // Backhand*, Shoot, AttackHigh/Med/Low 1-3, etc., e.g. SlashHigh
+        // 0x1000005b). Verified there is no non-0x10 prefix in this subrange
+        // (Cheer 0x1300004c sits at 0x4c, just below the range start).
+        0x0050..=0x006E => Some(0x1000_0000 | u32::from(low16)),
+        // MagicPowerUp01..MagicPowerUp10 — blocked. War-magic cast windups,
+        // class 0x10000000. ACE `MotionCommand.cs:118-127`.
         0x006F..=0x0078 => Some(0x1000_0000 | u32::from(low16)),
-        // TripleThrustLow..MagicPowerUp07Purple — blocked.
-        0x0128..=0x0131 => Some(0x1000_0000 | u32::from(low16)),
+        // DoubleSlashLow..MagicPowerUp07Purple — multi-strike attack chains
+        // + colored magic powerups, class 0x10000000. ACE
+        // `MotionCommand.cs:295-313` (DoubleSlashLow 0x1000011f ..
+        // MagicPowerUp07Purple 0x10000131). The jump gate's narrower
+        // `0x0128..=0x0131` blocked sub-range is a subset of this.
+        0x011F..=0x0131 => Some(0x1000_0000 | u32::from(low16)),
         // Jump — set explicitly by begin_jump; not normally
         // round-tripped via UpdateMotion.
         0x003B => Some(0x2500_003B), // Jump
@@ -247,6 +275,67 @@ mod motion_allows_jump_tests {
             motion_allows_jump(0x1000_0132),
             "MagicPowerUp08Purple is allowed"
         );
+    }
+}
+
+#[cfg(test)]
+mod expand_motion_command_low16_tests {
+    use super::*;
+
+    /// Wave 2 (2026-06-08) — Eat / Drink expand to their full 32-bit
+    /// Action-class values so B6's local eat one-shot can resolve its
+    /// MotionTable link. ACE `MotionCommand.cs:33-34`.
+    #[test]
+    fn eat_and_drink_expand_to_action_class() {
+        assert_eq!(
+            expand_motion_command_low16(0x1A),
+            Some(0x4000_001A),
+            "Eat low-16 0x1A must expand to 0x4000001A"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x1B),
+            Some(0x4000_001B),
+            "Drink low-16 0x1B must expand to 0x4000001B"
+        );
+    }
+
+    /// Wave 2 (2026-06-08) — a representative melee swing low-16
+    /// (SlashHigh 0x5B) carries the 0x10000000 attack class bit so B10
+    /// creature attacks resolve their swing link. ACE
+    /// `MotionCommand.cs:98`.
+    #[test]
+    fn attack_swing_expands_with_attack_class_bit() {
+        let slash_high = expand_motion_command_low16(0x5B)
+            .expect("SlashHigh low-16 0x5B must expand");
+        assert_eq!(
+            slash_high & 0xF000_0000,
+            0x1000_0000,
+            "SlashHigh must carry the 0x10000000 attack class bit"
+        );
+        assert_eq!(
+            slash_high, 0x1000_005B,
+            "SlashHigh must expand to its full 0x1000005B value"
+        );
+    }
+
+    /// The rest of the consumable/use range and the swing range keep the
+    /// pre-Wave-2 jump-gate values intact (no class regression).
+    #[test]
+    fn ranges_carry_correct_class_prefixes() {
+        // StoreInBackpack / Reading / JumpCharging — Action class.
+        assert_eq!(expand_motion_command_low16(0x19), Some(0x4000_0019));
+        assert_eq!(expand_motion_command_low16(0x1C), Some(0x4000_001C));
+        assert_eq!(expand_motion_command_low16(0x1D), Some(0x4000_001D));
+        // ThrustHigh / Shoot / AttackLow3 / SpinAttack — attack class.
+        assert_eq!(expand_motion_command_low16(0x5A), Some(0x1000_005A));
+        assert_eq!(expand_motion_command_low16(0x61), Some(0x1000_0061));
+        assert_eq!(expand_motion_command_low16(0x6A), Some(0x1000_006A));
+        assert_eq!(expand_motion_command_low16(0x6E), Some(0x1000_006E));
+        // DoubleSlashHigh — multi-strike attack class.
+        assert_eq!(expand_motion_command_low16(0x121), Some(0x1000_0121));
+        // Reload / Pickup still resolve (jump-gate range unchanged).
+        assert_eq!(expand_motion_command_low16(0x16), Some(0x4000_0016));
+        assert_eq!(expand_motion_command_low16(0x18), Some(0x4000_0018));
     }
 }
 

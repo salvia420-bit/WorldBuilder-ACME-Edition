@@ -17305,6 +17305,26 @@ const ENTITY_UPDATE_KIND_APPEARANCE: u32 = 6;
 ///   `motion_stance`  = `ParentEvent.placement` (the child's own grip pose key)
 /// All other fields are zeroed; JS resolves geometry from the cached rigs.
 const ENTITY_UPDATE_KIND_ATTACH: u32 = 7;
+/// Wave 2 (2026-06-08) — a one-shot Action-class motion command (a
+/// creature attack swing for B10, the local player's eat/drink for B6, or
+/// an emote/gesture) extracted from the `UpdateMotion` (0xF74C) action
+/// `commands` list. This is the SINGLE main-path route for the newest
+/// action command (the legacy `MOTION_ACTIONS` / `pollMotionActions`
+/// side-channel is now default-OFF for combat/eat so the two never
+/// double-play — see the `UpdateMotion` recv arm). Field reuse on
+/// `EntityUpdate`:
+///   `guid`           = entity GUID (may be the LOCAL player for eat/drink)
+///   `motion_command` = the FULL 32-bit `MotionCommand` (already expanded
+///                      in Rust — the MotionTable link inner key is the
+///                      full value, never the masked low-16)
+///   `motion_stance`  = `UpdateMotion.current_style`
+///   `motion_speed`   = the per-action playback speed (`MotionItem.speed`)
+/// Distinct from `KIND_MOTION` (locomotion): JS plays this as an OVERLAY
+/// one-shot for EVERY guid INCLUDING the local player — it never carries a
+/// locomotion command, so the local-player LOCOMOTION skip that protects
+/// the client-side gait predictor (B9) is left untouched. All other fields
+/// are zeroed.
+const ENTITY_UPDATE_KIND_MOTION_ACTION: u32 = 8;
 /// Phase 4 step 6f: ItemType bit 0x10000 = Portal. We auto-fire
 /// `GameAction::IdentifyObject(guid)` on every ObjectCreate that
 /// matches this bit so ACE pushes back the portal's
@@ -28681,6 +28701,19 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+// Wave 2 (2026-06-08) — per-entity last-played action sequence (15-bit) for the
+// MAIN-PATH (`KIND_MOTION_ACTION`) stamp-dedup. ACE re-broadcasts the current
+// `UpdateMotion` on unrelated state changes (e.g. a stance flip mid-swing), so
+// the same action command can arrive more than once; replaying it would restart
+// the swing/eat clip. Mirrors retail's per-object `server_action_stamp`
+// (`acclient.c:344388-344418`): the action plays only if its sequence is NEWER
+// under the half-range wrap compare. Keyed by guid → last sequence applied.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static MOTION_ACTION_STAMPS: std::cell::RefCell<std::collections::HashMap<u32, u16>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 /// Multi-action queue (2026-06-06) — drain the queued Action-class motion
 /// commands as a flat `Vec<u32>`, 4 per action: `[guid, command_low,
 /// packed_sequence, stance]`. JS: `for (let i = 0; i < a.length; i += 4) {…}`.
@@ -31676,6 +31709,99 @@ async fn recv_loop(
                                 // (`forward_speed`) → JS anim framerate scale.
                                 motion_speed: motion_speed_f32,
                             });
+                            // Wave 2 (2026-06-08) — MAIN-PATH action command.
+                            // The `commands` list carries the one-shot
+                            // Action-class command (creature attack swing B10,
+                            // local eat/drink B6, emote/gesture) that the
+                            // locomotion `motion_command` emit above DROPS
+                            // (`forward_command` and the action list are
+                            // independent slots on the wire). Surface the NEWEST
+                            // Action-class command — already EXPANDED to its full
+                            // 32-bit `MotionCommand` by the shared Wave-2 expander
+                            // (the MotionTable link inner key is the full value,
+                            // C3) — as a dedicated `KIND_MOTION_ACTION`
+                            // EntityUpdate. This is the SINGLE playback route for
+                            // it (C2): the JS arm plays it as a LoopOnce overlay
+                            // for EVERY guid, INCLUDING the local player, WITHOUT
+                            // carrying a locomotion command, so the local-gait
+                            // skip stays intact (C1). The extraction reuses the
+                            // canonical `EntityMotionSnapshot` so the wasm and
+                            // non-wasm (cli/TUI) paths agree byte-for-byte.
+                            let action_snapshot =
+                                holtburger_world::entity::EntityMotionSnapshot::from_movement_event(
+                                    &data,
+                                );
+                            let newest_action = action_snapshot
+                                .and_then(|s| s.action_command.map(|cmd| (cmd, s)));
+                            // 15-bit stamp-dedup: only emit when this action's
+                            // sequence is NEWER than the last one played for this
+                            // guid, so a re-broadcast UpdateMotion doesn't restart
+                            // the swing/eat clip. An action with no sequence
+                            // (shouldn't happen — the snapshot pairs them) emits.
+                            let action_is_new = match &newest_action {
+                                Some((_, snap)) => match snap.action_sequence {
+                                    Some(seq) => MOTION_ACTION_STAMPS.with(|m| {
+                                        let mut m = m.borrow_mut();
+                                        let guid_key = u32::from(data.guid);
+                                        let fresh = m
+                                            .get(&guid_key)
+                                            .map(|&prev| {
+                                                holtburger_common::sequence::is_newer_u16(seq, prev)
+                                            })
+                                            .unwrap_or(true);
+                                        if fresh {
+                                            m.insert(guid_key, seq);
+                                        }
+                                        fresh
+                                    }),
+                                    None => true,
+                                },
+                                None => false,
+                            };
+                            if let Some((action_cmd, snap)) = newest_action.filter(|_| action_is_new)
+                            {
+                                let action_speed = snap
+                                    .action_speed
+                                    .map(|s| s.to_f32())
+                                    .filter(|s| s.is_finite() && *s > 0.0)
+                                    .unwrap_or(1.0);
+                                entity_updates.borrow_mut().push(EntityUpdate {
+                                    kind: ENTITY_UPDATE_KIND_MOTION_ACTION,
+                                    guid: u32::from(data.guid),
+                                    model_id: 0,
+                                    landblock_id: 0,
+                                    x: 0.0,
+                                    y: 0.0,
+                                    z: 0.0,
+                                    qw: 1.0,
+                                    qx: 0.0,
+                                    qy: 0.0,
+                                    qz: 0.0,
+                                    wcid: 0,
+                                    item_type: 0,
+                                    name: String::new(),
+                                    obj_scale: 0.0,
+                                    icon_id: 0,
+                                    palette_id: 0,
+                                    mtable_id: 0,
+                                    model_changes: Vec::new(),
+                                    texture_changes: Vec::new(),
+                                    sub_palettes: Vec::new(),
+                                    portal_destination: String::new(),
+                                    vx: 0.0,
+                                    vy: 0.0,
+                                    vz: 0.0,
+                                    omega_z: 0.0,
+                                    // C3: full 32-bit command, no masking.
+                                    motion_command: action_cmd,
+                                    motion_stance: u32::from(data.current_style),
+                                    physics_script_did: 0,
+                                    sound_table_did: 0,
+                                    obj_desc_flags: 0,
+                                    weenie_flags: 0,
+                                    motion_speed: action_speed,
+                                });
+                            }
                             // Multi-action queue (2026-06-06, approach B):
                             // surface the Action-class `commands` Vec
                             // (emotes/gestures) the single `motion_command` emit
@@ -31684,6 +31810,15 @@ async fn recv_loop(
                             // carries `InterpretedMotionState.commands`. The
                             // `len() > 1` log is the reachability probe (does
                             // vanilla ACE ever pack >=2?).
+                            //
+                            // Wave 2 (2026-06-08, C2): the NEWEST Action-class
+                            // command now plays via the `KIND_MOTION_ACTION`
+                            // main path above, so SKIP it here — otherwise the
+                            // side-channel (when `?multiAction=on`) and the main
+                            // path would double-play the same swing/eat. The
+                            // newest item is identified by its `(command,
+                            // sequence)`. Remaining items (cosmetic gestures in a
+                            // rare multi-action frame) still queue.
                             #[cfg(target_arch = "wasm32")]
                             {
                                 if let MovementTypeData::Invalid(inv) = &data.data {
@@ -31695,12 +31830,28 @@ async fn recv_loop(
                                             actions.len(),
                                         ));
                                     }
-                                    if !actions.is_empty() {
+                                    // C2: the main path owns the newest Action
+                                    // command — identify it so we don't re-queue.
+                                    let newest_seq =
+                                        newest_action.as_ref().map(|(_, s)| s.action_sequence);
+                                    let queueable: Vec<&_> = actions
+                                        .iter()
+                                        .filter(|item| {
+                                            // Skip the item the main path plays:
+                                            // the newest Action-class command,
+                                            // matched on its 15-bit sequence.
+                                            match newest_seq {
+                                                Some(Some(seq)) => item.sequence() != seq,
+                                                _ => true,
+                                            }
+                                        })
+                                        .collect();
+                                    if !queueable.is_empty() {
                                         let guid = u32::from(data.guid);
                                         let stance = u32::from(data.current_style);
                                         MOTION_ACTIONS.with(|q| {
                                             let mut b = q.borrow_mut();
-                                            for item in actions {
+                                            for item in queueable {
                                                 b.push(guid);
                                                 b.push(u32::from(item.command.raw()));
                                                 b.push(u32::from(item.packed_sequence));

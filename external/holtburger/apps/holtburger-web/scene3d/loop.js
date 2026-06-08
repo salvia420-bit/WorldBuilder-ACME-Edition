@@ -77,6 +77,15 @@ const KIND_APPEARANCE = 6;
 // Reuses EntityUpdate fields: model_id = parent (wielder) guid (0 = detach),
 // motionCommand = ParentEvent.location, motionStance = ParentEvent.placement.
 const KIND_ATTACH = 7;
+// Wave 2 (2026-06-08) — a one-shot Action-class motion command (creature
+// attack swing B10, local eat/drink B6, emote/gesture) from the UpdateMotion
+// action `commands` list. motionCommand is the FULL 32-bit MotionCommand
+// (already expanded in Rust); motionStance is current_style; motionSpeed is
+// the per-action playback speed. Played as a LoopOnce OVERLAY via
+// em.setMotion → classifyMotionCommand → _tryPlayLink for EVERY guid
+// INCLUDING the local player — it never carries a locomotion command, so the
+// local-gait LOCOMOTION skip in the KIND_MOTION arms stays untouched (B9).
+const KIND_MOTION_ACTION = 8;
 
 // A2 (perf plan 2026-05-18) — module-scratch object passed to
 // `em.setVelocity` so we don't allocate a fresh `{guid,vx,vy,vz,omegaZ}`
@@ -1672,6 +1681,25 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         // for local-player landings — if it ever does arrive for
         // some other entity, the classifier still routes it through
         // entities.js STATIONARY (intentional, mirrors retail).
+      } else if (kind === KIND_MOTION_ACTION) {
+        // Wave 2 (2026-06-08) — one-shot Action-class command (creature
+        // attack swing B10, local eat/drink B6, emote/gesture). The wasm
+        // side already EXPANDED it to the full 32-bit MotionCommand and
+        // applied the 15-bit stamp-dedup, so we just route it through
+        // setMotion → classifyMotionCommand → _tryPlayLink, which plays it
+        // as a LoopOnce OVERLAY on top of the active locomotion cycle.
+        //
+        // Unlike KIND_MOTION, this fires for EVERY guid INCLUDING the local
+        // player: the command is ONLY ever an Action-class one-shot (never
+        // a locomotion command), so playing it does not touch the client-
+        // predicted gait — the local LOCOMOTION skip above is left intact
+        // (B9 gait predictor unaffected; C1).
+        const actionGuid = upd.guid >>> 0;
+        const actionCmd = (upd.motionCommand ?? 0) >>> 0;
+        const actionStance = (upd.motionStance ?? 0) >>> 0;
+        if (actionCmd !== 0 && typeof em.setMotion === "function") {
+          em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
+        }
       } else if (kind === KIND_APPEARANCE) {
         // Wave 7.3 — mid-game equip change. The wasm UpdateObject arm
         // packs only the four substitution-relevant fields; everything
@@ -1847,6 +1875,19 @@ export function installSharedDrainHook(scene3d) {
           // comment in the direct-drain path above; the local arms-up
           // overlay now clears via `kind=18` recv-side dispatch
           // (lib.rs Wave 10.1 + index.html kind=18 handler).
+        } else if (kind === KIND_MOTION_ACTION) {
+          // Wave 2 (2026-06-08) — one-shot Action-class command overlay.
+          // Mirrors the direct-drain arm above: setMotion plays it as a
+          // LoopOnce overlay for EVERY guid INCLUDING the local player
+          // (the command is never a locomotion command, so the local gait
+          // predictor / B9 LOCOMOTION skip is left intact; C1). The wasm
+          // side already expanded the full 32-bit command and stamp-deduped.
+          const actionGuid = upd.guid >>> 0;
+          const actionCmd = (upd.motionCommand ?? 0) >>> 0;
+          const actionStance = (upd.motionStance ?? 0) >>> 0;
+          if (actionCmd !== 0 && typeof em.setMotion === "function") {
+            em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
+          }
         }
       } catch (e) {
         // eslint-disable-next-line no-console

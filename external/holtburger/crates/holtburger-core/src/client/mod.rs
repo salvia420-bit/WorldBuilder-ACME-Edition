@@ -1222,6 +1222,7 @@ mod tests {
             sidestep_speed: None,
             turn_speed: OrderedMotionSpeed::from_f32(0.75),
             directive: None,
+            ..Default::default()
         });
         client.world.add_entity(remote);
 
@@ -1516,6 +1517,7 @@ mod tests {
             sidestep_speed: None,
             turn_speed: OrderedMotionSpeed::from_f32(0.75),
             directive: None,
+            ..Default::default()
         });
         client.world.add_entity(remote.clone());
 

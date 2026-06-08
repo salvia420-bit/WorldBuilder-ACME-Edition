@@ -14,7 +14,7 @@ use holtburger_protocol::messages::movement::messages::motion::{
     MoveToObject, MoveToPosition, MovementInvalid, TurnToHeading, TurnToObject,
 };
 use holtburger_protocol::messages::movement::{
-    InterpretedMotionCommand, MotionStance, MovementEventData, MovementTypeData,
+    InterpretedMotionCommand, MotionItem, MotionStance, MovementEventData, MovementTypeData,
 };
 use holtburger_protocol::messages::object::events::IdentifyObjectResponseEventData;
 use holtburger_protocol::messages::object::messages::description::ObjectDescriptionData;
@@ -34,6 +34,25 @@ pub struct EntityMotionSnapshot {
     pub sidestep_speed: Option<OrderedMotionSpeed>,
     pub turn_speed: Option<OrderedMotionSpeed>,
     pub directive: Option<EntityMotionDirective>,
+    /// Wave 2 (2026-06-08) — the newest Action-class command from the
+    /// `UpdateMotion` action `commands` list, **already expanded to its
+    /// full 32-bit `MotionCommand`** via
+    /// [`crate::player::expand_motion_command_low16`]. This is the swing
+    /// (B10 creature attacks) / eat-drink (B6) one-shot that rides in the
+    /// action command list, distinct from the forward/sidestep/turn
+    /// locomotion axes. `None` when the movement event carries no Action-
+    /// class command. The renderer routes this through its one-shot link
+    /// overlay (LoopOnce), never as a locomotion cycle.
+    pub action_command: Option<u32>,
+    /// 15-bit per-object action sequence (`MotionItem::sequence()`) of
+    /// [`Self::action_command`], for the renderer's stamp-dedup (a
+    /// repeated `UpdateMotion` carrying the same swing must not replay).
+    /// `None` when no action command is present.
+    pub action_sequence: Option<u16>,
+    /// Per-motion playback speed (`MotionItem::speed`) of
+    /// [`Self::action_command`], so a hasted/slowed swing or eat plays at
+    /// the right tempo. `None` when no action command is present.
+    pub action_speed: Option<OrderedMotionSpeed>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,6 +88,53 @@ impl EntityMotionSnapshot {
             .or(self.turn_command)
     }
 
+    /// Wave 2 (2026-06-08) — pull the NEWEST Action-class command out of
+    /// an `UpdateMotion` action `commands` list and return it expanded to
+    /// its full 32-bit `MotionCommand`, with its 15-bit sequence + speed.
+    ///
+    /// "Action class" means the expanded value carries the attack
+    /// (`0x10000000`) or use/emote (`0x40000000`) class bit — i.e. a swing
+    /// (B10), an eat/drink (B6), or a gesture, NOT a locomotion cycle.
+    /// Locomotion commands (Walk/Run/Stop/Ready/turn/sidestep) ride the
+    /// dedicated forward/sidestep/turn axes, so we deliberately ignore any
+    /// non-Action entry here to avoid double-driving the gait.
+    ///
+    /// "Newest" = the item with the highest 15-bit sequence under the
+    /// retail half-range wrap compare (`is_newer_u16`), matching the
+    /// per-object `server_action_stamp` ordering the renderer dedups on.
+    /// In practice vanilla ACE packs a single action per `UpdateMotion`,
+    /// but picking the newest is correct if it ever packs more.
+    fn newest_action_command(commands: &[MotionItem]) -> Option<(u32, u16, f32)> {
+        let mut best: Option<&MotionItem> = None;
+        for item in commands {
+            // Expand the low-16 to its full 32-bit value and keep it only
+            // if it lands in an Action class (attack / use-emote). A miss
+            // (None) is a command we don't model — skip it rather than
+            // mis-driving the rig with a half-formed key.
+            let Some(full) = crate::player::expand_motion_command_low16(item.command.raw()) else {
+                continue;
+            };
+            // The MotionCommand class is its TOP BYTE. An Action-class
+            // one-shot has class EXACTLY 0x10 (attack swings, e.g.
+            // SlashHigh 0x1000005B) or 0x40 (use/emote, e.g. Eat
+            // 0x4000001A). Locomotion commands also set the 0x40000000
+            // *bit* (RunForward 0x44000007, WalkForward 0x45000005, Ready
+            // 0x41000003), so a plain bit test would wrongly catch the
+            // gait — compare the full class byte instead.
+            let class = full & 0xFF00_0000;
+            if class != 0x1000_0000 && class != 0x4000_0000 {
+                continue;
+            }
+            best = match best {
+                Some(prev) if !is_newer_u16(item.sequence(), prev.sequence()) => Some(prev),
+                _ => Some(item),
+            };
+        }
+        let item = best?;
+        let full = crate::player::expand_motion_command_low16(item.command.raw())?;
+        Some((full, item.sequence(), item.speed))
+    }
+
     pub fn from_movement_event(data: &MovementEventData) -> Option<Self> {
         let mut snapshot = Self {
             current_style: MotionStance::from_interpreted(data.current_style),
@@ -76,6 +142,28 @@ impl EntityMotionSnapshot {
         };
 
         if let MovementTypeData::Invalid(invalid) = &data.data {
+            // Wave 2 (2026-06-08, C4): surface the Action-class command
+            // list for EVERY movement-type variant that carries an
+            // `InterpretedMotionState` on the wire — so a creature swinging
+            // (B10) or a local eat (B6) is not dropped. In this fork's wire
+            // model the action `commands` list lives ONLY in the
+            // `InterpretedMotionState` body, which (per
+            // `MovementEventData::unpack` / ACE
+            // `MovementManager.unpack_movement` `case 0`) is carried solely
+            // by `MovementType::Invalid`. The server-pathed `MoveToObject`
+            // / `MoveToPosition` / `TurnTo*` envelopes carry no command
+            // list, so there is nothing to surface for them; the "attack
+            // while moving" case arrives as a separate `Invalid`
+            // `UpdateMotion` whose `commands` we read here. If a future
+            // wire revision attaches a command list to another variant,
+            // extend this match alongside it.
+            if let Some((full, seq, speed)) =
+                Self::newest_action_command(&invalid.state.commands)
+            {
+                snapshot.action_command = Some(full);
+                snapshot.action_sequence = Some(seq);
+                snapshot.action_speed = OrderedMotionSpeed::from_f32(speed);
+            }
             if let Some(style) = invalid
                 .state
                 .current_style
@@ -125,7 +213,11 @@ impl EntityMotionSnapshot {
             || snapshot.forward_speed.is_some()
             || snapshot.sidestep_speed.is_some()
             || snapshot.turn_speed.is_some()
-            || snapshot.directive.is_some();
+            || snapshot.directive.is_some()
+            // Wave 2 (2026-06-08): a movement event carrying ONLY an
+            // Action-class swing/eat (no locomotion axis) must still yield
+            // a snapshot so the action command reaches the renderer.
+            || snapshot.action_command.is_some();
 
         has_data.then_some(snapshot)
     }
@@ -245,6 +337,99 @@ mod tests {
 
         assert_eq!(snapshot.current_style, Some(MotionStance::NonCombat));
         assert_eq!(snapshot.directive, None);
+    }
+
+    /// Wave 2 (2026-06-08) — a creature swing (SlashHigh) rides in the
+    /// `UpdateMotion` action `commands` list, NOT in `forward_command`.
+    /// `from_movement_event` must surface it on `action_command`, expanded
+    /// to its full 32-bit value, with its sequence + speed — even when no
+    /// locomotion axis is present (B10).
+    #[test]
+    fn invalid_movement_surfaces_newest_action_command_expanded() {
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        use holtburger_protocol::messages::movement::types::{
+            InterpretedMotionState, MotionItem,
+        };
+
+        let state = InterpretedMotionState {
+            // Two items: an older Thrust and a newer SlashHigh; the newest
+            // (highest sequence) must win.
+            commands: vec![
+                MotionItem::new(0x005Au16, 4, false, 1.0), // ThrustHigh, seq 4
+                MotionItem::new(0x005Bu16, 7, false, 1.5), // SlashHigh, seq 7
+            ],
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x50000001),
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state,
+                sticky_object: None,
+            }),
+        })
+        .expect("an action-only UpdateMotion must still yield a snapshot");
+
+        assert_eq!(
+            snapshot.action_command,
+            Some(0x1000_005B),
+            "newest action (SlashHigh) must surface expanded to full 32-bit"
+        );
+        assert_eq!(snapshot.action_sequence, Some(7));
+        assert_eq!(
+            snapshot.action_speed.map(|s| s.to_f32()),
+            Some(1.5),
+            "action speed must carry through for tempo scaling"
+        );
+        // The locomotion axes stay untouched — the swing is not a gait.
+        assert_eq!(snapshot.forward_command, None);
+    }
+
+    /// Wave 2 (2026-06-08) — Eat rides the action list as a `0x40000000`
+    /// use-class one-shot (B6). It must surface expanded, and a non-Action
+    /// command in the same list (e.g. RunForward) must be ignored here so
+    /// the gait is not double-driven.
+    #[test]
+    fn invalid_movement_surfaces_eat_and_ignores_locomotion_in_command_list() {
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        use holtburger_protocol::messages::movement::types::{
+            InterpretedMotionState, MotionItem,
+        };
+
+        let state = InterpretedMotionState {
+            commands: vec![
+                MotionItem::new(0x0007u16, 9, false, 1.0), // RunForward (not Action)
+                MotionItem::new(0x001Au16, 3, false, 1.0), // Eat (Action class)
+            ],
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x50000002),
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state,
+                sticky_object: None,
+            }),
+        })
+        .expect("an Eat action must yield a snapshot");
+
+        assert_eq!(
+            snapshot.action_command,
+            Some(0x4000_001A),
+            "Eat must surface as the 0x40000000 use-class command, ignoring RunForward"
+        );
     }
 
     #[test]
