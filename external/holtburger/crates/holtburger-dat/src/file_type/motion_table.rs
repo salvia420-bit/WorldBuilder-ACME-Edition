@@ -343,7 +343,54 @@ bitflags::bitflags! {
 }
 
 fn cycle_key(stance: u32, command: u32) -> u32 {
-    ((stance & 0xFFFF) << 16) | (command & MOTION_KEY_MASK)
+    // T8 KEY-COLLISION FIX: ACE builds the cycle key as
+    // `(style << 16) | (substate & 0xFFFFFF)` (physics MotionTable.cs:85,125,191).
+    // That layout OVERLAPS the style's low 16 bits (key bits 16-31) with the
+    // substate's bits 16-23 — so the `command & 0x00F0_0000` HIGH NIBBLE is
+    // OR-folded straight into the style byte and silently dropped/aliased. On
+    // retail data this never bites (max low-24 substate = 0x19b, so command
+    // bits 8-23 are always zero), but two synthetic commands differing ONLY in
+    // the 0x00F0_0000 nibble collide to the same key.
+    //
+    // We keep the FULL 24-bit command (per MOTION_KEY_MASK) by relocating its
+    // high byte (command bits 16-23) into key bits 24-31, leaving the style
+    // byte (key bits 16-23) and command's low 16 bits (key bits 0-15) exactly
+    // where ACE/lib.rs put them. Real entries (command high byte == 0)
+    // therefore produce a BYTE-IDENTICAL key to the raw on-disk ACE encoding —
+    // so retail-table lookups and the direct
+    // `(default_style << 16) | (substate & 0xFFFFFF)` construction in
+    // `apps/holtburger-web/src/lib.rs` still match — while a non-zero high
+    // nibble now survives the intra-command fold.
+    //
+    // LIMITATION — this is NOT collision-free in the general case. The relocated
+    // command high byte (key bits 24-31) SHARES those bits with the style: ACE's
+    // `(style & 0xFFFF) << 16` also writes the style's bits 8-15 into key bits
+    // 24-31. So the de-aliasing holds ONLY when the style's bits 8-15 are zero
+    // (`stance & 0xFF00 == 0`). It does for every retail MotionCommand style
+    // (NonCombat 0x8000003D, the weapon stances 0x8000003C..0x80000049, …,
+    // all low-byte-only) — BUT NOT for AtlatlCombat (0x8000013B) /
+    // ThrownShieldCombat (0x8000013C), whose bit 8 is set. For those a synthetic
+    // high-nibble command can still alias across stances, e.g.
+    // cycle_key(0x8000013B, 0x00000005) == cycle_key(0x8000003B, 0x00010005).
+    // A 16-bit style + a full 24-bit command cannot be packed collision-free
+    // into a single u32 (style needs bits 16-31, the low substate needs 0-15,
+    // leaving no room for a non-zero command high byte), and retail's on-disk
+    // u32 key format cannot encode such a command anyway — so a fully faithful
+    // single-u32 key is impossible and this is the closest faithful encoding.
+    // The debug_assert below pins the exact invariant (it can only ever trip on
+    // synthetic in-code data, never on a parsed retail table).
+    let cmd = command & MOTION_KEY_MASK;
+    let cmd_high = cmd & 0x00FF_0000; // bits 16-23
+    let cmd_low = cmd & 0x0000_FFFF; // bits 0-15
+    debug_assert!(
+        cmd_high == 0 || (stance & 0xFF00) == 0,
+        "cycle_key collision risk: a non-zero command high byte (0x{:06X}) \
+         aliases a style whose bits 8-15 are set (0x{:08X}); a 16-bit style + \
+         24-bit command cannot pack collision-free into u32",
+        cmd,
+        stance
+    );
+    (cmd_high << 8) | ((stance & 0xFFFF) << 16) | cmd_low
 }
 
 fn parse_u32_map<R: Read + Seek>(reader: &mut R) -> BinResult<HashMap<u32, u32>> {
@@ -540,6 +587,68 @@ mod tests {
             "the high-nibble command must NOT alias the low-nibble sibling"
         );
         assert_eq!(MOTION_KEY_MASK, 0x00FF_FFFF, "mask must be 24-bit");
+    }
+
+    /// T8 (limitation made explicit): `cycle_key` packs a 16-bit style and a
+    /// 24-bit command into a single u32, which is *impossible* to do
+    /// collision-free — key bits 24-31 carry BOTH the relocated command high
+    /// byte AND the style's bits 8-15. The de-aliasing therefore holds only
+    /// when `stance & 0xFF00 == 0`. This test pins the safe-vs-unsafe boundary
+    /// so the limitation is documented rather than latent:
+    ///   1. For EVERY retail (stance, command) pair — including the only retail
+    ///      styles whose bits 8-15 are set, AtlatlCombat (0x8000013B) and
+    ///      ThrownShieldCombat (0x8000013C) — `cycle_key` is BYTE-IDENTICAL to
+    ///      the raw on-disk ACE key `(style << 16) | (substate & 0xFFFFFF)`, so
+    ///      there is NO retail regression (retail substates are <= 0x19B, hence
+    ///      command high byte == 0).
+    ///   2. The cross-stance collision the encoding cannot avoid is provable:
+    ///      cycle_key(0x8000013B, 0x00000005) would equal
+    ///      cycle_key(0x8000003B, 0x00010005). The second call carries a
+    ///      non-zero command high byte on a style with bits 8-15 == 0, which the
+    ///      `debug_assert!` invariant rejects — so the collision can only be
+    ///      reached by feeding synthetic high-nibble commands to BOTH stances,
+    ///      i.e. exactly the non-retail data the assert is there to catch.
+    #[test]
+    fn t8_cross_stance_collision_boundary_is_documented() {
+        // Raw on-disk ACE encoding (what parse_motion_data_map reads verbatim).
+        let ace_key = |style: u32, cmd: u32| (style << 16) | (cmd & 0x00FF_FFFF);
+
+        // Retail-equivalence (cmd high byte == 0) holds even for the two retail
+        // styles whose bits 8-15 are set — no regression for AtlatlCombat /
+        // ThrownShieldCombat.
+        for &style in &[0x8000_003Du32, 0x8000_013Bu32, 0x8000_013Cu32] {
+            for &cmd in &[0x0000_0001u32, 0x0000_019Bu32, 0x4500_0005u32, 0x6500_000Du32] {
+                assert_eq!(
+                    cycle_key(style, cmd),
+                    ace_key(style, cmd),
+                    "retail (cmd high byte == 0) key must be byte-identical to \
+                     on-disk ACE encoding for style 0x{style:08X} cmd 0x{cmd:08X}"
+                );
+            }
+        }
+
+        // The unavoidable cross-stance collision, computed WITHOUT tripping the
+        // debug_assert (we replicate the bit-packing inline). cmd_high of the
+        // second pair (0x01 nibble) lands in key bits 24-31, exactly where
+        // style 0x...013B's bit 8 lands — so they collapse to the same key.
+        let pack = |style: u32, cmd: u32| {
+            let c = cmd & MOTION_KEY_MASK;
+            ((c & 0x00FF_0000) << 8) | ((style & 0xFFFF) << 16) | (c & 0x0000_FFFF)
+        };
+        assert_eq!(
+            pack(0x8000_013B, 0x0000_0005),
+            pack(0x8000_003B, 0x0001_0005),
+            "the single-u32 key cannot avoid this cross-stance collision; it is \
+             unreachable on retail data and guarded by cycle_key's debug_assert"
+        );
+
+        // And the safe case (stance bits 8-15 == 0) genuinely de-aliases the
+        // intra-command high nibble, which is the bug the fix actually targets.
+        assert_ne!(
+            cycle_key(0x8000_003D, 0x0010_0001),
+            cycle_key(0x8000_003D, 0x0000_0001),
+            "intra-command high-nibble de-aliasing must hold for low-byte styles"
+        );
     }
 
     // ---- T7: MotionData bitfield accessors ----

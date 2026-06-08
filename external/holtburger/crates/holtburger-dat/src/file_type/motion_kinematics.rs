@@ -199,7 +199,35 @@ impl MotionKinematicsTable {
 }
 
 fn cycle_key(stance: u32, command: u32) -> u32 {
-    ((stance & 0xFFFF) << 16) | (command & MOTION_KEY_MASK)
+    // T8 KEY-COLLISION FIX (mirrors motion_table.rs::cycle_key — same
+    // (stance, command) encoding). ACE's `(style << 16) | (substate & 0xFFFFFF)`
+    // overlaps the style byte (key bits 16-23) with the substate's bits 16-23,
+    // OR-folding the `command & 0x00F0_0000` high nibble into the style byte and
+    // dropping it. We relocate the command's high byte (bits 16-23) into key
+    // bits 24-31 so the FULL 24-bit command survives the intra-command fold,
+    // while real entries (command high byte == 0) stay byte-identical to the
+    // ACE on-disk encoding (and to the raw cycle keys dat2hba.rs copies straight
+    // out of MotionTable.cycles).
+    //
+    // LIMITATION — see motion_table.rs::cycle_key for the full analysis. Key
+    // bits 24-31 are SHARED with the style (`(stance & 0xFFFF) << 16` also
+    // writes the style's bits 8-15 there), so de-aliasing holds only when
+    // `stance & 0xFF00 == 0`. True for every retail style (low-byte-only) but
+    // NOT for AtlatlCombat (0x8000013B) / ThrownShieldCombat (0x8000013C). A
+    // 16-bit style + full 24-bit command cannot pack collision-free into u32;
+    // the debug_assert pins the invariant (only trips on synthetic in-code data).
+    let cmd = command & MOTION_KEY_MASK;
+    let cmd_high = cmd & 0x00FF_0000; // bits 16-23
+    let cmd_low = cmd & 0x0000_FFFF; // bits 0-15
+    debug_assert!(
+        cmd_high == 0 || (stance & 0xFF00) == 0,
+        "cycle_key collision risk: a non-zero command high byte (0x{:06X}) \
+         aliases a style whose bits 8-15 are set (0x{:08X}); a 16-bit style + \
+         24-bit command cannot pack collision-free into u32",
+        cmd,
+        stance
+    );
+    (cmd_high << 8) | ((stance & 0xFFFF) << 16) | cmd_low
 }
 
 fn read_u32_map<R: Read + Seek>(reader: &mut R) -> BinResult<HashMap<u32, u32>> {
