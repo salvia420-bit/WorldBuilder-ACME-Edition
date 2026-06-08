@@ -230,6 +230,136 @@ function buildTerrainVertexModulation(positions, terrainCodes, modRanges, lbX, l
   return { brightness, saturate, hue };
 }
 
+// === RP4 — per-LB DataTexture pools (2026-06-08) ===========================
+//
+// `vertexTypesTex` (9×9 RGBA8) and `mergeDataTex` (48×8 RGBA8, ?texMerge=on
+// only) are PER-LB GPU textures whose dimensions/format are FIXED across
+// every LB. On the prior code path each LB allocated a brand-new
+// `THREE.DataTexture` (a fresh GPU upload), and on LRU eviction that texture
+// was `.dispose()`'d (a GPU free). Crossing an LB boundary therefore churned
+// one (or two) full texture alloc+free per LB — pure waste, since the next
+// LB needs an identically-shaped texture.
+//
+// These pools recycle the GPU resource instead. Acquire pulls a texture off
+// the free list (or allocates one on a cold miss), then OVERWRITES every byte
+// of `tex.image.data` with this LB's codes and flags `needsUpdate` so three
+// re-uploads the new bytes into the SAME GPU texture object. The pooled
+// texture's `.dispose` is wrapped so the LRU's eviction-time `t.dispose()`
+// (landblock_lru.js step 5) returns the texture to the free list rather than
+// freeing the GPU resource — the standard pool-via-dispose-interception
+// pattern, fully contained in this file.
+//
+// CORRECTNESS INVARIANTS (see RP4 brief):
+//   * Full reset on reuse — the acquire helpers rewrite ALL 324 / 1536 bytes
+//     of the texture every time, so no stale codes from a prior LB bleed in.
+//   * No double-free / no aliasing — a texture only re-enters the free list
+//     via its wrapped dispose (called exactly once per eviction by the LRU);
+//     acquire only ever hands out a texture that is on the free list, so two
+//     resident LBs can never share one texture object.
+//   * The pool is per-session, fixed-shape, and self-limits to ~the max LB
+//     residency (LRU cap), so it does not grow unbounded.
+//   * Ring-shared textures (atlas, palette, detail arrays, road, alpha masks)
+//     are NOT pooled here — they live on `opts` and are cached scene3d-wide.
+//
+// The wrapped dispose carries a `__realDispose` handle so a future hard scene
+// teardown could force-free the whole pool if ever needed; today nothing
+// other than the LRU disposes these textures (verified: the only cross-file
+// references are the two `disposables.textures` track sites in index.js).
+const _vertexTypesTexFreeList = [];
+const _mergeDataTexFreeList = [];
+
+// Tag so the texture is recognisable in heap dumps / future audits and so a
+// double-recycle (dispose called twice) is a no-op rather than a corruption.
+const POOL_TAG = "__rp4Pooled";
+
+/**
+ * Install the pool-return dispose wrapper on a freshly-built pooled texture.
+ * The wrapper:
+ *   - on the FIRST dispose call (LRU eviction): pushes the texture back onto
+ *     `freeList` instead of freeing the GPU resource, and marks it as parked
+ *     so a stray second dispose is ignored.
+ *   - never touches `__realDispose` (the genuine THREE.Texture.dispose) — the
+ *     GPU resource is intentionally kept alive for reuse for the session.
+ */
+function _installPoolDispose(tex, freeList) {
+  const realDispose = tex.dispose.bind(tex);
+  tex.userData = { ...(tex.userData || {}), [POOL_TAG]: true, __parked: false };
+  tex.userData.__realDispose = realDispose;
+  tex.dispose = function pooledDispose() {
+    // Re-entrancy / double-free guard: only park once per checkout.
+    if (tex.userData.__parked) return;
+    tex.userData.__parked = true;
+    freeList.push(tex);
+  };
+  return tex;
+}
+
+/**
+ * Acquire a 9×9 vertex-types DataTexture for this LB. Reuses a pooled texture
+ * (overwriting all bytes) when one is free, else builds a fresh one via the
+ * shared adapter helper and installs the pool-return dispose wrapper.
+ *
+ * The byte layout + column-major transpose MUST stay bit-identical to
+ * `adapter.js::buildVertexTypesDataTexture` (RGBA8: R=terrainCode,
+ * G=roadCode*64, B=0, A=255) — the warm-path fill below mirrors it exactly so
+ * a re-baked LB is byte-identical to a cold-baked one.
+ */
+function acquireVertexTypesTex(terrainCodes, roadCodes) {
+  const tex = _vertexTypesTexFreeList.pop();
+  if (!tex) {
+    // Cold miss — build via the shared adapter helper (correct dims, filters,
+    // NoColorSpace, needsUpdate) then make it pool-managed.
+    const fresh = buildVertexTypesDataTexture(terrainCodes, roadCodes);
+    return _installPoolDispose(fresh, _vertexTypesTexFreeList);
+  }
+  // Warm hit — overwrite EVERY byte (full reset; no stale codes bleed in).
+  const bytes = tex.image.data; // Uint8Array(9*9*4)
+  for (let row = 0; row < 9; row += 1) {
+    for (let col = 0; col < 9; col += 1) {
+      const dst = (row * 9 + col) * 4;
+      const src = col * 9 + row; // column-major source (see adapter.js)
+      bytes[dst + 0] = terrainCodes[src];
+      bytes[dst + 1] = roadCodes ? roadCodes[src] * 64 : 0;
+      bytes[dst + 2] = 0;
+      bytes[dst + 3] = 255;
+    }
+  }
+  tex.userData.__parked = false; // checked back out
+  tex.needsUpdate = true; // re-upload the rewritten bytes to the same texture
+  return tex;
+}
+
+/**
+ * Acquire a 48×8 TexMerge DataTexture for this LB. `mergeBytes` is the wasm
+ * `terrainMergeData` block (Uint8Array length 48*8*4 = 1536). Reuses a pooled
+ * texture (overwriting all bytes) when one is free, else builds a fresh one
+ * with the same params the prior inline `new THREE.DataTexture(...)` used and
+ * installs the pool-return dispose wrapper.
+ */
+function acquireMergeDataTex(mergeBytes) {
+  const tex = _mergeDataTexFreeList.pop();
+  if (!tex) {
+    const fresh = new THREE.DataTexture(
+      Uint8Array.from(mergeBytes),
+      48,
+      8,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType
+    );
+    fresh.colorSpace = THREE.NoColorSpace; // packed data, not colour
+    fresh.magFilter = THREE.NearestFilter;
+    fresh.minFilter = THREE.NearestFilter;
+    fresh.generateMipmaps = false;
+    fresh.needsUpdate = true;
+    return _installPoolDispose(fresh, _mergeDataTexFreeList);
+  }
+  // Warm hit — overwrite EVERY byte (full reset).
+  tex.image.data.set(mergeBytes); // both length 1536
+  tex.userData.__parked = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 // === Wave 2.A / Agent 2.A — terrain palette LUT (2026-05-28) ===
 //
 // Retail's Region 1 ("Dereth") publishes a 32-entry terrain palette via
@@ -2300,28 +2430,20 @@ export async function bakeTerrainForLandblock(
     }
     material = scene3d._wireTerrainMaterial;
   } else {
-    vertexTypesTex = buildVertexTypesDataTexture(terrainCodesCopy, roadCodesCopy);
+    // RP4 — pooled 9×9 vertex-types texture (reuses the GPU texture across LB
+    // transitions; bytes fully overwritten per LB). See acquireVertexTypesTex.
+    vertexTypesTex = acquireVertexTypesTex(terrainCodesCopy, roadCodesCopy);
 
     // T1 — per-LB TexMerge data texture (48×8 RGBA8, NearestFilter). Built
     // only when `?texMerge=on` AND the wasm mesh carries merge data. The
     // shader reads it via texelFetch(uMergeData, ivec2(cx*6+slot, cy)). On
     // the off path mergeDataTex stays null and uTexMergeEnabled is 0.
     // (Declaration hoisted to function scope above; assigned here.)
+    // RP4 — pooled like vertexTypesTex (same fixed shape every LB).
     if (opts.texMergeEnabled) {
       const mergeBytes = wasmMesh.terrainMergeData; // Uint8Array(1536) or empty
       if (mergeBytes && mergeBytes.length === 48 * 8 * 4) {
-        mergeDataTex = new THREE.DataTexture(
-          Uint8Array.from(mergeBytes),
-          48,
-          8,
-          THREE.RGBAFormat,
-          THREE.UnsignedByteType
-        );
-        mergeDataTex.colorSpace = THREE.NoColorSpace; // packed data, not colour
-        mergeDataTex.magFilter = THREE.NearestFilter;
-        mergeDataTex.minFilter = THREE.NearestFilter;
-        mergeDataTex.generateMipmaps = false;
-        mergeDataTex.needsUpdate = true;
+        mergeDataTex = acquireMergeDataTex(mergeBytes);
       }
     }
 
