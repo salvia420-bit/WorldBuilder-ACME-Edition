@@ -1616,6 +1616,7 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         // locomotion frames). Mirror the KIND_POSITION local-guid skip (:1211)
         // and the 2D path's kind=5 skip (index.html ~6305). Remote entities
         // still drive their gait from the server echo.
+        const st = (upd.motionStance ?? 0) >>> 0;
         if (!isLocalPlayerGuid(motionGuid)) {
           const motionCmd = (upd.motionCommand ?? 0) >>> 0;
           // A1 (2026-05-29): forward the server's per-motion playback speed
@@ -1624,9 +1625,16 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
           em.setMotion(
             motionGuid,
             motionCmd,
-            (upd.motionStance ?? 0) >>> 0,
+            st,
             +(upd.motionSpeed ?? 1.0)
           );
+        } else if (st !== 0) {
+          // Track B9 (2026-06-08): keep skipping the server's local
+          // LOCOMOTION command (the predictor owns the gait), but restore
+          // the server-authoritative STANCE half of UpdateMotion 0xF74C.
+          // setLocalStance re-poses ONLY the Ready/idle base layer on a
+          // stance change and never disturbs the active walk/run clip.
+          em.setLocalStance(motionGuid, st);
         }
         // Wave 10 Phase 10.1 (2026-05-26) — removed the
         // Fallen→setAirborne(false) coupling here. The wasm-side
@@ -1792,15 +1800,22 @@ export function installSharedDrainHook(scene3d) {
           // client-predicted (W3.1, index.html ~10207); re-dispatching the
           // server echo fights the predictor and breaks the run loop. See the
           // matching block above (~:1232) for the full rationale.
+          const st = (upd.motionStance ?? 0) >>> 0;
           if (!isLocalPlayerGuid(motionGuid)) {
             const motionCmd = (upd.motionCommand ?? 0) >>> 0;
             // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
             em.setMotion(
               motionGuid,
               motionCmd,
-              (upd.motionStance ?? 0) >>> 0,
+              st,
               +(upd.motionSpeed ?? 1.0)
             );
+          } else if (st !== 0) {
+            // Track B9 (2026-06-08): skip the local LOCOMOTION command but
+            // restore the server-authoritative STANCE (see matching block
+            // above ~:1619). setLocalStance touches only the Ready/idle base
+            // pose and never the predictor-owned walk/run clip.
+            em.setLocalStance(motionGuid, st);
           }
           // Wave 10 Phase 10.1 (2026-05-26) — removed the
           // Fallen→setAirborne(false) coupling here. See the matching

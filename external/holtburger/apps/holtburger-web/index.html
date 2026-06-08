@@ -6466,6 +6466,16 @@ void main() {
           if (typeof applyConfirmedStance === "function") {
             applyConfirmedStance(upd.motionStance >>> 0);
           }
+          // Track B9 (2026-06-08): belt-and-suspenders — also re-pose the
+          // local 3D rig for the server-authoritative stance. The animation
+          // gate above (and loop.js KIND_MOTION) skips the local locomotion
+          // command, but the STANCE half of UpdateMotion 0xF74C must still
+          // reach the rig. setLocalStance touches only the Ready/idle base
+          // pose and never the predictor-owned walk/run clip.
+          window.liveScene3d?.entityManager?.setLocalStance?.(
+            localPlayerGuid,
+            upd.motionStance >>> 0
+          );
           return;
         }
         const entry = entityMap.get(guid);

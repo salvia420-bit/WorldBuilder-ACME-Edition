@@ -5281,6 +5281,74 @@ export class EntityManager {
   }
 
   /**
+   * Track B9 (2026-06-08) — apply the server-authoritative COMBAT STANCE
+   * to the LOCAL player's rig without disturbing its client-predicted
+   * locomotion.
+   *
+   * The local player's gait is owned by the W3.1 keystate predictor
+   * (`index.html` ~10457 fires `setMotion(localGuid, Run/Walk/Ready,
+   * stance)` on input); loop.js's KIND_MOTION arms therefore SKIP the
+   * server's UpdateMotion echo for the local guid so the echoed
+   * locomotion command can't fight the predictor (DIM10/A-2). But that
+   * skip ALSO dropped the server's STANCE half of UpdateMotion 0xF74C
+   * (ACE `Player_Combat.cs` ChangeCombatMode → `Creature_Combat.cs`
+   * SetCombatMode → GetCombatStance), so a combat-mode toggle never
+   * re-posed the local rig. This method restores ONLY the stance:
+   *
+   *   1. Stamp `inst.currentStance`/`inst.lastStance` so `getStance(guid)`
+   *      returns the confirmed stance — the predictor reads it on the
+   *      next input tick, so an in-flight walk/run re-resolves to the new
+   *      stance's cycle on its own without us touching the active clip.
+   *   2. ONLY when the resolved low-16 stance actually CHANGED, and ONLY
+   *      while the rig is NOT in an active walk/run locomotion clip,
+   *      replay the stance-aware Ready/idle base pose by delegating to
+   *      `setMotion(guid, Ready, motionStance)`. That reuses setMotion's
+   *      Stop/Invalid→Ready substitution and its 150ms stance-change
+   *      crossfade (`isStanceReadyChange`) — note we deliberately do NOT
+   *      pre-stamp `inst.lastStance` before that call so setMotion's
+   *      own `prevStance` capture still sees the change and fades.
+   *
+   * CONFLICT-GUARD (Track B9): this touches ONLY the Ready/idle base-pose
+   * layer. It MUST NEVER replace or restart the predictor-owned walk/run
+   * locomotion clip while the player is moving — so when the rig's last
+   * locomotion command classifies as walk/run we leave the active clip
+   * alone and let the predictor adopt the new stance on its next tick.
+   *
+   * @param {number} guid — local player GUID
+   * @param {number} motionStance — u32 MotionStance from UpdateMotion
+   */
+  setLocalStance(guid, motionStance) {
+    const g = (guid >>> 0);
+    const inst = this.entityMap.get(g);
+    if (!inst) return;
+    const stance = (motionStance >>> 0);
+    if (stance === 0) return; // motion-only broadcast — keep current stance
+    // Resolve the low-16 the same way setMotion compares stances, and
+    // detect whether the stance actually changed before we stamp it.
+    const prevStance = (inst.currentStance ?? inst.lastStance ?? 0) >>> 0;
+    const changed = (prevStance & 0xFFFF) !== (stance & 0xFFFF);
+    // Determine whether the rig is in an active walk/run locomotion clip
+    // owned by the predictor. If so, only stamp the stance — the predictor
+    // re-issues Run/Walk with the new stance on its next input tick
+    // (it reads getStance), so the active clip is left untouched.
+    const lastCls = classifyMotionCommand((inst.lastMotionCommand ?? 0) >>> 0);
+    const moving = lastCls === "walk" || lastCls === "run";
+    if (!changed || moving) {
+      // No pose swap: just record the confirmed stance so getStance()
+      // and the next predictor tick pick it up. (Always safe.)
+      inst.currentStance = stance;
+      inst.lastStance = stance;
+      return;
+    }
+    // Stationary AND the stance changed: replay the stance-aware Ready
+    // base pose via setMotion. We intentionally do NOT pre-stamp
+    // inst.lastStance/currentStance here — setMotion captures prevStance
+    // from inst.lastStance to drive its 150ms crossfade, then stamps both
+    // fields itself (`inst.currentStance = inst.lastStance = stance`).
+    this.setMotion(g, CMD_LOW_READY, stance);
+  }
+
+  /**
    * Wave 2 Phase 2.2 (2026-05-26) — layer a sidestep cycle on top of
    * the active forward locomotion clip.
    *
