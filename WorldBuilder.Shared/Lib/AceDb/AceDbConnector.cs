@@ -231,7 +231,11 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             }
 
             string insert = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "INSERT INTO `{0}`.`landblock_instance` (`guid`, `weenie_Class_Id`, `obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`, `angles_w`, `angles_x`, `angles_y`, `angles_z`) VALUES ({1}, {2}, {3}, {4:F6}, {5:F6}, {6:F6}, {7:F6}, {8:F6}, {9:F6}, {10:F6});",
+                // is_Link_Child is NOT NULL with no default in the ACE landblock_instance schema, so it
+                // MUST be supplied or the INSERT fails ("Field 'is_Link_Child' doesn't have a default value").
+                // WB placements are always standalone (not a link-child of a parent generator) → 0.
+                // last_Modified is omitted intentionally (it has a schema default).
+                "INSERT INTO `{0}`.`landblock_instance` (`guid`, `weenie_Class_Id`, `obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`, `angles_w`, `angles_x`, `angles_y`, `angles_z`, `is_Link_Child`) VALUES ({1}, {2}, {3}, {4:F6}, {5:F6}, {6:F6}, {7:F6}, {8:F6}, {9:F6}, {10:F6}, 0);",
                 databaseName, guid, record.WeenieClassId, record.ObjCellId,
                 record.OriginX, record.OriginY, record.OriginZ,
                 w, x, y, z);

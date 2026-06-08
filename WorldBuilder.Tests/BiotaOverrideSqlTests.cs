@@ -16,7 +16,7 @@ namespace WorldBuilder.Tests;
 ///
 /// Invariant families:
 ///   1. GOLDEN biota SQL matches ACE BiotaSQLWriter shape (id-keyed; palette adds `order`;
-///      generator 3rd column is biota_Class_Id; stub default flags 4294967295). Idempotent DELETE.
+///      generator 3rd column is weenie_Class_Id (live shard DDL); stub default flags 4294967295). Idempotent DELETE.
 ///   2. Guid threading: PlacementOverride placements key on the placement guid; a missing guid is
 ///      MINTED in the landblock static range; an out-of-range guid is SKIPPED with a warning. Never
 ///      crossed with the world weenie tables.
@@ -93,18 +93,19 @@ public class BiotaOverrideSqlTests {
     }
 
     [Fact]
-    public void BiotaGeneratorSql_Golden_ThirdColumnIsBiotaClassId() {
-        // Identical to the weenie generator EXCEPT column 3 name is biota_Class_Id (BiotaSQLWriter.cs:611).
+    public void BiotaGeneratorSql_Golden_ThirdColumnIsWeenieClassId() {
+        // Column 3 is weenie_Class_Id — matches the live ACE shard table (ShardBase.sql), NOT ACE's
+        // BiotaSQLWriter.cs:611 (which emits the schema-inconsistent biota_Class_Id, unusable in a live INSERT).
         const string expected =
             "DELETE FROM `biota_properties_generator` WHERE `object_Id` = 2058428416;\n" +
-            "INSERT INTO `biota_properties_generator` (`object_Id`, `probability`, `biota_Class_Id`, " +
+            "INSERT INTO `biota_properties_generator` (`object_Id`, `probability`, `weenie_Class_Id`, " +
             "`delay`, `init_Create`, `max_Create`, `when_Create`, `where_Create`, `stack_Size`, `palette_Id`, `shade`, " +
             "`obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`, `angles_W`, `angles_X`, `angles_Y`, `angles_Z`)\n" +
             "VALUES (2058428416, 1, 7, 5, 1, 3, 4, 1, NULL, 12, 0.25, 0xAB120100, 1.5, 2.5, 3.5, 1, 0, 0, 0);\n";
         string sql = AceDbConnector.GenerateBiotaGeneratorSql(Guid0, new List<PlacementGenerator> { SampleGenerator() })!;
         Assert.Equal(expected, sql);
-        Assert.Contains("`biota_Class_Id`", sql);
-        Assert.DoesNotContain("`weenie_Class_Id`", sql); // never the world column name
+        Assert.Contains("`weenie_Class_Id`", sql);
+        Assert.DoesNotContain("`biota_Class_Id`", sql); // ACE's SQLFormatter name, inconsistent w/ the actual shard column
     }
 
     [Fact]

@@ -26,8 +26,11 @@ namespace WorldBuilder.Shared.Lib.AceDb {
     /// default flags <c>4294967295</c> (BiotaSQLWriter.cs:45-48);</item>
     /// <item><c>biota_properties_palette</c> adds an <c>order</c> column the weenie table lacks
     /// (BiotaSQLWriter.cs:655);</item>
-    /// <item><c>biota_properties_generator</c>'s 3rd column is <c>biota_Class_Id</c> (NOT
-    /// <c>weenie_Class_Id</c>) — BiotaSQLWriter.cs:611;</item>
+    /// <item><c>biota_properties_generator</c>'s 3rd column is <c>weenie_Class_Id</c> — matching the
+    /// live ACE shard table (<c>Database/Base/ShardBase.sql</c> + entity
+    /// <c>BiotaPropertiesGenerator.WeenieClassId</c>). NB: ACE's own <c>BiotaSQLWriter.cs:611</c> emits
+    /// <c>biota_Class_Id</c>, but that name is inconsistent with the actual shard column, so a LIVE
+    /// INSERT must use <c>weenie_Class_Id</c> or it fails with "Unknown column 'biota_Class_Id'";</item>
     /// <item><c>biota_properties_position</c> / <c>_int</c> (type=3) / <c>_float</c> (type=12)
     /// mirror the weenie shapes.</item>
     /// </list>
@@ -118,12 +121,13 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             return sb.ToString();
         }
 
-        // ── biota_properties_generator (biota_Class_Id) ─────────────────────
+        // ── biota_properties_generator (weenie_Class_Id) ────────────────────
 
         /// <summary>
-        /// Emit <c>biota_properties_generator</c> for one placement's generator profiles. Identical
-        /// to the weenie generator emitter EXCEPT the 3rd column is named <c>biota_Class_Id</c>
-        /// (BiotaSQLWriter.cs:611) — the VALUE is still the spawn-target wcid. PaletteTemplate is
+        /// Emit <c>biota_properties_generator</c> for one placement's generator profiles. The 3rd
+        /// column is <c>weenie_Class_Id</c> (the spawn-target wcid), matching the live ACE shard table
+        /// (ShardBase.sql / BiotaPropertiesGenerator entity) — NOT ACE's BiotaSQLWriter.cs:611, which
+        /// emits the schema-inconsistent <c>biota_Class_Id</c> and would fail a live INSERT. PaletteTemplate is
         /// clamped to ACE's uint? domain (negatives → 0); the negative-clamp DIAGNOSTIC is surfaced
         /// by the validation/exporter layer, not here. Returns null when there are no profiles.
         /// </summary>
@@ -132,7 +136,7 @@ namespace WorldBuilder.Shared.Lib.AceDb {
 
             var sb = new StringBuilder();
             AppendBiotaDelete(sb, "biota_properties_generator", guid);
-            sb.AppendLine("INSERT INTO `biota_properties_generator` (`object_Id`, `probability`, `biota_Class_Id`, " +
+            sb.AppendLine("INSERT INTO `biota_properties_generator` (`object_Id`, `probability`, `weenie_Class_Id`, " +
                           "`delay`, `init_Create`, `max_Create`, `when_Create`, `where_Create`, `stack_Size`, `palette_Id`, `shade`, " +
                           "`obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`, `angles_W`, `angles_X`, `angles_Y`, `angles_Z`)");
 

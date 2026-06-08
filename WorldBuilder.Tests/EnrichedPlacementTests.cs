@@ -309,9 +309,9 @@ public partial class EnrichedPlacementTests {
         const string expected =
             "INSERT INTO `ace_world`.`landblock_instance` " +
             "(`guid`, `weenie_Class_Id`, `obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`, " +
-            "`angles_w`, `angles_x`, `angles_y`, `angles_z`) VALUES " +
+            "`angles_w`, `angles_x`, `angles_y`, `angles_z`, `is_Link_Child`) VALUES " +
             "(268435457, 1234, 2870083585, 10.000000, 20.000000, 30.000000, " +
-            "0.707100, 0.000000, 0.000000, 0.707100);";
+            "0.707100, 0.000000, 0.000000, 0.707100, 0);";
 
         string sql = AceDbConnector.GenerateInsertSql(rec);
         Assert.Equal(expected, sql);
@@ -558,9 +558,9 @@ public partial class EnrichedPlacementTests {
             nl +
             "INSERT INTO `ace_world`.`landblock_instance` " +
             "(`guid`, `weenie_Class_Id`, `obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`, " +
-            "`angles_w`, `angles_x`, `angles_y`, `angles_z`) VALUES " +
+            "`angles_w`, `angles_x`, `angles_y`, `angles_z`, `is_Link_Child`) VALUES " +
             "(268435457, 1234, 2870083585, 10.000000, 20.000000, 30.000000, " +
-            "0.707100, 0.000000, 0.000000, 0.707100);" + nl;
+            "0.707100, 0.000000, 0.000000, 0.707100, 0);" + nl;
 
         Assert.Equal(expected, batch);
         Assert.DoesNotContain("sub_Palette_Id", batch);
