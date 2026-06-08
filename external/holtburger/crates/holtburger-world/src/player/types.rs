@@ -884,6 +884,12 @@ impl PlayerState {
             return;
         }
         self.is_airborne = true;
+        // Trajectory lock (Track B3) — deliberately leave
+        // `current_planar_velocity` untouched: the last grounded tick's
+        // world-space planar velocity becomes the immutable airborne
+        // launch velocity (mid-air WASD must not re-aim it), mirroring
+        // retail `LeaveGround` / `get_leave_ground_velocity`
+        // (`MotionInterp.cs:192`).
         // Wave 5 Phase 5.1 (2026-05-26) — flag this airborne phase as
         // jump-initiated so the recv-loop animation emission can choose
         // Jump clip vs Falling cycle. The Jump clip is broadcast from

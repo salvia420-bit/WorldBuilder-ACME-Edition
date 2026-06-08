@@ -1122,20 +1122,28 @@ impl MovementSystem {
         // managed separately by the jump/fall arcs (see lines
         // 841-848). We only smooth X/Y.
         //
-        // When airborne, friction is skipped (matches retail's
-        // ON_WALKABLE_TS gate) and the input-derived `target_velocity`
-        // is applied directly. This lets a player who jumps mid-stride
-        // keep their forward momentum in the air, and lets a jump-
-        // backwards player flip direction in flight by holding W (with
-        // no friction to lag against — instant input response is fine
-        // mid-air since the rig is already in the airborne pose).
+        // When airborne, the trajectory is LOCKED to the launch velocity —
+        // mid-air WASD does NOT re-aim it (no mid-air steering), matching
+        // retail. ACE's `MotionInterp.contact_allows_move`
+        // (`MotionInterp.cs:584`) returns false for forward/sidestep
+        // velocity-bearing motions while there is no Contact, so a new
+        // forward/strafe command cannot drive a position delta in the air;
+        // the world-space planar velocity stamped at launch
+        // (`LeaveGround` / `get_leave_ground_velocity`, `MotionInterp.cs:192`)
+        // carries the body through the arc unchanged. The rig FACING can
+        // still turn in flight (TurnRight/TurnLeft are exempt from the
+        // contact gate) — that is handled by the omega path below, which
+        // rotates `pose.rotation` only and never re-derives this frozen
+        // world-space velocity.
         let smoothed_planar = if world.player.is_airborne {
-            // Airborne — pass the target through. The lateral velocity
-            // store stays in sync so a touchdown lands with the right
-            // initial velocity for friction-decay to act on.
-            let v = Vector3::new(target_velocity.x, target_velocity.y, 0.0);
-            world.player.current_planar_velocity = v;
-            v
+            // Airborne — use the frozen launch velocity verbatim. Do NOT
+            // recompute from `target_velocity` (that would let new WASD
+            // redirect the trajectory mid-air). `current_planar_velocity`
+            // is WORLD-FRAME (see `local_velocity_for_state` in
+            // `common.rs`, which rotates the magnitudes by heading), so it
+            // is applied to position below WITHOUT re-rotating by the
+            // in-flight heading.
+            world.player.current_planar_velocity
         } else {
             // Grounded: apply friction decay + accel cap, then snap to
             // zero below the small-velocity threshold.
@@ -2085,6 +2093,14 @@ impl MovementSystem {
         // user something now" prediction. No-op when the player
         // isn't turning (omega.z near zero), matching the existing
         // forward/strafe path that no-ops on zero velocity.
+        //
+        // This advances the FACING only. While airborne it keeps turning
+        // (retail exempts TurnRight/TurnLeft from the contact gate, see
+        // the airborne planar branch above), but it must NOT re-aim the
+        // frozen world-space launch velocity: `smoothed_planar` was read
+        // before this rotation and is applied to position as a world-frame
+        // delta, so turning the rig in flight changes where the player
+        // looks without curving the locked trajectory.
         if omega.z.abs() > f32::EPSILON {
             let new_heading = normalize_heading(heading + omega.z * dt_s);
             pose.rotation = Quaternion::from_heading(new_heading);
