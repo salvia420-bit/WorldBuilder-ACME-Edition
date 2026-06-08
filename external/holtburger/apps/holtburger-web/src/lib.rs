@@ -22000,6 +22000,17 @@ pub struct LocalPlayerPose {
     z: f32,
     heading: f32,
     landblock_id: u32,
+    /// Track B2 (2026-06-08): `true` when the local player is in
+    /// contact with the ground (`!world.player.is_airborne`). The JS
+    /// render path in `applyLocalPlayerPoseFromIntegrator`
+    /// (`scene3d/loop.js`) reads this via the `isOnGround` getter to
+    /// decide whether to clamp the rig to `getTerrainVisualZ` (grounded)
+    /// or render at the integrator's raw ballistic `z` (airborne), so
+    /// the gravity arc reaches the rig instead of being flattened every
+    /// frame. Distinct from the legacy `on_ground` fields on
+    /// `ClientPredictionFrame` / `LastClientPredictionJs`, which describe
+    /// the JS rAF integrator's separate prediction page.
+    on_ground: bool,
 }
 
 /// Wave 3.F internal carrier for the JS-side rAF integrator's pure
@@ -22204,6 +22215,15 @@ impl LocalPlayerPose {
     #[wasm_bindgen(getter, js_name = landblockId)]
     pub fn landblock_id(&self) -> u32 {
         self.landblock_id
+    }
+    /// Track B2 (2026-06-08): `true` when the local player is touching
+    /// the ground (`!world.player.is_airborne`). JS reads this as
+    /// `pose.isOnGround` in `applyLocalPlayerPoseFromIntegrator` to gate
+    /// whether the rig is clamped to `getTerrainVisualZ` (grounded) or
+    /// rendered at the integrator's raw ballistic `z` (airborne).
+    #[wasm_bindgen(getter, js_name = isOnGround)]
+    pub fn is_on_ground(&self) -> bool {
+        self.on_ground
     }
 }
 
@@ -28386,6 +28406,10 @@ fn publish_local_player_pose(
         z: pose.coords.z,
         heading,
         landblock_id: u32::from(pose.landblock_id),
+        // Track B2: grounded == not airborne. Lets the JS render path
+        // skip the per-frame `getTerrainVisualZ` clamp mid-jump so the
+        // integrator's ballistic z arc reaches the rig.
+        on_ground: !world.player.is_airborne,
     });
 
     // Movement trace (snapback investigation): record integrator pose vs raw

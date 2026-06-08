@@ -403,6 +403,9 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
 
   let posZ = predicted.z;
   let heading = 0;
+  // Track B2: default grounded so the legacy terrain-clamp path is used
+  // whenever the pose is unavailable (pre-spawn / read failure).
+  let isOnGround = true;
   if (sessionHandle && typeof sessionHandle.getLocalPlayerPose === "function") {
     try {
       const pose = sessionHandle.getLocalPlayerPose();
@@ -412,6 +415,9 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
         }
         if (typeof pose.heading === "number" && Number.isFinite(pose.heading)) {
           heading = pose.heading;
+        }
+        if (typeof pose.isOnGround === "boolean") {
+          isOnGround = pose.isOnGround;
         }
       }
     } catch (_) {}
@@ -426,23 +432,42 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   // the rendered terrain at the player's XY and use the visual Z if
   // the cast hits — physics/server pose stays untouched (see
   // `getTerrainVisualZ` doc in terrain.js).
-  let renderZ = getTerrainVisualZ(scene3d, predicted.x, predicted.y, posZ);
+  //
+  // Track B2 (2026-06-08): only clamp to the terrain mesh while
+  // grounded. Mid-jump the integrator's ballistic `posZ` IS the rig's
+  // altitude — clamping it to `getTerrainVisualZ` every frame flattened
+  // the gravity arc so the rig never left the ground (only the camera,
+  // which reads raw integrator Z, flew up). When airborne, render at the
+  // raw `posZ` so the arc reaches the rig.
+  let renderZ = isOnGround
+    ? getTerrainVisualZ(scene3d, predicted.x, predicted.y, posZ)
+    : posZ;
 
   // Low-pass the rig Z to kill the ~5-10 Hz vertical reconcile bob (see
   // the note atop this fn). Ease a persisted rig-Z toward `renderZ`; snap
   // through on big jumps. Framerate-independent (eases by wall-clock dt).
+  //
+  // Track B2: bypass the low-pass while airborne — the ballistic arc is
+  // a fast, intentional vertical move (not reconcile noise), so the
+  // 70 ms tau would lag/round it. Write `renderZ` straight through and
+  // keep the smoother's state in sync so the first grounded frame after
+  // touchdown eases from the correct altitude instead of snapping.
   {
     const now = (typeof performance !== "undefined" && performance.now)
       ? performance.now()
       : Date.now();
-    const st = scene3d._rigZSmooth;
-    if (st && Number.isFinite(st.z) && Math.abs(renderZ - st.z) <= RIG_Z_SNAP_M) {
-      const dtMs = Math.max(0, Math.min(now - st.ts, 100));
-      st.z += (renderZ - st.z) * (1.0 - Math.exp(-dtMs / RIG_Z_TAU_MS));
-      st.ts = now;
-      renderZ = st.z;
-    } else {
+    if (!isOnGround) {
       scene3d._rigZSmooth = { z: renderZ, ts: now };
+    } else {
+      const st = scene3d._rigZSmooth;
+      if (st && Number.isFinite(st.z) && Math.abs(renderZ - st.z) <= RIG_Z_SNAP_M) {
+        const dtMs = Math.max(0, Math.min(now - st.ts, 100));
+        st.z += (renderZ - st.z) * (1.0 - Math.exp(-dtMs / RIG_Z_TAU_MS));
+        st.ts = now;
+        renderZ = st.z;
+      } else {
+        scene3d._rigZSmooth = { z: renderZ, ts: now };
+      }
     }
   }
 
