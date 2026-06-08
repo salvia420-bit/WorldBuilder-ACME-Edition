@@ -314,6 +314,10 @@ import { materialCanCastShadow, SURFACE_TYPE } from "./materials.js";
 // entity-attached SetLight lights share identical color/intensity/falloff/
 // cone math. Only imported; constructs nothing at module load.
 import { buildLightForSetupLight } from "./lighting.js";
+// FCULL (2026-06-08) — distance horizon for the per-frame entity RENDER
+// cull. Only the constant is imported; the cull pass is driven from loop.js
+// via `tickEntityRenderVisibility`.
+import { CULL_DIST_SQ } from "./culling.js";
 
 // T11 (2026-05-28) — `?velScale=on` gates velocity-scaled locomotion cycle
 // speed (anti-ice-skating): the walk/run cycle's playback rate is scaled by
@@ -875,6 +879,205 @@ const _particleAttachScratchQuat = new THREE.Quaternion();
 // the destination (we then write into `inst.root.quaternion`, never
 // back into this scratch).
 const _omegaScratchQ = new THREE.Quaternion();
+
+// ── FCULL (2026-06-08) — composite entity visibility ─────────────────
+//
+// Two independent producers can want to hide/show an entity rig:
+//   1. STATE-authoritative visibility (NoDraw / Hidden / Cloaked / attach
+//      detach) — driven by wasm/server events through `setVisibility`,
+//      the NoDraw hook, and `_detachChild`. Stored on `inst._stateVisible`.
+//   2. RENDER cull (frustum + distance) — driven each frame by
+//      `tickEntityRenderVisibility`. Stored on `inst._renderCullHidden`.
+//
+// They must never overwrite each other. `inst.root.visible` is ALWAYS the
+// composite `stateVisible && !renderCullHidden`. Both setters below funnel
+// through `_applyEntityVisible`, which is the single writer of
+// `root.visible`. Defaults: stateVisible=true (spawn-visible), cull clear.
+
+function _applyEntityVisible(inst) {
+  if (!inst || !inst.root) return;
+  const stateVisible = inst._stateVisible !== false; // undefined → visible
+  const cullHidden = inst._renderCullHidden === true;
+  const want = stateVisible && !cullHidden;
+  if (inst.root.visible !== want) inst.root.visible = want;
+}
+
+/** Set the STATE-authoritative visibility (producer #1) + recompose. */
+function _setEntityStateVisible(inst, visible) {
+  if (!inst) return;
+  inst._stateVisible = !!visible;
+  _applyEntityVisible(inst);
+}
+
+// Conservative per-entity cull radius (m). Entity rigs animate so their
+// exact bounds shift every frame; rather than recompute a bounding sphere
+// per entity per frame (alloc + traversal), we test a fixed generous sphere
+// at the rig root. 6 m comfortably contains player/creature rigs (the
+// largest Dereth models — drudge lords, golems — fit) plus animation reach;
+// it is deliberately oversized so nothing pops at the frustum edge. The
+// sphere center is the entity's AC-space root position (entitiesGroup is
+// under worldRoot, so `root.position` IS AC-local — see file header).
+const ENTITY_CULL_RADIUS = 6;
+// Reused scratch sphere for the per-entity frustum test — radius is fixed,
+// only the center is rewritten per entity. Zero per-frame allocation.
+const _entityCullSphere = new THREE.Sphere(new THREE.Vector3(), ENTITY_CULL_RADIUS);
+
+// GUARDRAIL: never cull a rig that owns an active SetupModel SetLight — hiding
+// `inst.root` makes THREE skip the whole subtree, extinguishing any light
+// parented under a part / the root (lighting.js recordEntities → object3D.add)
+// and popping on-screen illumination from a light just off-screen. Detecting
+// this means a subtree walk, so we cache the result and only (re)scan when
+// lighting.js's `_setupLightScanned` marker changes (the single point at which
+// rig lights are attached). Returns false until lights have been scanned (no
+// lights ⇒ normal cull). Zero per-frame allocation in steady state.
+function _entityOwnsLight(inst) {
+  const scanned = inst._setupLightScanned === true;
+  if (inst._fcullLightScanGen === scanned) return inst._fcullOwnsLight === true;
+  inst._fcullLightScanGen = scanned;
+  let owns = false;
+  if (scanned) {
+    const parts = inst.parts;
+    if (Array.isArray(parts)) {
+      for (let pi = 0; pi < parts.length && !owns; pi++) {
+        const p = parts[pi];
+        const kids = p && p.children;
+        if (kids) {
+          for (let i = 0; i < kids.length; i++) {
+            if (kids[i] && kids[i].isLight) { owns = true; break; }
+          }
+        }
+      }
+    }
+    if (!owns) {
+      const rk = inst.root && inst.root.children;
+      if (rk) {
+        for (let i = 0; i < rk.length; i++) {
+          if (rk[i] && rk[i].isLight) { owns = true; break; }
+        }
+      }
+    }
+  }
+  inst._fcullOwnsLight = owns;
+  return owns;
+}
+
+/**
+ * ── FCULL — per-frame entity RENDER-visibility cull (2026-06-08). ─────
+ *
+ * Layered ON TOP of `_shouldTickEntity` (which gates UPDATES) without
+ * double-gating: this pass only writes `inst._renderCullHidden` and
+ * recomposes `root.visible`; it never touches mixer/hook/tween state. An
+ * entity can be ticked-but-culled (just left the frustum) or visible-but-
+ * not-ticked (NoDraw'd) — the two axes are independent.
+ *
+ * NEVER culls:
+ *   - the local player (always visible — it's the camera anchor);
+ *   - attached / wielded children (`_attachedParentGuid != null`) — they
+ *     are parented under the wielder's part node, so three.js already hides
+ *     them with the wielder; culling them here would fight that hierarchy;
+ *   - entities with no resolvable root position (fail-open).
+ *
+ * STATE-authoritative hides (NoDraw/Cloaked) compose correctly: an entity
+ * the server hid stays hidden whether or not the cull also wants to hide
+ * it, and un-culling never un-hides a server-hidden rig (see
+ * `_applyEntityVisible`).
+ *
+ * `culler` is the shared AC-space FrustumCuller, already `.update()`d this
+ * frame by loop.js. Fail-soft on every missing input.
+ */
+export function tickEntityRenderVisibility(scene3d, culler) {
+  const em = scene3d?.entityManager;
+  if (!em || !culler || !culler.valid) return { tested: 0, culled: 0 };
+  const map = em.entityMap;
+  if (!(map instanceof Map) || map.size === 0) return { tested: 0, culled: 0 };
+
+  // Resolve the local-player guid ONCE (never cull it). Same defensive
+  // resolution as `_shouldTickEntity`. GUARDRAIL: "NEVER cull local player" is
+  // unconditional, so when the live resolution fails (function absent / throws
+  // / returns null) we fall back to the LAST successfully-resolved guid
+  // (cached on scene3d) — once the camera-anchor rig is identified it stays
+  // cull-exempt even across a transient resolution gap.
+  let localGuid = null;
+  try {
+    if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+      const lpg = window.getLocalPlayerGuid();
+      if (lpg !== null && lpg !== undefined) localGuid = lpg >>> 0;
+    }
+  } catch (_) { /* fall back to the cached guid below */ }
+  if (localGuid !== null) {
+    scene3d._fcullLastLocalGuid = localGuid;
+  } else if (scene3d._fcullLastLocalGuid != null) {
+    localGuid = scene3d._fcullLastLocalGuid;
+  }
+
+  // Distance horizon padded by the entity radius so a rig straddling the
+  // boundary isn't clipped at its near edge. Precompute the padded squared
+  // threshold once (Infinity when ?cullDist disabled it → frustum-only).
+  const distHorizonSq =
+    CULL_DIST_SQ === Infinity
+      ? Infinity
+      : CULL_DIST_SQ +
+        ENTITY_CULL_RADIUS * ENTITY_CULL_RADIUS +
+        2 * ENTITY_CULL_RADIUS * Math.sqrt(CULL_DIST_SQ);
+
+  let tested = 0;
+  let culled = 0;
+  for (const inst of map.values()) {
+    if (!inst || !inst.root) continue;
+    // Local player — never cull (and clear any stale cull flag so a prior
+    // frame's hide can't linger if the guid only just resolved).
+    if (localGuid !== null && (inst.guid >>> 0) === localGuid) {
+      if (inst._renderCullHidden) {
+        inst._renderCullHidden = false;
+        _applyEntityVisible(inst);
+      }
+      continue;
+    }
+    // Attached / wielded child — hierarchy-governed, never cull directly.
+    if (inst._attachedParentGuid != null) {
+      if (inst._renderCullHidden) {
+        inst._renderCullHidden = false;
+        _applyEntityVisible(inst);
+      }
+      continue;
+    }
+    // Light-bearing rig — never cull (hiding it would extinguish the
+    // attached SetLight and pop on-screen illumination). See _entityOwnsLight.
+    if (_entityOwnsLight(inst)) {
+      if (inst._renderCullHidden) {
+        inst._renderCullHidden = false;
+        _applyEntityVisible(inst);
+      }
+      continue;
+    }
+    // Entity AC-space position. entitiesGroup is under worldRoot, so the
+    // rig's LOCAL position is already AC coords. Use it directly (no
+    // getWorldPosition round-trip — that would land in THREE world space,
+    // not the AC space the frustum lives in).
+    const p = inst.root.position;
+    if (!p) {
+      if (inst._renderCullHidden) {
+        inst._renderCullHidden = false;
+        _applyEntityVisible(inst);
+      }
+      continue;
+    }
+    tested += 1;
+    _entityCullSphere.center.set(p.x, p.y, p.z);
+    let want = culler.isSphereInFrustum(_entityCullSphere);
+    if (want && distHorizonSq !== Infinity) {
+      const distSq = culler.getDistanceSq(p.x, p.y, p.z);
+      if (distSq > distHorizonSq) want = false;
+    }
+    const cullHidden = !want;
+    if (inst._renderCullHidden !== cullHidden) {
+      inst._renderCullHidden = cullHidden;
+      _applyEntityVisible(inst);
+    }
+    if (cullHidden) culled += 1;
+  }
+  return { tested, culled };
+}
 
 // Wave 1.7 (2026-05-26, post-Joe-Trevis-quote restoration) — arms-up jump
 // pose overlay. Restored after Wave 1.2's deletion was determined to be
@@ -2965,7 +3168,11 @@ export class EntityManager {
     // equipped, which would otherwise drive a spurious visible=false here
     // and blank the in-hand weapon. Skip — the parent hierarchy decides.
     if (inst._attachedParentGuid != null) return;
-    inst.root.visible = !!visible;
+    // FCULL (2026-06-08) — route through the composite so a concurrent
+    // frustum/distance cull (`_renderCullHidden`) and this STATE-authoritative
+    // visibility don't fight: the rendered flag is `stateVisible &&
+    // !renderCullHidden`.
+    _setEntityStateVisible(inst, !!visible);
   }
 
   /**
@@ -3036,7 +3243,10 @@ export class EntityManager {
     // The wielder root may carry obj_scale; the child inherits it through
     // the part node (a juvenile creature holds a proportionally-placed
     // weapon — matches retail). Keep the child's own scale untouched.
-    c.root.visible = true;
+    // FCULL (2026-06-08) — set the STATE-visible baseline (true on attach);
+    // while attached the child is excluded from the cull walk (it follows
+    // the wielder's hierarchy visibility) so `_renderCullHidden` stays clear.
+    _setEntityStateVisible(c, true);
     c._attachedParentGuid = pGuid;
     c._attachedPlacement = placement >>> 0;
     if (!p._attachedChildren) p._attachedChildren = new Set();
@@ -8253,7 +8463,10 @@ export class EntityManager {
       // physics presence; we just hide/show the rig. `noDrawValue !== 0`
       // means "don't draw".
       const hidden = (hook.noDrawValue >>> 0) !== 0;
-      if (inst.root) inst.root.visible = !hidden;
+      // FCULL (2026-06-08) — composite with any active frustum/distance cull
+      // so the two never overwrite each other (NoDraw is STATE-authoritative;
+      // the cull is render-only).
+      if (inst.root) _setEntityStateVisible(inst, !hidden);
       this._noDrawHookFires = (this._noDrawHookFires | 0) + 1;
       return;
     }

@@ -37,9 +37,29 @@
 
 import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
 import { tickLightingForCellState } from "./lighting.js";
-import { getTerrainVisualZ } from "./terrain.js?v=phase-d-batch";
+import { getTerrainVisualZ, cullTerrainGroup } from "./terrain.js?v=phase-d-batch";
 import { SHADOW_RECEIVE_RANGE_SQ_M as BUILDINGS_SHADOW_RANGE_SQ_M } from "./buildings.js";
-import { SHADOW_RECEIVE_RANGE_SQ_M as STATICS_SHADOW_RANGE_SQ_M } from "./statics.js";
+import {
+  SHADOW_RECEIVE_RANGE_SQ_M as STATICS_SHADOW_RANGE_SQ_M,
+  cullStaticsGroup,
+} from "./statics.js";
+// FCULL (2026-06-08) — app-level frustum + distance render cull. loop.js
+// owns the import graph: it wires the per-domain cull fns into culling.js
+// (a three-only leaf module) via `setCullers`, then runs the coherent pass
+// as ONE CRITICAL per-frame step (below). `tickEntityRenderVisibility`
+// lives in entities.js so it can reach the EntityManager's private state.
+import { tickFrustumCull, setCullers } from "./culling.js";
+import { tickEntityRenderVisibility } from "./entities.js";
+
+// Wire the per-domain cullers once at module load. Each fn is `(scene3d,
+// culler) => void` and is individually fail-soft (tickFrustumCull also
+// wraps each in try/catch). Terrain is registered but only INVOKED when
+// `?cullTerrain=on` (the gate lives inside tickFrustumCull).
+setCullers({
+  statics: cullStaticsGroup,
+  entities: tickEntityRenderVisibility,
+  terrain: cullTerrainGroup,
+});
 import { weatherForState } from "./daygroup_weather.js";
 import { updateFromDayGroup as wxUpdateFromDayGroup } from "./weather_state.js";
 
@@ -1132,6 +1152,18 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
 
   // ── CRITICAL #1 — cell visibility (gates the whole scene). ───────────
   tickCellVisibility3D(scene3d, sessionHandle);
+  // ── CRITICAL #1.5 — FCULL app-level frustum + distance render cull. ──
+  // Runs AFTER cell-visibility (#1) so the world GROUPS already carry their
+  // correct `.visible` state, and BEFORE lighting (#5). It only gates per-
+  // OBJECT `.visible` INSIDE the already-visible statics/entities groups
+  // (and, opt-in, terrain) — it NEVER flips a group `.visible` flag, so it
+  // can't fight the wasm cell-visibility BFS. NEVER budget-deferred: the
+  // cost is one AC-space frustum build + cheap sphere tests over the live
+  // node/entity sets (no allocation in the hot path), and a deferred frame
+  // would leave stale objects drawn/hidden. Builds its own AC-space frustum
+  // from the active camera (mirrors cells.js's MVP order). Self-fail-soft
+  // (no camera / no worldRoot → culls nothing). `?frustumCull=off` disables.
+  tickFrustumCull(scene3d);
   // ── DEFERRABLE #2 (group PVS) — PVS-driven scenery + buildings ───────
   // expansion (paired with STATICS_RING_RADIUS=2 and BUILDINGS_RING_RADIUS=2
   // boot rings in index.js). Reads the wasm renderSet and triggers

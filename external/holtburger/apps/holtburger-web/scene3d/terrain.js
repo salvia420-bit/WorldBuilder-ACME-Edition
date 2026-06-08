@@ -32,6 +32,12 @@ import {
   getAdapterMaxAnisotropy,
 } from "./adapter.js";
 import { applyWireVertexAOPatch, applyFillDepthBias } from "./materials.js";
+// FCULL (2026-06-08) — distance horizon for the OPT-IN per-LB terrain cull
+// (`?cullTerrain=on`). Default OFF: three.js already per-mesh frustum-culls
+// terrain LB meshes correctly (plain Meshes with a lazily-computed geometry
+// bounding sphere), so app-level terrain culling is redundant in the common
+// case and exists only for A/B eye-test. Only the constant is imported.
+import { CULL_DIST_SQ } from "./culling.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -3079,4 +3085,94 @@ export function getTerrainVisualZ(scene3d, x, y, fallbackZ) {
   const z = _terrainVisualIntersects[0].point.y;
   _terrainVisualIntersects.length = 0;
   return Number.isFinite(z) ? z : fallbackZ;
+}
+
+// ── FCULL — OPT-IN per-LB terrain frustum + distance cull (2026-06-08) ─
+//
+// DEFAULT OFF (`?cullTerrain=on` to enable). Terrain LB meshes are plain
+// THREE.Meshes with `frustumCulled` left at the default `true`, so the
+// renderer ALREADY frustum-culls each LB per-mesh (using its lazily-
+// computed geometry bounding sphere) — app-level terrain culling is
+// redundant in the common case. We leave the COARSE gate to the wasm
+// cell-visibility BFS (which keeps `terrainGroup.visible`) + three's auto
+// per-mesh cull, exactly as the recon recommended.
+//
+// CAVEAT (why this is opt-in, not default): `getTerrainVisualZ` raycasts
+// the terrain group for nameplate Y-projection, and THREE's raycaster skips
+// `.visible === false` objects. Flipping an LB's `.visible` here would make
+// a nameplate that projects onto a culled (off-screen / far) LB fall back to
+// `fallbackZ`. That is benign (the LB is off-screen by definition) but it is
+// a behaviour change, so the pass is opt-in and the default path never
+// touches terrain `.visible`.
+//
+// The per-LB cull sphere is a CLOSED-FORM known-bounds sphere (no geometry
+// walk): center at the LB's AC-space middle (lb*192 + 96, height midpoint),
+// radius covering the 192×192 footprint half-diagonal plus the height span.
+// Cached on `userData._cullSphere` (terrain never moves). AC-space, so it
+// pairs directly with the AC-space FrustumCuller.
+
+const _terrainCullSphereScratch = new THREE.Vector3();
+
+function _resolveTerrainCullSphere(mesh) {
+  const ud = mesh.userData;
+  if (!ud) return null;
+  if (ud._cullSphere) return ud._cullSphere;
+  if (typeof ud.lbX !== "number" || typeof ud.lbY !== "number") return null;
+  const halfLb = METERS_PER_LANDBLOCK * 0.5; // 96 m
+  const cx = ud.lbX * METERS_PER_LANDBLOCK + halfLb;
+  const cy = ud.lbY * METERS_PER_LANDBLOCK + halfLb;
+  const hMin = Number.isFinite(ud.heightMin) ? ud.heightMin : 0;
+  const hMax = Number.isFinite(ud.heightMax) ? ud.heightMax : 0;
+  const cz = (hMin + hMax) * 0.5;
+  // Half-diagonal of the 192×192 footprint plus half the height span.
+  const halfHeight = Math.max(0, (hMax - hMin) * 0.5);
+  const footprintRadius = Math.sqrt(halfLb * halfLb + halfLb * halfLb);
+  const radius = Math.sqrt(
+    footprintRadius * footprintRadius + halfHeight * halfHeight
+  );
+  _terrainCullSphereScratch.set(cx, cy, cz);
+  const sphere = new THREE.Sphere(_terrainCullSphereScratch.clone(), radius);
+  ud._cullSphere = sphere;
+  return sphere;
+}
+
+/**
+ * Per-frame OPT-IN terrain cull. Only invoked by loop.js when
+ * `?cullTerrain=on`. `culler` is the shared AC-space FrustumCuller (already
+ * `.update()`d this frame). Fail-soft: missing group / sphere → leave the
+ * LB visible. Skips the paired wire-fill meshes (`userData.wireFillFor`),
+ * which inherit visibility from their wire partner.
+ */
+export function cullTerrainGroup(scene3d, culler) {
+  const group = scene3d?.terrainGroup;
+  if (!group || !culler || !culler.valid) return { tested: 0, culled: 0 };
+  const children = group.children;
+  if (!children || children.length === 0) return { tested: 0, culled: 0 };
+  let tested = 0;
+  let culled = 0;
+  for (const mesh of children) {
+    if (!mesh || !mesh.userData) continue;
+    // Wire-fill partner meshes have no lbX/lbY bounds of their own; they
+    // share geometry with the wire mesh. three's auto per-mesh cull handles
+    // them; skip here (they'd resolve a null sphere → fail-open anyway).
+    if (mesh.userData.wireFillFor) continue;
+    const sphere = _resolveTerrainCullSphere(mesh);
+    if (!sphere) {
+      if (mesh.visible === false) mesh.visible = true;
+      continue;
+    }
+    tested += 1;
+    let want = culler.isSphereInFrustum(sphere);
+    if (want && CULL_DIST_SQ !== Infinity) {
+      const c = sphere.center;
+      const distSq = culler.getDistanceSq(c.x, c.y, c.z);
+      const r = sphere.radius;
+      if (distSq > CULL_DIST_SQ + r * r + 2 * r * Math.sqrt(CULL_DIST_SQ)) {
+        want = false;
+      }
+    }
+    if (mesh.visible !== want) mesh.visible = want;
+    if (!want) culled += 1;
+  }
+  return { tested, culled };
 }

@@ -72,13 +72,11 @@
 //      Phase 7.2 capture, F#5+6 capture) stay green.
 
 import * as THREE from "three";
-import {
-  meshToGeometryGroups,
-  placementToMatrix4,
-} from "./adapter.js";
+import { meshToGeometryGroups } from "./adapter.js";
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
+import { CULL_DIST_SQ } from "./culling.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -1005,6 +1003,16 @@ function buildInstancedNode({
   // `computeBoundingSphere()` that walks the per-instance matrices
   // and expands the geometry's sphere.
   instanced.computeBoundingSphere();
+  // FCULL (2026-06-08) — DISABLE three.js's built-in frustum cull on the
+  // InstancedMesh. The renderer tests an InstancedMesh by transforming the
+  // SINGLE-instance `geometry.boundingSphere` by the NODE matrixWorld; it
+  // ignores the per-instance matrices, so a node whose instances are
+  // scattered across a 192 m landblock (node origin at one corner) gets
+  // wrongly culled the instant its origin leaves the frustum. The app-level
+  // cull pass (`cullStaticsGroup`) uses the AGGREGATE `boundingSphere`
+  // computed just above (it walks the instance matrices) and gates `.visible`
+  // correctly. `frustumCulled=false` hands the test to us alone.
+  instanced.frustumCulled = false;
 
   if (!degradedGeom) {
     return { node: instanced, isLod: false };
@@ -1030,6 +1038,10 @@ function buildInstancedNode({
   }
   degradedInstanced.instanceMatrix.needsUpdate = true;
   degradedInstanced.computeBoundingSphere();
+  // FCULL — same caveat as the full-detail leaf: disable three's broken
+  // single-instance frustum test; the app-level pass culls the LOD wrapper
+  // coherently using the aggregate sphere.
+  degradedInstanced.frustumCulled = false;
 
   const lod = new THREE.LOD();
   lod.name = `static-lod-${modelKey}-s${surfaceKey}`;
@@ -1119,7 +1131,14 @@ export async function bakeStaticsForLandblock(
   scene3d,
   lbX,
   lbY,
-  opts,
+  // FCULL (2026-06-08): the per-LB baker reads shared state (materialCache,
+  // shadowsEnabled, staticsBakedLbs) directly off `scene3d`, never this bag —
+  // it's a stub today (see `scene3d.staticsOpts` persist in bakeStaticsRing).
+  // It is the FOURTH POSITIONAL parameter and the live caller
+  // (index.js loadStaticsForLandblock) passes `this.staticsOpts` here, so it
+  // can't be dropped without shifting `wasmExports`; renamed `_opts` to mark
+  // it intentionally-unused while keeping the positional signature intact.
+  _opts,
   wasmExports
 ) {
   if (!scene3d || !scene3d.staticsGroup) {
@@ -1944,7 +1963,6 @@ const _bbCamWorld = new THREE.Vector3();
 const _bbCamLocal = new THREE.Vector3();
 const _bbInvMat = new THREE.Matrix4();
 const _bbEuler = new THREE.Euler();
-const _bbQuatFull = new THREE.Quaternion();
 const _bbDir = new THREE.Vector3();
 
 /**
@@ -2042,6 +2060,239 @@ export function tickStaticsBillboards(scene3d) {
     oriented += 1;
   }
   return oriented;
+}
+
+// ── FCULL — per-node frustum + distance render cull (2026-06-08) ──────
+//
+// Walks `scene3d.staticsGroup.children` once per frame and gates each
+// node's `.visible` against the AC-space FrustumCuller. Statics are
+// immobile, so each node's cull sphere is computed ONCE (lazily, cached on
+// `node.userData._cullSphere`) and reused every frame — zero per-frame
+// allocation in the hot path (one reused scratch sphere is only used during
+// the one-time build, not per frame).
+//
+// COHERENT-BY-CONSTRUCTION multi-surface culling: a multi-surface model
+// emits one node per (modelId, surface) — but every such node covers the
+// SAME placement set (singleton) or the SAME instance matrices (instanced),
+// so they all carry identical bounds and therefore flip `.visible` together
+// on the same frustum/distance decision. No explicit per-modelId grouping
+// is needed; testing each node independently yields the unit behaviour.
+//
+// INSTANCEDMESH CAVEAT: `frustumCulled=false` was set on every instanced
+// leaf at bake (so three's broken single-instance test is off); here we use
+// the AGGREGATE `node.boundingSphere` (computed from the instance matrices)
+// as the cull sphere, so scattered instances are never wrongly culled.
+//
+// We only gate per-OBJECT `.visible` INSIDE the already-visible
+// `staticsGroup`; we never touch the group flag (that's the wasm cell-
+// visibility BFS's job).
+
+// Reused scratch — only touched during the one-time per-node sphere BUILD,
+// never per frame after the cache is warm. Kept module-scoped so even the
+// cold path allocates nothing.
+const _cullCenterScratch = new THREE.Vector3();
+
+/**
+ * Resolve (and cache) the AC-local cull sphere for one statics node.
+ * Returns a THREE.Sphere in AC coords, or `null` when bounds can't be
+ * derived (caller treats null as "leave visible").
+ *
+ * - InstancedMesh: the aggregate `boundingSphere` (already AC-local — the
+ *   node has identity local transform and the instance matrices bake AC
+ *   world coords). Recomputed if absent.
+ * - LOD wrapper: the LOD node's AC-local position (its children sit at
+ *   LOD-local origin) + the largest level geometry's bounding radius,
+ *   scaled by the node scale. For instanced-LOD, the inner level's
+ *   aggregate `boundingSphere` radius is used (it already spans instances).
+ * - plain Mesh (singleton): the node position (AC-local) + the geometry
+ *   bounding radius × node scale.
+ */
+function _resolveStaticCullSphere(node) {
+  const cached = node.userData && node.userData._cullSphere;
+  if (cached) return cached;
+
+  let sphere = null;
+  if (node.isInstancedMesh) {
+    if (!node.boundingSphere) {
+      try {
+        node.computeBoundingSphere();
+      } catch (_) {
+        /* fall through to null */
+      }
+    }
+    if (node.boundingSphere) {
+      sphere = node.boundingSphere.clone();
+    }
+  } else if (node.isLOD) {
+    // Largest-radius level decides the cull bound (conservative — keep the
+    // node visible if ANY level would be on-screen). LOD children are at
+    // local origin; the LOD node itself carries the AC placement.
+    const lvls = node.levels;
+    let bestR = 0;
+    if (Array.isArray(lvls)) {
+      for (const lvl of lvls) {
+        const obj = lvl && lvl.object;
+        if (!obj) continue;
+        if (obj.isInstancedMesh) {
+          if (!obj.boundingSphere) {
+            try {
+              obj.computeBoundingSphere();
+            } catch (_) {}
+          }
+          // Instanced-LOD: the inner sphere already spans the instances in
+          // the node's local frame; its radius + |center| bounds the lot.
+          if (obj.boundingSphere) {
+            const bs = obj.boundingSphere;
+            const r = bs.radius + bs.center.length();
+            if (r > bestR) bestR = r;
+          }
+        } else if (obj.geometry) {
+          if (!obj.geometry.boundingSphere) {
+            try {
+              obj.geometry.computeBoundingSphere();
+            } catch (_) {}
+          }
+          // Use the rotation/offset-invariant bound (radius + |center|) so a
+          // LOD level whose geometry sphere is offset from the local origin
+          // (e.g. a tall model whose origin sits at its base) is fully
+          // contained by a sphere centred at node.position — mirrors the
+          // instanced-LOD sub-case above. Dropping |center| here would let
+          // the cull sphere miss the geometry's top and pop at the frustum
+          // edge.
+          const bs = obj.geometry.boundingSphere;
+          if (bs) {
+            const r = bs.radius + bs.center.length();
+            if (r > bestR) bestR = r;
+          }
+        }
+      }
+    }
+    const sx = Math.abs(node.scale?.x ?? 1);
+    const sy = Math.abs(node.scale?.y ?? 1);
+    const sz = Math.abs(node.scale?.z ?? 1);
+    const maxScale = Math.max(sx, sy, sz, 1e-6);
+    _cullCenterScratch.copy(node.position || _cullCenterScratch.set(0, 0, 0));
+    sphere = new THREE.Sphere(_cullCenterScratch.clone(), bestR * maxScale);
+  } else if (node.isMesh && node.geometry) {
+    if (!node.geometry.boundingSphere) {
+      try {
+        node.geometry.computeBoundingSphere();
+      } catch (_) {}
+    }
+    const bs = node.geometry.boundingSphere;
+    if (bs) {
+      const sx = Math.abs(node.scale?.x ?? 1);
+      const sy = Math.abs(node.scale?.y ?? 1);
+      const sz = Math.abs(node.scale?.z ?? 1);
+      const maxScale = Math.max(sx, sy, sz, 1e-6);
+      // Rotation-invariant bound: centre the cull sphere at node.position
+      // (the AC placement) and inflate the radius by the scaled geometry
+      // sphere offset (|center|). Singleton statics carry a real yaw
+      // (mesh.quaternion, statics.js:799); translating the center by an
+      // un-rotated bs.center would mis-place the sphere for horizontally
+      // asymmetric geometry, so we fold |center| into the radius instead —
+      // this always contains the geometry under any rotation.
+      _cullCenterScratch.copy(node.position || _cullCenterScratch.set(0, 0, 0));
+      sphere = new THREE.Sphere(
+        _cullCenterScratch.clone(),
+        (bs.radius + bs.center.length()) * maxScale
+      );
+    }
+  }
+
+  if (sphere) {
+    node.userData = node.userData || {};
+    node.userData._cullSphere = sphere;
+  }
+  return sphere;
+}
+
+/**
+ * True when a statics node owns an active SetupModel SetLight (lighting.js
+ * parents the THREE light as a direct child of the static's mesh — see
+ * lighting.js recordStatics / the `object3D.add(inst)` attach). Culling such
+ * a node (`node.visible = false`) makes THREE's projectObject skip the whole
+ * subtree, extinguishing the light — a lighting pop at the frustum edge for a
+ * lamp/brazier just off-screen that still illuminates on-screen geometry.
+ * We therefore exempt light-bearing nodes from culling (conservative: keep
+ * them rendered). Result is cached on userData and re-derived only when the
+ * node's child count changes (lights are attached AFTER node creation, so the
+ * cache must invalidate when a light is added/removed). Zero allocation.
+ */
+function _staticOwnsLight(node) {
+  const kids = node.children;
+  const n = kids ? kids.length : 0;
+  const ud = node.userData || (node.userData = {});
+  if (ud._lightScanCount === n) return ud._ownsLight === true;
+  ud._lightScanCount = n;
+  let owns = false;
+  for (let i = 0; i < n; i++) {
+    const c = kids[i];
+    if (c && c.isLight) {
+      owns = true;
+      break;
+    }
+  }
+  ud._ownsLight = owns;
+  return owns;
+}
+
+/**
+ * Per-frame statics cull. `culler` is the shared FrustumCuller (already
+ * `.update()`d this frame by loop.js). Fail-soft: missing group / camera /
+ * sphere → leave nodes visible. Returns `{ tested, culled }` for diag.
+ */
+export function cullStaticsGroup(scene3d, culler) {
+  const group = scene3d?.staticsGroup;
+  if (!group || !culler || !culler.valid) return { tested: 0, culled: 0 };
+  const children = group.children;
+  if (!children || children.length === 0) return { tested: 0, culled: 0 };
+
+  // Hoist the horizon sqrt out of the per-node loop (was recomputed per node
+  // per frame). `cullHorizon` is the metre horizon; the per-node test only
+  // needs to add the sphere radius to it.
+  const distEnabled = CULL_DIST_SQ !== Infinity;
+  const cullHorizon = distEnabled ? Math.sqrt(CULL_DIST_SQ) : 0;
+
+  let tested = 0;
+  let culled = 0;
+  for (const node of children) {
+    if (!node) continue;
+    const sphere = _resolveStaticCullSphere(node);
+    if (!sphere) {
+      // No derivable bounds — never hide (fail-open).
+      if (node.visible === false) node.visible = true;
+      continue;
+    }
+    // GUARDRAIL: never cull a node that owns an active SetLight — hiding it
+    // would extinguish the light and pop on-screen illumination.
+    if (_staticOwnsLight(node)) {
+      if (node.visible === false) node.visible = true;
+      continue;
+    }
+    tested += 1;
+    let want = culler.isSphereInFrustum(sphere);
+    // Distance horizon (conservative; disabled by default — Infinity unless
+    // ?cullDist=N opts in).
+    if (want && distEnabled) {
+      const c = sphere.center;
+      const distSq = culler.getDistanceSq(c.x, c.y, c.z);
+      // Add the sphere radius to the horizon so a large node straddling the
+      // boundary isn't clipped at its near edge: (cullHorizon + r)².
+      const r = sphere.radius;
+      const padded = cullHorizon + r;
+      if (distSq > padded * padded) {
+        want = false;
+      }
+    }
+    if (node.visible !== want) {
+      node.visible = want;
+      if (!want) culled += 1;
+    } else if (!want) {
+      culled += 1;
+    }
+  }
+  return { tested, culled };
 }
 
 // Self-managed rAF — same pattern as `nameplate_sprite.js`'s LOD loop.
