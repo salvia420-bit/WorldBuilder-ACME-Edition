@@ -1242,28 +1242,38 @@ function classifyMotionCommand(cmd) {
 // MotionTable LINK lookup. The link inner key is the FULL 32-bit
 // MotionCommand (never the masked low-16; C3) — `lib.rs` already ships a
 // full command on the main KIND_MOTION_ACTION path, but the
-// `pollMotionActions` side-channel and any legacy caller can still hand
-// `setMotion` a bare low-16. If the high bits are already set we return the
-// value unchanged (lossless for the main path); otherwise we OR in the
-// correct Action class by RANGE, mirroring the Rust
-// `expand_motion_command_low16` exactly (a coarse attack/cast split would
-// mis-prefix the magic powerups, which classify "cast" but are 0x10-class).
+// `pollMotionActions` side-channel (only reachable via default-OFF
+// `?multiAction=on`) and any legacy caller can still hand `setMotion` a
+// bare low-16. If the high bits are already set we return the value
+// unchanged (lossless for the main path); otherwise we OR in the correct
+// Action class by RANGE, mirroring the Rust `expand_motion_command_low16`
+// exactly (a coarse attack/cast split would mis-prefix the magic powerups,
+// which classify "cast" but are 0x10-class).
+//
 // Ranges per ACE MotionCommand.cs (cross-checked against chorizite):
-//   0x16..0x1D  Reload..JumpCharging (incl. Eat 0x1A / Drink 0x1B) → 0x40
-//   0x1E..0x39  AimLevel..MagicPray (aim + magic gestures)         → 0x40
-//   0x50..0x6E  FallDown..SpinAttack (melee/attack swings)         → 0x10
-//   0x6F..0x78  MagicPowerUp01..10 (cast windups)                  → 0x10
-//   0x11F..0x131 multi-strike attacks + colored powerups           → 0x10
-// Anything outside these ranges falls back to the use/emote class (0x40).
+//   0x16..0x1D   Reload..JumpCharging (incl. Eat 0x1A / Drink 0x1B) → 0x40
+//   0x1E..0x39   AimLevel..MagicPray (aim + magic gestures)         → 0x40
+//   0x50..0x6E   FallDown..SpinAttack (melee/attack swings)         → 0x10
+//   0x6F..0x78   MagicPowerUp01..10 (cast windups)                  → 0x10
+//   0x11F..0x134 multi-strike attacks + colored powerups            → 0x10
+// (Wave-2 review B6: 0x16..0x1D was NOT in the Rust expander's modeled
+// set before — it now is, so this mirror covers it.) A low-16 OUTSIDE
+// every modeled range is returned UNCHANGED — we must NOT fabricate a
+// wrong class (the previous catch-all `| 0x40000000` mis-prefixed
+// emotes / idle ambients, whose real classes are 0x13 / 0x10, making the
+// link lookup miss with a fake key instead of falling through cleanly).
 function expandActionCommandLow16(cmd) {
   const c = cmd >>> 0;
   if ((c >>> 16) !== 0) return c; // already a full 32-bit command
   const low = c & 0xffff;
   const isAttackClass =
     (low >= 0x0050 && low <= 0x0078) ||
-    (low >= 0x011f && low <= 0x0131);
-  const classBit = isAttackClass ? 0x10000000 : 0x40000000;
-  return (classBit | low) >>> 0;
+    (low >= 0x011f && low <= 0x0134);
+  const isUseClass = low >= 0x0016 && low <= 0x0039;
+  if (isAttackClass) return (0x10000000 | low) >>> 0;
+  if (isUseClass) return (0x40000000 | low) >>> 0;
+  // Outside every modeled range — don't fabricate a class; pass through.
+  return low >>> 0;
 }
 
 // Wave 3.E (2026-05-19) — typed widening of `classifyMotionCommand`.

@@ -7,7 +7,7 @@ pub mod types;
 
 pub use types::{
     MotionCommandCode, PlayerState, SkillBase, VitalBase, expand_motion_command_low16,
-    motion_allows_jump,
+    is_action_motion_command, motion_allows_jump,
 };
 
 #[cfg(test)]

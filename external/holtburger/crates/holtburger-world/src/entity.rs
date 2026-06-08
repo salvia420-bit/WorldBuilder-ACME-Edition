@@ -114,15 +114,18 @@ impl EntityMotionSnapshot {
             let Some(full) = crate::player::expand_motion_command_low16(item.command.raw()) else {
                 continue;
             };
-            // The MotionCommand class is its TOP BYTE. An Action-class
-            // one-shot has class EXACTLY 0x10 (attack swings, e.g.
-            // SlashHigh 0x1000005B) or 0x40 (use/emote, e.g. Eat
-            // 0x4000001A). Locomotion commands also set the 0x40000000
-            // *bit* (RunForward 0x44000007, WalkForward 0x45000005, Ready
-            // 0x41000003), so a plain bit test would wrongly catch the
-            // gait — compare the full class byte instead.
-            let class = full & 0xFF00_0000;
-            if class != 0x1000_0000 && class != 0x4000_0000 {
+            // Keep it ONLY if it is a GENUINE one-shot action — an attack
+            // swing (class 0x10, e.g. SlashHigh 0x1000005B / B10) or a
+            // narrow USE command (class 0x40, low-16 0x16..0x1D, e.g. Eat
+            // 0x4000001A / B6). The 0x40 class ALSO carries non-action
+            // STATE commands (Stop 0x40000004, Fallen 0x40000008, Dead
+            // 0x40000011, Falling 0x40000015) and aim/magic-gesture
+            // substates — surfacing those here would drive the LOCAL
+            // player's predicted gait off `KIND_MOTION_ACTION` (which has
+            // NO local-guid skip) = the C1/B9 regression. The shared
+            // `is_action_motion_command` predicate is the SINGLE source of
+            // truth for "is an action", reused by every surfacing path.
+            if !crate::player::is_action_motion_command(full) {
                 continue;
             }
             best = match best {
@@ -163,6 +166,38 @@ impl EntityMotionSnapshot {
                 snapshot.action_command = Some(full);
                 snapshot.action_sequence = Some(seq);
                 snapshot.action_speed = OrderedMotionSpeed::from_f32(speed);
+            } else if let Some(forward) = invalid.state.forward_command
+                && let Some(full) = crate::player::expand_motion_command_low16(forward.raw())
+                && crate::player::is_action_motion_command(full)
+            {
+                // Wave 2 (2026-06-08, review B6) — Eat 0x4000001A / Drink
+                // 0x4000001B carry the `CommandMask.SubState` (0x40000000)
+                // bit, NOT the Action (0x10000000) bit, so on a stock ACE
+                // server the eat path (`Player_Use.ApplyConsumable` ->
+                // `EnqueueMotion_Force(NonCombat, Eat)` ->
+                // `BroadcastMovement` `SetForwardCommand`) lands the eat in
+                // the wire `forward_command` slot, NOT the `commands`
+                // action list. Surface it here as the one-shot action so
+                // B6 (the local player eating) actually fires. The SAME
+                // narrow `is_action_motion_command` predicate guarantees
+                // only the genuine use range is picked up — locomotion
+                // (RunForward/WalkForward), stance (Ready/Crouch/Sit/Sleep),
+                // and state (Stop/Fallen/Dead/Falling) flow through the
+                // locomotion axis below, never onto the action overlay.
+                //
+                // No per-item stamp exists on `forward_command`, so we
+                // dedup on the per-broadcast `movement_sequence` (the u16
+                // ACE bumps each `UpdateMotion`). The lib.rs emit SUPPRESSES
+                // this same use-command from the `KIND_MOTION` locomotion
+                // `motion_command` so it plays on `KIND_MOTION_ACTION` ONLY
+                // (no double-play for remote players, who DO drive their
+                // gait off the server echo).
+                snapshot.action_command = Some(full);
+                snapshot.action_sequence = Some(data.movement_sequence);
+                snapshot.action_speed = invalid
+                    .state
+                    .forward_speed
+                    .and_then(OrderedMotionSpeed::from_f32);
             }
             if let Some(style) = invalid
                 .state
@@ -429,6 +464,202 @@ mod tests {
             snapshot.action_command,
             Some(0x4000_001A),
             "Eat must surface as the 0x40000000 use-class command, ignoring RunForward"
+        );
+    }
+
+    /// Wave 2 (2026-06-08, review C1) — a 0x40-class STATE command (Stop,
+    /// low-16 0x04 → 0x40000004) sitting in the `commands` list must NOT be
+    /// surfaced as an action. Surfacing it would emit it on
+    /// `KIND_MOTION_ACTION` (which has no local-guid skip) and drive the
+    /// LOCAL player's predicted-gait locomotion cycle — the C1/B9
+    /// regression. A genuine Eat (0x1A) and a genuine attack (SlashHigh
+    /// 0x5B) in the same list still ARE surfaced.
+    #[test]
+    fn invalid_movement_does_not_surface_substate_state_command_in_command_list() {
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        use holtburger_protocol::messages::movement::types::{
+            InterpretedMotionState, MotionItem,
+        };
+
+        // A Stop (0x04) STATE command alone in the list must yield NO action.
+        let stop_only = InterpretedMotionState {
+            commands: vec![MotionItem::new(0x0004u16, 5, false, 1.0)], // Stop, 0x40000004
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x5000_0003),
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state: stop_only,
+                sticky_object: None,
+            }),
+        });
+        assert_eq!(
+            snapshot.and_then(|s| s.action_command),
+            None,
+            "Stop (0x40000004) is a STATE command, never a one-shot action"
+        );
+
+        // Stop + Eat + SlashHigh together: only the genuine actions are
+        // eligible; the newest of them (SlashHigh, seq 9) wins.
+        let mixed = InterpretedMotionState {
+            commands: vec![
+                MotionItem::new(0x0004u16, 8, false, 1.0), // Stop (STATE) — ignored
+                MotionItem::new(0x001Au16, 6, false, 1.0), // Eat (action)
+                MotionItem::new(0x005Bu16, 9, false, 1.0), // SlashHigh (action, newest)
+            ],
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x5000_0003),
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state: mixed,
+                sticky_object: None,
+            }),
+        })
+        .expect("a list with genuine actions must yield a snapshot");
+        assert_eq!(
+            snapshot.action_command,
+            Some(0x1000_005B),
+            "the newest GENUINE action (SlashHigh) wins; Stop is never eligible"
+        );
+    }
+
+    /// Wave 2 (2026-06-08, review B6) — Eat arrives in the wire
+    /// `forward_command` slot on a stock ACE server (SubState bit, not the
+    /// Action bit). `from_movement_event` must surface it on
+    /// `action_command`. RunForward in `forward_command` (locomotion) must
+    /// NOT be surfaced as an action, and stays on the locomotion axis.
+    #[test]
+    fn forward_command_eat_surfaces_as_action_runforward_stays_locomotion() {
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        use holtburger_protocol::messages::movement::types::{
+            InterpretedMotionCommand, InterpretedMotionState,
+        };
+
+        // Eat (0x1A) in forward_command → surfaced as action; the snapshot
+        // still records forward_command verbatim (lib.rs suppresses it from
+        // the locomotion emit, not the snapshot).
+        let eat_fwd = InterpretedMotionState {
+            forward_command: Some(InterpretedMotionCommand::from(0x001Au16)),
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x5000_0004),
+            object_instance_sequence: 1,
+            movement_sequence: 42,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state: eat_fwd,
+                sticky_object: None,
+            }),
+        })
+        .expect("an eat in forward_command must yield a snapshot");
+        assert_eq!(
+            snapshot.action_command,
+            Some(0x4000_001A),
+            "eat in forward_command must surface as the use-class action"
+        );
+        assert_eq!(
+            snapshot.action_sequence,
+            Some(42),
+            "forward-command action dedups on movement_sequence"
+        );
+
+        // RunForward (0x07) in forward_command is locomotion — NOT an action.
+        let run_fwd = InterpretedMotionState {
+            forward_command: Some(InterpretedMotionCommand::RUN_FORWARD),
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x5000_0004),
+            object_instance_sequence: 1,
+            movement_sequence: 7,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state: run_fwd,
+                sticky_object: None,
+            }),
+        })
+        .expect("RunForward yields a locomotion snapshot");
+        assert_eq!(
+            snapshot.action_command, None,
+            "RunForward is locomotion, never a one-shot action"
+        );
+        assert_eq!(
+            snapshot.motion_command().map(|c| c.raw()),
+            Some(0x0007),
+            "RunForward stays on the locomotion forward axis"
+        );
+    }
+
+    /// Wave 2 (2026-06-08, review B6) — co-pack: RunForward on the
+    /// locomotion `forward_command` axis AND Eat in the `commands` action
+    /// list. The `commands` action takes priority for `action_command`
+    /// (it carries a real per-item stamp), RunForward stays locomotion, and
+    /// there is no double-play (the swing/eat is the single action overlay).
+    #[test]
+    fn forward_runforward_with_command_list_eat_surfaces_both_no_double_play() {
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        use holtburger_protocol::messages::movement::types::{
+            InterpretedMotionCommand, InterpretedMotionState, MotionItem,
+        };
+
+        let state = InterpretedMotionState {
+            forward_command: Some(InterpretedMotionCommand::RUN_FORWARD),
+            commands: vec![MotionItem::new(0x001Au16, 11, false, 1.0)], // Eat
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x5000_0005),
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state,
+                sticky_object: None,
+            }),
+        })
+        .expect("co-packed locomotion + action yields a snapshot");
+        assert_eq!(
+            snapshot.action_command,
+            Some(0x4000_001A),
+            "the commands-list eat is the single action overlay"
+        );
+        assert_eq!(
+            snapshot.action_sequence,
+            Some(11),
+            "commands-list action dedups on its own MotionItem stamp, not movement_sequence"
+        );
+        assert_eq!(
+            snapshot.motion_command().map(|c| c.raw()),
+            Some(0x0007),
+            "RunForward simultaneously drives the locomotion forward axis"
         );
     }
 

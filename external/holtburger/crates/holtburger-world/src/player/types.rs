@@ -138,16 +138,59 @@ pub fn expand_motion_command_low16(low16: u16) -> Option<u32> {
         // MagicPowerUp01..MagicPowerUp10 — blocked. War-magic cast windups,
         // class 0x10000000. ACE `MotionCommand.cs:118-127`.
         0x006F..=0x0078 => Some(0x1000_0000 | u32::from(low16)),
-        // DoubleSlashLow..MagicPowerUp07Purple — multi-strike attack chains
+        // DoubleSlashLow..MagicPowerUp10Purple — multi-strike attack chains
         // + colored magic powerups, class 0x10000000. ACE
-        // `MotionCommand.cs:295-313` (DoubleSlashLow 0x1000011f ..
-        // MagicPowerUp07Purple 0x10000131). The jump gate's narrower
-        // `0x0128..=0x0131` blocked sub-range is a subset of this.
-        0x011F..=0x0131 => Some(0x1000_0000 | u32::from(low16)),
+        // `MotionCommand.cs:295-316` (DoubleSlashLow 0x1000011f ..
+        // MagicPowerUp10Purple 0x10000134 — incl. MagicPowerUp08/09/10Purple
+        // 0x10000132/133/134, all verified class 0x10). Helper 0x13000135
+        // sits just past this range (class 0x13) and stays EXCLUDED. The
+        // jump gate's narrower `0x0128..=0x0131` blocked sub-range is a
+        // subset of this.
+        0x011F..=0x0134 => Some(0x1000_0000 | u32::from(low16)),
         // Jump — set explicitly by begin_jump; not normally
         // round-tripped via UpdateMotion.
         0x003B => Some(0x2500_003B), // Jump
         _ => None,
+    }
+}
+
+/// Wave 2 (2026-06-08, review C1/B6) — is this *expanded* 32-bit
+/// `MotionCommand` a GENUINE one-shot "action" (a swing / use / cast
+/// gesture the renderer plays ONCE as an overlay), as opposed to a
+/// locomotion / stance / lifecycle STATE command that drives a cycle?
+///
+/// This is the single shared notion of "is an action" reused by every
+/// surfacing path so locomotion/stance/state are NEVER mis-routed onto
+/// the one-shot overlay (which would drive the LOCAL player's predicted
+/// gait — the C1/B9 regression). It is deliberately NARROW:
+///
+/// * Class `0x10000000` — attack swings, magic windups, and multi-strike
+///   chains. Every member of this class in ACE `MotionCommand.cs` is a
+///   genuine one-shot action, so the whole class qualifies (B10).
+/// * Class `0x40000000` — accepted ONLY for the narrow Reload..JumpCharging
+///   USE range (low-16 `0x16..=0x1D`, which includes Eat `0x4000001A` /
+///   Drink `0x4000001B` — B6). The `0x40` class ALSO carries non-action
+///   STATE commands (Stop `0x40000004`, Fallen `0x40000008`, Dead
+///   `0x40000011`, Falling `0x40000015`) and the aim/magic-gesture
+///   substates (`0x4000001E..=0x40000039`) — none of which are surfaced
+///   as one-shot actions here.
+///
+/// Everything else (locomotion `0x44/0x45`, stance `0x41` Ready/Crouch/
+/// Sitting/Sleeping, lifecycle `0x13`, Jump `0x25`, …) is NOT an action.
+///
+/// Verified against ACE `Source/ACE.Entity/Enum/MotionCommand.cs` (Stop
+/// 0x40000004, Fallen 0x40000008, Dead 0x40000011, Falling 0x40000015,
+/// Eat 0x4000001a, Drink 0x4000001b, Ready 0x41000003).
+#[inline]
+pub fn is_action_motion_command(full: u32) -> bool {
+    match full & 0xFF00_0000 {
+        // Attack / magic windup / multi-strike — all genuine actions.
+        0x1000_0000 => true,
+        // Use class: ONLY the narrow Reload..JumpCharging use range
+        // (Eat / Drink live here). Excludes Stop/Fallen/Dead/Falling and
+        // the aim/magic-gesture substates that share the 0x40 class.
+        0x4000_0000 => matches!(full & 0x0000_FFFF, 0x0016..=0x001D),
+        _ => false,
     }
 }
 
@@ -336,6 +379,55 @@ mod expand_motion_command_low16_tests {
         // Reload / Pickup still resolve (jump-gate range unchanged).
         assert_eq!(expand_motion_command_low16(0x16), Some(0x4000_0016));
         assert_eq!(expand_motion_command_low16(0x18), Some(0x4000_0018));
+    }
+
+    /// Wave 2 (2026-06-08, review FIX 4a) — MagicPowerUp08/09/10Purple
+    /// (0x132/133/134) now expand to their class-0x10 attack values, and
+    /// Helper (0x135, class 0x13) stays a miss so its wrong class is never
+    /// fabricated.
+    #[test]
+    fn purple_powerups_08_to_10_expand_attack_class_helper_excluded() {
+        assert_eq!(expand_motion_command_low16(0x132), Some(0x1000_0132));
+        assert_eq!(expand_motion_command_low16(0x133), Some(0x1000_0133));
+        assert_eq!(expand_motion_command_low16(0x134), Some(0x1000_0134));
+        assert_eq!(
+            expand_motion_command_low16(0x135),
+            None,
+            "Helper (0x13000135) is class 0x13, not 0x10 — must stay excluded"
+        );
+    }
+
+    /// Wave 2 (2026-06-08, review C1/B6) — the shared action predicate is
+    /// the single source of truth for "is this a one-shot action". Class
+    /// 0x10 (all of it) and the narrow 0x40 use range (0x16..0x1D, incl.
+    /// Eat/Drink) are actions; 0x40-class STATE (Stop/Fallen/Dead/Falling),
+    /// 0x40-class aim/magic-gesture substates, 0x41 stance, and locomotion
+    /// are NOT.
+    #[test]
+    fn is_action_motion_command_is_narrow() {
+        // Genuine actions.
+        assert!(is_action_motion_command(0x1000_005B), "SlashHigh swing");
+        assert!(is_action_motion_command(0x1000_0078), "MagicPowerUp10");
+        assert!(is_action_motion_command(0x1000_0134), "MagicPowerUp10Purple");
+        assert!(is_action_motion_command(0x4000_001A), "Eat (use)");
+        assert!(is_action_motion_command(0x4000_001B), "Drink (use)");
+        assert!(is_action_motion_command(0x4000_0016), "Reload (use range)");
+        assert!(is_action_motion_command(0x4000_001D), "JumpCharging (use range)");
+        // 0x40-class STATE — NOT actions (the C1 hazard).
+        assert!(!is_action_motion_command(0x4000_0004), "Stop");
+        assert!(!is_action_motion_command(0x4000_0008), "Fallen");
+        assert!(!is_action_motion_command(0x4000_0011), "Dead");
+        assert!(!is_action_motion_command(0x4000_0015), "Falling");
+        // 0x40-class aim/magic-gesture substates — NOT surfaced as actions
+        // (deliberately narrow; do not broaden).
+        assert!(!is_action_motion_command(0x4000_001E), "AimLevel");
+        assert!(!is_action_motion_command(0x4000_0039), "MagicPray");
+        // Stance (0x41), locomotion (0x44/0x45), Jump (0x25) — NOT actions.
+        assert!(!is_action_motion_command(0x4100_0003), "Ready stance");
+        assert!(!is_action_motion_command(0x4100_0013), "Sitting stance");
+        assert!(!is_action_motion_command(0x4400_0007), "RunForward");
+        assert!(!is_action_motion_command(0x4500_0005), "WalkForward");
+        assert!(!is_action_motion_command(0x2500_003B), "Jump");
     }
 }
 

@@ -21647,6 +21647,17 @@ fn apply_inventory_object_delete(
     // long-session leak.
     entity_enchantments_index.borrow_mut().remove(&g_u32);
 
+    // Wave 2 (2026-06-08, review C3-leak) — prune the per-guid action
+    // stamp-dedup entry. `MOTION_ACTION_STAMPS` keys the last-played
+    // 15-bit action sequence by guid; without this prune it grows
+    // unbounded across despawn/relog (a dead guid never re-emits an
+    // action, so its entry would never be overwritten). Mirrors the
+    // per-guid prune discipline of the indexes above so a long session
+    // with heavy entity churn doesn't leak the map.
+    MOTION_ACTION_STAMPS.with(|m| {
+        m.borrow_mut().remove(&g_u32);
+    });
+
     was_owned
 }
 
@@ -31627,6 +31638,26 @@ async fn recv_loop(
                                     .state
                                     .forward_command
                                     .map(|c| c.raw())
+                                    // Wave 2 (2026-06-08, review B6) — SINGLE-ROUTE
+                                    // guarantee. A use-action (Eat 0x4000001A /
+                                    // Drink 0x4000001B) rides the `forward_command`
+                                    // slot on a stock ACE server, and the Wave-2
+                                    // action surfacing now picks it up here as a
+                                    // `KIND_MOTION_ACTION` one-shot. If we ALSO let
+                                    // it fall through to the locomotion
+                                    // `motion_command`, a REMOTE eater would play
+                                    // the eat clip TWICE (KIND_MOTION classifies
+                                    // 0x1A/0x1B as an INTERACTION LoopOnce overlay,
+                                    // and KIND_MOTION_ACTION plays it again). Drop
+                                    // it from the locomotion path so it plays on
+                                    // KIND_MOTION_ACTION ONLY. Locomotion / stance /
+                                    // state forward_commands are NOT actions and
+                                    // pass through unchanged (the gait still drives
+                                    // off the server echo for remotes).
+                                    .filter(|raw| {
+                                        !holtburger_world::player::expand_motion_command_low16(*raw)
+                                            .is_some_and(holtburger_world::player::is_action_motion_command)
+                                    })
                                     .unwrap_or(0),
                                 (
                                     MovementType::MoveToObject | MovementType::MoveToPosition,
