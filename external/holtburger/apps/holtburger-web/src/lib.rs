@@ -17789,6 +17789,16 @@ pub struct InventoryItem {
     attuned: u32,
     bonded: u32,
     containers_capacity: u32,
+    /// TRACK B8 (2026-06-08): per-item `PropertyInt::ItemsCapacity` (6) —
+    /// the number of non-container item slots a side pack holds. Twin of
+    /// `containers_capacity` above (which is the count of sub-containers,
+    /// NOT item slots). Surfaced so `rebuildItemsGrid` can pad a SIDE
+    /// pack's grid with empty drop cells up to its real item capacity
+    /// (the main pack uses the player-level `playerItemsCapacity` getter
+    /// instead). `0` for non-container items / when the property is
+    /// absent — JS treats `0` as capacity-unknown and renders the
+    /// occupied items only.
+    items_capacity: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -17934,6 +17944,14 @@ impl InventoryItem {
     #[wasm_bindgen(getter, js_name = containersCapacity)]
     pub fn containers_capacity(&self) -> u32 {
         self.containers_capacity
+    }
+
+    /// TRACK B8 (2026-06-08): per-item `PropertyInt::ItemsCapacity` (6) —
+    /// the side pack's item-slot count. JS reads via `itemsCapacity` to
+    /// pad a selected side pack's grid with empty drop cells.
+    #[wasm_bindgen(getter, js_name = itemsCapacity)]
+    pub fn items_capacity(&self) -> u32 {
+        self.items_capacity
     }
 }
 
@@ -22313,6 +22331,18 @@ struct LatestStats {
     // `playerShortcuts()`. ACE persists `(index, object_id)` only; the
     // wire still carries spell_id/layer for retail-shape symmetry.
     shortcuts: Vec<(u32, u32, u16, u16)>,
+    // TRACK B8 (2026-06-08): the local player's main-pack
+    // `PropertyInt::ItemsCapacity` (6) / `ContainersCapacity` (7), read
+    // off the player Entity via `WorldObjectExt::items_capacity()` /
+    // `containers_capacity()` — the same accessors `context.rs`'s
+    // capacity math + `find_non_full_pack` consume (verified correct +
+    // unit-tested). Surfaced so `rebuildItemsGrid` can pad empty drop
+    // slots up to the real pack capacity instead of rendering only the
+    // occupied cells. `0` when the property is absent (pre-spawn, or a
+    // CreateObject that lacked the `ITEMS_CAPACITY` weenie-flag) — JS
+    // treats `0` as capacity-unknown and degrades to occupied-only.
+    items_capacity: u32,
+    containers_capacity: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -22393,6 +22423,42 @@ impl SessionHandle {
             .as_ref()
             .map(|s| s.burden)
             .unwrap_or(0.0)
+    }
+
+    /// TRACK B8 (2026-06-08): the local player's main-pack
+    /// `PropertyInt::ItemsCapacity` (6) — the number of non-container item
+    /// slots the main pack holds (retail default ~102). Read off the
+    /// player Entity via `WorldObjectExt::items_capacity()` (the same
+    /// accessor `context.rs`'s capacity math + `find_non_full_pack`
+    /// consume) and cached on each `publish_player_stats_snapshot` (same
+    /// trigger as `playerBurden` — UpdateAttribute / equip / inventory
+    /// delta). JS reads via `playerItemsCapacity` so `rebuildItemsGrid`
+    /// can pad empty drop slots up to the real capacity. Returns `0`
+    /// pre-spawn / when the player CreateObject lacked the `ITEMS_CAPACITY`
+    /// weenie-flag — JS treats `0` as capacity-unknown and renders the
+    /// occupied items only (no full empty grid).
+    #[wasm_bindgen(getter, js_name = playerItemsCapacity)]
+    pub fn player_items_capacity(&self) -> u32 {
+        self.latest_stats
+            .borrow()
+            .as_ref()
+            .map(|s| s.items_capacity)
+            .unwrap_or(0)
+    }
+
+    /// TRACK B8 (2026-06-08): the local player's main-pack
+    /// `PropertyInt::ContainersCapacity` (7) — how many side-pack
+    /// containers the main pack can hold. Same source/trigger/fallback as
+    /// `playerItemsCapacity` (read via `WorldObjectExt::containers_capacity()`,
+    /// cached per stats snapshot, `0` when absent). JS reads via
+    /// `playerContainersCapacity`.
+    #[wasm_bindgen(getter, js_name = playerContainersCapacity)]
+    pub fn player_containers_capacity(&self) -> u32 {
+        self.latest_stats
+            .borrow()
+            .as_ref()
+            .map(|s| s.containers_capacity)
+            .unwrap_or(0)
     }
 
     /// T1 (2026-06-02): the player's current run-rate factor (ACE
@@ -27562,6 +27628,29 @@ fn publish_player_stats_snapshot(
     // matches what the cli sees. (`WorldContextExt` already in scope
     // from the burden read a few lines above.)
     let skill_credits = world.player_unspent_skill_points();
+    // TRACK B8 (2026-06-08): pull the player's main-pack ItemsCapacity /
+    // ContainersCapacity straight off the local-player Entity via the
+    // `WorldObjectExt` accessors (in scope from the function-top `use`).
+    // These are PropertyInt::ItemsCapacity (6) / ContainersCapacity (7),
+    // hydrated from the player CreateObject's `ITEMS_CAPACITY` weenie-flag
+    // (`hydration.rs:85-89`) — the SAME values `context.rs`'s capacity math
+    // + `find_non_full_pack` already consume. Surfaced via the
+    // `playerItemsCapacity` / `playerContainersCapacity` getters so
+    // `rebuildItemsGrid` can pad empty drop slots up to the real capacity.
+    // `0` when the property is absent (pre-spawn / a CreateObject missing
+    // the flag) — JS treats `0` as capacity-unknown and renders
+    // occupied-only. Re-read on the same triggers as burden (inventory
+    // delta / equip), so the grid stays in sync as the pack fills.
+    let (items_capacity, containers_capacity) = world
+        .entities
+        .get(world.player.guid)
+        .map(|entity| {
+            (
+                entity.items_capacity().unwrap_or(0),
+                entity.containers_capacity().unwrap_or(0),
+            )
+        })
+        .unwrap_or((0, 0));
     // P0-2 follow-up (2026-06-05): raw CharacterOptions1/2 bits straight
     // off the cached player struct. Hydrated by PlayerDescription on
     // login (PlayerState.options1/options2) and optimistically updated by
@@ -27592,6 +27681,8 @@ fn publish_player_stats_snapshot(
         character_options1,
         character_options2,
         shortcuts,
+        items_capacity,
+        containers_capacity,
     });
 }
 
@@ -27690,6 +27781,13 @@ fn publish_player_inventory_snapshot(
             .get_int_prop(PropertyInt::ContainersCapacity)
             .map(|bits| bits as u32)
             .unwrap_or(0);
+        // TRACK B8 (2026-06-08): item-slot capacity for side packs (twin
+        // of containers_capacity above). Same accessor pattern; `0` for
+        // non-container items. Drives the side-pack grid's empty-cell pad.
+        let items_capacity = entity
+            .get_int_prop(PropertyInt::ItemsCapacity)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -27710,6 +27808,7 @@ fn publish_player_inventory_snapshot(
             attuned,
             bonded,
             containers_capacity,
+            items_capacity,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS

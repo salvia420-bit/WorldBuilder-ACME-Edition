@@ -776,6 +776,17 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-inv-slot.selected {
       filter: drop-shadow(0 0 4px var(--hb-text-gold)) brightness(1.2);
     }
+    /* TRACK B8 (2026-06-08): empty drop-target cells padding the items
+       grid up to the selected pack's capacity. Same 32x32 slot art as a
+       filled cell but dimmed (no icon) so the grid reads as a full pack
+       with vacant slots — matching retail's fixed-size pack grid. Still a
+       valid drop target (drag an item onto a vacant cell to move it into
+       the selected pack). */
+    #${OVERLAY_ID} .hb-inv-slot.empty {
+      opacity: 0.45;
+      cursor: default;
+    }
+    #${OVERLAY_ID} .hb-inv-slot.empty:hover { filter: brightness(1.15); opacity: 0.7; }
     /* Item icon — colored square keyed by type-bit until we wire
        fetch_surface_pixels for the real icon DID. */
     #${OVERLAY_ID} .hb-inv-icon {
@@ -1816,6 +1827,60 @@ function doMount(parentEl, _ctx) {
     return slot;
   }
 
+  // TRACK B8 (2026-06-08): build a vacant 32x32 drop-target cell to pad the
+  // items grid up to the selected pack's capacity. No item GUID/icon — it
+  // reads as an empty pack slot and accepts a drag-drop that MOVES the
+  // dragged item into the currently selected pack (main pack =
+  // selectedPackContainerId 0 → destination is the player guid; a side pack
+  // → its containerId). Mirrors the populated slot's dragenter/dragover/drop
+  // wiring but routes through `handle.moveItem(sourceGuid, dest, 0)` (the
+  // same move the bag-tab drop path at L1464 uses for "drop into this pack")
+  // instead of the item-on-item tradeskill event (no target item here).
+  function makeEmptySlot() {
+    const slot = document.createElement("div");
+    slot.className = "hb-inv-slot empty";
+    slot.dataset.empty = "1";
+    const icon = document.createElement("div");
+    icon.className = "hb-inv-icon";
+    icon.style.background = "transparent";
+    icon.style.border = "1px dashed rgba(255, 255, 255, 0.12)";
+    slot.appendChild(icon);
+    slot.addEventListener("dragenter", (ev) => {
+      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
+        ev.preventDefault();
+      }
+    });
+    slot.addEventListener("dragover", (ev) => {
+      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+      }
+    });
+    slot.addEventListener("drop", (ev) => {
+      const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid");
+      if (!guidStr) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const sourceGuid = (parseInt(guidStr, 10) >>> 0);
+      if (!sourceGuid) return;
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (!handle || typeof handle.moveItem !== "function") return;
+      // Main pack (selectedPackContainerId 0) takes the player guid as the
+      // destination container (containerId 0 is rejected by ACE moveItem,
+      // same caveat as the bag-tab drop path); a side pack takes its own id.
+      let dest = (selectedPackContainerId >>> 0);
+      if (dest === 0) {
+        const me = (typeof window.getLocalPlayerGuid === "function")
+          ? (window.getLocalPlayerGuid() >>> 0) : 0;
+        if (!me) return;
+        dest = me;
+      }
+      try { handle.moveItem(sourceGuid, dest, 0); }
+      catch (e) { console.warn("[inv-empty] moveItem failed:", e); }
+    });
+    return slot;
+  }
+
   // Isolate a single-bit equip slot mask from a multi-bit ValidLocations
   // value, with explicit precedence mirroring retail acclient.c:220400
   // (gmPaperDollUI's WhichSlotForItem). A weapon that fits Melee + Held
@@ -2016,11 +2081,16 @@ function doMount(parentEl, _ctx) {
         continue;
       }
       tabEl.classList.remove("empty");
-      // Wave D / PR11 (2026-06-06): enrich tooltip with (n/m) capacity
-      // from the Wave A `containers_capacity` getter. Falls back to the
-      // retail default of 24 for any container whose capacity field
-      // hasn't propagated yet. n is computed from the snapshot by
-      // counting items whose containerId matches this pack.
+      // Wave D / PR11 (2026-06-06): enrich tooltip with (n/m) capacity.
+      // n is computed from the snapshot by counting items whose
+      // containerId matches this pack.
+      // TRACK B8 (2026-06-08): the main-pack tab now reads the real
+      // player-level ItemsCapacity (via the `playerItemsCapacity` getter)
+      // instead of the hardcoded 24 — the same surfacing gap that left the
+      // items grid capped at 24. A side pack reads its own per-item
+      // `itemsCapacity` (item-slot count), falling back to
+      // `containersCapacity` for older snapshots. The retail default 24 is
+      // kept only as a last-resort when the real value is still 0/unknown.
       const containerId = slot.containerId >>> 0;
       let cap = 24;
       let used = 0;
@@ -2032,11 +2102,22 @@ function doMount(parentEl, _ctx) {
           if (((it.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0) continue;
           used++;
         }
+        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+        let mainCap = 0;
+        try {
+          if (handle && typeof handle.playerItemsCapacity === "number") {
+            mainCap = handle.playerItemsCapacity >>> 0;
+          } else if (handle && typeof handle.playerItemsCapacity === "function") {
+            mainCap = (handle.playerItemsCapacity() >>> 0) || 0;
+          }
+        } catch (_) { mainCap = 0; }
+        if (mainCap > 0) cap = mainCap;
       } else {
         for (const it of inventorySnapshot) {
           if ((it.containerId >>> 0) === containerId) used++;
           if ((it.guid >>> 0) === containerId) {
-            const c = (it.containersCapacity >>> 0) | 0;
+            const items = (it.itemsCapacity >>> 0) | 0;
+            const c = items > 0 ? items : ((it.containersCapacity >>> 0) | 0);
             if (c > 0) cap = c;
           }
         }
@@ -2088,6 +2169,67 @@ function doMount(parentEl, _ctx) {
         continue;
       }
       itemsGrid.appendChild(makeSlot(li));
+    }
+    // TRACK B8 (2026-06-08): pad the grid with empty drop cells up to the
+    // selected pack's capacity. The bag-tab click path (L1416) calls this
+    // function directly (no orphan-equipped append follows), so padding
+    // here covers it; the full rebuild() path re-pads after appending the
+    // orphaned-equipped cells (padItemsGridToCapacity is idempotent — it
+    // strips existing empties first).
+    padItemsGridToCapacity();
+  }
+
+  // TRACK B8 (2026-06-08): resolve the selected pack's item-slot capacity.
+  // Main pack (selectedPackContainerId 0) reads the player-level
+  // `playerItemsCapacity` getter (the verified-missing surfacing — the
+  // grid previously fell back to a hardcoded 24). A side pack reads its
+  // own per-item `itemsCapacity` (item-slot count) off the snapshot,
+  // falling back to `containersCapacity` for older snapshots that only
+  // carried that field. Returns 0 when capacity is unknown (pre-spawn /
+  // property absent) so the caller can degrade to occupied-only — see the
+  // prerequisite-check note: a 0 here on the MAIN pack means the player
+  // CreateObject lacked the ITEMS_CAPACITY weenie-flag (a deeper bug), so
+  // we surface it honestly rather than faking a full grid.
+  function selectedPackItemCapacity() {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    if (selectedPackContainerId === 0) {
+      // Main pack — player-level ItemsCapacity (getter or fn form).
+      let cap = 0;
+      try {
+        if (handle && typeof handle.playerItemsCapacity === "number") {
+          cap = handle.playerItemsCapacity >>> 0;
+        } else if (handle && typeof handle.playerItemsCapacity === "function") {
+          cap = (handle.playerItemsCapacity() >>> 0) || 0;
+        }
+      } catch (_) { cap = 0; }
+      return cap;
+    }
+    // Side pack — its own per-item ItemsCapacity (fall back to the
+    // ContainersCapacity field for snapshots predating itemsCapacity).
+    const cid = selectedPackContainerId >>> 0;
+    for (const it of inventorySnapshot) {
+      if ((it.guid >>> 0) !== cid) continue;
+      const items = (it.itemsCapacity >>> 0) || 0;
+      if (items > 0) return items;
+      return (it.containersCapacity >>> 0) || 0;
+    }
+    return 0;
+  }
+
+  // TRACK B8 (2026-06-08): pad the items grid with empty drop-target cells
+  // up to the selected pack's capacity. Idempotent: strips any prior
+  // `.empty` cells first so it can run after the orphaned-equipped append.
+  // Capacity 0 (unknown — pre-spawn or a CreateObject missing the
+  // ITEMS_CAPACITY flag) renders NO empty cells (occupied-only) so we
+  // never paint a misleading full empty grid; capacity-full (occupied >=
+  // cap) likewise adds none.
+  function padItemsGridToCapacity() {
+    itemsGrid.querySelectorAll(".hb-inv-slot.empty").forEach((el) => el.remove());
+    const cap = selectedPackItemCapacity() >>> 0;
+    if (cap === 0) return; // capacity-unknown — degrade to occupied-only.
+    const occupied = itemsGrid.querySelectorAll(".hb-inv-slot:not(.empty)").length;
+    for (let i = occupied; i < cap; i++) {
+      itemsGrid.appendChild(makeEmptySlot());
     }
   }
 
@@ -2271,6 +2413,11 @@ function doMount(parentEl, _ctx) {
       for (const li of orphanedEquipped) {
         itemsGrid.appendChild(makeSlot(li));
       }
+      // TRACK B8 (2026-06-08): the orphaned-equipped cells are occupied
+      // items appended AFTER rebuildItemsGrid's own pad — re-pad so the
+      // empty drop cells land last (padItemsGridToCapacity strips the
+      // prior empties first, so this is a no-op when there were no orphans).
+      padItemsGridToCapacity();
     }
     // Wave 14 — refresh the 3D doll from the current local-player meta.
     // Idempotent on unchanged (setupId, mtableId, paletteId, subPalettes);
