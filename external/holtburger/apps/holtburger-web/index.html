@@ -8434,6 +8434,20 @@ void main() {
           // post-spawn DOM tree slim (matters for the agent-mode +
           // wire-agent fleets where the bar is never shown). CSS lives
           // in the main <style> block (search `#hb-jump-charge`).
+          // F1-5 (bughunt 2026-06-09) — jump power-bar charge curve. Retail
+          // `ClientCombatSystem::GetPowerBarLevel` (acclient.c:0056ADE0) is
+          // `(cur_time - buildStartTime) / divisor` clamped to [0,1], with
+          // divisor = 1.0 s (the prior 500 ms here was a documented GUESS — the
+          // keydown comment admitted "UNKNOWN retail mapping"). `DoJump` reads
+          // the level as the jump extent floored at MIN_JUMP_EXTENT = 0.001
+          // (acclient.c:41626). So full power needs a 1.0 s hold, not 0.5 s —
+          // pre-fix every charged jump hit full height/stamina-cost in half the
+          // retail hold time. (Retail's one 0.8 s variant keys off interpreted
+          // style 0x80000046; that combat-stance case is a documented follow-on,
+          // as is the JumpCharging 0x4000001D crouch-charge body-language overlay
+          // that retail plays while the bar builds.)
+          const JUMP_POWER_FULL_HOLD_MS = 1000;
+          const MIN_JUMP_EXTENT = 0.001;
           const jumpChargeUi = (() => {
             let bar = null;
             let fill = null;
@@ -8454,7 +8468,7 @@ void main() {
                 return;
               }
               const holdMs = performance.now() - window.__jumpKeydownTs;
-              const pct = Math.max(0, Math.min(100, (holdMs / 500) * 100));
+              const pct = Math.max(0, Math.min(100, (holdMs / JUMP_POWER_FULL_HOLD_MS) * 100));
               fill.style.width = pct + "%";
               if (pct >= 100) bar.classList.add("hb-jc-full");
               else bar.classList.remove("hb-jc-full");
@@ -8520,14 +8534,12 @@ void main() {
             // accepts a 0–1 `extent` field; the JS→wasm side fills
             // it from the computed power.
             //
-            // Hold-to-power curve (UNKNOWN retail mapping —
-            // documented guess): `power = clamp(hold_ms / 500, 0, 1)`.
-            // A quick tap (≤25ms keypress) → power ≈ 0.05 → ACE
-            // height clamps to 0.35m (tiny hop). A 500ms hold →
-            // power = 1.0 → full skill-scaled height. Neither
-            // `acclient.h` (only `m_dragScrollJumpDistance` which is
-            // UI-side) nor ACE source documents the retail client's
-            // curve; this is a play-feel guess that can be retuned.
+            // Hold-to-power curve (retail-matched, F1-5 2026-06-09):
+            // `power = clamp(hold_ms / 1000, MIN_JUMP_EXTENT, 1)`, mirroring
+            // `ClientCombatSystem::GetPowerBarLevel` (1.0 s divisor) +
+            // `DoJump`'s MIN_JUMP_EXTENT=0.001 floor (acclient.c). A 1.0 s
+            // hold → power 1.0 → full skill-scaled height; a quick tap →
+            // ~0.001 (minimal hop). See the JUMP_POWER_FULL_HOLD_MS note.
             if (ev.key === " " && handle && !ev.repeat) {
               window.__jumpKeydownTs = performance.now();
               jumpChargeUi.show();
@@ -8569,7 +8581,10 @@ void main() {
               if (!canJump) {
                 return;
               }
-              const power = Math.max(0, Math.min(1, holdMs / 500));
+              const power = Math.max(
+                MIN_JUMP_EXTENT,
+                Math.min(1, holdMs / JUMP_POWER_FULL_HOLD_MS)
+              );
               try {
                 handle.jump(power);
               } catch (e) {
