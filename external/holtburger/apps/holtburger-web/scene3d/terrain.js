@@ -3091,7 +3091,7 @@ const _terrainVisualRayOrigin = new THREE.Vector3();
 const _terrainVisualRayDir = new THREE.Vector3(0, -1, 0);
 const _terrainVisualIntersects = [];
 
-export function getTerrainVisualZ(scene3d, x, y, fallbackZ) {
+export function getTerrainVisualZ(scene3d, x, y, fallbackZ, maxDeltaM = Infinity) {
   const group = scene3d?.terrainGroup;
   if (!group || !group.children || group.children.length === 0) {
     return fallbackZ;
@@ -3115,7 +3115,20 @@ export function getTerrainVisualZ(scene3d, x, y, fallbackZ) {
   if (_terrainVisualIntersects.length === 0) return fallbackZ;
   const z = _terrainVisualIntersects[0].point.y;
   _terrainVisualIntersects.length = 0;
-  return Number.isFinite(z) ? z : fallbackZ;
+  if (!Number.isFinite(z)) return fallbackZ;
+  // F4-3 (bughunt 2026-06-09) — max-delta safety clamp. This raycast is an
+  // OUTDOOR-ONLY cosmetic reconcile (lift the rig ≤0.3 m from the bilinear
+  // collision surface onto the Catmull-Rom render surface). The vertical ray
+  // is fired from y=1000 and three's raycaster ignores `.visible` (and the
+  // PView fix force-shows terrain indoors), so an INDOOR pose's ray hits the
+  // OUTDOOR land surface dozens of metres away — pre-fix that buried every
+  // dungeon mob / upstairs character at the terrain surface. A hit further
+  // than `maxDeltaM` from the caller's authoritative Z is therefore never the
+  // surface this object is standing on: reject it and keep `fallbackZ`. With
+  // the default `Infinity` this is a no-op (old behaviour); the pose-appliers
+  // pass the documented 0.3 m bound + margin.
+  if (Math.abs(z - fallbackZ) > maxDeltaM) return fallbackZ;
+  return z;
 }
 
 // ── FCULL — OPT-IN per-LB terrain frustum + distance cull (2026-06-08) ─

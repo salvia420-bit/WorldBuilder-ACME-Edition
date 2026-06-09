@@ -6,56 +6,65 @@ use holtburger_common::{Guid, Vector3};
 use holtburger_protocol::messages::game_action::*;
 use holtburger_protocol::messages::game_message::{RawMotionFlags, RawMotionState};
 use holtburger_protocol::messages::*;
-use holtburger_world::context::WorldContextExt;
 use holtburger_world::{SelfMovementCapabilities, WorldState};
 use std::f32::consts::{PI, TAU};
 use std::time::Duration;
 
-// ACE's movement packets carry a run-rate / speed scalar, not a standalone
-// "already world-space" speed constant divorced from animation. In the retail
-// math that scalar is applied against the run animation base speed, and after
-// the engine's unit conversion it ends up numerically matching our meters/sec
-// representation. That coincidence is useful, but it is also the trap: this
-// value is the *maximum* run speed for a fully capped player, not the speed
-// every character should emit or simulate.
-const FALLBACK_RUN_RATE_SCALAR: f32 = 4.5;
+// F1-7 (movement bughunt 2026-06-09): the old `FALLBACK_RUN_RATE_SCALAR =
+// 4.5` is GONE. It leaked the MAXIMUM run rate (an 18 m/s runner) onto the
+// wire for any player whose Run skill hadn't hydrated, while the local
+// fallback caps moved at 4.5 m/s — a 4× wire/local mismatch that rubber-
+// banded the player for every observer. Post-F5-2 the raw wire never
+// carries a run rate at all (WalkForward + HoldKey=Run + speed 1.0; ACE
+// derives GetRunRate server-side from ITS OWN view of the player's Run
+// skill), so no wire-side fallback is needed. The LOCAL fallback caps live
+// in `apps/holtburger-web/src/lib.rs` (three install sites, `run_rate_
+// scalar: 1.0` + retail base velocities).
 pub(super) const AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 pub(super) const WALK_FORWARD_MOTION_COMMAND: u32 = 0x4500_0005;
 const WALK_BACKWARD_MOTION_COMMAND: u32 = 0x4500_0006;
-// Wave 2 Phase 2.3 (2026-05-26): `RunForward (0x44000007)` is the
-// motion code retail emits in `InterpretedState.ForwardCommand`
-// after `apply_run_to_command` swaps `WalkForward` when speed>0
-// AND HoldKey=Run (`~/ac-headers/acclient.c:343463-343467` and
-// `external/ACE/Source/ACE.Server/Physics/Animation/MotionInterp.cs:539-544`).
-// ACE accepts it on the wire too: `adjust_motion`
-// (`MotionInterp.cs:401-402`) handles `MotionCommand.RunForward`
-// as a no-op return (no canonicalization needed), and the
-// `RawMotionState.ApplyMotion` reject-RunForward branch
-// (`RawMotionState.cs:69`) only fires when the server itself is
-// constructing a RawState — not on wire deserialization (which
-// uses `SetState` at `:117-140` with no filtering). Sending it
-// directly causes the renderer to play the run clip via
-// `entities.js`'s `CMD_LOW_RUN_FORWARD = 0x0007` classifier
-// (`scene3d/entities.js:131,325`), bypassing the implicit-swap
-// dependency on ACE's broadcast canonicalization.
-pub(super) const RUN_FORWARD_MOTION_COMMAND: u32 = 0x4400_0007;
+// F5-2/F2-1 (movement bughunt 2026-06-09): `RunForward (0x44000007)` is the
+// INTERPRETED-state code — it must NEVER go on the raw C2S wire, and the
+// constant that used to live here is deleted so it can't creep back in.
+// See `forward_command_for_state` for the full broadcast-converter
+// rationale (`MovementData.cs:99-119`).
 pub(super) const TURN_RIGHT_MOTION_COMMAND: u32 = 0x6500_000d;
-// Phase 2.5 (2026-05-26): `TurnLeft (0x6500000E)` and `SideStepLeft
-// (0x65000010)` MotionCommand enum values exist on the AC wire schema
-// (`external/ACE/Source/ACE.Entity/Enum/MotionCommand.cs:20-23`), but we
-// NEVER emit them on outbound packets — retail's
-// `InterpretedMotionState::ApplyMotion` (`~/ac-headers/acclient.c:332761-
-// 332786`) only carries `TurnRight` / `SideStepRight`, and ACE's
-// `MotionInterp.adjust_motion` (`external/ACE/Source/ACE.Server/Physics/
-// Animation/MotionInterp.cs:409-417`) rewrites the Left codes to Right
-// with negated speed. Player MT 0x09000001 has no
-// `cycles[(stance, TurnLeft|SideStepLeft)]` entries, so the renderer's
-// cache lookup for the Left codes returns null and the rig silently
-// no-ops. See `sidestep_command_for_state` / `turn_motion_command_for_state`
-// below for the Phase 2.5 collapse logic.
+// F5-1 (movement bughunt 2026-06-09): the RAW C2S wire carries the REAL
+// sidestep enum — `SideStepLeft (0x65000010)` for a left strafe — because
+// ACE's broadcast converter (`ACE.Server/Network/Motion/MovementData.cs:
+// 123-131`) derives the observers' direction ONLY from the raw enum:
+// `interpState.SidestepSpeed = speed * 3.12f/1.25f*0.5f;` (always positive)
+// `if (rawState.SidestepCommand == MotionCommand.SideStepLeft)
+//      interpState.SidestepSpeed *= -1;`
+// — it never reads the client's raw `SidestepSpeed` sign. The Wave-2
+// Phase-2.5 collapse (Left → Right + negated speed) applied the
+// INTERPRETED-state canonicalization to the raw layer, so every observer
+// saw a left-strafing player strafe RIGHT until the ~1 Hz heartbeat
+// snapped them back. ACE's own `RawMotionState.cs:38-40` comment documents
+// that the one-direction+negated-speed convention applies to the TURN raw
+// field ONLY — so the turn collapse below stays (retail-correct), and the
+// sidestep collapse is reverted. The Left→Right rewrite (with negated
+// speed) is the SERVER's job in the broadcast; observers therefore still
+// only ever receive `SideStepRight` and the renderer's MT cache lookup
+// (which has no SideStepLeft cycles) is unaffected.
 const SIDESTEP_RIGHT_MOTION_COMMAND: u32 = 0x6500_000f;
-pub(super) const RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.5;
-const NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.0;
+const SIDESTEP_LEFT_MOTION_COMMAND: u32 = 0x6500_0010;
+// F1-3 (movement bughunt 2026-06-09): the raw wire turn speed is a
+// dimensionless anim-rate scalar, base 1.0 — NOT a pre-scaled rad/s value.
+// Retail sends raw 1.0 and lets `adjust_motion → apply_run_to_command`
+// apply `RunTurnFactor = 1.5` exactly once server-side when
+// `TurnHoldKey == Run` (`MotionInterp.cs:29,546-548`). The previous
+// `RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.5` pre-multiplied the factor into
+// the wire value while ALSO sending `turn_hold_key = Run`, so ACE applied
+// it again — observers integrated stationary turns at 2.25× while the
+// local predictor (which never applied the factor at all) turned at 1.0×.
+// The factor now lives on the LOCAL side only (`local_omega_for_state`).
+pub(super) const WIRE_TURN_SPEED_BASE: f32 = 1.0;
+/// Retail `CMotionInterp` `RunTurnFactor` (ACE `MotionInterp.cs:29`):
+/// turn omega multiplier while the Run key is held. Applied locally in
+/// [`local_omega_for_state`]; the wire sends the raw base speed and ACE
+/// applies this same factor server-side from the hold key.
+pub(super) const RUN_TURN_FACTOR: f32 = 1.5;
 
 pub(super) fn signed_heading_delta(current_heading: f32, desired_heading: f32) -> f32 {
     let mut delta = (desired_heading - current_heading) % TAU;
@@ -95,14 +104,36 @@ pub(super) fn raw_motion_state_with_motion_style(
 }
 
 fn resolve_contact(world: &WorldState, metadata: MovementPacketMetadata) -> bool {
-    metadata
-        .contact
-        .or(world.player.last_server_grounded)
-        .unwrap_or(true)
+    // F2-2 (movement bughunt 2026-06-09): the LOCAL airborne state is the
+    // source of truth for the wire contact bit. The previous fallback chain
+    // (`last_server_grounded.unwrap_or(true)`) misused the server's echo of
+    // our own reports as local state: ACE rarely sends self UpdatePosition
+    // outside corrections, so the byte was effectively a constant `1` even
+    // mid-jump/fall. ACE consumes it hard — `GameActionAutonomousPosition.cs:
+    // 26-28` updates `LastGroundPos` (the z-hack reference) whenever it's
+    // set, and `PhysicsObj.cs:3474` force-installs a terrain ContactPlane on
+    // cell change while `player.LastContact` is true, falsely re-grounding
+    // an airborne player in server physics. `is_airborne` is maintained by
+    // the integrator (`begin_jump`/`begin_fall`/`land`) and is current the
+    // tick it changes — which also makes the in-window contact-flip
+    // heartbeat re-send (`autonomous_pose_changed`, built precisely for the
+    // airborne flip) live for the first time.
+    metadata.contact.unwrap_or(!world.player.is_airborne)
 }
 
+/// MoveToState trailing byte: bit 0x1 = Contact (on ground), bit 0x2 =
+/// StandingLongJump (ACE `MoveToState.cs:43-48`). The long-jump bit is set
+/// while a jump charge began from a grounded standstill (F1-6) — ACE's
+/// broadcast converter excludes Forward/Sidestep from the observer
+/// broadcast while it's set (`MovementData.cs:104,123` — without that
+/// exclusion observers see "a buggy shallow arc jump", per ACE's own
+/// comment).
 pub(super) fn encode_contact_long_jump(world: &WorldState, metadata: MovementPacketMetadata) -> u8 {
-    u8::from(resolve_contact(world, metadata))
+    let mut byte = u8::from(resolve_contact(world, metadata));
+    if world.player.standing_long_jump_charge {
+        byte |= 0x2;
+    }
+    byte
 }
 
 fn encode_last_contact(world: &WorldState, metadata: MovementPacketMetadata) -> u8 {
@@ -143,75 +174,72 @@ fn hold_key_for_motion_state(state: MotionState) -> HoldKey {
     }
 }
 
-pub(super) fn player_run_rate_scalar(world: &WorldState) -> f32 {
-    world.player_run_rate().unwrap_or(FALLBACK_RUN_RATE_SCALAR)
-}
-
-/// Wave 2 Phase 2.3 (2026-05-26): the motion code itself must
-/// change Walk → Run when the player is forward+shift, not just
-/// the speed scalar. Retail's `CMotionInterp::apply_run_to_command`
-/// (`~/ac-headers/acclient.c:343463-343467`) swaps `WalkForward
-/// (0x45000005)` to `RunForward (0x44000007)` when speed > 0 and
-/// HoldKey=Run, then multiplies speed by `run_factor`. The
-/// motion-table fetches the RUN cycle (longer stride, faster arm
-/// swing) on the resulting motion code, not a sped-up walk clip.
+/// F5-2/F2-1 (movement bughunt 2026-06-09): the raw C2S wire ALWAYS
+/// carries the walk-class motion code — `WalkForward` for both gaits —
+/// with speed 1.0; the Run gait is communicated exclusively through the
+/// hold keys (`forward_hold_key` / `current_hold_key` = `HoldKey::Run`,
+/// already set by the caller). This is retail's raw encoding, and it is
+/// the ONLY encoding ACE's broadcast converter attaches the run rate to:
+/// `MovementData.cs:99-117` computes `speed = holdKey == Run ?
+/// creature.GetRunRate() : 1.0` and assigns it ONLY inside the
+/// `ForwardCommand == WalkForward || WalkBackwards` branch (which also
+/// performs the WalkForward→RunForward swap for the broadcast). The
+/// Wave-2 Phase-2.3 raw-`RunForward` encoding fell through the
+/// converter's `else` and was re-broadcast at the implicit speed 1.0 —
+/// every observer saw the runner at base 4.0 m/s + heartbeat snaps (see
+/// the `RUN_FORWARD_MOTION_COMMAND` doc above).
 ///
-/// Pre-Wave-2 we emitted `WALK_FORWARD_MOTION_COMMAND` with a
-/// scaled speed for both gaits, relying on ACE's server-side
-/// canonicalization to broadcast `RunForward` back to clients. That
-/// works for the renderer (entities.js's classifier sees
-/// `RunForward` in the broadcast and picks the run clip), but it
-/// muddies the client→server wire: ACE has to re-derive the run
-/// state, and `__diag.motion.snapshot()` on the local player shows
-/// the wrong cmd until the round-trip closes.
+/// The local renderer is unaffected: the run clip is dispatched from the
+/// JS input layer (`index.html` ~10518 `em.setMotion(localGuid,
+/// RunForward …)`), and ACE's canonicalized `RunForward` echo to the
+/// originator is swallowed by the B9 local-guid locomotion skip
+/// (`loop.js`). The client-side raw `ForwardSpeed` is never read by
+/// ACE's converter, so 1.0 is also what retail sends there.
 ///
 /// Backstep keeps its walk-class motion code regardless of gait
 /// (no `RunBackward` enum entry exists; see
 /// `external/ACE/Source/ACE.Entity/Enum/MotionCommand.cs:13-23`).
 /// Speed scaling for backstep is handled at the local-prediction
-/// layer (`local_locomotion_speed_for_state`) per Phase 2.1; on the
-/// wire it stays at 1.0 because ACE's `adjust_motion` +
-/// `apply_run_to_command` re-applies the scaling server-side.
-fn forward_command_for_state(
-    forward: ForwardLocomotion,
-    gait: Gait,
-    run_rate_scalar: f32,
-) -> (u32, f32) {
-    match (gait, forward) {
-        (Gait::Run, ForwardLocomotion::Forward) => (RUN_FORWARD_MOTION_COMMAND, run_rate_scalar),
-        (Gait::Walk, ForwardLocomotion::Forward) => (WALK_FORWARD_MOTION_COMMAND, 1.0),
-        (_, ForwardLocomotion::Backstep) => (WALK_BACKWARD_MOTION_COMMAND, 1.0),
+/// layer per Phase 2.1; on the wire it stays at 1.0 because ACE's
+/// `adjust_motion` + `apply_run_to_command` re-applies the scaling
+/// server-side (the negative rewritten speed keeps the command
+/// `WalkForward`, picking up `GetRunRate` in the same branch).
+fn forward_command_for_state(forward: ForwardLocomotion, _gait: Gait) -> (u32, f32) {
+    match forward {
+        ForwardLocomotion::Forward => (WALK_FORWARD_MOTION_COMMAND, 1.0),
+        ForwardLocomotion::Backstep => (WALK_BACKWARD_MOTION_COMMAND, 1.0),
     }
 }
 
-/// Wave 2 Phase 2.2 (2026-05-26): sidestep wire encoding. No `RunSideStep*`
-/// enum entries exist (`external/ACE/Source/ACE.Entity/Enum/MotionCommand.cs:22-23`),
-/// so retail handles "shift+strafe" via speed scaling on the existing motion
-/// codes. Speed on the wire stays at 1.0; server-side `apply_run_to_command`
-/// re-applies the scaling (and clamps at ±3.0 m/s).
+/// F5-1 (movement bughunt 2026-06-09): the RAW C2S wire carries the REAL
+/// sidestep enum — `SideStepLeft (0x65000010)` with POSITIVE unit speed
+/// for a left strafe — because ACE's broadcast converter derives the
+/// observers' strafe direction ONLY from the raw enum and never reads the
+/// raw speed's sign (`MovementData.cs:123-131`; see the
+/// `SIDESTEP_LEFT_MOTION_COMMAND` doc above). The Left→Right rewrite with
+/// negated speed is the SERVER's interpreted-state canonicalization
+/// (`MotionInterp.adjust_motion` `MotionInterp.cs:414-417` for physics,
+/// `MovementData.cs:130-131` for the broadcast) — pre-applying it on the
+/// raw wire inverted every observer's view of a left strafe.
 ///
-/// Wave 2 Phase 2.5 (2026-05-26): collapse `SideStepLeft (0x65000010)` into
-/// `SideStepRight (0x6500000F)` with NEGATED speed. Retail's
-/// `InterpretedMotionState::ApplyMotion` does NOT carry a separate Left code
-/// (`~/ac-headers/acclient.c:332766-332770` — only `SideStepRight` is
-/// handled), and retail's `CMotionInterp::apply_run_to_command` operates on a
-/// signed speed for `0x6500000F` (`acclient.c:343471-343481` — the clamp uses
-/// `fabs(v6) > 3.0` and preserves the sign of `v6`). ACE mirrors this at
-/// `MotionInterp.adjust_motion` (`external/ACE/Source/ACE.Server/Physics/
-/// Animation/MotionInterp.cs:414-417`) — `SideStepLeft` is auto-rewritten to
-/// `SideStepRight` with `speed *= -1`. The player MotionTable (DID 0x09000001)
-/// does NOT contain a `cycles[(stance, SideStepLeft)]` entry for any of the
-/// 13 stances — only the Right cycle exists, so the renderer's cache lookup
-/// for the Left code returns a null clip and silently no-ops.
+/// No `RunSideStep*` enum entries exist (`MotionCommand.cs:22-23`); the
+/// Run gait rides the hold keys and `apply_run_to_command` re-applies the
+/// scaling server-side (clamping the ANIM RATE at ±3.0 — see
+/// `MAX_SIDESTEP_ANIM_RATE`). Speed on the wire stays at 1.0.
+///
+/// Local consumers are unaffected: prediction velocity comes from
+/// `local_velocity_for_state` (keyed off the `SidestepLocomotion` enum,
+/// not this wire code), and the local rig's strafe overlay is driven from
+/// the JS input layer (`index.html` `setSidestepLayer`). Observers still
+/// only ever RECEIVE `SideStepRight ± speed` (ACE canonicalizes), so the
+/// renderer's MT cache (which has no SideStepLeft cycles) never sees the
+/// Left code.
 ///
 /// Returns `(motion_command, speed_sign)`. The caller multiplies the
 /// resolved base speed by this sign to produce the signed wire-side speed.
 fn sidestep_command_for_state(sidestep: SidestepLocomotion) -> (u32, f32) {
     match sidestep {
-        // Negated speed signals "go left" to the local integrator,
-        // remote observers, and ACE's `adjust_motion` (which would
-        // otherwise have to do the Left → Right rewrite itself).
-        SidestepLocomotion::StrafeLeft => (SIDESTEP_RIGHT_MOTION_COMMAND, -1.0),
+        SidestepLocomotion::StrafeLeft => (SIDESTEP_LEFT_MOTION_COMMAND, 1.0),
         SidestepLocomotion::StrafeRight => (SIDESTEP_RIGHT_MOTION_COMMAND, 1.0),
     }
 }
@@ -238,7 +266,6 @@ pub(super) fn build_motion_state_raw_motion_state(
     state: MotionState,
     motion_style: MotionStyle,
 ) -> RawMotionState {
-    let run_rate_scalar = player_run_rate_scalar(world);
     let axis_hold_key = hold_key_for_motion_state(state) as u32;
     let mut raw_motion_state = RawMotionState {
         flags: RawMotionFlags::CURRENT_HOLD_KEY,
@@ -256,7 +283,7 @@ pub(super) fn build_motion_state_raw_motion_state(
     // server / observers saw the player walking straight forward while
     // the local integrator drifted diagonally.
     if let Some(forward) = state.forward {
-        let (command, speed) = forward_command_for_state(forward, state.gait, run_rate_scalar);
+        let (command, speed) = forward_command_for_state(forward, state.gait);
         raw_motion_state.flags |= RawMotionFlags::FORWARD_COMMAND
             | RawMotionFlags::FORWARD_HOLD_KEY
             | RawMotionFlags::FORWARD_SPEED;
@@ -268,77 +295,66 @@ pub(super) fn build_motion_state_raw_motion_state(
         raw_motion_state.flags |= RawMotionFlags::SIDE_STEP_COMMAND
             | RawMotionFlags::SIDE_STEP_HOLD_KEY
             | RawMotionFlags::SIDE_STEP_SPEED;
-        // Phase 2.5: `sidestep_command_for_state` now always returns
-        // `SideStepRight (0x6500000F)` paired with a `±1.0` sign. The
-        // sign communicates direction through the existing
-        // `sidestep_speed` channel — matches retail
-        // `InterpretedMotionState::ApplyMotion` + ACE's
-        // `MotionInterp.adjust_motion` (both rewrite Left → Right with
-        // negated speed). The renderer's cache lookup hits the Right
-        // cycle in MT 0x09000001 either way; pre-Phase-2.5 the Left
-        // code missed the cache and the rig silently no-op'd.
+        // F5-1: the REAL enum (SideStepLeft / SideStepRight) goes on the
+        // raw wire with positive unit speed — ACE's broadcast converter
+        // reads direction from the enum only (`MovementData.cs:123-131`)
+        // and performs the Left→Right+negate rewrite itself. See
+        // `sidestep_command_for_state`.
         let (command, sign) = sidestep_command_for_state(sidestep);
         raw_motion_state.sidestep_command = Some(command);
         raw_motion_state.sidestep_hold_key = Some(axis_hold_key);
-        // Sidestep wire speed stays at the signed unit magnitude —
-        // server-side `apply_run_to_command` re-applies `run_factor`
-        // scaling and clamps at ±3.0 m/s (`acclient.c:343471-343481`,
-        // `MotionInterp.cs:550-560`); both preserve sign. Sending the
-        // scaled speed here would double-apply.
+        // Sidestep wire speed stays at the unit magnitude — server-side
+        // `apply_run_to_command` re-applies `run_factor` scaling and
+        // clamps the anim rate at ±3.0 (`acclient.c:343471-343481`,
+        // `MotionInterp.cs:550-560`). Sending the scaled speed here
+        // would double-apply.
         raw_motion_state.sidestep_speed = Some(sign);
     }
 
-    // Wave 2 Phase 2.4 (2026-05-26) — only emit a `turn_command` on
-    // the wire when the player is stationary (no forward / sidestep
-    // motion). Retail does NOT have a "TurnLeftWhileWalking" clip:
-    // when the player is moving + turning, ACE emits ONLY the forward
-    // (or sidestep) motion and the yaw integrator handles heading
-    // change via modifier-stacking (`~/ac-headers/acclient.c:332771-332786`
-    // — `InterpretedMotionState::ApplyMotion` carries forward / sidestep
-    // / turn as independent fields, but the visual is a SINGLE locomotion
-    // clip with the rig yawing under it, not a layered turn-in-place clip).
+    // F2-4 (movement bughunt 2026-06-09): the turn fields are RAW INPUT
+    // state — emit them whenever the turn key is held, INDEPENDENT of
+    // forward/sidestep. The Wave-2 Phase-2.4 gate (turn only when
+    // stationary) conflated the interpreted-state ANIMATION question (no
+    // turn-in-place clip layered while moving — true) with the raw wire
+    // schema (turn keys are always reported — also true): retail's
+    // `RawMotionState::ApplyMotion` (`acclient.c:332852-332889`, cases
+    // 0x6500000D/0x6500000E) writes turn_command+holdkey+speed into the
+    // raw state regardless of the forward/sidestep slots, and ACE's
+    // broadcast converter handles TurnCommand independently of locomotion
+    // (`MovementData.cs:134-148` — only StandingLongJump gates forward/
+    // sidestep; turn is ungated; `RawMotionState.cs:38-42` documents the
+    // turn channel as always-sent raw input, including mouselook). With
+    // the gate, observers got NO heading information while a player ran
+    // in a curve (W+Q/E) — they saw a dead-straight run that snapped
+    // heading at each ~1 s AutonomousPosition heartbeat.
     //
-    // We keep `state.turning` populated regardless of locomotion so
-    // `local_omega_for_state` (this file, below) can drive the local
-    // yaw integrator at `movement/system.rs:953-955` — the player must
-    // rotate locally on W+Q even though we don't broadcast a Turn cmd
-    // to ACE. ACE's server-side `MotionInterp.apply_interpreted_movement`
-    // (`external/ACE/Source/ACE.Server/Physics/Animation/MotionInterp.cs:440-504`)
-    // applies its own turn integration based on `TurnCommand`; when we
-    // suppress the wire-side `turn_command`, the server's heading stays
-    // synced to the client's via the subsequent UpdatePosition broadcast.
+    // Receiving-renderer note: remote rigs only yaw from the broadcast
+    // turn (the heading-ease consumes position quaternions; KIND_MOTION
+    // carries the forward command), so un-gating cannot layer a spurious
+    // turn-in-place clip over a locomotion clip on our own clients.
     //
     // Visual result:
-    //   - W+Q : `forward_command = WalkForward`, no `turn_command` on
-    //           the wire; player still rotates left as the local
-    //           integrator applies omega.z.
-    //   - Q alone : `forward_command` absent, `turn_command = TurnLeft`
-    //               on the wire; player plays the turn-in-place cycle
-    //               from the motion table.
-    // Wave 2 Phase 2.2 (2026-05-26): "locomotion active" now means EITHER
-    // forward OR sidestep slot is populated. The Phase 2.4 turn-gating
-    // rule still holds — retail emits the turn cmd only when the player
-    // is stationary; otherwise the locomotion clip carries the heading
-    // change via local yaw integration.
-    let locomotion_active = !state.is_locomotion_idle();
+    //   - W+Q : `forward_command = WalkForward` AND `turn_command =
+    //           TurnRight×(−speed)` on the wire; observers integrate the
+    //           curve between heartbeats.
+    //   - Q alone : `turn_command` only; player plays the turn-in-place
+    //               cycle from the motion table.
     if let Some(turn) = state.turning {
-        if !locomotion_active {
-            raw_motion_state.flags |= RawMotionFlags::TURN_COMMAND
-                | RawMotionFlags::TURN_HOLD_KEY
-                | RawMotionFlags::TURN_SPEED;
-            // Phase 2.5: `turn_motion_command_for_state` now always
-            // returns `TurnRight (0x6500000D)` paired with a `±1.0`
-            // sign. The sign rides the `turn_speed` channel — matches
-            // retail `InterpretedMotionState::ApplyMotion` + ACE's
-            // `MotionInterp.adjust_motion` Left → Right rewrite. The
-            // motion-table cache lookup for the Right code hits the
-            // turn-in-place cycle; pre-Phase-2.5 the Left code missed
-            // the cache for MT 0x09000001.
-            let (command, sign) = turn_motion_command_for_state(turn);
-            raw_motion_state.turn_command = Some(command);
-            raw_motion_state.turn_hold_key = Some(axis_hold_key);
-            raw_motion_state.turn_speed = Some(wire_turn_speed_for_state(state) * sign);
-        }
+        raw_motion_state.flags |= RawMotionFlags::TURN_COMMAND
+            | RawMotionFlags::TURN_HOLD_KEY
+            | RawMotionFlags::TURN_SPEED;
+        // Phase 2.5 collapse (KEPT — this one is retail-correct): the
+        // raw wire carries `TurnRight (0x6500000D)` with a signed
+        // speed for both directions. ACE's own `RawMotionState.cs:38-40`
+        // comment documents the one-direction+negative-speed convention
+        // as the RAW-wire contract for the turn field (and ONLY the
+        // turn field — contrast the F5-1 sidestep revert above), and
+        // `MovementData.cs:141-145` passes the signed raw TurnSpeed
+        // through to the broadcast.
+        let (command, sign) = turn_motion_command_for_state(turn);
+        raw_motion_state.turn_command = Some(command);
+        raw_motion_state.turn_hold_key = Some(axis_hold_key);
+        raw_motion_state.turn_speed = Some(wire_turn_speed_for_state(state) * sign);
     }
 
     raw_motion_state_with_motion_style(world, raw_motion_state, motion_style)
@@ -558,17 +574,34 @@ pub(crate) const HUGE_QUANTUM: f32 = 2.0;
 /// unbounded; retail caps it at 50 m/s.
 pub(super) const MAX_VELOCITY: f32 = 50.0;
 
-/// Cap for run-scaled sidestep speed in m/s, per retail
-/// `CMotionInterp::apply_run_to_command` case `SideStepRight`
-/// (`~/ac-headers/acclient.c:343471-343481`) and ACE's
-/// `MotionInterp.apply_run_to_command` (`external/ACE/Source/ACE.Server/
-/// Physics/Animation/MotionInterp.cs:550-560`). Both clamp `|speed|`
-/// to ±3.0 after multiplying by `run_factor`. There is no separate
-/// `RunSideStep*` MotionCommand in the AC enum
-/// (`external/ACE/Source/ACE.Entity/Enum/MotionCommand.cs:22-23` —
-/// only SideStepLeft/Right exist), so retail handles "shift+strafe"
-/// purely through speed scaling on the existing motion code.
-const SIDESTEP_RUN_SPEED_CAP_M_PER_SEC: f32 = 3.0;
+/// F1-2 (movement bughunt 2026-06-09): retail's `±3.0` sidestep clamp is
+/// an ANIM-RATE cap, NOT a m/s cap. `apply_run_to_command`
+/// (`MotionInterp.cs:550-560`, `acclient.c:343471-343481`) clamps the
+/// dimensionless `speed` scalar at `MaxSidestepAnimRate = 3.0`
+/// (`MotionInterp.cs:27`) AFTER multiplying by `run_factor`;
+/// `get_state_velocity` (`MotionInterp.cs:682-683`) then converts to m/s
+/// by multiplying `SidestepAnimSpeed = 1.25`. So the retail m/s ceiling
+/// is `3.0 × 1.25 = 3.75 m/s`. The previous name/doc
+/// (`SIDESTEP_RUN_SPEED_CAP_M_PER_SEC`) misread the clamp as m/s — one
+/// of the two halves of the uniform ~36% strafe-speed deficit.
+const MAX_SIDESTEP_ANIM_RATE: f32 = 3.0;
+
+/// ACE `MotionInterp.SidestepAnimSpeed = 1.25f` (`MotionInterp.cs:31`):
+/// the m/s velocity per unit sidestep anim rate in `get_state_velocity`
+/// (`velocity.X = SidestepAnimSpeed * SideStepSpeed`,
+/// `MotionInterp.cs:682-683`).
+const SIDESTEP_ANIM_SPEED: f32 = 1.25;
+
+/// ACE `adjust_motion`'s SideStep speed adjustment
+/// (`MotionInterp.cs:420-421`): `speed *= SidestepFactor(0.5) ×
+/// (WalkAnimSpeed 3.1199999 / SidestepAnimSpeed 1.25) = 1.248`, applied
+/// to ALL SideStep motions before the run scaling. Retail decomp
+/// cross-check `acclient.c:343471-343481`. Combined with
+/// [`SIDESTEP_ANIM_SPEED`], the net retail strafe speeds are:
+/// walk `1.25 × 1.248 = 1.56 m/s`; run `1.25 × min(1.248 × run_rate,
+/// 3.0)` up to `3.75 m/s`. The pre-fix arms (walk `1.0`, run
+/// `min(run_rate, 3.0)`) dropped both factors.
+const SIDESTEP_ADJUST_FACTOR: f32 = 1.248;
 
 /// Backstep magnitude factor relative to the walk-forward base speed,
 /// per retail. ACE's `MotionInterp.adjust_motion` rewrites
@@ -630,13 +663,23 @@ fn forward_axis_speed(state: MotionState, capabilities: &SelfMovementCapabilitie
     }
 }
 
+/// F1-2 (movement bughunt 2026-06-09): retail strafe speed chain —
+/// `adjust_motion` applies `SIDESTEP_ADJUST_FACTOR` (1.248) to the unit
+/// input, `apply_run_to_command` multiplies by `run_rate` and clamps the
+/// ANIM RATE at 3.0, and `get_state_velocity` converts to m/s via
+/// `SidestepAnimSpeed` (1.25). Net: walk strafe `1.56 m/s`, run strafe
+/// `min(1.248 × run_rate, 3.0) × 1.25` up to `3.75 m/s`. The pre-fix
+/// values (walk 1.0, run `min(run_rate, 3.0)`) were 0.64× retail below
+/// the clamp knee and 0.8× at the maxed run rate.
 fn sidestep_axis_speed(state: MotionState, capabilities: &SelfMovementCapabilities) -> f32 {
     match (state.gait, state.sidestep) {
         (_, None) => 0.0,
-        (Gait::Run, Some(_)) => capabilities
-            .run_rate_scalar
-            .min(SIDESTEP_RUN_SPEED_CAP_M_PER_SEC),
-        (Gait::Walk, Some(_)) => 1.0,
+        (Gait::Run, Some(_)) => {
+            let anim_rate =
+                (SIDESTEP_ADJUST_FACTOR * capabilities.run_rate_scalar).min(MAX_SIDESTEP_ANIM_RATE);
+            SIDESTEP_ANIM_SPEED * anim_rate
+        }
+        (Gait::Walk, Some(_)) => SIDESTEP_ANIM_SPEED * SIDESTEP_ADJUST_FACTOR,
     }
 }
 
@@ -690,14 +733,18 @@ pub(super) fn local_velocity_for_state(
     velocity
 }
 
+/// F1-3 (movement bughunt 2026-06-09): the raw wire turn speed is the
+/// BASE scalar (1.0) for both gaits — ACE applies `RunTurnFactor` itself
+/// from the already-sent `turn_hold_key = Run` (`adjust_motion →
+/// apply_run_to_command`, `MotionInterp.cs:423-427,546-548`). The
+/// previous gait-keyed 1.5 pre-multiplied the factor AND sent the Run
+/// hold key, so the server/observers integrated stationary turns at
+/// 2.25×. An explicit `state.turn_speed` override still passes through.
 fn wire_turn_speed_for_state(state: MotionState) -> f32 {
-    state.turn_speed.unwrap_or(match state.gait {
-        Gait::Run => RUN_HELD_TURN_SPEED_RAD_PER_SEC,
-        Gait::Walk => NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC,
-    })
+    state.turn_speed.unwrap_or(WIRE_TURN_SPEED_BASE)
 }
 
-fn local_turn_omega(base_omega: Vector3, override_speed: Option<f32>) -> Vector3 {
+fn local_turn_omega(base_omega: Vector3, override_speed: Option<f32>, gait: Gait) -> Vector3 {
     match override_speed {
         Some(speed) => {
             let base_magnitude = base_omega.length();
@@ -707,7 +754,17 @@ fn local_turn_omega(base_omega: Vector3, override_speed: Option<f32>) -> Vector3
                 Vector3::zero()
             }
         }
-        None => base_omega,
+        // F1-3: apply retail's `RunTurnFactor` (1.5×) to the DAT base
+        // omega while the Run key is held — the local predictor
+        // previously turned at 1.0× in both gaits, 33% slower than
+        // retail's run-held turn. Mirrors ACE `apply_run_to_command`'s
+        // TurnRight arm (`MotionInterp.cs:546-548`), which the server
+        // applies to our broadcast from the hold key; the local factor
+        // keeps prediction in step with what observers integrate.
+        None => match gait {
+            Gait::Run => base_omega * RUN_TURN_FACTOR,
+            Gait::Walk => base_omega,
+        },
     }
 }
 
@@ -719,10 +776,12 @@ pub(super) fn local_omega_for_state(
         Some(Turn::Right) => local_turn_omega(
             capabilities.kinematics().base_turn_right_omega,
             state.turn_speed,
+            state.gait,
         ),
         Some(Turn::Left) => local_turn_omega(
             capabilities.kinematics().base_turn_left_omega,
             state.turn_speed,
+            state.gait,
         ),
         None => Vector3::zero(),
     }
@@ -757,6 +816,32 @@ mod tests {
     fn local_omega_for_state_preserves_base_turn_omega_without_override() {
         let capabilities = test_capabilities();
 
+        // Walk gait: the DAT base omega passes through unscaled.
+        assert_eq!(
+            local_omega_for_state(
+                MotionState {
+                    gait: Gait::Walk,
+                    forward: None,
+                    sidestep: None,
+                    turning: Some(Turn::Left),
+                    turn_speed: None,
+                },
+                &capabilities,
+            ),
+            Vector3::new(0.0, 0.0, -1.5)
+        );
+    }
+
+    /// F1-3 (movement bughunt 2026-06-09) — the Run gait applies retail's
+    /// `RunTurnFactor` (1.5×) to the local turn omega. Previously the
+    /// local predictor turned at 1.0× in both gaits (33% slower than
+    /// retail's run-held turn) while the WIRE pre-multiplied 1.5 AND sent
+    /// HoldKey=Run, making ACE apply the factor again (2.25× for
+    /// observers). The factor now lives here, once.
+    #[test]
+    fn local_omega_for_state_applies_run_turn_factor() {
+        let capabilities = test_capabilities();
+
         assert_eq!(
             local_omega_for_state(
                 MotionState {
@@ -768,7 +853,7 @@ mod tests {
                 },
                 &capabilities,
             ),
-            Vector3::new(0.0, 0.0, -1.5)
+            Vector3::new(0.0, 0.0, -1.5 * RUN_TURN_FACTOR)
         );
     }
 
@@ -811,11 +896,13 @@ mod tests {
 
         // Forward at heading 0 contributes (-1.0, 0.0, 0.0) (walk speed = 1.0
         // m/s by test capabilities `base_walk_forward_velocity`).
-        // StrafeRight at heading 0 contributes (-cos(pi/2)*1.0, sin(pi/2)*1.0, 0)
-        // = (0.0, 1.0, 0.0).
-        // Sum: (-1.0, 1.0, 0.0). Both axes non-zero.
+        // StrafeRight at heading 0 contributes (0.0, walk_strafe, 0.0) where
+        // walk_strafe = SIDESTEP_ANIM_SPEED × SIDESTEP_ADJUST_FACTOR = 1.56
+        // m/s (F1-2 retail magnitude — fixed, not derived from the walk base).
+        // Both axes non-zero.
+        let walk_strafe = SIDESTEP_ANIM_SPEED * SIDESTEP_ADJUST_FACTOR;
         assert!((velocity.x - (-1.0)).abs() < 1e-5);
-        assert!((velocity.y - 1.0).abs() < 1e-5);
+        assert!((velocity.y - walk_strafe).abs() < 1e-5);
         assert!(velocity.z.abs() < 1e-5);
     }
 
@@ -841,10 +928,15 @@ mod tests {
         assert_eq!(raw.sidestep_speed, Some(1.0));
     }
 
-    /// Wave 2 Phase 2.2 (2026-05-26) — turn-gating (Phase 2.4) holds when
-    /// sidestep alone is active: a strafe should still suppress the turn cmd.
+    /// F2-4 (movement bughunt 2026-06-09) — the turn fields are raw input
+    /// state and are emitted INDEPENDENT of locomotion. The old Phase-2.4
+    /// gate (turn only when stationary) starved observers of heading
+    /// information while a player curved (W+Q/E): retail's
+    /// `RawMotionState::ApplyMotion` writes the turn slot regardless of
+    /// forward/sidestep, and ACE's broadcast converter handles TurnCommand
+    /// ungated (`MovementData.cs:134-148`).
     #[test]
-    fn build_motion_state_raw_motion_state_suppresses_turn_when_only_sidestep_active() {
+    fn build_motion_state_raw_motion_state_emits_turn_while_sidestep_active() {
         let world = holtburger_world::WorldState::synthetic();
         let state = MotionState::builder()
             .walk()
@@ -856,9 +948,73 @@ mod tests {
             build_motion_state_raw_motion_state(&world, state, MotionStyle::PreserveServer);
 
         assert!(raw.flags.contains(RawMotionFlags::SIDE_STEP_COMMAND));
-        // Turn cmd suppressed because sidestep is active.
-        assert!(!raw.flags.contains(RawMotionFlags::TURN_COMMAND));
-        assert_eq!(raw.turn_command, None);
+        // F2-4: turn rides the wire alongside the strafe.
+        assert!(raw.flags.contains(RawMotionFlags::TURN_COMMAND));
+        assert_eq!(raw.turn_command, Some(TURN_RIGHT_MOTION_COMMAND));
+        assert_eq!(raw.turn_speed, Some(-WIRE_TURN_SPEED_BASE));
+    }
+
+    /// F5-2/F2-1 (movement bughunt 2026-06-09) — the Run gait emits
+    /// `WalkForward` + `HoldKey=Run` + speed 1.0 on the raw wire (retail's
+    /// encoding). ACE's broadcast converter attaches `GetRunRate` ONLY in
+    /// its WalkForward/WalkBackwards branch (`MovementData.cs:99-117`); the
+    /// old raw-`RunForward` encoding fell through the `else` and observers
+    /// received the runner at implicit speed 1.0 (base 4 m/s) with ~1 Hz
+    /// rubber-band snaps.
+    #[test]
+    fn run_forward_emits_walk_forward_with_hold_key_run() {
+        let world = holtburger_world::WorldState::synthetic();
+        let state = MotionState::builder().run().forward().build();
+
+        let raw =
+            build_motion_state_raw_motion_state(&world, state, MotionStyle::PreserveServer);
+
+        assert_eq!(
+            raw.forward_command,
+            Some(WALK_FORWARD_MOTION_COMMAND),
+            "F5-2: raw wire must carry WalkForward; ACE canonicalizes to RunForward@GetRunRate",
+        );
+        // The interpreted-state RunForward code must never appear raw.
+        assert_ne!(raw.forward_command, Some(0x4400_0007));
+        assert_eq!(raw.forward_speed, Some(1.0));
+        assert_eq!(raw.forward_hold_key, Some(HoldKey::Run as u32));
+        assert_eq!(raw.current_hold_key, Some(HoldKey::Run as u32));
+    }
+
+    /// F1-2 (movement bughunt 2026-06-09) — retail strafe magnitudes:
+    /// walk strafe `1.25 × 1.248 = 1.56 m/s`; run strafe anim-rate-capped
+    /// at 3.0 then × 1.25 = `3.75 m/s` at high run rates.
+    #[test]
+    fn sidestep_axis_speeds_match_retail() {
+        // Walk strafe: 1.56 m/s regardless of run rate.
+        let caps_walk = retail_walk_base_capabilities(1.0);
+        let walk_state = MotionState::builder().walk().strafe_right().build();
+        let v = local_velocity_for_state(0.0, walk_state, &caps_walk);
+        assert!(
+            (v.length() - 1.56).abs() < 1e-4,
+            "walk strafe expected 1.56 m/s, got {:.4}",
+            v.length(),
+        );
+
+        // Run strafe below the clamp knee: 1.25 * 1.248 * run_rate.
+        let caps_low = retail_walk_base_capabilities(2.0);
+        let run_state = MotionState::builder().run().strafe_right().build();
+        let v = local_velocity_for_state(0.0, run_state, &caps_low);
+        let expected = 1.25 * (1.248_f32 * 2.0).min(3.0); // = 3.12
+        assert!(
+            (v.length() - expected).abs() < 1e-4,
+            "run strafe @rr=2.0 expected {expected:.4} m/s, got {:.4}",
+            v.length(),
+        );
+
+        // Run strafe at the maxed run rate: anim-rate clamps at 3.0 → 3.75 m/s.
+        let caps_max = retail_walk_base_capabilities(4.5);
+        let v = local_velocity_for_state(0.0, run_state, &caps_max);
+        assert!(
+            (v.length() - 3.75).abs() < 1e-4,
+            "run strafe @rr=4.5 expected 3.75 m/s (anim-rate cap 3.0 × 1.25), got {:.4}",
+            v.length(),
+        );
     }
 
     /// Wave 2 Phase 2.5 (2026-05-26) — `Turn::Left` emits the
@@ -881,12 +1037,14 @@ mod tests {
         assert_eq!(
             raw.turn_command,
             Some(TURN_RIGHT_MOTION_COMMAND),
-            "Phase 2.5: Turn::Left collapses to TurnRight code",
+            "Phase 2.5: Turn::Left collapses to TurnRight code (retail RAW-wire \
+             convention for the turn field — ACE RawMotionState.cs:38-40)",
         );
-        // Walk gait → NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC (1.0) negated.
+        // F1-3: the wire turn speed is the BASE scalar (1.0) negated —
+        // never the pre-multiplied run factor.
         assert_eq!(
             raw.turn_speed,
-            Some(-NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC),
+            Some(-WIRE_TURN_SPEED_BASE),
             "Phase 2.5: negated speed signals left direction",
         );
     }
@@ -905,16 +1063,20 @@ mod tests {
 
         assert!(raw.flags.contains(RawMotionFlags::TURN_COMMAND));
         assert_eq!(raw.turn_command, Some(TURN_RIGHT_MOTION_COMMAND));
-        assert_eq!(raw.turn_speed, Some(NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC));
+        assert_eq!(raw.turn_speed, Some(WIRE_TURN_SPEED_BASE));
     }
 
-    /// Wave 2 Phase 2.5 (2026-05-26) — `SidestepLocomotion::StrafeLeft`
-    /// emits the `SideStepRight (0x6500000F)` motion code with a NEGATED
-    /// `sidestep_speed`. Same retail / ACE contract as `turn_left_emits_
-    /// right_code_with_negated_speed` above; the player MotionTable's
-    /// `cycles[(stance, SideStepLeft)]` is empty across all 13 stances.
+    /// F5-1 (movement bughunt 2026-06-09) — `SidestepLocomotion::StrafeLeft`
+    /// emits the REAL `SideStepLeft (0x65000010)` enum with POSITIVE unit
+    /// speed on the raw wire. ACE's broadcast converter derives the
+    /// observers' direction ONLY from the raw enum
+    /// (`MovementData.cs:123-131` — it never reads the raw speed's sign),
+    /// so the old Phase-2.5 collapse (Right + negated speed) replicated a
+    /// left-strafing player as strafing RIGHT to every observer. The
+    /// Left→Right+negate rewrite belongs to the server's interpreted-state
+    /// canonicalization, not the raw C2S layer.
     #[test]
-    fn sidestep_left_emits_right_code_with_negated_speed() {
+    fn sidestep_left_emits_left_enum_with_positive_speed() {
         let world = holtburger_world::WorldState::synthetic();
         let state = MotionState::builder().walk().strafe_left().build();
 
@@ -924,13 +1086,13 @@ mod tests {
         assert!(raw.flags.contains(RawMotionFlags::SIDE_STEP_COMMAND));
         assert_eq!(
             raw.sidestep_command,
-            Some(SIDESTEP_RIGHT_MOTION_COMMAND),
-            "Phase 2.5: StrafeLeft collapses to SideStepRight code",
+            Some(SIDESTEP_LEFT_MOTION_COMMAND),
+            "F5-1: the raw wire carries the real SideStepLeft enum",
         );
         assert_eq!(
             raw.sidestep_speed,
-            Some(-1.0),
-            "Phase 2.5: negated unit speed signals left direction",
+            Some(1.0),
+            "F5-1: positive unit speed — direction rides the enum, not the sign",
         );
     }
 

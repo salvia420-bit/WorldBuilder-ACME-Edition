@@ -1,9 +1,9 @@
 use super::super::common::{
     AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY,
     PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ,
-    RUN_FORWARD_MOTION_COMMAND, RUN_HELD_TURN_SPEED_RAD_PER_SEC, TURN_RIGHT_MOTION_COMMAND,
-    WALK_FORWARD_MOTION_COMMAND, build_autonomous_position, build_motion_state_raw_motion_state,
-    player_run_rate_scalar, raw_motion_state_with_motion_style,
+    TURN_RIGHT_MOTION_COMMAND, WALK_FORWARD_MOTION_COMMAND, WIRE_TURN_SPEED_BASE,
+    build_autonomous_position, build_motion_state_raw_motion_state,
+    raw_motion_state_with_motion_style,
 };
 use super::*;
 use crate::client::movement_types::Gait;
@@ -18,7 +18,7 @@ use holtburger_world::{
     PlayerMotionTableSource, SelfMovementCapabilities, SelfMovementKinematics, WorldState,
 };
 
-fn seed_player_run_rate_scalar(world: &mut WorldState, run_skill: u32) -> f32 {
+fn seed_player_run_skill(world: &mut WorldState, run_skill: u32) {
     world.player.attributes.insert(
         AttributeType::StrengthAttr,
         Attribute {
@@ -46,8 +46,6 @@ fn seed_player_run_rate_scalar(world: &mut WorldState, run_skill: u32) -> f32 {
             specialized_cost: 0,
         },
     );
-
-    player_run_rate_scalar(world)
 }
 
 fn seed_local_player(world: &mut WorldState, guid: Guid, position: WorldPosition) {
@@ -376,13 +374,6 @@ fn test_raw_motion_state_can_omit_cached_server_style() {
 fn motion_state_raw_motion_state_adds_right_turn_when_requested() {
     let world = WorldState::synthetic();
 
-    // Wave 2 Phase 2.4 (2026-05-26) — Turn motion commands only
-    // populate the wire when the player is stationary (no forward /
-    // sidestep). Retail emits ONLY the locomotion clip when moving +
-    // turning, and lets the yaw integrator handle heading change. So
-    // this test now uses a turn-only state. The "forward + turn"
-    // wire-suppression case is covered by
-    // `motion_state_raw_motion_state_suppresses_turn_when_moving`.
     let raw_motion_state = build_motion_state_raw_motion_state(
         &world,
         MotionState::builder().run().turn_right().build(),
@@ -404,16 +395,22 @@ fn motion_state_raw_motion_state_adds_right_turn_when_requested() {
         raw_motion_state.turn_command,
         Some(TURN_RIGHT_MOTION_COMMAND)
     );
+    // F1-3 (movement bughunt 2026-06-09): the wire turn speed is the BASE
+    // scalar (1.0) for BOTH gaits — ACE applies RunTurnFactor itself from
+    // turn_hold_key=Run (`MotionInterp.cs:546-548`). The old pre-multiplied
+    // 1.5 made ACE apply the factor twice (2.25× for observers).
+    assert_eq!(raw_motion_state.turn_speed, Some(WIRE_TURN_SPEED_BASE));
     assert_eq!(
-        raw_motion_state.turn_speed,
-        Some(RUN_HELD_TURN_SPEED_RAD_PER_SEC)
+        raw_motion_state.turn_hold_key,
+        Some(HoldKey::Run as u32),
+        "run factor rides the hold key, not the speed",
     );
 }
 
 #[test]
-fn motion_state_raw_motion_state_uses_player_run_rate_scalar_for_forward_speed() {
+fn motion_state_raw_motion_state_run_forward_is_walk_forward_plus_hold_key() {
     let mut world = WorldState::synthetic();
-    let expected_run_rate_scalar = seed_player_run_rate_scalar(&mut world, 300);
+    seed_player_run_skill(&mut world, 300);
 
     let raw_motion_state = build_motion_state_raw_motion_state(
         &world,
@@ -421,20 +418,24 @@ fn motion_state_raw_motion_state_uses_player_run_rate_scalar_for_forward_speed()
         MotionStyle::PreserveServer,
     );
 
-    // Wave 2 Phase 2.3 (2026-05-26): forward + Run now emits
-    // `RunForward (0x44000007)` on the wire, not `WalkForward` with
-    // a scaled speed. Matches retail `apply_run_to_command`
-    // (`acclient.c:343463-343467`) which swaps the motion code itself
-    // when Walk → Run kicks in.
+    // F5-2/F2-1 (movement bughunt 2026-06-09): forward + Run emits
+    // `WalkForward` + `HoldKey=Run` + speed 1.0 — retail's raw encoding,
+    // and the ONLY one ACE's broadcast converter attaches `GetRunRate` to
+    // (`MovementData.cs:99-117`). The old raw `RunForward (0x44000007)`
+    // fell through the converter's `else` branch: observers received the
+    // runner at implicit ForwardSpeed 1.0 (base 4 m/s) and rubber-banded
+    // on every heartbeat. The run rate itself never goes on the wire.
     assert_eq!(
         raw_motion_state.forward_command,
-        Some(RUN_FORWARD_MOTION_COMMAND)
+        Some(WALK_FORWARD_MOTION_COMMAND)
+    );
+    assert_ne!(
+        raw_motion_state.forward_command,
+        Some(0x4400_0007),
+        "raw RunForward must never be emitted (F5-2)",
     );
     assert_eq!(raw_motion_state.forward_hold_key, Some(HoldKey::Run as u32));
-    assert_eq!(
-        raw_motion_state.forward_speed,
-        Some(expected_run_rate_scalar)
-    );
+    assert_eq!(raw_motion_state.forward_speed, Some(1.0));
     assert!(
         raw_motion_state
             .flags
@@ -475,9 +476,11 @@ fn motion_state_raw_motion_state_adds_left_turn_when_requested() {
         Some(TURN_RIGHT_MOTION_COMMAND),
         "Phase 2.5 collapse: Turn::Left emits TurnRight code with signed speed",
     );
+    // F1-3 (movement bughunt 2026-06-09): base scalar 1.0 negated — the
+    // run factor rides turn_hold_key=Run; ACE applies it server-side.
     assert_eq!(
         raw_motion_state.turn_speed,
-        Some(-RUN_HELD_TURN_SPEED_RAD_PER_SEC),
+        Some(-WIRE_TURN_SPEED_BASE),
         "Phase 2.5 collapse: negated speed signals left direction to ACE / observers",
     );
     assert_eq!(raw_motion_state.turn_hold_key, Some(HoldKey::Run as u32));
@@ -489,15 +492,15 @@ fn motion_state_raw_motion_state_adds_left_turn_when_requested() {
 }
 
 #[test]
-fn motion_state_raw_motion_state_suppresses_turn_when_moving() {
-    // Wave 2 Phase 2.4 (2026-05-26) — verify the new Phase 2.4
-    // contract: when the player is moving (forward or sidestep
-    // populated) AND turning, the wire-side `turn_command` is
-    // suppressed. Retail has no `TurnLeftWhileWalking` clip; the
-    // walk clip plays alone and the yaw integrator handles heading.
-    // The `state.turning` field stays populated on the MotionState
-    // so `local_omega_for_state` can still drive the predicted
-    // rotation locally (`movement/system.rs:953-955`).
+fn motion_state_raw_motion_state_emits_turn_while_moving() {
+    // F2-4 (movement bughunt 2026-06-09) — the turn fields are RAW INPUT
+    // state, emitted independent of forward/sidestep. Retail's
+    // `RawMotionState::ApplyMotion` (`acclient.c:332852-332889`) writes
+    // the turn slot regardless of locomotion, and ACE's broadcast
+    // converter passes TurnCommand through ungated
+    // (`MovementData.cs:134-148`). The old Phase-2.4 suppression starved
+    // observers of all heading info while a player curved (W+Q/E) — they
+    // saw a dead-straight run with ~1 s heading snaps.
     let world = WorldState::synthetic();
 
     let raw_motion_state = build_motion_state_raw_motion_state(
@@ -513,20 +516,22 @@ fn motion_state_raw_motion_state_suppresses_turn_when_moving() {
         "forward command must still be emitted when moving + turning",
     );
     assert!(
-        !raw_motion_state
+        raw_motion_state
             .flags
             .contains(RawMotionFlags::TURN_COMMAND),
-        "turn command suppressed when locomotion is active",
+        "F2-4: turn command rides the wire alongside locomotion",
     );
     assert!(
-        !raw_motion_state
+        raw_motion_state
             .flags
             .contains(RawMotionFlags::TURN_SPEED),
-        "turn speed flag also suppressed",
     );
-    assert_eq!(raw_motion_state.turn_command, None);
-    assert_eq!(raw_motion_state.turn_speed, None);
-    assert_eq!(raw_motion_state.turn_hold_key, None);
+    assert_eq!(
+        raw_motion_state.turn_command,
+        Some(TURN_RIGHT_MOTION_COMMAND)
+    );
+    assert_eq!(raw_motion_state.turn_speed, Some(WIRE_TURN_SPEED_BASE));
+    assert_eq!(raw_motion_state.turn_hold_key, Some(HoldKey::Run as u32));
 }
 
 #[test]
@@ -695,8 +700,14 @@ fn autonomous_position_heartbeat_defaults_to_grounded_when_contact_unknown() {
     assert_eq!(position_action.last_contact, 1);
 }
 
+/// F2-2 (movement bughunt 2026-06-09) — the wire contact byte reflects the
+/// LOCAL airborne state, not the stale server echo. Pre-fix, the fallback
+/// chain (`last_server_grounded.unwrap_or(true)`) made the byte a constant
+/// `1` even mid-jump/fall (ACE rarely sends self UpdatePosition), so ACE
+/// updated `LastGroundPos` mid-air and force-grounded airborne players on
+/// cell changes (`PhysicsObj.cs:3474`).
 #[test]
-fn autonomous_position_uses_server_grounded_when_contact_unspecified() {
+fn autonomous_position_contact_reflects_local_airborne_state() {
     let mut world = WorldState::synthetic();
     let guid = Guid(0x0102_0304);
     let position = WorldPosition {
@@ -708,14 +719,22 @@ fn autonomous_position_uses_server_grounded_when_contact_unspecified() {
     entity.velocity = Vector3::new(2.0, 0.0, 0.0);
 
     world.player.guid = guid;
+    // Even with a stale grounded echo on file, the LOCAL airborne state
+    // wins: a mid-jump heartbeat must report contact = 0.
     world.player.last_server_grounded = Some(true);
+    world.player.begin_jump(5.0);
     seed_local_player(&mut world, guid, position);
     world.entities.insert(entity);
 
     let position_action = build_autonomous_position(&world, MovementPacketMetadata::default())
         .expect("moving player should emit autonomous position action");
+    assert_eq!(position_action.last_contact, 0, "airborne → contact byte 0");
 
-    assert_eq!(position_action.last_contact, 1);
+    // Touchdown flips it back the same tick.
+    world.player.land();
+    let position_action = build_autonomous_position(&world, MovementPacketMetadata::default())
+        .expect("moving player should emit autonomous position action");
+    assert_eq!(position_action.last_contact, 1, "grounded → contact byte 1");
 }
 
 #[test]
@@ -2804,6 +2823,287 @@ fn step_down_beyond_step_height_falls_off_ledge() {
          the {terrain_z:.1} m terrain; got {:.3}",
         after.coords.z
     );
+}
+
+// ---------------------------------------------------------------------------
+// F4-1 (bughunt 2026-06-09) — INDOOR step-down. The outdoor step-down
+// path (above) followed small drops down and fell off real ledges, but
+// the indoor floor-snap branch was snap-UP-only: a grounded player
+// walking down a dungeon stair/ramp or off an indoor ledge kept the
+// highest Z it ever reached and hovered. These pin the symmetric indoor
+// descent: a real per-poly floor below the feet snaps the feet down
+// within step-down height (stairs/ramps) and begins a fall beyond it
+// (indoor ledges). Cell-agnostic, mirroring ACE `Transition.StepDown`.
+// ---------------------------------------------------------------------------
+
+/// Seed a grounded INDOOR player hovering `drop` metres above a flat
+/// per-poly floor triangle, then run one grounded run-forward tick.
+/// Returns the post-tick pose plus the airborne flag. The floor triangle
+/// spans the whole cell so the forward travel never falls off it and no
+/// wall blocks the lateral move (step-up stays inert) — only the
+/// retained-Z-vs-floor delta drives the indoor step-down decision.
+fn run_indoor_grounded_step_down_tick(
+    guid: Guid,
+    floor_z: f32,
+    retained_z: f32,
+) -> (WorldPosition, bool) {
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+
+    // Indoor cell (low word 0x0100 ⇒ `is_indoors()`).
+    let cell_landblock = Guid(0x8602_0100);
+    let cell_id = u32::from(cell_landblock);
+    let start_pose = WorldPosition {
+        landblock_id: cell_landblock,
+        coords: Vector3::new(50.0, 50.0, retained_z),
+        rotation: Quaternion::identity(),
+    };
+    let global = start_pose.global_coords();
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    // Tall cell so the ceiling clamp never engages on the retained Z, and
+    // an AABB floor well below the per-poly floor so the fall-through
+    // safety guard stays inert (it only fires below `aabb.min.z`).
+    let cell_aabb = holtburger_common::Aabb {
+        min: holtburger_common::Vector3::new(global.x - 6.0, global.y - 6.0, floor_z - 5.0),
+        max: holtburger_common::Vector3::new(global.x + 6.0, global.y + 6.0, floor_z + 40.0),
+    };
+    world.scene.insert_cell_aabb(cell_id, cell_aabb);
+    // One big, flat (upward-normal) floor triangle under the player,
+    // covering the ~0.45 m of forward travel in a 100 ms run tick.
+    let tri = holtburger_common::Triangle::new(
+        holtburger_common::Vector3::new(global.x - 6.0, global.y - 6.0, floor_z),
+        holtburger_common::Vector3::new(global.x + 6.0, global.y - 6.0, floor_z),
+        holtburger_common::Vector3::new(global.x, global.y + 6.0, floor_z),
+    );
+    world.scene.insert_cell_triangle(cell_id, tri);
+
+    assert!(
+        !world.player.is_airborne,
+        "freshly seeded player should be grounded for the indoor step-down path"
+    );
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    (after, world.player.is_airborne)
+}
+
+/// F4-1 — an INDOOR drop within `PLAYER_STEP_DOWN_HEIGHT` (1.5 m) snaps
+/// the feet down onto the per-poly floor and keeps the player grounded
+/// (walking down a dungeon stair/ramp), instead of hovering at the old
+/// altitude. Before the fix this was impossible: the indoor branch only
+/// snapped UP, so the retained Z never came down.
+#[test]
+fn indoor_step_down_within_step_height_snaps_and_stays_grounded() {
+    assert!(
+        USE_STEP_UP_DOWN && USE_RAMP_FLOOR_SNAP_FIX,
+        "this test pins the default-on indoor step-down (F4-1)"
+    );
+    let floor_z = 5.0_f32;
+    let retained_z = floor_z + 1.2; // 1.2 m drop: within the 1.5 m step-down
+    let (after, airborne) =
+        run_indoor_grounded_step_down_tick(Guid(0x5000_0F41), floor_z, retained_z);
+    assert!(
+        !airborne,
+        "an indoor 1.2 m drop is within the 1.5 m step-down and must NOT fall"
+    );
+    assert!(
+        (after.coords.z - (floor_z + 0.005)).abs() < 1e-3,
+        "indoor step-down must snap Z to floor + 5 mm ({:.3}), got {:.3} \
+         (pre-fix the snap-UP-only branch left Z hovering at {retained_z:.3})",
+        floor_z + 0.005,
+        after.coords.z
+    );
+}
+
+/// F4-1 — an INDOOR drop beyond `PLAYER_STEP_DOWN_HEIGHT` (1.5 m) is a
+/// real indoor ledge: the player begins a fall and Z is left for the
+/// gravity integrator, not snapped to the distant floor.
+#[test]
+fn indoor_step_down_beyond_step_height_falls_off_ledge() {
+    let floor_z = 5.0_f32;
+    let retained_z = floor_z + 2.5; // 2.5 m drop: beyond the 1.5 m step-down
+    let (after, airborne) =
+        run_indoor_grounded_step_down_tick(Guid(0x5000_0F42), floor_z, retained_z);
+    assert!(
+        airborne,
+        "an indoor 2.5 m drop exceeds the 1.5 m step-down and must trigger a fall"
+    );
+    // Z must NOT have snapped down to the far floor — the gravity
+    // integrator owns the drop. The first airborne slice applies only a
+    // sub-cm 2nd-order drop at 100 ms, so Z stays near the retained
+    // height, far above the floor.
+    assert!(
+        after.coords.z > floor_z + 1.0,
+        "indoor ledge fall must leave Z near the retained height ({retained_z:.1}), not \
+         snap to the {floor_z:.1} m floor; got {:.3}",
+        after.coords.z
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F1-1 (bughunt 2026-06-09) — grounded run-speed ceiling. The legacy
+// friction(0.5)+accel-cap(8) tug has a closed-form steady-state ceiling
+// `v* = 8·q/(1−0.5^q) ≈ 11.7–12 m/s`, so a high-Run character's 18 m/s run
+// target is unreachable. `USE_DIRECT_GROUND_VELOCITY` (retail apply_raw_movement
+// direct-set) reaches the target instantly. This test pins BOTH configurations
+// so it protects whichever way the flag is set and auto-validates the retail
+// path the moment the flag is flipped on (after the 1070 gait eye-test).
+// ---------------------------------------------------------------------------
+
+/// Run a grounded forward-run for `ticks` 100 ms slices and return the final
+/// stored planar speed (m/s). No terrain is populated, so the floor query
+/// misses and the player stays grounded throughout — the velocity store
+/// evolves purely from the target (= base_run × run_rate) and the grounded
+/// velocity model, independent of position. `base_run × run_rate = 18` is
+/// retail's max run.
+fn run_grounded_run_speed(guid: Guid, run_rate: f32, base_run: f32, ticks: u32) -> f32 {
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, run_rate, 1.0, base_run, 1.5);
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(96.0, 96.0, 10.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    assert!(
+        !world.player.is_airborne,
+        "freshly seeded player should be grounded for the run-speed path"
+    );
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    for _ in 0..ticks {
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+    }
+    let v = world.player.current_planar_velocity;
+    (v.x * v.x + v.y * v.y).sqrt()
+}
+
+/// F1-1 — an 18 m/s run target (base_run 4.0 × run_rate 4.5, retail max) is
+/// reachable ONLY with the retail direct-set model; the legacy friction+cap
+/// tug hard-ceilings ~20–35 % short.
+#[test]
+fn high_run_target_speed_reaches_retail_max_only_with_direct_velocity() {
+    let steady = run_grounded_run_speed(Guid(0x5000_0F11), 4.5, 4.0, 120);
+    if USE_DIRECT_GROUND_VELOCITY {
+        assert!(
+            (steady - 18.0).abs() < 0.2,
+            "direct-set must reach the 18 m/s run target, got {steady:.3}"
+        );
+        // …and reach it INSTANTLY (one tick), not over a multi-second ramp.
+        let one_tick = run_grounded_run_speed(Guid(0x5000_0F12), 4.5, 4.0, 1);
+        assert!(
+            (one_tick - 18.0).abs() < 0.2,
+            "direct-set must reach target in ONE tick (no ice-skating ramp), got {one_tick:.3}"
+        );
+    } else {
+        // Legacy friction(0.5)+accel-cap(8) steady state ≈ 8·0.1/(1−0.5^0.1)
+        // ≈ 11.95 m/s — the 18 m/s target is structurally unreachable (F1-1).
+        assert!(
+            steady > 11.0 && steady < 13.0,
+            "legacy integrator ceilings ~11.7–12 m/s and CANNOT reach the 18 m/s \
+             target (F1-1); got {steady:.3}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate. The grounded
+// outdoor path snapped Z onto ANY rise with no slope test, so a player could
+// run straight up an arbitrarily steep cliff at full speed.
+// `USE_TERRAIN_WALKABLE_GATE` refuses the climb onto a face steeper than
+// retail's FloorZ (~48.4°). This pins BOTH configurations so it protects
+// whichever way the flag is set.
+// ---------------------------------------------------------------------------
+
+/// Run `ticks` 100 ms forward-run slices into a ~60° uphill face (non-walkable)
+/// and return `(start_x, start_z, after_x, after_z)` in landblock-local coords.
+/// A run-forward at heading 0 drives the rig toward −X, so the slope is built
+/// to RISE toward −X (`grid[vx*9+vy] = (8−vx)·42 m`, ~60° everywhere): running
+/// forward heads straight up the face.
+fn run_uphill_cliff(guid: Guid, ticks: u32) -> (f32, f32, f32, f32) {
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    // Steep face across LB (0,0) rising toward −X (the run-forward direction).
+    let mut steep = [0.0f32; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            steep[vx * 9 + vy] = (8 - vx) as f32 * 42.0;
+        }
+    }
+    world.populate_terrain_heights(0, steep);
+    let start_x = 96.0_f32; // mid-LB so the −X run has room before the edge
+    let start_y = 96.0_f32;
+    let start_z = world
+        .terrain_height_at(start_x, start_y)
+        .expect("steep terrain populated");
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0x0000_0001), // lb (0,0), outdoor (low16 < 0x100)
+        coords: Vector3::new(start_x, start_y, start_z),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    assert!(
+        !world.player.is_airborne,
+        "freshly seeded player should be grounded on the slope"
+    );
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    for _ in 0..ticks {
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+    }
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    (start_x, start_z, after.coords.x, after.coords.z)
+}
+
+/// F4-2 — running into a ~60° cliff face advances + climbs it ONLY with the
+/// legacy (gate-off) snap; the walkable gate blocks the climb at the base.
+#[test]
+fn outdoor_steep_cliff_blocks_climb_only_with_walkable_gate() {
+    let (start_x, start_z, after_x, after_z) = run_uphill_cliff(Guid(0x5000_0F42), 10);
+    if USE_TERRAIN_WALKABLE_GATE {
+        // Gate ON: the advance onto the non-walkable face is reverted every
+        // tick, so the player stays at the base and gains no height.
+        assert!(
+            (after_x - start_x).abs() < 0.5 && (after_z - start_z).abs() < 1.0,
+            "walkable gate must stop the climb at the cliff base \
+             (x≈{start_x:.1}, z≈{start_z:.1}), got x={after_x:.3} z={after_z:.3}"
+        );
+    } else {
+        // Gate OFF (legacy): the player runs straight up the cliff — XY
+        // advances toward −X and Z snaps onto the rising terrain (the
+        // F4-2 exploit).
+        assert!(
+            after_x < start_x - 1.0 && after_z > start_z + 1.0,
+            "legacy snap climbs the cliff (x<{:.1}, z>{:.1}), got x={after_x:.3} z={after_z:.3}",
+            start_x - 1.0,
+            start_z + 1.0
+        );
+    }
 }
 
 // ---- edge_slide (gap 3 follow-up, 2026-06-01) ----

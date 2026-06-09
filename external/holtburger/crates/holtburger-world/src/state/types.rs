@@ -562,6 +562,66 @@ impl WorldState {
         Some(z)
     }
 
+    /// F4-2 (bughunt 2026-06-09) — terrain surface NORMAL (unit, AC z-up) at
+    /// world-frame `(x, y)`, for the outdoor walkable-slope gate. `None` when
+    /// the containing landblock isn't cached (caller falls back to "treat as
+    /// walkable / preserve behaviour").
+    ///
+    /// Retail/ACE refuse to walk onto a terrain polygon whose plane normal
+    /// `z < PhysicsGlobals.FloorZ` (`0.664174`, ~48.4° from horizontal) and
+    /// slide instead (`LandCell.FindEnvCollisions` → `ObjectInfo.is_valid_walkable`).
+    /// Our grounded outdoor path previously snapped Z onto ANY rise, so cliffs
+    /// were freely climbable. This surfaces the local slope so the integrator
+    /// can apply the cutoff.
+    ///
+    /// Derivation: the analytic gradient of the SAME bilinear height field
+    /// [`Self::terrain_height_at`] samples (∂z/∂x, ∂z/∂y over the 24 m cell),
+    /// giving `normal = normalize(-∂z/∂x, -∂z/∂y, 1)`. This matches the
+    /// walkable cutoff exactly at the boundary (a 48.4° slope ⇒ |grad| =
+    /// tan 48.4° = 1.126 ⇒ normal.z = 0.664 = FloorZ) and is monotonic with
+    /// steepness, so the gate decision is faithful. The per-cell triangle
+    /// SPLIT direction (which the gradient averages over) only shifts the
+    /// classification within a hair of the boundary on mixed cells — a
+    /// fidelity refinement, not the exploit; documented as a follow-on.
+    pub fn terrain_normal_at(&self, world_x: f32, world_y: f32) -> Option<holtburger_common::Vector3> {
+        const LB_M: f32 = 192.0;
+        const VERT_M: f32 = 24.0;
+        if !world_x.is_finite() || !world_y.is_finite() {
+            return None;
+        }
+        let lb_x = (world_x / LB_M).floor() as i32;
+        let lb_y = (world_y / LB_M).floor() as i32;
+        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
+            return None;
+        }
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let grid = self.terrain_heights.get(&landblock_id)?;
+
+        let local_x = world_x - lb_x as f32 * LB_M;
+        let local_y = world_y - lb_y as f32 * LB_M;
+        let cell_x = (local_x / VERT_M).clamp(0.0, 8.0);
+        let cell_y = (local_y / VERT_M).clamp(0.0, 8.0);
+        let cx0 = cell_x.floor() as usize;
+        let cy0 = cell_y.floor() as usize;
+        let cx1 = (cx0 + 1).min(8);
+        let cy1 = (cy0 + 1).min(8);
+        let fx = cell_x - cx0 as f32;
+        let fy = cell_y - cy0 as f32;
+        let z00 = grid[cx0 * 9 + cy0];
+        let z10 = grid[cx1 * 9 + cy0];
+        let z01 = grid[cx0 * 9 + cy1];
+        let z11 = grid[cx1 * 9 + cy1];
+        // Bilinear partials in cell units, converted to m/m (÷ VERT_M).
+        let dzdx = ((z10 - z00) * (1.0 - fy) + (z11 - z01) * fy) / VERT_M;
+        let dzdy = ((z01 - z00) * (1.0 - fx) + (z11 - z10) * fx) / VERT_M;
+        let n = holtburger_common::Vector3::new(-dzdx, -dzdy, 1.0);
+        let len = (n.x * n.x + n.y * n.y + n.z * n.z).sqrt();
+        if !len.is_finite() || len <= f32::EPSILON {
+            return Some(holtburger_common::Vector3::new(0.0, 0.0, 1.0));
+        }
+        Some(holtburger_common::Vector3::new(n.x / len, n.y / len, n.z / len))
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn synthetic() -> Self {
         Self::synthetic_with_spatial_physics(Arc::new(BasicSpatialPhysics))

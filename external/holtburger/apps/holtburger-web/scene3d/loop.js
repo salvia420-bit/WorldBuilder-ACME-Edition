@@ -86,6 +86,11 @@ const KIND_ATTACH = 7;
 // INCLUDING the local player — it never carries a locomotion command, so the
 // local-gait LOCOMOTION skip in the KIND_MOTION arms stays untouched (B9).
 const KIND_MOTION_ACTION = 8;
+// F3-3 (bughunt 2026-06-09) — a server TurnToHeading/TurnToObject directive.
+// qw/qx/qy/qz carry the absolute target heading as an AC z-up quaternion;
+// omega_z is the turn-speed hint. Remote-only: em.applyTurnDirective sets the
+// heading-ease target so the rig turns to face it (NPCs / idle turn-in-place).
+const KIND_TURN = 9;
 
 // FORCE_MOTION_LOCAL (motion B5#2 / C3, backlog 19, 2026-06-09) —
 // `?forceMotionLocal=on` (default OFF). The two KIND_MOTION arms below
@@ -526,8 +531,15 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   // the gravity arc so the rig never left the ground (only the camera,
   // which reads raw integrator Z, flew up). When airborne, render at the
   // raw `posZ` so the arc reaches the rig.
+  // F4-3 (bughunt 2026-06-09): the 4th arg caps the lift to 0.3 m (the
+  // documented visual-vs-collision delta) + margin. The raycast hits the
+  // OUTDOOR land surface even for an INDOOR pose (the ray ignores `.visible`
+  // and terrain is force-shown indoors), which pre-fix sank the grounded
+  // third-person avatar to the terrain surface — dozens of metres off — in
+  // any dungeon / upstairs room. A hit beyond the clamp is never the surface
+  // we're standing on, so it's rejected and the integrator's Z is kept.
   let renderZ = isOnGround
-    ? getTerrainVisualZ(scene3d, predicted.x, predicted.y, posZ)
+    ? getTerrainVisualZ(scene3d, predicted.x, predicted.y, posZ, 0.5)
     : posZ;
 
   // Low-pass the rig Z to kill the ~5-10 Hz vertical reconcile bob (see
@@ -1604,6 +1616,15 @@ function toMeta(upd) {
     mtableId: (upd.mtableId >>> 0),
     motionCommand: (upd.motionCommand ?? 0) >>> 0,
     motionStance: (upd.motionStance ?? 0) >>> 0,
+    // F3-1 (bughunt 2026-06-09): projectile launch velocity (AC world frame,
+    // m/s). Non-zero only on a PhysicsState::MISSILE spawn (the wasm KIND_SPAWN
+    // arm forwards the ObjectCreate PhysicsDesc velocity for missiles, 0 for
+    // everything else). entities.js _spawnImpl seeds it as `lastVel` + flags
+    // `_ballistic` so tick() integrates the flight (ACE never streams in-flight
+    // UpdatePosition for missiles, so this is the only motion datum they get).
+    vx: +(upd.vx ?? 0),
+    vy: +(upd.vy ?? 0),
+    vz: +(upd.vz ?? 0),
     // A6 (2026-05-18): copy via shared module scratches, slice to a
     // right-sized retained buffer. The wasm-bindgen Uint32Array views
     // point at linear memory that grows on subsequent allocations, so
@@ -1768,6 +1789,19 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
           // stance change and never disturbs the active walk/run clip.
           em.setLocalStance(motionGuid, st);
         }
+        // F3-4 (bughunt 2026-06-09): sticky-attack target rides on model_id of
+        // KIND_MOTION (0 = none/clear). Remote-only — the local player is never
+        // sticky. While set, EntityManager.tick glues the mob to the moving
+        // target so a kited melee monster tracks the player instead of freezing.
+        if (!isLocalPlayerGuid(motionGuid) && typeof em.setStickyTarget === "function") {
+          em.setStickyTarget(motionGuid, upd.modelId >>> 0);
+        }
+        // F3-5 (bughunt 2026-06-09): per-creature run rate rides on `vx` for
+        // KIND_MOTION (0 = none). Remote-only — drives the velScale gait tempo
+        // off the creature's own rate, not the local player's.
+        if (!isLocalPlayerGuid(motionGuid) && typeof em.setEntityRunRate === "function") {
+          em.setEntityRunRate(motionGuid, +(upd.vx ?? 0));
+        }
         // Wave 10 Phase 10.1 (2026-05-26) — removed the
         // Fallen→setAirborne(false) coupling here. The wasm-side
         // touchdown emission now uses `kind=18
@@ -1797,6 +1831,14 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         const actionStance = (upd.motionStance ?? 0) >>> 0;
         if (actionCmd !== 0 && typeof em.setMotion === "function") {
           em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
+        }
+      } else if (kind === KIND_TURN) {
+        // F3-3 (bughunt 2026-06-09): server TurnTo* directive — turn the rig to
+        // face the absolute target heading (qw/qx/qy/qz). Remote-only; the local
+        // player owns its own facing (client-predicted).
+        const turnGuid = upd.guid >>> 0;
+        if (!isLocalPlayerGuid(turnGuid) && typeof em.applyTurnDirective === "function") {
+          em.applyTurnDirective(turnGuid, upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0);
         }
       } else if (kind === KIND_APPEARANCE) {
         // Wave 7.3 — mid-game equip change. The wasm UpdateObject arm
@@ -1927,10 +1969,22 @@ export function installSharedDrainHook(scene3d) {
             // server sends bilinear-collision Z; Catmull-Rom render
             // surface deviates by up to 0.3 m. Raycast lifts the
             // remote rig to the visible terrain so other players don't
-            // appear partially buried. Returns wz unchanged when the
-            // ray misses (indoor envcells, unloaded LBs, etc.) so
-            // non-terrain placements stay server-authoritative.
-            const renderWz = getTerrainVisualZ(scene3d, wx, wy, wz);
+            // appear partially buried.
+            //
+            // F4-3 (bughunt 2026-06-09): this is OUTDOOR-ONLY. The old
+            // "returns wz when the ray misses indoors" claim was false —
+            // a vertical ray over a dungeon HITS the outdoor land surface
+            // above it (the raycaster ignores `.visible` and terrain is
+            // force-shown indoors), so every indoor mob/player rig was
+            // relocated to the surface dozens of metres up. Gate on the
+            // entity's cell: indoor (landblock low16 >= 0x100) keeps the
+            // server Z untouched; outdoor reconciles but clamps the lift
+            // to the documented 0.3 m delta + margin so a stray far hit
+            // can never teleport the rig.
+            const cellIndoor = ((upd.landblockId >>> 0) & 0xffff) >= 0x100;
+            const renderWz = cellIndoor
+              ? wz
+              : getTerrainVisualZ(scene3d, wx, wy, wz, 0.5);
             em.setPose(
               g,
               wx, wy, renderWz,
@@ -1975,6 +2029,15 @@ export function installSharedDrainHook(scene3d) {
             // pose and never the predictor-owned walk/run clip.
             em.setLocalStance(motionGuid, st);
           }
+          // F3-4 (bughunt 2026-06-09): sticky-attack target on model_id (see
+          // the direct-drain arm above). Remote-only.
+          if (!isLocalPlayerGuid(motionGuid) && typeof em.setStickyTarget === "function") {
+            em.setStickyTarget(motionGuid, upd.modelId >>> 0);
+          }
+          // F3-5 (bughunt 2026-06-09): per-creature run rate on `vx`. Remote-only.
+          if (!isLocalPlayerGuid(motionGuid) && typeof em.setEntityRunRate === "function") {
+            em.setEntityRunRate(motionGuid, +(upd.vx ?? 0));
+          }
           // Wave 10 Phase 10.1 (2026-05-26) — removed the
           // Fallen→setAirborne(false) coupling here. See the matching
           // comment in the direct-drain path above; the local arms-up
@@ -1992,6 +2055,12 @@ export function installSharedDrainHook(scene3d) {
           const actionStance = (upd.motionStance ?? 0) >>> 0;
           if (actionCmd !== 0 && typeof em.setMotion === "function") {
             em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
+          }
+        } else if (kind === KIND_TURN) {
+          // F3-3 (bughunt 2026-06-09): TurnTo* directive (see direct-drain arm).
+          const turnGuid = upd.guid >>> 0;
+          if (!isLocalPlayerGuid(turnGuid) && typeof em.applyTurnDirective === "function") {
+            em.applyTurnDirective(turnGuid, upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0);
           }
         }
       } catch (e) {

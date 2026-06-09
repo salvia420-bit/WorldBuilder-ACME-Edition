@@ -53,7 +53,9 @@ const USE_QUANTUM_SUBDIVIDED_INTEGRATION: bool = true;
 /// of falling at the legacy `LEDGE_FALL_THRESHOLD_M = 0.5` heuristic.
 /// Mirrors ACE's `Transition.StepUp`/`StepDown` walkable path
 /// (`Transition.cs:746-777,852-870`) capped at
-/// `ObjectInfo.StepUpHeight`/`StepDownHeight`.
+/// `ObjectInfo.StepUpHeight`/`StepDownHeight`. The step-DOWN half runs
+/// BOTH outdoors (terrain snap) and indoors (per-poly floor snap, F4-1)
+/// — retail `Transition.StepDown` is cell-agnostic.
 ///
 /// `false`: the pre-2026-06-01 behaviour — any riser blocks the move
 /// (no step-up at all) and a descent beyond `0.5 m` falls. Retained
@@ -222,6 +224,69 @@ const SERVER_PROJECTION_LANDBLOCK_TOLERANCE: u32 = 1;
 /// flat ground and only correct behaviour on slopes, so they carry the
 /// low-risk fidelity without touching the contested knob.
 const USE_RETAIL_GROUND_FRICTION: bool = false;
+
+/// F1-1 (bughunt 2026-06-09) — grounded velocity model: retail direct-set
+/// vs the hand-tuned friction + accel-cap tug.
+///
+/// `false` (DEFAULT): the legacy path — each grounded slice friction-decays
+/// the stored planar velocity ([`super::common::PLAYER_GROUND_FRICTION_PER_SEC`]
+/// `0.5`) then moves it toward the target clamped to
+/// [`super::common::PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ`] (`8.0`)
+/// per axis. That interaction has a closed-form steady-state ceiling
+/// `v* = 8·q/(1−0.5^q) ≈ 11.7 m/s` (q∈[1/30,0.1]), so any run target above
+/// ~11.7 (run_rate > ~2.92, effective Run skill ≳ 460) is UNREACHABLE — the
+/// player tops out ~20–35 % below retail's 18 m/s max run, with a 1.5–4 s
+/// ice-skating ramp and a ~5 m stop-skid. The accel-cap doc even calibrates
+/// `8` against "~4.5 m/s" — a 4× misread of the dimensionless run_rate scalar
+/// as m/s. Kept for A/B.
+///
+/// `true`: retail behaviour — set the grounded planar velocity DIRECTLY to
+/// the interpreted-state target each tick (ACE `MotionInterp.apply_raw_movement`
+/// copies raw→interpreted and `get_state_velocity` yields `RunAnimSpeed(4.0)
+/// × ForwardSpeed` reached INSTANTLY; retail's `calc_friction` acts on the
+/// physics velocity, which self-powered walking never fights — see
+/// `MotionInterp.cs:506-523,678-699` and the acclient pseudo-C
+/// `get_state_velocity` @ `0x00527D50`). No accel-cap ramp, no skid; the
+/// existing small-velocity snap still gives an instant stop on input release.
+/// This also removes the anim foot-slide (velScale reads the same target
+/// speed the body now actually reaches) and the observer rubber-band (wire
+/// forward_speed = run_rate now matches local). The contact-plane projection
+/// /SLEDDING fidelity in the friction path is a no-op on flat ground and only
+/// matters on ramps; direct-set leaves Z to the floor-Z snap below exactly as
+/// the planar store already does, so dropping it for grounded locomotion is
+/// faithful. DEFAULT-OFF pending a 1070 gait eye-test (the ramp/stop feel
+/// change wants live eyes, same rationale as `USE_RETAIL_GROUND_FRICTION` and
+/// the velScale flip). A documented sub-option, NOT implemented here, is a
+/// short ≤0.2 s blend on direction reversal if the instant turn reads too
+/// abrupt on the 1070.
+const USE_DIRECT_GROUND_VELOCITY: bool = false;
+
+/// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
+///
+/// `false` (DEFAULT): the legacy behaviour — outdoor grounded movement
+/// snaps Z onto the bilinear terrain height for ANY rise with no slope test
+/// (the `FLOOR_Z` walkable classifier was wired only into the INDOOR cell
+/// triangle path), so a player can run straight up an arbitrarily steep
+/// cliff/mountain face at full speed. The lateral clamp never blocks bare
+/// terrain either, so nothing stops the climb. Retained as the default until
+/// the gate is eye-tested on the 1070.
+///
+/// `true`: refuse to walk onto a terrain plane steeper than retail's
+/// `FloorZ` (`holtburger_world::spatial::FLOOR_Z` = `0.664174`, ~48.4° from
+/// horizontal — ACE `PhysicsGlobals.FloorZ`, `LandCell.FindEnvCollisions` →
+/// `ObjectInfo.is_valid_walkable`). When a grounded outdoor step is UPHILL
+/// (terrain Z above the feet) onto a face whose surface normal
+/// ([`holtburger_world::WorldState::terrain_normal_at`]) has `z < FLOOR_Z`,
+/// block the advance: revert the lateral move to the slice-entry XY (stop at
+/// the cliff base) and skip the up-snap, so the player can't gain height onto
+/// the cliff. Walking ALONG the base (destination terrain still walkable) is
+/// unaffected. DEFERRED follow-ons (refinements, not the exploit): sliding
+/// the residual along the slope contour instead of a hard stop (reuse
+/// `edge_slide`), the retail slide-DOWN when already standing on a
+/// non-walkable plane, feeding the terrain normal into `calc_friction` for
+/// uphill slowdown, and the exact per-cell triangle SPLIT normal (the gate
+/// uses the bilinear-gradient normal, faithful at the walkable cutoff).
+const USE_TERRAIN_WALKABLE_GATE: bool = false;
 
 /// 2026-06-02 indoor floor-pop fix — gate the ramped/multi-level
 /// floor-Z resolution in the `else` arm of
@@ -1143,6 +1208,12 @@ impl MovementSystem {
         let Some(mut pose) = world.local_player_runtime_pose() else {
             return;
         };
+        // F4-2 (bughunt 2026-06-09) — slice-entry landblock-local XY, captured
+        // before any lateral move, so the outdoor walkable-slope gate can
+        // revert an uphill advance onto a non-walkable cliff face. Same frame
+        // as `pose.coords` throughout the slice (rebucket runs only at the
+        // end), so the revert is consistent.
+        let entry_local_xy = (pose.coords.x, pose.coords.y);
         let heading = pose.rotation.to_heading();
         let capabilities = match world.resolve_self_movement_capabilities() {
             Ok(c) => c,
@@ -1211,6 +1282,34 @@ impl MovementSystem {
             // is applied to position below WITHOUT re-rotating by the
             // in-flight heading.
             world.player.current_planar_velocity
+        } else if USE_DIRECT_GROUND_VELOCITY {
+            // F1-1 (bughunt 2026-06-09) — retail direct-set. ACE's
+            // `apply_raw_movement` sets the motion velocity straight from the
+            // interpreted state every tick and `get_state_velocity` returns
+            // `RunAnimSpeed(4.0) × ForwardSpeed` reached INSTANTLY (no friction
+            // /accel-cap ramp for self-powered locomotion). Setting the planar
+            // store to the target here removes the legacy ~11.7 m/s steady-
+            // state ceiling (so high-Run characters reach retail's 18 m/s),
+            // the 1.5–4 s ice-skating ramp, and the ~5 m stop-skid. The target
+            // is already planar (X/Y from `local_velocity_for_state`); Z stays
+            // owned by the jump/fall arc + floor-Z snap below, so we zero it in
+            // the store exactly as the friction path did.
+            let mut v = target_velocity;
+            v.z = 0.0;
+            // Retail small-velocity snap (`PhysicsObj` `small_velocity`): when
+            // the input is released the interpreted forward command goes to 0,
+            // so the target drops below threshold and the body stops THIS tick
+            // — an instant stop, matching retail (no skid for self-powered
+            // locomotion).
+            let mag_sq = v.x * v.x + v.y * v.y;
+            let threshold_sq = PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
+                * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
+            if mag_sq < threshold_sq {
+                v.x = 0.0;
+                v.y = 0.0;
+            }
+            world.player.current_planar_velocity = v;
+            v
         } else {
             // Grounded: apply friction decay + accel cap, then snap to
             // zero below the small-velocity threshold.
@@ -2110,6 +2209,25 @@ impl MovementSystem {
                         pose.coords.z = z;
                         world.player.land();
                     }
+                } else if USE_TERRAIN_WALKABLE_GATE
+                    && z > pose.coords.z
+                    && world
+                        .terrain_normal_at(global.x, global.y)
+                        .map(|n| n.z < holtburger_world::spatial::FLOOR_Z)
+                        .unwrap_or(false)
+                {
+                    // F4-2 (bughunt 2026-06-09) — non-walkable uphill face.
+                    // Retail/ACE refuse a contact plane steeper than FloorZ
+                    // (~48.4°) and never let it become walkable; our snap
+                    // raised Z onto ANY rise, so cliffs were climbable at full
+                    // run speed. Refuse the climb: revert the lateral advance
+                    // to the slice-entry XY (stop at the cliff base) and skip
+                    // the up-snap so no height is gained onto the face. Walking
+                    // ALONG the base is unaffected (its destination terrain is
+                    // walkable, so this arm isn't taken). Slide-along-contour
+                    // is a documented follow-on.
+                    pose.coords.x = entry_local_xy.0;
+                    pose.coords.y = entry_local_xy.1;
                 } else {
                     // Wave 5 Phase 5.1 (movement-animation overhaul,
                     // 2026-05-26): walked-off-ledge detection. When the
@@ -2263,7 +2381,10 @@ impl MovementSystem {
             // with it off we reproduce the legacy combined-Option.
             let aabb_floor_z = cell_aabb.map(|a| a.min.z);
             if USE_RAMP_FLOOR_SNAP_FIX {
-                // Snap UP only to a real per-poly floor.
+                // Snap to a real per-poly floor. Two grounded directions:
+                //   - feet below the floor → snap UP (catch-up / landing).
+                //   - feet above the floor → indoor step-DOWN (see F4-1
+                //     below).
                 if let Some(floor) = poly_floor_z {
                     let snap_z = floor + 0.005; // 5 mm headroom; matches AC
                     if pose.coords.z < snap_z {
@@ -2273,6 +2394,41 @@ impl MovementSystem {
                         // uses `world.player.land()` likewise.
                         if world.player.is_airborne {
                             world.player.land();
+                        }
+                    } else if USE_STEP_UP_DOWN
+                        && !world.player.is_airborne
+                        && pose.coords.z > snap_z
+                    {
+                        // F4-1 (bughunt 2026-06-09) — indoor descent. The
+                        // outdoor branch above runs `step_down_decision` on
+                        // every walk-off; this indoor branch was snap-UP-only
+                        // (Phase 6 academy-rubberband fix), so a grounded
+                        // player walking DOWN a dungeon stair/ramp or off an
+                        // indoor ledge kept the highest Z it ever reached and
+                        // hovered on air at the old altitude. Retail/ACE
+                        // `Transition.StepDown` is cell-agnostic — it runs for
+                        // EnvCells exactly as for land cells, capped at
+                        // `ObjectInfo.StepDownHeight` (= PLAYER_STEP_DOWN_HEIGHT,
+                        // 1.5 m). Mirror it indoors: a drop within step-down
+                        // height snaps the feet down to follow the floor
+                        // (stairs/ramps/short steps); a deeper drop begins a
+                        // fall and lets the gravity integrator take over next
+                        // tick, after which the snap-UP arm above catches the
+                        // indoor landing. Grounded-only: while airborne the
+                        // gravity arc owns Z and the snap-UP arm handles
+                        // touchdown.
+                        match holtburger_world::spatial::step_down_decision(
+                            pose.coords.z,
+                            snap_z,
+                            holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT,
+                        ) {
+                            holtburger_world::spatial::StepDownOutcome::Snap(z) => {
+                                pose.coords.z = z;
+                            }
+                            holtburger_world::spatial::StepDownOutcome::Fall => {
+                                world.player.begin_fall();
+                                // Leave Z alone — gravity drops us next tick.
+                            }
                         }
                     }
                 }

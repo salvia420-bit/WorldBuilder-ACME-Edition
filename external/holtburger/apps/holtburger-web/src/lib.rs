@@ -4955,9 +4955,24 @@ fn moveto_locomotion_hint(movement_parameters: u32) -> u16 {
     }
 }
 
+/// F3-4 (bughunt 2026-06-09) — the MovementParams `sticky` bit (bit 7 =
+/// `0x80`, verified against retail `acclient.h` `can_walk..disable_jump`
+/// bitfield order, ACE `MovementParameters.Sticky`). ACE sets it on every
+/// monster chase (`Creature_Navigation.cs:307`) and then withholds the
+/// monster's position broadcasts while it's true (`Monster_Tick`
+/// `UpdatePosition(false)`), relying on the client to keep the mob glued to
+/// its target. A `MoveToObject` carrying this bit therefore names the sticky
+/// target (`MoveToObject.target`); the recv loop surfaces it on the
+/// KIND_MOTION `model_id` so the JS tick can track the target.
+#[cfg(any(target_arch = "wasm32", test))]
+fn moveto_is_sticky(movement_parameters: u32) -> bool {
+    const STICKY: u32 = 0x80;
+    movement_parameters & STICKY != 0
+}
+
 #[cfg(test)]
 mod moveto_hint_tests {
-    use super::moveto_locomotion_hint;
+    use super::{moveto_is_sticky, moveto_locomotion_hint};
     use holtburger_protocol::messages::movement::InterpretedMotionCommand;
 
     #[test]
@@ -4969,6 +4984,17 @@ mod moveto_hint_tests {
         assert_eq!(moveto_locomotion_hint(0x1 | 0x2), run, "can_walk+can_run -> run (chase default)");
         assert_eq!(moveto_locomotion_hint(0x1), walk, "walk-only -> walk");
         assert_eq!(moveto_locomotion_hint(0x0), walk, "no flags -> walk");
+    }
+
+    /// F3-4 — the sticky bit is 0x80 and is independent of the locomotion
+    /// flags (a chase sets can_run|sticky together).
+    #[test]
+    fn moveto_sticky_bit_is_0x80() {
+        assert!(moveto_is_sticky(0x80), "sticky bit set");
+        assert!(moveto_is_sticky(0x2 | 0x80), "can_run + sticky (typical chase)");
+        assert!(!moveto_is_sticky(0x0), "no flags -> not sticky");
+        assert!(!moveto_is_sticky(0x2 | 0x10), "can_run|can_charge alone -> not sticky");
+        assert!(!moveto_is_sticky(0x40), "use_final_heading (0x40) is not sticky");
     }
 }
 
@@ -17672,6 +17698,28 @@ const ENTITY_UPDATE_KIND_ATTACH: u32 = 7;
 /// the client-side gait predictor (B9) is left untouched. All other fields
 /// are zeroed.
 const ENTITY_UPDATE_KIND_MOTION_ACTION: u32 = 8;
+/// F3-4/F3-3 (bughunt 2026-06-09) — a server TurnToHeading/TurnToObject
+/// directive, surfaced so the JS heading-ease can actually execute the turn.
+/// Pre-fix the `UpdateMotion` `TurnTo*` envelope was decoded then dropped
+/// (`motion_command` collapsed to 0 and no field carried the heading), so
+/// NPCs never turned to face you on interaction/emote and turn-in-place idle
+/// behaviour never played. ACE broadcasts the turn once and rotates its
+/// server Location lazily (`Creature_Navigation.TurnTo`), so without a
+/// client-side turn the rig keeps whatever facing its last position packet
+/// left. Both wire variants carry an ABSOLUTE `desired_heading` (ACE
+/// pre-computes the toward-target heading for TurnToObject), so this needs no
+/// target tracking. Field reuse on `EntityUpdate` for this kind:
+///   `guid`            = entity GUID
+///   `qw,qx,qy,qz`     = the target heading as an AC z-up quaternion
+///                       (`qw=cos(h/2), qz=sin(h/2)`) — JS feeds it through the
+///                       same `acQuatToThree` path `setPose` uses
+///   `omega_z`         = the directive's turn speed (rad/s hint; the JS heading
+///                       ease currently uses its own K, so this is reserved for
+///                       a future rate-limit refinement)
+/// All other fields are zeroed. JS (remote-only) stashes it as the heading-ease
+/// `_serverTargetQuat` so the existing per-frame slerp turns the rig to face it.
+#[cfg(target_arch = "wasm32")]
+const ENTITY_UPDATE_KIND_TURN: u32 = 9;
 /// Phase 4 step 6f: ItemType bit 0x10000 = Portal. We auto-fire
 /// `GameAction::IdentifyObject(guid)` on every ObjectCreate that
 /// matches this bit so ACE pushes back the portal's
@@ -31510,6 +31558,36 @@ async fn recv_loop(
                                 .unwrap_or(false);
                             let skip_local_player_spawn =
                                 is_local_player && local_player_spawn_emitted;
+                            // F3-1 (bughunt 2026-06-09) — surface the projectile
+                            // launch velocity on Spawn. ACE NEVER broadcasts an
+                            // in-flight UpdatePosition for a `PhysicsState::MISSILE`
+                            // object (the missile-tick `SendUpdatePosition` is
+                            // commented out — WorldObject_Tick.cs), so the ONLY
+                            // motion datum the client ever receives for a bolt /
+                            // arrow / thrown weapon is the `ObjectCreate` PhysicsDesc
+                            // velocity (parsed at description.rs:1052-1057, stored on
+                            // the world entity at entity.rs:930-931). Pre-fix that
+                            // value was dropped here (vx/vy/vz hard-zeroed) and the
+                            // dead-reckon path only moves entities with a server
+                            // POSITION target — so every projectile sat frozen at the
+                            // launch point for its whole flight. Forward it on the
+                            // existing vx/vy/vz fields ONLY for missiles (non-missile
+                            // spawns keep 0 → JS never marks them ballistic); the JS
+                            // tick integrates it (entities.js ballistic branch). Arc
+                            // curvature (gravity, the `PhysicsState::GRAVITY` bit) is
+                            // a cosmetic follow-on: the projectile despawns on impact
+                            // within its sub-second flight, so constant-velocity never
+                            // sails off and impact VFX now plays near the target.
+                            let (spawn_vx, spawn_vy, spawn_vz) = if data
+                                .physics_state
+                                .contains(holtburger_common::properties::PhysicsState::MISSILE)
+                            {
+                                data.velocity
+                                    .map(|v| (v.x, v.y, v.z))
+                                    .unwrap_or((0.0, 0.0, 0.0))
+                            } else {
+                                (0.0, 0.0, 0.0)
+                            };
                             if !skip_local_player_spawn {
                                 entity_updates.borrow_mut().push(EntityUpdate {
                                     kind: ENTITY_UPDATE_KIND_SPAWN,
@@ -31534,9 +31612,10 @@ async fn recv_loop(
                                     texture_changes,
                                     sub_palettes,
                                     portal_destination: String::new(),
-                                    vx: 0.0,
-                                    vy: 0.0,
-                                    vz: 0.0,
+                                    // F3-1: launch velocity for missiles (0 otherwise).
+                                    vx: spawn_vx,
+                                    vy: spawn_vy,
+                                    vz: spawn_vz,
                                     omega_z: 0.0,
                                     // Render-completeness audit (2026-05-29):
                                     // default animatable entities (those with a
@@ -32097,10 +32176,61 @@ async fn recv_loop(
                                     .unwrap_or(1.0),
                                 _ => 1.0,
                             };
+                            // F3-4 (bughunt 2026-06-09) — sticky target. ACE
+                            // STOPS broadcasting a monster's position while it
+                            // is sticky-attacking (`Monster_Tick` calls
+                            // `UpdatePosition(false)` — netsend FALSE — relying
+                            // on the retail client's StickyManager to keep the
+                            // attacker glued to the moving target). We never
+                            // consumed sticky, so melee mobs froze in place when
+                            // the player kited. Surface the sticky target guid
+                            // so the JS tick can pin the mob to it. Two wire
+                            // sources: the `Invalid` (case-0) `sticky_object`,
+                            // and a `MoveToObject` carrying the MovementParams
+                            // `sticky` bit (0x80, acclient.h bit 7 — ACE sets it
+                            // on every chase, Creature_Navigation.cs:307). `0`
+                            // (no sticky / a fresh non-sticky command) clears it
+                            // JS-side. Carried on `model_id` (zeroed for
+                            // KIND_MOTION — same per-kind field-reuse as
+                            // KIND_ATTACH's parent-guid).
+                            let sticky_target: u32 = match &data.data {
+                                MovementTypeData::Invalid(inv) => {
+                                    inv.sticky_object.map(u32::from).unwrap_or(0)
+                                }
+                                MovementTypeData::MoveToObject(m)
+                                    if moveto_is_sticky(m.params.movement_parameters) =>
+                                {
+                                    u32::from(m.target)
+                                }
+                                _ => 0,
+                            };
+                            // F3-5 (bughunt 2026-06-09) — per-creature run rate.
+                            // A MoveTo* envelope carries the mover's OWN run_rate
+                            // (`MoveToObject/MoveToPosition.run_rate`, ACE sets a
+                            // genuine per-creature rate on every chase —
+                            // Creature_Navigation.cs:300). Retail stores it into
+                            // that object's `motion_interpreter->my_run_rate` and
+                            // scales its gait from it (acclient.c:339571,343502).
+                            // We dropped it: the JS velScale path fed the LOCAL
+                            // player's run rate to EVERY remote rig, so a whole
+                            // field of mobs animated at YOUR tempo and changed
+                            // with YOUR buffs. Surface it on the spare `vx` field
+                            // (zeroed for KIND_MOTION; distinct from `motion_speed`
+                            // which stays the forward_speed/anim-framerate scalar)
+                            // so JS can stash a per-entity rate. `0` = no rate this
+                            // event (JS keeps the last / falls back to a neutral
+                            // 1.0 for non-local, NOT the local player's rate).
+                            let entity_run_rate: f32 = match &data.data {
+                                MovementTypeData::MoveToObject(m) => m.run_rate,
+                                MovementTypeData::MoveToPosition(m) => m.run_rate,
+                                _ => 0.0,
+                            }
+                            .max(0.0);
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_MOTION,
                                 guid: u32::from(data.guid),
-                                model_id: 0,
+                                // F3-4: sticky target guid (0 = none/clear).
+                                model_id: sticky_target,
                                 landblock_id: 0,
                                 x: 0.0,
                                 y: 0.0,
@@ -32120,7 +32250,9 @@ async fn recv_loop(
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
                                 portal_destination: String::new(),
-                                vx: 0.0,
+                                // F3-5: per-creature run rate (0 = none); JS
+                                // stashes it for the velScale gait tempo.
+                                vx: entity_run_rate,
                                 vy: 0.0,
                                 vz: 0.0,
                                 omega_z: 0.0,
@@ -32135,6 +32267,64 @@ async fn recv_loop(
                                 motion_speed: motion_speed_f32,
                                 physics_translucency: 0.0,
                             });
+                            // F3-3 (bughunt 2026-06-09) — TurnTo execution. Both
+                            // TurnToHeading and TurnToObject carry an ABSOLUTE
+                            // target `desired_heading` (ACE pre-computes the
+                            // toward-target heading), so emit a KIND_TURN with the
+                            // heading as an AC z-up quaternion + the turn speed.
+                            // The JS heading-ease then slerps the rig to face it —
+                            // previously this envelope was decoded then dropped and
+                            // NPCs never turned to face the player. The KIND_MOTION
+                            // above (motion_command 0 for TurnTo) still carries the
+                            // stance; this is an additional event.
+                            let turn_directive: Option<(f32, f32)> = match &data.data {
+                                MovementTypeData::TurnToHeading(t) => {
+                                    Some((t.params.desired_heading, t.params.speed))
+                                }
+                                MovementTypeData::TurnToObject(t) => {
+                                    Some((t.desired_heading, t.params.speed))
+                                }
+                                _ => None,
+                            };
+                            if let Some((heading, turn_speed)) = turn_directive {
+                                let half = heading * 0.5;
+                                entity_updates.borrow_mut().push(EntityUpdate {
+                                    kind: ENTITY_UPDATE_KIND_TURN,
+                                    guid: u32::from(data.guid),
+                                    model_id: 0,
+                                    landblock_id: 0,
+                                    x: 0.0,
+                                    y: 0.0,
+                                    z: 0.0,
+                                    qw: half.cos(),
+                                    qx: 0.0,
+                                    qy: 0.0,
+                                    qz: half.sin(),
+                                    wcid: 0,
+                                    item_type: 0,
+                                    name: String::new(),
+                                    obj_scale: 0.0,
+                                    icon_id: 0,
+                                    palette_id: 0,
+                                    mtable_id: 0,
+                                    model_changes: Vec::new(),
+                                    texture_changes: Vec::new(),
+                                    sub_palettes: Vec::new(),
+                                    portal_destination: String::new(),
+                                    vx: 0.0,
+                                    vy: 0.0,
+                                    vz: 0.0,
+                                    omega_z: turn_speed,
+                                    motion_command: 0,
+                                    motion_stance: 0,
+                                    physics_script_did: 0,
+                                    sound_table_did: 0,
+                                    obj_desc_flags: 0,
+                                    weenie_flags: 0,
+                                    motion_speed: 1.0,
+                                    physics_translucency: 0.0,
+                                });
+                            }
                             // Wave 2 (2026-06-08) — MAIN-PATH action command.
                             // The `commands` list carries the one-shot
                             // Action-class command (creature attack swing B10,

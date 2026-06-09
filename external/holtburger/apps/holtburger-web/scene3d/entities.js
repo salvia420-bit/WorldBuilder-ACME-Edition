@@ -170,6 +170,14 @@ const DEAD_RECKON_TELEPORT_SNAP_SQ =
 // performance.now() deltas.
 const ENTITY_VELOCITY_STALE_MS = 500;
 
+// F3-4 (bughunt 2026-06-09) — sticky melee standoff (m). While a monster is
+// sticky-attacking, ACE withholds its position broadcast and relies on the
+// client to keep it glued to the (moving) target. We track the target at this
+// horizontal contact distance so the mob sits at melee range instead of
+// inside the player. A fixed default for now; per-entity cyl-radii (mob radius
+// + target radius) is a refinement.
+const ENTITY_STICKY_STANDOFF_M = 1.3;
+
 // === A2 Path A (2026-05-29) — remote-entity HEADING easing (DEFAULT-ON).
 // Remote entities used to SNAP their quaternion to each server heading
 // (~30 Hz), so a turning creature stepped through its facing. AC's MotionTable
@@ -2745,6 +2753,29 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // F3-1 (bughunt 2026-06-09) — ballistic projectile seed. PhysicsState::Missile
+    // entities (war/void/life bolts, arrows/bolts/thrown weapons) are the one
+    // class ACE never streams in-flight UpdatePosition for: the only motion datum
+    // is the ObjectCreate PhysicsDesc launch velocity, surfaced on the KIND_SPAWN
+    // EntityUpdate's vx/vy/vz (AC world frame, same frame as root.position). Seed
+    // it as `lastVel` and flag `_ballistic` so tick()'s ballistic branch
+    // integrates it every frame, instead of leaving the projectile frozen at the
+    // launch point (the dead-reckon ease only moves entities with a server
+    // POSITION target, which a missile never receives). Gated on BOTH the wasm
+    // projectile classification (projectile_index ← PhysicsState::Missile) AND a
+    // meaningfully non-zero launch velocity, so a non-missile spawn (vx/vy/vz = 0)
+    // is never marked ballistic.
+    {
+      const lvx = +(meta.vx ?? 0);
+      const lvy = +(meta.vy ?? 0);
+      const lvz = +(meta.vz ?? 0);
+      if (lvx * lvx + lvy * lvy + lvz * lvz > 1e-4 && this.isProjectile(guid)) {
+        inst.lastVel = { vx: lvx, vy: lvy, vz: lvz, omegaZ: 0 };
+        inst.lastVelMs =
+          typeof performance !== "undefined" ? performance.now() : 0;
+        inst._ballistic = true;
+      }
+    }
     // Track B2 (motion-audit, 2026-06-09): replay any PlayEffects that raced
     // ahead of this spawn (queued by guid when the target was not yet in the
     // entityMap). No-op if none queued.
@@ -3241,6 +3272,13 @@ export class EntityManager {
     const inst = this.entityMap.get(g);
     if (!inst) return;
     const isRemote = !this._isLocalPlayerGuid(g);
+    // F3-4 (bughunt 2026-06-09): a real server position broadcast for this
+    // entity means ACE resumed netsend-true movement — sticky is over (a
+    // sticky monster receives NO position updates). Clear it so normal
+    // dead-reckon resumes from this authoritative pose. This is the single
+    // clear-on-resumed-position point for both KIND_POSITION drain paths
+    // (EntityManager.setPose is only reached from a KIND_POSITION event).
+    if (inst._stickyTarget) inst._stickyTarget = null;
 
     // === A2 Path A (2026-05-29) — remote-entity HEADING ease.
     // Eligible only for a plain remote entity whose rotation isn't already
@@ -5259,13 +5297,26 @@ export class EntityManager {
     if (fwdCmd === 0 && sideCmd === 0) return null;
     const fwdSpeed = Number.isFinite(inst._forwardSpeed) ? inst._forwardSpeed : 0;
     const sideSpeed = Number.isFinite(inst._sidestepSpeed) ? inst._sidestepSpeed : 0;
+    // F3-4/F3-5 run-rate source. The state-velocity getter clamps to
+    // `run_rate * 4.0`, so the run rate sets each mover's top speed and thus
+    // its gait tempo. Pre-fix EVERY rig used the LOCAL player's
+    // skill/burden-derived `playerRunRate`, so a whole field of mobs animated
+    // at YOUR tempo and shifted with YOUR buffs (F3-5). Use the per-entity
+    // rate instead for non-local rigs: the creature's own `run_rate` from its
+    // MoveTo (stashed on `inst._runRate`), or a neutral 1.0 when none has
+    // arrived — never the local player's rate. The local player rig keeps
+    // `playerRunRate` (it IS the local player).
     let runRate = 1.0;
-    const rrFn = this.wasmExports?.playerRunRate;
-    if (typeof rrFn === "function") {
-      try {
-        const rr = +rrFn();
-        if (Number.isFinite(rr) && rr > 0) runRate = rr;
-      } catch (_) { /* keep the 1.0 seed */ }
+    if (this._isLocalPlayerGuid(inst.guid >>> 0)) {
+      const rrFn = this.wasmExports?.playerRunRate;
+      if (typeof rrFn === "function") {
+        try {
+          const rr = +rrFn();
+          if (Number.isFinite(rr) && rr > 0) runRate = rr;
+        } catch (_) { /* keep the 1.0 seed */ }
+      }
+    } else if (Number.isFinite(inst._runRate) && inst._runRate > 0) {
+      runRate = inst._runRate;
     }
     let v;
     try {
@@ -5949,6 +6000,61 @@ export class EntityManager {
       omegaZ: upd.omegaZ ?? 0,
     };
     inst.lastVelMs = typeof performance !== "undefined" ? performance.now() : 0;
+  }
+
+  /**
+   * F3-4 (bughunt 2026-06-09) — set/clear a sticky-attack target for `guid`.
+   * `target` 0 clears. While set, tick() glues this entity to the target's
+   * live position at melee standoff (ACE stops broadcasting a sticky monster's
+   * position — `Monster_Tick.UpdatePosition(false)` — so without this the mob
+   * freezes where it first reached you and attacks land from a statue meters
+   * away). The sticky target rides on `model_id` of the KIND_MOTION wire event
+   * (the canonical UpdateMotion echo); a fresh non-sticky movement command
+   * sends 0 here and a resumed position broadcast (setPose / KIND_POSITION)
+   * also clears it.
+   */
+  setStickyTarget(guid, target) {
+    const inst = this.entityMap.get((guid >>> 0));
+    if (!inst) return;
+    const t = (target >>> 0) || 0;
+    inst._stickyTarget = t === 0 ? null : t;
+  }
+
+  /**
+   * F3-5 (bughunt 2026-06-09) — stash a remote entity's OWN run rate (from its
+   * MoveTo `run_rate`, surfaced on the KIND_MOTION `vx` field). Used by
+   * `_resolveStateGroundSpeed` so the velScale gait tempo reflects the
+   * creature's rate instead of borrowing the local player's. A non-positive
+   * value is ignored (keeps the last known rate); the rate naturally persists
+   * across the position-only updates that follow a chase MoveTo.
+   */
+  setEntityRunRate(guid, rate) {
+    const inst = this.entityMap.get((guid >>> 0));
+    if (!inst) return;
+    const r = +rate;
+    if (Number.isFinite(r) && r > 0) inst._runRate = r;
+  }
+
+  /**
+   * F3-3 (bughunt 2026-06-09) — execute a server TurnToHeading/TurnToObject
+   * directive. The wire carries the ABSOLUTE target heading as an AC z-up
+   * quaternion; convert it the same way `setPose` does and stash it as the
+   * heading-ease target (`_serverTargetQuat` + `_headingEaseInit`) so the
+   * per-frame slerp in `tick()` turns the rig to face it. Pre-fix this
+   * envelope was dropped, so NPCs never turned to face you on interaction and
+   * idle turn-in-place never played. No snap — a turn should be a smooth
+   * rotation; a subsequent authoritative position update (`setPose`)
+   * overrides this if one arrives (awake monsters), and drives nothing extra
+   * if it doesn't (the NPC-emote case this fixes).
+   */
+  applyTurnDirective(guid, qw, qx, qy, qz) {
+    const inst = this.entityMap.get((guid >>> 0));
+    if (!inst || !inst.root) return;
+    const tq = acQuatToThree(qw, qx, qy, qz);
+    let tgtQ = inst._serverTargetQuat;
+    if (!tgtQ) tgtQ = inst._serverTargetQuat = new THREE.Quaternion();
+    tgtQ.copy(tq);
+    inst._headingEaseInit = true;
   }
 
   /**
@@ -8127,7 +8233,71 @@ export class EntityManager {
       // frames (default true → no change). The target is re-anchored every
       // setPose, so a skipped frame is recovered on the next run with no drift
       // — the documented far-band visual-lag trade. mixer/hooks are untouched.
-      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos) {
+      // F3-1 (bughunt 2026-06-09) — ballistic projectile flight. War/void/life
+      // bolts and arrows/bolts/thrown weapons are PhysicsState::Missile entities:
+      // ACE never broadcasts an in-flight UpdatePosition for them (the missile
+      // tick's SendUpdatePosition is commented out — WorldObject_Tick.cs), so the
+      // ONLY motion datum the client receives is the ObjectCreate PhysicsDesc
+      // launch velocity, which retail integrates every frame. Our dead-reckon
+      // ease below only moves entities that have a _serverTargetPos (set by
+      // KIND_POSITION) — a projectile never gets one, so pre-fix it sat frozen at
+      // the launch point for its whole flight and the impact VFX played at the
+      // caster's hand. Integrate the seeded launch velocity directly here: no
+      // _serverTargetPos and no staleness gate (there are no follow-up packets to
+      // be stale against), runs independent of `?deadReckon`/`runSmoothing` since
+      // projectile flight is gameplay motion, not visual smoothing. Constant-
+      // velocity — arc curvature (gravity) is deferred (see _spawnImpl + the wasm
+      // KIND_SPAWN note); the projectile despawns on impact (KIND_REMOVE) within
+      // its sub-second flight, so it never sails off and the impact VFX now plays
+      // near the target. `_ballistic` + `lastVel` seeded in _spawnImpl.
+      if (inst._ballistic && inst.lastVel) {
+        const lv = inst.lastVel;
+        const pos = inst.root.position;
+        pos.x += lv.vx * dt;
+        pos.y += lv.vy * dt;
+        pos.z += lv.vz * dt;
+      }
+      // F3-4 (bughunt 2026-06-09) — sticky melee tracking. While a monster is
+      // sticky-attacking, ACE withholds its position broadcast (relying on the
+      // retail client's StickyManager to glue it to the moving target), so our
+      // dead-reckon ease — which only chases the stale last KIND_POSITION —
+      // left the mob frozen where it first reached the player while its attacks
+      // kept landing. Pin the mob toward the target's LIVE position each frame,
+      // keeping a horizontal melee standoff so it sits at contact range rather
+      // than inside the target. Runs independent of `?deadReckon`/`runSmoothing`
+      // (this is gameplay tracking, not visual smoothing) and OWNS the position,
+      // so the dead-reckon ease below is skipped for a sticky entity. Cleared by
+      // setStickyTarget(0) on a fresh non-sticky command or a resumed position
+      // broadcast. Facing-toward-target is a documented follow-on (the mob keeps
+      // its last chase facing, already roughly toward the player).
+      let stickyGlued = false;
+      if (inst._stickyTarget) {
+        const tgtInst = this.entityMap.get(inst._stickyTarget >>> 0);
+        if (tgtInst && tgtInst !== inst && tgtInst.root) {
+          const tp = tgtInst.root.position;
+          const p = inst.root.position;
+          const dx = p.x - tp.x;
+          const dy = p.y - tp.y;
+          const dh = Math.hypot(dx, dy);
+          // Standoff along the current mob→target horizontal vector; if the mob
+          // is right on top of the target (dh≈0) keep its current bearing.
+          const ux = dh > 1e-3 ? dx / dh : 1;
+          const uy = dh > 1e-3 ? dy / dh : 0;
+          const gx = tp.x + ux * ENTITY_STICKY_STANDOFF_M;
+          const gy = tp.y + uy * ENTITY_STICKY_STANDOFF_M;
+          const gz = tp.z; // match the target's height (same ground/level)
+          const factor = 1 - Math.exp(-DEAD_RECKON_DAMP_K * dt);
+          p.x += (gx - p.x) * factor;
+          p.y += (gy - p.y) * factor;
+          p.z += (gz - p.z) * factor;
+          stickyGlued = true;
+        }
+      }
+      // `!inst._ballistic`/`!stickyGlued` defense-in-depth: a ballistic
+      // projectile and a sticky-glued mob own their own motion above and must
+      // never also be dragged by the dead-reckon ease (ACE sends no position
+      // for either, so _serverTargetPos is normally absent/stale anyway).
+      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos && !inst._ballistic && !stickyGlued) {
         const tgt = inst._serverTargetPos;
         // B5/QW2/REMOTE-3: extrapolate the server target forward by the last
         // VectorUpdate velocity while it's fresh — retail integrates

@@ -4788,3 +4788,68 @@ fn test_remove_entity_marks_contained_dependents_for_prune() {
             .any(|event| matches!(event, WorldEvent::EntityDespawned(guid) if *guid == item_guid))
     );
 }
+
+/// F4-2 (bughunt 2026-06-09) — terrain surface normal feeds the outdoor
+/// walkable-slope gate. Flat terrain is walkable (normal ≈ +Z); a face
+/// steeper than retail's FloorZ (~48.4°) classifies as non-walkable
+/// (normal.z < FLOOR_Z); a gentle slope stays walkable. The cutoff is the
+/// same constant the gate consults, so this pins the boundary the integrator
+/// blocks the climb at.
+#[test]
+fn terrain_normal_at_classifies_walkable_vs_cliff() {
+    let mut state = WorldState::synthetic();
+    let lb_id = 0u32; // lb_x=0, lb_y=0 → world coords [0,192) map here.
+
+    // Flat plane at z=5 → upward normal, fully walkable.
+    state.populate_terrain_heights(lb_id, [5.0; 81]);
+    let flat = state
+        .terrain_normal_at(12.0, 12.0)
+        .expect("flat terrain normal");
+    assert!(
+        flat.z > 0.999,
+        "flat terrain normal must be ≈ +Z, got z={:.4}",
+        flat.z
+    );
+    assert!(flat.z >= crate::spatial::FLOOR_Z, "flat terrain is walkable");
+
+    // Steep +X face: 42 m rise per 24 m cell ≈ 60° → non-walkable.
+    let mut steep = [0.0f32; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            steep[vx * 9 + vy] = vx as f32 * 42.0; // idx = vx*9 + vy
+        }
+    }
+    state.populate_terrain_heights(lb_id, steep);
+    let cliff = state
+        .terrain_normal_at(12.0, 12.0)
+        .expect("steep terrain normal");
+    assert!(
+        cliff.z < crate::spatial::FLOOR_Z,
+        "a ~60° face must be non-walkable (normal.z < FLOOR_Z {:.4}), got z={:.4}",
+        crate::spatial::FLOOR_Z,
+        cliff.z
+    );
+
+    // Gentle +X slope: 8.7 m rise per cell ≈ 20° → still walkable.
+    let mut gentle = [0.0f32; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            gentle[vx * 9 + vy] = vx as f32 * 8.7;
+        }
+    }
+    state.populate_terrain_heights(lb_id, gentle);
+    let ramp = state
+        .terrain_normal_at(12.0, 12.0)
+        .expect("gentle terrain normal");
+    assert!(
+        ramp.z >= crate::spatial::FLOOR_Z,
+        "a ~20° ramp must stay walkable (normal.z >= FLOOR_Z), got z={:.4}",
+        ramp.z
+    );
+
+    // Unknown landblock → None (caller preserves behaviour).
+    assert!(
+        state.terrain_normal_at(50_000.0, 50_000.0).is_none(),
+        "uncached landblock yields None"
+    );
+}

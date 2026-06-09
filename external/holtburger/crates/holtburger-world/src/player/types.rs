@@ -1377,6 +1377,28 @@ pub struct PlayerState {
     /// - `is_airborne && !is_jumping` → `Falling` cycle so the rig
     ///   doesn't T-pose during a ledge walk-off.
     pub is_jumping: bool,
+    /// F1-6 (movement bughunt 2026-06-09): `true` while a jump charge is
+    /// being held that began from a grounded STANDSTILL (no locomotion
+    /// keys at charge start). Mirrors retail/ACE `charge_jump` setting
+    /// `StandingLongJump = true` (`MotionInterp.cs:564-581`). While set:
+    /// - the manual-drive integrator ROOTS the player (zero locomotion
+    ///   target — `DoInterpretedMotion`'s StandingLongJump branch
+    ///   suppresses Walk/Run/SideStep, `MotionInterp.cs:458-476`);
+    ///   turning stays allowed;
+    /// - the MoveToState `contact_long_jump` byte carries bit `0x2`
+    ///   (`MoveToState.cs:43-48`) so ACE's broadcast converter excludes
+    ///   Forward/Sidestep from the observer broadcast
+    ///   (`MovementData.cs:104,123`);
+    /// - at release the Jump arm computes the launch planar velocity
+    ///   from the interpreted INTENT (`local_velocity_for_state`) rather
+    ///   than the rooted integrator store, mirroring
+    ///   `get_leave_ground_velocity = get_state_velocity()`
+    ///   (`MotionInterp.cs:654-663`) — the classic standing long jump.
+    ///
+    /// Set by the wasm `jumpChargeBegin` export (JS space-keydown);
+    /// cleared on jump dispatch ([`begin_jump`]), touchdown/teleport
+    /// ([`land`]), and charge cancel.
+    pub standing_long_jump_charge: bool,
     /// Player's local Z velocity in m/s while [`is_airborne`].
     /// Initialized to the result of [`compute_jump_velocity_z`]
     /// on `Jump` and decremented by `9.8 * dt` per tick (ACE
@@ -1581,6 +1603,8 @@ impl PlayerState {
             last_emitted_derived_stats: None,
             is_airborne: false,
             is_jumping: false,
+            // F1-6 — no jump charge held at spawn.
+            standing_long_jump_charge: false,
             vertical_velocity: 0.0,
             // Physics deep-dive 2026-06-01 (gap 3 follow-up) — default
             // to the retail player value (EdgeSlide set) until the local
@@ -1709,6 +1733,11 @@ impl PlayerState {
             return;
         }
         self.is_airborne = true;
+        // F1-6 — the charge (if any) is consumed by this dispatch; the
+        // caller decides the launch planar velocity (interpreted intent
+        // for a standing long jump, integrator store otherwise) BEFORE
+        // calling begin_jump.
+        self.standing_long_jump_charge = false;
         // Trajectory lock (Track B3) — deliberately leave
         // `current_planar_velocity` untouched: the last grounded tick's
         // world-space planar velocity becomes the immutable airborne
