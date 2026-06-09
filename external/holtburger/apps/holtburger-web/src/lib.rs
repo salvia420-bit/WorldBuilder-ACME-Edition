@@ -16854,6 +16854,10 @@ enum SessionCommand {
         /// 81 Z values in metres. Length-validated in the recv arm;
         /// non-81 lengths drop the command with a console warning.
         heights: Vec<f32>,
+        /// F4-4: 81 per-vertex `CellLandblock` terrain TYPE codes (0..31),
+        /// for the deep-water walk-block. Empty / non-81 → no water data
+        /// cached for this LB (fail-soft, never blocks).
+        terrain_codes: Vec<u8>,
     },
     /// Combat-mode toggle hotkey — JS pressed `` ` `` (the retail
     /// AC default for "toggle combat mode"). The recv-loop arm
@@ -25356,6 +25360,10 @@ impl SessionHandle {
         &self,
         landblock_id: u32,
         heights: Vec<f32>,
+        // F4-4: per-vertex terrain TYPE codes (81) for the deep-water
+        // walk-block. Optional from JS's view — an empty / wrong-length vec is
+        // accepted and simply caches no water data for this LB (fail-soft).
+        terrain_codes: Vec<u8>,
     ) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
         if heights.len() != 81 {
@@ -25368,6 +25376,7 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::PopulateTerrain {
                 landblock_id,
                 heights,
+                terrain_codes,
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("populate_terrain: cmd channel closed ({e})"))
@@ -34655,6 +34664,7 @@ async fn recv_loop(
                     Some(SessionCommand::PopulateTerrain {
                         landblock_id,
                         heights,
+                        terrain_codes,
                     }) => {
                         // Install the 81-float height grid into the
                         // world's terrain cache. Used by the manual-
@@ -34682,6 +34692,9 @@ async fn recv_loop(
                             }
                         };
                         w.populate_terrain_heights(landblock_id, arr);
+                        // F4-4: cache per-vertex water flags from the terrain
+                        // type codes (no-op when not 81 — fail-soft).
+                        w.populate_terrain_water(landblock_id, &terrain_codes);
                         console_log_str(&format!(
                             "[terrain] populated landblock 0x{landblock_id:08X} ({} cached total)",
                             w.terrain_height_cache_len(),

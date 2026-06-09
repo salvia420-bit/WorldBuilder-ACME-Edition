@@ -215,6 +215,37 @@ the same option names. Poll `window.__bootState` for progress
 
 ---
 
+## 6. Compile-time movement / physics flags (Rust `const`, NOT URL-toggleable)
+
+These are `const … : bool` gates in
+`crates/holtburger-core/src/client/movement/system.rs` (top of file). They are
+**not** `?query` flags — flipping one means editing the source and **rebuilding
+the wasm** (`wasm-pack build …` on the buildbox), then a fresh page load. They
+exist for A/B parity work; the **default-off** ones are awaiting a 1070 gait
+eye-test before being flipped on. Line numbers drift — grep the const name.
+(ACE/retail anchors live in each const's doc comment.)
+
+| Const | Default | Effect | Bughunt |
+|---|---|---|---|
+| `USE_QUANTUM_SUBDIVIDED_INTEGRATION` | **on** | Subdivide a large frame `dt` into bounded [1/30, 0.1] s slices (2nd-order integration; no frame-hitch over-integration). | — |
+| `USE_STEP_UP_DOWN` | **on** | Retail StepUp/StepDown — climb risers ≤0.6 m, follow drops ≤1.5 m down (outdoor terrain **and** indoor per-poly floor); else the legacy 0.5 m ledge heuristic. | F4-1 (indoor half) |
+| `USE_EDGE_SLIDE` | **on** | Slide the blocked residual along the wall tangent when a refused step-up would otherwise stop dead (Stage-1 single-plane). | — |
+| `USE_PRECIPICE_SLIDE_REENTRY` | off | Save/clear the pre-descent backup pose for a precipice-slide re-attempt. Bookkeeping only — the consumer is deferred, so flipping it on is still inert. | — |
+| `USE_CLIFF_SLIDE` | off | Stage-2 seam skid (`N_new × N_last`) where two non-coplanar walls meet; else the Stage-1 single-plane slide. | — |
+| `USE_AUTONOMOUS_POSITION_CHANGE_GATE` | **on** | Only emit the AutonomousPosition heartbeat on a meaningful pose change (cell / origin / heading / contact), not unconditionally. | — |
+| `USE_RETAIL_GROUND_FRICTION` | off | Use retail ground-friction `0.95` vs the hand-tuned `0.5`; A/B only (interacts with the accel cap). | — |
+| `USE_DIRECT_GROUND_VELOCITY` | off | **NEW.** Retail direct-set of the grounded planar velocity (no friction/accel-cap ramp) — removes the ~11.7 m/s steady-state ceiling so high-Run chars reach 18 m/s, and kills the ice-skating ramp + stop-skid + anim foot-slide. | **F1-1** |
+| `USE_TERRAIN_WALKABLE_GATE` | off | **NEW.** Refuse to walk up outdoor terrain steeper than `FloorZ` (~48.4°): an uphill step onto a non-walkable face reverts to the slice-entry XY + skips the up-snap (can't run up cliffs). Uses `WorldState::terrain_normal_at`. | **F4-2** |
+| `USE_RAMP_FLOOR_SNAP_FIX` | **on** | Indoor up-snap only to a real per-poly floor; the cell AABB `min.z` is a last-resort lower bound, never an up-snap target (no ramp floor-pop). | — |
+| `USE_PHYSICS_BSP` | off | Faithful physics-BSP narrow-phase indoor wall test after the flat-tri clamp (`?bspCollide` equivalent). | — |
+| `USE_STATIC_BSP` | off | Per-static physics-BSP push-out after the coarse-AABB sweep (B4 Tier-2). | — |
+| `USE_LOCAL_ENVCELL_ENTRY` | **on** | Client-side EnvCell entry from terrain (kill-switch restores the server-only transition). | — |
+| `USE_OUTDOOR_WALL_NORMALS` | off | Surface outdoor building wall normals so the refused-step-up slide + seam-skid fire outdoors too. | — |
+
+> Two flags introduced in the 2026-06-09 movement bughunt — `USE_DIRECT_GROUND_VELOCITY` (F1-1) and `USE_TERRAIN_WALKABLE_GATE` (F4-2) — are default-off pending the 1070 gait eye-test; flip both `true` and rebuild to validate, then default them on if they read correctly.
+
+---
+
 ## Possible hardening (not yet implemented)
 
 The remote-bridge failure above is a footgun: omit `bridge_url` and it silently

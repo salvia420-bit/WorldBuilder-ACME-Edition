@@ -4853,3 +4853,51 @@ fn terrain_normal_at_classifies_walkable_vs_cliff() {
         "uncached landblock yields None"
     );
 }
+
+/// F4-4 (bughunt 2026-06-09) — EntirelyWater cell detection for the deep-water
+/// walk-block. A cell is fully-water iff all four corner vertices are water
+/// terrain (codes 16-20/22/23); partial-water and land cells don't block, and
+/// an uncached landblock never blocks.
+#[test]
+fn is_entirely_water_cell_at_detects_full_water_cells() {
+    let mut state = WorldState::synthetic();
+    let lb = 0u32; // lb (0,0) → world coords [0,192)
+
+    // Uncached landblock → never blocks (fail-soft on missing data).
+    assert!(!state.is_entirely_water_cell_at(12.0, 12.0));
+
+    // Whole LB water (code 19 = WaterShallowStillSea) → every cell blocks.
+    state.populate_terrain_water(lb, &[19u8; 81]);
+    assert!(
+        state.is_entirely_water_cell_at(12.0, 12.0),
+        "all-water cell must block"
+    );
+    assert!(
+        state.is_entirely_water_cell_at(108.0, 108.0),
+        "interior all-water cell must block"
+    );
+
+    // All land (code 0) → never blocks.
+    state.populate_terrain_water(lb, &[0u8; 81]);
+    assert!(
+        !state.is_entirely_water_cell_at(12.0, 12.0),
+        "land cell must not block"
+    );
+
+    // Partially-water cell (0,0): three water corners + one land → no block
+    // (wading-depth handling is a documented follow-on, not a hard wall).
+    let mut codes = [19u8; 81];
+    codes[0 * 9 + 0] = 0; // corner vertex (vx0,vy0) of cell (0,0) is land
+    state.populate_terrain_water(lb, &codes);
+    assert!(
+        !state.is_entirely_water_cell_at(12.0, 12.0),
+        "partially-water cell must not block"
+    );
+
+    // Wrong-length codes are ignored (no-op): the prior grid stands.
+    state.populate_terrain_water(lb, &[19u8; 10]);
+    assert!(
+        !state.is_entirely_water_cell_at(12.0, 12.0),
+        "short codes are a no-op — grid unchanged"
+    );
+}

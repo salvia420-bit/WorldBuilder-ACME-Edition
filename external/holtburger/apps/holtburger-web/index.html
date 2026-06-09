@@ -5895,7 +5895,10 @@ void main() {
             const { lbId } = fetchIds[i];
             try {
               const h = window.__sessionHandle;
-              if (h) h.populateTerrain(lbId, meshes[i].heights);
+              // F4-4 (bughunt 2026-06-09): pass the per-vertex terrain TYPE
+              // codes alongside the heights so the wasm side can cache a water
+              // grid for the deep-water walk-block (USE_WATER_COLLISION).
+              if (h) h.populateTerrain(lbId, meshes[i].heights, meshes[i].terrainCodes);
               terrainPrefetchedLbs.add(lbId);
               // 2026-05-09 follow-up: also paint this LB's terrain
               // tile into outdoorContainer if it hasn't been painted

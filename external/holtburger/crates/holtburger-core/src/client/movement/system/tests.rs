@@ -3106,6 +3106,64 @@ fn outdoor_steep_cliff_blocks_climb_only_with_walkable_gate() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// F4-4 (bughunt 2026-06-09) — deep-water walk-block. The outdoor solver snapped
+// Z to the lakebed and never read terrain type, so players ran across water
+// floors. `USE_WATER_COLLISION` refuses a grounded step into a fully-water
+// cell. Flag-aware: pins BOTH configurations.
+// ---------------------------------------------------------------------------
+
+/// Run `ticks` forward-run slices on flat terrain whose whole LB is water, and
+/// return `(start_x, after_x)`. A run-forward at heading 0 drives −X.
+fn run_into_water(guid: Guid, ticks: u32) -> (f32, f32) {
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    // Flat terrain at z=10 across LB (0,0); the whole LB is water (code 19).
+    world.populate_terrain_heights(0, [10.0; 81]);
+    world.populate_terrain_water(0, &[19u8; 81]);
+    let start_x = 96.0_f32;
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0x0000_0001), // lb (0,0), outdoor
+        coords: Vector3::new(start_x, 96.0, 10.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    assert!(!world.player.is_airborne);
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    for _ in 0..ticks {
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+    }
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    (start_x, after.coords.x)
+}
+
+/// F4-4 — a grounded step into a fully-water cell is refused ONLY with the
+/// water-collision gate; the legacy path runs straight across the water floor.
+#[test]
+fn deep_water_blocks_movement_only_with_water_collision() {
+    let (start_x, after_x) = run_into_water(Guid(0x5000_0F44), 10);
+    if USE_WATER_COLLISION {
+        assert!(
+            (after_x - start_x).abs() < 0.5,
+            "water collision must stop the player at the shoreline (x≈{start_x}), got x={after_x:.3}"
+        );
+    } else {
+        assert!(
+            start_x - after_x > 1.0,
+            "legacy lets the player run across the water floor (−X), got x={after_x:.3}"
+        );
+    }
+}
+
 // ---- edge_slide (gap 3 follow-up, 2026-06-01) ----
 
 /// Gap 3 follow-up — `edge_slide_refused_step_up` slides the blocked

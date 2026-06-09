@@ -288,6 +288,30 @@ const USE_DIRECT_GROUND_VELOCITY: bool = false;
 /// uses the bilinear-gradient normal, faithful at the walkable cutoff).
 const USE_TERRAIN_WALKABLE_GATE: bool = false;
 
+/// F4-4 (bughunt 2026-06-09) — deep-water movement block.
+///
+/// `false` (DEFAULT): the legacy behaviour — outdoor movement snaps Z to the
+/// raw heightmap (the LAKEBED height for water cells) and never reads terrain
+/// type, so a player runs straight across lake/ocean floors under the rendered
+/// water plane; the world boundaries retail enforces with water (island
+/// separation, moats) are absent. Retained as default until eye-tested.
+///
+/// `true`: refuse to walk a grounded step INTO a fully-water 24 m cell
+/// ([`holtburger_world::WorldState::is_entirely_water_cell_at`] — all four
+/// corner vertices water-typed), mirroring ACE `LandCell.FindEnvCollisions`
+/// (`EntirelyWater && !IsViewer && !IsMissile => TransitionState.Collided`).
+/// The advance is reverted to the slice-entry XY (stop at the shoreline), the
+/// same mechanism as the [`USE_TERRAIN_WALKABLE_GATE`] cliff refusal. DEFERRED
+/// (documented follow-on): the partially-water wading-depth contact-plane raise
+/// (`ObjectInfo.ValidateWalkable` `+ waterDepth`) — this pass only hard-blocks
+/// EntirelyWater cells. Needs a wasm rebuild + 1070 eye-test. Caveat to watch
+/// in eye-test: only the GROUNDED step is gated (a jump arc over water is the
+/// airborne branch, unblocked — correct), but a grounded player on an elevated
+/// over-water static (a bridge) would also be refused; such bridges over
+/// EntirelyWater are rare in AC outdoor terrain (water = open ocean/lake) and
+/// the outdoor solver already snaps grounded Z to the lakebed there.
+const USE_WATER_COLLISION: bool = false;
+
 /// 2026-06-02 indoor floor-pop fix — gate the ramped/multi-level
 /// floor-Z resolution in the `else` arm of
 /// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
@@ -2209,6 +2233,20 @@ impl MovementSystem {
                         pose.coords.z = z;
                         world.player.land();
                     }
+                } else if USE_WATER_COLLISION
+                    && world.is_entirely_water_cell_at(global.x, global.y)
+                {
+                    // F4-4 (bughunt 2026-06-09) — fully-water cell ahead. Retail
+                    // collides on EntirelyWater land cells for walkers (ACE
+                    // LandCell.FindEnvCollisions => Collided); our snap put the
+                    // feet on the lakebed, letting the player stroll across the
+                    // ocean floor under the rendered water plane. Refuse the
+                    // step: revert the lateral advance to the slice-entry XY
+                    // (stop at the shoreline) and skip the snap, same mechanism
+                    // as the cliff refusal below. (Wading-depth for partially-
+                    // water cells is a documented follow-on.)
+                    pose.coords.x = entry_local_xy.0;
+                    pose.coords.y = entry_local_xy.1;
                 } else if USE_TERRAIN_WALKABLE_GATE
                     && z > pose.coords.z
                     && world

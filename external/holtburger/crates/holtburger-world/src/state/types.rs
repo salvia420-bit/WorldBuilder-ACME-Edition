@@ -26,6 +26,15 @@ pub struct ServerTimeSync {
     pub local_time: web_time::Instant,
 }
 
+/// F4-4 (bughunt 2026-06-09) — true for a `CellLandblock` terrain TYPE code
+/// (5-bit, 0..31) that is water. Matches the renderer's `TERRAIN_WATER_CODES`
+/// {16,17,18,19,20,22,23} (the `Water*` / `FauxWater*` terrain types; code 21
+/// is excluded). Used to classify per-vertex water for the EntirelyWater
+/// walk-block.
+fn is_water_terrain_code(code: u8) -> bool {
+    matches!(code & 0x1f, 16 | 17 | 18 | 19 | 20 | 22 | 23)
+}
+
 /// The authoritative state of the game world.
 ///
 /// `WorldState` owns entity/spatial/trade/vendor state plus the invariants that tie those systems
@@ -73,6 +82,15 @@ pub struct WorldState {
     /// values are already in metres (the dat-side `* 2.0` is applied
     /// at populate time, not at lookup).
     pub(crate) terrain_heights: std::collections::HashMap<u32, [f32; 81]>,
+    /// F4-4 (bughunt 2026-06-09) — per-vertex "is water terrain" flag for the
+    /// outdoor walkable solver, keyed by landblock id. Same `[_; 81]` layout
+    /// (`vx * 9 + vy`) as `terrain_heights`; derived at populate time from the
+    /// `CellLandblock` per-vertex terrain TYPE codes (water types 16-20/22/23,
+    /// matching the renderer's `TERRAIN_WATER_CODES`). Read by
+    /// [`WorldState::is_entirely_water_cell_at`] so the integrator can refuse
+    /// to walk into a fully-water 24 m cell (ACE `LandCell.FindEnvCollisions`
+    /// EntirelyWater => Collided). Empty for LBs whose codes weren't sent.
+    pub(crate) terrain_water: std::collections::HashMap<u32, [bool; 81]>,
     /// Cylsphere radius for each loaded SetupModel id (`0x02xxxxxx`),
     /// in metres. Populated by the wasm bundle via
     /// [`WorldState::register_setup_radius`] as the renderer loads
@@ -436,6 +454,7 @@ impl WorldState {
             trade: None,
             open_containers: std::collections::HashSet::new(),
             terrain_heights: std::collections::HashMap::new(),
+            terrain_water: std::collections::HashMap::new(),
             setup_radii: std::collections::HashMap::new(),
             entity_lifecycle: EntityLifecycleStore::default(),
             self_movement_capabilities_override: None,
@@ -455,6 +474,58 @@ impl WorldState {
     /// `WorldPosition::landblock_id` packs into.
     pub fn populate_terrain_heights(&mut self, landblock_id: u32, heights: [f32; 81]) {
         self.terrain_heights.insert(landblock_id, heights);
+    }
+
+    /// F4-4 (bughunt 2026-06-09) — cache the per-vertex water-terrain flags for
+    /// a landblock from its `CellLandblock` terrain TYPE codes (one byte per
+    /// 9×9 vertex, range 0..31). A code is water iff it is one of the renderer's
+    /// `TERRAIN_WATER_CODES` {16,17,18,19,20,22,23} (ACE/retail terrain types
+    /// `Water*` / `FauxWater*`). No-op when `codes.len() != 81` (fail-soft: the
+    /// LB simply has no water data and never blocks).
+    pub fn populate_terrain_water(&mut self, landblock_id: u32, codes: &[u8]) {
+        if codes.len() != 81 {
+            return;
+        }
+        let mut water = [false; 81];
+        for (i, &c) in codes.iter().enumerate() {
+            water[i] = is_water_terrain_code(c);
+        }
+        self.terrain_water.insert(landblock_id, water);
+    }
+
+    /// F4-4 — true when world-frame `(x, y)` sits inside a fully-water 24 m
+    /// terrain cell (all four corner vertices are water terrain). Mirrors ACE
+    /// `LandCell.get_block_water_type() == EntirelyWater`, which makes the cell
+    /// a hard wall for walkers (`FindEnvCollisions` returns `Collided`). Returns
+    /// `false` when the landblock's water grid isn't cached (don't block on
+    /// missing data) and for partially-water cells (the wading-depth contact-
+    /// plane raise is a documented follow-on).
+    pub fn is_entirely_water_cell_at(&self, world_x: f32, world_y: f32) -> bool {
+        const LB_M: f32 = 192.0;
+        const VERT_M: f32 = 24.0;
+        if !world_x.is_finite() || !world_y.is_finite() {
+            return false;
+        }
+        let lb_x = (world_x / LB_M).floor() as i32;
+        let lb_y = (world_y / LB_M).floor() as i32;
+        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
+            return false;
+        }
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let Some(water) = self.terrain_water.get(&landblock_id) else {
+            return false;
+        };
+        let local_x = world_x - lb_x as f32 * LB_M;
+        let local_y = world_y - lb_y as f32 * LB_M;
+        let cx0 = (local_x / VERT_M).clamp(0.0, 8.0).floor() as usize;
+        let cy0 = (local_y / VERT_M).clamp(0.0, 8.0).floor() as usize;
+        let cx1 = (cx0 + 1).min(8);
+        let cy1 = (cy0 + 1).min(8);
+        // EntirelyWater ⇔ all four corner vertices of the cell are water.
+        water[cx0 * 9 + cy0]
+            && water[cx1 * 9 + cy0]
+            && water[cx0 * 9 + cy1]
+            && water[cx1 * 9 + cy1]
     }
 
     /// Cache a SetupModel's collision radius. Called by the wasm
