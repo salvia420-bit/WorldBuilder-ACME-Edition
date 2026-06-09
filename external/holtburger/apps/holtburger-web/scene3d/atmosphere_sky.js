@@ -220,12 +220,16 @@ export class AtmosphereSky {
     // tick(); declaration + use share `this` so there's no split-scope
     // ReferenceError (cf. a prior wave that shipped one by reading the flag
     // in a different function than it declared it).
-    this._skyObjLum = false;
+    // render-audit T1d (skyObjLum): default-ON, opt-out via `?skyObjLum=off`.
+    // Returns false only when the value is exactly "off"; any other value
+    // (incl. absent param) and the no-window case default to ON. Pending
+    // 1070 GPU eye-test before this becomes the committed default.
+    this._skyObjLum = true;
     try {
       // eslint-disable-next-line no-undef
       const sp = new URLSearchParams(window.location.search).get("skyObjLum");
-      this._skyObjLum = sp === "on" || sp === "1" || sp === "true";
-    } catch (_) { /* default off */ }
+      this._skyObjLum = sp !== "off";
+    } catch (_) { /* no window → default ON */ }
     // Stash the material's default (constructed) intensity so the modulation
     // scales relative to it instead of hard-coding 1.0.
     this._starsBaseIntensity =

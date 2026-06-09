@@ -87,6 +87,84 @@ const KIND_ATTACH = 7;
 // local-gait LOCOMOTION skip in the KIND_MOTION arms stays untouched (B9).
 const KIND_MOTION_ACTION = 8;
 
+// FORCE_MOTION_LOCAL (motion B5#2 / C3, backlog 19, 2026-06-09) —
+// `?forceMotionLocal=on` (default OFF). The two KIND_MOTION arms below
+// UNCONDITIONALLY skip the local player's `motion_command` and apply only
+// the STANCE half (`setLocalStance`). That skip is the B9 fix: the local
+// gait is client-predicted (W3.1 fires setMotion on keystate), and
+// re-dispatching the server's locomotion echo to the local rig FIGHTS the
+// predictor — the echoed Walk/Run can differ from the prediction, so the
+// run clip keeps crossfading and never loops ("running animation
+// interrupts" snap-back, DIM10/A-2). We must NOT reintroduce that.
+//
+// BUT the skip also swallows any server-FORCED NON-LOCOMOTION pose/action
+// that ACE could broadcast onto the local player via the same UpdateMotion
+// `forward_command` slot (a forced sit/sleep/paralysis hold, a forced quest
+// emote, a knockdown). Those are NOT gait echoes and the predictor doesn't
+// own them — skipping them means the forced pose never plays locally.
+//
+// When this flag is ON, the local-guid arm lets a kind=5 command THROUGH to
+// `em.setMotion` IFF the command is NOT one of the predictor-owned
+// locomotion/stop/ready/fall signals (see `isLocalGaitLocomotionCmd`),
+// while still skipping every routine gait echo so local prediction (B9) is
+// preserved. When OFF, behaviour is byte-identical to today (skip → stance
+// only). Default OFF pending a 1070 GPU eye-test.
+//
+// WIRE-SIGNAL CAVEAT (see blocked[] in the track handoff): the current wasm
+// bridge derives the kind=5 `motion_command` EXCLUSIVELY from the
+// UpdateMotion `forward_command` / StopCompletely / MoveTo / airborne-edge
+// paths (apps/holtburger-web/src/lib.rs ~31847, ~37079, ~37146), all of
+// which are locomotion-family commands (Walk/Run/Stop/Ready/Falling/Fallen/
+// MoveTo-hint). It does NOT surface the wire `is_autonomous` bit
+// (movement/types.rs MotionItem.packed_sequence bit 15) nor the forced
+// `commands` list (sit/sleep/state-emotes ride that Vec, drained via the
+// separate KIND_MOTION_ACTION + pollMotionActions channels). So the
+// command-class discriminator below is the cleanest CORRECT signal
+// available from kind=5 today: it correctly lets a non-locomotion
+// `forward_command` through, but a fully-general "is this server-forced"
+// gate would need the wasm side to surface `is_autonomous` (or route the
+// forced `commands` items to the local player). Until then a forced pose
+// that arrives ONLY as a `commands` MotionItem still flows through
+// KIND_MOTION_ACTION (which already runs for the local guid), not here.
+const FORCE_MOTION_LOCAL_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("forceMotionLocal")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// Predictor-owned LOCOMOTION command low-16 set — the kind=5 commands the
+// B9 local-gait skip MUST keep swallowing so client prediction is never
+// overridden by the server echo. Mirrors
+// `InterpretedMotionCommand::is_locomotion()`
+// (crates/.../movement/types.rs:170-178) PLUS the Stop/Ready/Falling/Fallen
+// signals the wasm bridge also emits as kind=5 `motion_command` (lib.rs
+// ~31848 STOP, ~37105 READY, ~37172 FALLING). Anything NOT in this set that
+// arrives as a kind=5 command is, by construction, a forced non-locomotion
+// pose/action (the predictor never issues those), so FORCE_MOTION_LOCAL lets
+// it through. Low-16 values from ACE MotionCommand.cs (see the CMD_LOW_*
+// constants in entities.js):
+//   0x0003 Ready, 0x0004 Stop, 0x0005 WalkFwd, 0x0006 WalkBack,
+//   0x0007 RunFwd, 0x0008 Fallen, 0x000D TurnRight, 0x000E TurnLeft,
+//   0x000F SidestepRight, 0x0010 SidestepLeft, 0x0015 Falling.
+const _LOCAL_GAIT_LOCOMOTION_LOWS = new Set([
+  0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x0008,
+  0x000d, 0x000e, 0x000f, 0x0010, 0x0015,
+]);
+function isLocalGaitLocomotionCmd(cmd) {
+  // A zero command carries no forward locomotion (turn-only / unhandled
+  // type per the wasm `motion_command` doc); treat it as locomotion-class
+  // so it stays on the skip path (nothing to force, and it must not be
+  // mistaken for a forced pose). Otherwise compare the low-16.
+  const low = (cmd >>> 0) & 0xffff;
+  if (low === 0) return true;
+  return _LOCAL_GAIT_LOCOMOTION_LOWS.has(low);
+}
+
 // A2 (perf plan 2026-05-18) — module-scratch object passed to
 // `em.setVelocity` so we don't allocate a fresh `{guid,vx,vy,vz,omegaZ}`
 // on every KIND_VELOCITY event. `setVelocity` copies the fields into
@@ -721,7 +799,14 @@ function tickDistanceFogColor(scene3d) {
   // linear THREE.Fog (has finite `.near`/`.far`). Leaves the wireframe
   // FogExp2 density untouched (default-off path is unaffected — its fog
   // is the static FogExp2 from index.js L578, no near/far to write).
-  if (useLerp && typeof fog.near === "number" && typeof fog.far === "number") {
+  // render-audit T1d (world_fog gate): a worldFog of 0 in the keyframe means
+  // "fog OFF" for that segment, so the near/far lerp adoption must be skipped
+  // (otherwise we'd fog out a frame the keyframe intends to be clear). AND-in
+  // worldFog!=0 alongside the existing useLerp/finite/sane-value guards.
+  // `state.worldFog` is the snapshot field copied in sky_lighting.js:62.
+  const fogEnabled = (state.worldFog >>> 0) !== 0;
+  if (fogEnabled && useLerp &&
+      typeof fog.near === "number" && typeof fog.far === "number") {
     const fogMin = +state.fogMin;
     const fogMax = +state.fogMax;
     // Only adopt sane AC values; guard against 0/NaN pre-populator
@@ -1510,6 +1595,11 @@ function toMeta(upd) {
     name: upd.name || "",
     iconId: (upd.iconId >>> 0),
     objScale: upd.objScale > 0 ? upd.objScale : 1.0,
+    // Object-level physics Translucency (render-audit rank 6, 2026-06-09):
+    // PhysicsDesc Translucency (0=opaque..1=transparent), sourced on the wasm
+    // KIND_SPAWN arm. entities.js spawn() applies it as whole-object opacity.
+    // Spawn-only for now (runtime fade needs the UpdateObject arm to source it).
+    physicsTranslucency: +(upd.physicsTranslucency ?? 0),
     paletteId: (upd.paletteId >>> 0),
     mtableId: (upd.mtableId >>> 0),
     motionCommand: (upd.motionCommand ?? 0) >>> 0,
@@ -1651,8 +1741,16 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         // and the 2D path's kind=5 skip (index.html ~6305). Remote entities
         // still drive their gait from the server echo.
         const st = (upd.motionStance ?? 0) >>> 0;
-        if (!isLocalPlayerGuid(motionGuid)) {
-          const motionCmd = (upd.motionCommand ?? 0) >>> 0;
+        const motionCmd = (upd.motionCommand ?? 0) >>> 0;
+        // FORCE_MOTION_LOCAL (B5#2): when ON, let a server-FORCED
+        // NON-LOCOMOTION pose/action through to the local rig instead of
+        // swallowing it. A locomotion-class command (Walk/Run/Stop/Ready/
+        // Turn/Sidestep/Fall) is still skipped so the B9 client-gait
+        // predictor is never overridden (see flag header). Default OFF →
+        // `forceLocal` is always false → byte-identical to the old skip.
+        const forceLocal =
+          FORCE_MOTION_LOCAL_ON && !isLocalGaitLocomotionCmd(motionCmd);
+        if (forceLocal || !isLocalPlayerGuid(motionGuid)) {
           // A1 (2026-05-29): forward the server's per-motion playback speed
           // (UpdateMotion.forward_speed) so EntityManager.setMotion scales the
           // animation framerate. Defaults to 1.0 (no scaling) when absent.
@@ -1854,8 +1952,15 @@ export function installSharedDrainHook(scene3d) {
           // server echo fights the predictor and breaks the run loop. See the
           // matching block above (~:1232) for the full rationale.
           const st = (upd.motionStance ?? 0) >>> 0;
-          if (!isLocalPlayerGuid(motionGuid)) {
-            const motionCmd = (upd.motionCommand ?? 0) >>> 0;
+          const motionCmd = (upd.motionCommand ?? 0) >>> 0;
+          // FORCE_MOTION_LOCAL (B5#2): mirror the direct-drain arm above —
+          // when ON, a server-FORCED NON-LOCOMOTION pose/action passes
+          // through to the local rig; a locomotion-class echo is still
+          // skipped to preserve the B9 client-gait predictor. Default OFF →
+          // byte-identical to the prior unconditional skip.
+          const forceLocal =
+            FORCE_MOTION_LOCAL_ON && !isLocalGaitLocomotionCmd(motionCmd);
+          if (forceLocal || !isLocalPlayerGuid(motionGuid)) {
             // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
             em.setMotion(
               motionGuid,

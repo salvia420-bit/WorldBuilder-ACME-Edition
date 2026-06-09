@@ -1908,7 +1908,16 @@ async function resolveTerrainRingOpts(
   // `if (!atlasTexture)` block (the lazy path reuses the atlas but still
   // wants the detail uniforms). Flag off, fetch missing, or build failure
   // → null state → `uDetailTexEnabled` 0 → shader branch skipped (no-op).
-  const detailTexFlag = readTerrainDetailTexFlag();
+  // render-audit Site-2 (2026-06-09) — detailFlag preset now wired. The
+  // per-preset detailFlag (low:false, mid/high/ultra:true) from quality.js
+  // is now consumed for terrain detail textures: detail is ON for the
+  // mid/high/ultra presets and OFF for low, while still honouring an
+  // explicit `?terrainDetailTex=off` opt-out (and the legacy `=on` force).
+  // Effective enable = (preset.detailFlag || ?terrainDetailTex=on) AND NOT
+  // ?terrainDetailTex=off. Pending eye-test.
+  const detailTexFlag =
+    (!!scene3d.quality?.flags?.detailFlag || readTerrainDetailTexFlag()) &&
+    !readTerrainDetailTexOffFlag();
   let detailTexState = scene3d.terrainDetailTexState ?? null;
   if (
     detailTexFlag &&
@@ -2079,12 +2088,14 @@ async function resolveTerrainRingOpts(
  * missing `window`.
  */
 function readTerrainModulationFlag() {
+  // default-ON per render-audit T1a (2026-06-09): per-vertex bright/sat/hue
+  // jitter (TerrainTex modulation); opt-out ?terrainMod=off, pending eye-test.
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("terrainMod");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -2143,6 +2154,24 @@ function readTerrainDetailTexFlag() {
 }
 
 /**
+ * render-audit Site-2 (2026-06-09) — explicit `?terrainDetailTex=off`
+ * opt-out. Returns true ONLY for the literal value `"off"`
+ * (case-insensitive); missing / any other value is false. Lets a user
+ * force terrain detail textures off even on the mid/high/ultra presets
+ * (whose `detailFlag` now defaults the feature on — see the gate in
+ * resolveTerrainRingOpts). Same try/catch shape as the sibling readers.
+ */
+function readTerrainDetailTexOffFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("terrainDetailTex");
+    return typeof v === "string" && v.toLowerCase() === "off";
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * T1 (2026-05-28) — Parse `?texMerge=on`. Gates the retail TexMerge
  * composite (`uTexMergeEnabled` + the per-LB merge texture + the alpha-mask
  * array fetch). Default OFF — the mask-driven biome boundaries replace the
@@ -2151,12 +2180,14 @@ function readTerrainDetailTexFlag() {
  * sibling flag readers for the Node harness.
  */
 function readTexMergeFlag() {
+  // default-ON per render-audit T1a (2026-06-09): patchy biome alpha-splat
+  // composite; opt-out ?texMerge=off, pending 1070 eye-test.
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("texMerge");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 

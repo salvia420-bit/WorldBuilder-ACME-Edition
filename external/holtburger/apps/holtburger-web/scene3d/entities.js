@@ -310,6 +310,7 @@ import {
 import { AnimationCache, cycleTimeScale } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import { materialCanCastShadow, SURFACE_TYPE } from "./materials.js";
+import { drainPendingPlayEffects } from "./play_effect_vfx.js";
 // === Wave R2.A (2026-05-28) — reuse the static-light constructor so
 // entity-attached SetLight lights share identical color/intensity/falloff/
 // cone math. Only imported; constructs nothing at module load.
@@ -351,16 +352,87 @@ const VEL_SCALE_ON = (() => {
 // the wasm `cycleOmega` getter). Integrated in `_tickHookOmega` (summed with
 // SetOmega hook omega). Harmless while OFF: no `_cycleOmega` is ever set, so all
 // consumers see undefined and behaviour is byte-identical.
+// default-ON flipped per render-audit T1c (2026-06-09), opt-out ?cycleOmega=off, pending 1070 eye-test
 const CYCLE_OMEGA_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return (
+      new URLSearchParams(window.location.search).get("cycleOmega")?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return true;
+  }
+})();
+
+// MT_CLASS_FALLBACK (motion-dispatch audit §5, 2026-06-09) — `?mtClassFallback=on`
+// gates the Stage-1 generic class-mask fallback in `classifyMotionCommand`: when
+// no static command Set matches, derive a play-kind from the command class byte
+// instead of returning null. Default OFF pending a 1070 GPU eye-test.
+const MT_CLASS_FALLBACK_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("cycleOmega")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("mtClassFallback")?.toLowerCase() === "on"
     );
   } catch (_) {
     return false;
   }
 })();
+
+// IDLE_FIDGET (idle-fidget, 2026-06-09) — `?idleFidget=on` gates an autonomous
+// client-side idle-fidget timer. Retail's client played random idle
+// variations / fidget gestures so a standing creature/NPC/player is NOT frozen
+// in one looping Ready idle (the single most-noticeable non-retail tell). Per
+// entity, after it has been continuously in a plain standing idle (Ready/idle
+// cycle, |velocity| ~0, no action/jump/swing/cast overlay, server velocity
+// stale) for a per-entity randomized interval, we PROBE the MotionTable for a
+// random idle-variation/fidget link clip and play ONE as a LoopOnce overlay via
+// `_tryPlayLink`; it returns to the Ready cycle when the overlay ends. The
+// fidget is JS-ONLY (no server packet, no Rust) and immediately yields to any
+// real server motion/action (the per-entity gate re-evaluates every coarse
+// timer check and cancels as soon as locomotion / a tween / a non-idle command
+// arrives). Default OFF pending a 1070 GPU eye-test.
+const IDLE_FIDGET_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("idleFidget")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+// Coarse timer cadence (ms) — how often the per-entity idle-fidget bookkeeping
+// runs in tick(). The whole IDLE_FIDGET feature is inert when the flag is off,
+// and even when on this only walks the entity map ~3x/sec (no per-frame cost on
+// the fidget path). The fire interval itself is randomized per entity in
+// [IDLE_FIDGET_MIN_S, IDLE_FIDGET_MAX_S] and re-rolled each time a fidget fires.
+const IDLE_FIDGET_CHECK_INTERVAL_MS = 333;
+const IDLE_FIDGET_MIN_S = 6.0;
+const IDLE_FIDGET_MAX_S = 15.0;
+// |velocity| (m/s) below which an entity counts as "standing still" for the
+// idle-fidget gate. The EMA gait speed and the last server VectorUpdate must
+// both be under this (a tiny epsilon to tolerate dead-reckon micro-jitter).
+const IDLE_FIDGET_SPEED_EPS = 0.05;
+// Class-0x13 ChatEmote idle-variation / fidget commands (full 32-bit
+// MotionCommand keys — the link inner key is the full command, never the
+// low-16; see `_tryPlayLink` / the C3 fix at setMotion's emote path). This is
+// the universally-authored "harmless standing gesture" subset of the retail
+// /emote set (ACE MotionCommand.cs L138-151): a fidget plays one of these as a
+// LoopOnce overlay ONLY when the entity's MotionTable actually has a link for
+// it under (stance, Ready) — probed via `lookupMotionLinkForSwing`, so an MT
+// that lacks the clip is skipped (no guessing, graceful no-op). Picked to read
+// as ambient idle fidgets rather than communicative emotes (no waves / kisses).
+const IDLE_FIDGET_COMMANDS = [
+  0x13000083, // Nod
+  0x13000085, // ShakeHead
+  0x13000086, // Shrug
+  0x13000088, // Akimbo
+  0x1300008a, // Salute
+  0x1300008b, // ScratchHead
+  0x1300008d, // TapFoot
+  0x13000090, // YawnStretch
+];
 
 // T9 (2026-05-28) — `?dynLod=on` gates DYNAMIC entity LOD. Spawn already picks
 // a degrade band once (frozen); this re-queries the band at the live distance
@@ -511,6 +583,8 @@ const ATTACK_COMMANDS = new Set([
 const CAST_COMMANDS = new Set([
   // MagicBlast, MagicThrowMissile, MagicSelf* variants
   0x002B, 0x002C, 0x002D, 0x002E, 0x002F, 0x0030, 0x0031, 0x0032,
+  // MagicRecoilMissile (motion-audit A7: closes the remote/echo cast silent-drop)
+  0x0033,
   // PowerUp01..10
   0x006F, 0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077, 0x0078,
   // CastSpell
@@ -1197,10 +1271,23 @@ function classifyMotionCommand(cmd) {
   // Wave 5 Phase 5.1 (2026-05-26): fall states. Falling + Fallen are
   // CYCLE entries in MT 0x09000001 (data dump confirms `flags=0x01
   // HAS_VELOCITY` on Fallen entries) so they route through the cycle
-  // lookup path. FallDown is wired here for forward compatibility with
-  // creature MTs that may carry a one-shot lead-in even though MT
-  // 0x09000001 doesn't (Phase 5.1 investigation).
-  if (low === CMD_LOW_FALLING || low === CMD_LOW_FALLDOWN || low === CMD_LOW_FALLEN)
+  // lookup path.
+  //
+  // Audit A8 (FallDown link routing fix): FallDown (0x50) is an
+  // Action-class one-shot LEAD-IN, NOT a cycle. The player MT
+  // (0x09000001) has NO `cycles[(stance, FallDown)]` entry, so routing
+  // it to "walk" landed it in `fadeOutCurrent` (null cycle clip → rest
+  // pose) instead of playing the authored fall clip. The fall clip lives
+  // in `MotionTable.links` exactly like a swing/cast, so route FallDown
+  // to "attack" so it rides `_tryPlayLink`, which fetches the link clip
+  // (FallDown 0x50 is inside the modeled attack range 0x0050..0x0078, so
+  // `expandActionCommandLow16` keys it as 0x10000050) and plays it as a
+  // LoopOnce overlay. A missing link no-ops gracefully (same fail-soft
+  // path as any other attack-class command on an MT that lacks the
+  // entry). FALLING (0x15) + FALLEN (0x08) stay on the cycle ("walk")
+  // path — their behavior is unchanged.
+  if (low === CMD_LOW_FALLDOWN) return "attack";
+  if (low === CMD_LOW_FALLING || low === CMD_LOW_FALLEN)
     return "walk";
   if (ATTACK_COMMANDS.has(low)) return "attack";
   if (CAST_COMMANDS.has(low)) return "cast";
@@ -1235,6 +1322,18 @@ function classifyMotionCommand(cmd) {
   // It's the cycle ACE broadcasts on combat-mode toggle so the rig
   // can show the weapon-drawn / fists-up pose for the new stance.
   if (low === CMD_LOW_READY) return "idle";
+  if (MT_CLASS_FALLBACK_ON) {
+    // Stage-1 generic dispatcher (motion-dispatch audit §5): no static Set
+    // matched, so derive a play-kind from the command class byte. A bare
+    // low-16 (class byte 0) and held/sub-state classes fall through to the
+    // cycle path; Action(0x10)/ChatEmote(0x13) play as a LoopOnce overlay.
+    // _tryPlayLink and the cycle path both no-op gracefully on a missing MT
+    // entry, so this can only add a clip, never crash. Gated ?mtClassFallback=on
+    // pending 1070 GPU eye-test before default.
+    const _cls = (cmd >>> 24) & 0xff;
+    if (_cls === 0x10 || _cls === 0x13) return "attack";
+    return "walk";
+  }
   return null;
 }
 
@@ -1262,10 +1361,24 @@ function classifyMotionCommand(cmd) {
 // wrong class (the previous catch-all `| 0x40000000` mis-prefixed
 // emotes / idle ambients, whose real classes are 0x13 / 0x10, making the
 // link lookup miss with a fake key instead of falling through cleanly).
+// Audit §5 key-reconstruction fix: explicit per-command class map for
+// out-of-range commands whose full 32-bit class can't be derived from the
+// coarse attack/use ranges below. Full keys per the motion-audit A7/A8.
+//   0x4E TippedLeft  → 0x10 (Action)    0x4F TippedRight → 0x10 (Action)
+//   0x91 Cringe      → 0x13 (ChatEmote) 0xD3 CastSpell   → 0x40 (Use)
+const ACTION_LOW16_CLASS = {
+  0x4e: 0x10000000,
+  0x4f: 0x10000000,
+  0x91: 0x13000000,
+  0xd3: 0x40000000,
+};
 function expandActionCommandLow16(cmd) {
   const c = cmd >>> 0;
   if ((c >>> 16) !== 0) return c; // already a full 32-bit command
   const low = c & 0xffff;
+  // Audit §5: per-command class reconstruction for out-of-range commands.
+  if (ACTION_LOW16_CLASS[low] !== undefined)
+    return (ACTION_LOW16_CLASS[low] | low) >>> 0;
   const isAttackClass =
     (low >= 0x0050 && low <= 0x0078) ||
     (low >= 0x011f && low <= 0x0134);
@@ -2632,6 +2745,10 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // Track B2 (motion-audit, 2026-06-09): replay any PlayEffects that raced
+    // ahead of this spawn (queued by guid when the target was not yet in the
+    // entityMap). No-op if none queued.
+    drainPendingPlayEffects(this, guid);
     // Spawn-race recovery (2026-05-30): if a surface's DAT resources had not
     // yet streamed from the server when this entity spawned, its decode
     // returned empty and the mesh got the shared flat-grey fallback material
@@ -2879,6 +2996,31 @@ export class EntityManager {
       if (!this._nameplateSpriteWarned) {
         this._nameplateSpriteWarned = true;
         console.warn("[task-13] ensureNameplateForEntity threw:", e);
+      }
+    }
+    // Render-audit critic missedFeatures #1 (2026-06-09): whole-OBJECT
+    // translucency. The wasm EntitySpawnJs carries `physicsTranslucency`
+    // (PhysicsDesc Translucency, rank-6 render fix): 0.0 = fully opaque,
+    // 1.0 = fully transparent. Apply at the entity ROOT so ghosts /
+    // spectres / ethereal creatures and the classic fade-on-drop /
+    // materialize render semi-transparent instead of fully opaque. This
+    // is DISTINCT from the per-surface `state.translucency` consumed in
+    // `_applyPalettedSurfaceRenderState` — object translucency composes
+    // MULTIPLICATIVELY over each surface's authored base opacity (and over
+    // the Ethereal hint), so the two never clobber each other. No-op when
+    // the field is 0/absent (the common case) — leaves materials opaque.
+    {
+      const objTrans = +(meta.physicsTranslucency ?? 0);
+      if (objTrans > 0) {
+        try {
+          this._applyObjectTranslucencyToEntity(inst, objTrans);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._objTransWarned) {
+            this._objTransWarned = true;
+            console.warn("[render-audit#1] spawn object-translucency threw:", e);
+          }
+        }
       }
     }
     if (SPAWN_TRACE) {
@@ -6708,6 +6850,27 @@ export class EntityManager {
       }
       action.reset();
       action.play();
+      // Audit C1 (CMT remote-swing double-play dedup): a SERVER
+      // KIND_MOTION_ACTION swing/cast routes through here (setMotion's
+      // `cls === "attack"|"cast"` branch) and raw-plays WITHOUT touching
+      // `inst.currentActionKey` (it stays on the locomotion key) — the
+      // overlay clip lives under a `link:` key, and we never stamp
+      // `actionLastUsedMs` for it either. The index.html damageTaken/CMT
+      // guessed-swing dedup guard keys on `currentActionKey.startsWith(
+      // "swing:")`, so it MISSES an in-flight server swing routed this way
+      // and the CMT guess fires a SECOND swing on top (double-play). Stamp
+      // a timestamp here (attack/cast classes only — locomotion transition
+      // links must NOT suppress a later legitimate CMT swing) so that guard
+      // can also recognize an active server swing for the same target
+      // within its STALE_SWING_MS window.
+      {
+        const _tcls = (typeof classifyMotionCommand === "function")
+          ? classifyMotionCommand(toCmd >>> 0)
+          : null;
+        if (_tcls === "attack" || _tcls === "cast") {
+          inst._lastServerSwingMs = performance.now();
+        }
+      }
       console.log(
         `[motion-link] 0x${(inst.guid >>> 0).toString(16)} ${fromCmd.toString(16)}→${toCmd.toString(16)} stance=${stance.toString(16)} (link clip played, ${entry.hooks?.length ?? 0} hooks)`,
       );
@@ -8261,6 +8424,29 @@ export class EntityManager {
           }
         }
       }
+      // IDLE_FIDGET (2026-06-09, ?idleFidget=on) — autonomous client-side idle
+      // fidget. Accumulate per-entity standing-idle dwell time and, once it
+      // crosses a per-entity randomized interval, trigger ONE idle-variation
+      // overlay. Whole block dead when the flag is off (one truthy check then
+      // skip — byte-identical to pre-feature). `_idleFidgetTick` does the cheap
+      // dwell bookkeeping every frame and only does the (throttled, async)
+      // MT-probe + play when an interval elapses; it cancels/resets the dwell
+      // the instant the entity is no longer plainly standing idle, so it never
+      // fights server prediction or an incoming clip.
+      if (IDLE_FIDGET_ON) {
+        try {
+          this._idleFidgetTick(inst, dt);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._idleFidgetTickWarned) {
+            this._idleFidgetTickWarned = true;
+            console.warn(
+              `[entities/idle-fidget] tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+        }
+      }
     }
     // T9 (2026-05-28) — dynamic-LOD recheck (throttled). Re-queries each
     // entity's degrade band at the live camera distance and respawns it when
@@ -8304,6 +8490,219 @@ export class EntityManager {
           console.warn("[entities/H2] worldParticleManager.tick threw:", e);
         }
       }
+    }
+  }
+
+  /**
+   * IDLE_FIDGET (2026-06-09, ?idleFidget=on) — per-entity idle-fidget timer.
+   *
+   * **Problem.** Every standing creature/NPC/player is frozen in one looping
+   * Ready idle. Retail's client played autonomous idle variations / fidget
+   * gestures so a standing entity wasn't perfectly static — the single most-
+   * noticeable non-retail tell.
+   *
+   * **What this does.** Each entity accumulates `_idleDwellS` while it is in a
+   * PLAIN STANDING IDLE: on the Ready/idle cycle (or never-moved-since-spawn),
+   * |velocity| ~0 (both the velScale gait EMA AND the last server VectorUpdate
+   * under `IDLE_FIDGET_SPEED_EPS`, or stale), and with NO action overlay
+   * playing (no jump/swing/cast tween, no fidget already in flight). The
+   * instant ANY of those is false — a locomotion command, an incoming swing/
+   * cast clip, a tween, a non-idle motion — the dwell RESETS to 0 (the fidget
+   * yields immediately to real server motion/prediction; it never fights it).
+   *
+   * When the dwell crosses the entity's randomized target (`_idleFidgetNextS`,
+   * re-rolled in [MIN, MAX] each fire), it kicks ONE idle-variation overlay via
+   * `_fireIdleFidget` and resets the dwell + re-rolls the next interval.
+   *
+   * **Cost.** No per-frame allocation. The dwell add + gate is a handful of
+   * field reads per ticked entity; the (async) MT-probe + play happens at most
+   * once per ~6-15 s per entity, throttled so the manager-wide bookkeeping only
+   * re-evaluates the heavier gate every `IDLE_FIDGET_CHECK_INTERVAL_MS`.
+   *
+   * **Data-source note.** There is NO wasm getter to ENUMERATE the idle/fidget
+   * motions a MotionTable contains (the only MT-introspection export is
+   * `lookupMotionLinkForSwing(mtId, stance, cmd)`, which probes ONE command).
+   * So `_fireIdleFidget` PROBES a randomly-chosen ChatEmote idle-variation
+   * command with that getter and plays it only when a real link clip exists —
+   * correct, not guessed; an MT lacking the clip is skipped. The play path is
+   * the existing `_tryPlayLink` LoopOnce overlay, which already no-ops
+   * gracefully on a missing clip.
+   * @private
+   */
+  _idleFidgetTick(inst, dt) {
+    // (1) Reset the dwell the instant the entity is not plainly standing idle.
+    //     An action overlay (jump / swing / cast tween) or an in-flight fidget
+    //     means a clip is already playing — never stack a fidget on top, and
+    //     never fight an incoming server clip.
+    if (
+      inst._jumpPoseTween ||
+      inst._swingTween ||
+      inst._castTween ||
+      inst._idleFidgetActive
+    ) {
+      inst._idleDwellS = 0;
+      return;
+    }
+    // (2) Must be on the Ready/idle cycle. `lastMotionCommand` is the last
+    //     non-stop command setMotion played (sticky across STOP). "idle" ==
+    //     Ready; undefined/0 == spawned idle and never moved. Anything else
+    //     (walk / run / attack / cast / a held stationary pose) disqualifies.
+    const lastCmd = (inst.lastMotionCommand ?? 0) >>> 0;
+    const onIdle =
+      lastCmd === 0 || classifyMotionCommand(lastCmd) === "idle";
+    if (!onIdle) {
+      inst._idleDwellS = 0;
+      return;
+    }
+    // (3) |velocity| ~0. The velScale EMA gait speed (when present) AND the
+    //     last server VectorUpdate must both be under the epsilon. A stale
+    //     VectorUpdate (older than the dead-reckon staleness window) counts as
+    //     stopped — a standing entity stops getting velocity packets.
+    const emaSpeed = inst._emaSpeed ?? 0;
+    if (emaSpeed > IDLE_FIDGET_SPEED_EPS) {
+      inst._idleDwellS = 0;
+      return;
+    }
+    const lv = inst.lastVel;
+    if (lv && inst.lastVelMs !== undefined) {
+      const nowMs = typeof performance !== "undefined" ? performance.now() : 0;
+      if (nowMs - inst.lastVelMs < ENTITY_VELOCITY_STALE_MS) {
+        const vMag = Math.hypot(lv.vx ?? 0, lv.vy ?? 0, lv.vz ?? 0);
+        if (vMag > IDLE_FIDGET_SPEED_EPS) {
+          inst._idleDwellS = 0;
+          return;
+        }
+      }
+    }
+    // (4) Plainly standing idle — accumulate dwell. Lazily seed the per-entity
+    //     randomized fire interval the first time this entity becomes idle.
+    if (inst._idleFidgetNextS === undefined) {
+      inst._idleFidgetNextS = this._rollIdleFidgetInterval();
+    }
+    inst._idleDwellS = (inst._idleDwellS || 0) + dt;
+    if (inst._idleDwellS < inst._idleFidgetNextS) return;
+    // Interval elapsed — fire ONE fidget. Reset the dwell + re-roll the next
+    // interval up front so a failed/absent probe still waits a fresh interval
+    // (no tight retry loop) and so the dwell doesn't keep re-triggering while
+    // the async probe is in flight.
+    inst._idleDwellS = 0;
+    inst._idleFidgetNextS = this._rollIdleFidgetInterval();
+    this._fireIdleFidget(inst);
+  }
+
+  /**
+   * IDLE_FIDGET — pick a per-entity randomized fire interval in
+   * [IDLE_FIDGET_MIN_S, IDLE_FIDGET_MAX_S]. Uses the shared mockable RNG
+   * (`timeRng`) so tests are deterministic under `setRng`, matching the rest
+   * of scene3d's time-jitter (CallPES delay, particle emission).
+   * @private
+   */
+  _rollIdleFidgetInterval() {
+    let r;
+    try {
+      r = timeRng();
+    } catch (_) {
+      r = Math.random();
+    }
+    if (!(r >= 0 && r < 1)) r = 0;
+    return IDLE_FIDGET_MIN_S + r * (IDLE_FIDGET_MAX_S - IDLE_FIDGET_MIN_S);
+  }
+
+  /**
+   * IDLE_FIDGET — probe + play ONE idle-variation fidget for `inst`.
+   *
+   * Picks a random ChatEmote idle-variation command, PROBES the entity's
+   * MotionTable for a real link clip under (stance, Ready) via the wasm
+   * `lookupMotionLinkForSwing` getter, and — only when one exists — plays it as
+   * a LoopOnce overlay through the existing `_tryPlayLink` path. The probe
+   * keeps this CORRECT (it never plays a command the MT lacks); the play path
+   * already no-ops gracefully if the clip turns out absent at fetch time.
+   *
+   * `_idleFidgetActive` guards against stacking (`_idleFidgetTick` resets the
+   * dwell while it's set) and is cleared when the LoopOnce overlay's duration
+   * elapses (best-effort timer; the clip self-clamps to weight 0 regardless, so
+   * a missed clear just defers the next fidget by one interval — never a stuck
+   * pose). A real server motion clears it implicitly: setMotion's locomotion /
+   * swing / cast paths take over the affected parts, and the next idle dwell
+   * re-arms from 0.
+   * @private
+   */
+  _fireIdleFidget(inst) {
+    if (typeof window === "undefined") return;
+    const sh = window.__sessionHandle;
+    if (!sh || typeof sh.lookupMotionLinkForSwing !== "function") {
+      // No MT-introspection getter wired (pre-login / offline / Node) — can't
+      // verify the clip exists, so skip rather than play a possibly-absent
+      // command. The blocked[] note flags the missing enumerate-MT getter.
+      return;
+    }
+    const setupId = (inst.meta?.modelId ?? inst.meta?.setupId ?? 0) >>> 0;
+    const mtableId = (inst.meta?.mtableId ?? 0) >>> 0;
+    if (!mtableId) return; // raw GfxObj setup with no MotionTable — no fidgets.
+    const stance =
+      (inst.currentStance ?? inst.lastStance ?? inst.meta?.motionStance ?? 0) >>> 0;
+    if (!stance) return; // need a resolved stance to key the link lookup.
+    // Pick a random fidget command; probe up to a few candidates so an MT that
+    // happens to lack the first pick still fidgets (most have a handful of the
+    // common gestures). Bounded, cheap — at most IDLE_FIDGET_COMMANDS.length
+    // synchronous getter calls, once per ~6-15s per entity.
+    const n = IDLE_FIDGET_COMMANDS.length;
+    let startR;
+    try {
+      startR = timeRng();
+    } catch (_) {
+      startR = Math.random();
+    }
+    if (!(startR >= 0 && startR < 1)) startR = 0;
+    const start = Math.floor(startR * n) % n;
+    let cmd = 0;
+    for (let i = 0; i < n; i++) {
+      const candidate = IDLE_FIDGET_COMMANDS[(start + i) % n] >>> 0;
+      let linkAnim = null;
+      try {
+        linkAnim = sh.lookupMotionLinkForSwing(
+          mtableId >>> 0,
+          stance >>> 0,
+          candidate >>> 0
+        );
+      } catch (_) {
+        // Getter threw (rare) — give up on this fidget cycle.
+        return;
+      }
+      if (linkAnim) {
+        cmd = candidate;
+        // wasm Option<MotionLinkAnimJs> — free it; we only needed presence.
+        try { linkAnim.free?.(); } catch (_) {}
+        break;
+      }
+      try { linkAnim?.free?.(); } catch (_) {}
+    }
+    if (!cmd) return; // this MT has none of the idle-variation clips — skip.
+    // Re-check the entity is still plainly idle (the probe loop is synchronous,
+    // but a server motion could have landed via a queued event between the
+    // dwell check and here; cheapest re-guard is the overlay-tween set).
+    if (inst._jumpPoseTween || inst._swingTween || inst._castTween) return;
+    inst._idleFidgetActive = true;
+    // Play the fidget as a LoopOnce overlay on top of the Ready cycle (from =
+    // Ready, same as a swing). `_tryPlayLink` is async + fail-soft; a fetch
+    // miss just leaves `_idleFidgetActive` set until the clear timer below.
+    Promise.resolve()
+      .then(() =>
+        this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, cmd, stance)
+      )
+      .catch(() => {});
+    // Best-effort clear of the active guard after a generous fidget duration so
+    // the entity can fidget again later. The LoopOnce overlay self-clamps to
+    // weight 0 when it finishes regardless of this timer; this only re-arms the
+    // dwell gate. A real server motion takes over the parts independently.
+    if (typeof setTimeout === "function") {
+      setTimeout(() => {
+        if (this.entityMap.has(inst.guid >>> 0)) {
+          inst._idleFidgetActive = false;
+        }
+      }, IDLE_FIDGET_MAX_S * 1000);
+    } else {
+      inst._idleFidgetActive = false;
     }
   }
 
@@ -9235,6 +9634,94 @@ export class EntityManager {
           delete mat.userData.__preEtherealDepthWrite;
         }
       }
+    }
+  }
+
+  /**
+   * Render-audit critic missedFeatures #1 (2026-06-09) — whole-OBJECT
+   * translucency entrypoint. Called from the EntityUpdate drain (loop.js)
+   * whenever the wasm `physicsTranslucency` field changes at runtime — e.g.
+   * the classic AC fade as an item materializes / is dropped, or a creature
+   * phasing ethereal — so the change re-renders without a respawn. The same
+   * field is applied at spawn (see `spawn()`). No-op when the entity isn't
+   * in `entityMap` yet (race with the async spawn pipeline).
+   *
+   * `translucency` is the PhysicsDesc Translucency in [0, 1]: 0 = fully
+   * opaque, 1 = fully transparent. Values outside that range are clamped.
+   */
+  applyObjectTranslucency(guid, translucency) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst || !inst.root) return;
+    this._applyObjectTranslucencyToEntity(inst, +translucency || 0);
+  }
+
+  /**
+   * Render-audit critic missedFeatures #1 (2026-06-09) — apply a whole-OBJECT
+   * translucency factor across every surface on the entity. Mirrors the
+   * `_applyEtherealToEntity` snapshot/restore discipline so the two — plus
+   * the per-surface translucency (`_applyPalettedSurfaceRenderState`) and the
+   * Transparent (20) hook ramps — COMPOSE instead of clobbering.
+   *
+   * The object factor is MULTIPLICATIVE: each material's opacity becomes
+   * `base * (1 - translucency)`, where `base` is the opacity OWNED by the
+   * other systems (authored surface translucency, a Transparent ramp, etc.).
+   * We snapshot that base into `userData.__preObjTransOpacity` the first time
+   * object-translucency touches a material, and ALWAYS derive the new opacity
+   * from that snapshot — never from the already-multiplied current value — so
+   * repeated runtime updates don't compound. When translucency returns to 0
+   * we restore the snapshot, drop it, and reset `transparent`/`depthWrite` so
+   * the next non-zero apply re-snapshots the (now other-system-owned) base.
+   *
+   * Object translucency is INDEPENDENT of the `should_draw` hide-gate
+   * (`_setEntityStateVisible`): a hidden entity stays hidden via `root.visible`
+   * regardless of material opacity, and a translucent entity is still drawn
+   * (just blended). We deliberately do NOT touch `inst.root.visible` here.
+   *
+   * `_getOrCloneEntityMaterial` returns null for fallback / cache-miss
+   * surfaces (same as the ethereal path) — those silently no-op rather than
+   * cloning the shared fallback singleton.
+   */
+  _applyObjectTranslucencyToEntity(inst, translucency) {
+    // Clamp the translucency to [0, 1] → opacity multiplier in [0, 1].
+    const t = translucency < 0 ? 0 : (translucency > 1 ? 1 : translucency);
+    const factor = 1 - t; // clamp01(1 - physicsTranslucency)
+    inst._objectTranslucency = t;
+    const dids = this._collectEntitySurfaceDids(inst, -1);
+    for (const did of dids) {
+      const mat = this._getOrCloneEntityMaterial(inst, did);
+      if (!mat) continue;
+      if (t > 0) {
+        // Snapshot the base opacity (owned by surface-translucency / hooks /
+        // ethereal) on FIRST object-translucency touch; re-derive from it on
+        // every subsequent apply so runtime updates don't compound.
+        if (mat.userData.__preObjTransOpacity === undefined) {
+          mat.userData.__preObjTransOpacity = mat.opacity;
+        }
+        const base = mat.userData.__preObjTransOpacity;
+        mat.opacity = base * factor;
+        mat.transparent = true;
+        // Translucent objects must not occlude themselves via depth — stash
+        // the prior depthWrite so the restore path can return it.
+        if (mat.depthWrite !== false && mat.userData.__preObjTransDepthWrite === undefined) {
+          mat.userData.__preObjTransDepthWrite = mat.depthWrite;
+          mat.depthWrite = false;
+        }
+      } else if (mat.userData.__preObjTransOpacity !== undefined) {
+        // Restore: object is fully opaque again. Return the base opacity the
+        // other systems set, then let `transparent` reflect THAT value (a
+        // surface that's authored-translucent or mid-ethereal stays blended;
+        // a plain opaque surface drops back to opaque).
+        mat.opacity = mat.userData.__preObjTransOpacity;
+        delete mat.userData.__preObjTransOpacity;
+        mat.transparent = mat.opacity < 1.0;
+        if (mat.userData.__preObjTransDepthWrite !== undefined) {
+          mat.depthWrite = mat.userData.__preObjTransDepthWrite;
+          delete mat.userData.__preObjTransDepthWrite;
+        }
+      }
+      // t === 0 AND no snapshot → material was never touched by object
+      // translucency; leave it exactly as the other systems set it (do NOT
+      // force `transparent = true` on an already-opaque material).
     }
   }
 

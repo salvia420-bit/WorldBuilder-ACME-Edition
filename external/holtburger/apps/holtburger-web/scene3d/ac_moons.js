@@ -331,12 +331,16 @@ export class ACMoons {
     // at night down to a small daytime floor as the sun climbs. The flag is
     // captured ONCE here and consumed via `this._skyObjLum` in tick() — same
     // `this` scope, so no split-declaration ReferenceError.
-    this._skyObjLum = false;
+    // render-audit T1d (skyObjLum): default-ON, opt-out via `?skyObjLum=off`.
+    // Returns false only when the value is exactly "off"; any other value
+    // (incl. absent param) and the no-window case default to ON. Pending
+    // 1070 GPU eye-test before this becomes the committed default.
+    this._skyObjLum = true;
     try {
       // eslint-disable-next-line no-undef
       const sp = new URLSearchParams(window.location.search).get('skyObjLum');
-      this._skyObjLum = sp === 'on' || sp === '1' || sp === 'true';
-    } catch (_) { /* default off */ }
+      this._skyObjLum = sp !== 'off';
+    } catch (_) { /* no window → default ON */ }
     // Base uBrightness the meshes are constructed with (mirrors the
     // ShaderMaterial default 2.0); the modulation scales relative to it.
     this._moonBaseBrightness = 2.0;

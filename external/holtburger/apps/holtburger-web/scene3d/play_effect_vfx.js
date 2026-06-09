@@ -1546,6 +1546,238 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   return true;
 }
 
+// =====================================================================
+// Track B2 / motion-backlog rank 7 (2026-06-09) — pending-effect queue.
+// =====================================================================
+// PROBLEM. A PlayEffect (0xF755) whose target guid is not yet in
+// `entityMap` is silently dropped: every dispatch arm calls
+// `_resolveTargetPlacement(guid) → null` (and the real-VFX resolver
+// hits `missNoEntity`) → log + return, with no replay. So a cast/buff/
+// spawn flash that arrives on the wire JUST BEFORE its target's
+// ObjectCreate is lost forever — common for portal-in, projectile
+// birth, and the first PlayEffect when entering a fresh PVS area where
+// the effect packet beats the create packet.
+//
+// FIX. When the live dispatch finds NO instance for the target guid,
+// enqueue the effect (scriptId, speed, enqueue-time) keyed by guid
+// instead of dropping it. When `entities.js` later spawns that guid
+// (right after `entityMap.set(guid, inst)`), it calls
+// `drainPendingPlayEffects(this, guid)` which replays the queued
+// effects through the SAME resolve/spawn path the live dispatch uses.
+//
+// BOUNDS (so the queue can NEVER grow unbounded for guids that never
+// arrive — bad packets, despawn-before-create, etc.):
+//   - At most `_PENDING_MAX_PER_GUID` effects per guid (drop OLDEST on
+//     overflow; eviction is LOGGED, never silent).
+//   - At most `_PENDING_MAX_GUIDS` distinct guids tracked at once (drop
+//     the OLDEST-inserted guid bucket on overflow; LOGGED).
+//   - Entries older than `_PENDING_TTL_MS` are evicted on the next
+//     enqueue OR drain touch (lazy TTL — no timer/interval leak), with
+//     the evicted count LOGGED. A guid bucket that goes empty after TTL
+//     pruning is removed from the map.
+//
+// GATE. Default-OFF `?playEffectQueue=on` (same IIFE/URLSearchParams
+// pattern as MT_CLASS_FALLBACK_ON / CYCLE_OMEGA_ON in entities.js).
+// When OFF, behavior is byte-identical to pre-B2 (the missing-target
+// effect is dropped + logged exactly as before) so this stays inert
+// until the 1070 GPU eye-test flips the default. When ON, the effect is
+// queued and replayed on spawn. `drainPendingPlayEffects` itself is a
+// cheap no-op when the queue is empty regardless of the flag, so the
+// entities.js wire-site call is always safe to add.
+const PLAY_EFFECT_QUEUE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("playEffectQueue");
+    return v === "on" || v === "1" || v === "true";
+  } catch (_) {
+    return false;
+  }
+})();
+
+// Map<guid:number, Array<{scriptId:number, speed:number, enqueuedMs:number}>>.
+// Insertion order is preserved by Map iteration, so the oldest-guid
+// eviction below can pull `keys().next()`.
+const _pendingPlayEffects = new Map();
+const _PENDING_MAX_PER_GUID = 8;
+const _PENDING_MAX_GUIDS = 256;
+const _PENDING_TTL_MS = 3000;
+// Diag counters — surfaced via __test.pendingStats() so an acceptance
+// trace can assert "enqueued N, replayed N, evicted 0" without guessing.
+const _pendingStats = {
+  enqueued: 0,
+  replayed: 0,
+  evictedTtl: 0,
+  evictedPerGuid: 0,
+  evictedMaxGuids: 0,
+  // cell==0 non-positional suppressions (not queued).
+  suppressedCell0: 0,
+};
+
+/**
+ * Resolve the live entity instance for a guid via the SAME entityMap
+ * path the dispatch + resolver use (`_resolveTargetPlacement` line ~729
+ * and `_tryResolveRealVfx` line ~1223). Returns the instance or null.
+ * Used to decide enqueue-vs-dispatch: if this is null, the effect would
+ * be dropped, so we queue it instead.
+ *
+ * @param {number} guid
+ * @returns {object|null}
+ */
+function _liveInstanceForGuid(guid) {
+  try {
+    if (typeof window === "undefined") return null;
+    const em = window.liveScene3d?.entityManager;
+    if (!em || !em.entityMap || typeof em.entityMap.get !== "function") {
+      return null;
+    }
+    return em.entityMap.get(guid >>> 0) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Prune TTL-expired entries from a single guid's bucket in place.
+ * Returns the (possibly shortened) array, or null if it went empty.
+ * Bumps `_pendingStats.evictedTtl` + logs when anything was dropped.
+ */
+function _pruneExpired(guid, bucket, now) {
+  if (!bucket || bucket.length === 0) return null;
+  let dropped = 0;
+  let w = 0;
+  for (let r = 0; r < bucket.length; r++) {
+    if (now - bucket[r].enqueuedMs <= _PENDING_TTL_MS) {
+      bucket[w++] = bucket[r];
+    } else {
+      dropped += 1;
+    }
+  }
+  if (dropped > 0) {
+    bucket.length = w;
+    _pendingStats.evictedTtl += dropped;
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[play-effect-vfx/queue] TTL-evicted ${dropped} stale effect(s) for ` +
+        `guid 0x${(guid >>> 0).toString(16)} (>${_PENDING_TTL_MS}ms old)`,
+    );
+  }
+  return bucket.length > 0 ? bucket : null;
+}
+
+/**
+ * Enqueue a PlayEffect for a target guid that isn't in `entityMap` yet,
+ * to be replayed by `drainPendingPlayEffects` when the entity spawns.
+ * Enforces the per-guid cap, the max-guids cap, and lazy TTL pruning —
+ * all evictions are logged, never silent. No-op when the queue gate is
+ * OFF (caller checks `PLAY_EFFECT_QUEUE_ON` before calling, but this is
+ * also internally safe to call).
+ *
+ * @param {number} guid
+ * @param {number} scriptId
+ * @param {number} speed
+ */
+function _enqueuePlayEffect(guid, scriptId, speed) {
+  const g = guid >>> 0;
+  const now = (typeof performance !== "undefined" && performance.now)
+    ? performance.now()
+    : Date.now();
+  let bucket = _pendingPlayEffects.get(g);
+  if (bucket) {
+    // Lazy TTL prune on touch so stale entries can't linger.
+    bucket = _pruneExpired(g, bucket, now);
+    if (!bucket) {
+      // Re-create a fresh bucket; the old one fully expired. Delete +
+      // re-set so this guid moves to the tail of the insertion order
+      // (it's the freshest now).
+      _pendingPlayEffects.delete(g);
+      bucket = null;
+    }
+  }
+  if (!bucket) {
+    // New guid bucket — enforce the global guid cap FIRST so we never
+    // exceed _PENDING_MAX_GUIDS even transiently. Evict the oldest-
+    // inserted bucket (Map preserves insertion order).
+    while (_pendingPlayEffects.size >= _PENDING_MAX_GUIDS) {
+      const oldestGuid = _pendingPlayEffects.keys().next().value;
+      if (oldestGuid === undefined) break;
+      const evictedCount = _pendingPlayEffects.get(oldestGuid)?.length || 0;
+      _pendingPlayEffects.delete(oldestGuid);
+      _pendingStats.evictedMaxGuids += evictedCount;
+      // eslint-disable-next-line no-console
+      console.debug(
+        `[play-effect-vfx/queue] max-guids cap (${_PENDING_MAX_GUIDS}) — evicted ` +
+          `bucket for guid 0x${(oldestGuid >>> 0).toString(16)} ` +
+          `(${evictedCount} effect(s))`,
+      );
+    }
+    bucket = [];
+    _pendingPlayEffects.set(g, bucket);
+  }
+  bucket.push({ scriptId: scriptId >>> 0, speed, enqueuedMs: now });
+  _pendingStats.enqueued += 1;
+  // Per-guid cap — drop OLDEST on overflow.
+  if (bucket.length > _PENDING_MAX_PER_GUID) {
+    const overflow = bucket.length - _PENDING_MAX_PER_GUID;
+    bucket.splice(0, overflow);
+    _pendingStats.evictedPerGuid += overflow;
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[play-effect-vfx/queue] per-guid cap (${_PENDING_MAX_PER_GUID}) — dropped ` +
+        `${overflow} oldest effect(s) for guid 0x${g.toString(16)}`,
+    );
+  }
+  // eslint-disable-next-line no-console
+  console.debug(
+    `[play-effect-vfx/queue] enqueued scriptId=0x${(scriptId >>> 0).toString(16)} ` +
+      `for not-yet-spawned guid 0x${g.toString(16)} (depth ${bucket.length})`,
+  );
+}
+
+/**
+ * Replay (and remove) any PlayEffects queued for `guid` through the
+ * SAME dispatch path the live `playEffect` listener uses. Call this
+ * right after an entity is inserted into the entity map — see the
+ * entities.js wire-site (after `this.entityMap.set(guid, inst)`).
+ *
+ * Idempotent + cheap: a no-op (single Map.get) when nothing is queued
+ * for `guid`. Safe to call unconditionally regardless of the
+ * `?playEffectQueue=on` gate — if the gate is OFF nothing was ever
+ * enqueued, so this just returns. TTL-expired entries are pruned (and
+ * logged) before replay so a slow spawn doesn't replay stale flashes.
+ *
+ * `em` is the EntityManager (the spawn site passes `this`). It's
+ * accepted for signature symmetry + future direct use, but the replay
+ * path resolves the live scene through `window.liveScene3d` exactly as
+ * the live dispatch does, so the same resolve/spawn code runs for a
+ * replayed effect as for a live one.
+ *
+ * @param {object} em - the EntityManager (entities.js `this`)
+ * @param {number} guid
+ */
+export function drainPendingPlayEffects(em, guid) {
+  const g = guid >>> 0;
+  const bucket = _pendingPlayEffects.get(g);
+  if (!bucket || bucket.length === 0) {
+    if (bucket) _pendingPlayEffects.delete(g);
+    return; // common fast path — nothing queued.
+  }
+  // Remove the bucket up front so a re-entrant enqueue during replay
+  // (shouldn't happen — the entity now exists — but be safe) starts a
+  // fresh bucket instead of mutating the one we're iterating.
+  _pendingPlayEffects.delete(g);
+  const now = (typeof performance !== "undefined" && performance.now)
+    ? performance.now()
+    : Date.now();
+  // Drop anything that aged out while the entity was still un-spawned.
+  const live = _pruneExpired(g, bucket, now);
+  if (!live || live.length === 0) return;
+  for (const eff of live) {
+    _pendingStats.replayed += 1;
+    // Replay through the shared dispatch — identical to a live event.
+    _dispatchResolvedPlayEffect(g, eff.scriptId, eff.speed);
+  }
+}
+
 /**
  * Event handler for `playEffect` on the plugin event bus.
  *
@@ -1566,6 +1798,60 @@ function _onPlayEffect(evt) {
     return;
   }
 
+  // Track B2 (2026-06-09) — retail cell==0 / non-positional guard.
+  // Retail's CPhysicsObj::play_script anchors the script to the object's
+  // current cell; a PlayEffect broadcast with cell==0 (no spatial cell)
+  // is a non-positional cue that has no world anchor to attach a burst
+  // to. We must NOT queue such an effect (it would wait forever for a
+  // spatial target that will never make it positional). The wire bridge
+  // (index.html kind===30) does not currently forward a `cell` field, so
+  // this guard only fires when an explicit `detail.cell === 0` is present
+  // — forward-compatible + inert for today's 3-field payload. When it
+  // does fire we suppress (drop, logged) rather than queue; if the entity
+  // already exists the normal dispatch below would still place it, but a
+  // cell==0 broadcast by definition has no placement, so suppression is
+  // the correct retail-parity behavior.
+  if (Object.prototype.hasOwnProperty.call(detail, "cell")
+      && (detail.cell >>> 0) === 0) {
+    _pendingStats.suppressedCell0 += 1;
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[play-effect-vfx] suppressed non-positional (cell==0) PlayEffect ` +
+        `scriptId=0x${scriptId.toString(16)} target=0x${targetGuid.toString(16)}`,
+    );
+    return;
+  }
+
+  // Track B2 (2026-06-09) — queue-on-miss. If the target guid isn't in
+  // the entity map yet (PlayEffect raced ahead of ObjectCreate — common
+  // for portal-in, projectile birth, first-touch in a fresh PVS area),
+  // the dispatch below would resolve no placement and the effect would
+  // be silently dropped. Gated default-OFF behind `?playEffectQueue=on`
+  // (inert until the 1070 GPU eye-test): when ON we enqueue the effect
+  // keyed by guid so the entity's spawn site can replay it via
+  // `drainPendingPlayEffects`; when OFF we fall through to the original
+  // drop-on-miss behavior unchanged.
+  if (PLAY_EFFECT_QUEUE_ON && _liveInstanceForGuid(targetGuid) === null) {
+    _enqueuePlayEffect(targetGuid, scriptId, speed);
+    return;
+  }
+
+  _dispatchResolvedPlayEffect(targetGuid, scriptId, speed);
+}
+
+/**
+ * Shared dispatch body for a PlayEffect whose target is expected to be
+ * resolvable NOW — used by both the live listener (`_onPlayEffect`) and
+ * the queue replay (`drainPendingPlayEffects`). Extracted verbatim from
+ * the pre-B2 `_onPlayEffect` tail so a replayed effect runs the exact
+ * same resolve/spawn path (table check → placeholder → bounded real-VFX
+ * resolver) as a live one.
+ *
+ * @param {number} targetGuid
+ * @param {number} scriptId
+ * @param {number} speed
+ */
+function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed) {
   // Wave 17 / Phase 51: try the REAL retail VFX chain FIRST. If the
   // resolver completes (table → pick → physics-script → emitters),
   // skip the placeholder fallthrough for this event. On any miss the
@@ -2483,6 +2769,24 @@ export const __test = Object.freeze({
   isCriticalPlayScript: _isCriticalPlayScript,
   maxActiveBursts: _MAX_ACTIVE_BURSTS,
   maxPlayEffectEmitterGroups: _MAX_PLAYEFFECT_EMITTER_GROUPS,
+  // Track B2 (2026-06-09) — pending-effect queue introspection.
+  // `pendingStats` snapshots the enqueue/replay/evict counters;
+  // `pendingDepth(guid)` returns the queued count for one guid (or the
+  // total tracked-guid count when called with no arg); `enqueuePlayEffect`
+  // + `drainPendingPlayEffects` expose the two ends for a direct unit
+  // trace (no live wire event needed). `queueGateOn` reflects the flag.
+  pendingStats: () => Object.freeze({ ..._pendingStats }),
+  pendingDepth: (guid) => (guid === undefined
+    ? _pendingPlayEffects.size
+    : (_pendingPlayEffects.get(guid >>> 0)?.length || 0)),
+  enqueuePlayEffect: _enqueuePlayEffect,
+  drainPendingPlayEffects,
+  queueGateOn: PLAY_EFFECT_QUEUE_ON,
+  pendingCaps: Object.freeze({
+    maxPerGuid: _PENDING_MAX_PER_GUID,
+    maxGuids: _PENDING_MAX_GUIDS,
+    ttlMs: _PENDING_TTL_MS,
+  }),
 });
 
 // =====================================================================

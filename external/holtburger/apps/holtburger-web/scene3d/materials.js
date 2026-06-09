@@ -983,12 +983,19 @@ export function installPomShaderPatch(material, heightTexture, opts) {
 // over caller-local state, so the flag and its consumer always share
 // scope.
 export function readLightClampRetailFlag() {
+  // default-ON flipped per render-audit T1b (2026-06-09): retail linear-falloff
+  // + per-channel color clamp so colored torches stop washing to white; opt-out
+  // ?lightClamp=off (physical inverse-square), pending 1070 eye-test.
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("lightClamp");
-    return typeof v === "string" && v.toLowerCase() === "retail";
+    if (typeof v === "string") {
+      const lv = v.toLowerCase();
+      if (lv === "off" || lv === "physical") return false;
+    }
+    return true;
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -1154,6 +1161,32 @@ function _installLightClampShaderPatch(material) {
       "  " + reDirectCall + "\n" +
       "  vec3 _lcDiffDelta = reflectedLight.directDiffuse - _lcDiffBefore;\n" +
       "  vec3 _lcSpecDelta = reflectedLight.directSpecular - _lcSpecBefore;\n" +
+      "  // === R-JS-T2c (render audit G15): half-Lambert wrap ================\n" +
+      "  // Retail's point/spot diffuse uses a WRAPPED N.L instead of a raw\n" +
+      "  // saturate(dot(N,L)): the (n.l * 0.5 + 0.5) form softens the\n" +
+      "  // terminator so back-facing-ish surfaces fade gently rather than\n" +
+      "  // clamping hard to black (acclient.c:454608). Closes the LG2 TODO at\n" +
+      "  // lighting.js:1741-1743, which notes the wrap belongs in THIS shader,\n" +
+      "  // not in the lighting.js point/spot setup. three's stock RE_Direct\n" +
+      "  // already folded the raw saturate(dot(N,L)) into _lcDiffDelta, so we\n" +
+      "  // rescale that diffuse delta by wrapped/raw to convert it to the\n" +
+      "  // half-Lambert law. Specular is left on the physical dotNL (retail\n" +
+      "  // only wraps the diffuse term). Squaring (the classic Valve form)\n" +
+      "  // keeps the lit-side response near-identical while still lifting the\n" +
+      "  // dark side. Only ever runs under the retail lighting law (this whole\n" +
+      "  // patch is gated by readLightClampRetailFlag()).\n" +
+      "  float _hlRaw = saturate(dot(geometryNormal, directLight.direction));\n" +
+      "  float _hlWrapBase = dot(geometryNormal, directLight.direction) * 0.5 + 0.5;\n" +
+      "  float _hlWrapped = saturate(_hlWrapBase * _hlWrapBase);\n" +
+      "  // raw == 0 on the fully-lit-from-behind hemisphere; the stock delta\n" +
+      "  // is 0 there so a ratio can't recover the wrap. Reconstruct a soft\n" +
+      "  // Lambert term from the light color and the fragment albedo\n" +
+      "  // (diffuseColor.rgb is the in-scope BRDF albedo, see line ~884).\n" +
+      "  // Elsewhere just scale the existing delta by wrapped/raw.\n" +
+      "  vec3 _hlDiff = (_hlRaw > 1e-4)\n" +
+      "    ? _lcDiffDelta * (_hlWrapped / _hlRaw)\n" +
+      "    : directLight.color * (_hlWrapped * RECIPROCAL_PI) * diffuseColor.rgb;\n" +
+      "  _lcDiffDelta = _hlDiff;\n" +
       "  // Cap this light's per-channel contribution at the light's own\n" +
       "  // (attenuated) color so a colored light keeps its tone instead\n" +
       "  // of washing toward white. min() mirrors acclient.c:454616-454627.\n" +

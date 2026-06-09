@@ -1994,6 +1994,19 @@ pub struct EntitySpawnJs {
     cell: u32,
     is_server_managed: bool,
     name: String,
+    /// **Render audit G16 / rank-6 (2026-06-09).** OBJECT-level
+    /// translucency (`PhysicsDescriptionFlag::TRANSLUCENCY`): `0.0` =
+    /// opaque, `1.0` = fully invisible. Same JS field name
+    /// (`physicsTranslucency`) the wire `EntityUpdate` exposes, so the
+    /// synthetic-spawn injector applies it identically. NOTE: the staged
+    /// `*.spawns.jsonl` source does NOT carry physics translucency today
+    /// (it has no PropertyFloat block — only wcid/pos/orientation), and no
+    /// hydrated `PropertyFloat::Translucency` is reachable in this
+    /// pure-fetch path. Defaults to `0.0` (opaque) and is absorbed from an
+    /// optional JSONL `physicsTranslucency` field via `#[serde(default)]`
+    /// (mirrors the `qw/qx/qy/qz` future-proofing) so a dumper upgrade
+    /// lands without a schema break.
+    physics_translucency: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2051,6 +2064,14 @@ impl EntitySpawnJs {
     pub fn name(&self) -> String {
         self.name.clone()
     }
+    /// **Render audit G16 / rank-6 (2026-06-09).** OBJECT-level
+    /// translucency (`0.0` = opaque). `0.0` until the staged JSONL carries
+    /// a `physicsTranslucency` field. Same name the wire `EntityUpdate`
+    /// exposes so the synthetic injector treats both paths identically.
+    #[wasm_bindgen(getter, js_name = physicsTranslucency)]
+    pub fn physics_translucency(&self) -> f32 {
+        self.physics_translucency
+    }
 }
 
 /// Raw JSONL line shape for spawns. The orientation field in the
@@ -2091,6 +2112,11 @@ struct EntitySpawnJsonRaw {
     qy: Option<f32>,
     #[serde(default)]
     qz: Option<f32>,
+    /// Optional OBJECT-level physics translucency (`0.0` = opaque). Absent
+    /// in today's dumper; absorbed for future-proofing (G16 / rank-6,
+    /// 2026-06-09) the same way the optional quaternion components are.
+    #[serde(default, rename = "physicsTranslucency")]
+    physics_translucency: Option<f32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2138,6 +2164,9 @@ mod spawn_fetch {
         pub cell: u32,
         pub is_server_managed: bool,
         pub name: String,
+        /// OBJECT-level physics translucency (`0.0` = opaque). G16 /
+        /// rank-6 (2026-06-09). `0.0` until the JSONL source ships it.
+        pub physics_translucency: f32,
     }
 
     /// Set the base URL for `/spawns/...` fetches. Mirrors
@@ -2234,6 +2263,11 @@ mod spawn_fetch {
                 cell: raw.cell,
                 is_server_managed: raw.is_server_managed,
                 name: raw.name,
+                // G16 / rank-6 (2026-06-09): `0.0` (opaque) until the
+                // JSONL source ships `physicsTranslucency`. No hydrated
+                // PropertyFloat::Translucency is reachable in this
+                // pure-fetch path (see blocked[] in the track report).
+                physics_translucency: raw.physics_translucency.unwrap_or(0.0),
             });
         }
 
@@ -2294,6 +2328,10 @@ mod spawn_fetch {
             cell: rec.cell,
             is_server_managed: rec.is_server_managed,
             name: rec.name.clone(),
+            // G16 / rank-6 (2026-06-09): OBJECT-level translucency,
+            // `physicsTranslucency` to JS. `0.0` (opaque) for synthetic
+            // spawns until the JSONL source carries it.
+            physics_translucency: rec.physics_translucency,
         }
     }
 }
@@ -3892,8 +3930,8 @@ pub struct ModelMesh {
     /// `cell.polygons` key, which is unique only WITHIN a single source
     /// GfxObj / EnvCell. The aggregated single-mesh export paths
     /// (`triangulate_setup_model_at_frame` flattens every SetupModel part's
-    /// tris, and `append_environment_tris` flattens every cell's tris into
-    /// one `ModelMesh`) reset their polygon-id namespace per part / per
+    /// tris, and `append_environment_tris` flattens the SELECTED cell's tris
+    /// into one `ModelMesh`) reset their polygon-id namespace per part / per
     /// cell, so two different source polygons in different parts/cells can
     /// share the same `polygon_id`. For globally-unique per-tri provenance
     /// across a multi-part model, use the per-part export
@@ -11758,21 +11796,42 @@ fn append_environment_tris(
     tris: &mut Vec<Tri>,
     env: &holtburger_dat::file_type::Environment,
     surfaces: &[u32],
+    // G16 fix-1 (render audit, 2026-06-09): the selected CellStruct
+    // (`EnvCell.cell_structure` / StructIndex). An Environment record
+    // can hold MANY cellstructs (variant interiors keyed off the same
+    // env DID); each EnvCell references exactly ONE via its
+    // `cell_structure`. The physics path already selects the single
+    // cellstruct (`env.cells.get(&(envcell.cell_structure as u32))`,
+    // ~:13289); the visual triangulator used to iterate ALL of them, so
+    // multi-cellstruct dungeon Environments rendered the UNION of every
+    // variant (overlapping walls, stray geometry). Select the same one
+    // cellstruct here so the rendered mesh matches the physics mesh.
+    cell_structure: u16,
 ) {
     use holtburger_dat::graphics::Polygon;
-    let mut cell_keys: Vec<u32> = env.cells.keys().copied().collect();
-    cell_keys.sort_unstable();
-    for cell_key in cell_keys {
-        let cell = &env.cells[&cell_key];
+    // G16 fix-1: render ONLY the selected cellstruct — not the union of
+    // every cellstruct keyed in this Environment. Mirrors the physics
+    // path's `env.cells.get(&(envcell.cell_structure as u32))` at ~:13289.
+    let Some(cell) = env.cells.get(&(cell_structure as u32)) else {
+        return;
+    };
+    {
         if cell.vertex_array.vertices.is_empty() || cell.polygons.is_empty() {
-            continue;
+            return;
         }
+        // Two-sided / back-face constants — mirror the model path
+        // (`triangulate_model_per_part_buckets`, ~:4091-4093) and the
+        // graphics.rs Polygon parser (graphics.rs:167-169). `neg_uv_indices`
+        // is populated on read iff `sides_type == 0x2 && (stippling &
+        // NoNeg) == 0`.
+        const NO_POS: u8 = 0x04;
+        const NO_NEG: u8 = 0x08;
+        const CULL_CLOCKWISE: i32 = 0x2;
         let mut poly_ids: Vec<u16> = cell.polygons.keys().copied().collect();
         poly_ids.sort_unstable();
         for pid in poly_ids {
             let poly: &Polygon = &cell.polygons[&pid];
             if poly.vertex_ids.len() < 3 { continue; }
-            const NO_POS: u8 = 0x04;
             if (poly.stippling & NO_POS) != 0 { continue; }
 
             let surface_did = if poly.pos_surface >= 0
@@ -11783,8 +11842,34 @@ fn append_environment_tris(
                 0
             };
 
+            // G16 fix-2 (render audit, 2026-06-09): back-face (neg) surface
+            // resolution, ported from the model path (~:4123-4156). Interior
+            // EnvCell walls with a distinct back texture used to show the
+            // FRONT texture on both sides because the triangulator only read
+            // pos_surface/pos_uv. Resolve the neg surface the same way the
+            // model path does; emit a second (back) tri only when the back
+            // surface actually differs from the front (else a single
+            // DoubleSide draw is cheaper and the JS decoder applies it).
+            let has_back_face = poly.sides_type == CULL_CLOCKWISE
+                && (poly.stippling & NO_NEG) == 0
+                && !poly.neg_uv_indices.is_empty();
+            let neg_surface_did = if has_back_face
+                && poly.neg_surface >= 0
+                && (poly.neg_surface as usize) < surfaces.len()
+            {
+                surfaces[poly.neg_surface as usize] as u32
+            } else {
+                0
+            };
+            let emit_back_face = has_back_face
+                && neg_surface_did != 0
+                && neg_surface_did != surface_did;
+
             let mut ring_pos: Vec<[f32; 3]> = Vec::with_capacity(poly.vertex_ids.len());
             let mut ring_uv: Vec<[f32; 2]> = Vec::with_capacity(poly.vertex_ids.len());
+            // G16 fix-2: per-vertex back-face UVs (neg_uv_indices). Empty /
+            // [0,0] when this polygon has no distinct back face.
+            let mut ring_uv_neg: Vec<[f32; 2]> = Vec::with_capacity(poly.vertex_ids.len());
             let mut ok = true;
             for (i, &raw) in poly.vertex_ids.iter().enumerate() {
                 if raw < 0 { ok = false; break; }
@@ -11801,8 +11886,23 @@ fn append_environment_tris(
                 } else {
                     [vert.uvs[uv_idx].u, vert.uvs[uv_idx].v]
                 };
+                // G16 fix-2: back-face UV (matches model path ~:4182-4194).
+                let uv_neg = if emit_back_face && i < poly.neg_uv_indices.len() {
+                    let mut uv_neg_idx = poly.neg_uv_indices[i] as usize;
+                    if uv_neg_idx >= vert.uvs.len() {
+                        uv_neg_idx = 0;
+                    }
+                    if vert.uvs.is_empty() {
+                        [0.0, 0.0]
+                    } else {
+                        [vert.uvs[uv_neg_idx].u, vert.uvs[uv_neg_idx].v]
+                    }
+                } else {
+                    [0.0, 0.0]
+                };
                 ring_pos.push([vert.origin.x, vert.origin.y, vert.origin.z]);
                 ring_uv.push(uv);
+                ring_uv_neg.push(uv_neg);
             }
             if !ok || ring_pos.len() < 3 { continue; }
 
@@ -11824,10 +11924,28 @@ fn append_environment_tris(
                     // Environment (EnvCell) geometry stays two-sided (DoubleSide)
                     // — unchanged behaviour, never single-sided by the cull flag.
                     sides_type: 1,
-                    // E8: EnvCell polys only emit the positive (front) side.
+                    // E8: EnvCell polys emit the positive (front) side.
                     polygon_id: pid,
                     side_kind: SideKind::Positive,
                 });
+                // G16 fix-2: emit the distinct back face. Reversed winding
+                // (A, C, B) + flipped normals + neg-UV ring, mirroring the
+                // model path's back-face emission (~:4238-4256). The back
+                // surface gets its own tri so the JS MaterialCache paints
+                // each side with its own texture.
+                if emit_back_face {
+                    let neg = |v: [f32; 3]| [-v[0], -v[1], -v[2]];
+                    tris.push(Tri {
+                        pos: [a, c, b],
+                        uv: [ring_uv_neg[0], ring_uv_neg[i], ring_uv_neg[i - 1]],
+                        normals: [neg(face), neg(face), neg(face)],
+                        surface_did: neg_surface_did,
+                        sides_type: 1,
+                        // E8: back face → negative side of the SAME polygon.
+                        polygon_id: pid,
+                        side_kind: SideKind::Negative,
+                    });
+                }
             }
         }
     }
@@ -11843,6 +11961,11 @@ fn fetch_environment_mesh<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     environment_id: u32,
     surfaces: &[u32],
+    // G16 fix-1 (2026-06-09): the selected cellstruct (StructIndex) from
+    // the EnvCell that referenced this Environment. Passed straight
+    // through to `append_environment_tris` so only that one cellstruct is
+    // triangulated (not the union of every cellstruct in the record).
+    cell_structure: u16,
 ) -> ModelMesh {
     use holtburger_dat::file_type::Environment;
     use holtburger_dat::ResourceKey;
@@ -11855,7 +11978,7 @@ fn fetch_environment_mesh<S: holtburger_dat::ResourceSource + ?Sized>(
         Err(_) => return pack_model_mesh(Vec::new()),
     };
     let mut tris = Vec::new();
-    append_environment_tris(&mut tris, &env, surfaces);
+    append_environment_tris(&mut tris, &env, surfaces, cell_structure);
     pack_model_mesh(tris)
 }
 
@@ -12056,7 +12179,9 @@ pub fn holtburg_envcell_synthetic_textured_mesh_surface() -> u32 {
         .map(holtburger_dat::file_type::env_cell::surface_did_for_envcell_index)
         .collect();
     let mut tris = Vec::new();
-    append_environment_tris(&mut tris, &env, &surfaces);
+    // G16 fix-1: the fixture's single CellStruct is keyed `0`
+    // (`cell_struct_id = 0` above), so select cellstruct 0.
+    append_environment_tris(&mut tris, &env, &surfaces, 0);
     let mesh = pack_model_mesh(tris);
     mesh.surfaces.first().copied().unwrap_or(0)
 }
@@ -13134,12 +13259,20 @@ pub async fn fetch_env_cells_in_landblock(
         })?;
     }
 
-    let mut env_mesh_cache: std::collections::HashMap<u32, ModelMesh> =
+    // G16 fix-1 (render audit, 2026-06-09): key the visual-mesh cache by
+    // (env_did, cell_structure) — NOT env_did alone. An Environment record
+    // holds many cellstructs; sibling EnvCells that share the same env DID
+    // but select DIFFERENT cellstructs must each get their own triangulated
+    // mesh. Keying by env_did alone cached the first-seen cellstruct and
+    // wrongly reused it for every sibling (the whole point of the
+    // cellstruct selection below).
+    let mut env_mesh_cache: std::collections::HashMap<(u32, u16), ModelMesh> =
         std::collections::HashMap::new();
 
     let mut out: Vec<EnvCellPlacement> = Vec::with_capacity(cells_raw.len());
     for envcell in cells_raw {
         let env_did = 0x0D00_0000 | (envcell.environment_id as u32);
+        let cell_structure = envcell.cell_structure;
         // EnvCell wire format stores surface table as u16 indices; OR
         // each with the Surface namespace prefix (0x08) to recover the
         // full DID. Mirrors ACE `DatLoader/FileTypes/EnvCell.cs:50`.
@@ -13150,9 +13283,9 @@ pub async fn fetch_env_cells_in_landblock(
             .map(holtburger_dat::file_type::env_cell::surface_did_for_envcell_index)
             .collect();
         let mesh = env_mesh_cache
-            .entry(env_did)
+            .entry((env_did, cell_structure))
             .or_insert_with(|| {
-                fetch_environment_mesh(source.as_ref(), env_did, &surfaces)
+                fetch_environment_mesh(source.as_ref(), env_did, &surfaces, cell_structure)
             })
             .clone_for_take();
 
@@ -17776,6 +17909,21 @@ pub struct EntityUpdate {
     /// `kind=5 MOTION`; **`1.0`** (no scaling — fail-soft) for every
     /// other kind and when the wire carries no forward speed.
     motion_speed: f32,
+    /// **Render audit G16 / rank-6 (2026-06-09).** OBJECT-level
+    /// translucency from `PhysicsDescriptionFlag::TRANSLUCENCY` (0x040000),
+    /// decoded at `description.rs:1043-1050` (the wire `ObjectDescription
+    /// Data.translucency: Option<f32>`) and hydrated into
+    /// `PropertyFloat::Translucency` (`hydration.rs:241-243`). ACE
+    /// convention: `0.0` = fully opaque, `1.0` = fully invisible — the
+    /// renderer applies `opacity = 1 - physicsTranslucency` to the WHOLE
+    /// object (its `THREE.Object3D`), distinct from the per-SURFACE
+    /// `translucency` baked into individual `SurfaceMaterial`s. Carried on
+    /// `kind=SPAWN` (the ObjectCreate that ships the PhysicsDesc);
+    /// **`0.0`** (opaque) for every other kind and when the wire omits the
+    /// TRANSLUCENCY flag. Exposed to JS as `physicsTranslucency` — the
+    /// distinct name keeps it from colliding with the existing
+    /// per-surface `translucency` field entities.js already consumes.
+    physics_translucency: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -17993,6 +18141,17 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = motionSpeed)]
     pub fn motion_speed(&self) -> f32 {
         self.motion_speed
+    }
+
+    /// **Render audit G16 / rank-6 (2026-06-09).** OBJECT-level
+    /// translucency (`PhysicsDescriptionFlag::TRANSLUCENCY`, 0x040000):
+    /// `0.0` = opaque, `1.0` = fully invisible. The renderer applies
+    /// `opacity = 1 - physicsTranslucency` to the whole `THREE.Object3D`.
+    /// Distinct from the per-SURFACE `translucency` field; carried on
+    /// `kind=SPAWN` only, `0.0` (opaque) otherwise.
+    #[wasm_bindgen(getter, js_name = physicsTranslucency)]
+    pub fn physics_translucency(&self) -> f32 {
+        self.physics_translucency
     }
 
     /// Velocity-hint x component (m/s, world frame). Meaningful only
@@ -29798,6 +29957,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                                             });
                                         }
                                     }
@@ -30914,6 +31074,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -31049,6 +31210,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                                 });
                             }
                         }
@@ -31099,6 +31261,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -31463,6 +31626,19 @@ async fn recv_loop(
                                     // A1 (2026-05-29): Spawn carries no
                                     // playback speed — identity (no scaling).
                                     motion_speed: 1.0,
+                                    // Render audit G16 / rank-6 (2026-06-09):
+                                    // OBJECT-level translucency from the wire
+                                    // PhysicsDesc (`description.rs:1043-1050`).
+                                    // `data.translucency` is the same
+                                    // `Option<f32>` ODD field that feeds the
+                                    // `PropertyFloat::Translucency` hydration
+                                    // (`hydration.rs:241-243`); source it here
+                                    // exactly the way `obj_scale` above does.
+                                    // `0.0` (opaque) when the TRANSLUCENCY flag
+                                    // is absent.
+                                    physics_translucency: data
+                                        .translucency
+                                        .unwrap_or(0.0),
                                 });
                                 if is_local_player {
                                     local_player_spawn_emitted = true;
@@ -31629,6 +31805,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                             });
                         }
                         GameMessage::ObjDescEvent(data) => {
@@ -31707,6 +31884,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                             });
                         }
                         GameMessage::ParentEvent(data) => {
@@ -31763,6 +31941,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                             });
                         }
                         GameMessage::ObjectDelete(data) => {
@@ -31802,6 +31981,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
@@ -31953,6 +32133,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): per-motion playback speed
                                 // (`forward_speed`) → JS anim framerate scale.
                                 motion_speed: motion_speed_f32,
+                                physics_translucency: 0.0,
                             });
                             // Wave 2 (2026-06-08) — MAIN-PATH action command.
                             // The `commands` list carries the one-shot
@@ -32045,6 +32226,7 @@ async fn recv_loop(
                                     obj_desc_flags: 0,
                                     weenie_flags: 0,
                                     motion_speed: action_speed,
+                                    physics_translucency: 0.0,
                                 });
                             }
                             // Multi-action queue (2026-06-06, approach B):
@@ -32241,6 +32423,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                             });
                         }
                         // Phase 4 step 4: chat-bearing surfaces. Each
@@ -36916,6 +37099,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                                 });
                             }
                         }
@@ -37111,6 +37295,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                                     });
                                 } else if !was_airborne_pre_tick
                                     && w.player.is_airborne
@@ -37178,6 +37363,7 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
+                                physics_translucency: 0.0,
                                     });
                                 }
                                 // Phase 4 step 3.6 diagnostic — log pose

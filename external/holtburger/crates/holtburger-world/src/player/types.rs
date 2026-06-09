@@ -138,18 +138,180 @@ pub fn expand_motion_command_low16(low16: u16) -> Option<u32> {
         // MagicPowerUp01..MagicPowerUp10 — blocked. War-magic cast windups,
         // class 0x10000000. ACE `MotionCommand.cs:118-127`.
         0x006F..=0x0078 => Some(0x1000_0000 | u32::from(low16)),
-        // DoubleSlashLow..MagicPowerUp10Purple — multi-strike attack chains
+        // LogOut..MagicPowerUp10Purple — LogOut + multi-strike attack chains
         // + colored magic powerups, class 0x10000000. ACE
-        // `MotionCommand.cs:295-316` (DoubleSlashLow 0x1000011f ..
-        // MagicPowerUp10Purple 0x10000134 — incl. MagicPowerUp08/09/10Purple
-        // 0x10000132/133/134, all verified class 0x10). Helper 0x13000135
-        // sits just past this range (class 0x13) and stays EXCLUDED. The
-        // jump gate's narrower `0x0128..=0x0131` blocked sub-range is a
-        // subset of this.
-        0x011F..=0x0134 => Some(0x1000_0000 | u32::from(low16)),
+        // `MotionCommand.cs:294-316` (LogOut 0x1000011e, DoubleSlashLow
+        // 0x1000011f .. MagicPowerUp10Purple 0x10000134 — incl.
+        // MagicPowerUp08/09/10Purple 0x10000132/133/134, all verified class
+        // 0x10). Helper 0x13000135 sits just past this range (class 0x13) and
+        // stays EXCLUDED. The jump gate's narrower `0x0128..=0x0131` blocked
+        // sub-range is a subset of this.
+        //
+        // Motion-dispatch audit A9 (2026-06-09): the range start was lowered
+        // from 0x11F to 0x11E to surface LogOut (0x1000011e) — a lifecycle
+        // one-shot that is genuinely class 0x10 (verified ACE
+        // `MotionCommand.cs:294`). TradePanel (0x900011d, class 0x09) sits one
+        // below at 0x11D so the lowered range start does not pick up a non-0x10
+        // command; MeditateState (0x4300011c) and the panel/state commands
+        // below it stay excluded.
+        0x011E..=0x0134 => Some(0x1000_0000 | u32::from(low16)),
+        // ---- Motion-dispatch audit A2 (2026-06-09): social /emote
+        // one-shot gestures. These are the single highest-prominence
+        // motion-dispatch gap — `/bow`, `/wave`, `/cheer`, `/salute`,
+        // `/dance`, … previously expanded to `None` here and were dropped
+        // before reaching JS, so NO emote ever animated. Expanding them to
+        // their full 32-bit `MotionCommand` lets the inbound `UpdateMotion`
+        // be surfaced ONCE in Rust and shipped to JS; the renderer's
+        // KIND_MOTION_ACTION path plays the full-32-bit key via `_tryPlayLink`
+        // as a LoopOnce overlay (no JS classify change needed) as long as
+        // (a) the expander emits the correct full key — done here — and
+        // (b) `is_action_motion_command` returns true for class 0x13/0x12
+        // (done below).
+        //
+        // ChatEmote class `0x13000000` — social emotes. Every low-16 here is
+        // a one-shot gesture, verified against ACE
+        // `Source/ACE.Entity/Enum/MotionCommand.cs` and cross-checked vs
+        // chorizite / melt / WeenieViewer / ace-server (all five agree).
+        // The corresponding *held* states (ShakeFistState … DrudgeDanceState)
+        // are class `0x43000000`, NOT `0x13` — so widening is_action for
+        // class 0x13 never converts a looping held state into a one-shot.
+        0x004C => Some(0x1300_004C), // Cheer
+        // ShakeFist (0x79) … Winded (0x9A) — a single contiguous, exclusively
+        // class-0x13 span (ACE `MotionCommand.cs:128-161`). YMCA (0x9B,
+        // class 0x12) sits just ABOVE 0x9A, so this range is split correctly
+        // and never blanket-covers a mixed class.
+        0x0079..=0x009A => Some(0x1300_0000 | u32::from(low16)),
+        // Pray / Mock / Teapot — contiguous class-0x13 trio. Bounded by
+        // IncreasePowerSetting (0xC9, class 0x09) below and SpecialAttack1
+        // (0xCD, class 0x10) above (ACE `MotionCommand.cs:208-212`).
+        0x00CA..=0x00CC => Some(0x1300_0000 | u32::from(low16)),
+        // WarmHands — isolated class-0x13 (ACE `MotionCommand.cs:289`).
+        0x0119 => Some(0x1300_0119), // WarmHands
+        // Helper — isolated class-0x13 (ACE `MotionCommand.cs:317`). Sits one
+        // past the swing range above (which ends at MagicPowerUp10Purple
+        // 0x134, class 0x10) — must be an explicit arm so its 0x13 class is
+        // not fabricated as 0x10.
+        0x0135 => Some(0x1300_0135), // Helper
+        // NudgeLeft (0x14A) … DrudgeDance (0x151) — contiguous class-0x13
+        // span (ACE `MotionCommand.cs:338-345`): NudgeLeft/NudgeRight,
+        // PointLeft/PointRight/PointDown, Knock, ScanHorizon, DrudgeDance.
+        // Bounded by AtEaseState (0x149, class 0x43) below and LifestoneRecall
+        // (0x153, class 0x10) above; HaveASeat (0x152, also 0x13) is just past
+        // the audit-A2 scope and intentionally not surfaced here.
+        0x014A..=0x0151 => Some(0x1300_0000 | u32::from(low16)),
+        // Flatulence-class `0x12000000` — one-shot gestures sharing the
+        // ChatEmote-adjacent class. Audit A2 surfaces YMCA + Flatulence; both
+        // are genuine one-shots (no 0x12-class held variant exists).
+        0x009B => Some(0x1200_009B), // YMCA
+        0x00D4 => Some(0x1200_00D4), // Flatulence
         // Jump — set explicitly by begin_jump; not normally
         // round-tripped via UpdateMotion.
         0x003B => Some(0x2500_003B), // Jump
+        // ---- Motion-dispatch audit A9 (2026-06-09): remaining dropped
+        // one-shots whose TRUE class is 0x10 (attack/lifecycle/recall/use),
+        // plus the two batch-2 emote omissions (HaveASeat 0x13, Demonet 0x12).
+        // Every low-16 + class below is verified against ACE
+        // `Source/ACE.Entity/Enum/MotionCommand.cs`. These ride the JS
+        // KIND_MOTION_ACTION path via `_tryPlayLink` once the expander emits
+        // the full key (here) AND `is_action_motion_command` returns true —
+        // which it already does for all of class 0x10 and (batch-2) all of
+        // 0x13/0x12. Audit A7 (2026-06-09) additionally surfaces the class-0x40
+        // USE one-shots CastSpell (0x400000d3) and UseMagicStaff/Wand
+        // (0x400000e0/e1) via dedicated 0x40 arms below + a SURGICAL is_action
+        // 0x40 extension. The TwitchSubstates (0x400000e4..e6) remain EXCLUDED:
+        // they are HELD substates (see the Blink/Bite arm comment), not
+        // one-shots. The match is first-match; each new arm sits in a genuine
+        // gap between existing arms (no overlap / unreachable pattern).
+        //
+        // Lifecycle one-shots EnterGame..ExitPortal — contiguous class 0x10
+        // (ACE `MotionCommand.cs:163-168`): EnterGame 0x1000009c, ExitGame,
+        // OnCreation, OnDestruction, EnterPortal, ExitPortal 0x100000a1.
+        // Bounded by Winded (0x9a, 0x13) / YMCA (0x9b, 0x12) below and Cancel
+        // (0x800000a2, class 0x08) above.
+        0x009C..=0x00A1 => Some(0x1000_0000 | u32::from(low16)),
+        // Monster specials SpecialAttack1-3 + MissileAttack1-3 — contiguous
+        // class 0x10 (ACE `MotionCommand.cs:212-217`): SpecialAttack1
+        // 0x100000cd .. MissileAttack3 0x100000d2. Bounded by Teapot (0xcc,
+        // 0x13) below and CastSpell (0x400000d3, class 0x40) above, so the
+        // range stops AT 0xd2 and does NOT fabricate a 0x10 class for CastSpell
+        // (CastSpell gets its own 0x40 arm below). Flatulence (0xd4, 0x12) is
+        // handled by its own arm.
+        0x00CD..=0x00D2 => Some(0x1000_0000 | u32::from(low16)),
+        // ---- Motion-dispatch audit A7 (2026-06-09): class-0x40 USE one-shots.
+        // CastSpell — the generic cast-END clip, class 0x40 (ACE
+        // `MotionCommand.cs:218`, 0x400000d3). It is a genuine ONE-SHOT: ACE
+        // plays it via `new Motion(this, MotionCommand.CastSpell, speed)` with a
+        // finite `MotionTable.GetAnimationLength(...)` (Monster_Magic.cs:215,223)
+        // — a clip, not a held substate. It rides the JS KIND_MOTION_ACTION
+        // overlay once the expander emits the full key (here) AND
+        // `is_action_motion_command` admits its low-16 (extended below). Sits in
+        // the gap between MissileAttack3 (0xd2, handled above) and Flatulence
+        // (0xd4, class 0x12, its own arm), so this explicit single arm has no
+        // overlap.
+        0x00D3 => Some(0x4000_00D3), // CastSpell (one-shot cast-end clip)
+        // Demonet — isolated class 0x12 one-shot (ACE `MotionCommand.cs:230`,
+        // 0x120000df). Batch-2 omission; surfaced here. Surrounded by panel
+        // commands (class 0x09) and 0x40-class use/twitch commands, so it must
+        // be its own explicit arm.
+        0x00DF => Some(0x1200_00DF), // Demonet
+        // UseMagicStaff / UseMagicWand — contiguous class-0x40 USE one-shots
+        // (ACE `MotionCommand.cs:231-232`): UseMagicStaff 0x400000e0,
+        // UseMagicWand 0x400000e1. These are item-use gesture clips of the same
+        // family as the Reload..JumpCharging use range already surfaced at
+        // 0x16..=0x1d — finite one-shots, NOT held substates. Bounded by Demonet
+        // (0xdf, class 0x12, its own arm above) below and Blink (0x100000e2,
+        // class 0x10) above, so this exact 2-wide 0x40 arm has no overlap. The
+        // is_action 0x40 arm is extended below to admit 0xe0/0xe1.
+        0x00E0..=0x00E1 => Some(0x4000_0000 | u32::from(low16)),
+        // Blink / Bite — contiguous class 0x10 monster attacks (ACE
+        // `MotionCommand.cs:233-234`): Blink 0x100000e2, Bite 0x100000e3.
+        // Bounded by UseMagicWand (0x400000e1, class 0x40 — own arm above) below
+        // and TwitchSubstate1 (0x400000e4, class 0x40 — HELD substate, EXCLUDED)
+        // above, so this is a 2-wide island of genuine 0x10 attacks. The
+        // TwitchSubstate1-3 (0xe4..e6) commands are NOT surfaced: their name
+        // ("Sub-state") + class 0x40 mark them as the entity's persistent,
+        // continuously-looping HELD `substate` field (acclient `MotionState`
+        // `curr_state->substate`), NOT one-shot overlays. Surfacing a held
+        // substate onto the KIND_MOTION_ACTION path is exactly the C1/B9 gait
+        // regression the is_action guard prevents, so they stay None.
+        0x00E2..=0x00E3 => Some(0x1000_0000 | u32::from(low16)),
+        // SkillHealSelf / SkillHealOther — contiguous class 0x10 use one-shots
+        // (ACE `MotionCommand.cs:277,279`): SkillHealSelf 0x1000010e,
+        // SkillHealOther 0x1000010f. SelectSelf (0x900010d, class 0x09) sits
+        // below and PreviousMonster (0x9000110, class 0x09) above, so the range
+        // is exactly these two.
+        0x010E..=0x010F => Some(0x1000_0000 | u32::from(low16)),
+        // HouseRecall — isolated class 0x10 (ACE `MotionCommand.cs:322`,
+        // 0x1000013a). Sits above the Pickup5..Pickup20 block (0x136..0x139,
+        // class 0x40) and below AtlatlCombat (0x8000013b, class 0x80), so it
+        // must be its own arm.
+        0x013A => Some(0x1000_013A), // HouseRecall
+        // HaveASeat — isolated class 0x13 one-shot (ACE `MotionCommand.cs:346`,
+        // 0x13000152). Batch-2 omission (the 0x14A..=0x151 emote span stops one
+        // below at DrudgeDance 0x151). LifestoneRecall (0x153, 0x10) sits just
+        // above, so HaveASeat needs its own explicit 0x13 arm.
+        0x0152 => Some(0x1300_0152), // HaveASeat
+        // LifestoneRecall — isolated class 0x10 (ACE `MotionCommand.cs:347`,
+        // 0x10000153). Bounded by HaveASeat (0x152, 0x13) below and the panel
+        // commands (class 0x09) above.
+        0x0153 => Some(0x1000_0153), // LifestoneRecall
+        // Fishing / MarketplaceRecall / EnterPKLite — contiguous class 0x10
+        // (ACE `MotionCommand.cs:365-367`): Fishing 0x10000165,
+        // MarketplaceRecall 0x10000166, EnterPKLite 0x10000167. Bounded by
+        // MuteOnLosingFocus (0x9000164, class 0x09) below and AllegianceChat
+        // (0x9000168, class 0x09) above.
+        0x0165..=0x0167 => Some(0x1000_0000 | u32::from(low16)),
+        // AllegianceHometownRecall..PunchSlowLow — one contiguous class 0x10
+        // span (ACE `MotionCommand.cs:377-412`): AllegianceHometownRecall
+        // 0x10000171, PKArenaRecall 0x10000172, the offhand/extended melee
+        // block OffhandSlashHigh 0x10000173 .. AttackLow6 0x1000018e, and the
+        // monster Punch block PunchFastHigh 0x1000018f .. PunchSlowLow
+        // 0x10000194 — every entry in 0x171..=0x194 is class 0x10 with no gap
+        // or other class. Bounded by IssueSlashCommand (0x9000170, class 0x09)
+        // below and OffhandPunchFastHigh (0x10000195, class 0x10 — out of this
+        // batch's scope) above. The offhand attacks AND Attack4-6 are real
+        // melee swings; Punch1-6 are monster unarmed attacks.
+        0x0171..=0x0194 => Some(0x1000_0000 | u32::from(low16)),
         _ => None,
     }
 }
@@ -167,29 +329,59 @@ pub fn expand_motion_command_low16(low16: u16) -> Option<u32> {
 /// * Class `0x10000000` — attack swings, magic windups, and multi-strike
 ///   chains. Every member of this class in ACE `MotionCommand.cs` is a
 ///   genuine one-shot action, so the whole class qualifies (B10).
+/// * Class `0x13000000` — social /emote ChatEmote one-shot gestures
+///   (Cheer, ShakeFist..Winded, Pray/Mock/Teapot, WarmHands, Helper,
+///   NudgeLeft..DrudgeDance, …). **Motion-dispatch audit A2 (2026-06-09):**
+///   every member of this class is a one-shot gesture played ONCE as an
+///   overlay, so the whole class qualifies. This is what routes /emote onto
+///   the KIND_MOTION_ACTION overlay path instead of dropping it on the
+///   locomotion path. The held/looping emote *states* are class
+///   `0x43000000` (ShakeFistState … DrudgeDanceState), NOT `0x13`, so
+///   widening here never makes a held STATE into a one-shot — the C1/B9
+///   gait-regression guard holds.
+/// * Class `0x12000000` — YMCA / Flatulence (and friends) one-shot
+///   gestures (audit A2). Same reasoning as 0x13: genuine one-shots, no
+///   0x12-class held state exists.
 /// * Class `0x40000000` — accepted ONLY for the narrow Reload..JumpCharging
 ///   USE range (low-16 `0x16..=0x1D`, which includes Eat `0x4000001A` /
-///   Drink `0x4000001B` — B6). The `0x40` class ALSO carries non-action
-///   STATE commands (Stop `0x40000004`, Fallen `0x40000008`, Dead
-///   `0x40000011`, Falling `0x40000015`) and the aim/magic-gesture
-///   substates (`0x4000001E..=0x40000039`) — none of which are surfaced
-///   as one-shot actions here.
+///   Drink `0x4000001B` — B6) plus the audit-A7 (2026-06-09) class-0x40 USE
+///   one-shots CastSpell (`0x400000D3` — the cast-END clip, played by ACE as
+///   a finite-length `Motion`) and UseMagicStaff/UseMagicWand
+///   (`0x400000E0`/`0x400000E1` — item-use gesture clips). The `0x40` class
+///   ALSO carries non-action STATE commands (Stop `0x40000004`, Fallen
+///   `0x40000008`, Dead `0x40000011`, Falling `0x40000015`), the
+///   aim/magic-gesture substates (`0x4000001E..=0x40000039`), and the HELD
+///   `TwitchSubstate1..3` (`0x400000E4..=0x400000E6` — the entity's
+///   continuously-looping persistent `substate`, named "Sub-state" for that
+///   reason) — none of which are surfaced as one-shot actions here.
 ///
 /// Everything else (locomotion `0x44/0x45`, stance `0x41` Ready/Crouch/
-/// Sitting/Sleeping, lifecycle `0x13`, Jump `0x25`, …) is NOT an action.
+/// Sitting/Sleeping, held emote/lifecycle STATE `0x43`, Jump `0x25`, …) is
+/// NOT an action.
 ///
 /// Verified against ACE `Source/ACE.Entity/Enum/MotionCommand.cs` (Stop
 /// 0x40000004, Fallen 0x40000008, Dead 0x40000011, Falling 0x40000015,
-/// Eat 0x4000001a, Drink 0x4000001b, Ready 0x41000003).
+/// Eat 0x4000001a, Drink 0x4000001b, Ready 0x41000003, Cheer 0x1300004c,
+/// YMCA 0x1200009b, ShakeFistState 0x430000ea).
 #[inline]
 pub fn is_action_motion_command(full: u32) -> bool {
     match full & 0xFF00_0000 {
         // Attack / magic windup / multi-strike — all genuine actions.
         0x1000_0000 => true,
+        // Motion-dispatch audit A2 (2026-06-09): social /emote one-shot
+        // gestures. The whole class is one-shots; the LOOPING held variants
+        // are class 0x43, not 0x13/0x12, so nothing that should loop is
+        // wrongly made a one-shot.
+        0x1300_0000 => true, // ChatEmote (Cheer, Wave, Bow, Salute, Dance, …)
+        0x1200_0000 => true, // YMCA / Flatulence one-shots
         // Use class: ONLY the narrow Reload..JumpCharging use range
-        // (Eat / Drink live here). Excludes Stop/Fallen/Dead/Falling and
-        // the aim/magic-gesture substates that share the 0x40 class.
-        0x4000_0000 => matches!(full & 0x0000_FFFF, 0x0016..=0x001D),
+        // (Eat / Drink live here) plus the audit-A7 class-0x40 USE one-shots
+        // CastSpell (0xd3) and UseMagicStaff/Wand (0xe0/0xe1). Excludes
+        // Stop/Fallen/Dead/Falling, the aim/magic-gesture substates
+        // (0x1e..=0x39), and the HELD TwitchSubstate1-3 (0xe4..=0xe6) — making a
+        // held substate a one-shot is the C1/B9 gait regression this guard
+        // prevents, so they are deliberately NOT in this match.
+        0x4000_0000 => matches!(full & 0x0000_FFFF, 0x0016..=0x001D | 0x00D3 | 0x00E0 | 0x00E1),
         _ => false,
     }
 }
@@ -382,18 +574,24 @@ mod expand_motion_command_low16_tests {
     }
 
     /// Wave 2 (2026-06-08, review FIX 4a) — MagicPowerUp08/09/10Purple
-    /// (0x132/133/134) now expand to their class-0x10 attack values, and
-    /// Helper (0x135, class 0x13) stays a miss so its wrong class is never
-    /// fabricated.
+    /// (0x132/133/134) expand to their class-0x10 attack values. The class-10
+    /// swing range stops AT 0x134, so Helper (0x135) is never fabricated with
+    /// the wrong 0x10 prefix.
+    ///
+    /// Motion-dispatch audit A2 (2026-06-09): Helper is now surfaced with its
+    /// CORRECT class-0x13 key (0x13000135) by its own explicit arm — it is no
+    /// longer a miss, but it is still NOT class 0x10. The original intent of
+    /// this test (the swing-range arm must not bleed onto 0x135) is preserved.
     #[test]
-    fn purple_powerups_08_to_10_expand_attack_class_helper_excluded() {
+    fn purple_powerups_08_to_10_attack_class_helper_is_0x13_not_0x10() {
         assert_eq!(expand_motion_command_low16(0x132), Some(0x1000_0132));
         assert_eq!(expand_motion_command_low16(0x133), Some(0x1000_0133));
         assert_eq!(expand_motion_command_low16(0x134), Some(0x1000_0134));
         assert_eq!(
             expand_motion_command_low16(0x135),
-            None,
-            "Helper (0x13000135) is class 0x13, not 0x10 — must stay excluded"
+            Some(0x1300_0135),
+            "Helper (0x13000135) is class 0x13 — surfaced by audit A2, must NOT \
+             be the 0x10 swing class that ends one below it at 0x134"
         );
     }
 
@@ -428,6 +626,452 @@ mod expand_motion_command_low16_tests {
         assert!(!is_action_motion_command(0x4400_0007), "RunForward");
         assert!(!is_action_motion_command(0x4500_0005), "WalkForward");
         assert!(!is_action_motion_command(0x2500_003B), "Jump");
+    }
+
+    /// Motion-dispatch audit A2 (2026-06-09) — every social /emote low-16
+    /// expands to its exact full 32-bit `MotionCommand` key, with the
+    /// correct class prefix (0x13 for ChatEmote, 0x12 for YMCA/Flatulence).
+    /// Values cross-checked against ACE / chorizite / melt / WeenieViewer /
+    /// ace-server `MotionCommand.cs` (all five agree).
+    #[test]
+    fn emote_low16s_expand_to_exact_full_keys() {
+        // Cheer (isolated, just below the swing range).
+        assert_eq!(expand_motion_command_low16(0x4C), Some(0x1300_004C), "Cheer");
+        // ShakeFist..Winded contiguous class-0x13 span (endpoints + interior).
+        assert_eq!(
+            expand_motion_command_low16(0x79),
+            Some(0x1300_0079),
+            "ShakeFist (range start)"
+        );
+        assert_eq!(expand_motion_command_low16(0x7D), Some(0x1300_007D), "BowDeep");
+        assert_eq!(expand_motion_command_low16(0x87), Some(0x1300_0087), "Wave");
+        assert_eq!(expand_motion_command_low16(0x8A), Some(0x1300_008A), "Salute");
+        assert_eq!(
+            expand_motion_command_low16(0x9A),
+            Some(0x1300_009A),
+            "Winded (range end)"
+        );
+        // YMCA (0x9B) is class 0x12 and sits just ABOVE the 0x13 range — the
+        // range split is correct, NOT 0x1300009B.
+        assert_eq!(
+            expand_motion_command_low16(0x9B),
+            Some(0x1200_009B),
+            "YMCA must be class 0x12, not 0x13"
+        );
+        // Pray / Mock / Teapot trio.
+        assert_eq!(expand_motion_command_low16(0xCA), Some(0x1300_00CA), "Pray");
+        assert_eq!(expand_motion_command_low16(0xCB), Some(0x1300_00CB), "Mock");
+        assert_eq!(expand_motion_command_low16(0xCC), Some(0x1300_00CC), "Teapot");
+        // Flatulence — isolated class 0x12.
+        assert_eq!(
+            expand_motion_command_low16(0xD4),
+            Some(0x1200_00D4),
+            "Flatulence must be class 0x12"
+        );
+        // WarmHands / Helper — isolated class-0x13. Helper (0x135) sits one
+        // past the class-0x10 swing range that ends at 0x134.
+        assert_eq!(
+            expand_motion_command_low16(0x119),
+            Some(0x1300_0119),
+            "WarmHands"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x135),
+            Some(0x1300_0135),
+            "Helper must be class 0x13, not the 0x10 swing class below it"
+        );
+        // NudgeLeft..DrudgeDance contiguous class-0x13 span (endpoints +
+        // interior).
+        assert_eq!(
+            expand_motion_command_low16(0x14A),
+            Some(0x1300_014A),
+            "NudgeLeft (range start)"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x14C),
+            Some(0x1300_014C),
+            "PointLeft"
+        );
+        assert_eq!(expand_motion_command_low16(0x14F), Some(0x1300_014F), "Knock");
+        assert_eq!(
+            expand_motion_command_low16(0x150),
+            Some(0x1300_0150),
+            "ScanHorizon"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x151),
+            Some(0x1300_0151),
+            "DrudgeDance (range end)"
+        );
+    }
+
+    /// Motion-dispatch audit A2 (2026-06-09) — each newly-surfaced emote
+    /// full key is an action, so the renderer routes it onto the
+    /// KIND_MOTION_ACTION one-shot overlay path.
+    #[test]
+    fn emote_full_keys_are_actions() {
+        for full in [
+            0x1300_004C, // Cheer
+            0x1300_0079, // ShakeFist
+            0x1300_0087, // Wave
+            0x1300_008A, // Salute
+            0x1300_009A, // Winded
+            0x1300_00CA, // Pray
+            0x1300_00CC, // Teapot
+            0x1300_0119, // WarmHands
+            0x1300_0135, // Helper
+            0x1300_014A, // NudgeLeft
+            0x1300_0151, // DrudgeDance
+            0x1200_009B, // YMCA
+            0x1200_00D4, // Flatulence
+        ] {
+            assert!(
+                is_action_motion_command(full),
+                "{full:#010x} (emote) must be an action so it routes onto the one-shot overlay"
+            );
+        }
+    }
+
+    /// Motion-dispatch audit A2 (2026-06-09) — regression guard. The held
+    /// emote STATE commands are class 0x43 (NOT 0x13/0x12), so widening
+    /// is_action must NOT classify any of them as a one-shot — otherwise a
+    /// looping held pose would be played once and snap back. Also confirm
+    /// plain locomotion is untouched.
+    #[test]
+    fn emote_held_states_and_locomotion_are_not_actions() {
+        // Held emote states (class 0x43) — must stay NON-actions so they loop.
+        assert!(
+            !is_action_motion_command(0x4300_00EA),
+            "ShakeFistState (0x43 held) must NOT be a one-shot"
+        );
+        assert!(
+            !is_action_motion_command(0x4300_00EB),
+            "PrayState (0x43 held) must NOT be a one-shot"
+        );
+        assert!(
+            !is_action_motion_command(0x4300_0144),
+            "DrudgeDanceState (0x43 held) must NOT be a one-shot"
+        );
+        assert!(
+            !is_action_motion_command(0x4300_00FD),
+            "WindedState (0x43 held) must NOT be a one-shot"
+        );
+        // Locomotion negative — WalkForward still expands to its existing
+        // value and is NOT an action (no regression to the gait path).
+        assert_eq!(
+            expand_motion_command_low16(0x05),
+            Some(0x4500_0005),
+            "WalkForward low-16 0x05 still expands to its existing value"
+        );
+        assert!(
+            !is_action_motion_command(0x4500_0005),
+            "WalkForward must NOT be an action (locomotion, not a one-shot)"
+        );
+        // RunForward negative (the other locomotion path).
+        assert_eq!(expand_motion_command_low16(0x07), Some(0x4400_0007));
+        assert!(!is_action_motion_command(0x4400_0007), "RunForward not an action");
+    }
+
+    /// Motion-dispatch audit A9 (2026-06-09) — every newly-surfaced class-0x10
+    /// / 0x13 / 0x12 one-shot expands to its EXACT full 32-bit `MotionCommand`
+    /// key, with the correct class byte. Values verified against ACE
+    /// `Source/ACE.Entity/Enum/MotionCommand.cs`.
+    #[test]
+    fn audit_a9_low16s_expand_to_exact_full_keys() {
+        // LogOut (0x1000011e) — the swing range was lowered from 0x11f to
+        // 0x11e to surface this lifecycle one-shot; it is genuinely class 0x10.
+        assert_eq!(
+            expand_motion_command_low16(0x11E),
+            Some(0x1000_011E),
+            "LogOut must expand to 0x1000011e (class 0x10)"
+        );
+        // DoubleSlashLow (0x11f) — the next entry — still resolves to its
+        // existing class-0x10 value (the lowered range start did not shift it).
+        assert_eq!(
+            expand_motion_command_low16(0x11F),
+            Some(0x1000_011F),
+            "DoubleSlashLow stays 0x1000011f"
+        );
+        // EnterGame..ExitPortal lifecycle one-shots — class 0x10.
+        assert_eq!(
+            expand_motion_command_low16(0x9C),
+            Some(0x1000_009C),
+            "EnterGame (range start)"
+        );
+        assert_eq!(expand_motion_command_low16(0x9D), Some(0x1000_009D), "ExitGame");
+        assert_eq!(
+            expand_motion_command_low16(0x9E),
+            Some(0x1000_009E),
+            "OnCreation"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0xA0),
+            Some(0x1000_00A0),
+            "EnterPortal"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0xA1),
+            Some(0x1000_00A1),
+            "ExitPortal (range end)"
+        );
+        // SpecialAttack1-3 / MissileAttack1-3 — class 0x10. The range stops at
+        // 0xd2 (MissileAttack3) and EXCLUDES CastSpell 0xd3 (class 0x40).
+        assert_eq!(
+            expand_motion_command_low16(0xCD),
+            Some(0x1000_00CD),
+            "SpecialAttack1 (range start)"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0xCF),
+            Some(0x1000_00CF),
+            "SpecialAttack3"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0xD0),
+            Some(0x1000_00D0),
+            "MissileAttack1"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0xD2),
+            Some(0x1000_00D2),
+            "MissileAttack3 (range end)"
+        );
+        // Demonet (0x120000df) — isolated class 0x12 (batch-2 omission).
+        assert_eq!(
+            expand_motion_command_low16(0xDF),
+            Some(0x1200_00DF),
+            "Demonet must be class 0x12"
+        );
+        // Blink / Bite — class 0x10 island between 0x40-class neighbors.
+        assert_eq!(expand_motion_command_low16(0xE2), Some(0x1000_00E2), "Blink");
+        assert_eq!(expand_motion_command_low16(0xE3), Some(0x1000_00E3), "Bite");
+        // SkillHealSelf / SkillHealOther — class 0x10 use one-shots.
+        assert_eq!(
+            expand_motion_command_low16(0x10E),
+            Some(0x1000_010E),
+            "SkillHealSelf"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x10F),
+            Some(0x1000_010F),
+            "SkillHealOther"
+        );
+        // HouseRecall (0x1000013a) — isolated class 0x10 above the Pickup5..20
+        // (0x136..0x139, class 0x40) block.
+        assert_eq!(
+            expand_motion_command_low16(0x13A),
+            Some(0x1000_013A),
+            "HouseRecall must be class 0x10"
+        );
+        // HaveASeat (0x13000152) — isolated class 0x13 (batch-2 omission),
+        // one above DrudgeDance 0x151 (the prior emote range end).
+        assert_eq!(
+            expand_motion_command_low16(0x152),
+            Some(0x1300_0152),
+            "HaveASeat must be class 0x13"
+        );
+        // LifestoneRecall (0x10000153) — isolated class 0x10, one above
+        // HaveASeat.
+        assert_eq!(
+            expand_motion_command_low16(0x153),
+            Some(0x1000_0153),
+            "LifestoneRecall must be class 0x10"
+        );
+        // Fishing / MarketplaceRecall / EnterPKLite — class 0x10.
+        assert_eq!(
+            expand_motion_command_low16(0x165),
+            Some(0x1000_0165),
+            "Fishing (range start)"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x166),
+            Some(0x1000_0166),
+            "MarketplaceRecall"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x167),
+            Some(0x1000_0167),
+            "EnterPKLite (range end)"
+        );
+        // AllegianceHometownRecall..PunchSlowLow — one contiguous class-0x10
+        // span (recalls + offhand/extended melee + monster punches).
+        assert_eq!(
+            expand_motion_command_low16(0x171),
+            Some(0x1000_0171),
+            "AllegianceHometownRecall (range start)"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x172),
+            Some(0x1000_0172),
+            "PKArenaRecall"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x173),
+            Some(0x1000_0173),
+            "OffhandSlashHigh"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x18E),
+            Some(0x1000_018E),
+            "AttackLow6"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x18F),
+            Some(0x1000_018F),
+            "PunchFastHigh"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0x194),
+            Some(0x1000_0194),
+            "PunchSlowLow (range end)"
+        );
+    }
+
+    /// Motion-dispatch audit A9 (2026-06-09) — every newly-surfaced full key is
+    /// an action (class 0x10 / 0x13 / 0x12), so the renderer routes it onto the
+    /// KIND_MOTION_ACTION one-shot overlay path. `is_action_motion_command`
+    /// already returns true for all of these classes, so no is_action change
+    /// was needed.
+    #[test]
+    fn audit_a9_full_keys_are_actions() {
+        for full in [
+            0x1000_011E, // LogOut
+            0x1000_009C, // EnterGame
+            0x1000_00A1, // ExitPortal
+            0x1000_00CD, // SpecialAttack1
+            0x1000_00D2, // MissileAttack3
+            0x1200_00DF, // Demonet (class 0x12)
+            0x1000_00E2, // Blink
+            0x1000_00E3, // Bite
+            0x1000_010E, // SkillHealSelf
+            0x1000_010F, // SkillHealOther
+            0x1000_013A, // HouseRecall
+            0x1300_0152, // HaveASeat (class 0x13)
+            0x1000_0153, // LifestoneRecall
+            0x1000_0165, // Fishing
+            0x1000_0166, // MarketplaceRecall
+            0x1000_0167, // EnterPKLite
+            0x1000_0171, // AllegianceHometownRecall
+            0x1000_0172, // PKArenaRecall
+            0x1000_0173, // OffhandSlashHigh
+            0x1000_018E, // AttackLow6
+            0x1000_018F, // PunchFastHigh
+            0x1000_0194, // PunchSlowLow
+            // Audit A7 (2026-06-09): class-0x40 USE one-shots now surfaced.
+            0x4000_00D3, // CastSpell (cast-end clip)
+            0x4000_00E0, // UseMagicStaff
+            0x4000_00E1, // UseMagicWand
+        ] {
+            assert!(
+                is_action_motion_command(full),
+                "{full:#010x} (audit-A9 one-shot) must be an action so it routes onto the overlay"
+            );
+        }
+    }
+
+    /// Motion-dispatch audit A7 (2026-06-09) — the class-0x40 USE one-shots
+    /// CastSpell / UseMagicStaff / UseMagicWand now expand to their exact full
+    /// key AND are classified as actions, so they route onto the
+    /// KIND_MOTION_ACTION overlay path.
+    #[test]
+    fn audit_a7_class0x40_use_oneshots_surfaced() {
+        assert_eq!(
+            expand_motion_command_low16(0xD3),
+            Some(0x4000_00D3),
+            "CastSpell 0xd3 expands to its class-0x40 key"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0xE0),
+            Some(0x4000_00E0),
+            "UseMagicStaff 0xe0 expands to its class-0x40 key"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0xE1),
+            Some(0x4000_00E1),
+            "UseMagicWand 0xe1 expands to its class-0x40 key"
+        );
+        assert!(
+            is_action_motion_command(0x4000_00D3),
+            "CastSpell is a one-shot action"
+        );
+        assert!(
+            is_action_motion_command(0x4000_00E0),
+            "UseMagicStaff is a one-shot action"
+        );
+        assert!(
+            is_action_motion_command(0x4000_00E1),
+            "UseMagicWand is a one-shot action"
+        );
+    }
+
+    /// Motion-dispatch audit A7 (2026-06-09) — HELD-SUBSTATE exclusion guard.
+    /// TwitchSubstate1-3 (0x400000e4..e6) are class 0x40 like the CastSpell /
+    /// UseMagicStaff/Wand one-shots surfaced this batch, but their name
+    /// ("Sub-state") + the acclient `MotionState.substate` semantics mark them
+    /// as the entity's continuously-looping HELD substate, NOT one-shot
+    /// overlays. They must stay `None` from the expander (no full key
+    /// fabricated) and, even if hand-built, must NOT be classified as actions —
+    /// surfacing a held substate onto the KIND_MOTION_ACTION path is the C1/B9
+    /// gait regression the is_action guard exists to prevent.
+    #[test]
+    fn audit_a7_twitch_substates_excluded_as_held() {
+        // The Blink/Bite arm stops at 0xe3, and there is no 0xe4..=0xe6 arm, so
+        // these expand to None.
+        assert_eq!(
+            expand_motion_command_low16(0xE4),
+            None,
+            "TwitchSubstate1 0xe4 (HELD class-0x40 substate) must stay None"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0xE5),
+            None,
+            "TwitchSubstate2 0xe5 (HELD substate) must stay None"
+        );
+        assert_eq!(
+            expand_motion_command_low16(0xE6),
+            None,
+            "TwitchSubstate3 0xe6 (HELD substate) must stay None"
+        );
+        // Even a hand-built full key must NOT be classified as an action: the
+        // surgical is_action 0x40 extension admits exactly 0x16..=0x1d | 0xd3 |
+        // 0xe0 | 0xe1 — and NOT 0xe4..=0xe6.
+        assert!(
+            !is_action_motion_command(0x4000_00E4),
+            "TwitchSubstate1 0x400000e4 must NOT be an action (held substate)"
+        );
+        assert!(
+            !is_action_motion_command(0x4000_00E5),
+            "TwitchSubstate2 0x400000e5 must NOT be an action (held substate)"
+        );
+        assert!(
+            !is_action_motion_command(0x4000_00E6),
+            "TwitchSubstate3 0x400000e6 must NOT be an action (held substate)"
+        );
+    }
+
+    /// Motion-dispatch audit A7 (2026-06-09) — is_action 0x40-widening
+    /// REGRESSION guard. Extending the class-0x40 is_action arm to admit
+    /// 0xd3/0xe0/0xe1 must NOT make any of the other class-0x40 STATE commands
+    /// an action. Re-assert the canonical held/state 0x40 values stay false.
+    #[test]
+    fn audit_a7_class0x40_states_still_non_action() {
+        assert!(!is_action_motion_command(0x4000_0004), "Stop (state) not action");
+        assert!(!is_action_motion_command(0x4000_0008), "Fallen (state) not action");
+        assert!(!is_action_motion_command(0x4000_0011), "Dead (state) not action");
+        assert!(!is_action_motion_command(0x4000_0015), "Falling (state) not action");
+        // The aim/magic-gesture substate range (0x1e..=0x39) and the held
+        // Twitch substates (0xe4..=0xe6) sit adjacent to the newly-admitted
+        // low-16s but must remain non-actions — the match is exact, not a range
+        // widening over all of 0x40.
+        assert!(!is_action_motion_command(0x4000_001E), "AimLevel (substate) not action");
+        assert!(!is_action_motion_command(0x4000_0039), "MagicPray (substate) not action");
+        assert!(!is_action_motion_command(0x4000_00E4), "TwitchSubstate1 (held) not action");
+        // And the values just outside the admitted use-range/CastSpell keys
+        // stay false (boundary checks): 0x15 (Falling, below 0x16), 0x1e (above
+        // 0x1d), 0xd2 (MissileAttack3 is class 0x10, but a hand-built 0x40 d2
+        // must not be admitted), 0xe2 (Blink — class 0x10, not a 0x40 action).
+        assert!(!is_action_motion_command(0x4000_00D2), "0x400000d2 not in use range");
+        assert!(!is_action_motion_command(0x4000_00E2), "0x400000e2 not in use range");
     }
 }
 

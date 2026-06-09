@@ -194,6 +194,61 @@ function tagBillboardLod(lod, degradedGeom) {
   lod.userData.billboardLevel = 1;
 }
 
+// R-JS-T4a (render-audit G2) — coerce the degraded argument into an ordered
+// array of `{ geometry, dist, degradeMode }` band levels. Accepts:
+//   - an Array (the new multi-band shape — passed through as-is),
+//   - null/undefined/empty (→ `[]`, i.e. no LOD),
+//   - a bare BufferGeometry (back-compat: wrap as a single band, reading
+//     dist/degradeMode off `geom.userData`).
+// Never throws; a malformed entry just yields an empty chain.
+function normalizeDegradedLevels(degraded) {
+  if (!degraded) return [];
+  if (Array.isArray(degraded)) {
+    return degraded.filter((l) => l && l.geometry);
+  }
+  // Bare geometry (legacy callers) → single band.
+  if (degraded.isBufferGeometry || degraded.attributes) {
+    return [
+      {
+        geometry: degraded,
+        dist:
+          (degraded.userData && degraded.userData.lodDist) != null
+            ? degraded.userData.lodDist
+            : null,
+        degradeMode: (degraded.userData && degraded.userData.degradeMode) || 0,
+      },
+    ];
+  }
+  return [];
+}
+
+// R-JS-T4a (render-audit G2) — derive the per-band LOD swap distance array
+// from the band chain. Each band swaps at its authored `min_dist` (`dist`);
+// bands lacking one fall back to a monotonically increasing spread anchored
+// at LOD_DISTANCE_M so multiple level boundaries never collide. The result
+// is forced strictly ascending — THREE.LOD sorts levels by distance, and
+// two equal distances would make one band unreachable. Mirrors retail
+// `GfxObjDegradeInfo::get_degrade` (acclient.c:332374) ordering ALL bands by
+// distance. Pure / never throws.
+function bandSwapDistances(levels) {
+  const out = new Array(levels.length);
+  let prev = 0;
+  for (let i = 0; i < levels.length; i += 1) {
+    const authored =
+      levels[i] && typeof levels[i].dist === "number" && levels[i].dist > 0
+        ? levels[i].dist
+        : null;
+    // Authored distance when present; otherwise space bands out from the
+    // 100m default so each successive band swaps farther than the last.
+    let d = authored != null ? authored : LOD_DISTANCE_M * (i + 1);
+    // Enforce strictly ascending so no band is shadowed by an earlier one.
+    if (d <= prev) d = prev + 0.001;
+    out[i] = d;
+    prev = d;
+  }
+  return out;
+}
+
 // Phase C.3 — base URL for the baked scenery JSONL files. Mirrors
 // index.html's `MANIFEST_URL = "../../dist/manifest.json"`; scenery
 // files live at `../../dist/scenery/0xXXXX.scenery.jsonl`. Init is
@@ -544,18 +599,27 @@ function degradedSurfaceKey(surfaceDid, doubleSided) {
  *
  * RP1 (2026-06-08) — the degraded leaf is now ALSO partitioned
  * per-surface (matching the full mesh) so the LOD path keeps the
- * per-surfaceDid material key. Returns
- * `Map<modelId, Map<surfaceKey, geometry>>` where surfaceKey is the
- * `(surfaceDid, doubleSided)` composite from `degradedSurfaceKey` — the
- * SAME bucket identity the full mesh uses — so each FULL surface group
- * can pair its LOD with its OWN degraded surface group (one geometry per
- * full group, never shared → no LRU double-free). A full surface group
- * whose bucket has no degraded counterpart renders without an LOD
- * wrapper (always full-detail) — it
- * never gets painted with the wrong texture. The authored swap distance
- * (`lodDist`) and billboard mode (`degradeMode`) are stamped onto EVERY
- * degraded group geometry's userData (they are per-band, identical for
- * all of a model's degraded surfaces).
+ * per-surfaceDid material key.
+ *
+ * R-JS-T4a (render-audit G2, 2026-06-09) — consume the FULL DegradeInfo
+ * band CHAIN, not just `bands[0]`. Retail `GfxObjDegradeInfo::get_degrade`
+ * (acclient.c:332374) walks ALL bands by distance and builds a multi-level
+ * chain; we now mirror that. Returns
+ * `Map<modelId, Map<surfaceKey, Array<{geometry, dist, degradeMode}>>>`
+ * where surfaceKey is the `(surfaceDid, doubleSided)` composite from
+ * `degradedSurfaceKey` — the SAME bucket identity the full mesh uses — so
+ * each FULL surface group can pair its LOD with its OWN ordered list of
+ * per-band degraded surface groups (one geometry per band per full group,
+ * never shared → no LRU double-free). The list is ordered most-detailed
+ * degrade first (band 0) to least-detailed (the order the node builders
+ * add `addLevel`s, each at its own authored swap distance). A full surface
+ * group whose bucket has no degraded counterpart in a band renders that
+ * band without a level — it never gets painted with the wrong texture.
+ * Per band the authored swap distance (`dist`) and billboard mode
+ * (`degradeMode`) ride alongside the geometry in the list entry. Bands
+ * whose `0x01` geometry can't be fetched/built are SKIPPED (logged), never
+ * silently capping the chain — the remaining buildable bands still emit
+ * their levels at their correct distances.
  */
 async function fetchDegradedGeometries(
   didDegradeByModel,
@@ -573,19 +637,26 @@ async function fetchDegradedGeometries(
   // fetchable mesh. The prior code passed these `0x11` ids straight to
   // `fetch_model_meshes` (which only accepts `0x01`/`0x02`), so every
   // degraded fetch silently returned nothing and NO static LOD was ever
-  // built — the hardcoded-100m swap never fired. Resolve the chain via the
-  // existing `fetch_gfx_obj_degrade_info` getter, take the first
-  // (most-detailed) degrade band's `0x01` gfx_obj_id as the degraded leaf,
-  // and stash that band's authored `min_dist` on `geom.userData.lodDist`
-  // so `buildSingletonNode` swaps at the real distance instead of 100m.
-  // Fail-soft per model: any parse / fetch error drops to "no LOD" (plain
-  // mesh), exactly the prior (dead-path) behaviour — so this can only add
-  // working LOD, never regress.
+  // built. Resolve the chain via the existing `fetch_gfx_obj_degrade_info`
+  // getter.
+  //
+  // R-JS-T4a (render-audit G2, 2026-06-09) — closes the G3 TODO that
+  // capped consumption to `bands[0]`. We now resolve EVERY band's `0x01`
+  // gfx_obj_id and its authored `min_dist`, ordered most-detailed-degrade
+  // first, so the node builders can add one `addLevel` per band swapping at
+  // each band's own distance (mirroring retail
+  // `GfxObjDegradeInfo::get_degrade`, acclient.c:332374). When only one
+  // band exists the result is byte-identical to the prior single-band
+  // path. Fail-soft per model AND per band: a parse/fetch error on the
+  // whole chain drops the model to "no LOD"; a single unbuildable band is
+  // skipped (logged) while the other buildable bands still emit their
+  // levels — we never silently cap the chain at the first failure.
   if (typeof fetchDegradeInfo !== "function") {
     return degradedGeomByModel;
   }
 
-  // Resolve each model's chain → { gfxId (0x01), dist } in parallel.
+  // Resolve each model's chain → ordered list of
+  // { gfxId (0x01), dist, degradeMode } bands, in parallel.
   const entries = [...didDegradeByModel.entries()];
   const resolved = await Promise.all(
     entries.map(async ([modelId, chainId]) => {
@@ -595,20 +666,32 @@ async function fetchDegradedGeometries(
         const info = JSON.parse(json);
         const bands = Array.isArray(info?.degrades) ? info.degrades : [];
         if (bands.length === 0) return null;
-        const b = bands[0];
-        const gfxId = (b.gfx_obj_id ?? 0) >>> 0;
-        if (!gfxId) return null;
-        const dist =
-          typeof b.min_dist === "number" && b.min_dist > 0 ? b.min_dist : null;
-        // G1 (waves-2 2026-05-29) — `degrade_mode` is the per-LOD-band
-        // billboard-orientation flag from `CPhysicsPart::calc_draw_frame`
-        // (acclient.c:315074): 1=fixed (no transform), 2=full billboard,
-        // 3/4/5=axis-0/1/2 constrained. Carry it alongside so the per-frame
-        // billboard tick can orient the degraded leaf to face the viewer.
-        // Default 0 ("no billboard") when the band omits it → tick no-ops.
-        const degradeMode =
-          typeof b.degrade_mode === "number" ? b.degrade_mode >>> 0 : 0;
-        return { modelId, gfxId, dist, degradeMode };
+        // R-JS-T4a — walk the WHOLE band list (not just bands[0]). Each
+        // band with a usable `0x01` gfx_obj_id becomes one degraded LOD
+        // level; bands without one are dropped from the chain (they have
+        // no fetchable geometry). Authored distances are kept per band so
+        // the swap happens at the band's own `min_dist`.
+        const chain = [];
+        for (const b of bands) {
+          const gfxId = (b.gfx_obj_id ?? 0) >>> 0;
+          if (!gfxId) continue;
+          const dist =
+            typeof b.min_dist === "number" && b.min_dist > 0
+              ? b.min_dist
+              : null;
+          // G1 (waves-2 2026-05-29) — `degrade_mode` is the per-LOD-band
+          // billboard-orientation flag from `CPhysicsPart::calc_draw_frame`
+          // (acclient.c:315074): 1=fixed (no transform), 2=full billboard,
+          // 3/4/5=axis-0/1/2 constrained. Carry it alongside so the
+          // per-frame billboard tick can orient the degraded leaf to face
+          // the viewer. Default 0 ("no billboard") when the band omits it →
+          // tick no-ops.
+          const degradeMode =
+            typeof b.degrade_mode === "number" ? b.degrade_mode >>> 0 : 0;
+          chain.push({ gfxId, dist, degradeMode });
+        }
+        if (chain.length === 0) return null;
+        return { modelId, chain };
       } catch (_) {
         return null;
       }
@@ -616,12 +699,7 @@ async function fetchDegradedGeometries(
   );
   const perModel = new Map();
   for (const r of resolved) {
-    if (r)
-      perModel.set(r.modelId, {
-        gfxId: r.gfxId,
-        dist: r.dist,
-        degradeMode: r.degradeMode,
-      });
+    if (r) perModel.set(r.modelId, r.chain);
   }
   if (perModel.size === 0) return degradedGeomByModel;
 
@@ -630,7 +708,14 @@ async function fetchDegradedGeometries(
   // gfxId maps to a `Map<surfaceDid, geometry>` rather than one fused
   // geom. The full surface groups pair their LOD with the degraded
   // surface group of the SAME surfaceDid.
-  const uniqueGfxIds = [...new Set([...perModel.values()].map((v) => v.gfxId))];
+  // R-JS-T4a — the unique-gfxId set now spans EVERY band of EVERY model's
+  // chain (not just one per model), so each distinct band geometry is
+  // fetched once and shared by reference across the chains that cite it.
+  const uniqueGfxIds = [
+    ...new Set(
+      [...perModel.values()].flatMap((chain) => chain.map((b) => b.gfxId))
+    ),
+  ];
   const groupsByGfxId = new Map();
   try {
     const meshes = await fetchModelMeshes(new Uint32Array(uniqueGfxIds));
@@ -667,26 +752,86 @@ async function fetchDegradedGeometries(
     return degradedGeomByModel;
   }
 
-  for (const [modelId, { gfxId, dist, degradeMode }] of perModel) {
-    const bySurface = groupsByGfxId.get(gfxId);
-    if (!bySurface || bySurface.size === 0) continue;
-    for (const geom of bySurface.values()) {
-      // Stash the authored swap distance on each surface group's geometry
-      // so the node builders can read it per group. lodDist + degradeMode
-      // are per-band — identical across the model's degraded surfaces.
-      if (dist != null) {
-        geom.userData = geom.userData || {};
-        geom.userData.lodDist = dist;
+  // R-JS-T4a — assemble per model a Map<surfaceKey, [bandLevel, ...]> where
+  // each bandLevel = { geometry, dist, degradeMode } in chain order
+  // (most-detailed degrade first). The node builders add one `addLevel` per
+  // bandLevel, swapping at that band's `dist`.
+  //
+  // Geometry ownership: a single band gfxId (and thus its `bySurface`
+  // geometries) can be cited by MORE THAN ONE model's chain (different
+  // models referencing the same shared degraded leaf). The LRU disposes a
+  // node's geometries on eviction, so two LOD nodes must NEVER share one
+  // BufferGeometry object → double-free. We therefore CLONE each band
+  // geometry per (model, surface) consumer; degraded leaves are tiny so the
+  // clone cost is negligible, and the per-LB dispose/LRU paths below each
+  // own a distinct geometry. (The prior single-band code shared geometries
+  // across same-gfxId models, a latent double-free risk this clone closes.)
+  // `bandsWithGeom` / `bandsSkipped` feed a one-line summary log so a band
+  // whose geometry couldn't be built is visible, not silently dropped.
+  let bandsWithGeom = 0;
+  let bandsSkipped = 0;
+  for (const [modelId, chain] of perModel) {
+    // surfaceKey → ordered array of { geometry, dist, degradeMode }.
+    const bySurfaceLevels = new Map();
+    for (const band of chain) {
+      const srcBySurface = groupsByGfxId.get(band.gfxId);
+      if (!srcBySurface || srcBySurface.size === 0) {
+        // This band's 0x01 geometry wasn't fetchable/buildable. SKIP this
+        // level only — the other buildable bands of this chain still get
+        // their levels at their own distances. Never cap the chain here.
+        bandsSkipped += 1;
+        continue;
       }
-      // G1 — carry the band's billboard mode the same way. The node
-      // builders copy it onto the LOD node so `tickStaticsBillboards`
-      // can orient the degraded leaf each frame.
-      if (degradeMode) {
+      bandsWithGeom += 1;
+      for (const [surfaceKey, srcGeom] of srcBySurface) {
+        // Clone so each consumer owns its geometry (see ownership note).
+        let geom;
+        try {
+          geom = srcGeom.clone();
+        } catch (_) {
+          // A clone failure must not throw out of the bake — skip this
+          // band's surface (it just won't get a degraded level).
+          continue;
+        }
+        // Carry the band's authored swap distance + billboard mode on the
+        // cloned geometry's userData so the node builders read them per
+        // level exactly as the single-band path did, plus on the list entry
+        // for direct access.
         geom.userData = geom.userData || {};
-        geom.userData.degradeMode = degradeMode;
+        if (band.dist != null) geom.userData.lodDist = band.dist;
+        if (band.degradeMode) geom.userData.degradeMode = band.degradeMode;
+        let arr = bySurfaceLevels.get(surfaceKey);
+        if (!arr) {
+          arr = [];
+          bySurfaceLevels.set(surfaceKey, arr);
+        }
+        arr.push({
+          geometry: geom,
+          dist: band.dist,
+          degradeMode: band.degradeMode,
+        });
       }
     }
-    degradedGeomByModel.set(modelId, bySurface);
+    if (bySurfaceLevels.size > 0) {
+      degradedGeomByModel.set(modelId, bySurfaceLevels);
+    }
+  }
+  // The source `bySurface` geometries in `groupsByGfxId` were only used as
+  // clone templates; dispose them so they don't leak (every consumer holds
+  // a clone). Fail-soft per geometry.
+  for (const bySurface of groupsByGfxId.values()) {
+    for (const geom of bySurface.values()) {
+      try {
+        geom?.dispose?.();
+      } catch (_) {}
+    }
+  }
+  if (bandsSkipped > 0) {
+    // eslint-disable-next-line no-console
+    console.info(
+      `[scene3d.statics/R-JS-T4a] degrade chains: ${bandsWithGeom} band(s) built, ` +
+        `${bandsSkipped} band(s) skipped (no fetchable 0x01 geometry).`
+    );
   }
   return degradedGeomByModel;
 }
@@ -741,10 +886,12 @@ function makePlacementMatrixHelper() {
  * placement don't collide and the LRU's per-LB scene-graph eviction
  * (keyed by `userData.landblockId`) catches every one of them.
  *
- * When `degradedGeom` is non-null, wraps the full + degraded leaves
- * in a `THREE.LOD`. Most Holtburg statics have no degrade chain so
- * the wrap is a future-proofing no-op today, but we keep it so the
- * lazy-add code path matches the ring-bake code path exactly.
+ * When `degradedLevels` is a non-empty array, wraps the full leaf plus
+ * one degraded leaf PER band in a `THREE.LOD` (R-JS-T4a, render-audit G2),
+ * each swapping at its own band distance. Most Holtburg statics have no
+ * degrade chain so the wrap is a no-op today, but we keep it so the
+ * lazy-add code path matches the ring-bake code path exactly. A single-
+ * element array reproduces the prior 2-level LOD byte-for-byte.
  *
  * Caller adds the returned node to `scene3d.staticsGroup`.
  */
@@ -753,7 +900,7 @@ function buildSingletonNode({
   modelId,
   surfaceDid = 0,
   geom,
-  degradedGeom,
+  degradedLevels,
   mat,
   staticsShadow,
   staticsMatCastsShadow,
@@ -821,34 +968,15 @@ function buildSingletonNode({
     mesh.receiveShadow = placementReceiveShadow;
   }
 
-  if (!degradedGeom) {
+  // R-JS-T4a (render-audit G2) — `degradedLevels` is the ordered band
+  // chain (most-detailed degrade first) for this surface group, or null/
+  // empty when this group has no degrade chain. Normalize: also accept a
+  // bare geometry for back-compat with any caller that still passes one.
+  const levels = normalizeDegradedLevels(degradedLevels);
+  if (levels.length === 0) {
     return { node: mesh, isLod: false };
   }
 
-  const degradedMesh = new THREE.Mesh(degradedGeom, mat);
-  degradedMesh.name = `static-degraded-${placementKey}`;
-  if (staticsShadow) {
-    degradedMesh.castShadow = staticsMatCastsShadow;
-    // FU2 — same per-placement distance gate as the full-detail leaf
-    // above. Both LOD levels share the placement's spawn-distance so
-    // the gate decision is identical; reusing the cached predicate
-    // result keeps the two leaves consistent.
-    degradedMesh.receiveShadow = placementReceiveShadow;
-  }
-  degradedMesh.position.copy(mesh.position);
-  degradedMesh.quaternion.copy(mesh.quaternion);
-  if (placementScale !== 1) {
-    degradedMesh.scale.set(placementScale, placementScale, placementScale);
-  }
-  degradedMesh.userData = {
-    modelId,
-    surfaceDid,
-    landblockId: placement.landblockId,
-    placementKey,
-    isBuilding: false,
-    isDegraded: true,
-    source,
-  };
   const lod = new THREE.LOD();
   lod.name = `static-lod-${placementKey}`;
   lod.position.copy(mesh.position);
@@ -864,26 +992,60 @@ function buildSingletonNode({
   mesh.position.set(0, 0, 0);
   mesh.quaternion.identity();
   mesh.scale.set(1, 1, 1);
-  degradedMesh.position.set(0, 0, 0);
-  degradedMesh.quaternion.identity();
-  degradedMesh.scale.set(1, 1, 1);
   lod.addLevel(mesh, 0);
-  // Render-completeness audit (2026-05-29): swap at the DegradeInfo band's
-  // authored `min_dist` (stashed on the degraded geometry's userData by
-  // fetchDegradedGeometries) rather than the fixed 100m guess. Falls back
-  // to LOD_DISTANCE_M when no authored distance was resolved.
-  // G3 (waves-2 2026-05-29, LOW — left as TODO): retail
-  // `GfxObjDegradeInfo::get_degrade` (acclient.c:332374) walks ALL bands
-  // by ideal_dist/max_dist with a bias multiplier and builds a multi-level
-  // chain. We consume only bands[0]'s gfx_obj_id + min_dist (one degraded
-  // leaf, swapped at this single authored distance). The grounding agent
-  // judged the single-band path acceptable for the current phase, so this
-  // stays a 2-level THREE.LOD; a full multi-level + bias-aware walk is the
-  // future refinement (build one addLevel per band, swap at the bias-scaled
-  // ideal_dist).
-  const swapDist =
-    (degradedGeom.userData && degradedGeom.userData.lodDist) || LOD_DISTANCE_M;
-  lod.addLevel(degradedMesh, swapDist);
+
+  // R-JS-T4a (render-audit G2 — closes the prior G3 single-band TODO):
+  // build one `addLevel` PER degrade band, each swapping at the band's own
+  // authored `min_dist` (falling back to a spread of LOD_DISTANCE_M for
+  // bands missing a distance). Mirrors retail
+  // `GfxObjDegradeInfo::get_degrade` (acclient.c:332374) walking ALL bands
+  // into a multi-level chain instead of capping at bands[0]. A missing/
+  // throwing band is skipped (never throws); a single-band chain produces
+  // the exact prior 2-level LOD.
+  const swapDists = bandSwapDistances(levels);
+  let firstBillboardGeom = null;
+  for (let li = 0; li < levels.length; li += 1) {
+    const lvl = levels[li];
+    const dGeom = lvl && lvl.geometry;
+    if (!dGeom) continue;
+    let degradedMesh;
+    try {
+      degradedMesh = new THREE.Mesh(dGeom, mat);
+    } catch (_) {
+      continue; // robustness: skip this band, keep the rest.
+    }
+    degradedMesh.name = `static-degraded${li}-${placementKey}`;
+    if (staticsShadow) {
+      degradedMesh.castShadow = staticsMatCastsShadow;
+      // FU2 — same per-placement distance gate as the full-detail leaf.
+      degradedMesh.receiveShadow = placementReceiveShadow;
+    }
+    // Child of the LOD — identity local transform (the LOD owns placement).
+    degradedMesh.position.set(0, 0, 0);
+    degradedMesh.quaternion.identity();
+    degradedMesh.scale.set(1, 1, 1);
+    degradedMesh.userData = {
+      modelId,
+      surfaceDid,
+      landblockId: placement.landblockId,
+      placementKey,
+      isBuilding: false,
+      isDegraded: true,
+      degradeBand: li,
+      source,
+    };
+    lod.addLevel(degradedMesh, swapDists[li]);
+    // The first degraded band that carries a billboard mode is the one the
+    // tick orients (billboardLevel = 1 = first degraded leaf after the
+    // distance-sorted full leaf at index 0).
+    if (!firstBillboardGeom && (dGeom.userData?.degradeMode ?? 0) >= 2) {
+      firstBillboardGeom = dGeom;
+    }
+  }
+  // If every band failed to build a mesh, fall back to the plain full mesh.
+  if (lod.levels.length <= 1) {
+    return { node: mesh, isLod: false };
+  }
   lod.userData = {
     modelId,
     surfaceDid,
@@ -892,13 +1054,12 @@ function buildSingletonNode({
     isBuilding: false,
     source,
   };
-  // G1 (waves-2 2026-05-29) — tag the LOD for the per-frame billboard
-  // tick when the degraded band carries a billboard mode (>=2). Mode 1
-  // (fixed) and absent/0 leave the leaf at its authored orientation
-  // (current behaviour). `billboardLevel = 1` is the degraded leaf's
-  // index in `lod.levels` (full=0, degraded=1) so the tick only orients
-  // the leaf that's the billboard band, never the full-detail mesh.
-  tagBillboardLod(lod, degradedGeom);
+  // G1 (waves-2 2026-05-29) — tag the LOD for the per-frame billboard tick
+  // when the (first) degraded band carries a billboard mode (>=2). Mode 1
+  // (fixed) / 0 leave the leaf at its authored orientation. `billboardLevel
+  // = 1` is the first degraded leaf's index after the distance-sorted full
+  // leaf at index 0 — the tick only orients that band.
+  if (firstBillboardGeom) tagBillboardLod(lod, firstBillboardGeom);
   return { node: lod, isLod: true };
 }
 
@@ -917,7 +1078,7 @@ function buildInstancedNode({
   surfaceDid = 0,
   group,
   geom,
-  degradedGeom,
+  degradedLevels,
   mat,
   placementMatrix,
   staticsShadow,
@@ -1014,42 +1175,62 @@ function buildInstancedNode({
   // correctly. `frustumCulled=false` hands the test to us alone.
   instanced.frustumCulled = false;
 
-  if (!degradedGeom) {
+  // R-JS-T4a (render-audit G2) — `degradedLevels` is this surface group's
+  // ordered band chain (most-detailed degrade first), or null/empty for no
+  // LOD. Normalize (also tolerates a bare geometry from legacy callers).
+  const levels = normalizeDegradedLevels(degradedLevels);
+  if (levels.length === 0) {
     return { node: instanced, isLod: false };
   }
-
-  const degradedInstanced = new THREE.InstancedMesh(
-    degradedGeom,
-    mat,
-    group.length
-  );
-  degradedInstanced.name = `static-instanced-degraded-${modelKey}-s${surfaceKey}`;
-  if (staticsShadow) {
-    degradedInstanced.castShadow = staticsMatCastsShadow;
-    // C2 + FU2 — same low-preset gate as the full-detail InstancedMesh
-    // above. InstancedMesh is excluded from the distance-tier gate by
-    // design (per-mesh, not per-instance); see the comment block on
-    // the full-detail leaf for the full audit reasoning.
-    degradedInstanced.receiveShadow = staticsReceiveShadow;
-  }
-  for (let i = 0; i < group.length; i += 1) {
-    const m4 = placementMatrix(group[i]);
-    degradedInstanced.setMatrixAt(i, m4);
-  }
-  degradedInstanced.instanceMatrix.needsUpdate = true;
-  degradedInstanced.computeBoundingSphere();
-  // FCULL — same caveat as the full-detail leaf: disable three's broken
-  // single-instance frustum test; the app-level pass culls the LOD wrapper
-  // coherently using the aggregate sphere.
-  degradedInstanced.frustumCulled = false;
 
   const lod = new THREE.LOD();
   lod.name = `static-lod-${modelKey}-s${surfaceKey}`;
   lod.addLevel(instanced, 0);
-  // G3 note: the instanced path still uses the fixed LOD_DISTANCE_M
-  // guess rather than the band's authored distance — see the
-  // `degradedGeom.userData.lodDist` G3 TODO in `buildSingletonNode`.
-  lod.addLevel(degradedInstanced, LOD_DISTANCE_M);
+
+  // R-JS-T4a (render-audit G2 — closes the prior G3 TODO that hardcoded
+  // LOD_DISTANCE_M here): build ONE degraded InstancedMesh leaf PER band,
+  // each placed with the SAME per-instance matrices and swapped at the
+  // band's own authored distance. Mirrors retail
+  // `GfxObjDegradeInfo::get_degrade` (acclient.c:332374) walking ALL bands.
+  // A band whose geometry is missing/throws is skipped, never throwing; a
+  // single-band chain reproduces the prior 2-level instanced LOD (now at
+  // the band's real distance rather than the fixed guess).
+  const swapDists = bandSwapDistances(levels);
+  let firstBillboardMode = 0;
+  for (let li = 0; li < levels.length; li += 1) {
+    const dGeom = levels[li] && levels[li].geometry;
+    if (!dGeom) continue;
+    let degradedInstanced;
+    try {
+      degradedInstanced = new THREE.InstancedMesh(dGeom, mat, group.length);
+    } catch (_) {
+      continue; // robustness: skip this band, keep the rest.
+    }
+    degradedInstanced.name = `static-instanced-degraded${li}-${modelKey}-s${surfaceKey}`;
+    if (staticsShadow) {
+      degradedInstanced.castShadow = staticsMatCastsShadow;
+      // C2 + FU2 — same low-preset gate as the full-detail InstancedMesh.
+      degradedInstanced.receiveShadow = staticsReceiveShadow;
+    }
+    for (let i = 0; i < group.length; i += 1) {
+      const m4 = placementMatrix(group[i]);
+      degradedInstanced.setMatrixAt(i, m4);
+    }
+    degradedInstanced.instanceMatrix.needsUpdate = true;
+    degradedInstanced.computeBoundingSphere();
+    // FCULL — same caveat as the full-detail leaf: disable three's broken
+    // single-instance frustum test; the app-level pass culls the LOD wrapper
+    // coherently using the aggregate sphere.
+    degradedInstanced.frustumCulled = false;
+    lod.addLevel(degradedInstanced, swapDists[li]);
+    if (!firstBillboardMode && (dGeom.userData?.degradeMode ?? 0) >= 2) {
+      firstBillboardMode = dGeom.userData.degradeMode;
+    }
+  }
+  // If no band produced a degraded leaf, fall back to the plain InstancedMesh.
+  if (lod.levels.length <= 1) {
+    return { node: instanced, isLod: false };
+  }
   lod.userData = {
     modelId,
     surfaceDid,
@@ -1059,22 +1240,21 @@ function buildInstancedNode({
     sceneryCount,
     landblockInfoCount,
     // C3 #7 — same coversLbKeys Set as the InstancedMesh leaves (the LRU
-    // is handed the LOD wrapper for instanced-LOD nodes; both LOD levels
+    // is handed the LOD wrapper for instanced-LOD nodes; ALL LOD levels
     // share these covered lb-keys).
     coversLbKeys,
   };
-  // G1 (waves-2 2026-05-29) — billboard orientation is NOT applied to
-  // the InstancedMesh degraded leaf. Each instance sits at a distinct
-  // world position so a single shared mesh-level rotation can't face
-  // all of them at the camera; correct per-instance billboarding would
-  // require rewriting the whole instanceMatrix buffer every frame (the
-  // exact GPU re-upload cost the InstancedMesh collapse exists to
-  // avoid). The plain-Mesh singleton path (`buildSingletonNode`) gets
-  // the billboard tick. We record the band's mode for diag visibility
-  // only — `tickStaticsBillboards` skips `isInstancedLod` nodes.
-  if (degradedGeom?.userData?.degradeMode >= 2) {
-    lod.userData.billboardModeInstancedSkipped =
-      degradedGeom.userData.degradeMode;
+  // G1 (waves-2 2026-05-29) — billboard orientation is NOT applied to the
+  // InstancedMesh degraded leaves. Each instance sits at a distinct world
+  // position so a single shared mesh-level rotation can't face all of them
+  // at the camera; correct per-instance billboarding would require
+  // rewriting the whole instanceMatrix buffer every frame (the exact GPU
+  // re-upload cost the InstancedMesh collapse exists to avoid). The
+  // plain-Mesh singleton path (`buildSingletonNode`) gets the billboard
+  // tick. We record the (first) band's mode for diag visibility only —
+  // `tickStaticsBillboards` skips `isInstancedLod` nodes.
+  if (firstBillboardMode >= 2) {
+    lod.userData.billboardModeInstancedSkipped = firstBillboardMode;
   }
   return { node: lod, isLod: true };
 }
@@ -1319,9 +1499,12 @@ export async function bakeStaticsForLandblock(
       // (surfaceDid, doubleSided) bucket; a group with no degraded
       // counterpart renders without an LOD wrapper (always full-detail),
       // never with a wrong texture. The composite key keeps each full
-      // group bound to ITS OWN degraded geometry so one degraded geom is
+      // group bound to ITS OWN degraded geometries so a degraded geom is
       // never shared by two full groups (no LRU double-free).
-      const degradedGeom =
+      // R-JS-T4a — value is now the ORDERED band-level array for this
+      // surface (one entry per degrade band), passed straight through as
+      // `degradedLevels`.
+      const degradedLevels =
         (degradedBySurface &&
           degradedBySurface.get(degradedSurfaceKey(g.surfaceDid, g.doubleSided))) ||
         null;
@@ -1331,7 +1514,7 @@ export async function bakeStaticsForLandblock(
         modelId: placement.modelId,
         surfaceDid: g.surfaceDid >>> 0,
         geom: g.geometry,
-        degradedGeom,
+        degradedLevels,
         mat,
         staticsShadow,
         staticsMatCastsShadow,
@@ -1363,12 +1546,16 @@ export async function bakeStaticsForLandblock(
   if (staticsTimeSlice && !scene3d.staticsBakedLbs.has(lbKey)) {
     // RP1 — dispose every per-surface group geometry (full + degraded)
     // for this LB's models. groupsByModel: modelId → [{geometry,...}];
-    // degradedGeomByModel: modelId → Map<surfaceDid, geometry>.
+    // R-JS-T4a — degradedGeomByModel: modelId → Map<surfaceKey, [{geometry,
+    // dist, degradeMode}, ...]> (one entry per degrade band), so each
+    // surface value is now an array of band levels — dispose every band.
     for (const groups of primary.groupsByModel.values()) {
       for (const g of groups) { try { g?.geometry?.dispose?.(); } catch (_) {} }
     }
     for (const bySurface of degradedGeomByModel.values()) {
-      for (const geom of bySurface.values()) { try { geom?.dispose?.(); } catch (_) {} }
+      for (const levels of bySurface.values()) {
+        for (const lvl of levels) { try { lvl?.geometry?.dispose?.(); } catch (_) {} }
+      }
     }
     return {
       ...makeEmptySummary(),
@@ -1398,6 +1585,12 @@ export async function bakeStaticsForLandblock(
   // geometries (full) + its degraded surface-group geometries. Track EVERY
   // one so the LRU disposes each exactly once on eviction (matching the
   // singleton nodes built above, which each reference one group geometry).
+  //
+  // R-JS-T4a — the degraded value per surface is now an ARRAY of band
+  // levels (one BufferGeometry per degrade band). Each band geometry is
+  // owned once (shared by reference across all placements of the model in
+  // this LB, exactly like the full geometry), so push each band's geometry
+  // ONCE here → the LRU disposes each band exactly once on eviction.
   const lbDisposableGeometries = [];
   for (const groups of primary.groupsByModel.values()) {
     for (const g of groups) {
@@ -1405,8 +1598,10 @@ export async function bakeStaticsForLandblock(
     }
   }
   for (const bySurface of degradedGeomByModel.values()) {
-    for (const geom of bySurface.values()) {
-      if (geom) lbDisposableGeometries.push(geom);
+    for (const levels of bySurface.values()) {
+      for (const lvl of levels) {
+        if (lvl && lvl.geometry) lbDisposableGeometries.push(lvl.geometry);
+      }
     }
   }
 
@@ -1651,16 +1846,16 @@ export async function bakeStaticsRing(
   // wireframe rendering there's no visual difference between full-
   // detail and degraded leaves — the LOD switch only matters for
   // textured perspective at distance. Empty Map → buildSingletonNode /
-  // buildInstancedNode see `degradedGeom: null` and return the
-  // primary leaf without an LOD wrapper (guarded paths at L593/L727).
+  // buildInstancedNode see `degradedLevels: null` and return the
+  // primary leaf without an LOD wrapper (normalizeDegradedLevels → []).
   // Profile data 2026-05-22: this fetch accounted for 86% (341.9ms of
   // 394ms) of wire-mode statics bake on Chromium+SwiftShader.
   // Wire-agent: skip the degraded (LOD) geometry fetch entirely. In
   // wireframe rendering there's no visual difference between full-
   // detail and degraded leaves — the LOD switch only matters for
   // textured perspective at distance. Empty Map → buildSingletonNode /
-  // buildInstancedNode see `degradedGeom: null` and return the
-  // primary leaf without an LOD wrapper (guarded paths at L593/L727).
+  // buildInstancedNode see `degradedLevels: null` and return the
+  // primary leaf without an LOD wrapper (normalizeDegradedLevels → []).
   // Profile data 2026-05-22: this fetch accounted for 86% (341.9ms of
   // 394ms) of wire-mode statics bake on Chromium+SwiftShader. A/B
   // measured total boot 5087→4218ms median (-869ms, -17%).
@@ -1789,23 +1984,25 @@ export async function bakeStaticsRing(
       // (surfaceDid, doubleSided) bucket; a group with no degraded
       // counterpart renders without an LOD wrapper (never with a wrong
       // texture). The composite key binds each full group to ITS OWN
-      // degraded geometry so one degraded geom is never shared by two
+      // degraded geometries so a degraded geom is never shared by two
       // full groups → each degraded leaf is disposed exactly once on
       // LRU eviction (no double-free).
-      const degradedGeom =
+      // R-JS-T4a — value is the ORDERED band-level array for this surface
+      // (one entry per degrade band), passed through as `degradedLevels`.
+      const degradedLevels =
         (degradedBySurface &&
           degradedBySurface.get(degradedSurfaceKey(sg.surfaceDid, sg.doubleSided))) ||
         null;
 
       if (isInstanced) {
         // === InstancedMesh path ===
-        // One draw call per (model, surface), regardless of placement count.
+        // One draw call per (model, surface) PER LOD band.
         const { node, isLod } = buildInstancedNode({
           modelId,
           surfaceDid: sg.surfaceDid >>> 0,
           group,
           geom: sg.geometry,
-          degradedGeom,
+          degradedLevels,
           mat,
           placementMatrix,
           staticsShadow,
@@ -1827,7 +2024,7 @@ export async function bakeStaticsRing(
           modelId,
           surfaceDid: sg.surfaceDid >>> 0,
           geom: sg.geometry,
-          degradedGeom,
+          degradedLevels,
           mat,
           staticsShadow,
           staticsMatCastsShadow,
