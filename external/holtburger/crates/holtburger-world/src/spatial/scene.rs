@@ -182,6 +182,14 @@ fn constrain_local_pose_toward(current: WorldPosition, target: WorldPosition) ->
 
 const EPSILON: f32 = 1e-4;
 
+/// B11 exit BFS bound (2026-06-09): the most indoor cells
+/// `exited_envcell_to_outdoor` will walk before giving up and staying
+/// indoors. Sized well above any housing structure (the largest
+/// mansions are ~15 cells) so the cap only ever trips on a malformed or
+/// dungeon-scale graph, where "stay indoors, let the server correct" is
+/// the safe verdict.
+const EXIT_INDOOR_BFS_MAX_CELLS: usize = 64;
+
 #[derive(Debug, Clone)]
 pub(crate) struct BodySamplingStore {
     bodies: HashMap<SpatialBodyId, SpatialBody>,
@@ -1261,6 +1269,157 @@ impl SpatialScene {
             }
         }
         None
+    }
+
+    /// Does this cell carry at least one outdoor-exit portal edge? True
+    /// when any neighbour in `cell_portal_graph` has the AC outdoor-exit
+    /// sentinel in its low 16 bits (`>= 0xFFFE`, typically `0xFFFF`).
+    /// This is the same predicate `compute_visibility_with_frustum`'s
+    /// outdoor path uses to decide a cell is reachable from outside — a
+    /// building's ground-floor exit room qualifies; an attic reachable
+    /// only through interior portals does not. The B11 exit machinery
+    /// uses it to relax the cell-AABB containment net at a building's
+    /// doorway (see `movement/system.rs`).
+    pub fn cell_has_outdoor_exit(&self, cell_id: u32) -> bool {
+        self.cell_portal_graph
+            .get(&cell_id)
+            .map(|edges| edges.iter().any(|&n| (n & 0xFFFF) >= 0xFFFE))
+            .unwrap_or(false)
+    }
+
+    /// EnvCell→terrain EXIT (B11, 2026-06-09): the inverse of
+    /// [`Self::entered_envcell_for_outdoor_pose`]. When the player's
+    /// predicted pose is flagged INDOOR but the capsule has left the
+    /// current EnvCell's hull AND every portal-connected indoor
+    /// neighbour, return the outdoor LandCell id the global XY falls in
+    /// so the caller can flip `landblock_id` back to outdoor and re-
+    /// engage the outdoor collision path THIS tick.
+    ///
+    /// Why this exists: the entry flip latches `is_indoors()` the moment
+    /// the capsule reaches a cottage/mansion hull, but nothing ever
+    /// re-derives the cell membership on the way out. Once latched, the
+    /// indoor `clamp_delta_to_cell_interior` net boxes the capsule centre
+    /// inside the cell AABB forever — you can walk INTO a house but the
+    /// doorway becomes an invisible wall on the way OUT (the B11 bug).
+    /// Retail `check_building_transit` re-evaluates membership from
+    /// geometry every tick in BOTH directions; this restores the exit
+    /// half so entry and exit are symmetric.
+    ///
+    /// Broad+narrow phase mirror the entry test, run in reverse:
+    ///   - broad: still within the current cell's radius-padded AABB?
+    ///   - narrow: the current cell's `cell_membership` BSP, plus a
+    ///     bounded BFS over `cell_portal_graph` indoor neighbours
+    ///     (foyer-chain mansions hold several interior cells — you only
+    ///     exit once you've left ALL of them). Outdoor-exit sentinel
+    ///     edges (`>= 0xFFFE`) are NOT followed: they ARE the outdoors.
+    ///
+    /// Guard: returns `None` when the current cell has no
+    /// `cell_membership` entry (indoor geometry not baked yet) so a
+    /// half-loaded cell never spuriously ejects the player mid-room. The
+    /// BFS is capped at [`EXIT_INDOOR_BFS_MAX_CELLS`] cells; on overflow
+    /// it returns `None` (stay indoors) rather than risk ejecting from a
+    /// pathologically large structure. `radius` MUST match the capsule
+    /// radius the entry test + indoor wall-clamp use so entry and exit
+    /// engage at the same distance.
+    ///
+    /// The returned id shares the current landblock high word and is
+    /// derived purely from the (landblock-local) `coords`, so
+    /// `global_coords()` is preserved across the flip — no teleport.
+    pub fn exited_envcell_to_outdoor(
+        &self,
+        pos: &WorldPosition,
+        radius: f32,
+    ) -> Option<u32> {
+        if pos.landblock_id == Guid::NULL || !pos.is_indoors() {
+            return None;
+        }
+        let current = self.current_cell(pos);
+        // Don't eject from a cell whose membership geometry hasn't baked.
+        if !self.cell_membership.contains_key(&current) {
+            return None;
+        }
+        let global = pos.global_coords();
+        // Is the capsule still inside `cell_id`? Broad-phase AABB reject
+        // first (cheap), then the membership BSP (or unpadded-AABB
+        // fallback when a cell has no parsed `cell_bsp`) — identical
+        // verdict logic to `entered_envcell_for_outdoor_pose`.
+        let still_inside = |cell_id: u32| -> bool {
+            if let Some(aabb) = self.cell_aabbs.get(&cell_id) {
+                if !aabb.is_empty()
+                    && (global.x < aabb.min.x - radius
+                        || global.x > aabb.max.x + radius
+                        || global.y < aabb.min.y - radius
+                        || global.y > aabb.max.y + radius
+                        || global.z < aabb.min.z - radius
+                        || global.z > aabb.max.z + radius)
+                {
+                    return false;
+                }
+            }
+            match self.cell_membership.get(&cell_id) {
+                Some(m) => {
+                    let local = m.world_to_local(global);
+                    m.tree.sphere_intersects_cell(&local, radius)
+                        != holtburger_dat::physics::CellBound::Outside
+                }
+                None => match self.cell_aabbs.get(&cell_id) {
+                    Some(aabb) if !aabb.is_empty() => {
+                        global.x >= aabb.min.x
+                            && global.x <= aabb.max.x
+                            && global.y >= aabb.min.y
+                            && global.y <= aabb.max.y
+                            && global.z >= aabb.min.z
+                            && global.z <= aabb.max.z
+                    }
+                    _ => false,
+                },
+            }
+        };
+        // Still in the current cell ⇒ no exit.
+        if still_inside(current) {
+            return None;
+        }
+        // BFS the indoor portal neighbours. If the capsule is inside any
+        // reachable indoor cell, we merely crossed an interior portal —
+        // stay indoors (entry/`current_cell` own which cell). Skip
+        // outdoor-exit sentinels; cap the walk to protect against huge /
+        // malformed graphs (return None = stay indoors on overflow).
+        let mut visited: HashSet<u32> = HashSet::new();
+        visited.insert(current);
+        let mut frontier: VecDeque<u32> = VecDeque::new();
+        frontier.push_back(current);
+        while let Some(cell_id) = frontier.pop_front() {
+            let neighbours = match self.cell_portal_graph.get(&cell_id) {
+                Some(n) => n,
+                None => continue,
+            };
+            for &neighbour in neighbours {
+                // The sentinel IS the outdoors — not an indoor cell to test.
+                if (neighbour & 0xFFFF) >= 0xFFFE {
+                    continue;
+                }
+                if !visited.insert(neighbour) {
+                    continue;
+                }
+                if visited.len() > EXIT_INDOOR_BFS_MAX_CELLS {
+                    return None;
+                }
+                if still_inside(neighbour) {
+                    return None;
+                }
+                frontier.push_back(neighbour);
+            }
+        }
+        // Outside the current cell and every indoor neighbour ⇒ exited.
+        // Clear the cell low-word to make the pose outdoor, then re-derive
+        // the 1-64 terrain-cell index from `coords`. High word + coords
+        // are unchanged ⇒ `global_coords()` is preserved across the flip.
+        let outdoor = WorldPosition {
+            landblock_id: Guid(pos.landblock_id.0 & 0xFFFF_0000),
+            coords: pos.coords,
+            rotation: pos.rotation,
+        };
+        Some(outdoor.normalize_outdoor_cell().landblock_id.0)
     }
 
     /// Phase 6 step D: compute the visible cell set rooted at

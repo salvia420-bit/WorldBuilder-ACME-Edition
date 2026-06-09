@@ -2606,3 +2606,158 @@ mod bsp_collision {
         assert_eq!(scene.cell_physics_bsp_count(), 0, "BSP cleared on unload");
     }
 }
+
+/// B11 (2026-06-09): EnvCell→terrain EXIT flip — the inverse of
+/// `entered_envcell_for_outdoor_pose`. These cover the membership /
+/// neighbour / guard plumbing in `exited_envcell_to_outdoor`; the
+/// in-world door-crossing behaviour is verified separately.
+mod envcell_exit {
+    use super::*;
+    use holtburger_common::Aabb;
+    use holtburger_dat::physics::{BspLeaf, BspNode};
+
+    // Landblock 0xA9B4: high bytes X=0xA9 (169), Y=0xB4 (180). The
+    // landblock origin in global space is (169*192, 180*192).
+    const LB_HIGH: u32 = 0xA9B4_0000;
+    const ORIGIN_X: f32 = 169.0 * 192.0;
+    const ORIGIN_Y: f32 = 180.0 * 192.0;
+    const R: f32 = 0.4; // PLAYER_CAPSULE_RADIUS
+
+    /// A membership tree that is a single leaf — `sphere_intersects_cell`
+    /// short-circuits any leaf to `EntirelyInside`, so membership reduces
+    /// to the broad-phase AABB reject inside `exited_envcell_to_outdoor`.
+    /// Identity orientation ⇒ world == local. That's enough to exercise
+    /// the exit plumbing without hand-authoring a splitting BSP.
+    fn leaf_membership() -> CellMembership {
+        CellMembership {
+            tree: BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: None,
+                poly_ids: vec![],
+            }),
+            origin: Vector3::zero(),
+            orientation: Quaternion::identity(),
+        }
+    }
+
+    /// World-space AABB centred on landblock-local `(lx, ly)` with the
+    /// given half-extent, spanning a generous Z band.
+    fn cell_box(lx: f32, ly: f32, half: f32) -> Aabb {
+        let gx = ORIGIN_X + lx;
+        let gy = ORIGIN_Y + ly;
+        Aabb::new(
+            Vector3::new(gx - half, gy - half, -50.0),
+            Vector3::new(gx + half, gy + half, 50.0),
+        )
+    }
+
+    /// Indoor pose whose landblock-local coords are `(lx, ly, lz)`.
+    fn indoor_pose(cell_id: u32, lx: f32, ly: f32, lz: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(cell_id),
+            coords: Vector3::new(lx, ly, lz),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    #[test]
+    fn exit_returns_none_for_outdoor_pose() {
+        let scene = SpatialScene::new();
+        let outdoor = WorldPosition {
+            landblock_id: Guid(LB_HIGH | 0x0019),
+            coords: Vector3::new(50.0, 50.0, 5.0),
+            rotation: Quaternion::identity(),
+        };
+        assert_eq!(scene.exited_envcell_to_outdoor(&outdoor, R), None);
+    }
+
+    #[test]
+    fn exit_returns_none_when_membership_unbaked() {
+        // Cell AABB present (and the player is well outside it) but NO
+        // membership entry ⇒ indoor geometry hasn't baked ⇒ never eject.
+        let mut scene = SpatialScene::new();
+        let exit_cell = LB_HIGH | 0x0100;
+        scene.insert_cell_aabb(exit_cell, cell_box(50.0, 50.0, 5.0));
+        let pose = indoor_pose(exit_cell, 50.0, 90.0, 5.0); // outside the box
+        assert_eq!(scene.exited_envcell_to_outdoor(&pose, R), None);
+    }
+
+    #[test]
+    fn exit_returns_none_when_still_inside_cell() {
+        let mut scene = SpatialScene::new();
+        let exit_cell = LB_HIGH | 0x0100;
+        scene.insert_cell_aabb(exit_cell, cell_box(50.0, 50.0, 5.0));
+        scene.insert_cell_membership(exit_cell, leaf_membership());
+        // Standing in the middle of the room.
+        let pose = indoor_pose(exit_cell, 50.0, 50.0, 5.0);
+        assert_eq!(scene.exited_envcell_to_outdoor(&pose, R), None);
+    }
+
+    #[test]
+    fn exit_returns_outdoor_id_when_clear_of_cell() {
+        let mut scene = SpatialScene::new();
+        let exit_cell = LB_HIGH | 0x0100;
+        scene.insert_cell_aabb(exit_cell, cell_box(50.0, 50.0, 5.0));
+        scene.insert_cell_membership(exit_cell, leaf_membership());
+        // An outdoor-exit sentinel neighbour must NOT trip the BFS (it
+        // IS the outdoors) — include it to prove it's skipped.
+        scene.insert_cell_portal(exit_cell, LB_HIGH | 0xFFFF);
+        // Walked out: local (50, 90) is well past the box's +Y wall.
+        let pose = indoor_pose(exit_cell, 50.0, 90.0, 5.0);
+        let got = scene
+            .exited_envcell_to_outdoor(&pose, R)
+            .expect("capsule clear of the cell hull should flip to outdoor");
+        // High word preserved; result is outdoor; low word is the
+        // terrain cell the coords fall in (preserving global position).
+        assert_eq!(got & 0xFFFF_0000, LB_HIGH, "landblock high word preserved");
+        let result_pose = WorldPosition {
+            landblock_id: Guid(got),
+            coords: Vector3::zero(),
+            rotation: Quaternion::identity(),
+        };
+        assert!(!result_pose.is_indoors(), "flipped to an outdoor cell id");
+        let expected_low = WorldPosition {
+            landblock_id: Guid(LB_HIGH),
+            coords: pose.coords,
+            rotation: pose.rotation,
+        }
+        .derived_outdoor_cell_id()
+        .unwrap();
+        assert_eq!(got & 0xFFFF, expected_low, "outdoor cell derived from coords");
+    }
+
+    #[test]
+    fn exit_returns_none_when_inside_an_indoor_neighbour() {
+        // Player has left the current cell's AABB but is geometrically
+        // inside a portal-connected indoor neighbour (membership leaf, no
+        // AABB ⇒ broad-phase skipped ⇒ leaf says inside). Merely crossed
+        // an interior portal — stay indoors.
+        let mut scene = SpatialScene::new();
+        let exit_cell = LB_HIGH | 0x0100;
+        let back_room = LB_HIGH | 0x0101;
+        scene.insert_cell_aabb(exit_cell, cell_box(50.0, 50.0, 5.0));
+        scene.insert_cell_membership(exit_cell, leaf_membership());
+        // Neighbour: membership but no AABB, reachable via portal.
+        scene.insert_cell_membership(back_room, leaf_membership());
+        scene.insert_cell_portal(exit_cell, back_room);
+        scene.insert_cell_portal(back_room, exit_cell);
+        // Outside exit_cell's box; current_cell stays exit_cell (no AABB
+        // contains the point), so the BFS is what must catch the neighbour.
+        let pose = indoor_pose(exit_cell, 50.0, 90.0, 5.0);
+        assert_eq!(scene.exited_envcell_to_outdoor(&pose, R), None);
+    }
+
+    #[test]
+    fn cell_has_outdoor_exit_detects_sentinel() {
+        let mut scene = SpatialScene::new();
+        let exit_cell = LB_HIGH | 0x0100;
+        let interior = LB_HIGH | 0x0166;
+        scene.insert_cell_portal(exit_cell, LB_HIGH | 0xFFFF); // outdoor door
+        scene.insert_cell_portal(exit_cell, interior);
+        scene.insert_cell_portal(interior, exit_cell); // interior-only
+        assert!(scene.cell_has_outdoor_exit(exit_cell), "has 0xFFFF portal");
+        assert!(!scene.cell_has_outdoor_exit(interior), "interior-only cell");
+        assert!(!scene.cell_has_outdoor_exit(LB_HIGH | 0x0199), "unknown cell");
+    }
+}

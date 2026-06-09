@@ -1363,6 +1363,32 @@ impl MovementSystem {
             pose.landblock_id = Guid(entered);
         }
 
+        // EnvCell→terrain EXIT (B11, 2026-06-09): the symmetric inverse
+        // of the entry flip above. The entry flip latches `is_indoors()`
+        // on building entry; without this inverse the
+        // `clamp_delta_to_cell_interior` net (below) boxes the player
+        // inside the cell AABB forever — they can enter a cottage/mansion
+        // but the doorway becomes an invisible wall on the way out.
+        // Retail `check_building_transit` re-derives cell membership from
+        // geometry every tick in BOTH directions; mirror the exit half so
+        // entry and exit are symmetric. Same `USE_LOCAL_ENVCELL_ENTRY`
+        // flag (entry/exit MUST move together) and same pre-`indoor_-
+        // unbaked` / pre-`is_indoors()` ordering so the whole tick sees
+        // the flipped pose. `exited_envcell_to_outdoor` self-guards
+        // against unbaked indoor geometry (returns None) so a half-loaded
+        // cell never ejects the player mid-room; the AABB-net relaxation
+        // in the indoor branch below is what actually lets the capsule
+        // reach the doorway so this flip can fire next tick.
+        if USE_LOCAL_ENVCELL_ENTRY
+            && pose.is_indoors()
+            && let Some(outdoor) = world.scene.exited_envcell_to_outdoor(
+                &pose,
+                holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+            )
+        {
+            pose.landblock_id = Guid(outdoor);
+        }
+
         let indoor_unbaked = if pose.is_indoors() {
             let cell_id = world.scene.current_cell(&pose);
             world.scene.cell_triangles(cell_id).is_empty()
@@ -1471,8 +1497,28 @@ impl MovementSystem {
                 // that consults the portal graph (see
                 // docs/FOLLOW_ONS.md "Cell-AABB containment vs.
                 // doorway crossing").
+                // B11 doorway relaxation (2026-06-09): also bypass the
+                // cell-AABB containment net for a building's ground-floor
+                // EXIT room (a cell with an outdoor-exit portal) once its
+                // per-poly walls are loaded. The cell AABB stops at the
+                // doorway, so the net would crop the player's exit delta
+                // right at the door — boxing them in even though the per-
+                // poly walls already model the opening. Without this the
+                // capsule centre can never leave the AABB, so the EXIT
+                // flip above never trips and you can enter a house but
+                // never walk back out. Scoped tight on purpose: ONLY
+                // outdoor-exit cells (interior dungeon cells keep the net
+                // — they have no door to the terrain) and ONLY when
+                // `triangles` are present (real walls to fall back on, so
+                // we don't trade the doorway gap for unclamped drift).
+                // Tied to the same `USE_LOCAL_ENVCELL_ENTRY` flag as the
+                // entry/exit flips so the whole transition feature toggles
+                // as a unit.
+                let exit_room_relax = USE_LOCAL_ENVCELL_ENTRY
+                    && !triangles.is_empty()
+                    && world.scene.cell_has_outdoor_exit(cell_id);
                 match cell_aabb_opt {
-                    Some(aabb) if exclusion_aabbs.is_empty() => {
+                    Some(aabb) if exclusion_aabbs.is_empty() && !exit_room_relax => {
                         holtburger_world::spatial::clamp_delta_to_cell_interior(
                             &pose,
                             pre_clamped,
