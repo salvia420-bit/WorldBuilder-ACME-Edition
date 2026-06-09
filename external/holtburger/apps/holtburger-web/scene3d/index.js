@@ -79,6 +79,10 @@ import { installWebglContextRecovery } from "./webgl_context_recovery.js";
 // fetches in inventory/vendor/container/trade/buffs/spell-research
 // return synchronously. See docs/wave-15-icon-preload-2026-05-26.md.
 import { preloadAllIcons as preloadAllIconsShared } from "../ui/ac_icon_cache.js";
+// 2026-06-09 — per-LB streaming-bake resilience (terrain/buildings/statics).
+// See stream_bake_guard.js: stops a shard-fetch failure from being hammered
+// into an OOM crash by the per-position-update ring driver.
+import { guardedStreamBake, createStreamGuardState } from "./stream_bake_guard.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -2225,26 +2229,33 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // commit). The lazy hook is fail-soft when the field is missing
     // (init3D failed early or wasm exports are absent) because the
     // bakers raise an explicit error if `opts` is required but unset.
+    // 2026-06-09 — guard a per-LB streaming baker (`run` returns the bake
+    // promise) against the OOM-crash failure mode (see stream_bake_guard.js):
+    // in-flight dedup + post-failure cooldown, never rejects.
+    _guardedStreamBake(kind, lbKey, run) {
+      if (!this._streamGuardState) this._streamGuardState = createStreamGuardState();
+      return guardedStreamBake(this._streamGuardState, kind, lbKey, run);
+    },
     loadTerrainForLandblock(lbX, lbY) {
-      // Terrain bake handles its own wire-fill companion (second mesh
-      // per LB sharing geometry, added directly to terrainGroup by
-      // `bakeTerrainForLandblock` — see scene3d/terrain.js:1335ish).
-      // No post-bake walk needed.
-      const p = bakeTerrainForLandblock(
-        this,
-        lbX,
-        lbY,
-        this.terrainOpts,
-        this.wasmExports
-      );
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
-      const lru = this.landblockLru;
-      if (lru) {
-        return Promise.resolve(p).then((lbMesh) => {
-          // `lbMesh` is null on idempotent re-call (already baked) or
-          // when the bake threw. Track unconditionally so re-entries
-          // refresh lastTouchMs; only stash disposables when the bake
-          // produced a fresh per-LB Mesh.
+      const self = this;
+      return this._guardedStreamBake("terrain", lbKeyForLru, async () => {
+        // Terrain bake handles its own wire-fill companion (second mesh
+        // per LB sharing geometry, added directly to terrainGroup by
+        // `bakeTerrainForLandblock` — see scene3d/terrain.js:1335ish).
+        // No post-bake walk needed.
+        const lbMesh = await bakeTerrainForLandblock(
+          self,
+          lbX,
+          lbY,
+          self.terrainOpts,
+          self.wasmExports
+        );
+        const lru = self.landblockLru;
+        if (lru) {
+          // `lbMesh` is null on idempotent re-call (already baked). Track
+          // unconditionally so re-entries refresh lastTouchMs; only stash
+          // disposables when the bake produced a fresh per-LB Mesh.
           try {
             if (lbMesh?.geometry && lbMesh?.material) {
               const disposables = {
@@ -2267,22 +2278,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               lru.track(lbKeyForLru);
             }
           } catch (_) {}
-          return lbMesh;
-        });
-      }
-      return p;
+        }
+        return lbMesh;
+      });
     },
     loadBuildingsForLandblock(lbX, lbY) {
-      const p = bakeBuildingsForLandblock(
-        this,
-        lbX,
-        lbY,
-        this.buildingsOpts,
-        this.wasmExports
-      );
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
       const self = this;
-      return Promise.resolve(p).then((r) => {
+      return this._guardedStreamBake("buildings", lbKeyForLru, async () => {
+        const r = await bakeBuildingsForLandblock(
+          self,
+          lbX,
+          lbY,
+          self.buildingsOpts,
+          self.wasmExports
+        );
         // LRU wave H4 — buildings have zero per-LB disposables (every
         // geometry+material is cache-shared cross-LB); track() with empty
         // disposables registers the lbKey so eviction can still remove
@@ -2305,16 +2315,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       });
     },
     loadStaticsForLandblock(lbX, lbY) {
-      const p = bakeStaticsForLandblock(
-        this,
-        lbX,
-        lbY,
-        this.staticsOpts,
-        this.wasmExports
-      );
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
       const self = this;
-      return Promise.resolve(p).then((r) => {
+      return this._guardedStreamBake("statics", lbKeyForLru, async () => {
+        const r = await bakeStaticsForLandblock(
+          self,
+          lbX,
+          lbY,
+          self.staticsOpts,
+          self.wasmExports
+        );
         // LRU wave H4 — per-LB owned BufferGeometries (one per unique
         // modelId, plus per-modelId degraded LOD geom). Materials are
         // cache-shared. `r` is null on idempotent re-call — track without
