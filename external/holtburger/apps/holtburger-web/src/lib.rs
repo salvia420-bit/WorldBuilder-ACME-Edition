@@ -9209,6 +9209,144 @@ pub async fn fetch_setup_holding_locations(
     Ok(SetupHoldingLocations { setup_id, locations })
 }
 
+/// B5 (2026-06-09): one child-weapon part frame drained from a
+/// SetupModel's `placement_frames[placement]` slot. `part_index` is the
+/// `setup.parts[]` slot (matches the rig's `inst.parts[partIndex]`
+/// Group). `ox/oy/oz` is the part-local origin; `qw/qx/qy/qz` the
+/// orientation in AC wire order (w,x,y,z) — JS reorders to three.js
+/// (x,y,z,w) at apply, exactly like the rest-pose path.
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[derive(Debug, Clone, Copy)]
+pub struct PlacementPartFrame {
+    pub(crate) part_index: u32,
+    pub(crate) ox: f32,
+    pub(crate) oy: f32,
+    pub(crate) oz: f32,
+    pub(crate) qw: f32,
+    pub(crate) qx: f32,
+    pub(crate) qy: f32,
+    pub(crate) qz: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl PlacementPartFrame {
+    #[wasm_bindgen(getter, js_name = partIndex)]
+    pub fn part_index(&self) -> u32 { self.part_index }
+    #[wasm_bindgen(getter)] pub fn ox(&self) -> f32 { self.ox }
+    #[wasm_bindgen(getter)] pub fn oy(&self) -> f32 { self.oy }
+    #[wasm_bindgen(getter)] pub fn oz(&self) -> f32 { self.oz }
+    #[wasm_bindgen(getter)] pub fn qw(&self) -> f32 { self.qw }
+    #[wasm_bindgen(getter)] pub fn qx(&self) -> f32 { self.qx }
+    #[wasm_bindgen(getter)] pub fn qy(&self) -> f32 { self.qy }
+    #[wasm_bindgen(getter)] pub fn qz(&self) -> f32 { self.qz }
+}
+
+/// Pure helper: resolve a child SetupModel's per-part placement frames
+/// for `placement`, with the `requested → Default(0) → first` fallback
+/// chain (mirrors `compute_hinge_frames` / `walk_setup_parts`). Returns
+/// `(resolved_key, frames)`; an empty Vec for `0x01` raw GfxObjs (no
+/// parts / no placement table), unreadable/unparseable setups, or a
+/// setup with no `placement_frames` at all. `resolved_key` echoes which
+/// placement slot was actually used (for JS-side diagnostics).
+#[cfg(any(target_arch = "wasm32", test))]
+fn collect_setup_placement_frames<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+    placement: i32,
+) -> (i32, Vec<PlacementPartFrame>) {
+    use holtburger_dat::ResourceKey;
+    use holtburger_dat::file_type::SetupModel;
+    if (setup_id >> 24) as u8 != 0x02 {
+        return (placement, Vec::new());
+    }
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) else {
+        return (placement, Vec::new());
+    };
+    let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+        return (placement, Vec::new());
+    };
+    let resolved = setup
+        .placement_frames
+        .get(&placement)
+        .map(|p| (placement, p))
+        .or_else(|| setup.placement_frames.get(&0).map(|p| (0, p)))
+        .or_else(|| setup.placement_frames.iter().next().map(|(k, p)| (*k, p)));
+    let Some((resolved_key, placement_type)) = resolved else {
+        return (placement, Vec::new());
+    };
+    let frames = placement_type
+        .anim_frame
+        .frames
+        .iter()
+        .enumerate()
+        .map(|(i, frame)| PlacementPartFrame {
+            part_index: i as u32,
+            ox: frame.origin.x,
+            oy: frame.origin.y,
+            oz: frame.origin.z,
+            qw: frame.orientation.w,
+            qx: frame.orientation.x,
+            qy: frame.orientation.y,
+            qz: frame.orientation.z,
+        })
+        .collect();
+    (resolved_key, frames)
+}
+
+/// Per-child-setup placement-frame bundle returned from
+/// [`fetch_setup_placement_frames`]. Mirrors [`SetupHoldingLocations`]:
+/// a one-shot `take_frames()` drain so JS lifts the Vec across the wasm
+/// boundary without cloning, then caches per `(setup_id, placement)`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SetupPlacementFrames {
+    setup_id: u32,
+    placement_key: i32,
+    frames: Vec<PlacementPartFrame>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SetupPlacementFrames {
+    #[wasm_bindgen(getter, js_name = setupId)]
+    pub fn setup_id(&self) -> u32 { self.setup_id }
+    /// The placement slot actually used after the fallback chain.
+    #[wasm_bindgen(getter, js_name = placementKey)]
+    pub fn placement_key(&self) -> i32 { self.placement_key }
+    #[wasm_bindgen(getter, js_name = frameCount)]
+    pub fn frame_count(&self) -> u32 { self.frames.len() as u32 }
+    /// One-shot drain. Second call returns an empty Vec.
+    #[wasm_bindgen(js_name = takeFrames)]
+    pub fn take_frames(&mut self) -> Vec<PlacementPartFrame> {
+        std::mem::take(&mut self.frames)
+    }
+}
+
+/// Wasm export: walk a CHILD (held item) SetupModel and return its
+/// per-part `placement_frames[placement]` frames so JS can re-pose the
+/// weapon's parts into the combat grip on equip — retail
+/// `CPartArray::SetPlacementFrame`. JS calls this once per unique
+/// `(child setup id, placement)` (cached) from `attachChildToParent`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSetupPlacementFrames)]
+pub async fn fetch_setup_placement_frames(
+    setup_id: u32,
+    placement: i32,
+) -> Result<SetupPlacementFrames, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id));
+    })
+    .await?;
+    let (placement_key, frames) =
+        collect_setup_placement_frames(source.as_ref(), setup_id, placement);
+    Ok(SetupPlacementFrames { setup_id, placement_key, frames })
+}
+
 // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center ===
 //
 // AC authored a per-part `GfxObj.SortCenter` (melt `GfxObj.cs:25`) — a

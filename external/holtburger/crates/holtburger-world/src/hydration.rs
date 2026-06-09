@@ -218,6 +218,17 @@ impl WorldObjectPropertiesHydrationExt for WorldObjectProperties {
         if let Some(v) = odd.parent_loc {
             self.ints.insert(PropertyInt::ParentLocation, v as i32);
         }
+        // B5 (2026-06-09): the physics-desc ANIMATION_FRAME field is the
+        // object's static Placement id (the SetupModel `placement_frames`
+        // key it is currently posed in). Persist it as PropertyInt::
+        // Placement so an item that arrives already-equipped (CreateObject
+        // carrying the wielder + placement, no separate ParentEvent) still
+        // re-poses its weapon mesh into the combat grip rather than the
+        // Default(0) vertical pose. A subsequent ParentEvent overrides this
+        // with the authoritative equip placement (handlers/inventory.rs).
+        if let Some(v) = odd.animation_frame {
+            self.ints.insert(PropertyInt::Placement, v as i32);
+        }
         if let Some(v) = odd.obj_scale {
             self.floats.insert(PropertyFloat::DefaultScale, v as f64);
         }

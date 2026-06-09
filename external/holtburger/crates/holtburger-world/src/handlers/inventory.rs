@@ -6,7 +6,7 @@ use crate::state::liveness::EntityUpsertKind;
 use holtburger_common::Guid;
 use holtburger_common::properties::WorldObjectExt as _;
 use holtburger_common::properties::{
-    PropertyInstanceId, PropertyUpdate, WorldObjectPropertyAccessorsMut,
+    PropertyInstanceId, PropertyInt, PropertyUpdate, WorldObjectPropertyAccessorsMut,
 };
 use holtburger_protocol::messages::{GameEvent, GameEventMessage, GameMessage};
 
@@ -73,6 +73,22 @@ pub(crate) fn handle_message(
                 } else {
                     Some(data.parent_guid)
                 };
+                // B5 (2026-06-09): on equip, persist the AUTHORITATIVE grip
+                // frame from the ParentEvent — `placement` (the SetupModel
+                // `placement_frames` key, e.g. RightHandCombat) and
+                // `location` (the wielder holding-location key). Retail
+                // `SmartBox::DoParentEvent` mounts the child at the holding
+                // location AND re-poses the child's own parts to
+                // `placement_frames[placement]`; the wielded-item snapshot
+                // (lib.rs `get_int_prop(Placement/ParentLocation)`) surfaces
+                // these to the JS attach path, which without them reports 0
+                // and renders the weapon in the Default(0) vertical pose. A
+                // detach (parent == NULL) leaves the last-known values —
+                // ACE typically ObjectDeletes the child right after anyway.
+                if data.parent_guid != Guid::NULL {
+                    entity.set_int_prop(PropertyInt::Placement, data.placement as i32);
+                    entity.set_int_prop(PropertyInt::ParentLocation, data.location as i32);
+                }
             } else {
                 return false;
             }
@@ -88,6 +104,21 @@ pub(crate) fn handle_message(
             }
 
             let _ = state.reconcile_entity_retention(data.child_guid);
+
+            // B5 (2026-06-09): attach-resync. The Wielder-property transition
+            // that first drives the JS rig attach (EntityAttached → client
+            // kind=49) can land BEFORE this ParentEvent, so that first attach
+            // used placement=0. Now that the authoritative placement is on
+            // the entity, re-emit EntityAttached so the rig re-attaches and
+            // re-poses the weapon with the real grip. Idempotent on the JS
+            // side (attachChildToParent just re-sets the transforms). Only on
+            // equip; a detach is handled by the EntityDetached path elsewhere.
+            if data.parent_guid != Guid::NULL {
+                events.push(WorldEvent::EntityAttached {
+                    entity_guid: u32::from(data.child_guid),
+                    new_wielder_guid: u32::from(data.parent_guid),
+                });
+            }
 
             true
         }

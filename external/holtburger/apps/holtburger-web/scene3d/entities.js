@@ -1893,6 +1893,13 @@ export class EntityManager {
     this._pendingAttach = new Map();
     /** @type {Map<number, Map<number, object>>} */
     this._holdingLocCache = new Map();
+    // B5 (2026-06-09): child-weapon placement-frame cache, keyed
+    // `"<childSetupId>:<placement>"` → Map<partIndex, {ox..qz}>. Lets us
+    // fetch each held item's `placement_frames[placement]` from wasm at
+    // most once per (setup, placement) and re-pose the weapon's parts
+    // into the combat grip on attach (retail SetPlacementFrame).
+    /** @type {Map<string, Map<number, object>>} */
+    this._placementFrameCache = new Map();
     // Wave 7 Phase 7.1 (2026-05-26): rate-limit the per-entity
     // `_recentLocomotionTime` prune to once per second. Each entry is
     // single-shot (deleted on consume), but if a player walks then
@@ -3323,6 +3330,19 @@ export class EntityManager {
     try {
       c.root.traverse((o) => o.layers.set(1));
     } catch (_) {}
+    // B5 (2026-06-09): second equip step — re-pose the child weapon's own
+    // parts into the grip frame named by `placement`. Runs after the
+    // holding-location mount above so it sets the child's per-part LOCAL
+    // transforms (relative to the now-positioned child root). Re-applied
+    // on every attach (incl. the ParentEvent attach-resync), so a
+    // placement correction picks up automatically.
+    const childSetupId = (c.meta?.setupId ?? c.meta?.modelId ?? 0) >>> 0;
+    try {
+      await this._applyChildPlacementFrames(cGuid, childSetupId, placement >>> 0);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[attach] placement-frame re-pose failed:", e);
+    }
   }
 
   /**
@@ -3397,6 +3417,63 @@ export class EntityManager {
       this._holdingLocCache.set(sid, table);
     }
     return table.get(locationKey >>> 0) ?? null;
+  }
+
+  /**
+   * B5 (2026-06-09): re-pose a held child's OWN parts into the combat
+   * grip by applying its SetupModel `placement_frames[placement]` to each
+   * `inst.parts[i]` Group — the second half of retail's two-step equip
+   * (`set_parent` mounts the child at the hand; `SetPlacementFrame`
+   * re-poses the child's parts). Without this the weapon renders in its
+   * Default(0) spawn pose (a spear stands vertically instead of being
+   * gripped). Fetched once per `(childSetupId, placement)` and cached.
+   * `placement` is the server-authoritative grip key (PropertyInt
+   * Placement, surfaced through the wielded-item snapshot / ParentEvent).
+   * No-op when the child is a single-part GfxObj (no placement table) or
+   * the wasm export is absent (old bundle) — matches prior behaviour.
+   */
+  async _applyChildPlacementFrames(childGuid, setupId, placement) {
+    const sid = setupId >>> 0;
+    const cGuid = childGuid >>> 0;
+    if (sid === 0) return;
+    const key = `${sid}:${placement | 0}`;
+    let frames = this._placementFrameCache.get(key);
+    if (!frames) {
+      frames = new Map();
+      const fetchFn = this.wasmExports?.fetchSetupPlacementFrames;
+      if (typeof fetchFn === "function") {
+        const bundle = await fetchFn(sid, placement | 0);
+        if (bundle) {
+          const arr =
+            typeof bundle.takeFrames === "function" ? bundle.takeFrames() : [];
+          for (const f of arr) {
+            frames.set(f.partIndex >>> 0, {
+              ox: f.ox, oy: f.oy, oz: f.oz,
+              qw: f.qw, qx: f.qx, qy: f.qy, qz: f.qz,
+            });
+            if (typeof f.free === "function") {
+              try { f.free(); } catch (_) {}
+            }
+          }
+          if (typeof bundle.free === "function") {
+            try { bundle.free(); } catch (_) {}
+          }
+        }
+      }
+      this._placementFrameCache.set(key, frames);
+    }
+    if (frames.size === 0) return;
+    // Re-check liveness after the await — the child may have despawned.
+    const c = this.entityMap.get(cGuid);
+    if (!c || !c.parts) return;
+    for (let i = 0; i < c.parts.length; i += 1) {
+      const fr = frames.get(i);
+      const g = c.parts[i];
+      if (!fr || !g) continue;
+      g.position.set(fr.ox, fr.oy, fr.oz);
+      // AC wire order (qw, qx, qy, qz) → three.js (qx, qy, qz, qw).
+      g.quaternion.copy(acQuatToThree(fr.qw, fr.qx, fr.qy, fr.qz));
+    }
   }
 
   /**
