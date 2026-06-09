@@ -286,6 +286,25 @@ const USE_RAMP_FLOOR_SNAP_FIX: bool = true;
 /// the flat-tri slide. See the module-doc DEFERRED block.
 const USE_PHYSICS_BSP: bool = false;
 
+/// B4 Tier-2 (2026-06-09): per-static physics-BSP push-out for OUTDOOR
+/// statics. SEPARATE from `USE_PHYSICS_BSP` (indoor cells) on purpose —
+/// the indoor-BSP authority question is unresolved, and entangling the two
+/// gates would block this. When OFF (DEFAULT) the static-collision path is
+/// exactly the shipped Tier-1 coarse-AABB stop/slide; the per-static BSPs
+/// are parsed + plumbed into `SpatialScene.statics_physics_bsp` regardless
+/// but never consulted, so flipping this on is a pure runtime switch with
+/// no re-bake. When ON: statics carrying a precise BSP are CEDED from the
+/// coarse-AABB sweep (whose 8-corner bound stops the capsule short of thin
+/// geometry like a tree trunk) to `resolve_static_bsp_pushout`, which runs
+/// ACE `BSPTree.placement_insert` to push the capsule out of the true
+/// solid. Push-out only: it resolves penetration each tick (fine at
+/// walking speed, where the per-tick step is far smaller than a trunk
+/// radius); the swept time-of-collision stop (`BSPTree.find_collisions`
+/// + the Transition step/slide stack) that would stop a FAST move AT the
+/// surface is the deferred Tier-2 follow-on, as is per-part BSP for 0x02
+/// SetupModel statics. See the static-sweep block below.
+const USE_STATIC_BSP: bool = false;
+
 /// Terrain→EnvCell entry (2026-06-02): when ON (DEFAULT), the manual-
 /// drive integrator flips the local player indoors the tick its capsule
 /// enters a loaded EnvCell, instead of waiting for the server's
@@ -1633,7 +1652,17 @@ impl MovementSystem {
             // outdoor statics fan-in is small (Holtburg's central LB
             // has ~70). Empty candidate sets early-out before any
             // swept-sphere math, so dense LBs stay cheap.
-            let candidates = world.scene.statics_aabbs_near_pose(&pose);
+            let mut candidates = world.scene.statics_aabbs_near_pose(&pose);
+            // B4 Tier-2 (2026-06-09): when the static-BSP gate is on, cede
+            // statics that carry a precise BSP from this coarse-AABB sweep
+            // — the BSP push-out below handles them so the capsule can
+            // approach the true surface instead of stopping at the 8-corner
+            // bound. BSP-less statics keep the AABB clamp. When the gate is
+            // off this is a no-op (every entry has `has_bsp == false`), so
+            // Tier-1 stays byte-identical.
+            if USE_STATIC_BSP {
+                candidates.retain(|c| !c.has_bsp);
+            }
             if candidates.is_empty() {
                 lateral_clamped
             } else {
@@ -1691,6 +1720,40 @@ impl MovementSystem {
                     }
                 }
             }
+        };
+        // B4 Tier-2 (2026-06-09): per-static physics-BSP push-out. After
+        // the coarse-AABB sweep (which, under USE_STATIC_BSP, now covers
+        // only BSP-less statics), resolve the capsule OUT of any precise
+        // static BSP it penetrates at the post-clamp target. Push-out only
+        // — fine for walking-speed locomotion (per-tick step ≪ trunk
+        // radius); the swept stop is the deferred follow-on. Lateral push
+        // only: the Z displacement is dropped so the downstream floor-Z
+        // snap stays the sole vertical authority. No-op when the gate is
+        // off or no static BSP is near (`resolve_static_bsp_pushout` →
+        // None), so Tier-1 behaviour is preserved.
+        let lateral_clamped = if USE_STATIC_BSP {
+            let global = pose.global_coords();
+            let tx = global.x + lateral_clamped.x;
+            let ty = global.y + lateral_clamped.y;
+            let tz = global.z;
+            let r = holtburger_world::spatial::PLAYER_CAPSULE_RADIUS;
+            let h = holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT;
+            // ACE two-sphere cylinder: low at feet+radius, high at head−radius.
+            let low = Vector3::new(tx, ty, tz + r);
+            let high = Vector3::new(tx, ty, tz + (h - r).max(r));
+            match world
+                .scene
+                .resolve_static_bsp_pushout(&pose, &[low, high], r, 2)
+            {
+                Some(disp) => Vector3::new(
+                    lateral_clamped.x + disp.x,
+                    lateral_clamped.y + disp.y,
+                    lateral_clamped.z,
+                ),
+                None => lateral_clamped,
+            }
+        } else {
+            lateral_clamped
         };
         // Entity collision pass. Mirrors ACE's
         // `PhysicsObj.find_object_collisions`

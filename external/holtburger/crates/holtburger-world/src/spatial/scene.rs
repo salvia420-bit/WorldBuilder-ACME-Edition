@@ -473,6 +473,16 @@ pub struct SpatialScene {
     /// existing `EnvCellPlacement.static_objects` path and don't land
     /// here — they're picked up by the cell-mesh sweep.
     statics_aabb_index: HashMap<u32, Vec<StaticAabbEntry>>,
+    /// B4 Tier-2 (2026-06-09): per-landblock PRECISE physics BSPs for
+    /// outdoor statics, the parallel of `statics_aabb_index`. Keyed by
+    /// landblock high word; one [`CellPhysicsBsp`] per physics-bearing
+    /// static placement (its `GfxObj.physics_bsp` + resolved polys, framed
+    /// to world via the placement origin/orientation). Populated alongside
+    /// the AABBs by `populateStaticsAabbsForLandblock`; cleared per
+    /// landblock on unload. Consulted only when `USE_STATIC_BSP` is on, via
+    /// [`Self::resolve_static_bsp_pushout`] — the AABB stays the default /
+    /// gate-off path, so this is a pure additive runtime switch.
+    statics_physics_bsp: HashMap<u32, Vec<CellPhysicsBsp>>,
     /// Workstream C (3D camera collision, 2026-05-11): per-landblock
     /// world-space physics triangles for building interiors / basements.
     /// **This is the building-side parallel of `cell_physics_index`.**
@@ -544,6 +554,7 @@ impl SpatialScene {
             open_door_exclusion_aabbs: HashMap::new(),
             building_origins: HashMap::new(),
             statics_aabb_index: HashMap::new(),
+            statics_physics_bsp: HashMap::new(),
             building_physics_index: HashMap::new(),
             sky_desc: None,
         }
@@ -1725,6 +1736,110 @@ impl SpatialScene {
             delta,
             radius,
         )
+    }
+
+    /// B4 Tier-2 (2026-06-09): register a precise physics BSP for one
+    /// outdoor static placement under `landblock_high`. Drained from the
+    /// wasm bundle's `STATIC_BSP_PENDING` pile each TickMovement, the same
+    /// cadence as the static-AABB drain. Append-only; the per-landblock
+    /// clear on unload keeps it bounded.
+    pub fn insert_static_physics_bsp(&mut self, landblock_high: u32, bsp: CellPhysicsBsp) {
+        self.statics_physics_bsp
+            .entry(landblock_high)
+            .or_default()
+            .push(bsp);
+    }
+
+    /// B4 Tier-2: drop every static physics BSP for `landblock_high`
+    /// (mirror of `clear_static_aabbs_for_landblock`). Returns the removed
+    /// count for diagnostic logging.
+    pub fn clear_static_physics_bsps_for_landblock(&mut self, landblock_high: u32) -> usize {
+        match self.statics_physics_bsp.remove(&landblock_high) {
+            Some(v) => v.len(),
+            None => 0,
+        }
+    }
+
+    /// B4 Tier-2: total registered static physics-BSP count. Diagnostic.
+    pub fn static_physics_bsp_count(&self) -> usize {
+        self.statics_physics_bsp.values().map(|v| v.len()).sum()
+    }
+
+    /// B4 Tier-2 (2026-06-09): push the player's two-sphere cylinder OUT
+    /// of any outdoor static's precise physics BSP near `pose`. Iterates
+    /// the pose landblock + its 3x3 neighbour ring (matching
+    /// `statics_aabbs_near_pose`) and runs ACE `BSPTree.placement_insert`
+    /// (`placement_insert_bsp`) per static; an `Adjusted` result
+    /// contributes its WORLD-space displacement, and the running centers
+    /// advance so the next static sees the resolved position (handles a
+    /// capsule wedged between two trunks). Returns the NET world
+    /// displacement, or `None` when nothing adjusted (no BSP near, or the
+    /// capsule is already clear) so the caller leaves the delta untouched.
+    ///
+    /// `world_sphere_centers` are GLOBAL-meter centers (same frame
+    /// `cell_physics_bsp_placement` takes); `radius` the cylinder radius;
+    /// `num_sphere` ACE's NumSphere (2 for the player). Push-out only — the
+    /// swept time-of-collision stop (`BSPTree.find_collisions`) is the
+    /// deferred Tier-2 follow-on, so this resolves penetration rather than
+    /// stopping a fast move at the surface.
+    pub fn resolve_static_bsp_pushout(
+        &self,
+        pose: &WorldPosition,
+        world_sphere_centers: &[Vector3],
+        radius: f32,
+        num_sphere: u8,
+    ) -> Option<Vector3> {
+        let lb_high = pose.landblock_id.0 & 0xFFFF_0000;
+        let lb_x = ((lb_high >> 24) & 0xFF) as i32;
+        let lb_y = ((lb_high >> 16) & 0xFF) as i32;
+        let n = (num_sphere as usize).min(2).min(world_sphere_centers.len());
+        if n == 0 {
+            return None;
+        }
+        // Running world-space centers, advanced after each adjust.
+        let mut centers = [Vector3::zero(); 2];
+        centers[..n].copy_from_slice(&world_sphere_centers[..n]);
+        let mut total = Vector3::zero();
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                let nx = lb_x + dx;
+                let ny = lb_y + dy;
+                if !(0..256).contains(&nx) || !(0..256).contains(&ny) {
+                    continue;
+                }
+                let key = ((nx as u32) << 24) | ((ny as u32) << 16);
+                let Some(bsps) = self.statics_physics_bsp.get(&key) else {
+                    continue;
+                };
+                for bsp in bsps {
+                    let mut local = [holtburger_common::Sphere {
+                        center: Vector3::zero(),
+                        radius: 0.0,
+                    }; 2];
+                    for i in 0..n {
+                        local[i] = holtburger_common::Sphere {
+                            center: bsp.world_to_local(centers[i]),
+                            radius,
+                        };
+                    }
+                    let probe =
+                        bsp.tree.placement_insert_bsp(&local, num_sphere, true, &bsp.polys);
+                    if let holtburger_dat::physics::PlacementState::Adjusted = probe.state {
+                        let world_disp =
+                            bsp.orientation.rotate_vector(probe.local_displacement);
+                        total = total + world_disp;
+                        for c in centers.iter_mut().take(n) {
+                            *c = *c + world_disp;
+                        }
+                    }
+                }
+            }
+        }
+        if total.length_squared() < 1e-12 {
+            None
+        } else {
+            Some(total)
+        }
     }
 
     /// Workstream C: sweep a sphere from `start` to `end` (world-space

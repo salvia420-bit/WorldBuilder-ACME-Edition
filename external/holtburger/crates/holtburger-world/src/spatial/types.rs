@@ -88,6 +88,14 @@ pub struct CellPortalPolygon {
 pub struct StaticAabbEntry {
     pub did: u32,
     pub aabb: Aabb,
+    /// B4 Tier-2 (2026-06-09): true when this static ALSO has a precise
+    /// physics BSP registered in `statics_physics_bsp` (same landblock).
+    /// When `USE_STATIC_BSP` is on, the integrator cedes these entries
+    /// from the coarse-AABB sweep to the per-static BSP push-out so the
+    /// capsule can approach the true surface (the AABB stops it short of
+    /// thin geometry like a tree trunk). Always `false` for the AABB-only
+    /// Tier-1 path, so that sweep is byte-identical when the gate is off.
+    pub has_bsp: bool,
 }
 
 

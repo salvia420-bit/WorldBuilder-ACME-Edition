@@ -9998,6 +9998,19 @@ thread_local! {
         std::cell::RefCell<Vec<(u32, holtburger_world::StaticAabbEntry)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// B4 Tier-2 (2026-06-09): pending PRECISE static physics-BSP inserts
+    /// queued by `populateStaticsAabbsForLandblock` alongside
+    /// `STATIC_AABB_PENDING` — one entry per physics-bearing static
+    /// placement (its `GfxObj.physics_bsp` + resolved polys, framed to
+    /// world). Drained into `statics_physics_bsp` each `TickMovement`;
+    /// cleared per landblock in the `LANDBLOCK_CLEAR_PENDING` drain
+    /// alongside the static AABBs so a re-entry re-bake REPLACES rather
+    /// than appends. Consulted only when `USE_STATIC_BSP` is on, so the
+    /// data lands regardless of the flag.
+    static STATIC_BSP_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_world::CellPhysicsBsp)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
     /// Workstream Sky-B (parametric skybox, 2026-05-11): thread-local
     /// holding the parsed SkyDesc + GameTime + per-frame evaluator
     /// state. Populated once per session by `populateSkyDescFromRegion`
@@ -10320,6 +10333,22 @@ fn drain_pending_static_aabbs_into(scene: &mut holtburger_world::SpatialScene) -
         let count = buf.len();
         for (landblock_high, entry) in buf.drain(..) {
             scene.insert_static_aabb(landblock_high, entry);
+        }
+        count
+    })
+}
+
+/// B4 Tier-2 (2026-06-09): drain pending static physics-BSP inserts into
+/// `statics_physics_bsp`. Same `TickMovement` cadence as the static-AABB
+/// drain so the integrator's `USE_STATIC_BSP` push-out sees the new BSPs
+/// the same tick their AABBs land. Idempotent on an empty pile.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_static_bsps_into(scene: &mut holtburger_world::SpatialScene) -> usize {
+    STATIC_BSP_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (landblock_high, bsp) in buf.drain(..) {
+            scene.insert_static_physics_bsp(landblock_high, bsp);
         }
         count
     })
@@ -10811,6 +10840,12 @@ async fn populate_statics_aabbs_for_landblock_impl(
         };
         let placement_orientation = stab.frame.orientation;
 
+        // B4 Tier-2 (2026-06-09): set when this static has a precise
+        // physics BSP staged below. Flags its AABB entries so the
+        // integrator cedes them from the coarse-AABB sweep to the per-
+        // static BSP push-out when `USE_STATIC_BSP` is on.
+        let mut has_bsp = false;
+
         // Statics may be raw GfxObjs (`0x01...`) or SetupModels
         // (`0x02...`); mirror the building path's branching so the
         // collision coverage matches what the renderer draws. AABB-only
@@ -10831,6 +10866,46 @@ async fn populate_statics_aabbs_for_landblock_impl(
                             let mut aabb = Aabb::empty();
                             for vert in gfx.vertex_array.vertices.values() {
                                 aabb.expand_to_include_point(vert.origin);
+                            }
+                            // B4 Tier-2: stage this GfxObj's precise physics
+                            // BSP (push-out collision) framed to world via
+                            // the placement origin/orientation. Reuses the
+                            // already-parsed tree and resolves its physics
+                            // polys against the same vertex array — mirrors
+                            // the cell-physics-BSP construction in
+                            // `populate_env_cells_for_landblock`. SetupModel
+                            // (0x02) statics are a documented follow-on
+                            // (per-part BSP, no merging needed).
+                            if let Some(tree) = &gfx.physics_bsp {
+                                if !gfx.physics_polygons.is_empty() {
+                                    let polys =
+                                        holtburger_dat::physics::resolve_cell_physics_polygons(
+                                            &gfx.physics_polygons,
+                                            |vid| {
+                                                gfx.vertex_array.vertices.get(&vid).map(|sw| {
+                                                    holtburger_common::Vector3::new(
+                                                        sw.origin.x,
+                                                        sw.origin.y,
+                                                        sw.origin.z,
+                                                    )
+                                                })
+                                            },
+                                        );
+                                    if !polys.is_empty() {
+                                        has_bsp = true;
+                                        STATIC_BSP_PENDING.with(|pile| {
+                                            pile.borrow_mut().push((
+                                                landblock_high,
+                                                holtburger_world::CellPhysicsBsp {
+                                                    tree: tree.clone(),
+                                                    polys,
+                                                    origin: placement_origin,
+                                                    orientation: placement_orientation,
+                                                },
+                                            ));
+                                        });
+                                    }
+                                }
                             }
                             vec![aabb]
                         }
@@ -10886,6 +10961,7 @@ async fn populate_statics_aabbs_for_landblock_impl(
                     StaticAabbEntry {
                         did: model_id,
                         aabb: world_aabb,
+                        has_bsp,
                     },
                 ));
             });
@@ -36561,6 +36637,10 @@ async fn recv_loop(
                                 // re-bake REPLACES rather than appends —
                                 // `insert_static_aabb` is append-only.
                                 w.scene.clear_static_aabbs_for_landblock(lb);
+                                // B4 Tier-2 (2026-06-09): purge the per-
+                                // static physics BSPs alongside their AABBs
+                                // (same append-only lifetime).
+                                w.scene.clear_static_physics_bsps_for_landblock(lb);
                             }
                             n
                         });
@@ -36600,6 +36680,18 @@ async fn recv_loop(
                                 "[b4] drained {drained_statics} pending static AABBs into scene \
                                  (total now {} across all landblocks)",
                                 w.scene.static_aabb_count(),
+                            ));
+                        }
+                        // B4 Tier-2 (2026-06-09): drain the per-static
+                        // physics-BSP inserts queued alongside the AABBs.
+                        // Same cadence; consulted only when USE_STATIC_BSP
+                        // is on, so this is inert-but-present by default.
+                        let drained_static_bsps = drain_pending_static_bsps_into(&mut w.scene);
+                        if drained_static_bsps > 0 {
+                            console_log_str(&format!(
+                                "[b4t2] drained {drained_static_bsps} pending static physics BSPs \
+                                 (total now {} across all landblocks)",
+                                w.scene.static_physics_bsp_count(),
                             ));
                         }
                         // Phase 6 step E follow-up (2026-05-09): drain

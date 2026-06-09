@@ -1851,6 +1851,7 @@ mod cell_graph {
                 Vector3::new(4.0, -1.0, -1.0),
                 Vector3::new(6.0, 1.0, 1.0),
             ),
+            has_bsp: false,
         };
         // Sweep +X by 10 m at radius 0.4.
         let hit = crate::spatial::sweep_sphere_against_static_aabbs(
@@ -1896,6 +1897,7 @@ mod cell_graph {
                 Vector3::new(-1.0, -1.0, -1.0),
                 Vector3::new(1.0, 1.0, 1.0),
             ),
+            has_bsp: false,
         };
         let hit = crate::spatial::sweep_sphere_against_static_aabbs(
             &[inside],
@@ -2065,6 +2067,7 @@ mod cell_graph {
                     Vector3::new(4.0, -1.0, -1.0),
                     Vector3::new(6.0, 1.0, 1.0),
                 ),
+                has_bsp: false,
             },
         );
         assert_eq!(scene.static_aabb_count(), 1);
@@ -2604,6 +2607,95 @@ mod bsp_collision {
         assert_eq!(scene.cell_physics_bsp_count(), 1);
         scene.clear_cells_for_landblock(0xA9B4_0000);
         assert_eq!(scene.cell_physics_bsp_count(), 0, "BSP cleared on unload");
+    }
+
+    // ---- B4 Tier-2 (2026-06-09): per-static physics-BSP push-out ----
+
+    /// An outdoor pose in landblock 0xA9B4 (X=0xA9, Y=0xB4) so the push-out
+    /// ring query keys onto that landblock.
+    fn pose_in_a9b4() -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(0xA9B4_0019),
+            coords: v(10.0, 10.0, 0.0),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    #[test]
+    fn static_physics_bsp_storage_roundtrip() {
+        let mut scene = SpatialScene::new();
+        let lb_a = 0xA9B4_0000u32;
+        let lb_b = 0xA9C0_0000u32;
+        scene.insert_static_physics_bsp(lb_a, floor_bsp(v(100.0, 200.0, 10.0), Quaternion::identity()));
+        scene.insert_static_physics_bsp(lb_a, floor_bsp(v(120.0, 220.0, 10.0), Quaternion::identity()));
+        scene.insert_static_physics_bsp(lb_b, floor_bsp(Vector3::zero(), Quaternion::identity()));
+        assert_eq!(scene.static_physics_bsp_count(), 3);
+        assert_eq!(scene.clear_static_physics_bsps_for_landblock(lb_a), 2);
+        assert_eq!(scene.static_physics_bsp_count(), 1);
+        assert_eq!(
+            scene.clear_static_physics_bsps_for_landblock(lb_a),
+            0,
+            "idempotent re-clear"
+        );
+    }
+
+    #[test]
+    fn static_bsp_pushout_none_when_no_static_bsp() {
+        let scene = SpatialScene::new();
+        let pose = pose_in_a9b4();
+        let center = v(100.0, 200.0, 10.1);
+        assert!(
+            scene.resolve_static_bsp_pushout(&pose, &[center], 0.5, 1).is_none(),
+            "no registered static BSP ⇒ no push-out"
+        );
+    }
+
+    #[test]
+    fn static_bsp_pushout_resolves_penetrating_capsule() {
+        // A floor static at world (100,200,10), identity frame, so
+        // world_to_local is a pure translate. A sphere straddling the floor
+        // (local z=0.1, radius 0.5) penetrates the solid ⇒ push-out returns
+        // a non-zero +Z displacement (mirrors the dat-level
+        // `placement_insert_straddle_pushes_up_and_reports_adjusted`).
+        let mut scene = SpatialScene::new();
+        let origin = v(100.0, 200.0, 10.0);
+        scene.insert_static_physics_bsp(0xA9B4_0000, floor_bsp(origin, Quaternion::identity()));
+        let pose = pose_in_a9b4();
+        let straddle = v(origin.x, origin.y, origin.z + 0.1); // local z = 0.1
+        let disp = scene
+            .resolve_static_bsp_pushout(&pose, &[straddle], 0.5, 1)
+            .expect("penetrating capsule should be pushed out");
+        assert!(disp.z > 0.0, "pushed up off the floor: {disp:?}");
+        assert!(disp.length() > 1e-3, "displacement is non-trivial: {disp:?}");
+    }
+
+    #[test]
+    fn static_bsp_pushout_none_when_capsule_clear() {
+        let mut scene = SpatialScene::new();
+        let origin = v(100.0, 200.0, 10.0);
+        scene.insert_static_physics_bsp(0xA9B4_0000, floor_bsp(origin, Quaternion::identity()));
+        let pose = pose_in_a9b4();
+        // Sphere well above the floor (local z = 5) ⇒ free space ⇒ no push.
+        let clear = v(origin.x, origin.y, origin.z + 5.0);
+        assert!(
+            scene.resolve_static_bsp_pushout(&pose, &[clear], 0.5, 1).is_none(),
+            "capsule clear of the solid ⇒ no push-out"
+        );
+    }
+
+    #[test]
+    fn static_bsp_pushout_ignores_far_landblock() {
+        // A static BSP registered in a landblock outside the pose's 3x3
+        // ring must not be consulted.
+        let mut scene = SpatialScene::new();
+        let origin = v(100.0, 200.0, 10.0);
+        scene.insert_static_physics_bsp(0x1020_0000, floor_bsp(origin, Quaternion::identity()));
+        let pose = pose_in_a9b4(); // landblock 0xA9B4 — far from 0x1020
+        let straddle = v(origin.x, origin.y, origin.z + 0.1);
+        assert!(
+            scene.resolve_static_bsp_pushout(&pose, &[straddle], 0.5, 1).is_none(),
+            "out-of-ring static BSP ⇒ not consulted"
+        );
     }
 }
 
