@@ -380,9 +380,9 @@ export function attachCombat(diag) {
      * Subscribed via `_installDamageDealtSubscription`. Idempotent.
      *
      * @param {{ defenderName?: string, damage?: number,
-     *           damageType?: string, healthPercent?: number,
+     *           damageType?: string, severity?: number,
      *           criticalHit?: boolean, attackConditions?: number|bigint
-     *         }} detail
+     *         }} detail  severity = damage / MaxHealth (F10-2)
      */
     onDamageDealt(detail) {
       try {

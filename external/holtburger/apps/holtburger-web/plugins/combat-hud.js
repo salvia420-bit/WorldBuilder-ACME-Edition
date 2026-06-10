@@ -600,8 +600,9 @@ function updateLastHitRow() {
 
 // Wave 15 / Phase 46 — `damageDealt` handler. Pure consumer of the
 // existing event surface: src/lib.rs:23601 emits
-// `{ defenderName, damage, damageType, healthPercent, criticalHit,
-//    attackConditions }` against `kind=19` CombatEvent; the plugin
+// `{ defenderName, damage, damageType, severity, criticalHit,
+//    attackConditions }` against `kind=19` CombatEvent (`severity` =
+//    damage / MaxHealth, F10-2 — NOT remaining health); the plugin
 // client republishes as a CustomEvent-shaped object so `.detail`
 // carries the payload (see combat-bar.js:1467 for the same pattern).
 //

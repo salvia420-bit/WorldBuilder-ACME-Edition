@@ -15993,20 +15993,73 @@ fn damage_type_label(damage_type: holtburger_common::properties::DamageType) -> 
     }
 }
 
-/// Phase 4 step 4: format an `AttackConditions` bitset as a
-/// bracketed suffix (" [Reckless attack, Sneak attack]") or the empty
-/// string when no conditions are set. Mirrors the cli's
-/// `format_attack_conditions_suffix()`.
+/// F10-2 — retail per-hit damage VERB. In retail the CLIENT (not the
+/// server) picks the adjective from the damage TYPE and SEVERITY
+/// (damage / MaxHealth), per `acclient.c` `GetDamageAdjective`. Four
+/// severity tiers split at 0.1 / 0.25 / 0.5. `plural` selects the
+/// "X mangles you" defender form vs the "You mangle X" attacker form.
 #[cfg(target_arch = "wasm32")]
-fn attack_conditions_suffix(
+fn damage_severity_verb(
+    damage_type: holtburger_common::properties::DamageType,
+    severity: f64,
+    plural: bool,
+) -> &'static str {
+    use holtburger_common::properties::DamageType;
+    // tier index: 0 = ≤0.1, 1 = >0.1, 2 = >0.25, 3 = >0.5.
+    let tier = if severity > 0.5 {
+        3
+    } else if severity > 0.25 {
+        2
+    } else if severity > 0.1 {
+        1
+    } else {
+        0
+    };
+    // [tier0, tier1, tier2, tier3] as (singular, plural) — verbatim from
+    // acclient.c. Verb chosen by the dominant damage-type bit.
+    let table: [(&str, &str); 4] = if damage_type.contains(DamageType::SLASH) {
+        [("scratch", "scratches"), ("cut", "cuts"), ("slash", "slashes"), ("mangle", "mangles")]
+    } else if damage_type.contains(DamageType::PIERCE) {
+        [("nick", "nicks"), ("stab", "stabs"), ("impale", "impales"), ("gore", "gores")]
+    } else if damage_type.contains(DamageType::BLUDGEON) {
+        [("graze", "grazes"), ("bash", "bashes"), ("smash", "smashes"), ("crush", "crushes")]
+    } else if damage_type.contains(DamageType::COLD) {
+        [("numb", "numbs"), ("chill", "chills"), ("frost", "frosts"), ("freeze", "freezes")]
+    } else if damage_type.contains(DamageType::FIRE) {
+        [("singe", "singes"), ("scorch", "scorches"), ("burn", "burns"), ("incinerate", "incinerates")]
+    } else if damage_type.contains(DamageType::ACID) {
+        [("blister", "blisters"), ("sear", "sears"), ("corrode", "corrodes"), ("dissolve", "dissolves")]
+    } else if damage_type.contains(DamageType::ELECTRIC) {
+        [("spark", "sparks"), ("shock", "shocks"), ("jolt", "jolts"), ("blast", "blasts")]
+    } else if damage_type.contains(DamageType::HEALTH) {
+        [("drain", "drains"), ("exhaust", "exhausts"), ("siphon", "siphons"), ("deplete", "depletes")]
+    } else {
+        [("hit", "hits"), ("hit", "hits"), ("hit", "hits"), ("hit", "hits")]
+    };
+    let (singular, plural_form) = table[tier];
+    if plural { plural_form } else { singular }
+}
+
+/// F10-2 — retail attack-message prefix: "Critical hit!  " then
+/// "Sneak Attack! " then "Recklessness! ", in that order
+/// (`acclient.c:408411-408417`). Empty when none apply.
+#[cfg(target_arch = "wasm32")]
+fn attack_conditions_prefix(
+    critical: bool,
     attack_conditions: holtburger_protocol::messages::combat::types::AttackConditions,
 ) -> String {
-    let names: Vec<&'static str> = attack_conditions.iter_display_names().collect();
-    if names.is_empty() {
-        String::new()
-    } else {
-        format!(" [{}]", names.join(", "))
+    use holtburger_protocol::messages::combat::types::AttackConditions;
+    let mut s = String::new();
+    if critical {
+        s.push_str("Critical hit!  ");
     }
+    if attack_conditions.contains(AttackConditions::SNEAK_ATTACK) {
+        s.push_str("Sneak Attack! ");
+    }
+    if attack_conditions.contains(AttackConditions::RECKLESSNESS) {
+        s.push_str("Recklessness! ");
+    }
+    s
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -33201,25 +33254,29 @@ async fn recv_loop(
                                 holtburger_protocol::messages::GameEvent::AttackerNotification(
                                     data,
                                 ) => {
-                                    // "You hit Drudge Ravener for 37
-                                    // slash damage (25.0%). Critical
-                                    // hit. [Recklessness, Sneak attack]"
-                                    // — mirrors cli format from
-                                    // chat.rs:250-269.
-                                    let crit = if data.critical_hit {
-                                        " Critical hit."
-                                    } else {
-                                        ""
-                                    };
-                                    let suffix = attack_conditions_suffix(data.attack_conditions);
+                                    // F10-2 — retail attacker line, e.g.
+                                    // "Critical hit!  You mangle Drudge
+                                    // Ravener for 37 points of damage!".
+                                    // The verb encodes type + severity
+                                    // (acclient.c GetDamageAdjective);
+                                    // `health_percent` is the severity =
+                                    // damage / MaxHealth (NOT the target's
+                                    // remaining health), so it drives the
+                                    // verb but is no longer printed as a
+                                    // misleading percent.
+                                    let prefix = attack_conditions_prefix(
+                                        data.critical_hit,
+                                        data.attack_conditions,
+                                    );
+                                    let verb = damage_severity_verb(
+                                        data.damage_type,
+                                        data.health_percent,
+                                        false,
+                                    );
+                                    let pts = if data.damage == 1 { "point" } else { "points" };
                                     let line = format!(
-                                        "You hit {} for {} {} damage ({:.1}%).{}{}",
-                                        data.defender_name,
-                                        data.damage,
-                                        damage_type_label(data.damage_type),
-                                        data.health_percent * 100.0,
-                                        crit,
-                                        suffix,
+                                        "{}You {} {} for {} {} of damage!",
+                                        prefix, verb, data.defender_name, data.damage, pts,
                                     );
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
@@ -33231,12 +33288,15 @@ async fn recv_loop(
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_COMBAT_EVENT,
                                         string_payload: Some(
+                                            // F10-2 — `severity` = damage /
+                                            // MaxHealth (renamed from the
+                                            // misleading `healthPercent`).
                                             serde_json::json!({
                                                 "type": "damageDealt",
                                                 "defenderName": data.defender_name,
                                                 "damage": data.damage,
                                                 "damageType": damage_type_label(data.damage_type),
-                                                "healthPercent": data.health_percent,
+                                                "severity": data.health_percent,
                                                 "criticalHit": data.critical_hit,
                                                 "attackConditions": data.attack_conditions.bits(),
                                             })
@@ -33250,23 +33310,30 @@ async fn recv_loop(
                                 holtburger_protocol::messages::GameEvent::DefenderNotification(
                                     data,
                                 ) => {
-                                    // "Banderling hit you for 18 fire
-                                    // damage to your chest (12.5%)."
-                                    let crit = if data.critical_hit {
-                                        " Critical hit."
-                                    } else {
-                                        ""
-                                    };
-                                    let suffix = attack_conditions_suffix(data.attack_conditions);
+                                    // F10-2 — retail defender line, e.g.
+                                    // "Banderling bashes you for 18 points
+                                    // of damage to your chest!". Plural
+                                    // verb form; `health_percent` is the
+                                    // severity (damage / MaxHealth), used
+                                    // for the verb only.
+                                    let prefix = attack_conditions_prefix(
+                                        data.critical_hit,
+                                        data.attack_conditions,
+                                    );
+                                    let verb = damage_severity_verb(
+                                        data.damage_type,
+                                        data.health_percent,
+                                        true,
+                                    );
+                                    let pts = if data.damage == 1 { "point" } else { "points" };
                                     let line = format!(
-                                        "{} hit you for {} {} damage to your {} ({:.1}%).{}{}",
+                                        "{}{} {} you for {} {} of damage to your {}!",
+                                        prefix,
                                         data.attacker_name,
+                                        verb,
                                         data.damage,
-                                        damage_type_label(data.damage_type),
+                                        pts,
                                         damage_location_label(data.damage_location),
-                                        data.health_percent * 100.0,
-                                        crit,
-                                        suffix,
                                     );
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
@@ -33278,13 +33345,16 @@ async fn recv_loop(
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_COMBAT_EVENT,
                                         string_payload: Some(
+                                            // F10-2 — `severity` = damage /
+                                            // MaxHealth (renamed from the
+                                            // misleading `healthPercent`).
                                             serde_json::json!({
                                                 "type": "damageTaken",
                                                 "attackerName": data.attacker_name,
                                                 "damage": data.damage,
                                                 "damageType": damage_type_label(data.damage_type),
                                                 "damageLocation": damage_location_label(data.damage_location),
-                                                "healthPercent": data.health_percent,
+                                                "severity": data.health_percent,
                                                 "criticalHit": data.critical_hit,
                                                 "attackConditions": data.attack_conditions.bits(),
                                             })
