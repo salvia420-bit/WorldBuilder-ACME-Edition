@@ -158,6 +158,10 @@ export function setupClickPicking({
   // F17-2 — last peace-mode click, for double-click-to-Use detection.
   let lastPeaceClick = { guid: 0, t: 0 };
 
+  // F6-4 — throttle for movement-driven CancelAttack so a held WASD key
+  // (keydown auto-repeat) doesn't spam the wire.
+  let lastCancelAttackMs = 0;
+
   // Wave 2 Phase 4 (2026-05-26): track the last-fired melee motion u32
   // so the CMT picker can carry `prevMotion` forward. Module-scoped to
   // this closure (one local player per session); intentionally NOT
@@ -935,16 +939,59 @@ export function setupClickPicking({
     "arrowup", "arrowdown", "arrowleft", "arrowright",
   ]);
   function onKeyDownAbortCharge(ev) {
-    if (!charge) return;
     const k = (ev.key || "").toLowerCase();
     if (!ABORT_KEYS.has(k)) return;
-    // Don't kill the charge if the user is typing in a form
+    // Don't kill the charge / attack if the user is typing in a form
     // (chat input, login fields).
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    cancelCharge();
+    if (charge) cancelCharge();
+    // F6-4 — moving stops the server-side attack loop (retail). ACE
+    // defaults AutoRepeatAttacks ON, so a single attack otherwise keeps
+    // the player swinging — a fleeing player would be sticky-rotated and
+    // re-attacked by their own loop. Fire CancelAttack when a real
+    // movement key is pressed (not the bare Shift modifier) while an
+    // attack is active / we're in a combat stance. Skip the keydown
+    // auto-repeat and throttle so a held key sends at most one per 500ms.
+    if (k === "shift") return;
+    const cb = (typeof window !== "undefined") ? window.__combatBarState : null;
+    const inCombatStance = !!(isInMeleeStance?.() || isInRangedStance?.());
+    const attackActive = !!(cb && cb.attackInProgress) || inCombatStance;
+    if (!attackActive || ev.repeat) return;
+    if (typeof sessionHandle.cancelAttack !== "function") return;
+    const nowMs = (typeof performance !== "undefined" && performance.now)
+      ? performance.now() : Date.now();
+    if (nowMs - lastCancelAttackMs < 500) return;
+    lastCancelAttackMs = nowMs;
+    try {
+      sessionHandle.cancelAttack();
+      if (cb) cb.attackInProgress = false;
+    } catch (e) {
+      console.warn(`[picking] cancelAttack: ${e?.message ?? e}`);
+    }
   }
   document.addEventListener("keydown", onKeyDownAbortCharge);
+
+  // F6-4 — also stop the server attack loop when the target is cleared
+  // (explicit deselect, or the target despawning mid-fight). ACE already
+  // ends the loop on target death, so this is mostly belt-and-suspenders
+  // for the explicit-deselect case; throttled + combat-stance-gated so it
+  // doesn't send pointless cancels in peace.
+  let onSelectionCleared = null;
+  const bus = (typeof window !== "undefined") ? window.__pluginClient?.events : null;
+  if (bus && typeof bus.on === "function") {
+    onSelectionCleared = (ev) => {
+      if (((ev?.guid >>> 0) || 0) !== 0) return; // only on clear
+      if (!(isInMeleeStance?.() || isInRangedStance?.())) return;
+      if (typeof sessionHandle.cancelAttack !== "function") return;
+      const nowMs = (typeof performance !== "undefined" && performance.now)
+        ? performance.now() : Date.now();
+      if (nowMs - lastCancelAttackMs < 500) return;
+      lastCancelAttackMs = nowMs;
+      try { sessionHandle.cancelAttack(); } catch (_) {}
+    };
+    try { bus.on("selectionChanged", onSelectionCleared); } catch (_) {}
+  }
 
   return {
     destroy() {
@@ -957,6 +1004,9 @@ export function setupClickPicking({
       canvas.removeEventListener("dragover", onCanvasDragOver);
       canvas.removeEventListener("drop", onCanvasDrop);
       document.removeEventListener("keydown", onKeyDownAbortCharge);
+      if (onSelectionCleared && bus && typeof bus.off === "function") {
+        try { bus.off("selectionChanged", onSelectionCleared); } catch (_) {}
+      }
     },
   };
 }

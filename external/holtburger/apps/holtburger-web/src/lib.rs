@@ -16984,6 +16984,13 @@ enum SessionCommand {
         attack_height: holtburger_protocol::messages::AttackHeight,
         accuracy_level: f32,
     },
+    /// F6-4 (combat-melee/missile): JS-side requested that the current
+    /// server-side attack loop be stopped. Sends `GameAction::CancelAttack`
+    /// (sub-opcode 0x01B7, empty body). ACE defaults `AutoRepeatAttacks`
+    /// ON, so a single `attack` locks the player into a perpetual swing
+    /// loop; this is the retail "moving / deselect / stance-change stops
+    /// attacking" path. Mirrors `ClientCommand::CancelAttack` on the CLI.
+    CancelAttack,
     /// Phase F (combat-magic): JS-side requested a targeted spell-cast.
     /// `target_guid` is the entity the spell lands on; `spell_id` is
     /// the AC spell-table primary key. Sends
@@ -25609,6 +25616,22 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("missileAttack: cmd channel closed ({e})"))
+            })
+    }
+
+    /// F6-4 (combat-melee/missile): stop the server-side attack loop.
+    /// Sends `GameAction::CancelAttack` (sub-opcode 0x01B7). ACE defaults
+    /// `AutoRepeatAttacks` ON, so without this a single `attack` keeps the
+    /// player swinging at the target forever — moving with WASD, deselecting
+    /// the target, or changing stance should all stop it (retail behavior).
+    /// Fire-and-forget; ACE owns the loop teardown.
+    #[wasm_bindgen(js_name = cancelAttack)]
+    pub fn cancel_attack(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::CancelAttack)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("cancelAttack: cmd channel closed ({e})"))
             })
     }
 
@@ -37226,6 +37249,31 @@ async fn recv_loop(
                         console_log_str(&format!(
                             "[attack] target=0x{target_guid:08X} height={attack_height:?} power={power_level:.2}",
                         ));
+                    }
+                    Some(SessionCommand::CancelAttack) => {
+                        // F6-4 (combat): stop ACE's auto-repeat attack loop.
+                        // Empty-body GameAction::CancelAttack (sub-opcode
+                        // 0x01B7). ACE's HandleActionCancelAttack tears down
+                        // the ActionChain re-fire. Fire-and-forget — no local
+                        // state to mutate (the swing animation plays out its
+                        // own release frames).
+                        use holtburger_protocol::messages::{
+                            GameAction, CancelAttackActionData,
+                        };
+                        let action =
+                            GameAction::CancelAttack(Box::new(CancelAttackActionData {}));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(CancelAttack): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("cancelAttack: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str("[cancelAttack] sent");
                     }
                     Some(SessionCommand::Jump { power }) => {
                         // Mirror ACE's jump pipeline:
