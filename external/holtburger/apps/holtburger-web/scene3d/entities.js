@@ -336,6 +336,10 @@ import { AnimationCache, cycleTimeScale } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import { materialCanCastShadow, SURFACE_TYPE } from "./materials.js";
 import { drainPendingPlayEffects } from "./play_effect_vfx.js";
+import {
+  showSpeechBubbleOnEntity,
+  removeSpeechBubbleFromEntity,
+} from "./speech_bubble.js";
 // === Wave R2.A (2026-05-28) — reuse the static-light constructor so
 // entity-attached SetLight lights share identical color/intensity/falloff/
 // cone math. Only imported; constructs nothing at module load.
@@ -3563,6 +3567,27 @@ export class EntityManager {
   }
 
   /**
+   * F17-5 (bughunt 2026-06-09) — float a fading speech / emote bubble over
+   * the speaker. Driven by the wasm kind=55
+   * `CLIENT_EVENT_KIND_OVERHEAD_SPEECH` event (HearSpeech /
+   * HearRangedSpeech / EmoteText / SoulEmote), which now carries the
+   * sender guid that was previously dropped at the wasm→JS boundary.
+   * No-op when the speaker isn't a live 3D rig (speech is ephemeral — a
+   * bubble over a not-rendered entity is pointless, so unlike
+   * `setVisibility` there's no queue). Gated upstream by
+   * `?speechBubbles=on` (the index.html kind=55 handler).
+   *
+   * @param {number} guid — speaker GUID.
+   * @param {string} text — spoken words / emote text (no channel prefix).
+   * @param {boolean} isEmote — emote (vs say) styling hint.
+   */
+  showSpeechBubble(guid, text, isEmote) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst || !inst.root) return;
+    showSpeechBubbleOnEntity(inst, text, !!isEmote);
+  }
+
+  /**
    * Render-completeness audit (2026-05-29) — attach a wielded child
    * (weapon/shield/bow) to its wielder, or detach it.
    *
@@ -6656,6 +6681,10 @@ export class EntityManager {
     // F16-5 (2026-06-09): drop any un-applied spawn-time draw gate so a guid
     // that despawned before its rig finished building doesn't leak.
     this._pendingVisibility.delete(g);
+    // F17-5 (2026-06-09): tear down any in-flight speech bubble so a despawn
+    // mid-fade doesn't leak its texture/material (the fade loop would
+    // otherwise keep the sprite alive under the detached root).
+    removeSpeechBubbleFromEntity(inst);
     // B4 (2026-05-18): drop the name→guid index entry BEFORE dispose
     // so we still have access to `inst.meta.name`. Removes the bucket
     // entirely once empty to avoid a long-session leak of empty Sets.

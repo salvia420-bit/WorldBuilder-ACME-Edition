@@ -9943,6 +9943,33 @@ void main() {
                 ) {
                   window.liveScene3d.entityManager.setVisibility(visGuid, visible);
                 }
+              } else if (evt.kind === 55) {
+                // F17-5 — overhead speech bubble. The wasm recv loop emits
+                // this alongside the kind=2 chat-panel line for the four
+                // near-field chat arms (HearSpeech / HearRangedSpeech /
+                // EmoteText / SoulEmote), carrying the SPEAKER guid that was
+                // previously dropped — so chat only ever reached the DOM
+                // window, never the 3D talker. `u32Payload` = sender guid,
+                // `stringPayload` = the words / emote text (no channel
+                // prefix), `u32Payload2` = CHAT_CATEGORY_* (4 = emote, per
+                // lib.rs `CHAT_CATEGORY_EMOTE`). Opt-in: render-pipeline
+                // addition gated behind `?speechBubbles=on`, default off, so
+                // the 3D scene is byte-identical when off (the event still
+                // drains; we just ignore it). 1070 eye-test deferred.
+                if (
+                  new URLSearchParams(window.location.search).get("speechBubbles") === "on"
+                  && window.liveScene3d
+                  && window.liveScene3d.entityManager
+                  && typeof window.liveScene3d.entityManager.showSpeechBubble === "function"
+                ) {
+                  const speakerGuid = evt.u32Payload >>> 0;
+                  const isEmote = (evt.u32Payload2 >>> 0) === 4;
+                  window.liveScene3d.entityManager.showSpeechBubble(
+                    speakerGuid,
+                    evt.stringPayload || "",
+                    isEmote,
+                  );
+                }
               } else if (evt.kind === 18) {
                 // Wave 1.8 — EntityAirborneChanged for REMOTE players.
                 // Wave 10 Phase 10.1 (2026-05-26) — extended to also

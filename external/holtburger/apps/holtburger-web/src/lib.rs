@@ -16755,6 +16755,19 @@ const CLIENT_EVENT_KIND_UI_EVENT: u32 = 53;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_ENTITY_HEALTH: u32 = 54;
 
+/// `kind = 55` — F16-5 follow-on / F17-5: overhead speech. Carries the
+/// SPEAKER guid (dropped pre-fix) so JS can float a fading text bubble
+/// over the 3D speaker, in addition to the existing kind=2 chat-panel
+/// line. `string_payload` = the spoken words / emote text WITHOUT the
+/// channel prefix (kind=2's formatted `"X says, …"` line is for the DOM
+/// panel); `u32_payload` = sender GUID; `u32_payload_2` =
+/// [`CHAT_CATEGORY_*`] (Speech vs Emote, so JS can style say vs emote).
+/// Emitted alongside the four near-field chat arms (HearSpeech /
+/// HearRangedSpeech / EmoteText / SoulEmote). ADDITIVE — JS ignores it
+/// unless `?speechBubbles=on`, so render is byte-identical when off.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_OVERHEAD_SPEECH: u32 = 55;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -33331,6 +33344,18 @@ async fn recv_loop(
                                 u32_payload_2: Some(category),
                                 f32_payload: None,
                             });
+                            // F17-5 (2026-06-09): overhead bubble companion.
+                            // The chat line above goes to the DOM panel; this
+                            // surfaces the speaker guid + raw words so JS can
+                            // float a fading bubble over the 3D speaker.
+                            // Additive — inert unless `?speechBubbles=on`.
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_OVERHEAD_SPEECH,
+                                string_payload: Some(data.message.clone()),
+                                u32_payload: Some(data.sender),
+                                u32_payload_2: Some(category),
+                                f32_payload: None,
+                            });
                         }
                         GameMessage::HearRangedSpeech(data) => {
                             // Greater-range speech variant (e.g. heralds,
@@ -33347,6 +33372,15 @@ async fn recv_loop(
                                 u32_payload_2: Some(category),
                                 f32_payload: None,
                             });
+                            // F17-5 (2026-06-09): overhead bubble companion (see
+                            // HearSpeech arm).
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_OVERHEAD_SPEECH,
+                                string_payload: Some(data.message.clone()),
+                                u32_payload: Some(data.sender),
+                                u32_payload_2: Some(category),
+                                f32_payload: None,
+                            });
                         }
                         GameMessage::EmoteText(data) => {
                             // EmoteText.text is already self-contained —
@@ -33360,6 +33394,17 @@ async fn recv_loop(
                                 u32_payload_2: Some(CHAT_CATEGORY_EMOTE),
                                 f32_payload: None,
                             });
+                            // F17-5 (2026-06-09): overhead bubble companion. The
+                            // pre-rendered emote text floats over the actor (its
+                            // `sender` guid). Additive — inert unless
+                            // `?speechBubbles=on`.
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_OVERHEAD_SPEECH,
+                                string_payload: Some(data.text.clone()),
+                                u32_payload: Some(data.sender),
+                                u32_payload_2: Some(CHAT_CATEGORY_EMOTE),
+                                f32_payload: None,
+                            });
                         }
                         GameMessage::SoulEmote(data) => {
                             // SoulEmote.text is identical in shape to
@@ -33369,6 +33414,15 @@ async fn recv_loop(
                                 kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                 string_payload: Some(data.text.clone()),
                                 u32_payload: Some(0),
+                                u32_payload_2: Some(CHAT_CATEGORY_EMOTE),
+                                f32_payload: None,
+                            });
+                            // F17-5 (2026-06-09): overhead bubble companion (see
+                            // EmoteText arm).
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_OVERHEAD_SPEECH,
+                                string_payload: Some(data.text.clone()),
+                                u32_payload: Some(data.sender),
                                 u32_payload_2: Some(CHAT_CATEGORY_EMOTE),
                                 f32_payload: None,
                             });
