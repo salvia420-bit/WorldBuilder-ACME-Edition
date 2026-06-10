@@ -33,6 +33,7 @@ import * as THREE from "three";
 import {
   bakeTerrainForLandblock,
   bakeTerrainRing,
+  tickTerrainLodRebake,
 } from "./terrain.js?v=phase-d-batch";
 import {
   bakeBuildingsForLandblock,
@@ -1572,7 +1573,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     if (liveScene3dRef?.landblockLru) {
       try {
         const lru = liveScene3dRef.landblockLru;
-        lru.tickEviction(lru.getCurrentLbId());
+        const currentLbKey = lru.getCurrentLbId();
+        lru.tickEviction(currentLbKey);
+        // F12-6 — per-LB subdiv LOD re-bake on approach. Shares the LRU's
+        // current-LB read; no-op unless ?lodRebake=on. Detects the LB change,
+        // re-points the LOD reference, and drains one queued re-bake/frame.
+        tickTerrainLodRebake(liveScene3dRef, currentLbKey);
       } catch (e) {
         // eslint-disable-next-line no-console
         if (!liveScene3dRef._lbLruTickWarned) {

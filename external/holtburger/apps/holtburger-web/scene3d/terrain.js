@@ -2330,6 +2330,119 @@ function pickSubdivLevelForLb(opts, lbX, lbY) {
   return 1;
 }
 
+// === F12-6 — per-LB subdiv LOD re-bake on player approach ==================
+//
+// `pickSubdivLevelForLb` picks each LB's subdivision level from the player's
+// LB at BAKE time. Pre-F12-6 that level was frozen for the LB's lifetime —
+// walking from a coarse outer-ring LB (subdiv=1) toward it never upgraded its
+// detail, so terrain under your feet stayed visibly coarser (24 m facets, no
+// micro-relief) than the terrain where you logged in, and detail only "popped"
+// when a distant LB happened to be evicted + re-baked. This reconciles each
+// resident LB's BAKED level (`lbMesh.userData.subdivLevel`) against the level
+// the NEW player centre would pick, and re-bakes the mismatches one-per-frame.
+//
+// Opt-in via `?lodRebake=on` (default OFF → byte-identical: no reconcile, no
+// re-bake). The doc pairs this with the F12-1 edge weld (deferred, 1070) so the
+// MOVING LOD boundary stays crack-free; until that lands the flag-on path can
+// show a seam at the boundary — hence default-off + eye-test-pending.
+const LOD_REBAKE_ON = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("lodRebake") === "on";
+  } catch (_) { return false; }
+})();
+
+// Re-point the LOD reference at `newLbKey` and enqueue every resident terrain
+// LB whose baked subdiv level no longer matches what the new centre picks.
+// Private — driven by `tickTerrainLodRebake` on an LB change.
+function reconcileTerrainLodForCentre(scene3d, newLbKey) {
+  const opts = scene3d.terrainOpts;
+  if (!opts) return;
+  // Move the LOD reference so pickSubdivLevelForLb (here + in any subsequent
+  // lazy bake) measures distance from where the player actually is. Pre-F12-6
+  // this was never runtime-updated (see the pickSubdivLevelForLb header).
+  opts.playerLbKey = newLbKey;
+  scene3d.playerLbKey = newLbKey;
+  if (!(scene3d._lodRebakeQueue instanceof Set)) scene3d._lodRebakeQueue = new Set();
+  for (const c of scene3d.terrainGroup.children) {
+    const ud = c.userData;
+    // Only the real terrain mesh carries `subdivLevel`; the wire-fill
+    // companion (userData {wireFillFor, lbX, lbY}) does not — skip it.
+    if (!ud || typeof ud.subdivLevel !== "number" || typeof ud.lbX !== "number") continue;
+    const desired = pickSubdivLevelForLb(opts, ud.lbX, ud.lbY);
+    if (desired !== ud.subdivLevel) {
+      scene3d._lodRebakeQueue.add((((ud.lbX & 0xff) << 24) | ((ud.lbY & 0xff) << 16)) >>> 0);
+    }
+  }
+}
+
+// Tear down only the TERRAIN layer for one queued LB and re-bake it at the
+// new level. LandblockLRU.evict is intentionally NOT used — it would also
+// drop the LB's buildings / statics / EnvCells, which a terrain LOD swap must
+// leave in place. The LRU entry keeps stale refs to the now-disposed terrain
+// resources, but eviction's dispose() calls are try/caught no-ops and the
+// fresh bake's track() appends the new refs (a small JS-ref accrual bounded by
+// how often one LB re-bakes before it evicts — acceptable for opt-in). The new
+// mesh arrives async, so the LB shows a brief terrain gap; the integrator
+// holds pose Z from the cached heights so the player never falls through.
+function drainOneTerrainLodRebake(scene3d) {
+  const queue = scene3d._lodRebakeQueue;
+  if (!(queue instanceof Set) || queue.size === 0) return;
+  const lbKey = queue.values().next().value;
+  queue.delete(lbKey);
+  const lbX = (lbKey >>> 24) & 0xff;
+  const lbY = (lbKey >>> 16) & 0xff;
+  const group = scene3d.terrainGroup;
+  if (group && group.children) {
+    const kill = [];
+    for (const c of group.children) {
+      const ud = c.userData;
+      if (ud && ud.lbX === lbX && ud.lbY === lbY) kill.push(c);
+    }
+    for (const c of kill) {
+      group.remove(c);
+      try { c.geometry && c.geometry.dispose && c.geometry.dispose(); } catch (_) {}
+      const m = c.material;
+      if (m && !(m.userData && m.userData.__cacheOwned)) {
+        try { m.dispose && m.dispose(); } catch (_) {}
+      }
+      try { c.userData && c.userData.vertexTypesTexture && c.userData.vertexTypesTexture.dispose(); } catch (_) {}
+      try { c.userData && c.userData.mergeDataTexture && c.userData.mergeDataTexture.dispose(); } catch (_) {}
+    }
+  }
+  // Clear the idempotency gate so the lazy baker re-bakes (it short-circuits
+  // on terrainBakedLbs.has(lbKey)); opts.playerLbKey was updated in reconcile
+  // so the re-bake's pickSubdivLevelForLb picks the upgraded level.
+  if (scene3d.terrainBakedLbs instanceof Set) scene3d.terrainBakedLbs.delete(lbKey);
+  try {
+    if (typeof scene3d.loadTerrainForLandblock === "function") {
+      scene3d.loadTerrainForLandblock(lbX, lbY);
+    }
+  } catch (_) { /* fire-and-forget; never break the frame on a re-bake */ }
+}
+
+/**
+ * F12-6 — per-frame LOD re-bake driver. Call once per rAF with the player's
+ * current LB key (e.g. `landblockLru.getCurrentLbId()`). On an LB change it
+ * reconciles resident LB subdiv levels against the new centre; every frame it
+ * drains at most ONE queued re-bake so a burst (crossing into a fresh region)
+ * spreads across frames instead of hitching. No-op unless `?lodRebake=on` AND
+ * the quality tier subdivides (`opts.canSubdivide`) — at subdivLevel=1 every
+ * LB is level 1 and there is nothing to reconcile.
+ */
+export function tickTerrainLodRebake(scene3d, currentLbKey) {
+  if (!LOD_REBAKE_ON) return;
+  if (!scene3d || !scene3d.terrainGroup) return;
+  const opts = scene3d.terrainOpts;
+  if (!opts || !opts.canSubdivide) return;
+  const key = (currentLbKey == null) ? null : (currentLbKey >>> 0);
+  if (key != null && key !== scene3d._lodLastCentre) {
+    scene3d._lodLastCentre = key;
+    reconcileTerrainLodForCentre(scene3d, key);
+  }
+  drainOneTerrainLodRebake(scene3d);
+}
+
 /**
  * world-expand step 1 — per-LB terrain baker.
  *
