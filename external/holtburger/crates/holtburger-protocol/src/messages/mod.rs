@@ -2,6 +2,7 @@ pub mod allegiance;
 pub mod book;
 pub mod character;
 pub mod chat;
+pub mod chess;
 pub mod combat;
 pub mod contracts;
 pub mod effects;

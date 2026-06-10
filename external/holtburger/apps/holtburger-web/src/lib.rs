@@ -161,6 +161,13 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::MiscPortalStormImminent(_) => 0x02CA,
         GameEvent::MiscPortalStorm => 0x02CB,
         GameEvent::MiscPortalStormSubsided => 0x02CC,
+        // SG-C1a (2026-06-09): chess minigame opcodes catalogued for seq-gap
+        // bucketing; recv-loop dispatch is the SG-C1b follow-on.
+        GameEvent::JoinGameResponse(_) => 0x0281,
+        GameEvent::MoveResponse(_) => 0x0283,
+        GameEvent::OpponentTurn(_) => 0x0284,
+        GameEvent::OpponentStalemate(_) => 0x0285,
+        GameEvent::GameOver(_) => 0x028C,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }

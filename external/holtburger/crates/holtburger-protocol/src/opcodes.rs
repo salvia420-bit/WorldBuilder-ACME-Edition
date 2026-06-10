@@ -806,8 +806,8 @@ pub enum GameEventOpcode {
     CharacterConfirmationRequest = 0x0274,
     // /// S2C: Confirmation that a character management operation is done.
     CharacterConfirmationDone = 0x0276,
-    // /// S2C: Confirms the player has joined the game session.
-    // JoinGameResponse = 0x0281,
+    /// S2C: Chess — join result (color the player joined as, or -1 = failed). SG-C1a.
+    JoinGameResponse = 0x0281,
     /// S2C: Acknowledge that an action (Use) is complete.
     UseDone = 0x01C7,
     /// S2C: Result of an object appraisal (Assess/Identify).
@@ -993,15 +993,15 @@ pub enum GameEventOpcode {
     FellowshipFellowStatsDone = 0x01CA,
     // // (Already present: FellowshipFullUpdate, Disband, UpdateFellow)
 
-    // --- Minigames (Chess) ---
-    // /// S2C: Response to a movement or teleport request.
-    // MoveResponse = 0x0283,
-    // /// S2C: (Internal/Minigame) Signals that it is the opponent's turn.
-    // OpponentTurn = 0x0284,
-    // /// S2C: (Internal/Minigame) Signals a stalemate condition.
-    // OpponentStalemate = 0x0285,
-    // /// S2C: (Internal/Minigame) Signals that the game session has ended.
-    // GameOver = 0x028C,
+    // --- Minigames (Chess) — SG-C1a (2026-06-09) ---
+    /// S2C: Chess — result of the player's own move (ChessMoveResult).
+    MoveResponse = 0x0283,
+    /// S2C: Chess — the opponent's move (carries ChessMoveData).
+    OpponentTurn = 0x0284,
+    /// S2C: Chess — opponent offered (1) or retracted (0) a stalemate.
+    OpponentStalemate = 0x0285,
+    /// S2C: Chess — the game ended (team_winner, or -1 = draw).
+    GameOver = 0x028C,
 
     // --- Admin & Plugins ---
     // /// S2C: Admin-only query for the server's plugin list.

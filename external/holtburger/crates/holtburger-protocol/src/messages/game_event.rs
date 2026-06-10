@@ -2,6 +2,7 @@ pub use crate::messages::allegiance::events::*;
 pub use crate::messages::book::events::*;
 pub use crate::messages::chat::events::*;
 pub use crate::messages::chat::turbine::*;
+pub use crate::messages::chess::events::*;
 pub use crate::messages::combat::events::*;
 pub use crate::messages::contracts::events::*;
 pub use crate::messages::fellowship::events::*;
@@ -141,6 +142,16 @@ pub enum GameEvent {
     /// ACE `GameEventPortalStormSubsided.cs`. Opcode
     /// `MiscPortalStormSubsided = 0x02CC`. No payload.
     MiscPortalStormSubsided,
+    /// SG-C1a (2026-06-09): chess minigame — join result (`0x0281`).
+    JoinGameResponse(Box<JoinGameResponseEventData>),
+    /// SG-C1a: chess minigame — own-move result (`0x0283`).
+    MoveResponse(Box<MoveResponseEventData>),
+    /// SG-C1a: chess minigame — opponent's move (`0x0284`).
+    OpponentTurn(Box<OpponentTurnEventData>),
+    /// SG-C1a: chess minigame — opponent stalemate offer/retract (`0x0285`).
+    OpponentStalemate(Box<OpponentStalemateEventData>),
+    /// SG-C1a: chess minigame — game over (`0x028C`).
+    GameOver(Box<GameOverEventData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -422,6 +433,22 @@ impl ProtocolUnpack for GameEventMessage {
                 ),
                 GameEventOpcode::MiscPortalStorm => GameEvent::MiscPortalStorm,
                 GameEventOpcode::MiscPortalStormSubsided => GameEvent::MiscPortalStormSubsided,
+                // SG-C1a (2026-06-09): chess minigame events.
+                GameEventOpcode::JoinGameResponse => GameEvent::JoinGameResponse(Box::new(
+                    JoinGameResponseEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::MoveResponse => {
+                    GameEvent::MoveResponse(Box::new(MoveResponseEventData::unpack(data, offset)?))
+                }
+                GameEventOpcode::OpponentTurn => {
+                    GameEvent::OpponentTurn(Box::new(OpponentTurnEventData::unpack(data, offset)?))
+                }
+                GameEventOpcode::OpponentStalemate => GameEvent::OpponentStalemate(Box::new(
+                    OpponentStalemateEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::GameOver => {
+                    GameEvent::GameOver(Box::new(GameOverEventData::unpack(data, offset)?))
+                }
             },
             None => {
                 log::warn!(
@@ -847,6 +874,32 @@ impl ProtocolPack for GameEventMessage {
             GameEvent::MiscPortalStormSubsided => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::MiscPortalStormSubsided as u32)
                     .unwrap();
+            }
+            // SG-C1a (2026-06-09): chess minigame events.
+            GameEvent::JoinGameResponse(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::JoinGameResponse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::MoveResponse(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::MoveResponse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::OpponentTurn(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::OpponentTurn as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::OpponentStalemate(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::OpponentStalemate as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::GameOver(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::GameOver as u32)
+                    .unwrap();
+                data.pack(buf);
             }
             GameEvent::Unknown(opcode, data) => {
                 buf.write_u32::<LittleEndian>(*opcode).unwrap();
