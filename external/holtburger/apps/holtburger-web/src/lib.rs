@@ -17976,6 +17976,25 @@ pub struct EntityUpdate {
     /// distinct name keeps it from colliding with the existing
     /// per-surface `translucency` field entities.js already consumes.
     physics_translucency: f32,
+    /// **SG-B (2026-06-09).** The `UpdateMotion` (0xF74C) wire
+    /// `is_autonomous` bit (`MovementEventData.is_autonomous`,
+    /// `movement/messages/motion.rs:454`). ACE semantics
+    /// (`MovementData.cs:20`, `MotionItem.cs:25`): **`true` = client-
+    /// initiated** (the player's own predicted gait, echoed back by the
+    /// server — `Player.cs:948` sets it on every BroadcastMovement);
+    /// **`false` = server-initiated/forced** (a `Motion(stance, command)`
+    /// pushed via `EnqueueBroadcastMotion` — forced sit/sleep/paralysis-
+    /// hold/quest-emote, `Player.cs:1005`). JS reads this ONLY on
+    /// `kind=5 MOTION` for the local player: under `?forceMotionLocal=on`
+    /// it lets a server-FORCED (`!is_autonomous`) NON-locomotion pose
+    /// through to the local rig instead of swallowing it, while still
+    /// skipping every autonomous gait echo so the B9 client-gait
+    /// predictor is never overridden. Carries the live wire bit on the
+    /// 0xF74C-sourced kind=5; **`true`** (predictor-owned → stay skipped)
+    /// on the client-synthesised local touchdown/ledge-fall kind=5
+    /// emissions; **`false`** (don't-care) for every non-MOTION kind
+    /// (JS never reads it there).
+    is_autonomous: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -18204,6 +18223,17 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = physicsTranslucency)]
     pub fn physics_translucency(&self) -> f32 {
         self.physics_translucency
+    }
+
+    /// **SG-B (2026-06-09).** The `UpdateMotion` (0xF74C) wire
+    /// `is_autonomous` bit. `true` = client-initiated (the player's own
+    /// predicted gait echo — skip it, the predictor owns it); `false` =
+    /// server-initiated/forced (sit/sleep/paralysis-hold/quest-emote —
+    /// under `?forceMotionLocal=on` JS plays it on the local rig).
+    /// Meaningful only for `kind=5 MOTION`; `false` (don't-care) otherwise.
+    #[wasm_bindgen(getter, js_name = isAutonomous)]
+    pub fn is_autonomous(&self) -> bool {
+        self.is_autonomous
     }
 
     /// Velocity-hint x component (m/s, world frame). Meaningful only
@@ -30031,6 +30061,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                                is_autonomous: false,
                                             });
                                         }
                                     }
@@ -31194,6 +31225,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                is_autonomous: false,
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -31330,6 +31362,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                    is_autonomous: false,
                                 });
                             }
                         }
@@ -31381,6 +31414,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                is_autonomous: false,
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -31809,6 +31843,7 @@ async fn recv_loop(
                                     physics_translucency: data
                                         .translucency
                                         .unwrap_or(0.0),
+                                    is_autonomous: false,
                                 });
                                 if is_local_player {
                                     local_player_spawn_emitted = true;
@@ -31976,6 +32011,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                is_autonomous: false,
                             });
                         }
                         GameMessage::ObjDescEvent(data) => {
@@ -32055,6 +32091,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                is_autonomous: false,
                             });
                         }
                         GameMessage::ParentEvent(data) => {
@@ -32112,6 +32149,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                is_autonomous: false,
                             });
                         }
                         GameMessage::ObjectDelete(data) => {
@@ -32152,6 +32190,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                is_autonomous: false,
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
@@ -32357,6 +32396,7 @@ async fn recv_loop(
                                 // (`forward_speed`) → JS anim framerate scale.
                                 motion_speed: motion_speed_f32,
                                 physics_translucency: 0.0,
+                                is_autonomous: data.is_autonomous,
                             });
                             // F3-3 (bughunt 2026-06-09) — TurnTo execution. Both
                             // TurnToHeading and TurnToObject carry an ABSOLUTE
@@ -32414,6 +32454,7 @@ async fn recv_loop(
                                     weenie_flags: 0,
                                     motion_speed: 1.0,
                                     physics_translucency: 0.0,
+                                    is_autonomous: false,
                                 });
                             }
                             // Wave 2 (2026-06-08) — MAIN-PATH action command.
@@ -32508,6 +32549,7 @@ async fn recv_loop(
                                     weenie_flags: 0,
                                     motion_speed: action_speed,
                                     physics_translucency: 0.0,
+                                    is_autonomous: false,
                                 });
                             }
                             // Multi-action queue (2026-06-06, approach B):
@@ -32705,6 +32747,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                is_autonomous: false,
                             });
                         }
                         // Phase 4 step 4: chat-bearing surfaces. Each
@@ -37385,6 +37428,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                    is_autonomous: false,
                                 });
                             }
                         }
@@ -37581,6 +37625,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                        is_autonomous: true,
                                     });
                                 } else if !was_airborne_pre_tick
                                     && w.player.is_airborne
@@ -37649,6 +37694,7 @@ async fn recv_loop(
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
                                 physics_translucency: 0.0,
+                                        is_autonomous: true,
                                     });
                                 }
                                 // Phase 4 step 3.6 diagnostic — log pose

@@ -134,7 +134,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | `cycleOmega` | `on`/`off` | **on** | Apply cycle-authored angular velocity (spinners). (default-ON 2026-06-09, opt-out =off, pending 1070 eye-test) | scene3d/entities.js:358 |
 | `mtClassFallback` | `on` | off | Stage-1 generic class-mask motion-dispatch fallback — surfaces unmatched MT-modeled commands on the forward path (no-op if the MT lacks the clip). | scene3d/entities.js |
 | `idleFidget` | `on` | off | Autonomous client-side idle-fidget/idle-variation cycling so standing entities are not frozen in one Ready idle. | scene3d/entities.js |
-| `forceMotionLocal` | `on` | off | Apply server-forced NON-locomotion motions (sit/sleep/paralysis/forced emote) to the local player instead of skipping them. | scene3d/loop.js |
+| `forceMotionLocal` | `on` | off | Apply server-forced NON-locomotion motions (sit/sleep/paralysis/forced emote) to the local player instead of skipping them. SG-B (2026-06-09) gates on the real wire `is_autonomous` bit (`EntityUpdate.isAutonomous`): play only when the server marked the motion forced (`!isAutonomous`) AND it is non-locomotion (B9 predictor preserved). | scene3d/loop.js + apps/holtburger-web/src/lib.rs (needs wasm rebuild) |
 | `dynLod` | `on` | off | Dynamic entity LOD despawn/respawn with distance. | scene3d/entities.js:376 |
 | `sortCenter` | `on` | off | Transparency sort via AC authored sort-centers. | scene3d/entities.js:113 |
 | `maxTickDist` | float | ~2000 | Max distance for entity anim/AI ticking. | scene3d/entities.js:795 |

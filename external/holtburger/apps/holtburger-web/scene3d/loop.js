@@ -112,28 +112,29 @@ const KIND_TURN = 9;
 // own them — skipping them means the forced pose never plays locally.
 //
 // When this flag is ON, the local-guid arm lets a kind=5 command THROUGH to
-// `em.setMotion` IFF the command is NOT one of the predictor-owned
-// locomotion/stop/ready/fall signals (see `isLocalGaitLocomotionCmd`),
-// while still skipping every routine gait echo so local prediction (B9) is
-// preserved. When OFF, behaviour is byte-identical to today (skip → stance
-// only). Default OFF pending a 1070 GPU eye-test.
+// `em.setMotion` IFF (a) the server marked it FORCED (`!upd.isAutonomous`)
+// AND (b) the command is NOT one of the predictor-owned locomotion/stop/
+// ready/fall signals (see `isLocalGaitLocomotionCmd`), while still skipping
+// every routine gait echo so local prediction (B9) is preserved. When OFF,
+// behaviour is byte-identical to today (skip → stance only). Default OFF
+// pending a 1070 GPU eye-test.
 //
-// WIRE-SIGNAL CAVEAT (see blocked[] in the track handoff): the current wasm
-// bridge derives the kind=5 `motion_command` EXCLUSIVELY from the
-// UpdateMotion `forward_command` / StopCompletely / MoveTo / airborne-edge
-// paths (apps/holtburger-web/src/lib.rs ~31847, ~37079, ~37146), all of
-// which are locomotion-family commands (Walk/Run/Stop/Ready/Falling/Fallen/
-// MoveTo-hint). It does NOT surface the wire `is_autonomous` bit
-// (movement/types.rs MotionItem.packed_sequence bit 15) nor the forced
-// `commands` list (sit/sleep/state-emotes ride that Vec, drained via the
-// separate KIND_MOTION_ACTION + pollMotionActions channels). So the
-// command-class discriminator below is the cleanest CORRECT signal
-// available from kind=5 today: it correctly lets a non-locomotion
-// `forward_command` through, but a fully-general "is this server-forced"
-// gate would need the wasm side to surface `is_autonomous` (or route the
-// forced `commands` items to the local player). Until then a forced pose
-// that arrives ONLY as a `commands` MotionItem still flows through
-// KIND_MOTION_ACTION (which already runs for the local guid), not here.
+// WIRE-SIGNAL (SG-B, 2026-06-09 — resolves the prior caveat): the wasm
+// bridge NOW surfaces the UpdateMotion 0xF74C wire `is_autonomous` bit on
+// the kind=5 EntityUpdate (`EntityUpdate.isAutonomous`,
+// apps/holtburger-web/src/lib.rs — sourced from `MovementEventData
+// .is_autonomous`, movement/messages/motion.rs:454). ACE semantics
+// (`MovementData.cs:20`): true = client-initiated (the player's own
+// predicted gait echo — Player.cs:948 sets it on every BroadcastMovement);
+// false = server-initiated/forced (a `Motion(stance, command)` pushed via
+// `EnqueueBroadcastMotion` — forced sit/sleep/paralysis-hold/quest-emote,
+// Player.cs:1005). So `!isAutonomous` is now the PRIMARY, correct
+// "is-this-server-forced" discriminator, and the command-class check is kept
+// as defence-in-depth (B9). REMAINING gap: a forced pose that arrives ONLY
+// as a `commands`-list MotionItem (not the `forward_command` slot) still
+// flows through KIND_MOTION_ACTION (which already runs for the local guid),
+// not here — that channel does not yet thread `is_autonomous` per item
+// (movement/types.rs MotionItem.packed_sequence bit 15).
 const FORCE_MOTION_LOCAL_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -1778,14 +1779,30 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         // still drive their gait from the server echo.
         const st = (upd.motionStance ?? 0) >>> 0;
         const motionCmd = (upd.motionCommand ?? 0) >>> 0;
-        // FORCE_MOTION_LOCAL (B5#2): when ON, let a server-FORCED
+        // SG-B (2026-06-09): the kind=5 EntityUpdate now surfaces the wire
+        // `is_autonomous` bit (UpdateMotion 0xF74C). ACE marks the player's
+        // own predicted gait echo `is_autonomous=true` (client-initiated)
+        // and a server-FORCED motion `is_autonomous=false` (server-initiated
+        // — forced sit/sleep/paralysis-hold/quest-emote via
+        // `EnqueueBroadcastMotion`). The synthesised local touchdown/ledge-
+        // fall kind=5 emissions carry `true` (predictor owns them).
+        const isAuto = !!upd.isAutonomous;
+        // FORCE_MOTION_LOCAL (B5#2 + SG-B): when ON, let a server-FORCED
         // NON-LOCOMOTION pose/action through to the local rig instead of
-        // swallowing it. A locomotion-class command (Walk/Run/Stop/Ready/
-        // Turn/Sidestep/Fall) is still skipped so the B9 client-gait
-        // predictor is never overridden (see flag header). Default OFF →
+        // swallowing it. Three ANDed gates: (1) the flag, (2) the server
+        // marked it forced (`!isAuto`) — so an autonomous non-locomotion
+        // action the player triggered is still skipped (no double-play with
+        // prediction), and (3) it is not a locomotion-class command
+        // (Walk/Run/Stop/Ready/Turn/Sidestep/Fall) — defence-in-depth so the
+        // B9 client-gait predictor is NEVER overridden even if the autonomous
+        // bit is mis-set. (A genuinely server-FORCED locomotion — e.g. a
+        // forced-walk emote — is intentionally still deferred to the
+        // predictor by gate 3; revisit after the 1070 eye-test.) Default OFF →
         // `forceLocal` is always false → byte-identical to the old skip.
         const forceLocal =
-          FORCE_MOTION_LOCAL_ON && !isLocalGaitLocomotionCmd(motionCmd);
+          FORCE_MOTION_LOCAL_ON &&
+          !isAuto &&
+          !isLocalGaitLocomotionCmd(motionCmd);
         if (forceLocal || !isLocalPlayerGuid(motionGuid)) {
           // A1 (2026-05-29): forward the server's per-motion playback speed
           // (UpdateMotion.forward_speed) so EntityManager.setMotion scales the
@@ -2022,13 +2039,20 @@ export function installSharedDrainHook(scene3d) {
           // matching block above (~:1232) for the full rationale.
           const st = (upd.motionStance ?? 0) >>> 0;
           const motionCmd = (upd.motionCommand ?? 0) >>> 0;
-          // FORCE_MOTION_LOCAL (B5#2): mirror the direct-drain arm above —
-          // when ON, a server-FORCED NON-LOCOMOTION pose/action passes
-          // through to the local rig; a locomotion-class echo is still
-          // skipped to preserve the B9 client-gait predictor. Default OFF →
-          // byte-identical to the prior unconditional skip.
+          // SG-B (2026-06-09): wire `is_autonomous` bit (see the direct-drain
+          // arm above for the ACE semantics). true = client-predicted gait
+          // echo (skip); false = server-forced pose (apply under the flag).
+          const isAuto = !!upd.isAutonomous;
+          // FORCE_MOTION_LOCAL (B5#2 + SG-B): mirror the direct-drain arm —
+          // when ON, a server-FORCED (`!isAuto`) NON-LOCOMOTION pose/action
+          // passes through to the local rig; an autonomous echo OR a
+          // locomotion-class command is still skipped to preserve the B9
+          // client-gait predictor. Default OFF → byte-identical to the prior
+          // unconditional skip.
           const forceLocal =
-            FORCE_MOTION_LOCAL_ON && !isLocalGaitLocomotionCmd(motionCmd);
+            FORCE_MOTION_LOCAL_ON &&
+            !isAuto &&
+            !isLocalGaitLocomotionCmd(motionCmd);
           if (forceLocal || !isLocalPlayerGuid(motionGuid)) {
             // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
             em.setMotion(
