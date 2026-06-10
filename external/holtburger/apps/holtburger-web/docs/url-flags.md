@@ -128,6 +128,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | Flag | Values | Default | Effect | Where |
 |---|---|---|---|---|
 | `velScale` | `off` to disable | **on** (since 2026-06-05) | Velocity-scaled locomotion cycle (anti-ice-skating). | scene3d/entities.js:337 |
+| `signedMotionSpeed` | `on` | off | F15-2: play the locomotion clip in REVERSE for a backstep (negative wire forward_speed) instead of moonwalking the forward walk. Magnitude still from the velScale getter; only flips the final timeScale direction (inert when off). Backstep facet only — the Left→Right strafe/turn reverse is a follow-on. Pending 1070 eye-test. | scene3d/entities.js |
 | `deadReckon` | `off` to disable | on | Remote-entity motion smoothing / dead-reckoning. | scene3d/entities.js:55 |
 | `headingSnap` | `on` | off | Instant heading vs eased rotation (legacy). | scene3d/entities.js:74 |
 | `headingEaseK` | float >0 | conservative | Heading ease-in damping rate. | scene3d/entities.js:86 |

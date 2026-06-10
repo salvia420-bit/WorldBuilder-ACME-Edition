@@ -350,6 +350,21 @@ const VEL_SCALE_ON = (() => {
   }
 })();
 
+// F15-2 (2026-06-09) — `?signedMotionSpeed=on` gates REVERSE clip playback
+// for a backstep (negative forward_speed). Default OFF: a backstepping remote
+// otherwise moonwalks (forward walk anim while dead-reckoning backward). When
+// ON, the locomotion clip's final timeScale is negated for negative motion
+// speeds so three.js plays it in reverse. Magnitude for the gait still comes
+// from the velScale getter; this only flips direction. Needs a 1070 eye-test.
+const SIGNED_MOTION_SPEED = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("signedMotionSpeed")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
 // OMEGA (2026-06-06) — `?cycleOmega=on` gates applying a cycle's authored
 // MotionData.omega (continuous angular velocity) to the rig. Default OFF: a
 // behaviour change that needs a 1070 eye-test on a real authored spinner
@@ -5400,6 +5415,12 @@ export class EntityManager {
     {
       const ms = +motionSpeed;
       inst._motionSpeed = Number.isFinite(ms) && ms > 0 ? ms : 1.0;
+      // F15-2 — remember a backstep's direction (raw ms < 0) so the
+      // locomotion clip can play in reverse under ?signedMotionSpeed. The
+      // magnitude above is unchanged (the gait still comes from the velScale
+      // getter), so this is inert (sign = +1) when the flag is off.
+      inst._motionSpeedSign =
+        (SIGNED_MOTION_SPEED && Number.isFinite(ms) && ms < 0) ? -1 : 1;
     }
     // ACE broadcasts cmd=Stop (0x0004) or cmd=Invalid (0x0000) when a
     // moving entity comes to rest. With no override we'd fall through
@@ -5740,7 +5761,9 @@ export class EntityManager {
     // the cycle otherwise plays at native rate (1.0), so set the playback
     // speed directly here. Identity (1.0) is a no-op, so this is fail-soft.
     if (!VEL_SCALE_ON) {
-      const ms = inst._motionSpeed ?? 1.0;
+      // F15-2 — multiply in the backstep direction (sign = +1 unless
+      // ?signedMotionSpeed flips it for a negative speed).
+      const ms = (inst._motionSpeed ?? 1.0) * (inst._motionSpeedSign ?? 1);
       if (ms !== 1.0) {
         try { action.setEffectiveTimeScale(ms); } catch (_) {}
       }
@@ -8526,8 +8549,13 @@ export class EntityManager {
             // applies the speed scalar ONCE). EMA-fallback path keeps the legacy
             // compose-with-motionSpeed behavior unchanged. (Eye-test TODO: the EMA
             // path likely double-counts too; revisit when flipping VEL_SCALE_ON on.)
+            // F15-2 — apply the backstep direction AFTER cycleTimeScale's
+            // positive [0.25,4.0] clamp, so a negative final timeScale (reverse
+            // playback) survives. Sign is +1 unless ?signedMotionSpeed flips it,
+            // so this is byte-identical when the flag is off.
+            const dir = inst._motionSpeedSign ?? 1;
             locoAction.setEffectiveTimeScale(
-              speedFromGetter ? velScaleComponent : velScaleComponent * motionSpeed,
+              (speedFromGetter ? velScaleComponent : velScaleComponent * motionSpeed) * dir,
             );
           }
         }

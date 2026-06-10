@@ -32726,11 +32726,21 @@ async fn recv_loop(
                             // default). Non-positive / non-finite values are
                             // clamped to `1.0` so a bad scalar can't freeze the
                             // rig.
+                            // F15-2 (2026-06-09): preserve the SIGN. A backstep
+                            // is WalkForward with `forward_speed` negated upstream
+                            // (× -0.65); the old `*s > 0.0` filter dropped the
+                            // negative and fell back to 1.0, so a remote backstep
+                            // played the forward walk at full speed = moonwalk.
+                            // Keep finite NON-ZERO values (incl. negative); JS
+                            // clamps the magnitude for the gait/velScale getter and
+                            // only USES the sign (reverse clip playback) under the
+                            // default-off `?signedMotionSpeed` flag, so the default
+                            // wire→JS behavior is unchanged.
                             let motion_speed_f32: f32 = match &data.data {
                                 MovementTypeData::Invalid(inv) => inv
                                     .state
                                     .forward_speed
-                                    .filter(|s| s.is_finite() && *s > 0.0)
+                                    .filter(|s| s.is_finite() && *s != 0.0)
                                     .unwrap_or(1.0),
                                 _ => 1.0,
                             };
