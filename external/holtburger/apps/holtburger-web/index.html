@@ -1232,6 +1232,11 @@
         attributeName,
         vitalName,
       } from "./pkg/holtburger_web.js?v=wave-c-20260609d-render";
+      // F18-2 — namespace import for the stale-pkg handshake. A NAMED import of
+      // a possibly-missing export would throw a module-link error on the exact
+      // stale bundle we're trying to detect; namespace access yields `undefined`
+      // for a missing export instead, so the boot check can run safely.
+      import * as __hbWasmNs from "./pkg/holtburger_web.js?v=wave-c-20260609d-render";
 
       import * as PIXI from "pixi.js";
       import { configureBakeWorker } from "./scene3d/bake_worker_client.js";
@@ -1768,6 +1773,40 @@
         // wasm-stuck from manifest-stuck.
         root.innerHTML = "<p class=\"hint\">Initializing wasm bundle (1.5 MB)…</p>";
         await init();
+
+        // F18-2 — stale-pkg handshake. The ~50 `typeof fn === "function"`
+        // soft-degrade guards across the client silently no-op load-bearing
+        // gameplay (jumps glue to terrain, weapons vanish, pack capacity
+        // wrong, camera clips) when `pkg/` lags the Rust source. Assert the
+        // wasm's export-manifest version meets what this JS bundle was built
+        // against; on a stale bundle, console.error + an on-screen banner so
+        // the regression is LOUD instead of a clean-console mystery. BUMP
+        // both this and WASM_EXPORT_MANIFEST_VERSION (lib.rs) together when a
+        // load-bearing export is added.
+        const EXPECTED_WASM_MANIFEST_VERSION = 1;
+        try {
+          const manifestFn = __hbWasmNs?.wasm_export_manifest_version;
+          const wasmManifest = (typeof manifestFn === "function")
+            ? (manifestFn() >>> 0) : -1;
+          if (wasmManifest < EXPECTED_WASM_MANIFEST_VERSION) {
+            const msg = `wasm bundle is STALE: export-manifest v${wasmManifest} < expected v${EXPECTED_WASM_MANIFEST_VERSION}. ` +
+              `Rebuild pkg/ (wasm-pack build) — some gameplay will silently degrade until you do.`;
+            // eslint-disable-next-line no-console
+            console.error(`[F18-2] ${msg}`);
+            try {
+              const banner = document.createElement("div");
+              banner.id = "hb-stale-wasm-banner";
+              banner.textContent = "⚠ Stale wasm bundle — rebuild pkg/. Some gameplay is silently degraded.";
+              banner.style.cssText =
+                "position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#7a1f1f;color:#fff;" +
+                "font:12px/1.6 monospace;padding:6px 12px;text-align:center;box-shadow:0 1px 6px rgba(0,0,0,.5);";
+              document.body.appendChild(banner);
+            } catch (_) { /* DOM not ready / headless — console.error already fired */ }
+          }
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error("[F18-2] wasm export-manifest check failed:", e);
+        }
 
         // Expose a small surface of named wasm exports under
         // `window.__hbWasm` for plugins that need to call into the

@@ -329,6 +329,26 @@ pub fn build_info() -> String {
     )
 }
 
+/// F18-2 — export-surface manifest version. BUMP THIS (and the matching
+/// `EXPECTED_WASM_MANIFEST_VERSION` in index.html) whenever a LOAD-BEARING
+/// wasm export is added or its signature changes, so a stale `pkg/` (one
+/// that lags the Rust source) is detected LOUDLY at boot instead of silently
+/// no-oping gameplay through the ~50 `typeof fn === "function"` soft-degrade
+/// guards (the 2026-06-08 isOnGround-missing incident silently reverted the
+/// jump-arc fix). The compile-time git SHA stamping (the nicer half of F18-2)
+/// is a build-pipeline follow-on; this manual-but-reliable version handshake
+/// is the part that needs no build-system changes.
+pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 1;
+
+/// Returns the export-surface manifest version (F18-2). JS asserts this is
+/// `>=` its compiled-in expectation at boot; a mismatch — or this function
+/// being absent entirely on an older bundle — means `pkg/` is stale and must
+/// be rebuilt.
+#[wasm_bindgen]
+pub fn wasm_export_manifest_version() -> u32 {
+    WASM_EXPORT_MANIFEST_VERSION
+}
+
 /// AC's stateless 32-bit packet header checksum, exposed for callers
 /// that want to verify the protocol crate's deterministic output from
 /// JS. Smoke-tests passing a `&[u8]` from JS into wasm and a `u32`
