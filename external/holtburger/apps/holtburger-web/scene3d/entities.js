@@ -382,6 +382,23 @@ const FULL_BODY_ONE_SHOT = (() => {
   }
 })();
 
+// F8-1 (2026-06-09) — `?castSpeed=on` (default OFF) paces the local cast-
+// gesture chain at ACE CastSpeed=2.0 instead of 1× — without it a level-7 war
+// spell animates ~7s client-side vs ~3.5s server-side, so the projectile
+// launches and recoil happen while the character is still mid-windup. When
+// ON, each gesture's clip timeScale ×2 and its sleep ÷2, and the matching
+// wire echo is suppressed (F6-2 stamp-dedup) so the server's 2× windup doesn't
+// fight the prediction. Default OFF pending a 1070 eye-test (cast timing/feel).
+const CAST_SPEED = (() => {
+  try {
+    return (typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("castSpeed")?.toLowerCase() === "on")
+      ? 2.0 : 1.0;
+  } catch (_) {
+    return 1.0;
+  }
+})();
+
 // OMEGA (2026-06-06) — `?cycleOmega=on` gates applying a cycle's authored
 // MotionData.omega (continuous angular velocity) to the rig. Default OFF: a
 // behaviour change that needs a 1070 eye-test on a real authored spinner
@@ -4795,9 +4812,15 @@ export class EntityManager {
         // `await` it — the per-gesture sleep below is what paces the
         // chain. Awaiting setSwingMotion would compound its internal
         // latency on top of the spell's wall-clock duration.
-        this.setSwingMotion(g, motionU32);
+        // F8-1: pace the clip at CastSpeed (×2 under ?castSpeed), and record
+        // the prediction so the server's matching 2× windup echo is skipped
+        // (consumeLocalSwingEcho in loop.js) instead of fighting/restarting it.
+        this.setSwingMotion(g, motionU32, { speed: CAST_SPEED });
+        if (CAST_SPEED !== 1.0) this.noteLocalSwingPrediction?.(motionU32);
       } catch (_) { /* never block the chain on a single gesture fail */ }
-      const ms = Math.max(50, Math.round((+gesture.durationS || 0.6) * 1000));
+      // F8-1: shorten each gesture's wall-clock by CastSpeed so the chain's
+      // total duration matches the 2× server cast.
+      const ms = Math.max(50, Math.round(((+gesture.durationS || 0.6) * 1000) / CAST_SPEED));
       await new Promise((resolve) => setTimeout(resolve, ms));
       // Recheck cancellation after the sleep — a newer cast may have
       // started while we slept.
@@ -5039,7 +5062,10 @@ export class EntityManager {
     // duration (`clip.duration / dur`); MULTIPLY by `inst._motionSpeed`
     // (retail `Framerate *= speed`) so a hasted/slowed attack plays faster/
     // slower. Identity (1.0) is the fail-soft default.
-    const swingSpeed = inst._motionSpeed ?? 1.0;
+    // F8-1: `opts.speed` lets a caller pace this one-shot (e.g. the cast
+    // chain at ACE CastSpeed=2.0). Defaults to 1.0, so non-cast callers are
+    // unaffected. Composes multiplicatively with the server per-motion speed.
+    const swingSpeed = (inst._motionSpeed ?? 1.0) * (+(opts?.speed) > 0 ? +opts.speed : 1.0);
     const dur = +result.durationSec;
     if (Number.isFinite(dur) && dur > 0 && Number.isFinite(clip.duration) && clip.duration > 0) {
       action.setEffectiveTimeScale((clip.duration / dur) * swingSpeed);
