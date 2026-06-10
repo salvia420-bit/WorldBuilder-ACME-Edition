@@ -93,6 +93,58 @@ let _mvpMatrixScratch = null;
  *     skippedNoMesh: number,     // static DIDs whose model fetch failed
  *   }
  */
+// F14-3 — `?cellStaticMultiSurface=on` (default OFF). Cell-static props
+// (lanterns, braziers, tables, chests, beds) are multi-surface, but the
+// renderer fused each into a single-material mesh painted with only its
+// FIRST surface. When ON, each prop is built as ONE fused geometry with
+// per-surface addGroups + a parallel materials array (THREE.Mesh binds the
+// right material per group), so every surface textures correctly. Default
+// OFF pending a 1070 eye-test (changes interior prop textures).
+function readCellStaticMultiSurface() {
+  try {
+    return typeof globalThis !== "undefined" && globalThis.location &&
+      new URLSearchParams(globalThis.location.search).get("cellStaticMultiSurface") === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+// F14-3 — build one fused multi-surface BufferGeometry + parallel materials
+// array from `meshToGeometryGroups` output (each group = {geometry, surfaceDid}).
+// Mirrors the cell-surface fused build but with no opaque/transparent split
+// (props are small — the transparent-sort artifact is negligible next to
+// whole-prop mistexturing). Returns { geometry, materials } or null.
+function buildFusedMultiSurfaceStatic(groups, materialCache) {
+  if (!groups || groups.length === 0) return null;
+  let totalVerts = 0;
+  for (const g of groups) totalVerts += g.geometry.attributes.position.count;
+  if (totalVerts === 0) return null;
+  const mergedPos = new Float32Array(totalVerts * 3);
+  const mergedUv = new Float32Array(totalVerts * 2);
+  const mergedNormal = new Float32Array(totalVerts * 3);
+  const materials = [];
+  const fused = new THREE.BufferGeometry();
+  let vertexOffset = 0;
+  for (let i = 0; i < groups.length; i += 1) {
+    const src = groups[i].geometry;
+    const vertCount = src.attributes.position.count;
+    mergedPos.set(src.attributes.position.array, vertexOffset * 3);
+    mergedUv.set(src.attributes.uv.array, vertexOffset * 2);
+    mergedNormal.set(src.attributes.normal.array, vertexOffset * 3);
+    fused.addGroup(vertexOffset, vertCount, i);
+    vertexOffset += vertCount;
+    materials.push(
+      materialCache.getCached(groups[i].surfaceDid >>> 0) || materialCache.fallbackMaterial,
+    );
+  }
+  fused.setAttribute("position", new THREE.BufferAttribute(mergedPos, 3, false));
+  fused.setAttribute("uv", new THREE.BufferAttribute(mergedUv, 2, false));
+  fused.setAttribute("normal", new THREE.BufferAttribute(mergedNormal, 3, false));
+  fused.computeBoundingSphere();
+  for (const g of groups) { try { g.geometry.dispose?.(); } catch (_) {} }
+  return { geometry: fused, materials };
+}
+
 export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExports) {
   if (!scene3d || !scene3d.cellsGroup) {
     throw new Error("buildEnvCellsForLandblock: scene3d.cellsGroup missing");
@@ -305,6 +357,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     if (staticMeshes) {
       const allStaticSurfaceDids = new Set();
       const dominantByDid = new Map();
+      // F14-3 — when ON, keep each prop's per-surface groups so it can be
+      // built as a multi-material mesh after the surfaces preload below.
+      const multiSurface = readCellStaticMultiSurface();
+      const staticGroupsByDid = new Map();
       for (let i = 0; i < ids.length; i += 1) {
         const id = ids[i];
         const m = staticMeshes[i];
@@ -322,8 +378,15 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         if (surfacesArr.length > 0) {
           dominantByDid.set(id, surfacesArr[0] >>> 0);
         }
-        const geom = meshToFusedGeometry(m);
-        if (geom) staticGeomByDid.set(id, geom);
+        if (multiSurface) {
+          // Per-surface groups; the fused multi-material build runs after
+          // the surfaces are preloaded (materials must be cached first).
+          const { groups } = meshToGeometryGroups(m);
+          if (groups && groups.length > 0) staticGroupsByDid.set(id, groups);
+        } else {
+          const geom = meshToFusedGeometry(m);
+          if (geom) staticGeomByDid.set(id, geom);
+        }
         if (typeof m.free === "function") m.free();
       }
       // Preload static-side surfaces too (cheap if already cached;
@@ -342,7 +405,23 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           );
         }
       }
+      // F14-3 — flag ON: build the fused multi-material geometry + materials
+      // array now that the surfaces are cached. Stored the same way as the
+      // single-material path so the mesh-creation loop is unchanged (THREE.Mesh
+      // binds an array of materials per geometry group automatically).
+      if (multiSurface) {
+        for (const [id, groups] of staticGroupsByDid) {
+          const built = buildFusedMultiSurfaceStatic(groups, scene3d.materialCache);
+          if (!built) continue;
+          staticGeomByDid.set(id, built.geometry);
+          staticMatByDid.set(id, built.materials);
+          lbDisposableGeometries.push(built.geometry);
+        }
+      }
       for (const [id, geom] of staticGeomByDid) {
+        // Multi-surface props (F14-3) already have their geometry pushed to
+        // lbDisposableGeometries and their materials array set above.
+        if (staticMatByDid.has(id)) continue;
         const dom = dominantByDid.get(id);
         if (typeof dom === "number" && dom !== 0) {
           staticMatByDid.set(id, scene3d.materialCache.getCached(dom));
@@ -563,7 +642,11 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       m.name = `cellstatic-${snap.cellId.toString(16).padStart(8, "0")}-${so.did.toString(16).padStart(8, "0")}`;
       // Cell-static props (furniture, lanterns, decorations).
       if (cellsShadow) {
-        m.castShadow = materialCanCastShadow(mat);
+        // F14-3: `mat` is an array for multi-surface props — cast if ANY
+        // surface casts (per-Mesh flag, mirrors the cell-surface OR fold).
+        m.castShadow = Array.isArray(mat)
+          ? mat.some((sub) => materialCanCastShadow(sub))
+          : materialCanCastShadow(mat);
         m.receiveShadow = true;
       }
       const xform = placementToMatrix4(so);
