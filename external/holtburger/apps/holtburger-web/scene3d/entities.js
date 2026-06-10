@@ -462,6 +462,28 @@ const DYN_LOD_ON = (() => {
 // Throttle the dynamic-LOD recheck — distance bands are coarse, so ~2 Hz is
 // plenty and keeps the per-entity async band query off the hot path.
 const DYN_LOD_INTERVAL_S = 0.5;
+// R7 (runtime ObjScale/translucency, 2026-06-09) — `?runtimeObjScale=on`
+// (default OFF). A mid-game `UpdateObject` (0xF7DB) re-sends the full ODD,
+// which can carry a NEW obj_scale (server grow/shrink) or TRANSLUCENCY
+// (ghost/cloak). The kind=6 APPEARANCE path drove `applyAppearance` but kept
+// the SPAWN-time scale/opacity (newMeta inherits oldMeta), so those runtime
+// changes never reached the rig. When ON, `applyAppearance` overrides
+// `newMeta.{objScale,physicsTranslucency}` from the wire — but ONLY when the
+// value is non-sentinel: the Rust side sends the real value on `UpdateObject`
+// and the `0.0`/`-1.0` sentinels on `ObjDescEvent` (equip/dye/death carry no
+// scale/translucency on the wire), so the everyday equip/dye path never resets
+// a grown/ghosted entity. Default OFF pending a 1070 eye-test (re-scales the
+// rig via despawn+respawn — same path SG-D uses).
+const RUNTIME_OBJSCALE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("runtimeObjScale")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
 // Render-completeness Waves-2 P3 (2026-05-29) — CallPES (AnimationHook
 // type 19) is a RECURSIVE sub-script invocation: a PhysicsScript can call
 // another PhysicsScript, which can call another, etc. (354 retail scripts
@@ -6098,6 +6120,18 @@ export class EntityManager {
     if (opts?.textureChanges) newMeta.textureChanges = opts.textureChanges;
     if (opts?.subPalettes) newMeta.subPalettes = opts.subPalettes;
     if (opts?.paletteId !== undefined) newMeta.paletteId = (opts.paletteId >>> 0);
+    // R7 (?runtimeObjScale=on): apply a runtime scale/translucency carried by
+    // an UpdateObject. The Rust side sends real values on UpdateObject and the
+    // 0.0 / -1.0 "no change" sentinels on ObjDescEvent (equip/dye/death carry
+    // neither on the wire), so equip/dye never resets a grown/ghosted entity.
+    // The respawn below re-reads `meta.objScale` (~:2680) + `meta
+    // .physicsTranslucency` (~:3068), so merging into newMeta is sufficient.
+    if (RUNTIME_OBJSCALE_ON) {
+      if (opts?.objScale > 0) newMeta.objScale = opts.objScale;
+      if (opts?.physicsTranslucency >= 0) {
+        newMeta.physicsTranslucency = opts.physicsTranslucency;
+      }
+    }
 
     // Wave 7.5 — try hot-swap when the URL flag is on. Hot-swap
     // preserves root + mixer + currently-playing action; only the

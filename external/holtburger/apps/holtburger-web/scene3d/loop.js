@@ -1882,6 +1882,10 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
           textureChanges: _sliceFromScratch(upd.textureChanges, 1),
           subPalettes: _sliceFromScratch(upd.subPalettes, 2),
           paletteId: (upd.paletteId ?? 0) >>> 0,
+          // R7 (?runtimeObjScale=on): runtime scale/translucency (sentinels
+          // 0 / -1 = no change; applyAppearance gates on the flag).
+          objScale: +(upd.objScale ?? 0),
+          physicsTranslucency: +(upd.physicsTranslucency ?? -1),
         });
       } else if (kind === KIND_ATTACH) {
         // Render-completeness audit (2026-05-29) — wielded item equipped
@@ -2124,6 +2128,10 @@ export function installSharedDrainHook(scene3d) {
             textureChanges: _sliceFromScratch(upd.textureChanges, 1),
             subPalettes: _sliceFromScratch(upd.subPalettes, 2),
             paletteId: (upd.paletteId ?? 0) >>> 0,
+            // R7 (?runtimeObjScale=on): runtime scale/translucency (sentinels
+            // 0 / -1 = no change; applyAppearance gates on the flag).
+            objScale: +(upd.objScale ?? 0),
+            physicsTranslucency: +(upd.physicsTranslucency ?? -1),
           });
         } else if (kind === KIND_ATTACH) {
           // SG-D (2026-06-09): wielded-item attach/detach (render-completeness

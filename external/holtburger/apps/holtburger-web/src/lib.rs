@@ -32126,7 +32126,11 @@ async fn recv_loop(
                                 wcid: 0,
                                 item_type: 0,
                                 name: String::new(),
-                                obj_scale: 1.0,
+                                // R7 (?runtimeObjScale=on, 2026-06-09): carry the
+                                // runtime obj_scale from the full UpdateObject ODD so a
+                                // server grow/shrink reaches the rig (JS applies it when
+                                // >0). 1.0 = default scale when the ODD omits it.
+                                obj_scale: data.obj_scale.unwrap_or(1.0),
                                 icon_id: 0,
                                 palette_id,
                                 mtable_id: 0,
@@ -32147,7 +32151,10 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
-                                physics_translucency: 0.0,
+                                // R7: carry runtime OBJECT translucency from the
+                                // UpdateObject ODD (JS applies when >=0; ghost/cloak
+                                // grow). 0.0 = opaque when the ODD omits TRANSLUCENCY.
+                                physics_translucency: data.translucency.unwrap_or(0.0),
                                 is_autonomous: false,
                             });
                         }
@@ -32206,7 +32213,11 @@ async fn recv_loop(
                                 wcid: 0,
                                 item_type: 0,
                                 name: String::new(),
-                                obj_scale: 1.0,
+                                // R7: ObjDescEvent (equip/dye/death) carries NO
+                                // obj_scale on the wire — send the 0.0 sentinel = "no
+                                // scale change" so JS keeps the entity's current scale
+                                // (never resets a grown mob on every equip/dye).
+                                obj_scale: 0.0,
                                 icon_id: 0,
                                 palette_id,
                                 mtable_id: 0,
@@ -32227,7 +32238,9 @@ async fn recv_loop(
                                 // A1 (2026-05-29): non-MOTION updates carry no
                                 // playback speed — identity (no anim scaling).
                                 motion_speed: 1.0,
-                                physics_translucency: 0.0,
+                                // R7: ObjDescEvent carries no translucency — -1.0
+                                // sentinel = "no translucency change" (JS keeps current).
+                                physics_translucency: -1.0,
                                 is_autonomous: false,
                             });
                         }
