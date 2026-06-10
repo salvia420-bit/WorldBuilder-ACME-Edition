@@ -29929,6 +29929,64 @@ async fn recv_loop(
                                 WorldEvent::FellowshipStateUpdated(_) => {
                                     fellowship_changed = true;
                                 }
+                                // SG-E (2026-06-09, Lens-2 discovery): the world
+                                // dispatcher emits `FellowshipActivity` for every
+                                // join/leave/dismiss/disband (the cli renders these
+                                // as chat lines — `panels/chat.rs:548`), but the
+                                // wasm recv loop dropped them at the `_ => {}`
+                                // catch-all: only `FellowshipStateUpdated` was
+                                // consumed (roster refresh), so the local player's
+                                // own "You left/joined the fellowship." feedback —
+                                // and member join/leave notices — never reached JS.
+                                // Surface them as a `kind=2 CHAT_RECEIVED` line in
+                                // the Fellowship category (16). Formatting mirrors
+                                // the cli's `format_fellowship_activity` 1:1.
+                                WorldEvent::FellowshipActivity(activity) => {
+                                    use holtburger_world::events::FellowshipActivity as FA;
+                                    let line = match activity {
+                                        FA::YouJoined { fellowship_name } => {
+                                            if fellowship_name.is_empty() {
+                                                "You joined the fellowship.".to_string()
+                                            } else {
+                                                format!(
+                                                    "You joined the fellowship '{}'.",
+                                                    fellowship_name
+                                                )
+                                            }
+                                        }
+                                        FA::MemberJoined { member_name } => {
+                                            format!("{} joined the fellowship.", member_name)
+                                        }
+                                        FA::YouLeft => "You left the fellowship.".to_string(),
+                                        FA::MemberLeft { member_name } => {
+                                            format!("{} left the fellowship.", member_name)
+                                        }
+                                        FA::YouWereDismissed => {
+                                            "You were dismissed from the fellowship.".to_string()
+                                        }
+                                        FA::MemberWasDismissed { member_name } => {
+                                            format!(
+                                                "{} was dismissed from the fellowship.",
+                                                member_name
+                                            )
+                                        }
+                                        FA::FellowshipDisbanded { fellowship_name } => {
+                                            match fellowship_name {
+                                                Some(name) if !name.is_empty() => {
+                                                    format!("The fellowship '{}' was disbanded.", name)
+                                                }
+                                                _ => "The fellowship was disbanded.".to_string(),
+                                            }
+                                        }
+                                    };
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(line),
+                                        u32_payload: None,
+                                        u32_payload_2: Some(CHAT_CATEGORY_FELLOWSHIP),
+                                        f32_payload: None,
+                                    });
+                                }
                                 WorldEvent::TradeStateUpdated(_) => {
                                     trade_changed = true;
                                 }
