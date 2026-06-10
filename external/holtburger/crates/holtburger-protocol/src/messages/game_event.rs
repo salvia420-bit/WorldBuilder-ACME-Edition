@@ -9,6 +9,7 @@ pub use crate::messages::fellowship::events::*;
 pub use crate::messages::friends::events::*;
 pub use crate::messages::house::events::*;
 pub use crate::messages::inventory::events::*;
+pub use crate::messages::item_ops::events::*;
 pub use crate::messages::magic::events::*;
 pub use crate::messages::misc::events::*;
 pub use crate::messages::network::events::*;
@@ -152,6 +153,11 @@ pub enum GameEvent {
     OpponentStalemate(Box<OpponentStalemateEventData>),
     /// SG-C1a: chess minigame — game over (`0x028C`).
     GameOver(Box<GameOverEventData>),
+    /// SG-C2 (2026-06-09): per-material salvage yield (`0x02B4`).
+    SalvageOperationsResult(Box<SalvageOperationsResultEventData>),
+    /// SG-C2: object inscription + scribe (`GetInscriptionResponse` 0x00C3;
+    /// deprecated in retail — inscription normally arrives via appraisal).
+    InscriptionResponse(Box<InscriptionResponseEventData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -449,6 +455,13 @@ impl ProtocolUnpack for GameEventMessage {
                 GameEventOpcode::GameOver => {
                     GameEvent::GameOver(Box::new(GameOverEventData::unpack(data, offset)?))
                 }
+                // SG-C2 (2026-06-09): item-op self-events.
+                GameEventOpcode::SalvageOperationsResult => GameEvent::SalvageOperationsResult(
+                    Box::new(SalvageOperationsResultEventData::unpack(data, offset)?),
+                ),
+                GameEventOpcode::GetInscriptionResponse => GameEvent::InscriptionResponse(Box::new(
+                    InscriptionResponseEventData::unpack(data, offset)?,
+                )),
             },
             None => {
                 log::warn!(
@@ -898,6 +911,17 @@ impl ProtocolPack for GameEventMessage {
             }
             GameEvent::GameOver(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::GameOver as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            // SG-C2 (2026-06-09): item-op self-events.
+            GameEvent::SalvageOperationsResult(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::SalvageOperationsResult as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::InscriptionResponse(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::GetInscriptionResponse as u32)
                     .unwrap();
                 data.pack(buf);
             }

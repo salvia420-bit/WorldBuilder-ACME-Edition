@@ -861,8 +861,9 @@ pub enum GameEventOpcode {
     /// S2C: Notification that an inventory save operation failed on the server.
     InventoryServerSaveFailed = 0x00A0,
     // --- Visuals & Identification ---
-    // /// S2C: Returns the inscription text for an object.
-    // GetInscriptionResponse = 0x00C3,
+    /// S2C: Inscription text + scribe for an object (DEPRECATED in retail;
+    /// inscription normally arrives via IdentifyObjectResponse). SG-C2.
+    GetInscriptionResponse = 0x00C3,
 
     // --- Books & Inscriptions ---
     /// S2C: Response containing book metadata plus any inline page payloads.
@@ -875,8 +876,8 @@ pub enum GameEventOpcode {
     BookDeletePageResponse = 0x00B7,
     /// S2C: Returns specific page data for a book.
     BookPageDataResponse = 0x00B8,
-    // /// S2C: Result of a salvaging operation.
-    // SalvageOperationsResult = 0x02B4,
+    /// S2C: Per-material salvage yield after using an Ust. SG-C2.
+    SalvageOperationsResult = 0x02B4,
 
     // --- Combat & Stats ---
     /// S2C: Notification that the current attack sequence is finished.

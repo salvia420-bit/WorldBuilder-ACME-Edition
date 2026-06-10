@@ -9586,6 +9586,42 @@ void main() {
                   // eslint-disable-next-line no-console
                   console.warn("[chess] dispatch failed:", e);
                 }
+              } else if (evt.kind === 51 /* SG-C2 InscriptionResponse */) {
+                // SG-C2 (2026-06-09): an object's inscription text + scribe.
+                // u32Payload = object guid, stringPayload = inscription text,
+                // u32Payload_2 = scribe guid. (Deprecated retail event;
+                // inscription text normally arrives via appraisal.) Minimal
+                // observable surface + plugin-bus emit.
+                const objGuid = (evt.u32Payload ?? 0) >>> 0;
+                const text = String(evt.stringPayload || "");
+                const scribeGuid = (evt.u32Payload2 ?? 0) >>> 0;
+                // eslint-disable-next-line no-console
+                console.log(`[inscription] obj=0x${objGuid.toString(16)} scribe=0x${scribeGuid.toString(16)} text=${JSON.stringify(text)}`);
+                window.__pluginClient?.events?.emit?.("inscriptionShown", {
+                  objectGuid: objGuid, scribeGuid, text,
+                });
+              } else if (evt.kind === 52 /* SG-C2 SalvageOperationsResult */) {
+                // SG-C2 (2026-06-09): per-material salvage yield. u32Payload =
+                // skill, u32Payload_2 = augmentation bonus, stringPayload =
+                // "<material>:<units>:<workmanship>,..." per line.
+                const skill = (evt.u32Payload ?? 0) >>> 0;
+                const augBonus = (evt.u32Payload2 ?? 0) | 0;
+                const results = String(evt.stringPayload || "")
+                  .split(",")
+                  .filter((s) => s.length > 0)
+                  .map((s) => {
+                    const [material, units, workmanship] = s.split(":");
+                    return {
+                      material: parseInt(material, 10),
+                      units: parseInt(units, 10),
+                      workmanship: Number(workmanship),
+                    };
+                  });
+                // eslint-disable-next-line no-console
+                console.log(`[salvage] skill=${skill} augBonus=${augBonus}`, results);
+                window.__pluginClient?.events?.emit?.("salvageResult", {
+                  skill, augBonus, results,
+                });
               } else if (evt.kind === 32 /* ObjectAppraised */) {
                 // ACPlugin PR-2 (2026-05-27): an entity's appraisal
                 // data was just refreshed in the entity store (the

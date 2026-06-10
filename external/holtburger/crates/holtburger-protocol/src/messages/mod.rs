@@ -14,6 +14,7 @@ pub mod game_event;
 pub mod game_message;
 pub mod house;
 pub mod inventory;
+pub mod item_ops;
 pub mod magic;
 pub mod misc;
 pub mod movement;

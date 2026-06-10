@@ -168,6 +168,9 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::OpponentTurn(_) => 0x0284,
         GameEvent::OpponentStalemate(_) => 0x0285,
         GameEvent::GameOver(_) => 0x028C,
+        // SG-C2 (2026-06-09): item-op self-events.
+        GameEvent::SalvageOperationsResult(_) => 0x02B4,
+        GameEvent::InscriptionResponse(_) => 0x00C3,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -16620,6 +16623,21 @@ const CLIENT_EVENT_KIND_ENTITY_ATTACHED: u32 = 49;
 /// board state, and emits `chessUpdate` on the plugin bus.
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_CHESS_UPDATE: u32 = 50;
+
+/// `kind = 51` — InscriptionResponse. SG-C2 (2026-06-09): an object's
+/// inscription text + scribe (deprecated retail event; surfaced for
+/// completeness). `u32_payload` = object GUID. `string_payload` = the raw
+/// inscription text. `u32_payload_2` = scribe GUID. JS emits `inscriptionShown`
+/// on the plugin bus.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_INSCRIPTION: u32 = 51;
+
+/// `kind = 52` — SalvageOperationsResult. SG-C2 (2026-06-09): per-material
+/// salvage yield after using an Ust. `u32_payload` = skill, `u32_payload_2` =
+/// augmentation bonus, `string_payload` = a `,`-separated list of
+/// `<material>:<units>:<workmanship>` lines. JS emits `salvageResult`.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_SALVAGE_RESULT: u32 = 52;
 
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
@@ -34208,6 +34226,31 @@ async fn recv_loop(
                                         )),
                                         u32_payload: Some(board),
                                         u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                // SG-C2 (2026-06-09): item-op self-events.
+                                holtburger_protocol::messages::GameEvent::InscriptionResponse(data) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_INSCRIPTION,
+                                        string_payload: Some(data.inscription.clone()),
+                                        u32_payload: Some(u32::from(data.object_guid)),
+                                        u32_payload_2: Some(u32::from(data.scribe_guid)),
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::SalvageOperationsResult(data) => {
+                                    let list = data
+                                        .results
+                                        .iter()
+                                        .map(|r| format!("{}:{}:{}", r.material_type, r.units, r.workmanship))
+                                        .collect::<Vec<_>>()
+                                        .join(",");
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_SALVAGE_RESULT,
+                                        string_payload: Some(list),
+                                        u32_payload: Some(data.skill),
+                                        u32_payload_2: Some(data.augmentation_bonus as u32),
                                         f32_payload: None,
                                     });
                                 }
