@@ -43,6 +43,21 @@ const CAST_FACE_TARGET = (() => {
   } catch { return false; }
 })();
 
+// F6-5 — 3D / cylinder-aware melee range gate. Default-OFF (touches the
+// combat motion pipeline: changes when the client auto-pursue engages vs
+// when an immediate in-place swing fires). When ON, the melee reach check
+// is a cylinder distance instead of a flat horizontal circle, so a target
+// on a ledge / raised platform — a Z offset the flat 2.5m check was blind
+// to — reads as out of range and the existing charge engages (run cycle +
+// steering) instead of firing a "phantom" swing that ACE then services with
+// an invisible force-position walk. (?melee3dRange=on)
+const MELEE_3D_RANGE = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("melee3dRange") === "on";
+  } catch { return false; }
+})();
+
 // Fallback AttackType for the CombatManeuverTable lookup when the
 // per-weapon inference (Wave 1 Phase 3, 2026-05-26) returns
 // `ATTACK_TYPE.Undef` — e.g. shield-only, ranged before Phase 6
@@ -111,6 +126,25 @@ function horizontalDistance(a, b) {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
   return Math.sqrt(dx * dx + dy * dy);
+}
+
+// F6-5 — melee reach as a cylinder distance. Within a humanoid-height
+// vertical band the horizontal distance governs (normal flat combat is
+// unchanged); beyond it the vertical excess folds in Pythagorean-style so a
+// raised/sunken target is correctly judged far. Full radius subtraction
+// (reach a large monster at its cylinder edge) needs the per-entity physics
+// radius from the DAT, which isn't surfaced to JS yet — deferred, same as
+// F14-6's per-entity objcell_id. Only consulted under `?melee3dRange=on`.
+const MELEE_VERTICAL_REACH_M = 2.0; // ~one humanoid height of vertical slack
+function meleeCylinderDistance(a, b) {
+  const horiz = horizontalDistance(a, b);
+  const vExcess = Math.max(0, Math.abs(a.z - b.z) - MELEE_VERTICAL_REACH_M);
+  return vExcess > 0 ? Math.sqrt(horiz * horiz + vExcess * vExcess) : horiz;
+}
+// The metric the melee gate + charge use: cylinder when the flag is on,
+// flat horizontal (byte-identical to pre-F6-5) when off.
+function meleeGateDistance(a, b) {
+  return MELEE_3D_RANGE ? meleeCylinderDistance(a, b) : horizontalDistance(a, b);
 }
 
 function normalizeAngle(a) {
@@ -268,7 +302,12 @@ export function setupClickPicking({
       return;
     }
 
-    const dist = horizontalDistance(targetAc, pose);
+    // F6-5 — stop on the cylinder metric for melee charges (so a ledge
+    // target keeps the pursuit running until genuinely in reach), flat
+    // horizontal for missile charges and when `?melee3dRange` is off.
+    const dist = charge.cylinderReach
+      ? meleeCylinderDistance(targetAc, pose)
+      : horizontalDistance(targetAc, pose);
     if (dist <= charge.range) {
       // In range — stop, fire attack, clear state.
       try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
@@ -380,7 +419,7 @@ export function setupClickPicking({
    * `[entities/swingMotion] HOLD ...` log line on the hold-armed
    * path.
    */
-  function startCharge(guid, range, fireAttack, motionForWindup) {
+  function startCharge(guid, range, fireAttack, motionForWindup, cylinderReach) {
     cancelCharge();
     charge = {
       guid: guid >>> 0,
@@ -388,6 +427,11 @@ export function setupClickPicking({
       fireAttack,
       startMs: performance.now(),
       rafId: 0,
+      // F6-5 — melee charges pass true under `?melee3dRange=on` so the
+      // pursuit stop-condition uses the SAME cylinder metric as the gate
+      // that started it (else it would over- or under-shoot the stop).
+      // Missile charges leave it false → flat horizontal as before.
+      cylinderReach: !!cylinderReach,
     };
     try {
       const em = liveScene3d?.entityManager;
@@ -1023,12 +1067,19 @@ export function setupClickPicking({
           }
         }
       });
-      if (chargeEnabled && dist > MELEE_RANGE_M) {
+      // F6-5 — gate on the cylinder distance under `?melee3dRange=on` so a
+      // target the flat 2D check thought was in reach (but is on a ledge /
+      // raised platform) instead engages the charge: run cycle + steering
+      // pursue it rather than firing an in-place swing the server then
+      // services with an invisible force-position walk. Flat horizontal
+      // (== pre-F6-5) when off.
+      const meleeDist = meleeGateDistance(pose, targetAc);
+      if (chargeEnabled && meleeDist > MELEE_RANGE_M) {
         // Wave 4 / Phase 4.2 — pass the CMT-picked melee motion as
         // the windup so the local player holds at peak windup during
         // the pursuit. Released at arrival just before the real
         // swing fires.
-        startCharge(targetGuid, MELEE_RANGE_M, fire, motionCmd);
+        startCharge(targetGuid, MELEE_RANGE_M, fire, motionCmd, MELEE_3D_RANGE /* cylinderReach */);
       } else {
         fire();
       }
