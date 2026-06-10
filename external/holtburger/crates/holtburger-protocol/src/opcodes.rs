@@ -801,7 +801,8 @@ pub enum GameEventOpcode {
 
     // --- Interaction & Login (Extra) ---
     // /// S2C: Response to an age query.
-    // QueryAgeResponse = 0x01C3,
+    /// S2C: Reply to /age — `[string16 target_name, string16 age]`. SG-C3.
+    QueryAgeResponse = 0x01C3,
     // /// S2C: Request from server for character confirmation (e.g. before deletion).
     CharacterConfirmationRequest = 0x0274,
     // /// S2C: Confirmation that a character management operation is done.
@@ -816,9 +817,11 @@ pub enum GameEventOpcode {
 
     // --- Social & Communication (Extra) ---
     // /// S2C: List of available chat channels.
-    // ChannelList = 0x0148,
+    /// S2C: Online players in a chat channel. SG-C3.
+    ChannelList = 0x0148,
     // /// S2C: Index of a specific chat channel.
-    // ChannelIndex = 0x0149,
+    /// S2C: Chat channels available to the player (admin/advocate gated). SG-C3.
+    ChannelIndex = 0x0149,
     /// S2C: Displays a modal popup dialog with a message.
     PopupString = 0x0004,
     /// S2C: Displays a temporary ticker-like message on the screen.
@@ -974,14 +977,15 @@ pub enum GameEventOpcode {
     /// Version, u32 OpenStatus (0/1), u32 MonarchID, PackableHashTable
     /// (u16 count, u16 buckets) of (u32 guest_guid, u32 storage_flag).
     HouseUpdateRestrictions = 0x0248,
-    // /// S2C: Updates House Accessibility Rules (HAR) such as guest lists.
-    // UpdateHar = 0x0257,
+    /// S2C: House Access Records (HAR) — the house guest list. SG-C3.
+    UpdateHar = 0x0257,
     // /// S2C: Response containing extended data for a house.
     // HouseDataResponse = 0x022F,
     // /// S2C: Notification of a house-related transaction (purchase/sale).
     // HouseTransaction = 0x0259,
     // /// S2C: Returns a list of currently available houses for purchase.
-    // AvailableHouses = 0x0271,
+    /// S2C: List of available houses of a type to purchase. SG-C3.
+    AvailableHouses = 0x0271,
 
     // --- Fellowship (Extra) ---
     /// S2C: Notifies that a member has quit the fellowship.
@@ -1025,8 +1029,8 @@ pub enum GameEventOpcode {
     SendClientContractTracker = 0x0315,
 
     // --- Miscellaneous ---
-    // /// S2C: Opens the character barber (customization) UI.
-    // StartBarber = 0x0075,
+    /// S2C: Opens the character barber/appearance editor UI. SG-C3.
+    StartBarber = 0x0075,
 
     // --- Unused ---
     // /// This is a "ghost" opcode—defined in headers but not implemented or used in ACE.

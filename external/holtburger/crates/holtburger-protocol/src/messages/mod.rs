@@ -25,6 +25,7 @@ pub mod squelch;
 pub mod title;
 pub mod trade;
 pub mod transport;
+pub mod ui_events;
 pub mod utils;
 
 pub use game_action::*;

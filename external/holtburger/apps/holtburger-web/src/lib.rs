@@ -171,6 +171,13 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         // SG-C2 (2026-06-09): item-op self-events.
         GameEvent::SalvageOperationsResult(_) => 0x02B4,
         GameEvent::InscriptionResponse(_) => 0x00C3,
+        // SG-C3 (2026-06-09): UI-surface self-events.
+        GameEvent::QueryAgeResponse(_) => 0x01C3,
+        GameEvent::StartBarber(_) => 0x0075,
+        GameEvent::ChannelList(_) => 0x0148,
+        GameEvent::ChannelIndex(_) => 0x0149,
+        GameEvent::UpdateHar(_) => 0x0257,
+        GameEvent::HouseAvailableHouses(_) => 0x0271,
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -16638,6 +16645,16 @@ const CLIENT_EVENT_KIND_INSCRIPTION: u32 = 51;
 /// `<material>:<units>:<workmanship>` lines. JS emits `salvageResult`.
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_SALVAGE_RESULT: u32 = 52;
+
+/// `kind = 53` — UiEvent. SG-C3 (2026-06-09): the 6 UI-surface self-events
+/// (barber / age / chat channels / housing / house access records). One kind
+/// for all; `string_payload` is a `|`-delimited record whose first token is
+/// the sub-tag (`age`/`barber`/`channellist`/`channelindex`/`har`/`houses`)
+/// and the rest is event-specific. `u32_payload` / `u32_payload_2` carry the
+/// primary scalars (see each dispatch arm). JS routes by tag — `/age` to chat,
+/// the rest to plugin-bus `uiEvent`. UIs are follow-ons.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_UI_EVENT: u32 = 53;
 
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
@@ -34251,6 +34268,70 @@ async fn recv_loop(
                                         string_payload: Some(list),
                                         u32_payload: Some(data.skill),
                                         u32_payload_2: Some(data.augmentation_bonus as u32),
+                                        f32_payload: None,
+                                    });
+                                }
+                                // SG-C3 (2026-06-09): UI-surface self-events → kind=53.
+                                holtburger_protocol::messages::GameEvent::QueryAgeResponse(data) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_UI_EVENT,
+                                        string_payload: Some(format!(
+                                            "age|{}|{}",
+                                            data.target_name, data.age
+                                        )),
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::StartBarber(data) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_UI_EVENT,
+                                        string_payload: Some("barber".to_string()),
+                                        u32_payload: Some(data.setup_table_id),
+                                        u32_payload_2: Some(data.palette_base_did),
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::ChannelList(data) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_UI_EVENT,
+                                        string_payload: Some(format!(
+                                            "channellist|{}",
+                                            data.player_names.join(",")
+                                        )),
+                                        u32_payload: Some(data.player_names.len() as u32),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::ChannelIndex(data) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_UI_EVENT,
+                                        string_payload: Some(format!(
+                                            "channelindex|{}",
+                                            data.channels.join(",")
+                                        )),
+                                        u32_payload: Some(data.channels.len() as u32),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::UpdateHar(data) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_UI_EVENT,
+                                        string_payload: Some("har".to_string()),
+                                        u32_payload: Some(data.bitmask),
+                                        u32_payload_2: Some(data.guests.len() as u32),
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::HouseAvailableHouses(data) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_UI_EVENT,
+                                        string_payload: Some("houses".to_string()),
+                                        u32_payload: Some(data.house_type),
+                                        u32_payload_2: Some(data.total_available as u32),
                                         f32_payload: None,
                                     });
                                 }

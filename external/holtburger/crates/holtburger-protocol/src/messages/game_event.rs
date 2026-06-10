@@ -18,6 +18,7 @@ pub use crate::messages::player::events::*;
 pub use crate::messages::squelch::events::*;
 pub use crate::messages::title::events::*;
 pub use crate::messages::trade::events::*;
+pub use crate::messages::ui_events::events::*;
 
 use crate::opcodes::GameEventOpcode;
 use crate::traits::{ProtocolPack, ProtocolUnpack};
@@ -158,6 +159,18 @@ pub enum GameEvent {
     /// SG-C2: object inscription + scribe (`GetInscriptionResponse` 0x00C3;
     /// deprecated in retail — inscription normally arrives via appraisal).
     InscriptionResponse(Box<InscriptionResponseEventData>),
+    /// SG-C3 (2026-06-09): reply to /age (`0x01C3`).
+    QueryAgeResponse(Box<QueryAgeResponseEventData>),
+    /// SG-C3: open the barber/appearance editor (`0x0075`).
+    StartBarber(Box<StartBarberEventData>),
+    /// SG-C3: online players in a chat channel (`0x0148`).
+    ChannelList(Box<ChannelListEventData>),
+    /// SG-C3: chat channels available to the player (`0x0149`).
+    ChannelIndex(Box<ChannelIndexEventData>),
+    /// SG-C3: house access records / guest list (`0x0257`).
+    UpdateHar(Box<UpdateHarEventData>),
+    /// SG-C3: available houses to purchase (`0x0271`).
+    HouseAvailableHouses(Box<HouseAvailableHousesEventData>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -461,6 +474,25 @@ impl ProtocolUnpack for GameEventMessage {
                 ),
                 GameEventOpcode::GetInscriptionResponse => GameEvent::InscriptionResponse(Box::new(
                     InscriptionResponseEventData::unpack(data, offset)?,
+                )),
+                // SG-C3 (2026-06-09): UI-surface self-events.
+                GameEventOpcode::QueryAgeResponse => GameEvent::QueryAgeResponse(Box::new(
+                    QueryAgeResponseEventData::unpack(data, offset)?,
+                )),
+                GameEventOpcode::StartBarber => {
+                    GameEvent::StartBarber(Box::new(StartBarberEventData::unpack(data, offset)?))
+                }
+                GameEventOpcode::ChannelList => {
+                    GameEvent::ChannelList(Box::new(ChannelListEventData::unpack(data, offset)?))
+                }
+                GameEventOpcode::ChannelIndex => {
+                    GameEvent::ChannelIndex(Box::new(ChannelIndexEventData::unpack(data, offset)?))
+                }
+                GameEventOpcode::UpdateHar => {
+                    GameEvent::UpdateHar(Box::new(UpdateHarEventData::unpack(data, offset)?))
+                }
+                GameEventOpcode::AvailableHouses => GameEvent::HouseAvailableHouses(Box::new(
+                    HouseAvailableHousesEventData::unpack(data, offset)?,
                 )),
             },
             None => {
@@ -922,6 +954,37 @@ impl ProtocolPack for GameEventMessage {
             }
             GameEvent::InscriptionResponse(data) => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::GetInscriptionResponse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            // SG-C3 (2026-06-09): UI-surface self-events.
+            GameEvent::QueryAgeResponse(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::QueryAgeResponse as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::StartBarber(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::StartBarber as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::ChannelList(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::ChannelList as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::ChannelIndex(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::ChannelIndex as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::UpdateHar(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::UpdateHar as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameEvent::HouseAvailableHouses(data) => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::AvailableHouses as u32)
                     .unwrap();
                 data.pack(buf);
             }

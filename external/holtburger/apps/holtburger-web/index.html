@@ -9622,6 +9622,36 @@ void main() {
                 window.__pluginClient?.events?.emit?.("salvageResult", {
                   skill, augBonus, results,
                 });
+              } else if (evt.kind === 53 /* SG-C3 UiEvent */) {
+                // SG-C3 (2026-06-09): UI-surface self-events
+                // (barber/age/chat-channels/housing/house-access). stringPayload
+                // = "<tag>|<data...>". Route /age to the chat log; emit the rest
+                // on the plugin bus as `uiEvent` (per-feature UIs are follow-ons).
+                try {
+                  const rec = String(evt.stringPayload || "");
+                  const sep = rec.indexOf("|");
+                  const tag = sep === -1 ? rec : rec.slice(0, sep);
+                  const rest = sep === -1 ? "" : rec.slice(sep + 1);
+                  const u32 = (evt.u32Payload ?? 0) >>> 0;
+                  const u32b = (evt.u32Payload2 ?? 0) >>> 0;
+                  if (tag === "age") {
+                    // "age|<name>|<age>"
+                    const bar = rest.indexOf("|");
+                    const name = bar === -1 ? rest : rest.slice(0, bar);
+                    const age = bar === -1 ? "" : rest.slice(bar + 1);
+                    const line = `${name || "?"} ${age || ""}`.trim();
+                    if (typeof appendChatLine === "function") appendChatLine(line, 0);
+                    // eslint-disable-next-line no-console
+                    console.log(`[uiEvent age] ${line}`);
+                  } else {
+                    // eslint-disable-next-line no-console
+                    console.log(`[uiEvent ${tag}]`, { rest, u32, u32b });
+                  }
+                  window.__pluginClient?.events?.emit?.("uiEvent", { tag, rest, u32, u32b });
+                } catch (e) {
+                  // eslint-disable-next-line no-console
+                  console.warn("[uiEvent] dispatch failed:", e);
+                }
               } else if (evt.kind === 32 /* ObjectAppraised */) {
                 // ACPlugin PR-2 (2026-05-27): an entity's appraisal
                 // data was just refreshed in the entity store (the
