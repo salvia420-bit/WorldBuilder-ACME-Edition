@@ -9739,6 +9739,21 @@ void main() {
                     window.__pluginClient.events.emit("kind:13", evt);
                   } catch (_) {}
                 }
+                // F8-2: a fizzle (YourSpellFizzled = 0x0402) cancels the
+                // local cast-gesture chain so the character doesn't finish
+                // the windup and flash the spell's success glow. Default-off
+                // (?castFizzle=on), pending a 1070 eye-test.
+                if (errCode === 0x0402) {
+                  try {
+                    if (new URLSearchParams(window.location.search).get("castFizzle") === "on") {
+                      const em = window.liveScene3d?.entityManager;
+                      const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+                      if (em && lg && typeof em.cancelCastSequence === "function") {
+                        em.cancelCastSequence(lg);
+                      }
+                    }
+                  } catch (_) {}
+                }
               } else if (evt.kind === 14) {
                 // Phase 4 step 5: UseDone OK — door opened, container
                 // approached, lifestone touched. The visible reaction

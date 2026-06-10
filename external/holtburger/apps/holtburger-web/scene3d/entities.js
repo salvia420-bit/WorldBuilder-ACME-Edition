@@ -4882,6 +4882,13 @@ export class EntityManager {
     // landing on remote-entity targets and correlate by time-window.
     // See entities.js:2421 (`playCastSequence`) for where this hookup
     // would land.
+    // F8-2: don't fire the spell's success CasterEffect glow if the chain
+    // was cancelled while the cast gesture was playing — a recast preempted
+    // it, or a fizzle/UseDone bumped the token via cancelCastSequence().
+    // Without this, a FIZZLED cast still flashed the success VFX (the cast
+    // gesture's playGesture result isn't checked above, so control reaches
+    // here even after a mid-cast cancel).
+    if (inst._castSequenceToken !== token) return;
     if ((seq.casterEffect | 0) !== 0) {
       try {
         if (
@@ -4906,6 +4913,25 @@ export class EntityManager {
         );
       }
     }
+  }
+
+  // F8-2 — cancel an in-flight cast-gesture chain for `guid` (a fizzle /
+  // UseDone / WeenieError landed). Bumps `_castSequenceToken` so the chain's
+  // next token check breaks out (and the success CasterEffect glow is
+  // suppressed via the guard before the synthetic emit), then drops the rig
+  // back to its stance-Ready recoil so it doesn't freeze mid-windup.
+  cancelCastSequence(guid) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst) return false;
+    inst._castSequenceToken = ((inst._castSequenceToken | 0) + 1) | 0;
+    inst._castTween = null;
+    try {
+      const stance = ((inst.currentStance ?? inst.lastStance ??
+        (typeof window !== "undefined" ? window.__getCurrentStanceLow?.() : 0)) ?? 0) >>> 0;
+      // CMD_LOW_READY (0x0003) high-bits preserved like setMotion's substitution.
+      this.setMotion?.(guid >>> 0, 0x0003, stance, 1.0);
+    } catch (_) { /* recoil is best-effort */ }
+    return true;
   }
 
   /**
