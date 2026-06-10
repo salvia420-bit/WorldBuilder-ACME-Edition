@@ -263,6 +263,16 @@ service worker does not cache `index.html`).
 
 ---
 
+## Bughunt-86 combat/render/mechanics loop list (2026-06-09)
+
+The partial Fable bughunt (`~/out/movement-combat-render-bughunt-2026-06-09.raw.json`,
+86 findings) had its 25 movement findings triaged in `~/out/remaining.md`; the other
+57 (combat / render / mechanics / anim / crosscut) are triaged into a loop list at
+**`~/out/bughunt86-combat-render-loop-items-2026-06-09.md`** — ordered CODE-only first
+(13 doable with NO 1070), then MIXED (30), then VISUAL (14, 1070-gated). Cross-checked
+against done work (F18-1=SG-D, F17-1=portal-space, all movement). New flags from
+implementing those items get documented in the table below as they ship.
+
 ## Pending 1070 validation — self-guid `/loop` session (2026-06-09) · knock out in ONE sitting
 
 Everything below was landed default-safe (one URL flag; the rest additive
