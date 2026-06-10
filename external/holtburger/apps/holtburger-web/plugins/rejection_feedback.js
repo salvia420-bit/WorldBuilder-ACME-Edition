@@ -265,11 +265,43 @@ function _onWeenieError(evt) {
   } catch (_) {}
 }
 
+// F11-5 — client-side action rejection (mode mismatch). scene3d/picking.js
+// emits `clientActionRejected` {message} when a combat/cast click is
+// dropped for being in the wrong stance / having no target. We just render
+// the toast — same surface as the server-side WeenieError path above — so
+// the player gets "wrong mode" feedback instead of silence.
+function _onClientActionRejected(evt) {
+  const message = (evt?.detail ?? evt ?? {}).message;
+  if (message) _renderToast(message);
+}
+
+// F11-5 — server-side attack rejection. kind=19 `attackDone` carries
+// `error` ("None" on success). ACE drops the swing (wrong target, too far,
+// busy, …) with no other client signal, so render the reason. The full
+// server reason enum isn't enumerated client-side; humanize the PascalCase
+// name (e.g. "TargetOutOfRange" → "Target out of range") best-effort.
+function _humanizeAttackError(error) {
+  const s = String(error || "")
+    .replace(/_/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .trim();
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+function _onAttackDone(evt) {
+  const error = (evt?.detail ?? evt ?? {}).error;
+  if (!error || error === "None") return;
+  const msg = _humanizeAttackError(error);
+  if (msg) _renderToast(msg);
+}
+
 function _attachSubscription() {
   try {
     const client = window.__pluginClient;
     if (!client?.events?.on) return false;
     client.events.on("kind:13", _onWeenieError);
+    client.events.on("clientActionRejected", _onClientActionRejected);
+    client.events.on("attackDone", _onAttackDone);
     return true;
   } catch (_) { return false; }
 }

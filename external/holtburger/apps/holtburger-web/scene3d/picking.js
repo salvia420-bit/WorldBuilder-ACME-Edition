@@ -148,6 +148,19 @@ function playerWorldPose(sessionHandle) {
   };
 }
 
+// F11-5 — surface a player-visible reason when a combat/cast action is
+// dropped client-side for a mode mismatch (wrong stance, no target, armed
+// spell in a non-magic stance). Previously these were console-only, so the
+// player read silence as "combat is broken" rather than "wrong mode".
+// Emits onto the plugin bus; plugins/rejection_feedback.js renders the
+// toast (same surface it uses for server-side WeenieError rejections), so
+// picking.js stays decoupled from the DOM. Fail-soft pre-login (no bus).
+function emitActionRejected(message) {
+  try {
+    window.__pluginClient?.events?.emit?.("clientActionRejected", { message });
+  } catch (_) { /* never block input handling on feedback */ }
+}
+
 export function setupClickPicking({
   canvas,
   liveScene3d,
@@ -591,6 +604,14 @@ export function setupClickPicking({
         // player swap heights mid-fight (helmet knocked off → Hi for
         // crit) without re-clicking the monster.
         // `setSelectedTarget` already fired above; nothing more to do.
+        //
+        // F11-5 — but if a spell is ARMED while in a melee/missile stance,
+        // the click silently re-targets and the cast never fires (only the
+        // magic branch above casts). Tell the player why instead of eating
+        // the click.
+        if (cb && typeof cb.armedSpellId === "number" && cb.armedSpellId > 0) {
+          emitActionRejected("Enter magic mode to cast that spell.");
+        }
       } else if (typeof sessionHandle.useObject === "function") {
         // Wave 6.B (2026-05-28) — typed-class click precedence for
         // Lifestone. The Chorizite-port WorldObjectManager
@@ -704,6 +725,7 @@ export function setupClickPicking({
     const targetGuid = (liveScene3d.entityManager?.getSelectedTarget?.() ?? 0) >>> 0;
     if (targetGuid === 0) {
       console.log("[fire-attack] no target selected — click a monster first");
+      emitActionRejected("Select a target first."); // F11-5
       return;
     }
     const cb = window.__combatBarState;
@@ -1013,6 +1035,7 @@ export function setupClickPicking({
       return;
     }
     console.log(`[fire-attack] not in melee/missile stance — currentStanceLow=0x${(window.__getCurrentStanceLow?.() ?? 0).toString(16)}`);
+    emitActionRejected("You are not in melee or missile combat mode."); // F11-5
   }
 
   // Expose for combat-bar.js's Hi/Med/Lo height-button click handlers.
