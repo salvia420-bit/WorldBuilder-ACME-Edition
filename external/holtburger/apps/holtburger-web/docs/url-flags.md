@@ -260,3 +260,28 @@ falls back to localhost. A robust default would be, in the `bridge_url` prefill
 when behind the combined proxy). Then a bare remote URL "just works" and only
 explicit overrides need the param. Low-risk; takes effect on next page load (the
 service worker does not cache `index.html`).
+
+---
+
+## Pending 1070 validation — self-guid `/loop` session (2026-06-09) · knock out in ONE sitting
+
+Everything below was landed default-safe (one URL flag; the rest additive
+dispatch). **Only `?forceMotionLocal=on` is an actual URL flag** — the rest have
+no flag and are live behavior once their layer is loaded. Grouped so a single
+wasm rebuild + one session covers them all.
+
+**Step 0 — one-time prerequisite (makes ALL the Rust changes live):**
+`export PATH="$HOME/.cargo/bin:$PATH" && capped-build wasm-pack build --target web --out-dir pkg --release` (on the buildbox; ~1m30s) → pull `pkg/` → bump the `?v=wave-…` cache-bust in `index.html` (2 spots, ~lines 947 + 1234). JS-only changes (SG-D, all the JS dispatch arms, the board/chat handlers) are already live on reload; the Rust ClientEvent EMISSIONS are inert until this rebuild.
+
+| # | Change (commit) | Flag | How to eye/ear-test on 1070 | Pass criteria |
+|---|-----------------|------|-----------------------------|---------------|
+| 1 | **SG-B** server-forced motion (`766834c7`) | **`?forceMotionLocal=on`** (default off) | Admin `@motion`/force-sit (or paralysis/forced-emote) on your char | The forced pose plays on YOUR avatar; routine running still loops smoothly (NO rubber-band / B9 regression). If clean, consider default-on. |
+| 2 | **SG-D** APPEARANCE/ATTACH live dispatch (`2408d261`) | none (JS live on reload) | Equip/dye an item; wield a weapon | Your in-world avatar re-skins (gear/dye) and the weapon attaches; **watch for local-rig flicker on equip** during normal play (if bad, enable `?clothingHotSwap=1`). Remote players also re-skin. |
+| 3 | **SG-C1** chess board (`d39a296d`) | none | At a drudge-chess board: join + watch a game | `window.__chess` Map populates; `[chess]` console logs per event; `chessUpdate` bus event fires. |
+| 4 | **SG-C2** salvage (`89d64ab3`) | none | Salvage items with an Ust | `[salvage]` console log + `salvageResult` bus event with the per-material yield. (InscriptionResponse is deprecated — won't fire; expected.) |
+| 5 | **SG-C3** UI events (`83c23995`) | none | `/age <name>`; open the barber; trigger available-houses / channel list | `/age` → an age line in chat; barber/houses/channels → `[uiEvent …]` console + `uiEvent` bus event. |
+| 6 | **SG-E** fellowship chat (`654599ec`) | none | Join / leave / quit / get-dismissed from a fellowship | "You left/joined the fellowship." + member join/leave notices appear in the chat log (Fellowship category). |
+
+**No observable test (latent, land-and-forget):** SG-A1 (`62ee171e`) — `physics_script_table_did` self-seed field/index coherence; no live consumer reads the entity field today, so nothing to eye-test (correctness only).
+
+Full per-item detail + ACE wire refs: `~/out/self-guid-loop-handoff-2026-06-09.md`.
