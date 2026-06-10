@@ -43,6 +43,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
 
 /** gmToolbarUI — retail layout that drives the target-bar middle rows.
  *  Element-id map confirmed by target_bar_layout_dump 2026-05-24.
@@ -372,7 +373,15 @@ function build() {
       // See plugins/combat-bar.js stanceWord() for the full table.
       inCombatNow = stanceLow !== 0 && stanceLow !== 0x3D;
     } catch {}
-    const next = inCombatNow ? COMBAT_MODE_NON_COMBAT : COMBAT_MODE_MELEE_DEFAULT;
+    // Leaving Peace: pick the mode from the equipped weapon (Missile/
+    // Magic/Melee) so bow- and wand-wielders enter combat instead of a
+    // hardcoded Melee that ACE silently reverts (F11-1).
+    let suggested = COMBAT_MODE_MELEE_DEFAULT;
+    try {
+      const inv = typeof handle.playerInventory === "function" ? handle.playerInventory() : [];
+      suggested = suggestedCombatModeFromInventory(inv);
+    } catch {}
+    const next = inCombatNow ? COMBAT_MODE_NON_COMBAT : suggested;
     try {
       if (typeof handle.setCombatMode === "function") {
         handle.setCombatMode(next);

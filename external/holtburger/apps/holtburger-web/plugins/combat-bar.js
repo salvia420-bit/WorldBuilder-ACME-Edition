@@ -13,6 +13,7 @@ import {
   SPELL_SHAPE,
 } from "../ui/ac_spell_shape.js";
 import { setUseFastMissiles } from "../ui/ac_character_options.js";
+import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
 
 // Wave 6 / Phase 17 — spell-shape badge mapping.
 //
@@ -643,21 +644,30 @@ function renderStanceHeader(bodyEl, client) {
   btn.addEventListener("click", () => {
     try {
       // Use the JS-side stance label as the source of truth for
-      // current state — ACE's `PrivateUpdatePropertyInt(CombatMode)`
-      // doesn't reliably hydrate `world.player.combat_mode` on the
-      // wasm side, so the older `toggleCombatMode()` path always
-      // sees `Undef` and only ever toggles to Melee. By computing
-      // the target mode here from `__getCurrentStanceLow()` (which
-      // IS authoritative — `applyConfirmedStance` updates it on
-      // every kind=5 UpdateMotion) and sending it explicitly via
-      // `setCombatMode`, the toggle works in both directions.
-      // CombatMode wire values: 1=NonCombat, 2=Melee.
+      // current state — read `__getCurrentStanceLow()` (authoritative;
+      // `applyConfirmedStance` updates it on every kind=5 UpdateMotion).
+      // When LEAVING Peace, pick the target mode from the equipped
+      // weapon (Missile/Magic/Melee) so bow- and wand-wielders actually
+      // enter combat — a hardcoded Melee is silently reverted by ACE for
+      // those classes, and mages could never reach the spell picker via
+      // this button (F11-1). CombatMode flag values: NonCombat=1,
+      // Melee=2, Missile=4, Magic=8.
       const inCombat = stanceWord() !== "Peace";
       const handle = window.__sessionHandle;
+      let targetMode = 1; // NonCombat (entering Peace).
+      if (!inCombat) {
+        let inv = [];
+        try {
+          inv = typeof handle?.playerInventory === "function" ? handle.playerInventory() : [];
+        } catch (_) {}
+        targetMode = suggestedCombatModeFromInventory(inv);
+      }
       if (typeof handle?.setCombatMode === "function") {
-        handle.setCombatMode(inCombat ? 1 : 2);
+        handle.setCombatMode(targetMode);
       } else if (typeof client?.player?.toggleCombatMode === "function") {
-        // Fallback for older wasm bundles without setCombatMode.
+        // Fallback for older wasm bundles without setCombatMode —
+        // toggleCombatMode now reads the hydrated CombatMode and picks
+        // the equipment-suggested mode itself (post-Wave-6.A).
         client.player.toggleCombatMode();
       }
     } catch (e) {

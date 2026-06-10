@@ -135,6 +135,36 @@ export const COMBAT_STYLE_CASTER = 0x00000040; // Magic Caster
 export const COMBAT_STYLE_AMMO_LAUNCHER = 0x00008000; // ranged that consumes ammo
 
 /**
+ * Suggested ACE CombatMode for the local player when leaving Peace,
+ * derived from the equipped weapon. Mirrors ACE's weapon-class branch
+ * in `GetCombatMode()` — a hardcoded Melee makes bow/wand wielders'
+ * Combat toggle silently revert server-side (F11-1).
+ *
+ * Returns an ACE CombatMode FLAG value suitable for
+ * `handle.setCombatMode()`: NonCombat=1, Melee=2, Missile=4, Magic=8.
+ * Defaults to Melee (unarmed → retail HandCombat) when no weapon /
+ * empty inventory.
+ *
+ * @param {Array<object>} snapshot  `handle.playerInventory()` result.
+ * @returns {number} ACE CombatMode flag (2 | 4 | 8).
+ */
+export function suggestedCombatModeFromInventory(snapshot) {
+  const inv = Array.isArray(snapshot) ? snapshot : [];
+  // Missile launcher equipped → Missile mode.
+  if (inv.some((it) => ((it?.equipMask >>> 0) & EQUIP.MissileWeapon) !== 0)) return 4;
+  // Caster (wand / orb / sceptre) → Magic mode. Prefer the
+  // DefaultCombatStyle caster bit; fall back to the Held slot when the
+  // combat-style int isn't hydrated yet.
+  if (inv.some((it) =>
+      (((it?.defaultCombatStyle >>> 0) & COMBAT_STYLE_CASTER) !== 0) ||
+      ((it?.equipMask >>> 0) & EQUIP.Held) !== 0)) {
+    return 8;
+  }
+  // Melee weapon, or unarmed.
+  return 2;
+}
+
+/**
  * Build a derived equip-state snapshot from the wasm playerInventory()
  * array. Mirrors ACE Player_Inventory.cs:1746-1902 inputs.
  *
