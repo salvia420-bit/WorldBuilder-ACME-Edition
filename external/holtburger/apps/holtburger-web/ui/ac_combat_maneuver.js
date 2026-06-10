@@ -25,6 +25,26 @@
 
 export const DEFAULT_CMT_ID = 0x30000000;
 
+// F6-1 (2026-06-09) — `?cmtStanceMask=on` (default OFF). The CMT tree is
+// keyed by the FULL MotionStance u32 (e.g. 0x8000003C) but every caller
+// passes the low-16 stance (0x3C — `__getCurrentStanceLow()` /
+// picking.js), so getCombatManeuver missed at the stance level 100% of the
+// time and the local melee swing always fell back to the canned "vibe pose"
+// arm tween instead of the real SlashHigh/BackhandMed/ThrustLow clip. When
+// ON, both the tree keys and the lookup are masked to low-16 so the
+// (stance, height, type, power) lookup resolves. Default OFF: this lights up
+// the real swing animations and needs a 1070 eye-test before defaulting on.
+const CMT_STANCE_MASK = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("cmtStanceMask")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+const cmtStanceKey = (style) =>
+  CMT_STANCE_MASK ? ((style >>> 0) & 0xffff) : (style >>> 0);
+
 /**
  * @typedef {Object} CmtRuntime
  * @property {number} id
@@ -161,7 +181,7 @@ export function getCmt(tableId = DEFAULT_CMT_ID) {
 export function getCombatManeuver(stance, attackHeight, attackType, powerLevel = 1.0, prevMotion = null, tableId = DEFAULT_CMT_ID, opts = null) {
   const r = getCmt(tableId);
   if (!r?.tree) return null;
-  const heightMap = r.tree.get(stance >>> 0);
+  const heightMap = r.tree.get(cmtStanceKey(stance)); // F6-1: low-16 mask under flag
   if (!heightMap) {
     try { window.__diag?.combat?.onLookupMiss?.({ stance, attackHeight, attackType, reason: "stance" }); } catch (_) {}
     return null;
@@ -228,7 +248,7 @@ function _buildRuntime(tableId, data) {
   // Reindex flat list into Stance → Height → Type → [motion_command].
   const tree = new Map();
   for (const m of data.maneuvers) {
-    const s = (m.style >>> 0);
+    const s = cmtStanceKey(m.style); // F6-1: low-16 mask under flag (else full u32)
     const h = (m.attack_height >>> 0);
     const t = (m.attack_type >>> 0);
     let heights = tree.get(s);
