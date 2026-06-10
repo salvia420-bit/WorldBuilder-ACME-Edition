@@ -194,6 +194,8 @@ namespace WorldBuilder.Shared.Documents {
                 GfxObj t => writer.TrySave(t, iteration),
                 Setup t => writer.TrySave(t, iteration),
                 RenderSurface t => writer.TrySave(t, iteration),
+                Region t => writer.TrySave(t, iteration),
+                Scene t => writer.TrySave(t, iteration),
                 _ => false
             };
         }
@@ -209,6 +211,8 @@ namespace WorldBuilder.Shared.Documents {
                     nameof(GfxObj) => UnpackAndSave<GfxObj>(writer, entry.Data, iteration),
                     nameof(Setup) => UnpackAndSave<Setup>(writer, entry.Data, iteration),
                     nameof(RenderSurface) => UnpackAndSave<RenderSurface>(writer, entry.Data, iteration),
+                    nameof(Region) => UnpackAndSave<Region>(writer, entry.Data, iteration),
+                    nameof(Scene) => UnpackAndSave<Scene>(writer, entry.Data, iteration),
                     _ => false
                 };
             }

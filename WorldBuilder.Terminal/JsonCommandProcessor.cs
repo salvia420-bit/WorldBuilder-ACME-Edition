@@ -346,6 +346,28 @@ public class JsonCommandProcessor {
             // Wave-5.B skybox parity diagnostic — see CommandEngine.Skybox.cs
             ["region-skybox-snapshot"]    = CmdRegionSkyboxSnapshot,
             ["region-day-night-curve"]    = CmdRegionDayNightCurve,
+            // Melt-integration Phase R — Region 0x13 JSON round-trip; see CommandEngine.Region.cs
+            ["region-export-json"]        = CmdRegionExportJson,
+            ["region-import-json"]        = CmdRegionImportJson,
+            ["region-diff"]               = CmdRegionDiff,
+            // Melt-integration Phase X.1 — secondary DAT handles; see CommandEngine.DatHandles.cs
+            ["dat-open"]                  = CmdDatOpen,
+            ["dat-close"]                 = CmdDatClose,
+            ["dat-list"]                  = _ => CmdDatList(),
+            // Melt-integration Phase S — Scene 0x12 inspection; see CommandEngine.Scene.cs
+            ["scene-export-json"]         = CmdSceneExportJson,
+            ["scene-diff"]                = CmdSceneDiff,
+            ["scene-where-used"]          = CmdSceneWhereUsed,
+            ["scene-edit"]                = CmdSceneEdit,
+            // Melt-integration Phase G — asset-reference graph; see CommandEngine.AssetGraph.cs
+            ["asset-refs"]                = CmdAssetRefs,
+            ["asset-used-by"]             = CmdAssetUsedBy,
+            ["surface-fingerprint"]       = CmdSurfaceFingerprint,
+            // Melt-integration Phase X.2 — cross-DAT transplant; see CommandEngine.Transplant.cs
+            ["copy-landblock"]            = CmdCopyLandblock,
+            ["copy-building"]             = CmdCopyBuilding,
+            ["remove-building"]           = CmdRemoveBuilding,
+            ["bulk-paint-replace"]        = CmdBulkPaintReplace,
             // Wave-5.C diag-run-all meta-command — see Diagnostics/RunAll.cs
             ["diag-run-all"]              = CmdDiagRunAll,
             ["diag-status"]               = _ => CmdDiagStatus(),
@@ -2441,6 +2463,23 @@ public class JsonCommandProcessor {
             new { name = "generate-atlas-tiles", args = "mode, lbList?",                     description = "Bulk-generate tiles. mode=lbs|regions|world|all. mode=lbs requires lbList[{lbX,lbY}]; mode=all sweeps every LB and may take many minutes." },
             new { name = "emit-render-gallery", args = "outDir, autoTowns?, autoZones?, autoDungeons?, autoRegions?, radius?, resolution?, useSprites?, overlay?, lbFilter?", description = "Curate N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default), render-preview + describe-landblock per pick, bundle into a Tailwind gallery dir." },
             new { name = "serve-render-gallery",       args = "outDir, port?, bind?",                  description = "Serve a gallery (or any) directory over HTTP via a built-in C# HttpListener. Detects Tailscale IPs and reports a tailnet-reachable URL when one is available." },
+            new { name = "region-export-json", args = "out?, parts?, datPath?",              description = "Export Region 0x13000000 (LandDefs/GameTime/Sky/Sound/Scene/Terrain/Misc) as a stable JSON document. parts filters to sky|sound|scene|terrain|misc (comma list). Prefers staged PortalDatDocument edits, then project DATs, then base portal DAT." },
+            new { name = "region-import-json", args = "path, apply?",                        description = "Validate a region JSON document, rebuild the Region DBObj, verify pack/unpack self-parity; apply:true stages it into PortalDatDocument so 'export' writes it to the export DATs." },
+            new { name = "region-diff",        args = "otherDat?, otherJson?, maxRows?",     description = "Deep field-by-field Region diff vs a second DAT (path or portal/cell alias) or a previously exported region JSON. Emits {path, ours, theirs} rows." },
+            new { name = "dat-open",           args = "path, alias",                         description = "Open an external DAT (directory with the 4 EoR dats, or a single .dat file) read-only under a named alias. Aliases are accepted wherever a second DAT is consumed (region-diff otherDat, future scene-diff / transplant fromDat)." },
+            new { name = "dat-close",          args = "alias",                               description = "Dispose and unregister an external DAT handle." },
+            new { name = "dat-list",           args = "",                                    description = "Enumerate open external DAT handles ({alias, path, kind})." },
+            new { name = "scene-export-json",  args = "sceneId|all, out?, datPath?",         description = "Dump Scene 0x12 ObjectDescs (full retail field set incl. freq/displace/scale/slope/align/orient) as JSON; all:true sweeps every scene to 'out'." },
+            new { name = "scene-diff",         args = "sceneId, otherDat, maxRows?",         description = "Per-object field diff of a Scene vs a second DAT (dat-open alias or path)." },
+            new { name = "scene-where-used",   args = "sceneId",                             description = "Reverse map via Region 0x13: which SceneDesc scene-type indices carry this scene and which TerrainTypes reference them." },
+            new { name = "scene-edit",         args = "sceneId, index, fields, apply?",      description = "Mutate one ObjectDesc (objectId/origin/orientation/frequency/displace/scale/rotation/slope/align/orient/weenieObj) and stage the Scene for export (apply:true)." },
+            new { name = "asset-refs",         args = "id, datPath?",                        description = "Forward asset-chain edges for a DID: Scene→placed objects, Setup→GfxObj parts, GfxObj→Surfaces, Surface→SurfaceTexture/Palette, SurfaceTexture→RenderSurfaces." },
+            new { name = "asset-used-by",      args = "id, transitive?, datPath?",           description = "Reverse lookup: who references this DID. First call builds a session-cached portal-DAT reverse index; transitive:true walks the closure up to Setups/Scenes ('which models show this surface')." },
+            new { name = "surface-fingerprint", args = "id?, match?, datPath?",              description = "Fingerprint a Surface (Type, OrigTexture/Palette, ColorValue, Translucency, Luminosity, Diffuse) and find all surfaces sharing it, or query by partial match spec — locates the same material under different IDs." },
+            new { name = "copy-landblock",     args = "fromDat, srcLbX, srcLbY, dstLbX?, dstLbY?, heightmap?, textures?, objects?, buildings?, clearExisting?", description = "Copy a landblock from an external DAT (dat-open alias or directory): terrain heights and/or texture bytes, exterior objects, buildings incl. interior EnvCells (cell-ID remap at export). dst defaults to src. Validate + export afterwards." },
+            new { name = "copy-building",      args = "fromDat, srcLbX, srcLbY, buildingIndex, dstLbX, dstLbY, x, y, z, qw?/qx?/qy?/qz?", description = "Transplant one building + interior cells from an external DAT to a world position (donor-blueprint pipeline handles cell-ID remap + VisibleCells fixup at export)." },
+            new { name = "remove-building",    args = "lbX, lbY, buildingIndex",             description = "Remove a building's shell from the staged landblock; export drops the BuildingInfo and decrements NumCells (interior cells orphaned)." },
+            new { name = "bulk-paint-replace", args = "lbList|minLbX..maxLbY, fromType?, toType", description = "Bulk terrain-type substitution across many LBs (melt bucket-fill): replace fromType with toType, or repaint all 81 vertices when fromType omitted." },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",
@@ -4637,6 +4676,387 @@ public class JsonCommandProcessor {
             return double.Parse(v.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture);
         }
         return v.GetValue<double>();
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Melt-integration Phase R — Region 0x13 JSON round-trip
+    // see CommandEngine.Region.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdRegionExportJson(System.Text.Json.Nodes.JsonNode node) {
+        string? outPath = node["out"]?.GetValue<string>();
+        string? parts = node["parts"]?.GetValue<string>();
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.RegionExportJson(outPath, parts, datPath);
+        return Serialize(new {
+            success = true,
+            command = "region-export-json",
+            source = r.Source,
+            datPath = r.DatPath,
+            datSha256 = r.DatSha256,
+            outPath = r.OutPath,
+            partsMask = r.PartsMask,
+            counts = new {
+                dayGroups = r.DayGroups,
+                soundStbs = r.SoundStbs,
+                sceneTypes = r.SceneTypes,
+                terrainTypes = r.TerrainTypes,
+            },
+            // Inline only when no 'out' was given; large (~1 MB pretty-printed).
+            json = r.InlineJson,
+        });
+    }
+
+    private string CmdRegionImportJson(System.Text.Json.Nodes.JsonNode node) {
+        string path = node["path"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'path' field");
+        bool apply = node["apply"]?.GetValue<bool>() ?? false;
+        var r = _engine.RegionImportJson(path, apply);
+        return Serialize(new {
+            success = r.Problems.Count == 0,
+            command = "region-import-json",
+            applied = r.Applied,
+            staged = r.Staged,
+            path = r.Path,
+            problems = r.Problems,
+            packedBytes = r.PackedBytes,
+            packParity = r.PackParity,
+            packSha256 = r.PackSha256,
+            note = r.Staged
+                ? "Region staged in PortalDatDocument; run 'export' to write it into the export DATs."
+                : (r.Problems.Count == 0 ? "Dry-run OK (apply:false) — nothing staged." : "Validation failed — nothing staged."),
+        });
+    }
+
+    private string CmdRegionDiff(System.Text.Json.Nodes.JsonNode node) {
+        string? otherDat = node["otherDat"]?.GetValue<string>();
+        string? otherJson = node["otherJson"]?.GetValue<string>();
+        int maxRows = node["maxRows"]?.GetValue<int>() ?? 500;
+        var r = _engine.RegionDiff(otherDat, otherJson, maxRows);
+        return Serialize(new {
+            success = true,
+            command = "region-diff",
+            oursSource = r.OursSource,
+            theirsSource = r.TheirsSource,
+            diffCount = r.DiffCount,
+            truncated = r.Truncated,
+            rows = r.Rows.Select(row => new { path = row.Path, ours = row.Ours, theirs = row.Theirs }),
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Melt-integration Phase X.1 — secondary DAT handles
+    // see CommandEngine.DatHandles.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdDatOpen(System.Text.Json.Nodes.JsonNode node) {
+        string path = node["path"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'path' field");
+        string alias = node["alias"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'alias' field");
+        var r = _engine.DatOpen(path, alias);
+        return Serialize(new {
+            success = true,
+            command = "dat-open",
+            alias = r.Alias,
+            path = r.Path,
+            kind = r.Kind,
+            files = r.Files,
+        });
+    }
+
+    private string CmdDatClose(System.Text.Json.Nodes.JsonNode node) {
+        string alias = node["alias"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'alias' field");
+        var r = _engine.DatClose(alias);
+        return Serialize(new { success = true, command = "dat-close", alias = r.Alias, path = r.Path });
+    }
+
+    private string CmdDatList() {
+        var r = _engine.DatList();
+        return Serialize(new {
+            success = true,
+            command = "dat-list",
+            count = r.Count,
+            handles = r.Rows.Select(h => new { alias = h.Alias, path = h.Path, kind = h.Kind }),
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Melt-integration Phase S — Scene 0x12 inspection
+    // see CommandEngine.Scene.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdSceneExportJson(System.Text.Json.Nodes.JsonNode node) {
+        string? sceneId = node["sceneId"]?.GetValue<string>();
+        bool all = node["all"]?.GetValue<bool>() ?? false;
+        string? outPath = node["out"]?.GetValue<string>();
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.SceneExportJson(sceneId, all, outPath, datPath);
+        return Serialize(new {
+            success = true,
+            command = "scene-export-json",
+            sceneId = r.SceneId,
+            source = r.Source,
+            outPath = r.OutPath,
+            sceneCount = r.SceneCount,
+            objectCount = r.ObjectCount,
+            json = r.InlineJson,
+        });
+    }
+
+    private string CmdSceneDiff(System.Text.Json.Nodes.JsonNode node) {
+        string sceneId = node["sceneId"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'sceneId' field");
+        string otherDat = node["otherDat"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'otherDat' field");
+        int maxRows = node["maxRows"]?.GetValue<int>() ?? 500;
+        var r = _engine.SceneDiff(sceneId, otherDat, maxRows);
+        return Serialize(new {
+            success = true,
+            command = "scene-diff",
+            sceneId = r.SceneId,
+            oursSource = r.OursSource,
+            theirsSource = r.TheirsSource,
+            diffCount = r.DiffCount,
+            truncated = r.Truncated,
+            rows = r.Rows.Select(row => new { path = row.Path, ours = row.Ours, theirs = row.Theirs }),
+        });
+    }
+
+    private string CmdSceneWhereUsed(System.Text.Json.Nodes.JsonNode node) {
+        string sceneId = node["sceneId"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'sceneId' field");
+        var r = _engine.SceneWhereUsed(sceneId);
+        return Serialize(new {
+            success = true,
+            command = "scene-where-used",
+            sceneId = r.SceneId,
+            regionSource = r.RegionSource,
+            hitCount = r.HitCount,
+            hits = r.Hits.Select(h => new {
+                sceneTypeIndex = h.SceneTypeIndex,
+                stbIndex = h.StbIndex,
+                sceneSlot = h.SceneSlot,
+                sceneCountInType = h.SceneCountInType,
+                terrainTypes = h.TerrainTypes,
+            }),
+        });
+    }
+
+    private string CmdSceneEdit(System.Text.Json.Nodes.JsonNode node) {
+        string sceneId = node["sceneId"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'sceneId' field");
+        int index = node["index"]?.GetValue<int>()
+            ?? throw new ArgumentException("Missing 'index' field");
+        var fields = node["fields"] as System.Text.Json.Nodes.JsonObject
+            ?? throw new ArgumentException("Missing 'fields' object");
+        bool apply = node["apply"]?.GetValue<bool>() ?? false;
+        var r = _engine.SceneEdit(sceneId, index, fields, apply);
+        return Serialize(new {
+            success = true,
+            command = "scene-edit",
+            sceneId = r.SceneId,
+            index = r.Index,
+            source = r.Source,
+            changedFields = r.ChangedFields,
+            applied = r.Applied,
+            staged = r.Staged,
+            objectAfter = r.ObjectAfter,
+            note = r.Staged
+                ? "Scene staged in PortalDatDocument; run 'export' to write it into the export DATs."
+                : "Dry-run (apply:false) — nothing staged.",
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Melt-integration Phase G — asset-reference graph
+    // see CommandEngine.AssetGraph.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdAssetRefs(System.Text.Json.Nodes.JsonNode node) {
+        string id = node["id"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'id' field");
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.AssetRefs(id, datPath);
+        return Serialize(new {
+            success = true,
+            command = "asset-refs",
+            id = r.Id,
+            kind = r.Kind,
+            source = r.Source,
+            edgeCount = r.EdgeCount,
+            edges = r.Edges.Select(e => new { kind = e.Kind, id = e.Id, relation = e.Relation }),
+        });
+    }
+
+    private string CmdAssetUsedBy(System.Text.Json.Nodes.JsonNode node) {
+        string id = node["id"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'id' field");
+        bool transitive = node["transitive"]?.GetValue<bool>() ?? false;
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.AssetUsedBy(id, transitive, datPath);
+        return Serialize(new {
+            success = true,
+            command = "asset-used-by",
+            id = r.Id,
+            kind = r.Kind,
+            source = r.Source,
+            indexBuildMs = r.IndexBuildMs,
+            indexCounts = new {
+                gfxObjs = r.IndexCounts.GfxObjs,
+                setups = r.IndexCounts.Setups,
+                scenes = r.IndexCounts.Scenes,
+                surfaces = r.IndexCounts.Surfaces,
+                surfaceTextures = r.IndexCounts.SurfaceTextures,
+            },
+            directCount = r.DirectCount,
+            direct = r.Direct.Select(e => new { kind = e.Kind, id = e.Id }),
+            transitiveCount = r.TransitiveCount,
+            transitive = r.Transitive?.Select(e => new { kind = e.Kind, id = e.Id }),
+        });
+    }
+
+    private string CmdSurfaceFingerprint(System.Text.Json.Nodes.JsonNode node) {
+        string? id = node["id"]?.GetValue<string>();
+        Dictionary<string, string>? match = null;
+        if (node["match"] is System.Text.Json.Nodes.JsonObject matchObj) {
+            match = new Dictionary<string, string>();
+            foreach (var (k, v) in matchObj) {
+                if (v == null) continue;
+                match[k] = v.GetValueKind() == System.Text.Json.JsonValueKind.String
+                    ? v.GetValue<string>()
+                    : v.ToJsonString();
+            }
+        }
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.SurfaceFingerprint(id, match, datPath);
+        return Serialize(new {
+            success = true,
+            command = "surface-fingerprint",
+            probe = r.Probe,
+            source = r.Source,
+            matchCount = r.MatchCount,
+            matches = r.Matches,
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Melt-integration Phase X.2 — cross-DAT transplant
+    // see CommandEngine.Transplant.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdCopyLandblock(System.Text.Json.Nodes.JsonNode node) {
+        string fromDat = node["fromDat"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'fromDat' field");
+        uint srcLbX = U(node, "srcLbX"), srcLbY = U(node, "srcLbY");
+        uint? dstLbX = node["dstLbX"] != null ? U(node, "dstLbX") : null;
+        uint? dstLbY = node["dstLbY"] != null ? U(node, "dstLbY") : null;
+        bool heightmap = node["heightmap"]?.GetValue<bool>() ?? true;
+        bool textures = node["textures"]?.GetValue<bool>() ?? true;
+        bool objects = node["objects"]?.GetValue<bool>() ?? true;
+        bool buildings = node["buildings"]?.GetValue<bool>() ?? true;
+        bool clearExisting = node["clearExisting"]?.GetValue<bool>() ?? (objects && buildings);
+        var r = _engine.CopyLandblock(fromDat, srcLbX, srcLbY, dstLbX, dstLbY,
+            heightmap, textures, objects, buildings, clearExisting);
+        return Serialize(new {
+            success = true,
+            command = "copy-landblock",
+            source = r.SourceKey,
+            srcLb = r.SrcLb,
+            dstLb = r.DstLb,
+            terrainVertices = r.TerrainVertices,
+            heightmapCopied = r.HeightmapCopied,
+            texturesCopied = r.TexturesCopied,
+            objectsCopied = r.ObjectsCopied,
+            buildingsCopied = r.BuildingsCopied,
+            interiorCellsStaged = r.InteriorCellsStaged,
+            clearedExisting = r.ClearedExisting,
+            warnings = r.Warnings,
+            note = "Staged in documents — validate-landblock the destination, then 'export'.",
+        });
+    }
+
+    private string CmdCopyBuilding(System.Text.Json.Nodes.JsonNode node) {
+        string fromDat = node["fromDat"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'fromDat' field");
+        uint srcLbX = U(node, "srcLbX"), srcLbY = U(node, "srcLbY");
+        int buildingIndex = node["buildingIndex"]?.GetValue<int>()
+            ?? throw new ArgumentException("Missing 'buildingIndex' field");
+        uint dstLbX = U(node, "dstLbX"), dstLbY = U(node, "dstLbY");
+        float x = node["x"]?.GetValue<float>() ?? throw new ArgumentException("Missing 'x'");
+        float y = node["y"]?.GetValue<float>() ?? throw new ArgumentException("Missing 'y'");
+        float z = node["z"]?.GetValue<float>() ?? throw new ArgumentException("Missing 'z'");
+        System.Numerics.Quaternion? orientation = null;
+        if (node["qw"] != null) {
+            orientation = new System.Numerics.Quaternion(
+                node["qx"]?.GetValue<float>() ?? 0f,
+                node["qy"]?.GetValue<float>() ?? 0f,
+                node["qz"]?.GetValue<float>() ?? 0f,
+                node["qw"]!.GetValue<float>());
+        }
+        var r = _engine.CopyBuilding(fromDat, srcLbX, srcLbY, buildingIndex, dstLbX, dstLbY, x, y, z, orientation);
+        return Serialize(new {
+            success = true,
+            command = "copy-building",
+            source = r.SourceKey,
+            srcLb = r.SrcLb,
+            buildingIndex = r.BuildingIndex,
+            modelId = r.ModelId,
+            dstLb = r.DstLb,
+            staticObjectIndex = r.StaticObjectIndex,
+            interiorCells = r.InteriorCells,
+            warnings = r.Warnings,
+            note = "Staged — interior cells are instantiated (with cell-ID remap + VisibleCells fixup) at 'export'.",
+        });
+    }
+
+    private string CmdRemoveBuilding(System.Text.Json.Nodes.JsonNode node) {
+        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        int buildingIndex = node["buildingIndex"]?.GetValue<int>()
+            ?? throw new ArgumentException("Missing 'buildingIndex' field");
+        var r = _engine.RemoveBuilding(lbX, lbY, buildingIndex);
+        return Serialize(new {
+            success = true,
+            command = "remove-building",
+            lb = r.Lb,
+            buildingIndex = r.BuildingIndex,
+            modelId = r.ModelId,
+            removedStaticIndex = r.RemovedStaticIndex,
+            matchDistance = r.MatchDistance,
+            note = r.Note,
+        });
+    }
+
+    private string CmdBulkPaintReplace(System.Text.Json.Nodes.JsonNode node) {
+        int toType = node["toType"]?.GetValue<int>()
+            ?? throw new ArgumentException("Missing 'toType' field");
+        int? fromType = node["fromType"]?.GetValue<int>();
+        var lbs = new List<(uint, uint)>();
+        if (node["lbList"] is System.Text.Json.Nodes.JsonArray arr) {
+            foreach (var item in arr) {
+                if (item == null) continue;
+                lbs.Add((U(item, "lbX"), U(item, "lbY")));
+            }
+        }
+        else if (node["minLbX"] != null) {
+            uint minX = U(node, "minLbX"), minY = U(node, "minLbY");
+            uint maxX = U(node, "maxLbX"), maxY = U(node, "maxLbY");
+            for (uint xx = minX; xx <= maxX; xx++)
+                for (uint yy = minY; yy <= maxY; yy++)
+                    lbs.Add((xx, yy));
+        }
+        var r = _engine.BulkPaintReplace(lbs, fromType, toType);
+        return Serialize(new {
+            success = true,
+            command = "bulk-paint-replace",
+            landblocksRequested = r.LandblocksRequested,
+            landblocksChanged = r.LandblocksChanged,
+            landblocksMissing = r.LandblocksMissing,
+            verticesChanged = r.VerticesChanged,
+            fromType = r.FromType,
+            toType = r.ToType,
+        });
     }
 
     // ─────────────────────────────────────────────────────────────────

@@ -2077,3 +2077,140 @@ Wraps a built-in C# `HttpListener` (no Python dependency). When the host has an 
 
 (none — every new surface is JSON command + REPL subcommand, no new top-level flags.)
 
+
+## Sync Wave 2026-06-10 — Melt Integration Phase R (Region 0x13 round-trip)
+
+Per `docs/melt-integration-plan-2026-06-10.md` §2 — the first melt-derived command family. Behavioral reference is melt's `RegionConverter`/`RegionComparer` (reimplemented on DatReaderWriter types; no melt code linked). See `CommandEngine.Region.cs`.
+
+### `region-export-json`
+
+**Request:** `{"command":"region-export-json","out":"/tmp/region.json","parts":"sky,terrain","datPath":"portal"}` (all fields optional)
+**Response:** `{success, command, source, datPath, datSha256, outPath, partsMask, counts:{dayGroups, soundStbs, sceneTypes, terrainTypes}, json?}`
+
+Parses Region `0x13000000` into a complete, stable-ordered JSON document covering every part the retail client serializes: `landDefs` (incl. the 256-entry `landHeightTable`), `gameTime`, `skyInfo` (DayGroups → SkyObjects + SkyTimeOfDay keyframes), `soundInfo` (ambient STB descriptors), `sceneInfo`, `terrainInfo` (TerrainTypes + LandSurf/TexMerge corner/side/road alpha maps + per-terrain TerrainTex tiling/bright/sat/hue ranges), `regionMisc`. DIDs are `"0x........"` strings, colors are `"#AARRGGBB"`, enums are names.
+
+Source resolution order: explicit `datPath` (path or `portal` alias) → staged `PortalDatDocument` entry (so post-import exports reflect edits) → loaded project DATs → `~/ac_base_dats/client_portal.dat`. `parts` filters the emitted document to a comma list of `sky|sound|scene|terrain|misc`. Without `out`, the (~1 MB pretty-printed) document is returned inline as `json`.
+
+### `region-import-json`
+
+**Request:** `{"command":"region-import-json","path":"/tmp/region.json","apply":true}`
+**Response:** `{success, command, applied, staged, path, problems[], packedBytes, packParity, packSha256, note}`
+
+Validates the document (256-entry height table, partsMask↔parts consistency, skyTime `begin` in [0,1], every hex/enum field parseable — failures land in `problems[]` instead of throwing), rebuilds the Region DBObj, and verifies **pack/unpack self-parity** before anything is staged. With `apply:true` (requires a loaded project) the Region is staged into `PortalDatDocument`, so the standard `export` command writes it into the export DATs. `apply:false` is a dry-run validator.
+
+Round-trip fidelity is regression-tested: `WorldBuilder.Tests/RegionRoundTripTests.cs` asserts the JSON round-trip packs **byte-identical** to a direct retail load.
+
+### `region-diff`
+
+**Request:** `{"command":"region-diff","otherDat":"/path/to/other/client_portal.dat","maxRows":500}` or `{"command":"region-diff","otherJson":"/tmp/region.json"}`
+**Response:** `{success, command, oursSource, theirsSource, diffCount, truncated, rows:[{path, ours, theirs}]}`
+
+Melt `RegionComparer` equivalent: deep field-by-field diff of the current region (staged → project → base resolution as above) vs a second DAT or a previously exported JSON. Paths are dotted with array indices, e.g. `skyInfo.dayGroups[3].skyTime[0].dirColor`. Array length mismatches emit a single `.length` row plus element diffs over the common prefix. Retail-vs-retail must yield `diffCount: 0`.
+
+## Sync Wave 2026-06-10b — Melt Integration Phase X.1 (secondary DAT handles)
+
+Per `docs/melt-integration-plan-2026-06-10.md` §4.1. Melt's cross-DAT workflows all begin with a second open DAT (`cDatFile fromDat`); this wave adds the equivalent registry. See `CommandEngine.DatHandles.cs`.
+
+### `dat-open`
+
+**Request:** `{"command":"dat-open","path":"/path/to/dats-or-file","alias":"retail2"}`
+**Response:** `{success, command, alias, path, kind, files[]}`
+
+Opens an external DAT **read-only** and registers it under `alias`. A directory must contain all four EoR dats (`client_portal.dat`, `client_cell_1.dat`, `client_local_English.dat`, `client_highres.dat`) and opens as `kind:"collection"`; a single `.dat` file opens as `kind:"file"`. Aliases are accepted wherever a second DAT is consumed: `region-diff` `otherDat` today; Phase S `scene-diff` and Phase X.2 transplant `fromDat` next.
+
+### `dat-close` / `dat-list`
+
+`{"command":"dat-close","alias":"retail2"}` disposes and unregisters. `{"command":"dat-list"}` returns `{count, handles:[{alias, path, kind}]}`. Handles live for the terminal session; they are not persisted in the project.
+
+## Sync Wave 2026-06-10c — Melt Integration Phase S (Scene 0x12 inspection)
+
+Per `docs/melt-integration-plan-2026-06-10.md` §3 — behavioral reference is melt's `SceneUtilities.CompareObjects` (reimplemented on DatReaderWriter types). ObjectDesc field set per retail `acclient.h:57271–57286`. See `CommandEngine.Scene.cs`.
+
+### `scene-export-json`
+
+**Request:** `{"command":"scene-export-json","sceneId":"0x120000A5"}` or `{"command":"scene-export-json","all":true,"out":"/tmp/scenes.json"}`
+**Response:** `{success, command, sceneId, source, outPath, sceneCount, objectCount, json?}`
+
+Dumps a Scene's ObjectDesc list fully fielded: `objectId`, `origin [x,y,z]`, `orientation [w,x,y,z]`, `frequency`, `displaceX/Y`, `minScale`/`maxScale`, `maxRotation`, `minSlope`/`maxSlope`, `align`, `orient`, `weenieObj`. Source resolution mirrors the region commands (datPath/alias → staged → project → base portal). `all:true` sweeps every Scene (retail = 179 scenes / 1 167 objects) into one JSON array at `out`.
+
+### `scene-diff`
+
+**Request:** `{"command":"scene-diff","sceneId":"0x120000A5","otherDat":"myalias"}`
+**Response:** `{success, command, sceneId, oursSource, theirsSource, diffCount, truncated, rows:[{path, ours, theirs}]}`
+
+Per-object field diff vs a second DAT (`dat-open` alias or path). Identical row shape to `region-diff`.
+
+### `scene-where-used`
+
+**Request:** `{"command":"scene-where-used","sceneId":"0x120000A5"}`
+**Response:** `{success, command, sceneId, regionSource, hitCount, hits:[{sceneTypeIndex, stbIndex, sceneSlot, sceneCountInType, terrainTypes[]}]}`
+
+Joins Region 0x13's SceneDesc + TerrainDesc: each hit is a scene-type index whose `scenes[]` carries this scene (`sceneSlot` = position, `sceneCountInType` = sibling count → selection weight), plus the terrain-type names whose `sceneTypes[]` reference that index. The scenery-bake debugging primitive: "why does this tree appear on this terrain".
+
+### `scene-edit`
+
+**Request:** `{"command":"scene-edit","sceneId":"0x120000A5","index":0,"fields":{"frequency":0.5},"apply":true}`
+**Response:** `{success, command, sceneId, index, source, changedFields[], applied, staged, objectAfter}`
+
+Mutates one ObjectDesc and stages the Scene into `PortalDatDocument` (same export pipeline as `region-import-json`). Dry-run by default. Enables controlled scenery A/B test worlds (densities, scale ranges, slope gates).
+
+Mapping fidelity regression: `WorldBuilder.Tests/SceneCommandsTests.cs` checks every field of every ObjectDesc across all 179 retail scenes.
+
+## Sync Wave 2026-06-10d — Melt Integration Phase G (asset-reference graph)
+
+Per `docs/melt-integration-plan-2026-06-10.md` §5 — melt `GfxObjTools.FindUsedBy`/`FindTranslation` generalized into a graph service over the retail asset chain `Scene(0x12) → Setup(0x02) → GfxObj(0x01) → Surface(0x08) → SurfaceTexture(0x05) → RenderSurface(0x06)` (+ Palette off Surface). See `CommandEngine.AssetGraph.cs`.
+
+### `asset-refs`
+
+**Request:** `{"command":"asset-refs","id":"0x02000306"}`
+**Response:** `{success, command, id, kind, source, edgeCount, edges:[{kind, id, relation}]}`
+
+Forward edges, one level down the chain. Relations: `places` (Scene→object), `part` (Setup→GfxObj), `surface`, `origTexture`/`origPalette`, `texture`.
+
+### `asset-used-by`
+
+**Request:** `{"command":"asset-used-by","id":"0x08000FC8","transitive":true}`
+**Response:** `{success, command, id, kind, source, indexBuildMs, indexCounts, directCount, direct[], transitiveCount?, transitive[]?}`
+
+Reverse lookup. The first call per source scans the whole portal DAT into a session-cached reverse index (retail: 15 318 GfxObjs, 5 935 Setups, 179 Scenes, 6 152 Surfaces, 7 221 SurfaceTextures — ~3.3 s; subsequent calls are instant). `transitive:true` walks the closure upward (surface → its GfxObjs → their Setups → Scenes) — the white-object/lighting debugging primitive: "which models show this surface". Accepts `datPath` (path or `dat-open` alias); default source is the loaded project, else base portal DAT.
+
+### `surface-fingerprint`
+
+**Request:** `{"command":"surface-fingerprint","id":"0x08000FC8"}` or `{"command":"surface-fingerprint","match":{"luminosity":"0.25","type":"Base1Image, Translucent"}}`
+**Response:** `{success, command, probe?, source, matchCount, matches[]}`
+
+Fingerprint = (Type flags, OrigTextureId, OrigPaletteId, ColorValue, Translucency, Luminosity, Diffuse) — melt's `FindTranslation` identity tuple. With `id`, returns that surface's fingerprint plus every surface sharing it exactly ("the same material under a different ID"). With `match`, filters all surfaces by a partial spec (keys: `type`, `origTextureId`, `origPaletteId`, `colorValue`, `translucency`, `luminosity`, `diffuse`).
+
+## Sync Wave 2026-06-10e — Melt Integration Phase X.2 (cross-DAT transplant)
+
+Per `docs/melt-integration-plan-2026-06-10.md` §4.2 — melt's `replaceLandblock`/`addBuildingFrom` workflows reproduced on WB's document model. Cell-ID remapping and the full cross-reference fixup contract (CellPortals.OtherCellId, VisibleCells incl. LandCell deltas, building-portal OtherCellId + StabList, LandBlockInfo.NumCells — acclient.h:31893–32308) are delegated to the existing `BuildingBlueprintCache` donor-blueprint pipeline; the new commands feed it donors from **external DATs** (Phase X.1 handles). See `CommandEngine.Transplant.cs`.
+
+**Session contract:** staged mutations and the donor blueprint cache live for the terminal session only — run stage → `validate-landblock` → `export` in the **same session**.
+
+### `copy-landblock`
+
+**Request:** `{"command":"copy-landblock","fromDat":"donor","srcLbX":169,"srcLbY":180,"dstLbX":171,"dstLbY":180}`
+**Response:** `{success, command, source, srcLb, dstLb, terrainVertices, heightmapCopied, texturesCopied, objectsCopied, buildingsCopied, interiorCellsStaged, clearedExisting, warnings[]}`
+
+Melt `replaceLandblock` semantics with independently togglable parts: `heightmap` (81 height bytes), `textures` (terrain type/road/scenery bytes), `objects` (exterior stabs), `buildings` (BuildingInfo + interior EnvCells via donor blueprints). `dstLbX/Y` default to the source key ("replace this LB with that DAT's version"). `clearExisting` (default true when objects+buildings both copy) wipes the destination's staged statics first. Verified E2E: Holtburg 0xA9B4 → 0xABB4 lands 12 buildings / 114 objects / NumCells 123 in the exported cell DAT.
+
+### `copy-building`
+
+**Request:** `{"command":"copy-building","fromDat":"donor","srcLbX":169,"srcLbY":180,"buildingIndex":0,"dstLbX":170,"dstLbY":180,"x":32736,"y":34656,"z":50}`
+**Response:** `{success, command, source, srcLb, buildingIndex, modelId, dstLb, staticObjectIndex, interiorCells, warnings[]}`
+
+Melt `addBuildingFrom`: extracts the donor blueprint from the external DAT at command time, registers a placement-donor hint, and stages the shell; export instantiates interior cells with fresh IDs and fixes every cross-reference. `x/y/z` are world coordinates inside the destination LB; orientation defaults to the donor's. Warns when the model is not a known building in the **project** DATs (export would place a plain stab).
+
+### `remove-building`
+
+**Request:** `{"command":"remove-building","lbX":169,"lbY":180,"buildingIndex":0}`
+**Response:** `{success, command, lb, buildingIndex, modelId, removedStaticIndex, matchDistance, note}`
+
+Melt `removeBuilding`: removes the matching staged shell; export drops the BuildingInfo and decrements `NumCells` (verified: Holtburg 12→11 buildings, NumCells 123→106). Interior cells become orphaned records (client ignores them — existing exporter semantics).
+
+### `bulk-paint-replace`
+
+**Request:** `{"command":"bulk-paint-replace","minLbX":172,"minLbY":180,"maxLbX":172,"maxLbY":180,"fromType":16,"toType":2}` or with `lbList:[{lbX,lbY},…]`
+**Response:** `{success, command, landblocksRequested, landblocksChanged, landblocksMissing, verticesChanged, fromType, toType}`
+
+Melt `replaceLandblockSpecificTexture` (with `fromType`) / `landblockBucketFill` (without): per-vertex terrain-type substitution across a rect or explicit LB list, staged through TerrainDocument with normal edge synchronization.
