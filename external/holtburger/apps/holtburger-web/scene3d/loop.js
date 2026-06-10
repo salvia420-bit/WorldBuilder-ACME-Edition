@@ -1728,6 +1728,9 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         const g = upd.guid >>> 0;
         em.remove(g);
         if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
+        // F18-4: prune the multiAction stamp-dedup so a reused guid (a
+        // respawned creature) isn't silently refused its first action.
+        _actionStamps.delete(g);
       } else if (kind === KIND_POSITION) {
         // The 2D path translates LB-local → world; the 3D path's
         // setPose takes world coords already (rig.position is world,
@@ -1964,6 +1967,8 @@ export function installSharedDrainHook(scene3d) {
           const g = upd.guid >>> 0;
           em.remove(g);
           if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
+          // F18-4: prune the multiAction stamp-dedup (see the other arm).
+          _actionStamps.delete(g);
         } else if (kind === KIND_POSITION) {
           const lbId = upd.landblockId >>> 0;
           const lbX = (lbId >>> 24) & 0xff;
