@@ -18,6 +18,20 @@ const ATTACK_POWER_FULL = 1.0;
 // world action. Retail's default double-click delay is ~0.3–0.5s.
 const PEACE_USE_DOUBLE_CLICK_MS = 400;
 
+// F7-3 — turn the local player to face a missile target before firing.
+// ACE rotates the shooter (TurnToObject) before the launch; without this
+// the arrow leaves your character's back when the target is behind/beside
+// you. Default-OFF (touches the motion pipeline → setMovementInput turn);
+// pending 1070 eye-test. (?missileFaceTarget=on)
+const MISSILE_FACE_TARGET = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("missileFaceTarget") === "on";
+  } catch { return false; }
+})();
+// Cap the turn-to-face pre-step so a bad bearing can't stall the shot.
+const FACE_TURN_TIMEOUT_MS = 800;
+
 // Fallback AttackType for the CombatManeuverTable lookup when the
 // per-weapon inference (Wave 1 Phase 3, 2026-05-26) returns
 // `ATTACK_TYPE.Undef` — e.g. shield-only, ranged before Phase 6
@@ -283,6 +297,42 @@ export function setupClickPicking({
     } catch {}
 
     charge.rafId = requestAnimationFrame(chargeTick);
+  }
+
+  // F7-3 — turn the local player to face `targetGuid`, then fire. Reuses
+  // chargeTick's bearing math but turns IN PLACE (forward=0) until the
+  // heading delta is within ~0.05 rad, mirroring ACE's rotateTime delay
+  // before a missile launch. No-ops to an immediate fire when the flag is
+  // off, the target/pose is unresolvable, or we're already on-bearing.
+  function turnToFaceThenFire(targetGuid, fire) {
+    if (!MISSILE_FACE_TARGET || typeof sessionHandle.setMovementInput !== "function") {
+      fire();
+      return;
+    }
+    const startMs = performance.now();
+    const step = () => {
+      const targetAc = entityAcPosition(liveScene3d.entityManager, targetGuid);
+      const pose = playerWorldPose(sessionHandle);
+      if (!targetAc || !pose) {
+        try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
+        fire();
+        return;
+      }
+      const dx = targetAc.x - pose.x;
+      const dy = targetAc.y - pose.y;
+      const bearing = Math.atan2(dx, dy);
+      const turnDelta = normalizeAngle(bearing - pose.heading);
+      if (Math.abs(turnDelta) <= 0.05 ||
+          (performance.now() - startMs) > FACE_TURN_TIMEOUT_MS) {
+        try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
+        fire();
+        return;
+      }
+      const turn = turnDelta > 0 ? 1 : -1;
+      try { sessionHandle.setMovementInput(0 /* forward */, 0 /* strafe */, turn, false /* run */); } catch {}
+      requestAnimationFrame(step);
+    };
+    step();
   }
 
   /**
@@ -821,7 +871,9 @@ export function setupClickPicking({
         // at arrival just before the real swing fires.
         startCharge(targetGuid, MISSILE_RANGE_M, fire, finalMotion);
       } else {
-        fire();
+        // F7-3 — in range: face the target first (flag-gated), then fire.
+        // The out-of-range charge path above already turns during pursuit.
+        turnToFaceThenFire(targetGuid, fire);
       }
       return;
     }
