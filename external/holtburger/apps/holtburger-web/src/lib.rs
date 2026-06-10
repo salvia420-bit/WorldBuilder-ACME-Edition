@@ -31489,6 +31489,28 @@ async fn recv_loop(
                                 // CreateObject(this); MTable/CSetup flags set in
                                 // `WorldObject_Networking.cs:473-477`).
                                 entity.apply_description(&data);
+                                // SG-A1 (2026-06-09): mirror the resolve in
+                                // `apply_inventory_object_create` (lib.rs ~21890).
+                                // `apply_description` does NOT set
+                                // `physics_script_table_did` — it's resolved from
+                                // `Setup.default_phstable_id` / `PhysicsDesc.petable_id`
+                                // (not an ODD field), so this local self-seed would
+                                // otherwise OVERWRITE the value the ungated
+                                // `apply_inventory_object_create` already resolved
+                                // (on the same ObjectCreate) back to `0`, leaving the
+                                // entity field diverged from the JS-facing
+                                // `physics_script_table_index`. Resolve + stash so the
+                                // local player's self-cast/buff PhysicsScript VFX
+                                // (GameMessageScript 0xF755 → play_effect_vfx) resolve
+                                // against the right table and any future entity-field
+                                // reader sees the correct DID.
+                                let table_did = resolve_physics_script_table_did(&entity);
+                                entity.physics_script_table_did = table_did;
+                                if table_did != 0 {
+                                    physics_script_table_index
+                                        .borrow_mut()
+                                        .insert(u32::from(data.public_weenie_desc.guid), table_did);
+                                }
                                 w.add_entity(entity);
                                 let _ = w.set_local_player_runtime_pose(pos);
                                 entity_seeded = true;
