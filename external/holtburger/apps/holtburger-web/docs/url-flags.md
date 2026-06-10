@@ -285,3 +285,27 @@ wasm rebuild + one session covers them all.
 **No observable test (latent, land-and-forget):** SG-A1 (`62ee171e`) — `physics_script_table_did` self-seed field/index coherence; no live consumer reads the entity field today, so nothing to eye-test (correctness only).
 
 Full per-item detail + ACE wire refs: `~/out/self-guid-loop-handoff-2026-06-09.md`.
+
+### Also pending from the same day — motion + render audit batch (`3756fd85`)
+
+The "surface unsurfaced motion + render behaviors" audit (commit `3756fd85`)
+landed a batch of motion/render fixes the same day, each default-safe and
+pending the SAME 1070 sitting. Most are JS (live on reload); the
+`player/types.rs` motion-command expander is Rust (covered by the Step-0 rebuild
+above). Default-OFF flags to flip ON and test:
+
+| Flag | What it does | Eye-test | Pass criteria |
+|------|--------------|----------|---------------|
+| **`?idleFidget=on`** | Standing creatures/NPCs/players play random idle gestures instead of freezing in one idle loop (JS-only; uses `lookupMotionLinkForSwing` to probe the MT, so no-ops on MTs without the clip). | Stand near an NPC/creature ~6–15 s | It plays an occasional fidget (nod / shrug / scratch-head / etc.); never stacks on a real motion; no stuck pose. |
+| **`?playEffectQueue=on`** | PlayEffect (0xF755) fresh-spawn cast/buff VFX that were dropped when the entity's cell wasn't resolved yet (cell==0) are queued + replayed on ObjectCreate. | Watch an entity that casts/buffs as it spawns into view | The cast/buff flash now plays on the fresh entity (was silently dropped). |
+| **`?mtClassFallback=on`** | Safety-net: a motion command not in the two hand-synced allow-lists still dispatches via its class-mask (so rare emotes/specials animate). | Observe creatures/NPCs with unusual one-shot motions (special attacks, social emotes) | Previously-frozen rare motions now animate; no regression on common gait. |
+| `?forceMotionLocal=on` | (same as row 1 of the table above — SG-B) | — | — |
+
+Render features from the same audit were flipped **default-ON (opt-out `=off`)** —
+`terrainDetailTex` / `terrainMod` / `lightClamp` / `cycleOmega` / `skyObjLum` /
+`texMerge` / fog gate — so they're already live; append `&<flag>=off` to A/B them
+against the prior look if anything seems off. Also always-on in `3756fd85`:
+MagicRecoilMissile 0x0033 cast routing, SoundTriggered acToThree pan fix, FallDown
+link routing, CMT remote-swing double-play dedup. Detail:
+`~/out/holtburger-{motion-dispatch-coverage,unsurfaced-render-audit}-2026-06-09.md`
+and memory `project_audit_fixes_staged_2026-06-09`.
