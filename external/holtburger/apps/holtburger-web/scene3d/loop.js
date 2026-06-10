@@ -2101,6 +2101,45 @@ export function installSharedDrainHook(scene3d) {
           if (!isLocalPlayerGuid(turnGuid) && typeof em.applyTurnDirective === "function") {
             em.applyTurnDirective(turnGuid, upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0);
           }
+        } else if (kind === KIND_APPEARANCE) {
+          // SG-D (2026-06-09): mid-game appearance change (equip / dye-commit /
+          // death re-skin) from the wasm `UpdateObject` (0xF7DB) / `ObjDescEvent`
+          // (0xF625) arms (lib.rs ~31978 / ~32058), which pack only the four
+          // substitution-relevant fields and zero the rest. This arm was the
+          // ONLY missing kind in this LIVE dispatcher — the working copy lived
+          // in the dead `drainEntityEvents3D` (early-returns under
+          // `useSharedDrain`), so wire-driven re-skins were dropped for EVERY
+          // entity. Ported verbatim; `_sliceFromScratch` returns a fresh
+          // `.slice()` copy so the async `applyAppearance` is alias-safe.
+          //
+          // Applies to the LOCAL player too (you should see your own gear/dye
+          // change). `applyAppearance` despawn+respawns the rig (or hot-swaps
+          // under `?clothingHotSwap=1`), preserving world pose; the camera +
+          // integrator re-resolve the rig via `entityMap.get(guid)` every frame
+          // (loop.js:473, header :22), so the respawn doesn't orphan their
+          // binding. PENDING 1070 eye-test: confirm no visible local-rig
+          // flicker on equip during normal play (enable hot-swap if it does).
+          em.applyAppearance?.(upd.guid >>> 0, {
+            modelChanges: _sliceFromScratch(upd.modelChanges, 0),
+            textureChanges: _sliceFromScratch(upd.textureChanges, 1),
+            subPalettes: _sliceFromScratch(upd.subPalettes, 2),
+            paletteId: (upd.paletteId ?? 0) >>> 0,
+          });
+        } else if (kind === KIND_ATTACH) {
+          // SG-D (2026-06-09): wielded-item attach/detach (render-completeness
+          // audit 2026-05-29), likewise only present in the dead drain path.
+          // model_id = wielder guid (0 = detach back to world / hide);
+          // motionCommand = holding-location key (RightHand=1, …); motionStance
+          // = the child's grip placement key. EntityManager parents the child
+          // rig under the wielder's part node at the resolved holding frame.
+          const childGuid = upd.guid >>> 0;
+          const parentGuid = (upd.modelId ?? 0) >>> 0;
+          em.attachChildToParent?.(
+            childGuid,
+            parentGuid,
+            (upd.motionCommand ?? 0) >>> 0,
+            (upd.motionStance ?? 0) >>> 0
+          );
         }
       } catch (e) {
         // eslint-disable-next-line no-console
