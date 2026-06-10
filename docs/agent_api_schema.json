@@ -2959,6 +2959,24 @@
                 "landblocksMissing": "int",
                 "verticesChanged": "int"
             }
+        },
+        "melt-reference": {
+            "category": "reference",
+            "description": "Informational resource: agent briefing for melt functionality DEFERRED by the integration plan (NOT implemented). Topics: dm-textures (pre-ToD/Dark Majesty texture codecs + DM->ToD ID table), id-migration (cross-era positional ID pairing + surface fingerprinting), cache-converters (PhatAC 000N.raw formats), acedb-recipes (vendor/item/XP/loot mutation catalog). Content parsed live from docs/melt-deferred-reference.md.",
+            "parameters": {
+                "topic": {
+                    "type": "string",
+                    "required": false,
+                    "description": "dm-textures | id-migration | cache-converters | acedb-recipes; omitted = list topics"
+                }
+            },
+            "response": {
+                "topic": "string|null",
+                "docPath": "string",
+                "topics": "[{key,title,summary}]|null",
+                "markdown": "string|null",
+                "note": "string"
+            }
         }
     },
     "sharedTypes": {

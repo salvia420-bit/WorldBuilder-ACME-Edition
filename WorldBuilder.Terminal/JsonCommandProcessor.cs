@@ -363,6 +363,8 @@ public class JsonCommandProcessor {
             ["asset-refs"]                = CmdAssetRefs,
             ["asset-used-by"]             = CmdAssetUsedBy,
             ["surface-fingerprint"]       = CmdSurfaceFingerprint,
+            // Melt deferred-functionality briefing; see CommandEngine.MeltReference.cs
+            ["melt-reference"]            = CmdMeltReference,
             // Melt-integration Phase X.2 — cross-DAT transplant; see CommandEngine.Transplant.cs
             ["copy-landblock"]            = CmdCopyLandblock,
             ["copy-building"]             = CmdCopyBuilding,
@@ -2480,6 +2482,7 @@ public class JsonCommandProcessor {
             new { name = "copy-building",      args = "fromDat, srcLbX, srcLbY, buildingIndex, dstLbX, dstLbY, x, y, z, qw?/qx?/qy?/qz?", description = "Transplant one building + interior cells from an external DAT to a world position (donor-blueprint pipeline handles cell-ID remap + VisibleCells fixup at export)." },
             new { name = "remove-building",    args = "lbX, lbY, buildingIndex",             description = "Remove a building's shell from the staged landblock; export drops the BuildingInfo and decrements NumCells (interior cells orphaned)." },
             new { name = "bulk-paint-replace", args = "lbList|minLbX..maxLbY, fromType?, toType", description = "Bulk terrain-type substitution across many LBs (melt bucket-fill): replace fromType with toType, or repaint all 81 vertices when fromType omitted." },
+            new { name = "melt-reference",     args = "topic?",                              description = "Agent briefing for DEFERRED melt functionality (not implemented): topics dm-textures, id-migration, cache-converters, acedb-recipes. No topic = list; topic = full markdown section with melt file:line pointers. Read-only knowledge surface." },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",
@@ -4938,6 +4941,24 @@ public class JsonCommandProcessor {
             source = r.Source,
             matchCount = r.MatchCount,
             matches = r.Matches,
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Melt deferred-functionality briefing — see CommandEngine.MeltReference.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    private string CmdMeltReference(System.Text.Json.Nodes.JsonNode node) {
+        string? topic = node["topic"]?.GetValue<string>();
+        var r = _engine.MeltReference(topic);
+        return Serialize(new {
+            success = true,
+            command = "melt-reference",
+            topic = r.Topic,
+            docPath = r.DocPath,
+            topics = r.Topics?.Select(t => new { key = t.Key, title = t.Title, summary = t.Summary }),
+            markdown = r.Markdown,
+            note = r.Note,
         });
     }
 

@@ -2214,3 +2214,14 @@ Melt `removeBuilding`: removes the matching staged shell; export drops the Build
 **Response:** `{success, command, landblocksRequested, landblocksChanged, landblocksMissing, verticesChanged, fromType, toType}`
 
 Melt `replaceLandblockSpecificTexture` (with `fromType`) / `landblockBucketFill` (without): per-vertex terrain-type substitution across a rect or explicit LB list, staged through TerrainDocument with normal edge synchronization.
+
+## Sync Wave 2026-06-10f — `melt-reference` (deferred-functionality briefing)
+
+### `melt-reference`
+
+**Request:** `{"command":"melt-reference"}` (list) or `{"command":"melt-reference","topic":"dm-textures"}`
+**Response:** `{success, command, topic?, docPath, topics?[{key,title,summary}], markdown?, note}`
+
+Read-only **informational resource**: the agent briefing for melt functionality the integration plan deliberately deferred (`docs/melt-integration-plan-2026-06-10.md` §7) — none of it is implemented. Topics: `dm-textures` (pre-ToD/Dark-Majesty texture containers 0x04/0x10/0x11, per-era pixel format codes, the 41-entry DM→ToD landscape ID table), `id-migration` (melt's positional cross-era texture/object ID pairing + Surface fingerprint matching, and how it relates to the implemented `surface-fingerprint`), `cache-converters` (PhatAC `000N.raw` cache dump formats — archaeology only), `acedb-recipes` (catalog of ~50 live-MySQL vendor/item/XP/loot rebalancing recipes + the 8-tier loot mutation-script generator).
+
+Content is parsed at call time from `docs/melt-deferred-reference.md` (stable `## N. Title` anchors) — editing that doc updates the command output without a rebuild. Licensing reminder embedded in every response: melt is research-reference-only; never link or copy its code.
