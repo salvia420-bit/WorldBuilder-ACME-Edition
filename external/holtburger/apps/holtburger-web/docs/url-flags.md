@@ -110,6 +110,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | `moonSpeed` | float | 1.0 | Moon orbital speed multiplier. | scene3d/ac_moons.js:318 |
 | `skyObjLum` | float | default | Sky object luminosity scale. (default-ON 2026-06-09, opt-out =off, pending 1070 eye-test) | scene3d/atmosphere_sky.js:226 |
 | `fogLerp` | float | default | Fog blend rate. | scene3d/loop.js:637 |
+| `terrainSlopeShading` | `on` | off | F12-3: slope-dependent sun shading — feeds the per-vertex geometry normal (vAcNormal) into the terrain NdotL + RNM detail base, instead of a hardcoded flat normal, so mountains/valley walls/cliffs get light-shade relief (most visible at dawn/dusk). Default-off pending 1070 eye-test vs the white/dark exposure pipeline. | scene3d/terrain.js |
 | `terrainMod` | `on`/`off` | **on** | Terrain colour modulation (Ice/Road; dead-in-retail). (default-ON 2026-06-09, opt-out =off, pending 1070 eye-test) | scene3d/index.js:2084 |
 | `terrainModSatHue` | float | default | Terrain mod saturation/hue shift. | scene3d/index.js:2103 |
 | `terrainPalette` / `terrainDetailTex` / `texMerge` | string | default | Terrain texture/palette/merge overrides. (`terrainDetailTex`, `texMerge` default-ON 2026-06-09, opt-out =off, pending 1070 eye-test) | scene3d/index.js:2120–2156 |

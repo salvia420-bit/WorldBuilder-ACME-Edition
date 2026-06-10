@@ -926,6 +926,7 @@ uniform int uCodeToSlice[32];         // terrain-code → slice (255 = no detail
 uniform float uDetailScale;
 uniform vec2 uWindDir;                // unit vec2 (cos, sin) — sand UV rotation
 uniform float uDetailNormalEnabled;   // 0.0 OFF / 1.0 ON (quality gate)
+uniform float uTerrainSlopeShadingEnabled; // F12-3: 0.0 OFF / 1.0 ON (?terrainSlopeShading)
 // T7 (2026-05-28) — terrain DETAIL DIFFUSE texture. Retail modulates the
 // merged base tile by a per-terrain-type detail texture (acclient
 // TexMerge::GetDetailTex / GetDetailTiling) that tiles at sub-metre
@@ -1454,9 +1455,32 @@ void main() {
   // varying normals could be derived from geometry, but at 24 m
   // spacing they're barely non-vertical; the detail layer carries the
   // sub-cell perturbation.)
-  vec3 baseN = vec3(0.5, 0.5, 1.0);   // pre-encoded base normal at [0.5, 0.5, 1]
+  //
+  // F12-3 — slope-dependent sun shading (?terrainSlopeShading=on, default
+  // off). The geometry already carries a per-vertex AC-space normal
+  // (vAcNormal), but the lighting term ignored it: baseN was hardcoded flat
+  // and ndotl stayed 1.0 unless the detail-normal path ran (and even then it
+  // perturbed a FLAT base), so mountains / valley walls / cliff bands read
+  // airbrushed with no light-shade relief — worst at low (dawn/dusk) sun
+  // angles where retail terrain is strongly modelled. When enabled we
+  // (a) re-encode the true geometry normal as the RNM base so the detail
+  // layer perturbs the real surface, and (b) seed a base NdotL from that
+  // normal so terrain gets relief even with the detail layer off. The
+  // default-off path keeps the flat base + ndotl=1.0 (bit-exact prior look).
+  vec3 geomN = normalize(vAcNormal);
+  bool slopeShading = uTerrainSlopeShadingEnabled > 0.5;
+  vec3 baseN = slopeShading
+    ? (geomN * 0.5 + 0.5)             // encode AC normal → [0,1] RNM base
+    : vec3(0.5, 0.5, 1.0);            // flat pre-encoded base [0.5, 0.5, 1]
 
   float ndotl = 1.0;
+  if (slopeShading) {
+    // Base slope shading: sun NdotL off the geometry normal, with the same
+    // 0.65 wrap floor the detail path uses so unlit faces don't crush to
+    // black. The detail path below overwrites ndotl when it runs (its RNM
+    // base is now geomN too), so the two never double-apply.
+    ndotl = mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
+  }
   if (uDetailNormalEnabled > 0.5) {
     int slice = uCodeToSlice[clamp(vTerrainCode, 0, 31)];
     if (slice < 5) {
@@ -1683,6 +1707,7 @@ async function resolveTerrainRingOpts(
           : null,
       detailNormalEnabled: false,
       detailNormalArrayTex: null,
+      slopeShadingEnabled: false,
       triplanarEnabled: false,
       triplanarSlopeLo: 0.3,
       codeToSliceArr: null,
@@ -2063,6 +2088,10 @@ async function resolveTerrainRingOpts(
     // multiplies the two gates, so master-off is always a no-op).
     terrainModSatHueEnabled:
       readTerrainModulationFlag() && readTerrainModSatHueFlag(),
+    // F12-3 — slope-dependent sun shading (?terrainSlopeShading=on, default
+    // off). Render-pipeline change → default-off + 1070 eye-test before the
+    // default flips, per the loop's flag policy.
+    slopeShadingEnabled: readTerrainSlopeShadingFlag(),
     // T7 — terrain detail-diffuse array + per-code LUTs (opt-in
     // `?terrainDetailTex=on`). Null array + enabled:false when off/failed →
     // shader branch skipped. codeToSlice/codeTiling are length-33 number
@@ -2078,6 +2107,27 @@ async function resolveTerrainRingOpts(
     texMergeAlphaArray: texMergeState?.alphaArray ?? null,
     texMergeEnabled: !!texMergeState,
   };
+}
+
+/**
+ * F12-3 (2026-06-09) — Parse `?terrainSlopeShading=on`. Gates the
+ * geometry-normal slope-dependent sun shading on the terrain (base NdotL +
+ * RNM base re-encoded from vAcNormal). DEFAULT-OFF: a render-pipeline change
+ * that needs a 1070 eye-test against the white/dark exposure pipeline
+ * before the default flips, per the loop's flag policy. Any value other
+ * than the literal "on" (case-insensitive) — including missing — is off.
+ * Wrapped in try/catch for the non-browser Node harness.
+ */
+function readTerrainSlopeShadingFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get(
+      "terrainSlopeShading",
+    );
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
 }
 
 /**
@@ -2556,6 +2606,12 @@ export async function bakeTerrainForLandblock(
       uWindDir: { value: new THREE.Vector2(1.0, 0.0) },
       uDetailNormalEnabled: {
         value: opts.detailNormalEnabled ? 1.0 : 0.0,
+      },
+      // F12-3 — slope-dependent sun shading gate (?terrainSlopeShading=on,
+      // default off). Feeds the geometry normal (vAcNormal) into baseN +
+      // base NdotL so terrain slopes pick up light/shade relief.
+      uTerrainSlopeShadingEnabled: {
+        value: opts.slopeShadingEnabled ? 1.0 : 0.0,
       },
       // T7 — terrain detail-DIFFUSE array + per-code LUTs + tuning. All
       // threaded from opts (built once in resolveTerrainRingOpts). When the
