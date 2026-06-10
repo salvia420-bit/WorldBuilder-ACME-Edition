@@ -4549,6 +4549,30 @@ export class EntityManager {
    * are no-ops (an animated swing on a drudge would need a per-
    * shape part-index map and isn't worth Phase C scope).
    */
+  // F6-2 — record that picking.js just played an OPTIMISTIC local swing
+  // for `cmd`, so the server's matching KIND_MOTION_ACTION echo (which
+  // fires for the local guid too) doesn't restart/double-play the same
+  // swing ~RTT later. Keyed by command; consumed once within ~500ms.
+  noteLocalSwingPrediction(cmd) {
+    const c = (cmd >>> 0) || 0;
+    if (c === 0) return;
+    if (!this._localSwingEchoes) this._localSwingEchoes = new Map();
+    this._localSwingEchoes.set(c, performance.now() + 500);
+  }
+
+  // F6-2 — returns true (and consumes the record) when `guid` is the
+  // local player and `cmd` matches an optimistic swing fired within the
+  // last ~500ms, so the caller can skip re-playing it.
+  consumeLocalSwingEcho(guid, cmd) {
+    if (!this._localSwingEchoes) return false;
+    if (!this._isLocalPlayerGuid(guid >>> 0)) return false;
+    const c = (cmd >>> 0) || 0;
+    const expiry = this._localSwingEchoes.get(c);
+    if (expiry == null) return false;
+    this._localSwingEchoes.delete(c);
+    return performance.now() <= expiry;
+  }
+
   setSwingPose(guid) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst || !inst.root) return;

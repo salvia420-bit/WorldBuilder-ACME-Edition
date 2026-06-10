@@ -859,6 +859,8 @@ export function setupClickPicking({
         if (localGuid !== 0) {
           if (finalMotion && typeof em?.setSwingMotion === "function") {
             em.setSwingMotion(localGuid, finalMotion);
+            // F6-2 — suppress the server's matching swing echo.
+            em.noteLocalSwingPrediction?.(finalMotion);
           } else {
             em?.setSwingPose?.(localGuid);
           }
@@ -949,6 +951,9 @@ export function setupClickPicking({
         if (localGuid !== 0) {
           if (motionCmd && typeof em?.setSwingMotion === "function") {
             em.setSwingMotion(localGuid, motionCmd);
+            // F6-2 — suppress the server's matching swing echo so it
+            // doesn't double-play / restart this optimistic swing.
+            em.noteLocalSwingPrediction?.(motionCmd);
           } else {
             em?.setSwingPose?.(localGuid);
           }

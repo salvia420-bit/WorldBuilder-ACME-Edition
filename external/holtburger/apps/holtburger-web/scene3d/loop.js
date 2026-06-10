@@ -1861,7 +1861,13 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         const actionGuid = upd.guid >>> 0;
         const actionCmd = (upd.motionCommand ?? 0) >>> 0;
         const actionStance = (upd.motionStance ?? 0) >>> 0;
-        if (actionCmd !== 0 && typeof em.setMotion === "function") {
+        // F6-2 — if picking.js just played this swing optimistically for
+        // the local player, skip the server echo so it doesn't double-
+        // play / restart the same clip ~RTT later. Remote guids and
+        // non-matching commands are unaffected.
+        if (actionCmd !== 0 && em.consumeLocalSwingEcho?.(actionGuid, actionCmd)) {
+          // echo consumed — optimistic swing already covered it.
+        } else if (actionCmd !== 0 && typeof em.setMotion === "function") {
           em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
         }
       } else if (kind === KIND_TURN) {
