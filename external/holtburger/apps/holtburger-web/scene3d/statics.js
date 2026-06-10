@@ -82,6 +82,45 @@ const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
 const HOLTBURG_Y = 0xb4;
 
+// F13-4 — `?fullPlacementQuat=on`: orient a singleton/instanced static from
+// the FULL AC quaternion (qw/qx/qy/qz, carried on the placement record from
+// ObjectPlacement) instead of the yaw-only `rotationZ`. ~0.11% of outdoor
+// LandblockInfo stabs (48 of 42,942 — tilted props on slopes, deliberate 90°
+// lay-downs) carry a non-yaw orientation that the yaw-only path renders bolt
+// upright at a garbage heading. Default OFF → yaw-only (byte-identical), and
+// a stale pkg without the quat getters degrades to yaw-only too. The quat is
+// in AC's z-up frame — the SAME frame the yaw-only `setFromAxisAngle((0,0,1),
+// rotationZ)` uses (both are applied under worldRoot's z-up→y-up transform),
+// so it composes correctly. Pending a 1070 eye-test (e.g. LB 0x7D64).
+const FULL_PLACEMENT_QUAT = (() => {
+  try {
+    return typeof globalThis !== "undefined" && globalThis.location &&
+      new URLSearchParams(globalThis.location.search).get("fullPlacementQuat") === "on";
+  } catch (_) { return false; }
+})();
+
+// F13-4 — apply a placement's orientation to a THREE.Quaternion. Full AC quat
+// when the flag is on AND the record carries finite, non-degenerate quat
+// fields (non-zero norm); otherwise the yaw-only fallback (the default and the
+// stale-pkg path). `outQuat` is mutated and returned. `axisZ` is a reusable
+// (0,0,1) Vector3 the caller owns (avoids per-call allocation on hot paths).
+function applyPlacementOrientation(outQuat, placement, axisZ) {
+  if (FULL_PLACEMENT_QUAT) {
+    const { qw, qx, qy, qz } = placement;
+    if (
+      Number.isFinite(qw) && Number.isFinite(qx) &&
+      Number.isFinite(qy) && Number.isFinite(qz) &&
+      (qw * qw + qx * qx + qy * qy + qz * qz) > 1e-6
+    ) {
+      // three.js Quaternion is (x, y, z, w); normalize defensively since the
+      // wire frame is unit but float round-trips can drift slightly.
+      outQuat.set(qx, qy, qz, qw).normalize();
+      return outQuat;
+    }
+  }
+  return outQuat.setFromAxisAngle(axisZ, placement.rotationZ ?? 0);
+}
+
 // FU2 (perf follow-on 2026-05-18) — distance-tier follow-on for C2's
 // `low`-preset receiveShadow gate. At mid/high/ultra a placement gets
 // `receiveShadow = true` only when its world-space distance to the
@@ -379,6 +418,13 @@ function drainPlacements(allPlacements) {
         y: p.y,
         z: p.z,
         rotationZ: p.rotationZ,
+        // F13-4 — full AC orientation quaternion (undefined on a stale pkg →
+        // applyPlacementOrientation falls back to rotationZ). Only consulted
+        // under ?fullPlacementQuat=on.
+        qw: p.qw,
+        qx: p.qx,
+        qy: p.qy,
+        qz: p.qz,
         isBuilding: false,
         scale: 1,
         source: "landblockinfo",
@@ -853,7 +899,8 @@ function makePlacementMatrixHelper() {
     const worldX = lbX * METERS_PER_LANDBLOCK + placement.x;
     const worldY = lbY * METERS_PER_LANDBLOCK + placement.y;
     tmpPos.set(worldX, worldY, placement.z);
-    tmpQuat.setFromAxisAngle(tmpAxis, placement.rotationZ ?? 0);
+    // F13-4 — full AC quat under ?fullPlacementQuat=on, else yaw-only.
+    applyPlacementOrientation(tmpQuat, placement, tmpAxis);
     // Phase C.3 — honour per-placement scale. LandblockInfo placements
     // arrive with `scale = 1` (set by `drainPlacements`); scenery
     // placements carry the baked value (0.5 – 3.0 typical for retail
@@ -938,12 +985,13 @@ function buildSingletonNode({
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = `static-${placementKey}`;
   mesh.position.set(worldX, worldY, placement.z);
-  const yawQuat = new THREE.Quaternion();
-  yawQuat.setFromAxisAngle(
-    new THREE.Vector3(0, 0, 1),
-    placement.rotationZ ?? 0
+  // F13-4 — full AC quat under ?fullPlacementQuat=on (leans/lays down the
+  // ~48 non-yaw outdoor placements), else the yaw-only heading.
+  applyPlacementOrientation(
+    mesh.quaternion,
+    placement,
+    new THREE.Vector3(0, 0, 1)
   );
-  mesh.quaternion.copy(yawQuat);
   if (placementScale !== 1) {
     mesh.scale.set(placementScale, placementScale, placementScale);
   }

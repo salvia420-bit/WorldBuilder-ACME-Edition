@@ -1249,6 +1249,17 @@ pub struct ObjectPlacement {
     /// Yaw rotation around the z-axis (vertical), radians. Extracted
     /// from the AC quaternion via `atan2(2(qw*qz + qx*qy), 1 - 2(qy² + qz²))`.
     rotation_z: f32,
+    /// F13-4 — the FULL AC orientation quaternion (z-up frame), kept
+    /// alongside `rotation_z` for back-compat. ~0.11% of outdoor
+    /// LandblockInfo stabs (48 of 42,942) carry a non-yaw orientation
+    /// (tilted props on slopes, deliberate 90° lay-downs); the yaw-only
+    /// `rotation_z` renders those bolt upright at a garbage heading. The
+    /// 3D statics path can rebuild the exact orientation from these under
+    /// `?fullPlacementQuat=on`; the 2D path keeps reading `rotation_z`.
+    qw: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
     /// True when this placement came from `LandblockInfo.buildings`
     /// (the `BuildInfo` list) rather than `LandblockInfo.objects`
     /// (the `Stab` list). Phase 6 step A uses this on the JS side to
@@ -1283,6 +1294,25 @@ impl ObjectPlacement {
     #[wasm_bindgen(getter, js_name = rotationZ)]
     pub fn rotation_z(&self) -> f32 {
         self.rotation_z
+    }
+    // F13-4 — full AC orientation quaternion (optional; JS falls back to
+    // rotationZ when these are absent on a stale pkg, and only consults them
+    // under `?fullPlacementQuat=on`).
+    #[wasm_bindgen(getter, js_name = qw)]
+    pub fn qw(&self) -> f32 {
+        self.qw
+    }
+    #[wasm_bindgen(getter, js_name = qx)]
+    pub fn qx(&self) -> f32 {
+        self.qx
+    }
+    #[wasm_bindgen(getter, js_name = qy)]
+    pub fn qy(&self) -> f32 {
+        self.qy
+    }
+    #[wasm_bindgen(getter, js_name = qz)]
+    pub fn qz(&self) -> f32 {
+        self.qz
     }
     #[wasm_bindgen(getter, js_name = isBuilding)]
     pub fn is_building(&self) -> bool {
@@ -1378,6 +1408,13 @@ fn frame_to_placement(
         y: frame.origin.y,
         z: frame.origin.z,
         rotation_z: yaw,
+        // F13-4 — carry the full AC orientation so the 3D path can lean/lay
+        // down the ~48 non-yaw outdoor placements instead of standing them
+        // upright at the yaw-only heading.
+        qw: q.w,
+        qx: q.x,
+        qy: q.y,
+        qz: q.z,
         is_building,
     }
 }
