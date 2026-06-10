@@ -22031,12 +22031,19 @@ fn apply_inventory_object_create(
     // CMT Wave 8 / Phase 25 (2026-05-26): pull `MaximumVelocity`
     // (`PropertyFloat::MaximumVelocity = 26`) off the weapon entity so
     // the non-local `WieldedWeaponEntry` carries per-weapon projectile
-    // speed. The local-player path reads PropertyFloat 26 again from
-    // the inventory entity in `publish_player_inventory_snapshot` (same
-    // accessor on `Entity::get_float_prop`). Fallback `20.0` matches
-    // ACE `Creature_Missile.cs:208 DefaultProjectileSpeed` and Phase
-    // 19's `BOW_DEFAULT_SPEED_MPS = 20.0` JS constant — keep these
-    // aligned.
+    // speed. Fallback `20.0` matches ACE `Creature_Missile.cs:208
+    // DefaultProjectileSpeed` and Phase 19's `BOW_DEFAULT_SPEED_MPS`.
+    //
+    // F7-4 (2026-06-09): in practice this is ALWAYS the 20.0 fallback.
+    // PropertyFloat 26 is a WEENIE property; ACE reads it server-side in
+    // GetProjectileSpeed() (`missileLauncher.MaximumVelocity`) but never
+    // transmits it in the per-instance ObjectCreate/description, so
+    // `get_float_prop` here is always None. The real fix is a static
+    // wcid→MaximumVelocity table keyed by the equipped launcher's wcid
+    // (which IS on the wire), resolved client-side — DEFERRED: data-
+    // blocked, no PropertyFloat 26 source is currently exported (the E1
+    // weenie enrichment + LSD-Partial sets lack it). Mostly masked today
+    // by F7-2 (the predicted aim bucket can't play anyway).
     let maximum_velocity = entity
         .get_float_prop(PropertyFloat::MaximumVelocity)
         .map(|v| v as f32)

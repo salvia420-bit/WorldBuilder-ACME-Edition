@@ -770,14 +770,19 @@ export function setupClickPicking({
       // charge-to-range distance — re-using them avoids a second
       // accessor walk. If either is null the helper's solver returns
       // null → direct-line fallback which guards to AimLevel.
-      // Wave 8 / Phase 25 (2026-05-26): `projectileSpeed` is now
-      // per-weapon — sourced from PropertyFloat::MaximumVelocity = 26
-      // off the wielded missile launcher. Surfaces via
-      // `EquippedWeaponJs.maximumVelocity` / `InventoryItem
-      // .maximumVelocity` (lib.rs), threaded through
-      // `getEquippedWeapon` in entities.js. `BOW_DEFAULT_SPEED_MPS =
-      // 20.0` remains the explicit fallback for pre-property arrivals
-      // (matches ACE `Creature_Missile.cs:208 DefaultProjectileSpeed`).
+      // Wave 8 / Phase 25 (2026-05-26): `projectileSpeed` is meant to be
+      // per-weapon — from PropertyFloat::MaximumVelocity = 26 off the
+      // wielded launcher, surfaced via `EquippedWeaponJs.maximumVelocity`
+      // / `InventoryItem.maximumVelocity` (lib.rs) through
+      // `getEquippedWeapon` in entities.js. `BOW_DEFAULT_SPEED_MPS = 20.0`
+      // is the fallback (matches ACE `Creature_Missile.cs:208
+      // DefaultProjectileSpeed`).
+      // F7-4 (2026-06-09): in practice `maximumVelocity` is ALWAYS 20.0 —
+      // ACE never transmits PropertyFloat 26 per-instance (it's a weenie
+      // property read server-side only), so the wire value is absent. A
+      // static wcid→MaximumVelocity table keyed by the launcher wcid is
+      // the intended fix but is DEFERRED (data-blocked: no PropertyFloat
+      // 26 export available). Mostly masked today by F7-2.
       // Phase 26 (Wave 9, 2026-05-26): treat explicit 0 as unset. ACE
       // non-missile weapons leave the property unset (None → 20.0 via
       // Rust's `unwrap_or`), but the `> 0` guard is defensive against
