@@ -29724,6 +29724,23 @@ async fn recv_loop(
     // doors and doors opened before you arrived aren't an invisible wall.
     // Default OFF pending a 1070 eye-test (changes movement collision).
     let spawn_door_collision_on: bool = js_location_search().contains("spawnDoorCollision=on");
+    // F16-2 (2026-06-09): `?skipContainedSpawn=on` (default OFF). Every
+    // ObjectCreate for a contained pack item (full inventory at login, loot,
+    // vendor buys) carries no `pos` and no `wielder_id`, yet still emitted a
+    // KIND_SPAWN below — building a full 3D rig at landblock 0 (origin) that
+    // leaks for the session: a floating pile of everyone's pack items at LB
+    // 0x0000, plus per-frame cull/pick cost and pointless mesh/texture fetches.
+    // The inventory snapshot path (`apply_inventory_object_create`, above) feeds
+    // the 2D inventory UI independently, so the 3D rig is pure waste. When ON,
+    // skip the KIND_SPAWN for pos-less, unwielded items. WIELDED items
+    // (`wielder_id.is_some()`) still spawn so the ParentEvent attach has a rig;
+    // on equip ACE re-broadcasts the ObjectDescriptionData with `wielder_id`
+    // set (the 0xF7DB equip/unequip re-broadcast noted in the inventory block
+    // above), so equip-from-pack still renders the in-hand weapon. Default OFF
+    // pending a 1070 eye-test (verify inventory UI + equip-from-pack render +
+    // that no genuinely-visible object arrives pos-less).
+    let skip_contained_spawn_on: bool =
+        js_location_search().contains("skipContainedSpawn=on");
     let seq_tracker: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
@@ -31983,6 +32000,18 @@ async fn recv_loop(
                                 .unwrap_or(false);
                             let skip_local_player_spawn =
                                 is_local_player && local_player_spawn_emitted;
+                            // F16-2 — origin-ghost cull. A contained pack item
+                            // arrives with no world `pos` (renders at LB 0) and
+                            // no `wielder_id` (won't be hand-attached, so no rig
+                            // is needed). Its UI is already served by the
+                            // inventory snapshot path. Skip its KIND_SPAWN under
+                            // ?skipContainedSpawn=on. Wielded items keep spawning
+                            // (the ParentEvent attach needs the rig); world
+                            // objects keep spawning (pos is Some); the local
+                            // player always has a pos so is never skipped here.
+                            let skip_contained_spawn = skip_contained_spawn_on
+                                && data.pos.is_none()
+                                && data.public_weenie_desc.wielder_id.is_none();
                             // F3-1 (bughunt 2026-06-09) — surface the projectile
                             // launch velocity on Spawn. ACE NEVER broadcasts an
                             // in-flight UpdatePosition for a `PhysicsState::MISSILE`
@@ -32038,7 +32067,7 @@ async fn recv_loop(
                                 };
                                 from_state.unwrap_or(if mtable_id != 0 { 0x4100_0003 } else { 0 })
                             };
-                            if !skip_local_player_spawn {
+                            if !skip_local_player_spawn && !skip_contained_spawn {
                                 entity_updates.borrow_mut().push(EntityUpdate {
                                     kind: ENTITY_UPDATE_KIND_SPAWN,
                                     guid: u32::from(data.public_weenie_desc.guid),
