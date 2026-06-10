@@ -9762,6 +9762,16 @@ void main() {
                 // events; nothing to render here.
                 // eslint-disable-next-line no-console
                 console.log(`[step 5] UseDone (success)`);
+                // F8-4: UseDone means the server finished the current action
+                // (incl. a cast) — clear the local cast-busy window so the
+                // next cast can start immediately (?castStateMachine).
+                try {
+                  const em = window.liveScene3d?.entityManager;
+                  const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+                  if (em && lg && typeof em.clearCastBusy === "function") {
+                    em.clearCastBusy(lg);
+                  }
+                } catch (_) {}
               } else if (evt.kind === 15) {
                 // Phase 6 step E: DoorStateChanged — ACE has
                 // broadcast a SetState packet for an entity flagged

@@ -399,6 +399,22 @@ const CAST_SPEED = (() => {
   }
 })();
 
+// F8-4 (2026-06-09) — `?castStateMachine=on` (default OFF). A minimal client
+// cast-state machine: while a cast is in flight, a REPEAT cast request for the
+// same caster is ignored instead of restarting the windup animation every
+// click (spam-clicking a target otherwise visibly "recasts" while the server
+// is still executing the first cast). The busy window auto-expires (cap) so a
+// dropped UseDone can't wedge casting; clearCastBusy / cancelCastSequence clear
+// it early. Default OFF pending a 1070 eye-test (cast feel).
+const CAST_STATE_MACHINE = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("castStateMachine")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
 // OMEGA (2026-06-06) — `?cycleOmega=on` gates applying a cycle's authored
 // MotionData.omega (continuous angular velocity) to the rig. Default OFF: a
 // behaviour change that needs a 1070 eye-test on a real authored spinner
@@ -4776,6 +4792,19 @@ export class EntityManager {
       this.setCastPose(g);
       return;
     }
+    // F8-4 — cast-state-machine gate. While a cast is in flight, ignore a
+    // repeat request for the same caster (don't restart the windup). The busy
+    // window is sized to the chain's own duration (capped) so it can't wedge.
+    if (CAST_STATE_MACHINE) {
+      const nowMs = performance.now();
+      if (inst._castBusyUntilMs && nowMs < inst._castBusyUntilMs) {
+        return; // already casting — ignore the recast
+      }
+      let estMs = 0;
+      for (const gz of (seq.windupGestures || [])) estMs += (+gz.durationS || 0.6) * 1000;
+      if (seq.castGesture) estMs += (+seq.castGesture.durationS || 0.6) * 1000;
+      inst._castBusyUntilMs = nowMs + Math.min(12000, estMs / CAST_SPEED);
+    }
     // Cancellation token. Bump on every chain start; subsequent
     // awaits compare against this snapshot to detect "a newer cast
     // started, bail out".
@@ -4913,6 +4942,17 @@ export class EntityManager {
         );
       }
     }
+    // F8-4 — chain completed: clear the cast-busy window so the next cast
+    // isn't gated.
+    if (inst) inst._castBusyUntilMs = 0;
+  }
+
+  // F8-4 — clear the cast-busy window for `guid` (a UseDone / WeenieError
+  // landed, so the server is done with this cast). Lets the next cast start
+  // immediately instead of waiting out the capped busy window.
+  clearCastBusy(guid) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (inst) inst._castBusyUntilMs = 0;
   }
 
   // F8-2 — cancel an in-flight cast-gesture chain for `guid` (a fizzle /
@@ -4925,6 +4965,7 @@ export class EntityManager {
     if (!inst) return false;
     inst._castSequenceToken = ((inst._castSequenceToken | 0) + 1) | 0;
     inst._castTween = null;
+    inst._castBusyUntilMs = 0; // F8-4 — cancelled cast frees the busy window
     try {
       const stance = ((inst.currentStance ?? inst.lastStance ??
         (typeof window !== "undefined" ? window.__getCurrentStanceLow?.() : 0)) ?? 0) >>> 0;
