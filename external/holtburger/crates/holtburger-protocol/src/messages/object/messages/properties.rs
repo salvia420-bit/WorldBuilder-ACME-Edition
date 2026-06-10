@@ -203,10 +203,18 @@ impl ProtocolPack for ParentEventData {
     }
 }
 
+/// `GameMessagePickupEvent` (0xF74A). F16-3: the wire body is the picked-up
+/// object's GUID followed by its ObjectInstance and ObjectPosition sequence
+/// numbers — both `UShortSequence` (u16) per ACE
+/// `GameMessagePickupEvent.cs:11-13` + `SequenceManager.cs:170-175`. The
+/// previous `{ guid, success: u32 }` shape mislabelled the two u16 sequences
+/// as a single u32 success flag (the byte length was coincidentally the same,
+/// 8 bytes, so offsets were never corrupted — but the field was meaningless).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PickupEventData {
     pub guid: Guid,
-    pub success: bool,
+    pub instance_sequence: u16,
+    pub position_sequence: u16,
 }
 
 impl ProtocolUnpack for PickupEventData {
@@ -215,16 +223,21 @@ impl ProtocolUnpack for PickupEventData {
         if *offset + 4 > data.len() {
             return None;
         }
-        let success = LittleEndian::read_u32(&data[*offset..*offset + 4]) != 0;
+        let instance_sequence = LittleEndian::read_u16(&data[*offset..*offset + 2]);
+        let position_sequence = LittleEndian::read_u16(&data[*offset + 2..*offset + 4]);
         *offset += 4;
-        Some(PickupEventData { guid, success })
+        Some(PickupEventData {
+            guid,
+            instance_sequence,
+            position_sequence,
+        })
     }
 }
 
 impl ProtocolPack for PickupEventData {
     fn pack(&self, buf: &mut Vec<u8>) {
         self.guid.pack(buf);
-        buf.write_u32::<LittleEndian>(if self.success { 1 } else { 0 })
-            .unwrap();
+        buf.write_u16::<LittleEndian>(self.instance_sequence).unwrap();
+        buf.write_u16::<LittleEndian>(self.position_sequence).unwrap();
     }
 }

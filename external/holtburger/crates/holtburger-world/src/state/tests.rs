@@ -2993,7 +2993,8 @@ fn test_pickup_event_marks_unretained_entity_for_sweep() {
 
     let msg = GameMessage::PickupEvent(Box::new(PickupEventData {
         guid,
-        success: true,
+        instance_sequence: 0,
+        position_sequence: 0,
     }));
 
     let events = state.handle_message(&msg);

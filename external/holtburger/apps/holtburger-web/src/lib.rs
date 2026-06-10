@@ -32575,6 +32575,52 @@ async fn recv_loop(
                                 is_autonomous: false,
                             });
                         }
+                        GameMessage::PickupEvent(data) => {
+                            // F16-3: an item was picked up (by you or anyone
+                            // else) — incl. arrows/bolts after missile combat.
+                            // ACE sends this instead of an ObjectDelete, so
+                            // without a handler the mesh stayed on the ground
+                            // (and clickable) for the rest of the session.
+                            // Treat it as a removal, keyed by guid (the drop-
+                            // to-ground case re-creates via a fresh ObjectCreate).
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_REMOVE,
+                                guid: u32::from(data.guid),
+                                model_id: 0,
+                                landblock_id: 0,
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                qw: 1.0,
+                                qx: 0.0,
+                                qy: 0.0,
+                                qz: 0.0,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 1.0,
+                                icon_id: 0,
+                                palette_id: 0,
+                                mtable_id: 0,
+                                model_changes: Vec::new(),
+                                texture_changes: Vec::new(),
+                                sub_palettes: Vec::new(),
+                                portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
+                                motion_command: 0,
+                                motion_stance: 0,
+                                physics_script_did: 0,
+                                sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
+                                motion_speed: 1.0,
+                                physics_translucency: 0.0,
+                                is_autonomous: false,
+                            });
+                        }
                         GameMessage::UpdateMotion(data) => {
                             // Phase 4 step 3 wire validation: ACE
                             // broadcasts UpdateMotion in response to
