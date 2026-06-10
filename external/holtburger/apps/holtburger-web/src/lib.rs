@@ -16606,6 +16606,21 @@ const CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED: u32 = 48;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_ENTITY_ATTACHED: u32 = 49;
 
+/// `kind = 50` — ChessUpdate. SG-C1b (2026-06-09): surfaces the 5 decoded
+/// chess-minigame GameEvents (SG-C1a) to JS so a board state is observable.
+/// `u32_payload` = board (game) GUID. `string_payload` = a `|`-delimited
+/// record, first token = event tag, second = board GUID hex, then the
+/// event-specific fields:
+///   - `join|<board>|<color>`                         (JoinGameResponse; color -1 = failed)
+///   - `moveres|<board>|<result>`                     (MoveResponse; ChessMoveResult)
+///   - `turn|<board>|<color>|<type>|<player>|<fx>|<fy>|<tx>|<ty>|<piece>` (OpponentTurn)
+///   - `stale|<board>|<color>|<stalemate>`            (OpponentStalemate; 1=offer 0=retract)
+///   - `over|<board>|<winner>`                        (GameOver; winner color, -1 = draw)
+/// JS (`index.html` drainEvents kind===50) parses it, updates `window.__chess`
+/// board state, and emits `chessUpdate` on the plugin bus.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CHESS_UPDATE: u32 = 50;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -34116,6 +34131,84 @@ async fn recv_loop(
                                         u32_payload: Some(0),
                                         u32_payload_2: None,
                                         f32_payload: Some(0.0),
+                                    });
+                                }
+                                // SG-C1b (2026-06-09): chess minigame — surface the
+                                // 5 SG-C1a-decoded events to JS as kind=50 ChessUpdate
+                                // ClientEvents (string-encoded record, see the
+                                // CLIENT_EVENT_KIND_CHESS_UPDATE doc). JS maintains the
+                                // board state + emits `chessUpdate` on the plugin bus.
+                                holtburger_protocol::messages::GameEvent::JoinGameResponse(data) => {
+                                    let board = u32::from(data.board_guid);
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHESS_UPDATE,
+                                        string_payload: Some(format!(
+                                            "join|{board:08x}|{}",
+                                            data.color
+                                        )),
+                                        u32_payload: Some(board),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::MoveResponse(data) => {
+                                    let board = u32::from(data.board_guid);
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHESS_UPDATE,
+                                        string_payload: Some(format!(
+                                            "moveres|{board:08x}|{}",
+                                            data.result
+                                        )),
+                                        u32_payload: Some(board),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::OpponentTurn(data) => {
+                                    let board = u32::from(data.board_guid);
+                                    let md = &data.move_data;
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHESS_UPDATE,
+                                        string_payload: Some(format!(
+                                            "turn|{board:08x}|{}|{}|{:08x}|{}|{}|{}|{}|{:08x}",
+                                            data.color,
+                                            md.move_type,
+                                            u32::from(md.player_guid),
+                                            md.from.x,
+                                            md.from.y,
+                                            md.to.x,
+                                            md.to.y,
+                                            u32::from(md.piece_guid),
+                                        )),
+                                        u32_payload: Some(board),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::OpponentStalemate(data) => {
+                                    let board = u32::from(data.board_guid);
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHESS_UPDATE,
+                                        string_payload: Some(format!(
+                                            "stale|{board:08x}|{}|{}",
+                                            data.color, data.stalemate
+                                        )),
+                                        u32_payload: Some(board),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::GameOver(data) => {
+                                    let board = u32::from(data.board_guid);
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHESS_UPDATE,
+                                        string_payload: Some(format!(
+                                            "over|{board:08x}|{}",
+                                            data.team_winner
+                                        )),
+                                        u32_payload: Some(board),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
                                     });
                                 }
                                 _ => {

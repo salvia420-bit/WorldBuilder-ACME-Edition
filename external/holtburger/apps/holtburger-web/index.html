@@ -9531,6 +9531,61 @@ void main() {
                     });
                   }
                 }
+              } else if (evt.kind === 50 /* SG-C1b ChessUpdate */) {
+                // SG-C1b (2026-06-09): the 5 chess-minigame GameEvents
+                // decoded in SG-C1a arrive here string-encoded (see
+                // src/lib.rs CLIENT_EVENT_KIND_CHESS_UPDATE). Maintain a
+                // per-board state object on `window.__chess` (a Map keyed by
+                // board-guid hex) so the drudge-chess board is observable
+                // client-side (console + any future board plugin), and
+                // re-emit on the plugin bus as `chessUpdate`. Minimal/debug
+                // surface — a rendered 8x8 grid is a follow-on.
+                try {
+                  const rec = String(evt.stringPayload || "");
+                  const parts = rec.split("|");
+                  const tag = parts[0];
+                  const board = parts[1] || (((evt.u32Payload ?? 0) >>> 0).toString(16));
+                  if (!window.__chess) window.__chess = new Map();
+                  let st = window.__chess.get(board);
+                  if (!st) {
+                    st = {
+                      board, myColor: null, status: "active", lastMove: null,
+                      lastResult: null, stalemate: null, winner: null, history: [],
+                    };
+                    window.__chess.set(board, st);
+                  }
+                  if (tag === "join") {
+                    st.myColor = parseInt(parts[2], 10);
+                    st.status = st.myColor === -1 ? "join-failed" : "active";
+                  } else if (tag === "moveres") {
+                    st.lastResult = parseInt(parts[2], 10);
+                  } else if (tag === "turn") {
+                    const mv = {
+                      color: parseInt(parts[2], 10),
+                      type: parseInt(parts[3], 10),
+                      player: parts[4],
+                      from: { x: parseInt(parts[5], 10), y: parseInt(parts[6], 10) },
+                      to: { x: parseInt(parts[7], 10), y: parseInt(parts[8], 10) },
+                      piece: parts[9],
+                    };
+                    st.lastMove = mv;
+                    st.history.push(mv);
+                  } else if (tag === "stale") {
+                    st.stalemate = {
+                      color: parseInt(parts[2], 10),
+                      offering: parts[3] === "1",
+                    };
+                  } else if (tag === "over") {
+                    st.status = "over";
+                    st.winner = parseInt(parts[2], 10);
+                  }
+                  // eslint-disable-next-line no-console
+                  console.log(`[chess] ${tag} board=0x${board}`, st);
+                  window.__pluginClient?.events?.emit?.("chessUpdate", { board, tag, state: st });
+                } catch (e) {
+                  // eslint-disable-next-line no-console
+                  console.warn("[chess] dispatch failed:", e);
+                }
               } else if (evt.kind === 32 /* ObjectAppraised */) {
                 // ACPlugin PR-2 (2026-05-27): an entity's appraisal
                 // data was just refreshed in the entity store (the
