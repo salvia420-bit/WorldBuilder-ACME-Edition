@@ -710,9 +710,15 @@ export function setupClickPicking({
     const safeHeight = Number.isFinite(height) ? height : (cb?.attackHeight ?? ATTACK_HEIGHT_MEDIUM);
     const slider =
       cb && typeof cb.powerLevel === "number" ? cb.powerLevel : ATTACK_POWER_FULL;
-    const attackPending = !!cb?.attackInProgress;
     const fireOnce = (cmd) => {
-      if (attackPending) {
+      // F6-6 — read the lockout LIVE at execution time, not a click-time
+      // capture. For a charge-pursuit `fireOnce` runs seconds later on
+      // arrival; sampling `attackInProgress` at click time meant a swing
+      // that was merely finishing when you clicked gated the arrival fire,
+      // so a full chase ended in a silently swallowed attack ("dead click
+      // after a chase"). By arrival the prior swing's attackDone has
+      // usually cleared the flag, so the queued attack now actually fires.
+      if (cb?.attackInProgress) {
         console.log("[fire-attack] attack still pending (server hasn't sent attackDone) — gated");
         return false;
       }
