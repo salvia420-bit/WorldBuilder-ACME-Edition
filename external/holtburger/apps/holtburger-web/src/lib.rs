@@ -1419,6 +1419,46 @@ fn frame_to_placement(
     }
 }
 
+/// F7-4 — resolve a wielded weapon's projectile speed (`PropertyFloat 26`
+/// MaximumVelocity, m/s).
+///
+/// ACE reads this server-side in `GetProjectileSpeed()`
+/// (`missileLauncher.MaximumVelocity`) but NEVER transmits it in the
+/// per-instance `ObjectCreate`/description — it's a WEENIE property, not a
+/// per-instance one — so the wire value (`wire`) is effectively always
+/// absent and every launcher was predicted at the `20.0` floor. That
+/// over-arcs the aim-elevation buckets for the 493 retail MissileLauncher
+/// weenies whose real speed is 15–50 m/s (verified: NONE are 20.0) and
+/// mispredicts long-range out-of-range/ballistic-arc fallbacks.
+///
+/// Resolves from a static `wcid → MaximumVelocity` table extracted from the
+/// weenie world DB (`data/launcher_max_velocity.json`, MissileLauncher
+/// weenies only), keyed by the wielded launcher's `wcid` (which IS on the
+/// wire). Gated behind `?launcherVelocityTable=on` (default OFF → the `20.0`
+/// fallback, byte-identical to pre-F7-4). A wire value still wins if ACE
+/// ever sends it. The earlier "data-blocked — LSD-Partial lacks PropertyFloat
+/// 26" note was wrong: the launcher weenies carry it (e.g. Light Training
+/// Crossbow wcid 12749 = 22.5). Mostly masked today by F7-2 (the predicted
+/// aim bucket can't play anyway), but the arc/range math is corrected now.
+#[cfg(target_arch = "wasm32")]
+fn resolve_launcher_max_velocity(wcid: Option<u32>, wire: Option<f64>) -> f32 {
+    if let Some(v) = wire {
+        return v as f32;
+    }
+    if !js_location_search().contains("launcherVelocityTable=on") {
+        return 20.0;
+    }
+    static TABLE: std::sync::OnceLock<std::collections::HashMap<u32, f32>> =
+        std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        serde_json::from_str::<std::collections::HashMap<u32, f32>>(include_str!(
+            "../data/launcher_max_velocity.json"
+        ))
+        .unwrap_or_default()
+    });
+    wcid.and_then(|w| table.get(&w).copied()).unwrap_or(20.0)
+}
+
 // =====================================================================
 // Phase C.1 + C.2 — scenery bake fetch (`fetch_landblock_scenery`).
 // =====================================================================
@@ -22171,20 +22211,16 @@ fn apply_inventory_object_create(
     // speed. Fallback `20.0` matches ACE `Creature_Missile.cs:208
     // DefaultProjectileSpeed` and Phase 19's `BOW_DEFAULT_SPEED_MPS`.
     //
-    // F7-4 (2026-06-09): in practice this is ALWAYS the 20.0 fallback.
-    // PropertyFloat 26 is a WEENIE property; ACE reads it server-side in
-    // GetProjectileSpeed() (`missileLauncher.MaximumVelocity`) but never
-    // transmits it in the per-instance ObjectCreate/description, so
-    // `get_float_prop` here is always None. The real fix is a static
-    // wcid→MaximumVelocity table keyed by the equipped launcher's wcid
-    // (which IS on the wire), resolved client-side — DEFERRED: data-
-    // blocked, no PropertyFloat 26 source is currently exported (the E1
-    // weenie enrichment + LSD-Partial sets lack it). Mostly masked today
-    // by F7-2 (the predicted aim bucket can't play anyway).
-    let maximum_velocity = entity
-        .get_float_prop(PropertyFloat::MaximumVelocity)
-        .map(|v| v as f32)
-        .unwrap_or(20.0);
+    // F7-4 (2026-06-10): PropertyFloat 26 is a WEENIE property ACE reads
+    // server-side in GetProjectileSpeed() but never transmits per-instance,
+    // so `get_float_prop` here is always None → the 20.0 floor. Resolve it
+    // from the static wcid→MaximumVelocity launcher table (the earlier
+    // "LSD-Partial lacks it" note was wrong — the MissileLauncher weenies
+    // carry it). Behind `?launcherVelocityTable=on` (default OFF = 20.0).
+    let maximum_velocity = resolve_launcher_max_velocity(
+        entity.wcid,
+        entity.get_float_prop(PropertyFloat::MaximumVelocity),
+    );
     // CMT Wave 10 / Phase 29 (2026-05-26): pull `DamageMod`
     // (`PropertyFloat::DamageMod = 63`) off the weapon entity. Both
     // downstream paths (non-local `WieldedWeaponEntry` below AND local
@@ -28764,14 +28800,17 @@ fn publish_player_inventory_snapshot(
         // (PropertyFloat 26) so `scene3d/picking.js`'s missile branch
         // can resolve per-weapon projectile speed for the gravity-arc
         // aim resolver (replaces Phase 19's hardcoded 20.0 m/s default).
-        // Fallback `20.0` matches ACE `Creature_Missile.cs:208
-        // DefaultProjectileSpeed` and Phase 19's `BOW_DEFAULT_SPEED_MPS`.
-        // Same accessor pattern as the non-local path in
-        // `apply_inventory_object_create`.
-        let maximum_velocity = entity
-            .get_float_prop(PropertyFloat::MaximumVelocity)
-            .map(|v| v as f32)
-            .unwrap_or(20.0);
+        // F7-4 (2026-06-10): the wire never carries PropertyFloat 26 (it's
+        // a weenie property), so this is the launcher whose projectile-speed
+        // prediction matters most — the LOCAL equipped weapon picking.js
+        // reads via getEquippedWeapon. Resolve from the static
+        // wcid→MaximumVelocity launcher table behind `?launcherVelocityTable=on`
+        // (default OFF = 20.0 floor, byte-identical). Same helper + key
+        // (entity.wcid) as the non-local path in `apply_inventory_object_create`.
+        let maximum_velocity = resolve_launcher_max_velocity(
+            entity.wcid,
+            entity.get_float_prop(PropertyFloat::MaximumVelocity),
+        );
         // CMT Wave 10 / Phase 29 (2026-05-26): surface `DamageMod`
         // (PropertyFloat 63) so `ui/ac_damage_rating.js`'s
         // `computeDamageRatingRollup` can compute the per-weapon `base`

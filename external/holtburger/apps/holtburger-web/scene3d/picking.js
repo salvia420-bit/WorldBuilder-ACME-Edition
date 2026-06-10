@@ -886,12 +886,16 @@ export function setupClickPicking({
       // `getEquippedWeapon` in entities.js. `BOW_DEFAULT_SPEED_MPS = 20.0`
       // is the fallback (matches ACE `Creature_Missile.cs:208
       // DefaultProjectileSpeed`).
-      // F7-4 (2026-06-09): in practice `maximumVelocity` is ALWAYS 20.0 —
-      // ACE never transmits PropertyFloat 26 per-instance (it's a weenie
-      // property read server-side only), so the wire value is absent. A
-      // static wcid→MaximumVelocity table keyed by the launcher wcid is
-      // the intended fix but is DEFERRED (data-blocked: no PropertyFloat
-      // 26 export available). Mostly masked today by F7-2.
+      // F7-4 (2026-06-10): ACE never transmits PropertyFloat 26 per-instance
+      // (it's a weenie property read server-side only), so the wire value is
+      // absent and pre-F7-4 `maximumVelocity` was ALWAYS the 20.0 floor. The
+      // Rust hydration (`resolve_launcher_max_velocity`) now fills it from a
+      // static wcid→MaximumVelocity launcher table behind
+      // `?launcherVelocityTable=on` (default OFF = 20.0), so under that flag
+      // this reads the real per-launcher speed (15–50 m/s) with NO change
+      // here — `maximumVelocity` just carries the resolved value. Still
+      // mostly masked by F7-2 (predicted bucket can't play), but the arc /
+      // out-of-range math is now correct.
       // Phase 26 (Wave 9, 2026-05-26): treat explicit 0 as unset. ACE
       // non-missile weapons leave the property unset (None → 20.0 via
       // Rust's `unwrap_or`), but the `> 0` guard is defensive against
