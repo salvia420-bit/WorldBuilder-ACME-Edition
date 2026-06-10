@@ -365,6 +365,23 @@ const SIGNED_MOTION_SPEED = (() => {
   }
 })();
 
+// F15-1 (2026-06-09) — `?fullBodyOneShot=on` gates FULL-BODY one-shot
+// playback. Default OFF: an attack/cast/emote overlay plays on top of the
+// still-running base locomotion cycle, so three.js normalizes them to ~50/50
+// and the swing plays at half amplitude (a drudge's overhead smash looks like
+// a wiggle), then pops to the base pose in one frame at clip end. When ON, the
+// base cycle's weight is ramped to 0 for the one-shot's duration and restored
+// on its 'finished' event (retail's remove_cyclic_anims-then-re-add). Needs a
+// 1070 eye-test.
+const FULL_BODY_ONE_SHOT = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("fullBodyOneShot")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
 // OMEGA (2026-06-06) — `?cycleOmega=on` gates applying a cycle's authored
 // MotionData.omega (continuous angular velocity) to the rig. Default OFF: a
 // behaviour change that needs a 1070 eye-test on a real authored spinner
@@ -7071,6 +7088,8 @@ export class EntityManager {
           : null;
         if (_tcls === "attack" || _tcls === "cast") {
           inst._lastServerSwingMs = performance.now();
+          // F15-1: make this one-shot full-body (ramp the base cycle to 0).
+          if (FULL_BODY_ONE_SHOT) this._suppressBaseCycleForOverlay(inst, action);
         }
       }
       console.log(
@@ -7099,6 +7118,45 @@ export class EntityManager {
     } catch (e) {
       console.warn(`[motion-link] play failed: ${e?.message ?? e}`);
     }
+  }
+
+  // F15-1 — make a one-shot overlay (attack/cast/emote) FULL-BODY by ramping
+  // the base locomotion cycle's effectiveWeight to 0 for the overlay's
+  // duration, then restoring it on the overlay's 'finished' event. Without
+  // this, three.js normalizes the overlay + still-running base cycle to ~50/50,
+  // so swings play at half amplitude and pop to the base pose in one frame at
+  // clip end. Mirrors retail's remove_cyclic_anims-then-re-add. Gated by the
+  // caller on ?fullBodyOneShot; a same-overlay guard avoids duplicate
+  // listeners on rapid replay (spam-click).
+  _suppressBaseCycleForOverlay(inst, overlayAction) {
+    try {
+      if (!inst || !overlayAction || !inst.mixer) return;
+      if (inst._baseSuppressAction === overlayAction) return; // already suppressing this overlay
+      const baseKey = inst._locoCycleKey;
+      if (!baseKey) return;
+      const baseAction = inst.actions?.get(baseKey);
+      if (!baseAction || baseAction === overlayAction) return;
+      if (typeof baseAction.isRunning === "function" && !baseAction.isRunning()) return;
+      const savedWeight = (typeof baseAction.getEffectiveWeight === "function")
+        ? baseAction.getEffectiveWeight()
+        : 1.0;
+      baseAction.setEffectiveWeight(0);
+      inst._baseSuppressAction = overlayAction;
+      const mixer = inst.mixer;
+      const onFinished = (e) => {
+        if (e.action !== overlayAction) return;
+        try { mixer.removeEventListener("finished", onFinished); } catch (_) {}
+        if (inst._baseSuppressAction === overlayAction) inst._baseSuppressAction = null;
+        // Restore only if the loco cycle is still this same action (a motion
+        // change may have swapped it; the old action is then irrelevant and
+        // already faded out).
+        const cur = inst.actions?.get(inst._locoCycleKey);
+        if (cur === baseAction) {
+          try { baseAction.setEffectiveWeight(savedWeight > 0 ? savedWeight : 1.0); } catch (_) {}
+        }
+      };
+      mixer.addEventListener("finished", onFinished);
+    } catch (_) { /* never block the swing on the weight-ramp */ }
   }
 
   /**
