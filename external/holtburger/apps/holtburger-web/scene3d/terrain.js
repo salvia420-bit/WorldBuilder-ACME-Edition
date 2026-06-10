@@ -672,7 +672,27 @@ const DEFAULT_TRIPLANAR_SHARPNESS = 6.0;
 // Quality gate: only installed when `liveScene3d.quality.flags.subdivLevel
 // >= 2`. At subdivLevel=1, terrain verts are 24 m apart — the wavelength
 // would be larger than the screen and the wave would be invisible.
-const TERRAIN_WATER_CODES = new Set([16, 17, 18, 19, 20, 22, 23]);
+// F12-5 — `?strictWaterCodes=on` restricts the animated-water set to retail's
+// SurfChar water codes (16-20). The default set ALSO includes 22
+// (FauxWaterRunning) and 23 (SeaSlime), which retail's surface-characteristic
+// table marks NOT water — so marsh/slime terrain currently bobs ±0.25 m,
+// scrolls, and breathes blue like open sea. This single set feeds the
+// uWaterCodeMask that now drives all three sites (vertex displacement, the
+// per-corner UV scroll, and the blue tint), so the flag affects them
+// uniformly. Default OFF → set unchanged → byte-identical render. The
+// doc hedges on 22 ("render with scroll/tint only if eye-test agrees" — it
+// is faux *running* water visually); the conservative strict set drops it
+// per the SurfChar table, deferring the keep-22-scroll-only refinement (a
+// second mask) to the 1070 eye-test.
+function readStrictWaterCodesFlag() {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("strictWaterCodes") === "on";
+  } catch (_) { return false; }
+}
+const TERRAIN_WATER_CODES = new Set(
+  readStrictWaterCodesFlag() ? [16, 17, 18, 19, 20] : [16, 17, 18, 19, 20, 22, 23],
+);
 // Region 0x13 lava codes: none (see comment above). Future region-aware
 // extension would populate this for, e.g., Volcanic Hills.
 const TERRAIN_LAVA_CODES = new Set([]);
@@ -982,6 +1002,11 @@ uniform float uTriplanarSlopeLo;
 // stay quiet at subdivLevel=1 (matches the vertex-shader gate).
 uniform float uTime;
 uniform float uDisplacementEnabled;
+// F12-5 — same water-code bitmask the vertex shader uses for displacement
+// (bit i = terrain code i is animated water). The per-corner UV-scroll test
+// below reads it so the displacement / scroll / tint sites share ONE water
+// set; ?strictWaterCodes=on shrinks that set to retail's 16-20.
+uniform int uWaterCodeMask;
 
 // Clouds-L — sample the cloud effect's cascade-0 shadow buffer to dim
 // terrain ambient + diffuse where clouds occlude the sun. takram's
@@ -1263,10 +1288,17 @@ void main() {
   // stay on the static path. This keeps the blend across the water /
   // land seam continuous because non-water corners contribute their
   // unscrolled tile while the water corners drift.
-  vec2 uv00 = (t00 >= 16 && t00 <= 23 && t00 != 21) ? waterCellUv : cellUv;
-  vec2 uv10 = (t10 >= 16 && t10 <= 23 && t10 != 21) ? waterCellUv : cellUv;
-  vec2 uv01 = (t01 >= 16 && t01 <= 23 && t01 != 21) ? waterCellUv : cellUv;
-  vec2 uv11 = (t11 >= 16 && t11 <= 23 && t11 != 21) ? waterCellUv : cellUv;
+  //
+  // F12-5 — was a hardcoded "t >= 16 && t <= 23 && t != 21" range (=
+  // {16-20,22,23}); now reads the shared uWaterCodeMask so this scroll
+  // site, the displacement mask, and the tint all use ONE water set.
+  // Byte-identical with the default mask; ?strictWaterCodes=on drops 22
+  // (FauxWaterRunning) + 23 (SeaSlime) — which retail's SurfChar table marks
+  // NOT water — so marsh/slime no longer scrolls like open sea.
+  vec2 uv00 = (t00 >= 0 && t00 < 32 && (uWaterCodeMask & (1 << t00)) != 0) ? waterCellUv : cellUv;
+  vec2 uv10 = (t10 >= 0 && t10 < 32 && (uWaterCodeMask & (1 << t10)) != 0) ? waterCellUv : cellUv;
+  vec2 uv01 = (t01 >= 0 && t01 < 32 && (uWaterCodeMask & (1 << t01)) != 0) ? waterCellUv : cellUv;
+  vec2 uv11 = (t11 >= 0 && t11 < 32 && (uWaterCodeMask & (1 << t11)) != 0) ? waterCellUv : cellUv;
 
   vec3 c00 = texture(uAtlas, atlasUvFor(clamp(t00, 0, 32), uv00)).rgb;
   vec3 c10 = texture(uAtlas, atlasUvFor(clamp(t10, 0, 32), uv10)).rgb;
