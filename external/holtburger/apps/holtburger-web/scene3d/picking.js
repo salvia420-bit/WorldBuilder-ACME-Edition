@@ -11,6 +11,13 @@ import { classifySpell } from "../ui/ac_spell_shape.js";
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
 
+// F17-2 — retail GetDoubleClickDelay-like window. In peace mode a
+// single click only selects + assesses the object; USE (portal teleport,
+// door toggle, vendor open) requires a second click on the same target
+// within this window, so a stray click no longer fires an irreversible
+// world action. Retail's default double-click delay is ~0.3–0.5s.
+const PEACE_USE_DOUBLE_CLICK_MS = 400;
+
 // Fallback AttackType for the CombatManeuverTable lookup when the
 // per-weapon inference (Wave 1 Phase 3, 2026-05-26) returns
 // `ATTACK_TYPE.Undef` — e.g. shield-only, ranged before Phase 6
@@ -147,6 +154,9 @@ export function setupClickPicking({
   // Phase I.1 — charge-attack state machine. One pursuit in flight at
   // a time; clicking a different target replaces the current charge.
   let charge = null; // { guid, range, fireAttack, startMs, rafId }
+
+  // F17-2 — last peace-mode click, for double-click-to-Use detection.
+  let lastPeaceClick = { guid: 0, t: 0 };
 
   // Wave 2 Phase 4 (2026-05-26): track the last-fired melee motion u32
   // so the CMT picker can carry `prevMotion` forward. Module-scoped to
@@ -509,7 +519,6 @@ export function setupClickPicking({
         // crit) without re-clicking the monster.
         // `setSelectedTarget` already fired above; nothing more to do.
       } else if (typeof sessionHandle.useObject === "function") {
-        cancelCharge();
         // Wave 6.B (2026-05-28) — typed-class click precedence for
         // Lifestone. The Chorizite-port WorldObjectManager
         // (window.__wom) holds typed subclasses (Lifestone extends
@@ -519,7 +528,9 @@ export function setupClickPicking({
         // useObject → ACE-decides-bind path. The popup eventually
         // dispatches `useObject(guid)` itself on user "Bind here"
         // confirmation (so this branch only blocks the generic
-        // fall-through, no wire packet is dropped).
+        // fall-through, no wire packet is dropped). Lifestone stays on
+        // SINGLE click because it is confirmation-gated — a stray click
+        // can't fire an irreversible action.
         let handledByTypedClick = false;
         try {
           const wo = (typeof window !== "undefined")
@@ -533,7 +544,24 @@ export function setupClickPicking({
           }
         } catch (_) { /* never block click on wom-probe faults */ }
         if (!handledByTypedClick) {
-          sessionHandle.useObject(guid);
+          // F17-2 — single click only selects + assesses (selectionChanged
+          // already fired above; examine-target requests appraisal off it).
+          // Generic USE (portal teleport, door toggle, vendor open) now
+          // requires a double-click within PEACE_USE_DOUBLE_CLICK_MS, so a
+          // misclick in town no longer fires an irreversible world action.
+          const g = guid >>> 0;
+          const nowMs = (typeof performance !== "undefined" && performance.now)
+            ? performance.now() : Date.now();
+          const isDoubleClick =
+            lastPeaceClick.guid === g &&
+            (nowMs - lastPeaceClick.t) <= PEACE_USE_DOUBLE_CLICK_MS;
+          if (isDoubleClick) {
+            cancelCharge();
+            sessionHandle.useObject(g);
+            lastPeaceClick = { guid: 0, t: 0 }; // consume; next click re-selects
+          } else {
+            lastPeaceClick = { guid: g, t: nowMs };
+          }
         }
       }
     } catch (e) {
