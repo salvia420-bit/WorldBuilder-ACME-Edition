@@ -9652,6 +9652,15 @@ void main() {
                   // eslint-disable-next-line no-console
                   console.warn("[uiEvent] dispatch failed:", e);
                 }
+              } else if (evt.kind === 54 /* F10-1 EntityHealth */) {
+                // F10-1: a tracked entity's health fraction changed
+                // (QueryHealth reply / damage UpdateHealthFraction). Forward
+                // to the target-bar via the plugin bus, keyed by guid.
+                try {
+                  const guid = (evt.u32Payload ?? 0) >>> 0;
+                  const fraction = Number.isFinite(evt.f32Payload) ? evt.f32Payload : null;
+                  window.__pluginClient?.events?.emit?.("entityHealthUpdated", { guid, fraction });
+                } catch (_) {}
               } else if (evt.kind === 32 /* ObjectAppraised */) {
                 // ACPlugin PR-2 (2026-05-27): an entity's appraisal
                 // data was just refreshed in the entity store (the

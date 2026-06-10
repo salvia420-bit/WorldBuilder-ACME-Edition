@@ -16709,6 +16709,14 @@ const CLIENT_EVENT_KIND_SALVAGE_RESULT: u32 = 52;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_UI_EVENT: u32 = 53;
 
+/// `kind = 54` — F10-1: a tracked entity's health FRACTION changed
+/// (QueryHealth response `GameEvent::UpdateHealth` → world
+/// `EntityHealthUpdated`, or any UpdateHealthFraction broadcast).
+/// `u32_payload` = entity GUID, `f32_payload` = health fraction in
+/// `[0,1]`. JS keys the target-bar health bar by the selected GUID.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ENTITY_HEALTH: u32 = 54;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -17044,6 +17052,14 @@ enum SessionCommand {
     /// loop; this is the retail "moving / deselect / stance-change stops
     /// attacking" path. Mirrors `ClientCommand::CancelAttack` on the CLI.
     CancelAttack,
+    /// F10-1 (combat-events-feedback): JS-side requested the current
+    /// health fraction of `target_guid`. Sends `GameAction::QueryHealth`
+    /// (sub-opcode 0x01BF). ACE replies with `GameEvent::UpdateHealth`,
+    /// which the world processes into `WorldEvent::EntityHealthUpdated`
+    /// (bridged to JS as a `kind=54` ClientEvent for the target-bar).
+    QueryHealth {
+        target_guid: u32,
+    },
     /// Phase F (combat-magic): JS-side requested a targeted spell-cast.
     /// `target_guid` is the entity the spell lands on; `spell_id` is
     /// the AC spell-table primary key. Sends
@@ -25695,6 +25711,20 @@ impl SessionHandle {
             })
     }
 
+    /// F10-1 (combat-events-feedback): ask the server for `target_guid`'s
+    /// current health fraction. ACE replies with `UpdateHealth`, surfaced
+    /// to JS as a `kind=54` ClientEvent. Call on target selection so the
+    /// target-bar can show (and keep refreshing) the monster's health bar.
+    #[wasm_bindgen(js_name = queryHealth)]
+    pub fn query_health(&self, target_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::QueryHealth { target_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("queryHealth: cmd channel closed ({e})"))
+            })
+    }
+
     /// Phase F (combat-magic): cast `spell_id` on the entity identified
     /// by `target_guid`. Sends `GameAction::CastTargetedSpell`
     /// (sub-opcode 0x004A). ACE validates mana / components / range /
@@ -30025,6 +30055,21 @@ async fn recv_loop(
                                 | WorldEvent::DerivedStatsUpdated(_)
                                 | WorldEvent::PlayerEnchantmentsUpdated { .. } => {
                                     stats_changed = true;
+                                }
+                                // F10-1: a tracked entity's health fraction
+                                // changed (QueryHealth response, or a damage
+                                // UpdateHealthFraction broadcast). Bridge it to
+                                // JS so the target-bar can show the selected
+                                // monster's health bar (previously dropped at
+                                // the `_ => {}` catch-all).
+                                WorldEvent::EntityHealthUpdated { guid, health_fraction } => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ENTITY_HEALTH,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(*guid)),
+                                        u32_payload_2: None,
+                                        f32_payload: Some(*health_fraction),
+                                    });
                                 }
                                 WorldEvent::FellowshipStateUpdated(_) => {
                                     fellowship_changed = true;
@@ -37404,6 +37449,32 @@ async fn recv_loop(
                             return;
                         }
                         console_log_str("[cancelAttack] sent");
+                    }
+                    Some(SessionCommand::QueryHealth { target_guid }) => {
+                        // F10-1 (combat): ask ACE for the target's health
+                        // fraction. The UpdateHealth reply flows through the
+                        // world into WorldEvent::EntityHealthUpdated, bridged
+                        // to JS as kind=54 for the target-bar health bar.
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, QueryHealthActionData,
+                        };
+                        let action = GameAction::QueryHealth(Box::new(
+                            QueryHealthActionData {
+                                target_guid: Guid(target_guid),
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(QueryHealth): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("queryHealth: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
                     }
                     Some(SessionCommand::Jump { power }) => {
                         // Mirror ACE's jump pipeline:

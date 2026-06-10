@@ -249,6 +249,21 @@ function ensureStyles() {
       font-size: 9px;
       color: var(--hb-text-muted-2);
     }
+    /* F10-1 — selected target health bar. */
+    #${OVERLAY_ID} .htb-target-health {
+      flex: 1 1 auto;
+      min-width: 40px;
+      height: 6px;
+      margin-left: 6px;
+      border: 1px solid rgba(0, 0, 0, 0.6);
+      border-radius: 3px;
+      background: rgba(0, 0, 0, 0.45);
+      overflow: hidden;
+    }
+    #${OVERLAY_ID} .htb-target-health-fill {
+      height: 100%;
+      transition: width 180ms ease-out, background 180ms ease-out;
+    }
   `;
   document.head.appendChild(s);
 }
@@ -259,6 +274,9 @@ let state = {
   selectedGuid: 0,
   selectedName: "",
   inCombat: false,
+  // F10-1 — selected target's health fraction in [0,1], or null until the
+  // QueryHealth reply (EntityHealthUpdated) arrives.
+  selectedHealth: null,
 };
 
 function lookupEntityName(guid) {
@@ -305,6 +323,22 @@ function renderTarget() {
     meta.className = "htb-target-meta";
     setAcText(meta, `0x${guid.toString(16).toUpperCase().padStart(8, "0")}`);
     targetEl.appendChild(meta);
+    // F10-1 — selected target's health bar. Hidden until the QueryHealth
+    // reply lands (state.selectedHealth != null); shrinks as you damage it.
+    const frac = state.selectedHealth;
+    if (frac != null && Number.isFinite(frac)) {
+      const bar = document.createElement("div");
+      bar.className = "htb-target-health";
+      const fill = document.createElement("div");
+      fill.className = "htb-target-health-fill";
+      const pct = Math.max(0, Math.min(1, frac)) * 100;
+      fill.style.width = `${pct.toFixed(1)}%`;
+      // Green → yellow → red as health drops (hue 0=red .. 120=green).
+      fill.style.background = `hsl(${(pct * 1.2).toFixed(0)}, 70%, 45%)`;
+      bar.appendChild(fill);
+      bar.title = `${pct.toFixed(0)}% health`;
+      targetEl.appendChild(bar);
+    }
   }
   // Enable / disable use + examine based on target presence.
   ov.querySelector(".htb-use").disabled = !guid;
@@ -621,6 +655,13 @@ export function mount(_ctx) {
     if (next !== state.selectedGuid) {
       state.selectedGuid = next;
       state.selectedName = next ? (lookupEntityName(next) || "") : "";
+      // F10-1 — new target: clear the stale health bar and ask the server
+      // for this target's current health fraction (reply arrives as the
+      // `entityHealthUpdated` bus event). Deselect (next===0) just clears.
+      state.selectedHealth = null;
+      if (next) {
+        try { window.__sessionHandle?.queryHealth?.(next); } catch (_) {}
+      }
       renderTarget();
     } else if (next && !state.selectedName) {
       const n = lookupEntityName(next);
@@ -647,18 +688,30 @@ export function mount(_ctx) {
     const guid = (ev?.detail?.guid ?? 0) >>> 0;
     updateSelection(guid);
   };
+  // F10-1 — selected target's health changed (QueryHealth reply / damage
+  // broadcast). Update the bar only when it's for the current target.
+  const onEntityHealth = (ev) => {
+    const d = ev?.detail ?? ev ?? {};
+    const guid = (d.guid ?? 0) >>> 0;
+    if (!guid || guid !== state.selectedGuid) return;
+    const f = d.fraction;
+    state.selectedHealth = Number.isFinite(f) ? f : null;
+    renderTarget();
+  };
   const onStatsUpdated = () => updateStance();
   const pc = window.__pluginClient ?? null;
   let pcSubscribed = false;
   if (pc?.events?.on) {
     pc.events.on("selectionChanged", onSelectionChanged);
     pc.events.on("playerStatsUpdated", onStatsUpdated);
+    pc.events.on("entityHealthUpdated", onEntityHealth);
     pcSubscribed = true;
   } else if (window.__pluginClientReady?.then) {
     window.__pluginClientReady.then((client) => {
       if (client?.events?.on) {
         client.events.on("selectionChanged", onSelectionChanged);
         client.events.on("playerStatsUpdated", onStatsUpdated);
+        client.events.on("entityHealthUpdated", onEntityHealth);
         pcSubscribed = true;
       }
     });
@@ -676,6 +729,7 @@ export function mount(_ctx) {
     if (pcSubscribed && pcEnd?.events?.off) {
       try { pcEnd.events.off("selectionChanged", onSelectionChanged); } catch (_) {}
       try { pcEnd.events.off("playerStatsUpdated", onStatsUpdated); } catch (_) {}
+      try { pcEnd.events.off("entityHealthUpdated", onEntityHealth); } catch (_) {}
     }
     if (state.overlayEl) {
       state.overlayEl.remove();
