@@ -13309,7 +13309,16 @@ pub async fn fetch_env_cells_in_landblock(
     // mesh. Keying by env_did alone cached the first-seen cellstruct and
     // wrongly reused it for every sibling (the whole point of the
     // cellstruct selection below).
-    let mut env_mesh_cache: std::collections::HashMap<(u32, u16), ModelMesh> =
+    //
+    // F14-2 (2026-06-09): also key by the SURFACES hash. Two cells can
+    // share (env_did, cell_structure) but be authored with DIFFERENT
+    // surface palettes (the triangulated mesh bakes per-face surface DIDs
+    // in). Without the surfaces in the key, the first cell's textured mesh
+    // was reused for every sibling — ~8.1% of EnvCells world-wide rendered
+    // with another cell's wall/floor/ceiling textures. Each distinct
+    // surface set now gets its own correctly-textured mesh; the only cost
+    // is a few extra cache entries (no visual regression is possible).
+    let mut env_mesh_cache: std::collections::HashMap<(u32, u16, u64), ModelMesh> =
         std::collections::HashMap::new();
 
     let mut out: Vec<EnvCellPlacement> = Vec::with_capacity(cells_raw.len());
@@ -13325,8 +13334,17 @@ pub async fn fetch_env_cells_in_landblock(
             .copied()
             .map(holtburger_dat::file_type::env_cell::surface_did_for_envcell_index)
             .collect();
+        // F14-2: fold the per-cell surface palette into the cache key so
+        // cells with the same geometry but different textures don't share
+        // a mesh.
+        let surfaces_hash: u64 = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            surfaces.hash(&mut h);
+            h.finish()
+        };
         let mesh = env_mesh_cache
-            .entry((env_did, cell_structure))
+            .entry((env_did, cell_structure, surfaces_hash))
             .or_insert_with(|| {
                 fetch_environment_mesh(source.as_ref(), env_did, &surfaces, cell_structure)
             })
