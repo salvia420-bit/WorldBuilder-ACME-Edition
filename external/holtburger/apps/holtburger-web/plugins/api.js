@@ -364,6 +364,20 @@ export function createClient(sessionHandle) {
       } else {
         sessionHandle.castTargetedSpell(targetGuid, spellId);
       }
+      // F8-3 — play the local cast gesture for ALL non-picking cast paths
+      // (untargeted self-buffs/heals/recalls + hotbar / spell-research /
+      // combat-bar targeted casts). The picking.js armed-targeted path
+      // drives its own playCastSequence; everything else routed through here
+      // stood frozen in Magic stance while buff icons silently appeared,
+      // because the local-guid skip eats the class-0x40 gesture echo. Reuses
+      // the same local-prediction chain the targeted path already uses.
+      try {
+        const em = window.liveScene3d?.entityManager;
+        const localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+        if (em && localGuid && typeof em.playCastSequence === "function") {
+          em.playCastSequence(localGuid, (spellId >>> 0));
+        }
+      } catch (_) { /* never block the cast on the local animation */ }
     },
     forgetSpell(spellId) {
       sessionHandle.removeSpellFromBook(spellId);
