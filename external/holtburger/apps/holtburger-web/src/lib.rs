@@ -29741,6 +29741,26 @@ async fn recv_loop(
     // that no genuinely-visible object arrives pos-less).
     let skip_contained_spawn_on: bool =
         js_location_search().contains("skipContainedSpawn=on");
+    // F16-5 (bughunt 2026-06-09): `?spawnHiddenState=on` (default OFF).
+    // The wasm ObjectCreate arm pushes the KIND_SPAWN rig but never
+    // surfaces the spawn-time `PhysicsState` (HIDDEN/NO_DRAW/CLOAKED) to
+    // JS — so a player materializing nearby renders for the whole
+    // login-bubble window instead of staying hidden until ACE clears the
+    // bit, and NoDraw/Hidden server props (quest props, admin-cloaked
+    // actors, pre-materialize generator spawns) render then pop out when
+    // the first SetState arrives. ObjectCreate is NOT in
+    // `should_route_message_to_world`, so the canonical
+    // `upsert_entity_from_create` (liveness.rs:418) that emits a
+    // spawn-hidden `EntityVisibilityChanged{visible:false}` never runs
+    // here. Under this flag, mirror that gate at the KIND_SPAWN site:
+    // when `data.physics_state` is non-drawable, ALSO push a kind=17
+    // EntityVisibilityChanged{visible:false} (the existing SetState-driven
+    // visibility path). The 3D rig builds async, so this event reaches JS
+    // before the EntityInstance exists — the JS side queues it in
+    // `_pendingVisibility` and drains on spawn (mirrors `_pendingAttach`).
+    // Default OFF pending a 1070 eye-test (changes what renders at spawn).
+    let spawn_hidden_state_on: bool =
+        js_location_search().contains("spawnHiddenState=on");
     let seq_tracker: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
@@ -32226,6 +32246,34 @@ async fn recv_loop(
                                         u32::from(data.public_weenie_desc.guid),
                                         lb, x, y, z,
                                     ));
+                                }
+                                // F16-5 (2026-06-09): spawn-time draw gate. The
+                                // KIND_SPAWN above carries no PhysicsState, so a
+                                // hidden/cloaked/no-draw entity renders at spawn.
+                                // Mirror `Entity::should_draw()`
+                                // (entity.rs:959 — HIDDEN|NO_DRAW|CLOAKED) the way
+                                // `upsert_entity_from_create` does for the routed
+                                // path: emit a kind=17 visibility:false alongside
+                                // the spawn so JS hides the rig until ACE clears the
+                                // bit (login-bubble pop, uncloak) via the existing
+                                // SetState→EntityVisibilityChanged path. Reaches JS
+                                // before the async rig exists → queued in
+                                // `_pendingVisibility`, drained on spawn. Behind
+                                // `?spawnHiddenState=on` (render pipeline).
+                                if spawn_hidden_state_on
+                                    && data.physics_state.intersects(
+                                        holtburger_common::properties::PhysicsState::HIDDEN
+                                            | holtburger_common::properties::PhysicsState::NO_DRAW
+                                            | holtburger_common::properties::PhysicsState::CLOAKED,
+                                    )
+                                {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ENTITY_VISIBILITY_CHANGED,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(data.public_weenie_desc.guid)),
+                                        u32_payload_2: Some(0),
+                                        f32_payload: None,
+                                    });
                                 }
                             }
 

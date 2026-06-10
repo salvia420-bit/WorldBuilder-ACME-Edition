@@ -39,6 +39,23 @@ function readEntityLightsFlag() {
   }
 }
 
+// F16-5 (bughunt 2026-06-09) — `?spawnHiddenState=on` opt-in. Default OFF →
+// `setVisibility` no-ops on a not-yet-spawned guid exactly as before
+// (byte-identical render). On → a visibility request for a guid whose rig is
+// still async-building is queued in `_pendingVisibility` and applied when the
+// rig spawns. Pairs with the wasm spawn-hidden kind=17 emit (same flag name);
+// gating both behind the flag keeps the no-inst path inert when off. Same
+// reader shape as `readEntityLightsFlag`.
+function readSpawnHiddenStateFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("spawnHiddenState");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
 // === Wave R3.A — remote-entity motion SMOOTHING (2026-05-28) ===
 // `?deadReckon=on` opt-in. Default OFF → remote entities snap to each
 // server-authoritative position exactly as before (byte-identical render).
@@ -2099,6 +2116,15 @@ export class EntityManager {
     // so we fetch each wielder's holding table from wasm at most once.
     /** @type {Map<number, {parentGuid:number, location:number, placement:number}>} */
     this._pendingAttach = new Map();
+    // F16-5 (bughunt 2026-06-09) — spawn-time draw gate. `_pendingVisibility`:
+    // guid → visible(bool) for a `setVisibility` that arrived before the rig
+    // existed. The wasm spawn-hidden emit (`?spawnHiddenState=on`) sends a
+    // kind=17 visibility:false in the same recv batch as the KIND_SPAWN, but
+    // the rig builds async so the event lands first and `setVisibility` would
+    // otherwise no-op on the missing guid. Queue it and flush on spawn — same
+    // ordering-safe pattern as `_pendingAttach`.
+    /** @type {Map<number, boolean>} */
+    this._pendingVisibility = new Map();
     /** @type {Map<number, Map<number, object>>} */
     this._holdingLocCache = new Map();
     // B5 (2026-06-09): child-weapon placement-frame cache, keyed
@@ -2901,6 +2927,17 @@ export class EntityManager {
     // roles: this entity may be a child waiting for its wielder, or a wielder
     // whose children are queued. Fire-and-forget (resolves holding frame async).
     this._flushPendingAttach(guid);
+    // F16-5 (2026-06-09) — apply any spawn-time draw gate that raced ahead
+    // of this rig. The wasm spawn-hidden emit (`?spawnHiddenState=on`) queued
+    // a visible:false here in `_pendingVisibility`; re-route through
+    // `setVisibility` now that the rig is in `entityMap` so the same
+    // attached-child / render-cull composite guards apply. No-op when nothing
+    // queued (flag off, or a normally-visible spawn).
+    if (this._pendingVisibility.size > 0 && this._pendingVisibility.has(guid)) {
+      const wantVisible = this._pendingVisibility.get(guid);
+      this._pendingVisibility.delete(guid);
+      this.setVisibility(guid, wantVisible);
+    }
     // Diagnostic hook (always-on; cheap when __diag not installed). Fires
     // AFTER the entity is committed to the live scene graph so observed
     // position is the final post-bake value, not the spawn-time meta.
@@ -3500,8 +3537,17 @@ export class EntityManager {
    * the EntityInstance is built).
    */
   setVisibility(guid, visible) {
-    const inst = this.entityMap.get(guid >>> 0);
-    if (!inst || !inst.root) return;
+    const g = guid >>> 0;
+    const inst = this.entityMap.get(g);
+    if (!inst || !inst.root) {
+      // F16-5 (2026-06-09): the rig isn't built yet. Under
+      // `?spawnHiddenState=on` the wasm spawn-hidden emit (kind=17
+      // visible:false) lands before the async spawn completes — remember
+      // the desired visibility so `spawn()` can apply it once the rig
+      // exists, instead of dropping it. Off → no-op as before.
+      if (readSpawnHiddenStateFlag()) this._pendingVisibility.set(g, !!visible);
+      return;
+    }
     // Render-completeness audit (2026-05-29): a wielded child's own PVS
     // visibility is governed by its wielder (it's parented under the
     // wielder's part node, so three.js already hides it when the wielder
@@ -6607,6 +6653,9 @@ export class EntityManager {
       if (p && p._attachedChildren) p._attachedChildren.delete(g);
     }
     this._pendingAttach.delete(g);
+    // F16-5 (2026-06-09): drop any un-applied spawn-time draw gate so a guid
+    // that despawned before its rig finished building doesn't leak.
+    this._pendingVisibility.delete(g);
     // B4 (2026-05-18): drop the name→guid index entry BEFORE dispose
     // so we still have access to `inst.meta.name`. Removes the bucket
     // entirely once empty to avoid a long-session leak of empty Sets.
