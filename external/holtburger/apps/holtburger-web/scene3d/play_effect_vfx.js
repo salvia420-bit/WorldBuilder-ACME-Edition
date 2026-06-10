@@ -1594,6 +1594,28 @@ const PLAY_EFFECT_QUEUE_ON = (() => {
   }
 })();
 
+// F9-3 (2026-06-09) — `?castVfxDedup=on` (default OFF). The local caster's
+// CasterEffect plays TWICE: playCastSequence emits a synthetic `playEffect`
+// at the chain's end AND ACE broadcasts the same effect over the wire
+// (GameMessageScript → kind=30 → `playEffect`), so the glow flashes twice
+// (compounded by F8-1's slow chain). When ON, a per-(guid, scriptId) dedup
+// drops a second dispatch within `_CAST_VFX_DEDUP_MS` (first-wins, which
+// usually means the wire copy plays and the synthetic is suppressed).
+// Default OFF pending a 1070 eye-test (it must not swallow a legitimate
+// rapid re-trigger of the same one-shot script on the same entity).
+const CAST_VFX_DEDUP_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("castVfxDedup");
+    return v === "on" || v === "1" || v === "true";
+  } catch (_) {
+    return false;
+  }
+})();
+const _CAST_VFX_DEDUP_MS = 2000;
+// Map<`${guid}:${scriptId}`, lastDispatchMs>. Pruned lazily in _onPlayEffect.
+const _recentPlayEffects = new Map();
+
 // Map<guid:number, Array<{scriptId:number, speed:number, enqueuedMs:number}>>.
 // Insertion order is preserved by Map iteration, so the oldest-guid
 // eviction below can pull `keys().next()`.
@@ -1796,6 +1818,30 @@ function _onPlayEffect(evt) {
     // eslint-disable-next-line no-console
     console.debug("[play-effect-vfx] skipped: targetGuid=0");
     return;
+  }
+
+  // F9-3 — drop a duplicate (guid, scriptId) within the dedup window so the
+  // synthetic CasterEffect emit doesn't double-play the wire copy. First-wins.
+  if (CAST_VFX_DEDUP_ON) {
+    const now = (typeof performance !== "undefined" && performance.now)
+      ? performance.now() : Date.now();
+    const key = `${targetGuid}:${scriptId}`;
+    const last = _recentPlayEffects.get(key);
+    if (last !== undefined && (now - last) <= _CAST_VFX_DEDUP_MS) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        `[play-effect-vfx] F9-3 deduped scriptId=0x${scriptId.toString(16)} ` +
+          `target=0x${targetGuid.toString(16)} (within ${_CAST_VFX_DEDUP_MS}ms)`,
+      );
+      return;
+    }
+    _recentPlayEffects.set(key, now);
+    // Lazy prune so the map can't grow unbounded.
+    if (_recentPlayEffects.size > 256) {
+      for (const [k, t] of _recentPlayEffects) {
+        if ((now - t) > _CAST_VFX_DEDUP_MS) _recentPlayEffects.delete(k);
+      }
+    }
   }
 
   // Track B2 (2026-06-09) — retail cell==0 / non-positional guard.
