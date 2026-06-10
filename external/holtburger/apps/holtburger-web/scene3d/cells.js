@@ -807,6 +807,11 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   try {
     cellId = sessionHandle.getCurrentCellId() >>> 0;
     isIndoor = !!sessionHandle.isCurrentCellIndoor();
+    // F14-6 — stamp the local player's indoor state for the per-frame
+    // nameplate LOD tick (nameplate_sprite.js), which flips nameplate /
+    // buff-badge depthTest on indoors under ?nameplateOcclusion so dungeon
+    // walls occlude overhead names instead of X-raying through.
+    scene3d._currentCellIndoor = isIndoor;
 
     // Phase 4 PView port (2026-05-25): if the wasm exposes the
     // frustum-aware visibility method AND we have a live camera with

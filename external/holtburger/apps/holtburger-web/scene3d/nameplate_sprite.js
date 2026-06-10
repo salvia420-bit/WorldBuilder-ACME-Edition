@@ -117,6 +117,52 @@ const CANVAS_PADDING_X = 16;
 /** @type {Map<string, { texture: THREE.CanvasTexture, material: THREE.SpriteMaterial }>} */
 const _nameplateCache = new Map();
 
+// F14-6 — nameplate wall-occlusion. depthTest on the sprite materials is
+// normally OFF (Task 33: names render on-top, matching the 2D PIXI path),
+// which X-rays monster / NPC / player names (and chat bubbles) through
+// dungeon walls and floors — an immersion break and a situational-awareness
+// leak vs retail. Behind `?nameplateOcclusion=on` we flip depthTest ON while
+// the local player is INDOOR: the atmosphere pipeline already depth-clears
+// between the terrain pass and the EnvCell+entity pass (see cells.js
+// tickCellVisibility3D), so EnvCell wall geometry is in the depth buffer
+// when the layer-1 nameplates render, and a wall between the camera and an
+// entity in another cell now occludes its name. Outdoors we keep depthTest
+// OFF — no regression, the 2D path stays matched, and the wide-name
+// "missing middle" self-occlusion Task 33 fixed doesn't return in the open.
+// The fuller per-entity PVS-membership cull (hide the name when its OWNING
+// cell is outside the render set) is the better fix but needs the per-entity
+// objcell_id surfaced from wasm position updates; deferred (wasm rebuild).
+const _NAMEPLATE_OCCLUSION_FLAG = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("nameplateOcclusion") ===
+      "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+// Effective depthTest currently applied to all baked + cached nameplate
+// materials. New bakes read this; setNameplateDepthTest flips it on the
+// already-cached materials in place (depthTest is read live by the renderer
+// each frame, so no needsUpdate / recompile is required).
+let _nameplateDepthTest = false;
+function setNameplateDepthTest(enabled) {
+  const want = !!enabled;
+  if (want === _nameplateDepthTest) return;
+  _nameplateDepthTest = want;
+  // Flip both the name sprites and the sibling buff-badge ("+N") chips so
+  // overhead UI occludes consistently — a badge punching through a wall
+  // next to an occluded name would read worse than neither.
+  for (const entry of _nameplateCache.values()) {
+    if (entry?.material) entry.material.depthTest = want;
+  }
+  for (const entry of _buffBadgeCache.values()) {
+    if (entry?.material) entry.material.depthTest = want;
+  }
+}
+
 // Wave 1 / A1+A2 fix (2026-05-28) — FIFO caps so neither cache grows
 // unboundedly through long sessions with many unique names / enchant-
 // state tuples. Eviction does NOT dispose the texture/material because
@@ -379,7 +425,7 @@ function _bakeWithCanvasText(cacheKey, textCanvas) {
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    depthTest: false,
+    depthTest: _nameplateDepthTest, // F14-6 — flipped on indoors under ?nameplateOcclusion
     depthWrite: false,
     sizeAttenuation: true,
     toneMapped: false,
@@ -545,7 +591,7 @@ function getOrBakeNameplateMaterial(name, colorHex) {
     // through walls" was inconsistent with the 2D and arguably worse
     // for player situational awareness (you couldn't see the name of a
     // vendor through a wall before walking in).
-    depthTest: false,
+    depthTest: _nameplateDepthTest, // F14-6 — flipped on indoors under ?nameplateOcclusion
     depthWrite: false,
     // sizeAttenuation=true (default) — sprite gets smaller in the
     // distance, like a real billboard. Keeps the nameplate's apparent
@@ -860,7 +906,7 @@ function _bakeBuffBadge(buffs, debuffs, cooldowns) {
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    depthTest: false,
+    depthTest: _nameplateDepthTest, // F14-6 — flipped on indoors under ?nameplateOcclusion
     depthWrite: false,
     sizeAttenuation: true,
     toneMapped: false,
@@ -1019,6 +1065,14 @@ export function getNameplateCacheSize() {
 export function tickNameplateLod(scene3d) {
   if (_NAMEPLATE_DISABLED) return { visible: 0, considered: 0 };
   if (!scene3d) return { visible: 0, considered: 0 };
+  // F14-6 — drive nameplate / buff-badge wall-occlusion off the local
+  // player's indoor state (stamped by cells.js tickCellVisibility3D each
+  // frame). Only active under ?nameplateOcclusion=on; otherwise depthTest
+  // stays false (the shipped on-top behaviour). setNameplateDepthTest
+  // no-ops when the value is unchanged, so this is a cheap per-frame check.
+  if (_NAMEPLATE_OCCLUSION_FLAG) {
+    setNameplateDepthTest(!!scene3d._currentCellIndoor);
+  }
   const entityMap = scene3d.entityManager?.entityMap;
   if (!entityMap || typeof entityMap.values !== "function") {
     return { visible: 0, considered: 0 };

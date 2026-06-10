@@ -76,6 +76,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | Flag | Values | Default | Effect | Where |
 |---|---|---|---|---|
 | `cellStaticMultiSurface` | `on` | off | F14-3: render EnvCell static props (lanterns, braziers, tables, chests, beds) with ALL their surface textures via a fused multi-material mesh, instead of fusing to a single first-surface material. Visible in every interior. Default-off pending 1070 eye-test. | scene3d/cells.js |
+| `nameplateOcclusion` | `on` | off | F14-6: flip nameplate + buff-badge `depthTest` ON while the local player is INDOOR so dungeon walls occlude overhead names/badges instead of X-raying through. Outdoors stays on-top (matches the 2D path). Full per-entity PVS cell-membership cull deferred (needs per-entity objcell_id from wasm). Default-off pending 1070 eye-test. | scene3d/nameplate_sprite.js + scene3d/cells.js |
 | `clouds` | `on` | off | Volumetric cloud rendering (Bruneton/takram). GPU-heavy. | scene3d/index.js:2535 |
 | `cloudCoverage` | float 0–1 | 0.5 | Cloud coverage density. | scene3d/index.js:2540 |
 | `cloudQuality` | `low`\|`medium`\|`high`\|`ultra` | high | Cloud raymarch resolution. | scene3d/index.js:2541 |
