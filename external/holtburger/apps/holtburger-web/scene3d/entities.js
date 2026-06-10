@@ -6417,6 +6417,21 @@ export class EntityManager {
     }
     const inst = this.entityMap.get(g);
     if (!inst) return;
+    // F16-4 — clear the selected target when its entity despawns
+    // (ObjectDelete / corpse swap / out-of-vision). Otherwise the target
+    // bar keeps showing the dead guid and the next attack/cast/Use is sent
+    // against a nonexistent object and silently fails — reads as "combat
+    // stopped working". Emitted BEFORE entityMap.delete so subscribers can
+    // still resolve the old name from prevGuid if they need it.
+    if ((this._selectedGuid >>> 0) === g && g !== 0) {
+      this._selectedGuid = 0;
+      try {
+        window.__pluginClient?.events?.emit?.("selectionChanged", {
+          guid: 0,
+          prevGuid: g,
+        });
+      } catch (_) { /* never block despawn on a subscriber fault */ }
+    }
     // Render-completeness audit (2026-05-29) — wielded-item lifecycle.
     // If this entity is a WIELDER with attached children, detach them first
     // so they aren't dragged out of the scene (and left tracked-but-orphaned)
