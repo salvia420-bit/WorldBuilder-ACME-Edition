@@ -718,12 +718,24 @@ export function setupClickPicking({
       // so a full chase ended in a silently swallowed attack ("dead click
       // after a chase"). By arrival the prior swing's attackDone has
       // usually cleared the flag, so the queued attack now actually fires.
-      if (cb?.attackInProgress) {
+      //
+      // F11-3 — re-read `window.__combatBarState` HERE rather than the
+      // click-time `cb` capture above. Any syncWindowState (stance change,
+      // slider/checkbox edit, panel re-render) REPLACES the snapshot object
+      // wholesale, so the captured `cb` can be stale by the time a pursuit
+      // fires seconds later. The lockout clearers (attackDone / ack-loss
+      // safety-timeout, now owned at combat-bar module load) always mutate
+      // the *live* object, so gating and setting the flag on that same live
+      // object keeps set-vs-clear coherent. syncWindowState carries
+      // attackInProgress forward across the swap, so the live object never
+      // loses an in-flight lock.
+      const liveCb = (typeof window !== "undefined") ? window.__combatBarState : cb;
+      if (liveCb?.attackInProgress) {
         console.log("[fire-attack] attack still pending (server hasn't sent attackDone) — gated");
         return false;
       }
       cmd();
-      if (cb) cb.attackInProgress = true;
+      if (liveCb) liveCb.attackInProgress = true;
       try {
         window.__pluginClient?.events?.emit?.("combatCommenceAttack", {});
       } catch (_) {}

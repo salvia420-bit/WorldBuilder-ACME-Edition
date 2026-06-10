@@ -99,6 +99,13 @@ function saveState(state) {
 
 function syncWindowState(state) {
   window.__combatBarState = {
+    // F11-3 — PRESERVE the in-flight attack lockout across this wholesale
+    // object replacement. Previously any syncWindowState (stance change,
+    // slider/checkbox interaction, panel re-render) wiped attackInProgress
+    // to undefined mid-swing, so the live fireOnce read (F6-6) saw it as
+    // cleared and let an overlapping attack request through (visible windup
+    // restart). Carry the prior value forward.
+    attackInProgress: window.__combatBarState?.attackInProgress ?? false,
     attackHeight: state.attackHeight,
     powerLevel: state.powerLevel,
     autoRepeat: state.autoRepeat,
@@ -527,6 +534,7 @@ function readRecklessnessTrainingLevel() {
 if (typeof window !== "undefined") {
   syncWindowState(loadState());
   installAutoDisarmHooks();
+  installAttackLockoutHooks();
 }
 
 // Subscribe at module-load to the hotbar bus event — when a hotbar
@@ -600,6 +608,62 @@ function installAutoDisarmHooks() {
   // isn't plumbed today; see ui/bar.js:583-584 "TODO: bar teardown
   // not yet plumbed"). If/when bar teardown lands we can surface the
   // disposer back through a return value or a window-scoped handle.
+}
+
+// F11-3 — attackInProgress lockout lifecycle, owned at module-load.
+//
+// The flag (`window.__combatBarState.attackInProgress`) gates rapid attack
+// clicks in scene3d/picking.js. Previously the ONLY clearers lived inside
+// the power-meter closure (`attachPowerMeter`), which exists ONLY while the
+// combat panel is open — so an attack fired with the panel closed left the
+// flag stuck (the next click silently gated), and the ack-loss safety
+// timeout was never armed either. Mirroring installAutoDisarmHooks, we
+// subscribe the clearers here so the lockout is released whether or not the
+// panel is open. attachPowerMeter now drives the VISUAL meter only. Two
+// triggers:
+//   - `attackDone` — server says the swing finished; release immediately.
+//   - a safety timeout armed on `combatCommenceAttack` — releases the flag
+//     if attackDone is dropped (ACE error, packet loss, disconnect
+//     mid-swing). Duration mirrors the power-meter refill estimate.
+function installAttackLockoutHooks() {
+  let pollTimer = null;
+  let lockoutTimeoutId = 0;
+  const clearLockout = () => {
+    const cb = window.__combatBarState;
+    if (cb) cb.attackInProgress = false;
+    if (lockoutTimeoutId) {
+      clearTimeout(lockoutTimeoutId);
+      lockoutTimeoutId = 0;
+    }
+  };
+
+  function tryHook() {
+    const client = window.__pluginClient ?? null;
+    if (!client?.events?.on) {
+      return false;
+    }
+    client.events.on("attackDone", clearLockout);
+    client.events.on("combatCommenceAttack", () => {
+      // Match attachPowerMeter's refill estimate (~0.6s low … ~1.8s full)
+      // plus a 1s ack-loss margin.
+      const power = (window.__combatBarState?.powerLevel ?? 1.0);
+      const refillDurMs = 600 + power * 1200;
+      if (lockoutTimeoutId) clearTimeout(lockoutTimeoutId);
+      lockoutTimeoutId = setTimeout(clearLockout, refillDurMs + 1000);
+    });
+    return true;
+  }
+
+  if (!tryHook()) {
+    pollTimer = setInterval(() => {
+      if (tryHook()) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }, 500);
+  }
+  // No teardown — mirrors installAutoDisarmHooks; the disposer lives for
+  // the page lifetime (bar teardown isn't plumbed today).
 }
 
 // Stance label — one-word descriptor read off the wasm-side stance.
@@ -1027,19 +1091,12 @@ function renderAttackControls(bodyEl, state) {
       }
     }
 
-    // Lockout safety timeout id — set in onCommence, cleared in
-    // onDone. If `attackDone` is dropped (ACE error, packet loss,
-    // disconnect mid-swing), the timeout still releases the lockout
-    // so the player can fire again.
-    let lockoutTimeoutId = 0;
-    const clearLockout = () => {
-      const cb = window.__combatBarState;
-      if (cb) cb.attackInProgress = false;
-      if (lockoutTimeoutId) {
-        clearTimeout(lockoutTimeoutId);
-        lockoutTimeoutId = 0;
-      }
-    };
+    // F11-3 — the attackInProgress lockout flag is no longer cleared in
+    // this closure. Its full lifecycle (arm the ack-loss safety timeout on
+    // commence, clear on attackDone) now lives in `installAttackLockoutHooks()`
+    // at module-load, so the flag is released even when the combat panel is
+    // closed (this meter only exists while the panel is open). attachPowerMeter
+    // drives the VISUAL meter only.
     const onCommence = () => {
       // Power slider drives expected refill duration.
       const power = (window.__combatBarState?.powerLevel ?? 1.0);
@@ -1048,13 +1105,6 @@ function renderAttackControls(bodyEl, state) {
       meter.classList.remove("ready");
       meter.classList.add("refilling");
       meterFill.style.width = "0%";
-      // Lockout fallback: if attackDone doesn't arrive within
-      // refillDurMs + 1s, release the flag so the bar isn't stuck.
-      // The lockout is also driven from picking.js's
-      // `cb.attackInProgress = true` on fire, so the flag is set
-      // either path. This timer is the ack-loss safety net.
-      if (lockoutTimeoutId) clearTimeout(lockoutTimeoutId);
-      lockoutTimeoutId = setTimeout(clearLockout, refillDurMs + 1000);
       if (rafId) cancelAnimationFrame(rafId);
       // F2: if the bar is hidden right now, mark pending so the
       // visibilityObserver picks it up when we become visible again.
@@ -1076,7 +1126,6 @@ function renderAttackControls(bodyEl, state) {
       if (rafId) cancelAnimationFrame(rafId);
       rafId = 0;
       pendingResume = false;
-      clearLockout();
     };
 
     // Strike-frame pulse: the kind=19→`combatStrikeFrame` event fires
@@ -1123,14 +1172,14 @@ function renderAttackControls(bodyEl, state) {
     }
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
-      if (lockoutTimeoutId) clearTimeout(lockoutTimeoutId);
       if (pulseTimeoutId) clearTimeout(pulseTimeoutId);
       meter.classList.remove("strike-pulse");
-      // Don't leave the lockout flag set if the bar tears down
-      // mid-swing — a panel close followed by re-open would otherwise
-      // start with the flag still true and gate the first click.
-      const cb = window.__combatBarState;
-      if (cb) cb.attackInProgress = false;
+      // F11-3 — the lockout flag is NOT cleared on panel teardown any
+      // more. Clearing it on close prematurely released a real in-flight
+      // lockout (close the panel mid-swing → the next click double-fires
+      // the windup). `installAttackLockoutHooks()` owns the flag now and
+      // clears it on attackDone / ack-loss timeout regardless of panel
+      // state, so closing the panel is purely visual.
       if (visibilityObserver) visibilityObserver.disconnect();
       client.events.off("combatCommenceAttack", onCommence);
       client.events.off("attackDone", onDone);
