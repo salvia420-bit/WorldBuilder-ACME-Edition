@@ -54,7 +54,7 @@
 //! - `Region.land_defs.land_height_table` — 256-entry f32 lookup.
 
 use holtburger_dat::file_type::Region;
-use holtburger_dat::landblock::CellLandblock;
+use holtburger_dat::landblock::{decode_land_height, CellLandblock};
 
 /// A landblock has 9 vertices per side (`CellDim + 1`).
 pub const VERTEX_DIM: usize = 9;
@@ -66,14 +66,16 @@ pub const LANDBLOCK_SIZE: f32 = 192.0;
 /// Read the 9×9 vertex heights for the landblock, mapping each height
 /// byte through `region.land_defs.land_height_table`. Returns a
 /// row-major `[f32; 81]` indexed `vx * 9 + vy`.
+///
+/// F12-4: routes through the shared [`decode_land_height`] so this bake
+/// path and the render + walk paths (`CellLandblock::get_height_with_table`)
+/// share one decoder instead of two. For the full 256-entry retail/region
+/// table every `u8` height byte is in range, so the result is unchanged.
 pub fn vertex_heights(region: &Region, lb: &CellLandblock) -> [f32; 81] {
     let table = &region.land_defs.land_height_table;
     let mut out = [0.0f32; 81];
     for (i, &h) in lb.height.iter().enumerate() {
-        // Defensive: clamp to table length to avoid panics on
-        // hand-built test fixtures. Real heights are u8 so they fit.
-        let idx = (h as usize).min(table.len().saturating_sub(1));
-        out[i] = table[idx];
+        out[i] = decode_land_height(h, Some(table));
     }
     out
 }

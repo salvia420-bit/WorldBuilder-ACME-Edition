@@ -80,6 +80,27 @@ pub const TERRAIN_SHIFT_TYPE: u16 = 2;
 pub const TERRAIN_MASK_SCENERY: u16 = 0xF800;
 pub const TERRAIN_SHIFT_SCENERY: u16 = 11;
 
+/// Decode a raw terrain height byte to world-Z metres.
+///
+/// Retail's per-region `LandHeightTable` (256 `f32` entries, parsed into
+/// [`crate::file_type::region::LandDefs::land_height_table`]) maps each
+/// height byte to an absolute height. For the standard Dereth region this
+/// table is exactly `byte * 2.0`, which is the fallback applied when no
+/// table is threaded through (e.g. a landblock decoded without its Region).
+/// Custom/modded regions ship a non-linear table, so passing it keeps the
+/// render + walk decoders identical to the scenery bake
+/// (`holtburger-scenery-bake::height::vertex_heights`) and to server physics
+/// — the single source of truth this consolidates onto (F12-4).
+///
+/// Out-of-range bytes (only possible against a hand-built table shorter than
+/// 256 entries — real heights are `u8`, always `< 256`) fall back to `* 2.0`.
+pub fn decode_land_height(byte: u8, land_height_table: Option<&[f32]>) -> f32 {
+    match land_height_table {
+        Some(table) if (byte as usize) < table.len() => table[byte as usize],
+        _ => byte as f32 * 2.0,
+    }
+}
+
 impl CellLandblock {
     pub fn unpack(data: &[u8]) -> Result<Self> {
         let mut cursor = Cursor::new(data);
@@ -87,13 +108,28 @@ impl CellLandblock {
         Ok(lb)
     }
 
-    /// Returns height at (x, y) vertex in landblock [0, 8]
+    /// Returns height at (x, y) vertex in landblock [0, 8].
+    ///
+    /// Uses the no-region `byte * 2.0` fallback — see [`decode_land_height`].
+    /// For custom/modded regions whose `LandHeightTable` is non-linear, pass
+    /// the parsed table via [`Self::get_height_with_table`] so render + walk
+    /// heights stay aligned with the scenery bake and server physics.
     pub fn get_height(&self, x: usize, y: usize) -> f32 {
+        self.get_height_with_table(x, y, None)
+    }
+
+    /// Returns height at (x, y) vertex [0, 8], decoding the raw height byte
+    /// through the region's `LandHeightTable` when supplied (else the
+    /// `byte * 2.0` fallback). F12-4: the scenery bake already decodes via
+    /// the table (`holtburger-scenery-bake::height::vertex_heights`); this
+    /// gives the render + walk paths the same table-aware decode so they
+    /// don't silently diverge on a non-retail region DAT.
+    pub fn get_height_with_table(&self, x: usize, y: usize, land_height_table: Option<&[f32]>) -> f32 {
         if x > 8 || y > 8 {
             return 0.0;
         }
         let idx = x * 9 + y;
-        self.height[idx] as f32 * 2.0
+        decode_land_height(self.height[idx], land_height_table)
     }
 
     /// Raw `terrain[]` u16 at vertex `(x, y)`. Out-of-range returns `0`.

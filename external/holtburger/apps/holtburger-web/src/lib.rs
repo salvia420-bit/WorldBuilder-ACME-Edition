@@ -542,13 +542,41 @@ impl LandblockMesh {
     }
 }
 
+/// F12-4 — resolve the region's `LandHeightTable` (256 `f32` height-byte→Z
+/// entries) for table-aware terrain height decode, gated behind
+/// `?regionHeightTable=on`. Returns `None` when the flag is off OR the
+/// Region `0x13000000` isn't already in the resource cache — both fall back
+/// to the retail `byte * 2.0` decode (identical to pre-F12-4, since retail's
+/// table IS `byte * 2.0`, hence "no impact on retail data"). On a
+/// custom/modded region DAT the non-linear table keeps render + walk heights
+/// aligned with the scenery bake (`holtburger-scenery-bake::height`) and the
+/// server physics integrator. Cheap: a cache read + 256-`f32` parse, never a
+/// network fetch (no `.await`) — a cache miss just yields the fallback.
+#[cfg(target_arch = "wasm32")]
+fn resolve_region_land_height_table() -> Option<Vec<f32>> {
+    if !js_location_search().contains("regionHeightTable=on") {
+        return None;
+    }
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let bytes = global_source::global_source()
+        .get_file_by_key(ResourceKey::new("eor/portal", 0x1300_0000))
+        .ok()?;
+    let region = holtburger_dat::file_type::Region::unpack(&mut std::io::Cursor::new(&bytes[..]))
+        .ok()?;
+    let table = region.land_defs.land_height_table;
+    (!table.is_empty()).then_some(table)
+}
+
 /// Tessellate a parsed `CellLandblock` into a [`LandblockMesh`].
 ///
 /// Pure CPU work — no I/O, no JS interop. Shared by
 /// [`fetch_landblock_heightmap`] and [`fetch_landblock_heightmaps`] so
 /// the two exports stay in lockstep without code duplication.
 #[cfg(target_arch = "wasm32")]
-fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh {
+fn build_mesh(
+    cell: &holtburger_dat::landblock::CellLandblock,
+    land_height_table: Option<&[f32]>,
+) -> LandblockMesh {
     // Vertex spacing = METERS_PER_LANDBLOCK / 8 = 24 m. The 9×9 grid
     // spans the full 192 m landblock, NOT a single 24 m cell.
     const VERTEX_SPACING_M: f32 = holtburger_common::position::METERS_PER_LANDBLOCK / 8.0;
@@ -560,7 +588,7 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
     let mut height_max = f32::NEG_INFINITY;
     for x in 0..9usize {
         for y in 0..9usize {
-            let h = cell.get_height(x, y);
+            let h = cell.get_height_with_table(x, y, land_height_table);
             positions.push(x as f32 * VERTEX_SPACING_M);
             positions.push(y as f32 * VERTEX_SPACING_M);
             positions.push(h);
@@ -717,6 +745,8 @@ pub async fn fetch_landblock_heightmaps(
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
 
+    // F12-4 — table-aware height decode (no-op on retail; `?regionHeightTable=on`).
+    let height_table = resolve_region_land_height_table();
     let mut out = Vec::with_capacity(cell_ids.len());
     for id in &cell_ids {
         let bytes = source
@@ -724,7 +754,7 @@ pub async fn fetch_landblock_heightmaps(
             .map_err(|e| JsValue::from_str(&format!("get_file_by_key {id:#010X}: {e}")))?;
         let cell = CellLandblock::unpack(&bytes)
             .map_err(|e| JsValue::from_str(&format!("CellLandblock::unpack {id:#010X}: {e}")))?;
-        out.push(build_mesh(&cell));
+        out.push(build_mesh(&cell, height_table.as_deref()));
     }
     Ok(out)
 }
@@ -877,6 +907,9 @@ pub async fn fetch_subdivided_landblocks(
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
 
+    // F12-4 — table-aware height decode (no-op on retail; `?regionHeightTable=on`).
+    let height_table = resolve_region_land_height_table();
+    let height_table = height_table.as_deref();
     let mut out = Vec::with_capacity(cell_ids.len());
     for id in &cell_ids {
         let bytes = source
@@ -892,7 +925,7 @@ pub async fn fetch_subdivided_landblocks(
         let mut roads = [[0u8; 9]; 9];
         for x in 0..9 {
             for y in 0..9 {
-                heights[x][y] = cell.get_height(x, y);
+                heights[x][y] = cell.get_height_with_table(x, y, height_table);
                 codes[x][y] = cell.terrain_type(x, y);
                 roads[x][y] = cell.road_type(x, y);
             }
