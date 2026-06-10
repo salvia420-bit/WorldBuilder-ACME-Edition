@@ -143,6 +143,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | `entityLights` | `on` | off | Entity-attached dynamic lights (SetLight hook 25). | scene3d/entities.js:35 |
 | `multiAction` | `on` | off | Allow concurrent combat actions. | scene3d/loop.js:99 |
 | `missileFaceTarget` | `on` | off | F7-3: turn the local player to face the target before a missile shot (ACE TurnToObject), so the arrow doesn't leave your back when the target is behind/beside you. Reuses chargeTick's turn-input pulse; in-range path only (the out-of-range charge already turns). Default-off, pending 1070 eye-test. | scene3d/picking.js |
+| `spawnDoorCollision` | `on` | off | F17-3: COLLISION twin of `spawnMotionState`. A door that spawns already-OPEN (DOOR flag + ETHEREAL) gets the live DoorStateChanged{Open} collision treatment at ObjectCreate — drop the closed-door building AABB / add the indoor cell-mesh exclusion — so DefaultOpen doors (and doors opened before you arrived) aren't an invisible wall. Default-off, pending 1070 eye-test. | apps/holtburger-web/src/lib.rs |
 | `castAxes` | `on` | off | Debug: visualize cast projection axes. | scene3d/loop.js:158 |
 | `projectileArc` | `on` | off | Debug: visualize projectile arcs. | scene3d/spell_shape_preview.js |
 | `rain` / `snow` / `lightning` | `on`/`off` | weather-driven | Force weather state (overrides server). | scene3d/weather/manager.js:44–50 |

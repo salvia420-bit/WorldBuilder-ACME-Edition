@@ -29647,6 +29647,15 @@ async fn recv_loop(
     // when a live UpdateMotion happens to follow. Default OFF pending a 1070
     // eye-test (it changes the 3D spawn pose, which I can't verify here).
     let spawn_motion_state_on: bool = js_location_search().contains("spawnMotionState=on");
+    // F17-3 (2026-06-09): `?spawnDoorCollision=on` (default OFF). The
+    // COLLISION twin of `?spawnMotionState` (which is the RENDER half). When
+    // ON, a door that spawns already-OPEN (ObjectDescriptionFlag::DOOR +
+    // PhysicsState::ETHEREAL) gets the same collision treatment as a live
+    // DoorStateChanged{Open} at ObjectCreate time — drop the closed-door
+    // building AABB / add the indoor cell-mesh exclusion — so DefaultOpen
+    // doors and doors opened before you arrived aren't an invisible wall.
+    // Default OFF pending a 1070 eye-test (changes movement collision).
+    let spawn_door_collision_on: bool = js_location_search().contains("spawnDoorCollision=on");
     let seq_tracker: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
@@ -32141,13 +32150,22 @@ async fn recv_loop(
                             //   dungeon (no `LandblockInfo.buildings`
                             //   entry → no AABB candidates).
                             if let Some(w) = world.as_mut() {
-                                use holtburger_common::properties::ObjectDescriptionFlag;
+                                use holtburger_common::properties::{
+                                    ObjectDescriptionFlag, PhysicsState,
+                                };
                                 let guid = data.public_weenie_desc.guid;
-                                let pose = w
+                                // F17-3: also capture whether the door spawned
+                                // OPEN (ETHEREAL) so its closed-door collision
+                                // can be dropped at spawn under the flag.
+                                let door_state = w
                                     .entities
                                     .get(guid)
                                     .filter(|e| e.flags.contains(ObjectDescriptionFlag::DOOR))
-                                    .map(|e| e.position);
+                                    .map(|e| {
+                                        (e.position, e.physics_state.contains(PhysicsState::ETHEREAL))
+                                    });
+                                let pose = door_state.map(|(p, _)| p);
+                                let spawned_open = door_state.map(|(_, eth)| eth).unwrap_or(false);
                                 if let Some(pose) = pose {
                                     let candidates = w.scene.building_aabbs_near_pose(&pose);
                                     let px = pose.coords.x;
@@ -32173,6 +32191,19 @@ async fn recv_loop(
                                             building_id,
                                             part_index,
                                         );
+                                        // F17-3: door spawned OPEN — drop its
+                                        // closed-door building AABB so it isn't
+                                        // an invisible wall (mirrors the live
+                                        // DoorStateChanged{Open} handler).
+                                        if spawn_door_collision_on && spawned_open {
+                                            let flipped = w.scene.set_door_aabb_active(
+                                                building_id, part_index, false,
+                                            );
+                                            console_log_str(&format!(
+                                                "[F17-3] door 0x{:08X} spawned OPEN → set_door_aabb_active(bid={:?}, pidx={}, active=false) flipped={}",
+                                                u32::from(guid), building_id, part_index, flipped,
+                                            ));
+                                        }
                                         if let Some((origin_x, origin_y)) =
                                             w.scene.building_origin(building_id)
                                         {
@@ -32187,6 +32218,28 @@ async fn recv_loop(
                                                 },
                                             );
                                         }
+                                    } else if spawn_door_collision_on && spawned_open {
+                                        // F17-3: indoor cell door (no building
+                                        // AABB enclosed the pose) that spawned
+                                        // OPEN — add the same cell-mesh exclusion
+                                        // AABB the live DoorStateChanged{Open}
+                                        // arm builds, so the door PANEL polys in
+                                        // the EnvCell BSP don't block the doorway.
+                                        let g = pose.global_coords();
+                                        let aabb = holtburger_common::Aabb {
+                                            min: holtburger_common::Vector3::new(
+                                                g.x - 1.5, g.y - 1.5, g.z - 0.5,
+                                            ),
+                                            max: holtburger_common::Vector3::new(
+                                                g.x + 1.5, g.y + 1.5, g.z + 3.0,
+                                            ),
+                                        };
+                                        w.scene.add_open_door_exclusion(u32::from(guid), aabb);
+                                        console_log_str(&format!(
+                                            "[F17-3] door 0x{:08X} spawned OPEN — INDOOR: added cell-mesh exclusion AABB @ global ({:.1},{:.1},{:.1}) (count now {})",
+                                            u32::from(guid), g.x, g.y, g.z,
+                                            w.scene.open_door_exclusion_len(),
+                                        ));
                                     }
                                 }
                             }
