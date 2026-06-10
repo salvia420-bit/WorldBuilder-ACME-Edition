@@ -117,6 +117,9 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | `wireframe` | `1` | off | Wireframe rendering. | scene3d/index.js:277; entities.js:10 |
 | `lightClamp` / `flatDiffuse` | float | default | Debug shading overrides. (`lightClamp` default-ON 2026-06-09, opt-out =off, pending 1070 eye-test) | scene3d/materials.js:988–1006 |
 | `particleSortObjects` | `off` to disable | on | Particle sort by scene objects vs camera. | scene3d/particles/particle_manager.js:40 |
+| `portalSpace` | `on` \| float scale | **off** | Portal-space travel donut: flies the camera through Setup `0x02000306` (a hollow purplish ring, real DAT textures) on every teleport, with a forward+sidestep+turn swirl + iris open/close + the retail enter/exit portal whooshes. `=on` uses the default scale (0.4); a float (`=0.3`) sets the ring scale. Plays for indoor↔indoor + rapid recalls. 3D only. | scene3d/portal_space.js; index.html kind=33 |
+| `portalSound` | hex Wave DID \| `off` | `0x0A000246` | Override the **enter** whoosh (one-shot, only with `portalSpace`). Default `0x0A000246` is the VERIFIED `Sound.UI_EnterPortal` wave (SoundTable `0x2000004B`; exit uses `0x0A000245`). `=off` mutes. Silent (no crash) if the id is wrong. | scene3d/portal_space.js |
+| `portalSoundLoop` | hex Wave DID | none | Optional looping ambience bed for the whole transit (only with `portalSpace`), pinned to the listener. e.g. `=0x0A000316` (a real but un-table-mapped portal-adjacent wave). Off by default. | scene3d/portal_space.js |
 
 ---
 
@@ -241,8 +244,9 @@ eye-test before being flipped on. Line numbers drift — grep the const name.
 | `USE_STATIC_BSP` | off | Per-static physics-BSP push-out after the coarse-AABB sweep (B4 Tier-2). | — |
 | `USE_LOCAL_ENVCELL_ENTRY` | **on** | Client-side EnvCell entry from terrain (kill-switch restores the server-only transition). | — |
 | `USE_OUTDOOR_WALL_NORMALS` | off | Surface outdoor building wall normals so the refused-step-up slide + seam-skid fire outdoors too. | — |
+| `DEFER_LOGIN_COMPLETE_AFTER_TELEPORT` | off | **NEW.** Network-sequencing (not physics), so it lives in `client/mod.rs`, not `movement/system.rs`. Defers the post-teleport `LoginComplete` (`0x00A1`) from the instant `PlayerTeleport` (`0xF751`) arrives to the first post-teleport local-player `UpdatePosition` (the destination pose). `LoginComplete` clears ACE's `Teleporting` flag (`GameActionLoginComplete` → `OnTeleportComplete`); sending it before the destination pose is applied lets ACE accept AutonomousPosition from the **source** landblock (the desync ACE flags at `Player_Tick.cs:416`). Matches retail (`acclient.c CPlayerSystem::SendLoginCompleteNotification @ 0x562E90` never sends from the teleport message). Applies to **both** recv loops (cli `messages.rs` + wasm `lib.rs`). | **F2-3** |
 
-> Two flags introduced in the 2026-06-09 movement bughunt — `USE_DIRECT_GROUND_VELOCITY` (F1-1) and `USE_TERRAIN_WALKABLE_GATE` (F4-2) — are default-off pending the 1070 gait eye-test; flip both `true` and rebuild to validate, then default them on if they read correctly.
+> Three flags introduced in the 2026-06-09 movement bughunt — `USE_DIRECT_GROUND_VELOCITY` (F1-1), `USE_TERRAIN_WALKABLE_GATE` (F4-2), and `DEFER_LOGIN_COMPLETE_AFTER_TELEPORT` (F2-3) — are default-off pending the 1070 gait/teleport eye-test; flip them `true` and rebuild to validate, then default them on if they read correctly. (F2-3 lives in `client/mod.rs`, not `movement/system.rs`.)
 
 ---
 

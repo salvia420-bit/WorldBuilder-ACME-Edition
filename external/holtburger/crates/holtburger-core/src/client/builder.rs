@@ -162,6 +162,7 @@ impl ClientRuntimeBuilder {
             simulation: ClientSimulationSystem::new(),
             character_selection: CharacterSelectionState::new(self.account_name),
             turbine_chat: TurbineChatState::default(),
+            pending_post_teleport_login_complete: false,
         })
     }
 }
@@ -184,6 +185,7 @@ pub(crate) fn build_test_client(initial_state: ClientState) -> ClientRuntime {
         simulation: ClientSimulationSystem::new(),
         character_selection: CharacterSelectionState::new("test".to_string()),
         turbine_chat: TurbineChatState::default(),
+        pending_post_teleport_login_complete: false,
     };
     client.state = initial_state;
     client

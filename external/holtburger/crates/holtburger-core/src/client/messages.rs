@@ -77,6 +77,14 @@ impl ClientRuntime {
                     } => {
                         self.movement
                             .record_force_position_sequence(force_position_sequence);
+                        // F2-3: the first local-player UpdatePosition after a
+                        // teleport carries the destination pose. Now that the
+                        // client is at the destination, send the deferred
+                        // `LoginComplete` to clear ACE's `Teleporting` flag.
+                        if self.pending_post_teleport_login_complete {
+                            self.pending_post_teleport_login_complete = false;
+                            self.send_login_complete().await?;
+                        }
                     }
                     WorldEvent::SelfAutonomousPosition {
                         teleport_sequence,
@@ -482,7 +490,21 @@ impl ClientRuntime {
                     "Portal transition started (seq: {})",
                     data.teleport_sequence
                 );
-                self.send_login_complete().await?;
+                // F2-3: `LoginComplete` clears ACE's `Teleporting` flag
+                // (`GameActionLoginComplete` → `Player.OnTeleportComplete`).
+                // Firing it here — before the destination `UpdatePosition` is
+                // applied — clears the flag while we're still streaming
+                // AutonomousPosition from the source landblock. Defer to the
+                // first post-teleport `SelfUpdatePosition` (see
+                // `handle_world_events`) so the client is at the destination
+                // when the flag clears, matching retail
+                // (`CPlayerSystem::SendLoginCompleteNotification`). Gated
+                // default-off; see [`super::DEFER_LOGIN_COMPLETE_AFTER_TELEPORT`].
+                if super::DEFER_LOGIN_COMPLETE_AFTER_TELEPORT {
+                    self.pending_post_teleport_login_complete = true;
+                } else {
+                    self.send_login_complete().await?;
+                }
                 Ok(())
             }
             GameMessage::PrivateUpdatePropertyInt(_) | GameMessage::PublicUpdatePropertyInt(_) => {

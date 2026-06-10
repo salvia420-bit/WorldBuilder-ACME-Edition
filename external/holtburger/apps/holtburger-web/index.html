@@ -9336,6 +9336,38 @@ void main() {
                     teleportSeq: (evt.u32Payload ?? 0) >>> 0,
                   });
                 } catch (_) {}
+                // Portal-space donut travel visual (2026-06-09). The retail
+                // engine flies the camera through Setup 0x02000306 (a hollow
+                // purplish ring) during portal transit. Gated behind
+                // `?portalSpace=<scale>` (or `=on` for the default scale);
+                // plays on every teleport incl. indoor↔indoor + rapid recalls.
+                // Lazy-import keeps it additive / load-on-first-use.
+                try {
+                  const sp = new URLSearchParams(window.location.search);
+                  const ps = sp.get('portalSpace');
+                  const enabled = ps !== null && ps !== 'off' && ps !== '0' && ps !== 'false';
+                  if (enabled && window.liveScene3d) {
+                    const psf = parseFloat(ps);
+                    const scale = (ps === 'on' || ps === '' || !Number.isFinite(psf))
+                      ? undefined : psf;
+                    // Parse a hex Wave DID (or off/none → 0). undefined = use
+                    // the module default.
+                    const hexDid = (v) => {
+                      if (v === null) return undefined;
+                      if (v === 'off' || v === 'none' || v === '0') return 0;
+                      const n = parseInt(v.replace(/^0x/i, ''), 16);
+                      return Number.isFinite(n) ? (n >>> 0) : undefined;
+                    };
+                    // ?portalSound=<hex|off> overrides the enter whoosh
+                    // (default 0x0A000246 UI_EnterPortal); ?portalSoundLoop=<hex>
+                    // adds an optional looping bed (e.g. 0x0A000316).
+                    const enterDid = hexDid(sp.get('portalSound'));
+                    const loopDid = hexDid(sp.get('portalSoundLoop'));
+                    import('./scene3d/portal_space.js')
+                      .then((m) => m.startPortalSpace(window.liveScene3d, scale, enterDid, loopDid))
+                      .catch((e) => console.warn('[portalSpace] start failed:', e));
+                  }
+                } catch (_) {}
               } else if (evt.kind === 34 /* ContractsUpdated */) {
                 // Wave F.5 (2026-05-27): ACE pushed either
                 // `GameEvent::SendClientContractTrackerTable` (opcode
@@ -9835,6 +9867,30 @@ void main() {
                 const scene3d = window.liveScene3d;
                 const emgr = scene3d?.entityManager ?? null;
                 const inst = emgr?.entityMap?.get(sndGuid) ?? null;
+                // Event-sound coverage fix (2026-06-09): local-player SoundTable
+                // fallback. The local player entity is seeded without a
+                // SoundTable (lib.rs:30960 minimal seed; its self-ObjectCreate
+                // meta only hydrates one post-wasm-rebuild and only when the
+                // Setup carries `default_sound_table`). But ACE targets the
+                // bulk of action sounds — eat, drink, pickup, drop, wield,
+                // raise-trait, death, wound/fall-damage, resist, lifestone,
+                // spell-expire — at `player.Guid`. Without a table those all
+                // hit the `noSoundTable` skip below and play silence. Default
+                // the local player to the canonical humanoid table 0x20000001
+                // (verified to map the shared 0x8B-0x97 action cluster +
+                // Eat/Drink/Wound/Death). We mutate `inst.soundTableDid` so it
+                // persists → also unblocks the animation Sound-hook channel for
+                // the player. A race-accurate DID from the wasm spawn meta
+                // (post-rebuild) supersedes this (it only fires when the table
+                // is still 0). Remote entities are unaffected.
+                if (inst && !(inst.soundTableDid >>> 0)) {
+                  const lpg = (typeof window.getLocalPlayerGuid === "function")
+                    ? (window.getLocalPlayerGuid() >>> 0) : 0;
+                  if (lpg && (sndGuid >>> 0) === lpg) {
+                    inst.soundTableDid = 0x20000001;
+                    stats.localPlayerFallback = (stats.localPlayerFallback | 0) + 1;
+                  }
+                }
                 if (!inst) {
                   stats.entityMissing += 1;
                   // eslint-disable-next-line no-console

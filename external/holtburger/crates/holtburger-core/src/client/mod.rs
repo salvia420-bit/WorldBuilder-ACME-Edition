@@ -40,6 +40,47 @@ use types::*;
 const PHYSICS_TICK_MS: u64 = 30;
 const BUSY_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// F2-3 (movement bughunt 2026-06-09): defer the post-teleport
+/// `LoginComplete` (`0x00A1`) until the destination is applied client-side,
+/// instead of firing it the instant `PlayerTeleport` (`0xF751`) arrives.
+///
+/// `LoginComplete` is the action ACE's `GameActionLoginComplete` handler
+/// (`~/ace-server/.../Actions/GameActionLoginComplete.cs`) routes to
+/// `Player.OnTeleportComplete()`, which clears the server-side `Teleporting`
+/// flag and materialises the player ("pink bubble" → solid). While
+/// `Teleporting == true`, `Player_Tick.UpdatePlayerPosition` early-returns
+/// (`Player_Tick.cs:417`, literal comment *"possible bug: while teleporting,
+/// client can still send AutoPos packets from old landblock"*) — i.e. ACE
+/// **drops every inbound AutonomousPosition** until the flag clears.
+///
+/// The recv loops historically sent `LoginComplete` immediately on
+/// `PlayerTeleport` to clear that flag ASAP (otherwise server-side movement
+/// freezes). But firing it before the client has applied the destination
+/// `UpdatePosition` means ACE clears `Teleporting` while the client is still
+/// streaming AutonomousPosition from the **source** landblock — the exact
+/// desync ACE's own comment warns about.
+///
+/// The retail client never sends `LoginComplete` from the teleport message:
+/// `CPlayerSystem::SendLoginCompleteNotification` (decompiled `acclient.c`
+/// `0x562E90`) gates the send on `player_desc_received &&
+/// AllContainedObjectsExist()` (destination loaded), and re-sends it on
+/// **every** portal-space exit. ACE's `OnTeleportComplete` independently
+/// self-defers on its own `CurrentLandblock.CreateWorldObjectsCompleted`, so
+/// a slightly-early client send is absorbed server-side — what matters is
+/// that the client's position is already at the destination when the flag
+/// clears.
+///
+/// When `true`, both recv loops defer `LoginComplete` to the first
+/// post-teleport **local-player `UpdatePosition`** (the destination pose ACE
+/// always emits right after `PlayerTeleport` via the "fake" `SendUpdatePosition`
+/// in `Player_Location.Teleport`). This works for indoor/dungeon destinations
+/// too (which carry no terrain heights, so gating on terrain-load would
+/// deadlock). Default **off** pending a 1070 gait/teleport eye-test — this
+/// touches the high-regression-risk position pipeline; flip to `true` +
+/// rebuild wasm to validate. Documented in
+/// `apps/holtburger-web/docs/url-flags.md` §6.
+pub const DEFER_LOGIN_COMPLETE_AFTER_TELEPORT: bool = false;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingBusyOperation {
     operation: BusyOperationKind,
@@ -61,6 +102,11 @@ pub struct ClientRuntime {
     simulation: ClientSimulationSystem,
     character_selection: CharacterSelectionState,
     turbine_chat: TurbineChatState,
+    /// F2-3: set when a `PlayerTeleport` arrived while
+    /// [`DEFER_LOGIN_COMPLETE_AFTER_TELEPORT`] is on; the deferred
+    /// `LoginComplete` is sent on the next `WorldEvent::SelfUpdatePosition`
+    /// (the destination pose), then this clears.
+    pending_post_teleport_login_complete: bool,
 }
 
 impl ClientRuntime {

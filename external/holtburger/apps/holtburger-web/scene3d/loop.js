@@ -50,6 +50,9 @@ import {
 // lives in entities.js so it can reach the EntityManager's private state.
 import { tickFrustumCull, setCullers } from "./culling.js";
 import { tickEntityRenderVisibility } from "./entities.js";
+// Portal-space donut (0x02000306) travel visual. No-op unless a teleport has
+// armed it via `startPortalSpace` (gated behind `?portalSpace=`).
+import { tickPortalSpace } from "./portal_space.js";
 
 // Wire the per-domain cullers once at module load. Each fn is `(scene3d,
 // culler) => void` and is individually fail-soft (tickFrustumCull also
@@ -1503,6 +1506,18 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
         scene3d._cameraTickWarned = true;
         console.warn("[phase7.5] cameraSwitcher.tick threw:", e);
       }
+    }
+  }
+  // Portal-space donut: stream the ring tunnel around the camera while a
+  // teleport transition is active. AFTER cameraSwitcher.tick so the rig reads
+  // the final camera pose this frame; no-op unless armed via startPortalSpace.
+  try {
+    tickPortalSpace(scene3d, dt);
+  } catch (e) {
+    if (!scene3d._portalSpaceTickWarned) {
+      scene3d._portalSpaceTickWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn("[portalSpace] tickPortalSpace threw:", e);
     }
   }
   // Render-completeness audit (2026-05-29) — advance animated SurfaceTextures

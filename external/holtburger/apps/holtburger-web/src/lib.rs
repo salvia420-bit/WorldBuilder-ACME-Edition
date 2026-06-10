@@ -21730,6 +21730,15 @@ fn resolve_physics_script_table_did(
     setup.default_script_table.unwrap_or(0)
 }
 
+/// Canonical humanoid/player SoundTable (0x20000001) — the local-player
+/// fallback when its Setup carries no `default_sound_table`. Verified (via
+/// `dump_event_sound_coverage`) to map the shared player-action cluster
+/// (RaiseTrait 0x8B … ItemManaDepleted 0x97) plus Eat/Drink/Wound/Death, i.e.
+/// every `player.Guid`-targeted `GameMessageSound` ACE emits. Per-race vocal
+/// variants differ across the ~15 sibling tables but the action sounds match.
+#[cfg(target_arch = "wasm32")]
+const DEFAULT_HUMANOID_SOUND_TABLE: u32 = 0x2000_0001;
+
 /// 2026-06-05 [D7-NEW-2]: resolve the entity's SoundTable (DAT 0x22) DID,
 /// mirroring `resolve_physics_script_table_did` above and retail's
 /// two-source lookup chain for the sound table. Until now we resolved the
@@ -29387,6 +29396,13 @@ async fn recv_loop(
     let mut movement = holtburger_core::MovementSystemHandle::new();
     let mut entity_seeded = false;
     let mut heartbeat_armed = false;
+    // F2-3 (movement bughunt 2026-06-09): set when a `PlayerTeleport`
+    // arrived while `holtburger_core::client::DEFER_LOGIN_COMPLETE_AFTER_TELEPORT`
+    // is on. The deferred `LoginComplete` (which clears ACE's `Teleporting`
+    // flag) is sent on the first post-teleport local-player `UpdatePosition`
+    // (the destination pose), then this clears. See the const's doc-comment
+    // and the `PlayerTeleport` / `UpdatePosition` recv arms below.
+    let mut pending_post_teleport_login_complete = false;
     // Academy-rubberband diagnostic — when set, holds the last
     // observed `world.player.force_position_sequence`. Any tick where
     // it changes emits a `[acad-diag rubberband]` console line so the
@@ -30628,13 +30644,37 @@ async fn recv_loop(
                                     data.teleport_sequence,
                                 ));
                             }
-                            let login_complete = GameAction::LoginComplete(Box::new(
-                                holtburger_protocol::messages::LoginCompleteActionData,
-                            ));
-                            if let Err(e) = session.send_action(login_complete).await {
-                                console_log_str(&format!(
-                                    "[step 3.6] post-teleport LoginComplete send failed: {e}"
+                            // F2-3 (movement bughunt 2026-06-09): sending
+                            // `LoginComplete` here — the instant `PlayerTeleport`
+                            // arrives — clears ACE's `Teleporting` flag
+                            // (`GameActionLoginComplete` → `OnTeleportComplete`)
+                            // BEFORE the destination `UpdatePosition` has been
+                            // applied. ACE then accepts AutonomousPosition while
+                            // we're still streaming the SOURCE landblock pose
+                            // (the desync ACE flags at `Player_Tick.cs:416`).
+                            // Retail's `CPlayerSystem::SendLoginCompleteNotification`
+                            // (`acclient.c 0x562E90`) never sends from the teleport
+                            // message — it gates on the destination being loaded.
+                            // When the flag is on, defer to the first post-teleport
+                            // local-player `UpdatePosition` (handled in the
+                            // `GameMessage::UpdatePosition` arm); ACE always emits
+                            // that destination pose via the "fake" SendUpdatePosition
+                            // in `Player_Location.Teleport`. Default-off; see
+                            // `holtburger_core::client::DEFER_LOGIN_COMPLETE_AFTER_TELEPORT`.
+                            if holtburger_core::client::DEFER_LOGIN_COMPLETE_AFTER_TELEPORT {
+                                pending_post_teleport_login_complete = true;
+                                console_log_str(
+                                    "[F2-3] PlayerTeleport: deferring LoginComplete until first post-teleport UpdatePosition (destination applied)",
+                                );
+                            } else {
+                                let login_complete = GameAction::LoginComplete(Box::new(
+                                    holtburger_protocol::messages::LoginCompleteActionData,
                                 ));
+                                if let Err(e) = session.send_action(login_complete).await {
+                                    console_log_str(&format!(
+                                        "[step 3.6] post-teleport LoginComplete send failed: {e}"
+                                    ));
+                                }
                             }
                             // ACPlugin PR-4 (2026-05-27): Character.OnPortalSpaceEntered
                             // mirror. `Character.cs:468-471` fires the bus
@@ -30894,6 +30934,28 @@ async fn recv_loop(
                                 local_player.teleport_sequence = data.pos.teleport_sequence;
                                 local_player.force_position_sequence =
                                     data.pos.force_position_sequence;
+                                // F2-3: this UpdatePosition is the destination
+                                // pose after a teleport (its sequences were just
+                                // captured above, so the client is now at the
+                                // destination). If a `PlayerTeleport` deferred its
+                                // `LoginComplete`, send it now — ACE clears
+                                // `Teleporting` and starts accepting our
+                                // AutonomousPosition from the correct landblock.
+                                if pending_post_teleport_login_complete {
+                                    pending_post_teleport_login_complete = false;
+                                    let login_complete = GameAction::LoginComplete(Box::new(
+                                        holtburger_protocol::messages::LoginCompleteActionData,
+                                    ));
+                                    if let Err(e) = session.send_action(login_complete).await {
+                                        console_log_str(&format!(
+                                            "[F2-3] deferred post-teleport LoginComplete send failed: {e}"
+                                        ));
+                                    } else {
+                                        console_log_str(
+                                            "[F2-3] deferred post-teleport LoginComplete sent (destination UpdatePosition applied)",
+                                        );
+                                    }
+                                }
                                 // Phase 4 step 3.6: UpdatePosition for the
                                 // local player is the canonical position
                                 // packet (PrivateUpdatePosition rarely fires
@@ -31694,10 +31756,30 @@ async fn recv_loop(
                                     // (acclient.c:320871-320884) — so entities that
                                     // omit STABLE but carry a CSetup
                                     // `default_sound_table` no longer play silence.
-                                    sound_table_did: resolve_sound_table_did(
-                                        data.stable_id,
-                                        data.csetup_id.unwrap_or(0),
-                                    ),
+                                    sound_table_did: {
+                                        // Event-sound coverage (2026-06-09): the
+                                        // local player's Setup often omits
+                                        // `default_sound_table` (character models
+                                        // are clothing-base composites; the real
+                                        // table is the race/gender humanoid STB),
+                                        // so the strict two-source resolve yields 0
+                                        // and every player.Guid-targeted sound
+                                        // (eat/pickup/drop/wield/raise-trait/…) plus
+                                        // animation Sound-hooks play silence. Fall
+                                        // back to the humanoid table for the local
+                                        // player only; remote entities keep 0 =
+                                        // genuinely no SoundTable. Mirrors the JS
+                                        // kind=16 safety net (index.html ~9870).
+                                        let stb = resolve_sound_table_did(
+                                            data.stable_id,
+                                            data.csetup_id.unwrap_or(0),
+                                        );
+                                        if stb == 0 && is_local_player {
+                                            DEFAULT_HUMANOID_SOUND_TABLE
+                                        } else {
+                                            stb
+                                        }
+                                    },
                                     // Entity-Completeness E.B (2026-05-19):
                                     // canonical-classifier inputs. WorldObjectManager
                                     // pipes these through canonicalClassify(item_type,
