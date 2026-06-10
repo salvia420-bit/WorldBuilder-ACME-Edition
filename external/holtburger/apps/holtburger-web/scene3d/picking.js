@@ -776,7 +776,7 @@ export function setupClickPicking({
     const safeHeight = Number.isFinite(height) ? height : (cb?.attackHeight ?? ATTACK_HEIGHT_MEDIUM);
     const slider =
       cb && typeof cb.powerLevel === "number" ? cb.powerLevel : ATTACK_POWER_FULL;
-    const fireOnce = (cmd) => {
+    const fireOnce = (cmd, commenceDetail) => {
       // F6-6 — read the lockout LIVE at execution time, not a click-time
       // capture. For a charge-pursuit `fireOnce` runs seconds later on
       // arrival; sampling `attackInProgress` at click time meant a swing
@@ -803,7 +803,13 @@ export function setupClickPicking({
       cmd();
       if (liveCb) liveCb.attackInProgress = true;
       try {
-        window.__pluginClient?.events?.emit?.("combatCommenceAttack", {});
+        // F10-3 — this client-bus emit already seeds the combat-bar power
+        // meter on the FIRST / single swing (the doc's "first attacks never
+        // animate" premise was stale — the meter listens to THIS event, not
+        // the server's CombatCommenceAttack). `commenceDetail` optionally
+        // carries the resolved swing-clip duration so the meter can track
+        // the real cadence under `?powerMeterSwingDuration=on`.
+        window.__pluginClient?.events?.emit?.("combatCommenceAttack", commenceDetail || {});
       } catch (_) {}
       return true;
     };
@@ -1027,6 +1033,21 @@ export function setupClickPicking({
       // active picker uses power-bar threshold per ACE Player_Melee.cs).
       const motionCmd = getCombatManeuver(stance, safeHeight, attackType, slider, prevMeleeMotion);
       if (motionCmd) prevMeleeMotion = (motionCmd >>> 0);
+      // F10-3 — resolve the actual swing-clip length so the power meter can
+      // track the real swing cadence instead of the pure-power heuristic
+      // (which drifts at most power settings). Uses the same typed
+      // motion-link lookup the rig drives its pose from; 0 when the MT isn't
+      // cached yet → the meter keeps its heuristic. Consumed only under
+      // `?powerMeterSwingDuration=on` (the meter reads ev.detail).
+      let swingDurationMs = 0;
+      try {
+        const lp = em?.entityMap?.get?.(localGuid >>> 0);
+        const mtableId = (lp?.meta?.mtableId ?? 0) >>> 0;
+        const typed = window.__classifyMotionCommandTyped?.(mtableId, stance, motionCmd >>> 0);
+        if (typed && typed.durationSec > 0) {
+          swingDurationMs = Math.round(typed.durationSec * 1000);
+        }
+      } catch (_) { /* meter falls back to its heuristic */ }
       const fire = () => fireOnce(() => {
         // Wave 5 / Phase 9 (2026-05-26) — Sneak Attack prediction. Re-
         // sample target position + defender heading at the actual fire
@@ -1066,7 +1087,7 @@ export function setupClickPicking({
             em?.setSwingPose?.(localGuid);
           }
         }
-      });
+      }, { swingDurationMs });
       // F6-5 — gate on the cylinder distance under `?melee3dRange=on` so a
       // target the flat 2D check thought was in reach (but is on a ledge /
       // raised platform) instead engages the charge: run cycle + steering

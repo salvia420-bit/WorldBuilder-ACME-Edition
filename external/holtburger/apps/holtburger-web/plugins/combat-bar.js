@@ -1028,6 +1028,15 @@ function renderAttackControls(bodyEl, state) {
     let refillStartMs = 0;
     let refillDurMs = 1500;
     let rafId = 0;
+    // F10-3 — opt in to driving the meter off the resolved swing-clip
+    // length (passed on the combatCommenceAttack detail by picking.js)
+    // instead of the pure-power heuristic. Default OFF → meter timing is
+    // byte-identical to pre-F10-3. (?powerMeterSwingDuration=on)
+    const useSwingDuration = (() => {
+      try {
+        return new URLSearchParams(window.location.search).get("powerMeterSwingDuration") === "on";
+      } catch (_) { return false; }
+    })();
     // F2: when the bar / panel is hidden mid-refill we stop scheduling
     // rAFs and remember to resume on the next visible frame so the
     // power slider, refill duration, and elapsed time all stay correct.
@@ -1097,10 +1106,23 @@ function renderAttackControls(bodyEl, state) {
     // at module-load, so the flag is released even when the combat panel is
     // closed (this meter only exists while the panel is open). attachPowerMeter
     // drives the VISUAL meter only.
-    const onCommence = () => {
-      // Power slider drives expected refill duration.
+    const onCommence = (ev) => {
+      // Power slider drives the default expected refill duration.
       const power = (window.__combatBarState?.powerLevel ?? 1.0);
-      refillDurMs = 600 + power * 1200; // ~0.6s low, ~1.8s full
+      // F10-3 — when `?powerMeterSwingDuration=on` AND picking.js resolved
+      // the actual swing-clip length (typed motion-link lookup, passed on
+      // the event detail), drive the meter off that so the fill tracks the
+      // visible swing cadence instead of the pure-power heuristic, which
+      // drifts at most power settings. Falls back to the heuristic when the
+      // duration isn't available — MT not cached yet, or a server-driven
+      // auto-repeat re-arm that carries no detail. (NOTE: the meter already
+      // animated on the first/single swing pre-F10-3 — picking.js's
+      // local-fire emit seeds it; the doc's "never animate" premise was
+      // stale. This only refines the DURATION.)
+      const swingMs = useSwingDuration ? Number(ev?.detail?.swingDurationMs) : 0;
+      refillDurMs = (Number.isFinite(swingMs) && swingMs > 0)
+        ? swingMs
+        : (600 + power * 1200); // ~0.6s low, ~1.8s full
       refillStartMs = performance.now();
       meter.classList.remove("ready");
       meter.classList.add("refilling");
