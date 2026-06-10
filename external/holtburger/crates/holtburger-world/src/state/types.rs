@@ -207,10 +207,18 @@ impl WorldState {
     }
 
     pub fn player_combat_mode(&self) -> CombatMode {
-        let value = self
-            .player_int_property(PropertyInt::CombatMode)
-            .unwrap_or(0);
-        CombatMode::from_repr(value as u32).unwrap_or(CombatMode::NonCombat)
+        // F11-6: ACE never persists/describes CombatMode — it only pushes
+        // PropertyInt::CombatMode on a mode CHANGE, so it is absent at
+        // login and after a relog-while-in-combat. Treat absent as
+        // NonCombat (retail's resting state) rather than mapping the 0
+        // fallback through `from_repr` to CombatMode::Undef, which leaks an
+        // un-toggled Undef to any caller that gates on combat mode.
+        match self.player_int_property(PropertyInt::CombatMode) {
+            Some(value) => {
+                CombatMode::from_repr(value as u32).unwrap_or(CombatMode::NonCombat)
+            }
+            None => CombatMode::NonCombat,
+        }
     }
 
     pub fn player_name(&self) -> &str {
