@@ -32,6 +32,17 @@ const MISSILE_FACE_TARGET = (() => {
 // Cap the turn-to-face pre-step so a bad bearing can't stall the shot.
 const FACE_TURN_TIMEOUT_MS = 800;
 
+// F8-5 — turn the local caster to face the target before a spell cast
+// (ACE Rotate() before the windup), so the bolt doesn't launch sideways/
+// backwards out of a frozen, wrong-facing caster. Same default-off rule
+// as the missile case. (?castFaceTarget=on)
+const CAST_FACE_TARGET = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("castFaceTarget") === "on";
+  } catch { return false; }
+})();
+
 // Fallback AttackType for the CombatManeuverTable lookup when the
 // per-weapon inference (Wave 1 Phase 3, 2026-05-26) returns
 // `ATTACK_TYPE.Undef` — e.g. shield-only, ranged before Phase 6
@@ -299,14 +310,15 @@ export function setupClickPicking({
     charge.rafId = requestAnimationFrame(chargeTick);
   }
 
-  // F7-3 — turn the local player to face `targetGuid`, then fire. Reuses
-  // chargeTick's bearing math but turns IN PLACE (forward=0) until the
-  // heading delta is within ~0.05 rad, mirroring ACE's rotateTime delay
-  // before a missile launch. No-ops to an immediate fire when the flag is
-  // off, the target/pose is unresolvable, or we're already on-bearing.
-  function turnToFaceThenFire(targetGuid, fire) {
-    if (!MISSILE_FACE_TARGET || typeof sessionHandle.setMovementInput !== "function") {
-      fire();
+  // F7-3 / F8-5 — turn the local player to face `targetGuid`, then run
+  // `act`. Reuses chargeTick's bearing math but turns IN PLACE (forward=0)
+  // until the heading delta is within ~0.05 rad, mirroring ACE's
+  // rotateTime/Rotate() delay before a missile launch or a spell cast.
+  // No-ops to an immediate `act()` when `enabled` is false, the
+  // target/pose is unresolvable, or we're already on-bearing.
+  function turnToFaceThenAct(targetGuid, act, enabled) {
+    if (!enabled || typeof sessionHandle.setMovementInput !== "function") {
+      act();
       return;
     }
     const startMs = performance.now();
@@ -315,7 +327,7 @@ export function setupClickPicking({
       const pose = playerWorldPose(sessionHandle);
       if (!targetAc || !pose) {
         try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
-        fire();
+        act();
         return;
       }
       const dx = targetAc.x - pose.x;
@@ -325,7 +337,7 @@ export function setupClickPicking({
       if (Math.abs(turnDelta) <= 0.05 ||
           (performance.now() - startMs) > FACE_TURN_TIMEOUT_MS) {
         try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
-        fire();
+        act();
         return;
       }
       const turn = turnDelta > 0 ? 1 : -1;
@@ -538,32 +550,39 @@ export function setupClickPicking({
               fire(classification);
             }
           } catch (_) { /* event emission never blocks the cast */ }
-          sessionHandle.castTargetedSpell(guid, spellId);
-          // Wave 14 / Phase 45 (2026-05-26) — per-spell scarab-windup
-          // chain replaces Phase 42's `setCastPose` vibe-pose. The
-          // chain runner lives in
-          // `EntityManager.playCastSequence(guid, spellId)` (entities.js
-          // ~line 2330) and loads `data/spell-cast-sequence.json` lazily
-          // — first call kicks the fetch and falls back to vibe-pose;
-          // subsequent calls hit the cached table and chain the real
-          // gestures (windup × N → final cast). Cancellation is
-          // built-in (rapid-fire clicks → newer cast preempts the
-          // prior chain). Defensively-guarded: missing
-          // `playCastSequence` (older bundle / partial reload) → fall
-          // back to the Phase 42 vibe-pose so the local player still
-          // gets *some* cast feedback. setCastPose itself no-ops on
-          // non-human rigs and on missing entities.
-          try {
-            const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
-            if (localGuid !== 0) {
-              const em = liveScene3d?.entityManager;
-              if (em?.playCastSequence) {
-                em.playCastSequence(localGuid, spellId);
-              } else {
-                em?.setCastPose?.(localGuid);
+          // F8-5 — turn to face the target before casting (ACE Rotate()),
+          // flag-gated, so the bolt doesn't launch out of a wrong-facing
+          // caster. The caster stands still otherwise (no auto-charge),
+          // so an in-place turn is correct.
+          const doCast = () => {
+            sessionHandle.castTargetedSpell(guid, spellId);
+            // Wave 14 / Phase 45 (2026-05-26) — per-spell scarab-windup
+            // chain replaces Phase 42's `setCastPose` vibe-pose. The
+            // chain runner lives in
+            // `EntityManager.playCastSequence(guid, spellId)` (entities.js
+            // ~line 2330) and loads `data/spell-cast-sequence.json` lazily
+            // — first call kicks the fetch and falls back to vibe-pose;
+            // subsequent calls hit the cached table and chain the real
+            // gestures (windup × N → final cast). Cancellation is
+            // built-in (rapid-fire clicks → newer cast preempts the
+            // prior chain). Defensively-guarded: missing
+            // `playCastSequence` (older bundle / partial reload) → fall
+            // back to the Phase 42 vibe-pose so the local player still
+            // gets *some* cast feedback. setCastPose itself no-ops on
+            // non-human rigs and on missing entities.
+            try {
+              const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+              if (localGuid !== 0) {
+                const em = liveScene3d?.entityManager;
+                if (em?.playCastSequence) {
+                  em.playCastSequence(localGuid, spellId);
+                } else {
+                  em?.setCastPose?.(localGuid);
+                }
               }
-            }
-          } catch (_) { /* never block the cast on pose-fallback faults */ }
+            } catch (_) { /* never block the cast on pose-fallback faults */ }
+          };
+          turnToFaceThenAct(guid, doCast, CAST_FACE_TARGET);
         }
       } else if (isInMeleeStance?.() || isInRangedStance?.()) {
         // Retail UX — click on the monster only TARGETS it. Firing
@@ -880,7 +899,7 @@ export function setupClickPicking({
       } else {
         // F7-3 — in range: face the target first (flag-gated), then fire.
         // The out-of-range charge path above already turns during pursuit.
-        turnToFaceThenFire(targetGuid, fire);
+        turnToFaceThenAct(targetGuid, fire, MISSILE_FACE_TARGET);
       }
       return;
     }
