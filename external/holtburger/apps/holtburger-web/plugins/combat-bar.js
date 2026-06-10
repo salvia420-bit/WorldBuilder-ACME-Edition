@@ -12,7 +12,7 @@ import {
   isShapeTableLoaded,
   SPELL_SHAPE,
 } from "../ui/ac_spell_shape.js";
-import { setUseFastMissiles } from "../ui/ac_character_options.js";
+import { setUseFastMissiles, setAutoRepeatAttacks } from "../ui/ac_character_options.js";
 import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
 
 // Wave 6 / Phase 17 — spell-shape badge mapping.
@@ -862,12 +862,22 @@ function renderAttackControls(bodyEl, state) {
     state.autoRepeat = repeatBox.checked;
     saveState(state);
     syncWindowState(state);
+    // F11-2 — actually drive ACE's auto-attack loop. Without this the
+    // checkbox only flipped a local flag no consumer read; ACE defaults
+    // AutoRepeatAttacks OFF, so combat was one-click-one-swing. Now ACE
+    // re-fires on each AttackDone while this is set (mirrors the Fast
+    // Missiles Path-B wiring above). Fire-and-forget; fail-softs pre-login.
+    setAutoRepeatAttacks(repeatBox.checked);
   });
   repeatLabel.appendChild(repeatBox);
   const repeatText = document.createElement("span");
   setAcText(repeatText, "Repeat");
   repeatLabel.appendChild(repeatText);
   bodyEl.appendChild(repeatLabel);
+  // F11-2 — ACE defaults AutoRepeatAttacks OFF while the UI default is
+  // ON, so push the current checkbox value once on mount to make the
+  // displayed state authoritative (fail-softs pre-login).
+  setAutoRepeatAttacks(!!state.autoRepeat);
 
   // Phase I.1 — Charge Attack tickbox (retail's "Use Charge Attack").
   const chargeLabel = document.createElement("label");

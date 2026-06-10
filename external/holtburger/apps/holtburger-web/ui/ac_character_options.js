@@ -15,6 +15,11 @@
 // unknown values with a JS-side error so a typo here surfaces as a
 // console.warn instead of silently no-oping on the wire.
 export const CHARACTER_OPTION = Object.freeze({
+  // ACE CharacterOption — when ON, ACE re-fires the player's attack at
+  // the same target on each AttackDone until cancelled (retail hold-
+  // and-watch auto-attack). Mirrors `holtburger_common::CharacterOption
+  // ::AutoRepeatAttacks = 0x00` (character.rs:118). ACE defaults it OFF.
+  AutoRepeatAttacks: 0x00,
   // ACE CharacterOption.cs:144 — boosts arrow/bolt/dart launcher
   // velocity by 1.2× server-side. Wave 10 Phase 32 wired the client-
   // side prediction half; Wave 11 Phase 33 wires the wire-side bit.
@@ -51,4 +56,12 @@ export function setCharacterOption(option, enabled) {
 // 0x2B magic number out of plugin code.
 export function setUseFastMissiles(enabled) {
   setCharacterOption(CHARACTER_OPTION.UseFastMissiles, enabled);
+}
+
+// Convenience helper for the combat-bar's Repeat checkbox. Flips ACE's
+// AutoRepeatAttacks so the server drives the hold-and-watch auto-attack
+// loop (re-firing on each AttackDone) — without this the checkbox was
+// purely cosmetic (F11-2).
+export function setAutoRepeatAttacks(enabled) {
+  setCharacterOption(CHARACTER_OPTION.AutoRepeatAttacks, enabled);
 }
