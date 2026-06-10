@@ -29556,6 +29556,14 @@ async fn recv_loop(
     // `check_sequence_gap` call so production builds with the flag
     // off pay zero cost beyond a single `bool` check.
     let seq_debug: bool = parse_seq_debug_flag(&js_location_search());
+    // "why not both" (2026-06-09): `?spawnMotionState=on` (default OFF). When
+    // ON, the SPAWN EntityUpdate's `motion_command` is seeded from the
+    // ObjectCreate's CURRENT motion state (`movement_data` forward_command)
+    // instead of always defaulting to Ready — so an already-OPEN door (or a
+    // posed creature) entering vision renders in its current pose, not just
+    // when a live UpdateMotion happens to follow. Default OFF pending a 1070
+    // eye-test (it changes the 3D spawn pose, which I can't verify here).
+    let spawn_motion_state_on: bool = js_location_search().contains("spawnMotionState=on");
     let seq_tracker: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
@@ -31830,6 +31838,31 @@ async fn recv_loop(
                             } else {
                                 (0.0, 0.0, 0.0)
                             };
+                            // "why not both" (2026-06-09): the SPAWN motion_command
+                            // (below) hardcoded Ready on the stale assumption that
+                            // "the CreateObject wire payload carries no current-
+                            // motion state" — but it DOES (`movement_data`,
+                            // ObjectDescriptionData, when the MOVEMENT physics flag
+                            // is set; ACE WorldObject_Networking.cs:309). So an
+                            // already-open door (forward_command `On` 0x000B) — or
+                            // any non-Ready-posed entity — rendered Ready/closed at
+                            // spawn and only corrected if a LIVE UpdateMotion
+                            // followed. Under `?spawnMotionState=on`, seed the
+                            // spawn pose from that current motion (same parser the
+                            // world Entity uses for `motion_snapshot`,
+                            // entity.rs:947). Low-16 form matches the live kind=5
+                            // path. `0` / absent → keep the Ready-or-0 default.
+                            let spawn_motion_cmd: u32 = {
+                                let from_state = if spawn_motion_state_on {
+                                    holtburger_world::entity::EntityMotionSnapshot::from_object_description(&data)
+                                        .and_then(|s| s.motion_command())
+                                        .map(|c| u32::from(c.raw()))
+                                        .filter(|&c| c != 0)
+                                } else {
+                                    None
+                                };
+                                from_state.unwrap_or(if mtable_id != 0 { 0x4100_0003 } else { 0 })
+                            };
                             if !skip_local_player_spawn {
                                 entity_updates.borrow_mut().push(EntityUpdate {
                                     kind: ENTITY_UPDATE_KIND_SPAWN,
@@ -31876,12 +31909,12 @@ async fn recv_loop(
                                     // Ready fetch would cache-miss → rest pose).
                                     // If the server later broadcasts an explicit
                                     // motion (combat, sit, dead), the kind=5
-                                    // UpdateMotion arm overrides this.
-                                    motion_command: if mtable_id != 0 {
-                                        0x4100_0003
-                                    } else {
-                                        0
-                                    },
+                                    // UpdateMotion arm overrides this. "why not
+                                    // both" (2026-06-09): now seeded from the
+                                    // spawn-time current motion when
+                                    // `?spawnMotionState=on` (see `spawn_motion_cmd`
+                                    // above); falls back to this Ready-or-0 default.
+                                    motion_command: spawn_motion_cmd,
                                     motion_stance: 0,
                                     // H2 (2026-05-12): plumb the entity's
                                     // PhysicsScript DID through to JS so
