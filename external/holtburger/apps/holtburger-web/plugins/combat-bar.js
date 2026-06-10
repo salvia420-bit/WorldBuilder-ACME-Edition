@@ -1526,11 +1526,51 @@ export function activate(bodyEl, ctx) {
   // Phase F — branch on local combat stance. Magic stance (wand / orb
   // / magic staff in hand + combat mode) shows a spell picker;
   // melee / missile / NonCombat show the attack-controls row.
-  if (currentStanceIsMagic()) {
-    renderSpellPicker(bodyEl, state, client);
-  } else {
-    renderAttackControls(bodyEl, state);
+  //
+  // F11-4 — render the stance-specific body into a dedicated sub-container
+  // and re-render it whenever the combat mode changes, instead of branching
+  // exactly once at panel-open. Previously a weapon swap or Peace↔Combat
+  // toggle with the panel open left the WRONG body mounted (mages staring
+  // at dead attack buttons, melee players at a spell list) plus stale
+  // stance-conditional rows (the Accuracy/Power label and the missile-only
+  // Fast Missiles tickbox), recoverable only by closing + reopening the
+  // panel. The stance header (above) and the damage feed (below) are
+  // siblings of this container, so a body swap leaves them untouched.
+  const stanceBodyEl = document.createElement("div");
+  stanceBodyEl.className = "hb-cb-stance-body";
+  bodyEl.appendChild(stanceBodyEl);
+
+  // magic → spell picker; ranged / melee / NonCombat → attack controls.
+  // ranged and melee both render renderAttackControls, but that fn reads
+  // currentStanceIsRanged() for the Accuracy/Power label + the Fast
+  // Missiles row, so a ranged↔melee swap must re-render too.
+  function currentStanceBodyMode() {
+    if (currentStanceIsMagic()) return "magic";
+    if (currentStanceIsRanged()) return "ranged";
+    return "melee";
   }
+  // Tear down whichever body is currently mounted (each render fn parks its
+  // disposer on the element it was handed — now stanceBodyEl, not bodyEl).
+  function disposeStanceBody() {
+    for (const k of ["__spellPickerDispose", "__powerMeterDispose", "__reckBandDispose"]) {
+      if (typeof stanceBodyEl[k] === "function") {
+        try { stanceBodyEl[k](); } catch {}
+      }
+      stanceBodyEl[k] = undefined;
+    }
+  }
+  let renderedBodyMode = null;
+  function renderStanceBody() {
+    disposeStanceBody();
+    stanceBodyEl.replaceChildren();
+    renderedBodyMode = currentStanceBodyMode();
+    if (renderedBodyMode === "magic") {
+      renderSpellPicker(stanceBodyEl, state, client);
+    } else {
+      renderAttackControls(stanceBodyEl, state);
+    }
+  }
+  renderStanceBody();
 
   // ── Damage feed (shared across all stances) ──────────────────────
   // Live damage feed — subscribes to the facade combat events and
@@ -1610,6 +1650,16 @@ export function activate(bodyEl, ctx) {
     subs.push(() => client.events.off("damageTaken", onTaken));
     subs.push(() => client.events.off("evadedTarget", onEvadeTarget));
     subs.push(() => client.events.off("evadedAttacker", onEvadeAttacker));
+
+    // F11-4 — re-render the stance body when the combat mode changes
+    // (weapon swap / Peace↔Combat toggle). playerStatsUpdated is ACE's
+    // signal for stance + equipment changes; we rebuild only when the body
+    // mode actually flips, so the common no-op stat update stays cheap.
+    const onStanceBodyMaybeChanged = () => {
+      if (currentStanceBodyMode() !== renderedBodyMode) renderStanceBody();
+    };
+    client.events.on("playerStatsUpdated", onStanceBodyMaybeChanged);
+    subs.push(() => client.events.off("playerStatsUpdated", onStanceBodyMaybeChanged));
   }
 
   // Return a teardown so the bar's openPanel can clean up our
@@ -1618,21 +1668,14 @@ export function activate(bodyEl, ctx) {
     for (const dispose of subs) {
       try { dispose(); } catch {}
     }
-    // Phase G — spell-picker installs a window listener; clean it up.
-    if (typeof bodyEl.__spellPickerDispose === "function") {
-      try { bodyEl.__spellPickerDispose(); } catch {}
-    }
-    // Phase H.6 — power-meter rAF + event subscriptions.
-    if (typeof bodyEl.__powerMeterDispose === "function") {
-      try { bodyEl.__powerMeterDispose(); } catch {}
-    }
-    // Stance-header playerStatsUpdated subscription.
+    // F11-4 — the stance body's sub-renders (Phase G spell-picker window
+    // listener, Phase H.6 power-meter rAF + subs, Phase 8 Recklessness band
+    // sub) now live on the stanceBodyEl sub-container; dispose whichever
+    // body is currently mounted.
+    disposeStanceBody();
+    // Stance-header playerStatsUpdated subscription (on the main bodyEl).
     if (typeof bodyEl.__stanceHeaderDispose === "function") {
       try { bodyEl.__stanceHeaderDispose(); } catch {}
-    }
-    // Phase 8 (Wave 4) — Recklessness band's playerStatsUpdated sub.
-    if (typeof bodyEl.__reckBandDispose === "function") {
-      try { bodyEl.__reckBandDispose(); } catch {}
     }
   };
 }
