@@ -2,8 +2,8 @@ use super::common::{
     AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY, MIN_QUANTUM,
     PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_GROUND_FRICTION_RETAIL,
     PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC,
-    build_autonomous_position, build_motion_state_raw_motion_state, calc_friction,
-    encode_contact_long_jump, has_autonomous_position_sync_target, local_omega_for_state,
+    build_autonomous_position, build_motion_state_raw_motion_state, build_move_to_state,
+    calc_friction, has_autonomous_position_sync_target, local_omega_for_state,
     local_velocity_for_state, normalize_heading, raw_motion_state_with_motion_style,
     signed_heading_delta,
 };
@@ -3316,19 +3316,11 @@ impl MovementSystem {
         state: MotionState,
         metadata: MovementPacketMetadata,
     ) -> Result<()> {
-        let data = holtburger_protocol::messages::game_action::MoveToStateActionData {
-            raw_motion_state: build_motion_state_raw_motion_state(
-                world,
-                state,
-                metadata.motion_style,
-            ),
-            position: world.local_player_runtime_pose().unwrap_or_default(),
-            instance_sequence: world.player.instance_sequence,
-            server_control_sequence: world.player.server_control_sequence,
-            teleport_sequence: world.player.teleport_sequence,
-            force_position_sequence: world.player.force_position_sequence,
-            contact_long_jump: encode_contact_long_jump(world, metadata),
-        };
+        let data = build_move_to_state(
+            world,
+            build_motion_state_raw_motion_state(world, state, metadata.motion_style),
+            metadata,
+        );
 
         session
             .send_action(GameAction::MoveToState(Box::new(data)))
@@ -3340,15 +3332,7 @@ impl MovementSystem {
         session: &mut Session,
         raw_motion_state: RawMotionState,
     ) -> Result<()> {
-        let data = MoveToStateActionData {
-            raw_motion_state,
-            position: world.local_player_runtime_pose().unwrap_or_default(),
-            instance_sequence: world.player.instance_sequence,
-            server_control_sequence: world.player.server_control_sequence,
-            teleport_sequence: world.player.teleport_sequence,
-            force_position_sequence: world.player.force_position_sequence,
-            contact_long_jump: encode_contact_long_jump(world, MovementPacketMetadata::default()),
-        };
+        let data = build_move_to_state(world, raw_motion_state, MovementPacketMetadata::default());
 
         session
             .send_action(GameAction::MoveToState(Box::new(data)))
@@ -3360,19 +3344,15 @@ impl MovementSystem {
         session: &mut Session,
         metadata: MovementPacketMetadata,
     ) -> Result<()> {
-        let data = holtburger_protocol::messages::game_action::MoveToStateActionData {
-            raw_motion_state: raw_motion_state_with_motion_style(
+        let data = build_move_to_state(
+            world,
+            raw_motion_state_with_motion_style(
                 world,
                 RawMotionState::default(),
                 metadata.motion_style,
             ),
-            position: world.local_player_runtime_pose().unwrap_or_default(),
-            instance_sequence: world.player.instance_sequence,
-            server_control_sequence: world.player.server_control_sequence,
-            teleport_sequence: world.player.teleport_sequence,
-            force_position_sequence: world.player.force_position_sequence,
-            contact_long_jump: encode_contact_long_jump(world, metadata),
-        };
+            metadata,
+        );
 
         session
             .send_action(GameAction::MoveToState(Box::new(data)))

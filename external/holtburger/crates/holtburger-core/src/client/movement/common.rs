@@ -148,6 +148,28 @@ pub(super) fn has_autonomous_position_sync_target(world: &WorldState) -> bool {
     world.player.guid != Guid::NULL && position.landblock_id != Guid::NULL
 }
 
+/// Single MoveToState constructor — the timestamp quartet
+/// (instance/server_control/teleport/force_position) is read from
+/// `world.player` in exactly one place, mirroring retail's single
+/// MoveToStatePack ctor site in `CommandInterpreter::SendMovementEvent`
+/// (acclient.c:718175-718187: `update_times[8]/[5]/[4]/[6]` feed the one
+/// pack ctor; the three pulse kinds all flow through it). A13-W3.
+pub(super) fn build_move_to_state(
+    world: &WorldState,
+    raw_motion_state: RawMotionState,
+    metadata: MovementPacketMetadata,
+) -> MoveToStateActionData {
+    MoveToStateActionData {
+        raw_motion_state,
+        position: world.local_player_runtime_pose().unwrap_or_default(),
+        instance_sequence: world.player.instance_sequence,
+        server_control_sequence: world.player.server_control_sequence,
+        teleport_sequence: world.player.teleport_sequence,
+        force_position_sequence: world.player.force_position_sequence,
+        contact_long_jump: encode_contact_long_jump(world, metadata),
+    }
+}
+
 pub(super) fn build_autonomous_position(
     world: &WorldState,
     metadata: MovementPacketMetadata,
