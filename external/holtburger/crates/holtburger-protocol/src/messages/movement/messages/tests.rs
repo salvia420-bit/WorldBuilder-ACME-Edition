@@ -82,22 +82,22 @@ fn test_vector_update_fixture() {
 
 #[test]
 fn test_autonomous_position_fixture() {
-    let hex = "53F700000100000078563412000020410000A0410000F0410000803F000000000000000000000000010002000300040001000000";
+    // ACE writes the pose with writeLandblock:false — NO cell id after the
+    // guid (Position.Serialize(writer, true, false) in
+    // GameMessageAutonomousPosition.cs).
+    let hex = "53F7000001000000000020410000A0410000F0410000803F000000000000000000000000010002000300040001000000";
     let expected = GameMessage::AutonomousPosition(Box::new(ServerAutonomousPositionData {
         guid: Guid(1),
-        position: WorldPosition {
-            landblock_id: Guid(0x12345678),
-            coords: holtburger_common::math::Vector3 {
-                x: 10.0,
-                y: 20.0,
-                z: 30.0,
-            },
-            rotation: holtburger_common::math::Quaternion {
-                w: 1.0,
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
+        coords: holtburger_common::math::Vector3 {
+            x: 10.0,
+            y: 20.0,
+            z: 30.0,
+        },
+        rotation: holtburger_common::math::Quaternion {
+            w: 1.0,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
         },
         instance_sequence: 1,
         server_control_sequence: 2,
@@ -106,6 +106,45 @@ fn test_autonomous_position_fixture() {
         contact_flags: 1,
     }));
     assert_pack_unpack_parity(&hex::decode(hex).unwrap(), &expected);
+}
+
+#[test]
+fn test_autonomous_position_round_trip_and_landblock_carry_forward() {
+    let original = ServerAutonomousPositionData {
+        guid: Guid(0x5000_0001),
+        coords: holtburger_common::math::Vector3 {
+            x: 91.5,
+            y: 12.25,
+            z: 0.005,
+        },
+        rotation: holtburger_common::math::Quaternion {
+            w: 0.7071,
+            x: 0.0,
+            y: 0.0,
+            z: 0.7071,
+        },
+        instance_sequence: 7,
+        server_control_sequence: 8,
+        teleport_sequence: 9,
+        force_position_sequence: 10,
+        contact_flags: 1,
+    };
+
+    let mut buf = Vec::new();
+    original.pack(&mut buf);
+    // guid(4) + xyz(12) + quat(16) + 4 seqs(8) + contact(4) — no cell id.
+    assert_eq!(buf.len(), 44);
+
+    let mut offset = 0;
+    let decoded = ServerAutonomousPositionData::unpack(&buf, &mut offset).unwrap();
+    assert_eq!(offset, buf.len());
+    assert_eq!(decoded, original);
+
+    // The receiver carries its current landblock forward.
+    let pos = decoded.position_in(Guid(0xA9B4_0021));
+    assert_eq!(pos.landblock_id, Guid(0xA9B4_0021));
+    assert_eq!(pos.coords, original.coords);
+    assert_eq!(pos.rotation, original.rotation);
 }
 
 #[test]

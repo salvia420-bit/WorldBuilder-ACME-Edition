@@ -1707,11 +1707,8 @@ fn test_player_autonomous_sync_updates_authoritative_player_entity() {
 
     let sync_data = ServerAutonomousPositionData {
         guid: player_guid,
-        position: WorldPosition {
-            landblock_id: Guid(0x56780000),
-            coords: Vector3::new(1.0, 1.0, 1.0),
-            rotation: holtburger_common::math::Quaternion::identity(),
-        },
+        coords: Vector3::new(1.0, 1.0, 1.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
         instance_sequence: 10,
         server_control_sequence: 20,
         teleport_sequence: 30,
@@ -1730,10 +1727,13 @@ fn test_player_autonomous_sync_updates_authoritative_player_entity() {
         }
     )));
 
-    assert_eq!(state.player_position(), Some(sync_data.position));
+    // The frame carries no cell id — the player's current landblock is
+    // carried forward.
+    let expected_pos = sync_data.position_in(initial_pos.landblock_id);
+    assert_eq!(state.player_position(), Some(expected_pos));
     assert_eq!(
         state.entities.get(player_guid).unwrap().position,
-        sync_data.position
+        expected_pos
     );
     assert_eq!(state.player.instance_sequence, 10);
     assert_eq!(state.player.server_control_sequence, 20);
@@ -1756,11 +1756,8 @@ fn test_stale_player_autonomous_sync_is_ignored() {
 
     let sync_data = ServerAutonomousPositionData {
         guid: player_guid,
-        position: WorldPosition {
-            landblock_id: Guid(0x56780000),
-            coords: Vector3::new(1.0, 1.0, 1.0),
-            rotation: holtburger_common::math::Quaternion::identity(),
-        },
+        coords: Vector3::new(1.0, 1.0, 1.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
         instance_sequence: 10,
         server_control_sequence: 20,
         teleport_sequence: 30,
@@ -1886,11 +1883,8 @@ fn test_remote_autonomous_position_emits_forced_reposition_even_without_sequence
 
     let msg = GameMessage::AutonomousPosition(Box::new(ServerAutonomousPositionData {
         guid,
-        position: WorldPosition {
-            landblock_id: Guid(0x01000000),
-            coords: Vector3::new(7.0, 8.0, 9.0),
-            rotation: holtburger_common::math::Quaternion::identity(),
-        },
+        coords: Vector3::new(7.0, 8.0, 9.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
         instance_sequence: 12,
         server_control_sequence: 13,
         teleport_sequence: 30,

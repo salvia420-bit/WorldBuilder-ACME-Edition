@@ -551,7 +551,9 @@ impl WorldState {
         };
 
         let old_lb = entity.position.landblock_id;
-        let pos = data.position;
+        // The 0xF753 frame carries no cell id (ACE writeLandblock:false) —
+        // carry the entity's current landblock forward.
+        let pos = data.position_in(old_lb);
         let outcome = entity.apply_server_position_update(
             pos,
             data.instance_sequence,
@@ -745,18 +747,22 @@ impl WorldState {
             None,
         );
 
+        // The 0xF753 frame carries no cell id (ACE writeLandblock:false) —
+        // carry the player's current landblock forward.
+        let position = data.position_in(self.player_landblock().unwrap_or(Guid::NULL));
+
         let runtime_delta_m = self
             .local_player_runtime_pose()
-            .map(|pose| pose.distance_to(&data.position));
+            .map(|pose| pose.distance_to(&position));
         let auth_delta_m = self
             .player_position()
-            .map(|position| position.distance_to(&data.position))
+            .map(|current| current.distance_to(&position))
             .unwrap_or_default();
 
         log::debug!(
             "player: self AutonomousPosition {} pos {:?} runtime_delta={:?} auth_delta={:.2}m seqs inst={} server={} teleport={} force={} current teleport={} force={} server={}",
             if accepted { "accepted" } else { "rejected" },
-            data.position,
+            position,
             runtime_delta_m,
             auth_delta_m,
             data.instance_sequence,
@@ -778,7 +784,7 @@ impl WorldState {
             server_control_sequence: data.server_control_sequence,
         }];
 
-        events.extend(self.set_player_position(data.position));
+        events.extend(self.set_player_position(position));
 
         self.player.instance_sequence = data.instance_sequence;
         self.player.server_control_sequence = data.server_control_sequence;

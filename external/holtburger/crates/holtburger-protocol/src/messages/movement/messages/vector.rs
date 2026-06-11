@@ -110,10 +110,15 @@ impl ProtocolPack for AutonomousPositionData {
     }
 }
 
+/// S2C AutonomousPosition (0xF753). ACE serializes the pose with
+/// `Position.Serialize(writer, true, false)` — `writeLandblock:false` — so the
+/// frame carries NO leading cell id; the receiver supplies the object's
+/// current landblock (see [`Self::position_in`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerAutonomousPositionData {
     pub guid: Guid,
-    pub position: WorldPosition,
+    pub coords: holtburger_common::math::Vector3,
+    pub rotation: holtburger_common::math::Quaternion,
     pub instance_sequence: u16,
     pub server_control_sequence: u16,
     pub teleport_sequence: u16,
@@ -121,13 +126,39 @@ pub struct ServerAutonomousPositionData {
     pub contact_flags: u32,
 }
 
+impl ServerAutonomousPositionData {
+    /// Rebuilds a full [`WorldPosition`] by carrying the receiver's current
+    /// landblock forward (the wire frame omits it).
+    pub fn position_in(&self, landblock_id: Guid) -> WorldPosition {
+        WorldPosition {
+            landblock_id,
+            coords: self.coords,
+            rotation: self.rotation,
+        }
+    }
+}
+
 impl ProtocolUnpack for ServerAutonomousPositionData {
     fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
         let guid = Guid::unpack(data, offset)?;
-        let position = WorldPosition::unpack(data, offset)?;
-        if *offset + 12 > data.len() {
+        // Landblock-less pose: x,y,z + quat WXYZ (28 bytes), then 4 u16
+        // sequences + u32 contact (12 bytes).
+        if *offset + 40 > data.len() {
             return None;
         }
+        let coords = holtburger_common::math::Vector3 {
+            x: LittleEndian::read_f32(&data[*offset..*offset + 4]),
+            y: LittleEndian::read_f32(&data[*offset + 4..*offset + 8]),
+            z: LittleEndian::read_f32(&data[*offset + 8..*offset + 12]),
+        };
+        *offset += 12;
+        let rotation = holtburger_common::math::Quaternion {
+            w: LittleEndian::read_f32(&data[*offset..*offset + 4]),
+            x: LittleEndian::read_f32(&data[*offset + 4..*offset + 8]),
+            y: LittleEndian::read_f32(&data[*offset + 8..*offset + 12]),
+            z: LittleEndian::read_f32(&data[*offset + 12..*offset + 16]),
+        };
+        *offset += 16;
         let instance_sequence = LittleEndian::read_u16(&data[*offset..*offset + 2]);
         let server_control_sequence = LittleEndian::read_u16(&data[*offset + 2..*offset + 4]);
         let teleport_sequence = LittleEndian::read_u16(&data[*offset + 4..*offset + 6]);
@@ -140,7 +171,8 @@ impl ProtocolUnpack for ServerAutonomousPositionData {
 
         Some(Self {
             guid,
-            position,
+            coords,
+            rotation,
             instance_sequence,
             server_control_sequence,
             teleport_sequence,
@@ -153,7 +185,13 @@ impl ProtocolUnpack for ServerAutonomousPositionData {
 impl ProtocolPack for ServerAutonomousPositionData {
     fn pack(&self, buf: &mut Vec<u8>) {
         self.guid.pack(buf);
-        self.position.pack(buf);
+        buf.extend_from_slice(&self.coords.x.to_le_bytes());
+        buf.extend_from_slice(&self.coords.y.to_le_bytes());
+        buf.extend_from_slice(&self.coords.z.to_le_bytes());
+        buf.extend_from_slice(&self.rotation.w.to_le_bytes());
+        buf.extend_from_slice(&self.rotation.x.to_le_bytes());
+        buf.extend_from_slice(&self.rotation.y.to_le_bytes());
+        buf.extend_from_slice(&self.rotation.z.to_le_bytes());
         buf.extend_from_slice(&self.instance_sequence.to_le_bytes());
         buf.extend_from_slice(&self.server_control_sequence.to_le_bytes());
         buf.extend_from_slice(&self.teleport_sequence.to_le_bytes());
