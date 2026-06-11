@@ -106,6 +106,23 @@ fn parse_unified_tick_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "unifiedTick=on")
 }
 
+/// A1-O2 (2026-06-11, unification survey): parse
+/// `?posePublishPostTick=on` (or `&posePublishPostTick=on`). Same shape
+/// as `parse_unified_tick_flag`. When on, the TickMovement arm publishes
+/// the JS-readable shadows (`publish_cell_scene_snapshot` /
+/// `publish_local_player_pose` / `publish_local_player_can_jump`) AFTER
+/// the integrator tick instead of before it — retail fires
+/// `SmartBox::PlayerPhysicsUpdatedCallback` immediately AFTER the
+/// player's own `update_object` (acclient.c:311375-311378), so consumers
+/// (camera, cell recenter) see the pose the SAME frame it was
+/// integrated. Default OFF = publish-before-tick (shadows one tick
+/// stale), byte-identical to before — survey A1 §3 row 2.
+#[cfg(target_arch = "wasm32")]
+fn parse_pose_publish_post_tick_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "posePublishPostTick=on")
+}
+
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
 /// (the wire opcode read at `game_event.rs:97`). Used by the
 /// `[seq-gap]` observability hook to bucket sequence trackers per
@@ -30344,6 +30361,12 @@ async fn recv_loop(
     // instead of bare `movement.tick`. Default OFF; see
     // `parse_unified_tick_flag` and the arm below.
     let unified_tick_on: bool = parse_unified_tick_flag(&js_location_search());
+    // A1-O2 (2026-06-11): `?posePublishPostTick=on` — publish the
+    // pose/can-jump/cell-scene shadows AFTER the integrator tick
+    // (retail post-update callback order, acclient.c:311375). Default
+    // OFF; see `parse_pose_publish_post_tick_flag` and the arm below.
+    let pose_publish_post_tick_on: bool =
+        parse_pose_publish_post_tick_flag(&js_location_search());
     // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have
     // a JS-side rig (KIND_SPAWN emitted, no KIND_REMOVE since). Maintained
     // unconditionally (cheap set ops at the existing emission sites), but
@@ -38925,28 +38948,41 @@ async fn recv_loop(
                         // Runs after the cell-graph drain so the
                         // first frame after a landblock load shows
                         // a coherent visible-cell set.
-                        publish_cell_scene_snapshot(w, &cell_scene_snapshot);
+                        //
+                        // A1-O2 (2026-06-11, unification survey): under
+                        // `?posePublishPostTick=on` this trio of shadow
+                        // publishes moves to AFTER the integrator tick
+                        // (see the post-tick block below) — retail fires
+                        // `SmartBox::PlayerPhysicsUpdatedCallback`
+                        // immediately AFTER the player's `update_object`
+                        // (acclient.c:311375-311378), so the camera/rig
+                        // read a same-frame pose instead of one ≥1 tick
+                        // stale. Flag OFF = this pre-tick site, the
+                        // historical order, byte-identical.
+                        if !pose_publish_post_tick_on {
+                            publish_cell_scene_snapshot(w, &cell_scene_snapshot);
 
-                        // Workstream A (3D camera/game-feel fix):
-                        // publish the local player's pose into the
-                        // shared cell so JS can read it synchronously
-                        // via `SessionHandle::get_local_player_pose`.
-                        // Same cadence as the cell-scene snapshot
-                        // (every TickMovement) — the JS camera reads
-                        // this on every rAF tick to keep follow logic
-                        // smooth without rebroadcasting through the
-                        // entity_updates queue. Pre-spawn the pose is
-                        // `None`; post-spawn it stays `Some` and the
-                        // recv-loop overwrites in place.
-                        publish_local_player_pose(w, &local_player_pose);
+                            // Workstream A (3D camera/game-feel fix):
+                            // publish the local player's pose into the
+                            // shared cell so JS can read it synchronously
+                            // via `SessionHandle::get_local_player_pose`.
+                            // Same cadence as the cell-scene snapshot
+                            // (every TickMovement) — the JS camera reads
+                            // this on every rAF tick to keep follow logic
+                            // smooth without rebroadcasting through the
+                            // entity_updates queue. Pre-spawn the pose is
+                            // `None`; post-spawn it stays `Some` and the
+                            // recv-loop overwrites in place.
+                            publish_local_player_pose(w, &local_player_pose);
 
-                        // Wave 10 Phase 10.4 (2026-05-26): refresh the
-                        // `can_jump_now` shadow alongside the pose. JS
-                        // spacebar keyup polls this before firing the
-                        // local-prediction arms-up overlay so blocked
-                        // releases don't flash. Same cadence/justification
-                        // as the pose shadow above.
-                        publish_local_player_can_jump(w, &local_player_can_jump);
+                            // Wave 10 Phase 10.4 (2026-05-26): refresh the
+                            // `can_jump_now` shadow alongside the pose. JS
+                            // spacebar keyup polls this before firing the
+                            // local-prediction arms-up overlay so blocked
+                            // releases don't flash. Same cadence/justification
+                            // as the pose shadow above.
+                            publish_local_player_can_jump(w, &local_player_can_jump);
+                        }
 
                         // Workstream C (3D camera collision,
                         // 2026-05-11): refresh the JS-readable shadow
@@ -39154,6 +39190,34 @@ async fn recv_loop(
                         };
                         match tick_result {
                             Ok(()) => {
+                                // A1-O2 (2026-06-11, unification survey):
+                                // post-tick shadow publish — the retail
+                                // callback order. acclient.c:311371-311378:
+                                // `CPhysics::UseTime` iterates
+                                // `update_object` per object and fires
+                                // `SmartBox::PlayerPhysicsUpdatedCallback`
+                                // IMMEDIATELY after the player's own
+                                // update, so consumers see the pose the
+                                // same frame it was integrated. The
+                                // pre-tick site above (flag off) published
+                                // the PREVIOUS tick's pose — a structural
+                                // late-by-one-frame source (survey A1 §3
+                                // row 2). Same three publishes, same
+                                // relative order; only the position vs
+                                // the integrator tick changes. The drains
+                                // stay pre-tick (they FEED the
+                                // integrator, correctly).
+                                if pose_publish_post_tick_on {
+                                    publish_cell_scene_snapshot(
+                                        w,
+                                        &cell_scene_snapshot,
+                                    );
+                                    publish_local_player_pose(w, &local_player_pose);
+                                    publish_local_player_can_jump(
+                                        w,
+                                        &local_player_can_jump,
+                                    );
+                                }
                                 if was_airborne_pre_tick && !w.player.is_airborne {
                                     // Wave 10 Phase 10.1 (2026-05-26):
                                     // Touchdown signalling. The Wave 5
