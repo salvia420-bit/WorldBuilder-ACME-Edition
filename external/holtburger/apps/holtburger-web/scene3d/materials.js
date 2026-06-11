@@ -2719,7 +2719,7 @@ export class MaterialCache {
    */
   _buildEntityOwnedFromPixels(did, sp) {
     if (!sp) return null;
-    let w, h, pixels, surfaceType;
+    let w, h, pixels, surfaceType, sfTranslucency, sfLuminosity, sfDiffuse;
     try {
       w = sp.width;
       h = sp.height;
@@ -2733,16 +2733,26 @@ export class MaterialCache {
     try {
       pixels = sp.pixels;
       surfaceType = sp.surfaceType ?? 0;
+      // A10-M2 (2026-06-11) — snapshot the trailing T/L/D float triplet BEFORE
+      // `sp.free()` so the unified decoder can thread the render-state flags
+      // through the entity-owned (F.41 recolour) path. Same read idiom as the
+      // cache path (materials.js:2343) and the dyed hot-swap path
+      // (entities.js:6733-6735).
+      sfTranslucency = typeof sp.translucency === "number" ? sp.translucency : 0.0;
+      sfLuminosity = typeof sp.luminosity === "number" ? sp.luminosity : 0.0;
+      sfDiffuse = typeof sp.diffuse === "number" ? sp.diffuse : 0.0;
     } catch (_) {
       return null;
     }
     const tex = surfacePixelsToTexture(pixels, w, h);
     try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
-    // Entity-owned material uses plain opaque MeshStandardMaterial —
+    // Entity-owned material starts as a plain opaque MeshStandardMaterial —
     // mirrors entities.js line 594-600's existing entity-recolour
     // path which keeps things simple (no normal/height/CSM stack on
-    // recoloured NPC surfaces today). Future polish: thread
-    // surface_type flags through.
+    // recoloured NPC surfaces today). Under `?surfaceUnified=on` the A10-M2
+    // block below threads the Surface(0x08) render-state flags through
+    // (transparent/additive/clipmap/luminous/diffuse), closing the F.41
+    // flat-opaque gap (A10 §3 row 3).
     const mat = new THREE.MeshStandardMaterial({
       map: tex,
       roughness: 0.9,
@@ -2776,6 +2786,28 @@ export class MaterialCache {
     tex.wrapS = tex.wrapT = isStippled
       ? THREE.RepeatWrapping
       : THREE.ClampToEdgeWrapping;
+    // === A10-M2 (2026-06-11) — `?surfaceUnified=on` thread render-state flags ===
+    // Retail funnels EVERY drawn surface — including recoloured/entity-owned ones
+    // — through the SAME render-state decision (D3DPolyRender::SetSurface,
+    // acclient.c:454385; there is no special recolour path). Default OFF keeps the
+    // legacy plain-opaque material (rollback). When ON, run the single decoder so
+    // a recoloured NPC/gear surface with Translucent/Additive/ClipMap/luminosity
+    // renders correctly instead of flat-opaque (A10 §3 row 3). The decoder is a
+    // no-op when `surfaceType === 0` (empty/fallback), so opaque recolours are
+    // byte-identical to the legacy path. `tex` is passed as `emissiveMap` source
+    // for luminous surfaces (the resolved FF-modulate reading, M1 header).
+    if (readSurfaceUnifiedFlag()) {
+      applySurfaceRenderState(
+        mat,
+        {
+          flags: surfaceType,
+          translucency: sfTranslucency,
+          luminosity: sfLuminosity,
+          diffuse: sfDiffuse,
+        },
+        { texture: tex },
+      );
+    }
     return mat;
   }
 

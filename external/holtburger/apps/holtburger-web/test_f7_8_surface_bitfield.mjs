@@ -23,6 +23,14 @@
 //      independent flag decoding (simulates the wasm-side back-face
 //      emission — Rust emits two tris with different surface_dids
 //      and the JS side caches each in MaterialCache).
+//   4. A10-M1 — `?surfaceUnified=on` routes the cache path through the
+//      single `applySurfaceRenderState`; 70/70 flag×float combos prove the
+//      cache path == the unified fn byte-identical.
+//   5. A10-M2 — `?surfaceUnified=on` threads the render-state flags through
+//      the entity-owned (F.41 recolour) path `_buildEntityOwnedFromPixels`:
+//      default-off stays plain opaque (rollback); ON, an Additive/Translucent/
+//      luminous recolour decodes correctly and matches the unified decode for
+//      the same flags+floats; `surfaceType===0` recolours stay a no-op.
 //
 // Falls back to the host's installed copy of `three` (Playwright is
 // bundled at ~/.npm/_npx/.../node_modules/three on this box). If
@@ -583,6 +591,170 @@ check(
     `blending=${matOff.blending}, src=${matOff.blendSrc}, dst=${matOff.blendDst}`,
   );
 }
+
+// ---- Stage 5: A10-M2 entity-owned (F.41 recolour) path threads flags ----
+// `_buildEntityOwnedFromPixels` (the F.41 entity recolour path) historically
+// built a plain opaque MeshStandardMaterial — a recoloured NPC/gear surface with
+// Translucent/Additive/ClipMap/luminosity rendered flat-opaque (A10 §3 row 3).
+// Under `?surfaceUnified=on` it now runs the same `applySurfaceRenderState`
+// decoder as every other surface (retail: D3DPolyRender::SetSurface is the SOLE
+// funnel, acclient.c:454385). Default OFF keeps the legacy plain-opaque material.
+//
+// The factory stripped the bare `./adapter.js` import, so inject a minimal
+// `surfacePixelsToTexture` global the closure can resolve. We also need a real
+// `MaterialCache` instance to call the private method on.
+globalThis.surfacePixelsToTexture = (pixels, w, h) => {
+  const t = new THREE.DataTexture(
+    pixels, w, h, THREE.RGBAFormat, THREE.UnsignedByteType,
+  );
+  t.needsUpdate = true;
+  return t;
+};
+
+function makeSP({ surfaceType = 0, translucency = 0, luminosity = 0, diffuse = 0 }) {
+  return {
+    width: 1,
+    height: 1,
+    pixels: new Uint8Array([128, 128, 128, 255]),
+    surfaceType,
+    translucency,
+    luminosity,
+    diffuse,
+    free() {},
+  };
+}
+
+const cacheM2 = new MaterialCache();
+
+// (5a) Default OFF — entity-owned recolour stays plain opaque even with an
+// Additive surfaceType (legacy / rollback behaviour preserved).
+setUnifiedFlag(false);
+const m2Off = cacheM2._buildEntityOwnedFromPixels(
+  0x09000A01, makeSP({ surfaceType: SURFACE_TYPE.Additive }),
+);
+check(
+  "A10-M2 default-off: entity-owned Additive surface stays plain opaque (legacy)",
+  m2Off &&
+    m2Off.transparent === false &&
+    m2Off.blending === THREE.NormalBlending &&
+    m2Off.userData.surfaceTypeFlags === SURFACE_TYPE.Additive,
+  `transparent=${m2Off?.transparent}, blending=${m2Off?.blending}`,
+);
+
+// (5b) Flag ON — Additive recolour now blends additively (the row-3 fix).
+setUnifiedFlag(true);
+const m2Add = cacheM2._buildEntityOwnedFromPixels(
+  0x09000A02, makeSP({ surfaceType: SURFACE_TYPE.Additive }),
+);
+check(
+  "A10-M2 unified: entity-owned Additive surface → AdditiveBlending, transparent, depthWrite off",
+  m2Add &&
+    m2Add.blending === THREE.AdditiveBlending &&
+    m2Add.transparent === true &&
+    m2Add.depthWrite === false,
+  `blending=${m2Add?.blending}, transparent=${m2Add?.transparent}, depthWrite=${m2Add?.depthWrite}`,
+);
+
+// (5c) Flag ON — Translucent recolour blends + honours the translucency float.
+const m2Trans = cacheM2._buildEntityOwnedFromPixels(
+  0x09000A03, makeSP({ surfaceType: SURFACE_TYPE.Translucent, translucency: 0.25 }),
+);
+check(
+  "A10-M2 unified: entity-owned Translucent (T=0.25) → transparent, opacity=0.75",
+  m2Trans &&
+    m2Trans.transparent === true &&
+    m2Trans.depthWrite === false &&
+    Math.abs(m2Trans.opacity - 0.75) < 1e-6,
+  `transparent=${m2Trans?.transparent}, opacity=${m2Trans?.opacity}`,
+);
+
+// (5d) Flag ON — luminous recolour WITH a render-state bit set (here Translucent)
+// self-illuminates AND attaches the recoloured texture as emissiveMap (the
+// FF-modulate reading carried from M1). This is the dyed-luminous wash-to-white
+// fix now reaching the recolour path too. (A pure luminosity float with flags=0
+// is a decoder no-op — see 5e and the M1 `flags===0` early-return contract — so
+// the bit-bearing case is what exercises the luminous branch through M2.)
+const m2Lum = cacheM2._buildEntityOwnedFromPixels(
+  0x09000A04, makeSP({ surfaceType: SURFACE_TYPE.Translucent, luminosity: 0.6 }),
+);
+check(
+  "A10-M2 unified: entity-owned luminous → emissive white, intensity=0.6, emissiveMap=its own texture",
+  m2Lum &&
+    m2Lum.emissive &&
+    m2Lum.emissive.r === 1 &&
+    Math.abs(m2Lum.emissiveIntensity - 0.6) < 1e-6 &&
+    m2Lum.emissiveMap === m2Lum.map,
+  `emissive=${JSON.stringify(m2Lum?.emissive)}, intensity=${m2Lum?.emissiveIntensity}, mapMatch=${m2Lum?.emissiveMap === m2Lum?.map}`,
+);
+
+// (5e) Flag ON — surfaceType 0 (plain opaque recolour) is a decoder no-op, so it
+// stays byte-identical to the default-off material (the common NPC-dye case must
+// not regress).
+const m2Plain = cacheM2._buildEntityOwnedFromPixels(
+  0x09000A05, makeSP({ surfaceType: 0 }),
+);
+check(
+  "A10-M2 unified: surfaceType=0 recolour stays plain opaque (decoder no-op)",
+  m2Plain &&
+    m2Plain.transparent === false &&
+    m2Plain.blending === THREE.NormalBlending &&
+    m2Plain.alphaTest === 0 &&
+    m2Plain.emissiveIntensity === 1 &&
+    m2Plain.emissiveMap === null,
+  `transparent=${m2Plain?.transparent}, blending=${m2Plain?.blending}, emissiveMap=${m2Plain?.emissiveMap}`,
+);
+
+// (5f) Equivalence: the entity-owned ON-path render-state props match the cache
+// path's unified decode for the same flags+floats (the unification invariant —
+// retail has ONE decision point for ALL surfaces).
+setUnifiedFlag(true);
+for (const [st, fl2] of [
+  [SURFACE_TYPE.Additive, {}],
+  [SURFACE_TYPE.Translucent, { translucency: 0.25 }],
+  [SURFACE_TYPE.Base1ClipMap, {}],
+  [SURFACE_TYPE.Alpha, {}],
+  [0, { luminosity: 0.6 }],
+]) {
+  const eoMat = cacheM2._buildEntityOwnedFromPixels(
+    0x09001000 + st, makeSP({ surfaceType: st, ...fl2 }),
+  );
+  // Reference material: a default opaque material run through the unified fn with
+  // the SAME inputs (its own texture as emissiveMap source).
+  const refMat = new THREE.MeshStandardMaterial({
+    map: eoMat.map,
+    roughness: 0.9,
+    metalness: 0.0,
+    side: THREE.DoubleSide,
+    transparent: false,
+  });
+  applySurfaceRenderState(
+    refMat,
+    {
+      flags: st,
+      translucency: fl2.translucency ?? 0,
+      luminosity: fl2.luminosity ?? 0,
+      diffuse: fl2.diffuse ?? 0,
+    },
+    { texture: eoMat.map },
+  );
+  const cmp2 = (() => {
+    for (const k of DECODER_PROPS) {
+      if (eoMat[k] !== refMat[k]) return { ok: false, k, a: eoMat[k], b: refMat[k] };
+    }
+    if ((eoMat.emissive?.getHex() ?? null) !== (refMat.emissive?.getHex() ?? null))
+      return { ok: false, k: "emissive" };
+    if ((eoMat.emissiveMap === eoMat.map) !== (refMat.emissiveMap === eoMat.map))
+      return { ok: false, k: "emissiveMap" };
+    return { ok: true };
+  })();
+  check(
+    `A10-M2 equivalence: entity-owned ON == unified decode for surfaceType=0x${st.toString(16)}`,
+    cmp2.ok,
+    cmp2.ok ? "" : `prop ${cmp2.k}: entity=${cmp2.a} unified=${cmp2.b}`,
+  );
+}
+setUnifiedFlag(false);
+delete globalThis.surfacePixelsToTexture;
 
 // restore
 if (_prevWindow === undefined) delete globalThis.window;
