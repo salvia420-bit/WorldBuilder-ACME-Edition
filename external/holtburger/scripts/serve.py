@@ -190,6 +190,14 @@ class Handler(SimpleHTTPRequestHandler):
     caching makes inner-loop iteration confusing). Caching for production-shaped
     runs is applied by proxy.cjs in front, not here."""
 
+    # Login-boot diagnosis 2026-06-11: SimpleHTTPRequestHandler defaults to
+    # HTTP/1.0 — one TCP connection per request, no keep-alive. A cold boot is
+    # ~1,700 requests (144 modules + shards) and the connect storm overflowed
+    # the accept queue (kernel ListenOverflows climbing during boots, 1.02s
+    # retransmit tails measured). HTTP/1.1 keep-alive is safe here:
+    # SimpleHTTPRequestHandler always sends Content-Length.
+    protocol_version = "HTTP/1.1"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HOLT_ROOT), **kwargs)
 
@@ -212,6 +220,14 @@ class Handler(SimpleHTTPRequestHandler):
         status = getattr(self, "_hb_status", 0)
         if path.startswith("/dist/shards/") and 200 <= status < 300:
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        elif path.endswith((".js", ".mjs", ".wasm", ".bin", ".hba")) and not path.endswith("manifest.json"):
+            # Login-boot diagnosis 2026-06-11: no-store forced a full ~23MB /
+            # 150-request re-download on EVERY reload and retry cycle.
+            # `no-cache` (without no-store) still revalidates every request —
+            # hot-reload freshness is preserved — but unchanged bodies
+            # collapse to 304s via SimpleHTTPRequestHandler's built-in
+            # If-Modified-Since handling.
+            self.send_header("Cache-Control", "no-cache")
         else:
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.send_header("Pragma", "no-cache")
@@ -260,7 +276,13 @@ def main() -> None:
         print("[serve] --check OK" + (" (with --allow-missing)" if failures else ": all required layers present."), file=sys.stderr)
         return
 
-    httpd = ThreadingHTTPServer((args.bind, args.port), Handler)
+    # Login-boot diagnosis 2026-06-11: the default request_queue_size of 5
+    # dropped handshakes under the boot fan-out (proxy.cjs opens unbounded
+    # parallel upstream sockets). 1024 absorbs any realistic burst.
+    class Srv(ThreadingHTTPServer):
+        request_queue_size = 1024
+
+    httpd = Srv((args.bind, args.port), Handler)
     url = f"http://{args.bind}:{args.port}/apps/holtburger-web/index.html"
     print(f"[serve] serving {HOLT_ROOT} (threaded, no-cache)\n[serve] open {url}", file=sys.stderr)
     try:

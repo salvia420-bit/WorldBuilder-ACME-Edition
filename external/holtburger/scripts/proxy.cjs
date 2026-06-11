@@ -22,6 +22,13 @@ const PROXY_PORT = 7080;
 const HTTP_BACKEND = { host: "127.0.0.1", port: 8765 };
 const WS_BACKEND = { host: "127.0.0.1", port: 8080 };
 
+// Login-boot diagnosis 2026-06-11: the default global agent opens an
+// unbounded number of parallel upstream sockets (maxSockets=Infinity),
+// which overflowed serve.py's accept queue during the boot fan-out.
+// A bounded keep-alive pool caps upstream concurrency at a level the
+// listener absorbs and reuses sockets now that serve.py speaks HTTP/1.1.
+const upstreamAgent = new http.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 16 });
+
 function proxyHttp(clientReq, clientRes) {
   // Strip /wsbridge prefix if it ever shows up as a regular HTTP request
   // (it shouldn't — that path is only for upgrade requests — but be safe).
@@ -45,6 +52,7 @@ function proxyHttp(clientReq, clientRes) {
     {
       host: HTTP_BACKEND.host,
       port: HTTP_BACKEND.port,
+      agent: upstreamAgent,
       method: clientReq.method,
       path: targetPath,
       headers: { ...clientReq.headers, host: `${HTTP_BACKEND.host}:${HTTP_BACKEND.port}` },

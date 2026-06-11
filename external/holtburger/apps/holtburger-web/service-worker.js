@@ -39,13 +39,18 @@ const BOOT_PREFETCH_URLS = [
   // (Actually — manifest.json is intentionally re-fetched each load
   // per the SW header comment; pre-fetching it would race with that
   // refresh intent. Skip.)
-  "boot.hba",
-  "manifest/holtburger-core.bin",
+  // Login-boot diagnosis 2026-06-11: these were scope-relative
+  // ("boot.hba" → /apps/holtburger-web/boot.hba) and 404'd on EVERY
+  // install since the day they shipped — the real assets live under
+  // /dist/. The warming never happened; the page always fetched these
+  // cold at peak boot fan-out.
+  "../../dist/boot.hba",
+  "../../dist/manifest/holtburger-core.bin",
   // eor-cell.bin is 15 MB — too big for an install-time pre-fetch
   // (would block SW activation on slow connections). Lazy-fetch as
   // before. eor-portal.bin (1.5 MB) is borderline; include it since
   // every page load touches it for the EnvCell pipeline.
-  "manifest/eor-portal.bin",
+  "../../dist/manifest/eor-portal.bin",
 ];
 
 self.addEventListener("install", (event) => {
@@ -67,6 +72,11 @@ self.addEventListener("install", (event) => {
               const res = await fetch(req);
               if (res.ok && res.type === "basic") {
                 await cache.put(req, res.clone());
+              } else {
+                // A non-ok prefetch is a broken warming path — make it
+                // loud so a regression is visible (this exact failure
+                // was silent for weeks as a warn-on-throw only).
+                console.error("[holtburger-sw] boot prefetch non-ok:", path, res.status);
               }
             } catch (e) {
               console.warn("[holtburger-sw] boot prefetch failed:", path, e);

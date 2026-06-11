@@ -9119,6 +9119,28 @@ void main() {
                   ts: Date.now(),
                   reason: evt.stringPayload || "",
                 };
+                // Login-boot diagnosis 2026-06-11 (fix 9): the zombie
+                // state — world rendered, dead socket, wields/chat
+                // silently dropped — was indistinguishable from
+                // connected because loginStatus is hidden in agent
+                // mode. Surface an unmissable in-world banner.
+                try {
+                  if (window.__bootState === "in-world" || window.__bootState === "ready") {
+                    let b = document.getElementById("hbDisconnectBanner");
+                    if (!b) {
+                      b = document.createElement("div");
+                      b.id = "hbDisconnectBanner";
+                      b.style.cssText =
+                        "position:fixed;top:0;left:0;right:0;z-index:99999;" +
+                        "background:#a00;color:#fff;font:bold 16px/1.6 monospace;" +
+                        "text-align:center;padding:6px;";
+                      document.body.appendChild(b);
+                    }
+                    b.textContent =
+                      "DISCONNECTED — session dead, reload to reconnect" +
+                      (evt.stringPayload ? ` (${evt.stringPayload})` : "");
+                  }
+                } catch (_) { /* banner is best-effort */ }
                 return; // Stop polling.
               } else if (evt.kind === 20) {
                 // CharacterError — ACE wire-level signal. See
@@ -11034,10 +11056,34 @@ void main() {
               return `character-error-${ce.code}`;
             }
             const dc = window.__lastDisconnect;
-            if (dc && dc.ts >= since) return "kick"; // ACE terminated
+            if (dc && dc.ts >= since) {
+              // Kick-dance race fix (2026-06-11): a disconnect arriving
+              // just after THIS attempt fired is usually the PREVIOUS
+              // attempt's socket being booted by ACE in OUR favor
+              // ("booting currently connected account"), not a kick of
+              // this attempt. Classifying it as "kick" immediately made
+              // the dance reconnect on top of its own successful
+              // connection — each retry booted its live predecessor,
+              // forever (converged on low-RTT localhost, never on the
+              // 1070's +180ms link). Give char-list a grace window
+              // before conceding; only then treat it as a real kick.
+              const graceDeadline = Math.min(deadline, Date.now() + 5000);
+              while (Date.now() < graceDeadline) {
+                if (activeHandle?.characterList) return "char-list";
+                if (window.__bootState === "error") return "error";
+                await sleep(50);
+              }
+              return "kick"; // ACE terminated
+            }
             if (window.__bootState === "error") return "error";
             await sleep(50);
           }
+          // Login-boot diagnosis 2026-06-11 (fix 6): success may land
+          // exactly as the deadline expires (event-loop jank under the
+          // boot fan-out). A late char-list is still a success — without
+          // this check it returned "timeout" and the retry booted the
+          // live session.
+          if (activeHandle?.characterList) return "char-list";
           return "timeout";
         };
 
@@ -11079,6 +11125,21 @@ void main() {
             if (dc && dc.ts >= since) return "disconnect";
             if (window.__bootState === "error") return "error";
             await sleep(50);
+          }
+          // Login-boot diagnosis 2026-06-11 (fix 6): same late-success
+          // check as waitForConnectOutcome — an in-world transition that
+          // landed at the deadline edge must not be classified "timeout"
+          // (the retry would kick the freshly-spawned session).
+          if (window.__bootState === "in-world" || window.__bootState === "ready") return "in-world";
+          {
+            const history = window.__bootStateHistory;
+            if (Array.isArray(history)) {
+              for (let i = history.length - 1; i >= 0; i--) {
+                const entry = history[i];
+                if (!entry || entry.ts < since) break;
+                if (entry.state === "in-world") return "in-world";
+              }
+            }
           }
           return "timeout";
         };
@@ -11126,8 +11187,23 @@ void main() {
             }
 
             const attemptStartTs = Date.now();
-            fireSubmit();
-            const connectOutcome = await waitForConnectOutcome(connectTimeoutMs, attemptStartTs);
+            let connectOutcome;
+            if (attempt > 0 && activeHandle?.characterList) {
+              // Kick-dance race fix (2026-06-11): the char list landed
+              // DURING the adaptive kick wait — the previous attempt
+              // actually succeeded. Re-firing submit here would null
+              // activeHandle, orphan the live session as a zombie, and
+              // open a new connection that boots it. Use the live
+              // session instead of reconnecting.
+              setBootState(
+                "char-list-ready",
+                `attempt ${attempt}/${maxRetries + 1} succeeded during kick wait — skipping reconnect`,
+              );
+              connectOutcome = "char-list";
+            } else {
+              fireSubmit();
+              connectOutcome = await waitForConnectOutcome(connectTimeoutMs, attemptStartTs);
+            }
 
             if (connectOutcome === "kick") {
               // Wire-level signal: ACE kicked the account. Retry.
