@@ -496,6 +496,27 @@ const IDLE_FIDGET_ON = (() => {
     return false;
   }
 })();
+// G-4 / F3-1 follow-on (2026-06-11) — `?projectileGravity=on` gates the
+// ballistic ARC for gravity-class projectiles (arrows/bolts/thrown — the
+// spawns whose ObjectCreate carried PhysicsState::GRAVITY 0x400 alongside
+// MISSILE 0x40; war-magic bolts fly flat in retail and are untouched).
+// When on, tick()'s ballistic branch applies -9.8 z" (AC world frame,
+// ACE PhysicsGlobals gravity) to `lastVel` before integrating, so the
+// flight curves instead of flying constant-velocity. Default OFF
+// (motion-adjacent visual) pending a 1070 GPU eye-test; inert for any
+// pkg/ predating the `entityProjectileHasGravity` export (soft-guarded,
+// wasm manifest v2).
+const PROJECTILE_GRAVITY_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("projectileGravity")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+const PROJECTILE_GRAVITY_Z = -9.8; // m/s^2, AC frame (z up)
 // Coarse timer cadence (ms) — how often the per-entity idle-fidget bookkeeping
 // runs in tick(). The whole IDLE_FIDGET feature is inert when the flag is off,
 // and even when on this only walks the entity map ~3x/sec (no per-frame cost on
@@ -2916,6 +2937,10 @@ export class EntityManager {
         inst.lastVelMs =
           typeof performance !== "undefined" ? performance.now() : 0;
         inst._ballistic = true;
+        // G-4 (?projectileGravity=on): arc the flight for gravity-class
+        // missiles. Sampled once at spawn (classification is spawn-static).
+        inst._ballisticGravity =
+          PROJECTILE_GRAVITY_ON && this.projectileHasGravity(guid);
       }
     }
     // Track B2 (motion-audit, 2026-06-09): replay any PlayEffects that raced
@@ -4363,6 +4388,28 @@ export class EntityManager {
       if (typeof window !== "undefined" && window.__sessionHandle
           && typeof window.__sessionHandle.entityIsProjectile === "function") {
         return !!window.__sessionHandle.entityIsProjectile(g);
+      }
+    } catch (_) { /* never break callers */ }
+    return false;
+  }
+
+  /**
+   * G-4 / F3-1 follow-on (2026-06-11): `true` when the projectile's
+   * ObjectCreate carried PhysicsState::GRAVITY in addition to MISSILE
+   * (arrows/bolts/thrown — the arced class). Mirrors isProjectile's
+   * access shape; soft-guarded so a pkg/ predating the wasm manifest-v2
+   * `entityProjectileHasGravity` export degrades to `false` (flat flight).
+   *
+   * @param {number} guid — entity GUID to query
+   * @returns {boolean}
+   */
+  projectileHasGravity(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return false;
+    try {
+      if (typeof window !== "undefined" && window.__sessionHandle
+          && typeof window.__sessionHandle.entityProjectileHasGravity === "function") {
+        return !!window.__sessionHandle.entityProjectileHasGravity(g);
       }
     } catch (_) { /* never break callers */ }
     return false;
@@ -8672,6 +8719,13 @@ export class EntityManager {
       // near the target. `_ballistic` + `lastVel` seeded in _spawnImpl.
       if (inst._ballistic && inst.lastVel) {
         const lv = inst.lastVel;
+        // G-4 (?projectileGravity=on): semi-implicit Euler — decay the
+        // vertical velocity first, then integrate, so the arc matches the
+        // retail ballistic shape for gravity-class missiles. Flag off /
+        // non-gravity class / stale pkg → lv.vz untouched (flat flight).
+        if (inst._ballisticGravity) {
+          lv.vz += PROJECTILE_GRAVITY_Z * dt;
+        }
         const pos = inst.root.position;
         pos.x += lv.vx * dt;
         pos.y += lv.vy * dt;

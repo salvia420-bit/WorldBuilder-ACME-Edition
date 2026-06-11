@@ -348,7 +348,11 @@ pub fn build_info() -> String {
 /// jump-arc fix). The compile-time git SHA stamping (the nicer half of F18-2)
 /// is a build-pipeline follow-on; this manual-but-reliable version handshake
 /// is the part that needs no build-system changes.
-pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 1;
+// v2 (2026-06-11): + `SessionHandle.entityProjectileHasGravity` (G-4
+// projectile gravity arc). index.html's EXPECTED stays at 1 until the
+// `?projectileGravity` flag integrates always-on (the JS consumer is
+// flag-gated + typeof-guarded, so a v1 pkg soft-degrades to flat flight).
+pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 2;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
 /// `>=` its compiled-in expectation at boot; a mismatch — or this function
@@ -22328,6 +22332,12 @@ fn apply_inventory_object_create(
     // the time the ObjectCreate side-effects propagate.
     if entity.physics_state.contains(PhysicsState::MISSILE) {
         projectile_index.borrow_mut().insert(u32::from(guid));
+        // G-4 / F3-1 follow-on: arced-missile classification (see the
+        // PROJECTILE_GRAVITY_GUIDS doc). MISSILE alone = flat flight.
+        if entity.physics_state.contains(PhysicsState::GRAVITY) {
+            PROJECTILE_GRAVITY_GUIDS
+                .with(|g| g.borrow_mut().insert(u32::from(guid)));
+        }
     }
 
     // Direct insert via the public EntityManager — skips the
@@ -22517,6 +22527,8 @@ fn apply_inventory_object_delete(
     // delete arm runs. Cheap O(1) removal; absent GUIDs are a no-op (the
     // set just won't contain non-projectile deletes).
     projectile_index.borrow_mut().remove(&g_u32);
+    // G-4 / F3-1 follow-on: symmetric prune of the gravity classification.
+    PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow_mut().remove(&g_u32));
 
     // CMT Wave 16 / Phase 50 (2026-05-26): PhysicsScriptTable index
     // cleanup. Symmetric with the projectile-index path above so the
@@ -24227,6 +24239,22 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = entityIsProjectile)]
     pub fn entity_is_projectile(&self, guid: u32) -> bool {
         self.projectile_index.borrow().contains(&guid)
+    }
+
+    /// G-4 / F3-1 follow-on (2026-06-11, `?projectileGravity=on`): `true`
+    /// when the projectile's ObjectCreate carried `PhysicsState::GRAVITY`
+    /// (0x400) in addition to MISSILE — the arced-missile class
+    /// (arrows/bolts/thrown). The JS ballistic integrator applies -9.8 z"
+    /// to `lastVel` each frame when this is set AND the URL flag is on.
+    /// Mirrors `entityIsProjectile`'s access shape; backed by the
+    /// `PROJECTILE_GRAVITY_GUIDS` thread_local (no per-handle field).
+    /// SOFT-GUARDED in JS (`typeof === "function"`) because pkg/ lags the
+    /// Rust source between batch rebuilds; bump
+    /// `EXPECTED_WASM_MANIFEST_VERSION` (index.html) to 2 when the flag
+    /// integrates always-on.
+    #[wasm_bindgen(js_name = entityProjectileHasGravity)]
+    pub fn entity_projectile_has_gravity(&self, guid: u32) -> bool {
+        PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow().contains(&guid))
     }
 
     /// **CMT Wave 16 / Phase 50 (2026-05-26).** Cached
@@ -28480,6 +28508,25 @@ fn fallback_self_movement_capabilities() -> holtburger_world::SelfMovementCapabi
 thread_local! {
     static LATEST_RUN_RATE: std::cell::Cell<f32> =
         const { std::cell::Cell::new(FALLBACK_RUN_RATE_SCALAR) };
+}
+
+// G-4 / F3-1 follow-on (2026-06-11, ?projectileGravity=on): per-GUID set of
+// in-flight projectiles whose ObjectCreate PhysicsDesc carried BOTH
+// `PhysicsState::MISSILE` (0x40) and `PhysicsState::GRAVITY` (0x400) — i.e.
+// arced missiles (arrows/bolts/thrown weapons; ACE
+// `SetProjectilePhysicsState` sets GRAVITY from the spell/weenie
+// `NonTracking`+gravity flags, war-magic bolts fly flat without it). A
+// thread_local parallel to `SessionHandle.projectile_index` (single-threaded
+// wasm; same pattern as `LATEST_RUN_RATE`) so no recv-loop parameter
+// threading is needed. Populated in `apply_inventory_object_create`
+// alongside the projectile_index insert, pruned in
+// `apply_inventory_object_delete`. Read by
+// `SessionHandle::entity_projectile_has_gravity`; the JS ballistic
+// integrator (entities.js tick) applies -9.8 z" when the flag is on.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static PROJECTILE_GRAVITY_GUIDS: std::cell::RefCell<std::collections::HashSet<u32>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
 /// T1 (2026-06-03) — free wasm export of the cached player run-rate (ACE
