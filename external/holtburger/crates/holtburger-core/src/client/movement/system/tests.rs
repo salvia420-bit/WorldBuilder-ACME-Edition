@@ -3790,3 +3790,60 @@ fn test_backup_pose_for_step_down_set_and_clear_round_trip() {
         "clearing the backup pose must restore None"
     );
 }
+
+// === G-6 / F4-2 follow-on (2026-06-11): slide-along-contour tangent math ===
+
+/// Oblique approach at a too-steep face: the into-slope component is shed
+/// and the along-contour component survives untouched.
+#[test]
+fn test_terrain_contour_slide_oblique_keeps_tangent_component() {
+    // Face leaning toward -Y (uphill is +Y): normal XY points at -Y.
+    // Steeper than FloorZ (z component 0.5 < 0.664174).
+    let normal = Vector3::new(0.0, -0.866, 0.5);
+    // 45° approach: half uphill (+Y), half along the contour (+X).
+    let lateral = Vector3::new(0.3, 0.3, 0.0);
+    let slide = terrain_contour_slide(lateral, normal).expect("oblique approach must slide");
+    // Into-slope (Y) component gone, contour (X) component preserved.
+    assert!(slide.y.abs() < 1e-6, "into-slope component must be shed, got {slide:?}");
+    assert!((slide.x - 0.3).abs() < 1e-6, "contour component must survive, got {slide:?}");
+    // And the slide is perpendicular to the contour wall normal.
+    let wall = Vector3::new(0.0, -1.0, 0.0);
+    assert!(slide.dot(&wall).abs() < 1e-6);
+}
+
+/// Head-on approach (straight uphill): the tangent component is negligible
+/// → `None`, the caller keeps the retail hard stop at the cliff base.
+#[test]
+fn test_terrain_contour_slide_head_on_returns_none() {
+    let normal = Vector3::new(0.0, -0.866, 0.5);
+    let lateral = Vector3::new(0.0, 0.5, 0.0); // straight uphill
+    assert!(terrain_contour_slide(lateral, normal).is_none());
+}
+
+/// Degenerate face with no XY lean (flat ground) → `None`. Can't happen
+/// for a refused face (n.z < FloorZ implies XY lean) but the guard holds.
+#[test]
+fn test_terrain_contour_slide_flat_normal_returns_none() {
+    let normal = Vector3::new(0.0, 0.0, 1.0);
+    let lateral = Vector3::new(0.4, 0.2, 0.0);
+    assert!(terrain_contour_slide(lateral, normal).is_none());
+}
+
+/// The slide never gains an into-slope component regardless of approach
+/// angle — sweep a few headings and assert dot(slide, wall_xy) ≈ 0.
+#[test]
+fn test_terrain_contour_slide_never_into_slope() {
+    let normal = Vector3::new(0.6, -0.6, 0.52);
+    let n_xy_len = (normal.x * normal.x + normal.y * normal.y).sqrt();
+    let wall = Vector3::new(normal.x / n_xy_len, normal.y / n_xy_len, 0.0);
+    for i in 0..16 {
+        let ang = (i as f32) * std::f32::consts::TAU / 16.0;
+        let lateral = Vector3::new(ang.cos() * 0.4, ang.sin() * 0.4, 0.0);
+        if let Some(slide) = terrain_contour_slide(lateral, normal) {
+            assert!(
+                slide.dot(&wall).abs() < 1e-5,
+                "slide {slide:?} has an into-slope component for heading {ang}"
+            );
+        }
+    }
+}

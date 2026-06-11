@@ -569,6 +569,40 @@ fn edge_slide_refused_step_up(
     lateral_clamped + slide
 }
 
+/// G-6 / F4-2 follow-on (2026-06-11) — slide-along-contour for a REFUSED
+/// uphill terrain step (the [`USE_TERRAIN_WALKABLE_GATE`] cliff refusal).
+/// Retail doesn't stop dead at a too-steep face: the un-walkable contact
+/// plane sheds the into-slope component and the walker skids along the
+/// contour line (the same `Sphere.SlideSphere` tangent projection the
+/// indoor edge_slide reuses). The contour "wall" is the face normal
+/// projected to XY and normalized — the horizontal direction pointing
+/// away from the slope; sliding the lateral move against it leaves
+/// exactly the along-contour component.
+///
+/// Returns `None` when there is nothing useful to slide: a face with no
+/// XY lean (degenerate for a refused face — `n.z < FLOOR_Z` implies a
+/// strong XY component, but guard anyway) or a head-on approach whose
+/// tangent component is negligible (the hard stop is then correct).
+fn terrain_contour_slide(lateral: Vector3, terrain_normal: Vector3) -> Option<Vector3> {
+    let n_xy_len = (terrain_normal.x * terrain_normal.x
+        + terrain_normal.y * terrain_normal.y)
+        .sqrt();
+    if n_xy_len < 1e-6 {
+        return None;
+    }
+    let contour_wall = Vector3 {
+        x: terrain_normal.x / n_xy_len,
+        y: terrain_normal.y / n_xy_len,
+        z: 0.0,
+    };
+    let slide =
+        holtburger_world::spatial::slide_residual_along_wall_tangent(lateral, contour_wall);
+    if slide.x * slide.x + slide.y * slide.y < 1e-10 {
+        return None;
+    }
+    Some(slide)
+}
+
 #[derive(Debug, Default)]
 struct MovementSequenceDiagnostics {
     last_force_position_sequence: Option<u16>,
@@ -2305,14 +2339,74 @@ impl MovementSystem {
                     // Retail/ACE refuse a contact plane steeper than FloorZ
                     // (~48.4°) and never let it become walkable; our snap
                     // raised Z onto ANY rise, so cliffs were climbable at full
-                    // run speed. Refuse the climb: revert the lateral advance
-                    // to the slice-entry XY (stop at the cliff base) and skip
-                    // the up-snap so no height is gained onto the face. Walking
-                    // ALONG the base is unaffected (its destination terrain is
-                    // walkable, so this arm isn't taken). Slide-along-contour
-                    // is a documented follow-on.
-                    pose.coords.x = entry_local_xy.0;
-                    pose.coords.y = entry_local_xy.1;
+                    // run speed. Refuse the climb: no height is ever gained
+                    // onto the face. Walking ALONG the base is unaffected (its
+                    // destination terrain is walkable, so this arm isn't
+                    // taken).
+                    //
+                    // G-6 / F4-2 follow-on (2026-06-11) — slide-along-contour.
+                    // Instead of the original hard stop at the slice-entry XY,
+                    // project the refused lateral onto the slope contour
+                    // ([`terrain_contour_slide`], the edge_slide tangent
+                    // reused) and take the slid step IF its destination passes
+                    // the same gates (not a too-steep uphill face, not a
+                    // blocked water cell) — an oblique run at a cliff skids
+                    // along the base like retail instead of sticking. Head-on
+                    // approaches (negligible tangent) and refused slid
+                    // destinations keep the hard stop. Same
+                    // USE_TERRAIN_WALKABLE_GATE flag — this branch only runs
+                    // with the gate on.
+                    let mut slid = false;
+                    if let Some(slide) = world
+                        .terrain_normal_at(global.x, global.y)
+                        .and_then(|n| {
+                            terrain_contour_slide(
+                                Vector3 {
+                                    x: pose.coords.x - entry_local_xy.0,
+                                    y: pose.coords.y - entry_local_xy.1,
+                                    z: 0.0,
+                                },
+                                n,
+                            )
+                        })
+                    {
+                        // Local deltas equal global deltas (the landblock
+                        // offset is a pure translation).
+                        let cand_local =
+                            (entry_local_xy.0 + slide.x, entry_local_xy.1 + slide.y);
+                        let cand_global = (
+                            global.x + (cand_local.0 - pose.coords.x),
+                            global.y + (cand_local.1 - pose.coords.y),
+                        );
+                        let water_blocked = USE_WATER_COLLISION
+                            && world.is_entirely_water_cell_at(cand_global.0, cand_global.1);
+                        if !water_blocked
+                            && let Some(cand_z) =
+                                world.terrain_height_at(cand_global.0, cand_global.1)
+                        {
+                            let cand_steep_uphill = cand_z > pose.coords.z
+                                && world
+                                    .terrain_normal_at(cand_global.0, cand_global.1)
+                                    .map(|n| n.z < holtburger_world::spatial::FLOOR_Z)
+                                    .unwrap_or(false);
+                            // Conservative Z handling: follow the surface only
+                            // within the legacy ledge threshold; a bigger Z
+                            // delta keeps the entry Z and lets the next tick's
+                            // ledge/step logic decide.
+                            if !cand_steep_uphill {
+                                pose.coords.x = cand_local.0;
+                                pose.coords.y = cand_local.1;
+                                if (cand_z - pose.coords.z).abs() <= 0.5 {
+                                    pose.coords.z = cand_z;
+                                }
+                                slid = true;
+                            }
+                        }
+                    }
+                    if !slid {
+                        pose.coords.x = entry_local_xy.0;
+                        pose.coords.y = entry_local_xy.1;
+                    }
                 } else {
                     // Wave 5 Phase 5.1 (movement-animation overhaul,
                     // 2026-05-26): walked-off-ledge detection. When the
