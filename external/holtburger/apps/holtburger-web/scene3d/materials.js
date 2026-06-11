@@ -1017,6 +1017,122 @@ export function readFlatDiffuseRetailFlag() {
   }
 }
 
+// === A10-M1 (unification, 2026-06-11) — single surface render-state decoder ===
+// The JS analogue of retail's sole `D3DPolyRender::SetSurface`
+// (acclient.c:454385-454565). Before this, the Surface (0x08) flag→three.js
+// blend/emissive/diffuse ladder was decoded at TWO sites that had already
+// drifted: `MaterialCache._materialFromFlags` (cache path) attached the diffuse
+// texture as an `emissiveMap` for luminous surfaces, while
+// `EntityManager._applyPalettedSurfaceRenderState` (dyed/paletted path)
+// explicitly did NOT — both citing the SAME retail line (acclient.c:454691-454697)
+// with opposite readings (A10 survey §3 row 2; ROADMAP §7 item 2). A dyed luminous
+// item therefore washed to white while its undyed twin glowed correctly.
+//
+// Resolution (ROADMAP §7 ruling, A10 §4 Stage M1): adopt the emissiveMap-attached
+// reading. Retail's grayscale D3D emissive (Emissive.rgb = luminosity,
+// acclient.c:454691-454697) is MODULATED by the diffuse texture in the
+// fixed-function combiner (TEXOP_MODULATE stage 0, acclient.c:454429-454432) —
+// final ≈ texture × (lighting + emissive). three.js' `emissive` is ADDED and is
+// texture-modulated ONLY when an `emissiveMap` is set; without one a flat-white
+// emissive ADD washes the texture to pure white. So attaching the diffuse texture
+// as emissiveMap reproduces retail's texture×emissive for COLOURED luminous
+// surfaces (e.g. the blue lifestone crystal glows in its own colour, brighter).
+//
+// MUTATES `mat` in place (settable post-construction with `needsUpdate`):
+//   - `state`: { flags, translucency, luminosity, diffuse } (the Surface bitfield
+//     + the trailing T/L/D float triplet).
+//   - `opts.texture`: the diffuse map, used as `emissiveMap` for luminous surfaces.
+// Returns nothing. Does NOT touch `userData.surfaceTypeFlags` bookkeeping — each
+// caller owns that (the cache path stores it via meshToGeometryGroups; the
+// paletted path stamps it before delegating). `flags === 0` (empty/fallback
+// surface) is a no-op so it stays opaque, matching both legacy sites.
+export function applySurfaceRenderState(mat, state, opts) {
+  if (!mat || !state) return;
+  const flags = (state.flags ?? 0) >>> 0;
+  if (flags === 0) return; // fail-soft: empty/fallback surface stays opaque
+  const sfTranslucency = +(state.translucency ?? 0.0);
+  const sfLuminosity = +(state.luminosity ?? 0.0);
+  const sfDiffuse = +(state.diffuse ?? 0.0);
+  const texture = opts?.texture ?? null;
+  const isTranslucent = (flags & SURFACE_TYPE.Translucent) !== 0;
+  const isClipMap = (flags & SURFACE_TYPE.Base1ClipMap) !== 0;
+  const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0;
+  const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
+  const isInvAlpha = (flags & SURFACE_TYPE.InvAlpha) !== 0;
+  if (isAdditive && isAlpha) {
+    // Wave-3 M1: Alpha+Additive (0x10000|0x100) blends SRCALPHA/ONE, not ONE/ONE
+    // — the additive contribution is weighted by per-texel source alpha (retail
+    // acclient.c:454474). depthWrite off so the halo doesn't occlude geometry.
+    mat.blending = THREE.CustomBlending;
+    mat.blendSrc = THREE.SrcAlphaFactor;
+    mat.blendDst = THREE.OneFactor;
+    mat.blendEquation = THREE.AddEquation;
+    mat.transparent = true;
+    mat.depthWrite = false;
+  } else if (isAdditive) {
+    // Pure-additive (no Alpha bit) → ONE/ONE (flames, sparks); depthWrite off so
+    // they don't occlude geometry behind them.
+    mat.blending = THREE.AdditiveBlending;
+    mat.transparent = true;
+    mat.depthWrite = false;
+  } else if (isTranslucent || isAlpha || isInvAlpha) {
+    // Alpha blend (SRCALPHA/INVSRCALPHA), depthWrite off — painter-sorted. Retail
+    // routes both Translucent (0x10, acclient.c:454513) and Alpha (0x100, :454470)
+    // through this blend state. InvAlpha (0x200) first-cut shares it (census-zero
+    // in retail base DAT; true inverse blend deferred — A10 §3 row 6).
+    mat.transparent = true;
+    mat.depthWrite = false;
+    // Translucent's alpha = 1 - T (acclient.c:454523); Alpha (0x100) takes its
+    // alpha from the texture channel, so only adjust opacity for Translucent T>0.
+    if (isTranslucent && sfTranslucency > 0) {
+      mat.opacity = Math.max(0, 1 - sfTranslucency);
+      // DIM7-5 / W4.2: stash the AUTHORED base translucency so a later
+      // Transparent(20)/TransparentPart(7) hook ramp can floor against it — retail
+      // floors `_end` to translucencyOriginal (acclient.c:316947-316956).
+      mat.userData = { ...(mat.userData || {}), __baseTranslucency: sfTranslucency };
+    }
+  } else if (isClipMap) {
+    // Binary alpha mask (foliage, fences) — alphaTest cuts alpha=0 frags.
+    mat.alphaTest = 0.5;
+    mat.transparent = false;
+  }
+  if (sfLuminosity > 0) {
+    // Self-illumination driven by the luminosity FLOAT (not the 0x40 bit). Keep
+    // emissive=white scaled by luminosity AND attach the diffuse texture as
+    // emissiveMap (the resolved reading — see header). Untextured luminous
+    // surfaces keep the flat-white glow. Clamp to (0, 2] (ACE ~[0,1] with
+    // occasional HDR-ish pushes >1).
+    mat.emissive = new THREE.Color(0xffffff);
+    mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
+    if (texture) mat.emissiveMap = texture;
+  }
+  // Diffuse-reflectance albedo tint — retail uses `diffuse` as a reflectance
+  // multiplier on the material's diffuse colour (acclient.c:454458). No-op at
+  // d≈1 (~96% of surfaces); dims the d≠1 minority. Multiplies with `map`.
+  if (sfDiffuse > 0 && Math.abs(sfDiffuse - 1.0) > 0.01) {
+    mat.color = new THREE.Color(sfDiffuse, sfDiffuse, sfDiffuse);
+  }
+  mat.needsUpdate = true;
+}
+
+// === A10-M1 (unification, 2026-06-11) — `?surfaceUnified=on` opt-in =========
+// When ON, both Surface-flag decode sites delegate to the single
+// `applySurfaceRenderState` above (the dyed/paletted path then ALSO attaches the
+// luminous emissiveMap, fixing the dyed-luminous wash-to-white). Default OFF
+// keeps the legacy dual-path (byte-identical on the cache path — only the
+// paletted path's emissiveMap differs). JS-live (reload to toggle).
+export function readSurfaceUnifiedFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("surfaceUnified");
+    if (typeof v !== "string") return false;
+    const lv = v.toLowerCase();
+    return lv === "on" || lv === "1" || lv === "true";
+  } catch (_) {
+    return false;
+  }
+}
+
 // L4 — categories that get the flat-diffuse treatment under
 // `?flatDiffuse=retail`. Metal (the over-glossy offender) + Lava (so the
 // emissive bloom reads instead of a specular sheen). Stone/Wood/Sand/Foliage
@@ -1893,7 +2009,16 @@ export class MaterialCache {
     // the bits (emissive @454688, diffuse @454458).
     const isLuminous = (flags & SURFACE_TYPE.Luminous) !== 0;
     const hasLum = sfLuminosity > 0;
-    if (isAdditive && isAlpha) {
+    // === A10-M1 (2026-06-11) — single-decoder delegation =====================
+    // When `?surfaceUnified=on`, defer the blend/emissive/diffuse ladder to the
+    // shared `applySurfaceRenderState` (post-construction, mutating the built
+    // material) so this path and the dyed/paletted path run ONE decoder. Default
+    // OFF keeps the inline `opts` ladder below — byte-identical output (the
+    // unified function adopts this path's emissiveMap reading, and the inline
+    // writes vs post-construction `needsUpdate` writes resolve to the same
+    // MeshStandardMaterial props).
+    const useUnifiedDecoder = readSurfaceUnifiedFlag();
+    if (!useUnifiedDecoder && isAdditive && isAlpha) {
       // Wave-3 M1 — Alpha+Additive (0x10000|0x100): the additive
       // contribution is WEIGHTED by per-texel source alpha, not added at
       // full RGB. Retail D3DPolyRender::SetSurface (acclient.c:454474) sets
@@ -1911,7 +2036,7 @@ export class MaterialCache {
       opts.blendEquation = THREE.AddEquation;
       opts.transparent = true;
       opts.depthWrite = false;
-    } else if (isAdditive) {
+    } else if (!useUnifiedDecoder && isAdditive) {
       // Pure-additive (Additive without the Alpha bit): retail resolves to
       // src=BLEND_ONE(2)/dst=BLEND_ONE(2) (acclient.c:454474, the non-Alpha
       // path), which THREE.AdditiveBlending matches exactly. 19 retail
@@ -1920,7 +2045,7 @@ export class MaterialCache {
       opts.blending = THREE.AdditiveBlending;
       opts.transparent = true;
       opts.depthWrite = false;
-    } else if (isTranslucent || isAlpha || isInvAlpha) {
+    } else if (!useUnifiedDecoder && (isTranslucent || isAlpha || isInvAlpha)) {
       // Alpha blend (SRCALPHA/INVSRCALPHA), depthWrite off — the renderer
       // painter-sorts transparent objects. Retail routes both Translucent
       // (0x10, acclient.c:454513) and Alpha (0x100, :454470) through this
@@ -1935,13 +2060,13 @@ export class MaterialCache {
       if (isTranslucent && sfTranslucency > 0) {
         opts.opacity = Math.max(0, 1 - sfTranslucency);
       }
-    } else if (isClipMap) {
+    } else if (!useUnifiedDecoder && isClipMap) {
       // Binary alpha mask (foliage, fences). alphaTest cuts the
       // alpha=0 fragments at rasterise time → no transparency sort.
       opts.alphaTest = 0.5;
       opts.transparent = false;
     }
-    if (hasLum) {
+    if (!useUnifiedDecoder && hasLum) {
       // Self-illumination, driven by the per-surface luminosity FLOAT
       // (not the never-set 0x40 bit). Retail's grayscale D3D emissive
       // (D3DMATERIAL9.Emissive.rgb = luminosity, acclient.c
@@ -1972,10 +2097,25 @@ export class MaterialCache {
     // No-op at d≈1.0 (~96% of retail surfaces); dims the 241 with d≠1.
     // d==0 (2 surfaces) is left full-bright rather than forced black,
     // pending the GPU eye-test.
-    if (sfDiffuse > 0 && Math.abs(sfDiffuse - 1.0) > 0.01) {
+    if (!useUnifiedDecoder && sfDiffuse > 0 && Math.abs(sfDiffuse - 1.0) > 0.01) {
       opts.color = new THREE.Color(sfDiffuse, sfDiffuse, sfDiffuse);
     }
     const mat = new THREE.MeshStandardMaterial(opts);
+
+    // === A10-M1 (2026-06-11) — run the single decoder on the built material ===
+    // When `?surfaceUnified=on` the inline `opts` ladder above was skipped; apply
+    // the unified render-state now (mutates `mat` + sets `needsUpdate`). The
+    // `__baseTranslucency` userData it stamps for Translucent>0 is harmless on
+    // the cache path (only the hook-ramp clock reads it). Built with default
+    // opts (transparent:false, alphaTest:0) so the decoder starts from the same
+    // baseline as the legacy branches.
+    if (useUnifiedDecoder) {
+      applySurfaceRenderState(
+        mat,
+        { flags, translucency: sfTranslucency, luminosity: sfLuminosity, diffuse: sfDiffuse },
+        { texture },
+      );
+    }
 
     // Phase 1.1 — procedural normal map. Wasm skips Luminous surfaces
     // (empty normal_pixels → null texture), so `!isLuminous` is

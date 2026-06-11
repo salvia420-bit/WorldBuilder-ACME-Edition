@@ -367,7 +367,12 @@ import {
 } from "./adapter.js";
 import { AnimationCache, cycleTimeScale } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
-import { materialCanCastShadow, SURFACE_TYPE } from "./materials.js";
+import {
+  materialCanCastShadow,
+  SURFACE_TYPE,
+  applySurfaceRenderState,
+  readSurfaceUnifiedFlag,
+} from "./materials.js";
 import { drainPendingPlayEffects } from "./play_effect_vfx.js";
 import {
   showSpeechBubbleOnEntity,
@@ -3411,6 +3416,23 @@ export class EntityManager {
     const sfTranslucency = +(state.translucency ?? 0.0);
     const sfLuminosity = +(state.luminosity ?? 0.0);
     const sfDiffuse = +(state.diffuse ?? 0.0);
+    // === A10-M1 (2026-06-11) — delegate to the single decoder ================
+    // When `?surfaceUnified=on`, route through the shared
+    // `applySurfaceRenderState` (materials.js) so the dyed/paletted path and the
+    // cache path run ONE decoder. This ALSO attaches the luminous emissiveMap
+    // (the diffuse-recoloured map, `mat.map`) — the resolved reading that fixes
+    // dyed luminous gear washing to white (A10 §3 row 2; ROADMAP §7 item 2).
+    // Default OFF keeps the legacy inline ladder below (NO emissiveMap — the
+    // wrong reading, kept for byte-identical rollback only). The userData
+    // surfaceTypeFlags stamp above is preserved for the hook-ramp clock.
+    if (readSurfaceUnifiedFlag()) {
+      applySurfaceRenderState(
+        mat,
+        { flags, translucency: sfTranslucency, luminosity: sfLuminosity, diffuse: sfDiffuse },
+        { texture: mat.map ?? null },
+      );
+      return;
+    }
     const isTranslucent = (flags & SURFACE_TYPE.Translucent) !== 0;
     const isClipMap = (flags & SURFACE_TYPE.Base1ClipMap) !== 0;
     const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0;
@@ -3459,8 +3481,15 @@ export class EntityManager {
     }
     if (sfLuminosity > 0) {
       // Self-illumination driven by the luminosity FLOAT (not the 0x40 bit).
-      // Flat grayscale emissive, NO emissiveMap (acclient.c @454688). Clamp
-      // to (0, 2] (ACE ~[0,1] with occasional HDR pushes).
+      // LEGACY (?surfaceUnified off): flat grayscale emissive with NO
+      // emissiveMap. NOTE — this is the WRONG reading: retail's grayscale
+      // emissive is MODULATED by the diffuse texture in the FF combiner
+      // (acclient.c:454691-454697 + 454429-454432), so omitting the emissiveMap
+      // washes a COLOURED dyed-luminous surface to white (A10 §3 row 2). The
+      // correct reading (emissiveMap = mat.map) lives in
+      // `applySurfaceRenderState` (materials.js) and is taken when
+      // `?surfaceUnified=on`. Kept here only for byte-identical flag-off
+      // rollback. Clamp to (0, 2] (ACE ~[0,1] with occasional HDR pushes).
       mat.emissive = new THREE.Color(0xffffff);
       mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
     }

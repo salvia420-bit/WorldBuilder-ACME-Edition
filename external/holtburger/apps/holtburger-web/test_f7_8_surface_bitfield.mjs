@@ -116,9 +116,10 @@ const patched = matSrc
 
 const factory = new Function(
   "THREE",
-  `${patched}\n; return { MaterialCache, SURFACE_TYPE };`,
+  `${patched}\n; return { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag };`,
 );
-const { MaterialCache, SURFACE_TYPE } = factory(THREE);
+const { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag } =
+  factory(THREE);
 
 // ---- Stage 1: SURFACE_TYPE bit-value verification -------------------
 check(
@@ -241,9 +242,14 @@ check(
   `emissive=${JSON.stringify(matLum.emissive)}, intensity=${matLum.emissiveIntensity}`,
 );
 check(
-  "luminosity float>0: NO emissiveMap (retail flat grayscale, acclient.c @454688)",
-  !matLum.emissiveMap,
-  `emissiveMap=${matLum.emissiveMap}`,
+  // A10-M1 (2026-06-11): the cache path attaches the diffuse texture as
+  // emissiveMap so retail's texture×emissive (FF combiner, acclient.c:454691-
+  // 454697 + 454429-454432) is reproduced — a coloured luminous surface glows
+  // in its own colour instead of washing to white. (Superseded the old
+  // "NO emissiveMap" reading; see A10 §3 row 2.)
+  "luminosity float>0 WITH texture: emissiveMap = the diffuse texture",
+  matLum.emissiveMap === stubTex,
+  `emissiveMap=${matLum.emissiveMap?.uuid}, stub=${stubTex.uuid}`,
 );
 check(
   "luminosity float clamps to 2.0",
@@ -314,10 +320,10 @@ check(
 // (g) Combined Translucent bit + luminosity float → both applied.
 const matComboTL = fl(SURFACE_TYPE.Translucent, { luminosity: 0.4 });
 check(
-  "Translucent + lum float: transparent=true AND flat emissive (no map)",
+  "Translucent + lum float: transparent=true AND emissive white + emissiveMap=texture",
   matComboTL.transparent === true &&
     matComboTL.emissive.r === 1 &&
-    !matComboTL.emissiveMap,
+    matComboTL.emissiveMap === stubTex,
   `transparent=${matComboTL.transparent}, emissive=${JSON.stringify(matComboTL.emissive)}, hasMap=${!!matComboTL.emissiveMap}`,
 );
 
@@ -400,10 +406,10 @@ check(
   `transparent=${matA.transparent}, flags=0x${matA.userData.surfaceTypeFlags.toString(16)}`,
 );
 check(
-  "two-sided distinct: matB self-illuminates from its luminosity float",
+  "two-sided distinct: matB self-illuminates from its luminosity float (texture-modulated emissiveMap)",
   matB.emissive &&
     matB.emissive.r === 1 &&
-    !matB.emissiveMap &&
+    matB.emissiveMap === cache2.textures.get(0x08000A02) &&
     Math.abs(matB.emissiveIntensity - 0.7) < 1e-6,
   `emissive=${JSON.stringify(matB.emissive)}, hasMap=${!!matB.emissiveMap}, intensity=${matB.emissiveIntensity}`,
 );
@@ -412,6 +418,175 @@ check(
   cache2.materials.size === 2,
   `cache2.materials.size=${cache2.materials.size}`,
 );
+
+// ---- Stage 4: A10-M1 single-decoder prop-equality -------------------
+// The unified `applySurfaceRenderState` (materials.js) is the JS analogue of
+// retail's sole `D3DPolyRender::SetSurface`. With `?surfaceUnified=on` BOTH
+// decode sites delegate to it. This stage asserts byte-identical render-state
+// props across the flag×float matrix between:
+//   (A) `_materialFromFlags` with the flag ON (it builds a fresh material then
+//       calls the unified function), and
+//   (B) the unified function applied directly to a default material
+//       (the shape the paletted/entity path delegates with).
+// The render-state props compared are exactly those the decoder owns:
+// transparent, depthWrite, blending, blendSrc, blendDst, blendEquation,
+// opacity, alphaTest, emissive(.getHex), emissiveIntensity, emissiveMap,
+// color(.getHex). (Normal-map/POM/CSM/detail gates are off on a bare cache,
+// so they don't perturb the comparison.)
+
+// Fake a default-off then default-on `window.location.search` so
+// `readSurfaceUnifiedFlag()` flips. Restored after the stage.
+const _prevWindow = globalThis.window;
+function setUnifiedFlag(on) {
+  globalThis.window = { location: { search: on ? "?surfaceUnified=on" : "" } };
+}
+
+setUnifiedFlag(true);
+check(
+  "?surfaceUnified=on → readSurfaceUnifiedFlag() true",
+  readSurfaceUnifiedFlag() === true,
+  `got=${readSurfaceUnifiedFlag()}`,
+);
+setUnifiedFlag(false);
+check(
+  "no flag → readSurfaceUnifiedFlag() false (default off)",
+  readSurfaceUnifiedFlag() === false,
+  `got=${readSurfaceUnifiedFlag()}`,
+);
+
+const DECODER_PROPS = [
+  "transparent",
+  "depthWrite",
+  "blending",
+  "blendSrc",
+  "blendDst",
+  "blendEquation",
+  "opacity",
+  "alphaTest",
+  "emissiveIntensity",
+];
+function snapshotDecoderProps(mat) {
+  const snap = {};
+  for (const k of DECODER_PROPS) snap[k] = mat[k];
+  snap.emissive = mat.emissive ? mat.emissive.getHex() : null;
+  snap.color = mat.color ? mat.color.getHex() : null;
+  // Compare emissiveMap by identity-to-the-input-texture (true/false), since the
+  // two paths legitimately reference the same `stubTex`.
+  snap.emissiveMapIsTex = mat.emissiveMap === stubTex;
+  return snap;
+}
+function propsEqual(a, b) {
+  for (const k of Object.keys(a)) {
+    if (a[k] !== b[k]) return { ok: false, k, a: a[k], b: b[k] };
+  }
+  return { ok: true };
+}
+
+const F = SURFACE_TYPE;
+const FLAG_COMBOS = [
+  0,
+  F.Translucent,
+  F.Base1ClipMap,
+  F.Alpha,
+  F.InvAlpha,
+  F.Additive,
+  F.Additive | F.Alpha,
+  F.Translucent | F.Additive,
+  F.Luminous,
+  F.Translucent | F.Luminous,
+];
+const FLOAT_COMBOS = [
+  undefined,
+  { luminosity: 0.5 },
+  { luminosity: 9.0 },
+  { diffuse: 0.5 },
+  { diffuse: 1.0 },
+  { translucency: 0.3 },
+  { translucency: 0.3, luminosity: 0.6, diffuse: 0.4 },
+];
+
+const cacheU = new MaterialCache();
+let comboFails = 0;
+let comboCount = 0;
+for (const flags of FLAG_COMBOS) {
+  for (const floats of FLOAT_COMBOS) {
+    comboCount += 1;
+    // (A) cache path with the flag ON.
+    setUnifiedFlag(true);
+    const matA = cacheU._materialFromFlags(
+      flags >>> 0, stubTex, undefined, undefined, undefined, undefined, floats,
+    );
+    // (B) unified function applied directly to a default material — the shape
+    // the paletted/entity path delegates with.
+    const matB = new THREE.MeshStandardMaterial({
+      map: stubTex,
+      roughness: 0.9,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+      transparent: false,
+      alphaTest: 0,
+    });
+    applySurfaceRenderState(
+      matB,
+      {
+        flags: flags >>> 0,
+        translucency: floats?.translucency ?? 0,
+        luminosity: floats?.luminosity ?? 0,
+        diffuse: floats?.diffuse ?? 0,
+      },
+      { texture: stubTex },
+    );
+    setUnifiedFlag(false);
+    const cmp = propsEqual(snapshotDecoderProps(matA), snapshotDecoderProps(matB));
+    if (!cmp.ok) {
+      comboFails += 1;
+      console.log(
+        `  [FAIL] combo flags=0x${(flags >>> 0).toString(16)} floats=${JSON.stringify(floats)}` +
+          ` — prop ${cmp.k}: cache=${cmp.a} unified=${cmp.b}`,
+      );
+    }
+  }
+}
+check(
+  `A10-M1 prop-equality: ${comboCount - comboFails}/${comboCount} flag×float combos byte-identical (cache path == unified fn)`,
+  comboFails === 0,
+  comboFails === 0 ? "" : `${comboFails} combo(s) diverged`,
+);
+
+// Spot-check the load-bearing fix: a luminous combo under the unified decoder
+// attaches the emissiveMap (the dyed-luminous wash-to-white fix).
+{
+  setUnifiedFlag(true);
+  const matLumU = cacheU._materialFromFlags(
+    F.Luminous, stubTex, undefined, undefined, undefined, undefined, { luminosity: 0.6 },
+  );
+  setUnifiedFlag(false);
+  check(
+    "A10-M1 unified: luminous surface attaches emissiveMap=texture",
+    matLumU.emissiveMap === stubTex,
+    `emissiveMap=${matLumU.emissiveMap?.uuid}`,
+  );
+}
+
+// Default-off rollback: with no flag the cache path is unchanged (still attaches
+// emissiveMap because that fix predates M1; the point is the inline ladder runs).
+{
+  setUnifiedFlag(false);
+  const matOff = cacheU._materialFromFlags(
+    F.Additive | F.Alpha, stubTex, undefined, undefined, undefined, undefined, undefined,
+  );
+  check(
+    "A10-M1 default-off: cache path inline ladder still resolves Alpha+Additive (CustomBlending)",
+    matOff.blending === THREE.CustomBlending &&
+      matOff.blendSrc === THREE.SrcAlphaFactor &&
+      matOff.blendDst === THREE.OneFactor,
+    `blending=${matOff.blending}, src=${matOff.blendSrc}, dst=${matOff.blendDst}`,
+  );
+}
+
+// restore
+if (_prevWindow === undefined) delete globalThis.window;
+else globalThis.window = _prevWindow;
 
 // ---- summary --------------------------------------------------------
 console.log("=========================");
