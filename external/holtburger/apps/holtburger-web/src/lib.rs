@@ -76,6 +76,20 @@ fn parse_wielded_spawn_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "wieldedSpawn=on")
 }
 
+/// A8-M1 (2026-06-11, unification survey): parse `?worldLifecycle=on`
+/// (or `&worldLifecycle=on`). Same shape as `parse_seq_debug_flag` —
+/// read once at recv_loop start, stashed as a local `bool`. When on,
+/// the entity-lifecycle message family (ObjectCreate / ObjectDelete /
+/// InventoryRemoveObject / ParentEvent / PickupEvent) is routed through
+/// the canonical `holtburger_world` dispatcher instead of the
+/// `apply_inventory_object_*` spatial-bypass copies — see
+/// `should_route_message_to_world` for the root-cause history.
+#[cfg(target_arch = "wasm32")]
+fn parse_world_lifecycle_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "worldLifecycle=on")
+}
+
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
 /// (the wire opcode read at `game_event.rs:97`). Used by the
 /// `[seq-gap]` observability hook to bucket sequence trackers per
@@ -21910,19 +21924,44 @@ mod tests_player_enchantment_snapshot_shape {
 /// gating, MovementSystem heartbeat arming) and double-handling them
 /// risks regressing step 3.6 / 3.5.
 ///
-/// **`ObjectCreate` / `ObjectDelete` / `ParentEvent` / `PickupEvent` /
-/// `InventoryRemoveObject` are deliberately NOT routed.** The world's
-/// `inventory::handle_message` for `ObjectCreate` calls
-/// `state.upsert_entity_from_create` → `add_entity` → `scene.update_entity`
-/// + `reconcile_authoritative_body`, which trips a wasm `unreachable`
-/// panic in the spatial body store (the wasm bundle doesn't drive the
-/// full physics tick the cli does, so some spatial preconditions
-/// aren't met). Inventory tracking bypasses routing for these
-/// variants — `apply_inventory_object_create` /
+/// **Lifecycle family (`ObjectCreate` / `ObjectDelete` / `ParentEvent`
+/// / `PickupEvent` / `InventoryRemoveObject`): routed ONLY under
+/// `?worldLifecycle=on` (A8-M1, default-off).** History: the original
+/// exclusion (commit f62877dc, 2026-05-08) blamed a wasm `unreachable`
+/// panic on "the spatial body store" (`scene.update_entity` +
+/// `reconcile_authoritative_body`). A8-M1's diagnosis (2026-06-11)
+/// disproved that attribution: both functions were ALREADY pure
+/// HashMap work on `web_time::Instant` at f62877dc. The only
+/// `std::time` call in the routed ObjectCreate call graph was
+/// `WorldState::current_server_time()`'s wall-clock fallback
+/// (`std::time::SystemTime::now()`, which hard-panics on
+/// wasm32-unknown-unknown with "time not implemented on this
+/// platform"), reached via `reconcile_entity_retention` /
+/// `upsert_entity_from_create`'s lifecycle stamping — and every wasm
+/// panic surfaces as the bare `unreachable` trap, hence the
+/// misattribution. That exact panic was independently re-discovered
+/// and fixed on 2026-06-06 (commit 6e8d0c8e: `web_time::SystemTime`
+/// swap in `state/types.rs::current_server_time`), so the canonical
+/// path is wasm-safe today.
+///
+/// With the flag OFF (default), inventory tracking keeps the bespoke
+/// bypass — `apply_inventory_object_create` /
 /// `apply_inventory_object_delete` below replicate the
 /// inventory-relevant subset of the canonical handlers (entity
 /// insert, `add_to_inventory` / `remove_from_inventory`, equipment
-/// bookkeeping) without touching spatial state.
+/// bookkeeping) without touching spatial state. With the flag ON,
+/// `holtburger_world` (handlers/inventory.rs + state/liveness.rs)
+/// becomes the single lifecycle owner on wasm — retail's one-owner
+/// `CObjectMaint` model (decl acclient.c:6135-6173; single
+/// `DeleteObject` funnel acclient.c:309918-309936) — and the bypass
+/// helpers are skipped (bridge-local index maintenance still runs;
+/// see `maintain_bridge_indexes_on_routed_create`). NOTE: canonical
+/// ObjectDelete defers eviction to `mark_entity_explicit_delete` +
+/// the `world.tick()` sweep (`liveness.rs`), which does not run on
+/// wasm until A8-M2 lands — so the flag stays default-off until M2
+/// completes the pair. Rig events (KIND_SPAWN / KIND_REMOVE) are
+/// emitted by the wire-data arms either way; consolidating those onto
+/// `WorldEvent::EntitySpawned/EntityDespawned` is the M2/M3 follow-on.
 ///
 /// `GameEvent` IS routed because PlayerDescription drives the load-
 /// bearing first kind=8 event via login::handle_event +
@@ -21930,8 +21969,26 @@ mod tests_player_enchantment_snapshot_shape {
 /// ViewContents, IdentifyObjectResponse, WieldObject) all hit
 /// inventory / properties handlers that don't touch the spatial path.
 #[cfg(target_arch = "wasm32")]
-fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMessage) -> bool {
+fn should_route_message_to_world(
+    message: &holtburger_protocol::messages::GameMessage,
+    world_lifecycle_on: bool,
+) -> bool {
     use holtburger_protocol::messages::GameMessage;
+    // A8-M1 (2026-06-11): canonical lifecycle routing, gated
+    // `?worldLifecycle=on` (default OFF — see the doc comment above
+    // for the diagnosis + the M2 tick dependency).
+    if world_lifecycle_on
+        && matches!(
+            message,
+            GameMessage::ObjectCreate(_)
+                | GameMessage::ObjectDelete(_)
+                | GameMessage::InventoryRemoveObject(_)
+                | GameMessage::ParentEvent(_)
+                | GameMessage::PickupEvent(_)
+        )
+    {
+        return true;
+    }
     matches!(
         message,
         GameMessage::PrivateUpdateVital(_)
@@ -22475,6 +22532,121 @@ fn strip_wielder_index_item(
     idx.retain(|_, entries| !entries.is_empty());
 }
 
+/// A8-M1 (2026-06-11): bridge-local index maintenance for an
+/// `ObjectCreate` that was routed through the CANONICAL world
+/// dispatcher (`?worldLifecycle=on`). The canonical
+/// `inventory::handle_message` owns all world-state mutation
+/// (entity upsert via `upsert_entity_from_create`, player
+/// inventory/equipment via `sync_player_ownership_for_entity`,
+/// lifecycle stamps via `reconcile_entity_retention`) — but the
+/// wasm-bridge-local JS-facing indexes are not its concern, so this
+/// helper replicates exactly the index side of
+/// `apply_inventory_object_create` against the now-inserted world
+/// entity:
+/// - `physics_script_table_did` stamp + `physics_script_table_index`
+///   (CMT Wave 16 / Phase 50; retail acclient.c:322321-322331 /
+///   acclient.c:320886-320900 two-source chain),
+/// - projectile classification (`PhysicsState::MISSILE` →
+///   `projectile_index`, `+GRAVITY` → `PROJECTILE_GRAVITY_GUIDS`),
+/// - per-wielder weapon index (`upsert_wielder_index`, same gate +
+///   entry shape as the bypass path).
+#[cfg(target_arch = "wasm32")]
+fn maintain_bridge_indexes_on_routed_create(
+    world: &mut holtburger_world::WorldState,
+    guid: holtburger_common::Guid,
+    wielder_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    >,
+    projectile_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashSet<u32>>,
+    >,
+    physics_script_table_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    >,
+) {
+    use holtburger_common::properties::PhysicsState;
+    if let Some(entity) = world.entities.get_mut(guid) {
+        let table_did = resolve_physics_script_table_did(entity);
+        entity.physics_script_table_did = table_did;
+        let g_u32 = u32::from(guid);
+        if table_did != 0 {
+            physics_script_table_index.borrow_mut().insert(g_u32, table_did);
+        }
+        if entity.physics_state.contains(PhysicsState::MISSILE) {
+            projectile_index.borrow_mut().insert(g_u32);
+            if entity.physics_state.contains(PhysicsState::GRAVITY) {
+                PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow_mut().insert(g_u32));
+            }
+        }
+    }
+    upsert_wielder_index(world, guid, wielder_index);
+}
+
+/// A8-M1 (2026-06-11): bridge-local index cleanup for an entity-removal
+/// signal (`ObjectDelete` / `InventoryRemoveObject`). Extracted
+/// verbatim from `apply_inventory_object_delete` (which now calls it)
+/// so the `?worldLifecycle=on` routed path can run the SAME cleanup
+/// without duplicating the world-state mutation the canonical handler
+/// owns (`update_player_inventory_recursive` +
+/// `mark_entity_explicit_delete`; eviction itself lands in the
+/// `world.tick()` sweep once A8-M2 wires it on wasm).
+#[cfg(target_arch = "wasm32")]
+fn maintain_bridge_indexes_on_delete(
+    guid: holtburger_common::Guid,
+    wielder_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    >,
+    projectile_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashSet<u32>>,
+    >,
+    physics_script_table_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    >,
+    entity_enchantments_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
+    >,
+) {
+    // CMT Wave 2 / Phase 5 (2026-05-26): wielder-index cleanup. The
+    // deleted GUID can be either (a) a weapon item that was wielded by
+    // some entity — drop the entry from that entity's list, or (b) the
+    // wielder itself (an NPC/monster despawning) — drop the entire
+    // list. Both cases happen via the same ObjectDelete arm; we handle
+    // both unconditionally because the cost is small (HashMap with at
+    // most a few hundred wielders).
+    let g_u32 = u32::from(guid);
+    let mut idx = wielder_index.borrow_mut();
+    // (a) Strip any wielded-weapon entry whose item_guid matches.
+    for entries in idx.values_mut() {
+        entries.retain(|e| e.item_guid != g_u32);
+    }
+    // (b) The deleted entity itself was a wielder. Drop its bucket.
+    idx.remove(&g_u32);
+    // (c) Prune empty lists left over from (a) so the index doesn't
+    // grow unbounded with dead-wielder buckets.
+    idx.retain(|_, entries| !entries.is_empty());
+    drop(idx);
+
+    // CMT Wave 10 / Phase 30 (2026-05-26): projectile-index cleanup.
+    // Cheap O(1) removal; absent GUIDs are a no-op.
+    projectile_index.borrow_mut().remove(&g_u32);
+    // G-4 / F3-1 follow-on: symmetric prune of the gravity classification.
+    PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow_mut().remove(&g_u32));
+
+    // CMT Wave 16 / Phase 50 (2026-05-26): PhysicsScriptTable index
+    // cleanup — don't accumulate dead-GUID entries over a long session.
+    physics_script_table_index.borrow_mut().remove(&g_u32);
+
+    // === Wave 4.B — remote enchantments index cleanup (2026-05-28) ===
+    entity_enchantments_index.borrow_mut().remove(&g_u32);
+
+    // Wave 2 (2026-06-08, review C3-leak) — prune the per-guid action
+    // stamp-dedup entry so a long session with heavy entity churn
+    // doesn't leak the map.
+    MOTION_ACTION_STAMPS.with(|m| {
+        m.borrow_mut().remove(&g_u32);
+    });
+}
+
 /// Phase 4 step 4 follow-on: spatial-bypass version of
 /// `holtburger_world::handlers::inventory::handle_message`'s
 /// `GameMessage::ObjectDelete` /
@@ -22511,61 +22683,18 @@ fn apply_inventory_object_delete(
     }
     world.entities.remove(guid);
 
-    // CMT Wave 2 / Phase 5 (2026-05-26): wielder-index cleanup. The
-    // deleted GUID can be either (a) a weapon item that was wielded by
-    // some entity — drop the entry from that entity's list, or (b) the
-    // wielder itself (an NPC/monster despawning) — drop the entire
-    // list. Both cases happen via the same ObjectDelete arm; we handle
-    // both unconditionally because the cost is small (HashMap with at
-    // most a few hundred wielders).
-    let g_u32 = u32::from(guid);
-    let mut idx = wielder_index.borrow_mut();
-    // (a) Strip any wielded-weapon entry whose item_guid matches.
-    for entries in idx.values_mut() {
-        entries.retain(|e| e.item_guid != g_u32);
-    }
-    // (b) The deleted entity itself was a wielder. Drop its bucket.
-    idx.remove(&g_u32);
-    // (c) Prune empty lists left over from (a) so the index doesn't
-    // grow unbounded with dead-wielder buckets.
-    idx.retain(|_, entries| !entries.is_empty());
-
-    // CMT Wave 10 / Phase 30 (2026-05-26): projectile-index cleanup.
-    // Both `SpellProjectile.ProjectileImpact` (SpellProjectile.cs:240-243)
-    // and missile-projectile impacts flow into Destroy()/ObjectDelete
-    // after the ~5 s self-destruct chain — see Wave 11 plan for the
-    // `PlayScript::Explode` visual that should fire just before this
-    // delete arm runs. Cheap O(1) removal; absent GUIDs are a no-op (the
-    // set just won't contain non-projectile deletes).
-    projectile_index.borrow_mut().remove(&g_u32);
-    // G-4 / F3-1 follow-on: symmetric prune of the gravity classification.
-    PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow_mut().remove(&g_u32));
-
-    // CMT Wave 16 / Phase 50 (2026-05-26): PhysicsScriptTable index
-    // cleanup. Symmetric with the projectile-index path above so the
-    // cache doesn't accumulate dead-GUID entries over a long session.
-    physics_script_table_index.borrow_mut().remove(&g_u32);
-
-    // === Wave 4.B — remote enchantments index cleanup (2026-05-28) ===
-    //
-    // Same lifetime guarantee as the projectile + physics-script-table
-    // indexes above — when the entity despawns the per-GUID enchantment
-    // list goes with it. The JS consumer (buffs HUD / nameplate sprite)
-    // won't see ObjectDelete events for the entity it's currently
-    // rendering enchantments for anyway, but this guards against the
-    // long-session leak.
-    entity_enchantments_index.borrow_mut().remove(&g_u32);
-
-    // Wave 2 (2026-06-08, review C3-leak) — prune the per-guid action
-    // stamp-dedup entry. `MOTION_ACTION_STAMPS` keys the last-played
-    // 15-bit action sequence by guid; without this prune it grows
-    // unbounded across despawn/relog (a dead guid never re-emits an
-    // action, so its entry would never be overwritten). Mirrors the
-    // per-guid prune discipline of the indexes above so a long session
-    // with heavy entity churn doesn't leak the map.
-    MOTION_ACTION_STAMPS.with(|m| {
-        m.borrow_mut().remove(&g_u32);
-    });
+    // A8-M1 (2026-06-11): the bridge-local index cleanup (wielder /
+    // projectile / gravity / physics-script-table / enchantments /
+    // MOTION_ACTION_STAMPS) is shared with the `?worldLifecycle=on`
+    // routed path — extracted verbatim into
+    // `maintain_bridge_indexes_on_delete`.
+    maintain_bridge_indexes_on_delete(
+        guid,
+        wielder_index,
+        projectile_index,
+        physics_script_table_index,
+        entity_enchantments_index,
+    );
 
     was_owned
 }
@@ -30184,6 +30313,11 @@ async fn recv_loop(
     // ParentEvent time, for (b) emit the kind=7 ATTACH from the ObjectCreate
     // PhysicsDesc parent fields. Default OFF pending a 1070 eye-test.
     let wielded_spawn_on: bool = parse_wielded_spawn_flag(&js_location_search());
+    // A8-M1 (2026-06-11): `?worldLifecycle=on` — route the lifecycle
+    // message family through the canonical world dispatcher (single
+    // CObjectMaint-style owner) instead of the apply_inventory_object_*
+    // bypass copies. Default OFF; see should_route_message_to_world.
+    let world_lifecycle_on: bool = parse_world_lifecycle_flag(&js_location_search());
     // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have
     // a JS-side rig (KIND_SPAWN emitted, no KIND_REMOVE since). Maintained
     // unconditionally (cheap set ops at the existing emission sites), but
@@ -30498,7 +30632,7 @@ async fn recv_loop(
                             _ => {}
                         }
                     }
-                    if should_route_message_to_world(&message)
+                    if should_route_message_to_world(&message, world_lifecycle_on)
                         && let Some(w) = world.as_mut()
                     {
                         let mut world_events: Vec<holtburger_world::WorldEvent> = Vec::new();
@@ -31092,6 +31226,48 @@ async fn recv_loop(
                     // populated snapshot.
                     if let Some(w) = world.as_mut() {
                         match &message {
+                            // A8-M1 (2026-06-11): under `?worldLifecycle=on`
+                            // the canonical world dispatcher (routed above via
+                            // `should_route_message_to_world`) already owns
+                            // ALL world-state mutation for the lifecycle
+                            // family — only the wasm-bridge-local JS-facing
+                            // indexes are maintained here. `inventory_changed`
+                            // for the create case comes from the routed
+                            // `WorldEvent::EntitySpawned/EntityReplaced` arm
+                            // in the scan above; for deletes we set it
+                            // unconditionally (the snapshot builder filters
+                            // by ownership, so a false positive just
+                            // refreshes the panel one extra time — same
+                            // rationale as that arm).
+                            GameMessage::ObjectCreate(data) if world_lifecycle_on => {
+                                maintain_bridge_indexes_on_routed_create(
+                                    w,
+                                    data.public_weenie_desc.guid,
+                                    &wielder_index,
+                                    &projectile_index,
+                                    &physics_script_table_index,
+                                );
+                            }
+                            GameMessage::ObjectDelete(data) if world_lifecycle_on => {
+                                maintain_bridge_indexes_on_delete(
+                                    data.guid,
+                                    &wielder_index,
+                                    &projectile_index,
+                                    &physics_script_table_index,
+                                    &entity_enchantments_index,
+                                );
+                                inventory_changed = true;
+                            }
+                            GameMessage::InventoryRemoveObject(data) if world_lifecycle_on => {
+                                maintain_bridge_indexes_on_delete(
+                                    data.object_guid,
+                                    &wielder_index,
+                                    &projectile_index,
+                                    &physics_script_table_index,
+                                    &entity_enchantments_index,
+                                );
+                                inventory_changed = true;
+                            }
                             GameMessage::ObjectCreate(data) => {
                                 if apply_inventory_object_create(w, data, &wielder_index, &projectile_index, &physics_script_table_index) {
                                     inventory_changed = true;
