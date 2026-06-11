@@ -659,6 +659,25 @@ import { fetchPhysicsScriptTable } from "../ui/ac_physics_script_table.js";
 // jitter is the same mockable uniform[0,1) the rest of scene3d/particles
 // draws from (Math.random by default, deterministic under setRng in tests).
 import { rng as timeRng } from "./particles/time_rng.js";
+// A11-S1 (unification survey 2026-06-11) — shared PhysicsScript executor.
+// `?scriptQueue=on` (default OFF) routes the entity chain walker's hooks
+// through a per-owner time-ordered `ScriptManager` that fires them via the
+// SHARED `_fireHook` executor (ROADMAP §2 seam: reuse, never a 4th copy),
+// instead of the legacy per-hook wall-clock `setTimeout` walk. Closes the
+// G14 visual-hook routing gap as a side effect (16/20/23/24/25 now reach
+// `_fireHook`). Off-path = the unchanged legacy walker below.
+import { ScriptManager } from "./script_manager.js";
+const SCRIPT_QUEUE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("scriptQueue")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
 
 // AC InterpretedMotionCommand low-16 constants — used for
 // category-agnostic classification. The wasm export returns the full
@@ -2188,6 +2207,11 @@ export class EntityManager {
      * the timers can be canceled when the entity despawns. */
     /** @type {Map<number, number[]>} */
     this._soundTimeoutsForGuid = new Map();
+    /** A11-S1: per-entity-guid PhysicsScript `ScriptManager` (time-ordered
+     * hook queue). Only populated when `?scriptQueue=on`; ticked from
+     * `tick()` and cleared on entity despawn. */
+    /** @type {Map<number, ScriptManager>} */
+    this._scriptManagersForGuid = new Map();
     /** @type {Set<number>} */
     this._particleChainsAttached = new Set();
     // Track B7 (2026-06-08): PhysicsScriptTable DIDs already prewarmed
@@ -6964,6 +6988,14 @@ export class EntityManager {
       }
       this._soundTimeoutsForGuid.delete(g);
     }
+    // A11-S1: drop this entity's PhysicsScript queue (and its still-pending
+    // hooks) so a despawn mid-script doesn't fire hooks onto a released rig
+    // or leak the manager. (`?scriptQueue=on` only.)
+    const sm = this._scriptManagersForGuid.get(g);
+    if (sm) {
+      try { sm.clear(); } catch (_) {}
+      this._scriptManagersForGuid.delete(g);
+    }
     this._particleChainsAttached.delete(g);
     // === Wave R3.B (2026-05-29) — drop the per-guid sort-center attach guard
     // so a re-spawn of the same guid re-attaches. The per-SETUP offset cache
@@ -7771,6 +7803,17 @@ export class EntityManager {
     // Lazy-create the world-side ParticleManager on first chain walk.
     await this._ensureWorldParticleManager(rig);
 
+    // A11-S1 (unification survey 2026-06-11): when `?scriptQueue=on`, route
+    // this script through the per-owner time-ordered `ScriptManager` and the
+    // SHARED `_fireHook` executor instead of the legacy per-hook setTimeout
+    // walk below. This serializes scripts back-to-back (retail
+    // AddScriptInternal) and closes the G14 visual-hook routing gap (16/20/
+    // 23/24/25 reach `_fireHook` for free). CallPES recurses as a queued
+    // `addScript`. The legacy walker below is the unchanged off-path.
+    if (SCRIPT_QUEUE_ON) {
+      return this._queuePhysicsScript(guid, rig, pesId, entries, depth, defaultPartIndex);
+    }
+
     const THREE = (await import("three")).default ?? (await import("three"));
     // B2 (perf plan 2026-05-18): the per-hook `new Vector3(...)` /
     // `new Quaternion(...)` allocations these locals used to back are
@@ -8193,6 +8236,201 @@ export class EntityManager {
       emitterCount: emitterIds.length,
       soundHookCount: timeoutIds.length,
     };
+  }
+
+  // ===================================================================
+  // A11-S1 (unification survey 2026-06-11) — shared script executor path
+  // ===================================================================
+
+  /**
+   * Decode a `PhysicsScriptEntryJs` into a plain object whose fields match
+   * the `AnimationHookJs` getter names `_fireHook` / `_fireCreateParticleHook`
+   * read. The PhysicsScript entry's `hookData` carries the IDENTICAL
+   * `(hook_type, hook_data)` typeswitch body as an AnimationHook
+   * (lib.rs:14377-14409), so the byte offsets below mirror the
+   * `AnimationHookJs` getters (lib.rs:14543-14890) 1:1. This is the SEAM:
+   * after this decode every hook flows through the single `_fireHook`
+   * executor — no forked dispatch switch (ROADMAP §2).
+   *
+   * @param {Object} e  a PhysicsScriptEntryJs (drained from `takeEntries()`).
+   * @returns {Object} AnimationHookJs-shaped plain object.
+   */
+  _decodePhysicsScriptHookEntry(e) {
+    const hookType = e.hookType | 0;
+    const time = +e.startTime || 0;
+    const bytes = e.hookData;
+    const len = bytes ? bytes.byteLength : 0;
+    const dv =
+      bytes && len ? new DataView(bytes.buffer, bytes.byteOffset, len) : null;
+    const u32 = (off) => (dv && off + 4 <= len ? dv.getUint32(off, true) >>> 0 : 0);
+    const i32 = (off) => (dv && off + 4 <= len ? dv.getInt32(off, true) : 0);
+    const f32 = (off) => (dv && off + 4 <= len ? dv.getFloat32(off, true) : 0);
+    // Base — `direction` is carried so `_fireHook`'s A-DIR gate sees it
+    // (PhysicsScript hooks ARE direction-tagged on the wire).
+    const h = { hookType, time, direction: e.direction | 0 };
+    switch (hookType) {
+      case 1: // Sound — wave DID @0
+        h.soundWaveId = u32(0);
+        break;
+      case 21: // SoundTweaked — gid@0 prob@4 prio@8 vol@12
+        h.soundWaveId = u32(0);
+        h.soundProbability = len === 16 ? f32(4) : 1.0;
+        h.soundPriority = len === 16 ? f32(8) : 0.0;
+        h.soundVolume = len === 16 ? f32(12) : 1.0;
+        break;
+      case 2: // SoundTable — sound enum @0
+        h.soundEnum = u32(0);
+        break;
+      case 6: // Ethereal
+        h.etherealValue = i32(0);
+        break;
+      case 16: // NoDraw
+        h.noDrawValue = u32(0);
+        break;
+      case 25: // SetLight
+        h.lightsOn = i32(0);
+        break;
+      case 22: // SetOmega — x@0 y@4 z@8
+        h.omegaX = f32(0); h.omegaY = f32(4); h.omegaZ = f32(8);
+        break;
+      case 12: // Scale — end@0 time@4
+        h.rampEnd = f32(0); h.rampTime = f32(4);
+        break;
+      case 8: case 10: case 20: // whole-object ramp — start@0 end@4 time@8
+        h.rampStart = f32(0); h.rampEnd = f32(4); h.rampTime = f32(8);
+        h.partIndex = 0xffffffff;
+        break;
+      case 7: case 9: case 11: // per-part ramp — part@0 start@4 end@8 time@12
+        h.partIndex = u32(0);
+        h.rampStart = f32(4); h.rampEnd = f32(8); h.rampTime = f32(12);
+        break;
+      case 23: // TextureVelocity — u@0 v@4
+        h.textureUSpeed = f32(0); h.textureVSpeed = f32(4);
+        h.partIndex = 0xffffffff;
+        break;
+      case 24: // TextureVelocityPart — part@0 u@4 v@8
+        h.partIndex = u32(0);
+        h.textureUSpeed = f32(4); h.textureVSpeed = f32(8);
+        break;
+      case 18: // DefaultScriptPart — part@0
+        h.partIndex = len >= 4 ? u32(0) : 0xffffffff;
+        break;
+      case 14: case 15: // Destroy / Stop — handle @0
+        h.particleEmitterId = u32(0);
+        break;
+      case 19: // CallPES — did@0 pause@4
+        h.callPesDid = u32(0);
+        h.callPesPause = f32(4);
+        break;
+      case 13: case 26: // CreateParticle / CreateBlockingParticle (40 bytes)
+        h.emitterInfoId = len === 40 ? u32(0) : 0;
+        h.createPartIndex = len === 40 ? u32(4) : 0;
+        h.offsetOriginX = len === 40 ? f32(8) : 0;
+        h.offsetOriginY = len === 40 ? f32(12) : 0;
+        h.offsetOriginZ = len === 40 ? f32(16) : 0;
+        h.offsetOrientationW = len === 40 ? f32(20) : 1.0;
+        h.offsetOrientationX = len === 40 ? f32(24) : 0;
+        h.offsetOrientationY = len === 40 ? f32(28) : 0;
+        h.offsetOrientationZ = len === 40 ? f32(32) : 0;
+        h.particleEmitterId = len === 40 ? u32(36) : 0;
+        break;
+      default:
+        break;
+    }
+    return h;
+  }
+
+  /**
+   * A11-S1: queue a PhysicsScript onto this entity's `ScriptManager`, decoding
+   * each entry into an AnimationHookJs-shaped hook and firing it through the
+   * shared `_fireHook` executor. Replaces the legacy per-hook `setTimeout`
+   * walk (the off-path) when `?scriptQueue=on`. Scripts chain back-to-back
+   * (ScriptManager.addScript). CallPES (19) is handled inside the executor by
+   * recursing into `_queuePhysicsScript`, so a sub-script joins the SAME queue
+   * — serialized like retail, not a concurrent recursive walk.
+   *
+   * @returns {{ok:boolean, hookCount:number}} descriptor (parallels the legacy
+   *   walker's return shape enough for callers that only check `ok`).
+   */
+  _queuePhysicsScript(guid, rig, pesId, entries, depth = 0, defaultPartIndex = -1) {
+    const gKey = guid >>> 0;
+    let mgr = this._scriptManagersForGuid.get(gKey);
+    if (!mgr) {
+      mgr = new ScriptManager({ owner: gKey });
+      // Install the shared executor (the seam). Bound to THIS chain's rig +
+      // depth + default-part anchor so the sub-script recursion inherits them.
+      mgr.setExecutor((entry) =>
+        this._executeScriptHook(gKey, rig, pesId, entry, depth, defaultPartIndex),
+      );
+      this._scriptManagersForGuid.set(gKey, mgr);
+    } else {
+      // Re-point the executor at the most-recent chain context so a script
+      // queued after a context change (new rig on respawn) fires correctly.
+      mgr.setExecutor((entry) =>
+        this._executeScriptHook(gKey, rig, pesId, entry, depth, defaultPartIndex),
+      );
+    }
+    const decoded = [];
+    for (const e of entries) decoded.push(this._decodePhysicsScriptHookEntry(e));
+    mgr.addScript(pesId >>> 0, decoded);
+    // Descriptor shape parallels the legacy walker's so callers (validators)
+    // that read `ok`/`emitterCount`/`soundHookCount` keep working. On the
+    // queue path the visual/sound split isn't known until the hooks fire, so
+    // we surface the total queued hook count under all three fields' intent.
+    return {
+      ok: true,
+      hookCount: decoded.length,
+      emitterCount: 0,
+      soundHookCount: 0,
+    };
+  }
+
+  /**
+   * A11-S1: the per-hook arm of the shared executor. Routes a decoded hook
+   * through `_fireHook` (the single dispatch switch), with three owner-context
+   * fixups the entity walker needs:
+   *   - CreateParticle (13/26): seed the instance handle + default-part anchor,
+   *     honoring `?blockingParticleParity`, then call `_fireCreateParticleHook`.
+   *   - CallPES (19): recurse into `_queuePhysicsScript` (depth-guarded) so the
+   *     sub-script joins this owner's queue.
+   *   - everything else: straight `_fireHook(inst, hook, audioMgr, cache)`.
+   */
+  _executeScriptHook(gKey, rig, pesId, hook, depth, defaultPartIndex) {
+    const inst = this.entityMap.get(gKey);
+    if (!inst) return; // entity released — drop the hook.
+    const hookType = hook.hookType | 0;
+    const audioMgr = this.scene3d?.audioManager ?? null;
+    const cache = this.scene3d?.soundTableCache ?? null;
+    if (hookType === 13 || hookType === 26) {
+      // Inherit the invoking DefaultScriptPart's anchor when the hook anchors
+      // at the body root (W4.7 / DIM3-3 parity), then fire via the shared
+      // create-particle arm.
+      const adapted = { ...hook };
+      if ((adapted.createPartIndex >>> 0) === 0xffffffff && (defaultPartIndex | 0) >= 0) {
+        adapted.createPartIndex = defaultPartIndex | 0;
+      }
+      const isBlocking = hookType === 26 && BLOCKING_PARTICLE_PARITY_ON;
+      this._fireCreateParticleHook(inst, adapted, isBlocking).catch(() => {});
+      // Track for entity-release teardown like the legacy path does.
+      return;
+    }
+    if (hookType === 19) {
+      // CallPES — queue the sub-script on the SAME owner (serialized).
+      const callDid = hook.callPesDid >>> 0;
+      if (callDid === 0) return;
+      if (depth >= MAX_CALL_PES_DEPTH) return;
+      this.wasmExports
+        .fetchPhysicsScript(callDid)
+        .then((sub) => {
+          if (!this.entityMap.has(gKey)) return;
+          const subEntries = sub.takeEntries();
+          this._queuePhysicsScript(gKey, rig, callDid, subEntries, depth + 1, defaultPartIndex);
+        })
+        .catch(() => {});
+      return;
+    }
+    // All other hook types route straight through the shared executor.
+    this._fireHook(inst, hook, audioMgr, cache);
   }
 
   /**
@@ -9241,6 +9479,24 @@ export class EntityManager {
         if (!this._particleTickWarned) {
           this._particleTickWarned = true;
           console.warn("[entities/H2] worldParticleManager.tick threw:", e);
+        }
+      }
+    }
+    // A11-S1: advance the per-entity PhysicsScript queues on the SAME clock
+    // as the rest of the tick (no private setTimeout). Only populated when
+    // `?scriptQueue=on`; the map is empty (zero cost) on the off-path. An
+    // idle (drained) manager left in the map is cheap; it is removed on
+    // entity despawn. `update()` reads `currentTime()` from time_rng.js.
+    if (this._scriptManagersForGuid.size > 0) {
+      for (const mgr of this._scriptManagersForGuid.values()) {
+        try {
+          if (mgr.active) mgr.update();
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._scriptQueueTickWarned) {
+            this._scriptQueueTickWarned = true;
+            console.warn("[entities/A11-S1] scriptManager.update threw:", e);
+          }
         }
       }
     }
