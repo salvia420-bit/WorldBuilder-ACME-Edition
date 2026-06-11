@@ -1045,11 +1045,13 @@ export function readFlatDiffuseRetailFlag() {
 // Returns nothing. Does NOT touch `userData.surfaceTypeFlags` bookkeeping — each
 // caller owns that (the cache path stores it via meshToGeometryGroups; the
 // paletted path stamps it before delegating). `flags === 0` (empty/fallback
-// surface) is a no-op so it stays opaque, matching both legacy sites.
+// surface) skips ONLY the flag-driven blend ladder so it stays opaque, but the
+// float-driven luminosity-emissive and diffuse-tint STILL apply (they are
+// bit-independent — retail reads the floats, not the bits — matching the legacy
+// cache path which gated lum/diffuse on the floats alone, not on flags).
 export function applySurfaceRenderState(mat, state, opts) {
   if (!mat || !state) return;
   const flags = (state.flags ?? 0) >>> 0;
-  if (flags === 0) return; // fail-soft: empty/fallback surface stays opaque
   const sfTranslucency = +(state.translucency ?? 0.0);
   const sfLuminosity = +(state.luminosity ?? 0.0);
   const sfDiffuse = +(state.diffuse ?? 0.0);
@@ -1059,6 +1061,21 @@ export function applySurfaceRenderState(mat, state, opts) {
   const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0;
   const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
   const isInvAlpha = (flags & SURFACE_TYPE.InvAlpha) !== 0;
+  // === FIXUP A10-M1 (2026-06-11) — float-driven lum/diffuse are BIT-INDEPENDENT.
+  // The blend-state ladder below IS flag-driven, but luminosity-emissive and
+  // diffuse-tint are driven by the FLOATS, not by any surface-type bit (retail
+  // acclient.c:454452-454467; census 2026-05-28: Luminous/Diffuse bits set on
+  // 0/6152 surfaces while 762 carry luminosity>0 and 6150 carry diffuse>0 — all
+  // bit-independent). The legacy cache path (flag OFF) applies lum/diffuse on
+  // `hasLum`/`sfDiffuse` regardless of flags, so a `flags === 0` early-return
+  // here dropped them ON (opposite of the dyed-luminous fix). So: skip ONLY the
+  // blend ladder when flags===0 (empty/fallback surface stays opaque), then fall
+  // through to the float-driven lum/diffuse so they match the legacy path.
+  if (flags === 0) {
+    applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture);
+    mat.needsUpdate = true;
+    return;
+  }
   if (isAdditive && isAlpha) {
     // Wave-3 M1: Alpha+Additive (0x10000|0x100) blends SRCALPHA/ONE, not ONE/ONE
     // — the additive contribution is weighted by per-texel source alpha (retail
@@ -1096,6 +1113,18 @@ export function applySurfaceRenderState(mat, state, opts) {
     mat.alphaTest = 0.5;
     mat.transparent = false;
   }
+  applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture);
+  mat.needsUpdate = true;
+}
+
+// === FIXUP A10-M1 (2026-06-11) — the float-driven (bit-independent) half of the
+// decoder. Self-illumination (luminosity float) and diffuse-reflectance tint
+// (diffuse float) are applied for ALL surfaces regardless of surface-type bits
+// (retail acclient.c:454452-454467 reads the FLOATS, not the 0x40/0x20 bits).
+// Factored out so both the flags===0 (empty/fallback) branch and the main
+// branch run it identically — matching the legacy cache path which gated these
+// on `hasLum`/`sfDiffuse` alone, not on flags. Caller sets `needsUpdate`.
+function applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture) {
   if (sfLuminosity > 0) {
     // Self-illumination driven by the luminosity FLOAT (not the 0x40 bit). Keep
     // emissive=white scaled by luminosity AND attach the diffuse texture as
@@ -1112,7 +1141,6 @@ export function applySurfaceRenderState(mat, state, opts) {
   if (sfDiffuse > 0 && Math.abs(sfDiffuse - 1.0) > 0.01) {
     mat.color = new THREE.Color(sfDiffuse, sfDiffuse, sfDiffuse);
   }
-  mat.needsUpdate = true;
 }
 
 // === A10-M1 (unification, 2026-06-11) — `?surfaceUnified=on` opt-in =========

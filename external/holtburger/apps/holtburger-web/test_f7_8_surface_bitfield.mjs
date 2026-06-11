@@ -592,6 +592,102 @@ check(
   );
 }
 
+// ---- Stage 4b: A10-M1 OFF-vs-ON parity (the real regression lens) -------
+// FIXUP A10-M1 (2026-06-11): Stage 4 above compares matA (cache, flag ON) vs
+// matB (unified fn applied directly) — but BOTH pass through the same decoder,
+// so they agree even when the decoder diverges from the LEGACY (flag-OFF) path.
+// The load-bearing invariant is OFF-vs-ON parity: flipping ?surfaceUnified on
+// must NOT change a material's render-state props (except the intended dyed-
+// luminous emissiveMap fix, which lands on the paletted path, not the cache).
+// In particular the float-driven luminosity-emissive and diffuse-tint are
+// BIT-INDEPENDENT (census: 762 surfaces carry luminosity>0 and 6150 carry
+// diffuse>0 with ZERO surface-type bits) — so flags=0 + nonzero-float cells are
+// the regression the original `if (flags === 0) return;` early-return masked.
+// Here we compare the legacy cache path (flag OFF, inline ladder) against the
+// cache path (flag ON, unified decoder) across the SAME flag×float matrix.
+{
+  const cacheOff = new MaterialCache();
+  let offOnFails = 0;
+  let offOnCount = 0;
+  for (const flags of FLAG_COMBOS) {
+    for (const floats of FLOAT_COMBOS) {
+      offOnCount += 1;
+      // Legacy: flag OFF → the inline `opts` ladder in _materialFromFlags.
+      setUnifiedFlag(false);
+      const matLegacy = cacheOff._materialFromFlags(
+        flags >>> 0, stubTex, undefined, undefined, undefined, undefined, floats,
+      );
+      // Unified: flag ON → the single applySurfaceRenderState decoder.
+      setUnifiedFlag(true);
+      const matUnified = cacheOff._materialFromFlags(
+        flags >>> 0, stubTex, undefined, undefined, undefined, undefined, floats,
+      );
+      setUnifiedFlag(false);
+      const cmp = propsEqual(
+        snapshotDecoderProps(matLegacy), snapshotDecoderProps(matUnified),
+      );
+      if (!cmp.ok) {
+        offOnFails += 1;
+        console.log(
+          `  [FAIL] OFF-vs-ON flags=0x${(flags >>> 0).toString(16)} floats=${JSON.stringify(floats)}` +
+            ` — prop ${cmp.k}: legacy=${cmp.a} unified=${cmp.b}`,
+        );
+      }
+    }
+  }
+  check(
+    `A10-M1 OFF-vs-ON parity: ${offOnCount - offOnFails}/${offOnCount} flag×float combos identical (legacy cache == unified cache)`,
+    offOnFails === 0,
+    offOnFails === 0 ? "" : `${offOnFails} combo(s) diverged`,
+  );
+}
+
+// Pinpoint regression cells the FIXUP repairs: flags=0 + nonzero float must NOT
+// drop the float-driven emissive/diffuse under the unified decoder. (Pre-fixup
+// these returned early: emissiveIntensity 1/color white instead of the float.)
+{
+  const cachePin = new MaterialCache();
+  // flags=0 + luminosity>0: emissive must scale by the float (NOT 1.0 default).
+  setUnifiedFlag(true);
+  const lumPin = cachePin._materialFromFlags(
+    0, stubTex, undefined, undefined, undefined, undefined, { luminosity: 0.6 },
+  );
+  setUnifiedFlag(false);
+  check(
+    "A10-M1 fixup: flags=0 + luminosity 0.6 → emissive scaled by float + emissiveMap (not dropped)",
+    Math.abs(lumPin.emissiveIntensity - 0.6) < 1e-6 &&
+      lumPin.emissive.getHex() === 0xffffff &&
+      lumPin.emissiveMap === stubTex,
+    `intensity=${lumPin.emissiveIntensity}, emissive=0x${lumPin.emissive.getHex().toString(16)}, hasMap=${lumPin.emissiveMap === stubTex}`,
+  );
+  // flags=0 + diffuse!=1: albedo color must dim by the float (NOT stay white).
+  setUnifiedFlag(true);
+  const diffPin = cachePin._materialFromFlags(
+    0, stubTex, undefined, undefined, undefined, undefined, { diffuse: 0.5 },
+  );
+  setUnifiedFlag(false);
+  check(
+    "A10-M1 fixup: flags=0 + diffuse 0.5 → albedo color dimmed by float (not left white)",
+    Math.abs(diffPin.color.r - 0.5) < 1e-6 &&
+      Math.abs(diffPin.color.g - 0.5) < 1e-6 &&
+      Math.abs(diffPin.color.b - 0.5) < 1e-6,
+    `color=0x${diffPin.color.getHex().toString(16)}`,
+  );
+  // flags=0 + no float: stays opaque/full-bright (the genuine fail-soft case).
+  setUnifiedFlag(true);
+  const plainPin = cachePin._materialFromFlags(
+    0, stubTex, undefined, undefined, undefined, undefined, undefined,
+  );
+  setUnifiedFlag(false);
+  check(
+    "A10-M1 fixup: flags=0 + no float → stays opaque, default emissive/color (fail-soft preserved)",
+    plainPin.transparent === false &&
+      plainPin.emissiveIntensity === 1 &&
+      plainPin.color.getHex() === 0xffffff,
+    `transparent=${plainPin.transparent}, intensity=${plainPin.emissiveIntensity}, color=0x${plainPin.color.getHex().toString(16)}`,
+  );
+}
+
 // ---- Stage 5: A10-M2 entity-owned (F.41 recolour) path threads flags ----
 // `_buildEntityOwnedFromPixels` (the F.41 entity recolour path) historically
 // built a plain opaque MeshStandardMaterial — a recoloured NPC/gear surface with
