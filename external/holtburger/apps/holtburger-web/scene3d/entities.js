@@ -382,6 +382,16 @@ import {
 // entity-attached SetLight lights share identical color/intensity/falloff/
 // cone math. Only imported; constructs nothing at module load.
 import { buildLightForSetupLight } from "./lighting.js";
+// A9-Stage2 (unification survey 2026-06-11): the single JS owner of
+// part-array → Object3D transform semantics. `?rigModule=off` reverts to
+// the inline legacy paths below (byte-identical-transform acceptance bar).
+import {
+  readRigModuleFlag,
+  applyRestPoseFrame,
+  buildPartSurfaceMeshes,
+  createPartFramesProxy,
+} from "./setup_rig.js";
+const RIG_MODULE_ON = readRigModuleFlag();
 // FCULL (2026-06-08) — distance horizon for the per-frame entity RENDER
 // cull. Only the constant is imported; the cull pass is driven from loop.js
 // via `tickEntityRenderVisibility`.
@@ -2774,60 +2784,85 @@ export class EntityManager {
     const _spawnTraceRigStart = SPAWN_TRACE ? performance.now() : 0;
 
     // Build per-part Groups + per-surface Mesh leaves.
+    //
+    // A9-Stage2: the rest-pose frame + per-surface mesh-build loop is the
+    // single-owner part-array construction (`scene3d/setup_rig.js`). Per-
+    // surface material resolution stays HERE (A10 seam — this module owns
+    // the entity material decisions; setup_rig makes none). The closure
+    // mirrors the legacy inline branch exactly. `?rigModule=off` reverts.
+    const castShadowGate = !!(this.scene3d?.shadowsEnabled || this.scene3d?.csmEnabled);
+    const resolveEntityMaterial = (g) => {
+      const did = g.surfaceDid >>> 0;
+      if (inst._entityMaterials && inst._entityMaterials.has(did)) {
+        return inst._entityMaterials.get(did);
+      }
+      if (this.materialCache) {
+        // T2: g.doubleSided drives FrontSide vs DoubleSide (default true).
+        return this.materialCache.getCached(did, g.doubleSided);
+      }
+      return this._fallbackMaterial();
+    };
     for (let p = 0; p < partCount; p += 1) {
       const partGroup = new THREE.Group();
       partGroup.name = `part_${p}`;
-      // Cohere-B (2026-05-12): apply the resolved rest-pose frame to
-      // the partGroup. partMeshes ship part-LOCAL (no placement baked
-      // in); the rest frame composes against the entity root the same
-      // way PhatSDK's `CPartArray::UpdateParts` composes
-      // `entity_world.combine(anim_frame[i])`. During cycle playback
-      // the AnimationMixer overrides these values frame-by-frame with
-      // the model-space cycle keyframes. With hasRestPose=false (old
-      // wasm bundle without the getters), partGroup stays at identity
-      // — matches pre-fix behaviour.
-      if (hasRestPose) {
-        partGroup.position.set(
-          restOrigins[p * 3 + 0],
-          restOrigins[p * 3 + 1],
-          restOrigins[p * 3 + 2]
-        );
-        // AC wire order is (qw, qx, qy, qz); three.js wants
-        // (qx, qy, qz, qw). Reorder at apply.
-        const qw = restOrientations[p * 4 + 0];
-        const qx = restOrientations[p * 4 + 1];
-        const qy = restOrientations[p * 4 + 2];
-        const qz = restOrientations[p * 4 + 3];
-        partGroup.quaternion.set(qx, qy, qz, qw);
-      }
       const conv = partGroups[p];
-      for (const g of conv.groups) {
-        const did = g.surfaceDid >>> 0;
-        let mat = null;
-        if (inst._entityMaterials && inst._entityMaterials.has(did)) {
-          mat = inst._entityMaterials.get(did);
-        } else if (this.materialCache) {
-          // T2: g.doubleSided drives FrontSide vs DoubleSide (default true).
-          mat = this.materialCache.getCached(did, g.doubleSided);
-        } else {
-          mat = this._fallbackMaterial();
+      if (RIG_MODULE_ON) {
+        applyRestPoseFrame(THREE, partGroup, restOrigins, restOrientations, p, hasRestPose);
+        buildPartSurfaceMeshes(THREE, {
+          partGroup,
+          conv,
+          partIndex: p,
+          guid,
+          resolveMaterial: resolveEntityMaterial,
+          castShadow: castShadowGate,
+          materialCanCastShadow,
+          onGeometry: (geometry) => inst.registerGeometry(geometry),
+        });
+      } else {
+        // === Legacy inline path (`?rigModule=off` escape hatch) ===
+        // Cohere-B (2026-05-12): apply the resolved rest-pose frame to
+        // the partGroup. partMeshes ship part-LOCAL (no placement baked
+        // in); the rest frame composes against the entity root the same
+        // way PhatSDK's `CPartArray::UpdateParts` composes
+        // `entity_world.combine(anim_frame[i])`. During cycle playback
+        // the AnimationMixer overrides these values frame-by-frame with
+        // the model-space cycle keyframes. With hasRestPose=false (old
+        // wasm bundle without the getters), partGroup stays at identity
+        // — matches pre-fix behaviour.
+        if (hasRestPose) {
+          partGroup.position.set(
+            restOrigins[p * 3 + 0],
+            restOrigins[p * 3 + 1],
+            restOrigins[p * 3 + 2]
+          );
+          // AC wire order is (qw, qx, qy, qz); three.js wants
+          // (qx, qy, qz, qw). Reorder at apply.
+          const qw = restOrientations[p * 4 + 0];
+          const qx = restOrientations[p * 4 + 1];
+          const qy = restOrientations[p * 4 + 2];
+          const qz = restOrientations[p * 4 + 3];
+          partGroup.quaternion.set(qx, qy, qz, qw);
         }
-        const m = new THREE.Mesh(g.geometry, mat);
-        m.name = `part_${p}_surface_${did.toString(16)}`;
-        m.userData = { guid, partIndex: p, surfaceDid: did };
-        // Visual-fidelity Phase 0.1 — entities cast shadows (NPCs +
-        // local player rig). receiveShadow is false because the
-        // entity rig is animated per-frame; receiving shadows on a
-        // moving rig adds shimmer that's distracting without buying
-        // much (entities are mostly self-shadowing internally).
-        // Translucent / additive surfaces (ghosts, ethereal effects)
-        // are skipped via the material-flag check.
-        // Phase 3.3 — CSM path enables casting on the same meshes.
-        if (this.scene3d?.shadowsEnabled || this.scene3d?.csmEnabled) {
-          m.castShadow = materialCanCastShadow(mat);
+        for (const g of conv.groups) {
+          const did = g.surfaceDid >>> 0;
+          const mat = resolveEntityMaterial(g);
+          const m = new THREE.Mesh(g.geometry, mat);
+          m.name = `part_${p}_surface_${did.toString(16)}`;
+          m.userData = { guid, partIndex: p, surfaceDid: did };
+          // Visual-fidelity Phase 0.1 — entities cast shadows (NPCs +
+          // local player rig). receiveShadow is false because the
+          // entity rig is animated per-frame; receiving shadows on a
+          // moving rig adds shimmer that's distracting without buying
+          // much (entities are mostly self-shadowing internally).
+          // Translucent / additive surfaces (ghosts, ethereal effects)
+          // are skipped via the material-flag check.
+          // Phase 3.3 — CSM path enables casting on the same meshes.
+          if (castShadowGate) {
+            m.castShadow = materialCanCastShadow(mat);
+          }
+          partGroup.add(m);
+          inst.registerGeometry(g.geometry);
         }
-        partGroup.add(m);
-        inst.registerGeometry(g.geometry);
       }
       parts.push(partGroup);
       root.add(partGroup);
@@ -2849,7 +2884,12 @@ export class EntityManager {
     // 0xFFFFFFFF / -1 still anchors to root (handled upstream, never indexes
     // this); out-of-range / undefined falls back to root anchoring.
     // Reusable per-index frame objects so repeated reads don't allocate.
-    {
+    // A9-Stage2: the Proxy factory lives in setup_rig.js (single owner of
+    // the world-frame accessor contract A11 consumes). `?rigModule=off`
+    // reverts to the byte-identical inline Proxy below.
+    if (RIG_MODULE_ON) {
+      root.partFrames = createPartFramesProxy(THREE, parts);
+    } else {
       const partFrameCache = [];
       root.partFrames = new Proxy([], {
         get(_target, prop) {
@@ -6819,24 +6859,47 @@ export class EntityManager {
       }
       const conv = newPartGroups[p];
       if (!conv) continue;
-      for (const grp of conv.groups) {
+      // A9-Stage2: retail `CPhysicsPart::SetPart` swaps the part contents
+      // in place (the part Group / its transform survives; only the surface
+      // meshes are rebuilt) — same build loop as spawn, routed through the
+      // single owner. `?rigModule=off` reverts to the byte-identical inline
+      // loop. Material resolution stays here (A10 seam, hot-swap variant:
+      // `entityMaterials` is the freshly-fetched local Map, not inst._…).
+      const resolveSwapMaterial = (grp) => {
         const did = grp.surfaceDid >>> 0;
-        let mat = null;
         if (entityMaterials && entityMaterials.has(did)) {
-          mat = entityMaterials.get(did);
-        } else if (this.materialCache) {
-          mat = this.materialCache.getCached(did, grp.doubleSided);
-        } else {
-          mat = this._fallbackMaterial();
+          return entityMaterials.get(did);
         }
-        const m = new THREE.Mesh(grp.geometry, mat);
-        m.name = `part_${p}_surface_${did.toString(16)}`;
-        m.userData = { guid, partIndex: p, surfaceDid: did };
-        if (this.scene3d?.shadowsEnabled || this.scene3d?.csmEnabled) {
-          m.castShadow = materialCanCastShadow(mat);
+        if (this.materialCache) {
+          return this.materialCache.getCached(did, grp.doubleSided);
         }
-        partGroup.add(m);
-        inst.registerGeometry(grp.geometry);
+        return this._fallbackMaterial();
+      };
+      const swapCastShadow = !!(this.scene3d?.shadowsEnabled || this.scene3d?.csmEnabled);
+      if (RIG_MODULE_ON) {
+        buildPartSurfaceMeshes(THREE, {
+          partGroup,
+          conv,
+          partIndex: p,
+          guid,
+          resolveMaterial: resolveSwapMaterial,
+          castShadow: swapCastShadow,
+          materialCanCastShadow,
+          onGeometry: (geometry) => inst.registerGeometry(geometry),
+        });
+      } else {
+        for (const grp of conv.groups) {
+          const did = grp.surfaceDid >>> 0;
+          const mat = resolveSwapMaterial(grp);
+          const m = new THREE.Mesh(grp.geometry, mat);
+          m.name = `part_${p}_surface_${did.toString(16)}`;
+          m.userData = { guid, partIndex: p, surfaceDid: did };
+          if (swapCastShadow) {
+            m.castShadow = materialCanCastShadow(mat);
+          }
+          partGroup.add(m);
+          inst.registerGeometry(grp.geometry);
+        }
       }
     }
 

@@ -54,10 +54,16 @@ import * as THREE from "three";
 import {
   meshToGeometryGroups,
   placementToMatrix4,
-  acQuatToThree,
 } from "./adapter.js";
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
 import { surfacePixelsFetcher } from "./bake_worker_client.js";
+// A9-Stage2 (unification survey 2026-06-11): adopt the single-owner
+// part-transform composition. A building's per-part hinge frame is the same
+// rest-pose frame an entity part carries (position + AC-ordered quaternion);
+// routing it through `applyRestPoseFrame` keeps that semantic in one place
+// (`scene3d/setup_rig.js`). Byte-identical to the prior inline
+// `hingeWrapper.position.set(...)` + `acQuatToThree(...)`.
+import { applyRestPoseFrame } from "./setup_rig.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -369,9 +375,18 @@ function buildOneBuilding(
     // logic on every door open/close.
     const hingeWrapper = new THREE.Group();
     hingeWrapper.name = `part-${part.partIndex}`;
-    hingeWrapper.position.set(part.hinge.x, part.hinge.y, part.hinge.z);
-    hingeWrapper.quaternion.copy(
-      acQuatToThree(part.hinge.qw, part.hinge.qx, part.hinge.qy, part.hinge.qz)
+    // A9-Stage2: hinge frame = the part rest-pose frame (position + AC-order
+    // quaternion). `applyRestPoseFrame` sets `position` then
+    // `quaternion.set(qx,qy,qz,qw)` — identical to the prior inline
+    // `.set(...)` + `acQuatToThree(qw,qx,qy,qz).copy(...)` (the AC→three
+    // reorder is the same). Single part → index 0 over single-element flats.
+    applyRestPoseFrame(
+      THREE,
+      hingeWrapper,
+      [part.hinge.x, part.hinge.y, part.hinge.z],
+      [part.hinge.qw, part.hinge.qx, part.hinge.qy, part.hinge.qz],
+      0,
+      true
     );
     hingeWrapper.userData = {
       modelId: placement.modelId,
