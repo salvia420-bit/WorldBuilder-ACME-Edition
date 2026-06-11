@@ -56,6 +56,23 @@ const MELEE_3D_RANGE = (() => {
   } catch { return false; }
 })();
 
+// FU-3 (2026-06-11) — server-timed swing. Default-OFF. Retail plays NO
+// local swing on attack input: `ClientCombatSystem::ExecuteAttack`
+// (acclient.c:408626) only sends Event_TargetedMeleeAttack; the swing
+// arrives as a server UpdateMotion that ACE broadcasts (to the attacker
+// too, WorldObject_Networking.cs:1306) only AFTER its server-side MoveTo
+// reports the attacker within useRadius (Player_Melee.cs:170-213,
+// DoSwingMotion :398). When ON, the optimistic click-time swing is
+// suppressed so the server's KIND_MOTION_ACTION echo — which already
+// fires for the local guid — plays the swing at arrival, not at click.
+// (?serverSwing=on)
+const SERVER_SWING = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("serverSwing") === "on";
+  } catch { return false; }
+})();
+
 // Fallback AttackType for the CombatManeuverTable lookup when the
 // per-weapon inference (Wave 1 Phase 3, 2026-05-26) returns
 // `ATTACK_TYPE.Undef` — e.g. shield-only, ranged before Phase 6
@@ -1079,7 +1096,9 @@ export function setupClickPicking({
           }
         } catch (_) { /* never block the swing on prediction faults */ }
         sessionHandle.attack(targetGuid, safeHeight, slider);
-        if (localGuid !== 0) {
+        // FU-3 — under ?serverSwing=on, no optimistic swing: the server's
+        // post-MoveTo motion echo animates the local rig at arrival.
+        if (localGuid !== 0 && !SERVER_SWING) {
           if (motionCmd && typeof em?.setSwingMotion === "function") {
             em.setSwingMotion(localGuid, motionCmd);
             // F6-2 — suppress the server's matching swing echo so it

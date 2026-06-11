@@ -1861,10 +1861,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // until the flag is set (pending 1070 eye-test). Read once here.
   const wieldHandAttach =
     new URLSearchParams(window.location.search).get("wieldHandAttach")?.toLowerCase() === "on";
+  // wieldedSpawn (2026-06-11): default-OFF opt-in paired with the wasm-side
+  // `?wieldedSpawn=on` gate (synthetic KIND_SPAWN + attach for wielded items
+  // with no world presence). JS half: hide a freshly-committed rig whose own
+  // attach is parked in `_pendingAttach` so the weapon never flashes at its
+  // spawn pose before the async hand-mount lands. Read once here.
+  const wieldedSpawn =
+    new URLSearchParams(window.location.search).get("wieldedSpawn")?.toLowerCase() === "on";
   const entityManager = new EntityManager(scene3dForBuilders, wasmExports);
   // Thread the flag onto the manager so attachChildToParent /
   // _resolveHoldingLocation can read it without a second URL parse.
   entityManager._wieldHandAttach = wieldHandAttach;
+  entityManager._wieldedSpawn = wieldedSpawn;
 
   // Wielded-children pass for the local player rig in the world scene
   // + ALL remote players. The recv loop emits kind=47 EntityDetached
@@ -1928,6 +1936,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       wieldedFlushRaf = requestAnimationFrame(flushWieldedDirty);
     }
   }
+  // FU-1 (2026-06-11): expose for loop.js's KIND_SPAWN hook — login-time
+  // wields have no kind=49 transition event, so the spawn arm nudges the
+  // re-sync directly (gated on _wieldHandAttach there).
+  entityManager._markWielderDirty = markWielderDirty;
   try {
     const client = window.__pluginClient;
     if (client?.events?.on) {

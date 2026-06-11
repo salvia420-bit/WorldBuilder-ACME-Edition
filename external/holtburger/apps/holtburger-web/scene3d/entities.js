@@ -1998,6 +1998,23 @@ export class EntityManager {
         this._wieldHandAttach = (flag?.toLowerCase() === "on");
       }
     } catch (_) {}
+    // wieldedSpawn (2026-06-11): default-OFF opt-in. The wasm side
+    // synthesizes a KIND_SPAWN for a wielded child that has no world
+    // presence (pack→wield / login-wielded) with its kind=7 attach in the
+    // same drain batch — the attach parks in `_pendingAttach` until the rig
+    // commits. The mount resolves async (holding-location fetch), so under
+    // this flag `_spawnImpl` hides a rig whose own attach is pending at
+    // commit time; `attachChildToParent` re-asserts state-visible on mount.
+    // Mirrors the `_wieldHandAttach` pattern above (index.js overwrites
+    // after construction from a single URL parse; initialise here so the
+    // field is never undefined).
+    this._wieldedSpawn = false;
+    try {
+      if (typeof window !== "undefined" && window.location) {
+        const flag = new URLSearchParams(window.location.search).get("wieldedSpawn");
+        this._wieldedSpawn = (flag?.toLowerCase() === "on");
+      }
+    } catch (_) {}
     // === Wave R2.A (2026-05-28) — entity-attached dynamic lights.
     // Read the `?entityLights=on` opt-in HERE (constructor) — the same
     // scope as every consumer (`_attachEntityLights`, `_fireHook` SetLight
@@ -2933,6 +2950,18 @@ export class EntityManager {
         }
       });
       if (needsRefresh) this._scheduleEntitySurfaceRefresh(inst, 0);
+    }
+    // wieldedSpawn (2026-06-11) — this rig is a wielded child whose attach
+    // is already parked (the wasm emits its synthetic KIND_SPAWN and the
+    // kind=7 attach in one drain batch). The mount in attachChildToParent
+    // resolves async (holding-location fetch), so without this the weapon
+    // renders a frame or two at its spawn pose (the wielder's feet / LB 0)
+    // before snapping to the hand. Hide via the state-visible channel —
+    // attachChildToParent re-asserts `_setEntityStateVisible(c, true)` on
+    // mount, and the cull walk recomposes from the same flag (a raw
+    // `root.visible` write would be stomped by the next cull pass).
+    if (this._wieldedSpawn && this._pendingAttach.has(guid)) {
+      _setEntityStateVisible(inst, false);
     }
     // Render-completeness audit (2026-05-29) — flush any wielded-item attach
     // that arrived before this rig (or its counterpart) existed. Covers both

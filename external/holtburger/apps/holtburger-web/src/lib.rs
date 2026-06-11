@@ -66,6 +66,16 @@ fn parse_seq_debug_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "seqDebug=1")
 }
 
+/// wieldedSpawn (2026-06-11): parse `?wieldedSpawn=on` (or
+/// `&wieldedSpawn=on`) out of the URL query string. Same shape as
+/// `parse_seq_debug_flag` above — read once at recv_loop start and
+/// stashed as a local `bool`.
+#[cfg(target_arch = "wasm32")]
+fn parse_wielded_spawn_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "wieldedSpawn=on")
+}
+
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
 /// (the wire opcode read at `game_event.rs:97`). Used by the
 /// `[seq-gap]` observability hook to bucket sequence trackers per
@@ -23456,10 +23466,11 @@ struct LatestStats {
     // velScale path passes into `stateGroundSpeed` (it clamps the ground
     // anim-speed to `run_rate * 4.0`). Recomputed on the same triggers as
     // burden (UpdateAttribute / equip / inventory delta change run-skill &
-    // encumbrance). Falls back to `FALLBACK_RUN_RATE_SCALAR` (4.5) pre-spawn
-    // / before stats hydrate — the same flat cap the movement-caps path
-    // uses when `player_run_rate()` is `None`. JS reads via `playerRunRate`
-    // on each `kind=8 playerStatsUpdated` drain.
+    // encumbrance). Falls back to `FALLBACK_RUN_RATE_SCALAR` (1.0 — the
+    // retail my_run_rate initial; STAGE 1 2026-06-11 retired the 4.5
+    // max-rate seed) pre-spawn / before stats hydrate — the same fallback
+    // the movement-caps path uses when `player_run_rate()` is `None`. JS
+    // reads via `playerRunRate` on each `kind=8 playerStatsUpdated` drain.
     run_rate: f32,
     // P0-2 follow-up (2026-06-05): cached
     // `world.player.options1`/`options2` raw bits. ACE does NOT echo
@@ -23616,7 +23627,8 @@ impl SessionHandle {
     /// NOT re-apply it, because `stateGroundSpeed` already clamps the ground
     /// anim-speed to `run_rate * 4.0` internally. Refreshed by the recv loop
     /// on each `publish_player_stats_snapshot` call (same trigger as
-    /// `playerBurden`). Returns `FALLBACK_RUN_RATE_SCALAR` (4.5) pre-spawn /
+    /// `playerBurden`). Returns `FALLBACK_RUN_RATE_SCALAR` (1.0, the retail
+    /// my_run_rate initial — STAGE 1 2026-06-11) pre-spawn /
     /// before stats hydrate. JS reads via `playerRunRate` on each `kind=8
     /// playerStatsUpdated` drain so encumbrance/run-skill modulate gait.
     // T1 (2026-06-03): JS now reads run-rate via the FREE `playerRunRate` export
@@ -28398,8 +28410,17 @@ const RUN_ANIM_SPEED: f32 = 4.0;
 #[cfg(any(target_arch = "wasm32", test))]
 const SIDESTEP_ANIM_SPEED: f32 = 1.25;
 
+// STAGE 1 unified-movement-pipeline (2026-06-11, DESIGN.md §2 defect 1):
+// pre-stats run-rate seed is 1.0, NOT 4.5. The old 4.5 was the max-rate
+// guess (GetRunRate(0, >=800) = 18/4) and held until stats landed —
+// whenever ACE's actual rate was lower, every grounded tick over-ran by
+// 4.0×Δ m/s and ACE's echoes snapped us back. 1.0 matches retail's
+// `my_run_rate` initial value (acclient `CMotionInterp` ctor;
+// Inq-failure fallback acclient.c:343452-343455): pre-stats prediction
+// UNDER-runs (lags, self-corrects) instead of over-running (snaps).
+// Inert until the next wasm rebuild.
 #[cfg(target_arch = "wasm32")]
-const FALLBACK_RUN_RATE_SCALAR: f32 = 4.5;
+const FALLBACK_RUN_RATE_SCALAR: f32 = 1.0;
 
 // T1 (2026-06-03): single-thread mirror of the latest player run-rate so the JS
 // velScale path can read it as a FREE wasm export (entities.js calls
@@ -28417,7 +28438,8 @@ thread_local! {
 /// `GetRunRate`: run-skill + burden, 18/4 cap). JS feeds it into the
 /// `stateGroundSpeed` getter's `run_rate` arg (which clamps the ground
 /// anim-speed to `run_rate * 4.0`). Returns the `FALLBACK_RUN_RATE_SCALAR`
-/// (4.5) seed until the first stats snapshot hydrates it.
+/// (1.0, retail my_run_rate initial — STAGE 1 2026-06-11) seed until the
+/// first stats snapshot hydrates it.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = playerRunRate)]
 pub fn player_run_rate_export() -> f32 {
@@ -28765,8 +28787,10 @@ fn publish_player_stats_snapshot(
     // T1 (2026-06-02): recompute the run-rate factor on the same trigger as
     // burden (run-skill + encumbrance both change on these wire deltas).
     // `player_run_rate()` ports ACE GetRunRate (18/4 cap + burden modifier);
-    // `None` only when Quickness is also unknown (stats not loaded), in
-    // which case fall back to the flat `FALLBACK_RUN_RATE_SCALAR` cap (4.5)
+    // `None` until the wire Run skill lands (STAGE 1 2026-06-11 retired the
+    // Quickness synthesis), in which case fall back to
+    // `FALLBACK_RUN_RATE_SCALAR` (1.0, the retail my_run_rate initial —
+    // under-predicts and self-corrects, never over-runs into a snapback)
     // — same fallback the movement-caps `run_rate_scalar` path uses.
     let run_rate = world
         .player_run_rate()
@@ -30006,6 +30030,35 @@ async fn recv_loop(
     // INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (was the default-OFF
     // `?spawnHiddenState=on` gate; kept as an always-true binding).
     let spawn_hidden_state_on: bool = true;
+    // wieldedSpawn (2026-06-11): `?wieldedSpawn=on` (default OFF). A wielded
+    // item with no world presence never renders in-hand:
+    //   (a) pack→wield — the item's only ObjectCreate (contained at login:
+    //       no pos, no wielder) was culled by `skip_contained_spawn`, and the
+    //       EQUIPPING player never gets a fresh CreateObject on equip (ACE
+    //       Player_Tracking.cs:116 TrackEquippedObject returns for
+    //       wielder == this), so the kind=7 ATTACH parks in JS
+    //       `_pendingAttach` forever — no rig exists to attach.
+    //   (b) login-hydrated wielded items — the spawn DOES emit (wielder_id
+    //       defeats the cull) but ACE sends the owner no ParentEvent at
+    //       login; the parent linkage rides in the ObjectCreate PhysicsDesc
+    //       (parent_id/parent_loc), which the spawn arm never read — the rig
+    //       sits unattached at the pos-None fallback (LB 0 origin).
+    // Retail never hits either: pickup keeps the child's full CPhysicsObj
+    // alive out-of-world (acclient.c:143483 DoPickupEvent = unset_parent +
+    // leave_world only) and set_parent just re-homes it (acclient.c:322952);
+    // login-wielded CreateObjects are parented straight from PhysicsDesc
+    // (acclient.c:391955-391961). Under this flag, mirror that model: for
+    // (a) synthesize the missing KIND_SPAWN from the cached world entity at
+    // ParentEvent time, for (b) emit the kind=7 ATTACH from the ObjectCreate
+    // PhysicsDesc parent fields. Default OFF pending a 1070 eye-test.
+    let wielded_spawn_on: bool = parse_wielded_spawn_flag(&js_location_search());
+    // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have
+    // a JS-side rig (KIND_SPAWN emitted, no KIND_REMOVE since). Maintained
+    // unconditionally (cheap set ops at the existing emission sites), but
+    // only consulted by the flag-gated ParentEvent synthesis above so a
+    // ground-pickup→wield or re-equip (rig already live) never double-spawns.
+    let mut js_spawned_guids: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
     let seq_tracker: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
@@ -32518,6 +32571,66 @@ async fn recv_loop(
                                         .unwrap_or(0.0),
                                     is_autonomous: false,
                                 });
+                                // wieldedSpawn (2026-06-11): record the live rig.
+                                js_spawned_guids
+                                    .insert(u32::from(data.public_weenie_desc.guid));
+                                // wieldedSpawn (2026-06-11): login-hydrated wielded
+                                // item — case (b) of the flag comment above. ACE
+                                // sends the owner no ParentEvent for items already
+                                // wielded at login; the parent linkage rides in
+                                // THIS ObjectCreate's PhysicsDesc (parent_id +
+                                // parent_loc, written when WielderId AND
+                                // ParentLocation are both set —
+                                // WorldObject_Networking.cs:358-362). Mirror
+                                // retail's CreateObject-with-parent path
+                                // (acclient.c:391955-391961: set_parent straight
+                                // from PhysicsDesc, never enter_world): emit the
+                                // same kind=7 ATTACH the live ParentEvent arm
+                                // emits, with placement from the PhysicsDesc
+                                // animation_frame (the field hydration maps to
+                                // PropertyInt::Placement). The JS side parks it in
+                                // `_pendingAttach` until both rigs exist.
+                                if wielded_spawn_on
+                                    && let Some(parent_guid) = data.parent_id
+                                {
+                                    entity_updates.borrow_mut().push(EntityUpdate {
+                                        kind: ENTITY_UPDATE_KIND_ATTACH,
+                                        guid: u32::from(data.public_weenie_desc.guid),
+                                        model_id: u32::from(parent_guid),
+                                        landblock_id: 0,
+                                        x: 0.0,
+                                        y: 0.0,
+                                        z: 0.0,
+                                        qw: 1.0,
+                                        qx: 0.0,
+                                        qy: 0.0,
+                                        qz: 0.0,
+                                        wcid: 0,
+                                        item_type: 0,
+                                        name: String::new(),
+                                        obj_scale: 1.0,
+                                        icon_id: 0,
+                                        palette_id: 0,
+                                        mtable_id: 0,
+                                        model_changes: Vec::new(),
+                                        texture_changes: Vec::new(),
+                                        sub_palettes: Vec::new(),
+                                        portal_destination: String::new(),
+                                        vx: 0.0,
+                                        vy: 0.0,
+                                        vz: 0.0,
+                                        omega_z: 0.0,
+                                        motion_command: data.parent_loc.unwrap_or(0),
+                                        motion_stance: data.animation_frame.unwrap_or(0),
+                                        physics_script_did: 0,
+                                        sound_table_did: 0,
+                                        obj_desc_flags: 0,
+                                        weenie_flags: 0,
+                                        motion_speed: 1.0,
+                                        physics_translucency: 0.0,
+                                        is_autonomous: false,
+                                    });
+                                }
                                 if is_local_player {
                                     local_player_spawn_emitted = true;
                                     console_log_str(&format!(
@@ -32870,6 +32983,121 @@ async fn recv_loop(
                             // reuse documented on ENTITY_UPDATE_KIND_ATTACH:
                             // model_id=parent guid (0 = detach), motion_command=
                             // location, motion_stance=placement.
+                            //
+                            // wieldedSpawn (2026-06-11): pack→wield — case (a) of
+                            // the flag comment at recv-loop start. The child's
+                            // only ObjectCreate (contained: no pos, no wielder)
+                            // was culled by `skip_contained_spawn` and ACE never
+                            // re-sends a CreateObject to the equipping player, so
+                            // the kind=7 ATTACH below would park in JS
+                            // `_pendingAttach` forever. Synthesize the missing
+                            // KIND_SPAWN from the cached world entity (hydrated
+                            // from that login ObjectCreate by
+                            // `apply_inventory_object_create`) so the existing
+                            // spawn→_flushPendingAttach machinery attaches it.
+                            // LOSSY by design: the entity cache keeps the
+                            // Setup/MTable/STable DIDs + scale + translucency but
+                            // NOT the ObjDesc model_data (palette/texture swaps,
+                            // hydration.rs:190-251) — base weapon look only.
+                            // Spawn pose = the wielder's cached pose (the attach
+                            // overrides it; paired with the JS-side
+                            // pending-attach hide so nothing flashes at origin).
+                            // Skipped when the guid already has a live rig
+                            // (ground-pickup→wield, re-equip) — no double spawn.
+                            if wielded_spawn_on
+                                && data.parent_guid != holtburger_common::Guid::NULL
+                                && !js_spawned_guids.contains(&u32::from(data.child_guid))
+                                && let Some(w) = world.as_ref()
+                                && let Some(entity) = w.entities.get(data.child_guid)
+                            {
+                                use holtburger_common::properties::{
+                                    PropertyFloat, WorldObjectExt as _,
+                                    WorldObjectPropertyAccessors as _,
+                                };
+                                let setup_did =
+                                    entity.csetup_id().map(u32::from).unwrap_or(0);
+                                // No cached Setup → JS `_spawnImpl` would bail on
+                                // setupId 0 anyway; skip (nothing to render).
+                                if setup_did != 0 {
+                                    let mtable_id =
+                                        entity.mtable_id().map(u32::from).unwrap_or(0);
+                                    let (lb, x, y, z, qw, qx, qy, qz) = w
+                                        .entities
+                                        .get(data.parent_guid)
+                                        .map(|p| {
+                                            (
+                                                u32::from(p.position.landblock_id),
+                                                p.position.coords.x,
+                                                p.position.coords.y,
+                                                p.position.coords.z,
+                                                p.position.rotation.w,
+                                                p.position.rotation.x,
+                                                p.position.rotation.y,
+                                                p.position.rotation.z,
+                                            )
+                                        })
+                                        .unwrap_or((0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0));
+                                    entity_updates.borrow_mut().push(EntityUpdate {
+                                        kind: ENTITY_UPDATE_KIND_SPAWN,
+                                        guid: u32::from(data.child_guid),
+                                        model_id: setup_did,
+                                        landblock_id: lb,
+                                        x,
+                                        y,
+                                        z,
+                                        qw,
+                                        qx,
+                                        qy,
+                                        qz,
+                                        wcid: entity.wcid.unwrap_or(0),
+                                        item_type: entity.item_type_int().unwrap_or(0),
+                                        name: entity.name().to_string(),
+                                        obj_scale: entity
+                                            .get_float_prop(PropertyFloat::DefaultScale)
+                                            .map(|v| v as f32)
+                                            .unwrap_or(1.0),
+                                        icon_id: entity.icon_id.unwrap_or(0),
+                                        // model_data is not cached on the entity —
+                                        // base palette / no swaps (see arm comment).
+                                        palette_id: 0,
+                                        mtable_id,
+                                        model_changes: Vec::new(),
+                                        texture_changes: Vec::new(),
+                                        sub_palettes: Vec::new(),
+                                        portal_destination: String::new(),
+                                        vx: 0.0,
+                                        vy: 0.0,
+                                        vz: 0.0,
+                                        omega_z: 0.0,
+                                        // Mirror the ObjectCreate spawn default:
+                                        // Ready idle when a MotionTable exists.
+                                        motion_command: if mtable_id != 0 {
+                                            0x4100_0003
+                                        } else {
+                                            0
+                                        },
+                                        motion_stance: 0,
+                                        physics_script_did: entity
+                                            .default_script_id()
+                                            .map(u32::from)
+                                            .filter(|d| (d >> 24) == 0x33)
+                                            .unwrap_or(0),
+                                        sound_table_did: resolve_sound_table_did(
+                                            entity.stable_id().map(u32::from),
+                                            setup_did,
+                                        ),
+                                        obj_desc_flags: entity.flags.bits(),
+                                        weenie_flags: entity.weenie_flags.bits(),
+                                        motion_speed: 1.0,
+                                        physics_translucency: entity
+                                            .get_float_prop(PropertyFloat::Translucency)
+                                            .map(|v| v as f32)
+                                            .unwrap_or(0.0),
+                                        is_autonomous: false,
+                                    });
+                                    js_spawned_guids.insert(u32::from(data.child_guid));
+                                }
+                            }
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_ATTACH,
                                 guid: u32::from(data.child_guid),
@@ -32911,6 +33139,9 @@ async fn recv_loop(
                             });
                         }
                         GameMessage::ObjectDelete(data) => {
+                            // wieldedSpawn (2026-06-11): rig removed — drop the
+                            // live-rig ledger entry.
+                            js_spawned_guids.remove(&u32::from(data.guid));
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_REMOVE,
                                 guid: u32::from(data.guid),
@@ -32959,6 +33190,10 @@ async fn recv_loop(
                             // (and clickable) for the rest of the session.
                             // Treat it as a removal, keyed by guid (the drop-
                             // to-ground case re-creates via a fresh ObjectCreate).
+                            // wieldedSpawn (2026-06-11): rig removed — drop the
+                            // live-rig ledger entry, so a later wield-from-pack
+                            // of this picked-up item re-synthesizes its spawn.
+                            js_spawned_guids.remove(&u32::from(data.guid));
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_REMOVE,
                                 guid: u32::from(data.guid),

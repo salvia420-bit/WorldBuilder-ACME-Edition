@@ -193,6 +193,24 @@ const MULTI_ACTION_ON = (() => {
   }
 })();
 
+// FU-3 (2026-06-11) — `?serverSwing=on`: picking.js suppresses its
+// optimistic click-time swing, so the server's KIND_MOTION_ACTION echo is
+// the ONLY swing trigger. setMotion's MT-link overlay doesn't animate the
+// LOCAL rig (the known local combat-anim gap), so for attack-class
+// commands on the local guid we also fire the procedural shoulder pose
+// (setSwingPose) — the visual that worked pre-FU-3 — now at the
+// server-timed (post-MoveTo) moment instead of at click.
+const SERVER_SWING_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("serverSwing")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
 // Per-entity last-applied action stamp (15-bit) for the multi-action FIFO's
 // stamp-dedup. Mirrors retail's per-object `server_action_stamp`
 // (acclient.c:344400-344414): an action plays only if its sequence is NEWER
@@ -1717,6 +1735,18 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         // is async + may await the keyframe fetch.
         const meta = toMeta(upd);
         em.spawn(meta);
+        // FU-1 (2026-06-11, ?wieldHandAttach=on): LOGIN-time wielded
+        // items never get a kind=49 Wielder-transition event (the wield
+        // predates the session), so no attach is ever requested and the
+        // weapon renders "dropped" at the feet. Nudge the wielder
+        // re-sync for every spawned guid: if it wields anything,
+        // flushWieldedDirty enumerates entityWieldedItems() and
+        // requests the attaches (child-not-yet-spawned ordering is
+        // handled by _pendingAttach). Covers the local player on login
+        // AND NPCs spawning pre-armed. No-op for non-wielders.
+        if (em._wieldHandAttach) {
+          try { em._markWielderDirty?.(meta.guid); } catch (_) {}
+        }
       } else if (kind === KIND_REMOVE) {
         // A4 (2026-05-18): prune __lastEntityWorldPos on despawn to bound Map growth.
         const g = upd.guid >>> 0;
@@ -1866,6 +1896,18 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
           // echo consumed — optimistic swing already covered it.
         } else if (actionCmd !== 0 && typeof em.setMotion === "function") {
           em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
+          // FU-3 (2026-06-11): under ?serverSwing=on the local rig has no
+          // click-time swing anymore, and setMotion's MT clip doesn't
+          // animate the local rig. Fire the procedural shoulder pose at
+          // this (server-timed, post-MoveTo) moment for attack-class
+          // commands (0x51..0x6E per the swing-classification table;
+          // 0x50 FallDown excluded).
+          if (SERVER_SWING_ON && isLocalPlayerGuid(actionGuid)) {
+            const low = actionCmd & 0xFFFF;
+            if (low >= 0x51 && low <= 0x6E) {
+              try { em.setSwingPose?.(actionGuid); } catch (_) {}
+            }
+          }
         }
       } else if (kind === KIND_TURN) {
         // F3-3 (bughunt 2026-06-09): server TurnTo* directive — turn the rig to
