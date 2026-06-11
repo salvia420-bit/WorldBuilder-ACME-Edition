@@ -1299,6 +1299,11 @@
       // AudioContext panner). Mirrors the canonical fix already applied in
       // scene3d/entities.js Sound(1) hook (~:8498) and scene3d/index.js (~:3520).
       import { acToThree } from "./scene3d/adapter.js";
+      // A15-Q2 (2026-06-11 unification survey) — single EntityUpdate clone/
+      // field schema shared with the 3D path's toMeta (scene3d/loop.js).
+      // Pure function, no DOM/wasm. Wired into the backlog/deferred-spawn
+      // clones below behind `?unifiedClone=on` (default-off).
+      import { cloneEntityUpdate as __unifiedCloneEntityUpdate } from "./scene3d/entity_update_clone.js";
 
       let pluginClient = null;
       let barInstance = null;
@@ -4459,6 +4464,19 @@ void main() {
         const v = new URLSearchParams(window.location.search).get("spawnDefer2dOnly");
         return v === "on" || v === "true" || v === "1" || v === "yes";
       })();
+      // A15-Q2 (2026-06-11 unification): `?unifiedClone=on` (default-off)
+      // routes the backlog clone (__scene3dCloneEntityUpdate) and the 2D
+      // deferred-spawn clone (cloneEntitySpawn) through the single shared
+      // `cloneEntityUpdate` schema (scene3d/entity_update_clone.js), the
+      // same one scene3d/loop.js#toMeta consumes under the same flag. Off =
+      // the legacy per-site clones below. The unified clone is a strict
+      // superset, so it ALSO carries `isAutonomous` / `physicsTranslucency`
+      // / `motionSpeed` — fields the LIVE 3D dispatcher reads but the legacy
+      // backlog clone silently dropped (A15 §3 row 2).
+      const __UNIFIED_CLONE = (() => {
+        const v = new URLSearchParams(window.location.search).get("unifiedClone");
+        return v === "on" || v === "true" || v === "1" || v === "yes";
+      })();
       let __backlogOverflowWarned = false;
       let __deferredSpawnsOverflowWarned = false;
 
@@ -4492,6 +4510,13 @@ void main() {
         // Uint32Array views are copied via Uint32Array.from so the
         // backlog survives the wasm-bindgen `.free()` on each event.
         try {
+          // A15-Q2: under `?unifiedClone=on`, use the shared schema. It is
+          // a strict superset of the legacy fields below AND adds the
+          // `isAutonomous` / `physicsTranslucency` / `motionSpeed` the live
+          // dispatchOne reads — fixing the backlog-replay misses (§3 row 2).
+          if (__UNIFIED_CLONE) {
+            return __unifiedCloneEntityUpdate(upd);
+          }
           return {
             kind: upd.kind,
             guid: upd.guid,
@@ -4590,6 +4615,14 @@ void main() {
       // through handleEntitySpawn once liveScene is ready.
       const deferredSpawns = [];
       function cloneEntitySpawn(upd) {
+        // A15-Q2: under `?unifiedClone=on`, use the shared schema. The
+        // deferred spawn is replayed through handleEntitySpawn →
+        // metaFromSpawn, which re-normalizes (`>>> 0` / `|| ""`), so the
+        // unified clone's normalization + array-copy is behavior-safe and
+        // strictly more self-contained than the legacy raw-field copy.
+        if (__UNIFIED_CLONE) {
+          return __unifiedCloneEntityUpdate(upd);
+        }
         return {
           kind: upd.kind,
           guid: upd.guid,

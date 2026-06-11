@@ -53,6 +53,10 @@ import { tickEntityRenderVisibility } from "./entities.js";
 // Portal-space donut (0x02000306) travel visual. No-op unless a teleport has
 // armed it via `startPortalSpace` (gated behind `?portalSpace=`).
 import { tickPortalSpace } from "./portal_space.js";
+// A15-Q2 (2026-06-11 unification survey) — single EntityUpdate clone/field
+// schema shared with index.html's 2D path. Pure function, no DOM/wasm.
+// Wired into `toMeta` behind `?unifiedClone=on` (default-off, see below).
+import { cloneEntityUpdate } from "./entity_update_clone.js";
 
 // Wire the per-domain cullers once at module load. Each fn is `(scene3d,
 // culler) => void` and is individually fail-soft (tickFrustumCull also
@@ -187,6 +191,22 @@ const MULTI_ACTION_ON = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search).get("multiAction")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// A15-Q2 (2026-06-11 unification survey) — `?unifiedClone=on` (default-off):
+// route `toMeta` (and, in index.html, the backlog/deferred-spawn clones)
+// through the single shared `cloneEntityUpdate` schema instead of the
+// hand-copied per-site field lists. Off = legacy per-site clone (the
+// `toMeta` body below). See docs/url-flags.md.
+const UNIFIED_CLONE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("unifiedClone")?.toLowerCase() === "on"
     );
   } catch (_) {
     return false;
@@ -1618,6 +1638,14 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
  * `landblockToWorldXY` outside metaFromSpawn).
  */
 function toMeta(upd) {
+  // A15-Q2: under `?unifiedClone=on`, defer to the single shared schema.
+  // Pass the scratch-backed `_sliceFromScratch` so the Uint32Array copies
+  // keep the same shared-empty-sentinel / right-sized allocation behaviour
+  // the legacy body below has. The unified clone is a strict superset of
+  // the legacy fields, so em.spawn (the sole consumer) is unaffected.
+  if (UNIFIED_CLONE_ON) {
+    return cloneEntityUpdate(upd, { sliceU32: _sliceFromScratch });
+  }
   return {
     guid: (upd.guid >>> 0),
     modelId: (upd.modelId >>> 0),
