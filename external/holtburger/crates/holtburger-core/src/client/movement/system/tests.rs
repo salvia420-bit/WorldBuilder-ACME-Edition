@@ -3905,3 +3905,117 @@ fn test_apply_self_movement_world_events_records_all_sequence_families() {
         (Some(12), Some(6), Some(4))
     );
 }
+
+/// A13-W2 (2026-06-11, unification survey): `server_control_sequence`
+/// echo parity — the full canonical chain. Retail constructs every C2S
+/// position pack from the SAME `CPhysicsObj::update_times[]` slots, and
+/// the echoed server-control slot is `update_times[5]`
+/// (`CommandInterpreter::SendMovementEvent` acclient.c:718176 ->
+/// MoveToStatePack ctor :718187; `SendPositionEvent` :718227 -> :718239).
+/// Ours: a non-autonomous self `UpdateMotion` routed through the ONE
+/// world-handler path (`handlers::routing::handle_message`, used by both
+/// the native runtime and the `?wireStatePacks=stage1` wasm route) must
+/// advance `world.player.server_control_sequence`
+/// (`apply_self_update_motion`, mutations.rs — ACE cross-ref:
+/// ACE.Server `Sequence.SequenceType.ObjectServerControl` bumped per
+/// server-issued motion broadcast), and the NEXT built MoveToState /
+/// AutonomousPosition packs echo the live value — never the wasm
+/// pre-W1 constant 0 ("let it ride").
+#[test]
+fn test_a13_w2_non_autonomous_update_motion_echoes_into_next_packs() {
+    use super::super::common::build_move_to_state;
+    use holtburger_protocol::messages::game_message::GameMessage;
+    use holtburger_protocol::messages::{
+        MovementEventData, MovementInvalid, MovementType, MovementTypeData,
+    };
+    use holtburger_protocol::traits::ProtocolPack;
+    use holtburger_world::WorldEvent;
+    use holtburger_world::handlers::routing::handle_message;
+
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0001);
+    let position = WorldPosition {
+        landblock_id: Guid(0x1000_0001),
+        coords: Vector3::new(12.0, -4.0, 1.5),
+        rotation: Quaternion::from_heading(90.0_f32.to_radians()),
+    };
+    world.player.guid = guid;
+    world.player.instance_sequence = 9;
+    world.player.server_control_sequence = 7;
+    world.player.teleport_sequence = 33;
+    world.player.force_position_sequence = 44;
+    seed_local_player(&mut world, guid, position);
+
+    let update_motion = |server_control_sequence: u16| {
+        GameMessage::UpdateMotion(Box::new(MovementEventData {
+            guid,
+            object_instance_sequence: 9,
+            movement_sequence: 21,
+            server_control_sequence,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid::default()),
+        }))
+    };
+
+    // Non-autonomous UpdateMotion with sequence 41 routed through the
+    // canonical handler advances the one quartet owner and emits the
+    // Self* event the shared movement helper consumes.
+    let mut events = Vec::new();
+    handle_message(&mut world, &update_motion(41), &mut events);
+    assert_eq!(world.player.server_control_sequence, 41);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, WorldEvent::SelfServerControlledMotion(_))),
+        "accepted non-autonomous UpdateMotion must emit SelfServerControlledMotion"
+    );
+
+    // The NEXT built MoveToState echoes 41 (single builder, A13-W3).
+    let raw_motion_state = build_motion_state_raw_motion_state(
+        &world,
+        MotionState::builder().run().forward().build(),
+        MotionStyle::PreserveServer,
+    );
+    let action = build_move_to_state(&world, raw_motion_state, MovementPacketMetadata::default());
+    assert_eq!(action.instance_sequence, 9);
+    assert_eq!(action.server_control_sequence, 41);
+    assert_eq!(action.teleport_sequence, 33);
+    assert_eq!(action.force_position_sequence, 44);
+
+    // Golden bytes: the quartet sits immediately after
+    // RawMotionState + Position as 4 consecutive LE u16 then the
+    // contact|longjump<<1 byte, padded to 4 (retail
+    // MoveToStatePack::Pack acclient.c:323814-323851).
+    let mut prefix = Vec::new();
+    action.raw_motion_state.pack(&mut prefix);
+    action.position.pack(&mut prefix);
+    let mut packed = Vec::new();
+    action.pack(&mut packed);
+    assert_eq!(
+        &packed[prefix.len()..prefix.len() + 9],
+        &[9, 0, 41, 0, 33, 0, 44, 0, 1],
+        "quartet + grounded contact byte, LE, in retail order"
+    );
+    assert_eq!(packed.len() % 4, 0, "ALIGN_PTR(4) tail pad");
+
+    // The AutonomousPosition heartbeat echoes the same live value
+    // (retail SendPositionEvent reads the same update_times slots).
+    let position_action = build_autonomous_position(&world, MovementPacketMetadata::default())
+        .expect("seeded player should emit autonomous position action");
+    assert_eq!(position_action.server_control_sequence, 41);
+
+    // Stale replay (40 < 41 in u16 wrap order) is rejected: no sequence
+    // regression, no Self* event (should_accept_server_controlled_motion).
+    let mut stale_events = Vec::new();
+    handle_message(&mut world, &update_motion(40), &mut stale_events);
+    assert_eq!(world.player.server_control_sequence, 41);
+    assert!(
+        !stale_events
+            .iter()
+            .any(|e| matches!(e, WorldEvent::SelfServerControlledMotion(_))),
+        "stale UpdateMotion must not re-emit SelfServerControlledMotion"
+    );
+}
