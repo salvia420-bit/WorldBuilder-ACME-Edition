@@ -8,6 +8,7 @@ use super::common::{
     signed_heading_delta,
 };
 use super::motion_interp::interpreted_velocity_for_state;
+use super::motion_table_manager::MotionTableManager;
 use crate::client::movement_types::{
     AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
     PlayerDriveIntent, Turn,
@@ -268,6 +269,31 @@ const USE_RETAIL_GROUND_FRICTION: bool = false;
 /// integrate always-on + mark DONE in url-flags.md per the passed-flag
 /// policy.
 const USE_INTERPRETED_VELOCITY: bool = true;
+
+/// A4-Q1 (2026-06-11 unification survey) — STAGE 2 completion layer,
+/// the retail `MotionTableManager` pending-animation queue
+/// ([`super::motion_table_manager`]). Specced ONCE in
+/// `docs/2026-06-11-unified-movement-pipeline/DESIGN.md`
+/// "STAGE 2 AMENDMENT" (A3-D1 fold).
+///
+/// `true`: the tick pumps the queue's per-frame completion poll —
+/// retail `MotionTableManager::UseTime` tailcalls
+/// `CheckForCompletedMotions` (BN pseudo-C
+/// `acclient_2013.bndb_pseudo_c.txt:290845-290850`; body
+/// `acclient.c:329960`; ACE `MotionTableManager.cs:158-161`), reached
+/// per-frame via `CPhysicsObj::update_object_internal` →
+/// `CPartArray::HandleMovement` (`acclient.c:322882` →
+/// `:325106-325112`).
+///
+/// `false` (DEFAULT): the pump is skipped and — since nothing enqueues
+/// until the A3-D2 `PerformMovement`/`motion_done` consumer and the
+/// A4-Q2 renderer `AnimationDone` wiring (`?mtQueue=` +
+/// `notifyAnimationDone` export) land — the queue is fully inert;
+/// current one-shot paths are untouched. Flip plan (DESIGN.md
+/// amendment): A3-D2 → A4-Q2 → 1070 eye-test (spam-click truncation,
+/// emote-completes-then-gait-resumes), then default-on per the
+/// passed-flag policy.
+const USE_MOTION_TABLE_QUEUE: bool = false;
 
 /// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
 ///
@@ -734,6 +760,12 @@ pub(crate) struct MovementSystem {
     /// position updates are async + flushed lazily, so client-side
     /// observability is essential for debugging).
     pub(crate) heartbeats_sent: u32,
+    /// A4-Q1 (2026-06-11) — the local player's retail
+    /// `MotionTableManager` pending-animation queue
+    /// (`acclient.h:31097-31104`; per-entity instances arrive with
+    /// DESIGN.md Stage 3). Pumped per-tick under
+    /// [`USE_MOTION_TABLE_QUEUE`] (default-off → inert).
+    motion_table_manager: MotionTableManager,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -825,6 +857,7 @@ impl MovementSystem {
             last_sent_autonomous_pose: None,
             last_sent_autonomous_contact: None,
             heartbeats_sent: 0,
+            motion_table_manager: MotionTableManager::new(),
         }
     }
 
@@ -1033,6 +1066,24 @@ impl MovementSystem {
             .any(|command| matches!(command, QueuedDriveCommand::Stop));
         for command in queued {
             self.ingest_drive_command(command, now);
+        }
+
+        // A4-Q1 (2026-06-11): per-frame completion pump for the retail
+        // `MotionTableManager` queue, run AFTER drive ingestion —
+        // mirroring retail's synchronous `CheckForCompletedMotions`
+        // after every `CMotionInterp::PerformMovement` arm
+        // (`acclient.c:344684-344704`; ACE `MotionTableManager.cs:160`)
+        // plus the per-frame `UseTime` poll (BN pseudo-C
+        // `acclient_2013.bndb_pseudo_c.txt:290845-290850`), so a no-anim
+        // motion completes inside the same tick it was issued. The
+        // `MotionDone` events are drained and DROPPED until the A3-D2
+        // consumer (`motion_interp.motion_done`,
+        // `acclient.c:343641-343676`) lands — DESIGN.md STAGE 2
+        // AMENDMENT fan-out. DEFAULT-OFF ([`USE_MOTION_TABLE_QUEUE`]):
+        // queue inert, current paths untouched.
+        if USE_MOTION_TABLE_QUEUE {
+            self.motion_table_manager.use_time();
+            let _pending_motion_done = self.motion_table_manager.drain_events();
         }
 
         if self.suppress_frontend_autonomous_once

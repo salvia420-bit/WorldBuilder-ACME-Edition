@@ -2,6 +2,7 @@ mod common;
 mod handle;
 mod interp_state;
 mod motion_interp;
+mod motion_table_manager;
 mod raw_state;
 mod system;
 
