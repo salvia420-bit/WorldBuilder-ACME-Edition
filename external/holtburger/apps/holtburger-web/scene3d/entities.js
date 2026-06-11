@@ -212,6 +212,39 @@ const HEADING_EASE_DAMP_K_DEFAULT = 14.0;
 const HEADING_EASE_SNAP_RAD = 2.5; // ~143°: only true discontinuities snap
 const HEADING_EASE_EPSILON = 0.01; // settle (~0.6°) to avoid endless micro-slerp
 
+// G-5 / F3-3 follow-on (2026-06-11) — `?turnOmega=on` rate-limits the
+// KIND_TURN (TurnToHeading/TurnToObject) slerp to retail's turn rate.
+// Retail turns an entity at (MotionTable turn omega × MoveToParameters
+// .speed); our heading ease instead converges with a fixed exponential K,
+// so a 180° emote-turn whips around in ~0.2 s instead of sweeping at the
+// authored rate. The wire `params.speed` is already surfaced on the
+// KIND_TURN EntityUpdate (`omega_z`, lib.rs UpdateMotion arm) and loop.js
+// now forwards it here; the per-entity MotionTable omega is NOT plumbed,
+// so a base constant stands in (human TurnRight cycle ≈ 3 rad/s; tune at
+// the 1070 with `?turnOmegaBase=<rad/s>`). Applies ONLY to turn-directive
+// targets — a KIND_POSITION heading stash clears the cap so position-
+// driven smoothing keeps its existing fixed-K feel. Default OFF.
+const TURN_OMEGA_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("turnOmega")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+const TURN_OMEGA_BASE_RAD = (() => {
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("turnOmegaBase");
+      const n = v == null ? NaN : parseFloat(v);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch (_) { /* Node / no window → default */ }
+  return 3.0;
+})();
+
 // === Wave R2.A — per-quality-preset cap on the TOTAL number of entity-
 // attached lights created across all entities. WebGL2 has a hard per-scene
 // light-uniform limit and MeshStandardMaterial recompiles its shader when the
@@ -3500,6 +3533,9 @@ export class EntityManager {
       }
       inst._headingEaseInit = true;
       tgtQ.copy(tq);
+      // G-5 (?turnOmega=on): a position-driven heading target supersedes a
+      // turn directive — drop the omega cap so smoothing keeps its fixed-K.
+      if (inst._turnOmegaCapRad) inst._turnOmegaCapRad = 0;
       // Position — unchanged from R3.A: ease under ?deadReckon, else snap.
       if (this._deadReckonOn) {
         let tgt = inst._serverTargetPos;
@@ -6439,7 +6475,7 @@ export class EntityManager {
    * overrides this if one arrives (awake monsters), and drives nothing extra
    * if it doesn't (the NPC-emote case this fixes).
    */
-  applyTurnDirective(guid, qw, qx, qy, qz) {
+  applyTurnDirective(guid, qw, qx, qy, qz, turnSpeed) {
     const inst = this.entityMap.get((guid >>> 0));
     if (!inst || !inst.root) return;
     const tq = acQuatToThree(qw, qx, qy, qz);
@@ -6447,6 +6483,15 @@ export class EntityManager {
     if (!tgtQ) tgtQ = inst._serverTargetQuat = new THREE.Quaternion();
     tgtQ.copy(tq);
     inst._headingEaseInit = true;
+    // G-5 (?turnOmega=on): cap the tick slerp at the retail turn rate —
+    // base omega × the wire MoveToParameters.speed (loop.js forwards the
+    // KIND_TURN omega_z hint; 0/absent → speed 1). Cleared on settle and
+    // by any KIND_POSITION heading stash (setPose owns the target again).
+    if (TURN_OMEGA_ON) {
+      const sp = +turnSpeed;
+      inst._turnOmegaCapRad =
+        TURN_OMEGA_BASE_RAD * (Number.isFinite(sp) && sp > 0 ? sp : 1.0);
+    }
   }
 
   /**
@@ -8825,9 +8870,17 @@ export class EntityManager {
         const tgtQ = inst._serverTargetQuat;
         const ang = q.angleTo(tgtQ);
         if (ang > HEADING_EASE_EPSILON) {
-          q.slerp(tgtQ, 1 - Math.exp(-this._headingEaseK * dt));
+          let frac = 1 - Math.exp(-this._headingEaseK * dt);
+          // G-5 (?turnOmega=on): cap this frame's sweep at the retail turn
+          // rate for turn-directive targets (cap unset/0 → unchanged ease).
+          if (inst._turnOmegaCapRad > 0) {
+            const maxFrac = (inst._turnOmegaCapRad * dt) / ang;
+            if (maxFrac < frac) frac = maxFrac;
+          }
+          q.slerp(tgtQ, frac);
         } else if (ang > 0) {
           q.copy(tgtQ); // settle within epsilon — stop micro-slerping
+          if (inst._turnOmegaCapRad) inst._turnOmegaCapRad = 0; // turn done
         }
       }
       // T11 — velocity-scaled locomotion playback (anti-ice-skating). Derive

@@ -1915,7 +1915,9 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         // player owns its own facing (client-predicted).
         const turnGuid = upd.guid >>> 0;
         if (!isLocalPlayerGuid(turnGuid) && typeof em.applyTurnDirective === "function") {
-          em.applyTurnDirective(turnGuid, upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0);
+          // G-5 (?turnOmega=on): forward the wire MoveToParameters.speed
+          // (surfaced on omega_z) so the slerp can rate-limit to retail.
+          em.applyTurnDirective(turnGuid, upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0, +(upd.omegaZ ?? 0));
         }
       } else if (kind === KIND_APPEARANCE) {
         // Wave 7.3 — mid-game equip change. The wasm UpdateObject arm
@@ -2150,7 +2152,8 @@ export function installSharedDrainHook(scene3d) {
           // F3-3 (bughunt 2026-06-09): TurnTo* directive (see direct-drain arm).
           const turnGuid = upd.guid >>> 0;
           if (!isLocalPlayerGuid(turnGuid) && typeof em.applyTurnDirective === "function") {
-            em.applyTurnDirective(turnGuid, upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0);
+            // G-5 (?turnOmega=on): forward params.speed (omega_z hint).
+            em.applyTurnDirective(turnGuid, upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0, +(upd.omegaZ ?? 0));
           }
         } else if (kind === KIND_APPEARANCE) {
           // SG-D (2026-06-09): mid-game appearance change (equip / dye-commit /
