@@ -187,6 +187,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | `targetFps` | float ≤240 | 0 (uncapped) | Cap render fps. | scene3d/index.js:313 |
 | `netDrainHz` | float ≤60 | 0 (realtime) | Throttle network message drain. | scene3d/index.js:351 |
 | `spawnTrace` | `1` | off | Log entity spawn stage timings. | scene3d/entities.js:22 |
+| `spawnDefer2dOnly` | `on` | off | A15-Q1: under `?renderer=3d` the 2D `liveScene` is PERMANENTLY null, so every KIND_SPAWN was cloned into the 2D `deferredSpawns` queue that nothing ever drains (the 3D EntityManager already handled the spawn). On → skip that 2D spawn-defer push entirely in 3D mode (pure leak fix; off = legacy unconditional push, still ring-capped). The companion ring-caps on `deferredSpawns` + `__scene3dEntityBacklog` (keep-latest-512, one-time overflow warn) are unconditional — no flag. JS-live. | index.html (drain loop + bufferingHook) |
 | `frustumCull` | `off` to disable | **on** | Frustum culling (recent perf pass). | scene3d/culling.js:97 |
 | `cullTerrain` | `on` | off | Terrain culling. | scene3d/culling.js:98 |
 | `cullDist` | float | default | Culling distance override. | scene3d/culling.js:99 |

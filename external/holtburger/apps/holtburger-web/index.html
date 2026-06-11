@@ -4438,6 +4438,30 @@ void main() {
       window.getLocalPlayerGuid = getLocalPlayerGuid;
       window.entityMap = entityMap;
 
+      // A15-Q1 (2026-06-11 unification): module-scope renderer-mode
+      // constant + entity-buffer caps. Both `__scene3dEntityBacklog`
+      // (3D-consumed) and `deferredSpawns` (2D-consumed) are unbounded
+      // ring queues drained only on one path; in the OTHER mode their
+      // sole consumer never runs, so they grow without limit (slow leak
+      // in a populated zone — pollEntityUpdates can carry 100s/sec).
+      // Cap both with a keep-latest-N ring (one-time overflow warn).
+      const ENTITY_BUFFER_CAP = 512;
+      const __USE_RENDERER_3D =
+        new URLSearchParams(window.location.search).get("renderer") === "3d";
+      // `?spawnDefer2dOnly=on` (default-off): under ?renderer=3d the 2D
+      // `liveScene` is PERMANENTLY null (the 2D PIXI bring-up is skipped),
+      // so every KIND_SPAWN gets cloned into `deferredSpawns` that the 3D
+      // path never drains (the 3D EntityManager already handled the spawn
+      // via em.spawn). With this flag on, the 2D spawn-defer push is
+      // skipped entirely in 3D mode. Off = legacy unconditional push
+      // (still bounded by ENTITY_BUFFER_CAP below).
+      const __SPAWN_DEFER_2D_ONLY = (() => {
+        const v = new URLSearchParams(window.location.search).get("spawnDefer2dOnly");
+        return v === "on" || v === "true" || v === "1" || v === "yes";
+      })();
+      let __backlogOverflowWarned = false;
+      let __deferredSpawnsOverflowWarned = false;
+
       // Workstream E (3D camera/game-feel fix): pre-init3D entity-event
       // backlog. The 2D drainEvents loop forwards every pollEntityUpdates
       // batch via `window.__scene3dEntityHook?.(entityUpdates)` (line
@@ -4517,16 +4541,34 @@ void main() {
       // Initial hook is a buffering stub. installSharedDrainHook
       // replaces this after init3D resolves; subsequent calls go
       // direct to the EntityManager dispatcher in loop.js.
+      function __pushBacklog(cloned) {
+        if (!cloned) return;
+        const b = window.__scene3dEntityBacklog;
+        b.push(cloned);
+        // A15-Q1: ring-cap. In pure-2D sessions this stub is NEVER
+        // replaced (installSharedDrainHook runs only on the 3D init
+        // path), so without a cap the backlog grows unbounded for the
+        // whole session. Keep the latest N so the 3D-hot-swap race the
+        // backlog exists for is still covered.
+        if (b.length > ENTITY_BUFFER_CAP) {
+          b.splice(0, b.length - ENTITY_BUFFER_CAP);
+          if (!__backlogOverflowWarned) {
+            __backlogOverflowWarned = true;
+            console.warn(
+              `[A15-Q1] __scene3dEntityBacklog exceeded ${ENTITY_BUFFER_CAP}; ` +
+              `dropping oldest (3D drain hook never installed — likely 2D mode).`
+            );
+          }
+        }
+      }
       window.__scene3dEntityHook = function bufferingHook(updOrArray) {
         if (!updOrArray) return;
         if (typeof updOrArray.length === "number" && typeof updOrArray !== "string") {
           for (let i = 0; i < updOrArray.length; i += 1) {
-            const cloned = __scene3dCloneEntityUpdate(updOrArray[i]);
-            if (cloned) window.__scene3dEntityBacklog.push(cloned);
+            __pushBacklog(__scene3dCloneEntityUpdate(updOrArray[i]));
           }
         } else {
-          const cloned = __scene3dCloneEntityUpdate(updOrArray);
-          if (cloned) window.__scene3dEntityBacklog.push(cloned);
+          __pushBacklog(__scene3dCloneEntityUpdate(updOrArray));
         }
       };
 
@@ -10529,9 +10571,15 @@ void main() {
             // `scene3d/loop.js#installSharedDrainHook` after init3D
             // resolves) iterates read-only — it does NOT consume / .free()
             // the wasm-bindgen handles; the for-loop below still owns
-            // the lifecycle and calls upd.free() at line ~6062. No-op
-            // in 2D mode (the hook is undefined when ?renderer=3d isn't
-            // present).
+            // the lifecycle and calls upd.free() at line ~6062.
+            // A15-Q1 (corrected 2026-06-11): the hook is ALWAYS defined
+            // — the module-scope buffering stub (`bufferingHook`,
+            // ~L4520) is installed unconditionally, before any renderer
+            // is chosen. In 3D mode `installSharedDrainHook` later
+            // replaces it with the live EntityManager dispatcher; in 2D
+            // mode it is NEVER replaced, so this forward just buffers
+            // into `__scene3dEntityBacklog` (now ring-capped at
+            // ENTITY_BUFFER_CAP — see ~L4520) and nothing drains it.
             try { window.__scene3dEntityHook?.(entityUpdates); } catch (e) { console.warn("[7.5] scene3d hook:", e); }
             for (const upd of entityUpdates) {
               if (upd.kind === 0) handlePositionUpdate(upd);
@@ -10544,8 +10592,28 @@ void main() {
                 // once liveScene is ready.
                 if (liveScene) {
                   handleEntitySpawn(upd);
+                } else if (__SPAWN_DEFER_2D_ONLY && __USE_RENDERER_3D) {
+                  // A15-Q1: under ?renderer=3d, liveScene is PERMANENTLY
+                  // null (the 2D PIXI bring-up is skipped) and the 3D
+                  // EntityManager already handled this spawn via em.spawn
+                  // (loop.js). Without this gate every KIND_SPAWN clones
+                  // into deferredSpawns that nothing ever drains. Skip.
                 } else {
+                  // A15-Q1: ring-cap so a long 2D session (or a stuck
+                  // liveScene resolve) can't grow deferredSpawns without
+                  // bound. Keep latest N — replay drains them once
+                  // liveScene becomes non-null.
                   deferredSpawns.push(cloneEntitySpawn(upd));
+                  if (deferredSpawns.length > ENTITY_BUFFER_CAP) {
+                    deferredSpawns.splice(0, deferredSpawns.length - ENTITY_BUFFER_CAP);
+                    if (!__deferredSpawnsOverflowWarned) {
+                      __deferredSpawnsOverflowWarned = true;
+                      console.warn(
+                        `[A15-Q1] deferredSpawns exceeded ${ENTITY_BUFFER_CAP} ` +
+                        `before liveScene ready; dropping oldest.`
+                      );
+                    }
+                  }
                 }
                 // Chorizite WorldObjectManager dispatch (rev 3, 2026-05-19).
                 // Entity-Completeness E.B (2026-05-19): now feeds the three
