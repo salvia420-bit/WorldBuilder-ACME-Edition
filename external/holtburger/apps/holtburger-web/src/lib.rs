@@ -90,6 +90,22 @@ fn parse_world_lifecycle_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "worldLifecycle=on")
 }
 
+/// A1-O1 (2026-06-11, unification survey): parse `?unifiedTick=on`
+/// (or `&unifiedTick=on`). Same shape as `parse_world_lifecycle_flag`.
+/// When on, the `SessionCommand::TickMovement` arm drives the CANONICAL
+/// tick spine (`holtburger_core::TickSpineHandle::tick_frame` =
+/// `movement.tick` → `world.tick` → `simulation.tick`, the exact native
+/// `ClientRuntime::run` order; retail single-spine analog
+/// `SmartBox::UseTime`, acclient.c:146256–146316) instead of the bare
+/// `MovementSystemHandle::tick` — i.e. the liveness eviction sweep and
+/// the quantum-sliced spatial solver run in-browser for the first time.
+/// Default OFF = bare `movement.tick`, byte-identical to before.
+#[cfg(target_arch = "wasm32")]
+fn parse_unified_tick_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "unifiedTick=on")
+}
+
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
 /// (the wire opcode read at `game_event.rs:97`). Used by the
 /// `[seq-gap]` observability hook to bucket sequence trackers per
@@ -30154,6 +30170,11 @@ async fn recv_loop(
     // the same point. See `docs/phase-4-step-3.6-movement-system.md`.
     let mut world: Option<holtburger_world::WorldState> = None;
     let mut movement = holtburger_core::MovementSystemHandle::new();
+    // A1-O1 (2026-06-11): the canonical tick spine's wasm facade — owns
+    // the `ClientSimulationSystem` this recv loop otherwise lacks.
+    // Constructed unconditionally (cheap empty Vec); driven ONLY when
+    // `?unifiedTick=on` (see the TickMovement arm).
+    let mut tick_spine = holtburger_core::TickSpineHandle::new();
     let mut entity_seeded = false;
     let mut heartbeat_armed = false;
     // F2-3 (movement bughunt 2026-06-09): set when a `PlayerTeleport`
@@ -30318,6 +30339,11 @@ async fn recv_loop(
     // CObjectMaint-style owner) instead of the apply_inventory_object_*
     // bypass copies. Default OFF; see should_route_message_to_world.
     let world_lifecycle_on: bool = parse_world_lifecycle_flag(&js_location_search());
+    // A1-O1 (2026-06-11): `?unifiedTick=on` — drive the canonical
+    // movement → world → simulation tick spine from the TickMovement arm
+    // instead of bare `movement.tick`. Default OFF; see
+    // `parse_unified_tick_flag` and the arm below.
+    let unified_tick_on: bool = parse_unified_tick_flag(&js_location_search());
     // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have
     // a JS-side rig (KIND_SPAWN emitted, no KIND_REMOVE since). Maintained
     // unconditionally (cheap set ops at the existing emission sites), but
@@ -39094,8 +39120,40 @@ async fn recv_loop(
                             // fallback uses at `entities.js:2603-2607`
                             // when stance=0 arrives on the wire.
                             .unwrap_or(0x8000_003D);
-                        match movement.tick(now, w, &mut session).await {
-                            Ok(_events) => {
+                        // A1-O1 (2026-06-11, unification survey): gated
+                        // tick dispatch. Flag OFF (default) = the bare
+                        // `MovementSystemHandle::tick` this arm always
+                        // ran — byte-identical. `?unifiedTick=on` = the
+                        // CANONICAL spine (`tick_frame` = movement.tick →
+                        // world.tick → simulation.tick, the exact native
+                        // `ClientRuntime::run` order; retail single-spine
+                        // analog SmartBox::UseTime, acclient.c:146256),
+                        // closing survey A1 §3 row 1: the eviction sweep
+                        // (liveness.rs — the half A8-M1's KNOWN LIMIT
+                        // waits on; A8-M1 LANDED, so canonical
+                        // ObjectDelete marks now get SWEPT when both
+                        // flags are on) and the quantum-sliced spatial
+                        // solver run in-browser for the first time. The
+                        // handle's bespoke local-pose pre-integration is
+                        // skipped on-path — the local player advances
+                        // through the cli-canonical solver instead.
+                        // Spine-emitted WorldEvents feed the same solver
+                        // body-tracking law as native and are otherwise
+                        // dropped, matching this arm's existing
+                        // `Ok(_events)` discard; forwarding
+                        // EntityDespawned to the JS rig layer is A8-M2.
+                        let tick_result: anyhow::Result<()> = if unified_tick_on {
+                            tick_spine
+                                .tick_frame(now, w, &mut movement, &mut session)
+                                .await
+                        } else {
+                            movement
+                                .tick(now, w, &mut session)
+                                .await
+                                .map(|_events| ())
+                        };
+                        match tick_result {
+                            Ok(()) => {
                                 if was_airborne_pre_tick && !w.player.is_airborne {
                                     // Wave 10 Phase 10.1 (2026-05-26):
                                     // Touchdown signalling. The Wave 5

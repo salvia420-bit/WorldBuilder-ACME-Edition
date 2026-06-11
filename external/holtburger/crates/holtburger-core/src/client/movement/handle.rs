@@ -133,6 +133,29 @@ impl MovementSystemHandle {
         self.inner.tick(now, world, session).await
     }
 
+    /// A1-O1 (2026-06-11, unification survey): direct access to the
+    /// wrapped [`MovementSystem`] for the canonical tick spine
+    /// (`tick_spine::TickSpineHandle`). The spine calls
+    /// `MovementSystem::tick` itself (plus `world.tick` +
+    /// `simulation.tick`), deliberately SKIPPING this handle's bespoke
+    /// local-pose pre-integration above — under the unified spine the
+    /// local player advances through the cli-canonical solver path
+    /// instead (`current_local_solve_body_input` →
+    /// `SpatialPhysics::solve`), which is exactly the path the `tick`
+    /// doc comment says the off-path sidesteps.
+    pub(crate) fn inner_mut(&mut self) -> &mut MovementSystem {
+        &mut self.inner
+    }
+
+    /// A1-O1: bookkeeping for a spine-driven tick — stamps
+    /// `last_tick_at` and advances `tick_count` exactly as `tick` would,
+    /// so the wasm recv loop's `tick_count()`-keyed diag throttles keep
+    /// their cadence when `?unifiedTick=on` routes around `tick`.
+    pub(crate) fn note_unified_tick(&mut self, now: Instant) {
+        self.last_tick_at = Some(now);
+        self.tick_count = self.tick_count.wrapping_add(1);
+    }
+
     /// Phase 4 step 3.6 diagnostics — number of tick() calls since
     /// construction. The wasm bundle's recv loop reads this to throttle
     /// per-frame pose logs (one per ~60 ticks).

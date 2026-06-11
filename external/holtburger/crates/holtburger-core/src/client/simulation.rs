@@ -51,7 +51,9 @@ impl ClientSimulationSystem {
         Self::default()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    // A1-O1 (2026-06-11): no longer test-only — the canonical tick
+    // spine's body-tracking observation (tick_spine.rs) calls this on
+    // both the native and wasm paths.
     pub(super) fn track_body(&mut self, body_id: SpatialBodyId) {
         if body_id.authoritative_guid() != Some(Guid::NULL)
             && !self.tracked_body_ids.contains(&body_id)

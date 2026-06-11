@@ -1,6 +1,5 @@
 use super::*;
 use anyhow::Result;
-use holtburger_world::SpatialBodyId;
 use std::sync::Arc;
 use std::time::Duration;
 use web_time::Instant;
@@ -11,17 +10,10 @@ impl ClientRuntime {
             && self.session.last_send_time.elapsed() > Duration::from_secs(5)
     }
 
-    fn sync_remote_body_tracking(&mut self, body_id: SpatialBodyId) {
-        if matches!(body_id, SpatialBodyId::LocalPlayer(_)) {
-            return;
-        }
-
-        if self.world.body_has_simulatable_projection_basis(body_id) {
-            self.simulation.track_body(body_id);
-        } else {
-            self.simulation.untrack_body(body_id);
-        }
-    }
+    // A1-O1 (2026-06-11): the body-tracking sync + event observation
+    // moved verbatim to `tick_spine.rs` (`sync_remote_body_tracking` /
+    // `observe_world_event_for_body_tracking`) so the wasm spine shares
+    // one tracking law; these methods now delegate.
 
     pub(super) fn poll_busy_timeout(&mut self, now: Instant) {
         let Some(pending) = self.active_busy_operation.as_ref() else {
@@ -55,33 +47,11 @@ impl ClientRuntime {
     }
 
     pub(super) fn observe_runtime_world_event(&mut self, event: &WorldEvent) {
-        match event {
-            WorldEvent::EntitySpawned(entity)
-            | WorldEvent::EntityReplaced(entity)
-            | WorldEvent::EntityIdentified(entity) => {
-                if let Some(body_id) = self.world.runtime_body_id_for_guid(entity.guid) {
-                    self.sync_remote_body_tracking(body_id);
-                }
-            }
-            WorldEvent::EntityVectorUpdated { guid, .. } => {
-                if let Some(body_id) = self.world.runtime_body_id_for_guid(*guid) {
-                    self.sync_remote_body_tracking(body_id);
-                }
-            }
-            WorldEvent::EntityDespawned(guid) => {
-                self.simulation.untrack_body(SpatialBodyId::Entity(*guid));
-            }
-            WorldEvent::RuntimeBodyChanged { body_id } => {
-                self.sync_remote_body_tracking(*body_id);
-            }
-            WorldEvent::RuntimeBodyRemoved { body_id }
-                if !matches!(body_id, SpatialBodyId::LocalPlayer(_)) =>
-            {
-                self.simulation.untrack_body(*body_id);
-            }
-            WorldEvent::RuntimeBodiesReset { .. } => {}
-            _ => {}
-        }
+        super::tick_spine::observe_world_event_for_body_tracking(
+            &self.world,
+            &mut self.simulation,
+            event,
+        );
     }
 
     pub(super) fn handle_runtime_world_event(&mut self, event: &WorldEvent) {
@@ -174,28 +144,36 @@ impl ClientRuntime {
                     let dt_duration = Duration::from_secs_f32(dt.max(0.0));
                     last_physics_time = now;
 
-                    let movement_events = self
-                        .movement
-                        .tick(now, &mut self.world, &mut self.session)
-                        .await?;
-                    for event in movement_events {
-                        self.handle_runtime_world_event(&event);
-                    }
-
-                    let physics_events = self.world.tick();
-                    for event in physics_events {
-                        self.handle_runtime_world_event(&event);
-                    }
-
-                    let simulation_events = self.simulation.tick(
+                    // A1-O1 (2026-06-11): delegate to the canonical tick
+                    // spine — `tick_spine::tick_frame` is the single owner
+                    // of the movement → world → simulation order (retail
+                    // single-spine analog: SmartBox::UseTime,
+                    // acclient.c:146256–146316). The per-phase sink
+                    // preserves the exact pre-extraction per-event
+                    // handling (`handle_runtime_world_event` = observe
+                    // body tracking, then project to the view channel),
+                    // interleaved BETWEEN phases as before. `state`/`tx`
+                    // are snapshotted up front — neither can change inside
+                    // a physics tick (no message handling runs here).
+                    let view_state = self.state.clone();
+                    let view_tx = self.client_view_event_tx.clone();
+                    super::tick_spine::tick_frame(
                         now,
                         dt_duration,
                         &mut self.world,
                         &mut self.movement,
-                    );
-                    for event in simulation_events {
-                        self.handle_runtime_world_event(&event);
-                    }
+                        &mut self.simulation,
+                        &mut self.session,
+                        |_phase, event, world, simulation| {
+                            super::tick_spine::observe_world_event_for_body_tracking(
+                                world, simulation, event,
+                            );
+                            Self::emit_world_view_projection_to(
+                                world, &view_state, &view_tx, event,
+                            );
+                        },
+                    )
+                    .await?;
                 }
             }
         }

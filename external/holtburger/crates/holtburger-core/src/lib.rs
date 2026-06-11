@@ -12,5 +12,7 @@ pub use client::types::{
     BusyOperationResult, ClientCommand, ClientState, ClientViewEvent, PlayerCharacterOptions,
     RetryState,
 };
-pub use client::{ClientRuntime, ClientRuntimeBuilder, MotionStyle, MovementSystemHandle};
+pub use client::{
+    ClientRuntime, ClientRuntimeBuilder, MotionStyle, MovementSystemHandle, TickSpineHandle,
+};
 pub use soul_emote_motion::motion_command_for_soul_emote_pose;
